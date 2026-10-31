@@ -30,6 +30,12 @@ vi.mock("../../projectMenuState.js", () => ({
   refreshProjectMenuState: refreshProjectMenuStateMock,
 }));
 
+const windowMenuStateMock = vi.hoisted(() => ({
+  noteWindowClosing: vi.fn(),
+  refreshOpenWindowMenu: vi.fn(),
+}));
+vi.mock("../../windowMenuState.js", () => windowMenuStateMock);
+
 const setSignalShutdownMock = vi.fn();
 const setSafetyBeltTimerMock = vi.fn();
 vi.mock("../signalShutdownState.js", () => ({
@@ -758,33 +764,72 @@ describe("registerAppLifecycleHandlers – window-all-closed", () => {
     expect(refreshProjectMenuStateMock).not.toHaveBeenCalled();
   });
 
-  it("refreshes the gates after a closing window's survivor is promoted", async () => {
-    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
-    registerAppLifecycleHandlers(makeOpts());
-
+  /** Announce a new window to the lifecycle handlers and capture what it listens for. */
+  function createWindow() {
     const createdCall = appMock.on.mock.calls.find(
       ([event]: string[]) => event === "browser-window-created"
     );
     expect(createdCall).toBeDefined();
 
-    const winListeners: Record<string, () => void> = {};
+    const winListeners: Record<string, (event?: unknown) => void> = {};
     const fakeWin = {
       once: (event: string, cb: () => void) => {
         winListeners[event] = cb;
       },
+      on: (event: string, cb: (event?: unknown) => void) => {
+        winListeners[event] = cb;
+      },
     };
     (createdCall![1] as (event: unknown, win: unknown) => void)({}, fakeWin);
+    return { fakeWin, winListeners };
+  }
 
+  it("refreshes the gates after a closing window's survivor is promoted", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts());
+
+    const { winListeners } = createWindow();
     winListeners.closed();
 
     // Must NOT be synchronous: WindowRegistry promotes the surviving window in
     // its own "closed" listener, registered after this one. Refreshing now would
     // still resolve against the window that is going away.
     expect(refreshProjectMenuStateMock).not.toHaveBeenCalled();
+    expect(windowMenuStateMock.refreshOpenWindowMenu).not.toHaveBeenCalled();
 
     await Promise.resolve();
 
     expect(refreshProjectMenuStateMock).toHaveBeenCalled();
+    // The survivor takes the Window menu's current-window mark.
+    expect(windowMenuStateMock.refreshOpenWindowMenu).toHaveBeenCalled();
+  });
+
+  it.each(["win32", "linux"] as const)(
+    "on %s takes a window off the Window menu's list as soon as it starts closing",
+    async (platform) => {
+      Object.defineProperty(process, "platform", { value: platform });
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      registerAppLifecycleHandlers(makeOpts());
+
+      const { fakeWin, winListeners } = createWindow();
+      const closeEvent = { defaultPrevented: false };
+      winListeners.close(closeEvent);
+
+      expect(windowMenuStateMock.noteWindowClosing).toHaveBeenCalledExactlyOnceWith(
+        fakeWin,
+        closeEvent
+      );
+    }
+  );
+
+  it("on darwin leaves closing windows to AppKit's own list", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts());
+
+    const { winListeners } = createWindow();
+
+    expect(winListeners.close).toBeUndefined();
   });
 
   it("refreshes the File-menu project gates whenever a window takes focus", async () => {
@@ -799,6 +844,8 @@ describe("registerAppLifecycleHandlers – window-all-closed", () => {
 
     // The menu is process-global but its gates track the focused window's project.
     expect(refreshProjectMenuStateMock).toHaveBeenCalled();
+    // And the Window menu marks whichever window is now focused.
+    expect(windowMenuStateMock.refreshOpenWindowMenu).toHaveBeenCalled();
   });
 
   it("does not call app.quit on darwin even when no recreation is in flight", async () => {

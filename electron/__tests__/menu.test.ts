@@ -1192,6 +1192,131 @@ describe("update menu lifecycle", () => {
       const minimize = findSubmenu(capturedTemplate, "Window").find((i) => i.role === "minimize");
       expect(minimize?.registerAccelerator).not.toBe(false);
     });
+
+    describe("open windows (#15536)", () => {
+      function fakeWindow(id: number, title: string, minimized = false) {
+        const win = {
+          id,
+          title,
+          isDestroyed: () => false,
+          getTitle: () => win.title,
+          isMinimized: vi.fn(() => minimized),
+          restore: vi.fn(),
+          show: vi.fn(),
+          focus: vi.fn(),
+        };
+        return win;
+      }
+
+      type FakeWindow = ReturnType<typeof fakeWindow>;
+
+      function useWindows(windows: FakeWindow[], primary: FakeWindow = windows[0]!): void {
+        const ctxFor = (win: FakeWindow) => ({ windowId: win.id, browserWindow: win, services: {} });
+        windowRefMock.getWindowRegistry.mockReturnValue({
+          all: () => windows.map(ctxFor),
+          getPrimary: () => ctxFor(primary),
+          getByWindowId: (id: number) => {
+            const win = windows.find((w) => w.id === id);
+            return win ? ctxFor(win) : undefined;
+          },
+        });
+      }
+
+      function windowLabels(): unknown[] {
+        return findSubmenu(capturedTemplate, "Window")
+          .filter((i) => i.type === "checkbox")
+          .map((i) => i.label);
+      }
+
+      afterEach(() => {
+        windowRefMock.getWindowRegistry.mockReturnValue(null);
+      });
+
+      it.each(["win32", "linux"] as const)(
+        "on %s lists each open window by its title after Minimize and Close",
+        (platform) => {
+          Object.defineProperty(process, "platform", { value: platform, configurable: true });
+          const picker = fakeWindow(3, "Daintree");
+          const project = fakeWindow(5, "(1) daintree — studio-01");
+          useWindows([picker, project], project);
+
+          createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
+
+          const items = findSubmenu(capturedTemplate, "Window");
+          expect(items.map((i) => i.role ?? i.type)).toEqual([
+            "minimize",
+            "close",
+            "separator",
+            "checkbox",
+            "checkbox",
+          ]);
+          expect(items.slice(3).map((i) => [i.label, i.checked])).toEqual([
+            ["Daintree", false],
+            ["(1) daintree — studio-01", true],
+          ]);
+          expect(items[0]?.registerAccelerator).toBe(false);
+        }
+      );
+
+      it("restores a minimized window and focuses it when it is chosen", () => {
+        Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+        const current = fakeWindow(1, "daintree");
+        const minimized = fakeWindow(3, "website", true);
+        useWindows([current, minimized], current);
+        createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
+
+        const item = findSubmenu(capturedTemplate, "Window").find((i) => i.label === "website");
+        item!.click!(
+          {} as Electron.MenuItem,
+          mockBrowserWindow as unknown as Electron.BaseWindow,
+          {} as Electron.KeyboardEvent
+        );
+
+        expect(minimized.restore).toHaveBeenCalledTimes(1);
+        expect(minimized.focus).toHaveBeenCalledTimes(1);
+        expect(current.focus).not.toHaveBeenCalled();
+      });
+
+      it("on darwin leaves the list to AppKit and adds no items of its own", () => {
+        Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+        useWindows([fakeWindow(1, "daintree"), fakeWindow(2, "website")]);
+
+        createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
+
+        expect(findSubmenu(capturedTemplate, "Window").map((i) => i.role ?? i.type)).toEqual([
+          "minimize",
+          "zoom",
+          "separator",
+          "front",
+        ]);
+      });
+
+      it("rebuilds when a window opens or closes, never for a title change", () => {
+        Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+        const first = fakeWindow(1, "daintree");
+        const windows = [first];
+        useWindows(windows);
+        const win = mockBrowserWindow as unknown as Electron.BrowserWindow;
+        createApplicationMenu(win);
+        const builds = vi.mocked(Menu.setApplicationMenu);
+        builds.mockClear();
+
+        // A waiting count or a project switch retitles the item in place.
+        first.title = "(2) daintree";
+        rebuildApplicationMenuIfStale(win);
+        expect(builds).not.toHaveBeenCalled();
+
+        windows.push(fakeWindow(2, "website"));
+        rebuildApplicationMenuIfStale(win);
+        expect(builds).toHaveBeenCalledTimes(1);
+        expect(windowLabels()).toEqual(["(2) daintree", "website"]);
+
+        windows.shift();
+        rebuildApplicationMenuIfStale(win);
+        expect(builds).toHaveBeenCalledTimes(2);
+        expect(windowLabels()).toEqual(["website"]);
+      });
+    });
   });
 
   describe("File menu Exit and Settings accelerator on non-darwin (#7939)", () => {
@@ -2551,6 +2676,7 @@ describe("plugin menu items in a project that hides the plugin (#13765)", () => 
     const focused = { id: 2, isDestroyed: () => false };
     windowRefMock.getWindowRegistry.mockReturnValue({
       getPrimary: () => ({ browserWindow: focused, services: {} }),
+      all: () => [],
     });
     getAppWebContentsMock.mockImplementation((win) =>
       win.id === 2 ? { id: 22 } : mockWebContents

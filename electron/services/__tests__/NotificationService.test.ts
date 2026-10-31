@@ -80,6 +80,9 @@ vi.mock("../../window/webContentsRegistry.js", () => registryMock);
 const iconMock = vi.hoisted(() => ({ getLinuxWindowIcon: vi.fn(() => undefined as unknown) }));
 vi.mock("../../window/linuxWindowIcon.js", () => iconMock);
 
+const windowMenuStateMock = vi.hoisted(() => ({ refreshOpenWindowMenu: vi.fn() }));
+vi.mock("../../windowMenuState.js", () => windowMenuStateMock);
+
 import { sendToRenderer } from "../../ipc/utils.js";
 import { notificationService } from "../NotificationService.js";
 import type { ProjectTitleLookup, ProjectTitleRow } from "../../window/windowTitle.js";
@@ -298,6 +301,37 @@ describe("NotificationService", () => {
 
       expect(lastTitle(winA)).toBe("alpha-app");
       expect(lastTitle(winB)).toBe("beta-app");
+    });
+
+    it("relabels the Window menu's list once every title is written", () => {
+      const winA = createWindowMock(false, [11]);
+      const winB = createWindowMock(false, [21]);
+      winA.activeProjectId = "alpha";
+      winB.activeProjectId = "beta";
+      notificationService.initialize(createRegistryMock([winA, winB]) as never, rows);
+
+      notificationService.refreshTitles();
+
+      const refresh = windowMenuStateMock.refreshOpenWindowMenu.mock.invocationCallOrder;
+      expect(refresh).toHaveLength(1);
+      const titleWrites = [
+        ...winA.setTitle.mock.invocationCallOrder,
+        ...winB.setTitle.mock.invocationCallOrder,
+      ];
+      expect(Math.max(...titleWrites)).toBeLessThan(refresh[0]!);
+    });
+
+    it("relabels the Window menu's list when a waiting count reaches a title", () => {
+      const win = createWindowMock(false, [11]);
+      win.activeProjectId = "alpha";
+      notificationService.initialize(createRegistryMock([win]) as never, rows);
+
+      notificationService.updateNotifications(11, { waitingCount: 3 });
+      expect(windowMenuStateMock.refreshOpenWindowMenu).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(301);
+
+      expect(lastTitle(win)).toBe("(3) alpha-app");
+      expect(windowMenuStateMock.refreshOpenWindowMenu).toHaveBeenCalledTimes(1);
     });
 
     it("scopes the waiting count to the window that owns it", () => {
