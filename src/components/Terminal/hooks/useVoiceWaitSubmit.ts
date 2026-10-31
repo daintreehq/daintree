@@ -15,7 +15,7 @@ import {
   outsideDraftWrite,
   selectionAfterOutsideWrite,
 } from "../inputEditorExtensions/composerHistory";
-import { takePendingComposerSelection } from "@/lib/composerCaret";
+import { setPendingComposerSelection, takePendingComposerSelection } from "@/lib/composerCaret";
 import { makeDraftKey } from "@/lib/draftKey";
 import { replayLandedCorrection } from "../inputEditorExtensions/correctionReview";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
@@ -59,11 +59,12 @@ export type VoiceSubmitWait = { attempt: number; startedAt: number } & (
 export type VoiceSendCleanup = "skipped" | "failed";
 
 /**
- * How the last wait ended: sent, called off by Escape, or held back unsent;
- * `sending` while the composer is still handing the text over.
+ * How the last wait ended: sent, called off by Escape, reopened by a dictation
+ * that started in its draft, or held back unsent; `sending` while the composer
+ * is still handing the text over.
  */
 export interface VoiceSubmitOutcome {
-  kind: "sending" | "sent" | "cancelled" | "held";
+  kind: "sending" | "sent" | "cancelled" | "reopened" | "held";
   attempt: number;
   /** Set on a send, or one being handed over, that went without its cleanup. */
   cleanup?: VoiceSendCleanup;
@@ -170,12 +171,94 @@ interface WaitAttempt {
   handBack: SendHandBack | undefined;
   departure: DepartedComposerSend;
   wait: VoiceSubmitWait;
+  /** The dictation sessions it takes, read at its Enter. */
+  sessions: ReadonlySet<string>;
+  /** The composer's draft it sends, by its key, as it reads now. */
+  composerDraft: () => { key: string; draft: string };
   releaseKeys: () => void;
   releaseObserved: () => void;
+  releaseSend: () => void;
+  releaseReopen: () => void;
 }
 
 const isLive = (live: WaitAttempt, voiceId: string) =>
   !live.over && useTerminalInputStore.getState().isVoiceSubmitting(voiceId);
+
+type VoiceRecordingState = ReturnType<typeof useVoiceRecordingStore.getState>;
+
+/**
+ * Whether this store change starts a dictation in `panelId` that the send
+ * taking `sessions` doesn't: the dictation key's press, which arms it before
+ * any of its start is awaited, or a session that begins without one. The
+ * session of a start already under way at the send's Enter (`startedBefore`)
+ * is the next prompt's, as one begun after the send went would be (#14804).
+ */
+function startsDictationIn(
+  panelId: string,
+  sessions: ReadonlySet<string>,
+  startedBefore: VoiceRecordingState["pendingTarget"],
+  state: VoiceRecordingState,
+  prev: VoiceRecordingState
+): boolean {
+  if (state.pendingTarget !== prev.pendingTarget && state.pendingTarget?.panelId === panelId) {
+    return true;
+  }
+  if (state.activeTarget?.panelId !== panelId) return false;
+  if (startedBefore !== null && prev.pendingTarget === startedBefore) return false;
+  const session = state.panelBuffers[panelId]?.dictationSessionId;
+  return (
+    !!session &&
+    session !== prev.panelBuffers[panelId]?.dictationSessionId &&
+    !sessions.has(session)
+  );
+}
+
+/** Whether a dictation the send doesn't take is under way in `panelId`'s draft. */
+function dictatesPast(live: WaitAttempt, panelId: string): boolean {
+  if (!isVoiceSessionActiveFor(panelId)) return false;
+  const session = useVoiceRecordingStore.getState().panelBuffers[panelId]?.dictationSessionId;
+  return !!session && !live.sessions.has(session);
+}
+
+/**
+ * Calls a waiting send off: nothing of it touches a composer any more, and the
+ * one showing it unlocks. Its cleanup is left to land in the draft. A send a
+ * new dictation reopened leaves the caret after its text, where that
+ * dictation writes, so no selection left in it is written over (#15703).
+ */
+function callOffWait(
+  live: WaitAttempt,
+  voiceId: string,
+  kind: "cancelled" | "reopened",
+  refocus: boolean
+): void {
+  live.over = true;
+  live.releaseKeys();
+  live.releaseObserved();
+  live.releaseSend();
+  live.releaseReopen();
+  live.controller.abort();
+  if (unseatedWaits.get(voiceId) === live) unseatedWaits.delete(voiceId);
+  useTerminalInputStore.getState().setVoiceSubmitting(voiceId, false);
+  const at = live.seat;
+  if (!at) return;
+  if (at.activeWaitRef.current === live) at.activeWaitRef.current = null;
+  at.setWait(null);
+  at.setOutcome({ kind, attempt: live.attempt });
+  const view = at.editorViewRef.current;
+  if (!view) return;
+  unlockAfterSend(view, at.editableCompartmentRef.current, refocus);
+  if (kind !== "reopened") return;
+  const { key, draft } = live.composerDraft();
+  if (view.state.doc.toString() === draft) {
+    // Shown already: a hint left for it would undo a selection made since.
+    takePendingComposerSelection(key, draft);
+  } else {
+    // Over any selection a writer left for the composer to take as it syncs.
+    setPendingComposerSelection(key, draft, { from: draft.length, to: draft.length });
+  }
+  view.dispatch({ selection: { anchor: view.state.doc.length } });
+}
 
 /**
  * Sends whose composer unmounted mid-wait, by voice id. Once sent, a send is
@@ -309,16 +392,12 @@ export function useVoiceWaitSubmit({
       const store = useTerminalInputStore.getState();
       if (!store.isVoiceSubmitting(voiceId)) return false;
       const live = activeWaitRef.current;
-      activeWaitRef.current = null;
       if (live) {
-        live.over = true;
-        live.releaseKeys();
-        live.releaseObserved();
-        live.controller.abort();
+        callOffWait(live, voiceId, "cancelled", !options?.deferFocus);
+        return true;
       }
       store.setVoiceSubmitting(voiceId, false);
       setVoiceSubmitWait(null);
-      if (live) setVoiceSubmitOutcome({ kind: "cancelled", attempt: live.attempt });
       const view = editorViewRef.current;
       if (view) unlockAfterSend(view, editableCompartmentRef.current, !options?.deferFocus);
       return true;
@@ -436,17 +515,26 @@ export function useVoiceWaitSubmit({
   const startVoiceWaitSubmit = useCallback(
     (options?: VoiceWaitSubmitOptions) => {
       const store = useTerminalInputStore.getState();
-      if (store.isVoiceSubmitting(voiceId)) return;
+      if (store.isVoiceSubmitting(voiceId)) {
+        // The wait holds Enter, so only the dictation sends again while it
+        // waits: the session panel's Send, or "send it". One the send held
+        // back, begun from a start already under way at its Enter, reopens it,
+        // and this send takes both (#15703).
+        const waiting = activeWaitRef.current;
+        if (!waiting || !dictatesPast(waiting, voiceId)) return;
+        callOffWait(waiting, voiceId, "reopened", false);
+      }
 
       const attempt = ++attemptRef.current;
       // Before the lock below, so a press during the wait counts against it.
       const handBack = options?.stayPut ? STAY_PUT : claimSendHandBackRef.current?.();
-      // Read before the stop: a dictation started on this panel while the
-      // send waits is the next prompt's, and none of its words go with this
-      // one (#14804).
+      // Read before the stop: the sessions this send takes. One that starts
+      // here while it waits reopens it instead (#15703).
       const target = voiceDraftNow();
       const sessions = voiceRecordingService.sendSessions(target.panelId, target.projectId);
       const releaseSend = claimWaitingSend(voiceId, sessions);
+      const pendingStart = useVoiceRecordingStore.getState().pendingTarget;
+      const startedBefore = pendingStart?.panelId === voiceId ? pendingStart : null;
       // From before the stop, so a stop-time cleanup that fails before any
       // wait for it begins still counts.
       const observed = voiceRecordingService.observeSendCorrections(voiceId, sessions);
@@ -463,12 +551,31 @@ export function useVoiceWaitSubmit({
         handBack,
         departure: captureDepartureRef.current?.() ?? NO_DEPARTURE,
         wait: { attempt, phase: "finishing", startedAt: performance.now() },
+        sessions,
+        composerDraft: () => {
+          const projectId = projectIdRef.current ?? useProjectStore.getState().currentProject?.id;
+          return {
+            key: makeDraftKey(terminalId, projectId),
+            draft: useTerminalInputStore.getState().getDraftInput(terminalId, projectId),
+          };
+        },
         releaseKeys: () => {},
         releaseObserved: observed.release,
+        releaseSend,
+        releaseReopen: () => {},
       };
       const { controller } = live;
       const isCurrentAttempt = () => isLive(live, voiceId);
       seatWait(live);
+      // A send isn't final until it goes: a dictation started in this draft
+      // while it waits, shown here or not, calls it off as Escape does, and
+      // writes after its text for the next send to take whole (#15703). One
+      // started elsewhere leaves it alone (#14611).
+      live.releaseReopen = useVoiceRecordingStore.subscribe((state, prev) => {
+        if (!live.over && startsDictationIn(voiceId, sessions, startedBefore, state, prev)) {
+          callOffWait(live, voiceId, "reopened", true);
+        }
+      });
 
       void (async () => {
         let sent: boolean | Promise<boolean> = false;
@@ -564,6 +671,9 @@ export function useVoiceWaitSubmit({
           // way is one the send drops.
           if (voiceRecordingService.hasPendingCorrection(voiceId, sessions)) cleanup = "skipped";
           else if (observed.failed()) cleanup = "failed";
+          // Handed over, the text is the composer's: a dictation from here on
+          // is the next prompt's.
+          live.releaseReopen();
           if (live.departed) {
             const departed = live.departed(
               live.handBack,
@@ -582,6 +692,7 @@ export function useVoiceWaitSubmit({
           }
         } finally {
           live.releaseKeys();
+          live.releaseReopen();
           releaseSend();
           observed.release();
           if (unseatedWaits.get(voiceId) === live) unseatedWaits.delete(voiceId);

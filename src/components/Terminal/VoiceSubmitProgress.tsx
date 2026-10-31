@@ -100,6 +100,9 @@ export function voiceSubmitWaitCaption(wait: VoiceSubmitWait): string {
     : "Finishing… · Esc to cancel";
 }
 
+/** A send a dictation in its draft reopened: its words wait for the next send (#15703). */
+export const VOICE_SEND_REOPENED_CAPTION = "Send reopened · Enter sends it all";
+
 const UNCLEANED_RECEIPT: Record<VoiceSendCleanup, string> = {
   skipped: "Sent · cleanup skipped",
   failed: "Sent · cleanup failed",
@@ -130,7 +133,8 @@ interface VoiceSubmitProgressProps {
  * follows it. Only a send the composer took brings it to full, the caption
  * turning to a receipt as it fades; one still being handed over holds where it
  * stands, saying so. Escape, or a send held back, lets it fade where it
- * stands, caption and all. A wait that ends inside the gate leaves nothing to
+ * stands, caption and all; a send a new dictation reopened fades saying so.
+ * A wait that ends inside the gate leaves nothing to
  * take down, unless its send went without the cleanup; a handover that
  * outlasts it still shows. Mount one per attempt
  * (keyed), so each attempt gets its own gate and no bar carries over from the
@@ -169,7 +173,9 @@ export function VoiceSubmitProgress({
         : "Sent"
       : outcome?.kind === "sending"
         ? "Sending…"
-        : lastWaitCaption;
+        : outcome?.kind === "reopened"
+          ? VOICE_SEND_REOPENED_CAPTION
+          : lastWaitCaption;
 
   const visible = active && shown;
   if (visible !== wasShown) {

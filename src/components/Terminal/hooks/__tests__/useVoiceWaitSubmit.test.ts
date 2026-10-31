@@ -20,9 +20,10 @@ vi.mock("@/services/VoiceRecordingService", () => ({
 const voiceState = vi.hoisted(() => ({
   activeTarget: { panelId: "test-panel" },
   status: "recording",
+  panelBuffers: {},
 }));
 vi.mock("@/store", () => ({
-  useVoiceRecordingStore: { getState: () => voiceState },
+  useVoiceRecordingStore: { getState: () => voiceState, subscribe: () => () => {} },
 }));
 
 vi.mock("@/store/projectStore", () => ({
