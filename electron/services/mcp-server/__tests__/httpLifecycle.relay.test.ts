@@ -441,10 +441,14 @@ describe("HttpLifecycle.openRelaySession (#13493)", () => {
       }))!;
       sessionId = session.sessionId;
 
-      await session.callTool("agent.launch", { agentId: "claude" }, {
-        timeoutMs: 200_000,
-        callId: "c8",
-      });
+      await session.callTool(
+        "agent.launch",
+        { agentId: "claude" },
+        {
+          timeoutMs: 200_000,
+          callId: "c8",
+        }
+      );
 
       const holdUntil = NOW + 200_000 - MCP_REMOTE_CONFIRM_MARGIN_MS;
       expect(deadlineDuringCall).toBe(NOW + 200_000);

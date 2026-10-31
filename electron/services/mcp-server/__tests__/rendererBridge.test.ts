@@ -3207,7 +3207,10 @@ describe("rendererBridge — holding a confirm-gated dispatch open (#14989)", ()
       expect(call.outcome()).toEqual({
         result: {
           ok: false,
-          error: { code: "CONFIRMATION_TIMEOUT", message: expect.stringContaining("reached the screen") },
+          error: {
+            code: "CONFIRMATION_TIMEOUT",
+            message: expect.stringContaining("reached the screen"),
+          },
         },
         confirmationDecision: "timeout",
       });
@@ -3289,9 +3292,17 @@ describe("rendererBridge — holding a confirm-gated dispatch open (#14989)", ()
       mockWebContentsRegistry.set(818, wc);
 
       await expect(
-        bridge.dispatchActionForWebContents(818, "worktree.delete", {}, false, undefined, "external", {
-          holdUntil: Date.now(),
-        })
+        bridge.dispatchActionForWebContents(
+          818,
+          "worktree.delete",
+          {},
+          false,
+          undefined,
+          "external",
+          {
+            holdUntil: Date.now(),
+          }
+        )
       ).rejects.toThrow(/timed out/);
       expect(wc.send).not.toHaveBeenCalledWith(
         CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST,

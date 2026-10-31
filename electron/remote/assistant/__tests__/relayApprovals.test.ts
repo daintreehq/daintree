@@ -159,7 +159,10 @@ describe("askShellApproval (#13501)", () => {
 
       const decision = await askShellApproval(link, ASK, { now: () => clock });
 
-      expect(decision).toEqual({ decision: "approved", deadline: 200_000 + MCP_DISPATCH_TIMEOUT_MS });
+      expect(decision).toEqual({
+        decision: "approved",
+        deadline: 200_000 + MCP_DISPATCH_TIMEOUT_MS,
+      });
       const [, , options] = link.call.mock.calls[0] as unknown as [
         string,
         unknown,
@@ -174,9 +177,13 @@ describe("askShellApproval (#13501)", () => {
         clock = 95_000;
       });
 
-      const decision = await askShellApproval(link, { ...ASK, holdUntil: 100_000 }, {
-        now: () => clock,
-      });
+      const decision = await askShellApproval(
+        link,
+        { ...ASK, holdUntil: 100_000 },
+        {
+          now: () => clock,
+        }
+      );
 
       expect(decision).toEqual({ decision: "approved", deadline: 100_000 });
       const [, payload, options] = link.call.mock.calls[0] as unknown as [

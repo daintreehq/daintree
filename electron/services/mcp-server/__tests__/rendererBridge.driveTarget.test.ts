@@ -389,9 +389,16 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
         const endpoint = answeringEndpoint();
         setMcpDriveTargetResolver(() => ({ state: "live", endpoint }));
 
-        await bridge.dispatchActionForWorkspace(WORKSPACE, "worktree.delete", {}, false, "external", {
-          holdUntil: Date.now() + 100_000,
-        });
+        await bridge.dispatchActionForWorkspace(
+          WORKSPACE,
+          "worktree.delete",
+          {},
+          false,
+          "external",
+          {
+            holdUntil: Date.now() + 100_000,
+          }
+        );
 
         expect(sent(endpoint)).toEqual({ budget: 100_000, timeoutMs: 100_000 });
       });
@@ -401,9 +408,16 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
         const endpoint = answeringEndpoint();
         setMcpDriveTargetResolver(() => ({ state: "live", endpoint }));
 
-        await bridge.dispatchActionForWorkspace(WORKSPACE, "worktree.delete", {}, false, "external", {
-          holdUntil: Date.now() + 2 * MCP_REMOTE_DISPATCH_TIMEOUT_MS,
-        });
+        await bridge.dispatchActionForWorkspace(
+          WORKSPACE,
+          "worktree.delete",
+          {},
+          false,
+          "external",
+          {
+            holdUntil: Date.now() + 2 * MCP_REMOTE_DISPATCH_TIMEOUT_MS,
+          }
+        );
 
         expect(sent(endpoint).timeoutMs).toBe(MCP_REMOTE_DISPATCH_TIMEOUT_MS);
       });

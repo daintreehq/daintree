@@ -1024,7 +1024,9 @@ export function createRendererBridge(
       if (deadlineAt <= startedAt) {
         // Whoever times it has already given up: sent now, it could run unseen.
         reject(
-          new Error(`Action dispatch timed out: ${actionId} — its deadline passed before it was sent`)
+          new Error(
+            `Action dispatch timed out: ${actionId} — its deadline passed before it was sent`
+          )
         );
         return;
       }
