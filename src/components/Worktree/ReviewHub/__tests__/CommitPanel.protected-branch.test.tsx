@@ -2,8 +2,9 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor, act } from "@testing-library/react";
 import type { ReactNode } from "react";
+import type { GitPushCommitPreview } from "@shared/types/git";
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -50,6 +51,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
     onClose,
     confirmLabel,
     confirmDisabled,
+    hint,
   }: {
     isOpen: boolean;
     title: ReactNode;
@@ -59,6 +61,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
     onClose?: () => void;
     confirmLabel: string;
     confirmDisabled?: boolean;
+    hint?: ReactNode;
   }) => {
     if (!isOpen) return null;
     return (
@@ -68,9 +71,14 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
         {children && <div data-testid="confirm-body">{children}</div>}
         {/* Honours confirmDisabled: a double that always fires onConfirm would
             make every gating assertion vacuous. */}
-        <button type="button" onClick={confirmDisabled ? undefined : onConfirm}>
+        <button
+          type="button"
+          aria-disabled={confirmDisabled || undefined}
+          onClick={confirmDisabled ? undefined : onConfirm}
+        >
           {confirmLabel}
         </button>
+        {hint && <div data-testid="confirm-hint">{hint}</div>}
         {onClose && (
           <button type="button" onClick={onClose}>
             Cancel
@@ -134,20 +142,71 @@ function renderPanel(overrides: RenderProps = {}) {
   };
 }
 
+function pushPreview(overrides: Partial<GitPushCommitPreview> = {}): GitPushCommitPreview {
+  return {
+    destination: { remote: "origin", branch: "feature/x" },
+    rangeBasis: "tracked",
+    commits: [],
+    total: 0,
+    behind: 0,
+    ...overrides,
+  };
+}
+
+function earlierCommits(count: number): GitPushCommitPreview["commits"] {
+  return Array.from({ length: count }, (_, i) => ({
+    hash: `${i + 1}`.padStart(40, "a"),
+    date: "2026-10-01T00:00:00Z",
+    message: `feat: earlier ${i + 1}`,
+    author: "Dev",
+  }));
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+const listPushCommits = vi.fn();
+
+function confirmButton(name: RegExp): HTMLElement {
+  return screen.getByRole("button", { name });
+}
+
+async function confirmWhenReady(name: RegExp): Promise<void> {
+  const button = confirmButton(name);
+  await waitFor(() => expect(button.getAttribute("aria-disabled")).toBeNull());
+  fireEvent.click(button);
+}
+
+beforeEach(() => {
+  // Echoes the local branch as the destination, which is what `renderPanel`
+  // resolves by default.
+  listPushCommits
+    .mockReset()
+    .mockImplementation((_cwd: string, branch: string) =>
+      Promise.resolve(pushPreview({ destination: { remote: "origin", branch } }))
+    );
+  Object.defineProperty(window, "electron", {
+    value: {
+      git: { listCommits: vi.fn().mockResolvedValue({ items: [] }), listPushCommits },
+    },
+    writable: true,
+    configurable: true,
+  });
+});
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
+
 describe("CommitPanel — push confirm", () => {
-  beforeEach(() => {
-    Object.defineProperty(window, "electron", {
-      value: { git: { listCommits: vi.fn().mockResolvedValue({ items: [] }) } },
-      writable: true,
-      configurable: true,
-    });
-  });
-
-  afterEach(() => {
-    cleanup();
-    vi.clearAllMocks();
-  });
-
   it("on a feature branch, opens the ConfirmDialog instead of pushing immediately", () => {
     const { onCommitAndPush } = renderPanel({ currentBranch: "feature/x" });
     fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
@@ -155,12 +214,12 @@ describe("CommitPanel — push confirm", () => {
     expect(screen.getByTestId("push-confirm-dialog")).toBeDefined();
   });
 
-  it("confirming the dialog calls onCommitAndPush", () => {
+  it("confirming the dialog calls onCommitAndPush", async () => {
     const { onCommitAndPush } = renderPanel({ currentBranch: "develop" });
     fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     expect(onCommitAndPush).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: /Push to origin\/develop/ }));
+    await confirmWhenReady(/Push to origin\/develop/);
     expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
   });
 
@@ -189,7 +248,7 @@ describe("CommitPanel — push confirm", () => {
     expect(screen.getByTestId("commit-panel-push-confirm-message").textContent).toBe("feat: x");
   });
 
-  it("pushes the message it previewed, not one that replaced it behind the dialog", () => {
+  it("pushes the message it previewed, not one that replaced it behind the dialog", async () => {
     const { onCommitAndPush, setCommitMessage } = renderPanel({
       currentBranch: "develop",
       commitMessage: "feat: previewed",
@@ -197,7 +256,7 @@ describe("CommitPanel — push confirm", () => {
     fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     // A history recall that resolves after the dialog opened.
     setCommitMessage("feat: recalled late");
-    fireEvent.click(screen.getByRole("button", { name: /Push to origin\/develop/ }));
+    await confirmWhenReady(/Push to origin\/develop/);
     expect(onCommitAndPush).toHaveBeenCalledWith("feat: previewed");
   });
 
@@ -227,21 +286,21 @@ describe("CommitPanel — push confirm", () => {
     expect(onSetSkipPushConfirm).not.toHaveBeenCalled();
   });
 
-  it("confirming with the 'don't ask again' checkbox checked calls onSetSkipPushConfirm(true)", () => {
+  it("confirming with the 'don't ask again' checkbox checked calls onSetSkipPushConfirm(true)", async () => {
     const { onCommitAndPush, onSetSkipPushConfirm } = renderPanel({ currentBranch: "feature/x" });
     fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     const checkbox = screen.getByTestId("commit-panel-push-confirm-dont-ask");
     fireEvent.click(checkbox);
     expect(checkbox.getAttribute("aria-checked")).toBe("true");
-    fireEvent.click(screen.getByRole("button", { name: /Push to origin\/feature\/x/ }));
+    await confirmWhenReady(/Push to origin\/feature\/x/);
     expect(onSetSkipPushConfirm).toHaveBeenCalledWith(true);
     expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
   });
 
-  it("confirming without checking the box calls onSetSkipPushConfirm(false)", () => {
+  it("confirming without checking the box calls onSetSkipPushConfirm(false)", async () => {
     const { onSetSkipPushConfirm } = renderPanel({ currentBranch: "feature/x" });
     fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
-    fireEvent.click(screen.getByRole("button", { name: /Push to origin\/feature\/x/ }));
+    await confirmWhenReady(/Push to origin\/feature\/x/);
     expect(onSetSkipPushConfirm).toHaveBeenCalledWith(false);
   });
 
@@ -311,19 +370,23 @@ describe("CommitPanel — push confirm", () => {
     expect(screen.getByTestId("push-confirm-dialog")).toBeDefined();
   });
 
-  it("with currentBranch=null but a resolved destination, confirming fires push exactly once", () => {
+  // The earlier-commit range is read by local branch name, so with none there
+  // is nothing to show the approver and the push stays unapprovable.
+  it("with currentBranch=null but a resolved destination, keeps the confirm blocked", () => {
     const { onCommitAndPush } = renderPanel({
       currentBranch: null,
       pushDestination: { remote: "origin", branch: "main" },
     });
     fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     expect(screen.getByTestId("push-confirm-dialog")).toBeDefined();
-    fireEvent.click(screen.getByRole("button", { name: /Push to origin\/main/ }));
-    expect(onCommitAndPush).toHaveBeenCalledTimes(1);
-    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
+    const confirm = confirmButton(/Push to origin\/main/);
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(confirm);
+    expect(listPushCommits).not.toHaveBeenCalled();
+    expect(onCommitAndPush).not.toHaveBeenCalled();
   });
 
-  it("persists the opt-out even when the push call rejects", () => {
+  it("persists the opt-out even when the push call rejects", async () => {
     const onCommitAndPush = vi.fn().mockRejectedValue(new Error("network"));
     const { onSetSkipPushConfirm } = renderPanel({
       currentBranch: "feature/x",
@@ -331,7 +394,7 @@ describe("CommitPanel — push confirm", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     fireEvent.click(screen.getByTestId("commit-panel-push-confirm-dont-ask"));
-    fireEvent.click(screen.getByRole("button", { name: /Push to origin\/feature\/x/ }));
+    await confirmWhenReady(/Push to origin\/feature\/x/);
     expect(onSetSkipPushConfirm).toHaveBeenCalledWith(true);
     // The push attempt itself was made.
     expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
@@ -374,5 +437,244 @@ describe("CommitPanel — unresolved push destination (#11746)", () => {
 
     expect(screen.getByTestId("commit-panel-push-no-destination")).toBeDefined();
     expect(onCommitAndPush).not.toHaveBeenCalled();
+  });
+});
+
+describe("CommitPanel — earlier commits in the push (#15557)", () => {
+  function openConfirm(overrides: RenderProps = {}) {
+    const rendered = renderPanel({ currentBranch: "feature/x", ...overrides });
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
+    return rendered;
+  }
+
+  it("keeps the confirm blocked until the earlier-commit range has loaded", async () => {
+    const read = deferred<GitPushCommitPreview>();
+    listPushCommits.mockReturnValueOnce(read.promise);
+    const { onCommitAndPush } = openConfirm();
+
+    const confirm = confirmButton(/Push to origin\/feature\/x/);
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(confirm);
+    expect(onCommitAndPush).not.toHaveBeenCalled();
+
+    read.resolve(pushPreview({ commits: earlierCommits(2), total: 2 }));
+    await confirmWhenReady(/Push to origin\/feature\/x/);
+    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
+  });
+
+  it("keeps the confirm blocked after a failed read, and Retry re-reads before enabling it", async () => {
+    const retryRead = deferred<GitPushCommitPreview>();
+    listPushCommits
+      .mockRejectedValueOnce(new Error("could not read from remote"))
+      .mockReturnValueOnce(retryRead.promise);
+    const { onCommitAndPush } = openConfirm();
+
+    const error = await screen.findByTestId("commit-panel-push-confirm-unpushed-error");
+    const confirm = confirmButton(/Push to origin\/feature\/x/);
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getByTestId("confirm-hint").textContent).toContain("Retry");
+    fireEvent.click(confirm);
+    expect(onCommitAndPush).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /Retry/ }));
+    await waitFor(() => expect(listPushCommits).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(error.isConnected).toBe(false));
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
+
+    retryRead.resolve(pushPreview());
+    await confirmWhenReady(/Push to origin\/feature\/x/);
+    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
+  });
+
+  it("says a tracked range isn't on the remote yet", async () => {
+    listPushCommits.mockResolvedValueOnce(pushPreview({ commits: earlierCommits(2), total: 2 }));
+    openConfirm();
+    const range = await screen.findByTestId("commit-panel-push-confirm-unpushed");
+    expect(range.textContent).toContain(
+      "Also pushes 2 earlier commits that aren't on the remote yet"
+    );
+    expect(screen.queryByTestId("commit-panel-push-confirm-unverified")).toBeNull();
+  });
+
+  it("describes a branch being created rather than claiming its history is missing from the remote", async () => {
+    listPushCommits.mockResolvedValueOnce(
+      pushPreview({ rangeBasis: "creates", commits: earlierCommits(3), total: 120 })
+    );
+    openConfirm();
+    const range = await screen.findByTestId("commit-panel-push-confirm-unpushed");
+    expect(range.textContent).toContain("Creates this branch");
+    expect(range.textContent).not.toContain("on the remote yet");
+    expect(screen.queryByTestId("commit-panel-push-confirm-unverified")).toBeNull();
+  });
+
+  it("marks a non-empty unverified range as unverified, with a Retry that re-reads", async () => {
+    listPushCommits
+      .mockResolvedValueOnce(
+        pushPreview({ rangeBasis: "unverified", commits: earlierCommits(2), total: 2 })
+      )
+      .mockReturnValueOnce(new Promise(() => {}));
+    openConfirm();
+    const notice = await screen.findByTestId("commit-panel-push-confirm-unverified");
+    expect(notice.textContent).toContain("Couldn't verify the outgoing commits");
+    const range = screen.getByTestId("commit-panel-push-confirm-unpushed");
+    expect(range.textContent).toContain("unverified");
+    expect(range.textContent).not.toContain("on the remote yet");
+    // Unverified is a warning, not a blocker, as in the standalone push confirm.
+    expect(confirmButton(/Push to origin\/feature\/x/).getAttribute("aria-disabled")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Retry/ }));
+    await waitFor(() => expect(listPushCommits).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(confirmButton(/Push to origin\/feature\/x/).getAttribute("aria-disabled")).toBe("true")
+    );
+  });
+
+  it("marks an empty unverified range instead of rendering nothing", async () => {
+    listPushCommits.mockResolvedValueOnce(pushPreview({ rangeBasis: "unverified" }));
+    openConfirm();
+    const notice = await screen.findByTestId("commit-panel-push-confirm-unverified");
+    expect(notice.textContent).toContain("Couldn't verify the outgoing commits");
+    expect(screen.getByTestId("commit-panel-push-confirm-empty-unverified").textContent).toContain(
+      "isn't confirmed"
+    );
+    expect(screen.queryByTestId("commit-panel-push-confirm-unpushed")).toBeNull();
+  });
+
+  it("says before approval that git will refuse a push to a diverged destination", async () => {
+    listPushCommits.mockResolvedValueOnce(
+      pushPreview({ commits: earlierCommits(1), total: 1, behind: 2 })
+    );
+    const { onCommitAndPush } = openConfirm();
+    const notice = await screen.findByTestId("commit-panel-push-confirm-diverged");
+    expect(notice.textContent).toContain("origin/feature/x has 2 commits this branch doesn't");
+    expect(notice.textContent).toContain("Git will refuse this push");
+    // Not blocked: git's own refusal is where the force-push lease is captured.
+    await confirmWhenReady(/Push to origin\/feature\/x/);
+    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
+  });
+
+  it("reads the range again on each opening rather than trusting the last one", async () => {
+    listPushCommits
+      .mockResolvedValueOnce(pushPreview({ commits: earlierCommits(1), total: 1 }))
+      .mockReturnValueOnce(new Promise(() => {}));
+    openConfirm();
+    await screen.findByTestId("commit-panel-push-confirm-unpushed");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
+    await waitFor(() => expect(listPushCommits).toHaveBeenCalledTimes(2));
+    expect(screen.queryByTestId("commit-panel-push-confirm-unpushed")).toBeNull();
+    expect(confirmButton(/Push to origin\/feature\/x/).getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("ignores a read from an earlier opening that lands during the next one", async () => {
+    const first = deferred<GitPushCommitPreview>();
+    listPushCommits.mockReturnValueOnce(first.promise).mockReturnValueOnce(new Promise(() => {}));
+    openConfirm();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
+    await waitFor(() => expect(listPushCommits).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      first.resolve(pushPreview({ commits: earlierCommits(1), total: 1 }));
+    });
+    expect(screen.queryByTestId("commit-panel-push-confirm-unpushed")).toBeNull();
+    expect(confirmButton(/Push to origin\/feature\/x/).getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("does not approve a range read for a destination that changed while the dialog was open", async () => {
+    const second = deferred<GitPushCommitPreview>();
+    listPushCommits
+      .mockResolvedValueOnce(pushPreview({ commits: earlierCommits(1), total: 1 }))
+      .mockReturnValueOnce(second.promise);
+    const onCommitAndPush = vi.fn().mockResolvedValue(undefined);
+    const panel = (destination: { remote: string; branch: string }) => (
+      <CommitPanel
+        stagedCount={1}
+        isDetachedHead={false}
+        hasConflicts={false}
+        hasRemote
+        pushDestination={destination}
+        worktreePath="/repo"
+        currentBranch="feature/x"
+        commitMessage="fix: bug"
+        onCommitMessageChange={vi.fn()}
+        onCommit={vi.fn().mockResolvedValue(undefined)}
+        onCommitAndPush={onCommitAndPush}
+        isPushing={false}
+        pushProgress={new Map()}
+        pushTargetBranch={null}
+        skipPushConfirm={false}
+        onSetSkipPushConfirm={vi.fn()}
+      />
+    );
+    const { rerender } = render(panel({ remote: "origin", branch: "feature/x" }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
+    await screen.findByTestId("commit-panel-push-confirm-unpushed");
+
+    rerender(panel({ remote: "fork", branch: "feature/x" }));
+    const confirm = confirmButton(/Push to fork\/feature\/x/);
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.queryByTestId("commit-panel-push-confirm-unpushed")).toBeNull();
+    fireEvent.click(confirm);
+    expect(onCommitAndPush).not.toHaveBeenCalled();
+
+    second.resolve(pushPreview({ destination: { remote: "fork", branch: "feature/x" } }));
+    await confirmWhenReady(/Push to fork\/feature\/x/);
+    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
+  });
+
+  it("does not re-read when the parent hands over an equal destination object", async () => {
+    const onCommitAndPush = vi.fn().mockResolvedValue(undefined);
+    const panel = (destination: { remote: string; branch: string }) => (
+      <CommitPanel
+        stagedCount={1}
+        isDetachedHead={false}
+        hasConflicts={false}
+        hasRemote
+        pushDestination={destination}
+        worktreePath="/repo"
+        currentBranch="feature/x"
+        commitMessage="fix: bug"
+        onCommitMessageChange={vi.fn()}
+        onCommit={vi.fn().mockResolvedValue(undefined)}
+        onCommitAndPush={onCommitAndPush}
+        isPushing={false}
+        pushProgress={new Map()}
+        pushTargetBranch={null}
+        skipPushConfirm={false}
+        onSetSkipPushConfirm={vi.fn()}
+      />
+    );
+    const { rerender } = render(panel({ remote: "origin", branch: "feature/x" }));
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
+    await waitFor(() =>
+      expect(confirmButton(/Push to origin\/feature\/x/).getAttribute("aria-disabled")).toBeNull()
+    );
+    // A staging-status refresh rebuilds the destination object.
+    rerender(panel({ remote: "origin", branch: "feature/x" }));
+    // The read starts in a microtask; flush it so a re-read would be counted.
+    await act(async () => {});
+    expect(listPushCommits).toHaveBeenCalledTimes(1);
+    expect(confirmButton(/Push to origin\/feature\/x/).getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("blocks a range that main measured against a different destination", async () => {
+    listPushCommits.mockResolvedValueOnce(
+      pushPreview({ destination: { remote: "upstream", branch: "feature/x" } })
+    );
+    const { onCommitAndPush } = openConfirm();
+    await screen.findByTestId("commit-panel-push-confirm-unpushed-error");
+    const confirm = confirmButton(/Push to origin\/feature\/x/);
+    expect(confirm.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(confirm);
+    expect(onCommitAndPush).not.toHaveBeenCalled();
+  });
+
+  it("does not read the range when the confirm opt-out skips the dialog", () => {
+    const { onCommitAndPush } = renderPanel({ currentBranch: "feature/x", skipPushConfirm: true });
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
+    expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
+    expect(listPushCommits).not.toHaveBeenCalled();
   });
 });

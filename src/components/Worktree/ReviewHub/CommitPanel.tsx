@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect, useId } from "react";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { Callout } from "@/components/ui/Callout";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
-import type { GitPushDestination } from "@shared/types/git";
+import type { GitPushCommitPreview, GitPushDestination } from "@shared/types/git";
 import { cn } from "@/lib/utils";
 import { GitCommit, ArrowUpFromLine, AlertTriangle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -85,6 +85,32 @@ function describeBlockers({
   return !needsStaging && !hasConflicts
     ? `${sentence} · ${stagedSummary}`
     : `${sentence} to commit`;
+}
+
+/**
+ * Names the earlier commits by what the read established (#15557). A branch
+ * being created publishes its whole history, most of which the remote usually
+ * already holds on another branch, so it is never called "not on the remote".
+ */
+function describeOutgoingRange(range: GitPushCommitPreview): { line: string; rowsLabel: string } {
+  const commits = pluralize(range.total, "earlier commit");
+  switch (range.rangeBasis) {
+    case "creates":
+      return {
+        line: `Creates this branch on the remote, with ${commits} of history`,
+        rowsLabel: "This branch's history",
+      };
+    case "unverified":
+      return {
+        line: `Also pushes ${commits}, unverified`,
+        rowsLabel: "Earlier commits found locally",
+      };
+    default:
+      return {
+        line: `Also pushes ${commits} that ${range.total === 1 ? "isn't" : "aren't"} on the remote yet`,
+        rowsLabel: "Earlier commits in this push",
+      };
+  }
 }
 
 interface CommitPanelProps {
@@ -183,14 +209,33 @@ export function CommitPanel({
   const [dontAskChecked, setDontAskChecked] = useState(false);
   // The commits already on this branch that the push will publish alongside
   // the new one, read for the open confirm from the same range main measures
-  // for every other push preview. `null` while the read is in flight; a failed
-  // read says so (with Retry) rather than falling silent about the range.
+  // for every other push preview. The push can't be approved until it lands
+  // (#15557): on a branch with no tracking ref the read waits on the network,
+  // and a click inside that window published commits the confirm never listed.
   const [outgoing, setOutgoing] = useState<
-    { status: "ready"; commits: PreviewCommit[]; total: number } | { status: "error" } | null
+    | { key: string; status: "ready"; preview: GitPushCommitPreview }
+    | { key: string; status: "error" }
+    | null
   >(null);
+  // Bumped by every opening and every Retry, so no answer outlives the request
+  // it was read for.
   const [outgoingAttempt, setOutgoingAttempt] = useState(0);
+  // The destination's values, not the object: each staging-status refresh hands
+  // over a new one, which would re-read (and re-block) an unchanged range.
+  const destinationRemote = pushDestination?.remote ?? null;
+  const destinationBranch = pushDestination?.branch ?? null;
+  const outgoingKey =
+    pushConfirmOpen && currentBranch && destinationRemote !== null && destinationBranch !== null
+      ? JSON.stringify([
+          worktreePath,
+          currentBranch,
+          destinationRemote,
+          destinationBranch,
+          outgoingAttempt,
+        ])
+      : null;
   useEffect(() => {
-    if (!pushConfirmOpen || !currentBranch || pushDestination === null) return;
+    if (outgoingKey === null || !currentBranch) return;
     let cancelled = false;
     // Inside the chain so a failure to even start the read lands in `catch`.
     Promise.resolve()
@@ -199,28 +244,36 @@ export function CommitPanel({
       )
       .then((preview) => {
         if (cancelled) return;
-        setOutgoing({
-          status: "ready",
-          commits: preview.commits.map((c) => ({
-            hash: c.hash,
-            message: c.message,
-            author: c.author,
-          })),
-          total: preview.total,
-        });
+        // Main resolves the destination again for the read. A range measured
+        // against a different one than the confirm names describes another push.
+        const sameDestination =
+          preview.destination.remote === destinationRemote &&
+          preview.destination.branch === destinationBranch;
+        setOutgoing(
+          sameDestination
+            ? { key: outgoingKey, status: "ready", preview }
+            : { key: outgoingKey, status: "error" }
+        );
       })
       .catch(() => {
-        if (!cancelled) setOutgoing({ status: "error" });
+        if (!cancelled) setOutgoing({ key: outgoingKey, status: "error" });
       });
     return () => {
       cancelled = true;
     };
-  }, [pushConfirmOpen, worktreePath, currentBranch, pushDestination, outgoingAttempt]);
+  }, [outgoingKey, worktreePath, currentBranch, destinationRemote, destinationBranch]);
+
+  // Only the answer to the request on screen counts; anything else is pending.
+  const outgoingResult = outgoing !== null && outgoing.key === outgoingKey ? outgoing : null;
+  const outgoingRange = outgoingResult?.status === "ready" ? outgoingResult.preview : null;
+  const outgoingCommits: PreviewCommit[] =
+    outgoingRange?.commits.map((c) => ({ hash: c.hash, message: c.message, author: c.author })) ??
+    [];
+  const canConfirmPush = outgoingRange !== null;
+  const retryOutgoing = useCallback(() => setOutgoingAttempt((n) => n + 1), []);
 
   // Doherty-gated: a range read that lands within 400ms shows no interim line.
-  const showOutgoingChecking = useDohertyGate(
-    pushConfirmOpen && pushDestination !== null && outgoing === null
-  );
+  const showOutgoingChecking = useDohertyGate(outgoingKey !== null && outgoingResult === null);
 
   const isProtected = isProtectedBranch(currentBranch?.toLowerCase());
 
@@ -381,6 +434,7 @@ export function CommitPanel({
       // leave the user with a failed write and no explanation.
       if (!skipPushConfirm || pushDestination === null) {
         setPushConfirmMessage(commitMessage);
+        setOutgoingAttempt((n) => n + 1);
         setPushConfirmOpen(true);
         return;
       }
@@ -401,22 +455,27 @@ export function CommitPanel({
   ]);
 
   const handleConfirmPush = useCallback(() => {
+    if (!canConfirmPush) return;
     // The opt-out is persisted on confirm regardless of whether the
     // subsequent push succeeds — the user expressed a preference about the
     // confirm dialog, which is orthogonal to network/rejection failure.
     onSetSkipPushConfirm(dontAskChecked);
     setPushConfirmOpen(false);
     setDontAskChecked(false);
-    setOutgoing(null);
     // What the dialog previewed is what gets pushed, even if a history recall
     // landed in the composer behind it while it was open.
     void handleCommitAndPush(pushConfirmMessage);
-  }, [dontAskChecked, onSetSkipPushConfirm, handleCommitAndPush, pushConfirmMessage]);
+  }, [
+    canConfirmPush,
+    dontAskChecked,
+    onSetSkipPushConfirm,
+    handleCommitAndPush,
+    pushConfirmMessage,
+  ]);
 
   const handleClosePushConfirm = useCallback(() => {
     setPushConfirmOpen(false);
     setDontAskChecked(false);
-    setOutgoing(null);
   }, []);
 
   const progressEntries = [...pushProgress.values()];
@@ -610,6 +669,23 @@ export function CommitPanel({
     statusContent = stagedSummary;
   }
 
+  // Names the unmet prerequisite beside the blocked button, in the standalone
+  // push confirm's words.
+  const pushConfirmHint = !currentBranch
+    ? "Check out a branch to continue"
+    : pushDestination === null
+      ? "Set a destination to continue"
+      : outgoingResult?.status === "error"
+        ? "Retry the preview to continue"
+        : null;
+  const outgoingDescription = outgoingRange ? describeOutgoingRange(outgoingRange) : null;
+  const retryOutgoingButton = (
+    <Button variant="outline" size="xs" onClick={retryOutgoing}>
+      <RefreshCw aria-hidden="true" />
+      Retry
+    </Button>
+  );
+
   const showShortcut = !isBlocked && !actionsBusy;
   const progressRows = isPushing ? progressEntries : [];
 
@@ -781,7 +857,8 @@ export function CommitPanel({
           )
         }
         confirmLabel={`Push to ${destinationLabel ?? currentBranch ?? "branch"}`}
-        confirmDisabled={pushDestination === null}
+        confirmDisabled={!canConfirmPush}
+        hint={pushConfirmHint}
         variant="default"
         zIndex="nested"
         onConfirm={handleConfirmPush}
@@ -843,25 +920,65 @@ export function CommitPanel({
               </ul>
             </div>
           )}
-          {outgoing?.status === "ready" ? (
-            outgoing.total > 0 && (
+          {outgoingRange !== null && outgoingRange.behind > 0 && (
+            <Callout
+              severity="warning"
+              title={`${destinationLabel} has ${pluralize(outgoingRange.behind, "commit")} this branch doesn't`}
+              data-testid="commit-panel-push-confirm-diverged"
+            >
+              {/* Not a blocker: git's own refusal is the moment the force-push
+                  lease is captured (#7822). */}
+              <p>
+                As of the last fetch. Git will refuse this push rather than overwrite them —
+                integrate them first, or force push once the push is refused.
+              </p>
+            </Callout>
+          )}
+          {outgoingRange?.rangeBasis === "unverified" && (
+            <Callout
+              severity="warning"
+              title="Couldn't verify the outgoing commits"
+              action={retryOutgoingButton}
+              data-testid="commit-panel-push-confirm-unverified"
+            >
+              <p>
+                {destinationLabel} couldn&apos;t be checked, so the earlier commits are worked out
+                from this repository alone. This push may send ones that aren&apos;t listed, or ones
+                the remote already has.
+              </p>
+            </Callout>
+          )}
+          {outgoingRange !== null && outgoingDescription !== null ? (
+            outgoingRange.total > 0 ? (
               <div className="flex flex-col gap-1" data-testid="commit-panel-push-confirm-unpushed">
-                <p className="text-xs text-text-secondary">
-                  Also pushes {pluralize(outgoing.total, "earlier commit")} that{" "}
-                  {outgoing.total === 1 ? "isn't" : "aren't"} on the remote yet
-                </p>
+                <p className="text-xs text-text-secondary">{outgoingDescription.line}</p>
                 <div className="overflow-hidden rounded-[var(--radius-md)] border border-divider bg-surface-inset text-xs">
                   <CommitRows
-                    commits={outgoing.commits}
-                    total={outgoing.total}
-                    label="Earlier commits in this push"
+                    commits={outgoingCommits}
+                    total={outgoingRange.total}
+                    label={outgoingDescription.rowsLabel}
                     compact
                   />
                 </div>
               </div>
+            ) : (
+              // An empty unverified range means nothing was found locally, not
+              // that the remote already has everything.
+              outgoingRange.rangeBasis === "unverified" && (
+                <p
+                  className="text-xs text-text-secondary"
+                  data-testid="commit-panel-push-confirm-empty-unverified"
+                >
+                  No earlier commits found, but that isn&apos;t confirmed.
+                </p>
+              )
             )
-          ) : outgoing?.status === "error" ? (
-            <Callout severity="warning" data-testid="commit-panel-push-confirm-unpushed-error">
+          ) : outgoingResult?.status === "error" ? (
+            <Callout
+              severity="warning"
+              action={retryOutgoingButton}
+              data-testid="commit-panel-push-confirm-unpushed-error"
+            >
               <p>
                 Couldn&apos;t list the earlier commits this push includes
                 {unpushedCount !== null && unpushedCount > 0
@@ -869,18 +986,6 @@ export function CommitPanel({
                   : ""}
                 .
               </p>
-              <Button
-                variant="outline"
-                size="xs"
-                className="mt-1.5"
-                onClick={() => {
-                  setOutgoing(null);
-                  setOutgoingAttempt((n) => n + 1);
-                }}
-              >
-                <RefreshCw aria-hidden="true" />
-                Retry
-              </Button>
             </Callout>
           ) : (
             showOutgoingChecking && (
