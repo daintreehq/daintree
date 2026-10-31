@@ -1191,7 +1191,20 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     stageAll(cwd: string): Promise<void>;
     unstageAll(cwd: string): Promise<void>;
     commit(cwd: string, message: string): Promise<{ hash: string; summary: string }>;
-    push(cwd: string, setUpstream?: boolean, opId?: string): Promise<void>;
+    /**
+     * Push the checked-out branch to its push destination.
+     *
+     * `review` is what a confirm showed (#15646): with it the push refuses
+     * (`push-review-stale`) unless the worktree is still on that branch at that
+     * commit going to that destination, and publishes that commit. Omit it only
+     * where no confirm previewed the push.
+     */
+    push(
+      cwd: string,
+      setUpstream?: boolean,
+      opId?: string,
+      review?: import("../git.js").GitPushReview
+    ): Promise<void>;
     pullRebase(cwd: string): Promise<void>;
     forcePushWithLease(cwd: string, branchName: string, leaseSha: string): Promise<void>;
     listRemoteCommits(

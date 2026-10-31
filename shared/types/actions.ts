@@ -2,6 +2,7 @@ import type { BuiltInKeyAction } from "./keymap.js";
 import type { BuiltInRuntimeActionId } from "../config/actionIds.js";
 import type { z } from "zod";
 import type { CopyTreeRunSource } from "./ipc/copyTreeHistory.js";
+import type { GitPushReview } from "./git.js";
 
 export type ActionSource = "user" | "keybinding" | "menu" | "agent" | "context-menu" | "plugin";
 
@@ -207,6 +208,19 @@ export interface ActionContext {
    */
   hostApprovedRecipeRun?: HostApprovedRecipeRun;
   /**
+   * The push a human approved in the host confirm dialog (#15646). Set by
+   * `ActionService.dispatch` from {@link ActionDispatchOptions.hostApprovedPush}
+   * on the same terms as {@link hostApprovedRecipeRun}: host-only, never on any
+   * `argsSchema`, and stamped over whatever a `contextOverride` claimed.
+   *
+   * Present means the dialog showed this branch at this commit going to this
+   * destination, and `git.push` hands exactly that to the push, which refuses if
+   * the worktree has moved since. Absent means no dialog previewed this push —
+   * an unconfirmed call or a standing automation grant — and the push runs on
+   * the worktree as it is, as it always has for those.
+   */
+  hostApprovedPush?: HostApprovedPush;
+  /**
    * The plugin behind a `"plugin"` dispatch, stamped by `ActionService.dispatch`
    * from {@link ActionDispatchOptions.callerPluginId} and absent for every other
    * source, so a `contextOverride` can't claim one. Lets an action hold a plugin
@@ -238,6 +252,17 @@ export interface ActionContext {
  * something else, so the run reports every index as a failure and the caller
  * asks again (#8331).
  */
+/**
+ * A push a host confirmation previewed and a human approved (#15646): the
+ * worktree it was read in, and the branch, commit and destination it showed.
+ * `cwd` rides along so the action can refuse an approval for one worktree
+ * being spent on another.
+ */
+export interface HostApprovedPush {
+  cwd: string;
+  review: GitPushReview;
+}
+
 export interface HostApprovedRecipeRun {
   /** The recipe the dialog previewed, after shadow resolution (#8725). */
   recipeId: string;
@@ -596,6 +621,13 @@ export interface ActionDispatchOptions {
    * bridge, from the preview the approver actually read.
    */
   hostApprovedRecipeRun?: HostApprovedRecipeRun;
+  /**
+   * Trusted record of the push a host confirmation previewed and a human
+   * approved — NOT a client-supplied value. See
+   * {@link ActionContext.hostApprovedPush}. Set only by the MCP renderer bridge,
+   * from the preview the approver actually read.
+   */
+  hostApprovedPush?: HostApprovedPush;
   /**
    * The plugin making a `source: "plugin"` dispatch — NOT a plugin-supplied
    * value. Set by the host from the plugin host's own closure (the

@@ -62,6 +62,7 @@ import type {
   ActionContext,
   ActionDispatchResult,
   ActionId,
+  HostApprovedPush,
   HostApprovedRecipeRun,
   HostApprovedTarget,
 } from "@shared/types/actions";
@@ -128,6 +129,24 @@ const TIMEOUT_RESULT: ActionDispatchResult = {
   error: {
     code: "CONFIRMATION_TIMEOUT",
     message: "Confirmation request timed out before the user responded.",
+  },
+};
+
+/**
+ * An approved push whose confirm measured nothing (#15646): the read failed,
+ * found no branch or destination, or never ran because the worktree didn't
+ * resolve when the modal opened. The approval then names no branch, commit or
+ * destination, and a push is only ever allowed to publish what one did — so it
+ * is refused rather than run against whatever the worktree holds now. The
+ * modal still allowed the click, with its "couldn't verify" warning, because a
+ * permanently disabled approve button would strand the request until timeout.
+ */
+const UNREVIEWED_PUSH_RESULT: ActionDispatchResult = {
+  ok: false,
+  error: {
+    code: "CONFIRMATION_REQUIRED",
+    message:
+      "Push refused: the confirmation couldn't read what this push would publish, so the approval covers no branch, commit or destination. Nothing was pushed. Call again to raise a fresh confirmation with the push's preview.",
   },
 };
 
@@ -352,6 +371,25 @@ function readGitLocationArg(args: unknown): GitLocationArg {
     state: "named",
     location: Object.fromEntries(named.map((key) => [key, record[key]])) as WorktreeLocationArgs,
   };
+}
+
+/**
+ * Whether a git dispatch's location selector can never be valid: a spelling
+ * that is empty or not a string, or two path spellings that contradict each
+ * other. Such a call gets no preview, and must reach the action's own
+ * validation to be rejected for what it is — unlike a well-formed selector
+ * that simply didn't resolve yet, which is the approval-covers-nothing case.
+ */
+function isMalformedGitLocation(args: unknown, context: ActionContext | undefined): boolean {
+  const named = readGitLocationArg(args);
+  if (named.state === "invalid") return true;
+  if (named.state !== "named") return false;
+  try {
+    resolveWorktreeLocation(named.location, context ?? actionService.getContext());
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -825,6 +863,12 @@ export interface McpConfirmPreviewResult {
    * count the approver read.
    */
   approvedRecipeRun?: HostApprovedRecipeRun;
+  /**
+   * The branch, commit and destination a push preview showed, for the approval
+   * to pin the push to (#15646). Built from the same read the lines describe,
+   * and only when that read measured a push range.
+   */
+  approvedPush?: HostApprovedPush;
 }
 
 /**
@@ -921,6 +965,9 @@ export async function buildMcpConfirmPreview(
           : "No local commits to replay.",
         operation
       ),
+      ...(target.kind === "gitPush" && preview.pushReview
+        ? { approvedPush: { cwd: target.cwd, review: preview.pushReview } }
+        : {}),
     };
   } catch {
     return { lines: formatGitRemoteOperationPreviewLines(null, "", operation) };
@@ -1244,6 +1291,11 @@ export function useMcpBridge(): void {
         // keeps the smaller unapproved terminal cap rather than silently
         // inheriting a ten-pane authority nobody was shown.
         let approvedRecipeRun: HostApprovedRecipeRun | undefined;
+        // The push half of the same attestation (#15646), captured the same
+        // way: set from the preview build before approval can be clicked, and
+        // undefined for a pre-granted dispatch, which previews nothing and so
+        // keeps pushing the worktree as it stands.
+        let approvedPush: HostApprovedPush | undefined;
         try {
           let effectiveConfirmed = confirmed;
 
@@ -1359,12 +1411,20 @@ export function useMcpBridge(): void {
               const previewPending = hasAsyncPreview;
               if (hasAsyncPreview && previewTarget !== undefined) {
                 void buildMcpConfirmPreview(previewTarget)
-                  .then(({ lines, typedNameTarget, approvedRecipeRun: offered }) => {
-                    if (disposed) return;
-                    approvedTypedNameTarget = typedNameTarget;
-                    approvedRecipeRun = offered;
-                    useMcpConfirmStore.getState().setPreview(requestId, lines, typedNameTarget);
-                  })
+                  .then(
+                    ({
+                      lines,
+                      typedNameTarget,
+                      approvedRecipeRun: offered,
+                      approvedPush: shown,
+                    }) => {
+                      if (disposed) return;
+                      approvedTypedNameTarget = typedNameTarget;
+                      approvedRecipeRun = offered;
+                      approvedPush = shown;
+                      useMcpConfirmStore.getState().setPreview(requestId, lines, typedNameTarget);
+                    }
+                  )
                   // The builder already fails soft, but a rejection escaping it
                   // would leave previewPending stuck true and the modal
                   // unapprovable — the exact stall class #11538 removes. Clear
@@ -1372,6 +1432,7 @@ export function useMcpBridge(): void {
                   .catch(() => {
                     if (disposed) return;
                     approvedRecipeRun = undefined;
+                    approvedPush = undefined;
                     useMcpConfirmStore.getState().setPreview(requestId, []);
                   });
               }
@@ -1573,6 +1634,28 @@ export function useMcpBridge(): void {
                   return;
                 }
               }
+
+              // An approved push runs only on the review it was shown. With
+              // none, the approval covers no particular push, and `git.push`
+              // would otherwise run on whatever the worktree holds now.
+              //
+              // Keyed on the action, not on whether a preview target resolved:
+              // a worktree id this view didn't know yet when the modal opened,
+              // or no active worktree then, gets no preview at all, and either
+              // can resolve by the time the dispatch runs. Only a malformed
+              // selector is let through, to fail the action's own validation.
+              if (
+                actionId === "git.push" &&
+                approvedPush === undefined &&
+                !isMalformedGitLocation(args, context)
+              ) {
+                window.electron.mcpBridge.sendDispatchActionResponse({
+                  requestId,
+                  result: UNREVIEWED_PUSH_RESULT,
+                  confirmationDecision,
+                });
+                return;
+              }
             }
           }
 
@@ -1627,6 +1710,7 @@ export function useMcpBridge(): void {
                 contextOverride: context,
                 ...(hostApprovedTargets ? { hostApprovedTargets } : {}),
                 ...(approvedRecipeRun ? { hostApprovedRecipeRun: approvedRecipeRun } : {}),
+                ...(approvedPush ? { hostApprovedPush: approvedPush } : {}),
               }),
             actionId
           );

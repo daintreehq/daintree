@@ -2,7 +2,8 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GitPushConfirmDialog } from "../GitPushConfirmDialog";
-import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
+import { useGitPushConfirmStore, type GitPushConfirmResult } from "@/store/gitPushConfirmStore";
+import type { GitPushReview } from "@shared/types/git";
 import type { ReactNode } from "react";
 
 // The app root supplies the TooltipProvider. Triggers render inline; the
@@ -57,6 +58,10 @@ vi.stubGlobal(
   }
 );
 
+function reviewOf(branch: string): GitPushReview {
+  return { branch, headOid: "c".repeat(40), destination: { remote: "origin", branch } };
+}
+
 function pushButton(): HTMLElement {
   return screen.getByRole("button", { name: "Push commits" });
 }
@@ -81,7 +86,7 @@ describe("GitPushConfirmDialog", () => {
 
   afterEach(() => {
     if (useGitPushConfirmStore.getState().pendingConfirm) {
-      useGitPushConfirmStore.getState().resolveConfirmation(false);
+      useGitPushConfirmStore.getState().resolveConfirmation(null);
     }
     cleanup();
     vi.restoreAllMocks();
@@ -113,6 +118,7 @@ describe("GitPushConfirmDialog", () => {
       pullSource: { remote: "origin", branch: "main" },
       commits: [],
       pushRange: { total: 0, rangeBasis: "tracked" as const },
+      pushReview: reviewOf("main"),
     });
     render(<GitPushConfirmDialog />);
 
@@ -141,6 +147,7 @@ describe("GitPushConfirmDialog", () => {
       pullSource: { remote: "origin", branch: "main" },
       commits: [{ hash: "abcdef1234", message: "Fix it", author: "Ada" }],
       pushRange: { total: 1, rangeBasis: "tracked" as const },
+      pushReview: reviewOf("main"),
     });
     await act(async () => {
       retry.click();
@@ -252,7 +259,7 @@ describe("GitPushConfirmDialog", () => {
       pushRange: { total: 1, rangeBasis: "tracked" as const },
     });
     await act(async () => {
-      useGitPushConfirmStore.getState().resolveConfirmation(false);
+      useGitPushConfirmStore.getState().resolveConfirmation(null);
       rerender(<GitPushConfirmDialog />);
       void useGitPushConfirmStore.getState().requestConfirmation("/repo");
     });
@@ -407,23 +414,27 @@ describe("GitPushConfirmDialog", () => {
     expect(region.textContent).not.toContain("unverified");
   });
 
-  it("resolves the awaited confirm promise with the user's decision", async () => {
+  // The approval carries what was on screen, not a bare yes (#15646): the push
+  // refuses unless the worktree still matches it.
+  it("approves with the branch, commit and destination the dialog showed", async () => {
+    const shown = reviewOf("main");
     mocks.buildPreview.mockResolvedValue({
       branch: "main",
       destination: { remote: "origin", branch: "main" },
       pullSource: { remote: "origin", branch: "main" },
       commits: [],
       pushRange: { total: 0, rangeBasis: "tracked" as const },
+      pushReview: shown,
     });
     render(<GitPushConfirmDialog />);
 
-    let decision: boolean | undefined;
+    let decision: GitPushConfirmResult | undefined;
     await act(async () => {
       void useGitPushConfirmStore
         .getState()
         .requestConfirmation("/repo")
-        .then((ok) => {
-          decision = ok;
+        .then((result) => {
+          decision = result;
         });
     });
 
@@ -431,7 +442,119 @@ describe("GitPushConfirmDialog", () => {
       pushButton().click();
     });
 
-    expect(decision).toBe(true);
+    expect(decision).toEqual({ confirmed: true, review: shown });
+  });
+
+  // A second request for the SAME worktree must read its own preview: the
+  // worktree may have moved since the first, and the approval carries whatever
+  // the dialog shows. Reusing the first read would pin the push to a commit the
+  // branch has already left.
+  it("re-reads the preview when a request supersedes another for the same worktree", async () => {
+    const first = { ...reviewOf("main"), headOid: "1".repeat(40) };
+    const second = { ...reviewOf("main"), headOid: "2".repeat(40) };
+    const loaded = (review: GitPushReview, message: string) => ({
+      branch: "main",
+      destination: { remote: "origin", branch: "main" },
+      pullSource: { remote: "origin", branch: "main" },
+      commits: [{ hash: review.headOid, message, author: "Ada" }],
+      pushRange: { total: 1, rangeBasis: "tracked" as const },
+      pushReview: review,
+    });
+    // The first read is still in flight when the second request arrives, and
+    // lands LAST: it must not settle the newer request.
+    const firstRead = deferred<ReturnType<typeof loaded>>();
+    mocks.buildPreview.mockReturnValueOnce(firstRead.promise);
+    render(<GitPushConfirmDialog />);
+
+    let superseded: GitPushConfirmResult | undefined;
+    await act(async () => {
+      void useGitPushConfirmStore
+        .getState()
+        .requestConfirmation("/repo")
+        .then((result) => {
+          superseded = result;
+        });
+    });
+
+    const reread = deferred<ReturnType<typeof loaded>>();
+    mocks.buildPreview.mockReturnValueOnce(reread.promise);
+    let decision: GitPushConfirmResult | undefined;
+    await act(async () => {
+      void useGitPushConfirmStore
+        .getState()
+        .requestConfirmation("/repo")
+        .then((result) => {
+          decision = result;
+        });
+    });
+
+    expect(superseded).toEqual({ confirmed: false, review: null });
+    expect(mocks.buildPreview).toHaveBeenCalledTimes(2);
+    // Until its own read lands, the first request's rows can't be approved.
+    expect(pushButton().getAttribute("aria-disabled")).toBe("true");
+
+    await act(async () => {
+      reread.resolve(loaded(second, "After"));
+    });
+    await act(async () => {
+      firstRead.resolve(loaded(first, "Before"));
+    });
+    expect(screen.getByText("After")).toBeTruthy();
+    expect(screen.queryByText("Before")).toBeNull();
+    await act(async () => {
+      pushButton().click();
+    });
+
+    expect(decision).toEqual({ confirmed: true, review: second });
+  });
+
+  it("declines with no review when cancelled", async () => {
+    mocks.buildPreview.mockResolvedValue({
+      branch: "main",
+      destination: { remote: "origin", branch: "main" },
+      pullSource: { remote: "origin", branch: "main" },
+      commits: [],
+      pushRange: { total: 0, rangeBasis: "tracked" as const },
+      pushReview: reviewOf("main"),
+    });
+    render(<GitPushConfirmDialog />);
+
+    let decision: GitPushConfirmResult | undefined;
+    await act(async () => {
+      void useGitPushConfirmStore
+        .getState()
+        .requestConfirmation("/repo")
+        .then((result) => {
+          decision = result;
+        });
+    });
+
+    await act(async () => {
+      screen.getByRole("button", { name: "Cancel" }).click();
+    });
+
+    expect(decision).toEqual({ confirmed: false, review: null });
+  });
+
+  // A loaded preview that measured no push has nothing to pin an approval to,
+  // so there is nothing to approve: the push would refuse it anyway.
+  it("keeps approval blocked when the preview carries no review to pin", async () => {
+    mocks.buildPreview.mockResolvedValue({
+      branch: "main",
+      destination: { remote: "origin", branch: "main" },
+      pullSource: { remote: "origin", branch: "main" },
+      commits: [{ hash: "abcdef1234", message: "Fix it", author: "Ada" }],
+      pushRange: { total: 1, rangeBasis: "tracked" as const },
+      pushReview: null,
+    });
+    render(<GitPushConfirmDialog />);
+
+    await act(async () => {
+      void useGitPushConfirmStore.getState().requestConfirmation("/repo");
+    });
+
+    expect(screen.getByText("Fix it")).toBeTruthy();
+    expect(pushButton().getAttribute("aria-disabled")).toBe("true");
   });
 
   // A halted rebase detaches HEAD, so it arrives looking exactly like a detached
@@ -500,6 +623,7 @@ describe("GitPushConfirmDialog", () => {
       pullSource: null,
       commits: [{ hash: "abcdef12", message: "Local", author: "Ada" }],
       pushRange: { total: 1, rangeBasis: "tracked" as const, behind: 3 },
+      pushReview: reviewOf("topic"),
     });
     render(<GitPushConfirmDialog />);
 
@@ -544,7 +668,7 @@ describe("GitPushConfirmDialog", () => {
       });
       const id = screen.getByRole("dialog").getAttribute("aria-describedby");
       const present = id !== null && document.getElementById(id) !== null;
-      act(() => useGitPushConfirmStore.getState().resolveConfirmation(false));
+      act(() => useGitPushConfirmStore.getState().resolveConfirmation(null));
       view.unmount();
       return present;
     };
@@ -558,6 +682,7 @@ describe("GitPushConfirmDialog", () => {
       pullSource: null,
       commits: [{ hash: "abcdef12", message: "Local", author: "Ada" }],
       pushRange: { total: 1, rangeBasis: "tracked" as const, behind: 0 },
+      pushReview: reviewOf("topic"),
     };
 
     expect(await describes(base)).toBe(true);

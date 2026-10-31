@@ -152,6 +152,13 @@ function confirmManifestEntry(overrides: Partial<ActionManifestEntry> = {}): Act
   };
 }
 
+/** What the default git preview fixture shows: `main` at one commit, to `origin/main`. */
+const MAIN_PUSH_REVIEW = {
+  branch: "main",
+  headOid: "a".repeat(40),
+  destination: { remote: "origin", branch: "main" },
+};
+
 describe("useMcpBridge", () => {
   let manifestHandler: ((requestId: string) => void) | undefined;
   let dispatchHandler:
@@ -193,6 +200,7 @@ describe("useMcpBridge", () => {
       destination: { remote: "origin", branch: "main" },
       pullSource: { remote: "origin", branch: "main" },
       commits: [],
+      pushReview: MAIN_PUSH_REVIEW,
     });
     __resetMcpConfirmStoreForTesting();
     manifestHandler = undefined;
@@ -2102,10 +2110,121 @@ describe("useMcpBridge", () => {
     );
   });
 
+  // The approval covers the branch, commit and destination the modal showed,
+  // and the push is pinned to them (#15646): an agent committing into the
+  // worktree while the modal is open must not ride along under it.
+  it("hands git.push the branch, commit and destination the approver was shown", async () => {
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({ id: "git.push", name: "git.push", title: "Push" })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: true, result: undefined });
+    const shown = {
+      branch: "feature/x",
+      headOid: "b".repeat(40),
+      destination: { remote: "fork", branch: "feature/x" },
+    };
+    mocks.buildGitPreview.mockResolvedValue({
+      branch: "feature/x",
+      destination: shown.destination,
+      pullSource: { remote: "origin", branch: "feature/x" },
+      commits: [{ hash: "abcdef1234", message: "Fix the thing", author: "Ada" }],
+      pushReview: shown,
+    });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-pinned",
+      actionId: "git.push",
+      args: { cwd: "/repo" },
+    });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+    });
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "git.push",
+      { cwd: "/repo" },
+      expect.objectContaining({
+        source: "agent",
+        confirmed: true,
+        hostApprovedPush: { cwd: "/repo", review: shown },
+      })
+    );
+  });
+
+  // A standing grant previews nothing, so there is no review to pin: it keeps
+  // pushing the worktree as it stands, exactly as before.
+  it("pins nothing on a pre-granted git.push, which raised no preview", async () => {
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({ id: "git.push", name: "git.push", title: "Push" })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: true, result: undefined });
+
+    renderHook(() => useMcpBridge());
+
+    await dispatchHandler?.({
+      requestId: "req-granted",
+      actionId: "git.push",
+      args: { cwd: "/repo" },
+      confirmed: true,
+    });
+
+    expect(mocks.buildGitPreview).not.toHaveBeenCalled();
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "git.push",
+      { cwd: "/repo" },
+      expect.objectContaining({ source: "agent", confirmed: true })
+    );
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "git.push",
+      { cwd: "/repo" },
+      expect.not.objectContaining({ hostApprovedPush: expect.anything() })
+    );
+  });
+
+  // Two path spellings that contradict each other can never be valid. They get
+  // no preview, and must reach the action's validation to be told so, rather
+  // than a refusal that asks for a fresh confirmation which can't help.
+  it("lets contradictory path spellings through to validation rather than refusing them", async () => {
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({ id: "git.push", name: "git.push", title: "Push" })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: false, error: { code: "VALIDATION_ERROR" } });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-contradictory",
+      actionId: "git.push",
+      args: { cwd: "/a", worktreePath: "/b" },
+    });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.requestId).toBe("req-contradictory");
+    });
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.buildGitPreview).not.toHaveBeenCalled();
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "git.push",
+      { cwd: "/a", worktreePath: "/b" },
+      expect.objectContaining({ source: "agent" })
+    );
+  });
+
   // The whole point of #11538 is that nothing can leave a destructive dispatch
   // permanently unapprovable. A failed preview fetch must still clear
   // previewPending and say so, rather than stranding the modal until timeout.
-  it("clears previewPending and warns when the git preview fetch fails", async () => {
+  //
+  // The click stays available, but a push approved on a preview that read
+  // nothing is refused rather than run (#15646): the approval names no branch,
+  // commit or destination, and a push may only publish what one did.
+  it("clears previewPending and warns when the git preview fetch fails, then refuses the push", async () => {
     mocks.get.mockReturnValue(
       confirmManifestEntry({ id: "git.push", name: "git.push", title: "Push" })
     );
@@ -2128,7 +2247,96 @@ describe("useMcpBridge", () => {
 
     useMcpConfirmStore.getState().resolveCurrent("approved");
     await dispatched;
-    expect(mocks.dispatch).toHaveBeenCalled();
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: "req-fail",
+        confirmationDecision: "approved",
+        result: expect.objectContaining({
+          ok: false,
+          error: expect.objectContaining({ code: "CONFIRMATION_REQUIRED" }),
+        }),
+      })
+    );
+  });
+
+  it("refuses an approved push whose preview measured no push range", async () => {
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({ id: "git.push", name: "git.push", title: "Push" })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: true, result: undefined });
+    // Detached HEAD: nothing to measure, so nothing to pin.
+    mocks.buildGitPreview.mockResolvedValue({
+      branch: null,
+      destination: null,
+      pullSource: null,
+      commits: [],
+      pushReview: null,
+    });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-unmeasured",
+      actionId: "git.push",
+      args: { cwd: "/repo" },
+    });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+    });
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: "req-unmeasured",
+        confirmationDecision: "approved",
+        result: expect.objectContaining({
+          ok: false,
+          error: expect.objectContaining({ code: "CONFIRMATION_REQUIRED" }),
+        }),
+      })
+    );
+  });
+
+  // A worktree id this view hadn't indexed when the modal opened gets no
+  // preview; by the click it may resolve, and the push would then run on a
+  // worktree nobody was shown. The approval covers nothing, so it is refused.
+  it("refuses an approved push whose worktree only resolved after the modal opened", async () => {
+    setWorktreePathIndexAccessor(() => new Map());
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({ id: "git.push", name: "git.push", title: "Push" })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: true, result: undefined });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-late-worktree",
+      actionId: "git.push",
+      args: { worktreeId: "wt-new" },
+    });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.requestId).toBe("req-late-worktree");
+    });
+    expect(mocks.buildGitPreview).not.toHaveBeenCalled();
+    setWorktreePathIndexAccessor(() => new Map([["wt-new", "/repo/new"]]));
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: "req-late-worktree",
+        result: expect.objectContaining({
+          ok: false,
+          error: expect.objectContaining({ code: "CONFIRMATION_REQUIRED" }),
+        }),
+      })
+    );
   });
 
   it("previews and pins git.pullRebase the same way as git.push (#11538)", async () => {
@@ -3541,6 +3749,41 @@ describe("buildMcpConfirmPreview (#11343, #11538)", () => {
       force: false,
     });
     expect(lines).toEqual(["⚠ Could not verify current changes — proceed with caution."]);
+  });
+
+  it("offers the push review it previewed, and only for a push", async () => {
+    const shown = {
+      branch: "main",
+      headOid: "d".repeat(40),
+      destination: { remote: "origin", branch: "main" },
+    };
+    mocks.buildGitPreview.mockResolvedValue({
+      branch: "main",
+      destination: shown.destination,
+      pullSource: { remote: "origin", branch: "main" },
+      commits: [],
+      pushReview: shown,
+    });
+
+    const push = await buildMcpConfirmPreview({ kind: "gitPush", cwd: "/repo" });
+    expect(push.approvedPush).toEqual({ cwd: "/repo", review: shown });
+
+    const rebase = await buildMcpConfirmPreview({ kind: "gitPullRebase", cwd: "/repo" });
+    expect(rebase.approvedPush).toBeUndefined();
+
+    mocks.buildGitPreview.mockResolvedValue({
+      branch: null,
+      destination: null,
+      pullSource: null,
+      commits: [],
+      pushReview: null,
+    });
+    const unmeasured = await buildMcpConfirmPreview({ kind: "gitPush", cwd: "/repo" });
+    expect(unmeasured.approvedPush).toBeUndefined();
+
+    mocks.buildGitPreview.mockRejectedValue(new Error("git exploded"));
+    const failed = await buildMcpConfirmPreview({ kind: "gitPush", cwd: "/repo" });
+    expect(failed.approvedPush).toBeUndefined();
   });
 
   it("distinguishes an empty branch from an unverifiable one for git targets", async () => {

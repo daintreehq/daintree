@@ -34,6 +34,7 @@ import type {
 } from "../shared/types/ipc/mcpServer.js";
 import type { ActionContext, ActionDispatchResult } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
+import type { GitPushReview } from "../shared/types/git.js";
 import type { PluginPerfSnapshot } from "../shared/types/pluginMetrics.js";
 import type { PluginRendererMetricsEnvelope } from "../shared/types/ipc/pluginMetrics.js";
 import { CHANNELS } from "./ipc/channels.js";
@@ -2021,8 +2022,20 @@ function buildElectronApi(): ElectronAPI {
       commit: (cwd: string, message: string) =>
         _unwrappingInvoke(CHANNELS.GIT_COMMIT, { cwd, message }),
 
-      push: (cwd: string, setUpstream?: boolean, opId?: string) =>
-        _unwrappingInvoke(CHANNELS.GIT_PUSH, { cwd, setUpstream, opId }),
+      push: (cwd: string, setUpstream?: boolean, opId?: string, review?: GitPushReview) =>
+        _unwrappingInvoke(CHANNELS.GIT_PUSH, {
+          cwd,
+          setUpstream,
+          opId,
+          ...(review
+            ? {
+                expectedBranch: review.branch,
+                expectedHeadOid: review.headOid,
+                expectedRemote: review.destination.remote,
+                expectedRemoteBranch: review.destination.branch,
+              }
+            : {}),
+        }),
 
       pullRebase: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_PULL_REBASE, { cwd }),
 

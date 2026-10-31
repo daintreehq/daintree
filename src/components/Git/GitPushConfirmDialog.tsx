@@ -50,6 +50,11 @@ import { pluralize } from "@/lib/pluralize";
 function GitPushConfirmDialogInner() {
   const pendingConfirm = useGitPushConfirmStore((s) => s.pendingConfirm);
   const resolveConfirmation = useGitPushConfirmStore((s) => s.resolveConfirmation);
+  // Identifies the request, where `cwd` only identifies the worktree: a request
+  // that supersedes another for the SAME worktree must read its own preview,
+  // because the worktree may have moved in between and the approval carries
+  // whatever this dialog shows (#15646).
+  const requestSeq = useGitPushConfirmStore((s) => s.requestSeq);
 
   const cwd = pendingConfirm?.cwd ?? null;
 
@@ -57,20 +62,22 @@ function GitPushConfirmDialogInner() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   /**
-   * The cwd the currently-held preview actually describes.
+   * The request (its `requestSeq`) the currently-held preview was read for.
    *
    * Approval is gated on this matching the pending request, not merely on
    * "something loaded". The dialog keeps its state across close/open — the host
-   * stays mounted and only returns null — so without this a second confirm for a
-   * DIFFERENT worktree renders the previous worktree's branch, destination and
-   * commits for the frames between render and effect, with Push enabled against
-   * them.
+   * stays mounted and only returns null — so without this a second confirm
+   * renders the previous request's branch, destination and commits for the
+   * frames between render and effect, with Push enabled against them. Keyed on
+   * the request rather than the cwd so a second confirm for the same worktree
+   * can't approve the first one's review either.
    */
-  const [loadedFor, setLoadedFor] = useState<string | null>(null);
+  const [loadedFor, setLoadedFor] = useState<number | null>(null);
   const requestIdRef = useRef(0);
 
   const loadPreview = useCallback(() => {
     if (!cwd) return;
+    const forRequest = requestSeq;
     const requestId = ++requestIdRef.current;
     setIsLoading(true);
     setLoadError(null);
@@ -84,7 +91,7 @@ function GitPushConfirmDialogInner() {
         .then((result) => {
           if (requestIdRef.current !== requestId) return;
           setPreview(result);
-          setLoadedFor(cwd);
+          setLoadedFor(forRequest);
         })
         .catch((err: unknown) => {
           if (requestIdRef.current !== requestId) return;
@@ -102,7 +109,7 @@ function GitPushConfirmDialogInner() {
         }),
       { context: "GitPushConfirmDialog: load push preview" }
     );
-  }, [cwd]);
+  }, [cwd, requestSeq]);
 
   useEffect(() => {
     if (!cwd) {
@@ -129,7 +136,7 @@ function GitPushConfirmDialogInner() {
   useEffect(() => {
     return () => {
       if (useGitPushConfirmStore.getState().pendingConfirm) {
-        useGitPushConfirmStore.getState().resolveConfirmation(false);
+        useGitPushConfirmStore.getState().resolveConfirmation(null);
       }
     };
   }, []);
@@ -146,7 +153,7 @@ function GitPushConfirmDialogInner() {
   // starts false and the fetch only begins in an effect, so a check that asked
   // merely whether loading had finished classified the first painted frame as
   // "no destination" and flashed that error before anything had been read.
-  const isSettled = !isLoading && !loadError && loadedFor === cwd;
+  const isSettled = !isLoading && !loadError && loadedFor === requestSeq;
   const isPending = !isSettled && !loadError;
   // Checked before detached HEAD: a halted rebase detaches HEAD too, and telling
   // someone mid-rebase to check out a branch is the wrong diagnosis and the
@@ -173,6 +180,10 @@ function GitPushConfirmDialogInner() {
   // list is an estimate. The warning leads, and the consequence moves to the
   // footnote rather than sitting above the thing the user most needs to read.
   const hasWarning = isLoaded && (behind > 0 || isUnverified);
+  // What approving approves: the branch, commit and destination the rows on
+  // screen were measured against (#15646). Read only from this request's own
+  // settled answer, so a click can never carry a review the dialog isn't showing.
+  const pushReview = isSettled ? (preview?.pushReview ?? null) : null;
 
   // A destination nobody can name can't be approved — the handler would refuse
   // the write anyway, and guessing `origin` is the bug (#11746). `commits === null`
@@ -182,7 +193,11 @@ function GitPushConfirmDialogInner() {
   // A diverged destination is NOT blocked. Git refuses the push itself, and that
   // refusal is the one moment the force-push lease can be captured (#7822) — a
   // confirm that blocked here would take away the only route to that recovery.
-  const confirmDisabled = !isSettled || commits === null || !destination || !!loadError;
+  //
+  // No review, no approval: the push has to be pinned to what was shown, and a
+  // preview that measured nothing has nothing to pin it to.
+  const confirmDisabled =
+    !isSettled || commits === null || !destination || !pushReview || !!loadError;
 
   // Names the one unmet prerequisite rather than leaving a dead button to be
   // read as arbitrary. Ordered by which the user can act on first, and short
@@ -279,7 +294,7 @@ function GitPushConfirmDialogInner() {
   return (
     <ConfirmDialog
       isOpen={true}
-      onClose={() => resolveConfirmation(false)}
+      onClose={() => resolveConfirmation(null)}
       title="Push commits?"
       // Shown while the read is pending and when a push is actually about to
       // publish something. Blocked and empty states drop it: the consequence of a
@@ -305,7 +320,9 @@ function GitPushConfirmDialogInner() {
       // way out of the dialog.
       confirmDisabled={confirmDisabled}
       hint={blockedReason}
-      onConfirm={() => resolveConfirmation(true)}
+      onConfirm={() => {
+        if (pushReview) resolveConfirmation(pushReview);
+      }}
     >
       <PreviewFrame>
         {notice}

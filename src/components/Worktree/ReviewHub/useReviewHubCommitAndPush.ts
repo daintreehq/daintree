@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
+import type { GitPushReview } from "@shared/types/git";
 import { isClientAppError } from "@/utils/clientAppError";
 import type { debounce } from "@/utils/debounce";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
@@ -129,82 +130,94 @@ export function useReviewHubCommitAndPush({
   );
 
   const isPushingRef = useRef(false);
+  /**
+   * The review the last push ran under, so Retry pushes what was approved
+   * rather than whatever the branch holds by then (#15646). `null` for the
+   * commit-and-push path, whose confirm pins nothing.
+   */
+  const lastPushReviewRef = useRef<GitPushReview | null>(null);
 
-  const runPush = useCallback(async () => {
-    if (isPushingRef.current) return;
-    isPushingRef.current = true;
-    setIsPushing(true);
-    setPushError(null);
-    setPushProgress(new Map());
-    setPushTargetBranch(null);
-    setPushAnnouncement("");
-    let announcedTarget: string | null = null;
-
-    const cleanup = window.electron.git.onPushProgress((event) => {
-      if (event.cwd !== worktreePath) return;
-      if (event.stage === "target") {
-        announcedTarget = event.targetBranch ?? null;
-        setPushTargetBranch(event.targetBranch ?? null);
-        return;
-      }
-      setPushProgress((prev) => {
-        const next = new Map(prev);
-        next.set(event.stage, event);
-        return next;
-      });
-    });
-
-    // Drop any lease captured by an earlier rejection before pushing again —
-    // the same order `git.push`'s action uses. Without it a push that fails for
-    // some OTHER reason (or succeeds) leaves the previous rejection's lease
-    // standing, and the worktree card goes on offering a recovery for a remote
-    // state nobody has observed since.
-    useGitForcePushStore.getState().clearRecovery(worktreePath);
-    try {
-      const opId = mintRemoteOperationId();
-      await runHostOperation(
-        opId,
-        () =>
-          opId
-            ? window.electron.git.push(worktreePath, undefined, opId)
-            : window.electron.git.push(worktreePath),
-        { fromResult: () => undefined }
-      );
+  const runPush = useCallback(
+    async (review: GitPushReview | null) => {
+      if (isPushingRef.current) return;
+      isPushingRef.current = true;
+      lastPushReviewRef.current = review;
+      setIsPushing(true);
       setPushError(null);
-      setPushAnnouncement(announcedTarget ? `Pushed to ${announcedTarget}` : "Push complete");
-    } catch (err) {
-      // GitOperationError carries `gitReason` (auth-failed, push-rejected-*, etc.).
-      // AppError carries `code` from a different union (RATE_LIMITED, etc.) — fall
-      // back to "unknown" so getPushBannerConfig surfaces the raw message rather
-      // than rendering an unmapped reason.
-      const errFields = readGitErrorFields(err);
-      const isRateLimited =
-        isClientAppError(err) && (err as { code?: string }).code === "RATE_LIMITED";
-      const rawMessage = isRateLimited
-        ? "Too many push attempts in a short window — wait a moment and try again."
-        : formatErrorMessage(err, "Failed to push");
-      setPushError({
-        reason: errFields.gitReason ?? classifyGitError(rawMessage),
-        rawMessage,
-        leaseSha: errFields.leaseSha,
-        branchName: errFields.branchName,
+      setPushProgress(new Map());
+      setPushTargetBranch(null);
+      setPushAnnouncement("");
+      let announcedTarget: string | null = null;
+
+      const cleanup = window.electron.git.onPushProgress((event) => {
+        if (event.cwd !== worktreePath) return;
+        if (event.stage === "target") {
+          announcedTarget = event.targetBranch ?? null;
+          setPushTargetBranch(event.targetBranch ?? null);
+          return;
+        }
+        setPushProgress((prev) => {
+          const next = new Map(prev);
+          next.set(event.stage, event);
+          return next;
+        });
       });
-      // This pane pushes through the IPC directly rather than the `git.push`
-      // action, so the action's own capture never runs here. Publishing the
-      // lease to the shared store is what lets the worktree card offer the
-      // same recovery the banner below does — and keeps ONE lease per
-      // worktree, captured at one rejection, however the push was started.
-      useGitForcePushStore.getState().recordRejection({
-        cwd: worktreePath,
-        branchName: errFields.branchName,
-        leaseSha: errFields.leaseSha,
-      });
-    } finally {
-      cleanup();
-      setIsPushing(false);
-      isPushingRef.current = false;
-    }
-  }, [worktreePath]);
+
+      // Drop any lease captured by an earlier rejection before pushing again —
+      // the same order `git.push`'s action uses. Without it a push that fails for
+      // some OTHER reason (or succeeds) leaves the previous rejection's lease
+      // standing, and the worktree card goes on offering a recovery for a remote
+      // state nobody has observed since.
+      useGitForcePushStore.getState().clearRecovery(worktreePath);
+      try {
+        const opId = mintRemoteOperationId();
+        await runHostOperation(
+          opId,
+          () =>
+            review
+              ? window.electron.git.push(worktreePath, undefined, opId, review)
+              : opId
+                ? window.electron.git.push(worktreePath, undefined, opId)
+                : window.electron.git.push(worktreePath),
+          { fromResult: () => undefined }
+        );
+        setPushError(null);
+        setPushAnnouncement(announcedTarget ? `Pushed to ${announcedTarget}` : "Push complete");
+      } catch (err) {
+        // GitOperationError carries `gitReason` (auth-failed, push-rejected-*, etc.).
+        // AppError carries `code` from a different union (RATE_LIMITED, etc.) — fall
+        // back to "unknown" so getPushBannerConfig surfaces the raw message rather
+        // than rendering an unmapped reason.
+        const errFields = readGitErrorFields(err);
+        const isRateLimited =
+          isClientAppError(err) && (err as { code?: string }).code === "RATE_LIMITED";
+        const rawMessage = isRateLimited
+          ? "Too many push attempts in a short window — wait a moment and try again."
+          : formatErrorMessage(err, "Failed to push");
+        setPushError({
+          reason: errFields.gitReason ?? classifyGitError(rawMessage),
+          rawMessage,
+          leaseSha: errFields.leaseSha,
+          branchName: errFields.branchName,
+        });
+        // This pane pushes through the IPC directly rather than the `git.push`
+        // action, so the action's own capture never runs here. Publishing the
+        // lease to the shared store is what lets the worktree card offer the
+        // same recovery the banner below does — and keeps ONE lease per
+        // worktree, captured at one rejection, however the push was started.
+        useGitForcePushStore.getState().recordRejection({
+          cwd: worktreePath,
+          branchName: errFields.branchName,
+          leaseSha: errFields.leaseSha,
+        });
+      } finally {
+        cleanup();
+        setIsPushing(false);
+        isPushingRef.current = false;
+      }
+    },
+    [worktreePath]
+  );
 
   const handleCommitAndPush = useCallback(
     async (message: string) => {
@@ -226,7 +239,7 @@ export function useReviewHubCommitAndPush({
         // Same review reset as handleCommit — the changeset starts over.
         useDiffViewedStore.getState().clearWorktree(worktreePath);
         await refresh();
-        await runPush();
+        await runPush(null);
       } finally {
         setIsCommitPushInFlight(false);
       }
@@ -237,7 +250,7 @@ export function useReviewHubCommitAndPush({
   const handleRetryPush = useCallback(async () => {
     setPushError(null);
     debouncedBgRefreshRef.current?.cancel();
-    await runPush();
+    await runPush(lastPushReviewRef.current);
   }, [runPush, debouncedBgRefreshRef]);
 
   // Push from the clean-tree state, where no CommitPanel (and thus no local
@@ -245,9 +258,9 @@ export function useReviewHubCommitAndPush({
   // git.push action uses, then reuses runPush so progress and error banners
   // stay on the hub's existing paths.
   const handlePushClean = useCallback(async () => {
-    const confirmed = await useGitPushConfirmStore.getState().requestConfirmation(worktreePath);
-    if (!confirmed) return;
-    await runPush();
+    const result = await useGitPushConfirmStore.getState().requestConfirmation(worktreePath);
+    if (!result.confirmed) return;
+    await runPush(result.review);
   }, [worktreePath, runPush]);
 
   const handlePullRebase = useCallback(async () => {

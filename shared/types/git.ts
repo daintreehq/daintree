@@ -231,6 +231,24 @@ export interface GitPushCommitPreview {
    * where no tip could be read — so `0` there is "unmeasured", not "level".
    */
   behind: number;
+  /**
+   * The commit the named branch pointed at when every range above was measured.
+   * The rows, `total` and `behind` all describe this commit, so an approval of
+   * the preview is an approval of publishing exactly this commit (#15646).
+   */
+  headOid: string;
+}
+
+/**
+ * What a push confirm put in front of the approver: this branch, at this
+ * commit, going to this destination. Handed to the push so it refuses rather
+ * than publishing anything else when the worktree moved while the confirm was
+ * open (#15646).
+ */
+export interface GitPushReview {
+  branch: string;
+  headOid: string;
+  destination: GitPushDestination;
 }
 
 /**

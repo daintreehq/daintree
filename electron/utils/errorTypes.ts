@@ -187,6 +187,7 @@ export function getRetryability(error: unknown, gitReason?: GitOperationReason):
       case "conflict-unresolved":
       case "push-rejected-outdated":
       case "push-rejected-policy":
+      case "push-review-stale":
       case "pathspec-invalid":
       case "lfs-missing":
       case "lfs-quota-exceeded":

@@ -292,6 +292,8 @@ const RECOVERY_HINTS: Record<GitOperationReason, string | undefined> = {
     "The remote rejected this push (protected branch, hook, or size limit). Contact the repo admin.",
   "push-config-unsupported":
     "This remote is set up as a mirror (remote.<name>.mirror), which pushes every ref at once. Daintree only pushes the branch it showed, so push from a terminal, or turn mirroring off for this remote.",
+  "push-review-stale":
+    "The branch, its commits or its push destination changed after the push was reviewed, so nothing was pushed. Review the push again to see what it would publish now.",
   "pathspec-invalid": "The specified ref or path does not exist.",
   "lfs-missing": "Git LFS objects are missing — install git-lfs and run 'git lfs pull'.",
   "lfs-quota-exceeded":
@@ -313,6 +315,9 @@ const RECOVERY_ACTIONS: Partial<Record<GitOperationReason, RecoveryAction>> = {
     args: { tab: "code-forge", subtab: BUILTIN_GITHUB_PROVIDER_ID },
   },
   "push-rejected-outdated": { label: "Pull and rebase", actionId: "git.pullRebase" },
+  // Pushing again opens a fresh review, which is the only thing that can cover
+  // what the branch holds now.
+  "push-review-stale": { label: "Review push", actionId: "git.push" },
   "conflict-unresolved": { label: "Resolve conflicts", actionId: "worktree.openReviewHub" },
   "dubious-ownership": { label: "Trust this repo", actionId: "git.markSafeDirectory" },
 };

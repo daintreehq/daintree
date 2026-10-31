@@ -955,6 +955,56 @@ describe("ActionService", () => {
         );
       });
 
+      // The push half (#15646): what a confirm showed, which `git.push` pins
+      // the push to. A caller able to plant one could pin a push to a review
+      // nobody saw, so it rides on the options alone.
+      it("stamps ctx.hostApprovedPush from the dispatch options, and never from a contextOverride", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(confirmAction(mockRun));
+        const approval = {
+          cwd: "/repo",
+          review: {
+            branch: "topic",
+            headOid: "a".repeat(40),
+            destination: { remote: "origin", branch: "topic" },
+          },
+        };
+
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          hostApprovedPush: approval,
+        });
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          contextOverride: { hostApprovedPush: approval },
+        });
+        const forged = { ...approval, review: { ...approval.review, headOid: "b".repeat(40) } };
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          hostApprovedPush: approval,
+          contextOverride: { hostApprovedPush: forged },
+        });
+
+        expect(mockRun).toHaveBeenNthCalledWith(
+          1,
+          undefined,
+          expect.objectContaining({ hostApprovedPush: approval })
+        );
+        expect(mockRun).toHaveBeenNthCalledWith(
+          2,
+          undefined,
+          expect.objectContaining({ hostApprovedPush: undefined })
+        );
+        expect(mockRun).toHaveBeenNthCalledWith(
+          3,
+          undefined,
+          expect.objectContaining({ hostApprovedPush: approval })
+        );
+      });
+
       it("overwrites a contextOverride that claims per-target approvals nobody gave", async () => {
         const mockRun = vi.fn().mockResolvedValue(undefined);
         service.register(confirmAction(mockRun));
