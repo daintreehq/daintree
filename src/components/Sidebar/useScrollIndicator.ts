@@ -26,6 +26,16 @@ export interface HiddenSide {
 
 const NO_HIDDEN: HiddenSide = { count: 0, attention: 0 };
 
+/** How much of each edge of the scroller a pill's band currently covers. */
+export interface BandInsets {
+  top: number;
+  bottom: number;
+}
+
+// What one wheel "line" scrolls by when a band forwards a line-mode wheel
+// event. Matches Chromium's own per-line scroll step.
+const WHEEL_LINE_PX = 40;
+
 /**
  * Per-index classification of the list against the viewport, plus the rows a
  * click on each pill should reveal. Computed fresh on every read so a jump
@@ -51,6 +61,92 @@ interface Classification {
   clippedAtBottomFillsView: boolean;
 }
 
+function emptyClassification(): Classification {
+  return {
+    above: { count: 0, attention: 0 },
+    below: { count: 0, attention: 0 },
+    nearestAbove: null,
+    nearestAttentionAbove: null,
+    nearestBelow: null,
+    nearestAttentionBelow: null,
+    clippedAtTop: null,
+    clippedAtBottom: null,
+    clippedAtTopFillsView: false,
+    clippedAtBottomFillsView: false,
+  };
+}
+
+/** Classifies the list against one viewport, given as content offsets. */
+function classifyBetween(
+  items: ReadonlyArray<ScrollIndicatorItem>,
+  rendered: ReadonlyArray<ListItem<ScrollIndicatorItem>>,
+  attention: ReadonlySet<string>,
+  viewportTop: number,
+  viewportBottom: number
+): Classification {
+  const firstRenderedIndex = rendered[0]!.index;
+  const lastRenderedIndex = rendered[rendered.length - 1]!.index;
+  const result = emptyClassification();
+
+  // Indices only ever increase through these three passes, so "nearest" is
+  // the LAST hidden row seen above and the FIRST hidden row seen below.
+  const markAbove = (index: number) => {
+    const item = items[index]!;
+    result.above.count++;
+    result.nearestAbove = index;
+    if (item.worktreeId !== undefined && attention.has(item.worktreeId)) {
+      result.above.attention++;
+      result.nearestAttentionAbove = index;
+    }
+  };
+  const markBelow = (index: number) => {
+    const item = items[index]!;
+    result.below.count++;
+    result.nearestBelow ??= index;
+    if (item.worktreeId !== undefined && attention.has(item.worktreeId)) {
+      result.below.attention++;
+      result.nearestAttentionBelow ??= index;
+    }
+  };
+
+  // Rows that sit entirely outside the rendered window are unmounted, so they
+  // carry no geometry — count them straight from the backing list by index.
+  for (let i = 0; i < firstRenderedIndex && i < items.length; i++) {
+    if (items[i]!.kind === "row") markAbove(i);
+  }
+
+  // Rendered rows: classify each against the viewport using its measured
+  // offset/size. A partially-visible row counts as visible (not hidden).
+  for (const item of rendered) {
+    if (item.data?.kind !== "row" || item.index >= items.length) continue;
+    if (item.offset + item.size <= viewportTop + VISIBILITY_EPSILON_PX) {
+      markAbove(item.index);
+    } else if (item.offset >= viewportBottom - VISIBILITY_EPSILON_PX) {
+      markBelow(item.index);
+    } else {
+      const startsAtOrAboveTop = item.offset <= viewportTop + VISIBILITY_EPSILON_PX;
+      const endsAtOrBelowBottom = item.offset + item.size >= viewportBottom - VISIBILITY_EPSILON_PX;
+      if (item.offset < viewportTop - VISIBILITY_EPSILON_PX) {
+        result.clippedAtTop = item.index;
+        result.clippedAtTopFillsView = endsAtOrBelowBottom;
+      }
+      if (
+        result.clippedAtBottom === null &&
+        item.offset + item.size > viewportBottom + VISIBILITY_EPSILON_PX
+      ) {
+        result.clippedAtBottom = item.index;
+        result.clippedAtBottomFillsView = startsAtOrAboveTop;
+      }
+    }
+  }
+
+  for (let i = lastRenderedIndex + 1; i < items.length; i++) {
+    if (items[i]!.kind === "row") markBelow(i);
+  }
+
+  return result;
+}
+
 interface UseScrollIndicatorParams {
   /**
    * The full flat list backing the Virtuoso surface. Used to count worktree
@@ -68,6 +164,14 @@ interface UseScrollIndicatorParams {
   virtuosoRef: RefObject<Pick<VirtuosoHandle, "scrollToIndex"> | null>;
   /** False under reduced motion: a long smooth scroll is exactly the motion it asks to drop. */
   smoothScroll: boolean;
+  /**
+   * Height of the opaque band each pill sits in. A shown band is the list's
+   * edge on that side: rows behind it count as hidden, and a reveal parks its
+   * row clear of it. 0 (the default) measures against the bare scroller.
+   */
+  bandHeightPx?: number;
+  /** True while a drag is in flight: both pills and their bands step aside. */
+  paused?: boolean;
 }
 
 interface UseScrollIndicatorReturn {
@@ -80,12 +184,25 @@ interface UseScrollIndicatorReturn {
    */
   revealAbove: () => void;
   revealBelow: () => void;
+  /** The edges a shown band covers, for the scroller's `scroll-padding`. */
+  bandInsets: BandInsets;
+  /**
+   * Plug into each band's `onWheel`. The band covers the list rather than
+   * sitting inside it, so a wheel over it would otherwise scroll nothing.
+   */
+  handleBandWheel: (event: Pick<WheelEvent, "deltaY" | "deltaMode" | "ctrlKey">) => void;
   /** Plug into Virtuoso's `scrollerRef` prop. Captures the scrolling element. */
   scrollerRef: (el: HTMLElement | Window | null) => void;
   /** Plug into Virtuoso's `onScroll` prop. */
   handleScroll: () => void;
   /** Plug into Virtuoso's `itemsRendered` prop. Captures per-item geometry. */
   handleItemsRendered: (rendered: ListItem<ScrollIndicatorItem>[]) => void;
+}
+
+// The space between the bands when both are up, so a step through a card
+// taller than the view shows what was behind the far band next, not past it.
+function pageStep(scroller: HTMLElement, band: number): number {
+  return Math.max(scroller.clientHeight - 2 * band, scroller.clientHeight / 2);
 }
 
 function sameSide(a: HiddenSide, b: HiddenSide): boolean {
@@ -97,6 +214,8 @@ function useScrollIndicator({
   attentionWorktreeIds,
   virtuosoRef,
   smoothScroll,
+  bandHeightPx = 0,
+  paused = false,
 }: UseScrollIndicatorParams): UseScrollIndicatorReturn {
   const [hiddenAbove, setHiddenAboveState] = useState<HiddenSide>(NO_HIDDEN);
   const [hiddenBelow, setHiddenBelowState] = useState<HiddenSide>(NO_HIDDEN);
@@ -120,10 +239,14 @@ function useScrollIndicator({
   const itemsRef = useRef(items);
   const attentionRef = useRef(attentionWorktreeIds);
   const smoothScrollRef = useRef(smoothScroll);
+  const bandHeightRef = useRef(bandHeightPx);
+  const pausedRef = useRef(paused);
   useEffect(() => {
     itemsRef.current = items;
     attentionRef.current = attentionWorktreeIds;
     smoothScrollRef.current = smoothScroll;
+    bandHeightRef.current = bandHeightPx;
+    pausedRef.current = paused;
   });
   // Latest per-item geometry from Virtuoso's `itemsRendered`. Held in a ref (not
   // state) because `itemsRendered` only fires when the rendered set changes —
@@ -148,103 +271,39 @@ function useScrollIndicator({
 
     const items = itemsRef.current;
     const rendered = renderedItemsRef.current;
-    // No usable geometry: either nothing has been measured yet, or the cached
-    // geometry belongs to a previous list layout. Virtuoso re-fires
+    // Paused, or no usable geometry: either nothing has been measured yet, or
+    // the cached geometry belongs to a previous list layout. Virtuoso re-fires
     // `itemsRendered` for the current list momentarily, refreshing the tag.
-    if (rendered.length === 0 || geometryItemsRef.current !== items) {
-      return {
-        above: NO_HIDDEN,
-        below: NO_HIDDEN,
-        nearestAbove: null,
-        nearestAttentionAbove: null,
-        nearestBelow: null,
-        nearestAttentionBelow: null,
-        clippedAtTop: null,
-        clippedAtBottom: null,
-        clippedAtTopFillsView: false,
-        clippedAtBottomFillsView: false,
-      };
+    if (pausedRef.current || rendered.length === 0 || geometryItemsRef.current !== items) {
+      return emptyClassification();
     }
 
     const { scrollTop, clientHeight } = scroller;
-    const viewportTop = scrollTop;
-    const viewportBottom = scrollTop + clientHeight;
     const attention = attentionRef.current;
+    const physical = classifyBetween(
+      items,
+      rendered,
+      attention,
+      scrollTop,
+      scrollTop + clientHeight
+    );
 
-    const firstRenderedIndex = rendered[0]!.index;
-    const lastRenderedIndex = rendered[rendered.length - 1]!.index;
-
-    const result: Classification = {
-      above: { count: 0, attention: 0 },
-      below: { count: 0, attention: 0 },
-      nearestAbove: null,
-      nearestAttentionAbove: null,
-      nearestBelow: null,
-      nearestAttentionBelow: null,
-      clippedAtTop: null,
-      clippedAtBottom: null,
-      clippedAtTopFillsView: false,
-      clippedAtBottomFillsView: false,
-    };
-
-    // Indices only ever increase through these three passes, so "nearest" is
-    // the LAST hidden row seen above and the FIRST hidden row seen below.
-    const markAbove = (index: number) => {
-      const item = items[index]!;
-      result.above.count++;
-      result.nearestAbove = index;
-      if (item.worktreeId !== undefined && attention.has(item.worktreeId)) {
-        result.above.attention++;
-        result.nearestAttentionAbove = index;
-      }
-    };
-    const markBelow = (index: number) => {
-      const item = items[index]!;
-      result.below.count++;
-      result.nearestBelow ??= index;
-      if (item.worktreeId !== undefined && attention.has(item.worktreeId)) {
-        result.below.attention++;
-        result.nearestAttentionBelow ??= index;
-      }
-    };
-
-    // Rows that sit entirely outside the rendered window are unmounted, so they
-    // carry no geometry — count them straight from the backing list by index.
-    for (let i = 0; i < firstRenderedIndex && i < items.length; i++) {
-      if (items[i]!.kind === "row") markAbove(i);
-    }
-
-    // Rendered rows: classify each against the live viewport using its measured
-    // offset/size. A partially-visible row counts as visible (not hidden).
-    for (const item of rendered) {
-      if (item.data?.kind !== "row" || item.index >= items.length) continue;
-      if (item.offset + item.size <= viewportTop + VISIBILITY_EPSILON_PX) {
-        markAbove(item.index);
-      } else if (item.offset >= viewportBottom - VISIBILITY_EPSILON_PX) {
-        markBelow(item.index);
-      } else {
-        const startsAtOrAboveTop = item.offset <= viewportTop + VISIBILITY_EPSILON_PX;
-        const endsAtOrBelowBottom =
-          item.offset + item.size >= viewportBottom - VISIBILITY_EPSILON_PX;
-        if (item.offset < viewportTop - VISIBILITY_EPSILON_PX) {
-          result.clippedAtTop = item.index;
-          result.clippedAtTopFillsView = endsAtOrBelowBottom;
-        }
-        if (
-          result.clippedAtBottom === null &&
-          item.offset + item.size > viewportBottom + VISIBILITY_EPSILON_PX
-        ) {
-          result.clippedAtBottom = item.index;
-          result.clippedAtBottomFillsView = startsAtOrAboveTop;
-        }
-      }
-    }
-
-    for (let i = lastRenderedIndex + 1; i < items.length; i++) {
-      if (items[i]!.kind === "row") markBelow(i);
-    }
-
-    return result;
+    // Two passes, so a band can never hold itself open. Whether an edge gets
+    // a band is decided against the bare scroller; only what the pills report
+    // and reveal is measured inside the bands. Fed back, a short first row
+    // sitting wholly behind the top band would keep that band up even with
+    // the list scrolled to the very top.
+    const band = bandHeightRef.current;
+    const top = physical.above.count > 0 ? band : 0;
+    const bottom = physical.below.count > 0 ? band : 0;
+    if (top === 0 && bottom === 0) return physical;
+    return classifyBetween(
+      items,
+      rendered,
+      attention,
+      scrollTop + top,
+      scrollTop + clientHeight - bottom
+    );
   }, []);
 
   const updateScrollIndicators = useCallback(() => {
@@ -267,6 +326,10 @@ function useScrollIndicator({
   useEffect(() => {
     updateScrollIndicators();
   }, [attentionWorktreeIds, updateScrollIndicators]);
+
+  useEffect(() => {
+    updateScrollIndicators();
+  }, [bandHeightPx, paused, updateScrollIndicators]);
 
   useResizeObserverRaf(scrollerEl, () => updateScrollIndicators());
 
@@ -326,26 +389,30 @@ function useScrollIndicator({
     [setHiddenAbove, setHiddenBelow]
   );
 
-  // A worktree needing attention is centred, so it lands clear of both pills
-  // with its neighbours for context. Without one, it is a page step: the row
-  // the edge was cutting through (or, failing that, the nearest hidden one)
-  // moves to the opposite edge, so nothing half-read is skipped and everything
-  // newly on screen is what came next. A clipped card taller than the view is
-  // already at both edges, so aligning it would not move the list; that case
-  // scrolls by one viewport instead, which still walks through the card.
+  // A worktree needing attention is centred, so it lands clear of both bands
+  // with its neighbours for context (a card taller than the space between
+  // them can't be). Without one, it is a page step: the row the edge was
+  // cutting through (or, failing that, the nearest hidden one) moves to the
+  // opposite edge, so nothing half-read is skipped and everything newly on
+  // screen is what came next. That edge will carry a band once the list has
+  // moved, since the step itself hides rows behind it, so the row is parked a
+  // band's height in from it. A clipped card taller than the view is already
+  // at both edges, so aligning it would not move the list; that case scrolls
+  // by the space between the bands instead, which still walks through it.
   const revealAbove = useCallback(() => {
     const result = classify();
     const virtuoso = virtuosoRef.current;
     const scroller = scrollerElRef.current;
     if (!result || !virtuoso || !scroller) return;
     const behavior = smoothScrollRef.current ? "smooth" : "auto";
+    const band = bandHeightRef.current;
     if (result.nearestAttentionAbove !== null) {
       virtuoso.scrollToIndex({ index: result.nearestAttentionAbove, align: "center", behavior });
     } else if (result.clippedAtTopFillsView) {
-      scroller.scrollTo({ top: scroller.scrollTop - scroller.clientHeight, behavior });
+      scroller.scrollTo({ top: scroller.scrollTop - pageStep(scroller, band), behavior });
     } else if (result.nearestAbove !== null) {
       const index = result.clippedAtTop ?? result.nearestAbove;
-      virtuoso.scrollToIndex({ index, align: "end", behavior });
+      virtuoso.scrollToIndex({ index, align: "end", offset: band, behavior });
     }
   }, [classify, virtuosoRef]);
 
@@ -355,21 +422,47 @@ function useScrollIndicator({
     const scroller = scrollerElRef.current;
     if (!result || !virtuoso || !scroller) return;
     const behavior = smoothScrollRef.current ? "smooth" : "auto";
+    const band = bandHeightRef.current;
     if (result.nearestAttentionBelow !== null) {
       virtuoso.scrollToIndex({ index: result.nearestAttentionBelow, align: "center", behavior });
     } else if (result.clippedAtBottomFillsView) {
-      scroller.scrollTo({ top: scroller.scrollTop + scroller.clientHeight, behavior });
+      scroller.scrollTo({ top: scroller.scrollTop + pageStep(scroller, band), behavior });
     } else if (result.nearestBelow !== null) {
       const index = result.clippedAtBottom ?? result.nearestBelow;
-      virtuoso.scrollToIndex({ index, align: "start", behavior });
+      virtuoso.scrollToIndex({ index, align: "start", offset: -band, behavior });
     }
   }, [classify, virtuosoRef]);
+
+  const handleBandWheel = useCallback(
+    (event: Pick<WheelEvent, "deltaY" | "deltaMode" | "ctrlKey">) => {
+      const scroller = scrollerElRef.current;
+      // Ctrl+wheel is a zoom gesture (and a trackpad pinch), never a scroll.
+      if (!scroller || event.ctrlKey || event.deltaY === 0) return;
+      const unit =
+        event.deltaMode === WheelEvent.DOM_DELTA_LINE
+          ? WHEEL_LINE_PX
+          : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+            ? scroller.clientHeight
+            : 1;
+      scroller.scrollBy({ top: event.deltaY * unit });
+    },
+    []
+  );
+
+  // A pill shows exactly when its edge has a row wholly past the bare
+  // scroller, which is exactly when `classify` gave that edge a band.
+  const bandInsets: BandInsets = {
+    top: hiddenAbove.count > 0 ? bandHeightPx : 0,
+    bottom: hiddenBelow.count > 0 ? bandHeightPx : 0,
+  };
 
   return {
     hiddenAbove,
     hiddenBelow,
     revealAbove,
     revealBelow,
+    bandInsets,
+    handleBandWheel,
     scrollerRef,
     handleScroll,
     handleItemsRendered,

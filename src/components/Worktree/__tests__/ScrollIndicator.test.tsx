@@ -151,6 +151,47 @@ describe("ScrollIndicator", () => {
     expect(event.defaultPrevented).toBe(true);
   });
 
+  // The band covers rows that are past the list's edge, so nothing pressed on
+  // it may reach them: not a click, not a press that would start a row drag
+  // or move focus. Only the pill acts, and a wheel scrolls the list (#15805).
+  describe("the band the pill sits in", () => {
+    const band = () => document.querySelector<HTMLElement>("[data-sidebar-scroll-indicator]")!;
+
+    it("keeps a press on its empty part from reaching what lies beneath", () => {
+      const onAncestorPointerDown = vi.fn();
+      render(
+        <div onPointerDown={onAncestorPointerDown}>
+          <ScrollIndicator direction="below" count={2} onClick={onClick} />
+        </div>
+      );
+      fireEvent.pointerDown(band());
+      const press = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+      band().dispatchEvent(press);
+      fireEvent.click(band());
+
+      expect(onAncestorPointerDown).not.toHaveBeenCalled();
+      expect(press.defaultPrevented).toBe(true);
+      expect(onClick).not.toHaveBeenCalled();
+    });
+
+    it("hands a wheel anywhere over it to the list", () => {
+      const onWheel = vi.fn();
+      render(<ScrollIndicator direction="above" count={2} onClick={onClick} onWheel={onWheel} />);
+      fireEvent.wheel(band(), { deltaY: 40 });
+      fireEvent.wheel(screen.getByRole("button"), { deltaY: -40 });
+      expect(onWheel.mock.calls.map(([event]) => event.deltaY)).toEqual([40, -40]);
+    });
+
+    it("leaves with the pill", () => {
+      const { rerender, container } = render(
+        <ScrollIndicator direction="below" count={2} onClick={onClick} />
+      );
+      expect(band()).not.toBeNull();
+      rerender(<ScrollIndicator direction="below" count={0} onClick={onClick} />);
+      expect(container.innerHTML).toBe("");
+    });
+  });
+
   it("uses scoped transition-[opacity,translate] instead of bare transition", () => {
     // `translate` (not `transform`) because Tailwind v4 translate-* utilities
     // emit the individual `translate` property, which a `transform` entry in

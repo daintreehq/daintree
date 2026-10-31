@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type WheelEvent } from "react";
 import { ChevronUp, ChevronDown } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useAnimatedPresence } from "../../hooks/useAnimatedPresence";
@@ -7,6 +7,18 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { HollowCircle } from "@/components/icons";
 import { STATE_COLORS } from "./terminalStateConfig";
 import { pluralize } from "@/lib/pluralize";
+import {
+  UI_ENTER_DURATION,
+  UI_ENTER_EASING,
+  UI_EXIT_DURATION,
+  UI_EXIT_EASING,
+} from "@/lib/animationUtils";
+
+/**
+ * Height of the opaque band each pill sits in. The list treats a shown band as
+ * its edge, so this is also the inset `useScrollIndicator` measures against.
+ */
+export const SCROLL_INDICATOR_BAND_HEIGHT_PX = 36;
 
 interface ScrollIndicatorProps {
   direction: "above" | "below";
@@ -15,6 +27,8 @@ interface ScrollIndicatorProps {
   /** How many of those are in the quick-state bar's "Attention" bucket. */
   attentionCount?: number;
   onClick: () => void;
+  /** A wheel over the band, which covers the list and so can't scroll it itself. */
+  onWheel?: (event: WheelEvent<HTMLDivElement>) => void;
   tabIndex?: number;
   ariaHidden?: boolean;
 }
@@ -42,6 +56,7 @@ export function ScrollIndicator({
   count,
   attentionCount = 0,
   onClick,
+  onWheel,
   tabIndex,
   ariaHidden,
 }: ScrollIndicatorProps) {
@@ -72,33 +87,51 @@ export function ScrollIndicator({
   const action = describeAction(shown);
 
   return (
-    // Trailing edge, not centred: sidebar rows put identity text in a leading
-    // `min-w-0 flex-1` block and icons in a trailing `shrink-0` one, so a
-    // centred pill lands on the worktree title or the "Changed files" heading —
-    // the text you're scanning while you scroll (#12010). `pr-4` matches the
-    // card content column's own right gutter, which also keeps the pill off the
-    // active row's 2px inset accent edge at `right-0` (`sidebar.css`).
+    // A full-width opaque band rather than a pill floating over the list: rows
+    // keep their menu, chevron and alarm pills in the trailing corner, so a
+    // bare pill covered the edge row's controls and took their clicks
+    // (#15805), and centred it covered titles (#12010). A row behind the band
+    // is past the edge, and the list counts it so. The band takes every press,
+    // so its empty part can't click a row nobody can see, and it hands wheel
+    // scrolling on to the list. `pr-4` matches the card content column's gutter.
     <div
       aria-hidden={ariaHidden || undefined}
       data-sidebar-scroll-indicator={direction}
+      onWheel={onWheel}
+      onPointerDown={(e) => e.stopPropagation()}
+      // A pointer shortcut, not a focus stop: without this a click leaves
+      // focus on a button the accessibility tree has been told is absent.
+      onMouseDown={(e) => e.preventDefault()}
+      style={{ height: SCROLL_INDICATOR_BAND_HEIGHT_PX }}
       className={cn(
-        "absolute left-0 right-0 z-20 pointer-events-none flex justify-end pr-4",
-        direction === "above" ? "top-0 pt-2" : "bottom-0 pb-2"
+        "absolute inset-x-0 z-20 flex items-center justify-end pr-4",
+        direction === "above" ? "top-0" : "bottom-0"
       )}
     >
+      {/* The sidebar's own fill and grain, so the band reads as the list's
+          edge rather than a panel over it. Fades with the pill. */}
+      <div
+        className={cn(
+          "absolute inset-0 border-divider bg-surface-sidebar",
+          "bg-(image:--chrome-noise-texture) bg-blend-soft-light",
+          "transition-opacity",
+          direction === "above" ? "border-b" : "border-t",
+          isVisible ? "opacity-100" : "opacity-0"
+        )}
+        style={{
+          transitionDuration: `${isVisible ? UI_ENTER_DURATION : UI_EXIT_DURATION}ms`,
+          transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
+        }}
+      />
       <Tooltip>
         <TooltipTrigger asChild>
           <ScrollPill
             isVisible={isVisible}
             translateDirection={direction === "above" ? "up" : "down"}
             onClick={onClick}
-            onPointerDown={(e) => e.stopPropagation()}
-            // A pointer shortcut, not a focus stop: without this a click leaves
-            // focus on a button the accessibility tree has been told is absent.
-            onMouseDown={(e) => e.preventDefault()}
             tabIndex={tabIndex}
             aria-label={`${description}. ${action}`}
-            className="flex items-center gap-1.5 px-2.5 py-1"
+            className="relative flex items-center gap-1.5 px-2.5 py-1"
           >
             <Icon className="h-3 w-3" />
             <span className="font-medium tabular-nums">{shown.count}</span>
@@ -115,8 +148,7 @@ export function ScrollIndicator({
             )}
           </ScrollPill>
         </TooltipTrigger>
-        {/* Out past the sidebar's edge: to the left it would sit on the very
-            titles the trailing placement keeps the pill off. */}
+        {/* Out past the sidebar's edge, clear of the list altogether. */}
         <TooltipContent side="right" className="text-xs">
           <div>{description}</div>
           <div className="text-text-secondary">{action}</div>

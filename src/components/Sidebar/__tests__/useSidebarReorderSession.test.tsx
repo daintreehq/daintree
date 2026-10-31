@@ -48,6 +48,24 @@ function startDrag() {
   );
 }
 
+function endDrag() {
+  const onDragEnd = dndListener?.onDragEnd;
+  if (!onDragEnd) throw new Error("useDndMonitor received no onDragEnd listener");
+  act(() =>
+    onDragEnd({
+      active: {
+        id: "drag",
+        data: { current: undefined },
+        rect: { current: { initial: null, translated: null } },
+      },
+      activatorEvent: new Event("pointerdown"),
+      collisions: null,
+      delta: { x: 0, y: 0 },
+      over: null,
+    })
+  );
+}
+
 function makeWorktree(id: string, overrides: Partial<WorktreeState> = {}): WorktreeState {
   return {
     id,
@@ -273,5 +291,32 @@ describe("useSidebarReorderSession — drag cancel", () => {
     advance(50);
 
     expect(result.current.keyboardCancelAnnouncement).toBe("");
+  });
+});
+
+// The sidebar hides its scroll pills' bands for the length of a drag, since a
+// band covers rows a drop can still land on.
+describe("useSidebarReorderSession — drag in flight", () => {
+  it("is active from pickup until the drop", () => {
+    const { result } = renderSession();
+    expect(result.current.isDragActive).toBe(false);
+
+    startDrag();
+    expect(result.current.isDragActive).toBe(true);
+
+    endDrag();
+    expect(result.current.isDragActive).toBe(false);
+  });
+
+  it("ends on a cancel, whatever was being dragged", () => {
+    const { result } = renderSession();
+
+    startDrag();
+    cancelDrag({ type: "terminal", terminalId: "t1" });
+    expect(result.current.isDragActive).toBe(false);
+
+    startDrag();
+    cancelDrag({ type: "worktree-sort", worktreeId: "a" });
+    expect(result.current.isDragActive).toBe(false);
   });
 });
