@@ -1,5 +1,13 @@
 // @vitest-environment jsdom
-import { createElement, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import {
+  createElement,
+  startTransition,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { flushSync } from "react-dom";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
 
@@ -740,7 +748,52 @@ describe("useDisclosure", () => {
     act(() => result.current.onOpen());
     await act(async () => {});
     act(() => result.current.onOpen());
-    expect(onOpenChange.mock.calls).toEqual([[true], [true]]);
+    await act(async () => {});
+    act(() => result.current.onToggle());
+    await act(async () => {});
+    // Still rendered closed, so a close is no change.
+    act(() => result.current.onClose());
+    expect(onOpenChange.mock.calls).toEqual([[true], [true], [true]]);
+
+    const onClosed = vi.fn();
+    const shown = renderHook(() => useDisclosure({ open: true, onOpenChange: onClosed }));
+    act(() => shown.result.current.onClose());
+    await act(async () => {});
+    act(() => shown.result.current.onClose());
+    expect(onClosed.mock.calls).toEqual([[false], [false]]);
+  });
+
+  it("keeps a controlled request made after a commit when an older one lapses", async () => {
+    const onOpenChange = vi.fn();
+    const { result, rerender } = renderHook(
+      ({ open }) => useDisclosure({ open, onOpenChange }),
+      { initialProps: { open: false } }
+    );
+    let repeated: Promise<void> = Promise.resolve();
+    act(() => {
+      result.current.onOpen();
+      // Queued behind the open's lapse and ahead of the close's.
+      repeated = Promise.resolve().then(() => result.current.onClose());
+    });
+    rerender({ open: true });
+    act(() => result.current.onClose());
+    await act(async () => repeated);
+    expect(onOpenChange.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it("keeps an uncontrolled open queued behind an unrelated commit", () => {
+    const onOpenChange = vi.fn();
+    const { result } = renderHook(() => {
+      const [, setTick] = useState(0);
+      return { disclosure: useDisclosure({ onOpenChange }), setTick };
+    });
+    act(() => {
+      startTransition(() => result.current.disclosure.onOpen());
+      flushSync(() => result.current.setTick(1));
+      result.current.disclosure.onClose();
+    });
+    expect(result.current.disclosure.open).toBe(false);
+    expect(onOpenChange.mock.calls).toEqual([[true], [false]]);
   });
 
   it("composes several requests to a controlled owner in one handler", () => {

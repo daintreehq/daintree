@@ -4,7 +4,9 @@ import type { UseDisclosureOptions, UseDisclosureResult } from "@shared/types/pl
 /**
  * Open/closed state for a popover, dialog, sheet or section, controlled with
  * `open` + `onOpenChange` or uncontrolled from `defaultOpen`. `onOpenChange`
- * only fires when the value actually changes.
+ * only fires for a change from what is rendered, or from a request made
+ * earlier in the same handler; a controlled owner that declines a request
+ * hears the next one.
  */
 export function useDisclosure(rawOptions?: UseDisclosureOptions): UseDisclosureResult {
   const options: UseDisclosureOptions =
@@ -14,18 +16,32 @@ export function useDisclosure(rawOptions?: UseDisclosureOptions): UseDisclosureR
   const open = controlled ? options.open === true : inner;
   const notify = typeof options.onOpenChange === "function" ? options.onOpenChange : undefined;
 
-  // The value the next change compares against: the last one set, so an
-  // `onOpen(); onClose()` in one handler ends closed, not on this render's value.
-  const latest = useRef<boolean | null>(null);
+  // Changes compare against the last request not yet rendered, so an
+  // `onOpen(); onClose()` in one handler ends closed rather than on this
+  // render's value. A controlled owner can decline and keep rendering the same
+  // `open`, so its request lapses at the next commit or microtask; an
+  // uncontrolled one is always applied, so it lasts until `open` changes, even
+  // across an unrelated commit that renders ahead of it.
+  const rendered = useRef(open);
+  const pending = useRef<{ value: boolean } | null>(null);
   useLayoutEffect(() => {
-    latest.current = open;
-  }, [open]);
+    if (controlled || rendered.current !== open) pending.current = null;
+    rendered.current = open;
+  });
 
   const set = (next: boolean) => {
-    const current = latest.current ?? open;
+    const current = pending.current?.value ?? rendered.current;
     if (next === current) return;
-    latest.current = next;
-    if (!controlled) setInner(next);
+    const request = { value: next };
+    pending.current = request;
+    if (controlled) {
+      // Only this request's own lapse: a newer one made after a commit stands.
+      queueMicrotask(() => {
+        if (pending.current === request) pending.current = null;
+      });
+    } else {
+      setInner(next);
+    }
     notify?.(next);
   };
 
@@ -33,7 +49,7 @@ export function useDisclosure(rawOptions?: UseDisclosureOptions): UseDisclosureR
     open,
     onOpen: () => set(true),
     onClose: () => set(false),
-    onToggle: () => set(!(latest.current ?? open)),
+    onToggle: () => set(!(pending.current?.value ?? rendered.current)),
     onOpenChange: (next: boolean) => set(next === true),
   };
 }
