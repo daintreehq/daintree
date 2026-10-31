@@ -20,6 +20,9 @@ export default defineConfig(({ mode }) => {
     test: {
       globals: true,
       environment: "node",
+      // Same isolation guards as the unit config (temp DAINTREE_USER_DATA, Canopy
+      // scrubbing, process-kill guard), minus its DOM-only priming.
+      setupFiles: ["./vitest.integration.setup.ts"],
       // Only include integration tests
       include: ["**/*.integration.test.{js,ts}"],
       exclude: ["node_modules", "dist", "dist-electron", "dist-typecheck", "build", "release"],
