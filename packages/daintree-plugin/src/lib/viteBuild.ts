@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { execa, type ResultPromise } from "execa";
 
@@ -20,12 +20,21 @@ import { execa, type ResultPromise } from "execa";
  * without an `async` wrapper — an `async` wrapper would unwrap the thenable and
  * resolve only on the watcher's *exit*, hanging the dev loop.
  */
+function isFile(candidate: string): boolean {
+  try {
+    return statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
+}
+
 export function resolveViteBin(dir: string): string {
   const binName = process.platform === "win32" ? "vite.cmd" : "vite";
   const start = path.resolve(dir);
   for (let current = start; ;) {
     const bin = path.join(current, "node_modules", ".bin", binName);
-    if (existsSync(bin)) return bin;
+    // A directory named `vite` is skipped, as `npm run` skips it, so a stray one can't shadow the real bin.
+    if (isFile(bin)) return bin;
     const parent = path.dirname(current);
     if (parent === current) break;
     current = parent;

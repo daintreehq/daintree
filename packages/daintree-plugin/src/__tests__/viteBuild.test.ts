@@ -12,19 +12,43 @@ import {
   spawnViteWatch,
 } from "../lib/viteBuild.js";
 
+// resolveViteBin reads through statSync; the negative cases stub it so a stray
+// node_modules/.bin/vite in an ancestor of the temp dir (or at "/") can't flip them.
+const fsStat = vi.hoisted(() => ({ statSync: vi.fn(), real: undefined as unknown }));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  fsStat.real = actual.statSync;
+  fsStat.statSync.mockImplementation(actual.statSync);
+  return { ...actual, statSync: fsStat.statSync };
+});
+const stubNothingInstalled = () =>
+  fsStat.statSync.mockImplementation(() => {
+    throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+  });
+const restoreRealStat = () =>
+  fsStat.statSync.mockImplementation(fsStat.real as (...args: unknown[]) => unknown);
+
 const watcher = vi.hoisted(() => ({ then: vi.fn(), kill: vi.fn() }));
 vi.mock("execa", () => ({ execa: vi.fn(() => watcher) }));
 
 describe("viteBuild", () => {
   it("resolveViteBin throws a fix-it message when Vite isn't installed", () => {
-    expect(() => resolveViteBin("/nonexistent/plugin/dir")).toThrow(/Couldn't find Vite/);
+    stubNothingInstalled();
+    try {
+      expect(() => resolveViteBin("/nonexistent/plugin/dir")).toThrow(/Couldn't find Vite/);
+    } finally {
+      restoreRealStat();
+    }
   });
 
   describe("resolveViteBin lookup", () => {
     let root: string;
     const realPlatform = process.platform;
 
-    const installVite = async (dir: string, binName = "vite") => {
+    const installVite = async (
+      dir: string,
+      binName = realPlatform === "win32" ? "vite.cmd" : "vite"
+    ) => {
       const bin = path.join(dir, "node_modules", ".bin", binName);
       await fs.mkdir(path.dirname(bin), { recursive: true });
       await fs.writeFile(bin, "");
@@ -72,6 +96,14 @@ describe("viteBuild", () => {
       expect(resolveViteBin(plugin)).toBe(nearest);
     });
 
+    it("skips a directory named vite and keeps walking", async () => {
+      const bin = await installVite(root);
+      const plugin = path.join(root, "packages", "my-plugin");
+      const binName = realPlatform === "win32" ? "vite.cmd" : "vite";
+      await fs.mkdir(path.join(plugin, "node_modules", ".bin", binName), { recursive: true });
+      expect(resolveViteBin(plugin)).toBe(bin);
+    });
+
     it("ignores a node_modules directory that has no Vite bin", async () => {
       const bin = await installVite(root);
       const plugin = path.join(root, "packages", "my-plugin");
@@ -90,19 +122,23 @@ describe("viteBuild", () => {
     it("looks for the .cmd shim on Windows", async () => {
       setPlatform("win32");
       const bin = await installVite(root, "vite.cmd");
-      await installVite(path.join(root, "packages", "my-plugin"), "vite");
       const plugin = path.join(root, "packages", "my-plugin");
+      // A bare `vite` (the POSIX bin) nearer the plugin must not be picked on Windows.
+      await installVite(plugin, "vite");
       expect(resolveViteBin(plugin)).toBe(bin);
     });
 
     it("fails clearly, naming where it looked, when no ancestor has Vite", async () => {
       const plugin = path.join(root, "packages", "my-plugin");
       await fs.mkdir(plugin, { recursive: true });
+      stubNothingInstalled();
       let message = "";
       try {
         resolveViteBin(plugin);
       } catch (err) {
         message = (err as Error).message;
+      } finally {
+        restoreRealStat();
       }
       expect(message).toContain("Couldn't find Vite");
       expect(message).toContain(path.join(plugin, "node_modules", ".bin"));
