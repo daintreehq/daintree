@@ -449,7 +449,10 @@ describe("agent.launch with no frontend", () => {
     const terminalId = (result as { result: { terminalId: string } }).result.terminalId;
     const payload = spawned(invoke);
     expect(payload.command).toContain("--model devstral-small --prompt");
-    expect(payload).toMatchObject({ agentModelId: "devstral-small", title: "Mistral Vibe (Small)" });
+    expect(payload).toMatchObject({
+      agentModelId: "devstral-small",
+      title: "Mistral Vibe (Small)",
+    });
     expect(payload.agentLaunchFlags).not.toContain("--model");
     const snapshot = store.read()?.terminals.find((terminal) => terminal.id === terminalId);
     expect(snapshot?.agentModelId).toBe("devstral-small");

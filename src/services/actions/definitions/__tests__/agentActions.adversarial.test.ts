@@ -461,7 +461,9 @@ describe("agentActions adversarial", () => {
 
       const launch = callAction(actions, "agent.launch", { agentId: "mistral", ...args });
       await expect(launch).rejects.toBeInstanceOf(UnactionableTargetError);
-      await expect(launch).rejects.toThrow(/Mistral Vibe applies a model only to a new headless run/);
+      await expect(launch).rejects.toThrow(
+        /Mistral Vibe applies a model only to a new headless run/
+      );
       expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
     }
   );

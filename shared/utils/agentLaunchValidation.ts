@@ -99,7 +99,9 @@ export function launchModelRefusal(
   }
 ): string | undefined {
   if (!launch.model && !passesModelFlag(launch.agentLaunchFlags)) return undefined;
-  if (canSelectAgentModel(agentId, { interactive: launch.interactive, initialPrompt: launch.prompt })) {
+  if (
+    canSelectAgentModel(agentId, { interactive: launch.interactive, initialPrompt: launch.prompt })
+  ) {
     return undefined;
   }
   const name = getEffectiveAgentConfig(agentId)?.name ?? agentId;
