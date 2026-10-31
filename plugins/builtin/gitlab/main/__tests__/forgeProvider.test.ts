@@ -9,6 +9,7 @@ import {
   setProvenanceAccessors,
 } from "../GitLabAuth.js";
 import { resetLastRateLimitInfo } from "../GitLabClient.js";
+import { clearGitLabAssignmentHistory } from "../mutations.js";
 import { clearGitLabCaches, resolveAuthorAvatarImpl } from "../readOps.js";
 import { clearValidatedUserInfo } from "../GitLabAuth.js";
 
@@ -71,6 +72,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn());
   resetAuthStateForTests();
   clearGitLabCaches();
+  clearGitLabAssignmentHistory();
   resetLastRateLimitInfo();
   // No durable provenance record: a fresh install, where the first token
   // adopts the configured instance and that becomes its provenance.
@@ -1188,6 +1190,144 @@ describe("mutations", () => {
     expect(comment.url).toBe("https://gitlab.com/group/project/-/merge_requests/6#note_502");
     expect(comment.body).toBe("LGTM");
     expect(fetchMock()).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("assignment undo", () => {
+  const ADA = { id: 3, username: "ada" };
+  const FIXER = { id: 77, username: "fixer" };
+  const BOB = { id: 5, username: "bob" };
+  const USERS = [ADA, FIXER, BOB];
+
+  /**
+   * A stateful issue #9. `multiAssignee: false` mirrors GitLab Free's
+   * `filter_assignees_using_checks`, which keeps only the first id; `[0]`
+   * clears the list on every tier.
+   */
+  function assigneeServer(options: { multiAssignee: boolean; initial: number[] }) {
+    const server = { ids: [...options.initial], puts: [] as number[][] };
+    const issue = () => ({
+      iid: 9,
+      state: "opened",
+      assignees: server.ids.map((id) => USERS.find((u) => u.id === id)),
+    });
+    fetchMock().mockImplementation(async (input: unknown, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/users")) {
+        return jsonResponse(USERS.filter((u) => u.username === url.searchParams.get("username")));
+      }
+      if (url.pathname.endsWith("/issues/9")) {
+        if (init?.method === "PUT") {
+          const requested = requestBody([input, init]).assignee_ids as number[];
+          server.puts.push(requested);
+          const next = requested.filter((id) => id !== 0);
+          server.ids = options.multiAssignee ? next : next.slice(0, 1);
+        }
+        return jsonResponse(issue());
+      }
+      throw new Error(`unexpected request ${url.pathname}`);
+    });
+    return server;
+  }
+
+  it("hands a single-assignee issue back to the assignee it displaced", async () => {
+    const server = assigneeServer({ multiAssignee: false, initial: [ADA.id] });
+
+    const assigned = await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    expect(assigned.map((u) => u.login)).toEqual(["fixer"]);
+
+    const undone = await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(undone.map((u) => u.login)).toEqual(["ada"]);
+    expect(server.ids).toEqual([ADA.id]);
+    expect(server.puts.at(-1)).toEqual([ADA.id]);
+  });
+
+  it("removes only the viewer on a multi-assignee server", async () => {
+    const server = assigneeServer({ multiAssignee: true, initial: [ADA.id] });
+
+    const assigned = await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    expect(assigned.map((u) => u.login)).toEqual(["fixer", "ada"]);
+
+    const undone = await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(undone.map((u) => u.login)).toEqual(["ada"]);
+    expect(server.ids).toEqual([ADA.id]);
+  });
+
+  it("keeps assignees added after the assignment on a multi-assignee server", async () => {
+    const server = assigneeServer({ multiAssignee: true, initial: [ADA.id] });
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    server.ids = [...server.ids, BOB.id];
+
+    const undone = await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(undone.map((u) => u.login)).toEqual(["ada", "bob"]);
+  });
+
+  it("leaves the issue alone when someone else took it after the assignment", async () => {
+    const server = assigneeServer({ multiAssignee: false, initial: [ADA.id] });
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    server.ids = [BOB.id];
+    const putsBefore = server.puts.length;
+
+    const undone = await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(undone.map((u) => u.login)).toEqual(["bob"]);
+    expect(server.puts).toHaveLength(putsBefore);
+  });
+
+  it("leaves the issue alone when the viewer was removed after the assignment", async () => {
+    const server = assigneeServer({ multiAssignee: false, initial: [ADA.id] });
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    server.ids = [];
+    const putsBefore = server.puts.length;
+
+    const undone = await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(undone).toEqual([]);
+    expect(server.puts).toHaveLength(putsBefore);
+  });
+
+  // Unreachable on a real Free project, but any change to the list since the
+  // write means the displacement no longer describes it.
+  it("leaves the issue alone when the list changed but still holds the viewer", async () => {
+    const server = assigneeServer({ multiAssignee: false, initial: [ADA.id] });
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    server.ids = [FIXER.id, BOB.id];
+    const putsBefore = server.puts.length;
+
+    const undone = await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(undone.map((u) => u.login)).toEqual(["fixer", "bob"]);
+    expect(server.puts).toHaveLength(putsBefore);
+  });
+
+  it("still restores after a repeated assign that found the viewer already there", async () => {
+    const server = assigneeServer({ multiAssignee: false, initial: [ADA.id] });
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    expect(server.puts).toHaveLength(1);
+
+    await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(server.ids).toEqual([ADA.id]);
+  });
+
+  it("spends the record on the Undo that uses it", async () => {
+    const server = assigneeServer({ multiAssignee: false, initial: [ADA.id] });
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(server.ids).toEqual([ADA.id]);
+
+    // Someone hands the issue straight back: a later unassign is a plain
+    // removal, not a second restoration of Ada.
+    server.ids = [FIXER.id];
+    await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(server.puts.at(-1)).toEqual([0]);
+    expect(server.ids).toEqual([]);
+  });
+
+  it("forgets what was displaced once the credential changes", async () => {
+    const server = assigneeServer({ multiAssignee: false, initial: [ADA.id] });
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    gitlabForgeProvider.setCredentials?.({ kind: "bearer", value: "glpat-other" });
+
+    await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(server.puts.at(-1)).toEqual([0]);
   });
 });
 
