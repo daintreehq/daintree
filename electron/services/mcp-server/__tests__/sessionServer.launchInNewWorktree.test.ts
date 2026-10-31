@@ -54,11 +54,14 @@ describe("agent.launchInNewWorktree through the session server (#15738)", () => 
     const store = new SessionStore(() => {});
     stores.push(store);
     seedLiveSession(store, "s-1", tier);
-    const dispatchAction = vi.fn((actionId: string, args: Record<string, unknown>) => {
-      const envelope = envelopes[actionId];
-      const value = typeof envelope === "function" ? envelope(args) : envelope;
-      return Promise.resolve(value ?? { result: { ok: true, result: null } });
-    });
+    // The rest are dispatch's confirmation, authorization and relay call id.
+    const dispatchAction = vi.fn(
+      (actionId: string, args: Record<string, unknown>, ..._rest: unknown[]) => {
+        const envelope = envelopes[actionId];
+        const value = typeof envelope === "function" ? envelope(args) : envelope;
+        return Promise.resolve(value ?? { result: { ok: true, result: null } });
+      }
+    );
     const deps = fakeDeps({
       sessionStore: store,
       dispatchAction: dispatchAction as unknown as SessionServerDeps["dispatchAction"],
