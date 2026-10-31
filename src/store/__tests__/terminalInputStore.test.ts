@@ -254,17 +254,23 @@ describe("terminalInputStore", () => {
       expect(texts("term-3")).toEqual([exact]);
     });
 
-    it("drops the run of key characters a cut goes through (#15596)", () => {
+    it("drops the word a cut goes through (#15596)", () => {
       const store = useTerminalInputStore.getState();
+      const leadOf = (text: string, kept: number) =>
+        text.padStart(VOICE_RECENT_PROMPT_MAX_CHARS - 1 - kept, "a ");
       // The cut keeps `sk-proj-Q2w`, short of the prefix redaction knows a key by.
-      const lead = "use this key: ".padStart(VOICE_RECENT_PROMPT_MAX_CHARS - 12, "a ");
-      store.recordSentPrompt("term-1", `${lead}sk-proj-${"Q2w3E4r5".repeat(4)}`);
+      const key = leadOf("use this key: ", 11);
+      store.recordSentPrompt("term-1", `${key}sk-proj-${"Q2w3E4r5".repeat(4)}`);
+      // It keeps `postgres://user:pass`, which without its `@` names no credential.
+      const url = leadOf("connect to ", 20);
+      store.recordSentPrompt("term-2", `${url}postgres://user:pass@db.internal/app`);
       // A cut at the end of a word takes nothing more.
       const whole = "b ".repeat(VOICE_RECENT_PROMPT_MAX_CHARS);
-      store.recordSentPrompt("term-2", whole);
+      store.recordSentPrompt("term-3", whole);
 
-      expect(texts("term-1")).toEqual([`${lead}…`]);
-      expect(texts("term-2")).toEqual([`${whole.slice(0, VOICE_RECENT_PROMPT_MAX_CHARS - 1)}…`]);
+      expect(texts("term-1")).toEqual([`${key}…`]);
+      expect(texts("term-2")).toEqual([`${url}…`]);
+      expect(texts("term-3")).toEqual([`${whole.slice(0, VOICE_RECENT_PROMPT_MAX_CHARS - 1)}…`]);
     });
 
     it("forgets the terminal sent to longest ago past its terminal limit", () => {

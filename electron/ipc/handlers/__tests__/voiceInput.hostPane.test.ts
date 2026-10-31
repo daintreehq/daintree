@@ -371,6 +371,8 @@ describe("voiceInput — dictating into a host's pane", () => {
   it("withholds a credential from the prompts sent to the host's terminal (#15596)", async () => {
     await start(view);
     const key = `ghp_${"a1B2".repeat(9)}`;
+    // Each too short to look like a key alone: only the wrap gives them away.
+    const wrapped = ["a7f3k9m2x8v1", "zq8wplmn"];
     await getHandler(CHANNELS.VOICE_INPUT_CORRECT)(
       { sender: view },
       {
@@ -378,14 +380,14 @@ describe("voiceInput — dictating into a host's pane", () => {
         terminalId: TERMINAL,
         recentPrompts: [
           `export GITHUB_TOKEN=${key}`,
-          `Push with\nGITHUB_TOKEN=${key.slice(0, 20)}\n${key.slice(20)}\n\nthen open the PR`,
+          ["Push with", `GITHUB_TOKEN=${key}`, ...wrapped, "", "then open the PR"].join("\n"),
           "Measure gpt-6.1-terra against Luna",
         ],
       }
     );
     const sent = shared.correctCalls[0]?.request.recentPrompts as string[];
     expect(sent).toEqual(["Push with\n\nthen open the PR", "Measure gpt-6.1-terra against Luna"]);
-    expect(sent.join("\n")).not.toContain(key.slice(20));
+    for (const piece of [key, ...wrapped]) expect(sent.join("\n")).not.toContain(piece);
     expectNoLocalReads();
   });
 

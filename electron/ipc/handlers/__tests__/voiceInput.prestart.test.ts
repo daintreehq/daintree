@@ -1459,6 +1459,13 @@ describe("voiceInput — keyterm target", () => {
         expect(shared.correctionRecentPrompts).toEqual(PROMPTS);
       });
 
+      it("withholds a bare number given as a password, as the screen's would be", async () => {
+        await correct({
+          recentPrompts: [PROMPTS[0], "connect with mysql --password 123456 -u root", PROMPTS[1]],
+        });
+        expect(shared.correctionRecentPrompts).toEqual(PROMPTS);
+      });
+
       it("withholds every line of a key wrapped across the prompt, keeping the rest", async () => {
         const wrapped = [
           "Deploy staging with",
