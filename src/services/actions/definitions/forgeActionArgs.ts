@@ -34,9 +34,9 @@ const ForgeListPagingSchema = z.object({
     .min(1)
     .max(100)
     .optional()
-    .describe("Rows per page, 1-100 (default: 20)."),
+    .describe("1-100 rows; default varies."),
   sort: z.enum(["created", "updated"]).optional().describe("Sort field (default: created)."),
-  direction: z.enum(["asc", "desc"]).optional().describe("Sort direction (default: desc)."),
+  direction: z.enum(["asc", "desc"]).optional().describe("Default desc; asc may be refused."),
   // The only escape hatch from a warm list cache. Without it an out-of-band
   // change — the user running a forge CLI in a terminal, another agent closing
   // an issue — stays invisible until the cached page ages out, and the agent

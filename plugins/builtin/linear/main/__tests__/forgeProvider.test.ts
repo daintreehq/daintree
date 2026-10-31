@@ -277,6 +277,9 @@ describe("listIssues", () => {
       serveOrderedIssues();
       expect(await listAll({ sort: "created", direction: "desc" })).toEqual([3, 2, 1]);
       expect(fetchMock()).toHaveBeenCalledTimes(2);
+      // The mock orders by the variable, so the query has to actually apply it.
+      expect(body(0).query).toMatch(/\$orderBy: PaginationOrderBy!/);
+      expect(body(0).query).toMatch(/orderBy: \$orderBy\b/);
       expect(body(0).variables.orderBy).toBe("createdAt");
       expect(body(1).variables).toMatchObject({ orderBy: "createdAt", after: "i2" });
     });

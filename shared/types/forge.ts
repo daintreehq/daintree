@@ -290,8 +290,11 @@ export interface RepoMergeSettings {
 }
 
 /**
- * Paged-listing options. All fields advisory — providers ignore options they
- * do not support. `cursor` is opaque and provider-defined.
+ * Paged-listing options. Advisory — providers ignore options they do not
+ * support — except ordering: a provider that can't serve `sort` `"created"` /
+ * `"updated"` in the requested `direction` refuses it by name rather than
+ * return a page in some other order (#15604). `cursor` is opaque and
+ * provider-defined.
  */
 export interface ListOptions {
   /**
