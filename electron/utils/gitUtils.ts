@@ -5,6 +5,11 @@ import { logWarn } from "./logger.js";
 import { Cache } from "./cache.js";
 import { resolveExecutableForSpawn } from "./windowsExecutable.js";
 import { getSanitizedProcessEnv } from "./gitEnv.js";
+import { withTimeout } from "./withTimeout.js";
+
+// The filesystem fast path's lookup is cached while in flight, so a read stuck
+// on a stalled mount would hold every later lookup for that path behind it.
+const FS_FAST_PATH_TIMEOUT_MS = 5_000;
 
 // worktreePath → gitDir/commonDir is immutable for a live worktree and all
 // removal/switch paths invalidate explicitly via clearGitDirCache /
@@ -248,7 +253,12 @@ async function resolveGitPath(
         ? resolveCommonDirFromFs
         : null;
   if (fastResolver) {
-    const fast = await fastResolver(worktreePath);
+    // A timeout is "can't prove it cheaply" too: the subprocess carries its own.
+    const fast = await withTimeout(
+      fastResolver(worktreePath),
+      FS_FAST_PATH_TIMEOUT_MS,
+      `git dir fast path timed out: ${worktreePath}`
+    ).catch(() => null);
     if (fast !== null) return { path: fast };
   }
   try {

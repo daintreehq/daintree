@@ -336,6 +336,35 @@ describe("getWorktreeChangesWithStats in-flight deduplication", () => {
     expect(vi.mocked(createHardenedGit)).toHaveBeenCalledTimes(1);
   });
 
+  it("starts a fresh read instead of joining an abandoned one, and keeps the late result out of the cache (#15645)", async () => {
+    setupGitMocks();
+    const cwd = "/dedup-test/" + Math.random();
+    const lifecycle = new AbortController();
+    const abandon = new AbortController();
+    let releaseAbandoned!: (value: unknown) => void;
+    mockGit.status
+      .mockReturnValueOnce(new Promise((resolve) => (releaseAbandoned = resolve)))
+      .mockResolvedValue(emptyStatus);
+
+    const abandoned = getWorktreeChangesWithStats(cwd, {
+      signal: lifecycle.signal,
+      abandonSignal: abandon.signal,
+    });
+    await vi.waitFor(() => expect(mockGit.status).toHaveBeenCalledTimes(1));
+    abandon.abort();
+
+    const fresh = await getWorktreeChangesWithStats(cwd, { signal: lifecycle.signal });
+    expect(mockGit.status).toHaveBeenCalledTimes(2);
+    expect(fresh.changes).toHaveLength(0);
+
+    releaseAbandoned({ ...emptyStatus, modified: ["late.ts"] });
+    await expect(abandoned).resolves.toMatchObject({ changedFileCount: 1 });
+
+    const cached = await getWorktreeChangesWithStats(cwd, { signal: lifecycle.signal });
+    expect(mockGit.status).toHaveBeenCalledTimes(2);
+    expect(cached.changes).toHaveLength(0);
+  });
+
   it("does not deduplicate when forceRefresh is true", async () => {
     setupGitMocks();
     const cwd = "/dedup-test/" + Math.random();

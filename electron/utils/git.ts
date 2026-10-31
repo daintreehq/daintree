@@ -51,7 +51,11 @@ const GIT_WORKTREE_CHANGES_CACHE = new Cache<string, WorktreeChanges>({
 
 const inFlightWorktreeChanges = new Map<
   string,
-  { promise: Promise<WorktreeChanges>; signal: AbortSignal | undefined }
+  {
+    promise: Promise<WorktreeChanges>;
+    signal: AbortSignal | undefined;
+    abandonSignal: AbortSignal | undefined;
+  }
 >();
 
 // Oversized-repo warning fires once per cwd and re-arms only when a later fetch
@@ -717,6 +721,13 @@ export interface GetWorktreeChangesOptions {
    * processes instead of abandoning them.
    */
   signal?: AbortSignal;
+  /**
+   * Aborted when the caller stops waiting without stopping the owner (the
+   * poll watchdog). The read may still be stuck, so nothing joins it from
+   * then on and a late result is not cached. It does not kill the children:
+   * `signal` keys the reusable git instance.
+   */
+  abandonSignal?: AbortSignal;
 }
 
 // One SimpleGit per (cancellation owner, route). Construction runs a
@@ -790,7 +801,7 @@ export async function getWorktreeChangesWithStats(
     // Shared only between callers with the same cancellation owner: a read
     // joined across owners would hand one caller the other's abort.
     const inFlight = inFlightWorktreeChanges.get(cwd);
-    if (inFlight && inFlight.signal === options.signal) {
+    if (inFlight && inFlight.signal === options.signal && !inFlight.abandonSignal?.aborted) {
       return inFlight.promise;
     }
   }
@@ -1240,7 +1251,9 @@ export async function getWorktreeChangesWithStats(
       // Other enrichment steps degrade instead of throwing; a cancelled run
       // must not publish what it half-read.
       options.signal?.throwIfAborted();
-      GIT_WORKTREE_CHANGES_CACHE.set(cwd, result, cacheTTL);
+      if (!options.abandonSignal?.aborted) {
+        GIT_WORKTREE_CHANGES_CACHE.set(cwd, result, cacheTTL);
+      }
       return result;
     } catch (error) {
       if (error instanceof WorktreeRemovedError) {
@@ -1285,7 +1298,11 @@ export async function getWorktreeChangesWithStats(
   })();
 
   if (!forceRefresh) {
-    inFlightWorktreeChanges.set(cwd, { promise: fetchPromise, signal: options.signal });
+    inFlightWorktreeChanges.set(cwd, {
+      promise: fetchPromise,
+      signal: options.signal,
+      abandonSignal: options.abandonSignal,
+    });
   }
 
   try {

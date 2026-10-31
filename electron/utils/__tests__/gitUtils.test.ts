@@ -272,6 +272,28 @@ describe("filesystem fast path (no subprocess)", () => {
     expect(execFileMock).not.toHaveBeenCalled();
   });
 
+  it("falls back to the subprocess when the .git probe stalls, instead of caching the stall (#15645)", async () => {
+    vi.useFakeTimers();
+    const stat = vi.spyOn(fsPromises, "stat").mockImplementation(() => new Promise(() => {}));
+    try {
+      const gitDir = pathJoin(root, ".git");
+      mockGitOutput(`${gitDir}\n`);
+      let settled = false;
+      const resolving = getGitDir(root).finally(() => (settled = true));
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(settled).toBe(false);
+      expect(execFileMock).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+
+      await expect(resolving).resolves.toBe(gitDir);
+      expect(execFileMock).toHaveBeenCalledTimes(1);
+    } finally {
+      stat.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("returns the git dir itself as common dir for a main worktree", async () => {
     const gitDir = makeGitDir(root);
     await expect(getGitCommonDir(root)).resolves.toBe(gitDir);
