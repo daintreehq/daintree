@@ -384,6 +384,8 @@ describe("registerShutdownHandler", () => {
     quitWarningMock.showQuitWarning.mockResolvedValue(true);
     ccrConfigMock.stopWatching.mockResolvedValue(undefined);
     serviceRefsMock.setInitialState({});
+    // A queued drain a failed test never consumed must not answer for the next one.
+    readerDrainMock.waitForRetiringReaders.mockReset().mockResolvedValue(0);
   });
 
   async function setup(overrides?: Partial<ShutdownDeps>) {
@@ -884,16 +886,19 @@ describe("registerShutdownHandler", () => {
       const drained = new Promise<void>((resolve) => {
         releaseDrain = resolve;
       });
-      let markWaitStarted!: () => void;
-      const waitStarted = new Promise<void>((resolve) => {
-        markWaitStarted = resolve;
-      });
       readerDrainMock.waitForRetiringReaders.mockImplementationOnce(async (budgetMs) => {
         order.push(`reader-wait:${budgetMs}`);
-        markWaitStarted();
         await drained;
         order.push("reader-drained");
         return 0;
+      });
+      let releaseDispose!: () => void;
+      const disposeHeld = new Promise<void>((resolve) => {
+        releaseDispose = resolve;
+      });
+      dbMaintenanceMock.dispose.mockImplementationOnce(() => {
+        order.push("dbMaintenance.dispose");
+        return disposeHeld;
       });
       let markDbClosed!: () => void;
       const dbClosed = new Promise<void>((resolve) => {
@@ -910,54 +915,70 @@ describe("registerShutdownHandler", () => {
         });
       });
 
-      const { beforeQuitCb } = await setup({
-        getCleanupIpcHandlers: vi.fn(() => () => {
-          order.push("cleanupIpc");
-        }),
-      });
-      await beforeQuitCb(makeEvent());
+      try {
+        const { beforeQuitCb } = await setup({
+          getCleanupIpcHandlers: vi.fn(() => () => {
+            order.push("cleanupIpc");
+          }),
+        });
+        await beforeQuitCb(makeEvent());
 
-      // The wait overlaps the disposals rather than queueing behind them.
-      await Promise.all([waitStarted, dbClosed]);
-      for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
-      expect(closeTelemetryMock).not.toHaveBeenCalled();
-      expect(order).not.toContain("exit");
+        // The wait must start while a disposal is still holding the chain,
+        // not queue up behind the disposals.
+        await vi.waitFor(() => expect(order).toContain("dbMaintenance.dispose"));
+        await vi.waitFor(() =>
+          expect(order).toContain(`reader-wait:${CANOPY_READER_DRAIN_BUDGET_MS}`)
+        );
+        expect(order).not.toContain("closeSharedDb");
 
-      releaseDrain();
-      await exited;
-      expect(order.indexOf("cleanupIpc")).toBeLessThan(
-        order.indexOf(`reader-wait:${CANOPY_READER_DRAIN_BUDGET_MS}`)
-      );
-      expect(order.slice(-2)).toEqual(["reader-drained", "exit"]);
+        releaseDispose();
+        await dbClosed;
+        // Give an unblocked chain every chance to run on to its telemetry flush.
+        for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+        expect(closeTelemetryMock).not.toHaveBeenCalled();
+        expect(order).not.toContain("exit");
+
+        releaseDrain();
+        await exited;
+        expect(order.indexOf("cleanupIpc")).toBeLessThan(
+          order.indexOf(`reader-wait:${CANOPY_READER_DRAIN_BUDGET_MS}`)
+        );
+        expect(order.slice(-2)).toEqual(["reader-drained", "exit"]);
+      } finally {
+        releaseDispose();
+        releaseDrain();
+      }
     });
 
     it("starts the reader wait alongside the VAD drain, not after it", async () => {
-      let releaseVad!: () => void;
+      let releaseVad: (() => void) | undefined;
       vadDrainMock.waitForRetiringVadProcesses.mockImplementationOnce(
         () =>
           new Promise<number>((resolve) => {
             releaseVad = () => resolve(0);
           })
       );
-      let markReaderWaitStarted!: () => void;
-      const readerWaitStarted = new Promise<void>((resolve) => {
-        markReaderWaitStarted = resolve;
-      });
+      let readerWaitStarted = false;
       readerDrainMock.waitForRetiringReaders.mockImplementationOnce(async () => {
-        markReaderWaitStarted();
+        readerWaitStarted = true;
         return 0;
       });
       const exited = new Promise<void>((resolve) => {
         appMock.exit.mockImplementationOnce(() => resolve());
       });
 
-      const { beforeQuitCb } = await setup({});
-      await beforeQuitCb(makeEvent());
+      try {
+        const { beforeQuitCb } = await setup({});
+        await beforeQuitCb(makeEvent());
 
-      await readerWaitStarted;
-      expect(appMock.exit).not.toHaveBeenCalled();
-      releaseVad();
-      await exited;
+        await vi.waitFor(() => expect(releaseVad).toBeDefined());
+        await vi.waitFor(() => expect(readerWaitStarted).toBe(true));
+        expect(appMock.exit).not.toHaveBeenCalled();
+        releaseVad?.();
+        await exited;
+      } finally {
+        releaseVad?.();
+      }
     });
 
     it("exits cleanly when a reader is still draining at the budget", async () => {

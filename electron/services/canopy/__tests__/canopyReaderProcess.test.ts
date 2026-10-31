@@ -77,10 +77,13 @@ describe("waitForRetiringReaders", () => {
       settled = pending;
     });
     first.child.emit("exit", 0);
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
     expect(settled).toBeUndefined();
     second.child.emit("exit", 0);
-    await vi.waitFor(() => expect(settled).toBe(0));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(0);
+    // The budget timer goes with the wait, as do each reader's own timers.
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("gives up at the budget and reports what is still draining", async () => {
@@ -89,11 +92,11 @@ describe("waitForRetiringReaders", () => {
     drained.reader.retire();
     stuck.reader.retire();
     let settled: number | undefined;
-    void readerModule.waitForRetiringReaders(1_000).then((pending) => {
+    void readerModule.waitForRetiringReaders(400).then((pending) => {
       settled = pending;
     });
     drained.child.emit("exit", 0);
-    await vi.advanceTimersByTimeAsync(999);
+    await vi.advanceTimersByTimeAsync(399);
     expect(settled).toBeUndefined();
     await vi.advanceTimersByTimeAsync(1);
     expect(settled).toBe(1);
