@@ -1,6 +1,6 @@
 import type React from "react";
 import { isMac } from "@/lib/platform";
-import { revealCopy } from "@/components/FileViewer/revealCopy";
+import { useRevealCopy } from "@/components/FileViewer/revealCopy";
 import {
   AGENT_SNOOZE_DURATION_OPTIONS,
   AGENT_SNOOZE_LABEL,
@@ -54,7 +54,7 @@ import {
   Trash2,
   Unlock,
 } from "lucide-react";
-import { CirclePause, FolderOpen, FolderTree } from "@/components/icons";
+import { CirclePause, FolderTree } from "@/components/icons";
 import { ICON_CLASS, type MenuActionHandler } from "./menuShared";
 import type { useFleetRunMenuState } from "./useFleetRunMenuState";
 
@@ -95,6 +95,7 @@ export function TerminalSelectionMenuItems({
 }) {
   const mac = isMac();
   const clipboardCombos = terminalClipboardCombos(mac);
+  const reveal = useRevealCopy();
   return (
     <>
       <ContextMenuItem
@@ -178,8 +179,8 @@ export function TerminalSelectionMenuItems({
             />
           )}
           <ContextMenuItem onSelect={() => onAction(`reveal-in-finder:${hoveredFilePath}`)}>
-            <FolderOpen className={ICON_CLASS} aria-hidden="true" />
-            {revealCopy().label}
+            <reveal.icon className={ICON_CLASS} aria-hidden="true" />
+            {reveal.label}
           </ContextMenuItem>
         </>
       )}

@@ -17,7 +17,7 @@ import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
 import { FileSourceMetadataStrip } from "@/components/FileViewer/FileSourceMetadataStrip";
-import { revealCopy } from "@/components/FileViewer/revealCopy";
+import { useRevealCopy } from "@/components/FileViewer/revealCopy";
 import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
 import { ZoomableImage } from "@/components/FileViewer/ZoomableImage";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
@@ -568,7 +568,7 @@ export function FilePane({
     filePath && isUnderRoot(filePath, pickerRoot)
       ? toForwardSlashes(filePath).slice(toForwardSlashes(pickerRoot).replace(/\/$/, "").length + 1)
       : filePath && toForwardSlashes(filePath);
-  const reveal = revealCopy();
+  const reveal = useRevealCopy();
 
   // Leaving Edit unmounts the editor, and with it whatever had keyboard focus;
   // the mode toggle is the control the user is conceptually holding, so focus
@@ -716,7 +716,7 @@ export function FilePane({
           onOpenDiff: () => handleViewModeChange("diff"),
           // The toolbar's reveal: it takes the guarded fallback for a file
           // outside every project root, which this pane deliberately displays.
-          onReveal: () => void handleOpenExternal("reveal"),
+          onReveal: () => handleOpenExternal("reveal"),
           // The text already on screen, as the toolbar copies it — `file.read`
           // would refuse a file outside every project root. Unset while
           // nothing is loaded, leaving the shared read to answer.
@@ -840,12 +840,12 @@ export function FilePane({
                 errorMessage={errorMessage}
                 filePath={filePath}
                 fileName={fileName ?? filePath}
-                revealLabel={reveal.label}
+                reveal={reveal}
                 openTarget={openTarget}
                 canOpenInDefaultApp={isInsideGovernedRoot}
                 remote={remoteFile}
                 onRetry={() => loadFile("explicit")}
-                onExternal={(target) => void handleOpenExternal(target)}
+                onExternal={handleOpenExternal}
               />
             )}
 
