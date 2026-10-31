@@ -29,6 +29,12 @@ describe("dropRetiredAgentModel", () => {
     ).toEqual({ launch: { command: "copilot -i 'go'" }, droppedModelIds: ["gpt-5.4"] });
   });
 
+  it("cleans the caller's own flags when only they carry it", () => {
+    expect(
+      dropRetiredAgentModel("copilot", { callerLaunchFlags: ["--model", "gpt-5.4", "--yolo"] })
+    ).toEqual({ launch: { callerLaunchFlags: ["--yolo"] }, droppedModelIds: ["gpt-5.4"] });
+  });
+
   it.each([
     [
       "an offered model",

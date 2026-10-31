@@ -82,6 +82,7 @@ vi.mock("@/services/terminal/retiredModelNotice", () => ({
 };
 
 const { usePanelStore } = await import("../../../panelStore");
+const { saveNormalized } = await import("../persistence");
 const { useRecipeStore } = await import("../../../recipeStore");
 const { buildPanelDuplicateOptions } = await import("@/services/terminal/panelDuplicationService");
 const { load: loadTerminalService } =
@@ -160,6 +161,13 @@ describe("launches replaying a retired Copilot model (#15652)", () => {
     expect(launches).toHaveLength(1);
     expectNoModel(launches[0]!);
     expect(launches[0]!.spawn.command).toMatch(/^copilot\b/);
+    // What goes to disk is the cleaned launch, so a later restore can't bring it back.
+    const saves = vi.mocked(saveNormalized).mock.calls;
+    expect(saves.length).toBeGreaterThan(0);
+    const saved = saves.at(-1)![0][launches[0]!.pane.id] as PtyPanelData;
+    expect(saved.agentModelId).toBeUndefined();
+    expect(saved.agentLaunchFlags).not.toContain("claude-opus-4.6");
+    expect(saved.command).not.toMatch(/--model/);
     expect(notifyRetiredModelDroppedMock).toHaveBeenCalledWith(
       "copilot",
       ["claude-opus-4.6"],

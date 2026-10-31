@@ -539,10 +539,11 @@ export const createRestartActions = (
     // A pane saved with a retired model fails on every start (#15652). Each
     // command below (fresh, resume, the saved one as a fallback) and the state
     // the restart persists read these cleaned fields, so none can replay it.
-    const { launch: currentTerminal, droppedModelIds } = dropRetiredAgentModel(
+    const { launch: currentTerminal, droppedModelIds: droppedFromSaved } = dropRetiredAgentModel(
       _currentTerminalRaw.launchAgentId,
       _currentTerminalRaw
     );
+    const droppedModelIds = new Set(droppedFromSaved);
 
     if (currentTerminal.location === "trash") {
       // Terminal was removed or trashed while we were validating
@@ -598,7 +599,7 @@ export const createRestartActions = (
     // A restart that moves the pane picks its conversation itself, so a
     // caller's own selector (`--continue`, `resume --last`) can't ride along
     // and reopen whichever conversation the new folder has last (#14954).
-    const callerLaunchFlags =
+    let callerLaunchFlags =
       plannedCwd !== terminal.cwd
         ? stripConversationSelectorFlags(storedCallerFlags, effectiveAgentId)
         : storedCallerFlags;
@@ -969,6 +970,21 @@ export const createRestartActions = (
         }
       }
 
+      // The preset and settings are merged in after the saved fields were
+      // cleaned, and either can name a retired model of its own, so the launch
+      // as assembled is cleaned too: what runs is what the notice reports.
+      if (isAgent && effectiveAgentId) {
+        const assembled = dropRetiredAgentModel(effectiveAgentId, {
+          command: commandToRun,
+          agentLaunchFlags: nextAgentLaunchFlags,
+          callerLaunchFlags,
+        });
+        commandToRun = assembled.launch.command;
+        nextAgentLaunchFlags = assembled.launch.agentLaunchFlags;
+        callerLaunchFlags = assembled.launch.callerLaunchFlags ?? [];
+        for (const modelId of assembled.droppedModelIds) droppedModelIds.add(modelId);
+      }
+
       const spawnCommand = commandToRun;
       // The record of what the run was first asked (#14592) stays only while
       // that run goes on: a resume of the pane's own conversation (a forced
@@ -1000,7 +1016,9 @@ export const createRestartActions = (
           ? (currentTerminal.command ?? (forcedResume ? freshCommand : undefined))
           : spawnCommand;
       const durableCommand = durableSource
-        ? stripAssignedSessionIdArgs(durableSource, effectiveAgentId)
+        ? dropRetiredAgentModel(effectiveAgentId, {
+            command: stripAssignedSessionIdArgs(durableSource, effectiveAgentId),
+          }).launch.command
         : durableSource;
       // An assigned id stays valid across a resume — the CLI reuses it rather
       // than minting a new one — so carrying it through the restart keeps the
@@ -1088,8 +1106,8 @@ export const createRestartActions = (
       });
       // Told as soon as the change is saved: a spawn that then fails leaves the
       // pane on the default with nothing retired left to report on the retry.
-      if (isAgent && effectiveAgentId && droppedModelIds.length > 0) {
-        notifyRetiredModelDropped(effectiveAgentId, droppedModelIds, {
+      if (isAgent && effectiveAgentId && droppedModelIds.size > 0) {
+        notifyRetiredModelDropped(effectiveAgentId, [...droppedModelIds], {
           panelId: id,
           worktreeId: currentTerminal.worktreeId,
         });
@@ -1665,7 +1683,7 @@ async function respawnAgentOnPreset(
   }
   // The new preset's launch is built from these fields, so a retired model
   // saved on the pane doesn't follow it onto the new preset (#15652).
-  const { launch: terminal, droppedModelIds } = dropRetiredAgentModel(
+  const { launch: terminal, droppedModelIds: droppedFromSaved } = dropRetiredAgentModel(
     livePanel.launchAgentId,
     livePanel
   );
@@ -1696,15 +1714,18 @@ async function respawnAgentOnPreset(
   // Without this, a failed respawn leaves the panel permanently stamped as
   // "using fallback N" while no process is running, corrupting any retry
   // that reads fallbackChainIndex.
+  // Taken from the pane as saved: a respawn that fails before its own commit
+  // changed nothing, retired model included, so it puts nothing back cleaned.
   const priorSnapshot = {
-    command: terminal.command,
+    command: livePanel.command,
     agentPresetId: terminal.agentPresetId,
     agentPresetColor: terminal.agentPresetColor,
     originalPresetId: terminal.originalPresetId,
     isUsingFallback: terminal.isUsingFallback,
     fallbackChainIndex: terminal.fallbackChainIndex,
-    agentLaunchFlags: terminal.agentLaunchFlags,
-    callerLaunchFlags: terminal.callerLaunchFlags,
+    agentLaunchFlags: livePanel.agentLaunchFlags,
+    callerLaunchFlags: livePanel.callerLaunchFlags,
+    agentModelId: livePanel.agentModelId,
     conversationCwd: terminal.conversationCwd,
     env: terminal.env,
   };
@@ -1760,32 +1781,41 @@ async function respawnAgentOnPreset(
     // A switch promises a new conversation, and so does a hop that moves the
     // pane into its worktree (#14954), so a caller's own resume selector
     // (`--continue`, `resume --last`) can't ride along into the new home.
-    const callerLaunchFlags =
+    const keptCallerFlags =
       mode.kind === "switch" || filedLaunchCwd(get, id, terminal) !== terminal.cwd
         ? stripConversationSelectorFlags(storedCallerFlags, effectiveAgentId)
         : storedCallerFlags;
     const systemPromptArgs = extractSystemPromptArgs(storedBaseFlags, effectiveAgentId);
-    const commandToRun = appendCallerLaunchFlagsToCommand(
-      generateAgentCommand(baseCommand, effectiveEntry, effectiveAgentId, {
-        clipboardDirectory,
-        modelId: terminal.agentModelId,
-        systemPromptArgs,
-        presetArgs: nextPreset.args,
-        globalSkipPermissions,
-        globalUseAltScreen,
-      }),
-      callerLaunchFlags
-    );
-    const nextLaunchFlags = [
-      ...buildAgentLaunchFlags(effectiveEntry, effectiveAgentId, {
-        modelId: terminal.agentModelId,
-        systemPromptArgs,
-        presetArgs: nextPreset.args,
-        globalSkipPermissions,
-        globalUseAltScreen,
-      }),
-      ...callerLaunchFlags,
-    ];
+    // The new preset's own args or the settings can name a retired model too,
+    // so the launch as assembled is cleaned, not just what the pane saved.
+    const assembled = dropRetiredAgentModel(effectiveAgentId, {
+      command: appendCallerLaunchFlagsToCommand(
+        generateAgentCommand(baseCommand, effectiveEntry, effectiveAgentId, {
+          clipboardDirectory,
+          modelId: terminal.agentModelId,
+          systemPromptArgs,
+          presetArgs: nextPreset.args,
+          globalSkipPermissions,
+          globalUseAltScreen,
+        }),
+        keptCallerFlags
+      ),
+      agentLaunchFlags: [
+        ...buildAgentLaunchFlags(effectiveEntry, effectiveAgentId, {
+          modelId: terminal.agentModelId,
+          systemPromptArgs,
+          presetArgs: nextPreset.args,
+          globalSkipPermissions,
+          globalUseAltScreen,
+        }),
+        ...keptCallerFlags,
+      ],
+      callerLaunchFlags: keptCallerFlags,
+    });
+    const commandToRun = assembled.launch.command ?? baseCommand;
+    const nextLaunchFlags = assembled.launch.agentLaunchFlags ?? [];
+    const callerLaunchFlags = assembled.launch.callerLaunchFlags ?? [];
+    const droppedModelIds = [...new Set([...droppedFromSaved, ...assembled.droppedModelIds])];
 
     // Capture live terminal dimensions before teardown
     const managedInstance = peekTerminalService()?.get(id);
@@ -1863,6 +1893,14 @@ async function respawnAgentOnPreset(
       return { panelsById: newById };
     });
     if (droppedModelIds.length > 0) {
+      // Saved and reported from here, so a spawn that now fails rolls back to
+      // the cleaned launch rather than bringing the retired model back.
+      Object.assign(priorSnapshot, {
+        command: terminal.command,
+        agentLaunchFlags: terminal.agentLaunchFlags,
+        callerLaunchFlags: terminal.callerLaunchFlags,
+        agentModelId: terminal.agentModelId,
+      });
       notifyRetiredModelDropped(effectiveAgentId, droppedModelIds, {
         panelId: id,
         worktreeId: terminal.worktreeId,

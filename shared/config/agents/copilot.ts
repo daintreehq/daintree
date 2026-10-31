@@ -56,7 +56,7 @@ export const config: AgentConfig = {
     { id: "gemini-3.8-flash", name: "Gemini 3.8 Flash", shortLabel: "Gem 3.8 Flash" },
   ],
   // Earlier bundled IDs GitHub has deprecated, from its changelog. Panes and
-  // recipes that saved one relaunch on the CLI default with a notice naming it,
+  // recipes that saved one relaunch without it, with a notice naming it,
   // because `--model <retired id>` fails the launch.
   retiredModels: {
     "gemini-3-pro-preview": "2026-03-26",

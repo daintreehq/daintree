@@ -681,11 +681,12 @@ export interface AgentConfig {
    */
   curatedModels?: boolean;
   /**
-   * Model IDs the CLI once took and now rejects, each with the day it was
-   * retired. A pane or recipe that saved one of these relaunches on the CLI
-   * default instead of failing on every start (#15652). Declared rather than
-   * inferred from {@link models}: an ID the list doesn't carry may still be one
-   * the CLI accepts, so absence alone never drops a saved choice.
+   * Model IDs the CLI once took that its maker has since retired, each with
+   * the day it was retired. A pane or recipe that saved one of these relaunches
+   * without it, with a notice naming it, instead of failing on every start
+   * (#15652), so a plan that still serves one sees what changed. Declared
+   * rather than inferred from {@link models}: an ID the list doesn't carry may
+   * still be one the CLI accepts, so absence alone never drops a saved choice.
    */
   retiredModels?: Readonly<Record<string, string>>;
   /**
