@@ -10,6 +10,7 @@ import {
   getAppThemeCssVariables,
   hexToOklch,
   isHexColor,
+  normalizeAppColorScheme,
   type AppColorScheme,
   type AppThemeTokenKey,
 } from "@shared/theme";
@@ -17,25 +18,42 @@ import {
   ALL_CVD_TOKENS,
   BLUE_YELLOW_OVERRIDES,
   RED_GREEN_OVERRIDES,
+  getColorVisionWrites,
 } from "@shared/theme/colorVisionOverrides";
+import type { ColorVisionMode } from "@shared/types";
 import { applyAppThemeToRoot, applyColorVisionMode } from "../applyAppTheme";
 
-// Every syntax and graphical status ink a mode swaps in has to hold the floor the
-// theme's own ink is held to, on the surfaces that theme actually paints it on.
-// Measured on what `applyColorVisionMode` writes to the root, not on the maps.
+// Every syntax and graphical status ink on screen under a mode has to hold the
+// floor the theme's own ink is held to, on the surfaces that theme paints it on.
+// Measured on what `applyColorVisionMode` leaves on the root, not on the maps.
 
 const MODES = [
   ["red-green", RED_GREEN_OVERRIDES],
   ["blue-yellow", BLUE_YELLOW_OVERRIDES],
 ] as const;
 
-type Mode = (typeof MODES)[number][0];
+const DESTRUCTIVE_TOKENS = [
+  "--theme-destructive-fill",
+  "--theme-destructive-fill-hover",
+  "--theme-destructive-fill-active",
+  "--theme-destructive-foreground",
+] as const;
 
-function paint(scheme: AppColorScheme, mode: Mode) {
+const INK_FLOORS: ReadonlyArray<readonly [AppThemeTokenKey, readonly AppThemeTokenKey[], number]> =
+  [
+    ...SYNTAX_CANVAS_FLOORS.map(
+      ([token, floor]) => [token, [SYNTAX_CANVAS_SURFACE], floor] as const
+    ),
+    ...STATUS_INK_CONTRAST.inks.map(
+      (token) => [token, STATUS_INK_CONTRAST.surfaces, STATUS_INK_CONTRAST.minimum] as const
+    ),
+  ];
+
+function paint(scheme: AppColorScheme, mode: ColorVisionMode): HTMLElement {
   const root = document.createElement("div");
   applyAppThemeToRoot(root, scheme);
   applyColorVisionMode(root, mode, scheme);
-  return { root, read: (token: AppThemeTokenKey) => readInk(root, token) };
+  return root;
 }
 
 function readInk(root: HTMLElement, token: AppThemeTokenKey): string {
@@ -45,39 +63,36 @@ function readInk(root: HTMLElement, token: AppThemeTokenKey): string {
   return value;
 }
 
-/** Each token the mode fits, beside the surfaces it is measured on and its floor. */
-function fittedInks(overrides: Record<string, string>) {
-  const syntax = SYNTAX_CANVAS_FLOORS.map(
-    ([token, floor]) => [token, [SYNTAX_CANVAS_SURFACE], floor] as const
-  );
-  const status = STATUS_INK_CONTRAST.inks.map(
-    (token) => [token, STATUS_INK_CONTRAST.surfaces, STATUS_INK_CONTRAST.minimum] as const
-  );
-  return [...syntax, ...status].filter(([token]) => `--theme-${token}` in overrides);
+function floorFailures(root: HTMLElement, scheme: AppColorScheme): string[] {
+  const failures: string[] = [];
+  for (const [token, surfaces, floor] of INK_FLOORS) {
+    const ink = readInk(root, token);
+    for (const surface of surfaces) {
+      const ratio = contrastRatio(ink, scheme.tokens[surface]);
+      if (!(ratio >= floor)) {
+        failures.push(`${token} ${ink} on ${surface} is ${ratio.toFixed(2)}:1, floor ${floor}`);
+      }
+    }
+  }
+  return failures;
 }
 
 describe("colour-vision modes hold the theme's contrast floors (#15580)", () => {
   for (const [mode, overrides] of MODES) {
-    it.each(BUILT_IN_APP_SCHEMES)(`${mode} on $id: every fitted ink clears its floor`, (scheme) => {
-      const { read } = paint(scheme, mode);
-      const failures: string[] = [];
-      for (const [token, surfaces, floor] of fittedInks(overrides)) {
-        const ink = read(token);
-        for (const surface of surfaces) {
-          const ratio = contrastRatio(ink, scheme.tokens[surface]);
-          if (!(ratio >= floor)) {
-            failures.push(`${token} ${ink} on ${surface} is ${ratio.toFixed(2)}:1, floor ${floor}`);
-          }
-        }
+    it.each(BUILT_IN_APP_SCHEMES)(
+      `${mode} on $id: every ink on screen clears its floor`,
+      (scheme) => {
+        expect(floorFailures(paint(scheme, mode), scheme)).toEqual([]);
       }
-      expect(failures).toEqual([]);
-    });
+    );
 
     it.each(BUILT_IN_APP_SCHEMES)(`${mode} on $id: fitted inks keep the mode's hue`, (scheme) => {
-      const { read } = paint(scheme, mode);
-      for (const [token] of fittedInks(overrides)) {
+      const root = paint(scheme, mode);
+      const fitted = INK_FLOORS.filter(([token]) => `--theme-${token}` in overrides);
+      expect(fitted.length).toBeGreaterThan(0);
+      for (const [token] of fitted) {
         const seed = hexToOklch(overrides[`--theme-${token}`]!)!;
-        const ink = hexToOklch(read(token))!;
+        const ink = hexToOklch(readInk(root, token))!;
         if (seed.c < 0.005) {
           expect(ink.c, `${token} stays neutral`).toBeLessThan(0.005);
           continue;
@@ -89,25 +104,55 @@ describe("colour-vision modes hold the theme's contrast floors (#15580)", () => 
     });
   }
 
-  it.each(BUILT_IN_APP_SCHEMES)("turning the modes off restores every token on $id", (scheme) => {
-    const base = getAppThemeCssVariables(scheme);
-    const { root } = paint(scheme, "red-green");
-    applyColorVisionMode(root, "blue-yellow", scheme);
-    applyColorVisionMode(root, "default", scheme);
-    for (const token of ALL_CVD_TOKENS) {
-      expect(root.style.getPropertyValue(token), token).toBe(base[token] ?? "");
+  it.each(BUILT_IN_APP_SCHEMES)(
+    "every switch leaves exactly the active mode's writes on $id",
+    (scheme) => {
+      const base = getAppThemeCssVariables(scheme);
+      const root = document.createElement("div");
+      applyAppThemeToRoot(root, scheme);
+      const sequence: ColorVisionMode[] = [
+        "red-green",
+        "blue-yellow",
+        "red-green",
+        "default",
+        "blue-yellow",
+        "default",
+      ];
+      for (const mode of sequence) {
+        applyColorVisionMode(root, mode, scheme);
+        const writes = getColorVisionWrites(mode, scheme);
+        for (const token of [...ALL_CVD_TOKENS, ...DESTRUCTIVE_TOKENS]) {
+          expect(root.style.getPropertyValue(token), `${token} after ${mode}`).toBe(
+            writes[token] ?? base[token] ?? ""
+          );
+        }
+      }
     }
-  });
+  );
 
-  it("writes the raw map when there is no scheme to fit against", () => {
+  it("writes the raw map, and nothing derived, when there is no scheme to fit against", () => {
     for (const [mode, overrides] of MODES) {
       const root = document.createElement("div");
       applyColorVisionMode(root, mode);
-      for (const [token] of fittedInks(overrides)) {
-        expect(root.style.getPropertyValue(`--theme-${token}`), `${mode} ${token}`).toBe(
-          overrides[`--theme-${token}`]
-        );
+      for (const [token, value] of Object.entries(overrides)) {
+        expect(root.style.getPropertyValue(token), `${mode} ${token}`).toBe(value);
+      }
+      for (const token of DESTRUCTIVE_TOKENS) {
+        expect(root.style.getPropertyValue(token), `${mode} ${token}`).toBe("");
       }
     }
+  });
+
+  it("still reaches the floor on a canvas that leaves no room for the headroom over it", () => {
+    // White on #767676 is 4.54:1: past the 4.5:1 floor, short of floor plus headroom.
+    const scheme = normalizeAppColorScheme({
+      id: "tight-canvas",
+      name: "Tight canvas",
+      type: "dark",
+      tokens: { "surface-canvas": "#767676" },
+    });
+    const root = paint(scheme, "red-green");
+    const punctuation = readInk(root, "syntax-punctuation");
+    expect(contrastRatio(punctuation, "#767676")).toBeGreaterThanOrEqual(4.5);
   });
 });

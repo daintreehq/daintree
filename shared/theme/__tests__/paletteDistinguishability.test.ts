@@ -10,7 +10,6 @@ import {
   differenceEuclidean,
 } from "culori";
 import { BUILT_IN_APP_SCHEMES } from "../themes.js";
-import { hexToOklch } from "../oklch.js";
 import { WORKTREE_COLOR_PALETTE } from "../worktreeColors.js";
 import {
   RED_GREEN_OVERRIDES,
@@ -369,27 +368,31 @@ describe("palette distinguishability", () => {
         (token) => !token.endsWith("-surface") && !token.endsWith("-background")
       );
 
-    // Seeds this close on the OKLab a/b plane are one colour at two lightnesses:
-    // blue-yellow's sky blue and blue (7.8° apart in hue), or the greys. Fitting
-    // moves each to the lightness its floor needs, which can bring the two
-    // together on a theme where both have to move the same way; red-green already
-    // paints function, number and link in one blue. Seeds of different hues stay
-    // measured, and the static block above still holds every seed pair apart.
-    const SAME_FAMILY_CHROMA_DISTANCE = 0.03;
-    function oneFamily(a: string, b: string): boolean {
-      const plane = (hex: string) => {
-        const { c, h } = hexToOklch(hex)!;
-        return [c * Math.cos((h * Math.PI) / 180), c * Math.sin((h * Math.PI) / 180)] as const;
-      };
-      const [aa, ab] = plane(a);
-      const [ba, bb] = plane(b);
-      return Math.hypot(aa - ba, ab - bb) < SAME_FAMILY_CHROMA_DISTANCE;
-    }
+    // Seeds that differ only in lightness can meet once both are fitted to the
+    // same floor. Each pair allowed to meet is named here with why that is
+    // acceptable, so any other collapse, on any theme, still fails.
+    const CONVERGENT_PAIRS: Record<(typeof MODES)[number][0], ReadonlyArray<readonly string[]>> = {
+      "red-green": [],
+      "blue-yellow": [
+        // Sky blue and blue, 7.8° apart in hue: on a light canvas both darken to
+        // 4.5:1 and meet. Red-green paints function, number and link in one blue
+        // by design, and the terminal's blue is never set on the editor canvas.
+        ["--theme-syntax-function", "--theme-syntax-link"],
+        ["--theme-syntax-function", "--theme-terminal-blue"],
+        // Two greys fitted to different floors on different surfaces that land
+        // together on highlands: the info glyph in chrome and code punctuation.
+        ["--theme-status-info", "--theme-syntax-punctuation"],
+        ["--theme-status-info", "--theme-syntax-operator"],
+      ],
+    };
+    const mayConverge = (mode: (typeof MODES)[number][0], a: string, b: string) =>
+      CONVERGENT_PAIRS[mode].some(([x, y]) => (x === a && y === b) || (x === b && y === a));
 
     function collapsedPairs(
       label: string,
       colors: ReadonlyArray<{ token: string; value: string; seed?: string }>,
-      deficiencies: readonly Deficiency[]
+      deficiencies: readonly Deficiency[],
+      exempt: (a: string, b: string) => boolean = () => false
     ): string[] {
       const failures: string[] = [];
       for (const deficiency of deficiencies) {
@@ -404,7 +407,9 @@ describe("palette distinguishability", () => {
             const a = simulated[i]!;
             const b = simulated[j]!;
             if (!a.color || !b.color) continue;
-            if (a.seed !== undefined && b.seed !== undefined && oneFamily(a.seed, b.seed)) continue;
+            // One hex in the map is one colour by design (the static block dedupes them).
+            if (a.seed !== undefined && a.seed === b.seed) continue;
+            if (exempt(a.token, b.token)) continue;
             const d = differenceEuclidean("oklab")(a.color, b.color);
             if (d < JND_FLOOR) {
               failures.push(
@@ -418,17 +423,38 @@ describe("palette distinguishability", () => {
     }
 
     for (const [mode, overrides, deficiencies] of MODES) {
-      it(`${mode}: no two fitted override colours collapse on any built-in theme`, () => {
+      it(`${mode}: fitted override colours stay apart on every built-in theme`, () => {
         const failures = BUILT_IN_APP_SCHEMES.flatMap((scheme) => {
           const writes = getColorVisionWrites(mode, scheme);
           const colors = signalTokens(overrides).map((token) => ({
             token,
             value: writes[token]!,
-            seed: overrides[token]!,
+            seed: normHex(overrides[token]!),
           }));
-          return collapsedPairs(`${mode} on ${scheme.id}`, colors, deficiencies);
+          return collapsedPairs(`${mode} on ${scheme.id}`, colors, deficiencies, (a, b) =>
+            mayConverge(mode, a, b)
+          );
         });
         expect(failures, failures.join("\n")).toEqual([]);
+      });
+
+      it(`${mode}: every pair allowed to converge still does somewhere`, () => {
+        const collapsed = BUILT_IN_APP_SCHEMES.flatMap((scheme) => {
+          const writes = getColorVisionWrites(mode, scheme);
+          const colors = signalTokens(overrides).map((token) => ({
+            token,
+            value: writes[token]!,
+            seed: normHex(overrides[token]!),
+          }));
+          return collapsedPairs(scheme.id, colors, deficiencies);
+        });
+        for (const [a, b] of CONVERGENT_PAIRS[mode]) {
+          const pair = new RegExp(`(${a} .* - ${b} |${b} .* - ${a} )`);
+          expect(
+            collapsed.some((line) => pair.test(line)),
+            `${a} / ${b} no longer converges anywhere; drop it from CONVERGENT_PAIRS`
+          ).toBe(true);
+        }
       });
 
       it(`${mode}: the four status inks it leaves on screen stay apart on every built-in theme`, () => {

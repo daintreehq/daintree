@@ -10,6 +10,7 @@ import {
   getAppThemeById,
   getAppThemeCssVariables,
   hexToOklch,
+  isHexColor,
   normalizeAppColorScheme,
   resolveDiffTextBackdrops,
   resolveStatusTextBackdrops,
@@ -397,6 +398,7 @@ describe("applyColorVisionMode status text inks", () => {
       expectOnHue(ink, hue, text);
       // The letter's wash is the status ink the mode paints, fitted to this theme.
       const painted = root.style.getPropertyValue(`--theme-${status}`);
+      expect(isHexColor(painted), `${status} is written as hex`).toBe(true);
       for (const backdrop of resolveStatusTextBackdrops(painted, scheme.tokens)) {
         expect(
           contrastRatio(ink, backdrop.hex),

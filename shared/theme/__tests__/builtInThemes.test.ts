@@ -995,8 +995,10 @@ describe("border-input", () => {
     (scheme) => {
       const dangers: Array<[string, string]> = [["status-danger", scheme.tokens["status-danger"]]];
       for (const mode of ["red-green", "blue-yellow"] as const) {
-        const danger = getColorVisionWrites(mode, scheme)["--theme-status-danger"];
-        if (danger) dangers.push([`${mode} status-danger`, danger]);
+        const danger =
+          getColorVisionWrites(mode, scheme)["--theme-status-danger"] ??
+          scheme.tokens["status-danger"];
+        dangers.push([`${mode} status-danger`, danger]);
       }
       for (const [label, danger] of dangers) {
         const well = blendOverBackground(danger, dialogSurface(scheme), DANGER_WELL_ALPHA);

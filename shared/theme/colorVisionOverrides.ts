@@ -250,7 +250,10 @@ export function getColorVisionWrites(
     const backdrops = surfaces
       .map((surface) => scheme.tokens[surface])
       .filter((value): value is string => typeof value === "string" && isHexColor(value));
-    const ink = liftToContrast(seed, backdrops, minimum + FIT_HEADROOM, scheme.type);
+    let ink = liftToContrast(seed, backdrops, minimum + FIT_HEADROOM, scheme.type);
+    // A custom surface can leave room for the floor but not the headroom over it
+    // (a dark canvas at #767676 takes white to 4.54:1); the floor still holds.
+    if (ink === seed) ink = liftToContrast(seed, backdrops, minimum, scheme.type);
     effective[token] = ink;
     writes[`--theme-${token}`] = ink;
   };
