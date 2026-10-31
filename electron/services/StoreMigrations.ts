@@ -3,11 +3,21 @@ import Store from "electron-store";
 import type { StoreSchema } from "../store.js";
 import { invalidateStoreValueCache, tightenFilePermissions } from "../store.js";
 import fs from "fs";
+import path from "path";
 import { z } from "zod";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { getCurrentDiskSpaceStatus } from "./DiskSpaceMonitor.js";
 
 export const LATEST_SCHEMA_VERSION = 41;
+
+// Only the newest pre-migration backup matters for rolling back the latest
+// upgrade, and every older copy keeps rotated or cleared secrets on disk.
+const PRE_MIGRATION_BACKUPS_TO_KEEP = 3;
+
+// What follows `<store>.backup-`: an optional `v<N>-` (absent in names written
+// by older builds), then `toISOString()` with `:` and `.` replaced by `-`. The
+// timestamp is fixed width, so string order is chronological order.
+const BACKUP_SUFFIX_PATTERN = /^(?:v\d+-)?(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)$/;
 
 export interface Migration {
   version: number;
@@ -174,14 +184,65 @@ export class MigrationRunner {
       const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
       const backupPath = `${storePath}.backup-v${fromVersion}-${timestamp}`;
       fs.copyFileSync(storePath, backupPath);
-      // Pre-migration backups carry the full store including secrets and
-      // are never auto-cleaned, so tighten regardless of source mode.
+      // Pre-migration backups carry the full store including secrets, so
+      // tighten regardless of source mode.
       tightenFilePermissions(backupPath);
       console.log(`[Migrations] Created backup at ${backupPath}`);
       return backupPath;
     } catch (error) {
       console.warn("[Migrations] Failed to create backup:", error);
       return null;
+    }
+  }
+
+  /**
+   * Deletes all but the newest pre-migration backups next to the store: the
+   * versioned `<store>.backup-v<N>-<ts>` files and the unversioned
+   * `<store>.backup-<ts>` files written by older builds. When this run wrote a
+   * backup it is always kept, whatever its timestamp, so clock skew can never
+   * delete it. Never throws.
+   */
+  private pruneOldBackups(currentBackupPath: string | null): void {
+    const storePath = this.store.path;
+    // The in-memory recovery store has no file, and dirname("") is the cwd.
+    if (!storePath) return;
+    try {
+      const dir = path.dirname(storePath);
+      const currentName = currentBackupPath ? path.basename(currentBackupPath) : null;
+      const prefix = `${path.basename(storePath)}.backup-`;
+      const older: Array<{ name: string; sortKey: string }> = [];
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isFile() || entry.name === currentName || !entry.name.startsWith(prefix)) {
+          continue;
+        }
+        const match = BACKUP_SUFFIX_PATTERN.exec(entry.name.slice(prefix.length));
+        // Timestamp first, then the name, so equal timestamps sort deterministically.
+        if (match) older.push({ name: entry.name, sortKey: `${match[1]} ${entry.name}` });
+      }
+      // Newest first.
+      older.sort((a, b) => (a.sortKey < b.sortKey ? 1 : a.sortKey > b.sortKey ? -1 : 0));
+
+      const keepOlder = PRE_MIGRATION_BACKUPS_TO_KEEP - (currentName ? 1 : 0);
+      for (const { name } of older.slice(0, keepOlder)) {
+        // Backups written by older builds may still carry 0o644.
+        tightenFilePermissions(path.join(dir, name));
+      }
+
+      let removed = 0;
+      for (const { name } of older.slice(keepOlder)) {
+        const filePath = path.join(dir, name);
+        try {
+          fs.unlinkSync(filePath);
+          removed += 1;
+        } catch (error) {
+          console.warn(`[Migrations] Failed to delete old backup ${filePath}:`, error);
+        }
+      }
+      if (removed > 0) {
+        console.log(`[Migrations] Removed ${removed} old pre-migration backup(s)`);
+      }
+    } catch (error) {
+      console.warn("[Migrations] Failed to prune old pre-migration backups:", error);
     }
   }
 
@@ -295,6 +356,7 @@ export class MigrationRunner {
         }
         this.store.clear();
         this.store.set("_schemaVersion", floorVersion);
+        this.pruneOldBackups(backupPath);
         return;
       }
     }
@@ -389,5 +451,7 @@ export class MigrationRunner {
         cause: error,
       });
     }
+
+    this.pruneOldBackups(backupPath);
   }
 }
