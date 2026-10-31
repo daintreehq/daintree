@@ -219,6 +219,12 @@ export async function createPluginStyleRuntime(
   const roots = new Map<Element, number>();
 
   let lastGoodCss = "";
+  /**
+   * The CSS the sheet holds, or `null` once a write threw and left that unknown.
+   * Kept apart from `lastGoodCss` because a failed replacement whose restore also
+   * failed leaves the sheet holding neither for certain.
+   */
+  let installedCss: string | null = "";
   let compacting = false;
   let disposed = false;
   /** Candidate count at which compaction is worth attempting again. */
@@ -293,8 +299,8 @@ export async function createPluginStyleRuntime(
    * Rebuilding only when the set actually grew is what keeps `replaceSync()`
    * rare: a plugin that re-renders constantly with a stable class set never
    * touches the stylesheet after its first build. That matters because a
-   * replacement re-registers the output's `@property` rules, which is the
-   * expensive part of installing this CSS — not the utility rules.
+   * replacement invalidates style for the whole document, so the next frame
+   * recalculates every element's style whatever the new sheet contains.
    */
   function ingest(tokens: Iterable<string>, fromDom: boolean): void {
     if (disposed) return;
@@ -355,7 +361,14 @@ export async function createPluginStyleRuntime(
   function rebuild(added: string[]): boolean {
     try {
       const css = compiler.build(added);
-      sink.replace(css);
+      // A batch that generates nothing (an icon kind, a CodeMirror state class,
+      // a plugin's own hook class) gets the same cumulative CSS back, and
+      // installing identical text costs the same recalc as a real change.
+      // Compared with what the sheet holds, not with the compiler's last output:
+      // a batch whose install failed has already been absorbed by the compiler,
+      // so its retry builds that same output and still has to reach the sheet.
+      if (css === installedCss) return true;
+      install(css);
       lastGoodCss = css;
       return true;
     } catch (error) {
@@ -366,7 +379,7 @@ export async function createPluginStyleRuntime(
       });
       if (lastGoodCss) {
         try {
-          sink.replace(lastGoodCss);
+          install(lastGoodCss);
         } catch {
           // The sink itself is unusable; nothing further to try.
         }
@@ -378,6 +391,12 @@ export async function createPluginStyleRuntime(
       });
       return false;
     }
+  }
+
+  function install(css: string): void {
+    installedCss = null;
+    sink.replace(css);
+    installedCss = css;
   }
 
   /**
@@ -434,7 +453,7 @@ export async function createPluginStyleRuntime(
       const live = liveClasses();
 
       const css = fresh.build([...live]);
-      sink.replace(css);
+      install(css);
 
       // Only now is the swap safe to record.
       compiler = fresh;
