@@ -237,9 +237,8 @@ async function measureCall(arm: Arm, service: Service, c: OracleCase, into: Samp
 async function measureSize(service: Service): Promise<ArmResult[]> {
   for (const arm of ARM_NAMES) for (const c of ORACLE) await check(arm, service, c);
   globalThis.gc?.();
-  const samples = Object.fromEntries(
-    ARM_NAMES.map((arm) => [arm, { wall: [], wallByCase: {}, spawns: [], bytes: [], gaps: [] }])
-  ) as Record<Arm, Samples>;
+  const empty = (): Samples => ({ wall: [], wallByCase: {}, spawns: [], bytes: [], gaps: [] });
+  const samples: Record<Arm, Samples> = { legacy: empty(), current: empty() };
   for (let round = 0; round < calls; round++) {
     const order = round % 2 === 0 ? ARM_NAMES : [...ARM_NAMES].reverse();
     for (const c of ORACLE) {
