@@ -287,6 +287,19 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         return;
       }
 
+      // Before the readiness wait as well as at the write, and ahead of the
+      // busy check, whose refusal App's instance never shows: a locked pane
+      // is refused without generating anything.
+      if (isTerminalInputLocked(activeTerminal)) {
+        reportFailure(
+          INPUT_LOCKED_INJECTION_REFUSAL,
+          { worktreeId, terminalId: activeTerminal },
+          undefined,
+          "user-gated"
+        );
+        return;
+      }
+
       // Block concurrent injections to prevent state corruption
       if (globalInjectionState.isInjecting || globalInjectionState.isPendingInjection) {
         setError("Another injection is already in progress. Please wait or cancel it first.");
@@ -296,18 +309,6 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
       let terminal = usePanelStore.getState().panelsById[activeTerminal];
       if (!terminal) {
         setError(`Terminal not found: ${activeTerminal}`);
-        return;
-      }
-
-      // Before the readiness wait as well as at the write: a locked pane is
-      // refused without generating anything.
-      if (isTerminalInputLocked(activeTerminal)) {
-        reportFailure(
-          INPUT_LOCKED_INJECTION_REFUSAL,
-          { worktreeId, terminalId: activeTerminal },
-          undefined,
-          "user-gated"
-        );
         return;
       }
 

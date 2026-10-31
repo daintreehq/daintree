@@ -1428,8 +1428,9 @@ describe("worktree action hardening", () => {
       expect(onInject).not.toHaveBeenCalled();
     });
 
-    it("hands a person's request to the injection with the pane it checked", async () => {
-      lockPane(false);
+    it("hands a person's request on a locked pane to the injection, with the pane it checked", async () => {
+      // The hook refuses it there, on the surface a person sees.
+      lockPane(true);
       const onInject = vi.fn();
       const inject = buildRegistry(registerWorktreeActions, { onInject }).get("worktree.inject")!();
 

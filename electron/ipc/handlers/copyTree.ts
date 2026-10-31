@@ -426,6 +426,7 @@ const INJECTION_CANCELLED = "Injection cancelled";
 const INPUT_LOCKED_STOP = "Injection stopped: the terminal's input was locked";
 const AGENT_GONE_STOP = "Injection stopped: the agent it was for is no longer running there";
 const TERMINAL_CLOSED = "Terminal closed during injection";
+const TERMINAL_GONE = "Terminal no longer exists";
 const SHELL_REFUSAL = "Context can only be injected into a running agent, not a shell";
 const NOT_ACCEPTING_PASTE =
   "The agent isn't accepting pasted text yet. Try again once its prompt is ready";
@@ -468,7 +469,7 @@ export function judgePasteDestination(
   info: TerminalInfoPayload | null,
   platform: NodeJS.Platform = process.platform
 ): { reason: string; transient: boolean } | null {
-  if (!info?.hasPty) return { reason: "Terminal no longer exists", transient: false };
+  if (!info?.hasPty) return { reason: TERMINAL_GONE, transient: false };
   // The host recognises only built-in agents in the process tree. For one a
   // plugin contributed, the launch plus a foreground process that isn't the
   // shell it runs in is the evidence there is.
@@ -920,9 +921,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       if (owner.agentId !== agentId || relaunched) lost = AGENT_GONE_STOP;
     };
 
-    // An answer that straddled a respawn describes the predecessor.
+    // An answer that straddled a respawn describes the predecessor. Without
+    // an answer there is nothing to pin, and adopting whichever agent turns up
+    // later could hand the bundle to a successor.
     if (ledger.currentGeneration(terminalId) !== generation) lost = TERMINAL_CLOSED;
-    else if (info?.detectedAgentId) adoptOrCompare(info.detectedAgentId, info.agentIncarnation);
+    else if (!info?.hasPty) lost = TERMINAL_GONE;
+    else if (info.detectedAgentId) adoptOrCompare(info.detectedAgentId, info.agentIncarnation);
 
     // Subscribed in the continuation of the snapshot, so every event seen here
     // happened after the state that answer describes.
@@ -1127,10 +1131,11 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
 
     // A lock or cancel arrives as a stop on the tracker, and the target's own
     // loss comes from the host; either ends the run at its next checkpoint.
+    // Only a target still there is handed the terminator, whichever stop won.
     const halted = (): InjectionHalt | null => {
+      const lost = target?.lost() ?? null;
       const stop = contextInjectionTracker.getStop(injectionId);
-      if (stop) return { error: describeInjectionStop(stop), closePaste: true };
-      const lost = target?.lost();
+      if (stop) return { error: describeInjectionStop(stop), closePaste: lost === null };
       return lost ? { error: lost, closePaste: false } : null;
     };
 

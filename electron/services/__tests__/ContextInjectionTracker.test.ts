@@ -122,11 +122,11 @@ describe("ContextInjectionTracker", () => {
     it("holds only a bounded number, dropping the oldest first", () => {
       for (let i = 0; i < 65; i++) tracker.markCancelled(`inj-${i}`);
 
-      tracker.beginInjection("t1", "inj-0");
-      tracker.beginInjection("t2", "inj-64");
+      for (let i = 0; i < 65; i++) tracker.beginInjection(`t-${i}`, `inj-${i}`);
 
+      // The 65th pushed out only the first; the other 64 were all kept.
       expect(tracker.isCancelled("inj-0")).toBe(false);
-      expect(tracker.isCancelled("inj-64")).toBe(true);
+      for (let i = 1; i < 65; i++) expect(tracker.isCancelled(`inj-${i}`)).toBe(true);
     });
 
     it("is cleared by a project switch", () => {
@@ -168,17 +168,41 @@ describe("ContextInjectionTracker", () => {
   });
 
   describe("onProjectSwitch", () => {
-    it("clears all state", () => {
+    it("releases every terminal reservation", () => {
       tracker.beginInjection("t1", "inj1");
       tracker.beginInjection("t2", "inj2");
-      tracker.markCancelled("inj1");
 
       tracker.onProjectSwitch();
 
       expect(tracker.isTerminalInjecting("t1")).toBe(false);
       expect(tracker.isTerminalInjecting("t2")).toBe(false);
-      expect(tracker.isCancelled("inj1")).toBe(false);
       expect(tracker.getActiveCount()).toBe(0);
+    });
+
+    // #15644: the handler keeps running across a switch, so forgetting its
+    // stop would let a locked pane receive the bundle after all.
+    it("keeps a running run's stop, and still lets one reach it", () => {
+      tracker.beginInjection("t1", "inj1");
+      tracker.beginInjection("t2", "inj2");
+      tracker.markCancelled("inj1", "input-locked");
+
+      tracker.onProjectSwitch();
+      const reachedRun = tracker.markCancelled("inj2", "input-locked");
+
+      expect(tracker.getStop("inj1")).toBe("input-locked");
+      expect(reachedRun).toBe(true);
+      expect(tracker.getStop("inj2")).toBe("input-locked");
+    });
+
+    it("lets the older run's finish leave a newer run's reservation alone", () => {
+      tracker.beginInjection("t1", "inj-old");
+      tracker.onProjectSwitch();
+      tracker.beginInjection("t1", "inj-new");
+
+      tracker.finishInjection("t1", "inj-old");
+
+      expect(tracker.isTerminalInjecting("t1")).toBe(true);
+      expect(tracker.isCancelled("inj-old")).toBe(false);
     });
   });
 });

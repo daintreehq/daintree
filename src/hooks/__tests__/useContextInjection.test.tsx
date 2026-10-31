@@ -442,6 +442,37 @@ describe("useContextInjection", () => {
       expect(notifyMock).not.toHaveBeenCalled();
     });
 
+    it("refuses a locked pane visibly even while another injection is waiting", async () => {
+      terminalState.panelsById = {
+        "term-agent": {
+          id: "term-agent",
+          worktreeId: "wt-1",
+          detectedAgentId: "claude",
+          agentState: "working",
+        },
+        "term-1": { id: "term-1", worktreeId: "wt-1", agentState: "idle", isInputLocked: true },
+      };
+      const { result } = renderHook(() => useContextInjection());
+      const agentPane = renderHook(() => useContextInjection("term-agent"));
+
+      act(() => {
+        void result.current.inject("wt-1", "term-agent");
+      });
+      await vi.waitFor(() => expect(agentPane.result.current.isPendingInjection).toBe(true));
+
+      await act(async () => {
+        await result.current.inject("wt-1", "term-1");
+      });
+
+      expect(addErrorMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: `Context injection failed: ${LOCK_REFUSAL}`,
+          context: { worktreeId: "wt-1", terminalId: "term-1" },
+        })
+      );
+      expect(injectMock).not.toHaveBeenCalled();
+    });
+
     it("gives up waiting for a busy agent once its pane is locked", async () => {
       terminalState.panelsById = {
         "term-agent": {

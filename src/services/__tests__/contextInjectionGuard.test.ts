@@ -75,19 +75,29 @@ describe("contextInjectionGuard", () => {
     expect(injectMock).not.toHaveBeenCalled();
   });
 
-  it("reads no inherited property as a panel", () => {
-    expect(isTerminalInputLocked("__proto__")).toBe(false);
-    expect(isTerminalInputLocked("constructor")).toBe(false);
+  it("reads only a panel the map owns, never one it inherits", () => {
+    const inherited = Object.create({ "t-9": { id: "t-9", isInputLocked: true } }) as Record<
+      string,
+      Panel
+    >;
+    inherited["constructor"] = { id: "constructor", isInputLocked: true };
+    panelStore.setPanels(inherited);
+
+    expect(isTerminalInputLocked("t-9")).toBe(false);
+    expect(isTerminalInputLocked("constructor")).toBe(true);
   });
 
-  it("gives a run that has no id one of its own, and keeps one it was given", async () => {
+  it("gives each run that has no id one of its own, and keeps one it was given", async () => {
+    await injectContextUnlessLocked(request);
     await injectContextUnlessLocked(request);
     await injectContextUnlessLocked({ ...request, injectionId: "inj-given", source: "terminal" });
 
-    const allocated = injectMock.mock.calls[0]?.[3];
-    expect(allocated).toEqual(expect.any(String));
-    expect(allocated).not.toBe("");
-    expect(injectMock.mock.calls[1]).toEqual([
+    const first = injectMock.mock.calls[0]?.[3];
+    const second = injectMock.mock.calls[1]?.[3];
+    expect(first).toEqual(expect.any(String));
+    expect(second).toEqual(expect.any(String));
+    expect(first).not.toBe(second);
+    expect(injectMock.mock.calls[2]).toEqual([
       "t-1",
       "wt-1",
       undefined,
@@ -135,13 +145,18 @@ describe("contextInjectionGuard", () => {
     expect(cancelMock).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["it succeeds", () => injectMock.mockResolvedValue({ content: "", fileCount: 2 })],
-    ["the call rejects", () => injectMock.mockRejectedValue(new Error("ipc gone"))],
-  ])("stops watching the pane once %s", async (_label, arrange) => {
-    arrange();
+  it("stops watching the pane once the run succeeds", async () => {
+    await expect(injectContextUnlessLocked(request)).resolves.toMatchObject({ fileCount: 2 });
+    panelStore.setPanels({ "t-1": { id: "t-1", isInputLocked: true } });
 
-    await injectContextUnlessLocked(request).catch(() => undefined);
+    expect(panelStore.listenerCount()).toBe(0);
+    expect(cancelMock).not.toHaveBeenCalled();
+  });
+
+  it("passes on a call that rejects, and stops watching the pane", async () => {
+    injectMock.mockRejectedValue(new Error("ipc gone"));
+
+    await expect(injectContextUnlessLocked(request)).rejects.toThrow("ipc gone");
     panelStore.setPanels({ "t-1": { id: "t-1", isInputLocked: true } });
 
     expect(panelStore.listenerCount()).toBe(0);

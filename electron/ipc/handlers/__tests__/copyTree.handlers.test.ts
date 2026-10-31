@@ -2271,16 +2271,19 @@ describe("context injection paste boundary (#15629)", () => {
     }
     expect(writes.join("")).toBe(`${PASTE_START}${bundle}${PASTE_END}`);
   });
+  // Reads: the target's pin before generation, then at most one admission
+  // read. A terminal with no live PTY is refused at the pin, before generating.
   it.each([
-    ["a shell", { hasPty: true, bracketedPasteMode: true }, "not a shell"],
+    ["a shell", { hasPty: true, bracketedPasteMode: true }, "not a shell", 2],
     [
       "a shell an agent exited back to",
       { hasPty: true, launchAgentId: "claude", everDetectedAgent: true, bracketedPasteMode: true },
       "not a shell",
+      2,
     ],
-    ["an exited terminal", { hasPty: false, detectedAgentId: "claude" }, "no longer exists"],
-    ["a terminal the host doesn't know", null, "no longer exists"],
-  ])("refuses %s at once, without writing a byte", async (_label, info, message) => {
+    ["an exited terminal", { hasPty: false, detectedAgentId: "claude" }, "no longer exists", 1],
+    ["a terminal the host doesn't know", null, "no longer exists", 1],
+  ])("refuses %s at once, without writing a byte", async (_label, info, message, reads) => {
     register('<file path="run.sh">\nrm -rf ~/work\n</file>\n');
     ptyClient.getTerminalInfo.mockResolvedValue(info);
 
@@ -2288,8 +2291,7 @@ describe("context injection paste boundary (#15629)", () => {
 
     expect(result.error).toContain(message);
     expect(result.fileCount).toBe(0);
-    // The target's pin before generation, then one admission read: no polling.
-    expect(ptyClient.getTerminalInfo).toHaveBeenCalledTimes(2);
+    expect(ptyClient.getTerminalInfo).toHaveBeenCalledTimes(reads);
     expect(ptyClient.write).not.toHaveBeenCalled();
     expect(copyTreeHistoryMock.recordCopyTreeRun).not.toHaveBeenCalled();
   });
@@ -2406,10 +2408,13 @@ describe("context injection paste boundary (#15629)", () => {
 
   it("writes nothing when cancelled while the destination is being checked", async () => {
     register("<files/>\n");
-    ptyClient.getTerminalInfo.mockImplementation(async () => {
-      await cancel("inj-2");
-      return PASTE_READY_AGENT;
-    });
+    // The pin answers first; the cancel lands during the admission read.
+    ptyClient.getTerminalInfo
+      .mockResolvedValueOnce(PASTE_READY_AGENT)
+      .mockImplementation(async () => {
+        await cancel("inj-2");
+        return PASTE_READY_AGENT;
+      });
 
     const result = await inject({ injectionId: "inj-2" });
 
@@ -2641,7 +2646,7 @@ describe("context injection into a locked pane or a changed target (#15644)", ()
   });
 
   it.each([
-    ["a different agent", { ...PASTE_READY_AGENT, detectedAgentId: "codex", agentIncarnation: 1 }],
+    ["a different agent", { ...PASTE_READY_AGENT, detectedAgentId: "codex", agentIncarnation: 0 }],
     ["the same agent relaunched", { ...PASTE_READY_AGENT, agentIncarnation: 1 }],
     ["the shell the agent exited to", { hasPty: true, bracketedPasteMode: true }],
   ])("writes nothing to %s found after generation", async (_label, after) => {
@@ -2675,18 +2680,65 @@ describe("context injection into a locked pane or a changed target (#15644)", ()
     expect(ptyClient.write).not.toHaveBeenCalled();
   });
 
-  it("writes nothing to a same-id respawn that happened during generation", async () => {
+  it("refuses a same-id respawn from generation at once, never waiting on its startup", async () => {
     register();
     const release = holdGeneration();
 
     const pending = inject();
     await vi.waitFor(() => expect(generateContext).toHaveBeenCalled());
     getLifecycleLedger().recordLaunch("t-1", {});
+    // The successor is still starting, which on its own would be waited out.
+    ptyClient.getTerminalInfo.mockResolvedValue({ hasPty: true, launchAgentId: "claude" });
     release();
     const result = await pending;
 
     expect(result.error).toBe("Terminal closed during injection");
+    expect(ptyClient.getTerminalInfo).toHaveBeenCalledTimes(2);
     expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
+  it("refuses before generating when the host can't describe the terminal to pin", async () => {
+    register();
+    // The id still exists, but without an answer there is no agent to hold
+    // the injection to.
+    ptyClient.getTerminalInfo.mockResolvedValueOnce(null);
+
+    const result = await inject();
+
+    expect(result.error).toBe("Terminal no longer exists");
+    expect(generateContext).not.toHaveBeenCalled();
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
+  it("keeps a lock recorded during generation through a project switch", async () => {
+    register();
+    const release = holdGeneration();
+
+    const pending = inject();
+    await vi.waitFor(() => expect(generateContext).toHaveBeenCalled());
+    await stop("inj-lock", "input-locked");
+    contextInjectionTracker.onProjectSwitch();
+    release();
+    const result = await pending;
+
+    expect(result.error).toContain("input was locked");
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
+  it("hands no terminator to a successor when a lock and the agent's exit land together", async () => {
+    register();
+    ptyClient.write.mockImplementation((_id: string, data: string) => {
+      writes.push(data);
+      if (writes.length === 2) {
+        void stop("inj-lock", "input-locked");
+        agentExited("claude");
+      }
+    });
+
+    const result = await inject();
+
+    expect(result.error).toContain("input was locked");
+    expect(writes).toEqual([PASTE_START, BUNDLE.slice(0, 4096)]);
   });
 
   it("stops between chunks when the agent exits, with no terminator for its shell", async () => {
