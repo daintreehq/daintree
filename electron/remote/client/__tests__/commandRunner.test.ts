@@ -86,7 +86,13 @@ describe.skipIf(process.platform === "win32")("defaultCommandRunner settlement",
         options()
       );
       expect(isAlive(await recordedPid("holder"))).toBe(true);
-      expect(result).toEqual({ code: null, stdout: "out\n", stderr: "err\n", spawnError: null, timedOut });
+      expect(result).toEqual({
+        code: null,
+        stdout: "out\n",
+        stderr: "err\n",
+        spawnError: null,
+        timedOut,
+      });
       expect(elapsed).toBeLessThan(STOP_AT_MS + COMMAND_DRAIN_GRACE_MS + SLACK_MS);
     });
 
@@ -114,7 +120,13 @@ describe.skipIf(process.platform === "win32")("defaultCommandRunner settlement",
     const controller = new AbortController();
     controller.abort();
     const { result } = await run(`echo started > "$PIDS/started"`, { signal: controller.signal });
-    expect(result).toEqual({ code: null, stdout: "", stderr: "", spawnError: null, timedOut: false });
+    expect(result).toEqual({
+      code: null,
+      stdout: "",
+      stderr: "",
+      spawnError: null,
+      timedOut: false,
+    });
     await new Promise((resolve) => setTimeout(resolve, 200));
     await expect(fs.access(path.join(dir, "started"))).rejects.toThrow();
   });
@@ -160,12 +172,12 @@ describe.skipIf(process.platform === "win32")("defaultCommandRunner settlement",
   });
 
   it("settles on time when the program can't be signalled", async () => {
-    const kill = vi
-      .spyOn(ChildProcess.prototype, "kill")
-      .mockImplementation(function (this: ChildProcess) {
-        this.emit("error", new Error("kill EPERM"));
-        return false;
-      });
+    const kill = vi.spyOn(ChildProcess.prototype, "kill").mockImplementation(function (
+      this: ChildProcess
+    ) {
+      this.emit("error", new Error("kill EPERM"));
+      return false;
+    });
     const { result, elapsed } = await run(`echo $$ > "$PIDS/child.pid"; exec sleep 30`, {
       timeoutMs: STOP_AT_MS,
     });
