@@ -932,6 +932,10 @@ export function authHermeticityMisses(modules: CliModules): number {
   for (const name of authEnvVars(modules.registry)) {
     if (process.env[name] !== undefined) misses += 1;
   }
+  // A surviving config-root variable sends the probe outside synthetic HOME.
+  for (const name of configHomeEnvVars(modules.registry)) {
+    if (process.env[name] !== undefined) misses += 1;
+  }
   for (const relative of planted) {
     if (!existsSync(join(home, relative))) misses += 1;
   }

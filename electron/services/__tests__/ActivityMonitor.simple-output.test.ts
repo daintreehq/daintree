@@ -861,6 +861,28 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
+    it("stays in boot on unrelated Kimi Code startup output (#15566)", () => {
+      vi.setSystemTime(10000);
+      const onBootComplete = vi.fn();
+      const monitor = new ActivityMonitor("kimi-boot-none", 1000, vi.fn(), {
+        ...buildActivityMonitorOptions("kimi", {
+          getVisibleLines: () => [""],
+          getCursorLine: () => "",
+        }),
+        onBootComplete,
+      });
+      monitor.startPolling();
+
+      monitor.onData("Checking for updates...\r\n");
+      monitor.onData("╭──────────────────────────────────────────╮\r\n");
+      monitor.onData("│  Directory: /Users/test/project          │\r\n");
+      vi.advanceTimersByTime(1000);
+
+      expect(onBootComplete).not.toHaveBeenCalled();
+
+      monitor.dispose();
+    });
+
     it("leaves boot on the Kimi Code input box when the banner was missed (#15566)", () => {
       vi.setSystemTime(10000);
       const onBootComplete = vi.fn();

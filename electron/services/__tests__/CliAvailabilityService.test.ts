@@ -933,6 +933,64 @@ describe("CliAvailabilityService", () => {
       expect(probed.some((p) => p.startsWith(join(homedir(), ".kimi-code")))).toBe(false);
     });
 
+    it("does not fall back to ~/.kimi-code when KIMI_CODE_HOME holds no credential", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      kimiOnPath();
+
+      // A stale login under the default root is not where the CLI looks.
+      const defaultCredential = join(homedir(), ".kimi-code", "credentials", "kimi-code.json");
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path) === defaultCredential) return;
+        throw new Error("ENOENT");
+      });
+
+      await withEnv("KIMI_CODE_HOME", join("/opt", "kimi-home"), async () => {
+        const result = await service.checkAvailability();
+        expect(result.kimi).toBe("unauthenticated");
+      });
+
+      const probed = kimiProbedPaths(mockedAccess.mock.calls);
+      expect(probed.some((p) => p.startsWith(join(homedir(), ".kimi-code")))).toBe(false);
+    });
+
+    it.each([
+      ["empty", ""],
+      ["whitespace-only", "   "],
+    ])("probes ~/.kimi-code when KIMI_CODE_HOME is %s", async (_label, value) => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      kimiOnPath();
+      mockedAccess.mockRejectedValue(new Error("ENOENT"));
+
+      await withEnv("KIMI_CODE_HOME", value, async () => {
+        await service.checkAvailability();
+      });
+
+      expect(kimiProbedPaths(mockedAccess.mock.calls)).toEqual([
+        join(homedir(), ".kimi-code", "credentials", "kimi-code.json"),
+        join(homedir(), ".kimi-code", "config.toml"),
+      ]);
+    });
+
+    it("leaves a relative KIMI_CODE_HOME unconfirmed instead of guessing its base", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      kimiOnPath();
+      // Every path exists, so any probe at all would confirm auth.
+      mockedAccess.mockResolvedValue(undefined);
+
+      await withEnv("KIMI_CODE_HOME", join("relative", "kimi-home"), async () => {
+        const result = await service.checkAvailability();
+        expect(result.kimi).toBe("unauthenticated");
+      });
+
+      const authProbes = kimiProbedPaths(mockedAccess.mock.calls).filter(
+        (p) => p.endsWith("config.toml") || p.endsWith("kimi-code.json")
+      );
+      expect(authProbes).toEqual([]);
+    });
+
     it("does not treat a shell KIMI_API_KEY as authenticated", async () => {
       const { access } = await import("fs/promises");
       const mockedAccess = vi.mocked(access);

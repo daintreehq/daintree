@@ -497,8 +497,15 @@ export class CliAvailabilityService {
       if (authCheck.configHome) {
         const { envVar, defaultDir, paths } = authCheck.configHome;
         const relocated = process.env[envVar];
-        const root = relocated && relocated.trim() !== "" ? relocated : join(home, defaultDir);
-        for (const relPath of paths) {
+        const isRelocated = relocated !== undefined && relocated.trim() !== "";
+        // A relative root resolves against the agent's working directory,
+        // which differs per terminal, so nothing here can confirm it.
+        const root = !isRelocated
+          ? join(home, defaultDir)
+          : isAbsolute(relocated)
+            ? relocated
+            : null;
+        for (const relPath of root === null ? [] : paths) {
           const fullPath = join(root, relPath);
           checkedPaths.push(fullPath);
           try {

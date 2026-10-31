@@ -164,7 +164,8 @@ export interface AgentAuthCheck {
    * `paths` are checked under `process.env[envVar]` when it is set in
    * Daintree's environment, otherwise under `defaultDir` (relative to
    * os.homedir()). Never both: a relocated root means the default one is not
-   * where the CLI looks.
+   * where the CLI looks. A relative value is not probed at all, since it
+   * depends on the directory the agent is launched in.
    */
   configHome?: { envVar: string; defaultDir: string; paths: string[] };
   /** Environment variable(s) that indicate auth when present */
