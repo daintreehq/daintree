@@ -164,7 +164,7 @@ interface ReleaseCapability {
 
 New capabilities are added as sibling optional fields. The base interface does not change when a new capability is introduced.
 
-GitHub implements every base method and every capability listed above. Other providers implement the base contract and whichever capabilities they actually support; the contract admits that variation without re-shaping the host. GitLab (a full code forge with issues, merge requests, CI and releases) is the second provider to validate it, and Linear exercises the issues-only role. Validating against a second provider was out of scope for the original migration stage.
+GitHub implements every base method and every capability listed above. Code-role providers implement the base contract (`ForgeProviderImpl`) and whichever capabilities they actually support, and issues-only providers such as Linear implement `ForgeIssueProviderImpl`; the contract admits that variation without re-shaping the host. GitLab (a full code forge with issues, merge requests, CI and releases) is the second provider to validate it, and Linear exercises the issues-only role. Validating against a second provider was out of scope for the original migration stage.
 
 ### `rawData` on Every Domain Object
 
@@ -201,7 +201,7 @@ The host bridges the boundary so plugin authors never see it.
 
 **Race on first poll.** `PullRequestService` in the workspace-host starts polling before main's `PluginService.initialize()` finishes — the workspace-host is spawned early, the plugin scan completes asynchronously. The bridge handles this by allowing every poll to re-attempt resolution: when `providerNamespacedId` is null, `checkForPRs` calls `resolveProvider()` first. To keep the user from staring at empty PR sub-rows for an entire blurred-cadence interval (120s) on cold start, the next poll fires at the fast `FOCUS_CATCHUP_THROTTLE_MS` (5s) until resolution lands. Once a provider is bound, the normal 30s/120s cadence resumes. Explicit invalidation (`refresh()`, `setForgeSettings`) clears the cache.
 
-**For plugin authors:** there is nothing to do. `host.registerForgeProvider(descriptor, impl)` in the plugin's `activate()` is the entire surface. The bridge is invisible — the provider impl lives in main, and the workspace-host transparently proxies through. This means every forge plugin (built-in GitHub and GitLab, any other forge plugin) participates in PR detection without any extra wiring. Auth tokens, network state, and rate-limit accounting all stay in one process where they belong.
+**For plugin authors:** there is nothing to do. `host.registerForgeProvider(descriptor, impl)` in the plugin's `activate()` is the entire surface. The bridge is invisible — the provider impl lives in main, and the workspace-host transparently proxies through. This means every built-in code-role provider (GitHub and GitLab) participates in PR detection without any extra wiring. Auth tokens, network state, and rate-limit accounting all stay in one process where they belong.
 
 **Why not just load plugins in the workspace-host too?** Activating plugins twice risks duplicating side effects (IPC handlers, broadcasts, scheduled timers), duplicates auth state across processes, and exposes plugin authors to a second host-API surface with a different set of capabilities (no `registerHandler`, no `broadcastToRenderer`). The single-process activation with an RPC bridge keeps the plugin contract simple and main as the single source of truth.
 
@@ -311,7 +311,7 @@ The migration rehomes today's GitHub integration into a built-in plugin at `plug
 - `src/services/actions/definitions/githubActions.ts` → retired; the provider-routed `forge.*` surface lives in `src/services/actions/definitions/forgeActions.ts`
 - `src/store/githubConfigStore.ts`, `githubFilterStore.ts`, `githubTokenHealthStore.ts` → plugin-internal state
 
-Built-in plugins are bundled inside the Daintree app (no install step), but otherwise load through `PluginService` like any other plugin — same activation lifecycle, same disposal cascade, same capability disclosure. They are conceptually identical to third-party plugins; the only difference is location.
+Built-in plugins are bundled inside the Daintree app (no install step), but otherwise load through `PluginService` like any other plugin — same activation lifecycle, same disposal cascade, same capability disclosure. They share the plugin lifecycle and contribution contract, but their main code runs inside Electron main, while installed plugins run in utility-process workers (see [plugins/trust-model.md](../plugins/trust-model.md)). Forge providers currently must be built-ins; see [plugins/forge-provider.md](../plugins/forge-provider.md).
 
 The built-in plugin loader is a new code path inside `PluginService` that scans an in-app directory before `~/.daintree/plugins/`. Built-ins cannot be uninstalled but can be disabled.
 
@@ -326,7 +326,7 @@ Host-owned actions become `forge.*` (the host dispatches to the active provider)
 
 During the migration these were temporarily mirrored by `github.*` aliases that forwarded to the corresponding `forge.*` action so existing user-defined keybindings, recipes, and `actions.repeatLast` MRU entries kept working across the transition. Those aliases have since been removed; stale keybinding overrides referencing them are dropped non-fatally at load time.
 
-Even with only GitHub shipping, we land `forge.*` now so the action shape doesn't break a second time when the next provider arrives.
+The original migration landed `forge.*` while GitHub was the sole provider, so the action shape would not break when further providers shipped.
 
 ## Provider Selection and Settings UI
 
