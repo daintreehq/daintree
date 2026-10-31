@@ -482,12 +482,20 @@ describe("previews pulled ahead", () => {
 
   /**
    * The host's transfers and body reads, watched. `holdFirstSend(n)` keeps the
-   * next transfer from finishing until `n` transfers have started after it
-   * and every one but it has finished (or two seconds pass), so later slices
-   * settle before an earlier one.
+   * next transfer from finishing until `n` transfers have started counting it
+   * and every one but it has finished, so later slices settle before an
+   * earlier one; `stats.held` says whether that happened or a watchdog gave up.
    */
   function observeHost(host: LinkSession) {
-    const stats = { sends: 0, maxSends: 0, entered: 0, reading: 0, maxReading: 0, bytesRead: 0 };
+    const stats = {
+      sends: 0,
+      maxSends: 0,
+      entered: 0,
+      reading: 0,
+      maxReading: 0,
+      bytesRead: 0,
+      held: null as "barrier" | "watchdog" | null,
+    };
     let hold: { until: number; base: number } | null = null;
     let slowFirstRead = true;
     const send = host.transfers.send.bind(host.transfers);
@@ -500,10 +508,13 @@ describe("previews pulled ahead", () => {
       try {
         const result = await send(source, options);
         if (held) {
-          await waitFor(
+          stats.held = await waitFor(
             () => stats.entered - held.base >= held.until && stats.sends === 1,
-            2_000
-          ).catch(() => {});
+            5_000
+          ).then(
+            () => "barrier" as const,
+            () => "watchdog" as const
+          );
         }
         return result;
       } finally {
@@ -540,6 +551,7 @@ describe("previews pulled ahead", () => {
     };
     const holdFirstSend = (until: number) => {
       hold = { until, base: stats.entered };
+      stats.held = null;
     };
     const reset = () => {
       stats.maxSends = stats.sends;
@@ -586,6 +598,7 @@ describe("previews pulled ahead", () => {
     ctx.holdFirstSend(2);
     const response = await ctx.open(file);
     expect(sha256(new Uint8Array(await response.arrayBuffer()))).toBe(sha256(bytes));
+    expect(ctx.stats.held).toBe("barrier");
     expect(ctx.stats.maxSends).toBeGreaterThan(1);
     expect(ctx.stats.maxSends).toBeLessThanOrEqual(PREVIEW_PULL_DEPTH);
     expect(ctx.stats.maxReading).toBe(1);
@@ -609,6 +622,7 @@ describe("previews pulled ahead", () => {
       const response = await ctx.open(file);
       expect(Number(response.headers.get("content-length"))).toBe(size);
       expect(sha256(new Uint8Array(await response.arrayBuffer()))).toBe(sha256(bytes));
+      if (size > MiB) expect(ctx.stats.held).toBe("barrier");
       await waitFor(() => ctx.service.openStreams === 0);
     }
   );
@@ -682,6 +696,7 @@ describe("previews pulled ahead", () => {
     ctx.holdFirstSend(PREVIEW_PULL_DEPTH);
     const response = await ctx.open(c.file);
     expect(sha256(new Uint8Array(await response.arrayBuffer()))).toBe(sha256(c.bytes));
+    expect(ctx.stats.held).toBe("barrier");
     expect(ctx.stats.maxSends).toBe(PREVIEW_PULL_DEPTH);
   });
 
@@ -697,12 +712,13 @@ describe("previews pulled ahead", () => {
     await pausedB.read();
     await waitFor(() => ctx.stats.sends === 0);
     const response = await ctx.open(other.file);
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
     const body = await Promise.race([
       response.arrayBuffer(),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("starved of a pull slot")), 5_000)
-      ),
-    ]);
+      new Promise<never>((_, reject) => {
+        watchdog = setTimeout(() => reject(new Error("starved of a pull slot")), 5_000);
+      }),
+    ]).finally(() => clearTimeout(watchdog));
     expect(sha256(new Uint8Array(body))).toBe(sha256(other.bytes));
     // The first paused body kept everything it read ahead.
     expect(ctx.bodies[0]!.bufferedBytes).toBe(PREVIEW_PULL_DEPTH * MiB);
@@ -754,6 +770,34 @@ describe("previews pulled ahead", () => {
     await waitFor(() => !ctx.client.isOpen);
     await waitFor(() => body.bufferedBytes === 0);
     await expect(reader.read()).rejects.toBeDefined();
+  });
+
+  it("sends the notice again to a Shell that was only busy, keeping the link", async () => {
+    const ctx = await pipelined();
+    const { file } = await write("long.mp4", 8 * MiB);
+    const reader = (await ctx.open(file)).body!.getReader();
+    await reader.read();
+    const body = ctx.bodies[0]!;
+    await waitFor(() => body.bufferedBytes === PREVIEW_PULL_DEPTH * MiB);
+    await waitFor(() => ctx.stats.sends === 0);
+    const handled = vi.fn();
+    let busy = true;
+    ctx.client.registerCallHandler(
+      FileLinkMethod.STREAM_CLOSED,
+      z.object({ streamId: z.string() }),
+      ({ streamId }) => {
+        if (busy) {
+          busy = false;
+          throw new AppError({ code: "RATE_LIMITED", message: "Too many requests" });
+        }
+        handled(streamId);
+        return null;
+      }
+    );
+    ctx.endpoint.projectId = "p2";
+    ctx.service.onEndpointsChanged();
+    await waitFor(() => handled.mock.calls.length === 1);
+    expect(ctx.client.isOpen).toBe(true);
   });
 
   it("reads ahead only on spare pull slots", async () => {

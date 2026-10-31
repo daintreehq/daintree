@@ -105,6 +105,8 @@ const DEFAULT_CLICKED_TTL_MS = 60 * 60 * 1000;
 const MAX_CLICKED_PER_ENDPOINT = 64;
 const MAX_GRANT_ENDPOINTS = 256;
 const MAX_ERROR_TEXT = 1024;
+// A Shell or link that is only busy gets the close notice again, a little later each time.
+const STREAM_CLOSED_RETRY_MS = [100, 300, 900];
 
 interface SessionFiles {
   session: LinkSession;
@@ -1106,14 +1108,31 @@ export class HostFileService {
     stream.controller.abort();
     stream.release();
     void stream.reader.cancel().catch(() => {});
-    const session = stream.owner.session;
-    if (notifyShell && stream.depth > 1 && session.isOpen) {
-      void session.call(FileLinkMethod.STREAM_CLOSED, { streamId: stream.id }).catch(() => {
-        // Unheard, the Shell could still pass on slices of a revoked stream:
-        // a link that can't carry the notice is dropped, which stops them all.
-        if (session.isOpen) session.close("preview stream close notice failed");
-      });
-    }
+    if (notifyShell && stream.depth > 1) this.noticeStreamClosed(stream.owner.session, stream.id);
+  }
+
+  /**
+   * Tell the Shell a stream it reads ahead on is gone. Unheard, it could still
+   * pass on slices of a revoked stream, so a notice refused only for being
+   * busy is sent again, and a link that still can't carry it is dropped,
+   * which stops every body read over it.
+   */
+  private noticeStreamClosed(session: LinkSession, streamId: string, attempt = 0): void {
+    if (!session.isOpen) return;
+    void session.call(FileLinkMethod.STREAM_CLOSED, { streamId }).catch((error: unknown) => {
+      if (!session.isOpen) return;
+      const retryMs = STREAM_CLOSED_RETRY_MS[attempt];
+      // A call's error comes back rebuilt from the envelope: a plain Error carrying its code.
+      const busy = (error as { code?: unknown } | null)?.code === "RATE_LIMITED";
+      if (busy && retryMs !== undefined) {
+        setTimeout(
+          () => this.noticeStreamClosed(session, streamId, attempt + 1),
+          retryMs
+        ).unref?.();
+        return;
+      }
+      session.close("preview stream close notice failed");
+    });
   }
 
   private revokeWhere(match: (entry: HostStream | HostDownload) => boolean): void {
