@@ -127,6 +127,25 @@ describe("project:save-settings with an installed plugin's provider (#15583)", (
     expect(projectStoreMock.saveProjectSettings).toHaveBeenCalledTimes(1);
   });
 
+  it("refuses a bare issues id that resolves past a built-in code provider sharing it", async () => {
+    registerForgeProviders(
+      "daintree.forgejo",
+      [{ id: "forgejo", name: "Forgejo", matches: ["forgejo.example.com"], roles: ["code"] }],
+      { builtin: true }
+    );
+    registerForgeProviders(
+      "acme.forgejo",
+      [{ id: "forgejo", name: "Forgejo Issues", matches: [], roles: ["issues"] }],
+      { builtin: false }
+    );
+
+    await expect(save({ runCommands: [], issueProviderOverride: "forgejo" })).rejects.toThrow(
+      'Forge provider "Forgejo Issues" can\'t run'
+    );
+    await save({ runCommands: [], forgeProviderOverride: "forgejo" });
+    expect(projectStoreMock.saveProjectSettings).toHaveBeenCalledTimes(1);
+  });
+
   it("still accepts a built-in provider", async () => {
     await save({ runCommands: [], forgeProviderOverride: "daintree.github.github" });
 

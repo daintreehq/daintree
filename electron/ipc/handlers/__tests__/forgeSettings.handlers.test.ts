@@ -242,6 +242,11 @@ describe("registerForgeSettingsHandlers", () => {
       const setDefault = findHandler("forge:set-default-provider");
 
       expect(() => setDefault(null, "acme.gitea.gitea")).toThrow(UNAVAILABLE);
+      // The default picks a code forge, so a bare id is matched as one.
+      expect(registryMock.getForgeProviderUnavailableError).toHaveBeenCalledWith(
+        "acme.gitea.gitea",
+        "code"
+      );
       expect(storeMock.set).not.toHaveBeenCalled();
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(workspaceClientMock.updateForgeSettingsForAllProjects).not.toHaveBeenCalled();
