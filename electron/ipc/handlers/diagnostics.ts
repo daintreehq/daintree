@@ -334,8 +334,10 @@ function cleanupCpuProfileSession(session: RendererCpuProfileSession): void {
   }
 }
 
-// The detach listener is the signal; `isAttached()` backs it up in case the
-// capture's rejection is handled before the event reaches the listener.
+// Electron clears the attachment, then rejects pending commands, then emits
+// `detach`, so a rejection can be handled before the listener has run:
+// `isAttached()` covers that window. The latch covers the reverse, another
+// consumer reattaching the shared debugger before stop collects the failure.
 function wasCpuProfileDebuggerDetached(session: RendererCpuProfileSession): boolean {
   if (session.detached) return true;
   try {

@@ -1187,6 +1187,9 @@ describe("registerDiagnosticsHandlers", () => {
 
   describe("renderer CPU profile", () => {
     const PROFILE_FIXTURE = { nodes: [], startTime: 0, endTime: 15, samples: [1, 2] };
+    // cpuProfileSessions is module state that clearAllMocks can't reach, so
+    // every fixture's view is destroyed after its test to release its session.
+    const liveFixtures: Array<() => void> = [];
 
     function makeProfilerEvent(id: number) {
       type Listener = (...args: unknown[]) => void;
@@ -1234,7 +1237,12 @@ describe("registerDiagnosticsHandlers", () => {
         [...(listeners[key] ?? [])].forEach((fn) => fn(...args));
       };
       const listenerCount = (key: string) => (listeners[key] ?? []).length;
-      return { event: { sender }, sender, sendCommand, emit, listenerCount };
+      const destroy = () => {
+        sender.isDestroyed.mockReturnValue(true);
+        emit("wc:destroyed");
+      };
+      liveFixtures.push(destroy);
+      return { event: { sender }, sender, sendCommand, emit, listenerCount, destroy };
     }
 
     function profilerStopCalls(sendCommand: ReturnType<typeof vi.fn>): number {
@@ -1243,9 +1251,11 @@ describe("registerDiagnosticsHandlers", () => {
 
     beforeEach(() => {
       vi.useFakeTimers();
+      dialogMock.showSaveDialog.mockReset();
     });
 
     afterEach(() => {
+      liveFixtures.splice(0).forEach((destroy) => destroy());
       vi.useRealTimers();
     });
 
@@ -1544,7 +1554,8 @@ describe("registerDiagnosticsHandlers", () => {
       // Mirrors V8ProfilerAgentImpl's guards: enable and start are no-ops when
       // already done, setSamplingInterval refuses while a profile runs, disable
       // throws away a running profile, and stop needs one to be running. State
-      // changes when a command is sent; `hold` delays only its reply.
+      // changes when a command is sent; `hold` delays only its reply. A detach
+      // ends the CDP session, which resets the agent.
       function makeV8ProfilerEvent(
         id: number,
         hold?: (method: string, nth: number) => Promise<void> | undefined
@@ -1554,6 +1565,9 @@ describe("registerDiagnosticsHandlers", () => {
         const counts: Record<string, number> = {};
         base.sendCommand.mockImplementation(((method: string) => {
           const nth = (counts[method] = (counts[method] ?? 0) + 1);
+          if (base.sender.isDestroyed() || !base.sender.debugger.isAttached()) {
+            return Promise.reject(new Error("No target available"));
+          }
           let outcome: () => unknown;
           switch (method) {
             case "Profiler.enable":
@@ -1601,7 +1615,24 @@ describe("registerDiagnosticsHandlers", () => {
             return outcome();
           })();
         }) as (method: string) => Promise<Record<string, unknown>>);
-        return { ...base, v8 };
+        const emit = (key: string, ...args: unknown[]) => {
+          if (key === "dbg:detach") {
+            v8.enabled = false;
+            v8.recording = false;
+          }
+          base.emit(key, ...args);
+        };
+        return { ...base, emit, v8 };
+      }
+
+      function heldReply() {
+        let resolve!: () => void;
+        let reject!: (err: Error) => void;
+        const promise = new Promise<void>((res, rej) => {
+          resolve = res;
+          reject = rej;
+        });
+        return { promise, resolve, reject };
       }
 
       function sentMethods(sendCommand: ReturnType<typeof vi.fn>): string[] {
@@ -1696,38 +1727,50 @@ describe("registerDiagnosticsHandlers", () => {
         await expectNoOrphans(v);
       });
 
-      it("a start abandoned by a detach can't disable the retry that replaced it", async () => {
-        let rejectFirstEnable!: (err: Error) => void;
-        const firstEnable = new Promise<void>((_resolve, reject) => {
-          rejectFirstEnable = reject;
-        });
-        const v = makeV8ProfilerEvent(726, (method, nth) =>
-          method === "Profiler.enable" && nth === 1 ? firstEnable : undefined
-        );
-        dialogMock.showSaveDialog.mockResolvedValueOnce({
-          filePath: "/tmp/retry.cpuprofile",
-          canceled: false,
-        });
-        registerDiagnosticsHandlers(deps);
-        const start = getHandlerFn("system:renderer-cpu-profile-start");
-        const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+      it.each([
+        ["rejects", 726],
+        ["resolves", 728],
+      ] as const)(
+        "a start abandoned by a detach, whose held reply %s, can't disturb the retry that replaced it",
+        async (outcome, id) => {
+          const firstEnable = heldReply();
+          const v = makeV8ProfilerEvent(id, (method, nth) =>
+            method === "Profiler.enable" && nth === 1 ? firstEnable.promise : undefined
+          );
+          dialogMock.showSaveDialog.mockResolvedValueOnce({
+            filePath: "/tmp/retry.cpuprofile",
+            canceled: false,
+          });
+          registerDiagnosticsHandlers(deps);
+          const start = getHandlerFn("system:renderer-cpu-profile-start");
+          const stop = getHandlerFn("system:renderer-cpu-profile-stop");
 
-        const first = start(v.event) as Promise<{ status: string; reason?: string }>;
-        v.emit("dbg:detach");
-        const retry = (await start(v.event)) as { status: string };
-        expect(retry.status).toBe("started");
+          const first = start(v.event) as Promise<{ status: string; reason?: string }>;
+          v.emit("dbg:detach");
+          const retry = (await start(v.event)) as { status: string };
+          expect(retry.status).toBe("started");
 
-        rejectFirstEnable(new Error("target closed while handling command"));
-        const abandoned = await first;
+          if (outcome === "rejects") {
+            firstEnable.reject(new Error("target closed while handling command"));
+          } else {
+            firstEnable.resolve();
+          }
+          const abandoned = await first;
 
-        expect(abandoned.status).toBe("failed");
-        expect(abandoned.reason).toBe("cdp-error");
-        expect(sentMethods(v.sendCommand)).not.toContain("Profiler.disable");
-        expect(v.v8.recording).toBe(true);
-        expect(v.listenerCount("dbg:detach")).toBe(1);
-        expect(v.listenerCount("wc:destroyed")).toBe(1);
-        expect(await stop(v.event)).toEqual({ status: "saved" });
-      });
+          expect(abandoned.status).toBe("failed");
+          expect(abandoned.reason).toBe("cdp-error");
+          expect(sentMethods(v.sendCommand)).toEqual([
+            "Profiler.enable",
+            "Profiler.enable",
+            "Profiler.setSamplingInterval",
+            "Profiler.start",
+          ]);
+          expect(v.v8.recording).toBe(true);
+          expect(v.listenerCount("dbg:detach")).toBe(1);
+          expect(v.listenerCount("wc:destroyed")).toBe(1);
+          expect(await stop(v.event)).toEqual({ status: "saved" });
+        }
+      );
 
       it("only the winning session's auto-stop captures the profile", async () => {
         const v = makeV8ProfilerEvent(722);
@@ -1739,10 +1782,37 @@ describe("registerDiagnosticsHandlers", () => {
         const start = getHandlerFn("system:renderer-cpu-profile-start");
         const stop = getHandlerFn("system:renderer-cpu-profile-stop");
 
-        await Promise.all([start(v.event), start(v.event)]);
+        const timersBefore = vi.getTimerCount();
+
+        const results = (await Promise.all([start(v.event), start(v.event)])) as Array<{
+          status: string;
+          reason?: string;
+        }>;
+        expectSingleWinner(v, results, timersBefore);
         await vi.advanceTimersByTimeAsync(15_000);
 
         expect(profilerStopCalls(v.sendCommand)).toBe(1);
+        expect(await stop(v.event)).toEqual({ status: "saved" });
+      });
+
+      it("a replaced session's stale destroyed listener can't release its replacement", async () => {
+        const v = makeV8ProfilerEvent(727);
+        dialogMock.showSaveDialog.mockResolvedValueOnce({
+          filePath: "/tmp/replaced.cpuprofile",
+          canceled: false,
+        });
+        registerDiagnosticsHandlers(deps);
+        const start = getHandlerFn("system:renderer-cpu-profile-start");
+        const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+
+        await start(v.event);
+        const staleOnDestroyed = v.sender.once.mock.calls[0][1] as () => void;
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(((await start(v.event)) as { status: string }).status).toBe("started");
+
+        staleOnDestroyed();
+
+        expect(await start(v.event)).toEqual({ status: "failed", reason: "already-recording" });
         expect(await stop(v.event)).toEqual({ status: "saved" });
       });
 
@@ -1767,27 +1837,30 @@ describe("registerDiagnosticsHandlers", () => {
         expect(await stop(v.event)).toEqual({ status: "canceled" });
       });
 
-      it("a view destroyed mid-start leaves no session and never disables the profiler", async () => {
-        let releaseEnable!: () => void;
-        const enable = new Promise<void>((resolve) => {
-          releaseEnable = resolve;
-        });
-        const v = makeV8ProfilerEvent(724, (method) =>
-          method === "Profiler.enable" ? enable : undefined
-        );
-        registerDiagnosticsHandlers(deps);
-        const start = getHandlerFn("system:renderer-cpu-profile-start");
-        const timersBefore = vi.getTimerCount();
+      it.each([
+        [724, "Profiler.enable", ["Profiler.enable"]],
+        [729, "Profiler.setSamplingInterval", ["Profiler.enable", "Profiler.setSamplingInterval"]],
+      ])(
+        "a view destroyed while #%i's %s reply is pending sends nothing more",
+        async (id, heldMethod, sent) => {
+          const reply = heldReply();
+          const v = makeV8ProfilerEvent(id, (method) =>
+            method === heldMethod ? reply.promise : undefined
+          );
+          registerDiagnosticsHandlers(deps);
+          const start = getHandlerFn("system:renderer-cpu-profile-start");
+          const timersBefore = vi.getTimerCount();
 
-        const pending = start(v.event) as Promise<{ status: string; reason?: string }>;
-        v.emit("wc:destroyed");
-        v.sender.isDestroyed.mockReturnValue(true);
-        releaseEnable();
+          const pending = start(v.event) as Promise<{ status: string; reason?: string }>;
+          await vi.waitFor(() => expect(sentMethods(v.sendCommand)).toEqual(sent));
+          v.destroy();
+          reply.resolve();
 
-        expect(await pending).toEqual({ status: "failed", reason: "webcontents-destroyed" });
-        expect(vi.getTimerCount() - timersBefore).toBe(0);
-        expect(sentMethods(v.sendCommand)).not.toContain("Profiler.disable");
-      });
+          expect(await pending).toEqual({ status: "failed", reason: "webcontents-destroyed" });
+          expect(vi.getTimerCount() - timersBefore).toBe(0);
+          expect(sentMethods(v.sendCommand)).toEqual(sent);
+        }
+      );
 
       it("a capture that fails without a detach is not blamed on DevTools", async () => {
         const v = makeV8ProfilerEvent(725);
@@ -1806,6 +1879,39 @@ describe("registerDiagnosticsHandlers", () => {
         expect(result.status).toBe("failed");
         expect(result.reason).toBe("capture-failed");
         expect(result.message).toContain("No recording profiles found");
+      });
+
+      it("a detach stays blamed after another consumer reattaches the debugger", async () => {
+        const v = makeV8ProfilerEvent(730);
+        registerDiagnosticsHandlers(deps);
+        const start = getHandlerFn("system:renderer-cpu-profile-start");
+        const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+
+        await start(v.event);
+        v.emit("dbg:detach");
+        v.sender.debugger.attach();
+        const result = (await stop(v.event)) as { status: string; reason: string };
+
+        expect(result.reason).toBe("devtools-detached");
+      });
+
+      it("a capture rejected before the detach event arrives is still blamed on the detach", async () => {
+        const stopReply = heldReply();
+        const v = makeV8ProfilerEvent(731, (method) =>
+          method === "Profiler.stop" ? stopReply.promise : undefined
+        );
+        registerDiagnosticsHandlers(deps);
+        const start = getHandlerFn("system:renderer-cpu-profile-start");
+        const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+
+        await start(v.event);
+        const pending = stop(v.event) as Promise<{ status: string; reason: string }>;
+        // Electron clears the attachment before rejecting pending commands, and
+        // emits `detach` only after them.
+        v.sender.debugger.isAttached.mockReturnValue(false);
+        stopReply.reject(new Error("target closed while handling command"));
+
+        expect((await pending).reason).toBe("devtools-detached");
       });
     });
   });
