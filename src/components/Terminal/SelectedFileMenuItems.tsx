@@ -33,7 +33,7 @@ export function SelectedFileMenuItems({
   onView,
 }: SelectedFileMenuItemsProps) {
   const source = useMenuActionSource();
-  const reveal = useRevealCopy();
+  const revealCopy = useRevealCopy();
   return (
     <>
       <ContextMenuItem
@@ -63,7 +63,7 @@ export function SelectedFileMenuItems({
       {reveal && (
         <ContextMenuItem
           onSelect={() => {
-            runTransientReveal(reveal, () =>
+            runTransientReveal(revealCopy, () =>
               actionService
                 .dispatch("file.showItemInFolder", { path: absolutePath }, { source })
                 .then((result) => {
@@ -79,8 +79,8 @@ export function SelectedFileMenuItems({
             );
           }}
         >
-          <reveal.icon className={ICON_CLASS} aria-hidden="true" />
-          {reveal.label}
+          <revealCopy.icon className={ICON_CLASS} aria-hidden="true" />
+          {revealCopy.label}
         </ContextMenuItem>
       )}
     </>

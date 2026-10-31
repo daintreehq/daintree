@@ -93,6 +93,7 @@ import { primeRadix } from "@/components/ui/radix-loader";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { _resetCopyFlashForTests, getCopyFlash, invalidateCopyFlash } from "@/lib/copyFlash";
+import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 import {
   isFileRowMenuKey,
   useFileRowMenuItems,
@@ -604,13 +605,106 @@ describe("useFileRowMenuItems — Reveal routing", () => {
   it("calls the surface's own reveal when one is injected", async () => {
     // The file panel's reveal takes the out-of-root fallback its toolbar uses;
     // the contained action would refuse a file outside every project root.
-    const onReveal = vi.fn();
+    const onReveal = vi.fn(() => Promise.resolve(true));
     const menu = await openMenu({ options: { onReveal } });
 
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Reveal in Finder" }));
 
     expect(onReveal).toHaveBeenCalledTimes(1);
     expect(dispatchMock.mock.calls.some(([id]) => id === "file.showItemInFolder")).toBe(false);
+  });
+
+  it("keeps a local reveal's folder glyph and confirms nothing", async () => {
+    const menu = await openMenu();
+    const row = within(menu).getByRole("menuitem", { name: "Reveal in Finder" });
+    expect(row.querySelector("svg")?.classList.contains("lucide-folder-open")).toBe(true);
+
+    fireEvent.click(row);
+
+    await waitFor(() =>
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "file.showItemInFolder",
+        { path: "/repo/src/index.ts" },
+        { source: "context-menu" }
+      )
+    );
+    await act(async () => {});
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+    expect(getCopyFlash()).toBeNull();
+  });
+});
+
+describe("useFileRowMenuItems — Copy host path in a remote window (#15722)", () => {
+  beforeEach(() => {
+    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+    setHostPlatformInfo({ platform: "linux", connection: { kind: "ssh", target: "greg@studio-01" } });
+  });
+
+  afterEach(() => {
+    cleanup();
+    delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+    _resetHostPlatformForTests();
+  });
+
+  it("wears the copy glyph and confirms the copy like the Copy rows", async () => {
+    const menu = await openMenu();
+    const row = within(menu).getByRole("menuitem", { name: "Copy host path" });
+    expect(row.querySelector("svg")?.classList.contains("lucide-copy")).toBe(true);
+
+    fireEvent.click(row);
+
+    // Main writes the clipboard; the row has closed, so the flash and the
+    // announcement are the only sign it happened.
+    await waitFor(() =>
+      expect(useAnnouncerStore.getState().polite?.msg).toBe("Host path copied")
+    );
+    expect(getCopyFlash()).not.toBeNull();
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "file.showItemInFolder",
+      { path: "/repo/src/index.ts" },
+      { source: "context-menu" }
+    );
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("confirms nothing when the copy fails, and a successful Retry confirms", async () => {
+    dispatchMock.mockResolvedValueOnce({ ok: false, error: { message: "Host unreachable" } });
+    const menu = await openMenu();
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Copy host path" }));
+
+    await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
+    const [payload] = notifyMock.mock.calls[0]!;
+    expect(payload.title).toBe("Couldn't copy host path");
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+    expect(getCopyFlash()).toBeNull();
+
+    payload.action!.onClick();
+
+    await waitFor(() =>
+      expect(useAnnouncerStore.getState().polite?.msg).toBe("Host path copied")
+    );
+    expect(getCopyFlash()).not.toBeNull();
+  });
+
+  it("confirms a surface's own reveal only once it succeeded", async () => {
+    let settle: (ok: boolean) => void = () => {};
+    const onReveal = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          settle = resolve;
+        })
+    );
+    const menu = await openMenu({ options: { onReveal } });
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Copy host path" }));
+    expect(onReveal).toHaveBeenCalledTimes(1);
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+
+    await act(async () => settle(true));
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Host path copied");
+    expect(getCopyFlash()).not.toBeNull();
   });
 });
 

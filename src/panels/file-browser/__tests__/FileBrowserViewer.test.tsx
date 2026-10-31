@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { createContext, forwardRef, useContext, useImperativeHandle, type ReactNode } from "react";
-import { fireEvent, render, act, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, act, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Type-only: erased before the vi.mock factory runs, so it cannot pull the real
 // module in ahead of its own mock.
@@ -257,6 +257,9 @@ import type { WorkingTreeFileChange } from "@/lib/workingTreeDiff";
 import { NO_HIDDEN_ROWS } from "../fileBrowserTree";
 import { ClientAppError } from "@/utils/clientAppError";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
+import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
+import { _resetCopyFlashForTests, getCopyFlash } from "@/lib/copyFlash";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { seedDriveLeaseView } from "@/components/Recovery/driveLeaseState";
 import type {
   FileBrowserSortOrder,
@@ -2404,5 +2407,62 @@ describe("file menu on the viewer's content (#13423)", () => {
     fireEvent.contextMenu(screen.getByRole("button", { name: /src\/app\.ts/ }));
 
     expect(await screen.findByText("Row menu for src/app.ts")).toBeTruthy();
+  });
+});
+
+describe("Copy host path in a remote window (#15722)", () => {
+  const glyph = (el: HTMLElement, name: string) =>
+    el.querySelector("svg")?.classList.contains(`lucide-${name}`) ?? false;
+
+  beforeEach(() => {
+    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+    setHostPlatformInfo({ platform: "linux", connection: { kind: "ssh", target: "greg@studio-01" } });
+    _resetCopyFlashForTests();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+    _resetHostPlatformForTests();
+  });
+
+  it("swaps the toolbar button to a check once main copied the path", async () => {
+    readMock.mockResolvedValue({ content: "x" });
+    renderViewer("/repo/src/notes.txt");
+    const button = await screen.findByRole("button", { name: "Copy host path" });
+    expect(glyph(button, "copy")).toBe(true);
+
+    await act(async () => {
+      fireEvent.click(button);
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "file.showItemInFolder",
+      { path: "/repo/src/notes.txt" },
+      { source: "user" }
+    );
+    expect(glyph(screen.getByRole("button", { name: "Copy host path" }), "check")).toBe(true);
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Host path copied");
+  });
+
+  it("confirms the folded menu's row with a flash, since the menu has closed", async () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 0, 320, 30)
+    );
+    readMock.mockResolvedValue({ content: "x" });
+    renderViewer("/repo/src/notes.txt");
+    await screen.findByTestId("code-viewer-mock");
+
+    expect(screen.queryByRole("button", { name: "Copy host path" })).toBeNull();
+    const row = screen.getByRole("menuitem", { name: "Copy host path" });
+    expect(glyph(row, "copy")).toBe(true);
+    fireEvent.click(row);
+
+    await waitFor(() =>
+      expect(useAnnouncerStore.getState().polite?.msg).toBe("Host path copied")
+    );
+    expect(getCopyFlash()).not.toBeNull();
   });
 });
