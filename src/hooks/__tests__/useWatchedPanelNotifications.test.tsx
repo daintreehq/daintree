@@ -318,6 +318,28 @@ describe("useWatchedPanelNotifications", () => {
       expect(sync()).toHaveBeenCalledTimes(2);
     });
 
+    it("sends the watched set as it is now when the selection changes", () => {
+      // The one-shot unwatch clears a watch; a later worktree switch must not
+      // bring it back.
+      currentState = buildState([{ id: "p1" }], ["p1"]);
+      renderHook(() => useWatchedPanelNotifications());
+
+      act(() => fireUpdate(buildState([{ id: "p1" }], [])));
+      act(() => selectWorktree("/repo/wt-c"));
+
+      expect(sync()).toHaveBeenLastCalledWith([], { activeWorktreeId: "/repo/wt-c" });
+    });
+
+    it("sends the latest selection with a watched-set change", () => {
+      currentState = buildState([{ id: "p1" }, { id: "p2" }], ["p1"]);
+      renderHook(() => useWatchedPanelNotifications());
+
+      act(() => selectWorktree("/repo/wt-d"));
+      act(() => fireUpdate(buildState([{ id: "p1" }, { id: "p2" }], ["p1", "p2"])));
+
+      expect(sync()).toHaveBeenLastCalledWith(["p1", "p2"], { activeWorktreeId: "/repo/wt-d" });
+    });
+
     it("does not resend for a store update that leaves the selection alone", () => {
       renderHook(() => useWatchedPanelNotifications());
       sync().mockClear();

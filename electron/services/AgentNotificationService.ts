@@ -135,6 +135,8 @@ class AgentNotificationService {
   private activeTerminalIds = new Set<string>();
   /** Agents an event spoke for while the startup seed was in flight: the seed is older news. */
   private activeSeedTouched: Set<string> | null = null;
+  /** An all-clear that came due while the seed was in flight, and waits on its answer. */
+  private allClearHeldForSeed = false;
   private allClearTimer: NodeJS.Timeout | null = null;
 
   private waitingBurstBuffer: BurstWaitingEntry[] = [];
@@ -473,28 +475,52 @@ class AgentNotificationService {
     if (!ptyClient) return;
     const touched = new Set<string>();
     this.activeSeedTouched = touched;
-    void ptyClient.getAllTerminalsAsync().then(
-      (terminals) => {
+    void ptyClient.getAllTerminalsWithCompletenessAsync().then(
+      ({ terminals, degraded }) => {
         if (this.activeSeedTouched !== touched) return;
         this.activeSeedTouched = null;
+        let seeded = false;
         for (const terminal of terminals) {
-          if (touched.has(terminal.id) || terminal.isExited) continue;
           if (isHostThrowawayTerminalId(terminal.id)) continue;
+          // Read each live terminal's project now, while the host still names
+          // it: a natural exit drops that attribution before its last event.
+          if (terminal.projectId) this.panels.load(terminal.projectId, this.readSavedPanels);
+          if (touched.has(terminal.id) || terminal.isExited) continue;
           if (terminal.agentState && ACTIVE_AGENT_STATES.has(terminal.agentState)) {
             this.activeTerminalIds.add(terminal.id);
+            seeded = true;
           }
         }
+        if (seeded) {
+          this.hasEverGoneWorking = true;
+          this.peakConcurrentWorking = Math.max(
+            this.peakConcurrentWorking,
+            this.activeTerminalIds.size
+          );
+        }
+        // A host that didn't fully answer can't vouch that nothing is working.
+        this.settleAllClearHeldForSeed(!degraded);
       },
       () => {
-        if (this.activeSeedTouched === touched) this.activeSeedTouched = null;
+        if (this.activeSeedTouched !== touched) return;
+        this.activeSeedTouched = null;
+        this.settleAllClearHeldForSeed(false);
       }
     );
   }
 
+  private settleAllClearHeldForSeed(seedIsComplete: boolean): void {
+    if (!this.allClearHeldForSeed) return;
+    this.allClearHeldForSeed = false;
+    if (seedIsComplete && this.activeTerminalIds.size === 0) this.fireAllClear();
+  }
+
+  private readSavedPanels = (projectId: string) => projectStore.getProjectState(projectId);
+
   /** Read once the project a terminal belongs to, if no save has reached it yet. */
   private loadPanelProject(terminalId: string): void {
     const projectId = getPtyClient()?.getTerminalProjectId(terminalId);
-    if (projectId) this.panels.load(projectId, (id) => projectStore.getProjectState(id));
+    if (projectId) this.panels.load(projectId, this.readSavedPanels);
   }
 
   /** Where a panel is now, by its saved record; what the event said only when there is none. */
@@ -688,6 +714,7 @@ class AgentNotificationService {
         clearTimeout(this.allClearTimer);
         this.allClearTimer = null;
       }
+      this.allClearHeldForSeed = false;
       return;
     }
 
@@ -707,26 +734,35 @@ class AgentNotificationService {
 
       // Re-check after debounce — an agent may have started during the window
       if (this.activeTerminalIds.size > 0) return;
-
-      // Fire the all-clear. The event itself is unconditional — it drives
-      // renderer state (the all-clear overlay), which must still settle even
-      // when silent — but it carries a `shouldFlash` verdict computed here,
-      // from the single freshest copy of settings, rather than leaving each
-      // renderer to recompute it from its own (possibly stale, per-view)
-      // settings mirror: a second project view left open across a settings
-      // change would otherwise flash on stale eligibility.
-      const settings = projectStore.getEffectiveNotificationSettings();
-      const isSuppressed = this.isInformationalAudioSuppressed(settings);
-      if (settings.enabled !== false && settings.soundEnabled && !isSuppressed) {
-        soundService.play("all-clear");
+      // An agent working since before startup isn't counted until the seed
+      // answers, so the all-clear waits for it.
+      if (this.activeSeedTouched) {
+        this.allClearHeldForSeed = true;
+        return;
       }
-      const shouldFlash = settings.enabled !== false && settings.flashEnabled && !isSuppressed;
-      events.emit("agent:all-clear", { timestamp: Date.now(), shouldFlash });
-
-      // Reset for next multi-agent session
-      this.peakConcurrentWorking = 0;
-      this.hasEverGoneWorking = false;
+      this.fireAllClear();
     }, ALL_CLEAR_DEBOUNCE_MS);
+  }
+
+  private fireAllClear(): void {
+    // Fire the all-clear. The event itself is unconditional — it drives
+    // renderer state (the all-clear overlay), which must still settle even
+    // when silent — but it carries a `shouldFlash` verdict computed here,
+    // from the single freshest copy of settings, rather than leaving each
+    // renderer to recompute it from its own (possibly stale, per-view)
+    // settings mirror: a second project view left open across a settings
+    // change would otherwise flash on stale eligibility.
+    const settings = projectStore.getEffectiveNotificationSettings();
+    const isSuppressed = this.isInformationalAudioSuppressed(settings);
+    if (settings.enabled !== false && settings.soundEnabled && !isSuppressed) {
+      soundService.play("all-clear");
+    }
+    const shouldFlash = settings.enabled !== false && settings.flashEnabled && !isSuppressed;
+    events.emit("agent:all-clear", { timestamp: Date.now(), shouldFlash });
+
+    // Reset for next multi-agent session
+    this.peakConcurrentWorking = 0;
+    this.hasEverGoneWorking = false;
   }
 
   private scheduleCompletionNotification(
@@ -1385,6 +1421,7 @@ class AgentNotificationService {
     this.selectedWorktreeByOwner.clear();
     this.panels.clear();
     this.activeSeedTouched = null;
+    this.allClearHeldForSeed = false;
     this.notificationQueue = [];
     this.hasEverGoneWorking = false;
     this.peakConcurrentWorking = 0;

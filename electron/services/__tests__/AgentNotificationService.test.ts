@@ -173,6 +173,11 @@ function saveProjectPanels(terminals: readonly object[], projectId = PROJECT_ID)
   }
 }
 
+/** A project's state cleared away, which reaches listeners as `null`. */
+function clearProjectPanels(projectId = PROJECT_ID) {
+  for (const listener of [...persistedListeners]) listener(projectId, null);
+}
+
 /** Seed the legacy global record, which the service must ignore. */
 function seedLegacyAppState(appState: Record<string, unknown>) {
   const previous = storeMock.get.getMockImplementation();
@@ -3403,6 +3408,190 @@ describe("panel details come from the panel's per-project record (#15636)", () =
       vi.advanceTimersByTime(180_000);
 
       expect(lastEscalationOptions().navigation?.context).toMatchObject({ worktreeId: "wt-b" });
+    });
+  });
+  describe("reading a project no save has reached", () => {
+    /** A PTY host that names term-1's project but never finishes its startup list. */
+    function coldProject(projectId = "project-cold") {
+      setPtyClientRef({
+        getTerminalProjectId: (id: string) => (id === "term-1" ? projectId : null),
+        getAllTerminalsWithCompletenessAsync: () => new Promise(() => {}),
+      } as never);
+    }
+
+    it("reads it once across every transition, while the read is out and after", async () => {
+      settings({ waitingEnabled: true, waitingEscalationEnabled: true });
+      coldProject();
+      let answer!: () => void;
+      projectStoreMock.getProjectState.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answer = () => resolve({ terminals: [dockedAgent] } as never);
+          })
+      );
+
+      transition("working", "idle");
+      await vi.advanceTimersByTimeAsync(0);
+      transition("waiting", "working");
+      transition("working", "waiting");
+      answer();
+      await vi.advanceTimersByTimeAsync(0);
+      transition("waiting", "working");
+      transition("working", "waiting");
+      transition("waiting", "working");
+      await vi.advanceTimersByTimeAsync(180_000);
+
+      expect(projectStoreMock.getProjectState).toHaveBeenCalledTimes(1);
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it("needs no read for a project saved before its agent's first event", () => {
+      settings({ waitingEnabled: true, waitingEscalationEnabled: true });
+      coldProject();
+      saveProjectPanels([dockedAgent], "project-cold");
+
+      transition("waiting", "working");
+      vi.advanceTimersByTime(180_000);
+
+      expect(projectStoreMock.getProjectState).not.toHaveBeenCalled();
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads again after a read that found nothing", async () => {
+      // The store answers null for a file it couldn't read, not only for none.
+      settings({ waitingEnabled: true, waitingEscalationEnabled: true });
+      coldProject();
+      projectStoreMock.getProjectState
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ terminals: [dockedAgent] } as never);
+
+      transition("waiting", "working");
+      await vi.advanceTimersByTimeAsync(0);
+      transition("working", "waiting");
+      await vi.advanceTimersByTimeAsync(0);
+      transition("waiting", "working");
+      await vi.advanceTimersByTimeAsync(180_000);
+
+      expect(projectStoreMock.getProjectState).toHaveBeenCalledTimes(2);
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it("ignores a read that was still out when the service restarted", async () => {
+      settings({ waitingEnabled: true, waitingEscalationEnabled: true });
+      coldProject();
+      let staleAnswer!: () => void;
+      projectStoreMock.getProjectState
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              staleAnswer = () => resolve({ terminals: [dockedAgent] } as never);
+            })
+        )
+        .mockImplementationOnce(() => new Promise(() => {}));
+
+      transition("waiting", "working");
+      await vi.advanceTimersByTimeAsync(0);
+      agentNotificationService.dispose();
+      agentNotificationService.initialize();
+      transition("waiting", "working");
+      await vi.advanceTimersByTimeAsync(0);
+      staleAnswer();
+      await vi.advanceTimersByTimeAsync(180_000);
+
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    it("reads each live terminal's project at startup, so a completion after a natural exit keeps its title and worktree", async () => {
+      settings({ completedEnabled: true });
+      agentNotificationService.dispose();
+      setPtyClientRef({
+        getAllTerminalsWithCompletenessAsync: async () => ({
+          terminals: [{ id: "term-1", projectId: "project-live", agentState: "working" }],
+          degraded: false,
+        }),
+        // A natural exit drops the host's attribution before the completion lands.
+        getTerminalProjectId: () => null,
+      } as never);
+      projectStoreMock.getProjectState.mockResolvedValueOnce({
+        terminals: [
+          { ...dockedAgent, title: "Auth refactor", titleMode: "user", worktreeId: "wt-9" },
+        ],
+      } as never);
+      agentNotificationService.initialize();
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
+      await vi.advanceTimersByTimeAsync(0);
+
+      transition("completed", "working");
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(projectStoreMock.getProjectState).toHaveBeenCalledWith("project-live");
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+        "Agent finished",
+        "Auth refactor finished its task",
+        expect.objectContaining({ panelId: "term-1", worktreeId: "wt-9" }),
+        "notification:watch-navigate",
+        expect.anything()
+      );
+    });
+  });
+
+  describe("a panel closed from its project's layout", () => {
+    it.each([
+      ["an empty layout", false],
+      ["a cleared state", true],
+    ])(
+      "stops escalating once its project saves %s, while another project's panel still does",
+      (_label, cleared) => {
+        settings({ waitingEnabled: true, waitingEscalationEnabled: true });
+        saveProjectPanels([dockedAgent], "project-a");
+        saveProjectPanels([{ ...dockedAgent, id: "term-2" }], "project-b");
+
+        transition("waiting", "working", "term-1");
+        transition("waiting", "working", "term-2");
+        vi.advanceTimersByTime(60_000);
+        if (cleared) clearProjectPanels("project-a");
+        else saveProjectPanels([], "project-a");
+        vi.advanceTimersByTime(120_000);
+
+        expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+        expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+          "Agent still waiting",
+          expect.any(String),
+          expect.objectContaining({ closeWithPanels: ["term-2"] })
+        );
+      }
+    );
+  });
+
+  describe("only the owning view's own focus and selection count", () => {
+    function waitingFor(setUp: () => void) {
+      settings({ waitingEnabled: true });
+      saveProjectPanels([dockedAgent]);
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
+      setUp();
+      notificationServiceMock.getUserPresence.mockReturnValue("present");
+      transition("waiting", "working");
+      vi.advanceTimersByTime(200);
+    }
+
+    it("pages when the owning view is unfocused, though another focused view shows the worktree", () => {
+      waitingFor(() => {
+        agentNotificationService.setSelectedWorktree(OWNER, "wt-1");
+        agentNotificationService.setSelectedWorktree(OTHER_VIEW, "wt-1");
+        notificationServiceMock.isOwnerViewFocused.mockImplementation(
+          (owner) => owner === OTHER_VIEW
+        );
+      });
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it("pages once the owning view reports it has no selection", () => {
+      waitingFor(() => {
+        agentNotificationService.setSelectedWorktree(OWNER, "wt-1");
+        agentNotificationService.setSelectedWorktree(OWNER, null);
+        notificationServiceMock.isOwnerViewFocused.mockImplementation((owner) => owner === OWNER);
+      });
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
     });
   });
 });

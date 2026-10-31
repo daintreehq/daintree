@@ -35,7 +35,11 @@ export class PanelRecordIndex {
     this.replace(workspaceId, state);
   }
 
-  /** Read a workspace no save has reached yet. A failed read is tried again on the next sighting. */
+  /**
+   * Read a workspace no save has reached yet. A failed read, or one that found
+   * nothing, is tried again on the next sighting: the store answers `null` for
+   * a file it could not read as well as for one that isn't there.
+   */
   load(workspaceId: string, read: (workspaceId: string) => Promise<SavedPanels>): void {
     if (this.idsByWorkspace.has(workspaceId) || this.loading.has(workspaceId)) return;
     const generation = this.generations.get(workspaceId) ?? 0;
@@ -47,6 +51,7 @@ export class PanelRecordIndex {
         (state) => {
           if (epoch !== this.epoch) return;
           this.loading.delete(workspaceId);
+          if (state === null) return;
           if ((this.generations.get(workspaceId) ?? 0) !== generation) return;
           this.replace(workspaceId, state);
         },
