@@ -86,6 +86,10 @@ import {
   parseIndexGitlinks,
 } from "../utils/submoduleInventory.js";
 import { invalidateGitStatusCache } from "../utils/git.js";
+import {
+  clearWorktreeDiffStatCache,
+  releaseWorktreeDiffStats,
+} from "../utils/worktreeDiffStatCache.js";
 import { StatusTimingRecorder } from "./StatusTimingRecorder.js";
 import { WorktreeEmitGate } from "./WorktreeEmitGate.js";
 import { branchRefName, readBranchCommitterDates } from "../utils/branchCommitterDates.js";
@@ -1725,6 +1729,9 @@ export class WorkspaceService {
     clearGitDirCache(monitor.path);
     clearGitCommonDirCache(monitor.path);
     invalidateGitStatusCache(monitor.path);
+    // Keyed by the canonical toplevel the last pass resolved; the monitor path
+    // may be a symlinked spelling of it.
+    releaseWorktreeDiffStats(monitor.getWorktreeChanges()?.rootPath ?? monitor.path);
 
     // Drop the in-memory wsl-git opt-in entry (keyed by monitor.id, matching
     // the lookup shape used by `enrichWorktreeWithWsl`) and tell main to
@@ -6183,6 +6190,7 @@ export class WorkspaceService {
     }
     this.monitors.clear();
     this.backgroundGitWatcherLru.clear();
+    clearWorktreeDiffStatCache();
     this.agentActiveWorktreeIds.clear();
     // Drop in-flight fetch chains and per-repo failure state — the next
     // project's monitors get a clean coordinator and stale completions are
@@ -6351,6 +6359,7 @@ export class WorkspaceService {
     }
     this.monitors.clear();
     this.backgroundGitWatcherLru.clear();
+    clearWorktreeDiffStatCache();
     this.agentActiveWorktreeIds.clear();
     this.authFailureConfirmedNotified.clear();
     this.pollQueue.clear();

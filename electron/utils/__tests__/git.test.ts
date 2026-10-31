@@ -830,6 +830,81 @@ describe("getWorktreeChangesWithStats per-file diff cache", () => {
     expect(result.totalInsertions).toBe(400);
   });
 
+  it("keeps every file of a changeset past 2,000 files cached across passes", async () => {
+    const cwd = "/per-file-cache-2500/" + Math.random();
+    setupRevparse(cwd, "head-oid-2500");
+    const modified = Array.from({ length: 2_500 }, (_, i) => `src/f${i}.ts`);
+    mockGit.status.mockResolvedValue({ ...emptyStatus, modified });
+    (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 1000, size: 50 });
+    echoNumstat();
+
+    await getWorktreeChangesWithStats(cwd, true);
+    expect(new Set(diffedPaths())).toEqual(new Set(modified));
+
+    for (let pass = 0; pass < 2; pass++) {
+      mockGit.diff.mockClear();
+      const result = await getWorktreeChangesWithStats(cwd, true);
+      expect(mockGit.diff).not.toHaveBeenCalled();
+      expect(result.totalInsertions).toBe(2_500);
+      expect(result.totalDeletions).toBe(2_500);
+    }
+  });
+
+  it("keeps each sibling worktree's entries while the siblings pass in turn", async () => {
+    const base = "/per-file-cache-siblings/" + Math.random();
+    const roots = [1, 2, 3, 4].map((n) => `${base}/wt-${n}`);
+    vi.mocked(createHardenedGit).mockImplementation(((cwd: string) => ({
+      ...mockGit,
+      raw: vi.fn(async (args: string[]) =>
+        args[0] === "rev-parse" ? `head-oid-siblings\n${cwd}` : ""
+      ),
+    })) as unknown as typeof createHardenedGit);
+    try {
+      const modified = Array.from({ length: 1_000 }, (_, i) => `src/f${i}.ts`);
+      mockGit.status.mockResolvedValue({ ...emptyStatus, modified });
+      (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 1000, size: 50 });
+      echoNumstat();
+
+      for (const root of roots) await getWorktreeChangesWithStats(root, true);
+      expect(diffedPaths()).toHaveLength(4_000);
+
+      mockGit.diff.mockClear();
+      for (const root of roots) {
+        const result = await getWorktreeChangesWithStats(root, true);
+        expect(result.totalInsertions).toBe(1_000);
+      }
+      expect(mockGit.diff).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(createHardenedGit).mockImplementation(
+        (() => mockGit) as unknown as typeof createHardenedGit
+      );
+    }
+  });
+
+  it("re-diffs only the file edited between passes of a large changeset", async () => {
+    const cwd = "/per-file-cache-large-edit/" + Math.random();
+    setupRevparse(cwd, "head-oid-large-edit");
+    const modified = Array.from({ length: 2_500 }, (_, i) => `src/f${i}.ts`);
+    mockGit.status.mockResolvedValue({ ...emptyStatus, modified });
+    (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 1000, size: 50 });
+    echoNumstat();
+    await getWorktreeChangesWithStats(cwd, true);
+
+    (fs.stat as ReturnType<typeof vi.fn>).mockImplementation(async (p: string) =>
+      p.endsWith(pathJoin("src", "f1234.ts")) ? { mtimeMs: 2000, size: 60 } : { mtimeMs: 1000, size: 50 }
+    );
+    mockGit.diff.mockReset();
+    mockGit.diff.mockResolvedValue("7\t3\tsrc/f1234.ts\n");
+    const result = await getWorktreeChangesWithStats(cwd, true);
+
+    expect(diffedPaths()).toEqual(["src/f1234.ts"]);
+    expect(result.changes.find((c) => c.path.endsWith(pathJoin("src", "f1234.ts")))).toMatchObject({
+      insertions: 7,
+      deletions: 3,
+    });
+    expect(result.totalInsertions).toBe(2_499 + 7);
+  });
+
   it("keeps cached diff stats and commit metadata while their keys are unchanged, however long", async () => {
     const cwd = "/per-file-cache-nottl/" + Math.random();
     setupRevparse(cwd, "head-oid-nottl");
@@ -928,10 +1003,14 @@ describe("getWorktreeChangesWithStats per-file diff cache", () => {
     ).rejects.toBe(abortError);
     expect(mockGit.diff).toHaveBeenCalledTimes(2);
 
-    // Nothing was published: a plain read runs status again.
+    // Nothing was published: a plain read runs status again, and the first
+    // batch's rows were not kept either.
     mockGit.status.mockClear();
+    mockGit.diff.mockReset();
+    echoNumstat();
     await getWorktreeChangesWithStats(cwd);
     expect(mockGit.status).toHaveBeenCalledTimes(1);
+    expect(diffedPaths()).toEqual(modified);
   });
 
   it("stats each untracked file once per pass and reuses it for the mtime", async () => {
@@ -1075,6 +1154,12 @@ describe("getWorktreeChangesWithStats binary file handling", () => {
     const second = await getWorktreeChangesWithStats(cwd, true);
 
     expect(second.changes[0].insertions).toBe(3);
+    expect(readFileMock).not.toHaveBeenCalled();
+
+    // A pass that answered from cache must carry the entry forward, or the
+    // one after it would read the file again.
+    const third = await getWorktreeChangesWithStats(cwd, true);
+    expect(third.changes[0].insertions).toBe(3);
     expect(readFileMock).not.toHaveBeenCalled();
   });
 });

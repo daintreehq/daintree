@@ -5,6 +5,12 @@ import type { SimpleGit } from "simple-git";
 import type { WorkspaceService } from "../WorkspaceService.js";
 import type { WorktreeMonitor } from "../WorktreeMonitor.js";
 import type { Worktree } from "../../../shared/types/worktree.js";
+import type { WorktreeChanges } from "../../../shared/types/git.js";
+import {
+  beginDiffStatPass,
+  clearWorktreeDiffStatCache,
+  getWorktreeDiffStatCacheStats,
+} from "../../utils/worktreeDiffStatCache.js";
 /** The private sweep, reachable for spying. */
 type SweepHost = { sweepPrunableWorktreeEntries: () => Promise<void> };
 
@@ -362,6 +368,30 @@ describe("WorkspaceService external worktree removal", () => {
         })
       );
       expect(service["monitors"].has(TEST_WORKTREE_PATH)).toBe(false);
+    });
+
+    it("releases the removed worktree's retained diff stats under its canonical root", () => {
+      clearWorktreeDiffStatCache();
+      const canonicalRoot = pathResolve("/private/test/worktree");
+      const monitor = createAndRegisterMonitor();
+      (monitor as unknown as { worktreeChanges: Partial<WorktreeChanges> }).worktreeChanges = {
+        rootPath: canonicalRoot,
+        changes: [],
+      };
+      for (const root of [canonicalRoot, pathResolve("/test/sibling")]) {
+        const pass = beginDiffStatPass(root);
+        pass.keepTracked(
+          pathResolve(root, "a.ts"),
+          { headOid: "head", statusCode: " M", mtimeMs: 1, size: 1 },
+          { insertions: 1, deletions: 0 }
+        );
+        pass.publish();
+      }
+
+      service["handleExternalWorktreeRemoval"](TEST_WORKTREE_PATH);
+
+      expect(getWorktreeDiffStatCacheStats()).toMatchObject({ worktrees: 1, trackedEntries: 1 });
+      clearWorktreeDiffStatCache();
     });
 
     it("does not remove main worktree", () => {
