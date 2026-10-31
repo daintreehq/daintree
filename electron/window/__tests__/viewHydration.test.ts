@@ -1,6 +1,10 @@
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it } from "vitest";
-import { isViewHydrated, markViewHydrated, _resetViewHydrationForTesting } from "../viewHydration.js";
+import {
+  isViewHydrated,
+  markViewHydrated,
+  _resetViewHydrationForTesting,
+} from "../viewHydration.js";
 
 let nextId = 1;
 
