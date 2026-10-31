@@ -74,6 +74,7 @@ export const GLOBAL_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "worktree.waitUntilReady",
   "worktree.waitForPullRequest",
   "worktree.deleteOwned",
+  "worktree.retireOwned",
   "worktree.resource.status",
   "worktree.resource.teardown",
   "recipe.list",

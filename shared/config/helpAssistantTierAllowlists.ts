@@ -75,6 +75,10 @@ export const CORE_TIER_TOOLS = [
   // a worktree the calling session created and refuses everything else
   // (#11909).
   "worktree.deleteOwned",
+  // The owned delete with its checks run first, in one call (#15737): clean
+  // and pushed, no one else's process there, this session's panes closed and
+  // their processes gone. Owned for every origin, like the delete it ends in.
+  "worktree.retireOwned",
   // `worktree.createWithRecipe` takes a recipe id, and nothing else says what
   // the ids are.
   "recipe.list",
@@ -383,14 +387,15 @@ export const HELP_TIER_CUMULATIVE: Record<HelpAssistantTier, readonly string[]> 
  *
  * Operational risk, not minimum tier. The preview intersects this list with the
  * tier being previewed, so the same tool is called out wherever it first
- * becomes reachable. The first three run project-defined teardown — arbitrary
+ * becomes reachable. The first four run project-defined teardown — arbitrary
  * commands from `.daintree/config.json`, and resource teardown that can destroy
- * a remote devbox. The two delete variants then remove the tree as well. The
+ * a remote devbox. The three delete variants then remove the tree as well. The
  * last runs whatever command the assistant chooses.
  */
 export const HIGH_BLAST_RADIUS_TOOLS: readonly string[] = [
   "worktree.delete",
   "worktree.deleteOwned",
+  "worktree.retireOwned",
   "worktree.resource.teardown",
   "project.runCommand",
 ];

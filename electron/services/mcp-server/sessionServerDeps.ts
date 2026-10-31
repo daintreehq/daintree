@@ -268,6 +268,7 @@ export interface SessionServerDepsSource {
   readTerminalCloseContext?: import("./sessionServer.js").SessionServerDeps["readTerminalCloseContext"];
   readClosedPanelProcess?: import("./sessionServer.js").SessionServerDeps["readClosedPanelProcess"];
   readTerminalProcesses?: import("./sessionServer.js").SessionServerDeps["readTerminalProcesses"];
+  readWorktreeGit?: import("./sessionServer.js").SessionServerDeps["readWorktreeGit"];
   waitForClosedPanelExits?: import("./sessionServer.js").SessionServerDeps["waitForClosedPanelExits"];
   terminalGenerationOf?: import("./sessionServer.js").SessionServerDeps["terminalGenerationOf"];
   trackedTerminalIds?: import("./sessionServer.js").SessionServerDeps["trackedTerminalIds"];
@@ -1109,6 +1110,7 @@ export function createSessionServerDeps(
     ...(deps.readTerminalProcesses !== undefined
       ? { readTerminalProcesses: deps.readTerminalProcesses }
       : {}),
+    ...(deps.readWorktreeGit !== undefined ? { readWorktreeGit: deps.readWorktreeGit } : {}),
     ...(deps.waitForClosedPanelExits !== undefined
       ? { waitForClosedPanelExits: deps.waitForClosedPanelExits }
       : {}),

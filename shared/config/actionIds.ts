@@ -47,6 +47,7 @@ export const BUILT_IN_ACTION_IDS = [
   "worktree.create",
   "worktree.delete",
   "worktree.deleteOwned",
+  "worktree.retireOwned",
   "worktree.listBranches",
   "worktree.getDefaultPath",
   "worktree.reveal",

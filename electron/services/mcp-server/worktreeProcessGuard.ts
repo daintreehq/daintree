@@ -46,7 +46,7 @@ export interface WorktreeMatchOptions {
   resolveDeadlineMs: number;
 }
 
-const HOST_MATCH_OPTIONS: WorktreeMatchOptions = {
+export const HOST_MATCH_OPTIONS: WorktreeMatchOptions = {
   caseInsensitive: process.platform === "win32",
   realpath: (path) => realpath(path),
   resolveDeadlineMs: 2_000,
@@ -108,10 +108,27 @@ export async function liveTerminalsInWorktree(
   worktreeId: string,
   options: WorktreeMatchOptions
 ): Promise<WorktreeCensus> {
-  const live = records.filter((record) => record.isExited !== true);
+  return terminalsInWorktree(
+    records.filter((record) => record.isExited !== true),
+    worktreeId,
+    options
+  );
+}
+
+/**
+ * Every one of `records` that sits in the worktree, by the rules
+ * {@link liveTerminalsInWorktree} describes, exited or not. A retirement
+ * (#15737) reads the caller's own exited panes from it too, since those are
+ * panes it closes even though no process holds the directory.
+ */
+export async function terminalsInWorktree(
+  records: readonly TerminalProcessRecord[],
+  worktreeId: string,
+  options: WorktreeMatchOptions
+): Promise<WorktreeCensus> {
   const root = pathComparisonKey(worktreeId, options);
-  const placed = new Set(live.filter((record) => matches(record, record.cwd, [root], options)));
-  const unplaced = live.filter((record) => !placed.has(record));
+  const placed = new Set(records.filter((record) => matches(record, record.cwd, [root], options)));
+  const unplaced = records.filter((record) => !placed.has(record));
   let complete = true;
   if (unplaced.length > 0) {
     const resolved = await withinDeadline(
@@ -138,7 +155,7 @@ export async function liveTerminalsInWorktree(
     else unplaced.forEach((record, index) => resolved[index] && placed.add(record));
   }
   const named = new Set<string>();
-  const terminals = live.filter((record) => {
+  const terminals = records.filter((record) => {
     if (!placed.has(record) || named.has(record.id)) return false;
     named.add(record.id);
     return true;
@@ -146,7 +163,7 @@ export async function liveTerminalsInWorktree(
   return { terminals, complete };
 }
 
-function describeTerminal(terminal: WorktreeLiveTerminal): string {
+export function describeTerminal(terminal: WorktreeLiveTerminal): string {
   const parts = [
     terminal.createdByThisSession
       ? "created by this session"

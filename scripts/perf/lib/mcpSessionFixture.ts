@@ -831,6 +831,7 @@ export const SELF_GATED_TOOLS: ReadonlySet<string> = new Set([
   "terminal.restartOnPresetOwned",
   "terminal.readLastMessageOwned",
   "worktree.deleteOwned",
+  "worktree.retireOwned",
   // Waits only for panels this session closed (#15728): an argument-free probe
   // names none, and its correct refusal is not a miss.
   "terminal.waitForExit",

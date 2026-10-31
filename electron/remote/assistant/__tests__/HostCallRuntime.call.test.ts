@@ -336,6 +336,14 @@ describe("relayRunMs", () => {
     );
   });
 
+  it("gives a retirement its exit wait and then a whole confirmation (#15737)", () => {
+    // The wait runs before the delete's confirmation, so neither may eat the other's time.
+    expect(relayRunMs("worktree.retireOwned", { timeoutMs: 60_000 })).toBeGreaterThan(
+      60_000 + MCP_REMOTE_DISPATCH_TIMEOUT_MS
+    );
+    expect(relayRunMs("worktree.retireOwned", {})).toBeGreaterThan(relayRunMs("worktree.delete", {}));
+  });
+
   it("leaves a call that never asks anyone its own floor", () => {
     expect(relayRunMs("throwaway.launch", {}, 90_000)).toBe(90_000);
     expect(relayRunMs("throwaway.launch", { timeoutMs: 1_000 }, 90_000)).toBe(90_000);

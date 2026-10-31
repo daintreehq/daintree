@@ -14,6 +14,10 @@ import {
 import { PartialSuccessError } from "@shared/utils/partialSuccess";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { WORKTREE_BRANCH_KEPT_MARKER } from "@shared/utils/worktreeSummary";
+import {
+  WorktreeRetireOwnedArgsSchema,
+  WorktreeRetireOwnedResultSchema,
+} from "@shared/types/worktreeRetirement";
 
 export function registerWorktreeCreateActions(
   actions: ActionRegistry,
@@ -231,6 +235,37 @@ export function registerWorktreeCreateActions(
       run: async () => {
         throw new Error(
           "worktree.deleteOwned must be invoked through the MCP main-process path, not renderer dispatch."
+        );
+      },
+    })
+  );
+
+  // The owned delete with its preconditions run in one call (#15737), on the
+  // same main-process path: main checks the tree is clean and pushed and that
+  // no one else's process is in it, closes this session's own panes there
+  // and waits for their processes to exit, then sends the same
+  // `worktree.delete` the owned delete sends, so the D2 confirmation and its
+  // preview are unchanged. `danger: "confirm"` withholds it from a
+  // workspace-bound session for the same reason as `worktree.deleteOwned`.
+  actions.set("worktree.retireOwned", () =>
+    defineAction({
+      id: "worktree.retireOwned",
+      title: "Retire owned worktree",
+      description:
+        "Retire a worktree this session created: refuses unless it is clean with every commit on a remote, or while a terminal not yours runs there; then closes your panes there, waits for their processes to exit, and deletes it after the user confirms. Never forces or deletes the branch. A failure after closing says what was done.",
+      category: "worktree",
+      kind: "command",
+      danger: "confirm",
+      scope: "renderer",
+      dangerRationale:
+        "Closes the session's own panes in the worktree and deletes the working tree from disk. Recovery requires re-creating the worktree, so the session's own ownership record is a precondition rather than the approval.",
+      palette: { mode: "hidden" },
+      argsSchema: WorktreeRetireOwnedArgsSchema,
+      resultSchema: WorktreeRetireOwnedResultSchema,
+      mcpOutputSchema: true,
+      run: async () => {
+        throw new Error(
+          "worktree.retireOwned must be invoked through the MCP main-process path, not renderer dispatch."
         );
       },
     })

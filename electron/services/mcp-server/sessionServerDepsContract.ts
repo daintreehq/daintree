@@ -251,6 +251,16 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     readonly import("./worktreeProcessGuard.js").TerminalProcessRecord[]
   >;
   /**
+   * What git reports of a worktree about to be retired (#15737): its status
+   * and how many of its commits no remote-tracking ref holds. Rejects on any
+   * failure. Absent, every retirement is refused: no reader is no evidence
+   * that the worktree is clean.
+   */
+  readWorktreeGit?: (
+    worktreePath: string,
+    signal: AbortSignal
+  ) => Promise<import("./worktreeRetirementGit.js").WorktreeGitObservation>;
+  /**
    * Whether a terminal belongs to the workspace of this session's pinned view,
    * re-resolved on every call (#12883). What admits Daintree's own assistant to
    * `terminal.readLastMessageOwned` for a pane it did not create: it already
