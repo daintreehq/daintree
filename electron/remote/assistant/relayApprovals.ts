@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import {
+  MCP_DISPATCH_TIMEOUT_MS,
+  MCP_REMOTE_DISPATCH_TIMEOUT_MS,
+} from "../../../shared/config/mcpConfirmWindow.js";
 import { canonicalArgsHash } from "../../services/mcp-server/sessionDedup.js";
 import type {
   ViewlessApprovalAsk,
@@ -12,12 +16,18 @@ import {
 } from "./linkMethods.js";
 
 /**
- * How long a host waits for a Shell to answer an approval, and how long the
- * answer covers the call. The Shell's dialog gives up after 28 s, inside its
- * own 30 s dispatch, so this leaves the call time to reach its change once
- * approved, and no more.
+ * How long a host waits for a Shell to answer an approval (#15699): a whole
+ * confirmation in the Shell's window, from waiting behind other prompts to a
+ * full decision window once it is on screen, then the trip back. The Shell
+ * holds its dialog inside this.
  */
-export const RELAY_APPROVAL_WINDOW_MS = 40_000;
+export const RELAY_APPROVAL_WINDOW_MS = MCP_REMOTE_DISPATCH_TIMEOUT_MS;
+
+/**
+ * How long an approval covers the call from when it arrives: the run a local
+ * approval buys, so the call reaches its change promptly or not at all.
+ */
+const RELAY_APPROVED_RUN_MS = MCP_DISPATCH_TIMEOUT_MS;
 
 /** One confirm-gated call a Shell assistant is making here, to put to its person. */
 export interface RelayApprovalAsk extends ViewlessApprovalAsk {
@@ -25,6 +35,12 @@ export interface RelayApprovalAsk extends ViewlessApprovalAsk {
   /** The MCP_CALL being made: the Shell asks only about one of its own in flight. */
   callId: string;
   projectId: string;
+  /**
+   * When that call stops waiting on its answer, on this host's clock
+   * (#15699): the ask ends by then, and an approval covers nothing after it.
+   * Never sent.
+   */
+  holdUntil?: number;
 }
 
 function codeOf(error: unknown): string | undefined {
@@ -47,14 +63,23 @@ export async function askShellApproval(
   options: { now?: () => number; newId?: () => string; windowMs?: number } = {}
 ): Promise<ViewlessApprovalDecision> {
   const now = options.now ?? Date.now;
-  const windowMs = options.windowMs ?? RELAY_APPROVAL_WINDOW_MS;
   const args = ask.args;
   if (session === null || args === null || typeof args !== "object" || Array.isArray(args)) {
     return { decision: "unavailable" };
   }
+  const askedAt = now();
+  const holdUntil = ask.holdUntil ?? Infinity;
+  const windowMs = Math.floor(
+    Math.min(options.windowMs ?? RELAY_APPROVAL_WINDOW_MS, holdUntil - askedAt)
+  );
+  // The call gives up before anyone could answer: asked now, it would only
+  // show a dialog whose answer runs nothing.
+  if (windowMs <= 0) return { decision: "timeout" };
   const approvalId = (options.newId ?? randomUUID)();
   const argsHash = canonicalArgsHash(ask.actionId, args);
-  const deadline = now() + windowMs;
+  const answerBy = askedAt + windowMs;
+  // Covered for a run from when the answer came, never past the call's own wait.
+  const covered = (): number => Math.min(now() + RELAY_APPROVED_RUN_MS, holdUntil);
   const payload: RelayApprovePayload = {
     approvalId,
     helpSessionId: ask.helpSessionId,
@@ -87,12 +112,14 @@ export async function askShellApproval(
   }
   switch (parsed.data.decision) {
     case "approved":
-      return now() > deadline ? { decision: "timeout" } : { decision: "approved", deadline };
+      return now() > answerBy
+        ? { decision: "timeout" }
+        : { decision: "approved", deadline: covered() };
     // The Shell's own "Never ask" (#15698): covered as an approval is, and said as a skip.
     case "skip-preference":
-      return now() > deadline
+      return now() > answerBy
         ? { decision: "timeout" }
-        : { decision: "approved", deadline, authorization: "skip-preference" };
+        : { decision: "approved", deadline: covered(), authorization: "skip-preference" };
     case "rejected":
     case "timeout":
       return { decision: parsed.data.decision };

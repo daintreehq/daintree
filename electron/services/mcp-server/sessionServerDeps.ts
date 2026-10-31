@@ -56,7 +56,10 @@ import { computeMcpAuditSeverity } from "../../../shared/types/ipc/mcpServer.js"
 import type { TurnOutcomeService } from "./turnOutcomeLog.js";
 import { helpNotifyKey, relayNoticePane } from "./terminalNotify.js";
 import type { AbusePolicy } from "./abusePolicy.js";
-import { MCP_CONFIRMABLE_CALL_MAX_MS } from "../../../shared/config/mcpConfirmWindow.js";
+import {
+  MCP_CONFIRMABLE_CALL_MAX_MS,
+  MCP_REMOTE_CONFIRM_MARGIN_MS,
+} from "../../../shared/config/mcpConfirmWindow.js";
 import { createLogger } from "../../utils/logger.js";
 
 const pinnedViewLogger = createLogger("main:McpPinnedView");
@@ -894,8 +897,18 @@ export function createSessionServerDeps(
       // Its confirmation, with no view here to raise one, is put to the
       // person at that Shell about this very call (#13501).
       const askShell = relay?.requestApproval;
+      // Everything the call waits on ends inside its own deadline (#15699),
+      // with room for the answer to reach it: a confirmation that outlasted
+      // it could be approved after the caller was told the call failed.
+      const callDeadline =
+        relay !== undefined && relayCallId !== undefined
+          ? relay.callDeadline?.(relayCallId)
+          : undefined;
+      const holdUntil =
+        callDeadline !== undefined ? callDeadline - MCP_REMOTE_CONFIRM_MARGIN_MS : undefined;
       const relayOptions: WorkspaceDispatchOptions | undefined = relay
         ? {
+            ...(holdUntil !== undefined ? { holdUntil } : {}),
             relay: {
               linkSessionId: relay.linkSessionId,
               readOnly:
@@ -905,7 +918,14 @@ export function createSessionServerDeps(
                 ? { call: { callId: relayCallId, helpSessionId: relay.helpSessionId } }
                 : {}),
               ...(askShell !== undefined && relayCallId !== undefined
-                ? { requestApproval: (ask) => askShell({ ...ask, callId: relayCallId }) }
+                ? {
+                    requestApproval: (ask) =>
+                      askShell({
+                        ...ask,
+                        callId: relayCallId,
+                        ...(holdUntil !== undefined ? { holdUntil } : {}),
+                      }),
+                  }
                 : {}),
             },
           }

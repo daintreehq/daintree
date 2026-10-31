@@ -47,6 +47,21 @@ export const MCP_CONFIRM_ASK_MAX_MS =
   MCP_DISPATCH_TIMEOUT_MS;
 
 /**
+ * What each machine on a relayed call leaves the one waiting on it (#15699):
+ * room for its answer to cross the link before the waiting side gives up. It
+ * is never extra time to decide.
+ */
+export const MCP_REMOTE_CONFIRM_MARGIN_MS = 10_000;
+
+/**
+ * How long one machine waits on another's dispatch or question that may raise
+ * a confirmation there (#15699): a whole confirmation, then the trip back. The
+ * asked machine is told, and holds its dialog inside it, so a call that never
+ * asks still ends at the plain deadline it always had.
+ */
+export const MCP_REMOTE_DISPATCH_TIMEOUT_MS = MCP_CONFIRM_ASK_MAX_MS + MCP_REMOTE_CONFIRM_MARGIN_MS;
+
+/**
  * The longest a confirm-gated tool call can stay open end to end. A call can
  * ask twice: an agent pane's call above its tier is approved first, and some
  * still raise their own dialog after (#12692). Every client timeout Daintree

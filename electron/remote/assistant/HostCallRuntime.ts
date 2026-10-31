@@ -5,6 +5,7 @@ import {
 } from "../../../shared/config/globalAssistant.js";
 import { PROJECT_CHECK_DEFAULT_TIMEOUT_MS } from "../../../shared/types/projectCheck.js";
 import { REPLY_WAIT_DEFAULT_SECONDS } from "../../../shared/types/replyWait.js";
+import { MCP_REMOTE_DISPATCH_TIMEOUT_MS } from "../../../shared/config/mcpConfirmWindow.js";
 import {
   HOST_LIST_PROJECT_BYTES_MAX,
   type HostCallArgs,
@@ -606,10 +607,16 @@ const LOCAL_REFUSAL_DETAILS: Partial<
   },
 };
 
-/** Least a relayed call is given: a dispatch, a confirmation the person may take, and the trip. */
-const RELAY_MIN_RUN_MS = 90_000;
 /** Room past what a tool asks for, for its own dispatch and its answer to come back. */
 const RELAY_RUN_MARGIN_MS = 30_000;
+/**
+ * Least a relayed project call is given (#15699): the host's wait on a whole
+ * confirmation here, from queueing to a full decision window once it is on
+ * screen, then the room past it. The host's own waits end inside it.
+ */
+const RELAY_MIN_RUN_MS = MCP_REMOTE_DISPATCH_TIMEOUT_MS + RELAY_RUN_MARGIN_MS;
+/** Least a throwaway call is given: it never asks anyone, so a dispatch and the trip. */
+const THROWAWAY_MIN_RUN_MS = 90_000;
 /** How much longer than the host's own deadline the Shell waits for the answer. */
 const RELAY_ANSWER_GRACE_MS = 15_000;
 
@@ -618,7 +625,11 @@ const RELAY_ANSWER_GRACE_MS = 15_000;
  * call's own arguments ask for, so a long check or a held reply isn't cut off
  * and reported as lost.
  */
-export function relayRunMs(tool: string, args: Record<string, unknown>): number {
+export function relayRunMs(
+  tool: string,
+  args: Record<string, unknown>,
+  minMs: number = RELAY_MIN_RUN_MS
+): number {
   let wanted = 0;
   const timeoutMs = args.timeoutMs;
   if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0) {
@@ -633,7 +644,7 @@ export function relayRunMs(tool: string, args: Record<string, unknown>): number 
         : REPLY_WAIT_DEFAULT_SECONDS;
     wanted = Math.max(wanted, seconds * 1000);
   }
-  return Math.min(MAX_RELAY_RUN_MS, Math.max(RELAY_MIN_RUN_MS, wanted + RELAY_RUN_MARGIN_MS));
+  return Math.min(MAX_RELAY_RUN_MS, Math.max(minMs, wanted + RELAY_RUN_MARGIN_MS));
 }
 
 function codeOf(error: unknown): string | null {
@@ -1625,7 +1636,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         return { ...this.outcomeWith("opted_out", CONTROL_OFF_DETAIL), ...unsent };
       }
     }
-    const runMs = relayRunMs(args.tool, parsed.data.args);
+    const runMs = relayRunMs(args.tool, parsed.data.args, THROWAWAY_MIN_RUN_MS);
     const payload: ThrowawayCallPayload = {
       helpSessionId,
       tier: context.tier,
