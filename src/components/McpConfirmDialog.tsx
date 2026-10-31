@@ -197,41 +197,44 @@ export function McpConfirmDialog() {
     return () => document.removeEventListener("visibilitychange", observe);
   }, [currentRequestId, markShown]);
 
-  // The request a pointer press began on (#15700). The confirm button stays the
-  // same element when an expiry brings up the next request, so a press held
-  // through that and its cooldown would release onto a question it never began
-  // on. A key press clears it: keyboard activation starts on what is current.
+  // The request the press behind a click began on (#15700). The confirm button
+  // stays the same element when an expiry brings up the next request, so a
+  // press held through that and its cooldown would release onto a question it
+  // never began on. Each click takes over its own press and nothing else, so a
+  // click with no press (an assistive "press") and a key press start on what is
+  // current.
   const pressedForRef = useRef<string | null>(null);
+  const clickPressedForRef = useRef<string | null>(null);
   const hasRequest = currentRequestId !== null;
   useEffect(() => {
     if (!hasRequest) return;
     const onPointerDown = () => {
       pressedForRef.current = useMcpConfirmStore.getState().current?.requestId ?? null;
     };
-    const onKeyDown = () => {
+    const onPointerCancel = () => {
       pressedForRef.current = null;
     };
+    const onClick = () => {
+      clickPressedForRef.current = pressedForRef.current;
+      pressedForRef.current = null;
+    };
+    const onKeyDown = () => {
+      pressedForRef.current = null;
+      clickPressedForRef.current = null;
+    };
     document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("pointercancel", onPointerCancel, true);
+    document.addEventListener("click", onClick, true);
     document.addEventListener("keydown", onKeyDown, true);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("pointercancel", onPointerCancel, true);
+      document.removeEventListener("click", onClick, true);
       document.removeEventListener("keydown", onKeyDown, true);
       pressedForRef.current = null;
+      clickPressedForRef.current = null;
     };
   }, [hasRequest]);
-
-  // A request brought up in place of one that expired says so once, through
-  // the announcer rather than a live region (#15700): two in a row can say the
-  // same words, and a dialog reopened from beside the requester mounts with
-  // them already there.
-  const promotedByExpiry =
-    current?.followsExpired !== undefined && !current.expired
-      ? `${followsExpiredText(current.followsExpired)}. Now asking: ${confirmTitle(current)}`
-      : null;
-  useEffect(() => {
-    if (promotedByExpiry === null) return;
-    useAnnouncerStore.getState().announce(promotedByExpiry, "polite");
-  }, [currentRequestId, promotedByExpiry]);
 
   // Which rows of a selectable confirmation are still checked (#12123). Every
   // target starts checked: these are the exact finite ids the caller already
@@ -263,6 +266,19 @@ export function McpConfirmDialog() {
   // that settles meanwhile can't leave the next one hidden.
   const [inspectingId, setInspectingId] = useState<string | null>(null);
   const inspecting = inspectingId !== null && inspectingId === currentRequestId;
+
+  // A request brought up in place of one that expired says so through the
+  // announcer rather than a live region (#15700): two in a row can say the same
+  // words, and a dialog reopened from beside the requester mounts with them
+  // already there. Said again each time it comes back into view.
+  const promotedByExpiry =
+    current?.followsExpired !== undefined && !current.expired && !inspecting
+      ? `${followsExpiredText(current.followsExpired)}. Now asking: ${confirmTitle(current)}`
+      : null;
+  useEffect(() => {
+    if (promotedByExpiry === null) return;
+    useAnnouncerStore.getState().announce(promotedByExpiry, "polite");
+  }, [currentRequestId, promotedByExpiry]);
   // Where to go once the dialog has finished closing. Not before: the close
   // hands focus back to wherever it was when the dialog opened, which would
   // pull it straight out of the pane the user asked to see.
@@ -411,7 +427,7 @@ export function McpConfirmDialog() {
     cancelLabel: expired ? "Close" : "Cancel",
     onConfirm: () => {
       if (expired) return;
-      const pressedFor = pressedForRef.current;
+      const pressedFor = clickPressedForRef.current;
       if (pressedFor !== null && pressedFor !== current.requestId) return;
       resolveOnce(
         current.requestId,

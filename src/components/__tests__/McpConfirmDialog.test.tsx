@@ -631,6 +631,34 @@ describe("McpConfirmDialog", () => {
       }
     });
 
+    it("lets a click with no press of its own approve after a finished press on an earlier request (#15700)", async () => {
+      vi.useFakeTimers();
+      try {
+        void enqueue({ requestId: "req-expiring", actionTitle: "Push", danger: "safe" });
+        const next = enqueue({ requestId: "req-next", actionTitle: "Push", danger: "safe" });
+        render(<McpConfirmDialog />);
+        const description = screen.getByText("Permanently delete a worktree.");
+        fireEvent.pointerDown(description);
+        fireEvent.click(description);
+
+        act(() => {
+          useMcpConfirmStore.getState().expire("req-expiring");
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1_300);
+        });
+        // An assistive "press": a click with no pointer behind it.
+        act(() => {
+          screen.getByRole("button", { name: "Push" }).click();
+        });
+
+        expect(await next).toEqual({ decision: "approved" });
+      } finally {
+        vi.runOnlyPendingTimers();
+        vi.useRealTimers();
+      }
+    });
+
     it("never answers the request brought up in place of one that expired with a click meant for it (#15700)", async () => {
       vi.useFakeTimers();
       try {
@@ -1269,6 +1297,32 @@ describe("McpConfirmDialog", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it("says again that the previous request expired when the next comes back into view (#15700)", async () => {
+      void enqueue({ requestId: "req-expiring", danger: "safe", actionTitle: "Push" });
+      void enqueue({ requestId: "req-next", danger: "safe", actionTitle: "Pull", requester: PANE });
+      render(<McpConfirmDialog />);
+      act(() => {
+        useMcpConfirmStore.getState().expire("req-expiring");
+      });
+      const promoted = useAnnouncerStore.getState().polite;
+      expect(promoted?.msg).toContain("The previous request, 'Push', timed out");
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Show pane" }));
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(useAnnouncerStore.getState().polite).toBe(promoted);
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+      });
+
+      const reopened = useAnnouncerStore.getState().polite;
+      expect(reopened?.msg).toBe(promoted?.msg);
+      expect(reopened?.id).toBeGreaterThan(promoted?.id ?? Infinity);
     });
 
     it("keeps the request's clock running while it is stepped aside", async () => {
