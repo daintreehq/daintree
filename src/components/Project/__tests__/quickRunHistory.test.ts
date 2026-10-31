@@ -65,6 +65,12 @@ describe("appendHistory", () => {
     ]);
   });
 
+  it("treats a stored entry with space around it as the same command", () => {
+    const next = appendHistory([item("ls"), item(" npm run test ")], "npm run test", 9);
+
+    expect(next.map((h) => h.command)).toEqual(["npm run test", "ls"]);
+  });
+
   it("treats the same text with space around it as the same command", () => {
     const next = appendHistory([item("ls"), item("npm run test")], "  npm run test\n", 9);
 

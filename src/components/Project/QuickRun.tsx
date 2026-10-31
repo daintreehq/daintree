@@ -379,8 +379,10 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
     // match is lit where it sits, under its own band; anything else gets the
     // typed text itself as a leading row rather than left implied by an unlit
     // list.
+    // A row's own text may carry surrounding space (a pin saved that way), which
+    // Tab copies into the field; it is still the row that was typed.
     const typed = input.trim();
-    if (matches.some((opt) => opt.value === typed)) return matches;
+    if (matches.some((opt) => opt.value.trim() === typed)) return matches;
     return [{ label: typed, value: typed, type: "typed" as const }, ...matches];
   }, [input, allDetectedRunners, history, settings]);
 
@@ -485,7 +487,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
       ? searching
         ? Math.max(
             0,
-            suggestions.findIndex((s) => s.value === typedCommand)
+            suggestions.findIndex((s) => s.value.trim() === typedCommand)
           )
         : -1
       : focusedSuggestionIndex;
@@ -512,10 +514,10 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   // with the list shut, the text in the field. Text that is exactly a pinned
   // command or a script is still that command with the list shut, so a pinned
   // command keeps its own output and restart choice after Escape. Every
-  // comparison of a row with the field is literal, with the list open or shut:
-  // `'$SHELL'` is not the command `$SHELL` is.
+  // comparison of a row with the field is literal apart from surrounding space,
+  // with the list open or shut: `'$SHELL'` is not the command `$SHELL` is.
   const exactMatch = searching
-    ? suggestions.find((s) => s.type !== "typed" && s.value === typedCommand)
+    ? suggestions.find((s) => s.type !== "typed" && s.value.trim() === typedCommand)
     : undefined;
   const runTarget: SuggestionItem | undefined =
     highlighted ??
@@ -549,7 +551,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   // Tab completes: the lit command goes into the field to be read in full or
   // edited, without running. Only while it differs from what is there, so a
   // second Tab moves focus on as usual rather than trapping it.
-  const canComplete = highlighted != null && highlighted.value !== typedCommand;
+  const canComplete = highlighted != null && highlighted.value.trim() !== typedCommand;
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // Mid-composition every key is the IME's: Enter commits the candidate rather
