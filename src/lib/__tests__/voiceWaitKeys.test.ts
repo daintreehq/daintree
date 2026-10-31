@@ -325,6 +325,20 @@ describe("voiceWaitKeys", () => {
         expect(seen).toEqual([NONE, BOTH]);
       } finally {
         stop();
+        window.dispatchEvent(new FocusEvent("focus"));
+      }
+    });
+
+    // A spoken "send it" can start a wait with the keyboard in another app.
+    it("knows the window lost the keyboard before anyone observed", () => {
+      try {
+        window.dispatchEvent(new FocusEvent("blur"));
+        const owner = claim();
+        const stop = observeVoiceWaitKeysReach(() => {});
+        expect(voiceWaitKeysReach(owner)).toEqual(NONE);
+        stop();
+      } finally {
+        window.dispatchEvent(new FocusEvent("focus"));
       }
     });
 
@@ -364,12 +378,12 @@ describe("voiceWaitKeys", () => {
         const first = observeVoiceWaitKeysReach(() => {});
         const second = observeVoiceWaitKeysReach(() => {});
         const types = (calls: unknown[][]) => calls.map(([type]) => type).sort();
-        expect(types(add.mock.calls)).toEqual(["blur", "focus", "focusin", "focusout"]);
+        expect(types(add.mock.calls)).toEqual(["focusin", "focusout"]);
 
         first();
         expect(remove).not.toHaveBeenCalled();
         second();
-        expect(types(remove.mock.calls)).toEqual(["blur", "focus", "focusin", "focusout"]);
+        expect(types(remove.mock.calls)).toEqual(["focusin", "focusout"]);
         for (const call of add.mock.calls) expect(remove).toHaveBeenCalledWith(...call);
       } finally {
         add.mockRestore();

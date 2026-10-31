@@ -106,7 +106,8 @@ const REACHES_BOTH: VoiceWaitKeysReach = { enter: true, escape: true, page: true
 const REACHES_ESCAPE: VoiceWaitKeysReach = { enter: false, escape: true, page: true };
 
 // Whether this page's window holds the keyboard, which another app, or another
-// view in the window (a portal tab), takes from it. Read while observed.
+// view in the window (a portal tab), takes from it. Followed from load, so a
+// wait that starts while it doesn't (a spoken "send it") knows.
 let windowFocused = true;
 
 /**
@@ -150,6 +151,12 @@ function onWindowFocus(event: FocusEvent): void {
   notifyReach();
 }
 
+// Not capture: only the window's own focus and blur, which don't bubble.
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("focus", onWindowFocus);
+  window.addEventListener("blur", onWindowFocus);
+}
+
 /**
  * Calls `listener` whenever where the wait keys go may have changed: the
  * keyboard moved, within the page or off it, or a waiting composer claimed or
@@ -157,22 +164,14 @@ function onWindowFocus(event: FocusEvent): void {
  */
 export function observeVoiceWaitKeysReach(listener: () => void): () => void {
   if (reachListeners.size === 0) {
-    // Taken to hold the keyboard as the first wait starts, which is from a key
-    // press or a click here but for a spoken "send it"; its blur says otherwise.
-    windowFocused = true;
     window.addEventListener("focusin", notifyReach, true);
     window.addEventListener("focusout", onFocusOut, true);
-    // Not capture: only the window's own focus and blur, which don't bubble.
-    window.addEventListener("focus", onWindowFocus);
-    window.addEventListener("blur", onWindowFocus);
   }
   reachListeners.add(listener);
   return () => {
     if (!reachListeners.delete(listener) || reachListeners.size > 0) return;
     window.removeEventListener("focusin", notifyReach, true);
     window.removeEventListener("focusout", onFocusOut, true);
-    window.removeEventListener("focus", onWindowFocus);
-    window.removeEventListener("blur", onWindowFocus);
   };
 }
 

@@ -1073,6 +1073,44 @@ describe("HybridInputBar stop-and-send pressed again while its send waits (#1570
     }
   });
 
+  it("names no key while a guest page or another app holds the keyboard, whose keys never reach it", async () => {
+    const onSend = vi.fn();
+    const { pending, pane } = await sendWithTheKey(onSend, true);
+    const named = `${keyText()} to send as dictated`;
+    const guest = document.createElement("iframe");
+    document.body.appendChild(guest);
+    panes.push(guest);
+    try {
+      act(() => {
+        window.dispatchEvent(new FocusEvent("blur"));
+      });
+      expect(caption()).toBe("Polishing…");
+      expect(status()).toBe("Polishing dictation.");
+
+      act(() => {
+        window.dispatchEvent(new FocusEvent("focus"));
+      });
+      expect(caption()).toContain(named);
+
+      // Focus entering a guest page leaves the page with a focusout only.
+      await act(async () => {
+        guest.focus();
+      });
+      expect(document.activeElement).toBe(guest);
+      expect(caption()).toBe("Polishing…");
+
+      act(() => {
+        pane.focus();
+      });
+      expect(caption()).toContain(named);
+    } finally {
+      window.dispatchEvent(new FocusEvent("focus"));
+      await act(async () => {
+        pending.resolve({ action: "no_change", correctedText: "hello wrld" });
+      });
+    }
+  });
+
   // #15703: a dictation started in its draft reopens it, and the key no longer sends it.
   it("lets go of the key once a dictation in its draft reopens the send", async () => {
     const onSend = vi.fn();
