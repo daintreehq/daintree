@@ -469,4 +469,16 @@ describe("sendToOneVisibleRenderer", () => {
     expect(a.view.send).toHaveBeenCalledTimes(1);
     expect(sendCount(incoming, restoring)).toBe(0);
   });
+  it("leaves a background restore out when the only shown view has crashed", () => {
+    const a = openWindow({ focused: true });
+    a.view.crashed = true;
+    const restoring = backgroundRestore(a.win);
+    const remote = remoteEndpoint(401);
+    getEndpointRegistry().add(remote);
+
+    expect(sendToOneVisibleRenderer(channel, 1)).toBe(false);
+
+    expect(sendCount(a.view, restoring)).toBe(0);
+    expect(remote.send).toHaveBeenCalledTimes(1);
+  });
 });

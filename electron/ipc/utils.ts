@@ -763,7 +763,8 @@ function singleTargetCandidates(channel: string, args: unknown[]): WebContents[]
     if (shown) shownIds.add(wc.id);
     if (isSingleTargetEligible(wc, channel, args)) pool.push(wc);
   };
-  for (const wc of getShownAppWebContents()) consider(wc, true);
+  const shown = getShownAppWebContents();
+  for (const wc of shown) consider(wc, true);
   // A cold switch points the window at the incoming view before it loads,
   // while the outgoing one stays on screen, hydrated and listening. Other
   // uncached views are left out: a background restore is never attached, and
@@ -774,8 +775,10 @@ function singleTargetCandidates(channel: string, args: unknown[]): WebContents[]
     if (!wc.isDestroyed() && !seen.has(wc.id) && isOutgoingBridge(wc)) consider(wc, false);
   }
   // No window has a registered shown view (early boot, or a window that never
-  // registered one): any uncached renderer, still only one of them.
-  if (pool.length === 0) {
+  // registered one): any uncached renderer, still only one of them. Not when a
+  // shown view exists but can't play (crashed): that would hand the sound to a
+  // background restore.
+  if (shown.length === 0 && pool.length === 0) {
     for (const wc of all) consider(wc, false);
   }
   if (pool.length <= 1) return pool;
