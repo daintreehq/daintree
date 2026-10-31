@@ -1,4 +1,7 @@
-import { PANEL_LIMIT_DECLINED_REASON } from "@/services/actions/definitions/panelLimitError";
+import {
+  PANEL_LIMIT_CONFIRM_EXPIRED_REASON,
+  PANEL_LIMIT_DECLINED_REASON,
+} from "@/services/actions/definitions/panelLimitError";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -1940,6 +1943,83 @@ describe("recipeStore", () => {
       } finally {
         usePanelLimitStore.setState({ requestConfirmation: previousRequestConfirmation });
       }
+    });
+
+    describe("panel-limit confirm behind an agent dispatch deadline (#15648)", () => {
+      afterEach(() => {
+        usePanelLimitStore.getState().resolveConfirmation(false);
+        vi.useRealTimers();
+      });
+
+      function seedAmbientPanels(count: number) {
+        const ids = Array.from({ length: count }, (_, i) => `ambient-${i}`);
+        panelStoreState.panelIds = ids;
+        panelStoreState.panelsById = Object.fromEntries(ids.map((id) => [id, { location: "grid" }]));
+      }
+
+      function seedRecipe() {
+        let callIndex = 0;
+        addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));
+        useRecipeStore.setState({
+          recipes: [tenTerminalRecipe()],
+          isLoading: false,
+          currentProjectId: "project-1",
+        });
+      }
+
+      it("starts nothing when the person says yes after the dispatch deadline passed", async () => {
+        vi.useFakeTimers();
+        seedAmbientPanels(18);
+        seedRecipe();
+
+        const run = useRecipeStore
+          .getState()
+          .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1", undefined, {
+            dispatchSource: "agent",
+            dispatchDeadlineAt: Date.now() + 30_000,
+          });
+        await vi.advanceTimersByTimeAsync(0);
+        const pending = usePanelLimitStore.getState().pendingConfirm;
+        expect(pending?.request).toMatchObject({ currentCount: 18, allowedCount: 3 });
+
+        await vi.advanceTimersByTimeAsync(30_000);
+        // The late click: on the dialog as it was shown, and through the store.
+        pending!.resolve(true);
+        usePanelLimitStore.getState().resolveConfirmation(true);
+        const results = await run;
+
+        expect(addTerminalMock).not.toHaveBeenCalled();
+        expect(beginSpawnBatchMock).not.toHaveBeenCalled();
+        expect(results.spawned).toHaveLength(0);
+        expect(
+          results.failed.filter((f) => f.error === PANEL_LIMIT_CONFIRM_EXPIRED_REASON)
+        ).toHaveLength(3);
+        expect(usePanelLimitStore.getState().pendingConfirm).toBeNull();
+      });
+
+      it("keeps waiting on the person for a user-started run, however long they take", async () => {
+        vi.useFakeTimers();
+        seedAmbientPanels(18);
+        seedRecipe();
+
+        const run = useRecipeStore
+          .getState()
+          .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(usePanelLimitStore.getState().pendingConfirm?.request).toMatchObject({
+          currentCount: 18,
+          allowedCount: 10,
+        });
+
+        await vi.advanceTimersByTimeAsync(10 * 60_000);
+        expect(usePanelLimitStore.getState().pendingConfirm).not.toBeNull();
+        usePanelLimitStore.getState().resolveConfirmation(true);
+        const results = await run;
+
+        expect(addTerminalMock).toHaveBeenCalledTimes(10);
+        expect(results.spawned).toHaveLength(10);
+        expect(results.failed).toHaveLength(0);
+      });
     });
 
     it("spawns all terminals for an agent run at exactly the cap", async () => {

@@ -9,7 +9,10 @@ import { useToolbarPreferencesStore } from "./toolbarPreferencesStore";
 import { launcherItemToolbarButtonId } from "@shared/types/toolbar";
 import { recipeToolbarSourceId } from "@/utils/recipeScope";
 import { preflightSpawnBatchLimit } from "./panelLimitStore";
-import { PANEL_LIMIT_DECLINED_REASON } from "@/services/actions/definitions/panelLimitError";
+import {
+  PANEL_LIMIT_CONFIRM_EXPIRED_REASON,
+  PANEL_LIMIT_DECLINED_REASON,
+} from "@/services/actions/definitions/panelLimitError";
 import { countPanelLimitUsage } from "./slices/panelRegistry/panelCount";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { isMcpSpawnFocusSuppressed } from "./mcpSpawnFocusGuard";
@@ -151,7 +154,22 @@ export interface RecipeRunOptions {
    * shadowing winner, and not content a plugin reload swapped in since.
    */
   expectedRecipe?: { id: string; terminalsDigest: string };
+  /**
+   * When main gives up on the agent dispatch behind this run, forwarded from
+   * `ActionContext.dispatchDeadlineAt` (#15648). Past it the caller has been
+   * told the call failed, so the run starts nothing more, and a panel-limit
+   * confirm it raises closes in time to say so. Absent for runs a person
+   * started, which wait on the person as long as they take.
+   */
+  dispatchDeadlineAt?: number;
 }
+
+/**
+ * The failure reason for a step an agent's run never started because the
+ * dispatch behind it had already timed out (#15648).
+ */
+export const RECIPE_DISPATCH_EXPIRED_REASON =
+  "The request timed out before this terminal could start";
 
 /** How long a panel step waits for a worktree created moments ago to reach this view. */
 const WORKTREE_ARRIVAL_WAIT_MS = 5_000;
@@ -188,7 +206,8 @@ async function waitForWorktreeInView(worktreeId: string): Promise<void> {
 async function openRecipePluginPanel(
   recipe: TerminalRecipe,
   terminal: RecipeTerminal,
-  worktreeId: string | undefined
+  worktreeId: string | undefined,
+  dispatchExpired: () => boolean
 ): Promise<string> {
   const kind = terminal.panelKindId;
   const config = kind !== undefined ? getPanelKindConfig(kind) : undefined;
@@ -206,6 +225,8 @@ async function openRecipePluginPanel(
   // Loaded on demand: the action layer imports half the renderer, and only a
   // plugin recipe with a panel step needs it.
   const { actionService } = await import("@/services/ActionService");
+  // Both waits above can outlast the dispatch an agent is waiting on.
+  if (dispatchExpired()) throw new Error(RECIPE_DISPATCH_EXPIRED_REASON);
   const result = await actionService.dispatch<{ panelId: string }>(
     "panel.openPluginPanel",
     {
@@ -1175,6 +1196,11 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // strip focus from user-initiated recipe runs (dock menu, NewWorktreeDialog,
     // WorktreeCard); MCP-initiated runs already get "preserve" via panelStore.
     const focusPolicy = options?.focusPolicy;
+    // Checked before anything starts: past it, main has told the agent the
+    // call failed, so a panel opened now is one nobody will ever claim (#15648).
+    const dispatchDeadlineAt = options?.dispatchDeadlineAt;
+    const dispatchExpired = () =>
+      dispatchDeadlineAt !== undefined && Date.now() >= dispatchDeadlineAt;
 
     const results: RecipeSpawnResults = { spawned: [], failed: [] };
 
@@ -1211,10 +1237,8 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // path", which is false: preflightSpawnBatchLimit prompts on
     // `currentCount + allowed > DEFAULT_CONFIRMATION_LIMIT`, and `currentCount`
     // is the workspace's ambient panel count, which no per-recipe cap bounds.
-    // 18 panels already open plus a capped 3 is 21, and that prompts today —
-    // with no timeout on the dialog and a 30s deadline on the dispatch behind
-    // it. Left alone deliberately: it is a separate defect from this cap, and
-    // widening the approved ceiling only changes how often it is reached.
+    // 18 panels already open plus a capped 3 is 21, and that prompts. The
+    // prompt is bounded by the dispatch's own deadline instead (#15648).
     const approval = options?.hostApprovedRecipeRun;
     const approvalCovers = approval !== undefined && approvalCoversRecipe(approval, recipe);
     const agentTerminalCap = approval
@@ -1241,8 +1265,17 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // panel list, which a batch's deferred append would leave stale (#13797).
     const panelIndices = validIndices.filter((i) => recipe.terminals[i]!.type === "plugin-panel");
     for (const index of panelIndices) {
+      if (dispatchExpired()) {
+        results.failed.push({ index, error: RECIPE_DISPATCH_EXPIRED_REASON });
+        continue;
+      }
       try {
-        const panelId = await openRecipePluginPanel(recipe, recipe.terminals[index]!, worktreeId);
+        const panelId = await openRecipePluginPanel(
+          recipe,
+          recipe.terminals[index]!,
+          worktreeId,
+          dispatchExpired
+        );
         results.spawned.push({ index, terminalId: panelId });
       } catch (error) {
         results.failed.push({ index, error: formatErrorMessage(error, "Failed to open panel") });
@@ -1276,17 +1309,33 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // and the snapshot taken before them would let the batch overshoot it. The
     // live count also covers overlapping runs and adds still in flight, and the
     // granted slots stay reserved until this run's panels are visible (#15607).
-    const { allowed, declined, grant } = await preflightSpawnBatchLimit(
-      () => countPanelLimitUsage(usePanelStore.getState()),
-      validIndices.length,
-      { source: { kind: "recipe", name: recipe.name }, worktreeId }
-    );
+    // The waits above spend the agent dispatch's budget too, so a run already
+    // past it asks nobody anything; slots granted to one that lapsed anyway go
+    // back with the release below.
+    const gate = dispatchExpired()
+      ? null
+      : await preflightSpawnBatchLimit(
+          () => countPanelLimitUsage(usePanelStore.getState()),
+          validIndices.length,
+          {
+            source: { kind: "recipe", name: recipe.name },
+            worktreeId,
+            deadlineAt: dispatchDeadlineAt,
+          }
+        );
+    const grant = gate?.grant ?? null;
+    const lapsed = gate === null || (gate.allowed > 0 && dispatchExpired());
+    const allowed = lapsed ? 0 : (gate?.allowed ?? 0);
+    const refusal = lapsed
+      ? RECIPE_DISPATCH_EXPIRED_REASON
+      : gate?.expired
+        ? PANEL_LIMIT_CONFIRM_EXPIRED_REASON
+        : gate?.declined
+          ? PANEL_LIMIT_DECLINED_REASON
+          : "Panel limit reached";
     const spawnIndices = validIndices.slice(0, allowed);
     for (const index of validIndices.slice(allowed)) {
-      results.failed.push({
-        index,
-        error: declined ? PANEL_LIMIT_DECLINED_REASON : "Panel limit reached",
-      });
+      results.failed.push({ index, error: refusal });
     }
 
     // Capture focus intent synchronously before the batch. The batched
@@ -1383,10 +1432,10 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               launchCliDetail = getCurrentLaunchCliDetail(agentId, true);
               launchCliDetails.set(agentId, launchCliDetail);
             }
-            const baseCommand = resolveAgentLaunchBaseCommand(
-              agentConfig?.command ?? "",
-              await launchCliDetail
-            );
+            const cliDetail = await launchCliDetail;
+            // That wait can outlast the dispatch an agent is waiting on.
+            if (dispatchExpired()) throw new Error(RECIPE_DISPATCH_EXPIRED_REASON);
+            const baseCommand = resolveAgentLaunchBaseCommand(agentConfig?.command ?? "", cliDetail);
             const resolvedContext: RecipeContext = { ...context, worktreePath };
             const step = resolveRecipeAgentStep(recipe, terminal, agentId, resolvedContext);
             if (!step.ok) throw new Error(step.reason);
