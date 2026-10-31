@@ -19,10 +19,11 @@ const CONNECTION_PATTERNS: RegExp[] = [
   /\bAPI Error:\s*(?:5\d\d|Repeated\s+5\d\d|Repeated\s+529\s+Overloaded|Overloaded)/i,
   /\b(?:502|503|504)\s+(?:Bad Gateway|Service Unavailable|Gateway Timeout)/i,
   // gRPC status names only count where a CLI prints them as an error ("Error:
-  // 14 UNAVAILABLE: ...", a JSON error body), not as bare words in source,
-  // enums or test output.
+  // 14 UNAVAILABLE: ...", an error body, possibly JSON-escaped inside another
+  // one), not as bare words in source, enums, fixtures or test output.
   /\b\w*(?:Error|Exception|error):\s*(?:\d{1,2}\s+)?(?:INTERNAL|UNAVAILABLE)\b(?![\w.])/,
-  /"status"\s*:\s*"(?:INTERNAL|UNAVAILABLE)"/,
+  /\\?"error\\?"\s*:\s*\{[\s\S]{0,400}?\\?"status\\?"\s*:\s*\\?"(?:INTERNAL|UNAVAILABLE)\\?"/,
+  /\b\w*(?:Error|Exception)\b[^\n]*\\?"status\\?"\s*:\s*\\?"(?:INTERNAL|UNAVAILABLE)\\?"/,
 
   // Connection/DNS/timeout
   /\bECONNREFUSED|\bENOTFOUND|\bETIMEDOUT|\bECONNRESET/,
@@ -56,7 +57,7 @@ const RATE_LIMIT_PATTERNS: RegExp[] = [
   /\bAPI Error:\s*Rate limit/i,
   // A bare 429 is a line number or a count in ordinary output; only an error
   // or status context makes it a rate limit.
-  /\(429\)/,
+  /\b(?:rejected|error|status|response)\b[^\n|]{0,30}\(429\)/i,
   /\b(?:Error|error):?\s*429\b/,
   /\b(?:status|code)["']?\s*[:=]\s*429\b/i,
   /\brate[\s-]?limit(?:ed|ing)?\b/i,

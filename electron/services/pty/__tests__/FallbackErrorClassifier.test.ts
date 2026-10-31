@@ -54,6 +54,8 @@ cases("connection: gRPC status names in an error context", "connection", [
   "Error: 13 INTERNAL: Received RST_STREAM",
   'ApiError: {"error":{"code":503,"message":"The model is overloaded.","status":"UNAVAILABLE"}}',
   '{"error": {"code": 500, "status": "INTERNAL"}}',
+  'ApiError: {"error":{"message":"{\\"error\\":{\\"code\\":500,\\"status\\":\\"INTERNAL\\"}}","code":500,"status":"Internal Server Error"}}',
+  'Error: request failed {"status":"UNAVAILABLE"}',
 ]);
 
 cases("auth: Claude patterns", "auth", [
@@ -107,7 +109,9 @@ cases(
     "Handlers return HTTP 429 when the bucket is empty.",
     "src/foo.ts line 429",
     "enum Code { OK = 0, INTERNAL = 13, UNAVAILABLE = 14 }",
+    '```json\n{"status":"UNAVAILABLE"}\n```',
     "```ts\nexport const INTERNAL = 13;\nif (status === Status.UNAVAILABLE) retry();\n```",
+    " Tests  1 failed | 428 passed (429)",
     " Test Files  1 failed | 12 passed (13)\n      Tests  1 failed | 429 passed (430)\n   Duration  4.2s",
   ],
   { exitCode: 1 }
@@ -144,6 +148,11 @@ describe("classifyExitOutput: short-circuits", () => {
 
   it("keeps a real 5xx a connection error when an unrelated 429 appears elsewhere", () => {
     const output = "API Error: 503 Service Unavailable\nsrc/foo.ts line 429\n";
+    expect(classifyExitOutput({ recentOutput: output, exitCode: 1 })).toBe("connection");
+  });
+
+  it("keeps a real 5xx a connection error when a test summary ends in (429)", () => {
+    const output = "API Error: 503 Service Unavailable\n Tests  1 failed | 428 passed (429)\n";
     expect(classifyExitOutput({ recentOutput: output, exitCode: 1 })).toBe("connection");
   });
 
