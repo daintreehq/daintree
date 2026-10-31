@@ -802,8 +802,8 @@ export const MCP_ASSISTANT_SERVER_INSTRUCTIONS =
  * outcome, and for `worktree.deleteOwned` that skips the duplicate's own
  * ownership check and process guard (#15729). Each delete call goes through
  * its own checks and confirmation policy and returns its own result or
- * refusal; a concurrent duplicate costs a second dialog, or a second dispatch
- * when the call is pre-authorized.
+ * refusal, so a concurrent duplicate that passes its checks raises a second
+ * dialog, or dispatches a second time when pre-authorized.
  *
  * The forge writes that used to sit here left MCP with the core/full split, so
  * no replay of them can arrive.

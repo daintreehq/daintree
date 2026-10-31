@@ -587,6 +587,9 @@ describe("worktree.delete redispatch (#15791)", () => {
     deps.sessionStore.sessionOriginMap.set(sessionId, "help");
     return createSessionServer(sessionId, deps);
   };
+  const textAnswer = (payload: string) => ({
+    content: [{ type: "text", text: JSON.stringify(payload) }],
+  });
 
   it("dispatches a repeated identical delete and returns its own result", async () => {
     const dispatchAction = vi
@@ -599,8 +602,8 @@ describe("worktree.delete redispatch (#15791)", () => {
     const second = await callTool(server, { name: "worktree.delete", arguments: deleteArgs });
 
     expect(dispatchAction).toHaveBeenCalledTimes(2);
-    // The same answer shape, carrying the second dispatch's payload.
-    expect(JSON.stringify(second)).toBe(JSON.stringify(first).replace('"first', '"second'));
+    expect(first).toEqual(textAnswer("first"));
+    expect(second).toEqual(textAnswer("second"));
   });
 
   it("answers a repeat against a worktree that is already gone with the delete's own error", async () => {
@@ -641,7 +644,8 @@ describe("worktree.delete redispatch (#15791)", () => {
     const second = await callTool(server, { name: "worktree.delete", arguments: args });
 
     expect(dispatchAction).toHaveBeenCalledTimes(2);
-    expect(JSON.stringify(second)).toBe(JSON.stringify(first).replace('"first', '"second'));
+    expect(first).toEqual(textAnswer("first"));
+    expect(second).toEqual(textAnswer("second"));
   });
 
   it("dispatches concurrent identical deletes independently instead of sharing one", async () => {
