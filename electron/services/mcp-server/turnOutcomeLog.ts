@@ -18,8 +18,8 @@ export interface TurnOutcomeLogStore {
   write(records: AssistantTurnRecord[], options?: { sync?: boolean }): void;
 }
 
-// Persists the ring in the dedicated audit-logs store; see the matching note
-// in auditLog.ts. Config flags stay in config.json.
+// Persists the ring in SQLite `audit_rings`; see the matching note in
+// auditLog.ts. Config flags stay in config.json.
 const defaultLogStore: TurnOutcomeLogStore = {
   read: () => auditRingStore.readAll("mcpTurnOutcomeLog"),
   write: (records, options) =>

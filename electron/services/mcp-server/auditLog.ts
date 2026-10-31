@@ -168,10 +168,10 @@ export interface McpAuditLogStore {
   write(records: McpLogRecord[], options?: { sync?: boolean }): void;
 }
 
-// Persists the ring in the dedicated audit-logs store so settings writes to
-// config.json stay decoupled from audit appends and bootstrap never pays the
-// parse cost of the rings. `auditEnabled` / `auditMaxRecords` stay in
-// config.json (`mcpServer`), read via the injected config closures.
+// Persists the ring in SQLite `audit_rings` so settings writes to config.json
+// stay decoupled from audit appends and bootstrap never pays the parse cost of
+// the rings. `auditEnabled` / `auditMaxRecords` stay in config.json
+// (`mcpServer`), read via the injected config closures.
 const defaultLogStore: McpAuditLogStore = {
   read: () => auditRingStore.readAll("mcpAuditLog"),
   write: (records, options) =>

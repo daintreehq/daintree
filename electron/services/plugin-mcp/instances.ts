@@ -15,9 +15,9 @@ let rateLimiterInstance: PluginMcpRateLimiter | null = null;
  * Plugin-MCP inbound audit log singleton. Config flags are wired to the
  * `pluginMcpAudit` electron-store slice (reading via `?? {}` defends against
  * forward-compat replays where an older schema version omits the slice); the
- * ring itself lives in the audit-logs store since migration023. The spread
- * merge keeps a legacy `pluginMcpAudit.auditLog` carryover intact for
- * installs where the migration deferred (audit-logs store not durable).
+ * ring itself lives in SQLite `audit_rings`. The spread merge keeps a legacy
+ * `pluginMcpAudit.auditLog` carryover intact until the boot import
+ * (legacyAuditRingImport) moves it into SQLite.
  */
 export function getPluginMcpAuditService(): PluginMcpAuditService {
   if (!auditInstance) {
