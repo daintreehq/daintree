@@ -182,6 +182,12 @@ const vadDrainMock = vi.hoisted(() => ({
 
 vi.mock("../../services/voice/openaiVadProcess.js", () => vadDrainMock);
 
+const readerDrainMock = vi.hoisted(() => ({
+  waitForRetiringReaders: vi.fn((_budgetMs: number) => Promise.resolve(0)),
+}));
+
+vi.mock("../../services/canopy/canopyReaderProcess.js", () => readerDrainMock);
+
 const closeTelemetryMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
 vi.mock("../../services/TelemetryService.js", () => ({
@@ -337,6 +343,7 @@ import {
   POST_PTY_TEARDOWN_RESERVE_MS,
   PROJECT_GRACEFUL_KILL_TIMEOUT_MS,
   SHUTDOWN_DEADLINE_MS,
+  CANOPY_READER_DRAIN_BUDGET_MS,
   SHUTDOWN_TAIL_TIMEOUT_MS,
   VAD_DRAIN_BUDGET_MS,
 } from "../shutdownConfig.js";
@@ -377,6 +384,8 @@ describe("registerShutdownHandler", () => {
     quitWarningMock.showQuitWarning.mockResolvedValue(true);
     ccrConfigMock.stopWatching.mockResolvedValue(undefined);
     serviceRefsMock.setInitialState({});
+    // A queued drain a failed test never consumed must not answer for the next one.
+    readerDrainMock.waitForRetiringReaders.mockReset().mockResolvedValue(0);
   });
 
   async function setup(overrides?: Partial<ShutdownDeps>) {
@@ -864,6 +873,156 @@ describe("registerShutdownHandler", () => {
 
         expect(appMock.exit).toHaveBeenCalledWith(0);
         expect(warnSpy).toHaveBeenCalledWith("[MAIN] 1 VAD process(es) still draining at quit");
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+  });
+
+  describe("Canopy reader drain at quit (#15538)", () => {
+    // The chain's lazy imports can outrun vi.waitFor's one-second default under load.
+    const WAIT = { timeout: 5_000 };
+
+    it("waits for the reader Canopy teardown retired before exiting", async () => {
+      const order: string[] = [];
+      let releaseDrain!: () => void;
+      const drained = new Promise<void>((resolve) => {
+        releaseDrain = resolve;
+      });
+      readerDrainMock.waitForRetiringReaders.mockImplementationOnce(async (budgetMs) => {
+        order.push(`reader-wait:${budgetMs}`);
+        await drained;
+        order.push("reader-drained");
+        return 0;
+      });
+      let releaseDispose!: () => void;
+      const disposeHeld = new Promise<void>((resolve) => {
+        releaseDispose = resolve;
+      });
+      dbMaintenanceMock.dispose.mockImplementationOnce(() => {
+        order.push("dbMaintenance.dispose");
+        return disposeHeld;
+      });
+      let markDbClosed!: () => void;
+      const dbClosed = new Promise<void>((resolve) => {
+        markDbClosed = resolve;
+      });
+      closeSharedDbMock.closeSharedDb.mockImplementationOnce(() => {
+        order.push("closeSharedDb");
+        markDbClosed();
+      });
+      const exited = new Promise<void>((resolve) => {
+        appMock.exit.mockImplementationOnce(() => {
+          order.push("exit");
+          resolve();
+        });
+      });
+
+      try {
+        const { beforeQuitCb } = await setup({
+          getCleanupIpcHandlers: vi.fn(() => () => {
+            order.push("cleanupIpc");
+          }),
+        });
+        await beforeQuitCb(makeEvent());
+
+        // The wait must start while a disposal is still holding the chain,
+        // not queue up behind the disposals.
+        await vi.waitFor(() => expect(order).toContain("dbMaintenance.dispose"), WAIT);
+        await vi.waitFor(
+          () => expect(order).toContain(`reader-wait:${CANOPY_READER_DRAIN_BUDGET_MS}`),
+          WAIT
+        );
+        expect(order).not.toContain("closeSharedDb");
+
+        releaseDispose();
+        await dbClosed;
+        // Give an unblocked chain every chance to run on to its telemetry flush.
+        for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+        expect(closeTelemetryMock).not.toHaveBeenCalled();
+        expect(order).not.toContain("exit");
+
+        releaseDrain();
+        await exited;
+        expect(order.indexOf("cleanupIpc")).toBeLessThan(
+          order.indexOf(`reader-wait:${CANOPY_READER_DRAIN_BUDGET_MS}`)
+        );
+        expect(order.slice(-2)).toEqual(["reader-drained", "exit"]);
+      } finally {
+        releaseDispose();
+        releaseDrain();
+      }
+    });
+
+    it("starts the reader wait alongside the VAD drain, not after it", async () => {
+      let releaseVad: (() => void) | undefined;
+      vadDrainMock.waitForRetiringVadProcesses.mockImplementationOnce(
+        () =>
+          new Promise<number>((resolve) => {
+            releaseVad = () => resolve(0);
+          })
+      );
+      let readerWaitStarted = false;
+      readerDrainMock.waitForRetiringReaders.mockImplementationOnce(async () => {
+        readerWaitStarted = true;
+        return 0;
+      });
+      const exited = new Promise<void>((resolve) => {
+        appMock.exit.mockImplementationOnce(() => resolve());
+      });
+
+      try {
+        const { beforeQuitCb } = await setup({});
+        await beforeQuitCb(makeEvent());
+
+        await vi.waitFor(() => expect(releaseVad).toBeDefined(), WAIT);
+        await vi.waitFor(() => expect(readerWaitStarted).toBe(true), WAIT);
+        expect(appMock.exit).not.toHaveBeenCalled();
+        releaseVad?.();
+        await exited;
+      } finally {
+        releaseVad?.();
+      }
+    });
+
+    it("exits cleanly when a reader is still draining at the budget", async () => {
+      readerDrainMock.waitForRetiringReaders.mockResolvedValueOnce(1);
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const exited = new Promise<void>((resolve) => {
+        appMock.exit.mockImplementationOnce(() => resolve());
+      });
+
+      try {
+        const { beforeQuitCb } = await setup({});
+        await beforeQuitCb(makeEvent());
+        await exited;
+
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+        expect(warnSpy).toHaveBeenCalledWith(
+          "[MAIN] 1 Canopy reader process(es) still draining at quit"
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("exits cleanly when the reader drain fails", async () => {
+      readerDrainMock.waitForRetiringReaders.mockRejectedValueOnce(new Error("boom"));
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const exited = new Promise<void>((resolve) => {
+        appMock.exit.mockImplementationOnce(() => resolve());
+      });
+
+      try {
+        const { beforeQuitCb } = await setup({});
+        await beforeQuitCb(makeEvent());
+        await exited;
+
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+        expect(warnSpy).toHaveBeenCalledWith(
+          "[MAIN] Canopy reader drain at quit failed:",
+          expect.any(Error)
+        );
       } finally {
         warnSpy.mockRestore();
       }

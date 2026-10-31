@@ -72,6 +72,7 @@ import {
 import {
   CAPTURE_DELIVERY_BUDGET_MS,
   CAPTURE_PERSISTENCE_DRAIN_BUDGET_MS,
+  CANOPY_READER_DRAIN_BUDGET_MS,
   CLEANUP_TIMEOUT_MS,
   POST_PTY_TEARDOWN_RESERVE_MS,
   PROJECT_GRACEFUL_KILL_TIMEOUT_MS,
@@ -970,6 +971,17 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         .catch((error) => {
           console.warn("[MAIN] VAD drain at quit failed:", error);
         });
+      // Canopy teardown above retires its reader process the same way.
+      const readerDrain = import("../services/canopy/canopyReaderProcess.js")
+        .then(({ waitForRetiringReaders }) => waitForRetiringReaders(CANOPY_READER_DRAIN_BUDGET_MS))
+        .then((pending) => {
+          if (pending > 0) {
+            console.warn(`[MAIN] ${pending} Canopy reader process(es) still draining at quit`);
+          }
+        })
+        .catch((error) => {
+          console.warn("[MAIN] Canopy reader drain at quit failed:", error);
+        });
       const cleanupErr = deps.getCleanupErrorHandlers();
       if (cleanupErr) {
         cleanupErr();
@@ -1028,6 +1040,8 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
 
       currentPhase = "vad-drain";
       await vadDrain;
+      currentPhase = "canopy-reader-drain";
+      await readerDrain;
     });
 
   const timeoutPromise = new Promise<never>((_, reject) => {
