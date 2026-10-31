@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
 import { refreshProjectMenuState } from "../projectMenuState.js";
 import { noteWindowClosing, refreshOpenWindowMenu } from "../windowMenuState.js";
+import { onWindowTitlesChanged } from "../window/windowTitle.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { setSignalShutdown, setSafetyBeltTimer } from "./signalShutdownState.js";
 import { finishIfGroupStop } from "./groupStop.js";
@@ -486,6 +487,12 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
     // The Window menu marks the focused window (#15536).
     refreshOpenWindowMenu();
   });
+
+  // Off macOS the Window menu lists each window by its title, so a waiting
+  // count or a project switch relabels it in place.
+  if (process.platform !== "darwin") {
+    onWindowTitlesChanged(refreshOpenWindowMenu);
+  }
 
   app.on("browser-window-created", (_event, win) => {
     if (process.platform !== "darwin") {

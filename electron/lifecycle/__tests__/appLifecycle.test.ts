@@ -36,6 +36,12 @@ const windowMenuStateMock = vi.hoisted(() => ({
 }));
 vi.mock("../../windowMenuState.js", () => windowMenuStateMock);
 
+const onWindowTitlesChangedMock = vi.hoisted(() => vi.fn(() => () => {}));
+vi.mock("../../window/windowTitle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../window/windowTitle.js")>()),
+  onWindowTitlesChanged: onWindowTitlesChangedMock,
+}));
+
 const setSignalShutdownMock = vi.fn();
 const setSafetyBeltTimerMock = vi.fn();
 vi.mock("../signalShutdownState.js", () => ({
@@ -830,6 +836,27 @@ describe("registerAppLifecycleHandlers – window-all-closed", () => {
     const { winListeners } = createWindow();
 
     expect(winListeners.close).toBeUndefined();
+  });
+
+  it.each(["win32", "linux"] as const)(
+    "on %s relabels the Window menu's list whenever window titles change",
+    async (platform) => {
+      Object.defineProperty(process, "platform", { value: platform });
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      registerAppLifecycleHandlers(makeOpts());
+
+      expect(onWindowTitlesChangedMock).toHaveBeenCalledExactlyOnceWith(
+        windowMenuStateMock.refreshOpenWindowMenu
+      );
+    }
+  );
+
+  it("on darwin does not follow window titles for a list AppKit keeps", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts());
+
+    expect(onWindowTitlesChangedMock).not.toHaveBeenCalled();
   });
 
   it("refreshes the File-menu project gates whenever a window takes focus", async () => {

@@ -1,6 +1,8 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   composeWindowTitle,
+  notifyWindowTitlesChanged,
+  onWindowTitlesChanged,
   rememberRemoteWorkspaceTitle,
   setRemoteHostNameResolver,
   forgetRemoteWorkspaceTitles,
@@ -203,5 +205,39 @@ describe("resolveWindowProjectName", () => {
 
   it("reports no project when no lookup was injected", () => {
     expect(resolveWindowProjectName(pvm("proj-open"), null)).toBeNull();
+  });
+});
+
+describe("window title change announcements", () => {
+  it("tells every listener, and stops telling one that unsubscribed", () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const unsubscribeFirst = onWindowTitlesChanged(first);
+    const unsubscribeSecond = onWindowTitlesChanged(second);
+
+    notifyWindowTitlesChanged();
+    unsubscribeFirst();
+    notifyWindowTitlesChanged();
+    unsubscribeSecond();
+
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a throwing listener from failing the title write or starving the rest", () => {
+    const after = vi.fn();
+    const unsubscribeThrowing = onWindowTitlesChanged(() => {
+      throw new Error("menu torn down");
+    });
+    const unsubscribeAfter = onWindowTitlesChanged(after);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    expect(() => notifyWindowTitlesChanged()).not.toThrow();
+    unsubscribeThrowing();
+    unsubscribeAfter();
+
+    expect(after).toHaveBeenCalledTimes(1);
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 });
