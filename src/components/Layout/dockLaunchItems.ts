@@ -336,8 +336,11 @@ export function dockLaunchBandLabel(
     if (band === "grid-panels" && surface === "grid") return "Panels";
     // A recipe opens in the grid whichever launcher runs it: a terminal's dock
     // placement only lives in a cloned layout and is stripped from every stored
-    // recipe (`sanitizeRecipeTerminal`).
-    if (band === "recipes" && surface === "dock") return "Recipes · open in grid";
+    // recipe (`sanitizeRecipeTerminal`). Over the lone "Create a recipe" cue
+    // there is nothing to open, so the heading only names what it holds.
+    if (band === "recipes" && surface === "dock" && row.kind === "item") {
+      return "Recipes · open in grid";
+    }
   }
   return DOCK_LAUNCH_BAND_LABELS[band];
 }

@@ -615,8 +615,10 @@ describe("DockLaunchButton", () => {
     // Gemini is blocked in the fixture; it stays in the agent column under the
     // one "Agents" heading and says "Setup" on its own row. With two agents
     // against the full panel set, recipes stack under the agents. The footer
-    // actions are placed, not headed.
-    expect(labels).toEqual(["Agents", "Recipes", "Open in dock", "Open in grid"]);
+    // actions are placed, not headed. The dock's header says "Launch in dock",
+    // so its own panels are just "Panels"; recipes and Review land in the grid
+    // and their headings say so.
+    expect(labels).toEqual(["Agents", "Recipes · open in grid", "Panels", "Open in grid"]);
   });
 
   it("lists pinned and unpinned agents under one Agents heading, pinned first", () => {

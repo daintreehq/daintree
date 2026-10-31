@@ -57,7 +57,7 @@
  * reserved), one tier under hover so hover, armed and press still step up from
  * it, and single-class so every one of those (0,2,0) states wins over it. */
 .toolbar-launcher-trigger {
-  background: var(--toolbar-launcher-rest-bg, var(--theme-overlay-subtle));
+  background: var(--theme-overlay-subtle);
 }
 
 /* Keyboard focus reads against the idle surface — the 2px accent outline is the
