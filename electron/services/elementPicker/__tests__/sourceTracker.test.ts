@@ -123,7 +123,10 @@ describe("SourceTracker", () => {
     const newest = path.join("/repo", "past", "x.svelte");
     t.disk.set(newest, revision(1));
     t.subject.observe(newest, ref("past/x.svelte"), revision(1));
-    expect(t.subject.usage()).toEqual({ files: MAX_WATCHED_DIRECTORIES, directories: MAX_WATCHED_DIRECTORIES });
+    expect(t.subject.usage()).toEqual({
+      files: MAX_WATCHED_DIRECTORIES,
+      directories: MAX_WATCHED_DIRECTORIES,
+    });
     expect(t.listeners.has(path.dirname(newest))).toBe(true);
     expect(t.disposed).toEqual([path.dirname(at(0))]);
     await t.settle();
@@ -308,7 +311,10 @@ describe("SourceTracker", () => {
   it("tracks a new selection's file once held, though held files filled the caps when it was read", async () => {
     const t = tracker({}, true);
     const at = (index: number) => path.join("/repo", `d${index}`, "x.svelte");
-    const pinned = Array.from({ length: MAX_WATCHED_DIRECTORIES }, (_, index) => ref(`d${index}/x.svelte`).path);
+    const pinned = Array.from(
+      { length: MAX_WATCHED_DIRECTORIES },
+      (_, index) => ref(`d${index}/x.svelte`).path
+    );
     t.subject.hold(pinned);
     for (let index = 0; index < MAX_WATCHED_DIRECTORIES; index++) {
       t.subject.observe(at(index), ref(`d${index}/x.svelte`), revision(1));

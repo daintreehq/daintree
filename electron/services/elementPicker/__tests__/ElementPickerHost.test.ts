@@ -1313,7 +1313,9 @@ describe("ElementPickerHost held sources", () => {
   it("takes the view's list without reading anything or starting the host", async () => {
     const { host, children } = harness();
     const id = await workspace(host);
-    await expect(host.holdSources(id, ["app/src/App.svelte", "app/src/Missing.svelte"])).resolves.toBeUndefined();
+    await expect(
+      host.holdSources(id, ["app/src/App.svelte", "app/src/Missing.svelte"])
+    ).resolves.toBeUndefined();
     await expect(host.holdSources(id, [])).resolves.toBeUndefined();
     expect(children).toHaveLength(0);
     expect(host.running).toBe(false);

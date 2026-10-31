@@ -1776,7 +1776,9 @@ describe("keeping the selection's files watched", () => {
   it("holds the element's own file first, then the rest of the selection's, sending only a change", async () => {
     const { selection } = await readySelection();
     // A workspace opens holding nothing, so there was nothing to send before.
-    expect(host.calls("holdSources")).toEqual([{ workspaceId: WORKSPACE, paths: [FILE, CARD_FILE] }]);
+    expect(host.calls("holdSources")).toEqual([
+      { workspaceId: WORKSPACE, paths: [FILE, CARD_FILE] },
+    ]);
 
     // Pinning the same selection to a draft holds nothing new.
     act(() => updateComposerMemory(key(), { draft: "Make it", pinned: { selection, scope: 0 } }));
@@ -1800,7 +1802,11 @@ describe("keeping the selection's files watched", () => {
     const newer = elsewhere(selection, "newer");
     const drafted = elsewhere(selection, "drafted");
     const settled = elsewhere(selection, "settled");
-    const otherApp = { ...elsewhere(selection, "other"), workspaceId: "ws-gone", appPath: "apps/other" };
+    const otherApp = {
+      ...elsewhere(selection, "other"),
+      workspaceId: "ws-gone",
+      appPath: "apps/other",
+    };
     act(() =>
       updateComposerMemory(key(), {
         draft: "Make it bigger",
