@@ -147,29 +147,32 @@ describe("SettingsDialog close when the project save fails", () => {
   it.each([
     ["Escape", pressEscape],
     ["the close button", clickCloseButton],
-  ])("refuses a close by %s after a failed Save, then closes once a retry saves", async (_, close) => {
-    const onClose = await openOnProjectVariables();
-    await failExplicitSave();
+  ])(
+    "refuses a close by %s after a failed Save, then closes once a retry saves",
+    async (_, close) => {
+      const onClose = await openOnProjectVariables();
+      await failExplicitSave();
 
-    await close();
-    await waitFor(() => {
-      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Retry" }));
-    });
-    expect(onClose).not.toHaveBeenCalled();
-    expect(valueInput().value).toBe("b");
-    expect(screen.getByText(SAVE_BANNER)).toBeTruthy();
+      await close();
+      await waitFor(() => {
+        expect(document.activeElement).toBe(screen.getByRole("button", { name: "Retry" }));
+      });
+      expect(onClose).not.toHaveBeenCalled();
+      expect(valueInput().value).toBe("b");
+      expect(screen.getByText(SAVE_BANNER)).toBeTruthy();
 
-    persistence.saveSettings.mockResolvedValue(undefined);
-    await close();
+      persistence.saveSettings.mockResolvedValue(undefined);
+      await close();
 
-    await waitFor(() => {
-      expect(onClose).toHaveBeenCalledTimes(1);
-    });
-    expect(persistence.saveSettings).toHaveBeenLastCalledWith(
-      expect.objectContaining({ environmentVariables: { MY_VAR: "b" } })
-    );
-    expect(screen.queryByText(SAVE_BANNER)).toBeNull();
-  });
+      await waitFor(() => {
+        expect(onClose).toHaveBeenCalledTimes(1);
+      });
+      expect(persistence.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ environmentVariables: { MY_VAR: "b" } })
+      );
+      expect(screen.queryByText(SAVE_BANNER)).toBeNull();
+    }
+  );
 
   it("lets the banner's Retry save the edit and clear the page's own error", async () => {
     const onClose = await openOnProjectVariables();
