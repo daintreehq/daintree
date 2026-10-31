@@ -860,7 +860,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       ptyClient.write(terminalId, BRACKETED_PASTE_START, traceId);
       opened = true;
       for (const source of sources) {
-        for (let i = 0; i < source.length; ) {
+        for (let i = 0; i < source.length;) {
           if (isCancelled()) {
             console.log(`[${traceId}] CopyTree inject cancelled by user`);
             return stop(INJECTION_CANCELLED);
@@ -880,7 +880,9 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
         }
       }
     } catch (error) {
-      return stop(`Failed to write context to the terminal: ${formatErrorMessage(error, "unknown error")}`);
+      return stop(
+        `Failed to write context to the terminal: ${formatErrorMessage(error, "unknown error")}`
+      );
     }
 
     if (!ptyClient.hasTerminal(terminalId)) {
