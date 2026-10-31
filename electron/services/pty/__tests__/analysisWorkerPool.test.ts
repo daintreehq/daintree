@@ -279,6 +279,52 @@ describe("AnalysisWorkerPool", () => {
     localPool.dispose();
   });
 
+  it("keeps the bracketed-paste seed for the next rebuild when the prelude is dropped", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    let dropNextPrelude = false;
+    const local: FakeWorker[] = [];
+    const localPool = new AnalysisWorkerPool(2, () => {
+      const worker = new FakeWorker();
+      const post = worker.postMessage.bind(worker);
+      worker.postMessage = (msg: unknown) => {
+        if (dropNextPrelude && (msg as HostToWorkerMessage).type === "prelude") {
+          dropNextPrelude = false;
+          throw new Error("dropped");
+        }
+        post(msg);
+      };
+      local.push(worker);
+      return worker;
+    });
+    const backend = localPool.createBackend(makeSpec("t1"), makeDelegate())!;
+    localPool.createBackend(makeSpec("t2"), makeDelegate());
+    local[0].emit("message", {
+      type: "viewport",
+      terminalId: "t1",
+      lines: [],
+      cursorLine: null,
+      bracketedPasteMode: true,
+    });
+
+    dropNextPrelude = true;
+    local[0].emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(backend.isBracketedPasteMode()).toBe(false);
+
+    // A second crash of the slot moves t1 to the surviving worker.
+    local[2].emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(2000);
+
+    const preludes = local[1]
+      .messagesOfType("prelude")
+      .filter((m) => m.terminalId === "t1")
+      .map((m) => m.data);
+    expect(preludes).toContain("\x1b[?2004h");
+    expect(backend.isBracketedPasteMode()).toBe(true);
+    localPool.dispose();
+  });
+
   it("seeds the respawned monitor busy when the host FSM is mid-work", async () => {
     vi.useFakeTimers();
     const delegate = makeDelegate();

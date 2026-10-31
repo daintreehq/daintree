@@ -29,6 +29,7 @@ import { getRemoteService } from "../../remote/runtime.js";
 import { resolveScopedProjectForIpcContext } from "../projectContext.js";
 import { isAssistantTerminalRecord } from "../../services/assistantTerminal.js";
 import { getLifecycleLedger } from "../../services/pty/lifecycleLedger.js";
+import { isPlainShellName } from "../../services/pty/agentProcessTree.js";
 import { isBuiltInAgentId } from "../../../shared/config/agentIds.js";
 import type { TerminalInfoPayload } from "../../../shared/types/ipc/terminal.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
@@ -434,11 +435,16 @@ export function judgePasteDestination(
 ): { reason: string; transient: boolean } | null {
   if (!info?.hasPty) return { reason: "Terminal no longer exists", transient: false };
   // The host recognises only built-in agents in the process tree. For one a
-  // plugin contributed, the launch is all the evidence there is, and the
-  // paste-mode check below still keeps a shell it left behind from reading
-  // the bundle as commands.
+  // plugin contributed, the launch plus a foreground process that isn't the
+  // shell it runs in is the evidence there is.
   const contributedAgent =
     info.launchAgentId !== undefined && !isBuiltInAgentId(info.launchAgentId);
+  if (
+    contributedAgent &&
+    (info.ptyForegroundProcess === undefined || isPlainShellName(info.ptyForegroundProcess))
+  ) {
+    return { reason: SHELL_REFUSAL, transient: true };
+  }
   if (info.detectedAgentId === undefined && !contributedAgent) {
     // A launch the host has never seen an agent in is still starting; one it
     // has is a shell again.
@@ -857,6 +863,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     const ledger = getLifecycleLedger();
     const deadline = Date.now() + PASTE_READY_WAIT_MS;
     for (;;) {
+      if (isCancelled()) return { error: INJECTION_CANCELLED };
       const generation = ledger.currentGeneration(terminalId);
       const verdict = judgePasteDestination(await deps.ptyClient!.getTerminalInfo(terminalId));
       if (isCancelled()) return { error: INJECTION_CANCELLED };
@@ -910,6 +917,9 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       return error;
     };
 
+    // Admission resolved a continuation ago; a respawn can land in between.
+    if (isCancelled()) return INJECTION_CANCELLED;
+    if (!isAdmittedTerminalAlive()) return "Terminal closed during injection";
     try {
       ptyClient.write(terminalId, BRACKETED_PASTE_START, traceId);
       opened = true;

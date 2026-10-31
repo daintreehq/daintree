@@ -120,7 +120,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   private viewportLines: string[] = [];
   private cursorLine: string | null = null;
   private bracketedPasteMode = false;
-  // A rebuild whose `create` was dropped still owes the next session the mode.
+  // A rebuild whose `create` or prelude was dropped still owes the next session the mode.
   private bracketedPasteSeedPending = false;
   private monitorSpec: MonitorStartOptions | null = null;
   private pollingIntervalMs: number | undefined;
@@ -625,7 +625,6 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     // The program set bracketed paste once and won't say so again; without
     // this the fresh mirror would report it off for as long as the program
     // runs, and context injection would refuse a perfectly good agent.
-    this.bracketedPasteSeedPending = carriesBracketedPaste && !created;
     if (created && carriesBracketedPaste) {
       this.bracketedPasteMode = this.pool.post(this.spec.terminalId, {
         type: "prelude",
@@ -633,6 +632,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
         data: "\x1b[?2004h",
       });
     }
+    this.bracketedPasteSeedPending = carriesBracketedPaste && !this.bracketedPasteMode;
     if (this.monitorSpec) {
       this.postAgentContext();
       // Preserve-state semantics (mirrors the in-thread preserveState path):

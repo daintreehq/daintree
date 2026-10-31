@@ -2209,6 +2209,18 @@ describe("context injection paste boundary (#15629)", () => {
     expect(copyTreeHistoryMock.recordCopyTreeRun).not.toHaveBeenCalled();
   });
 
+  it("never opens a paste on a terminal that went away after admission", async () => {
+    register("<files/>\n");
+    // The first read is the pre-generation existence check; every later one
+    // sees the terminal gone.
+    ptyClient.hasTerminal.mockReturnValueOnce(true).mockReturnValue(false);
+
+    const result = await inject();
+
+    expect(result.error).toBe("Terminal closed during injection");
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
   it("never hands the rest of the paste to a same-id respawn", async () => {
     const bundle = "r".repeat(12_000);
     register(bundle);
@@ -2283,13 +2295,37 @@ describe("context injection paste boundary (#15629)", () => {
       { hasPty: true, launchAgentId: "claude", bracketedPasteMode: true },
       "not a shell",
     ],
+    [
+      "a plugin agent with bracketed paste off",
+      { hasPty: true, launchAgentId: "acme-agent", ptyForegroundProcess: "acme-agent" },
+      "accepting pasted text",
+    ],
+    [
+      "a plugin agent's launch whose shell is in the foreground",
+      {
+        hasPty: true,
+        launchAgentId: "acme-agent",
+        ptyForegroundProcess: "-zsh",
+        bracketedPasteMode: true,
+      },
+      "not a shell",
+    ],
+    [
+      "a plugin agent's launch with no foreground process to show",
+      { hasPty: true, launchAgentId: "acme-agent", bracketedPasteMode: true },
+      "not a shell",
+    ],
   ])("waits out %s, then refuses without writing a byte", async (_label, info, message) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
     register("<files/>\n");
     ptyClient.getTerminalInfo.mockResolvedValue(info);
 
-    const pending = inject();
+    let settled = false;
+    const pending = inject().finally(() => {
+      settled = true;
+    });
     await vi.advanceTimersByTimeAsync(9_000);
+    expect(settled).toBe(false);
     expect(ptyClient.write).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2_000);
     const result = await pending;
@@ -2318,6 +2354,7 @@ describe("context injection paste boundary (#15629)", () => {
     ptyClient.getTerminalInfo.mockResolvedValue({
       hasPty: true,
       launchAgentId: "acme-agent",
+      ptyForegroundProcess: "acme-agent",
       bracketedPasteMode: true,
     });
 
