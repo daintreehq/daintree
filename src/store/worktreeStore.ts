@@ -448,6 +448,7 @@ let lastPersistedMruEpoch = 0;
 
 let lastPersistedMruList: string[] | undefined;
 let pendingPersistMruList: string[] | undefined;
+let pendingPersistMruWrite: Promise<void> = Promise.resolve();
 let mruPersistVersion = 0;
 let mruRecordingSuppressed = false;
 
@@ -471,21 +472,28 @@ function mruListsEqual(a: string[] | undefined, b: string[]): boolean {
 const MRU_WRITE_KEY = "app-state:mruList";
 const ACTIVE_WORKTREE_WRITE_KEY = "app-state:activeWorktreeId";
 
-export function persistMruList(list: string[]): void {
+/**
+ * Resolves once the write this list needs has settled — sent, held for replay,
+ * or failed and logged — so a caller holding the view open can wait for it.
+ * Never rejects.
+ */
+export function persistMruList(list: string[]): Promise<void> {
   const epoch = getHostOwnedStateEpoch();
   const acknowledged = lastPersistedMruEpoch === epoch ? lastPersistedMruList : undefined;
   // On its way already: that write stays the one to hold if the link loses it.
-  if (pendingPersistMruList !== undefined && mruListsEqual(pendingPersistMruList, list)) return;
+  if (pendingPersistMruList !== undefined && mruListsEqual(pendingPersistMruList, list)) {
+    return pendingPersistMruWrite;
+  }
   if (pendingPersistMruList === undefined && mruListsEqual(acknowledged, list)) {
     // The host has it: anything held from before is older.
     supersedeDeferredHostOwnedWrite(MRU_WRITE_KEY);
-    return;
+    return Promise.resolve();
   }
 
   pendingPersistMruList = list;
   const requestVersion = ++mruPersistVersion;
 
-  void loadClientsModule()
+  const write = loadClientsModule()
     .then(({ appClient }) =>
       sendHostOwnedWrite(
         MRU_WRITE_KEY,
@@ -513,6 +521,8 @@ export function persistMruList(list: string[]): void {
         details: { listLength: list.length },
       });
     });
+  pendingPersistMruWrite = write;
+  return write;
 }
 
 function loadClientsModule(): Promise<ClientsModule> {
@@ -980,7 +990,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       // Record worktree MRU on explicit selection (suppressed during hydration)
       if (!mruRecordingSuppressed) {
         usePanelStore.getState().recordMru(`worktree:${id}`);
-        persistMruList(usePanelStore.getState().mruList);
+        void persistMruList(usePanelStore.getState().mruList);
       }
     }
 

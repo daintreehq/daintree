@@ -74,7 +74,11 @@ import { initTerminalConfigSync } from "@/services/terminalConfigSync";
 import { initAgentSettingsSync } from "@/services/agentSettingsSync";
 import { initPanelGridConfigSync } from "@/services/panelGridConfigSync";
 import { initAgentToolbarPinsSync } from "@/services/agentToolbarPinsSync";
-import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
+import {
+  isProjectViewCached,
+  subscribeProjectViewCachedFlush,
+  subscribeProjectViewLifecycle,
+} from "@/lib/viewCacheState";
 
 // Thunk form: read the live mruList at fire time, not at schedule time. A
 // snapshot captured at schedule time could be stale by the time the debounce
@@ -720,26 +724,30 @@ export function initStoreOrchestrator(): () => void {
     )
   );
 
-  // 8. Flush the MRU debounce before the view is torn down. The 150ms debounce
-  //    above strands the latest MRU write if the user switches projects, closes
-  //    the window, or quits within the debounce window. `visibilitychange`
-  //    fires on WebContentsView detach while the renderer is still alive and
-  //    IPC channels are open, so the async persist completes (#9914). Mirrors
-  //    the `pagehide` flush in `optimisticPanelClose.ts`, but uses
-  //    `visibilitychange` because `persistMruList` is async IPC, which would
-  //    not complete in the late `pagehide` teardown window.
+  // 8. Flush the MRU debounce once nobody can see this view, or its latest
+  //    write is stranded when the user switches projects, closes the window,
+  //    or quits within the debounce window (#9914). A project switch caches
+  //    the view, which fires no `visibilitychange` (a cached view reports
+  //    "visible" forever, see `viewCacheState`), so main's cached edge is the
+  //    cue there; main keeps the view unfrozen and resident until the persist
+  //    settles, within a bounded wait (#15651). Hiding or minimizing the
+  //    window still flips `document.hidden`. Not `pagehide` like
+  //    `optimisticPanelClose.ts`: `persistMruList` is async IPC, which would
+  //    not complete in the late teardown window.
+  const flushMru = () => debouncedPersistMruList.flush();
   if (typeof document !== "undefined") {
     const handleVisibilityChange = () => {
       if (!document.hidden) return;
-      void debouncedPersistMruList.flush();
+      void flushMru();
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
     disposables.add(
       toDisposable(() => document.removeEventListener("visibilitychange", handleVisibilityChange))
     );
-    // Cover the race where the document is already hidden at init time.
-    if (document.hidden) void debouncedPersistMruList.flush();
   }
+  disposables.add(toDisposable(subscribeProjectViewCachedFlush(flushMru)));
+  // Both signals are edges: cover a view already hidden or cached at init.
+  if (isViewUnobservable()) void flushMru();
 
   // Focused panel kind for `host.onDidChangeFocusedPanel` (#13221). Main
   // combines it with window and Portal focus, which it observes itself.

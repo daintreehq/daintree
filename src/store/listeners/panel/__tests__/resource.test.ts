@@ -7,10 +7,15 @@ vi.mock("@/store/slices", () => ({
 }));
 
 const flushDraftsMock = vi.hoisted(() => vi.fn());
+const draftsIdleMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 const stopLiveSyncMock = vi.hoisted(() => vi.fn());
 const startLiveSyncMock = vi.hoisted(() => vi.fn(() => stopLiveSyncMock));
 vi.mock("@/store/persistence/draftInputPersistence", () => ({
-  draftInputPersistence: { flushAll: flushDraftsMock, startLiveSync: startLiveSyncMock },
+  draftInputPersistence: {
+    flushAll: flushDraftsMock,
+    whenIdle: draftsIdleMock,
+    startLiveSync: startLiveSyncMock,
+  },
 }));
 
 vi.mock("@/store/resourceMonitoringStore", () => ({
@@ -155,6 +160,31 @@ describe("setupResourceListeners — persistence flush when the view is cached (
     expect(document.hidden).toBe(false);
     expect(flushPanelPersistenceMock).toHaveBeenCalledTimes(1);
     expect(flushDraftsMock).toHaveBeenCalledTimes(1);
+    d.dispose();
+  });
+
+  it("holds main's cached edge until both the layout and draft writes settle", async () => {
+    const view = installViewLifecycle();
+    let releasePanels!: () => void;
+    let releaseDrafts!: () => void;
+    flushPanelPersistenceMock.mockReturnValueOnce(
+      new Promise<void>((resolve) => (releasePanels = resolve))
+    );
+    draftsIdleMock.mockReturnValueOnce(new Promise<void>((resolve) => (releaseDrafts = resolve)));
+    const d = setupResourceListeners();
+
+    let released = false;
+    void view.cache().then(() => (released = true));
+    releasePanels();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(released).toBe(false);
+
+    releaseDrafts();
+    await vi.waitFor(() => expect(released).toBe(true));
+    // The drafts were queued before their writes were awaited.
+    expect(flushDraftsMock.mock.invocationCallOrder[0]).toBeLessThan(
+      draftsIdleMock.mock.invocationCallOrder[0]!
+    );
     d.dispose();
   });
 

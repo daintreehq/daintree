@@ -580,6 +580,72 @@ describe("PanelPersistence", () => {
     });
   });
 
+  describe("flushAndSettle (#15651)", () => {
+    it("waits for a save queued behind a write still in flight", async () => {
+      const client = createMockProjectClient();
+      let releaseFirst!: () => void;
+      client.setTerminals.mockImplementationOnce(
+        () => new Promise<void>((resolve) => (releaseFirst = resolve))
+      );
+      const persistence = new PanelPersistence(client, { debounceMs: 500 });
+
+      persistence.save([createMockTerminal()], projectId);
+      persistence.flush();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.setTerminals).toHaveBeenCalledTimes(1);
+
+      persistence.save([createMockTerminal(), createMockTerminal({ id: "test-2" })], projectId);
+      let settled = false;
+      void persistence.flushAndSettle().then(() => (settled = true));
+      await vi.advanceTimersByTimeAsync(0);
+      // Chained behind the first write, so neither sent nor settled yet.
+      expect(client.setTerminals).toHaveBeenCalledTimes(1);
+      expect(settled).toBe(false);
+
+      releaseFirst();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.setTerminals).toHaveBeenCalledTimes(2);
+      expect(settled).toBe(true);
+    });
+
+    it("waits for a pending tab-group save to be sent", async () => {
+      const client = createMockProjectClient();
+      let release!: () => void;
+      client.setTabGroups.mockImplementationOnce(
+        () => new Promise<void>((resolve) => (release = resolve))
+      );
+      const persistence = new PanelPersistence(client, { debounceMs: 500 });
+      const group: TabGroup = {
+        id: "group-1",
+        panelIds: ["term-1", "term-2"],
+        activeTabId: "term-1",
+        location: "grid",
+      };
+
+      persistence.saveTabGroups(new Map([["group-1", group]]), projectId);
+      let settled = false;
+      void persistence.flushAndSettle().then(() => (settled = true));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.setTabGroups).toHaveBeenCalledTimes(1);
+      expect(settled).toBe(false);
+
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(true);
+    });
+
+    it("resolves rather than rejects when a write fails", async () => {
+      const client = createMockProjectClient();
+      client.setTerminals.mockRejectedValueOnce(new Error("EACCES"));
+      const persistence = new PanelPersistence(client, { debounceMs: 500 });
+
+      persistence.save([createMockTerminal()], projectId);
+
+      await expect(persistence.flushAndSettle()).resolves.toBeUndefined();
+      expect(client.setTerminals).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("cancel", () => {
     it("cancels pending save", async () => {
       const client = createMockProjectClient();
