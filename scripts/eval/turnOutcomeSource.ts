@@ -136,11 +136,30 @@ function assertSqliteSource(dbPath: string): { walMode: boolean } {
 
 /**
  * SQLite refuses a URI authority other than localhost, so a UNC share's server
- * goes into the path behind an empty one (`file:////server/share/...`).
+ * goes into the path behind an empty one (`file:////server/share/...`). URL
+ * parsing drops a `localhost` server, which would leave the path naming a local
+ * drive, so that one is put back from the path itself.
  */
-function immutableUri(filePath: string): string {
-  const url = pathToFileURL(filePath);
-  return `file://${url.host === "" ? "" : `//${url.host}`}${url.pathname}?immutable=1`;
+export function immutableUri(
+  filePath: string,
+  windows: boolean = process.platform === "win32"
+): string {
+  const url = pathToFileURL(filePath, { windows });
+  const server =
+    url.host !== ""
+      ? url.host
+      : windows && /^[\\/]{2}localhost[\\/]/i.test(filePath)
+        ? "localhost"
+        : "";
+  return `file://${server === "" ? "" : `//${server}`}${url.pathname}?immutable=1`;
+}
+
+function fileSize(file: string): number | null {
+  try {
+    return fs.statSync(file).size;
+  } catch {
+    return null;
+  }
 }
 
 function queryRing(db: SqliteDatabase, dbPath: string): TurnOutcomeRingRead {
@@ -200,8 +219,9 @@ function withConnection<T>(location: string, read: (db: SqliteDatabase) => T): T
  * Anything else means the app started meanwhile, and the read is redone on a
  * read-only WAL connection, which sees one consistent snapshot, never blocks
  * the app's writers, and never checkpoints (it cannot take the write lock).
- * A rollback-mode file, or one with a -journal beside it, may need recovery
- * that only a locking connection performs, so it never takes the immutable path.
+ * A rollback-mode file is read on a locking connection, which opens no
+ * sidecars. A non-empty -journal beside a WAL-mode file may need a rollback
+ * that only a writer can perform, so that source is refused unopened.
  */
 export function readTurnOutcomeRing(dbPath: string): TurnOutcomeRingRead {
   const { walMode } = assertSqliteSource(dbPath);
@@ -210,7 +230,14 @@ export function readTurnOutcomeRing(dbPath: string): TurnOutcomeRingRead {
     const realPath = fs.realpathSync(dbPath);
     const walPath = `${realPath}-wal`;
     const read = (location: string) => withConnection(location, (db) => queryRing(db, dbPath));
-    if (walMode && !fs.existsSync(walPath) && !fs.existsSync(`${realPath}-journal`)) {
+    if (walMode && !fs.existsSync(walPath)) {
+      if ((fileSize(`${realPath}-journal`) ?? 0) > 0) {
+        throw new TurnOutcomeSourceError(
+          "unreadable",
+          dbPath,
+          `${dbPath} has a rollback journal awaiting recovery (${realPath}-journal). Open the profile in Daintree once, then rerun.`
+        );
+      }
       const before = identityOf(realPath);
       const unchanged = () => !fs.existsSync(walPath) && sameIdentity(before, identityOf(realPath));
       let result: TurnOutcomeRingRead;

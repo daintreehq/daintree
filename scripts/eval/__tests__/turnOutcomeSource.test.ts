@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TurnOutcomeSourceError, readTurnOutcomeRing } from "../turnOutcomeSource.js";
+import { TurnOutcomeSourceError, immutableUri, readTurnOutcomeRing } from "../turnOutcomeSource.js";
 
 const { DatabaseSync } = process.getBuiltinModule("node:sqlite") as typeof import("node:sqlite");
 type Db = InstanceType<typeof DatabaseSync>;
@@ -338,13 +338,51 @@ describe("readTurnOutcomeRing", () => {
     expect(opened.some(isImmutable)).toBe(false);
   });
 
-  it("never reads as immutable with a -journal beside the database", () => {
+  it("ignores an empty -journal beside an idle WAL database and writes nothing", () => {
     const dbPath = idleProfile([["t-1", 1000]]);
     fs.writeFileSync(`${dbPath}-journal`, "");
+    const listing = fs.readdirSync(tmp).sort();
+    const dbBefore = fingerprint(dbPath);
     const opened = instrumentSqlite();
 
     expect(ids(readTurnOutcomeRing(dbPath).rows)).toEqual(["t-1"]);
-    expect(opened.some(isImmutable)).toBe(false);
+    expect(opened.map(isImmutable)).toEqual([true]);
+    expect(fs.readdirSync(tmp).sort()).toEqual(listing);
+    expect(fingerprint(dbPath)).toBe(dbBefore);
+  });
+
+  it("refuses, unopened, a WAL database with a rollback journal awaiting recovery", () => {
+    const dbPath = idleProfile([["t-1", 1000]]);
+    fs.writeFileSync(`${dbPath}-journal`, "journal bytes");
+    const listing = fs.readdirSync(tmp).sort();
+    const opened = instrumentSqlite();
+
+    expect(expectSourceError(dbPath, "unreadable")).toContain("-journal");
+    expect(opened).toEqual([]);
+    expect(fs.readdirSync(tmp).sort()).toEqual(listing);
+  });
+});
+
+describe("immutableUri", () => {
+  it("percent-encodes POSIX paths", () => {
+    expect(immutableUri("/Users/a b/x#y?z%/daintree.db", false)).toBe(
+      "file:///Users/a%20b/x%23y%3Fz%25/daintree.db?immutable=1"
+    );
+  });
+
+  it("keeps Windows drive letters in the path", () => {
+    expect(immutableUri("C:\\Users\\a b\\daintree.db", true)).toBe(
+      "file:///C:/Users/a%20b/daintree.db?immutable=1"
+    );
+  });
+
+  it("puts a UNC server, localhost included, behind an empty authority", () => {
+    expect(immutableUri("\\\\server\\share\\daintree.db", true)).toBe(
+      "file:////server/share/daintree.db?immutable=1"
+    );
+    expect(immutableUri("\\\\localhost\\share\\daintree.db", true)).toBe(
+      "file:////localhost/share/daintree.db?immutable=1"
+    );
   });
 });
 
