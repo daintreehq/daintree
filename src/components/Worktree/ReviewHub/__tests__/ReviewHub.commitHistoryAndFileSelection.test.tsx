@@ -269,6 +269,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
 import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { useReviewCommitDraftStore } from "@/store/reviewCommitDraftStore";
+import { isHoldingUnrecoverableWork } from "@/services/plugin/panelRecoveryHold";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
 import { setViewedMarkSourcesAccessor } from "@/store/storeAccessors";
@@ -711,6 +712,50 @@ describe("ReviewHub", () => {
       focusTextareaAt(textarea, 0);
       fireEvent.keyDown(textarea, { key: "ArrowDown" });
       await waitFor(() => expect(textarea.value).toBe("my draft message"), { timeout: 3000 });
+      expect(useReviewCommitDraftStore.getState().draftsByWorktree[WORKTREE_PATH]).toBe(
+        "my draft message"
+      );
+    });
+
+    it("returns from a recall to the note's seed without keeping it as a draft (#15574)", async () => {
+      listCommitsMock.mockResolvedValue({
+        items: [
+          {
+            hash: "abc1234",
+            shortHash: "abc1234",
+            message: "feat: most recent commit",
+            author: { name: "Test", email: "test@example.com" },
+            date: "2026-05-10",
+          },
+        ],
+        hasMore: false,
+        total: 1,
+      });
+
+      render(
+        <ReviewHubContent
+          isOpen={true}
+          worktreePath={WORKTREE_PATH}
+          onClose={vi.fn()}
+          initialCommitMessage="from AI note"
+        />
+      );
+      await waitFor(() => screen.getByLabelText("Commit message"));
+      const textarea = screen.getByLabelText("Commit message") as HTMLTextAreaElement;
+      expect(textarea.value).toBe("from AI note");
+
+      focusTextareaAt(textarea, 0);
+      fireEvent.keyDown(textarea, { key: "ArrowUp" });
+      await waitFor(() => expect(textarea.value).toBe("feat: most recent commit"), {
+        timeout: 3000,
+      });
+      expect(isHoldingUnrecoverableWork()).toBe(true);
+
+      focusTextareaAt(textarea, 0);
+      fireEvent.keyDown(textarea, { key: "ArrowDown" });
+      await waitFor(() => expect(textarea.value).toBe("from AI note"), { timeout: 3000 });
+      expect(useReviewCommitDraftStore.getState().draftsByWorktree).toEqual({});
+      expect(isHoldingUnrecoverableWork()).toBe(false);
     });
 
     it("does not intercept ArrowUp when caret is not at position 0", async () => {
