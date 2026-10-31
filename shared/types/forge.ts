@@ -1789,6 +1789,14 @@ export interface CredentialField {
 export interface RegisteredForgeProvider {
   pluginId: string;
   contribution: ForgeProviderContribution;
+  /**
+   * Set when the provider is registered but can't run, with the reason to show
+   * beside it. Today that is a provider declared by an installed plugin: those
+   * activate in the plugin worker, where `host.registerForgeProvider` binds
+   * nothing, so only built-in plugins can back a forge provider. Absent means
+   * runnable, even before the plugin's `activate()` has bound an impl.
+   */
+  unavailableReason?: string;
 }
 
 /**
@@ -1932,6 +1940,8 @@ export interface ForgeProviderDescriptor {
 export interface ForgeProviderEntry {
   pluginId: string;
   contribution: ForgeProviderContribution;
+  /** See {@link RegisteredForgeProvider.unavailableReason}. */
+  unavailableReason?: string;
 }
 
 /**

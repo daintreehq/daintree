@@ -230,9 +230,19 @@ export function ForgeIntegrationsTab() {
       ...providers
         .filter((entry) => forgeProviderServesRole(entry.contribution, "code"))
         .map((entry) => {
+          const value = makeForgeProviderId(entry.pluginId, entry.contribution.id);
+          // Still listed so a stored default reads correctly, but can't be picked.
+          if (entry.unavailableReason) {
+            return {
+              value,
+              label: `${entry.contribution.name} (unavailable)`,
+              description: entry.unavailableReason,
+              disabled: true,
+            };
+          }
           const matches = entry.contribution.matches.join(", ");
           return {
-            value: makeForgeProviderId(entry.pluginId, entry.contribution.id),
+            value,
             label: entry.contribution.name,
             description: matches ? `Matches: ${matches}` : undefined,
           };
@@ -255,6 +265,15 @@ export function ForgeIntegrationsTab() {
     }
     return base;
   }, [providers, settings.defaultProviderId]);
+
+  const storedDefaultUnavailable =
+    settings.defaultProviderId === null
+      ? undefined
+      : providers.find(
+          (entry) =>
+            makeForgeProviderId(entry.pluginId, entry.contribution.id) ===
+            settings.defaultProviderId
+        )?.unavailableReason;
 
   // Re-resolve all remotes after a settings write succeeds. Changing the
   // global default can shift the `resolvedVia` badge for remotes whose origin
@@ -341,7 +360,7 @@ export function ForgeIntegrationsTab() {
             onReset={() => void handleChange(AUTO_DETECT_VALUE)}
             resetAriaLabel="Reset default provider to auto-detect"
             placeholder={loading ? "Loading…" : AUTO_DETECT_LABEL}
-            error={error ?? undefined}
+            error={error ?? storedDefaultUnavailable}
           />
         </SettingsGroup>
         <ProjectRoutingPanel
@@ -525,7 +544,10 @@ function RoutingResult({
   return (
     <span className="text-right text-xs">
       <span className="block text-sm text-text-primary">{resolved.entry.contribution.name}</span>
-      <span className="block text-text-secondary">by {VIA_LABEL[resolved.resolvedVia]}</span>
+      <span className="block text-text-secondary">
+        by {VIA_LABEL[resolved.resolvedVia]}
+        {resolved.entry.unavailableReason ? " · unavailable" : null}
+      </span>
     </span>
   );
 }

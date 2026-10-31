@@ -13,6 +13,8 @@ export interface ForgeProviderOption {
   id: string;
   name: string;
   pluginId: string;
+  /** Registered but can't run (an installed plugin's provider). */
+  unavailable?: boolean;
 }
 
 type ProviderIcon = ComponentType<{ size?: number; className?: string }>;
@@ -88,7 +90,14 @@ export function ForgeProviderSelectorDropdown({
         return (
           <>
             <Icon size={16} className="shrink-0 text-text-secondary" />
-            <span className="flex-1 min-w-0 truncate">{item.name}</span>
+            {item.unavailable ? (
+              <div className="flex-1 min-w-0">
+                <div className="truncate">{item.name}</div>
+                <div className="text-xs text-text-secondary truncate">Unavailable</div>
+              </div>
+            ) : (
+              <span className="flex-1 min-w-0 truncate">{item.name}</span>
+            )}
           </>
         );
       }}
