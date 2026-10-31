@@ -35,14 +35,14 @@ function quoteAgentArgOptional(arg: string): string {
  * Tokenises an Arguments or Custom arguments field into argv (#15637): quotes
  * group a spaced value into one argument. Text with an unclosed quote keeps
  * the whitespace split it always had, so a bare apostrophe (`O'Brien`) can't
- * swallow every argument after it. A control character inside a quoted value
+ * swallow every argument after it. A control character left inside an argument
  * becomes a space, because the spawn schema refuses a command that holds one.
  */
 function parseLaunchArgs(text: string | undefined): string[] {
   if (!text?.trim()) return [];
-  if (hasUnclosedQuote(text)) return text.trim().split(/\s+/);
+  const args = hasUnclosedQuote(text) ? text.trim().split(/\s+/) : parseShellArgs(text);
   // eslint-disable-next-line no-control-regex
-  return parseShellArgs(text).map((arg) => arg.replace(/[\x00-\x1F\x7F]+/g, " "));
+  return args.map((arg) => arg.replace(/[\x00-\x1F\x7F]+/g, " "));
 }
 
 // Marks where recipe args go in the persisted launch flags while those are

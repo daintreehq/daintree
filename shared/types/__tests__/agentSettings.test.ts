@@ -761,6 +761,26 @@ describe("quoted launch arguments (#15637)", () => {
     ).toBe(`claude --title '"draft' --yolo`);
   });
 
+  it("cleans control characters on the unclosed-quote path too", () => {
+    const recipeArgs = "--name O'Brien --label a\u001bb\u007f";
+    expect(generateAgentFlags({ customFlags: recipeArgs }, "claude")).toEqual([
+      "--name",
+      "O'Brien",
+      "--label",
+      "a b ",
+    ]);
+    expect(buildAgentLaunchFlags({}, "claude", { recipeArgs })).toEqual([
+      "--name",
+      "O'Brien",
+      "--label",
+      "a b ",
+    ]);
+    expect(generateAgentCommand("claude", {}, "claude", { recipeArgs })).not.toMatch(
+      // eslint-disable-next-line no-control-regex
+      /[\x00-\x1F\x7F]/
+    );
+  });
+
   it("turns a control character inside a quoted value into a space", () => {
     const entry = { customFlags: '--append-system-prompt "first\nsecond\tthird"' };
     expect(generateAgentFlags(entry, "claude")).toEqual([
