@@ -4,31 +4,16 @@
 // that need to verify the throwing behavior (e.g. `ipcGuard.test.ts`) reset
 // the flag explicitly via `_resetIpcGuardForTesting()`.
 
-import os from "node:os";
-import path from "node:path";
-import { afterAll, afterEach, vi } from "vitest";
 import { markIpcSecurityReady } from "./electron/ipc/ipcGuard.js";
 import { installTestLocale } from "./scripts/lib/testLocale.js";
-import {
-  formatProcessKillViolations,
-  installProcessKillGuard,
-  takeProcessKillViolations,
-} from "./electron/__tests__/helpers/processKillGuard.js";
+import { installTestIsolation } from "./electron/__tests__/helpers/testIsolation.js";
+import { vi } from "vitest";
 
 markIpcSecurityReady();
 
-// Mock ptys carry made-up PIDs, and a real ProcessTreeKiller signals whatever
-// owns them: one test SIGKILLed the developer's running Daintree at pid 456
-// (#14418). Only this worker and its own children can be signalled; anything
-// else is refused, and because kill paths swallow errors, the refusal fails
-// the test from here.
-installProcessKillGuard();
-const failOnProcessKillViolations = () => {
-  const violations = takeProcessKillViolations();
-  if (violations.length > 0) throw new Error(formatProcessKillViolations(violations));
-};
-afterEach(failOnProcessKillViolations);
-afterAll(failOnProcessKillViolations);
+// Env scrubbing and the process-kill guard are shared with the integration
+// config (vitest.integration.setup.ts); see testIsolation.ts.
+installTestIsolation();
 
 // vitest.config.ts pins LANG/LC_ALL so en-US formatting holds on any machine,
 // but Node on Windows takes ICU's default from the user's regional settings and
@@ -38,27 +23,6 @@ afterAll(failOnProcessKillViolations);
 const TEST_LOCALE = "en-US";
 if (new Intl.NumberFormat().resolvedOptions().locale !== TEST_LOCALE) {
   installTestLocale(TEST_LOCALE);
-}
-
-// `hardenedGit` resolves an app-owned `core.hooksPath` from DAINTREE_USER_DATA,
-// falling back to the real home directory when nothing else is available. Any
-// test that builds a git factory would otherwise create `~/.daintree/git-hooks`
-// on the developer's machine. Point it at a temp root instead; suites that
-// inspect the directory (hardenedGit's own) override this with their own
-// mkdtemp before their first factory call.
-//
-// Assigned unconditionally: an inherited empty or relative value would survive
-// `??=` and land right back on the home directory, and an inherited real
-// userData path would let a test suite write into the developer's own app data.
-// Keyed by pid so a stale hook file from an earlier run can't be dispatched by
-// a later one.
-process.env.DAINTREE_USER_DATA = path.join(os.tmpdir(), `daintree-vitest-userdata-${process.pid}`);
-
-// A developer's own Canopy settings must not reach the suite: a trace path would
-// have tests append fixture readings to the real training-data file, and a
-// background pace would change what the service tests read.
-for (const name of ["DAINTREE_CANOPY_TRACE", "DAINTREE_CANOPY_BACKGROUND_POLL_MS"]) {
-  delete process.env[name];
 }
 
 // Tests render Radix wrappers synchronously, but our production wrappers
