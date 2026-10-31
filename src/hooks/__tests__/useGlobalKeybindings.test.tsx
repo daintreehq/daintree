@@ -6,6 +6,7 @@ import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
 import { APP_MODAL_SELECTOR } from "@/lib/appModal";
 import { PANE_DIALOG_ATTR } from "@/lib/paneDialog";
 import { claimVoiceWaitKeys } from "@/lib/voiceWaitKeys";
+import { claimWaitingSend } from "@/services/voiceDraftSend";
 import type { PaletteId } from "@/store/paletteStore";
 
 function parseComboLite(combo: string) {
@@ -287,6 +288,93 @@ describe("useGlobalKeybindings — isolated surfaces", () => {
     pressDictationIn(false, '<div class="cm-editor"><textarea></textarea></div>');
     expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
     expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+  });
+
+  // #15705: pressed again, it sends a waiting send it started wherever the keyboard is.
+  describe("while a send the stop-and-send key started waits", () => {
+    const STOP_AND_SEND_EVENT = { key: "d", code: "KeyD", metaKey: true, altKey: true };
+    const releases: Array<() => void> = [];
+    afterEach(() => releases.splice(0).forEach((release) => release()));
+    const claim = (sendNow?: () => void) => {
+      const release = claimWaitingSend("term-1", new Set(["s1"]), sendNow);
+      releases.push(release);
+      return release;
+    };
+
+    function isolatedTerminal(resolvesTo = "voiceInput.stopAndSend") {
+      mocks.keybindingService.getEffectiveCombo.mockImplementation((id: string) =>
+        id === "voiceInput.stopAndSend" ? "Cmd+Alt+D" : undefined
+      );
+      mocks.keybindingService.resolveKeybinding.mockReturnValue({
+        match: { actionId: resolvesTo },
+        chordPrefix: false,
+        shouldConsume: true,
+      });
+      render(<Host />);
+      const surface = document.createElement("div");
+      surface.setAttribute("data-keybindings-isolated", "");
+      surface.innerHTML = '<div class="xterm"><textarea></textarea></div>';
+      document.body.appendChild(surface);
+      const field = surface.querySelector("textarea")!;
+      const press = () => {
+        const event = new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          ...STOP_AND_SEND_EVENT,
+        });
+        field.dispatchEvent(event);
+        return event;
+      };
+      return { surface, press };
+    }
+
+    it("lets that key through from an isolated terminal until the send is gone", () => {
+      const release = claim(() => {});
+      const { surface, press } = isolatedTerminal();
+      try {
+        expect(press().defaultPrevented).toBe(true);
+        expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
+          "voiceInput.stopAndSend",
+          undefined,
+          expect.anything()
+        );
+
+        release();
+        mocks.actionService.dispatch.mockClear();
+        expect(press().defaultPrevented).toBe(false);
+        expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+      } finally {
+        surface.remove();
+      }
+    });
+
+    it("keeps it out for a send Enter started", () => {
+      claim();
+      const { surface, press } = isolatedTerminal();
+      try {
+        expect(press().defaultPrevented).toBe(false);
+        expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+      } finally {
+        surface.remove();
+      }
+    });
+
+    it("keeps out another action bound to the same keys", () => {
+      claim(() => {});
+      const { surface, press } = isolatedTerminal("acme.plugin.command");
+      try {
+        expect(press().defaultPrevented).toBe(false);
+        expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+      } finally {
+        surface.remove();
+      }
+    });
+
+    it("still keeps the dictation key out", () => {
+      claim(() => {});
+      pressDictationIn(false, '<div class="xterm"><textarea></textarea></div>');
+      expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+    });
   });
 });
 

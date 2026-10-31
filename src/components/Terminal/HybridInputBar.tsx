@@ -30,6 +30,7 @@ import {
 } from "./hybridInputParsing";
 import { splitContextProviderQuery } from "@shared/utils/pluginContextReference";
 import type { ContextProviderItem } from "@shared/types/pluginContextProvider";
+import { isActiveVoiceSession } from "@shared/types/voice";
 import { usePluginContextProvidersStore } from "@/store/pluginContextProvidersStore";
 import { useContextProviderSearch } from "./hooks/useContextProviderSearch";
 import { useForgeReferenceMarks } from "./hooks/useForgeReferenceMarks";
@@ -86,6 +87,8 @@ import {
   VoiceSubmitProgress,
   correctionStreamShare,
   voiceSubmitWaitCaption,
+  voiceSubmitWaitStatus,
+  type VoiceSubmitWaitKeys,
 } from "./VoiceSubmitProgress";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import {
@@ -1472,6 +1475,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       voiceSubmitPhase,
       voiceSubmitWait,
       voiceSubmitOutcome,
+      voiceWaitKeys,
     } = useVoiceWaitSubmit({
       terminalId,
       projectId,
@@ -1487,6 +1491,21 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       isDisabled: () => disabledRef.current,
       onSpokenSendTooShort: noteSpokenSendTooShort,
     });
+    // The stop-and-send key sends a wait it started as it stands, from
+    // anywhere in the page, unless a dictation running elsewhere takes the
+    // press first.
+    const stopAndSendCombo = useEffectiveCombo("voiceInput.stopAndSend");
+    const voiceSessionTakesStopAndSend = useVoiceRecordingStore(
+      (s) => s.activeTarget !== null && s.status !== "finishing" && isActiveVoiceSession(s.status)
+    );
+    const voiceSubmitKeys: VoiceSubmitWaitKeys = {
+      enter: voiceWaitKeys.enter,
+      escape: voiceWaitKeys.escape,
+      skip:
+        voiceSubmitWait?.byStopAndSend && voiceWaitKeys.page && !voiceSessionTakesStopAndSend
+          ? (stopAndSendCombo ?? null)
+          : null,
+    };
     // The editor locks and the shell changes the moment a voice send starts;
     // what it is waiting on is only told once the wait outlasts the inline
     // gate, so a send that goes at once says nothing more.
@@ -1648,9 +1667,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // note shows: nothing else says the earlier words haven't gone (#15703).
     const voiceSubmitStatus = voiceSubmitWait
       ? showVoiceSubmitStatus
-        ? voiceSubmitWait.phase === "polishing"
-          ? "Polishing dictation. Press Enter to send it as dictated, or Escape to cancel the send."
-          : "Finishing dictation. Press Escape to cancel the send."
+        ? voiceSubmitWaitStatus(voiceSubmitWait, voiceSubmitKeys)
         : ""
       : voiceSendUncleaned
         ? VOICE_SEND_UNCLEANED_STATUS[voiceSendUncleaned]
@@ -1674,7 +1691,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const expandedSubmitLabel =
       voiceSubmitWait && showVoiceSubmitStatus ? (
         <span aria-hidden="true" className="ml-auto mr-3 text-xs text-text-secondary">
-          {voiceSubmitWaitCaption(voiceSubmitWait)}
+          {voiceSubmitWaitCaption(voiceSubmitWait, voiceSubmitKeys)}
         </span>
       ) : showScratchRefusalCaption ? (
         <span aria-hidden="true" className="ml-auto mr-3 text-xs text-text-secondary">
@@ -2378,6 +2395,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             <VoiceSubmitProgress
               key={voiceSubmitAttempt}
               wait={voiceSubmitWait}
+              keys={voiceSubmitKeys}
               outcome={voiceSubmitOutcome}
               streamed={voiceCorrectionStreamed}
               onPresentChange={setIsVoiceSubmitPresenting}

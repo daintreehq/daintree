@@ -664,6 +664,65 @@ describe("VoiceRecordingService — the session panel's Send (#14920)", () => {
 
     expect(voiceRecordingService.canSendActiveSession()).toBe(false);
   });
+
+  // #15705: its key pressed again, a send it started goes as its words stand.
+  const releases: Array<() => void> = [];
+  const track = (release: () => void) => releases.push(release);
+  afterEach(() => releases.splice(0).forEach((release) => release()));
+
+  it("sends a waiting send it started as it stands once nothing is left to stop", async () => {
+    const { voiceRecordingService, useVoiceRecordingStore, stop } = await setup();
+    const { claimWaitingSend } = await import("../voiceDraftSend");
+    useVoiceRecordingStore.getState().setStatus("idle");
+    const sendNow = vi.fn();
+    track(claimWaitingSend(PANEL_ID, new Set(["s1"]), sendNow));
+
+    await voiceRecordingService.stopAndSend();
+
+    expect(sendNow).toHaveBeenCalledTimes(1);
+    expect(stop).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("cuts a waiting send short while its transcript still drains, leaving the drain to finish", async () => {
+    const { voiceRecordingService, useVoiceRecordingStore, stop } = await setup();
+    const { claimWaitingSend } = await import("../voiceDraftSend");
+    useVoiceRecordingStore.getState().setStatus("finishing");
+    const sendNow = vi.fn();
+    track(claimWaitingSend(PANEL_ID, new Set(["s1"]), sendNow));
+
+    await voiceRecordingService.stopAndSend();
+
+    expect(sendNow).toHaveBeenCalledTimes(1);
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("stops and sends a dictation still running before cutting any waiting send short", async () => {
+    const { voiceRecordingService } = await setup();
+    const { claimWaitingSend } = await import("../voiceDraftSend");
+    const handler = vi.fn();
+    voiceRecordingService.onSpokenSend(PANEL_ID, undefined, handler);
+    const sendNow = vi.fn();
+    track(claimWaitingSend("another-panel", new Set(["s0"]), sendNow));
+
+    await voiceRecordingService.stopAndSend();
+
+    expect(handler).toHaveBeenCalledWith({ spoken: false, asker: "stop_and_send_key" });
+    expect(sendNow).not.toHaveBeenCalled();
+  });
+
+  it("leaves a send Enter started to Enter", async () => {
+    const { voiceRecordingService, useVoiceRecordingStore } = await setup();
+    const { claimWaitingSend, hasWaitingStopAndSend, isHeldBackSession } =
+      await import("../voiceDraftSend");
+    useVoiceRecordingStore.getState().setStatus("idle");
+    track(claimWaitingSend(PANEL_ID, new Set(["s1"])));
+
+    expect(hasWaitingStopAndSend()).toBe(false);
+    await voiceRecordingService.stopAndSend();
+    expect(notify).not.toHaveBeenCalled();
+    expect(isHeldBackSession(PANEL_ID, "a-later-session")).toBe(true);
+  });
 });
 
 describe("VoiceRecordingService — a send request that goes nowhere leaves a line (#15704)", () => {

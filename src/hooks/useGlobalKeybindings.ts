@@ -19,6 +19,7 @@ import { usePluginContextKeyStore } from "@/store/pluginContextKeyStore";
 import { usePaletteStore, usePanelStore } from "../store";
 import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
 import { routeVoiceWaitKey } from "@/lib/voiceWaitKeys";
+import { hasWaitingStopAndSend } from "@/services/voiceDraftSend";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 
 // The keys a surface that owns its own dictation (Canopy's reply) still lets
@@ -106,6 +107,9 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
         target.closest("[data-keybindings-isolated]") !== null;
       const ownsClose = isolated && target.closest(`[${CLOSE_OWNER_ATTR}]`) !== null;
       const ownsDictation = isolated && target.closest(`[${DICTATION_OWNER_ATTR}]`) !== null;
+      // A send the stop-and-send key started, still waiting, takes that key
+      // again wherever the keyboard is, a surface that keeps it out included.
+      const skipsWaitingSend = isolated && hasWaitingStopAndSend();
       if (isolated) {
         // A chord begun outside is abandoned once the user types in here: the
         // keys are the terminal's, and the surface's own shortcuts are single.
@@ -118,6 +122,7 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
         if (
           !matches("canopy.toggle") &&
           !(ownsDictation && DICTATION_KEYS.some(matches)) &&
+          !(skipsWaitingSend && matches("voiceInput.stopAndSend")) &&
           !(ownsClose && matches("terminal.close"))
         ) {
           return;
@@ -372,6 +377,7 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
         isolated &&
         result.match?.actionId !== "canopy.toggle" &&
         !(ownsDictation && isDictationKey(result.match?.actionId)) &&
+        !(skipsWaitingSend && result.match?.actionId === "voiceInput.stopAndSend") &&
         !(ownsClose && result.match?.actionId === "terminal.close")
       ) {
         if (result.chordPrefix) keybindingService.clearPendingChord();

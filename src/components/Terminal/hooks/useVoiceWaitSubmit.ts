@@ -31,7 +31,14 @@ import {
   type VoiceSendAsker,
   type VoiceSendRefusal,
 } from "@/services/voiceSendDiagnostics";
-import { claimVoiceWaitKeys } from "@/lib/voiceWaitKeys";
+import {
+  claimVoiceWaitKeys,
+  NO_VOICE_WAIT_KEYS,
+  observeVoiceWaitKeysReach,
+  voiceWaitKeysReach,
+  type VoiceWaitKeyClaim,
+  type VoiceWaitKeysReach,
+} from "@/lib/voiceWaitKeys";
 import type { ClaimSendHandBack, SendHandBack } from "./useSendHandBack";
 import type { ComposerSendRoute } from "./useEditorKeymap";
 
@@ -43,9 +50,11 @@ export type VoiceSubmitPhase = "finishing" | "polishing";
  * correction's wait has no deadline: it lasts until the correction lands or
  * fails, or a second Enter sends what stands (#14780). `expectedAt` is when
  * past corrections say it should land, and `beganAt` when its request went out,
- * which can be before Enter (both null: no estimate).
+ * which can be before Enter (both null: no estimate). `byStopAndSend` marks a
+ * send the stop-and-send key or the session panel's Send started, which that
+ * key, pressed again, sends as it stands wherever the keyboard is (#15705).
  */
-export type VoiceSubmitWait = { attempt: number; startedAt: number } & (
+export type VoiceSubmitWait = { attempt: number; startedAt: number; byStopAndSend: boolean } & (
   | { phase: "finishing" }
   | {
       phase: "polishing";
@@ -387,6 +396,8 @@ export function useVoiceWaitSubmit({
   const activeWaitRef = useRef<WaitAttempt | null>(null);
   const [voiceSubmitWait, setVoiceSubmitWait] = useState<VoiceSubmitWait | null>(null);
   const [voiceSubmitOutcome, setVoiceSubmitOutcome] = useState<VoiceSubmitOutcome | null>(null);
+  // Which of Enter and Escape reach the wait shown here from where the keyboard is.
+  const [voiceWaitKeys, setVoiceWaitKeys] = useState<VoiceWaitKeysReach>(NO_VOICE_WAIT_KEYS);
   const [seat] = useState<WaitSeat>(() => ({
     editorViewRef,
     editableCompartmentRef,
@@ -420,8 +431,8 @@ export function useVoiceWaitSubmit({
 
   // Enter and Escape belong to the wait while a composer shows it.
   const claimKeys = useCallback(
-    (live: WaitAttempt) =>
-      claimVoiceWaitKeys({
+    (live: WaitAttempt) => {
+      const claim: VoiceWaitKeyClaim = {
         holds: (element) => {
           const view = editorViewRef.current;
           if (view?.dom.contains(element)) return true;
@@ -454,7 +465,16 @@ export function useVoiceWaitSubmit({
           };
           window.addEventListener("keyup", refocus, true);
         },
-      }),
+      };
+      const releaseClaim = claimVoiceWaitKeys(claim);
+      const showReach = () => setVoiceWaitKeys(voiceWaitKeysReach(claim));
+      const stopObserving = observeVoiceWaitKeysReach(showReach);
+      showReach();
+      return () => {
+        stopObserving();
+        releaseClaim();
+      };
+    },
     [terminalId, voiceId, editorViewRef, cancelVoiceWaitSubmit]
   );
 
@@ -520,6 +540,8 @@ export function useVoiceWaitSubmit({
       }
       live.over = true;
       live.releaseObserved();
+      // Called off, as Escape calls it off: the stop-and-send key no longer sends it.
+      live.releaseSend();
       live.controller.abort();
       useTerminalInputStore.getState().setVoiceSubmitting(voiceId, false);
     };
@@ -556,7 +578,14 @@ export function useVoiceWaitSubmit({
       // here while it waits reopens it instead (#15703).
       const target = voiceDraftNow();
       const sessions = voiceRecordingService.sendSessions(target.panelId, target.projectId);
-      const releaseSend = claimWaitingSend(voiceId, sessions);
+      const byStopAndSend = options?.stayPut === true;
+      // Set below, once there is an attempt for the key to cut short.
+      let sendNow = () => {};
+      const releaseSend = claimWaitingSend(
+        voiceId,
+        sessions,
+        byStopAndSend ? () => sendNow() : undefined
+      );
       const pendingStart = useVoiceRecordingStore.getState().pendingTarget;
       const startedBefore = pendingStart?.panelId === voiceId ? pendingStart : null;
       // From before the stop, so a stop-time cleanup that fails before any
@@ -574,7 +603,7 @@ export function useVoiceWaitSubmit({
         departed: null,
         handBack,
         departure: captureDepartureRef.current?.() ?? NO_DEPARTURE,
-        wait: { attempt, phase: "finishing", startedAt: performance.now() },
+        wait: { attempt, phase: "finishing", startedAt: performance.now(), byStopAndSend },
         sessions,
         composerDraft: () => {
           const projectId = projectIdRef.current ?? useProjectStore.getState().currentProject?.id;
@@ -590,6 +619,11 @@ export function useVoiceWaitSubmit({
       };
       const { controller } = live;
       const isCurrentAttempt = () => isLive(live, voiceId);
+      // The stop-and-send key pressed again: what a second Enter does, shown
+      // in a composer or not.
+      sendNow = () => {
+        if (isCurrentAttempt()) controller.abort();
+      };
       seatWait(live);
       // A send isn't final until it goes: a dictation started in this draft
       // while it waits, shown here or not, calls it off as Escape does, and
@@ -640,6 +674,7 @@ export function useVoiceWaitSubmit({
               attempt: live.attempt,
               phase: "polishing",
               startedAt: performance.now(),
+              byStopAndSend,
               expectedAt: landing?.landsAt ?? null,
               beganAt: landing?.startedAt ?? null,
               sessions,
@@ -830,5 +865,6 @@ export function useVoiceWaitSubmit({
     voiceSubmitPhase: voiceSubmitWait?.phase ?? null,
     voiceSubmitWait,
     voiceSubmitOutcome,
+    voiceWaitKeys,
   };
 }

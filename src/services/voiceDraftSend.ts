@@ -24,21 +24,57 @@ export interface VoiceDraftSend {
   leadingSpace: { dictationId: string; span: DictationTextSpan } | null;
 }
 
-// The sessions each dictated send still waiting takes, by voice panel.
-const waitingSends = new Map<string, ReadonlySet<string>>();
+interface WaitingSend {
+  sessions: ReadonlySet<string>;
+  /** Set on a send the stop-and-send key started: it goes as the words stand. */
+  sendNow?: () => void;
+}
 
-/** Marks a dictated send from `panelId` as waiting on its cleanup; returns its release. */
-export function claimWaitingSend(panelId: string, sessions: ReadonlySet<string>): () => void {
-  waitingSends.set(panelId, sessions);
+// Each dictated send still waiting, by voice panel.
+const waitingSends = new Map<string, WaitingSend>();
+
+/**
+ * Marks a dictated send from `panelId` as waiting on its cleanup; returns its
+ * release. `sendNow` is for a send the stop-and-send key or the session panel's
+ * Send started, which that key, pressed again, sends as it stands (#15705).
+ */
+export function claimWaitingSend(
+  panelId: string,
+  sessions: ReadonlySet<string>,
+  sendNow?: () => void
+): () => void {
+  const entry: WaitingSend = sendNow ? { sessions, sendNow } : { sessions };
+  waitingSends.set(panelId, entry);
   return () => {
-    if (waitingSends.get(panelId) === sessions) waitingSends.delete(panelId);
+    if (waitingSends.get(panelId) === entry) waitingSends.delete(panelId);
   };
 }
 
 /** Whether a send from `panelId` is waiting, and `sessionId` isn't one it takes. */
 export function isHeldBackSession(panelId: string, sessionId: string): boolean {
-  const sessions = waitingSends.get(panelId);
+  const sessions = waitingSends.get(panelId)?.sessions;
   return sessions !== undefined && !sessions.has(sessionId);
+}
+
+/** Whether a send the stop-and-send key started is waiting, shown in a composer or not. */
+export function hasWaitingStopAndSend(): boolean {
+  for (const entry of waitingSends.values()) if (entry.sendNow) return true;
+  return false;
+}
+
+/**
+ * The stop-and-send key pressed again: every send it started that still waits
+ * goes as its words stand, as a second Enter sends the one it started. All of
+ * them, since each says the key sends it; returns whether there were any.
+ */
+export function sendWaitingStopAndSends(): boolean {
+  let sent = false;
+  for (const { sendNow } of [...waitingSends.values()]) {
+    if (!sendNow) continue;
+    sendNow();
+    sent = true;
+  }
+  return sent;
 }
 
 /**
