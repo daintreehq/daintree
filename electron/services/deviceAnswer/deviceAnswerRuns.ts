@@ -1,9 +1,10 @@
-import { listChoices } from "../../../shared/utils/terminalChoice.js";
+import { listChoices, parseChoiceList } from "../../../shared/utils/terminalChoice.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import type { FleetRunRow, FleetSnapshot } from "../../../shared/types/ipc/fleet.js";
 import { readPluginTerminalScreen } from "../plugin/pluginTerminalScreenRead.js";
 import { redactSecrets } from "../redactSecrets.js";
 import { ANSWER_SCREEN_LINES, isAnswerLabel, type AnswerPtyClient } from "../terminalAnswer.js";
+import { questionIdOf } from "./questionId.js";
 
 /** Runs a page lists at once; screens are read for each on every poll. */
 export const MAX_LISTED_RUNS = 20;
@@ -29,6 +30,11 @@ export interface WaitingRunView {
   screen: string | null;
   /** The options its screen draws that a press can reach, top to bottom. */
   choices: string[];
+  /**
+   * The question those options answer, sent back with an answer so it is
+   * pressed only into the question this screen showed; null with no choices.
+   */
+  questionId: string | null;
 }
 
 /** A waiting run with the machine it waits on, as the page lists it. */
@@ -111,7 +117,7 @@ export async function listWaitingRuns(deps: DeviceAnswerRunsDeps): Promise<Waiti
         screen: screen === null ? null : redactSecrets(screen),
         // Parsed from the raw screen, since redacting can swallow rows of the
         // dialog; the device answers with these labels as sent.
-        choices: screen === null ? [] : answerableChoices(screen),
+        ...(screen === null ? noChoices() : answerableChoices(row, screen)),
       };
     })
   );
@@ -120,13 +126,24 @@ export async function listWaitingRuns(deps: DeviceAnswerRunsDeps): Promise<Waiti
   return views.filter((view) => isRunStillWaiting(after, view.runId, view.spawnedAt));
 }
 
+type Answerable = Pick<WaitingRunView, "choices" | "questionId">;
+
+function noChoices(): Answerable {
+  return { choices: [], questionId: null };
+}
+
 /**
- * The options as the device is sent them, or none when one couldn't be sent
- * back: redacting can lengthen a label past what an answer may carry.
+ * The options as the device is sent them, with the question they answer, or
+ * none when one couldn't be sent back: redacting can lengthen a label past
+ * what an answer may carry.
  */
-function answerableChoices(screen: string): string[] {
+function answerableChoices(row: FleetRunRow, screen: string): Answerable {
   const choices = listChoices(screen, redactSecrets);
-  return choices.every(isAnswerLabel) ? choices : [];
+  const question = parseChoiceList(screen)?.question;
+  if (choices.length === 0 || !choices.every(isAnswerLabel) || question === undefined) {
+    return noChoices();
+  }
+  return { choices, questionId: questionIdOf(row.runId, row.spawnedAt, question) };
 }
 
 /**

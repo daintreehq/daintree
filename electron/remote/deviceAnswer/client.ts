@@ -71,7 +71,13 @@ export class DeviceAnswerHostsClient {
           );
           const parsed = DeviceAnswerListResultSchema.safeParse(raw);
           if (parsed.success) return { hostId, host, status: "ok", runs: parsed.data.runs };
-          return { hostId, host, status: "unreachable", runs: [] };
+          const checksQuestions = (raw as { questionIds?: unknown } | null)?.questionIds === true;
+          return {
+            hostId,
+            host,
+            status: checksQuestions ? "unreachable" : "needs-update",
+            runs: [],
+          };
         } catch (error) {
           const status = errorCode(error) === "UNSUPPORTED" ? "needs-update" : "unreachable";
           return { hostId, host, status, runs: [] };
@@ -81,17 +87,20 @@ export class DeviceAnswerHostsClient {
   }
 
   /**
-   * Press the option labelled `label` in one of a host's runs. Resolves once
-   * the host pressed every key; rejects with the reason, in words the page
-   * shows. Never sent twice: a link lost mid-answer may have pressed it.
+   * Press the option labelled `label` in one of a host's runs, only into the
+   * question `questionId` was listed for; the host checks it against its own
+   * screen. Resolves once the host pressed every key; rejects with the
+   * reason, in words the page shows. Never sent twice: a link lost
+   * mid-answer may have pressed it.
    */
   async answer(request: {
     hostId: HostId;
     runId: string;
     spawnedAt: number;
     label: string;
+    questionId: string;
   }): Promise<void> {
-    const { hostId, runId, spawnedAt, label } = request;
+    const { hostId, runId, spawnedAt, label, questionId } = request;
     const host = this.hostName(hostId);
     if (host === null) {
       throw answerRefused("That host isn't in Daintree's host list any more. Nothing was pressed.");
@@ -100,9 +109,11 @@ export class DeviceAnswerHostsClient {
     if (!session?.isOpen) throw answerRefused(`${host} isn't connected. Nothing was pressed.`);
     const release = this.deps.hold(hostId);
     try {
+      // Never the older method as a fallback: a host that can't check the
+      // question is told to update, not asked to press by label alone.
       await session.call(
-        DeviceAnswerLinkMethod.ANSWER,
-        { runId, spawnedAt, label },
+        DeviceAnswerLinkMethod.ANSWER_QUESTION,
+        { runId, spawnedAt, label, questionId },
         { timeoutMs: HOST_ANSWER_TIMEOUT_MS }
       );
     } catch (error) {

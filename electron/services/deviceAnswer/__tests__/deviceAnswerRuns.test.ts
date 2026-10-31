@@ -154,7 +154,34 @@ describe("listWaitingRuns", () => {
       projectName: () => null,
     });
     expect(runs[0]!.choices).toEqual([]);
+    expect(runs[0]!.questionId).toBeNull();
     expect(runs[0]!.screen).toContain("password=[redacted]");
+  });
+
+  it("names the question each list asks, the same wherever its highlight is, and none without options", async () => {
+    const ask = (command: string, highlighted: "Yes" | "No") =>
+      [
+        ` Run ${command}?`,
+        highlighted === "Yes" ? "❯ 1. Yes" : "  1. Yes",
+        highlighted === "No" ? "❯ 2. No" : "  2. No",
+        "",
+        " Esc to cancel",
+      ].join("\n");
+    const questionIdFor = async (screen: string | null) => {
+      screens.set("a", screen);
+      const [run] = await listWaitingRuns({
+        fleet: () => snapshot([row({ runId: "a", agentState: "waiting" })]),
+        pty: () => ptyAt(100),
+        projectName: () => null,
+      });
+      return run!.questionId;
+    };
+    const asked = await questionIdFor(ask("rm -rf build", "Yes"));
+    expect(asked).toMatch(/^[A-Za-z0-9_-]{16,}$/);
+    expect(await questionIdFor(ask("rm -rf build", "No"))).toBe(asked);
+    expect(await questionIdFor(ask("git push --force", "Yes"))).not.toBe(asked);
+    expect(await questionIdFor("Working…")).toBeNull();
+    expect(await questionIdFor(null)).toBeNull();
   });
 
   it("lists nothing when the fleet has no snapshot yet", async () => {

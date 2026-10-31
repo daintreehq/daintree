@@ -25,6 +25,7 @@ const pty = {
   getSerializedStateAsync: async () => null,
   write: (_id: string, data: string) => {
     state.writes.push(data);
+    state.screen = redrawFor(state.screen, data);
     state.onWrite?.(state.writes.length);
   },
 };
@@ -60,6 +61,7 @@ vi.mock("../../../services/plugin/pluginTerminalScreenRead.js", () => ({
   }),
 }));
 
+import { redrawFor } from "../../../services/__tests__/answerRedraw.js";
 import type { LinkSession } from "../../link/session.js";
 import {
   makeTempDir,
@@ -69,6 +71,7 @@ import {
 } from "../../link/__tests__/linkTestUtils.js";
 import { DeviceAnswerHostsClient } from "../client.js";
 import { installDeviceAnswerHost } from "../hostInstall.js";
+import { DeviceAnswerLinkMethod } from "../linkMethods.js";
 
 const HOST = "studio-03";
 
@@ -77,8 +80,20 @@ let sessions: { host: LinkSession; client: LinkSession };
 let uninstall: () => void;
 let client: DeviceAnswerHostsClient;
 
-const answer = (label: string) =>
-  client.answer({ hostId: HOST, runId: "run-1", spawnedAt: 100, label });
+/** The question the host lists its run with now, as the device would be sent it. */
+async function listedQuestion(): Promise<string> {
+  const [listed] = await client.listWaiting();
+  return listed!.runs[0]!.questionId!;
+}
+
+const answer = async (label: string, questionId?: string) =>
+  client.answer({
+    hostId: HOST,
+    runId: "run-1",
+    spawnedAt: 100,
+    label,
+    questionId: questionId ?? (await listedQuestion()),
+  });
 
 beforeEach(async () => {
   state.writes = [];
@@ -121,8 +136,32 @@ describe("a host answering for a device paired with its Shell", () => {
     expect(JSON.stringify(listed)).not.toContain("abcdef123456");
     expect(listed!.runs[0]!.choices).toEqual(["Yes", "Use token=[redacted]", "No"]);
 
-    await answer("Use token=[redacted]");
+    await answer("Use token=[redacted]", listed!.runs[0]!.questionId!);
     expect(state.writes).toEqual(["\x1b[B", "\r"]);
+  });
+
+  it("checks the question its device was shown on its own screen, and presses nothing into a later one", async () => {
+    state.screen = " Run rm -rf build?\n❯ 1. Yes\n  2. No\n\n Esc to cancel";
+    const shown = await listedQuestion();
+    state.screen = " Run git push --force?\n❯ 1. Yes\n  2. No\n\n Esc to cancel";
+    await expect(answer("Yes", shown)).rejects.toMatchObject({
+      userMessage: "The question changed since this device showed it. Nothing was pressed.",
+    });
+    expect(state.writes).toEqual([]);
+  });
+
+  it("presses nothing for a Shell from before answers named their question, and says what to update", async () => {
+    await expect(
+      sessions.client.call(DeviceAnswerLinkMethod.ANSWER, {
+        runId: "run-1",
+        spawnedAt: 100,
+        label: "Yes",
+      })
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      userMessage: expect.stringContaining("needs updating"),
+    });
+    expect(state.writes).toEqual([]);
   });
 
   it("stands as the Shell's windows in its lease, and presses nothing where the Shell couldn't type", async () => {
@@ -143,20 +182,22 @@ describe("a host answering for a device paired with its Shell", () => {
   it("stops between keys when another screen takes the project", async () => {
     let taken = false;
     state.driving = () => !taken;
+    const questionId = await listedQuestion();
     state.onWrite = () => {
       taken = true;
     };
-    await expect(answer("No")).rejects.toMatchObject({
+    await expect(answer("No", questionId)).rejects.toMatchObject({
       userMessage: expect.stringContaining("Another screen took control"),
     });
     expect(state.writes).toEqual(["\x1b[B"]);
   });
 
   it("stops between keys when the link to the Shell drops", async () => {
+    const questionId = await listedQuestion();
     state.onWrite = (count) => {
       if (count === 1) sessions.host.close("test");
     };
-    await expect(answer("No")).rejects.toMatchObject({
+    await expect(answer("No", questionId)).rejects.toMatchObject({
       userMessage: expect.stringContaining("may have been pressed"),
     });
     // The next key was weighed, and not pressed.

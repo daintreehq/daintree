@@ -18,8 +18,20 @@ const BOX_RIGHT = /\s*[│┃║]\s*$/;
 
 /** Rows within this distance of the label are searched for the highlight. */
 const MAX_LIST_ROWS = 12;
+/**
+ * A rule or a box's corner drawn at the left edge: a dialog's frame, above
+ * which its question doesn't go on. Indented, it is part of what is asked (a
+ * divider inside a heredoc), so it never ends the question.
+ */
+const DIALOG_EDGE = /^ ?(?:[╭┌╔╰└╚]|[─━═]{8,})/;
 
-export type ChoicePlan = { ok: true; keys: string[] } | { ok: false; reason: string };
+/**
+ * `question` is the dialog the keys were planned on, as text that doesn't
+ * change when only its highlight moves: an answer checks it is still the same
+ * question before each key it presses.
+ */
+export type ChoicePlan =
+  { ok: true; keys: string[]; question: string } | { ok: false; reason: string };
 
 function indentOf(row: string): number {
   const marker = HIGHLIGHT_MARKER.exec(row);
@@ -39,10 +51,42 @@ function unframe(row: string): string {
   return row.replace(BOX_LEFT, "").replace(BOX_RIGHT, "");
 }
 
+/**
+ * The question a list asks, from the dialog's frame (or the top of what was
+ * read) through row `last`, each row as `shown` makes it. Rows are kept as
+ * drawn, since a command's text and indentation are what is being approved;
+ * `shown` takes off only the highlight. Moving the highlight leaves it the
+ * same; a different command, prompt or option makes it differ. Rows after the
+ * list's block, which a blank row ends (key hints, task lists, status), never
+ * count, since they can change while the question doesn't.
+ *
+ * The frame is found on the rows as drawn (`raw`), not unframed `lines`: a
+ * divider inside a boxed command is the box's content, never its edge.
+ */
+function questionText(
+  raw: readonly string[],
+  lines: readonly string[],
+  last: number,
+  shown: (row: string, i: number) => string
+): string {
+  let top = last;
+  while (top > 0 && !DIALOG_EDGE.test(raw[top - 1]!)) top--;
+  return lines
+    .slice(top, last + 1)
+    .map((row, k) => shown(row, top + k).trimEnd())
+    .join("\n");
+}
+
+/** The highlight's marker blanked to spaces, so the row reads as its neighbours are drawn. */
+function unhighlighted(row: string): string {
+  return row.replace(HIGHLIGHT_MARKER, (marker) => marker.replace(/[^\s]/, " "));
+}
+
 export function planChoice(screen: string, label: string): ChoicePlan {
   const wanted = label.trim().toLowerCase();
   if (wanted.length === 0) return { ok: false, reason: "The option label is empty." };
-  const lines = screen.split("\n").map(unframe);
+  const raw = screen.split("\n");
+  const lines = raw.map(unframe);
   const rows = (i: number): string => lines[i] ?? "";
 
   // An option row starts with its label, after any marker or number; a
@@ -98,7 +142,20 @@ export function planChoice(screen: string, label: string): ChoicePlan {
   for (let i = from; i <= to; i++) if (isOption(i)) steps++;
 
   const move = cursor < target ? "Down" : "Up";
-  return { ok: true, keys: [...Array<string>(steps).fill(move), "Enter"] };
+  let last = target;
+  while (last < lines.length - 1 && rows(last + 1).trim() !== "") last++;
+  // Options are the rows that start where the highlighted one's text does,
+  // wherever the highlight is; a heading or a command drawn at another indent
+  // is kept as drawn.
+  // A dialog the strict parser reads knows its option rows; any other list
+  // only has its highlighted row told apart, so only that row's marker goes.
+  const strict = readChoiceList(raw, true);
+  // Only when it is this very list: an older dialog above can offer the label too.
+  const question =
+    strict?.rows.includes(target) && strict.rows[strict.cursor] === cursor
+      ? strict.question
+      : questionText(raw, lines, last, (row, i) => (i === cursor ? unhighlighted(row) : row));
+  return { ok: true, keys: [...Array<string>(steps).fill(move), "Enter"], question };
 }
 
 const NUMBERED_OPTION = /^\s*(?:[❯›>▶➜→●]\s*)?(\d+)[.)]\s+/;
@@ -116,6 +173,10 @@ export interface ChoiceList {
   labels: string[];
   /** Index into `labels` of the highlighted option. */
   cursor: number;
+  /** What it asks, the same wherever its highlight is; see `questionText`. */
+  question: string;
+  /** The screen row each label is drawn on. */
+  rows: number[];
 }
 
 function labelOf(row: string): string {
@@ -210,7 +271,15 @@ function readChoiceList(rawLines: readonly string[], requireHint: boolean): Choi
   const labels = rows.map((i) => labelOf(lines[i]!));
   const folded = labels.map((label) => label.toLowerCase());
   if (labels.some((label) => label === "") || new Set(folded).size !== folded.length) return null;
-  return { labels, cursor: rows.indexOf(cursor) };
+  return {
+    labels,
+    cursor: rows.indexOf(cursor),
+    // Through the block's end, so the last option's wrapped rows count too.
+    question: questionText(rawLines, lines, bottom, (row, i) =>
+      i >= rows[0]! ? row.replace(HIGHLIGHT_MARKER, "").trim() : row
+    ),
+    rows,
+  };
 }
 
 /**
@@ -262,5 +331,9 @@ export function planListedChoice(
   if (index === -1) return { ok: false, reason: `No option "${label}" is on the screen.` };
   const steps = index - list.cursor;
   const move = steps > 0 ? "Down" : "Up";
-  return { ok: true, keys: [...Array<string>(Math.abs(steps)).fill(move), "Enter"] };
+  return {
+    ok: true,
+    keys: [...Array<string>(Math.abs(steps)).fill(move), "Enter"],
+    question: list.question,
+  };
 }

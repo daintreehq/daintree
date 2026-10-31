@@ -23,6 +23,7 @@ import { DEVICE_PAGE_CSP, DEVICE_PAGE_HTML } from "./deviceAnswerPage.js";
 import { MAX_AUDIT_ENTRIES, MAX_PAIRED_DEVICES, isValidPort } from "./deviceAnswerSettings.js";
 import { LOCAL_HOST_ID, isLocalHostId } from "../../../shared/types/remoteHosts.js";
 import type { DeviceWaitingList } from "./deviceAnswerRuns.js";
+import { isQuestionId } from "./questionId.js";
 import { sshLoginTarget } from "../../utils/machineName.js";
 
 const MAX_BODY_BYTES = 8 * 1024;
@@ -52,10 +53,11 @@ export interface DeviceAnswerServiceDeps {
   listWaiting: (options: { hosts: boolean }) => Promise<DeviceWaitingList>;
   /**
    * Press the option labelled `label` in the run on `hostId` (`LOCAL_HOST_ID`
-   * for this machine), for `device`. Resolves when every key went in; rejects
-   * with the reason, in words the page shows, when anything stopped it.
-   * `stillAllowed` is the service's own say before every key: the device
-   * still paired and the listener still on.
+   * for this machine), for `device`, only into the question `questionId` was
+   * listed for. Resolves when every key went in; rejects with the reason, in
+   * words the page shows, when anything stopped it. `stillAllowed` is the
+   * service's own say before every key: the device still paired and the
+   * listener still on.
    */
   answer: (request: {
     device: DevicePrincipal;
@@ -63,6 +65,7 @@ export interface DeviceAnswerServiceDeps {
     runId: string;
     spawnedAt: number;
     label: string;
+    questionId: string;
     stillAllowed: () => string | null;
   }) => Promise<void>;
   /** A connected host's name for the audit, or null when it isn't in the host list. */
@@ -471,7 +474,13 @@ export class DeviceAnswerService {
     times.push(now);
     this.answerTimes.set(device.id, times);
 
-    const { hostId: rawHostId, runId, spawnedAt, label } = (body ?? {}) as Record<string, unknown>;
+    const {
+      hostId: rawHostId,
+      runId,
+      spawnedAt,
+      label,
+      questionId,
+    } = (body ?? {}) as Record<string, unknown>;
     // A page from before hosts were listed names none: it was shown this machine's runs only.
     const hostId = rawHostId === undefined ? LOCAL_HOST_ID : rawHostId;
     if (
@@ -487,6 +496,17 @@ export class DeviceAnswerService {
       label.trim() === "" ||
       label.length > 200
     ) {
+      throw new HttpError(400, "That answer wasn't understood. Nothing was pressed.");
+    }
+    // A page from before answers named their question would be answering by
+    // label alone, which a later question with the same options also matches.
+    if (questionId === undefined) {
+      throw new HttpError(
+        409,
+        "This page is out of date. Reload it, then answer again. Nothing was pressed."
+      );
+    }
+    if (!isQuestionId(questionId)) {
       throw new HttpError(400, "That answer wasn't understood. Nothing was pressed.");
     }
     // A page from before redaction, or a hand-made request, can still send a
@@ -505,6 +525,7 @@ export class DeviceAnswerService {
         runId,
         spawnedAt,
         label,
+        questionId,
         stillAllowed: () => {
           if (this.closed || this.server === null || this.listenerGeneration !== generation) {
             return "Answering from another device was turned off. Nothing more was pressed.";

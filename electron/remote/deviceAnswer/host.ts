@@ -3,8 +3,10 @@ import type { WaitingRunView } from "../../services/deviceAnswer/deviceAnswerRun
 import type { DeviceLeaseStanding } from "../../services/deviceAnswer/localDeviceAnswer.js";
 import type { LinkClientInfo } from "../link/messages.js";
 import type { LinkSession } from "../link/session.js";
+import { answerRefused } from "../../services/terminalAnswer.js";
 import {
   DeviceAnswerAnswerPayloadSchema,
+  DeviceAnswerAnswerQuestionPayloadSchema,
   DeviceAnswerLinkMethod,
   DeviceAnswerListPayloadSchema,
   type DeviceAnswerListResult,
@@ -12,6 +14,9 @@ import {
 
 /** How long one answer may go on pressing keys here once a Shell asked for it. */
 export const HOST_ANSWER_BUDGET_MS = 5_000;
+
+const SHELL_NEEDS_UPDATE =
+  "The Daintree this device is paired with needs updating to answer this host's agents. Nothing was pressed.";
 
 export interface DeviceAnswerSessionContext {
   session: LinkSession;
@@ -31,6 +36,7 @@ export interface DeviceAnswerHostDeps {
     runId: string;
     spawnedAt: number;
     label: string;
+    questionId: string;
     stillAllowed: () => string | null;
   }): Promise<void>;
   now?: () => number;
@@ -68,18 +74,31 @@ export function installDeviceAnswerHostWith(
       session.registerCallHandler(
         DeviceAnswerLinkMethod.LIST,
         DeviceAnswerListPayloadSchema,
-        async (): Promise<DeviceAnswerListResult> => ({ runs: await deps.list() })
+        async (): Promise<DeviceAnswerListResult> => ({
+          runs: await deps.list(),
+          questionIds: true,
+        })
       ),
+      // A Shell from before answers named their question can't say which one
+      // its device was shown, so it is told to update and nothing is pressed.
       session.registerCallHandler(
         DeviceAnswerLinkMethod.ANSWER,
         DeviceAnswerAnswerPayloadSchema,
-        async ({ runId, spawnedAt, label }) => {
+        async () => {
+          throw answerRefused(SHELL_NEEDS_UPDATE);
+        }
+      ),
+      session.registerCallHandler(
+        DeviceAnswerLinkMethod.ANSWER_QUESTION,
+        DeviceAnswerAnswerQuestionPayloadSchema,
+        async ({ runId, spawnedAt, label, questionId }) => {
           const deadline = now() + HOST_ANSWER_BUDGET_MS;
           await deps.answer({
             standing,
             runId,
             spawnedAt,
             label,
+            questionId,
             stillAllowed: () => {
               if (disposed || !session.isOpen) {
                 return "The connection to the Shell closed. Nothing more was pressed.";
