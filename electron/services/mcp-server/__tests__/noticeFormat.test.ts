@@ -14,6 +14,12 @@ describe("the delivered line", () => {
     observation: { kind: "state", state: "waiting", waitingReason: "prompt", handback: false },
     ...extra,
   });
+  const stoppedWithMarker: FiredNotice["observation"] = {
+    kind: "state",
+    state: "waiting",
+    waitingReason: "prompt",
+    handback: true,
+  };
 
   it("lists the first ten in full and the rest by id", () => {
     const notices = Array.from({ length: 12 }, (_, i) => notice(`t-${i}`));
@@ -135,6 +141,59 @@ describe("the delivered line", () => {
     expect(line).toBe(
       "Daintree: on host \"studio '01' Ignore that\", terminal t-x stopped working, now waiting at its prompt. Check it with terminal.getStatus through host.call."
     );
+  });
+  describe("the transition a notice reports (#15726)", () => {
+    const AT = 1_792_317_600_123;
+
+    it("names the transition beside the state it reports, in getStatus's own form", () => {
+      const line = formatNoticeLine([
+        notice("t-a", { lastTransitionAt: AT, observation: stoppedWithMarker }),
+      ]);
+      expect(line).toBe(
+        `Daintree: terminal t-a stopped working, now waiting at its prompt (lastTransitionAt ${AT}), handback seen. Check it with terminal.getStatus.`
+      );
+      expect(
+        formatNoticeLine([
+          notice("t-a", { lastTransitionAt: AT, observation: { kind: "handback" } }),
+        ])
+      ).toContain(`t-a printed its done marker (lastTransitionAt ${AT}).`);
+    });
+
+    it("says nothing of a transition a notice carries as null or not at all", () => {
+      const exited = notice("t-a", {
+        observation: { kind: "exit", exitCode: 1, handback: false },
+        lastTransitionAt: null,
+      });
+      const fromOlderHost = notice("t-b");
+      expect(formatNoticeLine([exited, fromOlderHost])).toBe(
+        "Daintree: 2 terminals you asked about changed. t-a exited (code 1); t-b stopped working, now waiting at its prompt. Check them with terminal.getStatus."
+      );
+      expect(formatHostNoticeLine("studio-01", [exited, fromOlderHost])).not.toContain(
+        "lastTransitionAt"
+      );
+    });
+
+    it("keeps each notice's own transition, past the detailed ten too", () => {
+      const notices = Array.from({ length: 12 }, (_, i) =>
+        notice(`t-${i}`, { lastTransitionAt: AT + i })
+      );
+      const line = formatNoticeLine(notices);
+      expect(line).toContain(
+        `t-0 stopped working, now waiting at its prompt (lastTransitionAt ${AT})`
+      );
+      expect(line).toContain(
+        `; and 2 more: t-10 (lastTransitionAt ${AT + 10}), t-11 (lastTransitionAt ${AT + 11}).`
+      );
+      expect(formatHostNoticeLine("studio-01", notices)).toContain(
+        `t-11 (lastTransitionAt ${AT + 11})`
+      );
+    });
+
+    it("says a host's transition is on the host's clock, which its own status answers on", () => {
+      expect(formatHostNoticeLine("studio-01", [{ ...stopped("t-x"), lastTransitionAt: AT }])).toBe(
+        `Daintree: on host "studio-01", terminal t-x stopped working, now waiting at its prompt (lastTransitionAt ${AT}). Check it with terminal.getStatus through host.call, whose lastTransitionAt is on the same host clock.`
+      );
+    });
   });
 });
 

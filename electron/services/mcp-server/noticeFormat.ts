@@ -69,29 +69,37 @@ function describeState(state: AgentState, waitingReason?: WaitingReason): string
   }
 }
 
-/** A notice's terminal, with the transition it reports when it carries one. */
-function describeTerminal(notice: FiredNotice): string {
-  const id = displayNoticeTerminalId(notice.terminalId);
+/**
+ * The transition a notice reports, beside the state it names, in the form
+ * `terminal.getStatus` answers it. Nothing when the notice carries none.
+ */
+function describeTransition(notice: FiredNotice): string {
   return typeof notice.lastTransitionAt === "number"
-    ? `${id} (lastTransitionAt ${notice.lastTransitionAt})`
-    : id;
+    ? ` (lastTransitionAt ${notice.lastTransitionAt})`
+    : "";
 }
 
 function describeNotice(notice: FiredNotice): string {
-  const id = describeTerminal(notice);
+  const id = displayNoticeTerminalId(notice.terminalId);
+  const at = describeTransition(notice);
   const obs = notice.observation;
   switch (obs.kind) {
     case "state":
-      return `${id} stopped working, ${describeState(obs.state, obs.waitingReason)}${obs.handback ? ", handback seen" : ""}${notice.awaitingHandback === true ? ", with no done marker yet (another notice follows when it next stops)" : ""}`;
+      return `${id} stopped working, ${describeState(obs.state, obs.waitingReason)}${at}${obs.handback ? ", handback seen" : ""}${notice.awaitingHandback === true ? ", with no done marker yet (another notice follows when it next stops)" : ""}`;
     case "exit":
-      return `${id} exited${obs.exitCode !== undefined ? ` (code ${obs.exitCode})` : ""}${obs.handback ? ", handback seen" : ""}`;
+      return `${id} exited${obs.exitCode !== undefined ? ` (code ${obs.exitCode})` : ""}${at}${obs.handback ? ", handback seen" : ""}`;
     case "closed":
-      return `${id} was closed`;
+      return `${id} was closed${at}`;
     case "handback":
-      return `${id} printed its done marker`;
+      return `${id} printed its done marker${at}`;
     case "not-written":
-      return `${id} was not confirmed to receive your prompt (${obs.phase})`;
+      return `${id} was not confirmed to receive your prompt (${obs.phase})${at}`;
   }
+}
+
+/** A notice past the detailed ones: its terminal, and the transition it reports. */
+function describeTerminal(notice: FiredNotice): string {
+  return `${displayNoticeTerminalId(notice.terminalId)}${describeTransition(notice)}`;
 }
 
 /**

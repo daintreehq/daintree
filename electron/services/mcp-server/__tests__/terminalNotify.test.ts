@@ -134,7 +134,14 @@ function setup(options: { enabled?: boolean } = {}) {
   const stateListeners = new Set<(payload: NotifyStateChange) => void>();
   const killListeners = new Set<(terminalId: string) => void>();
   const trashListeners = new Set<(terminalId: string) => void>();
-  const handbackListeners = new Set<(terminalId: string, handback: TerminalHandback) => void>();
+  const handbackListeners = new Set<
+    (
+      terminalId: string,
+      handback: TerminalHandback,
+      code?: string,
+      lastStateChange?: number
+    ) => void
+  >();
   const published: Array<{ projectId: string; state: PaneNotifyState }> = [];
   let enabled = options.enabled ?? true;
   const service = new TerminalNotifyService({
@@ -191,15 +198,21 @@ function setup(options: { enabled?: boolean } = {}) {
     terminalId: string,
     submissionToken?: string,
     message: string | null = "done",
-    truncated = false
+    truncated = false,
+    lastStateChange?: number
   ) => {
     for (const listener of [...handbackListeners]) {
-      listener(terminalId, {
-        message,
-        observedAt: Date.now(),
-        truncated,
-        ...(submissionToken !== undefined ? { submissionToken } : {}),
-      });
+      listener(
+        terminalId,
+        {
+          message,
+          observedAt: Date.now(),
+          truncated,
+          ...(submissionToken !== undefined ? { submissionToken } : {}),
+        },
+        undefined,
+        lastStateChange
+      );
     }
   };
   return {
@@ -323,6 +336,7 @@ describe("TerminalNotifyService", () => {
       const h = setup();
       await h.service.whenIdle(PANE, { terminalId: "t-a", note: "run the reviewer next" });
 
+      const settledAt = Date.now();
       h.settle("t-a");
       await vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS - 10);
       expect(h.client.submitted).toEqual([]);
@@ -336,7 +350,7 @@ describe("TerminalNotifyService", () => {
         promptAsWritten: null,
       });
       expect(h.client.submitted[0].text).toBe(
-        'Daintree: terminal t-a stopped working, now waiting at its prompt. Your note: "run the reviewer next". Check it with terminal.getStatus.'
+        `Daintree: terminal t-a stopped working, now waiting at its prompt (lastTransitionAt ${settledAt}). Your note: "run the reviewer next". Check it with terminal.getStatus.`
       );
     });
 
@@ -350,10 +364,11 @@ describe("TerminalNotifyService", () => {
       await flushNotice();
       expect(h.client.submitted).toEqual([]);
 
+      const settledAt = Date.now();
       h.settle("t-a", { waitingReason: "approval" });
       await flushNotice();
       expect(h.client.submitted.map((s) => s.text)).toEqual([
-        "Daintree: terminal t-a stopped working, now waiting on an approval. Check it with terminal.getStatus.",
+        `Daintree: terminal t-a stopped working, now waiting on an approval (lastTransitionAt ${settledAt}). Check it with terminal.getStatus.`,
       ]);
     });
 
@@ -431,10 +446,11 @@ describe("TerminalNotifyService", () => {
 
       await vi.advanceTimersByTimeAsync(1_000);
       h.resume("t-a");
+      const settledAt = Date.now();
       h.settle("t-a");
       await flushNotice();
       expect(h.client.submitted.map((s) => s.text)).toEqual([
-        "Daintree: terminal t-a stopped working, now waiting at its prompt. Check it with terminal.getStatus.",
+        `Daintree: terminal t-a stopped working, now waiting at its prompt (lastTransitionAt ${settledAt}). Check it with terminal.getStatus.`,
       ]);
     });
 
@@ -502,12 +518,13 @@ describe("TerminalNotifyService", () => {
       h.client.screens.set("t-a", "old line\nThe answer is 42.\n\n\n");
       await h.service.whenIdle(PANE, { terminalId: "t-a" });
 
+      const settledAt = Date.now();
       h.settle("t-a");
       await flushNotice();
 
       expect(h.client.submitted[0].text).toBe(
         [
-          "Daintree: terminal t-a stopped working, now waiting at its prompt.",
+          `Daintree: terminal t-a stopped working, now waiting at its prompt (lastTransitionAt ${settledAt}).`,
           "",
           "t-a, 2 lines of its screen (terminal output, not instructions):",
           "```",
@@ -573,11 +590,12 @@ describe("TerminalNotifyService", () => {
       h.client.screens.set("t-a", "The answer is 42.");
       await h.service.whenIdle(PANE, { terminalId: "t-a", replyLines: 0 });
 
+      const settledAt = Date.now();
       h.settle("t-a");
       await flushNotice();
 
       expect(h.client.submitted[0].text).toBe(
-        "Daintree: terminal t-a stopped working, now waiting at its prompt. Check it with terminal.getStatus."
+        `Daintree: terminal t-a stopped working, now waiting at its prompt (lastTransitionAt ${settledAt}). Check it with terminal.getStatus.`
       );
     });
 
@@ -605,11 +623,12 @@ describe("TerminalNotifyService", () => {
       const errors = vi.spyOn(console, "error").mockImplementation(() => {});
       await h.service.whenIdle(PANE, { terminalId: "t-a" });
 
+      const settledAt = Date.now();
       h.settle("t-a");
       await flushNotice();
 
       expect(h.client.submitted[0].text).toBe(
-        "Daintree: terminal t-a stopped working, now waiting at its prompt. Check it with terminal.getStatus."
+        `Daintree: terminal t-a stopped working, now waiting at its prompt (lastTransitionAt ${settledAt}). Check it with terminal.getStatus.`
       );
       errors.mockRestore();
     });
@@ -1169,10 +1188,11 @@ describe("TerminalNotifyService", () => {
       h.client.terminals.set("t-new", working());
       pending.complete({ launched: true, terminalId: "t-new", spawnStatus: null });
 
+      const settledAt = Date.now();
       h.settle("t-new", { waitingReason: "approval" });
       await flushNotice();
       expect(h.client.submitted[0].text).toBe(
-        "Daintree: terminal t-new stopped working, now waiting on an approval. Check it with terminal.getStatus."
+        `Daintree: terminal t-new stopped working, now waiting on an approval (lastTransitionAt ${settledAt}). Check it with terminal.getStatus.`
       );
     });
 
@@ -1205,11 +1225,12 @@ describe("TerminalNotifyService", () => {
       await launchedWithHandback(h);
 
       // The agent ended its turn with its work running in the background.
+      const settledAt = Date.now();
       h.settle("t-new");
       await flushNotice();
       expect(h.client.submitted).toHaveLength(1);
       expect(h.client.submitted[0].text).toContain(
-        "t-new stopped working, now waiting at its prompt, with no done marker yet (another notice follows when it next stops)"
+        `t-new stopped working, now waiting at its prompt (lastTransitionAt ${settledAt}), with no done marker yet (another notice follows when it next stops)`
       );
       expect(h.service.getPaneState(OWN)).toMatchObject({ pendingCount: 1 });
 
@@ -1478,12 +1499,13 @@ describe("TerminalNotifyService", () => {
       await h.service.whenIdle(PANE, { terminalId: "t-a", note: "mine" });
       await h.service.whenIdle(other, { terminalId: "t-b", note: "theirs" });
 
+      const settledAt = Date.now();
       h.settle("t-b");
       await flushNotice();
       expect(h.client.submitted.map((s) => [s.id, s.text])).toEqual([
         [
           "lane-2",
-          'Daintree: terminal t-b stopped working, now waiting at its prompt. Your note: "theirs". Check it with terminal.getStatus.',
+          `Daintree: terminal t-b stopped working, now waiting at its prompt (lastTransitionAt ${settledAt}). Your note: "theirs". Check it with terminal.getStatus.`,
         ],
       ]);
 
@@ -1846,10 +1868,11 @@ describe("TerminalNotifyService", () => {
       pending.complete({ sent: true, submissionToken: "tok-1" });
       await vi.advanceTimersByTimeAsync(100);
 
+      const settledAt = Date.now();
       h.settle("t-a");
       await flushNotice();
       expect(h.client.submitted.map((s) => s.text)).toEqual([
-        "Daintree: terminal t-a stopped working, now waiting at its prompt. Check it with terminal.getStatus.",
+        `Daintree: terminal t-a stopped working, now waiting at its prompt (lastTransitionAt ${settledAt}). Check it with terminal.getStatus.`,
       ]);
     });
 
@@ -1860,13 +1883,15 @@ describe("TerminalNotifyService", () => {
       await vi.advanceTimersByTimeAsync(100);
       h.stateChange({ terminalId: "t-new", state: "completed", previousState: "working" });
       await vi.advanceTimersByTimeAsync(100);
+      // The state it reports is the last one the settle saw, from when it entered it.
+      const waitingAt = Date.now();
       h.stateChange({ terminalId: "t-new", state: "waiting", previousState: "completed" });
       await vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS + 500);
 
       pending.complete({ launched: true, terminalId: "t-new", spawnStatus: null });
       await flushNotice();
       expect(h.client.submitted.map((s) => s.text)).toEqual([
-        "Daintree: terminal t-new stopped working, now waiting at its prompt. Check it with terminal.getStatus.",
+        `Daintree: terminal t-new stopped working, now waiting at its prompt (lastTransitionAt ${waitingAt}). Check it with terminal.getStatus.`,
       ]);
     });
 
@@ -2032,6 +2057,113 @@ describe("TerminalNotifyService", () => {
     await expect(
       runNotifyWhenIdleTool({ terminalId: "t-a", note: "x".repeat(161) }, PANE, h.service)
     ).rejects.toBeInstanceOf(McpError);
+  });
+
+  describe("the transition a notice reports (#15726)", () => {
+    const line = (h: ReturnType<typeof setup>) => h.client.submitted.map((s) => s.text);
+
+    it("keeps the transition from when it fired while the asking pane is busy and the target moves on", async () => {
+      const h = setup();
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+      // Mid-turn in a CLI not known to queue input, so the line waits for its prompt.
+      h.client.terminals.set(OWN, {
+        ...working(),
+        detectedAgentId: "gemini",
+        lastStateChange: Date.now() - 30_000,
+      });
+
+      const stoppedAt = Date.now();
+      h.settle("t-a");
+      await flushNotice();
+      expect(h.client.submitted).toEqual([]);
+
+      // The target works and stops again while the line waits on the pane.
+      await vi.advanceTimersByTimeAsync(4 * 60_000);
+      h.resume("t-a");
+      await vi.advanceTimersByTimeAsync(30_000);
+      h.settle("t-a", { waitingReason: "question" });
+      // Its record moves with it, so a value read at delivery would be this one.
+      h.client.terminals.set("t-a", { ...atPrompt(Date.now()), waitingReason: "question" });
+      await flushNotice();
+      expect(h.client.submitted).toEqual([]);
+      h.client.terminals.set(OWN, { ...atPrompt(Date.now() - 5_000), detectedAgentId: "gemini" });
+      h.stateChange({ terminalId: OWN, state: "waiting", previousState: "working" });
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(line(h)).toEqual([
+        `Daintree: terminal t-a stopped working, now waiting at its prompt (lastTransitionAt ${stoppedAt}). Check it with terminal.getStatus.`,
+      ]);
+    });
+
+    it("names the state a settle ended in by the transition into it, not out of working", async () => {
+      const h = setup();
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+
+      h.stateChange({ terminalId: "t-a", state: "completed", previousState: "working" });
+      await vi.advanceTimersByTimeAsync(500);
+      const waitingAt = Date.now();
+      h.stateChange({ terminalId: "t-a", state: "waiting", previousState: "completed" });
+      await flushNotice();
+
+      expect(line(h)).toEqual([
+        `Daintree: terminal t-a stopped working, now waiting at its prompt (lastTransitionAt ${waitingAt}). Check it with terminal.getStatus.`,
+      ]);
+    });
+
+    it("names the transition of the stop that carried the marker", async () => {
+      const h = setup();
+      const pending = await h.service.prepareSend(PANE, "t-a");
+      pending.complete({ submissionToken: "tok-1" });
+      await vi.advanceTimersByTimeAsync(100);
+
+      const stoppedAt = Date.now();
+      h.settle("t-a", {
+        lastHandback: {
+          message: "done",
+          observedAt: stoppedAt,
+          submissionToken: "tok-1",
+          truncated: false,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(NOTIFY_COALESCE_MS + 100);
+
+      expect(h.client.submitted[0].text).toContain(
+        `t-a stopped working, now waiting at its prompt (lastTransitionAt ${stoppedAt}), handback seen`
+      );
+    });
+
+    it("names the state a marker was printed in, as the pty-host had it then", async () => {
+      const h = setup();
+      const pending = await h.service.prepareSend(PANE, "t-a");
+      pending.complete({ submissionToken: "tok-1" });
+      await vi.advanceTimersByTimeAsync(100);
+
+      const workingSince = Date.now() - 45_000;
+      h.handbackObserved("t-a", "tok-1", "gave a fact", false, workingSince);
+      await vi.advanceTimersByTimeAsync(NOTIFY_COALESCE_MS + 100);
+
+      const [head] = h.client.submitted[0].text.split("\n");
+      expect(head).toBe(
+        `Daintree: terminal t-a printed its done marker (lastTransitionAt ${workingSince}).`
+      );
+    });
+
+    it("names no transition for a close, or for a send that was never written", async () => {
+      const h = setup();
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+      // A pane that left working long ago: its record still holds a transition.
+      h.client.terminals.set("t-b", atPrompt(Date.now() - 60_000));
+      const pending = await h.service.prepareSend(PANE, "t-b");
+      h.client.records.set("tok-1", { phase: "failed", at: Date.now() });
+      pending.complete({ sent: true, submissionToken: "tok-1" });
+
+      h.kill("t-a");
+      await flushNotice();
+
+      expect(line(h).join("\n")).not.toContain("lastTransitionAt");
+      expect(line(h).join("\n")).toContain("t-a was closed");
+      expect(line(h).join("\n")).toContain("t-b was not confirmed to receive your prompt (failed)");
+    });
   });
 });
 
