@@ -430,14 +430,15 @@ describe("useGlobalKeybindings — Cmd+W in a surface that owns its close", () =
   });
 
   it("never opens the grid pane's menu from inside the isolated surface", () => {
-    // Close rebound to Shift+F10, pressed on a control in the pane (a text
-    // field keeps unmodified keys for itself, by the editable rule).
-    mocks.keybindingService.getTriggerCombos.mockImplementation((id: string) =>
-      id === "terminal.close" ? ["Shift+F10"] : []
-    );
-    mocks.keybindingService.getEffectiveCombo.mockImplementation((id: string) =>
-      id === "terminal.contextMenu" ? "Shift+F10" : undefined
-    );
+    // Close rebound to Shift+F10 while the panel menu still holds it too,
+    // pressed on a control in the pane (a text field keeps unmodified keys for
+    // itself, by the editable rule). A panel is focused, so the menu route
+    // would dispatch if the isolated surface didn't keep it out.
+    mocks.panelState.focusedId = "panel-1";
+    bindTriggers({
+      "terminal.close": ["Shift+F10"],
+      "terminal.contextMenu": ["Shift+F10"],
+    });
     render(<Host />);
     const owner = document.createElement("section");
     owner.setAttribute("data-close-owner", "");
@@ -1959,16 +1960,27 @@ describe("useGlobalKeybindings — panel menu keys follow the action's bindings"
         input.remove();
       }
     });
+  });
 
-    it("still leaves Shift+F10 to a surface that owns its rows' menus", () => {
+  // The stand-down follows the physical key, not the binding: a surface with
+  // its own menu keeps both keys whatever the panel menu is bound to.
+  describe.each<[string, string]>([
+    ["a surface that owns its rows' menus", `<div data-row-menu=""><div id="target"></div></div>`],
+    ["an already-open menu", `<div role="menu"><div id="target" role="menuitem"></div></div>`],
+  ])("inside %s", (_owner, html) => {
+    it.each<[string, KeyboardEventInit, string[]]>([
+      ["Shift+F10", SHIFT_F10, ["Shift+F10", "ContextMenu"]],
+      ["ContextMenu", MENU_KEY, ["Shift+F10", "ContextMenu"]],
+      ["Shift+F10 after a rebind to F9", SHIFT_F10, ["F9"]],
+      ["ContextMenu after a rebind to F9", MENU_KEY, ["F9"]],
+    ])("leaves %s to its owner", (_key, init, combos) => {
+      bindTriggers({ "terminal.contextMenu": combos });
       render(<Host />);
-      const surface = document.createElement("div");
-      surface.setAttribute("data-row-menu", "");
-      const row = document.createElement("div");
-      surface.appendChild(row);
-      document.body.appendChild(surface);
+      const host = document.createElement("div");
+      host.innerHTML = html;
+      document.body.appendChild(host);
 
-      const event = press(SHIFT_F10, row);
+      const event = press(init, host.querySelector<HTMLElement>("#target")!);
 
       expect(event.defaultPrevented).toBe(false);
       expect(dispatchedActionIds()).toEqual([]);
