@@ -49,6 +49,13 @@ cases("connection: Codex patterns", "connection", [
   "504 Gateway Timeout",
 ]);
 
+cases("connection: gRPC status names in an error context", "connection", [
+  "Error: 14 UNAVAILABLE: No connection established",
+  "Error: 13 INTERNAL: Received RST_STREAM",
+  'ApiError: {"error":{"code":503,"message":"The model is overloaded.","status":"UNAVAILABLE"}}',
+  '{"error": {"code": 500, "status": "INTERNAL"}}',
+]);
+
 cases("auth: Claude patterns", "auth", [
   "Error: Not logged in. Please run /login to authenticate.",
   "Please run /login first",
@@ -89,6 +96,23 @@ cases("user-error: must NOT trigger fallback", "user-error", [
 
 cases("clean: empty or non-matching tail", "clean", ["", "Hello, world!"]);
 
+cases(
+  "clean: ordinary text containing INTERNAL, UNAVAILABLE or 429 on a nonzero exit",
+  "clean",
+  [
+    "const INTERNAL_API_URL = process.env.INTERNAL_API_URL;",
+    "return Status.UNAVAILABLE;",
+    "⎿  Read 429 lines",
+    "Tests: 429 passed, 1 failed",
+    "Handlers return HTTP 429 when the bucket is empty.",
+    "src/foo.ts line 429",
+    "enum Code { OK = 0, INTERNAL = 13, UNAVAILABLE = 14 }",
+    "```ts\nexport const INTERNAL = 13;\nif (status === Status.UNAVAILABLE) retry();\n```",
+    " Test Files  1 failed | 12 passed (13)\n      Tests  1 failed | 429 passed (430)\n   Duration  4.2s",
+  ],
+  { exitCode: 1 }
+);
+
 describe("classifyExitOutput: short-circuits", () => {
   it("returns 'clean' when wasKilled is true, regardless of output", () => {
     const output = "API Error: 500 Internal server error";
@@ -116,6 +140,11 @@ describe("classifyExitOutput: short-circuits", () => {
     const padding = "noise ".repeat(5000);
     const output = padding + "\nAPI Error: 500 Internal server error\n";
     expect(classifyExitOutput({ recentOutput: output })).toBe("connection");
+  });
+
+  it("keeps a real 5xx a connection error when an unrelated 429 appears elsewhere", () => {
+    const output = "API Error: 503 Service Unavailable\nsrc/foo.ts line 429\n";
+    expect(classifyExitOutput({ recentOutput: output, exitCode: 1 })).toBe("connection");
   });
 
   it("does not match unrelated 'Error:' chatter", () => {

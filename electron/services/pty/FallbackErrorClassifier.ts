@@ -18,7 +18,11 @@ const CONNECTION_PATTERNS: RegExp[] = [
   // HTTP 5xx server-class
   /\bAPI Error:\s*(?:5\d\d|Repeated\s+5\d\d|Repeated\s+529\s+Overloaded|Overloaded)/i,
   /\b(?:502|503|504)\s+(?:Bad Gateway|Service Unavailable|Gateway Timeout)/i,
-  /INTERNAL|UNAVAILABLE/,
+  // gRPC status names only count where a CLI prints them as an error ("Error:
+  // 14 UNAVAILABLE: ...", a JSON error body), not as bare words in source,
+  // enums or test output.
+  /\b\w*(?:Error|Exception|error):\s*(?:\d{1,2}\s+)?(?:INTERNAL|UNAVAILABLE)\b(?![\w.])/,
+  /"status"\s*:\s*"(?:INTERNAL|UNAVAILABLE)"/,
 
   // Connection/DNS/timeout
   /\bECONNREFUSED|\bENOTFOUND|\bETIMEDOUT|\bECONNRESET/,
@@ -50,7 +54,11 @@ const AUTH_PATTERNS: RegExp[] = [
 // Evaluated before connection/auth so a 429 cannot be misread as a 5xx.
 const RATE_LIMIT_PATTERNS: RegExp[] = [
   /\bAPI Error:\s*Rate limit/i,
-  /\b429\b/,
+  // A bare 429 is a line number or a count in ordinary output; only an error
+  // or status context makes it a rate limit.
+  /\(429\)/,
+  /\b(?:Error|error):?\s*429\b/,
+  /\b(?:status|code)["']?\s*[:=]\s*429\b/i,
   /\brate[\s-]?limit(?:ed|ing)?\b/i,
   /\bRESOURCE_EXHAUSTED\b/,
   /\brateLimitExceeded\b/i,
