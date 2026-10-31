@@ -30,8 +30,14 @@ describe("dropRetiredAgentModel", () => {
   });
 
   it.each([
-    ["an offered model", { agentModelId: "claude-sonnet-5.5", command: "copilot --model claude-sonnet-5.5" }],
-    ["a model the bundled list doesn't name", { agentModelId: "claude-sonnet-6", command: "copilot --model claude-sonnet-6" }],
+    [
+      "an offered model",
+      { agentModelId: "claude-sonnet-5.5", command: "copilot --model claude-sonnet-5.5" },
+    ],
+    [
+      "a model the bundled list doesn't name",
+      { agentModelId: "claude-sonnet-6", command: "copilot --model claude-sonnet-6" },
+    ],
     ["no model", { agentLaunchFlags: ["--allow-all-tools"], command: "copilot" }],
   ])("leaves %s exactly as saved", (_label, saved) => {
     const result = dropRetiredAgentModel("copilot", saved);

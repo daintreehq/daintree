@@ -100,8 +100,7 @@ async function settle(): Promise<void> {
 
 function copilotPanes(): PtyPanelData[] {
   return Object.values(usePanelStore.getState().panelsById).filter(
-    (panel): panel is PtyPanelData =>
-      "launchAgentId" in panel && panel.launchAgentId === "copilot"
+    (panel): panel is PtyPanelData => "launchAgentId" in panel && panel.launchAgentId === "copilot"
   );
 }
 

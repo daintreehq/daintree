@@ -1356,7 +1356,10 @@ export function resolveAssistantModelId(
 }
 
 /** Whether `agentId` declares `modelId` retired (see `AgentConfig.retiredModels`). */
-export function isRetiredAgentModel(agentId: string | undefined, modelId: string | undefined): boolean {
+export function isRetiredAgentModel(
+  agentId: string | undefined,
+  modelId: string | undefined
+): boolean {
   if (!agentId || !modelId) return false;
   const retired = getEffectiveAgentConfig(agentId)?.retiredModels;
   return retired !== undefined && Object.hasOwn(retired, modelId);

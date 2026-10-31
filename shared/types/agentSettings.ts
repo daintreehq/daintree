@@ -1,4 +1,8 @@
-import { AGENT_REGISTRY, getEffectiveAgentConfig, isRetiredAgentModel } from "../config/agentRegistry.js";
+import {
+  AGENT_REGISTRY,
+  getEffectiveAgentConfig,
+  isRetiredAgentModel,
+} from "../config/agentRegistry.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import {
   agentCommandDialect,
