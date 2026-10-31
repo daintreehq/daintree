@@ -524,6 +524,54 @@ describe("MigrationRunner", () => {
       warnSpy.mockRestore();
     });
 
+    it("deletes no backups when this run could not write its own", async () => {
+      seed(SEEDED_BACKUPS);
+      const copySpy = vi.spyOn(fs, "copyFileSync").mockImplementation(() => {
+        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const store = createMockStore(storePath, { _schemaVersion: 3 });
+
+      try {
+        await new MigrationRunner(store as never).runMigrations([noop]);
+      } finally {
+        copySpy.mockRestore();
+        warnSpy.mockRestore();
+      }
+
+      expect(store.data._schemaVersion).toBe(4);
+      expect(backups()).toEqual([...SEEDED_BACKUPS].sort());
+    });
+
+    it.skipIf(process.platform === "win32")(
+      "leaves directories and symlinks named like backups alone",
+      async () => {
+        seed(SEEDED_BACKUPS);
+        const dirEntry = path.join(tempDir, "config.json.backup-2020-01-01T00-00-00-000Z");
+        fs.mkdirSync(dirEntry);
+        const target = path.join(tempDir, "outside-target.json");
+        fs.writeFileSync(target, "{}", "utf8");
+        fs.chmodSync(target, 0o644);
+        const linkEntry = path.join(tempDir, "config.json.backup-v0-2020-02-01T00-00-00-000Z");
+        fs.symlinkSync(target, linkEntry);
+        const store = createMockStore(storePath, { _schemaVersion: 3 });
+
+        await new MigrationRunner(store as never).runMigrations([noop]);
+
+        expect(fs.statSync(dirEntry).isDirectory()).toBe(true);
+        expect(fs.lstatSync(linkEntry).isSymbolicLink()).toBe(true);
+        expect(fs.statSync(target).mode & 0o777).toBe(0o644);
+        expect(backups()).toEqual(
+          [
+            path.basename(dirEntry),
+            path.basename(linkEntry),
+            "config.json.backup-v3-2025-02-10T10-00-00-000Z",
+            ...NEWEST_SEEDED,
+          ].sort()
+        );
+      }
+    );
+
     it.skipIf(process.platform === "win32")(
       "tightens retained backups written by older builds to 0o600",
       async () => {

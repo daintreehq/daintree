@@ -208,16 +208,17 @@ export class MigrationRunner {
       const dir = path.dirname(storePath);
       const currentName = path.basename(currentBackupPath);
       const prefix = `${path.basename(storePath)}.backup-`;
-      const older: Array<{ name: string; timestamp: string }> = [];
+      const older: Array<{ name: string; sortKey: string }> = [];
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         if (!entry.isFile() || entry.name === currentName || !entry.name.startsWith(prefix)) {
           continue;
         }
         const match = BACKUP_SUFFIX_PATTERN.exec(entry.name.slice(prefix.length));
-        if (match) older.push({ name: entry.name, timestamp: match[1] });
+        // Timestamp first, then the name, so equal timestamps sort deterministically.
+        if (match) older.push({ name: entry.name, sortKey: `${match[1]} ${entry.name}` });
       }
       // Newest first.
-      older.sort((a, b) => (a.timestamp < b.timestamp ? 1 : a.timestamp > b.timestamp ? -1 : 0));
+      older.sort((a, b) => (a.sortKey < b.sortKey ? 1 : a.sortKey > b.sortKey ? -1 : 0));
 
       const keepOlder = PRE_MIGRATION_BACKUPS_TO_KEEP - 1;
       for (const { name } of older.slice(0, keepOlder)) {
