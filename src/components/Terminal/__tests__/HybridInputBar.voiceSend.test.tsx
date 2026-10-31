@@ -26,6 +26,8 @@ import { subscribeDictationRangeTracking } from "@/store/dictationRangeStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
+import { setPendingComposerSelection } from "@/lib/composerCaret";
+import { makeDraftKey } from "@/lib/draftKey";
 import { HybridInputBar } from "../HybridInputBar";
 
 type DeltaPayload = { text: string; itemId?: string };
@@ -263,6 +265,29 @@ describe("HybridInputBar dictated send without its cleanup (#14959)", () => {
 });
 
 describe("HybridInputBar dictated send reopened by the next dictation (#14804, #15703)", () => {
+  // A progress strip a slow runner got to show fades out, as on screen, so
+  // the border is free by the next act whether or not the gate opened.
+  let stillAnimate: PropertyDescriptor | undefined;
+  beforeEach(() => {
+    stillAnimate = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
+    Object.defineProperty(Element.prototype, "animate", {
+      configurable: true,
+      value: () => {
+        const animation = { cancel() {}, pause() {} };
+        Object.defineProperty(animation, "onfinish", {
+          get: () => null,
+          set: (finish: (() => void) | null) => {
+            if (finish) queueMicrotask(finish);
+          },
+        });
+        return animation;
+      },
+    });
+  });
+  afterEach(() => {
+    if (stillAnimate) Object.defineProperty(Element.prototype, "animate", stillAnimate);
+  });
+
   /** Enter on a passage whose cleanup is held, then the dictation key again. */
   async function enterThenDictate(onSend: (payload: { text: string }) => void, next: string) {
     const pending = deferred<CorrectResult>();
@@ -318,6 +343,68 @@ describe("HybridInputBar dictated send reopened by the next dictation (#14804, #
     expect(document.querySelector("[data-send-reopened-caption]")).toBeNull();
   });
 
+  it("says so on the strip a wait past the gate showed, then on the border", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const onSend = vi.fn();
+    act(() => {
+      dictate("hello wrld");
+    });
+    const view = await mount(onSend);
+    await pressEnter(view);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, UI_INLINE_LOADING_GATE_MS + 50));
+    });
+    expect(document.querySelector("[data-voice-submit-caption]")?.textContent).toMatch(
+      /^Polishing/
+    );
+
+    await act(async () => {
+      dictate("these are the next prompt");
+      useVoiceRecordingStore.getState().setMicSignal("live");
+    });
+
+    expect(document.querySelector("[data-voice-submit-caption]")).toBeNull();
+    expect(document.querySelector("[data-send-reopened-caption]")?.textContent).toMatch(
+      /^Send reopened/
+    );
+    expect(statuses().some((text) => text.startsWith("Send reopened"))).toBe(true);
+  });
+
+  it("writes after the prompt even over a selection a writer left for the composer to take", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const onSend = vi.fn();
+    act(() => {
+      dictate("hello wrld");
+    });
+    const view = await mount(onSend);
+    act(() => {
+      view.focus();
+    });
+    await pressEnter(view);
+
+    // A rule rewrites the passage and asks for "hello" to be selected once the
+    // composer shows it; the dictation key lands before the composer syncs.
+    act(() => {
+      const inputs = useTerminalInputStore.getState();
+      inputs.setDraftInput(PANEL_ID, "hello world");
+      setPendingComposerSelection(makeDraftKey(PANEL_ID, undefined), "hello world", {
+        from: 0,
+        to: "hello".length,
+      });
+      inputs.bumpExternalDraftRevision({ keepsSelection: true });
+      useVoiceRecordingStore.getState().setArming({ panelId: PANEL_ID });
+    });
+    expect(view.state.doc.toString()).toBe("hello world");
+    await act(async () => {
+      dictate("next");
+    });
+
+    expect(draft()).toBe("hello world next");
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
   it("leaves both passages unsent, and the note gone, when the next dictation stops without a send", async () => {
     const later = deferred<CorrectResult>();
     const onSend = vi.fn();
@@ -340,6 +427,14 @@ describe("HybridInputBar dictated send reopened by the next dictation (#14804, #
     expect(onSend).not.toHaveBeenCalled();
     expect(draft()).toBe("Hello world. The next prompt.");
     expect(view.state.doc.toString()).toBe("Hello world. The next prompt.");
+
+    // A later dictation here is just a dictation.
+    await act(async () => {
+      dictate("more");
+      useVoiceRecordingStore.getState().setMicSignal("live");
+    });
+    expect(document.querySelector("[data-send-reopened-caption]")).toBeNull();
+    expect(statuses().some((text) => text.startsWith("Send reopened"))).toBe(false);
   });
 
   it("sends the reopened prompt whole through an expansion it holds", async () => {
@@ -365,31 +460,6 @@ describe("HybridInputBar dictated send reopened by the next dictation (#14804, #
     expect(draft()).toBe("");
   });
 
-  it("leaves the draft whole rather than drop typing the store hasn't heard yet", async () => {
-    const diff = deferred<string>();
-    Object.assign(window.electron, { git: { getWorkingDiff: vi.fn(() => diff.promise) } });
-    const onSend = vi.fn();
-    useTerminalInputStore.getState().setDraftInput(PANEL_ID, "@diff");
-    const { view, pending } = await enterThenDictate(onSend, "these are the next prompt");
-    await act(async () => {
-      pending.resolve({ action: "replace", correctedText: "Hello world." });
-    });
-    correct.mockResolvedValueOnce({ action: "no_change", correctedText: "" });
-    await pressEnter(view);
-    // A keystroke the editor has but its write-back to the store hasn't
-    // committed yet when the expansion comes back.
-    view.dispatch({
-      changes: { from: view.state.doc.length, insert: " now" },
-      userEvent: "input.type",
-    });
-    await act(async () => {
-      diff.resolve("BODY");
-    });
-
-    expect(onSend).toHaveBeenCalledTimes(1);
-    expect(view.state.doc.toString()).toBe("@diff Hello world. these are the next prompt now");
-  });
-
   it("starts the next dictation after the prompt, not over text selected in it", async () => {
     const pending = deferred<CorrectResult>();
     correct.mockReturnValueOnce(pending.promise);
@@ -413,6 +483,80 @@ describe("HybridInputBar dictated send reopened by the next dictation (#14804, #
 
     expect(onSend).not.toHaveBeenCalled();
     expect(draft()).toBe("Hello world. next");
+  });
+});
+
+describe("HybridInputBar dictated send with the next dictation's start already under way (#14804)", () => {
+  /**
+   * The dictation key, then Enter on the stopped passage before the new
+   * start's session begins: that dictation is the next prompt's.
+   */
+  async function enterWhileArming(onSend: (payload: { text: string }) => void) {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    act(() => {
+      dictate("hello wrld");
+    });
+    await act(async () => {
+      await voiceRecordingService.stop();
+    });
+    const view = await mount(onSend);
+    act(() => {
+      useVoiceRecordingStore.getState().setArming({ panelId: PANEL_ID });
+    });
+    await act(async () => {
+      runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+    });
+    await act(async () => {
+      dictate("these are the next prompt");
+    });
+    return { view, pending };
+  }
+
+  it("keeps what the next dictation adds while an expansion in the sent prompt is fetched", async () => {
+    const diff = deferred<string>();
+    Object.assign(window.electron, { git: { getWorkingDiff: vi.fn(() => diff.promise) } });
+    const onSend = vi.fn();
+    useTerminalInputStore.getState().setDraftInput(PANEL_ID, "@diff");
+    const { view, pending } = await enterWhileArming(onSend);
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+    expect(onSend).not.toHaveBeenCalled();
+    await act(async () => {
+      callbacks.complete!({ text: "and the rest", willCorrect: false, itemId: "item-late" });
+    });
+    await act(async () => {
+      diff.resolve("BODY");
+    });
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend.mock.calls[0]![0].text).toBe("```diff\nBODY\n``` Hello world.");
+    expect(draft()).toBe("these are the next prompt and the rest");
+    expect(view.state.doc.toString()).toBe("these are the next prompt and the rest");
+  });
+
+  it("leaves the draft whole rather than drop typing the store hasn't heard yet", async () => {
+    const diff = deferred<string>();
+    Object.assign(window.electron, { git: { getWorkingDiff: vi.fn(() => diff.promise) } });
+    const onSend = vi.fn();
+    useTerminalInputStore.getState().setDraftInput(PANEL_ID, "@diff");
+    const { view, pending } = await enterWhileArming(onSend);
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+    // A keystroke the editor has but its write-back to the store hasn't
+    // committed yet when the expansion comes back.
+    view.dispatch({
+      changes: { from: view.state.doc.length, insert: " now" },
+      userEvent: "input.type",
+    });
+    await act(async () => {
+      diff.resolve("BODY");
+    });
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(view.state.doc.toString()).toBe("@diff Hello world. these are the next prompt now");
   });
 });
 
