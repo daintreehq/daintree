@@ -7,15 +7,16 @@
 // requests counted through async_hooks, so the count does not depend on how the
 // reader imports `fs`; not a count of OS syscalls) and the event-loop-active
 // time it cost, as the median of `--rounds` batches of `--lookups` sequential
-// lookups. Requests are counted in a pass of their own: the hook slows every
-// async resource, so it is off while anything is timed.
+// lookups. Requests are counted only after every timed round: enabling the
+// hook even once leaves V8's promise-hook optimizations off for the rest of the
+// process, so nothing is timed once it has been on.
 //
 // Mechanism, not journey: it removes the IPC hop, the pty-host terminal lookup
 // and the renderer poll, and the fixture's directories are empty apart from a
 // few transcripts, so a real store with deeper trees and a slower disk pays more
 // per `stat`. The counts carry across machines; the times are this machine's.
 import { createHook } from "node:async_hooks";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -108,6 +109,11 @@ async function buildFixture(): Promise<Case[]> {
   // a session that has not recorded its first message yet.
   const absent = sessionId("ab5e47");
 
+  // Where the scan reaches the fallback directory decides what the old reader
+  // paid for it, so the reading says rather than leaving it to the filesystem.
+  const listing = await readdir(projectsRoot);
+  const scanPosition = listing.indexOf(path.basename(hashedDir)) + 1;
+
   return [
     {
       name: "no-children",
@@ -118,7 +124,7 @@ async function buildFixture(): Promise<Case[]> {
     },
     {
       name: "fallback-hit",
-      summary: "subagents/ only under a slug the derivation gets wrong",
+      summary: `subagents/ only under a slug the derivation gets wrong (scan position ${scanPosition} of ${listing.length})`,
       cwd: fallbackCwd,
       sessionId: fallbackOnly,
       expected: fallbackSubagents,
@@ -170,14 +176,8 @@ async function countRequests(c: Case): Promise<number> {
   return fsRequests - before;
 }
 
-async function measure(c: Case): Promise<CaseResult> {
+async function time(c: Case): Promise<Pick<CaseResult, "activeMsPerLookup" | "wallMsPerLookup">> {
   resetCaches?.();
-  requestCounter.enable();
-  const coldFsRequests = await countRequests(c);
-  const requestSamples: number[] = [];
-  for (let i = 0; i < lookups; i++) requestSamples.push(await countRequests(c));
-  requestCounter.disable();
-
   for (let i = 0; i < 5; i++) await lookup(c);
   const activeSamples: number[] = [];
   const wallSamples: number[] = [];
@@ -190,21 +190,28 @@ async function measure(c: Case): Promise<CaseResult> {
     activeSamples.push(delta.active / lookups);
     wallSamples.push(wall / lookups);
   }
-  return {
-    name: c.name,
-    summary: c.summary,
-    coldFsRequests,
-    fsRequestsPerLookup: median(requestSamples),
-    activeMsPerLookup: median(activeSamples),
-    wallMsPerLookup: median(wallSamples),
-  };
+  return { activeMsPerLookup: median(activeSamples), wallMsPerLookup: median(wallSamples) };
+}
+
+async function count(c: Case): Promise<Pick<CaseResult, "coldFsRequests" | "fsRequestsPerLookup">> {
+  resetCaches?.();
+  const coldFsRequests = await countRequests(c);
+  const samples: number[] = [];
+  for (let i = 0; i < lookups; i++) samples.push(await countRequests(c));
+  return { coldFsRequests, fsRequestsPerLookup: median(samples) };
 }
 
 let exitCode = 0;
 try {
   const cases = await buildFixture();
+  const timings = [];
+  for (const c of cases) timings.push(await time(c));
+  requestCounter.enable();
   const results: CaseResult[] = [];
-  for (const c of cases) results.push(await measure(c));
+  for (const [index, c] of cases.entries()) {
+    results.push({ name: c.name, summary: c.summary, ...(await count(c)), ...timings[index]! });
+  }
+  requestCounter.disable();
 
   if (values.json) {
     console.log(JSON.stringify({ dirs: dirCount, rounds, lookups, results }, null, 2));

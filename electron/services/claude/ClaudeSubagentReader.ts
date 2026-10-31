@@ -183,6 +183,11 @@ function rememberLocation(key: string, entry: string): void {
  * worktree) renames both across together. So a transcript here means any child
  * this session spawns will appear here too, and no other project directory
  * needs searching. It only ever spares a scan; it never names a path to read.
+ *
+ * The one split Claude Code can leave is a relocation whose second rename
+ * fails, stranding existing children in the old directory. A location the scan
+ * already found is checked before this, so that case still resolves whenever
+ * those children were seen before the move.
  */
 async function holdsSessionTranscript(
   projectDir: string,

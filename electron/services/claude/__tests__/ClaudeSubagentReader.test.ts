@@ -272,6 +272,19 @@ describe("findSubagentsDir", () => {
       );
     });
 
+    it("keeps answering from a remembered location once a transcript turns up under the derived slug", async () => {
+      // What a relocation leaves behind when renaming the transcript succeeds
+      // and renaming the session directory does not: the children stay where
+      // they were, and the derived directory now holds the transcript.
+      const stored = await seedElsewhere("an-encoding-we-did-not-predict");
+      await find();
+
+      await seedTranscript();
+      listed.length = 0;
+      await expect(find()).resolves.toBe(stored);
+      expect(scans()).toBe(0);
+    });
+
     it("refuses a remembered location that has since become a symlink out of the store", async () => {
       await seedElsewhere("an-encoding-we-did-not-predict");
       await find();
@@ -319,7 +332,15 @@ describe("findSubagentsDir", () => {
 
         await expect(find(SESSION, root)).resolves.toBe(here);
         await expect(find(SESSION, other)).resolves.toBe(there);
+
+        // Each store keeps its own remembered location, so alternating between
+        // them never sends either back to a scan.
+        listed.length = 0;
         await expect(find(SESSION, root)).resolves.toBe(here);
+        await expect(find(SESSION, other)).resolves.toBe(there);
+        await expect(find(SESSION, root)).resolves.toBe(here);
+        const storeRoots = [projects(), path.join(other, "projects")];
+        expect(listed.filter((target) => storeRoots.includes(target))).toEqual([]);
 
         await rm(path.join(other, "projects", "found-there"), { recursive: true });
         await expect(find(SESSION, other)).resolves.toBeNull();
@@ -335,9 +356,13 @@ describe("findSubagentsDir", () => {
 
       const expected = path.join(linked, path.relative(root, stored));
       await expect(find(SESSION, linked)).resolves.toBe(expected);
+
+      // Both spellings share one remembered location, and each still gets the
+      // path under the root it named.
+      listed.length = 0;
       await expect(find(SESSION, linked)).resolves.toBe(expected);
-      // Both spellings share one remembered location; each still gets its own.
       await expect(find(SESSION, root)).resolves.toBe(stored);
+      expect(listed.filter((target) => target.endsWith("projects"))).toEqual([]);
     });
 
     it("keeps a bounded number of locations, dropping the least recently used", async () => {
