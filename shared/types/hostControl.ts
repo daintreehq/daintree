@@ -207,13 +207,13 @@ export const HostListEntrySchema = z.object({
       sampledAt: z.number(),
       receivedAt: z.number().nullable(),
       ageMs: z.number().nullable().describe("At most this old. Null: unknown."),
-      stale: z
-        .boolean()
-        .describe("Too old to trust: the live figures below are null. Not a zero reading."),
+      stale: z.boolean().describe("Untrusted: live figures are null, not zero."),
       staleReason: z
-        .enum(["age-limit", "clock-uncertain"])
+        .enum(["age-limit", "clock-uncertain", "earlier-link"])
         .nullable()
-        .describe("clock-uncertain: no age bound, and its timestamp is off this clock."),
+        .describe(
+          "clock-uncertain: no age bound, timestamp off this clock. earlier-link: prior link's."
+        ),
       platform: z.enum(["darwin", "linux"]),
       cpuPercent: z.number().nullable(),
       cpuLogicalCores: z.number().nullable(),

@@ -218,6 +218,9 @@ export class HostMetricsClient {
   private readonly rings = new Map<HostId, HostMetricsSummary[]>();
   /** When each held summary arrived and how old it could be then, kept beside it rather than in it. */
   private readonly receipts = new WeakMap<HostMetricsSummary, SummaryReceipt>();
+  /** The link each held summary came on, as a token per session so its summaries never keep a closed one alive. */
+  private readonly arrivedOn = new WeakMap<HostMetricsSummary, object>();
+  private readonly linkTokens = new WeakMap<LinkSession, object>();
   /** Each known host's address: a new address is another machine, whose history starts empty. */
   private readonly known = new Map<HostId, string>();
   /** Hosts dialled for their notifications, so turning them on dials once, not on every change. */
@@ -270,6 +273,17 @@ export class HostMetricsClient {
   /** When a summary this client holds arrived, and what its frame proved about its age (#14462). */
   receiptOf(summary: HostMetricsSummary): SummaryReceipt | null {
     return this.receipts.get(summary) ?? null;
+  }
+
+  /**
+   * Whether a held summary came on `session` (#15736). The history outlives a
+   * reconnect, so one from an earlier link, or any while no link is open, is
+   * false; null for one that came on no link at all, as this machine's own do.
+   */
+  cameOn(summary: HostMetricsSummary, session: LinkSession | null): boolean | null {
+    const token = this.arrivedOn.get(summary);
+    if (token === undefined) return null;
+    return session !== null && this.linkTokens.get(session) === token;
   }
 
   /** Agents a connected host last reported working and waiting; unknown while it isn't connected. */
@@ -453,6 +467,7 @@ export class HostMetricsClient {
       stamped,
       receiveSummary(timing, (nonce) => session?.pingSentAt(nonce) ?? null, at)
     );
+    if (session) this.arrivedOn.set(stamped, this.linkToken(session));
     let ring = this.rings.get(hostId);
     if (!ring) {
       ring = [];
@@ -468,6 +483,15 @@ export class HostMetricsClient {
         logger.warn("A summary listener threw", { error });
       }
     }
+  }
+
+  private linkToken(session: LinkSession): object {
+    let token = this.linkTokens.get(session);
+    if (token === undefined) {
+      token = {};
+      this.linkTokens.set(session, token);
+    }
+    return token;
   }
 
   private hostIdOf(payload: unknown): HostId {

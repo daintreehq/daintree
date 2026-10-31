@@ -107,6 +107,8 @@ const logger = createLogger("main:HostCallRuntime");
 interface Sampled {
   summary: HostMetricsSummary;
   receipt: SummaryReceipt | null;
+  /** It came on a link that has since closed, however recent it is (#15736). */
+  earlier?: boolean;
 }
 
 /** One host as this Shell observes it: its registry entry, its link, its last summary. */
@@ -118,6 +120,11 @@ export interface ObservedHost {
   summary: HostMetricsSummary | null;
   /** When `summary` arrived and what its frame proved about its age; absent, only its timestamp says. */
   summaryReceipt?: SummaryReceipt | null;
+  /**
+   * Whether `summary` came on the link open now (#15736): false for one an
+   * earlier link brought, kept across the reconnect; absent when unknown.
+   */
+  summaryFromCurrentLink?: boolean;
   /** The build its last handshake named, kept after the link goes. */
   lastHandshake?: HostHandshakeInfo | null;
   /** The person disconnected it and nothing has dialled it since. */
@@ -229,8 +236,9 @@ export interface HostCallRuntimeDeps {
   askSettingsApproval?: HostSettingsRequestDeps["askApproval"];
   /**
    * Hears hosts' links, the host list and summaries as they already arrive,
-   * for `host.watch` (#14463); subscribed only while a watch is armed. It
-   * never dials, holds or wakes a host. Absent, no watch is armed.
+   * for `host.watch` (#14463); subscribed only while a watch is armed, or
+   * while `host.list` waits for a host it dialed to send its first summary.
+   * It never dials, holds or wakes a host. Absent, no watch is armed.
    */
   watchHosts?(listener: HostWatchListener): () => void;
   now?: () => number;
@@ -277,6 +285,8 @@ const PROJECTS_READ_MS = 5_000;
 const INVENTORY_READ_MS = 1_500;
 /** How long `host.list` waits for a host it dials to connect. */
 const LIST_CONNECT_MS = 8_000;
+/** How long `host.list` then waits for the new link's first summary (#15736). */
+const FIRST_SAMPLE_MS = 1_500;
 /** Hosts' directories kept by host and project filter, for a read that fails (#14455). */
 const LAST_AGENTS_MAX = 64;
 
@@ -806,6 +816,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   /** The hosts each help session sent a throwaway launch to, to release them when it ends (#14447). */
   private readonly throwawayHosts = new Map<string, Set<HostId>>();
   private disposed = false;
+  /** `host.list`'s waits for a dialed host's first summary, each ended at once by dispose. */
+  private readonly sampleWaits = new Set<() => void>();
   private readonly settingsRequests: HostSettingsRequests;
   private readonly hostWatches: HostWatches;
   /** Each host's last directory read, by project filter, oldest first. */
@@ -1323,6 +1335,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   /** Forgets every call and notice; calls on hosts are left as they are. */
   dispose(): void {
     this.disposed = true;
+    for (const end of [...this.sampleWaits]) end();
     this.hostWatches.dispose();
     this.throwawayHosts.clear();
     this.callsOut.clear();
@@ -1791,14 +1804,18 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       const seenHosts = observed.filter((seen) => wanted(seen.hostId));
       const hosts = await Promise.all(
         seenHosts.map(async (seen): Promise<HostListEntry> => {
-          const host = await this.dialed(seen);
-          const summary = host.summary;
+          const { host, dialed } = await this.dialed(seen);
           const connected = host.connection.status === "connected";
           const control = this.deps.controlEnabled?.(host.hostId) === true;
-          const [page, agents] = await Promise.all([
+          const [page, agents, sample] = await Promise.all([
             connected && control ? this.hostProjects(host.hostId, scope) : null,
             agentsOf ? this.hostAgents(host, control, agentsOf) : null,
+            dialed ? this.firstSample(host) : host,
           ]);
+          const summary = sample.summary;
+          // The history outlives a reconnect: what an earlier link brought is
+          // not what the host says now, however recently it came.
+          const earlier = connected && sample.summaryFromCurrentLink === false;
           const entry: HostListEntry = {
             hostId: host.hostId,
             name: host.name,
@@ -1811,13 +1828,17 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
             load: null,
             // A tally from before the link dropped is history, not what is running now.
             agentsObserved:
-              connected && summary?.agentsObserved ? { ...summary.agentsObserved } : null,
+              connected && !earlier && summary?.agentsObserved
+                ? { ...summary.agentsObserved }
+                : null,
             projects: null,
             projectInventory: null,
             control,
             ...(agents ? { agents } : {}),
           };
-          if (summary) sampled.set(entry, { summary, receipt: host.summaryReceipt ?? null });
+          if (summary) {
+            sampled.set(entry, { summary, receipt: sample.summaryReceipt ?? null, earlier });
+          }
           if (page) paged.set(entry, page);
           return entry;
         })
@@ -1829,7 +1850,10 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         const held = sampled.get(entry);
         if (!held) continue;
         const live = entry.link.status === "connected" || entry.link.status === "local";
-        const freshness = sampleFreshness(held.summary, held.receipt, now);
+        const measured = sampleFreshness(held.summary, held.receipt, now);
+        const freshness = held.earlier
+          ? { ...measured, stale: true, staleReason: "earlier-link" as const }
+          : measured;
         entry.load = projectHostLoad(held.summary, freshness);
         entry.agentClis = projectHostAgentClis(held.summary, live, !freshness.stale);
       }
@@ -2086,19 +2110,84 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * the Shell lets an unused link go after a few minutes, and `host.call`
    * dials it again on demand, so to the assistant it is a host it can reach,
    * not one that is down. One the person disconnected stays as it is. Observed
-   * again afterwards, whatever came of it.
+   * again afterwards, whatever came of it, and said whether it was dialed.
    */
-  private async dialed(host: ObservedHost): Promise<ObservedHost> {
+  private async dialed(host: ObservedHost): Promise<{ host: ObservedHost; dialed: boolean }> {
     const connect = this.deps.connect;
     const status = host.connection.status;
-    if (!connect || (status !== "disconnected" && status !== "connecting")) return host;
-    if (this.deps.controlEnabled?.(host.hostId) !== true) return host;
+    if (!connect || (status !== "disconnected" && status !== "connecting")) {
+      return { host, dialed: false };
+    }
+    if (this.deps.controlEnabled?.(host.hostId) !== true) return { host, dialed: false };
     // A dial that throws before it is under way fails this host's entry, never the listing.
     const dial = Promise.resolve()
       .then(() => connect(host.hostId, LIST_CONNECT_MS))
       .catch(() => undefined);
     await withinMs(dial, LIST_CONNECT_MS, undefined);
-    return this.deps.hosts().find((candidate) => candidate.hostId === host.hostId) ?? host;
+    const observed = this.deps.hosts().find((candidate) => candidate.hostId === host.hostId);
+    return { host: observed ?? host, dialed: true };
+  }
+
+  /**
+   * A host just dialed whose summary an earlier link brought, observed again
+   * once the new link's first one arrives (#15736): the host sends what it
+   * holds as a link opens, but the dial is done before that lands. Waits at
+   * most {@link FIRST_SAMPLE_MS}, and no longer once the host drops, goes or
+   * has its control switched off; the observation returned is this one or a
+   * later one whose summary came on the link open now.
+   */
+  private firstSample(host: ObservedHost): Promise<ObservedHost> {
+    const watch = this.deps.watchHosts;
+    if (
+      !watch ||
+      this.disposed ||
+      host.connection.status !== "connected" ||
+      host.summaryFromCurrentLink !== false
+    ) {
+      return Promise.resolve(host);
+    }
+    return new Promise((resolve) => {
+      let off: (() => void) | null = null;
+      let done = false;
+      const finish = (observed: ObservedHost) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        this.sampleWaits.delete(end);
+        off?.();
+        resolve(observed);
+      };
+      const end = () => finish(host);
+      const check = () => {
+        const now = this.deps.hosts().find((candidate) => candidate.hostId === host.hostId);
+        if (
+          !now ||
+          now.connection.status !== "connected" ||
+          this.deps.controlEnabled?.(host.hostId) !== true
+        ) {
+          finish(host);
+        } else if (now.summaryFromCurrentLink === true) {
+          finish(now);
+        }
+      };
+      const timer = setTimeout(end, FIRST_SAMPLE_MS);
+      timer.unref?.();
+      this.sampleWaits.add(end);
+      try {
+        off = watch({
+          changed: check,
+          summary: (hostId) => {
+            if (hostId === host.hostId) check();
+          },
+        });
+      } catch {
+        finish(host);
+        return;
+      }
+      // Told synchronously as it subscribed: finished before there was anything to let go.
+      if (done) off();
+      else check();
+    });
   }
 
   /** A page of a connected host's projects, or null when it didn't say in time. */

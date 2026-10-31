@@ -44,7 +44,8 @@ export function receiveSummary(
   };
 }
 
-export type SampleStaleReason = "age-limit" | "clock-uncertain";
+/** `earlier-link`: the sample came on a link that has since closed (#15736); `sampleFreshness` never says it. */
+export type SampleStaleReason = "age-limit" | "clock-uncertain" | "earlier-link";
 
 export interface SampleFreshness {
   /** How old the sample is at most; null when that can't be said. */

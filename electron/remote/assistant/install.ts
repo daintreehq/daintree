@@ -117,7 +117,8 @@ export interface HostControlInstallDeps {
   isHostControlEnabled(hostId: HostId): boolean;
   /**
    * Hears what hosts already report, for `host.watch` (#14463): links, the
-   * host list and summaries. Held only while a watch is armed.
+   * host list and summaries. Held only while a watch is armed, or while
+   * `host.list` waits for a host it dialed to send its first summary.
    */
   watchHosts?: HostCallRuntimeDeps["watchHosts"];
 }
