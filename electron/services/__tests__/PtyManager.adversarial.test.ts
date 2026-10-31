@@ -498,6 +498,10 @@ describe("PtyManager adversarial", () => {
 
     expect(manager.getTerminalInfo("agent-1")!.bracketedPasteMode).toBe(true);
 
+    created.isBracketedPasteMode.mockReturnValue(false);
+    expect(manager.getTerminalInfo("agent-1")!.bracketedPasteMode).toBe(false);
+
+    created.isBracketedPasteMode.mockReturnValue(true);
     created.info.isExited = true;
     expect(manager.getTerminalInfo("agent-1")!.bracketedPasteMode).toBe(false);
   });

@@ -28,6 +28,9 @@ import type { ClientEndpoint } from "../endpoint.js";
 import { getRemoteService } from "../../remote/runtime.js";
 import { resolveScopedProjectForIpcContext } from "../projectContext.js";
 import { isAssistantTerminalRecord } from "../../services/assistantTerminal.js";
+import { getLifecycleLedger } from "../../services/pty/lifecycleLedger.js";
+import { isBuiltInAgentId } from "../../../shared/config/agentIds.js";
+import type { TerminalInfoPayload } from "../../../shared/types/ipc/terminal.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import type {
   CopyTreeGeneratePayload,
@@ -415,6 +418,36 @@ async function loadCopyTreeProjectSettings(
 }
 
 const INJECTION_CANCELLED = "Injection cancelled";
+const SHELL_REFUSAL = "Context can only be injected into a running agent, not a shell";
+const NOT_ACCEPTING_PASTE =
+  "The agent isn't accepting pasted text yet. Try again once its prompt is ready";
+const PASTE_READY_WAIT_MS = 10_000;
+const PASTE_READY_POLL_MS = 250;
+
+/**
+ * Why the host's view of a terminal doesn't admit the bundle as a bracketed
+ * paste, or null when it does. `transient` marks a verdict worth waiting out:
+ * an agent still starting, or one that hasn't turned bracketed paste on yet.
+ */
+export function judgePasteDestination(
+  info: TerminalInfoPayload | null
+): { reason: string; transient: boolean } | null {
+  if (!info?.hasPty) return { reason: "Terminal no longer exists", transient: false };
+  // The host recognises only built-in agents in the process tree. For one a
+  // plugin contributed, the launch is all the evidence there is, and the
+  // paste-mode check below still keeps a shell it left behind from reading
+  // the bundle as commands.
+  const contributedAgent =
+    info.launchAgentId !== undefined && !isBuiltInAgentId(info.launchAgentId);
+  if (info.detectedAgentId === undefined && !contributedAgent) {
+    // A launch the host has never seen an agent in is still starting; one it
+    // has is a shell again.
+    const starting = info.launchAgentId !== undefined && info.everDetectedAgent !== true;
+    return { reason: SHELL_REFUSAL, transient: starting };
+  }
+  if (info.bracketedPasteMode !== true) return { reason: NOT_ACCEPTING_PASTE, transient: true };
+  return null;
+}
 
 /**
  * Progress goes to the caller on the existing channel and to the operation,
@@ -811,16 +844,28 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     )
   );
 
-  const checkPasteDestination = async (terminalId: string): Promise<string | null> => {
-    const info = await deps.ptyClient!.getTerminalInfo(terminalId);
-    if (!info?.hasPty) return "Terminal no longer exists";
-    if (!info.detectedAgentId) {
-      return "Context can only be injected into a running agent, not a shell";
+  /**
+   * Poll the host until the terminal can take the paste, for as long as the
+   * verdict could still change: a workflow injects right after launching its
+   * agent, before the CLI has drawn a prompt. The generation pins the
+   * incarnation that was judged, so a same-id respawn can't inherit the paste.
+   */
+  const awaitPasteDestination = async (
+    terminalId: string,
+    isCancelled: () => boolean
+  ): Promise<{ generation: number | undefined } | { error: string }> => {
+    const ledger = getLifecycleLedger();
+    const deadline = Date.now() + PASTE_READY_WAIT_MS;
+    for (;;) {
+      const generation = ledger.currentGeneration(terminalId);
+      const verdict = judgePasteDestination(await deps.ptyClient!.getTerminalInfo(terminalId));
+      if (isCancelled()) return { error: INJECTION_CANCELLED };
+      // An answer that straddled a respawn describes the predecessor.
+      if (!verdict && ledger.currentGeneration(terminalId) === generation) return { generation };
+      if (verdict && !verdict.transient) return { error: verdict.reason };
+      if (Date.now() >= deadline) return { error: verdict?.reason ?? NOT_ACCEPTING_PASTE };
+      await new Promise((resolve) => setTimeout(resolve, PASTE_READY_POLL_MS));
     }
-    if (info.bracketedPasteMode !== true) {
-      return "The agent isn't accepting pasted text yet. Try again once its prompt is ready";
-    }
-    return null;
   };
 
   /**
@@ -836,17 +881,26 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
    */
   const writeBracketedPaste = async (
     terminalId: string,
+    generation: number | undefined,
     sources: string[],
     isCancelled: () => boolean,
     traceId: string
   ): Promise<string | null> => {
     const ptyClient = deps.ptyClient!;
+    const ledger = getLifecycleLedger();
     const CHUNK_SIZE = 4096;
     if (sources.every((source) => source.length === 0)) return null;
     let opened = false;
 
+    // `hasTerminal` alone stays true across a same-id respawn, whose successor
+    // never saw the opener and would read the rest of the bundle as typing.
+    const isAdmittedTerminalAlive = (): boolean =>
+      ptyClient.hasTerminal(terminalId) &&
+      ledger.currentGeneration(terminalId) === generation &&
+      ledger.getEntry(terminalId)?.closedAt === undefined;
+
     const stop = (error: string): string => {
-      if (opened && ptyClient.hasTerminal(terminalId)) {
+      if (opened && isAdmittedTerminalAlive()) {
         try {
           ptyClient.write(terminalId, BRACKETED_PASTE_END, traceId);
         } catch {
@@ -865,7 +919,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
             console.log(`[${traceId}] CopyTree inject cancelled by user`);
             return stop(INJECTION_CANCELLED);
           }
-          if (!ptyClient.hasTerminal(terminalId)) {
+          if (!isAdmittedTerminalAlive()) {
             return stop("Terminal closed during injection");
           }
           const end = nextChunkBoundary(source, i, CHUNK_SIZE);
@@ -885,9 +939,8 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       );
     }
 
-    if (!ptyClient.hasTerminal(terminalId)) {
-      return "Terminal closed during injection";
-    }
+    if (isCancelled()) return stop(INJECTION_CANCELLED);
+    if (!isAdmittedTerminalAlive()) return "Terminal closed during injection";
     try {
       ptyClient.write(terminalId, BRACKETED_PASTE_END, traceId);
     } catch (error) {
@@ -1006,18 +1059,17 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       // started: the bundle is written as one bracketed paste, which a shell's
       // line editor would still leave as a multi-megabyte draft, and a program
       // with bracketed paste off reads every newline in it as Enter.
-      const refusal = await checkPasteDestination(validated.terminalId);
-      if (refusal) {
-        return { content: "", fileCount: 0, error: refusal };
-      }
-      if (contextInjectionTracker.isCancelled(injectionId)) {
-        return { content: "", fileCount: 0, error: INJECTION_CANCELLED };
+      const isCancelled = () => contextInjectionTracker.isCancelled(injectionId);
+      const admission = await awaitPasteDestination(validated.terminalId, isCancelled);
+      if ("error" in admission) {
+        return { content: "", fileCount: 0, error: admission.error };
       }
 
       const injectError = await writeBracketedPaste(
         validated.terminalId,
+        admission.generation,
         [result.content, buildRemoteComputeBlock(worktree)],
-        () => contextInjectionTracker.isCancelled(injectionId),
+        isCancelled,
         traceId
       );
       if (injectError) {

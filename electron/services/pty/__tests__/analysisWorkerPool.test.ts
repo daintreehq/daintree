@@ -238,6 +238,47 @@ describe("AnalysisWorkerPool", () => {
     }
   );
 
+  it("keeps the bracketed-paste seed for the retry when the respawned create is dropped", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    let dropNextCreate = false;
+    const local: FakeWorker[] = [];
+    const localPool = new AnalysisWorkerPool(1, () => {
+      const worker = new FakeWorker();
+      const post = worker.postMessage.bind(worker);
+      worker.postMessage = (msg: unknown) => {
+        if (dropNextCreate && (msg as HostToWorkerMessage).type === "create") {
+          dropNextCreate = false;
+          throw new Error("dropped");
+        }
+        post(msg);
+      };
+      local.push(worker);
+      return worker;
+    });
+    const backend = localPool.createBackend(makeSpec("t1"), makeDelegate())!;
+    local[0].emit("message", {
+      type: "viewport",
+      terminalId: "t1",
+      lines: [],
+      cursorLine: null,
+      bracketedPasteMode: true,
+    });
+
+    dropNextCreate = true;
+    local[0].emit("exit", 1);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(local[1].messagesOfType("prelude")).toHaveLength(0);
+    expect(backend.isBracketedPasteMode()).toBe(false);
+
+    // The re-assert finds no session and rebuilds; this create lands.
+    backend.resyncGeometry(80, 24);
+
+    expect(local[1].messagesOfType("prelude").map((m) => m.data)).toContain("\x1b[?2004h");
+    expect(backend.isBracketedPasteMode()).toBe(true);
+    localPool.dispose();
+  });
+
   it("seeds the respawned monitor busy when the host FSM is mid-work", async () => {
     vi.useFakeTimers();
     const delegate = makeDelegate();

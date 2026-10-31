@@ -44,4 +44,22 @@ describe("AnalysisSession input modes (#15629)", () => {
     await vi.waitFor(() => expect(lastViewport(messages)).toBeDefined());
     expect(lastViewport(messages)).toMatchObject({ bracketedPasteMode: false });
   });
+
+  it("reports each flip at once instead of folding them into one throttled digest", async () => {
+    const messages: WorkerToHostMessage[] = [];
+    const session = makeSession(messages);
+
+    session.feedChunk("\x1b[?2004h", { agentLive: true });
+    session.feedChunk("\x1b[?2004l", { agentLive: false });
+    await vi.waitFor(() =>
+      expect(
+        messages.filter((message) => message.type === "viewport" && !message.bracketedPasteMode)
+      ).toHaveLength(1)
+    );
+
+    const modes = messages.flatMap((message) =>
+      message.type === "viewport" ? [message.bracketedPasteMode] : []
+    );
+    expect(modes).toEqual([true, false]);
+  });
 });
