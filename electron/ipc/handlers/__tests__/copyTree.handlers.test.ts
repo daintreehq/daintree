@@ -2110,12 +2110,18 @@ describe("context injection paste boundary (#15629)", () => {
     return haystack.split(needle).length - 1;
   }
 
+  // Plugin-agent admission reads the foreground process, which Windows can't
+  // supply; pinned so these cases mean the same thing on every runner.
+  const originalPlatform = process.platform;
+
   afterEach(() => {
     vi.useRealTimers();
     disposeLifecycleLedger();
+    Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
   });
 
   beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "linux", writable: true });
     vi.clearAllMocks();
     _resetRateLimitQueuesForTest();
     copyTreeHistoryMock.recordCopyTreeRun.mockReset().mockResolvedValue(undefined);
