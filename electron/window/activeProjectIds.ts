@@ -136,14 +136,20 @@ export interface HeldWorkspaceSources {
   remoteViewWorkspaceIds: () => Iterable<string | null>;
   /** Workspaces with at least one tracked terminal. */
   liveTerminalWorkspaceIds: () => Iterable<string>;
-  /** Workspaces a window has committed to before its manager has a view. */
-  reservedWorkspaceIds: () => Iterable<string>;
   /**
-   * Workspaces the persisted open-window manifest names. Covers a window the
-   * launch is still restoring, which has neither a view nor a reservation yet
-   * while the windows before it come up.
+   * Workspaces a window has committed to before its manager has a view: a
+   * window reserved for its initial workspace, or a claimed switch still
+   * waiting on the window's queue.
    */
-  manifestWorkspaceIds: () => Iterable<string>;
+  openingWorkspaceIds: () => Iterable<string>;
+  /**
+   * Workspaces still to be restored: the background-restore queue's, and the
+   * persisted open-window manifest's. The manifest covers a later window of a
+   * launch's fleet, which has neither a view nor a reservation while the
+   * windows before it come up, and in a launch that never rewrites it, the
+   * windows the next launch will restore.
+   */
+  restoringWorkspaceIds: () => Iterable<string>;
 }
 
 /**
@@ -168,7 +174,7 @@ export function collectHeldWorkspaceIds(sources: HeldWorkspaceSources): Set<stri
     if (id) ids.add(id);
   }
   for (const id of sources.liveTerminalWorkspaceIds()) ids.add(id);
-  for (const id of sources.reservedWorkspaceIds()) ids.add(id);
-  for (const id of sources.manifestWorkspaceIds()) ids.add(id);
+  for (const id of sources.openingWorkspaceIds()) ids.add(id);
+  for (const id of sources.restoringWorkspaceIds()) ids.add(id);
   return ids;
 }

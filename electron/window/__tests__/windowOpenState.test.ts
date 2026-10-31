@@ -280,14 +280,15 @@ describe("reserveWindowForOpen", () => {
   });
 
   it("names every reserved workspace across windows until its open settles (#15614)", () => {
-    const restoring = reserveWindowForOpen(1, { projectId: "scratch-a", projectPath: null });
+    reserveWindowForOpen(1, { projectId: "scratch-a", projectPath: null });
     reserveWindowForOpen(2, { projectId: null, projectPath: "/folder" });
-    reserveWindowForOpen(2, { projectId: "project-b", projectPath: "/b" });
+    const first = reserveWindowForOpen(2, { projectId: "project-b", projectPath: "/b" });
+    reserveWindowForOpen(2, { projectId: "project-c", projectPath: "/c" });
 
-    expect(getReservedWorkspaceIds().sort()).toEqual(["project-b", "scratch-a"]);
+    expect(getReservedWorkspaceIds().sort()).toEqual(["project-b", "project-c", "scratch-a"]);
 
-    restoring(true);
-    expect(getReservedWorkspaceIds()).toEqual(["project-b"]);
+    first(true);
+    expect(getReservedWorkspaceIds().sort()).toEqual(["project-c", "scratch-a"]);
   });
 
   it("keeps an open that settled unbound until the window binds a workspace", () => {

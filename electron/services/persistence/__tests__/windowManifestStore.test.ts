@@ -39,10 +39,13 @@ describe("readManifestWorkspaceIds (#15614)", () => {
     ]);
   });
 
-  it("answers nothing when no manifest has been stored, or it names no windows", () => {
+  it("answers nothing when no manifest has been stored, or it names no workspace", () => {
     expect(readManifestWorkspaceIds()).toEqual([]);
 
     writeOpenWindowsManifest([]);
+    expect(readManifestWorkspaceIds()).toEqual([]);
+
+    writeOpenWindowsManifest([{ projectId: null }]);
     expect(readManifestWorkspaceIds()).toEqual([]);
   });
 

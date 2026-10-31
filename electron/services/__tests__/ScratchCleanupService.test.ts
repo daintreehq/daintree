@@ -463,6 +463,52 @@ describe("runScratchCleanup — scratches the app still holds (#15614)", () => {
 
     expect(result.tombstoned).toBe(0);
     expect(store.rows[0]!.deletedAt).toBeNull();
+    // Seen held on the re-check, so it ages from now once it closes.
+    expect(store.rows[0]!.lastOpened).toBe(NOW);
+  });
+
+  // The refreshed `last_opened` alone would keep a held scratch out of the
+  // stale set; with the write landing nowhere, only the held check stands.
+  it("skips a held scratch on the held set alone, before inspection and after it", async () => {
+    const late = "33333333-3333-4333-8333-333333333333";
+    const store = makeStore([
+      await scratchRow(HELD, NOW - 2 * SCRATCH_TTL_MS),
+      await scratchRow(late, NOW - 2 * SCRATCH_TTL_MS),
+    ]);
+    store.touchScratches = vi.fn();
+    let held: string[] = [HELD];
+    setHeldWorkspaceIdsReader(() => held);
+    const check = vi.fn<ScratchCleanupSafetyCheck>(async () => {
+      held = [HELD, late];
+      return { disposition: "safe", reason: "test-safe" };
+    });
+
+    const result = await runScratchCleanup(NOW, store, check);
+
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(check.mock.calls[0]![0]).toContain(late);
+    expect(result.tombstoned).toBe(0);
+    expect(store.rows.every((r) => r.deletedAt == null)).toBe(true);
+  });
+
+  it("keeps a held scratch's last-seen time when writing it fails, and writes it later", async () => {
+    const store = makeStore([await scratchRow(HELD, NOW - 2 * SCRATCH_TTL_MS)]);
+    const touch = store.touchScratches.bind(store);
+    store.touchScratches = vi.fn(() => {
+      throw new Error("SQLITE_BUSY");
+    });
+    let held: string[] = [HELD];
+    setHeldWorkspaceIdsReader(() => held);
+
+    await runScratchCleanup(NOW, store, ALWAYS_SAFE);
+    held = [];
+    const check = vi.fn(ALWAYS_SAFE);
+    expect((await runScratchCleanup(NOW + DAY, store, check)).tombstoned).toBe(0);
+    expect(check).not.toHaveBeenCalled();
+
+    store.touchScratches = touch;
+    await runScratchCleanup(NOW + 2 * DAY, store, ALWAYS_SAFE);
+    expect(store.rows[0]!.lastOpened).toBe(NOW);
   });
 
   it("tombstones nothing when the held set cannot be read, but still reaps mature tombstones", async () => {
@@ -549,11 +595,16 @@ describe("runScratchCleanup — scratches the app still holds (#15614)", () => {
     expect(touch).not.toHaveBeenCalled();
     expect(store.rows[0]!.lastOpened).toBe(NOW - 2 * SCRATCH_TTL_MS);
 
+    // A sweep whose clock reads earlier must not move the observation back.
+    await runScratchCleanup(NOW - DAY, store, ALWAYS_SAFE);
+
     // Closed while the disk is still critical: the stale row in the DB must not
     // be what the next sweep goes by.
     held = [];
-    const whileSuppressed = await runScratchCleanup(NOW + DAY, store, ALWAYS_SAFE);
+    const check = vi.fn(ALWAYS_SAFE);
+    const whileSuppressed = await runScratchCleanup(NOW + DAY, store, check);
     expect(whileSuppressed.tombstoned).toBe(0);
+    expect(check).not.toHaveBeenCalled();
     expect(store.rows[0]!.deletedAt).toBeNull();
 
     setWritesSuppressed(false);

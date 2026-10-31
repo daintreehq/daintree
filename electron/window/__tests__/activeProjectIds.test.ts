@@ -233,8 +233,8 @@ describe("collectHeldWorkspaceIds (#15614)", () => {
       ],
       remoteViewWorkspaceIds: () => ["remote-cached", null],
       liveTerminalWorkspaceIds: () => ["terminal-only"],
-      reservedWorkspaceIds: () => ["opening"],
-      manifestWorkspaceIds: () => ["restoring"],
+      openingWorkspaceIds: () => ["opening"],
+      restoringWorkspaceIds: () => ["restoring"],
     });
 
     expect([...ids].sort()).toEqual([
@@ -249,19 +249,23 @@ describe("collectHeldWorkspaceIds (#15614)", () => {
     ]);
   });
 
+  const healthy = {
+    projectViewManagers: () => [heldManager({ active: "shown" })],
+    remoteViewWorkspaceIds: none,
+    liveTerminalWorkspaceIds: none,
+    openingWorkspaceIds: none,
+    restoringWorkspaceIds: none,
+  };
+
   it.each([
     "projectViewManagers",
     "remoteViewWorkspaceIds",
     "liveTerminalWorkspaceIds",
-    "reservedWorkspaceIds",
-    "manifestWorkspaceIds",
+    "openingWorkspaceIds",
+    "restoringWorkspaceIds",
   ] as const)("throws rather than answer without %s", (failing) => {
     const sources = {
-      projectViewManagers: () => [heldManager({ active: "shown" })],
-      remoteViewWorkspaceIds: none,
-      liveTerminalWorkspaceIds: none,
-      reservedWorkspaceIds: none,
-      manifestWorkspaceIds: none,
+      ...healthy,
       [failing]: () => {
         throw new Error(`${failing} unavailable`);
       },
@@ -270,21 +274,35 @@ describe("collectHeldWorkspaceIds (#15614)", () => {
     expect(() => collectHeldWorkspaceIds(sources)).toThrow(`${failing} unavailable`);
   });
 
-  it("throws when one window's manager cannot answer", () => {
-    const disposing = {
-      getActiveProjectId: () => {
-        throw new Error("disposed");
-      },
-    } as unknown as ProjectViewManager;
+  it("throws rather than answer from a source that fails part-way through", () => {
+    function* partial(): Generator<string> {
+      yield "first";
+      throw new Error("enumeration failed");
+    }
 
     expect(() =>
-      collectHeldWorkspaceIds({
-        projectViewManagers: () => [heldManager({ active: "shown" }), disposing],
-        remoteViewWorkspaceIds: none,
-        liveTerminalWorkspaceIds: none,
-        reservedWorkspaceIds: none,
-        manifestWorkspaceIds: none,
-      })
-    ).toThrow("disposed");
+      collectHeldWorkspaceIds({ ...healthy, liveTerminalWorkspaceIds: partial })
+    ).toThrow("enumeration failed");
   });
+
+  it.each(["getActiveProjectId", "getOutgoingBridgeProjectId", "getAllViews"] as const)(
+    "throws when one window's manager cannot answer %s",
+    (method) => {
+      const disposing = {
+        getActiveProjectId: () => null,
+        getOutgoingBridgeProjectId: () => null,
+        getAllViews: () => [],
+        [method]: () => {
+          throw new Error("disposed");
+        },
+      } as unknown as ProjectViewManager;
+
+      expect(() =>
+        collectHeldWorkspaceIds({
+          ...healthy,
+          projectViewManagers: () => [heldManager({ active: "shown" }), disposing],
+        })
+      ).toThrow("disposed");
+    }
+  );
 });

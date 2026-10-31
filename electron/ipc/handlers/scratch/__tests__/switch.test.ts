@@ -76,6 +76,7 @@ import {
   resetProjectHistory,
 } from "../../../../services/ProjectHistoryService.js";
 import type { HandlerDependencies } from "../../../types.js";
+import { getAllPendingActivationIds } from "../../../../window/projectActivationClaims.js";
 
 function getHandler(channel: string) {
   const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
@@ -364,5 +365,40 @@ describe("scratch:switch carries a focus intent to the incoming view", () => {
     ).rejects.toThrow();
 
     expect(setPendingFocusIntent).not.toHaveBeenCalled();
+  });
+});
+
+// While the switch waits on the window's queue the scratch has no view, and the
+// cleanup sweep reads claimed activations to know it is being opened (#15614).
+describe("scratch:switch claims the scratch until the switch commits", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    webContentsRegistryMock.getProjectForWebContents.mockReturnValue(null);
+    webContentsRegistryMock.getWindowForWebContents.mockReturnValue(null);
+    enterScratch(SCRATCH_ONE);
+  });
+
+  it.each([
+    ["lands", () => Promise.resolve({ view: null })],
+    ["fails", () => Promise.reject(new Error("swap failed"))],
+  ])("holds the claim while the swap is in flight and drops it once it %s", async (_, settle) => {
+    const claimedDuringSwap: string[][] = [];
+    const deps = {
+      mainWindow: { id: 82 },
+      projectViewManager: {
+        setPendingFocusIntent: vi.fn(),
+        switchTo: vi.fn(() => {
+          claimedDuringSwap.push(getAllPendingActivationIds());
+          return settle();
+        }),
+      },
+    } as unknown as HandlerDependencies;
+    registerScratchHandlers(deps);
+
+    await getHandler(CHANNELS.SCRATCH_SWITCH)(fakeEvent, SCRATCH_ONE).catch(() => undefined);
+
+    expect(claimedDuringSwap).toEqual([[SCRATCH_ONE]]);
+    expect(getAllPendingActivationIds()).toEqual([]);
+    disposeProjectHistory(82);
   });
 });

@@ -541,17 +541,21 @@ describe("ScratchStore.touchScratches (#15614)", () => {
     expect(store.getCurrentScratchId()).toBe(current);
   });
 
-  it("ignores ids that are not scratches", () => {
+  it("ignores ids that are not scratch ids, and times that are not times", () => {
+    const projectShaped = "a".repeat(64);
+    db.insert(schema.scratches)
+      .values({ id: projectShaped, path: "/tmp/x", name: "x", createdAt: 1_000, lastOpened: 2_000 })
+      .run();
     const id = insert(2_000);
 
-    expect(() =>
-      store.touchScratches(
-        new Map([
-          ["a".repeat(64), 5_000],
-          [id, Number.NaN],
-        ])
-      )
-    ).not.toThrow();
+    store.touchScratches(
+      new Map([
+        [projectShaped, 5_000],
+        [id, Number.NaN],
+      ])
+    );
+
+    expect(lastOpenedOf(projectShaped)).toBe(2_000);
     expect(lastOpenedOf(id)).toBe(2_000);
   });
 });

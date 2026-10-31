@@ -29,8 +29,11 @@
  *
  * Phase 2 never tombstones a scratch the app still holds (#15614): one a local
  * window shows, caches, or is bridging away from; one a connected remote Shell
- * has a view of; one with a tracked terminal; one a window is about to bind or
- * the open-window manifest says is being restored. The global
+ * has a view of; one with a tracked terminal; one a window has reserved or a
+ * switch has claimed but not yet bound; one the background-restore queue or the
+ * open-window manifest still means to restore. In a launch that never rewrites
+ * the manifest (recovery, the windowless Host) that last one is what the next
+ * launch restores, so those scratches stay held until it does. The global
  * `currentScratchId` pointer only names the last scratch any window switched
  * to, so it stays an extra exclusion, never the check. That set comes from the
  * reader `globalServicesInit` installs, is read before inspection and again
@@ -56,8 +59,8 @@
  * scan limits fails closed (protected, never reclaimed) rather than be scanned
  * unboundedly; once a scratch is tombstoned, work that appears externally
  * within the grace window is not re-inspected before the directory is reaped;
- * and a scratch closed between two sweeps counts from the earlier one, up to
- * four hours sooner than it was actually last open.
+ * and a scratch closed between two sweeps counts from the earlier one, which is
+ * sooner than it was actually last open.
  *
  * Mirrors the fire-and-forget pattern of `initializeTrashedPidCleanup`: never
  * awaited by production callers, never throws — a cleanup failure must not

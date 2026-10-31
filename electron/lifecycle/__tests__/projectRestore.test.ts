@@ -29,6 +29,7 @@ vi.mock("../../utils/logger.js", () => ({
 import {
   cancelBackgroundRestores,
   enqueueBackgroundRestores,
+  getQueuedBackgroundRestoreIds,
   resetBackgroundRestoreQueueForTests,
   type BackgroundRestoreJob,
 } from "../projectRestore.js";
@@ -182,6 +183,35 @@ describe("enqueueBackgroundRestores", () => {
     first.settle();
     await tick();
     expect(second.calls).toEqual(["z"]);
+  });
+
+  it("names the project in hand alongside the queued ones until its restore settles (#15614)", async () => {
+    // Off the pending list before admission is read, and not a view until the
+    // restore registers one: the cleanup sweep must still see it.
+    const fake = createFakeManager();
+    let releaseRefresh: () => void = () => {};
+    const refreshAdmission = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseRefresh = resolve;
+        })
+    );
+    enqueueBackgroundRestores(
+      job({ getManager: () => fake.manager, projectIds: ["a", "b"], refreshAdmission })
+    );
+    enqueueBackgroundRestores(
+      job({ windowId: 2, getManager: () => fake.manager, projectIds: ["c"] })
+    );
+    await tick();
+
+    expect(getQueuedBackgroundRestoreIds().sort()).toEqual(["a", "b", "c"]);
+
+    releaseRefresh();
+    await tick();
+    expect(fake.calls).toEqual(["a"]);
+    fake.settle();
+    await tick();
+    expect(getQueuedBackgroundRestoreIds().sort()).toEqual(["b", "c"]);
   });
 
   it("narrows the pending set as each project comes back", async () => {

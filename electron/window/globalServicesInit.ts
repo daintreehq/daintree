@@ -93,6 +93,8 @@ import {
   projectViewManagersFrom,
 } from "./activeProjectIds.js";
 import { getReservedWorkspaceIds } from "./windowOpenState.js";
+import { getAllPendingActivationIds } from "./projectActivationClaims.js";
+import { getQueuedBackgroundRestoreIds } from "../lifecycle/projectRestore.js";
 import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
 import { readManifestWorkspaceIds } from "../services/persistence/windowManifestStore.js";
 import { isSmokeTest } from "../setup/environment.js";
@@ -590,8 +592,11 @@ export async function initGlobalServices(
           .getRemote()
           .map((endpoint) => endpoint.projectId),
       liveTerminalWorkspaceIds: () => getPtyClient()?.getLiveWorkspaceIds() ?? [],
-      reservedWorkspaceIds: getReservedWorkspaceIds,
-      manifestWorkspaceIds: readManifestWorkspaceIds,
+      openingWorkspaceIds: () => [...getReservedWorkspaceIds(), ...getAllPendingActivationIds()],
+      restoringWorkspaceIds: () => [
+        ...getQueuedBackgroundRestoreIds(),
+        ...readManifestWorkspaceIds(),
+      ],
     })
   );
 
