@@ -29,8 +29,7 @@ const DIALOG_EDGE = /^\s*(?:[╭┌╔╰└╚]|[─━═]{8,})/;
  * question before each key it presses.
  */
 export type ChoicePlan =
-  | { ok: true; keys: string[]; question: string }
-  | { ok: false; reason: string };
+  { ok: true; keys: string[]; question: string } | { ok: false; reason: string };
 
 function indentOf(row: string): number {
   const marker = HIGHLIGHT_MARKER.exec(row);

@@ -72,7 +72,12 @@ export class DeviceAnswerHostsClient {
           const parsed = DeviceAnswerListResultSchema.safeParse(raw);
           if (parsed.success) return { hostId, host, status: "ok", runs: parsed.data.runs };
           const checksQuestions = (raw as { questionIds?: unknown } | null)?.questionIds === true;
-          return { hostId, host, status: checksQuestions ? "unreachable" : "needs-update", runs: [] };
+          return {
+            hostId,
+            host,
+            status: checksQuestions ? "unreachable" : "needs-update",
+            runs: [],
+          };
         } catch (error) {
           const status = errorCode(error) === "UNSUPPORTED" ? "needs-update" : "unreachable";
           return { hostId, host, status, runs: [] };

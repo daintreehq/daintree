@@ -501,7 +501,10 @@ export class DeviceAnswerService {
     // A page from before answers named their question would be answering by
     // label alone, which a later question with the same options also matches.
     if (questionId === undefined) {
-      throw new HttpError(409, "This page is out of date. Reload it, then answer again. Nothing was pressed.");
+      throw new HttpError(
+        409,
+        "This page is out of date. Reload it, then answer again. Nothing was pressed."
+      );
     }
     if (!isQuestionId(questionId)) {
       throw new HttpError(400, "That answer wasn't understood. Nothing was pressed.");
