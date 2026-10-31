@@ -174,6 +174,7 @@ import { mintHtmlPreviewToken, _resetHtmlPreviewTokensForTests } from "../htmlPr
 import { createDaintreeHtmlProtocolHandler } from "../protocols/html.js";
 import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
 import { setRemoteWebviewSrcGate } from "../../window/webviewSrcGate.js";
+import { PATH_CANONICAL_HEADER } from "../../../shared/types/ipc/files.js";
 
 const mockedGetWebviewDialogService = vi.mocked(getWebviewDialogService);
 
@@ -2119,6 +2120,112 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     } finally {
       relativeSpy.mockRestore();
     }
+  });
+
+  // A rendered Markdown image HEADs its own URL after each refresh to learn
+  // whether ticks naming other directories can be skipped for it (#15678).
+  describe("HEAD canonical-path probe (#15678)", () => {
+    function makeHead(filePath: string, rootPath: string, origin?: string): GlobalRequest {
+      const url = new URL("daintree-file://load");
+      url.searchParams.set("path", filePath);
+      url.searchParams.set("root", rootPath);
+      return new Request(url.toString(), {
+        method: "HEAD",
+        headers: origin ? { Origin: origin } : undefined,
+      }) as GlobalRequest;
+    }
+
+    async function installStatHandle(stats: { size: number; nlink?: number }) {
+      const fs = await import("fs/promises");
+      const handle = {
+        read: vi.fn(),
+        stat: vi.fn().mockResolvedValue({ ...stats, isFile: () => true }),
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+      vi.mocked(fs.open).mockResolvedValue(
+        handle as unknown as Awaited<ReturnType<typeof fs.open>>
+      );
+      return handle;
+    }
+
+    it("answers from a stat of the open file, without reading it", async () => {
+      const fs = await import("fs/promises");
+      vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+      const handle = await installStatHandle({ size: 2048, nlink: 1 });
+
+      const handler = await captureHandler("daintree-file");
+      const response = await handler(makeHead("/project/docs/img/a.png", "/project"));
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Length")).toBe("2048");
+      expect(response.headers.get(PATH_CANONICAL_HEADER)).toBe("true");
+      expect((await response.arrayBuffer()).byteLength).toBe(0);
+      expect(handle.read).not.toHaveBeenCalled();
+      expect(handle.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("says a path reached through a symlink is not canonical", async () => {
+      const fs = await import("fs/promises");
+      vi.mocked(fs.realpath).mockImplementation((p) =>
+        Promise.resolve(
+          p === path.normalize("/project/docs/img/a.png")
+            ? path.normalize("/project/assets/a.png")
+            : (p as string)
+        )
+      );
+      await installStatHandle({ size: 10, nlink: 1 });
+
+      const handler = await captureHandler("daintree-file");
+      const response = await handler(makeHead("/project/docs/img/a.png", "/project"));
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get(PATH_CANONICAL_HEADER)).toBe("false");
+    });
+
+    it("says a hard-linked file is not canonical", async () => {
+      const fs = await import("fs/promises");
+      vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+      await installStatHandle({ size: 10, nlink: 2 });
+
+      const handler = await captureHandler("daintree-file");
+      const response = await handler(makeHead("/project/docs/img/a.png", "/project"));
+
+      expect(response.headers.get(PATH_CANONICAL_HEADER)).toBe("false");
+    });
+
+    it("refuses a path outside the root without vouching for anything", async () => {
+      const fs = await import("fs/promises");
+      vi.mocked(fs.realpath).mockImplementation((p) =>
+        Promise.resolve(
+          p === path.normalize("/project/docs/img/a.png")
+            ? path.normalize("/etc/passwd")
+            : (p as string)
+        )
+      );
+
+      const handler = await captureHandler("daintree-file");
+      const response = await handler(makeHead("/project/docs/img/a.png", "/project"));
+
+      expect(response.status).toBe(404);
+      expect(response.headers.get(PATH_CANONICAL_HEADER)).toBeNull();
+      expect(fs.open).not.toHaveBeenCalled();
+    });
+
+    it("exposes the answer to the trusted app origin's fetch", async () => {
+      const fs = await import("fs/promises");
+      vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+      await installStatHandle({ size: 10, nlink: 1 });
+
+      const handler = await captureHandler("daintree-file");
+      const response = await handler(
+        makeHead("/project/docs/img/a.png", "/project", "app://daintree")
+      );
+
+      const exposed = (response.headers.get("Access-Control-Expose-Headers") ?? "")
+        .split(",")
+        .map((name) => name.trim().toLowerCase());
+      expect(exposed).toContain(PATH_CANONICAL_HEADER.toLowerCase());
+    });
   });
 });
 
