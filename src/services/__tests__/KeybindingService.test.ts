@@ -1596,7 +1596,7 @@ describe("KeybindingService", () => {
       vi.stubGlobal("window", {
         electron: {
           keybinding: {
-            getOverrides: vi.fn().mockResolvedValue(overrides),
+            getOverrides: vi.fn().mockResolvedValue({ revision: 0, overrides }),
             setOverride: vi.fn().mockResolvedValue(undefined),
             removeOverride: vi.fn().mockResolvedValue(undefined),
             resetAll: vi.fn().mockResolvedValue(undefined),
@@ -1703,7 +1703,7 @@ describe("KeybindingService", () => {
       vi.stubGlobal("window", {
         electron: {
           keybinding: {
-            getOverrides: vi.fn().mockResolvedValue(overrides),
+            getOverrides: vi.fn().mockResolvedValue({ revision: 0, overrides }),
             setOverride: vi.fn().mockResolvedValue(undefined),
             removeOverride: vi.fn().mockResolvedValue(undefined),
             resetAll: vi.fn().mockResolvedValue(undefined),

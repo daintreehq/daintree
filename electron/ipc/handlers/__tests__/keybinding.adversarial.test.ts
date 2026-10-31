@@ -107,7 +107,7 @@ describe("keybinding handlers adversarial", () => {
     const handler = getHandler(CHANNELS.KEYBINDING_GET_OVERRIDES);
     const result = await handler(fakeEvent());
 
-    expect(result).toEqual({ "action.a": ["Cmd+A"], "action.b": [] });
+    expect(result).toMatchObject({ overrides: { "action.a": ["Cmd+A"], "action.b": [] } });
   });
 
   it("getOverrides warns once per malformed entry — issue #7303", async () => {
@@ -133,13 +133,13 @@ describe("keybinding handlers adversarial", () => {
     const handler = getHandler(CHANNELS.KEYBINDING_GET_OVERRIDES);
 
     storeMock.get.mockReturnValue(null);
-    expect(await handler(fakeEvent())).toEqual({});
+    expect(await handler(fakeEvent())).toMatchObject({ overrides: {} });
 
     storeMock.get.mockReturnValue(["not", "an", "object"]);
-    expect(await handler(fakeEvent())).toEqual({});
+    expect(await handler(fakeEvent())).toMatchObject({ overrides: {} });
 
     storeMock.get.mockReturnValue("string");
-    expect(await handler(fakeEvent())).toEqual({});
+    expect(await handler(fakeEvent())).toMatchObject({ overrides: {} });
   });
 
   it("setOverride persists sanitized existing entries plus the new override, dropping invalid keys", async () => {
@@ -420,6 +420,10 @@ describe("keybinding handlers — every view hears a saved change (#15579)", () 
       {},
     ]);
     expect(replies).toEqual(pushes());
+    // A read answers with the latest save, numbered like it.
+    expect(await getHandler(CHANNELS.KEYBINDING_GET_OVERRIDES)(fakeEvent())).toEqual(
+      pushes().at(-1)
+    );
     const revisions = pushes().map((push) => push.revision);
     expect(revisions).toEqual([...revisions].sort((a, b) => a - b));
     expect(new Set(revisions).size).toBe(revisions.length);

@@ -1057,7 +1057,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   // Keybinding channels
   "keybinding:get-overrides": {
     args: [];
-    result: Record<KeyAction, string[]>;
+    result: KeybindingOverridesSnapshot;
   };
   "keybinding:set-override": {
     args: [payload: { actionId: KeyAction; combo: string[] }];

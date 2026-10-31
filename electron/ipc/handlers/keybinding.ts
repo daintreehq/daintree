@@ -8,6 +8,7 @@ import { exportProfile, importProfile } from "../../utils/keybindingProfileIO.js
 import type { ImportResult } from "../../utils/keybindingProfileIO.js";
 import {
   getValidatedOverrides,
+  readKeybindingOverrides,
   saveKeybindingOverrides,
 } from "../../services/keybindingOverridesStore.js";
 import { typedHandle, typedHandleWithContext } from "../utils.js";
@@ -38,7 +39,7 @@ export function registerKeybindingHandlers(deps: HandlerDependencies): () => voi
 
   handlers.push(
     typedHandle(CHANNELS.KEYBINDING_GET_OVERRIDES, async () => {
-      return getValidatedOverrides();
+      return readKeybindingOverrides();
     })
   );
 

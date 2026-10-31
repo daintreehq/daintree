@@ -177,8 +177,9 @@ import type { IdleBackgroundClosedPayload } from "./idleBackgroundAutoClose.js";
 import type { KeyAction } from "../keymap.js";
 
 /**
- * This machine's saved keybinding overrides, numbered by save. A write's
- * reply and the pushes reach a view separately, so it keeps the newest (#15579).
+ * This machine's saved keybinding overrides, numbered by save. A read, a
+ * write's reply and the pushes reach a view separately, so it keeps the
+ * newest (#15579).
  */
 export interface KeybindingOverridesSnapshot {
   revision: number;
@@ -1533,8 +1534,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onStateChanged(callback: (payload: { osDndActive: boolean | undefined }) => void): () => void;
   };
   keybinding: {
-    /** Get current keybinding overrides */
-    getOverrides(): Promise<Record<KeyAction, string[]>>;
+    /** Get current keybinding overrides, numbered like the saves */
+    getOverrides(): Promise<KeybindingOverridesSnapshot>;
     /** Set override for a specific action; resolves to the saved map */
     setOverride(actionId: KeyAction, combo: string[]): Promise<KeybindingOverridesSnapshot>;
     /** Remove override for a specific action (revert to default); resolves to the saved map */

@@ -58,7 +58,7 @@ function createMain() {
   };
 
   const bridge = {
-    getOverrides: vi.fn(() => reply({ ...saved })),
+    getOverrides: vi.fn(() => reply({ revision, overrides: { ...saved } })),
     setOverride: vi.fn((actionId: string, combo: string[]) =>
       reply(save({ ...saved, [actionId]: combo }))
     ),
@@ -360,6 +360,21 @@ describe("keybinding overrides sync across views (#15579)", () => {
     connect(other);
 
     await vi.waitFor(() => expect(other.getEffectiveCombo("terminal.close")).toBe("Cmd+Shift+J"));
+  });
+
+  it("doesn't let a reply from before a re-attach undo the save its read picked up", async () => {
+    disconnectAll();
+    main.hold();
+    const pending = writer.setOverride("terminal.close", ["Cmd+Shift+J"]);
+    // Saved while this view wasn't listening, so only the read can bring it.
+    main.saveElsewhere({ "terminal.close": ["Cmd+Shift+K"] });
+    connect(writer);
+    await vi.waitFor(() => expect(writer.getEffectiveCombo("terminal.close")).toBe("Cmd+Shift+K"));
+
+    main.release();
+    await pending;
+
+    expect(writer.getEffectiveCombo("terminal.close")).toBe("Cmd+Shift+K");
   });
 
   it("stops listening once disposed", () => {

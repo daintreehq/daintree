@@ -60,18 +60,23 @@ export function getValidatedOverrides(): Record<string, string[]> {
 
 let revision = 0;
 
+/** What a view reads: the map as of the latest save, numbered like the saves. */
+export function readKeybindingOverrides(): KeybindingOverridesSnapshot {
+  return { revision, overrides: getValidatedOverrides() };
+}
+
 /**
  * Saves this machine's overrides and hands the saved map to every view on it,
  * the writer and cached project views included, since each keeps its own copy
- * (#15579). Every save takes the next revision: a write's reply and the pushes
- * travel separately, so a view keeps whichever snapshot is newest.
+ * (#15579). Every save takes the next revision: a write's reply, a read and
+ * the pushes travel separately, so a view keeps whichever snapshot is newest.
  */
 export function saveKeybindingOverrides(
   overrides: Record<string, string[]>
 ): KeybindingOverridesSnapshot {
   store.set("keybindingOverrides.overrides", overrides);
   revision += 1;
-  const snapshot = { revision, overrides: getValidatedOverrides() };
+  const snapshot = readKeybindingOverrides();
   broadcastToRenderer(CHANNELS.KEYBINDING_OVERRIDES_CHANGED, snapshot);
   return snapshot;
 }

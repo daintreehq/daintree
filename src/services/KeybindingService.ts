@@ -56,7 +56,8 @@ class KeybindingService {
   private whenContextProvider: ((event: KeyboardEvent) => WhenClauseContext) | null = null;
   private shortcutCaptures = 0;
   // The newest save this view holds (#15579). Main numbers every save, and a
-  // write's reply and the pushes arrive separately, so an older one is dropped.
+  // read, a write's reply and the pushes arrive separately, so an older one is
+  // dropped.
   private overridesRevision = 0;
   // Set once a save or a read lands. The boot payload was read before either.
   private overridesSeeded = false;
@@ -120,14 +121,14 @@ class KeybindingService {
 
   async loadOverrides(): Promise<void> {
     if (typeof window !== "undefined" && window.electron?.keybinding) {
-      // A read carries no revision, so one that a save overtook in flight
-      // could be older than it.
-      const revision = this.overridesRevision;
       try {
-        const overrides = await window.electron.keybinding.getOverrides();
-        if (revision !== this.overridesRevision) return;
+        const answer = await window.electron.keybinding.getOverrides();
+        // The same revision as this view's is the same save: a fresh view
+        // reads revision 0 before anything was saved.
+        if (!isOverridesSnapshot(answer) || answer.revision < this.overridesRevision) return;
+        this.overridesRevision = answer.revision;
         this.overridesSeeded = true;
-        this.applyOverrides(overrides);
+        this.applyOverrides(answer.overrides);
       } catch (error) {
         // Mirrors useUserAgentRegistryStore.initialize() — non-fatal degradation.
         // `this.bindings` retains DEFAULT_KEYBINDINGS (seeded in constructor).

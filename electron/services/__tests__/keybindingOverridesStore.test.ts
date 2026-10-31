@@ -7,7 +7,7 @@ const broadcastMock = vi.hoisted(() => vi.fn());
 vi.mock("../../store.js", () => ({ store: { get: storeGetMock, set: storeSetMock } }));
 vi.mock("../../ipc/utils.js", () => ({ broadcastToRenderer: broadcastMock }));
 
-const { getValidatedOverrides, saveKeybindingOverrides } =
+const { getValidatedOverrides, readKeybindingOverrides, saveKeybindingOverrides } =
   await import("../keybindingOverridesStore.js");
 const { CHANNELS } = await import("../../ipc/channels.js");
 
@@ -123,6 +123,7 @@ describe("saveKeybindingOverrides (#15579)", () => {
     });
     expect(second.overrides).toEqual(getValidatedOverrides());
     expect(second.revision).toBeGreaterThan(first.revision);
+    expect(readKeybindingOverrides()).toEqual(second);
     expect(broadcastMock.mock.calls).toEqual([
       [CHANNELS.KEYBINDING_OVERRIDES_CHANGED, first],
       [CHANNELS.KEYBINDING_OVERRIDES_CHANGED, second],
