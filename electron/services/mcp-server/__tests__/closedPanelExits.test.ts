@@ -205,9 +205,7 @@ describe("waitForClosedPanelExits (#15728)", () => {
       ),
       0
     );
-    expect(result.processes).toEqual([
-      { terminalId: "t1", outcome: "unknown", graceEnded: false },
-    ]);
+    expect(result.processes).toEqual([{ terminalId: "t1", outcome: "unknown", graceEnded: false }]);
     expect(host.endGraceCalls).toEqual([]);
   });
 
@@ -261,9 +259,7 @@ describe("waitForClosedPanelExits (#15728)", () => {
       0
     );
     expect(host.endGraceCalls).toEqual([]);
-    expect(result.processes).toEqual([
-      { terminalId: "t1", outcome: "running", graceEnded: false },
-    ]);
+    expect(result.processes).toEqual([{ terminalId: "t1", outcome: "running", graceEnded: false }]);
   });
 
   it("waits for every panel under one deadline and answers each in the order asked", async () => {

@@ -19,7 +19,10 @@ export interface ClosedPanelExitRecord {
 
 export interface ClosedPanelExitDeps {
   /** An exit main received for this incarnation (#15728), kept past the host's record. */
-  findExit(terminalId: string, launchGeneration: number | undefined): RecentTerminalExit | undefined;
+  findExit(
+    terminalId: string,
+    launchGeneration: number | undefined
+  ): RecentTerminalExit | undefined;
   onExit(listener: (exit: RecentTerminalExit) => void): () => void;
   /** The host's record, null when it holds none. Rejects when the read failed. */
   readRecord(terminalId: string): Promise<ClosedPanelExitRecord | null>;

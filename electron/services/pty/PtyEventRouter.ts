@@ -231,12 +231,7 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       if (!superseded) state.terminalPids.delete(event.id);
       if (callbacks.onTerminalExit) {
         try {
-          callbacks.onTerminalExit(
-            event.id,
-            event.exitCode,
-            event.launchGeneration,
-            event.signal
-          );
+          callbacks.onTerminalExit(event.id, event.exitCode, event.launchGeneration, event.signal);
         } catch (err) {
           deps.logWarn(`[PtyClient] onTerminalExit threw for ${event.id}: ${String(err)}`);
         }

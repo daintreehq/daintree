@@ -2197,10 +2197,7 @@ export class PtyClient extends EventEmitter {
    * caller closed. Null when the host did not answer: it may or may not have
    * started, and the caller's wait finds out from the exit.
    */
-  async endTrashGrace(
-    id: string,
-    expectedGeneration: number
-  ): Promise<EndTrashGraceStatus | null> {
+  async endTrashGrace(id: string, expectedGeneration: number): Promise<EndTrashGraceStatus | null> {
     if (this.isDisposed) return null;
     return sendPtyHostRpc<EndTrashGraceStatus>(
       this.shardForTerminal(id),
