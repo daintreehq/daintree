@@ -353,7 +353,9 @@ class AgentNotificationService {
   private projectOf(terminalId: string | undefined): string | null {
     if (!terminalId) return null;
     return (
-      getPtyClient()?.getTerminalProjectId(terminalId) ?? this.panels.workspaceOf(terminalId) ?? null
+      getPtyClient()?.getTerminalProjectId(terminalId) ??
+      this.panels.workspaceOf(terminalId) ??
+      null
     );
   }
 

@@ -73,7 +73,9 @@ export interface MetricsHostDeps {
    * which decide only for a Shell that never sent its own choices (one from
    * before #14701).
    */
-  notificationSettings(projectId: string | null): Pick<
+  notificationSettings(
+    projectId: string | null
+  ): Pick<
     NotificationSettings,
     | "enabled"
     | "waitingEnabled"

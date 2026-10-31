@@ -4003,7 +4003,10 @@ describe("each project's own choices across a burst (#15635)", () => {
       { [PROJECT_B]: { waitingEscalationDelayMs: 60_000 } }
     );
     saveProjectPanels([panel("term-a", "wt-a", "dock")], PROJECT_A);
-    saveProjectPanels([panel("term-b", "wt-b", "dock"), panel("term-b2", "wt-b", "dock")], PROJECT_B);
+    saveProjectPanels(
+      [panel("term-b", "wt-b", "dock"), panel("term-b2", "wt-b", "dock")],
+      PROJECT_B
+    );
     agentNotificationService.syncWatchedPanels(VIEW_A, []);
     agentNotificationService.syncWatchedPanels(VIEW_B, []);
 

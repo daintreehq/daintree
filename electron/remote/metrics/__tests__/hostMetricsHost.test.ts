@@ -561,7 +561,9 @@ describe("installHostMetricsHostWith", () => {
     const d = deps({
       notificationSettings: (projectId) => {
         asked.push(projectId);
-        return projectId === "muted" ? { ...NO_QUIET_HOURS, waitingEnabled: false } : NO_QUIET_HOURS;
+        return projectId === "muted"
+          ? { ...NO_QUIET_HOURS, waitingEnabled: false }
+          : NO_QUIET_HOURS;
       },
     });
     const dispose = installHostMetricsHostWith(server, d);
