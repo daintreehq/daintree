@@ -373,10 +373,11 @@ export class DocumentController {
     };
   }
 
-  async load(options: { restoreDraft: boolean }): Promise<void> {
+  /** Resolves true when this load's result was applied; false when it was overtaken or disposed. */
+  async load(options: { restoreDraft: boolean }): Promise<boolean> {
     const request = this.beginLoad();
     const result = await this.read();
-    if (!this.loadIsCurrent(request)) return;
+    if (!this.loadIsCurrent(request)) return false;
     if (result === null || result.status === "unavailable") {
       // The file is not there, but a stored draft may be: surface it so the
       // panel shows the unsaved mark and the draft can be copied, rather than
@@ -384,7 +385,7 @@ export class DocumentController {
       let draft = this.record().draft;
       if (options.restoreDraft && draft === null) {
         const stored = await this.readStoredDraft();
-        if (!this.loadIsCurrent(request)) return;
+        if (!this.loadIsCurrent(request)) return false;
         if (stored) draft = { text: stored.draftText, baseRevision: stored.baseRevision };
       }
       this.update((record) => ({
@@ -393,21 +394,21 @@ export class DocumentController {
         draft,
         textVersion: draft === record.draft ? record.textVersion : record.textVersion + 1,
       }));
-      return;
+      return true;
     }
     if (result.status === "refused") {
       if (result.reason === "TOO_LARGE") {
         settleDiskTooLarge(this.key);
-        return;
+        return true;
       }
       this.update((record) => ({ ...record, status: "refused", refusal: result.reason }));
-      return;
+      return true;
     }
     const base = this.baseFrom(result);
     let draft: DocumentRecord["draft"] = null;
     if (options.restoreDraft) {
       const stored = await this.readStoredDraft();
-      if (!this.loadIsCurrent(request)) return;
+      if (!this.loadIsCurrent(request)) return false;
       if (stored && stored.draftText !== base.text) {
         draft = { text: stored.draftText, baseRevision: stored.baseRevision };
       } else if (stored) {
@@ -437,7 +438,7 @@ export class DocumentController {
       if (previous !== null && previous.revision === draft.baseRevision) {
         this.update((record) => ({ ...record, status: "ready", conflict, error: null }));
         announce("File changed on disk");
-        return;
+        return true;
       }
       this.update((record) => ({
         ...record,
@@ -451,7 +452,7 @@ export class DocumentController {
         textVersion: record.textVersion + 1,
       }));
       announce("Recovered draft, file changed on disk");
-      return;
+      return true;
     }
     this.update((record) => ({
       ...record,
@@ -464,6 +465,7 @@ export class DocumentController {
       loadGeneration: record.loadGeneration + 1,
       textVersion: record.textVersion + 1,
     }));
+    return true;
   }
 
   // ── Editing ────────────────────────────────────────────────────────
@@ -704,14 +706,21 @@ export class DocumentController {
 
   // ── External change detection ──────────────────────────────────────
 
-  /** What a reload ended as: it can find the file grown past the ceiling instead. */
-  private announceReload(before: DocumentRecord): void {
+  /**
+   * What an applied reload ended as: it can find the file gone, refused or
+   * grown past the ceiling instead. An ordinary conflict announced itself.
+   */
+  private announceReload(before: DocumentRecord, applied: boolean): void {
+    if (!applied || this.disposed) return;
     const after = this.record();
-    if (after.status === "refused" && after.refusal === "TOO_LARGE") {
-      if (before.status !== "refused") announceDiskTooLarge("refused");
+    if (after.status === "refused") {
+      if (after.refusal !== "TOO_LARGE") announce("File changed on disk");
+      else if (before.status !== "refused") announceDiskTooLarge("refused");
+    } else if (after.status === "unavailable") {
+      announce("File is no longer available");
     } else if (after.conflict?.tooLarge) {
       announceDiskTooLarge("held");
-    } else {
+    } else if (after.conflict === null) {
       announce("File changed on disk, reloaded");
     }
   }
@@ -759,8 +768,7 @@ export class DocumentController {
       return;
     }
     if (current.status === "refused") {
-      await this.load({ restoreDraft: current.draft === null });
-      this.announceReload(current);
+      this.announceReload(current, await this.load({ restoreDraft: current.draft === null }));
       return;
     }
     if (!current.base) {
@@ -789,8 +797,7 @@ export class DocumentController {
       if (current.conflict && current.conflict.revision === result.revision) return;
     }
     if (current.draft === null) {
-      await this.load({ restoreDraft: false });
-      this.announceReload(current);
+      this.announceReload(current, await this.load({ restoreDraft: false }));
       return;
     }
     const fresh = await this.read();

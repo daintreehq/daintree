@@ -731,6 +731,37 @@ describe("DocumentController (#12323)", () => {
       expect(announceMock).not.toHaveBeenCalledWith("File changed on disk, reloaded");
     });
 
+    it("a clean reload that finds the file gone says so, not that it reloaded", async () => {
+      const controller = await open();
+      main.files.set(PROPS.filePath, "# Plan\n\nagent\n");
+      main.overrides.set(CHANNELS.read, () => ({ status: "unavailable" }));
+      main.push(PUSH_CHANNELS.documentChanged, { identityKey: KEY });
+      await flush(200);
+      expect(controller.record().status).toBe("unavailable");
+      expect(announceMock).toHaveBeenCalledWith("File is no longer available");
+      expect(announceMock).not.toHaveBeenCalledWith("File changed on disk, reloaded");
+    });
+
+    it("a reload overtaken by the panel closing announces nothing", async () => {
+      await open();
+      main.files.set(PROPS.filePath, "# Plan\n\nagent\n");
+      let finishRead!: (value: unknown) => void;
+      main.overrides.set(
+        CHANNELS.read,
+        () =>
+          new Promise((resolve) => {
+            finishRead = resolve;
+          })
+      );
+      main.push(PUSH_CHANNELS.documentChanged, { identityKey: KEY });
+      await flush(200);
+      panelStore().setState({ panelsById: { "panel-2": { id: "panel-2" } } });
+      announceMock.mockClear();
+      finishRead({ status: "refused", reason: "TOO_LARGE" });
+      await flush();
+      expect(announceMock).not.toHaveBeenCalled();
+    });
+
     it("a clean reload that finds it too large says so, not that it reloaded", async () => {
       const controller = await open();
       main.files.set(PROPS.filePath, "# Plan\n\nagent\n");
