@@ -26,6 +26,8 @@ import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { usePanelLimitStore, buildPanelLimitSnapshot } from "@/store/panelLimitStore";
 import { notify } from "@/lib/notify";
+import { notifyRetiredModelDropped } from "@/services/terminal/retiredModelNotice";
+import { dropRetiredAgentModel } from "@shared/types/agentSettings";
 import { noteVisibleAgentLaunch } from "@/services/systemMemoryLaunchNotice";
 import {
   getDefaultTitle,
@@ -106,15 +108,24 @@ function estimateOverlayGridDims(fontSize: number): { cols: number; rows: number
 
 export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySlice, "addPanel"> => {
   const createPanel = async (
-    options: AddPanelOptions,
+    requestedOptions: AddPanelOptions,
     commit: AddPanelCommitOptions | undefined
   ): Promise<string | null> => {
-    const requestedKind = options.kind ?? "terminal";
+    const requestedKind = requestedOptions.kind ?? "terminal";
 
     // Handle panels that use custom UI (browser, dev-preview, extensions) separately
     if (!panelKindUsesTerminalUi(requestedKind)) {
-      return addNonPtyPanel(set, get, options, commit, requestedKind);
+      return addNonPtyPanel(set, get, requestedOptions, commit, requestedKind);
     }
+
+    // Every replayed launch (recipe, duplicate, reopen, worktree and project
+    // restore) arrives here, so a saved retired model is dropped once, before
+    // the panel records it (#15652). A reconnect attaches to a run already
+    // going and a recovery hold starts nothing, so neither is changed.
+    const { launch: options, droppedModelIds } =
+      requestedOptions.existingId || requestedOptions.restoreRecovery !== undefined
+        ? { launch: requestedOptions, droppedModelIds: [] }
+        : dropRetiredAgentModel(requestedOptions.launchAgentId, requestedOptions);
 
     // PTY panels: terminal / dev-preview. Agent identity lives on `launchAgentId`.
     const launchAgentId = options.launchAgentId;
@@ -405,6 +416,13 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
     if (isRecoveryHold) return id;
 
     markRendererPerformance("agentlaunch.committed", { id });
+
+    if (launchAgentId && droppedModelIds.length > 0) {
+      notifyRetiredModelDropped(launchAgentId, droppedModelIds, {
+        panelId: id,
+        worktreeId: options.worktreeId,
+      });
+    }
 
     // Mint the panel's launch generation atomically with the commit above (no
     // await between id reservation and here). Every async completion below —

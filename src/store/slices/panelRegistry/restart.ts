@@ -23,7 +23,12 @@ import {
   resolveEffectiveBypass,
   resolveEffectiveInlineMode,
 } from "@shared/types";
-import { agentClipboardDirectory, supportsCrossDirectoryResume } from "@shared/types/agentSettings";
+import {
+  agentClipboardDirectory,
+  dropRetiredAgentModel,
+  supportsCrossDirectoryResume,
+} from "@shared/types/agentSettings";
+import { notifyRetiredModelDropped } from "@/services/terminal/retiredModelNotice";
 import { resolveInheritedPanelCwd } from "@/services/terminal/panelDuplicationService";
 import type { AgentSettingsEntry } from "@shared/types/agentSettings";
 import type { AgentState } from "@/types";
@@ -531,7 +536,13 @@ export const createRestartActions = (
       logWarn("[TerminalStore] Terminal no longer exists or was trashed", { id });
       return;
     }
-    const currentTerminal = _currentTerminalRaw;
+    // A pane saved with a retired model fails on every start (#15652). Each
+    // command below (fresh, resume, the saved one as a fallback) and the state
+    // the restart persists read these cleaned fields, so none can replay it.
+    const { launch: currentTerminal, droppedModelIds } = dropRetiredAgentModel(
+      _currentTerminalRaw.launchAgentId,
+      _currentTerminalRaw
+    );
 
     if (currentTerminal.location === "trash") {
       // Terminal was removed or trashed while we were validating
@@ -1034,6 +1045,7 @@ export const createRestartActions = (
           // restart falls through to the default shell.
           command: isDemotedAgent ? undefined : durableCommand,
           agentLaunchFlags: isAgent ? nextAgentLaunchFlags : t.agentLaunchFlags,
+          agentModelId: isAgent ? currentTerminal.agentModelId : t.agentModelId,
           // Only the ownership the split trusted: a tail it rejected must not
           // later claim settings-derived tokens that happen to end the list.
           callerLaunchFlags: isAgent
@@ -1074,6 +1086,14 @@ export const createRestartActions = (
         saveNormalized(newById, state.panelIds);
         return { panelsById: newById };
       });
+      // Told as soon as the change is saved: a spawn that then fails leaves the
+      // pane on the default with nothing retired left to report on the retry.
+      if (isAgent && effectiveAgentId && droppedModelIds.length > 0) {
+        notifyRetiredModelDropped(effectiveAgentId, droppedModelIds, {
+          panelId: id,
+          worktreeId: currentTerminal.worktreeId,
+        });
+      }
 
       const terminalService = peekTerminalService() ?? (await loadTerminalService());
       await terminalService.waitForInstance(id, { timeoutMs: 5000 });
@@ -1636,13 +1656,19 @@ async function respawnAgentOnPreset(
   nextPresetId: string,
   mode: PresetRespawnMode
 ): Promise<{ success: boolean; error?: string }> {
-  const terminal = get().panelsById[id];
-  if (!terminal) {
+  const livePanel = get().panelsById[id];
+  if (!livePanel) {
     return { success: false, error: "terminal not found" };
   }
-  if (!isPtyPanel(terminal)) {
+  if (!isPtyPanel(livePanel)) {
     return { success: false, error: "panel is not a PTY panel" };
   }
+  // The new preset's launch is built from these fields, so a retired model
+  // saved on the pane doesn't follow it onto the new preset (#15652).
+  const { launch: terminal, droppedModelIds } = dropRetiredAgentModel(
+    livePanel.launchAgentId,
+    livePanel
+  );
   if (terminal.isRestarting) {
     return { success: false, error: "already restarting" };
   }
@@ -1809,6 +1835,7 @@ async function respawnAgentOnPreset(
         // on the preset it just moved off.
         env: sanitizeAgentEnv(runtimeSettings.env),
         agentLaunchFlags: nextLaunchFlags,
+        agentModelId: terminal.agentModelId,
         callerLaunchFlags: callerLaunchFlags.length > 0 ? callerLaunchFlags : undefined,
         agentSessionId: undefined,
         // The fallback starts a new conversation where the pane runs, and is
@@ -1835,6 +1862,12 @@ async function respawnAgentOnPreset(
       saveNormalized(newById, state.panelIds);
       return { panelsById: newById };
     });
+    if (droppedModelIds.length > 0) {
+      notifyRetiredModelDropped(effectiveAgentId, droppedModelIds, {
+        panelId: id,
+        worktreeId: terminal.worktreeId,
+      });
+    }
 
     const terminalService = peekTerminalService() ?? (await loadTerminalService());
     await terminalService.waitForInstance(id, { timeoutMs: 5000 });

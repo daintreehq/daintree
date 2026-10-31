@@ -1,4 +1,4 @@
-import { AGENT_REGISTRY, getEffectiveAgentConfig } from "../config/agentRegistry.js";
+import { AGENT_REGISTRY, getEffectiveAgentConfig, isRetiredAgentModel } from "../config/agentRegistry.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import {
   agentCommandDialect,
@@ -1461,6 +1461,105 @@ export function stripConversationSelectorFlags(
     i++;
   }
   return kept;
+}
+
+const MODEL_FLAG = "--model";
+
+/**
+ * Drops each `--model <id>` / `--model=<id>` naming a retired model from a run
+ * of argument words. `unquote` reads a command's shell-quoted words for the id.
+ * Returns undefined when nothing was dropped. Stops at `--`: what follows it is
+ * positional, never a flag.
+ */
+function withoutRetiredModelArgs(
+  words: readonly string[],
+  agentId: string,
+  unquote: (word: string) => string,
+  dropped: Set<string>
+): string[] | undefined {
+  const kept: string[] = [];
+  let changed = false;
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i]!;
+    if (word === "--") {
+      kept.push(...words.slice(i));
+      break;
+    }
+    if (word === MODEL_FLAG && i + 1 < words.length) {
+      const modelId = unquote(words[i + 1]!);
+      if (isRetiredAgentModel(agentId, modelId)) {
+        dropped.add(modelId);
+        changed = true;
+        i++;
+        continue;
+      }
+    } else if (word.startsWith(`${MODEL_FLAG}=`)) {
+      const modelId = unquote(word.slice(MODEL_FLAG.length + 1));
+      if (isRetiredAgentModel(agentId, modelId)) {
+        dropped.add(modelId);
+        changed = true;
+        continue;
+      }
+    }
+    kept.push(word);
+  }
+  return changed ? kept : undefined;
+}
+
+/** The fields a pane or launch keeps its model choice in. */
+export interface SavedAgentModelLaunch {
+  agentModelId?: string;
+  agentLaunchFlags?: string[];
+  callerLaunchFlags?: string[];
+  command?: string;
+}
+
+/**
+ * Takes a retired model (`AgentConfig.retiredModels`) out of a saved launch
+ * before it is replayed, so the run starts on the CLI default instead of
+ * failing on `--model <retired id>` every time (#15652).
+ *
+ * The choice is saved in up to four places — the scalar id, the replayed
+ * flags, the caller's verbatim tail of them, and the command itself — and a
+ * relaunch path can take any of them, so all four are cleaned together. An id
+ * that is offered, unknown, or simply missing from the bundled list is left
+ * alone: only a declared retirement drops anything.
+ *
+ * Returns the same `launch` object, with no ids, when nothing is retired.
+ */
+export function dropRetiredAgentModel<T extends SavedAgentModelLaunch>(
+  agentId: string | undefined,
+  launch: T
+): { launch: T; droppedModelIds: string[] } {
+  if (!agentId || !getEffectiveAgentConfig(agentId)?.retiredModels) {
+    return { launch, droppedModelIds: [] };
+  }
+  const dropped = new Set<string>();
+  const next: T = { ...launch };
+  if (isRetiredAgentModel(agentId, launch.agentModelId)) {
+    dropped.add(launch.agentModelId!);
+    next.agentModelId = undefined;
+  }
+  const identity = (word: string) => word;
+  if (launch.agentLaunchFlags) {
+    const flags = withoutRetiredModelArgs(launch.agentLaunchFlags, agentId, identity, dropped);
+    if (flags) next.agentLaunchFlags = flags;
+  }
+  if (launch.callerLaunchFlags) {
+    const flags = withoutRetiredModelArgs(launch.callerLaunchFlags, agentId, identity, dropped);
+    if (flags) next.callerLaunchFlags = flags.length > 0 ? flags : undefined;
+  }
+  if (launch.command) {
+    const words = withoutRetiredModelArgs(
+      splitShellWords(launch.command),
+      agentId,
+      unquoteShellWord,
+      dropped
+    );
+    if (words) next.command = words.join(" ");
+  }
+  if (dropped.size === 0) return { launch, droppedModelIds: [] };
+  return { launch: next, droppedModelIds: [...dropped] };
 }
 
 const ASSIGNABLE_SESSION_ID_PATTERN =

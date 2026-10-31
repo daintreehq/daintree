@@ -114,6 +114,11 @@ vi.mock("@shared/types", async () => {
   };
 });
 
+const notifyRetiredModelDroppedMock = vi.hoisted(() => vi.fn());
+vi.mock("@/services/terminal/retiredModelNotice", () => ({
+  notifyRetiredModelDropped: notifyRetiredModelDroppedMock,
+}));
+
 vi.mock("@/store/ccrPresetsStore", () => ({
   useCcrPresetsStore: {
     getState: () => ({ ccrPresetsByAgent: {} }),
@@ -2796,5 +2801,154 @@ describe("restartTerminal starts a moved pane where it is filed (#14954)", () =>
 
     expect(mockSpawn.mock.calls[0]![0].command).not.toContain("--continue");
     expect(paneAfterRestart().callerLaunchFlags).toBeUndefined();
+  });
+});
+
+describe("restartTerminal with a retired Copilot model (#15652)", () => {
+  const retiredCopilot = {
+    ...agentPanelBase,
+    launchAgentId: "copilot",
+    title: "GitHub Copilot",
+    agentState: "idle" as const,
+    agentModelId: "claude-opus-4.6",
+    agentLaunchFlags: ["--model", "claude-opus-4.6", "--allow-all-tools"],
+    command: "copilot --model claude-opus-4.6 --allow-all-tools",
+  };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    getMergedPresetMock.mockReturnValue(undefined);
+    buildAgentLaunchFlagsMock.mockReturnValue([]);
+    mockGracefulKill.mockResolvedValue(null);
+    const { agentSettingsClient, projectClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockResolvedValue({});
+    vi.mocked(projectClient.getSettings).mockResolvedValue(null);
+    const { getAgentConfig } = await import("@/config/agents");
+    vi.mocked(getAgentConfig).mockReturnValue({ command: "copilot" } as never);
+    // The real builders, so the command under test is the one that would run.
+    const actual = await vi.importActual<typeof import("@shared/types")>("@shared/types");
+    const shared = await import("@shared/types");
+    vi.mocked(shared.buildLaunchCommandFromFlags).mockImplementation(
+      actual.buildLaunchCommandFromFlags
+    );
+    vi.mocked(shared.buildResumeCommand).mockImplementation(actual.buildResumeCommand);
+    vi.mocked(shared.buildResumeLatestCommand).mockReturnValue(null as never);
+    const { reset } = usePanelStore.getState();
+    await reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+    });
+  });
+
+  afterAll(async () => {
+    const { getAgentConfig } = await import("@/config/agents");
+    vi.mocked(getAgentConfig).mockReturnValue({ command: "claude" } as never);
+  });
+
+  function show(panel: Record<string, unknown>) {
+    usePanelStore.setState({
+      panelsById: { [panel.id as string]: panel as unknown as PtyPanelData },
+      panelIds: [panel.id as string],
+    });
+  }
+
+  function paneAfterRestart(): PtyPanelData {
+    const panel = usePanelStore.getState().panelsById["test-1"];
+    if (!panel || !isPtyPanel(panel)) throw new Error("pane missing");
+    return panel;
+  }
+
+  it("relaunches on the CLI default and saves the launch without the retired model", async () => {
+    show(retiredCopilot);
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("copilot --allow-all-tools");
+    expect(payload.agentLaunchFlags).toEqual(["--allow-all-tools"]);
+    expect(payload.agentModelId).toBeUndefined();
+    const pane = paneAfterRestart();
+    expect(pane.agentModelId).toBeUndefined();
+    expect(pane.agentLaunchFlags).toEqual(["--allow-all-tools"]);
+    expect(pane.command).toBe("copilot --allow-all-tools");
+    expect(notifyRetiredModelDroppedMock).toHaveBeenCalledWith("copilot", ["claude-opus-4.6"], {
+      panelId: "test-1",
+      worktreeId: "wt-1",
+    });
+  });
+
+  it("resumes the captured conversation without the retired model", async () => {
+    mockGracefulKill.mockResolvedValue("live-7");
+    show(retiredCopilot);
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("copilot --allow-all-tools --resume=live-7");
+    expect(payload.agentModelId).toBeUndefined();
+    // A resume keeps the saved command as the next fresh launch, so it too has
+    // to be the cleaned one.
+    expect(paneAfterRestart().command).toBe("copilot --allow-all-tools");
+  });
+
+  it("drops a retired model saved only in the caller's flags", async () => {
+    show({
+      ...retiredCopilot,
+      agentModelId: undefined,
+      agentLaunchFlags: ["--allow-all-tools", "--model=gpt-5.4"],
+      callerLaunchFlags: ["--model=gpt-5.4"],
+      command: "copilot --allow-all-tools --model=gpt-5.4",
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].command).toBe("copilot --allow-all-tools");
+    expect(paneAfterRestart().callerLaunchFlags).toBeUndefined();
+    expect(notifyRetiredModelDroppedMock).toHaveBeenCalledWith(
+      "copilot",
+      ["gpt-5.4"],
+      expect.anything()
+    );
+  });
+
+  it("relaunches a model Copilot still offers with the same --model", async () => {
+    show({
+      ...retiredCopilot,
+      agentModelId: "claude-sonnet-5.5",
+      agentLaunchFlags: ["--model", "claude-sonnet-5.5", "--allow-all-tools"],
+      command: "copilot --model claude-sonnet-5.5 --allow-all-tools",
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("copilot --model 'claude-sonnet-5.5' --allow-all-tools");
+    expect(payload.agentModelId).toBe("claude-sonnet-5.5");
+    expect(paneAfterRestart().agentModelId).toBe("claude-sonnet-5.5");
+    expect(notifyRetiredModelDroppedMock).not.toHaveBeenCalled();
+  });
+
+  it("moves to another preset without carrying the retired model", async () => {
+    getMergedPresetMock.mockReturnValue({ id: "amber", name: "Amber", args: ["--amber"] });
+    const { generateAgentCommand } = await import("@shared/types");
+    show(retiredCopilot);
+
+    await usePanelStore.getState().restartTerminalOnPreset("test-1", "amber");
+
+    expect(vi.mocked(generateAgentCommand).mock.calls[0]![3]?.modelId).toBeUndefined();
+    expect(mockSpawn.mock.calls[0]![0].agentModelId).toBeUndefined();
+    expect(paneAfterRestart().agentModelId).toBeUndefined();
+    expect(notifyRetiredModelDroppedMock).toHaveBeenCalledWith(
+      "copilot",
+      ["claude-opus-4.6"],
+      expect.anything()
+    );
   });
 });
