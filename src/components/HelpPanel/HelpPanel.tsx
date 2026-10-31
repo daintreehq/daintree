@@ -1208,6 +1208,7 @@ export function HelpPanel({
       {!globalSelected && (
         <HelpSessionTabs
           tabs={sessionTabs}
+          isRegionFocused={isHighlighted}
           activeSlot={activeSlot}
           onSelect={handleSelectSlot}
           onClose={handleCloseSlot}

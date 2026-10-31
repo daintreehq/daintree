@@ -73,8 +73,6 @@ const MICRO_LABEL_EXCEPTIONS: Record<string, number> = {
   // Git's own vocabulary inside rebase and conflict rows ("pick", "both
   // modified"), drawn mono like the todo list it mirrors — a row tag, not a heading.
   "src/components/Worktree/ReviewHub/ConflictPanel.tsx": 2,
-  // The "N background" status floated over a maximized pane's header.
-  "src/components/Panel/PanelHeader.tsx": 1,
   // The review row's "Viewed" checkbox label — a control, owned by the checkbox family.
   "src/components/Worktree/ReviewHub/FileStageRow.tsx": 1,
   // The drawer's tab strip, owned by the dev-preview drawer family.

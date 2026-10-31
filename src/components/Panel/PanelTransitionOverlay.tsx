@@ -7,8 +7,18 @@ import {
   UI_ANIMATION_DURATION,
 } from "@/lib/animationUtils";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
+import { cn } from "@/lib/utils";
 
 export type TransitionDirection = "minimize" | "restore";
+
+/**
+ * What flies. A dock move flies a card: the pane is leaving the canvas (or
+ * arriving from a chip), so a solid stand-in is what carries it. Maximize and
+ * restore keep the pane on the canvas the whole time — the new layout is
+ * already painted underneath — so they fly a frame alone and the content stays
+ * readable through it.
+ */
+export type TransitionAppearance = "card" | "frame";
 
 export interface TransitionRect {
   x: number;
@@ -37,6 +47,7 @@ interface TransitionState {
   direction: TransitionDirection;
   sourceRect: TransitionRect;
   target: TransitionTarget;
+  appearance: TransitionAppearance;
 }
 
 interface PanelTransitionOverlayProps {
@@ -116,7 +127,8 @@ export function triggerPanelTransition(
   sourceRect: TransitionRect,
   target: TransitionTarget,
   title = "",
-  identity = id
+  identity = id,
+  appearance: TransitionAppearance = "card"
 ): void {
   if (prefersReducedMotion()) return;
   // A zero-size box has nothing to show, and would put NaN into the keyframes.
@@ -131,6 +143,7 @@ export function triggerPanelTransition(
     direction,
     sourceRect,
     target,
+    appearance,
   };
   listeners.forEach((listener) => listener(transition));
 }
@@ -234,7 +247,7 @@ function sameRect(a: TransitionRect, b: TransitionRect): boolean {
 }
 
 function TransitionGhost({ transition, onDone }: TransitionGhostProps) {
-  const { key, id, direction, sourceRect, target, title } = transition;
+  const { key, id, direction, sourceRect, target, title, appearance } = transition;
   const elementRef = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLDivElement>(null);
   const cueRef = useRef<HTMLDivElement>(null);
@@ -397,17 +410,25 @@ function TransitionGhost({ transition, onDone }: TransitionGhostProps) {
       <div
         ref={elementRef}
         data-panel-transition-ghost={direction}
-        className="absolute flex flex-col overflow-hidden rounded-[var(--radius-lg)] border border-border-strong bg-surface-panel shadow-overlay"
+        data-panel-transition-appearance={appearance}
+        className={cn(
+          "absolute flex flex-col overflow-hidden rounded-[var(--radius-lg)] border",
+          appearance === "frame"
+            ? "border-text-secondary"
+            : "border-border-strong bg-surface-panel shadow-overlay"
+        )}
         // Parked at the source and invisible until the flight is armed, so a
         // flight that never finds its target is never seen at all.
         style={{ ...toBox(sourceRect), opacity: 0 }}
       >
-        <div
-          ref={titleRef}
-          className="flex h-full max-h-8 shrink-0 items-center border-b border-divider px-3"
-        >
-          <span className="truncate text-xs text-text-secondary">{title}</span>
-        </div>
+        {appearance === "card" && (
+          <div
+            ref={titleRef}
+            className="flex h-full max-h-8 shrink-0 items-center border-b border-divider px-3"
+          >
+            <span className="truncate text-xs text-text-secondary">{title}</span>
+          </div>
+        )}
       </div>
       {direction === "minimize" && (
         <div

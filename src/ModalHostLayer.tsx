@@ -36,7 +36,7 @@ import { PostHydrationListeners } from "./components/PostHydrationListeners";
 import { HostFilePickerMount } from "./components/HostFilePicker/HostFilePickerMount";
 import { HostSwitchMount } from "./components/HostSwitch/HostSwitchMount";
 import { HostsOverviewMount } from "./components/Hosts/Overview/HostsOverviewMount";
-import { PanelTransitionOverlay } from "./components/Panel";
+import { MaximizeFlights, PanelTransitionOverlay } from "./components/Panel";
 import { usePluginManagerStore } from "./store";
 import { actionService } from "./services/ActionService";
 import {
@@ -937,6 +937,7 @@ export function ModalHostLayer({
       </ErrorBoundary>
 
       <PanelTransitionOverlay />
+      <MaximizeFlights />
       {isStateLoaded && (
         <ErrorBoundary
           variant="component"

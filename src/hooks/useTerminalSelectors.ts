@@ -5,6 +5,7 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import type { WorktreeSnapshot } from "@shared/types";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import { getNarrowPanels } from "@/store/slices/panelRegistry/selectors";
+import { panelMatchesWorktreeScope } from "@/store/slices/panelRegistry/worktreeIndex";
 import { isTerminalOrphaned, isTerminalVisible } from "@/lib/terminalVisibility";
 import { isTerminalErrorClusterEligible } from "@/store/fleetEligibility";
 import { isAskingWait } from "@/lib/handBackPresentation";
@@ -220,11 +221,19 @@ const EMPTY_BACKGROUND_PANEL_STATS = Object.freeze({
 });
 
 /**
- * Get background panel stats for Zen Mode header display.
- * Returns count of active (grid) panels excluding the current one, and how many are
- * working (churning) vs waiting (blocked on the user) — the latter is otherwise
- * invisible while a single panel is maximized, since the other grid panels unmount.
- * @param excludeId - The ID of the current panel to exclude from counts
+ * What the Zen Mode header says about the panes a maximized one is hiding.
+ *
+ * `activeCount` counts what the grid would show around it: the other cells of
+ * the same worktree's grid, a tab group being one cell however many tabs it
+ * holds. Counted any other way the number could not be reconciled with the
+ * layout the user just left (seven tabs read as seven panes, another
+ * worktree's panes as this one's). The pane's own tab group is left out of
+ * everything, since its tabs stay on screen in the maximized header.
+ *
+ * `workingCount` and `waitingCount` count agents in those cells, background
+ * tabs included: an agent in a tab nobody can see is exactly the one the
+ * readout is for.
+ * @param excludeId - The maximized panel
  * @param enabled - When false (panel not maximized), skips the per-write panel scan
  */
 export function useBackgroundPanelStats(
@@ -239,19 +248,29 @@ export function useBackgroundPanelStats(
   return usePanelStore(
     useShallow((state) => {
       if (!enabled) return EMPTY_BACKGROUND_PANEL_STATS;
-      let active = 0;
+      const groupOf = new Map<string, string>();
+      for (const [groupId, group] of state.tabGroups ?? []) {
+        if (group.location !== "grid") continue;
+        for (const id of group.panelIds) groupOf.set(id, groupId);
+      }
+      const scope = state.panelsById[excludeId]?.worktreeId;
+      const ownGroup = groupOf.get(excludeId);
+      const cells = new Set<string>();
       let working = 0;
       let waiting = 0;
       for (const panel of getNarrowPanels(state.panelsById, state.panelIds)) {
-        if (panel.id !== excludeId && (panel.location === "grid" || panel.location === undefined)) {
-          active++;
-          if (isPtyPanel(panel)) {
-            if (panel.agentState === "working") working++;
-            else if (isAskingWait(handBackIds, panel)) waiting++;
-          }
+        if (panel.id === excludeId) continue;
+        if (panel.location !== "grid" && panel.location !== undefined) continue;
+        if (!panelMatchesWorktreeScope(panel.worktreeId, scope, "grid")) continue;
+        const groupId = groupOf.get(panel.id);
+        if (groupId !== undefined && groupId === ownGroup) continue;
+        cells.add(groupId ?? panel.id);
+        if (isPtyPanel(panel)) {
+          if (panel.agentState === "working") working++;
+          else if (isAskingWait(handBackIds, panel)) waiting++;
         }
       }
-      return { activeCount: active, workingCount: working, waitingCount: waiting };
+      return { activeCount: cells.size, workingCount: working, waitingCount: waiting };
     })
   );
 }

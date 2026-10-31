@@ -11,7 +11,6 @@ import React, {
 import {
   Bell,
   BellOff,
-  Check,
   ChevronDown,
   CirclePlay,
   CopyPlus,
@@ -62,6 +61,7 @@ import { focusPaneWhenStripCloses, revealTabInStrip } from "@/components/ui/docu
 import { isTabCloseKey, useKeyboardTabClose } from "@/hooks/useKeyboardTabClose";
 import type { PanelKind } from "@/types";
 import { cn } from "@/lib/utils";
+import { pluralNoun } from "@/lib/pluralize";
 import { formatShortcutForTooltip } from "@/lib/platform";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -69,13 +69,7 @@ import { SurfaceHeader, SURFACE_HEADER_FOCUS_LIFT_CLASS } from "@/components/ui/
 import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
 import { Button } from "@/components/ui/button";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
-import {
-  STATE_COLORS,
-  STATE_ICONS,
-  getEffectiveStateColor,
-  getEffectiveStateIcon,
-  getEffectiveStateLabel,
-} from "@/components/Worktree/terminalStateConfig";
+import { STATE_COLORS, STATE_ICONS } from "@/components/Worktree/terminalStateConfig";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { PluginPanelBadges } from "@/components/Panel/PluginPanelBadges";
 import { PluginPanelActivityIndicator } from "@/components/Panel/PluginPanelActivity";
@@ -105,6 +99,7 @@ import { PopoverAnchor } from "@/components/ui/popover";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { TabButton, type TabInfo } from "./TabButton";
+import { HiddenTabMenuItem } from "./HiddenTabMenuItem";
 import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
 import { isAskingWait } from "@/lib/handBackPresentation";
 import { SortableTabButton } from "./SortableTabButton";
@@ -990,49 +985,9 @@ function PanelHeaderComponent({
         align="end"
         className="min-w-[200px] max-w-[320px] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
       >
-        {hiddenTabs.map((tab) => {
-          const StateIcon = tab.agentState ? getEffectiveStateIcon(tab.agentState) : null;
-          return (
-            <DropdownMenuItem
-              key={tab.id}
-              onSelect={() => onTabClick?.(tab.id)}
-              aria-current={tab.isActive ? "true" : undefined}
-              // The tab on screen takes the committed-value check, as in the
-              // docked tab-group menu, not weight alone.
-              className={cn(tab.isActive && "font-medium")}
-            >
-              <span className="shrink-0 mr-2 inline-flex items-center justify-center w-3.5 h-3.5">
-                <TerminalIcon
-                  kind={tab.kind}
-                  chrome={tab.chrome}
-                  className="w-3.5 h-3.5"
-                  brandColor={tab.presetColor ?? tab.chrome.color}
-                />
-              </span>
-              <span className="mr-3 truncate">{tab.title}</span>
-              {StateIcon && tab.agentState && (
-                <span className="sr-only">, {getEffectiveStateLabel(tab.agentState)}</span>
-              )}
-              {tab.isActive && (
-                <Check
-                  className="ml-auto h-3.5 w-3.5 shrink-0 text-text-secondary"
-                  aria-hidden="true"
-                />
-              )}
-              {StateIcon && tab.agentState && (
-                <StateIcon
-                  className={cn(
-                    tab.isActive ? "ml-1.5" : "ml-auto",
-                    "h-3 w-3 shrink-0",
-                    getEffectiveStateColor(tab.agentState),
-                    tab.agentState === "working" && "animate-spin-slow motion-reduce:animate-none"
-                  )}
-                  aria-hidden="true"
-                />
-              )}
-            </DropdownMenuItem>
-          );
-        })}
+        {hiddenTabs.map((tab) => (
+          <HiddenTabMenuItem key={tab.id} tab={tab} onSelect={() => onTabClick?.(tab.id)} />
+        ))}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -1166,6 +1121,7 @@ function PanelHeaderComponent({
                       hasDangerousFlags={tab.hasDangerousFlags}
                       tabPanelId={tabPanelId}
                       menuLocation={location}
+                      isStripFocused={location === "dock" || isFocused}
                       onClick={() => onTabClick?.(tab.id)}
                       onClose={() => onTabClose?.(tab.id)}
                       onRename={
@@ -1206,6 +1162,7 @@ function PanelHeaderComponent({
                   hasDangerousFlags={tab.hasDangerousFlags}
                   tabPanelId={tabPanelId}
                   menuLocation={location}
+                  isStripFocused={location === "dock" || isFocused}
                   onClick={() => onTabClick?.(tab.id)}
                   onClose={() => onTabClose?.(tab.id)}
                   onRename={onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined}
@@ -1500,38 +1457,42 @@ function PanelHeaderComponent({
         )}
       </div>
 
-      {/* Centered Zen Mode indicator (only visible when maximized) */}
+      {/* Centered Zen Mode readout (only when maximized): what the grid it hides
+          is doing. Ordinary sentence-case metadata in secondary ink, so it never
+          outweighs the pane's own title; the state glyphs carry the colour,
+          which state-hued text could not do legibly on every theme. */}
       {isMaximized && activeCount > 0 && (
         <div
-          className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-3 text-text-secondary select-none pointer-events-none"
+          className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-3 whitespace-nowrap text-xs text-text-secondary select-none pointer-events-none"
           role="status"
           aria-live="polite"
         >
-          <div className="flex items-center gap-1.5 text-2xs uppercase tracking-wider font-semibold whitespace-nowrap">
+          <span className="flex items-center gap-1.5 tabular-nums">
             <Grid2X2 className="w-3 h-3 shrink-0" aria-hidden="true" />
-            <span className="tabular-nums inline-flex items-center gap-1">
-              <AnimatedLabel label={String(activeCount)} textClassName="tabular-nums" /> Background
+            <AnimatedLabel label={String(activeCount)} textClassName="tabular-nums" />
+            {pluralNoun(activeCount, "other pane")}
+          </span>
+          {workingCount > 0 && (
+            <span className="flex items-center gap-1.5 tabular-nums">
+              <STATE_ICONS.working
+                className={cn(
+                  "w-3 h-3 shrink-0 animate-spin-slow motion-reduce:animate-none",
+                  STATE_COLORS.working
+                )}
+                aria-hidden="true"
+              />
+              <AnimatedLabel label={String(workingCount)} textClassName="tabular-nums" /> working
             </span>
-            {workingCount > 0 && (
-              <span
-                className={cn("flex items-center gap-1 tabular-nums ml-1", STATE_COLORS.working)}
-              >
-                <STATE_ICONS.working
-                  className="w-3 h-3 animate-spin-slow motion-reduce:animate-none"
-                  aria-hidden="true"
-                />
-                <AnimatedLabel label={String(workingCount)} textClassName="tabular-nums" /> working
-              </span>
-            )}
-            {waitingCount > 0 && (
-              <span
-                className={cn("flex items-center gap-1 tabular-nums ml-1", STATE_COLORS.waiting)}
-              >
-                <STATE_ICONS.waiting className="w-3 h-3" aria-hidden="true" />
-                <AnimatedLabel label={String(waitingCount)} textClassName="tabular-nums" /> waiting
-              </span>
-            )}
-          </div>
+          )}
+          {waitingCount > 0 && (
+            <span className="flex items-center gap-1.5 tabular-nums">
+              <STATE_ICONS.waiting
+                className={cn("w-3 h-3 shrink-0", STATE_COLORS.waiting)}
+                aria-hidden="true"
+              />
+              <AnimatedLabel label={String(waitingCount)} textClassName="tabular-nums" /> waiting
+            </span>
+          )}
         </div>
       )}
 

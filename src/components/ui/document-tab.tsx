@@ -32,17 +32,28 @@ export function documentTabClassName(isActive: boolean): string {
 }
 
 /**
- * The selected tab's 2px accent underline. Render it only inside the selected
- * tab: the shared `layoutId` makes it slide between tabs, so each strip must
- * sit inside its own `LayoutGroup` or the mark would travel between strips.
+ * The selected tab's 2px underline. Render it only inside the selected tab: the
+ * shared `layoutId` makes it slide between tabs, so each strip must sit inside
+ * its own `LayoutGroup` or the mark would travel between strips.
+ *
+ * Accent only in the region the keyboard is in. A busy grid shows several tab
+ * groups and the assistant's lanes at once, and an accent underline in each of
+ * them put the colour reserved for "this is where you are" on every strip on
+ * screen. A strip whose region is not focused keeps the same mark in neutral
+ * ink, still well clear of 3:1 against the bar, so which tab is open never
+ * depends on focus — the colour does.
  */
-export function DocumentTabIndicator() {
+export function DocumentTabIndicator({ inFocusedRegion = true }: { inFocusedRegion?: boolean }) {
   return (
     <m.div
       layoutId="document-tab-indicator"
       layout="position"
       data-document-tab-indicator=""
-      className="absolute inset-x-0 bottom-0 h-0.5 bg-accent-primary pointer-events-none"
+      data-region-focused={inFocusedRegion || undefined}
+      className={cn(
+        "absolute inset-x-0 bottom-0 h-0.5 pointer-events-none transition-colors duration-150 ease-out",
+        inFocusedRegion ? "bg-accent-primary" : "bg-text-secondary"
+      )}
       transition={{ duration: UI_ANIMATION_DURATION / 1000, ease: EASE_OUT_EXPO_FM }}
       aria-hidden="true"
     />

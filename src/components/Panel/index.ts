@@ -15,6 +15,7 @@ export {
 } from "./TitleEditingContext";
 export type { TitleEditingContextValue, TitleEditingProviderProps } from "./TitleEditingContext";
 export { PanelTransitionOverlay, triggerPanelTransition } from "./PanelTransitionOverlay";
+export { MaximizeFlights } from "./MaximizeFlights";
 export type {
   TransitionDirection,
   TransitionRect,

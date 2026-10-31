@@ -193,6 +193,7 @@ interface SessionTabChipProps {
   newSessionAgentIds: readonly string[];
   canOpenSessionWithAgent: boolean;
   onOpenSessionWithAgent?: (agentId: string) => void;
+  isRegionFocused: boolean;
 }
 
 /**
@@ -219,6 +220,7 @@ function SessionTabChip({
   newSessionAgentIds,
   canOpenSessionWithAgent,
   onOpenSessionWithAgent,
+  isRegionFocused,
 }: SessionTabChipProps) {
   const closingFromMenuRef = useRef(false);
   const stateId = `${tabId}-state`;
@@ -276,7 +278,7 @@ function SessionTabChip({
         "min-w-0 shrink px-2 py-1.5"
       )}
     >
-      {isActive && <DocumentTabIndicator />}
+      {isActive && <DocumentTabIndicator inFocusedRegion={isRegionFocused} />}
       {agentName && tab.agentId && <TabAgentMark agentId={tab.agentId} />}
       <TabStateIndicator agentState={agentState} />
       <TabLabel label={tab.label} isTaskTitle={tab.fullTitle !== undefined} labelRef={labelRef} />
@@ -391,6 +393,11 @@ interface HelpSessionTabsProps {
   idBase: string;
   /** The id of the body this strip drives, for `aria-controls`. */
   panelId: string;
+  /**
+   * Whether the assistant is the region the keyboard is in. The selected lane's
+   * underline takes the accent only then, as a grid pane's strip does.
+   */
+  isRegionFocused?: boolean;
 }
 
 /**
@@ -405,7 +412,8 @@ interface HelpSessionTabsProps {
  *
  * The tabs are the app's document tab family (`ui/document-tab`), so selection is
  * marked exactly as it is on a grid pane, the dock and the portal: an accent underline
- * on a lifted fill, at the same weight as every other tab.
+ * on a lifted fill, at the same weight as every other tab, neutral while the
+ * keyboard is elsewhere.
  *
  * Tabs are content-width and sit at the leading edge with the new-session control
  * directly after the last one, which is how the panel, dock and portal strips in this
@@ -433,6 +441,7 @@ export function HelpSessionTabs({
   onOpenSessionWithAgent,
   idBase,
   panelId,
+  isRegionFocused = true,
 }: HelpSessionTabsProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
   const layoutGroupId = useId();
@@ -576,6 +585,7 @@ export function HelpSessionTabs({
               newSessionAgentIds={newSessionAgentIds}
               canOpenSessionWithAgent={canOpenSessionWithAgent}
               onOpenSessionWithAgent={onOpenSessionWithAgent}
+              isRegionFocused={isRegionFocused}
             />
           ))}
         </LayoutGroup>
