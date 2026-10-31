@@ -41,6 +41,7 @@ import {
   type BulkRemoveTarget,
   type BulkRemoveTargetStatus,
 } from "../useWorktreeBulkRemove";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import type { WorktreeDeletePreview } from "../worktreeDeletePreview";
 import type { WorktreeState } from "@/types";
 import type { FileChangeDetail, WorktreeChanges } from "@shared/types/git";
@@ -86,14 +87,16 @@ function risk(over: Partial<SubmoduleDeleteRisk> = {}): SubmoduleDeleteRisk {
 function setup(selectedIds: string[], worktrees: WorktreeState[]) {
   const worktreeMap = new Map(worktrees.map((w) => [w.id, w] as const));
   const clearSelection = vi.fn();
+  const selectOnly = vi.fn();
   const hook = renderHook(() =>
     useWorktreeBulkRemove({
       selectedIds: new Set(selectedIds),
       worktreeMap,
       clearSelection,
+      selectOnly,
     })
   );
-  return { hook, clearSelection };
+  return { hook, clearSelection, selectOnly };
 }
 
 /**
@@ -598,7 +601,7 @@ describe("useWorktreeBulkRemove — execution", () => {
     worktreeClientMock.delete
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error("Filesystem busy"));
-    const { hook, clearSelection } = setup(
+    const { hook, selectOnly } = setup(
       ["a", "b"],
       [wt("a", { branch: "feature/a" }), wt("b", { branch: "feature/b" })]
     );
@@ -620,10 +623,9 @@ describe("useWorktreeBulkRemove — execution", () => {
     expect(payload.title).toBe("Deleted 1 of 2 worktrees");
     // Spans two worktrees, so it files under neither.
     expect(payload.context?.worktreeId).toBeUndefined();
-    expect(payload.message).toContain("feature/b");
-    // Selection is cleared regardless of partial failure — selection is
-    // not a retry surface (the modal itself is).
-    expect(clearSelection).toHaveBeenCalled();
+    expect(payload.message).toBe("feature/b: Filesystem busy");
+    // The failed target stays selected so reopening bulk delete retries it.
+    expect(selectOnly).toHaveBeenCalledWith(["b"]);
   });
 
   it("emits an error toast on total failure", async () => {
@@ -643,7 +645,7 @@ describe("useWorktreeBulkRemove — execution", () => {
       context?: { worktreeId?: string };
     };
     expect(payload.title).toBe("Couldn't delete worktree");
-    expect(payload.message).toBe("Disk read-only");
+    expect(payload.message).toBe("branch-a: Disk read-only");
     expect(payload.context?.worktreeId).toBe("a");
   });
 
@@ -991,6 +993,181 @@ describe("useWorktreeBulkRemove — the queue no longer guillotines the batch (#
   });
 });
 
+describe("useWorktreeBulkRemove — failure reporting (#15575)", () => {
+  const announced = () => useAnnouncerStore.getState();
+
+  beforeEach(() => {
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+  });
+
+  function failWith(reasons: Record<string, string>) {
+    worktreeClientMock.delete.mockImplementation((id: string) =>
+      reasons[id] ? Promise.reject(new Error(reasons[id])) : Promise.resolve()
+    );
+  }
+
+  async function run(hook: ReturnType<typeof setup>["hook"]) {
+    await openAndSettle(hook);
+    await act(async () => {
+      await hook.result.current.handleConfirm();
+    });
+  }
+
+  it("names both failed targets and both reasons in a partial run", async () => {
+    failWith({ b: "Directory is locked", c: "Teardown command exited 1" });
+    const { hook, clearSelection, selectOnly } = setup(
+      ["a", "b", "c"],
+      [wt("a"), wt("b", { branch: "feature/b" }), wt("c", { branch: "feature/c" })]
+    );
+    await run(hook);
+
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "warning",
+        title: "Deleted 1 of 3 worktrees",
+        message: "feature/b: Directory is locked; feature/c: Teardown command exited 1",
+      })
+    );
+    expect(selectOnly).toHaveBeenCalledWith(["b", "c"]);
+    expect(clearSelection).not.toHaveBeenCalled();
+    expect(announced().polite?.msg).toBe("Deleted 1 of 3 worktrees. 2 worktrees failed");
+  });
+
+  it("names every target and reason when the whole run fails", async () => {
+    failWith({ a: "Directory is locked", b: "Teardown command exited 1", c: "Timed out" });
+    const { hook, selectOnly } = setup(
+      ["a", "b", "c"],
+      [wt("a"), wt("b", { branch: "feature/b" }), wt("c", { branch: "feature/c" })]
+    );
+    await run(hook);
+
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        title: "Couldn't delete worktrees",
+        message:
+          "branch-a: Directory is locked; feature/b: Teardown command exited 1; feature/c: Timed out",
+      })
+    );
+    expect(selectOnly).toHaveBeenCalledWith(["a", "b", "c"]);
+    expect(announced().assertive?.msg).toBe("Couldn't delete worktrees. 3 worktrees failed");
+  });
+
+  it("caps the list and counts the rest", async () => {
+    failWith({ a: "one", b: "two", c: "three", d: "four", e: "five" });
+    const ids = ["a", "b", "c", "d", "e"];
+    const { hook } = setup(
+      ids,
+      ids.map((id) => wt(id, { branch: id }))
+    );
+    await run(hook);
+
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "a: one; b: two; c: three; and 2 more" })
+    );
+  });
+
+  it("flattens a multi-line reason and bounds a long one", async () => {
+    failWith({ a: `fatal: cannot remove\n\n  ${"x".repeat(400)}` });
+    const { hook } = setup(["a"], [wt("a", { branch: "a" })]);
+    await run(hook);
+
+    const message = (notifyMock.mock.calls[0]![0] as { message: string }).message;
+    expect(message).not.toMatch(/\n/);
+    expect(message.startsWith("a: fatal: cannot remove xxx")).toBe(true);
+    expect(message.length).toBeLessThanOrEqual("a: ".length + 200);
+    expect(message.endsWith("…")).toBe(true);
+  });
+
+  it("keeps a failed nested worktree and the ancestor it blocks selected, and not the one that succeeded", async () => {
+    failWith({ child: "Filesystem busy" });
+    const parent = wt("parent", { path: "/repo/parent", branch: "feature/parent" });
+    const child = wt("child", { path: "/repo/parent/child", branch: "feature/child" });
+    const other = wt("other", { path: "/repo/other", branch: "feature/other" });
+    const { hook, selectOnly } = setup(["parent", "child", "other"], [parent, child, other]);
+    await run(hook);
+
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "warning",
+        message:
+          "feature/child: Filesystem busy; " +
+          "feature/parent: Kept because feature/child inside it wasn't deleted",
+      })
+    );
+    expect(selectOnly).toHaveBeenCalledTimes(1);
+    expect(selectOnly.mock.calls[0]![0]).toEqual(["child", "parent"]);
+  });
+
+  it("drops a failed id the overview no longer lists", async () => {
+    failWith({ a: "Reported failure", b: "Filesystem busy" });
+    const a = wt("a");
+    const b = wt("b");
+    const selectOnly = vi.fn();
+    const clearSelection = vi.fn();
+    let map = new Map([a, b].map((w) => [w.id, w] as const));
+    const hook = renderHook(
+      ({ worktreeMap }) =>
+        useWorktreeBulkRemove({
+          selectedIds: new Set(["a", "b"]),
+          worktreeMap,
+          clearSelection,
+          selectOnly,
+        }),
+      { initialProps: { worktreeMap: map } }
+    );
+    await openAndSettle(hook);
+    // `a` disappears from the overview while the run is in flight.
+    map = new Map([[b.id, b]]);
+    hook.rerender({ worktreeMap: map });
+    await act(async () => {
+      await hook.result.current.handleConfirm();
+    });
+
+    expect(selectOnly).toHaveBeenCalledWith(["b"]);
+  });
+
+  it("clears the selection when every failed worktree is already gone", async () => {
+    failWith({ a: "Reported failure" });
+    const a = wt("a");
+    const selectOnly = vi.fn();
+    const clearSelection = vi.fn();
+    let map = new Map([[a.id, a]]);
+    const hook = renderHook(
+      ({ worktreeMap }) =>
+        useWorktreeBulkRemove({
+          selectedIds: new Set(["a"]),
+          worktreeMap,
+          clearSelection,
+          selectOnly,
+        }),
+      { initialProps: { worktreeMap: map } }
+    );
+    await openAndSettle(hook);
+    map = new Map();
+    hook.rerender({ worktreeMap: map });
+    await act(async () => {
+      await hook.result.current.handleConfirm();
+    });
+
+    expect(selectOnly).not.toHaveBeenCalled();
+    expect(clearSelection).toHaveBeenCalled();
+  });
+
+  it("clears the selection and raises no failure notification after a full success", async () => {
+    worktreeClientMock.delete.mockResolvedValue(undefined);
+    const { hook, clearSelection, selectOnly } = setup(["a", "b"], [wt("a"), wt("b")]);
+    await run(hook);
+
+    expect(clearSelection).toHaveBeenCalled();
+    expect(selectOnly).not.toHaveBeenCalled();
+    expect(notifyMock).not.toHaveBeenCalled();
+    expect(announced().polite?.msg).toBe("Deleted 2 worktrees");
+  });
+});
+
 describe("useWorktreeBulkRemove — nested worktrees (#12789)", () => {
   const parent = () => wt("parent", { path: "/repo/parent", branch: "feature/parent" });
   const child = () => wt("child", { path: "/repo/parent/child", branch: "feature/child" });
@@ -1036,12 +1213,14 @@ describe("useWorktreeBulkRemove — nested worktrees (#12789)", () => {
 
     expect(deletedIds()).toEqual(["child"]);
     // The parent comes first in selection order, but its failure only echoes
-    // the child's, so the child's cause is the one shown.
+    // the child's, so the child's cause leads and the parent is attributed to it.
     expect(notifyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "error",
         title: "Couldn't delete worktrees",
-        message: "Filesystem busy",
+        message:
+          "feature/child: Filesystem busy; " +
+          "feature/parent: Kept because feature/child inside it wasn't deleted",
       })
     );
   });
@@ -1088,7 +1267,13 @@ describe("useWorktreeBulkRemove — nested worktrees (#12789)", () => {
     expect(deletedIds()).not.toContain("parent");
     expect(logErrorMock).toHaveBeenCalledTimes(2);
     expect(notifyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", message: "Filesystem busy" })
+      expect.objectContaining({
+        type: "error",
+        message:
+          "feature/child: Filesystem busy; feature/second: Filesystem busy; " +
+          "feature/parent: Kept because 2 worktrees inside it weren't deleted: " +
+          "feature/child, feature/second",
+      })
     );
   });
 

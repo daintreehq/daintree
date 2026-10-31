@@ -205,9 +205,9 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
       expect(modalSource).toMatch(/for\s*\(const\s+id\s+of\s+closeSessionsIdsRef\.current\)/);
     });
 
-    it("passes selectedIds, worktreeMap, and clearSelection to useWorktreeBulkRemove", () => {
+    it("passes selectedIds, worktreeMap, clearSelection, and selectOnly to useWorktreeBulkRemove", () => {
       expect(modalSource).toMatch(
-        /useWorktreeBulkRemove\(\{\s*selectedIds,\s*worktreeMap,\s*clearSelection,?\s*\}\)/
+        /useWorktreeBulkRemove\(\{\s*selectedIds,\s*worktreeMap,\s*clearSelection,\s*selectOnly,?\s*\}\)/
       );
     });
   });
