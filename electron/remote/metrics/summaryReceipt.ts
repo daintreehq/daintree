@@ -12,10 +12,10 @@ export const HOST_LOAD_STALE_MS = 3 * HOST_METRICS_INTERVAL_MS;
  * runs from when the ping the frame names left this Shell, and the host names
  * the newest ping it had, which can have left up to a ping interval (and its
  * trip) before the host posted: a sample within {@link HOST_LOAD_STALE_MS} can
- * bound that much higher without being any older. The allowance is for how the
- * bound is taken, never for age: a sample this Shell knows is older than the
- * limit is stale whatever its bound says, and a fresh one is still at most
- * this old by this Shell's clocks alone.
+ * bound that much higher without being any older. A fresh sample is still at
+ * most this old by this Shell's clocks alone, though from here a frame held in
+ * transit looks the same as that slack; one this Shell knows is older than the
+ * limit is stale whatever its bound says.
  */
 export const HOST_LOAD_BOUND_STALE_MS = HOST_LOAD_STALE_MS + DEFAULT_PING_INTERVAL_MS;
 
