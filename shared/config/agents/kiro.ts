@@ -46,11 +46,17 @@ export const config: AgentConfig = {
           commands: ["curl -fsSL https://cli.kiro.dev/install | bash"],
         },
       ],
+      windows: [
+        {
+          label: "PowerShell",
+          commands: ["irm 'https://cli.kiro.dev/install.ps1' | iex"],
+        },
+      ],
     },
     troubleshooting: [
       "Restart Daintree after installation to update PATH",
       "Verify installation with: kiro-cli --version",
-      "Kiro CLI is only supported on macOS and Linux",
+      "On Windows, Kiro CLI needs Windows 11 and Windows Terminal or PowerShell (not Command Prompt)",
       "Authenticate after installing via Kiro's login flow",
     ],
   },

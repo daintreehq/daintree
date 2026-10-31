@@ -7,7 +7,8 @@ export const config: AgentConfig = {
   // `go install github.com/charmbracelet/crush@latest` lands the binary at
   // ~/go/bin/crush, which is not on PATH for sandboxed Electron processes.
   // Homebrew (charmbracelet/tap/crush) installs to a brew-managed prefix
-  // already covered by getUnixFallbackPaths. No native Windows installer.
+  // already covered by getUnixFallbackPaths. On Windows, winget/Scoop shims and
+  // the npm-global bin are found through PATH and the `packages.npm` probe.
   nativePaths: ["~/go/bin/crush"],
   color: "#E864A4",
   iconId: "crush",
@@ -52,18 +53,37 @@ export const config: AgentConfig = {
           commands: ["go install github.com/charmbracelet/crush@latest"],
         },
       ],
+      windows: [
+        {
+          label: "winget",
+          commands: ["winget install charmbracelet.crush"],
+        },
+        {
+          label: "Scoop",
+          commands: [
+            "scoop bucket add charm https://github.com/charmbracelet/scoop-bucket.git",
+            "scoop install crush",
+          ],
+        },
+        {
+          label: "npm",
+          commands: ["npm install -g @charmland/crush"],
+        },
+      ],
     },
     troubleshooting: [
       "Restart Daintree after installation to update PATH",
       "Verify installation with: crush --version",
       "If installed via `go install`, ensure ~/go/bin is on PATH",
-      "Crush is currently distributed for macOS and Linux only",
       "Configure providers via the Catwalk catalog inside Crush",
     ],
   },
   packages: {
     go: "github.com/charmbracelet/crush",
     brew: "charmbracelet/tap/crush",
+    npm: "@charmland/crush",
+    winget: "charmbracelet.crush",
+    scoop: { bucket: "charm", name: "crush" },
   },
   capabilities: {
     scrollback: 10000,

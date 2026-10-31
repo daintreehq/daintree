@@ -1225,11 +1225,39 @@ describe("all built-in agents have Windows or generic install", () => {
     "kimi",
     "amp",
     "aider",
+    "crush",
+    "kiro",
   ])("%s has windows or generic install block", (agentId) => {
     const config = getAgentConfig(agentId);
     const hasWindows = (config?.install?.byOs?.windows?.length ?? 0) > 0;
     const hasGeneric = (config?.install?.byOs?.generic?.length ?? 0) > 0;
     expect(hasWindows || hasGeneric).toBe(true);
+  });
+});
+
+describe("crush and kiro Windows install help", () => {
+  it("offers the vendor-documented Windows routes", () => {
+    const crush = getAgentConfig("crush")!.install!.byOs!.windows!;
+    expect(crush.find((m) => m.label === "winget")?.commands).toEqual([
+      "winget install charmbracelet.crush",
+    ]);
+    expect(crush.find((m) => m.label === "Scoop")?.commands).toEqual([
+      "scoop bucket add charm https://github.com/charmbracelet/scoop-bucket.git",
+      "scoop install crush",
+    ]);
+    expect(getAgentConfig("kiro")!.install!.byOs!.windows![0]!.commands).toEqual([
+      "irm 'https://cli.kiro.dev/install.ps1' | iex",
+    ]);
+  });
+
+  it("states Kiro's Windows 11 / PowerShell requirement", () => {
+    const lines = getAgentConfig("kiro")!.install!.troubleshooting ?? [];
+    expect(lines.some((l) => /Windows 11/.test(l) && /PowerShell/.test(l))).toBe(true);
+  });
+
+  it.each(["crush", "kiro"])("%s troubleshooting never claims macOS/Linux only", (id) => {
+    const lines = getAgentConfig(id)!.install!.troubleshooting ?? [];
+    expect(lines.some((l) => /macOS and Linux only|only supported on macOS/i.test(l))).toBe(false);
   });
 });
 
