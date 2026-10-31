@@ -54,6 +54,7 @@ import {
   setFleetArmedIdsAccessor,
   setFleetLastArmedIdAccessor,
   setProjectHomeExitAccessor,
+  setProjectHomePresentedAccessor,
   setPanelMaximizeAccessor,
   resetStoreAccessorsForTesting,
 } from "./storeAccessors";
@@ -162,6 +163,7 @@ export function initStoreOrchestrator(): () => void {
     const fallback = applicationDefaultRoute(useProjectPluginStore.getState().application);
     if (selectProjectMainAreaRoute(home, fallback) === "home") home.showGrid();
   });
+  setProjectHomePresentedAccessor(() => useProjectHomeStore.getState().presented);
   setPanelMaximizeAccessor({
     isMaximized: () => usePanelStore.getState().maximizedId !== null,
     exit: () => usePanelStore.getState().exitMaximize(),

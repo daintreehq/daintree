@@ -236,6 +236,16 @@ describe("rendererStoreOrchestrator", () => {
 
       expect(selectProjectMainAreaRoute(useProjectHomeStore.getState())).toBe("split");
     });
+
+    it("reports whether Home is drawing in place of the grid (#15550)", async () => {
+      const { isProjectHomePresented } = await import("../storeAccessors");
+
+      useProjectHomeStore.getState().setPresented(true);
+      expect(isProjectHomePresented()).toBe(true);
+
+      useProjectHomeStore.getState().setPresented(false);
+      expect(isProjectHomePresented()).toBe(false);
+    });
   });
 
   describe("notification origin while the project's Home shows", () => {
