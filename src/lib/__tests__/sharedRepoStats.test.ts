@@ -1,17 +1,24 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  clearRepoAlias,
-  publishSharedObservation,
-  readNewestSharedObservation,
-  readRepoAlias,
-  writeRepoAlias,
+  publishSharedRepoStats,
+  readSharedRepoStats,
+  subscribeSharedRepoStats,
+  type SharedRepoReading,
 } from "../sharedRepoStats";
 
 const REPO = "github.com/acme/widgets";
+const NOW = 1_700_000_000_000;
 
-function observation(observedAt: number, hostId: string, issueCount = 3) {
-  return { issueCount, prCount: 1, observedAt, hostId };
+function reading(hostId: string, lastUpdated: number, issueCount = 3): SharedRepoReading {
+  return {
+    issueCount,
+    prCount: 1,
+    lastUpdated,
+    issueRefreshedAt: lastUpdated,
+    prRefreshedAt: lastUpdated,
+    hostId,
+  };
 }
 
 describe("sharedRepoStats", () => {
@@ -24,78 +31,101 @@ describe("sharedRepoStats", () => {
     window.localStorage.clear();
   });
 
-  it("reads the newest observation from any other host", () => {
-    publishSharedObservation("gh", "octo", REPO, observation(2_000, "studio", 5));
-    publishSharedObservation("gh", "octo", REPO, observation(3_000, "build-box", 8));
-    publishSharedObservation("gh", "octo", REPO, observation(9_000, "local", 1));
+  it("reads the reading this Shell received last, from any host", () => {
+    publishSharedRepoStats(REPO, reading("studio", 2_000, 5), NOW);
+    publishSharedRepoStats(REPO, reading("build-box", 3_000, 8), NOW + 10);
+    publishSharedRepoStats(REPO, reading("local", 1_000, 1), NOW + 20);
 
-    expect(readNewestSharedObservation("gh", "octo", REPO, "local")).toEqual(
-      observation(3_000, "build-box", 8)
-    );
-    expect(readNewestSharedObservation("gh", "octo", REPO, "build-box")).toEqual(
-      observation(9_000, "local", 1)
-    );
+    expect(readSharedRepoStats(REPO)).toMatchObject({ hostId: "local", issueCount: 1 });
   });
 
-  it("never lets a host overwrite its own entry with an older observation", () => {
-    publishSharedObservation("gh", "octo", REPO, observation(2_000, "studio", 5));
-    publishSharedObservation("gh", "octo", REPO, observation(1_000, "studio", 9));
-    publishSharedObservation("gh", "octo", REPO, observation(2_000, "studio", 9));
-    expect(readNewestSharedObservation("gh", "octo", REPO, "local")?.issueCount).toBe(5);
+  it("orders hosts by receipt, not by their own clocks", () => {
+    // build-box's clock runs a day ahead of studio's.
+    publishSharedRepoStats(REPO, reading("build-box", NOW + 86_000_000, 8), NOW);
+    publishSharedRepoStats(REPO, reading("studio", NOW + 10, 5), NOW + 10);
 
-    publishSharedObservation("gh", "octo", REPO, observation(3_000, "studio", 0));
-    expect(readNewestSharedObservation("gh", "octo", REPO, "local")?.issueCount).toBe(0);
+    expect(readSharedRepoStats(REPO)?.issueCount).toBe(5);
   });
 
-  it("keeps observations apart by provider, account and repository", () => {
-    publishSharedObservation("gh", "octo", REPO, observation(1_000, "studio"));
+  it("picks the same entry for every reader on a tie", () => {
+    publishSharedRepoStats(REPO, reading("studio", 2_000, 5), NOW);
+    publishSharedRepoStats(REPO, reading("build-box", 3_000, 8), NOW);
 
-    expect(readNewestSharedObservation("gl", "octo", REPO, "local")).toBeNull();
-    expect(readNewestSharedObservation("gh", "someone-else", REPO, "local")).toBeNull();
-    expect(readNewestSharedObservation("gh", "octo", `${REPO}-2`, "local")).toBeNull();
-    expect(readNewestSharedObservation("gh", "octo", "github.com/acme", "local")).toBeNull();
+    expect(readSharedRepoStats(REPO)?.hostId).toBe("studio");
+  });
+
+  it("never lets a host republish a reading, or replace it with an older one", () => {
+    expect(publishSharedRepoStats(REPO, reading("studio", 2_000, 5), NOW)).toBe(true);
+    publishSharedRepoStats(REPO, reading("local", 2_500, 9), NOW + 10);
+
+    expect(publishSharedRepoStats(REPO, reading("studio", 2_000, 5), NOW + 20)).toBe(false);
+    expect(publishSharedRepoStats(REPO, reading("studio", 1_000, 4), NOW + 30)).toBe(false);
+    expect(readSharedRepoStats(REPO)?.hostId).toBe("local");
+
+    expect(publishSharedRepoStats(REPO, reading("studio", 3_000, 0), NOW + 40)).toBe(true);
+    expect(readSharedRepoStats(REPO)).toMatchObject({ hostId: "studio", issueCount: 0 });
+  });
+
+  it("dates each count on this Shell's clock by the age the host reported", () => {
+    publishSharedRepoStats(
+      REPO,
+      { ...reading("studio", 50_000), issueRefreshedAt: 20_000, prRefreshedAt: 49_000 },
+      NOW
+    );
+
+    expect(readSharedRepoStats(REPO)).toMatchObject({
+      receivedAt: NOW,
+      issueObservedAt: NOW - 30_000,
+      prObservedAt: NOW - 1_000,
+      sourceUpdatedAt: 50_000,
+    });
+  });
+
+  it("keeps origins apart, whatever provider or account reported them", () => {
+    publishSharedRepoStats(REPO, reading("studio", 1_000), NOW);
+
+    expect(readSharedRepoStats(`${REPO}-2`)).toBeNull();
+    expect(readSharedRepoStats("github.com/acme")).toBeNull();
+    expect(readSharedRepoStats(REPO)?.hostId).toBe("studio");
   });
 
   it.each([
     ["unparseable JSON", "{not json"],
-    ["a negative count", { ...observation(1_000, "studio"), issueCount: -1 }],
-    ["a fractional count", { ...observation(1_000, "studio"), prCount: 1.5 }],
-    ["a far-future time", observation(Date.now() + 10 * 24 * 60 * 60 * 1000, "studio")],
-    ["a missing host", { issueCount: 1, prCount: 1, observedAt: 1_000 }],
-  ])("reads an entry with %s as absent", (_label, stored) => {
-    publishSharedObservation("gh", "octo", REPO, observation(1_000, "studio"));
-    const key = Object.keys(window.localStorage).find((k) => k.includes("obs"))!;
-    window.localStorage.setItem(key, typeof stored === "string" ? stored : JSON.stringify(stored));
+    ["a negative count", { issueCount: -1 }],
+    ["a fractional count", { prCount: 1.5 }],
+    ["a far-future receipt", { receivedAt: Date.now() + 10 * 24 * 60 * 60 * 1000 }],
+    ["a missing host", { hostId: undefined }],
+  ])("reads an entry with %s as absent", (_label, change) => {
+    publishSharedRepoStats(REPO, reading("studio", 1_000), NOW);
+    const key = Object.keys(window.localStorage).find((k) => k.includes("repo-stats"))!;
+    const stored =
+      typeof change === "string"
+        ? change
+        : JSON.stringify({ ...JSON.parse(window.localStorage.getItem(key)!), ...change });
+    window.localStorage.setItem(key, stored);
 
-    expect(readNewestSharedObservation("gh", "octo", REPO, "local")).toBeNull();
+    expect(readSharedRepoStats(REPO)).toBeNull();
   });
 
-  it("refuses to publish an invalid observation", () => {
-    publishSharedObservation("gh", "octo", REPO, observation(1_000, "studio"));
-    publishSharedObservation("gh", "octo", REPO, {
-      ...observation(2_000, "studio"),
-      issueCount: Number.NaN,
-    });
+  it("refuses to publish an invalid reading", () => {
+    publishSharedRepoStats(REPO, reading("studio", 1_000), NOW);
 
-    expect(readNewestSharedObservation("gh", "octo", REPO, "local")?.observedAt).toBe(1_000);
+    expect(
+      publishSharedRepoStats(REPO, { ...reading("studio", 2_000), issueCount: Number.NaN }, NOW)
+    ).toBe(false);
+    expect(readSharedRepoStats(REPO)?.sourceUpdatedAt).toBe(1_000);
   });
 
   it("treats blocked storage as empty instead of throwing", () => {
-    publishSharedObservation("gh", "octo", REPO, observation(1_000, "studio"));
-    writeRepoAlias("studio", "/repo", { providerId: "gh", repoKey: REPO });
+    publishSharedRepoStats(REPO, reading("studio", 1_000), NOW);
     // Spying on a Storage instance's methods just stores a key by that name, so
     // block the accessor itself, as a sandboxed or disabled store does.
     vi.spyOn(window, "localStorage", "get").mockImplementation(() => {
       throw new Error("blocked");
     });
 
-    expect(() =>
-      publishSharedObservation("gh", "octo", REPO, observation(2_000, "x"))
-    ).not.toThrow();
-    expect(() => writeRepoAlias("x", "/repo", { providerId: "gh", repoKey: REPO })).not.toThrow();
-    expect(() => clearRepoAlias("studio", "/repo")).not.toThrow();
-    expect(readNewestSharedObservation("gh", "octo", REPO, "local")).toBeNull();
-    expect(readRepoAlias("studio", "/repo")).toBeNull();
+    expect(publishSharedRepoStats(REPO, reading("x", 2_000), NOW)).toBe(false);
+    expect(readSharedRepoStats(REPO)).toBeNull();
   });
 
   it("survives a full store", () => {
@@ -111,30 +141,51 @@ describe("sharedRepoStats", () => {
       clear: () => {},
     };
     vi.spyOn(window, "localStorage", "get").mockReturnValue(full);
+    const listener = vi.fn();
+    const unsubscribe = subscribeSharedRepoStats(REPO, listener);
 
-    expect(() =>
-      publishSharedObservation("gh", "octo", REPO, observation(1_000, "x"))
-    ).not.toThrow();
-    expect(() => writeRepoAlias("x", "/repo", { providerId: "gh", repoKey: REPO })).not.toThrow();
-    expect(setItem).toHaveBeenCalledTimes(2);
+    expect(publishSharedRepoStats(REPO, reading("x", 1_000), NOW)).toBe(false);
+    expect(setItem).toHaveBeenCalledTimes(1);
+    expect(listener).not.toHaveBeenCalled();
+    unsubscribe();
   });
 
-  it("maps a host's project path to its repository, per host, until cleared", () => {
-    writeRepoAlias("studio", "/home/me/widgets", { providerId: "gh", repoKey: REPO });
+  describe("subscribeSharedRepoStats", () => {
+    it("hears this document's publishes and other documents' storage events for the origin", () => {
+      const listener = vi.fn();
+      const unsubscribe = subscribeSharedRepoStats(REPO, listener);
 
-    expect(readRepoAlias("studio", "/home/me/widgets")).toEqual({
-      providerId: "gh",
-      repoKey: REPO,
+      publishSharedRepoStats(REPO, reading("studio", 1_000), NOW);
+      expect(listener).toHaveBeenCalledTimes(1);
+
+      const key = Object.keys(window.localStorage)[0]!;
+      window.dispatchEvent(new StorageEvent("storage", { key }));
+      expect(listener).toHaveBeenCalledTimes(2);
+
+      // The whole store cleared.
+      window.dispatchEvent(new StorageEvent("storage", { key: null }));
+      expect(listener).toHaveBeenCalledTimes(3);
+
+      unsubscribe();
+      publishSharedRepoStats(REPO, reading("studio", 2_000), NOW);
+      window.dispatchEvent(new StorageEvent("storage", { key }));
+      expect(listener).toHaveBeenCalledTimes(3);
     });
-    expect(readRepoAlias("local", "/home/me/widgets")).toBeNull();
 
-    writeRepoAlias("studio", "/home/me/widgets", { providerId: "gl", repoKey: "gitlab.com/a/b" });
-    expect(readRepoAlias("studio", "/home/me/widgets")).toEqual({
-      providerId: "gl",
-      repoKey: "gitlab.com/a/b",
+    it("ignores other origins and other keys", () => {
+      const listener = vi.fn();
+      const unsubscribe = subscribeSharedRepoStats(REPO, listener);
+
+      publishSharedRepoStats(`${REPO}-2`, reading("studio", 1_000), NOW);
+      const otherKey = Object.keys(window.localStorage)[0]!;
+      window.dispatchEvent(new StorageEvent("storage", { key: otherKey }));
+      window.dispatchEvent(new StorageEvent("storage", { key: "daintree:unrelated" }));
+      // A refused publish changes nothing.
+      publishSharedRepoStats(REPO, reading("studio", 1_000), NOW);
+      publishSharedRepoStats(REPO, reading("studio", 1_000), NOW);
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      unsubscribe();
     });
-
-    clearRepoAlias("studio", "/home/me/widgets");
-    expect(readRepoAlias("studio", "/home/me/widgets")).toBeNull();
   });
 });

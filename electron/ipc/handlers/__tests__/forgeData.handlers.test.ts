@@ -1387,6 +1387,55 @@ describe("issues bound to a separate provider (#13700)", () => {
     expect(stats).toMatchObject({ issueCount: 99, prCount: 4, repoKey: "fake.test/acme/widgets" });
   });
 
+  it("names the same origin without polling, for a view's first paint (#15546)", async () => {
+    const code = codeImplWithStats();
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef: { ...repoRef, host: "Fake.Test", projectPath: "/repo" },
+      impl: code,
+    });
+    registerForgeDataHandlers();
+
+    const repoKey = await findHandler("forge:get-repo-key")(null, { cwd: "/repo/src" });
+    const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
+
+    expect(repoKey).toBe("fake.test/acme/widgets");
+    expect(stats).toMatchObject({ repoKey });
+    expect(code.repoStats.getRepoStats).toHaveBeenCalledTimes(1);
+    expect(resolveIssueOverrideForCwdMock).toHaveBeenCalledWith("/repo/src", "/repo");
+  });
+
+  it.each([
+    [
+      "an issues provider is bound",
+      () =>
+        resolveIssueOverrideForCwdMock.mockResolvedValue({
+          namespaceId: "acme.tracker.tracker",
+          repoRef: trackerRef,
+          impl: {},
+          viaIssueOverride: true,
+        }),
+    ],
+    [
+      "the bound issues provider can't be resolved",
+      () => resolveIssueOverrideForCwdMock.mockRejectedValue(new Error("gone")),
+    ],
+    [
+      "no code provider resolves",
+      () => resolveForCwdMock.mockRejectedValue(new Error("No remote URL found")),
+    ],
+  ])("names no origin when %s", async (_label, arrange) => {
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: codeImplWithStats(),
+    });
+    arrange();
+    registerForgeDataHandlers();
+
+    await expect(findHandler("forge:get-repo-key")(null, { cwd: "/repo" })).resolves.toBeNull();
+  });
+
   it("takes the issue count from the issues provider and keeps PRs from the code forge", async () => {
     const code = codeImplWithStats();
     resolveForCwdMock.mockResolvedValue({ namespaceId: "fake.provider", repoRef, impl: code });

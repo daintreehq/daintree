@@ -758,6 +758,7 @@ describe("forge handlers — rate limiting", () => {
       // capability reads: 10/10s (matches github:get-repo-stats family)
       { channel: CHANNELS.FORGE_GET_REPO_STATS, maxCalls: 10, invoke: (h) => h({}, { cwd }) },
       { channel: CHANNELS.FORGE_GET_FIRST_PAGE_CACHE, maxCalls: 10, invoke: (h) => h({}, { cwd }) },
+      { channel: CHANNELS.FORGE_GET_REPO_KEY, maxCalls: 10, invoke: (h) => h({}, { cwd }) },
       { channel: CHANNELS.FORGE_GET_PROJECT_HEALTH, maxCalls: 10, invoke: (h) => h({}, { cwd }) },
       {
         channel: CHANNELS.FORGE_GET_PR_REVIEW_THREADS,
@@ -818,12 +819,12 @@ describe("forge handlers — rate limiting", () => {
       },
     ];
 
-    it("registers all forge channels (52 rate-limited + 2 unrated probes)", () => {
-      expect(specs).toHaveLength(52);
+    it("registers all forge channels (53 rate-limited + 2 unrated probes)", () => {
+      expect(specs).toHaveLength(53);
       // FORGE_GET_CURRENT_USER and FORGE_GET_TOKEN_HEALTH are intentionally
       // unrated replay/identity probes with no checkRateLimit, so they register
       // handlers but stay out of `specs`.
-      expect(ipcMainMock.handle).toHaveBeenCalledTimes(54);
+      expect(ipcMainMock.handle).toHaveBeenCalledTimes(55);
     });
 
     it.each(specs)(

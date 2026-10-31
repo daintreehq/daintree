@@ -146,14 +146,6 @@ export interface SharedRepoReading {
 
 const localListeners = new Map<string, Set<() => void>>();
 
-function isLocalStorage(area: Storage | null): boolean {
-  try {
-    return area === window.localStorage;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Record a host's fresh reading as the origin's newest, unless that host
  * already published it or a later one. Returns whether it was written.
@@ -195,7 +187,6 @@ export function publishSharedRepoStats(
 export function subscribeSharedRepoStats(repoKey: string, listener: () => void): () => void {
   const scope = recordScope(repoKey);
   const onStorage = (event: StorageEvent) => {
-    if (!isLocalStorage(event.storageArea)) return;
     // A null key is the whole store being cleared.
     if (event.key !== null && !event.key.startsWith(scope)) return;
     listener();
