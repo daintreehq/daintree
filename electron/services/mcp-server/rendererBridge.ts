@@ -195,9 +195,7 @@ function matchesFilters(terminal: HostStartedTerminal, filters: Record<string, u
     return false;
   }
   const location =
-    typeof filters.location === "string"
-      ? (filters.location as TerminalLocationFilter)
-      : undefined;
+    typeof filters.location === "string" ? (filters.location as TerminalLocationFilter) : undefined;
   return matchesTerminalLocationFilter(terminal.location, location);
 }
 
