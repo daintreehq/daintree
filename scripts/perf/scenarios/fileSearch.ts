@@ -235,9 +235,11 @@ function samePage(actual: readonly string[], expected: readonly string[]): boole
 }
 
 /**
- * The planted ties must arrive intact, still be ties, and land inside the
- * largest page. Otherwise the oracle passes without ever having compared two
- * paths the collator cannot order.
+ * The planted ties must arrive intact, still be ties, land inside the largest
+ * page, and be listed in an order raw string comparison would not give.
+ * Otherwise the oracle passes without ever having compared two paths the
+ * collator cannot order, or cannot tell listing order from a raw-string
+ * tie-break.
  */
 function collatorTieMisses(index: readonly string[], topPage: readonly string[]): number {
   let misses = 0;
@@ -246,6 +248,10 @@ function collatorTieMisses(index: readonly string[], topPage: readonly string[])
     if (!index.includes(tie) || !topPage.includes(tie)) misses += 1;
     if (tie.length !== first.length || oracleCollator.compare(tie, first) !== 0) misses += 1;
   }
+  const ties: readonly string[] = COLLATOR_TIE_PATHS;
+  const listed = index.filter((file) => ties.includes(file));
+  const byRawString = [...listed].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  if (samePage(listed, byRawString)) misses += 1;
   return misses;
 }
 
@@ -289,11 +295,11 @@ async function coldEmptyQueryOpen(
   const closedAtMs = listing?.exitCode === 0 ? listing.closedAtMs : null;
   const timingMisses = listing !== null && closedAtMs !== null ? 0 : 1;
 
+  // Marked before the listing is read: a reload anywhere in the oracle would
+  // check the pages against a different listing than the cold one came from.
+  const warmMark = gitSpawnMark();
   const index = await service.listFiles(repo.path);
   const ranking = fullLengthRanking(index);
-  // A warm page that reloaded would be checked against a different listing
-  // than the one it was served from.
-  const warmMark = gitSpawnMark();
   let rankingMisses = samePage(results, ranking.slice(0, limit)) ? 0 : 1;
   for (const oracleLimit of EMPTY_QUERY_ORACLE_LIMITS) {
     const page = await service.search({ cwd: repo.path, query: "", limit: oracleLimit });
@@ -498,7 +504,8 @@ export const fileSearchScenarios: PerfScenario[] = [
       "terminal's IPC — decode, NUL parse, directory set, scoring arrays and the empty-query " +
       "ranking. rankingMisses holds the cold page, and warm pages at limits 1, 50 and 100, against " +
       "a full length-then-locale sort of the same listing, which carries paths of one length the " +
-      "collator calls equal (tieFixtureMisses proves they arrived and made the page). " +
+      "collator calls equal, listed in an order a raw-string tie-break would not give " +
+      "(tieFixtureMisses proves they arrived, made the page and kept that order). " +
       "gitPathListMisses proves each open spawned the listing and returned the `dist/` entry the " +
       "filesystem walker cannot produce.",
     tier: "heavy",
@@ -537,7 +544,11 @@ export const fileSearchScenarios: PerfScenario[] = [
             metrics[`${key}Limit${limit}ColdMs`] = open.coldMs;
             metrics[`${key}Limit${limit}GitMs`] = open.gitProcessMs;
             metrics[`${key}Limit${limit}PostGitMs`] = open.postGitMs;
-            metrics[`${key}IndexEntryCount`] = open.indexEntryCount;
+            // The smaller of the two opens, so the floor holds for both.
+            metrics[`${key}IndexEntryCount`] = Math.min(
+              metrics[`${key}IndexEntryCount`] ?? Number.POSITIVE_INFINITY,
+              open.indexEntryCount
+            );
             rankingMisses += open.rankingMisses;
             gitPathListMisses += open.gitPathListMisses;
             timingMisses += open.timingMisses;

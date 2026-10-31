@@ -215,7 +215,7 @@ describe("FileSearchService", () => {
     // A tiny alphabet keeps hundreds of paths on a handful of lengths, so most
     // comparisons reach the collator, and each pair here is one the collator
     // calls equal at equal length (canonical singletons and their targets).
-    const ALPHABET = ["a", "b", "_", "Å", "Å", "Ω", "Ω", "K", "K"];
+    const ALPHABET = ["a", "b", "_", "\u212B", "\u00C5", "\u2126", "\u03A9", "\u212A", "K"];
 
     function randomListing(rng: () => number, count: number): string[] {
       const paths: string[] = [];
@@ -254,27 +254,28 @@ describe("FileSearchService", () => {
       }
     });
 
-    it("keeps paths the collator calls equal in listing order", async () => {
-      const angstrom = "x/Å.ts";
-      const ring = "x/Å.ts";
+    it("keeps paths the collator calls equal in listing order across the cutoff", async () => {
+      const angstrom = "\u212B.ts";
+      const ring = "\u00C5.ts";
+      expect(angstrom).not.toBe(ring);
       expect(collator.compare(angstrom, ring)).toBe(0);
+      // Ninety-nine shorter names fill the page ahead of the pair, so only the
+      // first-listed of the two fits, and the heap has to evict one of them.
+      const shorter = Array.from({ length: 99 }, (_, i) => String(i).padStart(3, "0"));
 
-      const results: string[][] = [];
-      for (const order of [
+      for (const [first, second] of [
         [angstrom, ring],
         [ring, angstrom],
       ]) {
         const dir = makeTempDir();
         tempDirs.push(dir);
-        gitRepo(dir, `${order.join("\0")}\0`);
+        gitRepo(dir, `${[first, second, ...shorter].join("\0")}\0`);
         const service = await createService();
-        results.push(await service.search({ cwd: dir, query: "", limit: 3 }));
-      }
+        const page = await service.search({ cwd: dir, query: "", limit: 100 });
 
-      expect(results).toEqual([
-        ["x/", angstrom, ring],
-        ["x/", ring, angstrom],
-      ]);
+        expect(page.slice(0, 99)).toEqual(shorter);
+        expect(page[99]).toBe(first);
+      }
     });
 
     it("serves every limit as a prefix of one ranking without reloading", async () => {

@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { createPerfTempRoot } from "./tempRoots";
 import { createRng } from "./workloads";
 
@@ -44,8 +44,15 @@ export const SCALED_FILE_COUNT = 51200;
  * ranking gave paths it cannot tell apart, which has to be the listing order.
  * Soft hyphens rather than canonical singletons (U+212B against U+00C5) because
  * no Unicode normalisation rewrites them on the way through git.
+ *
+ * The byte-greatest is left untracked in the worktree rather than committed:
+ * `ls-files` prints `--others` ahead of the index, so the three are listed in an
+ * order raw string comparison would not give, and a ranking that broke collator
+ * ties by raw string rather than by listing order cannot pass.
  */
 export const COLLATOR_TIE_PATHS = ["ab\u00AD.md", "a\u00ADb.md", "\u00ADab.md"] as const;
+const TRACKED_TIE_PATHS = COLLATOR_TIE_PATHS.slice(0, 2);
+const UNTRACKED_TIE_PATHS = COLLATOR_TIE_PATHS.slice(2);
 
 const TOP_LEVEL = [
   "src",
@@ -187,7 +194,8 @@ function buildRepo(
   name: string,
   fileCount: number,
   seed: number,
-  extraPaths: readonly string[] = []
+  extraPaths: readonly string[] = [],
+  untrackedPaths: readonly string[] = []
 ): FileSearchRepo {
   const repoPath = join(root, name);
   mkdirSync(repoPath, { recursive: true });
@@ -221,6 +229,11 @@ function buildRepo(
   ].join("\n");
   git(repoPath, ["fast-import", "--quiet"], importStream);
   git(repoPath, ["read-tree", "HEAD"]);
+  for (const relative of untrackedPaths) {
+    const absolute = join(repoPath, relative);
+    mkdirSync(dirname(absolute), { recursive: true });
+    writeFileSync(absolute, contents);
+  }
 
   return { path: repoPath, fileCount: relativePaths.length };
 }
@@ -271,8 +284,22 @@ export function getFileSearchEmptyQueryFixture(): FileSearchEmptyQueryFixture {
 
   const root = createPerfTempRoot("daintree-perf-filesearch-empty-", { canonical: true });
   emptyQueryFixture = {
-    monorepo: buildRepo(root, "monorepo", MONOREPO_FILE_COUNT, 191, COLLATOR_TIE_PATHS),
-    scaled: buildRepo(root, "scaled", SCALED_FILE_COUNT, 199, COLLATOR_TIE_PATHS),
+    monorepo: buildRepo(
+      root,
+      "monorepo",
+      MONOREPO_FILE_COUNT,
+      191,
+      TRACKED_TIE_PATHS,
+      UNTRACKED_TIE_PATHS
+    ),
+    scaled: buildRepo(
+      root,
+      "scaled",
+      SCALED_FILE_COUNT,
+      199,
+      TRACKED_TIE_PATHS,
+      UNTRACKED_TIE_PATHS
+    ),
   };
   return emptyQueryFixture;
 }
