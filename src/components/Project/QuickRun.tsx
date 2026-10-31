@@ -28,21 +28,20 @@ import { SeverityMark } from "@/lib/statusSeverity";
 import { isMac } from "@/lib/platform";
 import { describeChord } from "@/lib/kbdShortcut";
 import { hostScopedKey } from "@/hooks/useHostPlatform";
+import { QUICK_RUN_AUTO_RESTART_KEY_PREFIX } from "./quickRunStorageKeys";
 import {
-  QUICK_RUN_AUTO_RESTART_KEY_PREFIX,
-  QUICK_RUN_HISTORY_KEY_PREFIX,
-} from "./quickRunStorageKeys";
+  historyStorageKey,
+  loadHistory,
+  normalizeCommand,
+  recordHistory,
+  type HistoryItem,
+} from "./quickRunHistory";
 import { QUICK_RUN_PANEL_ID } from "./QuickRunToggle";
 
 interface QuickRunProps {
   projectId: string;
   /** Focus the input on mount — true only when the user just opened the panel. */
   focusOnMount?: boolean;
-}
-
-interface HistoryItem {
-  command: string;
-  timestamp: number;
 }
 
 type SuggestionItem =
@@ -161,22 +160,7 @@ function matchRanges(text: string, search: string): Array<[number, number]> | un
 /** Stable ids so `aria-activedescendant` has something to point at. */
 const SUGGESTION_LIST_ID = "quick-run-suggestions";
 const suggestionOptionId = (index: number) => `quick-run-suggestion-${index}`;
-const MAX_HISTORY = 10;
 const LEAD_INDEX = -2;
-
-/**
- * Normalize a command string for comparison.
- * Removes quotes around tokens that don't contain spaces.
- * e.g., `npm run "test"` -> `npm run test`
- * but keeps `npm run "test with spaces"` as is.
- */
-function normalizeCommand(cmd: string): string {
-  return cmd
-    .trim()
-    .replace(/\s+/g, " ")
-    .replace(/"([^"\s]+)"/g, "$1")
-    .replace(/'([^'\s]+)'/g, "$1");
-}
 
 /**
  * QuickRun's panel: the destination, running tasks and the command input. It
@@ -268,47 +252,8 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   };
 
   useEffect(() => {
-    const saved = localStorage.getItem(
-      `${QUICK_RUN_HISTORY_KEY_PREFIX}${hostScopedKey(projectId)}`
-    );
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (
-          Array.isArray(parsed) &&
-          parsed.every(
-            (item) => typeof item === "object" && "command" in item && "timestamp" in item
-          )
-        ) {
-          setHistory(parsed);
-        } else {
-          console.warn("Invalid history format, resetting");
-          localStorage.removeItem(`${QUICK_RUN_HISTORY_KEY_PREFIX}${hostScopedKey(projectId)}`);
-        }
-      } catch (e) {
-        logError("Failed to parse command history", e);
-        localStorage.removeItem(`${QUICK_RUN_HISTORY_KEY_PREFIX}${hostScopedKey(projectId)}`);
-      }
-    }
+    setHistory(loadHistory(historyStorageKey(projectId)));
   }, [projectId]);
-
-  const saveHistory = (cmd: string) => {
-    setHistory((prev) => {
-      const newItem = { command: cmd, timestamp: Date.now() };
-      const normalizedNew = normalizeCommand(cmd);
-      // Use normalized comparison to avoid duplicates with quote variations
-      // but keep the original command value
-      const newHistory = [
-        newItem,
-        ...prev.filter((h) => normalizeCommand(h.command) !== normalizedNew),
-      ].slice(0, MAX_HISTORY);
-      localStorage.setItem(
-        `${QUICK_RUN_HISTORY_KEY_PREFIX}${hostScopedKey(projectId)}`,
-        JSON.stringify(newHistory)
-      );
-      return newHistory;
-    });
-  };
 
   // Pinning moves a row into another band, so its index changes under the
   // highlight. Remember which command was acted on and put the highlight back
@@ -462,18 +407,16 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   }
 
   const handleToggleAutoRestart = () => {
-    setAutoRestart((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem(
-          `${QUICK_RUN_AUTO_RESTART_KEY_PREFIX}${hostScopedKey(projectId)}`,
-          String(next)
-        );
-      } catch {
-        // ignore
-      }
-      return next;
-    });
+    const next = !autoRestart;
+    setAutoRestart(next);
+    try {
+      localStorage.setItem(
+        `${QUICK_RUN_AUTO_RESTART_KEY_PREFIX}${hostScopedKey(projectId)}`,
+        String(next)
+      );
+    } catch {
+      // ignore
+    }
   };
 
   // A pinned command carries its own output and restart choice, and a toggle
@@ -531,7 +474,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
         exitBehavior: restart ? "restart" : undefined,
         spawnedBy: "quickrun",
       });
-      saveHistory(cmd);
+      setHistory(recordHistory(historyStorageKey(projectId), cmd, history));
     } catch (error) {
       logError("Failed to spawn terminal", error);
       // Give the command back rather than leaving an empty field and no task —

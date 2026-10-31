@@ -2,6 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { Component, StrictMode, type ReactNode } from "react";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 
 // Provide localStorage stub for jsdom
@@ -91,6 +92,8 @@ vi.mock("@/components/Project/RunningTaskList", () => ({
 }));
 
 import { QuickRun } from "../QuickRun";
+import { resetQuickRunHistoryForTests } from "../quickRunHistory";
+import { setPermanentFallbackHandler } from "@/store/persistence/safeStorage";
 import { QuickRunToggle, useQuickRunExpanded } from "../QuickRunToggle";
 
 /** The panel as the sidebar footer mounts it: only while its toggle is open. */
@@ -130,6 +133,7 @@ describe("QuickRun", () => {
     // The disclosure persists per project, so one test opening the panel would
     // otherwise hand the next test an already-open one.
     localStorage.clear();
+    resetQuickRunHistoryForTests();
   });
 
   /**
@@ -828,6 +832,205 @@ describe("QuickRun", () => {
         expect.objectContaining({ command: "npm test" })
       );
       expect(screen.queryByRole("alert")).toBeNull();
+    });
+  });
+
+  describe("when the history can't be read or saved", () => {
+    /** What AppLayout's section boundary does to the sidebar when a render throws. */
+    class SectionBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+      state = { failed: false };
+      static getDerivedStateFromError() {
+        return { failed: true };
+      }
+      render() {
+        return this.state.failed ? <div data-testid="section-fallback" /> : this.props.children;
+      }
+    }
+
+    const quotaError = () => new DOMException("The quota has been exceeded.", "QuotaExceededError");
+    const accessDenied = () => new DOMException("Access is denied.", "SecurityError");
+
+    const degradedNotice = vi.fn();
+    // A structural failure parks writes in a memory map shared by the whole module,
+    // so each test uses a project of its own rather than inheriting the last one's.
+    let projectNumber = 0;
+    let projectId: string;
+    let historyKey: string;
+    let autoRestartKey: string;
+    let historyWrites: string[];
+
+    /** Makes the history key's reads or writes fail, recording every attempted write. */
+    function failHistory(method: "getItem" | "setItem", error: () => Error) {
+      if (method === "getItem") {
+        vi.spyOn(localStorage, "getItem").mockImplementation((key) => {
+          if (key === historyKey) throw error();
+          return storageMap.get(key) ?? null;
+        });
+        return;
+      }
+      vi.spyOn(localStorage, "setItem").mockImplementation((key, value) => {
+        if (key === historyKey) {
+          historyWrites.push(value);
+          throw error();
+        }
+        storageMap.set(key, value);
+      });
+    }
+
+    function renderFooter(strict = false) {
+      const tree = (
+        <SectionBoundary>
+          <Footer projectId={projectId} />
+        </SectionBoundary>
+      );
+      return render(strict ? <StrictMode>{tree}</StrictMode> : tree);
+    }
+
+    async function launch(command: string) {
+      mockAddTerminal.mockResolvedValue(undefined);
+      typeAndEnter(command);
+      await act(async () => {});
+    }
+
+    function recentCommands() {
+      fireEvent.keyDown(screen.getByPlaceholderText("Run a command"), { key: "ArrowDown" });
+      return commandOptions().map((o) => o.textContent);
+    }
+
+    beforeEach(() => {
+      projectId = `history-failure-${++projectNumber}`;
+      historyKey = `daintree_cmd_history_${projectId}`;
+      autoRestartKey = `daintree_quickrun_autorestart_${projectId}`;
+      historyWrites = [];
+      setPermanentFallbackHandler(degradedNotice);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      setPermanentFallbackHandler(null);
+      degradedNotice.mockReset();
+      vi.restoreAllMocks();
+    });
+
+    it("renders when reading the stored history throws, and points at the degraded-storage notice", async () => {
+      failHistory("getItem", accessDenied);
+      renderFooter();
+
+      expect(screen.queryByTestId("section-fallback")).toBeNull();
+      expect(openPanel()).not.toBeNull();
+      expect(degradedNotice).toHaveBeenCalledTimes(1);
+
+      await launch("npm test");
+      expect(recentCommands()).toEqual([expect.stringContaining("npm test")]);
+    });
+
+    it("keeps a launch that succeeded when saving its history hits the storage quota", async () => {
+      failHistory("setItem", quotaError);
+      setupPendingTerminal();
+      renderFooter();
+
+      typeAndEnter("npm test");
+      // Recording waits for the terminal to exist.
+      expect(historyWrites).toEqual([]);
+      await act(async () => resolveTerminal());
+
+      expect(historyWrites).toHaveLength(1);
+      expect(screen.queryByTestId("section-fallback")).toBeNull();
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect((screen.getByPlaceholderText("Run a command") as HTMLInputElement).value).toBe("");
+      expect(recentCommands()).toEqual([expect.stringContaining("npm test")]);
+      // A full quota is transient; storage is still healthy, so no degraded-storage notice.
+      expect(degradedNotice).not.toHaveBeenCalled();
+    });
+
+    it("records nothing for a launch that failed", async () => {
+      failHistory("setItem", quotaError);
+      setupPendingTerminal();
+      renderFooter();
+
+      typeAndEnter("npm test");
+      await act(async () => rejectTerminal(new Error("spawn failed")));
+
+      expect(screen.getByRole("alert")).not.toBeNull();
+      expect(historyWrites).toEqual([]);
+      expect(storageMap.has(historyKey)).toBe(false);
+    });
+
+    it("keeps a command the quota refused when the panel is closed and reopened", async () => {
+      failHistory("setItem", quotaError);
+      renderFooter();
+      await launch("npm test");
+
+      fireEvent.click(screen.getByRole("button", { name: /run command/i }));
+      expect(screen.queryByPlaceholderText("Run a command")).toBeNull();
+      openPanel();
+
+      expect(recentCommands()).toEqual([expect.stringContaining("npm test")]);
+    });
+
+    it("keeps history in memory and raises the notice once when storage fails structurally", async () => {
+      failHistory("setItem", accessDenied);
+      renderFooter();
+
+      await launch("npm test");
+      await launch("npm run lint");
+
+      expect(screen.queryByTestId("section-fallback")).toBeNull();
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(recentCommands()).toEqual([
+        expect.stringContaining("npm run lint"),
+        expect.stringContaining("npm test"),
+      ]);
+      expect(degradedNotice).toHaveBeenCalledTimes(1);
+      // Once storage is known broken, it isn't hit again.
+      expect(historyWrites).toHaveLength(1);
+    });
+
+    it("writes the history once per launch under StrictMode, not once per updater run", async () => {
+      const setItem = vi.spyOn(localStorage, "setItem");
+      renderFooter(true);
+
+      await launch("npm test");
+
+      expect(setItem.mock.calls.filter(([key]) => key === historyKey)).toHaveLength(1);
+      expect(recentCommands()).toEqual([expect.stringContaining("npm test")]);
+    });
+
+    it("writes the auto-restart choice once per toggle under StrictMode", () => {
+      const setItem = vi.spyOn(localStorage, "setItem");
+      renderFooter(true);
+      openPanel();
+      const toggle = screen.getByRole("button", { name: "Auto-restart" });
+
+      fireEvent.click(toggle);
+      expect(toggle.getAttribute("aria-pressed")).toBe("true");
+      fireEvent.click(toggle);
+      expect(toggle.getAttribute("aria-pressed")).toBe("false");
+
+      expect(setItem.mock.calls.filter(([key]) => key === autoRestartKey)).toEqual([
+        [autoRestartKey, "true"],
+        [autoRestartKey, "false"],
+      ]);
+    });
+
+    it("starts from an empty history when the stored one is malformed", () => {
+      for (const stored of [
+        "{not json",
+        JSON.stringify([null]),
+        JSON.stringify([{ command: 7, timestamp: 1 }]),
+        JSON.stringify({ command: "npm test", timestamp: 1 }),
+      ]) {
+        storageMap.set(historyKey, stored);
+        const view = renderFooter();
+        fireEvent.keyDown(openPanel(), { key: "ArrowDown" });
+
+        expect(screen.queryByTestId("section-fallback")).toBeNull();
+        expect(screen.queryAllByRole("option")).toEqual([]);
+        expect(storageMap.has(historyKey)).toBe(false);
+        view.unmount();
+        resetQuickRunHistoryForTests();
+      }
     });
   });
 
