@@ -107,7 +107,7 @@ For the layering behind this recipe — the envelope, the sender-validation wrap
 
 ```bash
 npm test -- src/components/__tests__/Foo.test.tsx  # Tests covering your change
-npm run test:watch        # Watch mode
+npm run test:watch -- <path>  # Watch mode
 ```
 
 Don't run the whole suite locally (15-20 minutes): CI runs it on every PR, sharded 6 ways behind `ci-ok`, together with `npm run check`. E2E does not run on PRs. Fix failures outside your files from the CI log.
@@ -180,13 +180,13 @@ The flag is gated on `app.isPackaged === false` (forwarded to the pty host as `D
 
 `.github/workflows/ci.yml` runs on push/PR to `main` and `develop`:
 
-1. **check** (Ubuntu): typecheck + lint + format (`npm run check`)
+1. **static** and **lint** (Ubuntu): typecheck, codegen and drift guards, format, and the ESLint ratchet (the pieces of `npm run check`)
 2. **test** (Ubuntu): vitest unit tests, sharded 6 ways, minus the perf liveness guard
 3. **perf-liveness** (Ubuntu): `scripts/perf/__tests__/scenarioLiveness.test.ts` on its own runner, ungated, so its per-scenario child processes stay off the shards' critical path
 4. **build** (Ubuntu only): production build verification
 5. **ci-ok**: aggregate gate that fails if any job failed — the sole required status check
 
-`check` and `test` default to Ubuntu on push/PR but can opt into Windows via `gh workflow run CI -f os=windows` (or `os=both`). Cross-platform build, smoke, and E2E live in `stabilize.yml` — the on-demand, agent-driven workflow (and the `stabilize` skill that drives it) that replaced the scheduled nightly; releases run per-OS via `release-macos.yml` / `release-linux.yml` / `release-windows.yml`. The only thing still on a nightly cron is `nightly-publish.yml`, which builds and publishes the macOS/Linux nightly auto-update binaries and runs no test suites (only a launch smoke before publishing).
+`static` and `lint` default to Ubuntu on push/PR but can opt into Windows via `gh workflow run CI -f os=windows` (or `os=both`). Cross-platform build, smoke, and E2E live in `stabilize.yml` — the on-demand, agent-driven workflow (and the `stabilize` skill that drives it) that replaced the scheduled nightly; releases run per-OS via `release-macos.yml` / `release-linux.yml` / `release-windows.yml`. The only thing still on a nightly cron is `nightly-publish.yml`, which builds and publishes the macOS/Linux nightly auto-update binaries and runs no test suites (only a launch smoke before publishing).
 
 ## Compiler bailout tooling
 
