@@ -194,6 +194,18 @@ describe("worktreeDiffStatCache", () => {
     expect(getWorktreeDiffStatCacheStats().worktrees).toBe(1);
   });
 
+  it("releases every partition a retargeted symlink published into", () => {
+    for (const root of ["/private/wt-a", "/private/wt-b"]) {
+      const pass = beginDiffStatPass(root, "/link/wt");
+      pass.keepTracked(`${root}/f`, id(), { insertions: 1, deletions: 0 });
+      pass.publish();
+    }
+
+    releaseWorktreeDiffStats("/link/wt");
+
+    expect(getWorktreeDiffStatCacheStats()).toMatchObject({ worktrees: 0, estimatedBytes: 0 });
+  });
+
   it("keeps a released worktree released when a pass begun before the release completes", () => {
     publishTracked("/wt-a", ["/wt-a/f"]);
     const inFlight = beginDiffStatPass("/wt-a");
@@ -201,6 +213,7 @@ describe("worktreeDiffStatCache", () => {
 
     releaseWorktreeDiffStats("/wt-a");
     inFlight.publish();
+    expect(getWorktreeDiffStatCacheStats().worktrees).toBe(0);
 
     const beforeClear = beginDiffStatPass("/wt-b");
     beforeClear.keepTracked("/wt-b/f", id(), { insertions: 1, deletions: 0 });

@@ -235,18 +235,13 @@ function publishPartition(
 export function releaseWorktreeDiffStats(path: string): void {
   epoch++;
   tombstones.delete(path);
-  const direct = partitions.get(path);
-  if (direct) {
-    partitions.delete(path);
-    totalBytes -= direct.bytes;
-    return;
-  }
-  for (const [root, partition] of partitions) {
-    if (!partition.aliases.has(path)) continue;
+  // A symlink retargeted between passes leaves its spelling on more than one
+  // partition, so every match goes.
+  for (const [root, partition] of [...partitions]) {
+    if (root !== path && !partition.aliases.has(path)) continue;
     partitions.delete(root);
     tombstones.delete(root);
     totalBytes -= partition.bytes;
-    return;
   }
 }
 
