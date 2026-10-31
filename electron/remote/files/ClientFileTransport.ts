@@ -286,9 +286,13 @@ class Gate {
     return this.releaser();
   }
 
-  /** A slot only if one is free now: read-ahead never queues in front of a pull someone waits on. */
-  tryAcquire(): (() => void) | null {
-    if (this.active >= this.limit) return null;
+  /**
+   * A slot for read-ahead, only while another stays free: read-ahead never
+   * queues, and a slice read ahead keeps its slot until someone reads it, so
+   * a body whose reader paused must not hold the slot a waiting read needs.
+   */
+  tryAcquireSpare(): (() => void) | null {
+    if (this.active >= this.limit - 1) return null;
     this.active++;
     return this.releaser();
   }
@@ -337,9 +341,10 @@ interface PreviewBodyDeps {
 /**
  * One preview body, read slice by slice in order. With a depth above one, the
  * next slices are pulled while the first is still being acknowledged, but
- * only on gate slots nobody is waiting for, and each slice keeps its slot
- * until it has been handed over or dropped, so read-ahead counts against the
- * per-host pull cap like any other pull. Cancelling, the host closing the
+ * only on spare gate slots, and each slice keeps its slot until it has been
+ * handed over or dropped, so read-ahead counts against the per-host pull cap
+ * like any other pull, and the last slot is always left for a read someone
+ * is waiting on. Cancelling, the host closing the
  * stream, the link dropping or any slice failing drops every slice held at
  * once; nothing read ahead is handed over after that.
  */
@@ -432,7 +437,7 @@ class PreviewBody implements HostFileBody {
       const expected = this.deps.expectedBytes;
       // One pull past the announced length learns that the body ended there.
       if (expected !== null && this.nextSequence * PULL_MAX_BYTES > expected) return;
-      const release = this.deps.gate.tryAcquire();
+      const release = this.deps.gate.tryAcquireSpare();
       if (!release) return;
       const slot = this.newSlot();
       slot.release = release;

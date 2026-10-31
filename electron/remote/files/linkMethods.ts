@@ -40,12 +40,13 @@ export const PULL_MAX_BYTES = 1024 * 1024;
 /**
  * Pulls a Shell keeps in flight on one preview body, so the next slices are
  * already on their way while one waits out its acknowledgement: each pull
- * holds its slot for about two round trips, so four keep a link of a few
- * hundred Mbit/s busy at a 40 ms round trip. Read-ahead only takes pull slots
- * nobody waits for, and the host grants at most its own per-session pull cap;
- * a host that grants nothing (an older build) is pulled one slice at a time.
+ * holds its slot for about two round trips, so three keep a link of a few
+ * hundred Mbit/s busy at a 40 ms round trip. Read-ahead never takes the last
+ * free per-host pull slot, and the host grants at most its own per-session
+ * pull cap; a host that grants nothing (an older build) is pulled one slice
+ * at a time.
  */
-export const PREVIEW_PULL_DEPTH = 4;
+export const PREVIEW_PULL_DEPTH = 3;
 
 /** What either side accepts as a depth: a bound on the field, not a promise. */
 const pullDepth = z.number().int().min(1).max(64);

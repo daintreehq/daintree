@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 vi.mock("electron", () => ({
   app: { isPackaged: true, on: vi.fn(), getPath: vi.fn(() => os.tmpdir()) },
@@ -479,15 +480,32 @@ describe("revocation", () => {
 describe("previews pulled ahead", () => {
   const MiB = PULL_MAX_BYTES;
 
-  /** Host transfers in flight at once, and host body reads in flight at once. */
+  /**
+   * The host's transfers and body reads, watched. `holdFirstSend(n)` keeps the
+   * next transfer from finishing until `n` transfers have started after it
+   * and every one but it has finished (or two seconds pass), so later slices
+   * settle before an earlier one.
+   */
   function observeHost(host: LinkSession) {
-    const stats = { sends: 0, maxSends: 0, reading: 0, maxReading: 0, bytesRead: 0 };
+    const stats = { sends: 0, maxSends: 0, entered: 0, reading: 0, maxReading: 0, bytesRead: 0 };
+    let hold: { until: number; base: number } | null = null;
+    let slowFirstRead = true;
     const send = host.transfers.send.bind(host.transfers);
     vi.spyOn(host.transfers, "send").mockImplementation(async (source, options) => {
       stats.sends++;
+      stats.entered++;
       stats.maxSends = Math.max(stats.maxSends, stats.sends);
+      const held = hold;
+      hold = null;
       try {
-        return await send(source, options);
+        const result = await send(source, options);
+        if (held) {
+          await waitFor(
+            () => stats.entered - held.base >= held.until && stats.sends === 1,
+            2_000
+          ).catch(() => {});
+        }
+        return result;
       } finally {
         stats.sends--;
       }
@@ -504,6 +522,11 @@ describe("previews pulled ahead", () => {
           stats.reading++;
           stats.maxReading = Math.max(stats.maxReading, stats.reading);
           try {
+            // Long enough for the pulls sent behind the first to arrive while it reads.
+            if (slowFirstRead) {
+              slowFirstRead = false;
+              await new Promise((resolve) => setTimeout(resolve, 50));
+            }
             const next = await read();
             stats.bytesRead += next.value?.byteLength ?? 0;
             return next;
@@ -515,7 +538,15 @@ describe("previews pulled ahead", () => {
       }) as typeof body.getReader;
       return response;
     };
-    return { stats, serve };
+    const holdFirstSend = (until: number) => {
+      hold = { until, base: stats.entered };
+    };
+    const reset = () => {
+      stats.maxSends = stats.sends;
+      stats.maxReading = stats.reading;
+      slowFirstRead = true;
+    };
+    return { stats, serve, holdFirstSend, reset };
   }
 
   async function pipelined(options: Parameters<typeof setup>[0] = {}) {
@@ -532,7 +563,13 @@ describe("previews pulled ahead", () => {
       bodies.push(body);
       return body;
     });
-    return { ...ctx, stats: observed.stats, bodies };
+    const pulls = () =>
+      vi.mocked(ctx.client.call).mock.calls.filter(([method]) => method === FileLinkMethod.PULL)
+        .length;
+    vi.spyOn(ctx.client, "call");
+    const open = (file: string) =>
+      ctx.proxy("daintree-media", new Request(url("daintree-media", file, project)));
+    return { ...ctx, ...observed, bodies, pulls, open };
   }
 
   async function write(name: string, size: number): Promise<{ file: string; bytes: Buffer }> {
@@ -542,13 +579,12 @@ describe("previews pulled ahead", () => {
     return { file, bytes };
   }
 
-  it("sends the next slice while the last one waits for its acknowledgement, reading one at a time", async () => {
-    const ctx = await pipelined({ conditions: { oneWayDelayMs: 10 } });
+  it("sends later slices while the first waits for its acknowledgement, in order, reading one at a time", async () => {
+    const ctx = await pipelined({ conditions: { oneWayDelayMs: 5 } });
     const { file, bytes } = await write("clip.mp4", 6 * MiB + 17);
-    const response = await ctx.proxy(
-      "daintree-media",
-      new Request(url("daintree-media", file, project))
-    );
+    // Slice 0 finishes only after the slice behind it has: they reach the reader in order anyway.
+    ctx.holdFirstSend(2);
+    const response = await ctx.open(file);
     expect(sha256(new Uint8Array(await response.arrayBuffer()))).toBe(sha256(bytes));
     expect(ctx.stats.maxSends).toBeGreaterThan(1);
     expect(ctx.stats.maxSends).toBeLessThanOrEqual(PREVIEW_PULL_DEPTH);
@@ -568,13 +604,25 @@ describe("previews pulled ahead", () => {
     async (_label, size) => {
       const ctx = await pipelined({ conditions: { oneWayDelayMs: 5 } });
       const { file, bytes } = await write("exact.mp4", size);
-      const response = await ctx.proxy(
-        "daintree-media",
-        new Request(url("daintree-media", file, project))
-      );
+      // With two slices or more, the first finishes last.
+      if (size > MiB) ctx.holdFirstSend(2);
+      const response = await ctx.open(file);
       expect(Number(response.headers.get("content-length"))).toBe(size);
       expect(sha256(new Uint8Array(await response.arrayBuffer()))).toBe(sha256(bytes));
       await waitFor(() => ctx.service.openStreams === 0);
+    }
+  );
+
+  it.each([
+    ["one byte", 1, 1],
+    ["exactly one slice", MiB, 2],
+  ])(
+    "pulls nothing past the announced length of %s but the one pull that finds its end",
+    async (_label, size, expected) => {
+      const ctx = await pipelined({ conditions: { oneWayDelayMs: 5 } });
+      const { file } = await write("short.mp4", size);
+      await (await ctx.open(file)).arrayBuffer();
+      expect(ctx.pulls()).toBe(expected);
     }
   );
 
@@ -598,15 +646,12 @@ describe("previews pulled ahead", () => {
   it("stops reading on the host within a slice of a cancel, read-ahead included", async () => {
     const ctx = await pipelined({ conditions: { oneWayDelayMs: 5 } });
     const { file } = await write("long.mp4", 32 * MiB);
-    const response = await ctx.proxy(
-      "daintree-media",
-      new Request(url("daintree-media", file, project))
-    );
-    const reader = response.body!.getReader();
+    const reader = (await ctx.open(file)).body!.getReader();
     const first = await reader.read();
     expect(first.value!.byteLength).toBe(MiB);
     await reader.cancel();
     await waitFor(() => ctx.service.openStreams === 0);
+    await waitFor(() => ctx.stats.sends === 0 && ctx.stats.reading === 0);
     const readAtClose = ctx.stats.bytesRead;
     // The slice handed over and the slices in flight when the cancel landed,
     // give or take the part of a read the last slice left over.
@@ -616,17 +661,54 @@ describe("previews pulled ahead", () => {
     expect(ctx.bodies[0]!.bufferedBytes).toBe(0);
   });
 
-  it("drops a slice read ahead the moment the host revokes the stream", async () => {
+  it("gives back every pull slot a cancelled body held, in flight or read ahead", async () => {
+    const ctx = await pipelined({ conditions: { oneWayDelayMs: 5 } });
+    const a = await write("a.mp4", 8 * MiB);
+    const b = await write("b.mp4", 8 * MiB);
+    const c = await write("c.mp4", 6 * MiB);
+    // Cancelled while its read-ahead is still in flight.
+    const readerA = (await ctx.open(a.file)).body!.getReader();
+    await readerA.read();
+    await readerA.cancel();
+    // Cancelled once its read-ahead has all arrived.
+    const readerB = (await ctx.open(b.file)).body!.getReader();
+    await readerB.read();
+    await waitFor(() => ctx.bodies[1]!.bufferedBytes === PREVIEW_PULL_DEPTH * MiB);
+    await waitFor(() => ctx.stats.sends === 0);
+    await readerB.cancel();
+    await waitFor(() => ctx.service.openStreams === 0 && ctx.stats.sends === 0);
+    // A body on the same transport still gets its whole depth.
+    ctx.reset();
+    ctx.holdFirstSend(PREVIEW_PULL_DEPTH);
+    const response = await ctx.open(c.file);
+    expect(sha256(new Uint8Array(await response.arrayBuffer()))).toBe(sha256(c.bytes));
+    expect(ctx.stats.maxSends).toBe(PREVIEW_PULL_DEPTH);
+  });
+
+  it("leaves a pull slot for another preview while one whose reader paused holds its read-ahead", async () => {
+    const ctx = await pipelined({ conditions: { oneWayDelayMs: 2 } });
+    const paused = await write("paused.mp4", 8 * MiB);
+    const other = await write("other.mp4", 3 * MiB + 5);
+    const reader = (await ctx.open(paused.file)).body!.getReader();
+    await reader.read();
+    await waitFor(() => ctx.bodies[0]!.bufferedBytes === PREVIEW_PULL_DEPTH * MiB);
+    await waitFor(() => ctx.stats.sends === 0);
+    const response = await ctx.open(other.file);
+    expect(sha256(new Uint8Array(await response.arrayBuffer()))).toBe(sha256(other.bytes));
+    // The paused body kept everything it read ahead.
+    expect(ctx.bodies[0]!.bufferedBytes).toBe(PREVIEW_PULL_DEPTH * MiB);
+    await reader.cancel();
+  });
+
+  it("drops what it read ahead the moment the host revokes the stream", async () => {
     const ctx = await pipelined();
     const { file } = await write("long.mp4", 8 * MiB);
-    const response = await ctx.proxy(
-      "daintree-media",
-      new Request(url("daintree-media", file, project))
-    );
-    const reader = response.body!.getReader();
+    const reader = (await ctx.open(file)).body!.getReader();
     await reader.read();
     const body = ctx.bodies[0]!;
-    await waitFor(() => body.bufferedBytes >= MiB);
+    // Every pull answered: only the host's notice can reach what is held now.
+    await waitFor(() => body.bufferedBytes === PREVIEW_PULL_DEPTH * MiB);
+    await waitFor(() => ctx.stats.sends === 0);
     ctx.endpoint.projectId = "p2";
     ctx.service.onEndpointsChanged();
     expect(ctx.service.openStreams).toBe(0);
@@ -635,28 +717,39 @@ describe("previews pulled ahead", () => {
   });
 
   it("drops what it read ahead when the host idles out a stream nobody reads", async () => {
-    const ctx = await pipelined({ streamIdleMs: 100 });
+    const ctx = await pipelined({ streamIdleMs: 500 });
     const { file } = await write("paused.mp4", 8 * MiB);
-    const response = await ctx.proxy(
-      "daintree-media",
-      new Request(url("daintree-media", file, project))
-    );
-    const reader = response.body!.getReader();
+    const reader = (await ctx.open(file)).body!.getReader();
     await reader.read();
     const body = ctx.bodies[0]!;
-    await waitFor(() => body.bufferedBytes >= MiB);
+    await waitFor(() => body.bufferedBytes === PREVIEW_PULL_DEPTH * MiB);
     await waitFor(() => ctx.service.openStreams === 0);
     await waitFor(() => body.bufferedBytes === 0);
     await expect(reader.read()).rejects.toBeDefined();
   });
 
-  it("reads ahead only on pull slots nobody else is waiting for", async () => {
+  it("drops the link when the Shell can't take the host's notice, so nothing read ahead survives", async () => {
+    const ctx = await pipelined();
+    const { file } = await write("long.mp4", 8 * MiB);
+    const reader = (await ctx.open(file)).body!.getReader();
+    await reader.read();
+    const body = ctx.bodies[0]!;
+    await waitFor(() => body.bufferedBytes === PREVIEW_PULL_DEPTH * MiB);
+    await waitFor(() => ctx.stats.sends === 0);
+    ctx.client.registerCallHandler(FileLinkMethod.STREAM_CLOSED, z.unknown(), () => {
+      throw new AppError({ code: "RATE_LIMITED", message: "Too many requests" });
+    });
+    ctx.endpoint.projectId = "p2";
+    ctx.service.onEndpointsChanged();
+    await waitFor(() => !ctx.client.isOpen);
+    await waitFor(() => body.bufferedBytes === 0);
+    await expect(reader.read()).rejects.toBeDefined();
+  });
+
+  it("reads ahead only on spare pull slots", async () => {
     const ctx = await pipelined({ clientPulls: 1, conditions: { oneWayDelayMs: 2 } });
     const { file, bytes } = await write("solo.mp4", 3 * MiB + 5);
-    const response = await ctx.proxy(
-      "daintree-media",
-      new Request(url("daintree-media", file, project))
-    );
+    const response = await ctx.open(file);
     expect(sha256(new Uint8Array(await response.arrayBuffer()))).toBe(sha256(bytes));
     expect(ctx.stats.maxSends).toBe(1);
   });
@@ -664,10 +757,7 @@ describe("previews pulled ahead", () => {
   it("pulls one slice at a time from a host that grants no depth", async () => {
     const ctx = await pipelined({ legacyHost: true, conditions: { oneWayDelayMs: 2 } });
     const { file, bytes } = await write("old-host.mp4", 3 * MiB + 5);
-    const response = await ctx.proxy(
-      "daintree-media",
-      new Request(url("daintree-media", file, project))
-    );
+    const response = await ctx.open(file);
     expect(sha256(new Uint8Array(await response.arrayBuffer()))).toBe(sha256(bytes));
     expect(ctx.stats.maxSends).toBe(1);
     // The host closed the stream itself at the end, as it always has.
@@ -678,10 +768,7 @@ describe("previews pulled ahead", () => {
     const ctx = await pipelined({ clientPullDepth: 1, conditions: { oneWayDelayMs: 2 } });
     const answered = vi.spyOn(ctx.transport, "request");
     const { file, bytes } = await write("old-shell.mp4", 3 * MiB + 5);
-    const response = await ctx.proxy(
-      "daintree-media",
-      new Request(url("daintree-media", file, project))
-    );
+    const response = await ctx.open(file);
     expect((await answered.mock.results[0]!.value) as FileResponse).not.toHaveProperty("pullDepth");
     expect(sha256(new Uint8Array(await response.arrayBuffer()))).toBe(sha256(bytes));
     expect(ctx.stats.maxSends).toBe(1);

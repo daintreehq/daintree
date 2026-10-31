@@ -111,6 +111,16 @@ export async function conditionedSocketPair(
 ): Promise<{ a: net.Socket; b: net.Socket }> {
   const near = await socketPair(dir);
   const far = await socketPair(dir);
+  // The relay's own ends: a reset while one side tears down closes both, never throws.
+  for (const [end, other] of [
+    [near.b, far.a],
+    [far.a, near.b],
+  ] as const) {
+    end.on("error", () => {
+      end.destroy();
+      other.destroy();
+    });
+  }
   relayDirection(near.b, far.a, conditions);
   relayDirection(far.a, near.b, conditions);
   return { a: near.a, b: far.b };

@@ -218,7 +218,7 @@ describe("host file previews", () => {
     await expect(unannounced.arrayBuffer()).rejects.toThrow();
   });
 
-  it("reads the body as deep as the host allows, never past its announced length", async () => {
+  it("reads the body as deep as the host allows, bounded by its announced length", async () => {
     const { ask, openBody } = proxyFor({
       ...streamed(200, { "content-length": String(SCRIPT.byteLength) }),
       pullDepth: 2,

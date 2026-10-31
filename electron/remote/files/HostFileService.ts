@@ -1108,7 +1108,11 @@ export class HostFileService {
     void stream.reader.cancel().catch(() => {});
     const session = stream.owner.session;
     if (notifyShell && stream.depth > 1 && session.isOpen) {
-      void session.call(FileLinkMethod.STREAM_CLOSED, { streamId: stream.id }).catch(() => {});
+      void session.call(FileLinkMethod.STREAM_CLOSED, { streamId: stream.id }).catch(() => {
+        // Unheard, the Shell could still pass on slices of a revoked stream:
+        // a link that can't carry the notice is dropped, which stops them all.
+        if (session.isOpen) session.close("preview stream close notice failed");
+      });
     }
   }
 
