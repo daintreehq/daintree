@@ -205,6 +205,21 @@ export interface FetchOptions {
  */
 export type FetchResult = WorkspaceFetchResult;
 
+/** One remote branch to fetch into its tracking ref, for {@link RepoFetchCoordinator.fetchRefCommit}. */
+export interface RefCommitFetch {
+  /** A checkout of the repository: the fetch runs here, and its common dir keys the chain. */
+  cwd: string;
+  remote: string;
+  /** The branch on the remote, fully qualified, e.g. `refs/heads/develop`. */
+  sourceRef: string;
+  /** The ref the fetch writes, fully qualified, e.g. `refs/remotes/origin/develop`. */
+  trackingRef: string;
+  /** The whole call's budget, including any wait behind another fetch of the repo. */
+  timeoutMs: number;
+}
+
+const REF_FETCH_STOPPED_MESSAGE = "The fetch was stopped because the project closed";
+
 /**
  * Per-repo coordinator for background `git fetch` calls.
  *
@@ -444,6 +459,95 @@ export type FetchResult = WorkspaceFetchResult;
       }
     }
     return results;
+  }
+
+  /**
+   * Fetch one remote branch into its tracking ref and return the full id of
+   * the commit that ref names afterwards, for a caller that needs the branch as
+   * it is on the remote now (#15733).
+   *
+   * It rides the repo's chain, so it never races a background fetch on
+   * `packed-refs`, and shares nothing else with background fetching. The
+   * recency window and the failure backoff are both skipped: a cached
+   * "success" would hand the caller the stale ref it asked to avoid, and a
+   * cached failure isn't this fetch's own reason. Its success isn't recorded
+   * either, since one fetched branch says nothing about the rest of the remote.
+   *
+   * Throws with git's reason on any failure, and on running out of
+   * `timeoutMs`, which counts the wait for the chain as well.
+   */
+  async fetchRefCommit(opts: RefCommitFetch): Promise<string> {
+    const baseGenerationAtStart = this.baseGeneration;
+    // The budget starts here, not at the git spawn: finding the common dir and
+    // waiting for the chain are part of what the caller is kept waiting for.
+    const controller = new AbortController();
+    this.inFlightControllers.add(controller);
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, opts.timeoutMs);
+    // Settles the caller as soon as the budget runs out or teardown aborts,
+    // even while the work below still waits on the common dir or the chain.
+    const abandoned = new Promise<never>((_, reject) => {
+      controller.signal.addEventListener("abort", () => reject(new Error("aborted")), {
+        once: true,
+      });
+    });
+    const work = async (): Promise<string> => {
+      const commonDir = await getGitCommonDir(opts.cwd, { logErrors: false });
+      if (!commonDir) {
+        throw new Error(`Couldn't find the git directory for '${opts.cwd}'`);
+      }
+      if (this.baseGeneration !== baseGenerationAtStart || controller.signal.aborted) {
+        throw new Error(REF_FETCH_STOPPED_MESSAGE);
+      }
+      const run = (this.chains.get(commonDir) ?? Promise.resolve()).then(async () => {
+        if (controller.signal.aborted) throw new Error("aborted");
+        const git = await createBackgroundFetchGit(opts.cwd, { signal: controller.signal });
+        await git.raw([
+          "fetch",
+          "--no-tags",
+          "--no-prune",
+          "--no-auto-gc",
+          "--no-write-fetch-head",
+          "--",
+          opts.remote,
+          `+${opts.sourceRef}:${opts.trackingRef}`,
+        ]);
+        const commit = String(
+          await git.raw(["rev-parse", "--verify", `${opts.trackingRef}^{commit}`])
+        ).trim();
+        if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i.test(commit)) {
+          throw new Error(`git named no commit for ${opts.trackingRef} after fetching it`);
+        }
+        return commit;
+      });
+      this.chains.set(
+        commonDir,
+        run.then(
+          () => undefined,
+          () => undefined
+        )
+      );
+      return run;
+    };
+    try {
+      return await Promise.race([work(), abandoned]);
+    } catch (error) {
+      if (timedOut) {
+        throw new Error(`The fetch didn't finish within ${Math.ceil(opts.timeoutMs / 1000)}s`, {
+          cause: error,
+        });
+      }
+      if (controller.signal.aborted) {
+        throw new Error(REF_FETCH_STOPPED_MESSAGE, { cause: error });
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      this.inFlightControllers.delete(controller);
+    }
   }
 
   /**

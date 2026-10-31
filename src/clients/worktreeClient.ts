@@ -27,6 +27,7 @@ export function worktreeCreateResultFromOutcome(result: unknown): WorktreeCreate
     worktreeId: record.worktreeId,
     branch: record.branch,
     setupState: isSetupState(record.setupState) ? record.setupState : "unknown",
+    ...(typeof record.startCommit === "string" ? { startCommit: record.startCommit } : {}),
   };
 }
 

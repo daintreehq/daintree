@@ -27,6 +27,7 @@ describe("remote create-worktree options", () => {
       sourcePrLinkedIssueNumber: 7,
       submoduleInit: "all",
       collisionPolicy: "error",
+      fetchBase: true,
     };
     const result = create(options);
     expect(result).toEqual({
@@ -57,6 +58,7 @@ describe("remote create-worktree options", () => {
     ["an unknown submodule policy", { submoduleInit: "recursive" }],
     ["an unknown collision policy", { collisionPolicy: "overwrite" }],
     ["a mistyped flag", { fromRemote: "yes" }],
+    ["a mistyped fetchBase", { fetchBase: "yes" }],
     ["a null byte in the path", { path: "/tmp/x\u0000y" }],
   ])("refuses %s", (_label, override) => {
     const result = create({ baseBranch: "main", newBranch: "x", path: "/tmp/x", ...override });

@@ -476,8 +476,25 @@ export interface CreateWorktreeOptions {
    * implement either policy, because checking a name reserves nothing.
    *
    * Ignored when `useExistingBranch` is set — reuse is not a collision.
+   *
+   * With `fetchBase`, `suffix` never reuses an existing branch: it sits at
+   * whatever commit it was left at, which is exactly the stale start the
+   * caller asked to avoid. A collision always suffixes instead.
    */
   collisionPolicy?: WorktreeBranchCollisionPolicy;
+  /**
+   * Fetch the base from its remote as part of the create and start the new
+   * branch at the commit that fetch brought back (#15733). A remote base
+   * (`fromRemote`) is fetched as named; a local base is fetched from its
+   * upstream, and the local branch itself is left where it is. A failed fetch
+   * fails the create with git's reason, and nothing falls back to the
+   * last-fetched ref.
+   *
+   * The branch is created from that commit, not from the ref, so it has no
+   * upstream even when it shares the remote branch's name. The commit comes
+   * back as `startCommit`. Refused beside `useExistingBranch`.
+   */
+  fetchBase?: boolean;
 }
 
 /**

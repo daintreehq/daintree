@@ -74,6 +74,8 @@ function getWorktreeCreateRequestKey(
     // caller asked to be refused, and differing submodule policies would become
     // first-request-wins.
     collisionPolicy: payload.options.collisionPolicy ?? "suffix",
+    // A fresh-base create must not be answered by one that skipped the fetch.
+    fetchBase: payload.options.fetchBase ?? false,
     submoduleInit: payload.options.submoduleInit ?? "inherit",
     // These change what gets provisioned and what the worktree's card shows, so
     // two requests differing only here are still different requests.

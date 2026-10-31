@@ -7078,7 +7078,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "worktree",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Create a managed git worktree; Daintree's creator also copies project config, initializes submodules and runs setup. Pick one mode: new branch, existing branch as named, or pull request. A recipe is optional, only to launch terminals. Setup runs in the background and can fail after this returns.",
+    "description": "Create a managed git worktree: Daintree also copies project config, initializes submodules and runs setup. Pick one source mode. A recipe is optional, only to launch terminals. Setup runs in the background and can fail after this returns.",
     "examples": undefined,
     "id": "worktree.createWithRecipe",
     "keywords": undefined,

@@ -32,6 +32,7 @@ describe("WorktreeCreatePayloadSchema", () => {
       sourcePrLinkedIssueNumber: 7,
       submoduleInit: "all" as const,
       collisionPolicy: "error" as const,
+      fetchBase: true,
     };
     const result = WorktreeCreatePayloadSchema.safeParse({
       rootPath: "/home/user/repo",
@@ -49,6 +50,23 @@ describe("WorktreeCreatePayloadSchema", () => {
   // born unbuildable, which is the exact failure the option exists to prevent.
   // The "no silent stripping" test above did not catch it because it enumerated
   // the same fields the schema did.
+  it("carries fetchBase through as given and rejects a non-boolean (#15733)", () => {
+    for (const fetchBase of [true, false]) {
+      const result = WorktreeCreatePayloadSchema.safeParse({
+        rootPath: "/home/user/repo",
+        options: { ...validOptions, fetchBase },
+      });
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.options.fetchBase).toBe(fetchBase);
+    }
+    expect(
+      WorktreeCreatePayloadSchema.safeParse({
+        rootPath: "/home/user/repo",
+        options: { ...validOptions, fetchBase: "yes" },
+      }).success
+    ).toBe(false);
+  });
+
   it("carries submoduleInit through rather than stripping it", () => {
     const result = WorktreeCreatePayloadSchema.safeParse({
       rootPath: "/home/user/repo",

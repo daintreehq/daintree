@@ -2924,7 +2924,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "worktree",
     danger: "safe",
     description:
-      "Create a managed git worktree; Daintree's creator also copies project config, initializes submodules and runs setup. Pick one mode: new branch, existing branch as named, or pull request. A recipe is optional, only to launch terminals. Setup runs in the background and can fail after this returns.",
+      "Create a managed git worktree: Daintree also copies project config, initializes submodules and runs setup. Pick one source mode. A recipe is optional, only to launch terminals. Setup runs in the background and can fail after this returns.",
     enabled: true,
     id: "worktree.createWithRecipe",
     inputSchema: {
@@ -2939,7 +2939,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 kind: {
                   type: "string",
                   const: "newBranch",
-                  description: "Branch off a base branch; a taken name follows `collisionPolicy`.",
+                  description: "Branch off a base; a taken name follows collisionPolicy.",
                 },
                 branchName: {
                   type: "string",
@@ -2952,7 +2952,12 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                   minLength: 1,
                 },
                 fromRemote: {
-                  description: "Set true if baseBranch names a remote branch, e.g. origin/develop.",
+                  description: "True if baseBranch is a remote branch, e.g. origin/develop.",
+                  type: "boolean",
+                },
+                fetchBase: {
+                  description:
+                    "Fetch the base (a local one via its upstream) and branch from that commit, returned as startCommit. A failed fetch fails; a taken name is never reused.",
                   type: "boolean",
                 },
                 collisionPolicy: {
@@ -2963,14 +2968,14 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 },
                 issueNumber: {
                   description:
-                    "Issue this worktree is for, passed to the recipe and assignToSelf; it does not attach the issue.",
+                    "Issue this worktree is for, passed to the recipe and assignToSelf; not attached.",
                   type: "integer",
                   exclusiveMinimum: 0,
                   maximum: 9007199254740991,
                 },
                 assignToSelf: {
                   description:
-                    "Assign the linked issue to the current user. Omit for the saved 'Assign issue to me' preference.",
+                    "Assign the issue to the current user. Omit for the saved 'Assign issue to me' preference.",
                   type: "boolean",
                 },
               },
@@ -2988,19 +2993,18 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 branchName: {
                   type: "string",
                   minLength: 1,
-                  description:
-                    "Existing local branch, used verbatim: never suffixed, never replaced by a new branch if missing.",
+                  description: "Existing local branch, used verbatim: never suffixed or created.",
                 },
                 issueNumber: {
                   description:
-                    "Issue this worktree is for, passed to the recipe and assignToSelf; it does not attach the issue.",
+                    "Issue this worktree is for, passed to the recipe and assignToSelf; not attached.",
                   type: "integer",
                   exclusiveMinimum: 0,
                   maximum: 9007199254740991,
                 },
                 assignToSelf: {
                   description:
-                    "Assign the linked issue to the current user. Omit for the saved 'Assign issue to me' preference.",
+                    "Assign the issue to the current user. Omit for the saved 'Assign issue to me' preference.",
                   type: "boolean",
                 },
               },
@@ -3014,14 +3018,13 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                   type: "string",
                   const: "pullRequest",
                   description:
-                    "Check out a pull request's head branch. State is unchecked: a closed or merged PR works while its head ref exists.",
+                    "Check out a pull request's head branch; a closed or merged PR works while its head ref exists.",
                 },
                 pullRequestNumber: {
                   type: "integer",
                   exclusiveMinimum: 0,
                   maximum: 9007199254740991,
-                  description:
-                    "Pull request to check out; its head branch is fetched for you, so pass no branch name.",
+                  description: "Pull request to check out; its head branch is fetched for you.",
                 },
               },
               required: ["kind", "pullRequestNumber"],

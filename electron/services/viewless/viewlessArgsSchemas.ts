@@ -79,6 +79,7 @@ export const WorktreeCreateWithRecipeArgsSchema = z.object({
         branchName,
         baseBranch: branchName.optional(),
         fromRemote: z.boolean().optional(),
+        fetchBase: z.boolean().optional(),
         collisionPolicy: z.enum(["suffix", "error"]).optional(),
         issueNumber,
         assignToSelf: z.boolean().optional(),

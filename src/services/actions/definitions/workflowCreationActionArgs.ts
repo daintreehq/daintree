@@ -36,7 +36,7 @@ const WorktreeCreationSourceSchema = z
       .object({
         kind: z
           .literal("newBranch")
-          .describe("Branch off a base branch; a taken name follows `collisionPolicy`."),
+          .describe("Branch off a base; a taken name follows collisionPolicy."),
         branchName: z
           .string()
           .trim()
@@ -51,7 +51,13 @@ const WorktreeCreationSourceSchema = z
         fromRemote: z
           .boolean()
           .optional()
-          .describe("Set true if baseBranch names a remote branch, e.g. origin/develop."),
+          .describe("True if baseBranch is a remote branch, e.g. origin/develop."),
+        fetchBase: z
+          .boolean()
+          .optional()
+          .describe(
+            "Fetch the base (a local one via its upstream) and branch from that commit, returned as startCommit. A failed fetch fails; a taken name is never reused."
+          ),
         collisionPolicy: z
           .enum(["suffix", "error"])
           .optional()
@@ -64,13 +70,13 @@ const WorktreeCreationSourceSchema = z
           .positive()
           .optional()
           .describe(
-            "Issue this worktree is for, passed to the recipe and assignToSelf; it does not attach the issue."
+            "Issue this worktree is for, passed to the recipe and assignToSelf; not attached."
           ),
         assignToSelf: z
           .boolean()
           .optional()
           .describe(
-            "Assign the linked issue to the current user. Omit for the saved 'Assign issue to me' preference."
+            "Assign the issue to the current user. Omit for the saved 'Assign issue to me' preference."
           ),
       })
       .strict(),
@@ -83,22 +89,20 @@ const WorktreeCreationSourceSchema = z
           .string()
           .trim()
           .min(1)
-          .describe(
-            "Existing local branch, used verbatim: never suffixed, never replaced by a new branch if missing."
-          ),
+          .describe("Existing local branch, used verbatim: never suffixed or created."),
         issueNumber: z
           .number()
           .int()
           .positive()
           .optional()
           .describe(
-            "Issue this worktree is for, passed to the recipe and assignToSelf; it does not attach the issue."
+            "Issue this worktree is for, passed to the recipe and assignToSelf; not attached."
           ),
         assignToSelf: z
           .boolean()
           .optional()
           .describe(
-            "Assign the linked issue to the current user. Omit for the saved 'Assign issue to me' preference."
+            "Assign the issue to the current user. Omit for the saved 'Assign issue to me' preference."
           ),
       })
       .strict(),
@@ -107,15 +111,13 @@ const WorktreeCreationSourceSchema = z
         kind: z
           .literal("pullRequest")
           .describe(
-            "Check out a pull request's head branch. State is unchecked: a closed or merged PR works while its head ref exists."
+            "Check out a pull request's head branch; a closed or merged PR works while its head ref exists."
           ),
         pullRequestNumber: z
           .number()
           .int()
           .positive()
-          .describe(
-            "Pull request to check out; its head branch is fetched for you, so pass no branch name."
-          ),
+          .describe("Pull request to check out; its head branch is fetched for you."),
       })
       .strict(),
   ])

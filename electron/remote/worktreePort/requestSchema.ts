@@ -48,6 +48,7 @@ const CreateWorktreeOptionsSchema = z.object({
   sourcePrLinkedIssueNumber: z.number().int().min(0).optional(),
   submoduleInit: z.enum(["inherit", "all", "none"]).optional(),
   collisionPolicy: z.enum(["suffix", "error"]).optional(),
+  fetchBase: z.boolean().optional(),
 }) satisfies z.ZodType<CreateWorktreeOptions>;
 
 const RESOURCE_ACTIONS = [
