@@ -292,20 +292,29 @@ describe("host.fs.writeFile while queued behind another writer", () => {
  */
 describe.skipIf(process.platform === "win32")("host.fs single-file reads of a FIFO", () => {
   let fifo: string;
+  let fifos: string[];
+
+  const makeFifo = (target: string) => {
+    execFileSync("mkfifo", [target]);
+    fifos.push(target);
+  };
 
   beforeEach(() => {
+    fifos = [];
     fifo = path.join(root, "pipe.md");
-    execFileSync("mkfifo", [fifo]);
+    makeFifo(fifo);
   });
 
   afterEach(() => {
     // A read that did block would hold its thread for the rest of the run; a
     // writer opening and closing the other end releases it with EOF. With no
     // reader waiting the open fails with ENXIO, which is the expected case.
-    try {
-      closeSync(openSync(fifo, constants.O_WRONLY | constants.O_NONBLOCK));
-    } catch {
-      // no reader was waiting
+    for (const target of fifos) {
+      try {
+        closeSync(openSync(target, constants.O_WRONLY | constants.O_NONBLOCK));
+      } catch {
+        // no reader was waiting
+      }
     }
   });
 
@@ -328,6 +337,7 @@ describe.skipIf(process.platform === "win32")("host.fs single-file reads of a FI
       (error: unknown) => error as Error & { code?: string; currentRevision?: string }
     );
     expect(caught?.code).toBe("TARGET_UNAVAILABLE");
+    expect(caught?.message).toMatch(/not a regular file/);
     expect(caught?.currentRevision).toBeUndefined();
     expect(h.deps.safeAppendAudit).not.toHaveBeenCalled();
     expect((await fs.lstat(fifo)).isFIFO()).toBe(true);
@@ -335,23 +345,27 @@ describe.skipIf(process.platform === "win32")("host.fs single-file reads of a FI
     await expect(runExclusive(fifo, async () => "free")).resolves.toBe("free");
   });
 
-  it("refuses a regular file swapped for one after containment", async () => {
-    const h = harness(root, path.join(base, "data"));
+  it("refuses a regular file swapped for one just before the open", async () => {
+    // Swapped at the open itself, so anything checked on the path beforehand
+    // still saw a regular file: only the opened descriptor shows the FIFO.
+    const { api } = harness(root, path.join(base, "data"));
     const target = path.join(root, "notes.md");
     await fs.writeFile(target, "mine");
-    h.afterContainment(() => {
-      rmSync(target);
-      execFileSync("mkfifo", [target]);
-    });
-    try {
-      await expect(h.api.readFile(target)).rejects.toMatchObject({ code: "TARGET_UNAVAILABLE" });
-    } finally {
-      try {
-        closeSync(openSync(target, constants.O_WRONLY | constants.O_NONBLOCK));
-      } catch {
-        // no reader was waiting
+    const realOpen = fs.open.bind(fs);
+    let swapped = false;
+    vi.spyOn(fs, "open").mockImplementation(((file, flags, mode) => {
+      if (file === target && !swapped) {
+        swapped = true;
+        rmSync(target);
+        makeFifo(target);
       }
-    }
+      return realOpen(file, flags, mode);
+    }) as typeof fs.open);
+    await expect(api.readFile(target)).rejects.toMatchObject({
+      code: "TARGET_UNAVAILABLE",
+      message: expect.stringMatching(/not a regular file/),
+    });
+    expect(swapped).toBe(true);
   });
 
   it("refuses a device", async () => {
