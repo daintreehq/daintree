@@ -2359,9 +2359,12 @@ export class WorktreeMonitor {
       }
       // Read at run time: a worktree that gained or lost elevation while the
       // request waited for its slot gets the pass it needs now.
-      return this.updateGitStatus(forceRefresh()).catch(() => {
-        // updateGitStatus's own error path emits "error" mood; nothing to do here.
-      });
+      return this.updateGitStatus(forceRefresh()).then(
+        () => {},
+        () => {
+          // updateGitStatus's own error path emits "error" mood; nothing to do here.
+        }
+      );
     };
     try {
       if (this.pollQueue) {

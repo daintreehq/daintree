@@ -353,12 +353,22 @@ describe("getWorktreeChangesWithStats in-flight deduplication", () => {
     await vi.waitFor(() => expect(mockGit.status).toHaveBeenCalledTimes(1));
     abandon.abort();
 
-    const fresh = await getWorktreeChangesWithStats(cwd, { signal: lifecycle.signal });
-    expect(mockGit.status).toHaveBeenCalledTimes(2);
-    expect(fresh.changes).toHaveLength(0);
+    let releaseFresh!: (value: unknown) => void;
+    mockGit.status.mockReturnValueOnce(new Promise((resolve) => (releaseFresh = resolve)));
+    const fresh = getWorktreeChangesWithStats(cwd, { signal: lifecycle.signal });
+    await vi.waitFor(() => expect(mockGit.status).toHaveBeenCalledTimes(2));
 
+    // The abandoned read lands while the fresh one is still in flight; its
+    // cleanup must leave the fresh entry for the next caller to join.
     releaseAbandoned({ ...emptyStatus, modified: ["late.ts"] });
     await expect(abandoned).resolves.toMatchObject({ changedFileCount: 1 });
+    const joined = getWorktreeChangesWithStats(cwd, { signal: lifecycle.signal });
+
+    releaseFresh(emptyStatus);
+    const [freshResult, joinedResult] = await Promise.all([fresh, joined]);
+    expect(mockGit.status).toHaveBeenCalledTimes(2);
+    expect(freshResult.changes).toHaveLength(0);
+    expect(joinedResult).toBe(freshResult);
 
     const cached = await getWorktreeChangesWithStats(cwd, { signal: lifecycle.signal });
     expect(mockGit.status).toHaveBeenCalledTimes(2);
@@ -2064,8 +2074,9 @@ describe("getWorktreeChangesWithStats on a stalled mount (#15645)", () => {
     expect(readFileMock).not.toHaveBeenCalled();
   });
 
-  it("fails the pass when a realpath never returns", async () => {
-    const cwd = "/stalled-realpath/" + Math.random();
+  it("fails the pass when a realpath never returns, without reading it as a removal", async () => {
+    // A path that spells out the removal heuristics' own keywords.
+    const cwd = "/repos/ENOENT not a git repository/" + Math.random();
     mockGit.status.mockResolvedValue(emptyStatus);
     mockGit.raw.mockImplementation((args: string[]) =>
       Promise.resolve(args[0] === "rev-parse" ? `${OID}\n${cwd}\n` : "")
@@ -2086,5 +2097,74 @@ describe("getWorktreeChangesWithStats on a stalled mount (#15645)", () => {
     expect(error).toBeInstanceOf(Error);
     expect(error).not.toBeInstanceOf(WorktreeRemovedError);
     expect((error as Error).message).toMatch(/timed out/);
+  });
+
+  it.each([
+    [
+      "rejects when its signal aborts",
+      (_path: string, options?: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener(
+            "abort",
+            () =>
+              reject(
+                Object.assign(new Error("The operation was aborted"), {
+                  name: "AbortError",
+                  cause: options.signal?.reason,
+                })
+              ),
+            { once: true }
+          );
+        }),
+    ],
+    ["never returns", () => never()],
+  ])("gives up on untracked reads that stall once, when the read %s", async (_name, read) => {
+    const cwd = "/stalled-read/" + Math.random();
+    const files = Array.from({ length: 50 }, (_, i) => `out/f${i}.txt`);
+    mockGit.status.mockResolvedValue({ ...emptyStatus, not_added: files });
+    mockGit.raw.mockImplementation((args: string[]) =>
+      Promise.resolve(args[0] === "rev-parse" ? `${OID}\n${cwd}\n` : "")
+    );
+    statMock().mockResolvedValue({ mtimeMs: 1000, size: 12, dev: 1, ino: 1 });
+    readFileMock.mockImplementation(read);
+
+    const pending = getWorktreeChangesWithStats(cwd, { forceRefresh: true });
+    const flag = settledFlag(pending);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(flag.settled).toBe(true);
+
+    const result = await pending;
+    const untracked = result.changes.filter((change) => change.status === "untracked");
+    expect(untracked).toHaveLength(files.length);
+    expect(untracked.every((change) => change.insertions === null)).toBe(true);
+    expect(readFileMock).toHaveBeenCalledTimes(10);
+  });
+
+  it("publishes tracked changes whose stats stall, falling back to the diff for their line counts", async () => {
+    const cwd = "/stalled-tracked/" + Math.random();
+    const files = Array.from({ length: 20 }, (_, i) => `src/f${i}.ts`);
+    mockGit.status.mockResolvedValue({ ...emptyStatus, modified: files });
+    mockGit.raw.mockImplementation((args: string[]) =>
+      Promise.resolve(args[0] === "rev-parse" ? `${OID}\n${cwd}\n` : "")
+    );
+    mockGit.diff.mockResolvedValue(files.map((file) => `2\t1\t${file}`).join("\n"));
+    statMock().mockImplementation((path: string) =>
+      path === cwd ? Promise.resolve({ mtimeMs: 1000, size: 512, dev: 1, ino: 1 }) : never()
+    );
+
+    const pending = getWorktreeChangesWithStats(cwd, { forceRefresh: true });
+    const flag = settledFlag(pending);
+
+    // The sweep stats every tracked file at once, and the mtime pass after the
+    // diff fails fast on the latch instead of waiting out a second bound.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(flag.settled).toBe(true);
+
+    const result = await pending;
+    expect(result.changes).toHaveLength(files.length);
+    expect(result.changes.every((change) => change.insertions === 2)).toBe(true);
+    expect(result.changes.every((change) => change.mtimeMs === 0)).toBe(true);
+    expect(statMock().mock.calls.filter(([path]) => path !== cwd)).toHaveLength(files.length);
   });
 });

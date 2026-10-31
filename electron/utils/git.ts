@@ -18,13 +18,14 @@ import { TimeoutError, timeoutSignal, withTimeout } from "./withTimeout.js";
 const FS_OP_TIMEOUT_MS = 5_000;
 
 // `stat` and `realpath` take no AbortSignal, so a stalled one is abandoned,
-// not cancelled.
+// not cancelled. Timeout messages carry no path: they reach logs, and the
+// removal heuristics below match on message text.
 function statBounded(path: string): Promise<Stats> {
-  return withTimeout(fs.stat(path), FS_OP_TIMEOUT_MS, `stat timed out: ${path}`);
+  return withTimeout(fs.stat(path), FS_OP_TIMEOUT_MS, "stat timed out");
 }
 
 function realpathBounded(path: string): Promise<string> {
-  return withTimeout(fs.realpath(path), FS_OP_TIMEOUT_MS, `realpath timed out: ${path}`);
+  return withTimeout(fs.realpath(path), FS_OP_TIMEOUT_MS, "realpath timed out");
 }
 
 // The signal reclaims the read's buffers once it times out; the race settles
@@ -34,11 +35,16 @@ async function readFileBounded(path: string, encoding: "utf-8"): Promise<string>
 async function readFileBounded(path: string, encoding?: "utf-8"): Promise<Buffer | string> {
   const { signal, dispose } = timeoutSignal(FS_OP_TIMEOUT_MS);
   try {
-    return await withTimeout(
+    return await withTimeout<Buffer | string>(
       encoding ? fs.readFile(path, { encoding, signal }) : fs.readFile(path, { signal }),
       FS_OP_TIMEOUT_MS,
-      `readFile timed out: ${path}`
+      "readFile timed out"
     );
+  } catch (error) {
+    // A read that honours the abort rejects with an AbortError first; it is
+    // still this bound expiring, and the per-file stall latch keys on that.
+    if (signal.aborted && signal.reason instanceof TimeoutError) throw signal.reason;
+    throw error;
   } finally {
     dispose();
   }
@@ -1283,6 +1289,8 @@ export async function getWorktreeChangesWithStats(
         // simply has no Git installed, so it falls through to the classified
         // `toGitOperationError` path instead (#11764).
         !isMissingGitExecutableError(error) &&
+        // Not seeing an answer is not proof the worktree is gone.
+        !(error instanceof TimeoutError) &&
         (errorMessage.includes("ENOENT") ||
           errorMessage.includes("no such file or directory") ||
           errorMessage.includes("Unable to read current working directory") ||
