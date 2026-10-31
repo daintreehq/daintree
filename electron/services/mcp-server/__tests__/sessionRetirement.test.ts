@@ -268,9 +268,9 @@ describe("SessionStore retirement routes (#15624)", () => {
           "resourceOwnership.byOwner[survivor]",
         ])
       );
-      expect(events.filter((e) => e.sessionId === "survivor" && e.type === "grant.revoked")).toEqual(
-        []
-      );
+      expect(
+        events.filter((e) => e.sessionId === "survivor" && e.type === "grant.revoked")
+      ).toEqual([]);
     }
   );
 
@@ -309,7 +309,9 @@ describe("SessionStore retirement routes (#15624)", () => {
     openSession(store, "http-1", "streamable-http");
     openSession(store, "pane-1", "streamable-http", "pane-principal");
     openRelay(store, "relay-1");
-    const needles = ["sse-1", "http-1", "pane-1", "relay-1"].flatMap((id) => seed(store, id).needles);
+    const needles = ["sse-1", "http-1", "pane-1", "relay-1"].flatMap(
+      (id) => seed(store, id).needles
+    );
 
     store.drain();
 
@@ -328,7 +330,9 @@ describe("SessionStore retirement routes (#15624)", () => {
     openSession(store, "pane-1", "streamable-http", "pane-principal");
     store.resourceOwnership.bindPrincipal("pane-1", "pane-principal");
     openRelay(store, "relay-1");
-    const needles = ["sse-1", "http-1", "pane-1", "relay-1"].flatMap((id) => seed(store, id).needles);
+    const needles = ["sse-1", "http-1", "pane-1", "relay-1"].flatMap(
+      (id) => seed(store, id).needles
+    );
     const residue = findResidue(store, needles);
 
     const unseeded = stateCollections(store).filter(
