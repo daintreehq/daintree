@@ -179,6 +179,23 @@ describe("notificationHistoryStore cross-view write merge (#15534)", () => {
     expect(readBlob(backing).state.entries.map((e) => e.id)).toEqual([siblingId]);
   });
 
+  it("persists this view's dismissal of an entry that expired after hydration", async () => {
+    const aging = makeEntry({ id: "aging", seenAsToast: true, timestamp: NOW - 7 * DAY + HOUR });
+    const backing = installLocalStorage(seed([aging]));
+
+    const viewA = await openView();
+    const viewB = await openView();
+
+    viewB.getState().archiveEntry("aging");
+    flush();
+
+    vi.advanceTimersByTime(2 * HOUR);
+    viewA.getState().dismissEntry("aging");
+    flush();
+
+    expect(readBlob(backing).state.entries).toEqual([]);
+  });
+
   it("persists the writing view's own prune", async () => {
     const expired = makeEntry({ id: "expired", timestamp: NOW - HOUR, seenAsToast: true });
     const backing = installLocalStorage(seed([expired]));
@@ -264,6 +281,45 @@ describe("notificationHistoryStore cross-view write merge (#15534)", () => {
     expect(row?.archivedAt).not.toBeNull();
   });
 
+  it("keeps a sibling-archived row read when this view marks it unread", async () => {
+    const backing = installLocalStorage(seed([makeEntry({ id: "row", seenAsToast: true })]));
+
+    const viewA = await openView();
+    const viewB = await openView();
+
+    viewB.getState().archiveEntry("row");
+    flush();
+
+    viewA.getState().markUnseenAsToast("row", { silent: true });
+    flush();
+
+    const row = entryById(backing, "row");
+    expect(row?.archivedAt).not.toBeNull();
+    expect(row?.seenAsToast).toBe(true);
+  });
+
+  it("keeps a sibling's message update on a row this view left alone", async () => {
+    const backing = installLocalStorage(
+      seed([
+        makeEntry({ id: "summary", message: "3 more" }),
+        makeEntry({ id: "other", timestamp: NOW - 2 * HOUR }),
+      ])
+    );
+
+    const viewA = await openView();
+    const viewB = await openView();
+
+    viewB.getState().updateEntryMessage("summary", "4 more");
+    flush();
+
+    viewA.getState().markIdsRead(["other"]);
+    flush();
+
+    const row = entryById(backing, "summary");
+    expect(row?.message).toBe("4 more");
+    expect(row?.seenAsToast).toBe(false);
+  });
+
   it("does not bring back an entry a sibling dismissed when this view archives it", async () => {
     const backing = installLocalStorage(
       seed([makeEntry({ id: "doomed" }), makeEntry({ id: "kept", timestamp: NOW - 2 * HOUR })])
@@ -282,7 +338,7 @@ describe("notificationHistoryStore cross-view write merge (#15534)", () => {
   });
 
   it("does not treat the session-only summarized flag as an edit", async () => {
-    const backing = installLocalStorage(seed([makeEntry({ id: "row" })]));
+    const backing = installLocalStorage(seed([makeEntry({ id: "row", summarized: true })]));
 
     const viewA = await openView();
     const viewB = await openView();
@@ -295,6 +351,7 @@ describe("notificationHistoryStore cross-view write merge (#15534)", () => {
     flush();
 
     expect(entryById(backing, "row")?.seenAsToast).toBe(true);
+    expect(entryById(backing, "row")?.summarized).toBe(false);
     expect(viewA.getState().entries.find((e) => e.id === "row")?.summarized).toBe(true);
   });
 
@@ -336,6 +393,21 @@ describe("notificationHistoryStore cross-view write merge (#15534)", () => {
     flush();
 
     expect(readBlob(backing).state.snoozedThreads).toEqual({ "thread-1": NOW + DAY });
+  });
+
+  it("keeps an old unread row marked read on disk so its Undo persists", async () => {
+    const old = makeEntry({ id: "old", timestamp: NOW - 8 * DAY });
+    const backing = installLocalStorage(seed([old]));
+
+    const view = await openView();
+
+    view.getState().markIdsRead(["old"]);
+    flush();
+    expect(entryById(backing, "old")?.seenAsToast).toBe(true);
+
+    view.getState().markUnseenAsToast("old", { silent: true });
+    flush();
+    expect(entryById(backing, "old")?.seenAsToast).toBe(false);
   });
 
   it("holds the 200-entry cap, keeping both views' new entries", async () => {

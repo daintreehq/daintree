@@ -289,8 +289,7 @@ interface NormalizedNotificationHistory {
  * is post-hydration memory, and without it the session-local `summarized`
  * reset or an expired snooze would read as a writer edit. Entries are not
  * age-pruned here: an entry that expired after hydration would vanish from the
- * baseline too and a dismissal of it would look like a sibling's addition. The
- * merged result is pruned instead.
+ * baseline too and a dismissal of it would look like a sibling's addition.
  */
 function normalizeNotificationHistory(
   value: StorageValue<unknown> | null,
@@ -349,8 +348,10 @@ function mergeEntryFields(
  *   - on disk and never known to the writer → a sibling's addition, kept.
  *
  * Snoozes merge per thread through `mergeRecordByWriterDelta`. The result is
- * sorted newest first and pruned, so retention and the 200-entry cap hold over
- * both views' additions. `clearAll` clears what this view knew; entries a
+ * sorted newest first, and pruned only when both views' additions overflow the
+ * 200-entry cap: age retention otherwise stays with hydration and the store's
+ * own prunes, so an old unread row marked read (and expired) in memory is still
+ * on disk for its Undo. `clearAll` clears what this view knew; entries a
  * sibling added since are kept.
  */
 function mergeNotificationHistoryPersistedWrite({
@@ -381,7 +382,7 @@ function mergeNotificationHistoryPersistedWrite({
   merged.sort((a, b) => b.timestamp - a.timestamp);
 
   const state: PersistedNotificationHistoryShape = {
-    entries: pruneNotificationEntries(merged, now),
+    entries: merged.length > MAX_ENTRIES ? pruneNotificationEntries(merged, now) : merged,
     snoozedThreads: mergeRecordByWriterDelta(
       base.snoozedThreads,
       inc.snoozedThreads,
