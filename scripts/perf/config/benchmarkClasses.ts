@@ -281,11 +281,11 @@ const FAMILIES: readonly Family[] = [
   },
   {
     label: "diff tokenization",
-    ids: ["PERF-160", "PERF-161", "PERF-162", "PERF-163"],
+    ids: ["PERF-160", "PERF-161", "PERF-162", "PERF-163", "PERF-165"],
     kind: "mechanism",
     fidelity: PURE,
     claim:
-      "The real tokenizer and its oversized fallback. PERF-163 additionally measures how long the main thread was unavailable while it ran, against an idle calibration window — main-thread availability, not painted latency.",
+      "The real tokenizer and its oversized fallback. PERF-163 additionally measures how long the main thread was unavailable while it ran, against an idle calibration window — main-thread availability, not painted latency. PERF-165 prices the clone of the worker's response with node:v8 serialize/deserialize, the structured clone wire format, not a real postMessage or a Chromium Web Worker.",
   },
   {
     label: "diff tokenize admission",

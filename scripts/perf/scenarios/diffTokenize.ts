@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { deserialize, serialize } from "node:v8";
 import { parseDiff, type HunkData, type HunkTokens } from "react-diff-view";
 import { armBystanderProbe, bystanderMetrics } from "../lib/bystander";
 import type { PerfScenario } from "../types";
@@ -239,7 +240,9 @@ function yieldToLoop(): Promise<void> {
  *
  * - `tokenLineMisses` — `HunkTokens.old` and `.new` are indexed by ABSOLUTE file
  *   line, not by change position, so each side's length must equal the highest
- *   line number that side touches.
+ *   line number that side touches. Length is the logical extent, not an entry
+ *   count: lines no hunk carries are holes, and the content term below is what
+ *   requires every line a hunk does carry to be there.
  * - `tokenContentMisses` — the text of every changed line, reconstructed from
  *   its token nodes, must equal that line's source content. This is the term
  *   that closes the obvious hole in the other two: an implementation returning
@@ -864,6 +867,51 @@ const ADMISSION_BURST: ReadonlyArray<{
 /** Every grammar the burst touches, warmed before the bracket opens. */
 const BURST_LANGUAGES = [...new Set(ADMISSION_BURST.map((file) => file.language))];
 
+/**
+ * Where PERF-165 places its one small hunk, in an otherwise identical file.
+ *
+ * The hunk's thirteen lines are byte-identical at every depth, so anything that
+ * grows across these readings is paid for WHERE the change sits rather than for
+ * what changed. Line 100 is the control: a diff near the top of a file.
+ */
+const DEEP_HUNK_LINES = [100, 20_000, 100_000] as const;
+
+/**
+ * One 13-line TypeScript hunk starting at `atLine`: three context lines, then
+ * five deletes paired with five inserts.
+ *
+ * Same vocabulary as `generateUnifiedDiff`, so the planted identifiers, reserved
+ * words and quoted literals the oracle grades are the ones it already knows.
+ * Five pairs sits under `MIN_LINE_ALIGNED_BLOCK_LINES`, so the block-mode
+ * markEdits pass runs rather than the line-aligned one PERF-160 exercises.
+ */
+export function deepHunkFor(atLine: number): HunkData[] {
+  const CONTEXT = 3;
+  const PAIRS = 5;
+  const lines = [
+    "diff --git a/src/deep.ts b/src/deep.ts",
+    "index 1111111..2222222 100644",
+    "--- a/src/deep.ts",
+    "+++ b/src/deep.ts",
+    `@@ -${atLine},${CONTEXT + PAIRS} +${atLine},${CONTEXT + PAIRS} @@`,
+  ];
+  for (let c = 0; c < CONTEXT; c += 1) lines.push(`   const ctx_${c} = resolve(${c});`);
+  for (let b = 0; b < PAIRS; b += 1) {
+    lines.push(`-  const value_${b} = legacyCompute(${165 + b}, { retries: 3 });`);
+  }
+  for (let b = 0; b < PAIRS; b += 1) {
+    lines.push(`+  const value_${b} = compute(${165 + b}, { retries: 3, backoff: "expo" });`);
+  }
+  lines.push("");
+  return parseDiff(lines.join("\n"))[0]?.hunks ?? [];
+}
+
+/** Per-line entries a token tree actually holds, both sides. Holes are not entries. */
+function treeEntryCount(tokens: HunkTokens | null): number {
+  if (!tokens) return 0;
+  return Object.keys(tokens.old).length + Object.keys(tokens.new).length;
+}
+
 export const diffTokenizeScenarios: PerfScenario[] = [
   {
     id: "PERF-160",
@@ -1358,6 +1406,121 @@ export const diffTokenizeScenarios: PerfScenario[] = [
         // process.exit would mask that rather than prove it was cleaned up.
         await harness.close();
       }
+    },
+  },
+  {
+    id: "PERF-165",
+    name: "Diff Tokenize - Small Hunk Deep in a File",
+    description:
+      "The same 13-line TypeScript hunk (3 context, 5 deletes, 5 inserts) tokenized at line 100, " +
+      "20,000 and 100,000 of an otherwise identical file. Per depth it reports the runDiffTokenize " +
+      "pass the worker executes (tokenizeMsAtLine*), the bytes of the response the worker posts " +
+      "back (resultBytesAtLine*) and the time to deserialize it (deserializeMsAtLine*), which is " +
+      "the part of a worker round trip that runs on the renderer main thread. The clone is priced " +
+      "with node:v8 serialize/deserialize, a structured-clone-compatible proxy: no Chromium worker " +
+      "transport, renderer scheduling or painted latency is measured. treeLinesAtLine* counts the " +
+      "per-line entries the tree holds. durationMs is tokenize plus deserialize summed over the " +
+      "three depths, excluding serialization and grading. Grading runs on the DESERIALIZED tree, " +
+      "on PERF-160's terms, so a representation that lost lines or tokens in the clone fails " +
+      "rather than posting a smaller number.",
+    tier: "fast",
+    modes: ["smoke", "ci", "nightly"],
+    iterations: { smoke: 8, ci: 14, nightly: 20 },
+    warmups: 1,
+    correctness: [
+      "tokenizeMisses",
+      "tokenLineMisses",
+      "tokenContentMisses",
+      "tokenHighlightMisses",
+      "tokenCategoryMisses",
+      "tokenLexicalMisses",
+      "tokenStringMisses",
+    ],
+    // Depth IS the workload. A fixture that quietly placed every hunk near the
+    // top of the file would report flat readings with every predicate at zero.
+    workloadFloors: { deepestHunkLine: 100_000, depthCount: 3, changedLines: 30 },
+    async run() {
+      const prepared = DEEP_HUNK_LINES.map((atLine) => ({ atLine, hunks: deepHunkFor(atLine) }));
+      // The floors only see the deepest depth and the totals, so a middle depth
+      // swapped for a duplicate, or a hunk of another shape, would slip past
+      // them. These are the apparatus, so they throw.
+      for (const { atLine, hunks } of prepared) {
+        const hunk = hunks[0];
+        const kinds = { normal: 0, delete: 0, insert: 0 };
+        for (const change of hunk?.changes ?? []) kinds[change.type] += 1;
+        if (
+          hunks.length !== 1 ||
+          hunk!.oldStart !== atLine ||
+          hunk!.newStart !== atLine ||
+          kinds.normal !== 3 ||
+          kinds.delete !== 5 ||
+          kinds.insert !== 5
+        ) {
+          throw new Error(`PERF-165: fixture at line ${atLine} is not one 3/5/5 hunk starting there`);
+        }
+      }
+
+      const metrics: Record<string, number> = {};
+      let durationMs = 0;
+      let depthCount = 0;
+      let tokenizeMisses = 0;
+      let changedLines = 0;
+      let deepestHunkLine = 0;
+      let tokenGrade = emptyTokenGrade();
+
+      for (const { atLine, hunks } of prepared) {
+        depthCount += 1;
+        const tokenizeStart = performance.now();
+        const result = await runDiffTokenize({
+          hunks,
+          language: "typescript",
+          highlight: true,
+          extraRanges: null,
+        });
+        const tokenizeMs = performance.now() - tokenizeStart;
+
+        // Exactly what diffTokenize.worker.ts posts on success. Serializing is
+        // the worker's cost and stays outside the main-thread figure.
+        const payload = serialize({ id: 1, ok: true, ...result });
+        const deserializeStart = performance.now();
+        const received = deserialize(payload) as DiffTokenizeResult;
+        const deserializeMs = performance.now() - deserializeStart;
+        durationMs += tokenizeMs + deserializeMs;
+
+        if (!received.tokens) tokenizeMisses += 1;
+        // Graded after both clocks stop: the walk is comparable to the work.
+        tokenGrade = addTokenGrade(
+          tokenGrade,
+          gradeTokens(received.tokens, hunks, "required", TYPESCRIPT_RESERVED)
+        );
+        for (const hunk of hunks) {
+          for (const change of hunk.changes) if (change.type !== "normal") changedLines += 1;
+          deepestHunkLine = Math.max(deepestHunkLine, hunk.oldStart, hunk.newStart);
+        }
+
+        metrics[`tokenizeMsAtLine${atLine}`] = tokenizeMs;
+        metrics[`resultBytesAtLine${atLine}`] = payload.byteLength;
+        metrics[`deserializeMsAtLine${atLine}`] = deserializeMs;
+        metrics[`treeLinesAtLine${atLine}`] = treeEntryCount(received.tokens);
+      }
+
+      const deepest = DEEP_HUNK_LINES[DEEP_HUNK_LINES.length - 1];
+      return {
+        durationMs,
+        metrics: {
+          ...metrics,
+          depthCount,
+          deepestHunkLine,
+          changedLines,
+          tokenizeMisses,
+          ...tokenGrade,
+        },
+        notes:
+          tokenizeMisses > 0
+            ? `${tokenizeMisses}/${prepared.length} depths returned null tokens`
+            : `line ${deepest}: ${(metrics[`resultBytesAtLine${deepest}`]! / 1024).toFixed(0)} KiB, ` +
+              `${metrics[`deserializeMsAtLine${deepest}`]!.toFixed(2)}ms deserialize`,
+      };
     },
   },
 ];

@@ -13,11 +13,14 @@ import type {
  * library's `normalizeToLines` rebuilds its whole accumulator with spreads per
  * token path (O(paths²)) and its `backToTree` runs a lodash deep-equal per
  * attached node, which together dominate tokenize cost on large diffs. This
- * module reproduces the exact same output shape with single-pass algorithms
- * and structural sharing (safe: every downstream phase, including the
- * library's own `pickRanges`/`markEdits` enhancers, copies nodes instead of
- * mutating them). Edit detection stays on the library's enhancers so ranking
- * semantics can't drift — only the tree plumbing is reimplemented.
+ * module reproduces the same tokens for every line the hunks carry with
+ * single-pass algorithms and structural sharing (safe: every downstream phase,
+ * including the library's own `pickRanges`/`markEdits` enhancers, copies nodes
+ * instead of mutating them). Unlike the library it lexes only those lines and
+ * leaves every other absolute line a hole, so cost follows the size of the
+ * diff rather than how deep in the file it sits. Edit detection stays on the
+ * library's enhancers so ranking semantics can't drift — only the tree
+ * plumbing is reimplemented.
  */
 
 export interface RefractorLike {
@@ -31,25 +34,92 @@ export interface FastTokenizeOptions {
   enhancers?: TokenizeEnhancer[];
 }
 
-function toText(changes: ChangeData[], computeLineNumber: (change: ChangeData) => number): string {
-  if (changes.length === 0) return "";
+/**
+ * Blank lines lexed in place of a gap between two lines a side carries.
+ *
+ * The library lexes one empty line per absolute line above and between the
+ * hunks, so a one-line change at line 100,000 cost 100,000 lexed, split,
+ * enhanced and cloned lines. A gap only ever reaches the lexer as a run of
+ * newlines, and no shipped grammar counts newlines: the boundaries they see
+ * are "line break" and "blank line". Gaps up to this bound lex byte-for-byte
+ * as before; a longer run is shortened to it, which keeps both boundaries.
+ */
+export const MAX_GAP_FILLER_LINES = 8;
+
+const MAX_ARRAY_LENGTH = 2 ** 32 - 1;
+
+interface SideText {
+  text: string;
+  /** For each line of `text`, the absolute line index it lexes, or -1 for gap filler. */
+  sources: number[];
+  /** The tree's length: one slot per absolute line up to the LAST change's line. */
+  length: number;
+}
+
+const EMPTY_SIDE: SideText = { text: "", sources: [], length: 1 };
+
+function toSideText(
+  changes: ChangeData[],
+  computeLineNumber: (change: ChangeData) => number
+): SideText {
+  if (changes.length === 0) return EMPTY_SIDE;
   // Mirrors the library: lines run from 1 to the LAST change's line number,
-  // with gaps (context outside hunks) filled by empty strings so absolute
-  // line numbers in edit ranges stay aligned.
-  const maxLineNumber = computeLineNumber(changes[changes.length - 1]!);
-  const byLine = new Array<string>(maxLineNumber).fill("");
+  // so absolute line numbers in edit ranges stay aligned. The dense array this
+  // replaced was `new Array(lastLine)`: a non-number made a one-slot array no
+  // line fell inside, and a number that is not a valid length threw (which
+  // runDiffTokenize turns into a null pass). Both outcomes are kept.
+  const lastLine: unknown = computeLineNumber(changes[changes.length - 1]!);
+  if (typeof lastLine !== "number") return EMPTY_SIDE;
+  if (!Number.isInteger(lastLine) || lastLine < 0 || lastLine > MAX_ARRAY_LENGTH) {
+    throw new RangeError(`Invalid last line number: ${lastLine}`);
+  }
+  const byLine = new Map<number, string>();
   for (const change of changes) {
     const lineNumber = computeLineNumber(change);
     // Out-of-range line numbers (malformed/unordered hunks) are dropped, as
-    // the library's fixed-length 1..maxLineNumber mapping does.
-    if (lineNumber >= 1 && lineNumber <= maxLineNumber) {
-      byLine[lineNumber - 1] = change.content;
+    // the library's fixed-length 1..lastLine mapping does; a later change on
+    // the same line wins, as it did there.
+    if (Number.isInteger(lineNumber) && lineNumber >= 1 && lineNumber <= lastLine) {
+      byLine.set(lineNumber, change.content);
     }
   }
-  return byLine.join("\n");
+
+  const present = [...byLine.keys()].sort((a, b) => a - b);
+  const lines: string[] = [];
+  const sources: number[] = [];
+  let previous = 0;
+  for (const lineNumber of present) {
+    const filler = Math.min(lineNumber - previous - 1, MAX_GAP_FILLER_LINES);
+    for (let i = 0; i < filler; i += 1) {
+      lines.push("");
+      sources.push(-1);
+    }
+    lines.push(byLine.get(lineNumber)!);
+    sources.push(lineNumber - 1);
+    previous = lineNumber;
+  }
+  return { text: lines.join("\n"), sources, length: Math.max(lastLine, 1) };
 }
 
-function toTextPair(hunks: HunkData[]): [string, string] {
+/**
+ * Place each lexed line at its absolute index. Gap filler and every line no
+ * hunk carries stay holes: react-diff-view only reads `tokens[side][line - 1]`
+ * for rendered changes, every enhancer walks lines with `.map` (which skips
+ * holes), and structured clone writes a holey array in its sparse form, so
+ * neither the worker nor the main thread pays for lines nobody renders.
+ */
+function scatter<T>(lexed: T[], side: SideText): T[] {
+  const out = new Array<T>(side.length);
+  const { sources } = side;
+  const count = Math.min(sources.length, lexed.length);
+  for (let i = 0; i < count; i += 1) {
+    const at = sources[i]!;
+    if (at >= 0) out[at] = lexed[i]!;
+  }
+  return out;
+}
+
+function toSidePair(hunks: HunkData[]): [SideText, SideText] {
   const oldChanges: ChangeData[] = [];
   const newChanges: ChangeData[] = [];
   for (const hunk of hunks) {
@@ -64,7 +134,10 @@ function toTextPair(hunks: HunkData[]): [string, string] {
       }
     }
   }
-  return [toText(oldChanges, computeOldLineNumber), toText(newChanges, computeNewLineNumber)];
+  return [
+    toSideText(oldChanges, computeOldLineNumber),
+    toSideText(newChanges, computeNewLineNumber),
+  ];
 }
 
 function stripChildren(node: TokenNode): TokenNode {
@@ -236,7 +309,7 @@ function splitTreeToLines(children: TokenNode[]): TokenNode[][] {
 }
 
 export function tokenizeFast(hunks: HunkData[], options: FastTokenizeOptions): HunkTokens {
-  const [oldText, newText] = toTextPair(hunks);
+  const [oldSide, newSide] = toSidePair(hunks);
   const toChildren = options.highlight
     ? (text: string) => options.refractor.highlight(text, options.language)
     : (text: string): TokenNode[] => [{ type: "text", value: text }];
@@ -244,19 +317,30 @@ export function tokenizeFast(hunks: HunkData[], options: FastTokenizeOptions): H
   const enhancers = options.enhancers ?? [];
   if (enhancers.length === 0) {
     return {
-      old: splitTreeToLines(toChildren(oldText)),
-      new: splitTreeToLines(toChildren(newText)),
+      old: scatter(splitTreeToLines(toChildren(oldSide.text)), oldSide),
+      new: scatter(splitTreeToLines(toChildren(newSide.text)), newSide),
     };
   }
 
   const pair: [TokenPath[][], TokenPath[][]] = [
-    nodesToLines(toChildren(oldText)),
-    nodesToLines(toChildren(newText)),
+    scatter(nodesToLines(toChildren(oldSide.text)), oldSide),
+    scatter(nodesToLines(toChildren(newSide.text)), newSide),
   ];
   const [oldEnhanced, newEnhanced] = enhancers.reduce((input, enhance) => enhance(input), pair);
 
   return {
-    old: oldEnhanced.map(backToTreeChildren),
-    new: newEnhanced.map(backToTreeChildren),
+    old: rebuildTrees(oldEnhanced, oldSide),
+    new: rebuildTrees(newEnhanced, newSide),
   };
+}
+
+/** `backToTreeChildren` over the lines the side carries, without walking its holes. */
+function rebuildTrees(enhanced: TokenPath[][], side: SideText): TokenNode[][] {
+  const out = new Array<TokenNode[]>(side.length);
+  for (const at of side.sources) {
+    if (at < 0) continue;
+    const line = enhanced[at];
+    if (line) out[at] = backToTreeChildren(line);
+  }
+  return out;
 }
