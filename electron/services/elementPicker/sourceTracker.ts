@@ -23,6 +23,9 @@ import type { FileRevision, SourceFileRef } from "../../../shared/elementPicker/
 export const MAX_TRACKED_FILES = 256;
 export const MAX_WATCHED_DIRECTORIES = 64;
 
+/** Paths one file is remembered by: a link inside the app reaches the same file by another. */
+const MAX_REFS_PER_FILE = 8;
+
 export interface SourceChange {
   file: SourceFileRef;
   /** Null once the file is no longer readable source: deleted, or past the size cap. */
@@ -38,7 +41,8 @@ export interface SourceTrackerOptions {
 }
 
 interface FileRecord {
-  ref: SourceFileRef;
+  /** Every workspace-relative path a resolve reached this file by, first read first. */
+  refs: SourceFileRef[];
   directory: string;
   revision: FileRevision | null;
   /** When a resolve last read it; higher is more recent. */
@@ -64,7 +68,11 @@ function samePath(a: string, b: string): boolean {
 export class SourceTracker {
   private readonly files = new Map<string, TrackedFile>();
   private readonly directories = new Map<string, WatchedDirectory>();
-  /** Files read but not tracked now, oldest first: what a later hold can bring back. */
+  /**
+   * Files read but not tracked now, oldest first: what a later hold can bring
+   * back. Bounded for files the view doesn't hold; a held one stays while it
+   * is held, so churn can't forget the file the view most wants back.
+   */
   private readonly dropped = new Map<string, FileRecord>();
   /** Workspace-relative path to its place in the view's list: lower ranks first. */
   private held = new Map<string, number>();
@@ -81,10 +89,14 @@ export class SourceTracker {
     if (existing) {
       existing.revision = revision;
       existing.readAt = readAt;
+      existing.refs = withRef(existing.refs, ref);
       return;
     }
+    const remembered = this.dropped.get(absolutePath);
     this.dropped.delete(absolutePath);
-    this.admit([[absolutePath, { ref, directory: path.dirname(absolutePath), revision, readAt }]]);
+    const directory = path.dirname(absolutePath);
+    const refs = withRef(remembered?.refs ?? [], ref);
+    this.admit([[absolutePath, { refs, directory, revision, readAt }]]);
   }
 
   /**
@@ -101,11 +113,11 @@ export class SourceTracker {
     // A new order alone never needs room: what is tracked already fits.
     const returning: Array<[string, FileRecord]> = [];
     for (const [absolutePath, record] of this.dropped) {
-      if (held.has(record.ref.path)) returning.push([absolutePath, record]);
+      if (this.rank(record) !== undefined) returning.push([absolutePath, record]);
     }
-    if (returning.length === 0) return;
     for (const [absolutePath] of returning) this.dropped.delete(absolutePath);
-    this.admit(returning);
+    if (returning.length > 0) this.admit(returning);
+    else this.prune();
   }
 
   /** What is tracked and watched now. */
@@ -127,38 +139,35 @@ export class SourceTracker {
    * best-ranked files that fit both caps. Files are taken in rank order: one
    * whose directory is not yet kept needs a directory slot as well as a file
    * slot, and when there is none the next file down may still fit in a
-   * directory that is. Everything else is remembered, untracked, and a
-   * directory left with no tracked file is closed before any new one opens.
+   * directory that is. What loses is remembered, untracked, and a directory
+   * left with nothing tracked is closed, all before any arrival is tracked or
+   * any new watch opens, so neither cap is passed even in passing.
    */
   private admit(arrivals: ReadonlyArray<readonly [string, FileRecord]>): void {
     const opening = new Set<string>();
     for (const [, record] of arrivals) {
       if (!this.directories.has(record.directory)) opening.add(record.directory);
     }
-    const admitted: Array<[string, TrackedFile]> = [];
+    let admitted: ReadonlyArray<readonly [string, FileRecord]> = arrivals;
     if (
-      this.files.size + arrivals.length <= MAX_TRACKED_FILES &&
-      this.directories.size + opening.size <= MAX_WATCHED_DIRECTORIES
+      this.files.size + arrivals.length > MAX_TRACKED_FILES ||
+      this.directories.size + opening.size > MAX_WATCHED_DIRECTORIES
     ) {
-      for (const [absolutePath, record] of arrivals) {
-        admitted.push([absolutePath, this.track(absolutePath, record)]);
-      }
-    } else {
       const arriving = new Set(arrivals.map(([absolutePath]) => absolutePath));
       const ranked: Array<readonly [string, FileRecord]> = [...this.files, ...arrivals];
       ranked.sort(([, a], [, b]) => this.compare(a, b));
+      const winners: Array<readonly [string, FileRecord]> = [];
       const kept = new Set<string>();
       let count = 0;
-      for (const [absolutePath, record] of ranked) {
-        const fits =
+      for (const entry of ranked) {
+        const [absolutePath, record] = entry;
+        if (
           count < MAX_TRACKED_FILES &&
-          (kept.has(record.directory) || kept.size < MAX_WATCHED_DIRECTORIES);
-        if (fits) {
+          (kept.has(record.directory) || kept.size < MAX_WATCHED_DIRECTORIES)
+        ) {
           count += 1;
           kept.add(record.directory);
-          if (arriving.has(absolutePath)) {
-            admitted.push([absolutePath, this.track(absolutePath, record)]);
-          }
+          if (arriving.has(absolutePath)) winners.push(entry);
           continue;
         }
         if (!arriving.has(absolutePath)) this.files.delete(absolutePath);
@@ -169,8 +178,16 @@ export class SourceTracker {
         this.directories.delete(directory);
         close(watched);
       }
+      admitted = winners;
     }
-    for (const [absolutePath, file] of admitted) {
+    const tracked = admitted.map(([absolutePath, record]) => {
+      // A fresh record every time, so a read still out for an earlier one lands on nothing.
+      const file: TrackedFile = { ...record, checking: false, recheckQueued: false };
+      this.files.set(absolutePath, file);
+      return [absolutePath, file] as const;
+    });
+    this.prune();
+    for (const [absolutePath, file] of tracked) {
       if (!this.directories.has(file.directory)) this.watch(file.directory);
       // A change that landed between the read and the watch produced no event;
       // reconcile once now that both are in place.
@@ -178,35 +195,40 @@ export class SourceTracker {
     }
   }
 
-  /** A fresh record every time, so a read still out for an earlier one lands on nothing. */
-  private track(absolutePath: string, record: FileRecord): TrackedFile {
-    const file: TrackedFile = {
-      ref: record.ref,
-      directory: record.directory,
-      revision: record.revision,
-      readAt: record.readAt,
-      checking: false,
-      recheckQueued: false,
-    };
-    this.files.set(absolutePath, file);
-    return file;
-  }
-
   private remember(absolutePath: string, record: FileRecord): void {
     this.dropped.set(absolutePath, {
-      ref: record.ref,
+      refs: record.refs,
       directory: record.directory,
       revision: record.revision,
       readAt: record.readAt,
     });
-    if (this.dropped.size <= MAX_TRACKED_FILES) return;
-    const oldest = this.dropped.keys().next().value;
-    if (oldest !== undefined) this.dropped.delete(oldest);
+  }
+
+  /** Forgets the oldest remembered files the view doesn't hold, past the bound. */
+  private prune(): void {
+    let excess = -MAX_TRACKED_FILES;
+    for (const record of this.dropped.values()) if (this.rank(record) === undefined) excess += 1;
+    for (const [absolutePath, record] of this.dropped) {
+      if (excess <= 0) return;
+      if (this.rank(record) !== undefined) continue;
+      this.dropped.delete(absolutePath);
+      excess -= 1;
+    }
+  }
+
+  /** Its best place in the view's list by any path it was read through; undefined when not held. */
+  private rank(record: FileRecord): number | undefined {
+    let best: number | undefined;
+    for (const ref of record.refs) {
+      const place = this.held.get(ref.path);
+      if (place !== undefined && (best === undefined || place < best)) best = place;
+    }
+    return best;
   }
 
   private compare(a: FileRecord, b: FileRecord): number {
-    const left = this.held.get(a.ref.path);
-    const right = this.held.get(b.ref.path);
+    const left = this.rank(a);
+    const right = this.rank(b);
     if (left !== undefined || right !== undefined) {
       if (left === undefined) return 1;
       if (right === undefined) return -1;
@@ -257,16 +279,25 @@ export class SourceTracker {
         if (this.disposed || this.files.get(absolutePath) !== file) return;
         if (revision === file.revision) continue;
         file.revision = revision;
-        try {
-          this.options.push({ file: file.ref, revision });
-        } catch (error) {
-          this.options.warn("source change listener threw", { error: String(error) });
+        // Every path it was read by: whoever holds a selection names the file by its own.
+        for (const ref of file.refs) {
+          try {
+            this.options.push({ file: ref, revision });
+          } catch (error) {
+            this.options.warn("source change listener threw", { error: String(error) });
+          }
         }
       } while (file.recheckQueued && !this.disposed && this.files.get(absolutePath) === file);
     } finally {
       file.checking = false;
     }
   }
+}
+
+/** The refs with `ref` added, newest kept when there are too many. */
+function withRef(refs: SourceFileRef[], ref: SourceFileRef): SourceFileRef[] {
+  if (refs.some((entry) => entry.path === ref.path)) return refs;
+  return [...refs, ref].slice(-MAX_REFS_PER_FILE);
 }
 
 /** Closes a watch at most once, however many times it is given up. */

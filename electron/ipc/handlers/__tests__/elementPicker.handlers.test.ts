@@ -220,6 +220,12 @@ describe("elementPicker handlers", () => {
     for (const [schema, payload] of refused) {
       expect(schema.safeParse(payload).success, JSON.stringify(payload).slice(0, 80)).toBe(false);
     }
+    for (const paths of [
+      [],
+      Array.from({ length: ELEMENT_PICKER_MAX_HELD_SOURCES }, (_, i) => `f${i}`),
+    ]) {
+      expect(all.holdSources.schema.safeParse({ workspaceId: "ws-1", paths }).success).toBe(true);
+    }
   });
 
   it("binds for the sender's project, and delivers the binding's traffic to the sender alone", async () => {

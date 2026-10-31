@@ -603,8 +603,9 @@ export class InspectorController implements DevPreviewToolSession {
    * whatever else a resolve read: the selection's own element file, the rest
    * of its files, then those of what the composer's draft and waiting requests
    * are pinned to. Sent only when the list changes. A hold that fails is not
-   * retried until it changes again: the revisions checked at send time are
-   * the authority, the tracker only a way to notice an edit sooner.
+   * retried until it changes again, and still counts as what was last sent, so
+   * a list that later empties is sent as empty: the revisions checked at send
+   * time are the authority, the tracker only a way to notice an edit sooner.
    */
   private holdSources(): void {
     if (this.disposed) return;
@@ -625,11 +626,8 @@ export class InspectorController implements DevPreviewToolSession {
     // A workspace opens holding nothing.
     const before = this.sourcesHeld?.workspaceId === workspaceId ? this.sourcesHeld.key : "";
     if (key === before) return;
-    const sent = { workspaceId, key };
-    this.sourcesHeld = sent;
-    void this.deps.picker.holdSources({ workspaceId, paths }).catch(() => {
-      if (this.sourcesHeld === sent) this.sourcesHeld = null;
-    });
+    this.sourcesHeld = { workspaceId, key };
+    void this.deps.picker.holdSources({ workspaceId, paths }).catch(() => undefined);
   }
 
   /* ------------------------------------------------------------------------ */

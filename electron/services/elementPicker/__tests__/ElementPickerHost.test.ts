@@ -28,7 +28,7 @@ import {
 import type { ResolverLoaders } from "../worker/runtime.js";
 import { RESOLVER_LOADERS } from "../worker/resolverRegistry.js";
 import type { ProjectAdapter, ProjectAdapterRegistration } from "../projectAdapters/types.js";
-import type { SourceChange } from "../sourceTracker.js";
+import { SourceTracker, type SourceChange } from "../sourceTracker.js";
 import { revisionOf, type SourceMapProvider } from "../sourceAccess.js";
 import { createSourceMapSymbolicator, symbolicatedResult } from "../worker/symbolication.js";
 import { COORDINATE_CONVENTIONS } from "../../../../shared/elementPicker/coordinates.js";
@@ -1310,15 +1310,18 @@ describe("ElementPickerHost project context", () => {
 });
 
 describe("ElementPickerHost held sources", () => {
-  it("takes the view's list without reading anything or starting the host", async () => {
+  it("hands the view's list to the workspace's tracker without starting the host", async () => {
+    const hold = vi.spyOn(SourceTracker.prototype, "hold");
     const { host, children } = harness();
     const id = await workspace(host);
     await expect(
       host.holdSources(id, ["app/src/App.svelte", "app/src/Missing.svelte"])
     ).resolves.toBeUndefined();
     await expect(host.holdSources(id, [])).resolves.toBeUndefined();
+    expect(hold.mock.calls).toEqual([[["app/src/App.svelte", "app/src/Missing.svelte"]], [[]]]);
     expect(children).toHaveLength(0);
     expect(host.running).toBe(false);
+    hold.mockRestore();
   });
 
   it("refuses a list past its bound or holding anything but paths", async () => {

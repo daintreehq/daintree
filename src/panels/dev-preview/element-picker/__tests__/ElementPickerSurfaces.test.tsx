@@ -16,6 +16,7 @@ import { ElementPickerDrawer, ElementPickerToolbar } from "../ElementPickerSurfa
 import { HMR_SETTLE_MS, type InspectorController } from "../inspectorController";
 import { ELEMENT_PICKER_TOOL_ID } from "../toolId";
 import { citedRevisions, type PickedSelection } from "../selection";
+import type { DeliveryState } from "@/services/agentRequests";
 import {
   __resetDevPreviewToolSessionsForTests,
   peekDevPreviewToolSession,
@@ -1764,11 +1765,11 @@ describe("keeping the selection's files watched", () => {
     return { ...(JSON.parse(moved) as PickedSelection), selectionId: `${name}-selection` };
   }
 
-  const delivery = (id: string, subject: PickedSelection, status: "queued" | "sent") => ({
+  const delivery = (id: string, subject: PickedSelection, state: DeliveryState) => ({
     id,
     instruction: "Make it bigger",
     subject: { selection: subject, scope: 0 },
-    state: { status },
+    state,
     title: "claude",
     terminalId: "term-1",
   });
@@ -1807,18 +1808,25 @@ describe("keeping the selection's files watched", () => {
       workspaceId: "ws-gone",
       appPath: "apps/other",
     };
+    // An older workspace's pin on the same app still counts: it is the files open now.
+    const reopened = { ...elsewhere(selection, "reopened"), workspaceId: "ws-gone" };
+    const deliveries = [
+      delivery("r0", settled, { status: "sent" }),
+      delivery("r1", settled, { status: "unconfirmed" }),
+      delivery("r2", settled, { status: "failed", message: "no", partial: true }),
+      delivery("r3", older, { status: "queued" }),
+      delivery("r4", otherApp, { status: "starting" }),
+      delivery("r5", reopened, { status: "needs-you" }),
+      delivery("r6", newer, { status: "sending" }),
+    ];
     act(() =>
       updateComposerMemory(key(), {
         draft: "Make it bigger",
         pinned: { selection: drafted, scope: 0 },
-        deliveries: [
-          delivery("r0", settled, "sent"),
-          delivery("r1", older, "queued"),
-          delivery("r2", otherApp, "queued"),
-          delivery("r3", newer, "queued"),
-        ],
+        deliveries,
       })
     );
+    expect(host.calls("holdSources")).toHaveLength(2);
     expect(host.calls("holdSources").at(-1)).toEqual({
       workspaceId: WORKSPACE,
       paths: [
@@ -1828,10 +1836,35 @@ describe("keeping the selection's files watched", () => {
         "src/drafted/Card.svelte",
         "src/newer/+page.svelte",
         "src/newer/Card.svelte",
+        "src/reopened/+page.svelte",
+        "src/reopened/Card.svelte",
         "src/older/+page.svelte",
         "src/older/Card.svelte",
       ],
     });
+
+    // A request that has gone in lets its files go.
+    act(() =>
+      updateComposerMemory(key(), {
+        deliveries: deliveries.map((entry) =>
+          entry.id === "r6" ? { ...entry, state: { status: "sent" } } : entry
+        ),
+      })
+    );
+    expect(host.calls("holdSources")).toHaveLength(3);
+    expect(host.calls("holdSources").at(-1)?.paths).not.toContain("src/newer/+page.svelte");
+  });
+
+  it("doesn't retry a hold the host refused, but still lets go when the list empties", async () => {
+    host.picker.holdSources.mockRejectedValue(workspaceClosedError());
+    const { controller, selection } = await readySelection();
+    act(() => updateComposerMemory(key(), { draft: "Make it", pinned: { selection, scope: 0 } }));
+    act(() => updateComposerMemory(key(), { draft: "Make it bigger" }));
+    expect(host.calls("holdSources")).toHaveLength(1);
+
+    act(() => updateComposerMemory(key(), { draft: "", pinned: null }));
+    await act(async () => controller.clearSelection());
+    expect(host.calls("holdSources").at(-1)).toEqual({ workspaceId: WORKSPACE, paths: [] });
   });
 
   it("holds nothing for another preview's or worktree's composer", async () => {
@@ -1846,7 +1879,7 @@ describe("keeping the selection's files watched", () => {
 
   it("stops holding when the picker is switched off", async () => {
     const { selection } = await readySelection();
-    switchOff();
+    await switchOff();
     act(() =>
       updateComposerMemory(key(), {
         draft: "x",
