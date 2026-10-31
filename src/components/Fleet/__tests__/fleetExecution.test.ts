@@ -311,10 +311,12 @@ describe("executeFleetBroadcast", () => {
         if (id === "t11") throw new Error("EPIPE");
       });
 
-      await executeFleetBroadcast("x".repeat(120_000), ids);
+      // Words: a cut through one long run keeps none of it (#15596).
+      const paste = "x ".repeat(60_000);
+      await executeFleetBroadcast(paste, ids);
 
       expect(useTerminalInputStore.getState().sentPrompts.size).toBe(11);
-      expect(sentTo("t0")[0]).toBe(`${"x".repeat(999)}…`);
+      expect(sentTo("t0")[0]).toBe(`${paste.slice(0, 999)}…`);
       expect(sentTo("t11")).toEqual([]);
     });
   });

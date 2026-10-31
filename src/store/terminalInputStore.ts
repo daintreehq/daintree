@@ -30,14 +30,14 @@ function sentPromptKey(terminalId: string): string {
 
 // Cut when recorded, so a pasted wall of text is kept only as its opening; by
 // UTF-16 unit, never splitting a surrogate pair, whatever the language. The
-// word the cut goes through goes with it: cut short, a key or a URL's password
-// (`postgres://user:pass` without its `@host`) is too little for cleanup's
-// redaction to know. A prompt that is one word throughout keeps the cut.
+// run of printable ASCII the cut goes through goes with it, however long:
+// cut short, a key or a URL's password (`postgres://user:pass` without its
+// `@host`) is too little for cleanup's redaction to know.
 function boundSentPrompt(text: string): string {
   if (text.length <= VOICE_RECENT_PROMPT_MAX_CHARS) return text;
   let cut = text.slice(0, VOICE_RECENT_PROMPT_MAX_CHARS - 1);
   if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
-  if (/\S/.test(text.charAt(cut.length))) cut = cut.replace(/\S+$/, "") || cut;
+  if (/[!-~]/.test(text.charAt(cut.length))) cut = cut.replace(/[!-~]+$/, "");
   return `${cut}…`;
 }
 

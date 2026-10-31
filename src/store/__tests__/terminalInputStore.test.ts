@@ -267,10 +267,14 @@ describe("terminalInputStore", () => {
       // A cut at the end of a word takes nothing more.
       const whole = "b ".repeat(VOICE_RECENT_PROMPT_MAX_CHARS);
       store.recordSentPrompt("term-3", whole);
+      // Minified, the whole cut is one run, and none of it is kept.
+      const json = `{"description":"${"x".repeat(954)}","url":"postgres://user:pass@host"}`;
+      store.recordSentPrompt("term-4", json);
 
       expect(texts("term-1")).toEqual([`${key}…`]);
       expect(texts("term-2")).toEqual([`${url}…`]);
       expect(texts("term-3")).toEqual([`${whole.slice(0, VOICE_RECENT_PROMPT_MAX_CHARS - 1)}…`]);
+      expect(texts("term-4")).toEqual(["…"]);
     });
 
     it("forgets the terminal sent to longest ago past its terminal limit", () => {
