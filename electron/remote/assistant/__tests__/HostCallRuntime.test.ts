@@ -740,7 +740,9 @@ describe("HostCallRuntime (#13493, #13496)", () => {
         });
 
         it("says the same of a host already connected again, without waiting", async () => {
-          hosts = [host({ connection: CONNECTED, summary: PREVIOUS, summaryFromCurrentLink: false })];
+          hosts = [
+            host({ connection: CONNECTED, summary: PREVIOUS, summaryFromCurrentLink: false }),
+          ];
           const connect = vi.fn(async () => undefined);
           const listed = await dialing(connect, { watchHosts }).list("a");
           if (!listed.ok) throw new Error("refused");
