@@ -11,7 +11,7 @@
  * which is what these assert on.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, onTestFinished, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
@@ -319,6 +319,22 @@ describe("pluginStyleRuntime — batches that change nothing", () => {
     expect(failures).toHaveLength(1);
   });
 
+  it("installs a first batch on its retry when there was no sheet to restore", async () => {
+    const writes = watchSheetWrites();
+    writes.failNext = 1;
+    const root = mountRoot(`<span class="p-4"></span>`);
+    runtime.registerRoot(root);
+    expect(installedCss()).toBe("");
+
+    // Nothing was written after the refusal, so the retry's identical build is
+    // the only thing that can still install it.
+    root.innerHTML = `<span class="p-4"></span>`;
+    await afterObserver();
+
+    expect(builds.at(-1)?.css).toBe(builds.at(-2)?.css);
+    expect(installedCss()).toContain(".p-4");
+  });
+
   it("installs on the next batch after both the replacement and its restore failed", async () => {
     const root = mountRoot(`<span class="p-4"></span>`);
     runtime.registerRoot(root);
@@ -381,20 +397,24 @@ describe("pluginStyleRuntime — a kit view session", () => {
       const wrapper = mountRoot();
       const unregister = runtime.registerRoot(wrapper);
       const reactRoot = createRoot(wrapper);
+      let mounted = true;
+      const unmount = () => {
+        if (!mounted) return;
+        mounted = false;
+        act(() => reactRoot.unmount());
+        unregister();
+        wrapper.remove();
+      };
+      // Before anything can fail, so a failed mount still takes CodeMirror's
+      // listeners down with it instead of leaving them to later tests.
+      onTestFinished(unmount);
       await act(async () => reactRoot.render(createElement(View)));
       // The editor loads on first use; its classes arrive once it has.
       for (let tries = 0; tries < 200 && !wrapper.querySelector(".cm-content"); tries++) {
         await act(() => new Promise((resolve) => setTimeout(resolve, 25)));
       }
       expect(wrapper.querySelector(".cm-content")).not.toBeNull();
-      return {
-        wrapper,
-        unmount: () => {
-          act(() => reactRoot.unmount());
-          unregister();
-          wrapper.remove();
-        },
-      };
+      return { wrapper, unmount };
     }
 
     const writes = watchSheetWrites();
@@ -404,11 +424,13 @@ describe("pluginStyleRuntime — a kit view session", () => {
 
     const content = generation.wrapper.querySelector<HTMLElement>(".cm-content");
     const view = content ? EditorView.findFromDOM(content) : null;
+    if (!view) throw new Error("the kit CodeEditor mounted no EditorView");
     await act(async () => {
-      view?.focus();
-      view?.dispatch({ changes: { from: 2, insert: '"k": 1,\n  ' } });
+      view.focus();
+      view.dispatch({ changes: { from: 2, insert: '"k": 1,\n  ' } });
     });
     await afterObserver();
+    expect(view.state.doc.toString()).toContain('"k": 1');
 
     const show = [...generation.wrapper.querySelectorAll("button")].find(
       (button) => button.textContent === "Show warning"
