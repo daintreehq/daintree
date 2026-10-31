@@ -3,6 +3,7 @@ import path from "path";
 import Module from "module";
 
 const mockExecFileSync = vi.fn();
+const mockSpawnSync = vi.fn();
 const mockExistsSync = vi.fn();
 const mockReadFileSync = vi.fn();
 const mockWriteFileSync = vi.fn();
@@ -49,6 +50,25 @@ function mockOs() {
   return { tmpdir: () => "/tmp" };
 }
 
+const BUNDLE_CDHASH = "887831fb4cf162bf70182271b4b571a62ff7d7da";
+const REBUILT_CDHASH = "0b1d2c3e4f5061728394a5b6c7d8e9f001122334";
+
+function codesignDisplay(cdhash: string) {
+  return {
+    status: 0,
+    stdout: "",
+    stderr: [
+      "Executable=/build/mac-arm64/Daintree.app/Contents/MacOS/Daintree",
+      "Identifier=org.daintree.app",
+      "Hash type=sha256 size=32",
+      `CandidateCDHash sha256=${cdhash}`,
+      `CDHash=${cdhash}`,
+      "TeamIdentifier=D9674SJ8J4",
+      "",
+    ].join("\n"),
+  };
+}
+
 function setAppleCredentials() {
   process.env.APPLE_API_KEY = "/tmp/key.p8";
   process.env.APPLE_API_KEY_ID = "ABC123";
@@ -68,6 +88,8 @@ describe("notarize-macos", () => {
     vi.clearAllMocks();
     // Staple-failure tests install a persistent throwing implementation.
     mockExecFileSync.mockReset();
+    mockSpawnSync.mockReset();
+    mockSpawnSync.mockReturnValue(codesignDisplay(BUNDLE_CDHASH));
     consoleLogSpy.mockImplementation(() => {});
     consoleWarnSpy.mockImplementation(() => {});
     delete process.env.DAINTREE_SKIP_NOTARIZATION;
@@ -80,7 +102,8 @@ describe("notarize-macos", () => {
     Module.prototype.require = function (id: string) {
       if (id === "fs") return mockFs();
       if (id === "os") return mockOs();
-      if (id === "child_process") return { execFileSync: mockExecFileSync };
+      if (id === "child_process")
+        return { execFileSync: mockExecFileSync, spawnSync: mockSpawnSync };
       // Helper re-signing (#9775) is exercised by its own test; no-op it here so
       // these assertions stay focused on notarization codesign call counts.
       if (id === "./resign-helpers-macos.cjs") return { resignHelpers: async () => {} };
@@ -337,7 +360,12 @@ describe("notarize-macos", () => {
     it("should reattach via wait instead of resubmitting", async () => {
       mockReadFileSync.mockReturnValue(
         JSON.stringify({
-          "3": { submissionId: "sub-existing", status: "submitted", timestamp: "2026-01-01" },
+          "3": {
+            submissionId: "sub-existing",
+            status: "submitted",
+            cdhash: BUNDLE_CDHASH,
+            timestamp: "2026-01-01",
+          },
         })
       );
       mockExecFileSync
@@ -357,7 +385,12 @@ describe("notarize-macos", () => {
     it("should throw on reattach timeout with submission ID", async () => {
       mockReadFileSync.mockReturnValue(
         JSON.stringify({
-          "3": { submissionId: "sub-existing", status: "submitted", timestamp: "2026-01-01" },
+          "3": {
+            submissionId: "sub-existing",
+            status: "submitted",
+            cdhash: BUNDLE_CDHASH,
+            timestamp: "2026-01-01",
+          },
         })
       );
 
@@ -381,7 +414,12 @@ describe("notarize-macos", () => {
     it("should staple directly without submit or wait", async () => {
       mockReadFileSync.mockReturnValue(
         JSON.stringify({
-          "3": { submissionId: "sub-accepted", status: "accepted", timestamp: "2026-01-01" },
+          "3": {
+            submissionId: "sub-accepted",
+            status: "accepted",
+            cdhash: BUNDLE_CDHASH,
+            timestamp: "2026-01-01",
+          },
         })
       );
       mockExecFileSync.mockReturnValueOnce("stapled");
@@ -397,7 +435,12 @@ describe("notarize-macos", () => {
     it("should throw when staple fails in recovery", async () => {
       mockReadFileSync.mockReturnValue(
         JSON.stringify({
-          "3": { submissionId: "sub-accepted", status: "accepted", timestamp: "2026-01-01" },
+          "3": {
+            submissionId: "sub-accepted",
+            status: "accepted",
+            cdhash: BUNDLE_CDHASH,
+            timestamp: "2026-01-01",
+          },
         })
       );
 
@@ -423,6 +466,39 @@ describe("notarize-macos", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  describe("rebuilt bundle", () => {
+    beforeEach(() => {
+      mockExistsSync.mockReturnValue(true);
+      mockSpawnSync.mockReturnValue(codesignDisplay(REBUILT_CDHASH));
+    });
+
+    it("submits fresh instead of stapling an accepted submission for another bundle", async () => {
+      mockReadFileSync.mockReturnValue(
+        JSON.stringify({
+          "3": {
+            submissionId: "sub-old",
+            status: "accepted",
+            cdhash: BUNDLE_CDHASH,
+            timestamp: "2026-01-01",
+          },
+        })
+      );
+      mockExecFileSync
+        .mockReturnValueOnce("") // ditto
+        .mockReturnValueOnce(JSON.stringify({ id: "sub-new", status: "In Progress" }))
+        .mockReturnValueOnce(JSON.stringify({ id: "sub-new", status: "Accepted" }))
+        .mockReturnValueOnce("stapled");
+
+      await afterSign(createContext());
+
+      expect(mockExecFileSync).toHaveBeenCalledTimes(4);
+      expect(mockExecFileSync.mock.calls[0][0]).toBe("ditto");
+      expect(mockExecFileSync.mock.calls[1][1]).toContain("submit");
+      expect(mockExecFileSync.mock.calls[2][1]).toContain("sub-new");
+      expect(mockExecFileSync.mock.calls.flat().join(" ")).not.toContain("sub-old");
     });
   });
 
