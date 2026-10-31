@@ -32,6 +32,7 @@ import {
   NoFrontendAttachedError,
 } from "../rendererBridge.js";
 import { setMcpDriveTargetResolver } from "../driveTarget.js";
+import { MCP_EXTERNAL_BASE_MANIFEST } from "../generated/mcpExternalBaseManifest.js";
 import {
   fakeSessionStore,
   fakeDeps,
@@ -758,6 +759,9 @@ describe("structuredContent for terminal query actions (#10676)", () => {
     // `agent.listModels` is in the viewless catalog but not the external tier, so
     // the cold-cache lookup under NoFrontendAttachedError used to find no entry
     // and the same call answered as JSON text only.
+    // Pinned so the test fails loudly, rather than silently passing without the
+    // fix, if the tool ever joins the external tier the old lookup read.
+    expect(MCP_EXTERNAL_BASE_MANIFEST.some((e) => e.id === "agent.listModels")).toBe(false);
     const payload = { agents: [{ agentId: "codex", models: [] }] };
     const server = createSessionServer(
       "sc-viewless-only",
