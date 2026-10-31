@@ -26,39 +26,44 @@ export interface RevealCopy {
   copiedAnnouncement: string | null;
 }
 
-const SHOW_IN_EXPLORER: RevealCopy = {
+type RevealWords = Pick<RevealCopy, "label" | "errorTitle" | "retryAriaLabel">;
+
+const SHOW_IN_EXPLORER: RevealWords = {
   label: "Show in Explorer",
   errorTitle: "Couldn't show in Explorer",
   retryAriaLabel: "Retry showing in Explorer",
-  icon: FolderOpen,
-  copiedAnnouncement: null,
 };
 
-const COPY_HOST_PATH: RevealCopy = {
+const COPY_HOST_PATH: RevealWords = {
   label: "Copy host path",
   errorTitle: "Couldn't copy host path",
   retryAriaLabel: "Retry copying host path",
-  icon: Copy,
-  // The terminal menu's remote reveal copies through `copyWithToast("Host
-  // path", …)`, which announces the same words.
-  copiedAnnouncement: "Host path copied",
 };
 
-const REVEAL_IN_FINDER: RevealCopy = {
+const REVEAL_IN_FINDER: RevealWords = {
   label: "Reveal in Finder",
   errorTitle: "Couldn't reveal in Finder",
   retryAriaLabel: "Retry revealing in Finder",
-  icon: FolderOpen,
-  copiedAnnouncement: null,
 };
 
-const SHOW_IN_FOLDER: RevealCopy = {
+const SHOW_IN_FOLDER: RevealWords = {
   label: "Show in folder",
   errorTitle: "Couldn't show in folder",
   retryAriaLabel: "Retry showing in folder",
-  icon: FolderOpen,
-  copiedAnnouncement: null,
 };
+
+// The glyphs are read when a reveal is resolved, never at module scope: menu
+// handlers import this module for its decision alone, and a suite that mocks
+// the icon set without them would otherwise fail on import.
+function opensFileManager(words: RevealWords): RevealCopy {
+  return { ...words, icon: FolderOpen, copiedAnnouncement: null };
+}
+
+function copiesHostPath(): RevealCopy {
+  // The terminal menu's remote reveal copies through `copyWithToast("Host
+  // path", …)`, which announces the same words.
+  return { ...COPY_HOST_PATH, icon: Copy, copiedAnnouncement: "Host path copied" };
+}
 
 /**
  * Resolved from the snapshot it is handed: the seeded host platform the
@@ -71,11 +76,11 @@ function revealCopyFor(host: HostPlatformInfo): RevealCopy {
     // other client only ssh hosts. A reveal claiming a copy main never makes
     // would confirm one that didn't happen.
     const kind = host.connection?.kind ?? remoteConnectionKindOn(isWindows() ? "win32" : "posix");
-    return kind === "wsl" ? SHOW_IN_EXPLORER : COPY_HOST_PATH;
+    return kind === "wsl" ? opensFileManager(SHOW_IN_EXPLORER) : copiesHostPath();
   }
-  if (isHostMac()) return REVEAL_IN_FINDER;
-  if (isHostWindows()) return SHOW_IN_EXPLORER;
-  return SHOW_IN_FOLDER;
+  if (isHostMac()) return opensFileManager(REVEAL_IN_FINDER);
+  if (isHostWindows()) return opensFileManager(SHOW_IN_EXPLORER);
+  return opensFileManager(SHOW_IN_FOLDER);
 }
 
 /**
