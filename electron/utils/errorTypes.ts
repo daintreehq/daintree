@@ -174,6 +174,7 @@ export function getRetryability(error: unknown, gitReason?: GitOperationReason):
       // user installs Git.
       case "auth-failed":
       case "config-missing":
+      case "push-config-unsupported":
       case "dubious-ownership":
       case "git-not-installed":
         return "user-gated";

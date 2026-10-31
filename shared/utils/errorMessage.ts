@@ -93,6 +93,7 @@ const GIT_REASON_TITLES = {
   "conflict-unresolved": "Merge conflicts unresolved",
   "push-rejected-outdated": "Push rejected — branch out of date",
   "push-rejected-policy": "Push blocked by repository policy",
+  "push-config-unsupported": "Push not possible with this remote's settings",
   "pathspec-invalid": "Branch or path not found",
   "lfs-missing": "Git LFS object missing",
   "lfs-quota-exceeded": "Git LFS quota exceeded",

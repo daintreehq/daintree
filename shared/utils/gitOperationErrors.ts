@@ -108,6 +108,12 @@ const PATTERNS: ReadonlyArray<readonly [GitOperationReason, RegExp]> = [
     /Repository not found|fatal: repository '.*' not found|The project you were looking for could not be found|does not appear to be a git repository/i,
   ],
   [
+    // Push paths always name one branch explicitly (#15556), so a mirror remote,
+    // which would push every ref, refuses rather than mirroring.
+    "push-config-unsupported",
+    /--mirror can't be combined with refspecs/i,
+  ],
+  [
     "push-rejected-policy",
     // GH006: protected branch, GH013: ruleset violation (modern GitHub), generic 'protected
     // branch' / 'file size' / pack-size / ruleset-violation wording.
@@ -284,6 +290,8 @@ const RECOVERY_HINTS: Record<GitOperationReason, string | undefined> = {
     "The remote has commits you don't have locally — pull and rebase before pushing.",
   "push-rejected-policy":
     "The remote rejected this push (protected branch, hook, or size limit). Contact the repo admin.",
+  "push-config-unsupported":
+    "This remote is set up as a mirror (remote.<name>.mirror), which pushes every ref at once. Daintree only pushes the branch it showed, so push from a terminal, or turn mirroring off for this remote.",
   "pathspec-invalid": "The specified ref or path does not exist.",
   "lfs-missing": "Git LFS objects are missing — install git-lfs and run 'git lfs pull'.",
   "lfs-quota-exceeded":
