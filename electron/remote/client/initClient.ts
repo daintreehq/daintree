@@ -644,6 +644,13 @@ const HOST_STATE_CLEANUPS: readonly HostStateCleanup[] = [
   { name: "window restores", run: clearPendingRemoteRestoresForHost },
   { name: "window restore retries", run: forgetRemoteRestoresForHost },
   {
+    name: "window bounds",
+    async run(hostId) {
+      const { pruneWindowStatesForHost } = await import("../../windowState.js");
+      pruneWindowStatesForHost(hostId);
+    },
+  },
+  {
     name: "cached views",
     run(hostId) {
       for (const ctx of getWindowRegistry()?.all() ?? []) {

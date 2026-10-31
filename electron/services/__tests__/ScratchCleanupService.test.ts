@@ -31,15 +31,15 @@ vi.mock("../scratchStorePaths.js", () => ({
   getScratchDir: (root: string, id: string) => root + "/" + id,
 }));
 
-const { removeScratchStateDirMock } = vi.hoisted(() => ({
-  removeScratchStateDirMock: vi.fn(async (_scratchId: string) => {}),
+const { removeScratchPersistedStateMock } = vi.hoisted(() => ({
+  removeScratchPersistedStateMock: vi.fn(async (_scratchId: string) => {}),
 }));
 
 // The sweep only needs the state-dir hook; the default store export is never
 // used because every test injects its own `ScratchCleanupStore`.
 vi.mock("../ScratchStore.js", () => ({
   scratchStore: {},
-  removeScratchStateDir: removeScratchStateDirMock,
+  removeScratchPersistedState: removeScratchPersistedStateMock,
 }));
 
 // Fully replace hardenedGit so the default classifier's git branch is driven by
@@ -142,7 +142,7 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "scratch-cleanup-test-"));
   scratchTestRoot.current = tmpDir;
   mockedCreateHardenedGit.mockReset();
-  removeScratchStateDirMock.mockClear();
+  removeScratchPersistedStateMock.mockClear();
 });
 
 afterEach(async () => {
@@ -416,7 +416,7 @@ describe("runScratchCleanup — phase 1 (reap after grace)", () => {
 
     await runScratchCleanup(NOW, store, ALWAYS_SAFE);
 
-    expect(removeScratchStateDirMock).toHaveBeenCalledWith("mature-with-state");
+    expect(removeScratchPersistedStateMock).toHaveBeenCalledWith("mature-with-state");
   });
 
   it("leaves persisted state alone for a tombstone still inside the grace window", async () => {
@@ -433,7 +433,7 @@ describe("runScratchCleanup — phase 1 (reap after grace)", () => {
 
     await runScratchCleanup(NOW, store, ALWAYS_SAFE);
 
-    expect(removeScratchStateDirMock).not.toHaveBeenCalled();
+    expect(removeScratchPersistedStateMock).not.toHaveBeenCalled();
   });
 
   it("does not reap a tombstone still inside the grace window", async () => {

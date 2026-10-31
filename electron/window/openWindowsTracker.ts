@@ -89,19 +89,50 @@ export function clearPendingBackgroundRestores(windowId: number): void {
  */
 const pendingRemoteRestores = new Map<number, string>();
 
+/**
+ * Told when a window starts or stops waiting for a host's project. A window's
+ * saved bounds follow it (windowStateTracking.ts), and a restore that is given
+ * up passes through no view manager to say so.
+ */
+const pendingRemoteRestoreListeners = new Set<() => void>();
+
+export function onPendingRemoteRestoreChanged(listener: () => void): () => void {
+  pendingRemoteRestoreListeners.add(listener);
+  return () => {
+    pendingRemoteRestoreListeners.delete(listener);
+  };
+}
+
+function notifyPendingRemoteRestoreChanged(): void {
+  for (const listener of pendingRemoteRestoreListeners) {
+    try {
+      listener();
+    } catch (error) {
+      // Runs inside a restore's bookkeeping, which must finish whatever a listener does.
+      console.error("[openWindowsTracker] pending restore listener threw:", error);
+    }
+  }
+}
+
 export function setPendingRemoteRestore(windowId: number, workspaceKey: string): void {
   pendingRemoteRestores.set(windowId, workspaceKey);
+  notifyPendingRemoteRestoreChanged();
 }
 
 export function clearPendingRemoteRestore(windowId: number): void {
-  pendingRemoteRestores.delete(windowId);
+  if (pendingRemoteRestores.delete(windowId)) notifyPendingRemoteRestoreChanged();
 }
 
 /** A host was removed from this device: no window is restored onto it any more. */
 export function clearPendingRemoteRestoresForHost(hostId: string): void {
+  let cleared = false;
   for (const [windowId, key] of pendingRemoteRestores) {
-    if (parseHostScopedKey(key).hostId === hostId) pendingRemoteRestores.delete(windowId);
+    if (parseHostScopedKey(key).hostId === hostId) {
+      pendingRemoteRestores.delete(windowId);
+      cleared = true;
+    }
   }
+  if (cleared) notifyPendingRemoteRestoreChanged();
   for (const windowId of [...pendingRemoteBackgroundRestores.keys()]) {
     removePendingRemoteBackgroundRestores(
       windowId,

@@ -53,6 +53,14 @@ vi.mock("../ProjectStore.js", () => ({
   projectStore: { removeWorkspaceStateDir: removeWorkspaceStateDirMock },
 }));
 
+const { pruneWindowStateForScratchMock } = vi.hoisted(() => ({
+  pruneWindowStateForScratchMock: vi.fn((_scratchId: string) => {}),
+}));
+
+vi.mock("../../windowState.js", () => ({
+  pruneWindowStateForScratch: pruneWindowStateForScratchMock,
+}));
+
 import { ScratchStore } from "../ScratchStore.js";
 
 describe("ScratchStore transaction mode", () => {
@@ -114,6 +122,7 @@ describe("removeScratch state cleanup (#11484)", () => {
 
     store = new ScratchStore();
     removeWorkspaceStateDirMock.mockClear();
+    pruneWindowStateForScratchMock.mockClear();
   });
 
   afterEach(() => {
@@ -129,6 +138,17 @@ describe("removeScratch state cleanup (#11484)", () => {
     await store.removeScratch(scratchId);
 
     expect(removeWorkspaceStateDirMock).toHaveBeenCalledWith(scratchId);
+    expect(pruneWindowStateForScratchMock).toHaveBeenCalledWith(scratchId);
+    expect(db.select().from(schema.scratches).all()).toHaveLength(0);
+  });
+
+  it("drops the saved window bounds even when the panel state can't be removed", async () => {
+    vi.spyOn(fs, "rm").mockResolvedValue(undefined);
+    removeWorkspaceStateDirMock.mockRejectedValueOnce(new Error("EACCES"));
+
+    await store.removeScratch(scratchId);
+
+    expect(pruneWindowStateForScratchMock).toHaveBeenCalledWith(scratchId);
     expect(db.select().from(schema.scratches).all()).toHaveLength(0);
   });
 
@@ -140,6 +160,7 @@ describe("removeScratch state cleanup (#11484)", () => {
     await store.removeScratch(scratchId);
 
     expect(removeWorkspaceStateDirMock).not.toHaveBeenCalled();
+    expect(pruneWindowStateForScratchMock).not.toHaveBeenCalled();
     expect(db.select().from(schema.scratches).all()).toHaveLength(1);
   });
 });

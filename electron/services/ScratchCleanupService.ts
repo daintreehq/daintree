@@ -50,7 +50,10 @@
 import fs from "fs/promises";
 import path from "path";
 import PQueue from "p-queue";
-import { scratchStore as defaultScratchStore, removeScratchStateDir } from "./ScratchStore.js";
+import {
+  scratchStore as defaultScratchStore,
+  removeScratchPersistedState,
+} from "./ScratchStore.js";
 import type { ScratchRow } from "./persistence/schema.js";
 import { logError, logInfo } from "../utils/logger.js";
 import {
@@ -348,9 +351,9 @@ export async function runScratchCleanup(
     }
 
     // The persisted panel grid lives outside the scratch directory, under the
-    // shared `projects/<id>/` state layout (#11484), so reaping the working
-    // directory alone would leak it forever.
-    await removeScratchStateDir(row.id);
+    // shared `projects/<id>/` state layout (#11484), and its window bounds in
+    // window-states.json, so reaping the working directory alone would leak them.
+    await removeScratchPersistedState(row.id);
 
     result.directoriesRemoved += 1;
     // The directory delete already freed the disk space, so the hard-delete DB

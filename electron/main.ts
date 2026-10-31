@@ -600,6 +600,7 @@ if (!gotTheLock) {
           openWindowForPath(projectPath, initiatingWindowId),
         projectPath: initialProjectPath,
         initialProjectId,
+        remoteWorkspaceKey: opts?.remoteWorkspaceKey,
         revealMode: opts?.revealMode,
       });
     setMainWindow(win);
