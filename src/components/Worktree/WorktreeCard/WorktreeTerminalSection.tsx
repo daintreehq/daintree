@@ -349,6 +349,11 @@ export interface WorktreeTerminalSectionProps {
   onStartSession?: () => void;
   /** See {@link WorktreeDetailsSectionProps.variant} — same reasoning. */
   variant?: "sidebar" | "grid";
+  /**
+   * Sidebar only. A comfortable card keeps its "Start a session" tray; a
+   * compact one drops it (see the empty branch below).
+   */
+  density?: "comfortable" | "compact";
   isExpanded: boolean;
   counts: WorktreeTerminalCounts;
   terminals: PtyPanelData[];
@@ -380,6 +385,7 @@ export function WorktreeTerminalSection({
   worktreeId,
   onStartSession,
   variant = "sidebar",
+  density: cardDensity = "compact",
   isExpanded,
   counts,
   terminals,
@@ -587,18 +593,19 @@ export function WorktreeTerminalSection({
      baseline, and "no sessions" and "the sessions row did not render" looked
      the same. The row names the next action rather than the absence.
 
-     The sidebar drops it. Repeated down a 25-card list it was a 30px box on
-     every idle card, the largest single share of the list's height, and the
-     separation it used to supply comes from the card plane and its 2px gutter.
-     Starting a session stays one step away in the card's menus. */
+     The comfortable sidebar card keeps it in a well, where it is also the
+     card's terminator: every card ends on the same row shape, sessions or
+     not. The compact card drops it. Repeated down a 25-card list it was a
+     30px box on every idle card, the largest single share of the list's
+     height. Starting a session stays one step away in the card's menus. */
   if (!showMetaFooter) {
     // No tray without somewhere for its row to go: see `onStartSession`.
-    if (!onStartSession || isSidebar) return null;
+    if (!onStartSession || (isSidebar && cardDensity === "compact")) return null;
     return (
       <div
         id={terminalsId}
-        // No well: with no sessions there is nothing to contain.
-        className="mt-1.5"
+        // The grid has no well: with no sessions there is nothing to contain.
+        className={isSidebar ? density.well : "mt-1.5"}
       >
         <button
           type="button"

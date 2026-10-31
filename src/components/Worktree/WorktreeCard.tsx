@@ -244,6 +244,9 @@ export function WorktreeCard({
     (state) => state.worktreeLabelColors[worktree.id] ?? null
   );
   const customTitle = useWorktreeFilterStore((state) => state.worktreeCustomTitles[worktree.id]);
+  // The sidebar card has two densities; the grid card has its own layout.
+  const cardDensity = useWorktreeFilterStore((state) => state.cardDensity);
+  const isCompactCard = variant === "sidebar" && cardDensity === "compact";
   const labelAriaSuffix = labelColor
     ? `, Label colour: ${worktreeLabelDisplayName(labelColor)}`
     : "";
@@ -1108,10 +1111,10 @@ export function WorktreeCard({
   };
 
   const lifecycleAlarm = deriveSetupAlarm(worktree, lifecycleLabel, Boolean(isLifecycleRunning));
-  // Details and Sessions share one footer row while both are closed: two
-  // disclosures that each used a full row to say one line.
+  // On the compact card Details and Sessions share one footer row while both
+  // are closed: two disclosures that each used a full row to say one line.
   const isSessionsFooterInline =
-    variant === "sidebar" && !isExpanded && !isTerminalsExpanded && terminalCounts.total > 0;
+    isCompactCard && !isExpanded && !isTerminalsExpanded && terminalCounts.total > 0;
 
   const ariaStatusParts: string[] = [spineState];
   if (gitStateIndicator) {
@@ -1188,6 +1191,7 @@ export function WorktreeCard({
           // this — the class alone is on both variants, and that file is
           // unlayered, so an unscoped rule silently repaints the grid card.
           data-variant={variant}
+          data-density={variant === "sidebar" ? cardDensity : undefined}
           data-active={isActive && variant === "sidebar" ? "true" : undefined}
           data-has-grip={variant === "sidebar" && hasRowDragHandle ? "true" : undefined}
           data-hoverable={!isActive && variant === "sidebar" ? "true" : undefined}
@@ -1548,7 +1552,13 @@ export function WorktreeCard({
                   under the cursor. */}
               <div
                 className={cn(
-                  effectiveIsCollapsed ? "py-1" : variant === "sidebar" ? "pt-3" : "pt-2",
+                  effectiveIsCollapsed
+                    ? "py-1"
+                    : variant !== "sidebar"
+                      ? "pt-2"
+                      : isCompactCard
+                        ? "pt-3"
+                        : "pt-3.5",
                   variant === "grid" && "pr-5"
                 )}
               >
@@ -1556,6 +1566,7 @@ export function WorktreeCard({
                   worktree={worktree}
                   isActive={isActive}
                   variant={variant}
+                  density={cardDensity}
                   isMuted={isMuted}
                   isProjectNotificationsMuted={isProjectNotificationsMuted}
                   isMainWorktree={isMainWorktree}
@@ -1611,15 +1622,24 @@ export function WorktreeCard({
                 />
               </div>
 
-              {/* Sidebar pt-1: with the Details row's own 4px that is 8px
+              {/* Compact pt-1: with the Details row's own 4px that is 8px
                   between the identity rows and the activity row, twice the 4px
                   between the identity rows themselves, so the card reads as two
-                  groups rather than three equal lines. The grid's pt-2 does the
-                  same job against its taller metadata stack. */}
+                  groups rather than three equal lines. Comfortable keeps the
+                  same ratio at its own scale: 12px against its 4px line gap,
+                  and 14px at the card's edges so the edge stays the largest
+                  gap on the card. The grid's pt-2 does the same job against
+                  its taller metadata stack. */}
               {!effectiveIsCollapsed && (
                 <div
                   id={`worktree-body-${worktree.id}`}
-                  className={variant === "sidebar" ? "pb-3 pt-1" : "pb-2.5 pt-2"}
+                  className={
+                    variant !== "sidebar"
+                      ? "pb-2.5 pt-2"
+                      : isCompactCard
+                        ? "pb-3 pt-1"
+                        : "pb-3.5 pt-2"
+                  }
                 >
                   {worktree.isWslPath && !worktree.wslGitOptIn && !worktree.wslGitDismissed && (
                     <WslGitBanner
@@ -1685,7 +1705,7 @@ export function WorktreeCard({
                         onResourceTeardown={hasTeardownCommand ? handleResourceTeardown : undefined}
                         onResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
                         syncDetail={
-                          variant === "sidebar" && !quietGit && !isMainWorktree ? (
+                          isCompactCard && !quietGit && !isMainWorktree ? (
                             <QuietGitDetails
                               worktree={worktree}
                               branchLabel={branchLabel}
@@ -1699,11 +1719,12 @@ export function WorktreeCard({
 
                     <WorktreeTerminalSection
                       variant={variant}
+                      density={cardDensity}
                       worktreeId={worktree.id}
                       onStartSession={() => handleOpenPanelPalette("user")}
                       isExpanded={isTerminalsExpanded}
                       inline={isSessionsFooterInline}
-                      stateGlyphsElsewhere={variant === "sidebar"}
+                      stateGlyphsElsewhere={isCompactCard}
                       counts={terminalCounts}
                       terminals={worktreeTerminals}
                       onToggle={handleToggleTerminals}

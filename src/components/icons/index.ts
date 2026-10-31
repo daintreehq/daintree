@@ -77,6 +77,7 @@ export {
   Plug, // agent (integration that plugs into the host system), including an agent's own branch namespace with no brand mark; also a terminal handed to an agent pane, paired with Unplug to take it back
   Plus, // the toolbar launcher — "make me a new thing" (agent, panel)
   Radar, // an agent pane waiting to hear about other terminals, which Daintree may type a notice into — distinct from BellDot, the user's own watch alert
+  Rows3, // sidebar density — how much room each worktree card takes (Comfortable or Compact)
   ScreenShare, // other machines connected to this one — the host's connected-machines pill
   Server, // a machine a window runs on — the toolbar's host switcher, beside the project pill
   ServerOff, // the window's host with its link down — the same machine, crossed out, never an alarm
