@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
 import { useContext, type ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { HelpAssistantSettings } from "@shared/types";
 import {
   SettingsFlushContext,
@@ -52,20 +52,43 @@ const STORED: HelpAssistantSettings = {
   acceptRemoteControl: true,
 };
 
-let setSettings: ReturnType<typeof vi.fn>;
+let setSettings: Mock<(patch: Partial<HelpAssistantSettings>) => Promise<void>>;
 
 function install() {
-  setSettings = vi.fn().mockResolvedValue(undefined);
-  window.electron = {
-    helpAssistant: {
-      getSettings: vi.fn().mockResolvedValue(STORED),
-      setSettings,
+  setSettings = vi.fn<(patch: Partial<HelpAssistantSettings>) => Promise<void>>();
+  setSettings.mockResolvedValue(undefined);
+  Object.defineProperty(window, "electron", {
+    configurable: true,
+    writable: true,
+    value: {
+      helpAssistant: {
+        getSettings: vi.fn().mockResolvedValue(STORED),
+        setSettings,
+      },
+      mcpServer: {
+        getStatus: vi.fn().mockResolvedValue({ enabled: true, port: 1, apiKey: "k" }),
+        onRuntimeStateChanged: vi.fn(() => () => {}),
+      },
     },
-    mcpServer: {
-      getStatus: vi.fn().mockResolvedValue({ enabled: true, port: 1, apiKey: "k" }),
-      onRuntimeStateChanged: vi.fn(() => () => {}),
-    },
-  } as unknown as typeof window.electron;
+  });
+}
+
+// Starts a close without awaiting it, so a test can check it is still waiting.
+function startClose(hook: Hook) {
+  const outcome: { failed: FailedSettingsFlush[] | null } = { failed: null };
+  let closing!: Promise<void>;
+  act(() => {
+    closing = hook.result.current.flush.flushAll().then((result) => {
+      outcome.failed = result;
+    });
+  });
+  return { outcome, done: () => closing };
+}
+
+async function tick() {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
 }
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -122,7 +145,7 @@ describe("useAssistantSettingsPersistence custom args (#15576)", () => {
 
   it("keeps a refused value in the field with main's reason and holds the close", async () => {
     const hook = await renderPersistence();
-    setSettings.mockRejectedValue(new Error(REFUSAL));
+    setSettings.mockRejectedValueOnce(new Error(REFUSAL));
 
     type(hook, "--add-dir C:\\work\\shared");
     await settleDebounce();
@@ -189,6 +212,9 @@ describe("useAssistantSettingsPersistence custom args (#15576)", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(failed).toBeNull();
+    // Nothing reads as saved until main answers.
+    expect(hook.result.current.state.settings.customArgs).toBe("--verbose");
+    expect(hook.result.current.state.displayedCustomArgs).toBe("--model sonnet");
 
     await act(async () => {
       save.reject(new Error("disk full"));
@@ -220,6 +246,9 @@ describe("useAssistantSettingsPersistence custom args (#15576)", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(failed).toBeNull();
+    // Nothing reads as saved until main answers.
+    expect(hook.result.current.state.settings.customArgs).toBe("--verbose");
+    expect(hook.result.current.state.displayedCustomArgs).toBe("--model sonnet");
 
     await act(async () => {
       save.resolve();
@@ -267,6 +296,7 @@ describe("useAssistantSettingsPersistence custom args (#15576)", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(hook.result.current.state.displayedCustomArgs).toBe("--add-dir /work");
+    expect(hook.result.current.state.customArgsError).toBeNull();
 
     await settleDebounce();
     expect(setSettings).toHaveBeenLastCalledWith({ customArgs: "--add-dir /work" });
@@ -412,6 +442,203 @@ describe("useAssistantSettingsPersistence custom args (#15576)", () => {
 
     type(hook, "--a");
     expect(hook.result.current.state.customArgsError).toBeNull();
+  });
+
+  it("doesn't resend a value a close tried, even when its refusal lands after a render", async () => {
+    const hook = await renderPersistence();
+    const save = deferred();
+    setSettings.mockReturnValueOnce(save.promise);
+
+    type(hook, "--add-dir C:\\work");
+    const closing = startClose(hook);
+    await tick();
+    expect(closing.outcome.failed).toBeNull();
+
+    await act(async () => {
+      save.reject(new Error(REFUSAL));
+      await closing.done();
+    });
+    expect(closing.outcome.failed).toEqual(HELD);
+
+    await settleDebounce();
+    await settleDebounce();
+    expect(setSettings).toHaveBeenCalledTimes(1);
+    expect(hook.result.current.state.customArgsError).toBe(REFUSAL);
+  });
+
+  it("keeps text retyped after a queued reset when the older save of it succeeds", async () => {
+    const hook = await renderPersistence();
+    const first = deferred();
+    const reset = deferred();
+    setSettings.mockReturnValueOnce(first.promise).mockReturnValueOnce(reset.promise);
+
+    type(hook, "--model sonnet");
+    await settleDebounce();
+    act(() => hook.result.current.state.resetCustomArgs());
+    type(hook, "--model sonnet");
+
+    await act(async () => {
+      first.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(hook.result.current.state.displayedCustomArgs).toBe("--model sonnet");
+    await act(async () => {
+      reset.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(hook.result.current.state.displayedCustomArgs).toBe("--model sonnet");
+
+    expect(await close(hook)).toEqual([]);
+    expect(setSettings.mock.calls).toEqual([
+      [{ customArgs: "--model sonnet" }],
+      [{ customArgs: "" }],
+      [{ customArgs: "--model sonnet" }],
+    ]);
+    expect(hook.result.current.state.settings.customArgs).toBe("--model sonnet");
+  });
+
+  it("holds a close until another save settles, then sends a draft typed back to the stored value", async () => {
+    const hook = await renderPersistence();
+    const other = deferred();
+    setSettings.mockReturnValueOnce(other.promise);
+
+    type(hook, "--model sonnet");
+    await settleDebounce();
+    type(hook, "--verbose");
+    const closing = startClose(hook);
+    await tick();
+    expect(closing.outcome.failed).toBeNull();
+    expect(setSettings).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      other.resolve();
+      await closing.done();
+    });
+
+    expect(closing.outcome.failed).toEqual([]);
+    expect(setSettings).toHaveBeenLastCalledWith({ customArgs: "--verbose" });
+    expect(hook.result.current.state.settings.customArgs).toBe("--verbose");
+    expect(hook.result.current.state.displayedCustomArgs).toBe("--verbose");
+  });
+
+  it("closes without a resend when the other save fails and the draft is still what's stored", async () => {
+    const hook = await renderPersistence();
+    const other = deferred();
+    setSettings.mockReturnValueOnce(other.promise);
+
+    type(hook, "--model sonnet");
+    await settleDebounce();
+    type(hook, "--verbose");
+    const closing = startClose(hook);
+    await tick();
+    expect(closing.outcome.failed).toBeNull();
+
+    await act(async () => {
+      other.reject(new Error("disk full"));
+      await closing.done();
+    });
+
+    expect(closing.outcome.failed).toEqual([]);
+    expect(setSettings).toHaveBeenCalledTimes(1);
+    expect(hook.result.current.state.displayedCustomArgs).toBe("--verbose");
+  });
+
+  it("doesn't queue a debounced draft behind a running save that the user then typed away from", async () => {
+    const hook = await renderPersistence();
+    const first = deferred();
+    setSettings.mockReturnValueOnce(first.promise);
+
+    type(hook, "--model sonnet");
+    await settleDebounce();
+    type(hook, "--model opus");
+    await settleDebounce();
+    type(hook, "--model sonnet");
+
+    await act(async () => {
+      first.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await settleDebounce();
+
+    expect(setSettings).toHaveBeenCalledExactlyOnceWith({ customArgs: "--model sonnet" });
+    expect(hook.result.current.state.settings.customArgs).toBe("--model sonnet");
+    expect(hook.result.current.state.displayedCustomArgs).toBe("--model sonnet");
+  });
+
+  it("keeps a failed reset's empty draft and error, holds the close, and recovers on Retry", async () => {
+    const hook = await renderPersistence();
+    const reset = deferred();
+    setSettings.mockReturnValueOnce(reset.promise);
+
+    act(() => hook.result.current.state.resetCustomArgs());
+    const pending = startClose(hook);
+    await tick();
+    expect(pending.outcome.failed).toBeNull();
+    expect(hook.result.current.state.displayedCustomArgs).toBe("");
+    expect(hook.result.current.state.settings.customArgs).toBe("--verbose");
+
+    await act(async () => {
+      reset.reject(new Error("disk full"));
+      await pending.done();
+    });
+    expect(pending.outcome.failed).toEqual(HELD);
+    expect(hook.result.current.state.displayedCustomArgs).toBe("");
+    expect(hook.result.current.state.customArgsError).toBe("disk full");
+
+    await settleDebounce();
+    expect(await close(hook)).toEqual(HELD);
+    expect(setSettings).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      hook.result.current.state.retryCustomArgs();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(setSettings).toHaveBeenCalledTimes(2);
+    expect(hook.result.current.state.settings.customArgs).toBe("");
+    expect(hook.result.current.state.customArgsError).toBeNull();
+    expect(await close(hook)).toEqual([]);
+  });
+
+  it("answers a hide flush and a later close with one request for the same draft", async () => {
+    const hook = await renderPersistence();
+    const save = deferred();
+    setSettings.mockReturnValueOnce(save.promise);
+
+    type(hook, "--model sonnet");
+    const hide = startClose(hook);
+    await tick();
+    const closing = startClose(hook);
+    await tick();
+    expect(hide.outcome.failed).toBeNull();
+    expect(closing.outcome.failed).toBeNull();
+
+    await act(async () => {
+      save.reject(new Error("disk full"));
+      await hide.done();
+      await closing.done();
+    });
+
+    expect(hide.outcome.failed).toEqual(HELD);
+    expect(closing.outcome.failed).toEqual(HELD);
+    expect(setSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends nothing more once unmounted with a save in flight", async () => {
+    const hook = await renderPersistence();
+    const save = deferred();
+    setSettings.mockReturnValueOnce(save.promise);
+
+    type(hook, "--model sonnet");
+    await settleDebounce();
+    type(hook, "--model opus");
+    hook.unmount();
+
+    await act(async () => {
+      save.reject(new Error("disk full"));
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(setSettings).toHaveBeenCalledTimes(1);
   });
 
   it("saves a draft on close before the debounce and doesn't send it twice", async () => {

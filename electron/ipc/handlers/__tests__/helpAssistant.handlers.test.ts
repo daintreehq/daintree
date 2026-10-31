@@ -571,13 +571,11 @@ describe("registerHelpAssistantHandlers", () => {
   });
 
   it("reports a refused Windows path and leaves the stored value and listeners alone (#15576)", async () => {
-    storeMock.get.mockReturnValue({ customArgs: "--verbose" });
     const { onHelpAssistantSettingsChanged } = await import("../helpAssistant.js");
     let heard = 0;
     const off = onHelpAssistantSettingsChanged(() => heard++);
     registerHelpAssistantHandlers();
     const setHandler = ipcMainMock._handlers.get(SET_CHANNEL)!;
-    const getHandler = ipcMainMock._handlers.get(GET_CHANNEL)!;
 
     try {
       await expect(
@@ -585,7 +583,6 @@ describe("registerHelpAssistantHandlers", () => {
       ).rejects.toMatchObject({ code: "VALIDATION", message: expect.stringContaining("\\") });
       expect(storeMock.set).not.toHaveBeenCalled();
       expect(heard).toBe(0);
-      expect(await getHandler(null)).toMatchObject({ customArgs: "--verbose" });
     } finally {
       off();
     }

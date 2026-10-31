@@ -67,9 +67,9 @@ export function useAssistantSettingsPersistence() {
   const savedCustomArgsRef = useRef(DEFAULT_SETTINGS.customArgs);
   const customArgsFailureRef = useRef<CustomArgsFailure | null>(null);
   const customArgsSaveRef = useRef<CustomArgsSave | null>(null);
-  // Each value is sent once: a refused one would otherwise re-fire the debounced
-  // save and retry in a loop. Retry lives on the error banner instead.
-  const lastAttemptedCustomArgsRef = useRef<string | null>(null);
+  // Bumped on every edit, so a save only clears the draft it was started for:
+  // the same text typed again after a reset is a newer edit than the save of it.
+  const customArgsRevisionRef = useRef(0);
 
   useSettingsTabValidation("assistant", Boolean(loadError || saveFailure || customArgsError));
 
@@ -150,6 +150,7 @@ export function useAssistantSettingsPersistence() {
   );
 
   const editCustomArgs = useCallback((value: string | null) => {
+    customArgsRevisionRef.current += 1;
     pendingCustomArgsRef.current = value;
     setPendingCustomArgs(value);
   }, []);
@@ -160,7 +161,7 @@ export function useAssistantSettingsPersistence() {
     (value: string): Promise<boolean> => {
       const previous = customArgsSaveRef.current;
       if (previous?.value === value) return previous.promise;
-      lastAttemptedCustomArgsRef.current = value;
+      const revision = customArgsRevisionRef.current;
       setCustomArgsSavesInFlight((count) => count + 1);
       const send = async (): Promise<boolean> => {
         if (previous) await previous.promise;
@@ -181,7 +182,7 @@ export function useAssistantSettingsPersistence() {
         setCustomArgsFailure(null);
         setSettings((current) => ({ ...current, customArgs: value }));
         // Text typed since this save started stays in the field for its own save.
-        if (pendingCustomArgsRef.current === value) editCustomArgs(null);
+        if (customArgsRevisionRef.current === revision) editCustomArgs(null);
         return true;
       };
       const save: CustomArgsSave = { value, promise: send() };
@@ -197,15 +198,14 @@ export function useAssistantSettingsPersistence() {
 
   // Persist the draft once the debounce settles. While a save is running it
   // decides what's stored, so this waits and re-runs once it settles: a draft
-  // typed back to the stored value mid-save still has to be sent.
+  // typed back to the stored value mid-save still has to be sent. A value that
+  // already failed is sent once, here or by a close: re-firing it would retry a
+  // refusal in a loop, so Retry lives on the error banner instead.
   useEffect(() => {
-    if (debouncedPendingCustomArgs === null) {
-      lastAttemptedCustomArgsRef.current = null;
-      return;
-    }
+    if (debouncedPendingCustomArgs === null) return;
     if (customArgsSavesInFlight > 0) return;
     if (debouncedPendingCustomArgs !== pendingCustomArgsRef.current) return;
-    if (debouncedPendingCustomArgs === lastAttemptedCustomArgsRef.current) return;
+    if (debouncedPendingCustomArgs === customArgsFailureRef.current?.value) return;
     if (debouncedPendingCustomArgs === settings.customArgs) return;
     void saveCustomArgs(debouncedPendingCustomArgs);
   }, [debouncedPendingCustomArgs, settings.customArgs, customArgsSavesInFlight, saveCustomArgs]);
