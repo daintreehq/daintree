@@ -17,6 +17,7 @@ import {
 import { readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
 import { logError, logWarn } from "../utils/logger.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
+import type { PrepareWindowRecreation } from "./windowRecreation.js";
 import { rendererReloadNotice } from "./rendererReloadNotice.js";
 import { getTerminationIntent } from "../services/processTerminationIntent.js";
 
@@ -29,11 +30,12 @@ export interface AppViewRendererGoneOptions {
   /** Resolved per event: services are wired after the window is created. */
   getProjectViewManager: () => ProjectViewManager | null;
   getRecoveryUrl: (reason: string, exitCode: number) => string;
-  onRecreateWindow?: () => Promise<void>;
+  prepareWindowRecreation?: PrepareWindowRecreation;
 }
 
 export function attachAppViewRendererGoneHandler(opts: AppViewRendererGoneOptions): void {
-  const { win, appWebContents, getProjectViewManager, getRecoveryUrl, onRecreateWindow } = opts;
+  const { win, appWebContents, getProjectViewManager, getRecoveryUrl, prepareWindowRecreation } =
+    opts;
   const rendererCrashTimestamps: number[] = [];
   const oomRecreationTimestamps: number[] = [];
 
@@ -129,7 +131,7 @@ export function attachAppViewRendererGoneHandler(opts: AppViewRendererGoneOption
         const recoveryUrl = getRecoveryUrl(details.reason, details.exitCode);
         appWebContents.loadURL(recoveryUrl);
       });
-    } else if (isProbableOom && onRecreateWindow) {
+    } else if (isProbableOom && prepareWindowRecreation) {
       const now2 = Date.now();
       while (
         oomRecreationTimestamps.length > 0 &&
@@ -154,12 +156,15 @@ export function attachAppViewRendererGoneHandler(opts: AppViewRendererGoneOption
           ),
           { source: "renderer-crash" }
         );
+        // Captured now, while the window still holds its views: destroying it
+        // disposes everything that knows what it was showing (#15564).
+        const recreateWindow = prepareWindowRecreation();
         setImmediate(() => {
           // Increment the guard before `destroy()` — Electron emits
           // `window-all-closed` synchronously inside the destroy call.
           beginWindowRecreating();
           if (!win.isDestroyed()) win.destroy();
-          onRecreateWindow()
+          recreateWindow()
             .catch((err) => {
               console.error("[MAIN] Failed to recreate window after OOM:", err);
             })

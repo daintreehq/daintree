@@ -5,6 +5,7 @@ import {
   normalizeWindowRecords,
   resolvePrimaryRestoreProjectId,
   restoreWindowFleet,
+  windowRestoreArgs,
   type CreateWindowResult,
   type RestoreWindowFleetDeps,
 } from "../windowRestore.js";
@@ -91,6 +92,28 @@ describe("resolvePrimaryRestoreProjectId", () => {
     expect(
       resolvePrimaryRestoreProjectId([record(`studio-01:${"a".repeat(64)}`)], true, "other")
     ).toBeUndefined();
+  });
+});
+
+describe("windowRestoreArgs (#15564)", () => {
+  it("opens a local workspace by its id, carrying its background list", () => {
+    expect(windowRestoreArgs({ projectId: "a", backgroundProjectIds: ["b"] })).toEqual({
+      projectId: "a",
+      options: { backgroundProjectIds: ["b"] },
+    });
+  });
+
+  it("opens a host's workspace on the picker and hands the key to the host restore", () => {
+    const key = `studio-01:${"a".repeat(64)}`;
+    const args = windowRestoreArgs({ projectId: key });
+    expect(args.projectId).toBeUndefined();
+    expect(args.options.remoteWorkspaceKey).toBe(key);
+  });
+
+  it("opens a picker window as a picker", () => {
+    const args = windowRestoreArgs({ projectId: null });
+    expect(args.projectId).toBeUndefined();
+    expect(args.options.remoteWorkspaceKey).toBeUndefined();
   });
 });
 

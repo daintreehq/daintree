@@ -136,6 +136,22 @@ function remoteRestoreOpts(record: OpenWindowRecord | undefined): {
 }
 
 /**
+ * What `createWindow` is given to bring a window back from its record. Shared
+ * by the launch restore and an OOM recreation (#15564), so a host-scoped
+ * workspace comes back the same way from both: a picker on this machine that
+ * moves to the host, never a local project that happens to share its id.
+ */
+export function windowRestoreArgs(record: OpenWindowRecord): {
+  projectId: string | undefined;
+  options: { remoteWorkspaceKey?: string; backgroundProjectIds?: readonly string[] };
+} {
+  return {
+    projectId: localSeedOf(record),
+    options: { ...remoteRestoreOpts(record), backgroundProjectIds: record.backgroundProjectIds },
+  };
+}
+
+/**
  * Collapse the manifest to one live view per workspace across the whole fleet
  * (#12596). A manifest saved before that rule existed can name one project in
  * two windows, and restoring it verbatim would rebuild the duplicate: two views
@@ -245,10 +261,10 @@ export async function restoreWindowFleet(deps: RestoreWindowFleetDeps): Promise<
       if (record.projectId !== null && deps.isProjectOwned?.(record.projectId)) continue;
       // Background windows reveal with showInactive(): a plain show() would
       // pull focus away from the window the user is working in.
-      const created = deps.createWindow(localSeedOf(record), {
-        ...remoteRestoreOpts(record),
+      const { projectId, options } = windowRestoreArgs(record);
+      const created = deps.createWindow(projectId, {
+        ...options,
         revealMode: "showInactive",
-        backgroundProjectIds: record.backgroundProjectIds,
         ...(index < background.length - 1 ? { awaitHydrationMs: RESTORE_HYDRATION_WAIT_MS } : {}),
       });
       let result: CreateWindowResult | "stalled";

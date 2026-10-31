@@ -67,8 +67,10 @@ vi.mock("electron", () => {
       isPackaged: false,
       commandLine: { appendSwitch: vi.fn() },
       getAppMetrics: () => mockGetAppMetrics(),
+      quit: vi.fn(),
     },
-    BrowserWindow: vi.fn(),
+    // Read after an OOM rebuild settles, to replay a quit the destroy swallowed.
+    BrowserWindow: Object.assign(vi.fn(), { getAllWindows: vi.fn(() => []) }),
     WebContentsView: MockWebContentsView,
     session: { fromPartition: vi.fn(() => ({ protocol: { handle: vi.fn() } })) },
     ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
@@ -177,6 +179,11 @@ vi.mock("../../utils/webContentsLifecycle.js", () => ({
   unthrottleCpuWebContents: vi.fn().mockResolvedValue(undefined),
 }));
 
+// An OOM rebuild saves the window manifest; the real store reaches better-sqlite3.
+vi.mock("../../services/persistence/windowManifestStore.js", () => ({
+  writeOpenWindowsManifest: vi.fn(),
+}));
+
 vi.mock("../../utils/logger.js", () => ({
   logDebug: vi.fn(),
   logInfo: vi.fn(),
@@ -242,6 +249,8 @@ const remoteMcpBindingLive = (webContentsId: number): boolean =>
   boundRemoteViews.has(webContentsId);
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
+import { createWindowRecreation } from "../windowRecreation.js";
+import type { WindowContext, WindowRegistry } from "../WindowRegistry.js";
 import { events } from "../../services/events.js";
 import { logDebug, logInfo } from "../../utils/logger.js";
 import { forgetBlinkSample, forgetEluSample } from "../../services/ProcessMemoryMonitor.js";
@@ -442,6 +451,59 @@ describe("ProjectViewManager — eviction safety", () => {
 
       expect(wcB.reload).toHaveBeenCalledTimes(1);
       expect(manager.getAllViews().map((v) => v.projectId)).toContain("proj-b");
+    });
+
+    it("rebuilds a window whose view died of OOM onto the project it switched to (#15564)", async () => {
+      const createWindow = vi.fn(async () => "ok" as const);
+      // Destroying the window disposes its manager, as the registry's teardown does.
+      const oomWin = { ...createMockWindow(), destroy: vi.fn(() => oomManager.dispose()) };
+      const ctx = {
+        windowId: 1,
+        browserWindow: { isDestroyed: () => false, isFocused: () => true },
+        services: {
+          get projectViewManager() {
+            return oomManager;
+          },
+        },
+      } as unknown as WindowContext;
+      const registry = {
+        focusOrder: () => [ctx],
+        getByWindowId: (id: number) => (id === 1 ? ctx : undefined),
+      } as unknown as WindowRegistry;
+      const recreation = createWindowRecreation({
+        windowRegistry: registry,
+        getWindowId: () => 1,
+        createWindow,
+      });
+      const oomManager: ProjectViewManager = new ProjectViewManager(oomWin as never, {
+        dirname: "/test",
+        paintGateTimeoutMs: 0,
+        paintGateHardTimeoutMs: 0,
+        warmPaintGateTimeoutMs: 0,
+        warmPaintGateHardTimeoutMs: 0,
+        cachedProjectViews: 3,
+        assistantBackendsForProject,
+        isTerminalLive,
+        prepareWindowRecreation: recreation.prepare,
+      });
+
+      await oomManager.switchTo("proj-a", "/path/a");
+      await flushImmediates();
+      await oomManager.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+      const wcB = oomManager.getAllViews().find((v) => v.projectId === "proj-b")!.view
+        .webContents as unknown as ReturnType<typeof createMockWebContents>;
+
+      emitProcessGone(wcB, "oom");
+      await flushImmediates();
+      await flushImmediates();
+
+      expect(oomWin.destroy).toHaveBeenCalledTimes(1);
+      expect(createWindow).toHaveBeenCalledTimes(1);
+      expect(createWindow).toHaveBeenCalledWith(
+        "proj-b",
+        expect.objectContaining({ backgroundProjectIds: ["proj-a"] })
+      );
     });
   });
 

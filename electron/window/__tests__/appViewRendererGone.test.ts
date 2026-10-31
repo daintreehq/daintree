@@ -41,7 +41,8 @@ function createHarness(
       | "evictCrashedCachedView"
       | "getLowMemoryFreeThresholdMb"
     > | null;
-    onRecreateWindow?: () => Promise<void>;
+    /** The rebuild the harness's prepare hands back. */
+    recreateWindow?: () => Promise<void>;
   } = {}
 ) {
   const handlers: Handler[] = [];
@@ -54,17 +55,19 @@ function createHarness(
     loadURL: vi.fn(),
   };
   const win = { id: 7, isDestroyed: vi.fn(() => false), destroy: vi.fn() };
+  const recreateWindow = opts.recreateWindow;
+  const prepareWindowRecreation = recreateWindow ? vi.fn(() => recreateWindow) : undefined;
   attachAppViewRendererGoneHandler({
     win: win as never,
     appWebContents: appWebContents as never,
     getProjectViewManager: () => (opts.pvm ?? null) as ProjectViewManager | null,
     getRecoveryUrl: (reason, exitCode) => `app://daintree/recovery.html?${reason}-${exitCode}`,
-    onRecreateWindow: opts.onRecreateWindow,
+    prepareWindowRecreation,
   });
   const crash = (reason: string, exitCode = 1) => {
     for (const handler of handlers) handler({}, { reason, exitCode });
   };
-  return { appWebContents, win, handlers, crash };
+  return { appWebContents, win, handlers, crash, prepareWindowRecreation };
 }
 
 /**
@@ -169,8 +172,8 @@ describe("app-view render-process-gone (#12954)", () => {
       availableMemory.mb = memMb;
       const { pvm, onViewRendererGone } = createClaimingManager({ claimed: true, active, cached });
       pvm.getLowMemoryFreeThresholdMb = () => 500;
-      const onRecreateWindow = vi.fn(() => Promise.resolve());
-      const { appWebContents, win, crash } = createHarness({ pvm, onRecreateWindow });
+      const recreateWindow = vi.fn(() => Promise.resolve());
+      const { appWebContents, win, crash } = createHarness({ pvm, recreateWindow });
 
       for (let i = 0; i < crashes; i++) crash("crashed");
 
@@ -233,15 +236,15 @@ describe("app-view render-process-gone (#12954)", () => {
     availableMemory.mb = 100;
     const { pvm } = createClaimingManager({ claimed: true, active: false, cached: true });
     pvm.getLowMemoryFreeThresholdMb = () => 500;
-    const onRecreateWindow = vi.fn(() => Promise.resolve());
-    const { win, crash } = createHarness({ pvm, onRecreateWindow });
+    const recreateWindow = vi.fn(() => Promise.resolve());
+    const { win, crash } = createHarness({ pvm, recreateWindow });
 
     crash("crashed");
     await vi.runAllTimersAsync();
 
     expect(pvm.evictCrashedCachedView).not.toHaveBeenCalled();
     expect(win.destroy).toHaveBeenCalledTimes(1);
-    expect(onRecreateWindow).toHaveBeenCalledTimes(1);
+    expect(recreateWindow).toHaveBeenCalledTimes(1);
   });
 
   it("still recovers when the window has no manager yet", () => {
@@ -298,28 +301,48 @@ describe("app-view render-process-gone (#12954)", () => {
     availableMemory.mb = 100;
     const { pvm, onViewCrashed } = createClaimingManager({ claimed: true, active: true });
     pvm.getLowMemoryFreeThresholdMb = () => 500;
-    const onRecreateWindow = vi.fn(() => Promise.resolve());
-    const { win, crash } = createHarness({ pvm, onRecreateWindow });
+    const recreateWindow = vi.fn(() => Promise.resolve());
+    const { win, crash, prepareWindowRecreation } = createHarness({ pvm, recreateWindow });
 
     crash("crashed");
     expect(onViewCrashed).toHaveBeenCalledTimes(1);
     await vi.runAllTimersAsync();
 
     expect(win.destroy).toHaveBeenCalledTimes(1);
-    expect(onRecreateWindow).toHaveBeenCalledTimes(1);
+    expect(prepareWindowRecreation).toHaveBeenCalledTimes(1);
+    expect(recreateWindow).toHaveBeenCalledTimes(1);
     expect(isWindowRecreating()).toBe(false);
   });
 
+  it("prepares the recreation at the crash, before the window is destroyed (#15564)", async () => {
+    const recreateWindow = vi.fn(() => Promise.resolve());
+    const { win, crash, prepareWindowRecreation } = createHarness({ recreateWindow });
+
+    crash("oom");
+
+    expect(prepareWindowRecreation).toHaveBeenCalledTimes(1);
+    expect(win.destroy).not.toHaveBeenCalled();
+    expect(recreateWindow).not.toHaveBeenCalled();
+
+    await vi.runAllTimersAsync();
+
+    expect(win.destroy).toHaveBeenCalledTimes(1);
+    expect(recreateWindow).toHaveBeenCalledTimes(1);
+    expect(win.destroy.mock.invocationCallOrder[0]).toBeLessThan(
+      recreateWindow.mock.invocationCallOrder[0]!
+    );
+  });
+
   it("releases the recreation guard when recreating after an explicit oom fails", async () => {
-    const onRecreateWindow = vi.fn(() => Promise.reject(new Error("recreate failed")));
-    const { win, crash } = createHarness({ onRecreateWindow });
+    const recreateWindow = vi.fn(() => Promise.reject(new Error("recreate failed")));
+    const { win, crash } = createHarness({ recreateWindow });
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     crash("oom");
     await vi.runAllTimersAsync();
 
     expect(win.destroy).toHaveBeenCalledTimes(1);
-    expect(onRecreateWindow).toHaveBeenCalledTimes(1);
+    expect(recreateWindow).toHaveBeenCalledTimes(1);
     expect(isWindowRecreating()).toBe(false);
   });
 

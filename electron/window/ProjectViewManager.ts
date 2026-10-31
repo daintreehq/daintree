@@ -162,7 +162,7 @@ export interface ViewInventoryEntry {
 
 export interface ProjectViewManagerOptions {
   dirname: string;
-  onRecreateWindow?: () => Promise<void>;
+  prepareWindowRecreation?: import("./windowRecreation.js").PrepareWindowRecreation;
   windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
   /** Called when a view is evicted (destroyed) with its webContents.id, for port cleanup */
   onViewEvicted?: (webContentsId: number) => void;
@@ -425,7 +425,7 @@ export class ProjectViewManager {
   lastEvictionSkippedLog: string | null = null;
   win: BrowserWindow;
   dirname: string;
-  onRecreateWindow?: () => Promise<void>;
+  prepareWindowRecreation?: import("./windowRecreation.js").PrepareWindowRecreation;
   onViewEvicted?: (webContentsId: number) => void;
   onViewCached?: (webContentsId: number) => void;
   onViewReady?: (webContents: Electron.WebContents) => void;
@@ -522,7 +522,7 @@ export class ProjectViewManager {
   constructor(win: BrowserWindow, opts: ProjectViewManagerOptions) {
     this.win = win;
     this.dirname = opts.dirname;
-    this.onRecreateWindow = opts.onRecreateWindow;
+    this.prepareWindowRecreation = opts.prepareWindowRecreation;
     this.onViewEvicted = opts.onViewEvicted;
     this.onViewCached = opts.onViewCached;
     this.onViewReady = opts.onViewReady;

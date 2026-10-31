@@ -60,6 +60,7 @@ import { isDemoMode, isSmokeTest } from "../setup/environment.js";
 import { isE2EDeferRendererLoad, isE2EMode } from "../setup/runtimeFlags.js";
 import { SMOKE_BOOT_TIMEOUT_MS } from "../services/smokeTest.js";
 import { attachAppViewRendererGoneHandler } from "./appViewRendererGone.js";
+import type { PrepareWindowRecreation } from "./windowRecreation.js";
 
 /**
  * This window's own ProjectViewManager. Resolve it at call time and never
@@ -143,7 +144,7 @@ function registerWindowIpcHandlers(onCreateWindow?: CreateWindowHandler): void {
 }
 
 export interface SetupBrowserWindowOptions {
-  onRecreateWindow?: () => Promise<void>;
+  prepareWindowRecreation?: PrepareWindowRecreation;
   onCreateWindow?: CreateWindowHandler;
   projectPath?: string | null;
   /** Last-active projectId read synchronously from DB before window creation.
@@ -179,7 +180,7 @@ export function setupBrowserWindow(
   options: SetupBrowserWindowOptions = {}
 ): CreateWindowResult {
   const {
-    onRecreateWindow,
+    prepareWindowRecreation,
     onCreateWindow,
     projectPath,
     initialProjectId,
@@ -570,7 +571,7 @@ export function setupBrowserWindow(
     appWebContents,
     getProjectViewManager: () => getProjectViewManagerFor(win),
     getRecoveryUrl,
-    onRecreateWindow,
+    prepareWindowRecreation,
   });
 
   // Fullscreen events
