@@ -1686,15 +1686,17 @@ function readSetupFailureSummary(chunks: string[]): string | undefined {
     .filter((line) => line.length > 0)
     .at(-1);
   if (!lastLine?.startsWith(SETUP_FAILURE_SUMMARY_PREFIX)) return undefined;
-  // Scrubbed before and after: dropping a control character can join a token
-  // to the word before it, hiding the boundary a pattern needs, or join the
-  // halves of one. Filtered without a control-character regex, which lint refuses.
+  // A control character becomes a space, never nothing, so words it separated
+  // stay apart. Scrubbed on both sides of that: some patterns read a control
+  // character as part of a token (`[^&\s]`), others need the space (`Bearer `).
+  // Filtered without a control-character regex, which lint refuses.
   const printable = Array.from(scrubSecrets(lastLine.slice(SETUP_FAILURE_SUMMARY_PREFIX.length)))
-    .filter((ch) => {
+    .map((ch) => {
       const code = ch.codePointAt(0) ?? 0;
-      return code > 0x1f && code !== 0x7f && !(code >= 0x80 && code <= 0x9f);
+      return code <= 0x1f || code === 0x7f || (code >= 0x80 && code <= 0x9f) ? " " : ch;
     })
-    .join("");
+    .join("")
+    .replace(/\s+/g, " ");
   const summary = Array.from(scrubSecrets(printable).trim());
   if (summary.length === 0) return undefined;
   // By code point, so the cut never splits a surrogate pair.

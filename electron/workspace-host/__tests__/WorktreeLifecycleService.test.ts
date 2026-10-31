@@ -890,16 +890,32 @@ describe("WorktreeLifecycleService", () => {
         expect(capped.endsWith("…")).toBe(true);
       });
 
-      it("scrubs a token that dropping a control character would join to the word before it", async () => {
+      it("keeps words a control character separated apart, so a token after one is still scrubbed", async () => {
         const token = `ghp_${"b".repeat(36)}`;
         mockSpawn.mockReturnValue(
           makeFakeProcessWithOutput(`DAINTREE_SETUP_ERROR: token\u0007${token}\n`, 1)
         );
 
-        const summary = (await run(["node check.mjs"])).failureSummary ?? "";
+        expect((await run(["node check.mjs"])).failureSummary).toBe("token [REDACTED]");
+      });
 
-        expect(summary.startsWith("token")).toBe(true);
-        expect(summary).not.toContain(token);
+      it("scrubs the raw line, where a control character can sit inside a token", async () => {
+        mockSpawn.mockReturnValue(
+          makeFakeProcessWithOutput(
+            "DAINTREE_SETUP_ERROR: see https://x.test/cb?access_token=abc\u0007defghij\n",
+            1
+          )
+        );
+
+        expect((await run(["node check.mjs"])).failureSummary).not.toContain("defghij");
+      });
+
+      it("scrubs again once control characters are spaces, which some patterns need", async () => {
+        mockSpawn.mockReturnValue(
+          makeFakeProcessWithOutput(`DAINTREE_SETUP_ERROR: Bearer\u0007${"t".repeat(24)}\n`, 1)
+        );
+
+        expect((await run(["node check.mjs"])).failureSummary).not.toContain("t".repeat(24));
       });
 
       it("caps by code point, never splitting an emoji", async () => {

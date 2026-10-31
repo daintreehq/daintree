@@ -76,13 +76,13 @@ function listDrift(drift) {
 /**
  * One line naming the drift in the shared install and what fixes it. It is the
  * setup error a caller sees, which is cut to its first 200 characters, so the
- * fix comes before the packages.
+ * fix comes before the path and the packages.
  */
 export function describeSharedDrift(drift, projectRoot, lockfilesMatch) {
-  const fix = lockfilesMatch
-    ? `Run \`npm ci\` in ${projectRoot}.`
-    : `${projectRoot} has a different package-lock.json: update whichever is behind, then run \`npm ci\` there.`;
-  return `Shared node_modules doesn't match package-lock.json. ${fix} Differs: ${listDrift(drift)}.`;
+  const problem = lockfilesMatch
+    ? "Shared node_modules doesn't match package-lock.json. Run"
+    : "Shared node_modules doesn't match package-lock.json, and the main checkout's differs too: update whichever is behind, then run";
+  return `${problem} \`npm ci\` in the main checkout, ${projectRoot}. Differs: ${listDrift(drift)}.`;
 }
 
 function readFileOrNull(file, fsImpl) {

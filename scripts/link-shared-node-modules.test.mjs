@@ -73,7 +73,7 @@ describe("linkAndCheck", () => {
 
     expect(result.ok).toBe(false);
     expect(result.reason).toBe(
-      `Shared node_modules doesn't match package-lock.json. Run \`npm ci\` in ${root}. ` +
+      `Shared node_modules doesn't match package-lock.json. Run \`npm ci\` in the main checkout, ${root}. ` +
         "Differs: react 18.3.1 installed, 19.0.0 locked; typescript7 missing."
     );
     expect(fs.readdirSync(path.join(root, "node_modules"))).toEqual(["react"]);
@@ -87,8 +87,8 @@ describe("linkAndCheck", () => {
     const result = linkAndCheck({ worktreePath: worktree, projectRoot: root });
 
     expect(result.reason).toBe(
-      `Shared node_modules doesn't match package-lock.json. ${root} has a different package-lock.json: ` +
-        "update whichever is behind, then run `npm ci` there. Differs: typescript7 missing."
+      "Shared node_modules doesn't match package-lock.json, and the main checkout's differs too: " +
+        `update whichever is behind, then run \`npm ci\` in the main checkout, ${root}. Differs: typescript7 missing.`
     );
   });
 
@@ -116,7 +116,11 @@ describe("linkAndCheck", () => {
 
   it("recognises the shared install by identity, whatever spelling its link resolves to", () => {
     install(root, { "node_modules/react": "19.0.0" });
-    fs.symlinkSync(path.join(root, "node_modules"), path.join(worktree, "node_modules"));
+    fs.symlinkSync(
+      path.join(root, "node_modules"),
+      path.join(worktree, "node_modules"),
+      "junction"
+    );
     // A case-insensitive volume can hand back another casing than the project root's.
     const linkPath = path.join(worktree, "node_modules");
     const realpathSync = (target) =>
@@ -141,7 +145,7 @@ describe("linkAndCheck", () => {
   });
 
   it("fails on a broken link and leaves it alone", () => {
-    fs.symlinkSync(path.join(tmp, "gone"), path.join(worktree, "node_modules"));
+    fs.symlinkSync(path.join(tmp, "gone"), path.join(worktree, "node_modules"), "junction");
 
     const result = linkAndCheck({ worktreePath: worktree, projectRoot: root });
 
@@ -152,7 +156,7 @@ describe("linkAndCheck", () => {
 
   it("checks the main checkout itself, by any path that reaches it, without linking it to itself", () => {
     const alias = path.join(tmp, "app-alias");
-    fs.symlinkSync(root, alias);
+    fs.symlinkSync(root, alias, "junction");
 
     expect(linkAndCheck({ worktreePath: alias, projectRoot: root }).reason).toBe(
       `${root} has no node_modules. Run \`npm ci\` there.`
@@ -161,7 +165,9 @@ describe("linkAndCheck", () => {
 
     install(root, { "node_modules/react": "19.0.0" });
     const result = linkAndCheck({ worktreePath: root, projectRoot: root });
-    expect(result.reason).toContain(`Run \`npm ci\` in ${root}. Differs: typescript7 missing.`);
+    expect(result.reason).toContain(
+      `Run \`npm ci\` in the main checkout, ${root}. Differs: typescript7 missing.`
+    );
     expect(fs.lstatSync(path.join(root, "node_modules")).isSymbolicLink()).toBe(false);
   });
 
@@ -264,9 +270,14 @@ describe("findLockfileDrift", () => {
     fs.mkdirSync(path.join(root, "node_modules", "@app"), { recursive: true });
     fs.symlinkSync(
       path.join(root, "packages", "sdk"),
-      path.join(root, "node_modules", "@app", "sdk")
+      path.join(root, "node_modules", "@app", "sdk"),
+      "junction"
     );
-    fs.symlinkSync(path.join(root, "gone"), path.join(root, "node_modules", "@app", "broken"));
+    fs.symlinkSync(
+      path.join(root, "gone"),
+      path.join(root, "node_modules", "@app", "broken"),
+      "junction"
+    );
 
     expect(
       check({
@@ -294,11 +305,23 @@ describe("findLockfileDrift", () => {
 });
 
 describe("describeSharedDrift", () => {
+  it("keeps the fix within the 200 characters the setup status holds, however long the root", () => {
+    const longRoot = `/home/${"nested/".repeat(20)}daintree`;
+
+    for (const lockfilesMatch of [true, false]) {
+      const kept = describeSharedDrift(["typescript7 missing"], longRoot, lockfilesMatch).slice(
+        0,
+        200
+      );
+      expect(kept).toContain("`npm ci` in the main checkout");
+    }
+  });
+
   it("lists three packages after the fix and counts the rest", () => {
     expect(
       describeSharedDrift(["a missing", "b missing", "c missing", "d missing"], "/r", true)
     ).toBe(
-      "Shared node_modules doesn't match package-lock.json. Run `npm ci` in /r. " +
+      "Shared node_modules doesn't match package-lock.json. Run `npm ci` in the main checkout, /r. " +
         "Differs: a missing; b missing; c missing (+1 more)."
     );
   });
@@ -333,7 +356,7 @@ describe("as setup", () => {
     const lines = stderr.trim().split("\n");
     expect(lines[0]).toBe(`Linked node_modules to ${path.join(root, "node_modules")}.`);
     expect(lines.at(-1)).toBe(
-      `${SETUP_ERROR_PREFIX}Shared node_modules doesn't match package-lock.json. Run \`npm ci\` in ${root}. Differs: typescript7 missing.`
+      `${SETUP_ERROR_PREFIX}Shared node_modules doesn't match package-lock.json. Run \`npm ci\` in the main checkout, ${root}. Differs: typescript7 missing.`
     );
   });
 
@@ -370,7 +393,7 @@ describe("as setup", () => {
     const failed = await runSetup();
     expect(failed.success).toBe(false);
     expect(failed.failureSummary).toBe(
-      `Shared node_modules doesn't match package-lock.json. Run \`npm ci\` in ${root}. Differs: typescript7 missing.`
+      `Shared node_modules doesn't match package-lock.json. Run \`npm ci\` in the main checkout, ${root}. Differs: typescript7 missing.`
     );
 
     install(root, INSTALLED);
