@@ -22,6 +22,11 @@ import {
 import type { WorktreeState } from "@/types";
 import type { WorktreeTeardownPreview } from "@shared/types/worktree";
 import { pluralize } from "@/lib/pluralize";
+import {
+  describeBulkRemoveFailureCount,
+  summarizeBulkRemoveFailures,
+  type BulkRemoveFailure,
+} from "./bulkRemoveFailureSummary";
 
 /**
  * What the fresh per-target preview established, plus the `pending` state the
@@ -243,6 +248,8 @@ interface UseWorktreeBulkRemoveArgs {
   selectedIds: Set<string>;
   worktreeMap: Map<string, WorktreeState>;
   clearSelection: () => void;
+  /** Replaces the selection, so a run with failures can leave exactly those targets selected. */
+  selectOnly: (ids: readonly string[]) => void;
 }
 
 export interface UseWorktreeBulkRemoveReturn {
@@ -407,13 +414,15 @@ interface BulkRemoveResult {
  * FRESH delete preview for every snapshotted target (#12416), and runs the
  * deletes the user consented to through a p-queue capped at concurrency 4.
  * Emits a single summary toast — past-tense for all-success, warning for
- * partial, error for total failure. All selection is cleared regardless of
- * outcome; the modal itself is the retry surface.
+ * partial, error for total failure, each naming the failed targets and why.
+ * Selection is cleared on success; after a failure it narrows to the failed
+ * targets still on the overview, so reopening bulk delete retries exactly them.
  */
 export function useWorktreeBulkRemove({
   selectedIds,
   worktreeMap,
   clearSelection,
+  selectOnly,
 }: UseWorktreeBulkRemoveArgs): UseWorktreeBulkRemoveReturn {
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
@@ -444,6 +453,12 @@ export function useWorktreeBulkRemove({
   const previewSessionRef = useRef(0);
   const [previewSession, setPreviewSession] = useState(0);
   const mountedRef = useRef(true);
+  // The run outlives the render that started it, so what is still on the
+  // overview afterwards has to come from the latest list, not the closure.
+  const worktreeMapRef = useRef(worktreeMap);
+  useEffect(() => {
+    worktreeMapRef.current = worktreeMap;
+  }, [worktreeMap]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -641,6 +656,7 @@ export function useWorktreeBulkRemove({
     const queue = new PQueue({ concurrency: DELETE_CONCURRENCY });
     const total = targets.length;
 
+    let failedIds: string[] = [];
     try {
       const removeOne = (target: BulkRemoveTarget) =>
         queue.add<BulkRemoveResult>(async () => {
@@ -732,8 +748,8 @@ export function useWorktreeBulkRemove({
       let successCount = 0;
       let stoppedDevServerCount = 0;
       let stoppedDevServerName: string | null = null;
-      const failures: Array<{ name: string; reason: string }> = [];
-      const keptFailures: Array<{ name: string; reason: string }> = [];
+      const failures: BulkRemoveFailure[] = [];
+      const keptFailures: BulkRemoveFailure[] = [];
       settled.forEach((entry, index) => {
         const target = targets[index];
         const fallbackName = target ? (target.branch ?? target.name) : "worktree";
@@ -745,6 +761,7 @@ export function useWorktreeBulkRemove({
           // anyway: every target the run attempted has to reach the summary,
           // and `addAll`'s Promise.all is what used to lose the others.
           failures.push({
+            id: target?.id ?? "",
             name: fallbackName,
             reason: formatErrorMessage(entry.reason, "Delete failed"),
           });
@@ -761,7 +778,11 @@ export function useWorktreeBulkRemove({
         if (result.ok) {
           successCount++;
         } else {
-          const failure = { name: result.name, reason: result.reason ?? "Delete failed" };
+          const failure = {
+            id: target?.id ?? "",
+            name: result.name,
+            reason: result.reason ?? "Delete failed",
+          };
           // An ancestor kept for its nested worktree only echoes that failure;
           // the nested one carries the cause, so it leads the summary.
           if (result.keptForNested) keptFailures.push(failure);
@@ -792,45 +813,47 @@ export function useWorktreeBulkRemove({
         }
         announce(successTitle);
       } else if (successCount === 0) {
-        // Total failure — no recovery action attached because the modal
-        // itself is the retry surface (the user can re-select and retry).
-        const firstFailure = failures[0];
+        // Total failure — no recovery action attached: the failed targets stay
+        // selected, so Delete from the selection bar is the retry.
         const failureTitle = total === 1 ? "Couldn't delete worktree" : "Couldn't delete worktrees";
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           title: failureTitle,
-          message: firstFailure ? firstFailure.reason : "All deletes failed.",
+          message: summarizeBulkRemoveFailures(failures),
           ...(soleTargetId ? { context: { worktreeId: soleTargetId } } : {}),
         });
-        announce(failureTitle, "assertive");
+        announce(
+          `${failureTitle}. ${describeBulkRemoveFailureCount(failures.length)}`,
+          "assertive"
+        );
       } else {
         // Partial — warning type so the success half isn't lost in red.
         // Warning toasts aren't gated by the success-toast rule, so no
         // eslint-disable is needed here (the rule fires only on `type:
         // "success"` and `type: "error"` without protection).
-        const firstFailure = failures[0];
-        const partialMessage =
-          failures.length === 1 && firstFailure
-            ? `${firstFailure.name} failed: ${firstFailure.reason}`
-            : `${failures.length} failed.`;
         const partialTitle = `Deleted ${successCount} of ${total} worktrees`;
         notify({
           type: "warning",
           title: partialTitle,
-          message: partialMessage,
+          message: summarizeBulkRemoveFailures(failures),
         });
-        announce(partialTitle);
+        announce(`${partialTitle}. ${describeBulkRemoveFailureCount(failures.length)}`);
       }
+      failedIds = failures.map((failure) => failure.id);
     } finally {
       isExecutingRef.current = false;
       setIsExecuting(false);
       setIsRechecking(false);
       setIsConfirmOpen(false);
       resetSnapshot();
-      clearSelection();
+      // Only ids the overview still lists: a delete that reported failure after
+      // the worktree was already gone has nothing left to retry.
+      const retained = failedIds.filter((id) => id !== "" && worktreeMapRef.current.has(id));
+      if (retained.length > 0) selectOnly(retained);
+      else clearSelection();
     }
-  }, [clearSelection, resetSnapshot]);
+  }, [clearSelection, resetSnapshot, selectOnly]);
 
   const eligibleCount = displayTargets.filter(isBulkRemoveEligible).length;
   const hasRetryablePreviews = displayTargets.some(isBulkRemoveRetryable);

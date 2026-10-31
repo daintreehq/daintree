@@ -734,6 +734,7 @@ describe("WorktreeBulkRemoveDialog — settled evidence clears earlier consent",
           ["b", wt("b")],
         ]),
         clearSelection: vi.fn(),
+        selectOnly: vi.fn(),
       })
     );
     const { rerender } = render(<WorktreeBulkRemoveDialog bulkRemove={hook.result.current} />);
