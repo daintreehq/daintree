@@ -59,6 +59,7 @@ import {
   type CreateWindowResult,
 } from "./lifecycle/windowRestore.js";
 import { restoreFleetAfterCrash, setCrashFleetRestorer } from "./lifecycle/crashWindowRestore.js";
+import { initializeDatabaseForBoot } from "./lifecycle/databaseBoot.js";
 import { registerShutdownHandler } from "./lifecycle/shutdown.js";
 import { setAttachedShellsProvider } from "./lifecycle/attachedShells.js";
 import { getActiveShutdown } from "./lifecycle/shutdownCoordinator.js";
@@ -427,21 +428,8 @@ if (!gotTheLock) {
     getCrashRecoveryService().getCrashedLiveWorkspaceIds()
   );
 
-  // DatabaseMaintenance.initialize() runs the SQLite probe + recovery and MUST
-  // complete before getSharedDb() opens the file. Dynamic import removes
-  // main.ts as a static-graph importer of this service; shutdown.ts and
-  // globalServicesInit.ts still pull it in via their own eager paths, so the
-  // module remains on the eager graph — the win is keeping the boot path
-  // free of an additional static edge and the sync probe off the
-  // top-of-module evaluation. The 200ms startMaintenance() timer + suspend
-  // listener wiring is handled by the `database-maintenance` deferred task
-  // in globalServicesInit. See #8817.
-  const { initializeDatabaseMaintenance } =
-    await import("./services/DatabaseMaintenanceService.js");
-  // Pass the clean-exit signal so probeDb can skip the O(size) quick_check
-  // on clean boots. CrashLoopGuard zeros its crash count on a clean exit and
-  // accumulates it on crashes, so count === 0 is a reliable clean-boot signal.
-  initializeDatabaseMaintenance(getCrashLoopGuard().getCrashCount() === 0);
+  // Probe and recover the database before anything opens it.
+  await initializeDatabaseForBoot(getCrashLoopGuard());
 
   // GpuCrashMonitor must install its `child-process-gone` listener BEFORE the
   // GPU process spawns (first BrowserWindow creation), so it sees crashes in
