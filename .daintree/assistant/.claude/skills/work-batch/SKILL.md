@@ -52,7 +52,7 @@ The user wrote this skill, and it records their decisions where those runbooks l
 - **Every `/work` agent runs on the model and effort `/next-batch` gave its issue**, as a launch `model` and `agentLaunchFlags: ["--effort", "<effort>"]`, even where they match the defaults (see Models). A design-review unit is the one exception: always Opus at xhigh. That is the user's policy: spend up, not down, because a buggy PR costs more than the tokens saved. Never re-tier an issue yourself, and never lower its model or effort to save allowance or fill a slot.
 - **No `handback` on `/work` or `/design-review`**, for `daintree.agents.run-agent-command`'s reason: Daintree appends its instruction to the prompt text, which would become the command's arguments. Each prints its own end marker, read exactly with `terminal.readLastMessageOwned`. The pick and the merge are sentences, so they take `handback`.
 - **Each `/merge-prs` lands the eligible open PRs as they stand at its launch, then ends.** Every PR in the repository open then is its, the user's own included, except PRs whose units are still working. It is told never to rescan or drain: one long merge that keeps absorbing PRs as they open never hands back and holds the queue for hours. It hands its summary back to you, you close its pane, and the next merge takes whatever finished in the meantime (step 4).
-- **Teardown is total, per unit, and doesn't wait for the merge**: as each unit finishes (green CI, no-op, failed or skipped), its pane is closed and its worktree closed out through the Daintree MCP (`worktree.deleteOwned`), landed or not, so the worktree sidebar never fills with finished work. The branch is on origin, so the merge never needs the worktree. Branches and PRs stay, so nothing committed is lost. Any worktree left on disk is reported with its reason.
+- **Teardown is total, per unit, and doesn't wait for the merge**: as each unit finishes (green CI, no-op, failed or skipped), its pane is closed and its worktree closed out through the Daintree MCP (`worktree.deleteOwned`) on the host it ran on, landed or not, so the worktree sidebar never fills with finished work. The branch is on origin, so the merge never needs the worktree. Branches and PRs stay, so nothing committed is lost. A worktree left on disk, here or on a worker, is unfinished tidy: it is retried while the run lives and reported with its reason.
 - **A recurring cron replaces the per-turn `ScheduleWakeup` backstop.** A wakeup loop isn't restored on `claude --resume` (that stalled a `/work` wave for an hour on 2026-10-14) and ends at a maximum duration. The cron is still the one pacing mechanism.
 
 ## Models
@@ -122,7 +122,7 @@ Read the checkpoint first: `cancelled` or `done` means do nothing more (delete t
 3. **Paused, not stopped.** A last reply whose final non-empty line starts with `WORK_WAITING` (a `/work` pane) or `MERGE_WAITING` (the merge pane), usually followed by what it waits on, is the skill waiting on background work it started (a Codex call, a subagent, a CI watch), which wakes it. Treat that pane as working, under step 1's quiet-check rule; never nudge it.
 4. **Stopped without its marker, a pause or a question** (not the merge pane): one 30-line screen read. A usage or rate limit naming a reset time: record it and wait. Otherwise, or once reset, set `nudged` and nudge once with `terminal.sendCommand` (`notify: true`) and the pane's nudge text. Stopping again without its marker after that fails it.
 
-Never resend a launch prompt. A pane showing no sign that its command started (no banner, or an empty prompt after a minute): close it and, if its worktree is still clean, relaunch it once with a fresh `requestedId`; still not started, fail the unit and report it. Every check ends by running a held Sync again, then applying Flow: it may launch into a freed slot, start a pick, or start a merge.
+Never resend a launch prompt. A pane showing no sign that its command started (no banner, or an empty prompt after a minute): close it and, if its worktree is still clean, relaunch it once with a fresh `requestedId`; still not started, fail the unit and report it. Every check ends by running a held Sync again and retrying every pending delete (step 5), then applying Flow: it may launch into a freed slot, start a pick, or start a merge.
 
 ## Sync
 
@@ -213,7 +213,7 @@ Runs for each unit as soon as it is finished (see step 3), whatever its status: 
 
 1. **Check the worktree.** `git -C <path> status --porcelain` must print nothing, and `terminal.list` with its `worktreeId`, once as is and once with `location: "background"`, must list no pane this run didn't open. A dirty tree is uncommitted work that `worktree.deleteOwned` never forces past, and a foreign pane means the user is working there: keep that worktree and its pane, and report why. A failed read keeps it too.
 2. **Close its pane** if still open, with `terminal.closeMany`. A pane is closed only when its `results` item is `ok` and its `result.closedIds` holds the pane's id. A unit that never launched a pane, or whose pane `terminal.list` no longer shows, goes straight to delete. A pane that won't close keeps the worktree.
-3. **Delete the worktree** with `worktree.deleteOwned` and the unit's worktree id, one at a time. The branch stays. Record each outcome: `CONFIRMATION_TIMEOUT` is pending and retried once at the next tidy, `USER_REJECTED` is kept, and `RESOURCE_NOT_OWNED` (see Resume) is kept and listed in the report. None is asked about, and none holds a slot, a pick or a merge.
+3. **Delete the worktree** with `worktree.deleteOwned` and the unit's worktree id, one at a time. The branch stays. Record each outcome: `CONFIRMATION_TIMEOUT` goes on the checkpoint's pending deletes and is retried on every check until it goes (on a worker, `workers.md`, Tidy on a worker), `USER_REJECTED` is kept, and `RESOURCE_NOT_OWNED` (see Resume) is kept and listed in the report. None is asked about, and none holds a slot, a pick or a merge.
 
 ## 6. Report
 
@@ -225,7 +225,7 @@ The run ends normally only when a pick returns `BATCH: none` with every unit fin
 - every unit of a batch failed; or
 - a completed merge landed none of the unit PRs open when it started.
 
-Stopping early sets phase `stopping`: no more picks, and no create or launch for a unit not yet started; tidy those at once and list their issues as assigned. `stopAfterRound` sets `stopping` too, but only ends the picks: units already picked still launch as slots free. Either way, units working and a merge running finish and are watched, gated and tidied as usual, and finished PRs still get a merge unless a merge failed. Supervision ends only once every unit is finished and tidied or was tidied unstarted (a `blocked` or `setting-up` unit keeps it going), no pick or merge is running, and no unit PR is waiting for a merge: then the final report, `CronDelete` and phase `done`.
+Stopping early sets phase `stopping`: no more picks, and no create or launch for a unit not yet started; tidy those at once and list their issues as assigned. `stopAfterRound` sets `stopping` too, but only ends the picks: units already picked still launch as slots free. Either way, units working and a merge running finish and are watched, gated and tidied as usual, and finished PRs still get a merge unless a merge failed. Supervision ends only once every unit is finished and tidied or was tidied unstarted (a `blocked` or `setting-up` unit keeps it going), no pick or merge is running, and no unit PR is waiting for a merge: then one last delete pass over every pending delete (with workers, their sweep), the final report, `CronDelete` and phase `done`.
 
 ## Flow
 
@@ -263,5 +263,5 @@ With no checkpoint, never infer size, drain or filters. Report the `Batch` panes
 - Hosts left out of a sync or still held, with why.
 - Failed, blocked, reverted and unlanded units, with their branch, PR and why they didn't land.
 - Issues this run assigned that have no landed PR. An assigned issue never reaches a later `/next-batch`, so the user may want to unassign them.
-- Every worktree this run created that is still on disk, with its path, pane name and why: dirty, a foreign pane, delete pending or refused, or a run that stopped before tidy.
+- Every worktree this run created that is still on disk, here or on a worker, with its host, path, pane name and why: dirty, a foreign pane, delete pending (its confirmation never seen) or refused, or a run that stopped before tidy.
 - Anything you could not verify.
