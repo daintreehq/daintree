@@ -195,9 +195,9 @@ export const REGISTRY: Record<string, Command> = {
   },
   "branch-name-availability": {
     summary:
-      "Wall time, git spawns, bytes read and longest stall per New Worktree branch-name check at 300/3k/20k refs (#15663)",
+      "Wall time, git spawns, git stdout bytes and longest stall per New Worktree branch-name check at 300/3k/20k refs (#15663)",
     kind: "mechanism",
-    runner: tsxScript("branch-name-availability.ts"),
+    runner: tsxScriptWithGc("branch-name-availability.ts"),
   },
   // Modes set iteration counts and which scenarios are eligible; each needs
   // `--scenario <ONE-ID>`. Nothing schedules these — there is no perf CI.

@@ -8,9 +8,10 @@
 // dialog's debounced check does, one call at a time, beside a `legacy` arm that
 // answers from `listBranches()` the way the method did before #15663. Per call
 // it reports wall time, git processes started, bytes git wrote to stdout, and
-// the longest stretch the calling thread went unobserved (lib/bystander.ts),
-// as medians over every timed call. The stall reading at 4 ms cadence cannot
-// resolve anything shorter than a cadence.
+// the longest gap between observations of a 4 ms timer (lib/bystander.ts), as
+// medians over every timed call. That gap bounds the longest synchronous block
+// from above and includes ordinary timer slop, so it reads against the idle
+// control printed with it, and cannot resolve a block shorter than a cadence.
 //
 // The oracle runs on every call of both arms: a free name, a name taken
 // locally, a name taken only on a remote, and a name with local `-2`/`-7`
@@ -24,7 +25,8 @@ import { ChildProcess, execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { parseArgs } from "node:util";
-import { armBystanderProbe } from "./lib/bystander.js";
+import { BRANCH_NAME_AVAILABILITY_CLASS } from "./config/benchmarkClasses.js";
+import { armBystanderProbe, type BystanderReading } from "./lib/bystander.js";
 import { createPerfTempRoot } from "./lib/tempRoots.js";
 
 const { values } = parseArgs({
@@ -173,20 +175,30 @@ const ARMS: Record<Arm, (service: Service, input: string) => Promise<string>> = 
   legacy: legacyFindAvailableBranchName,
   current: (service, input) => service.findAvailableBranchName(input),
 };
+const ARM_NAMES = Object.keys(ARMS) as Arm[];
 
 interface ArmResult {
   arm: Arm;
   wallMsPerCall: number;
+  wallMsPerCallByCase: Record<string, number>;
   gitSpawnsPerCall: number;
   gitStdoutBytesPerCall: number;
-  longestStallMsPerCall: number;
-  longestStallMsMax: number;
+  longestGapMsPerCall: number;
+  longestGapMsMax: number;
 }
 
 interface SizeResult {
   refs: number;
   localBranches: number;
   arms: ArmResult[];
+}
+
+interface Samples {
+  wall: number[];
+  wallByCase: Record<string, number[]>;
+  spawns: number[];
+  bytes: number[];
+  gaps: number[];
 }
 
 async function check(arm: Arm, service: Service, c: OracleCase): Promise<void> {
@@ -196,48 +208,75 @@ async function check(arm: Arm, service: Service, c: OracleCase): Promise<void> {
   }
 }
 
-async function measureArm(arm: Arm, service: Service): Promise<ArmResult> {
-  for (const c of ORACLE) await check(arm, service, c);
-  const wall: number[] = [];
-  const spawns: number[] = [];
-  const bytes: number[] = [];
-  const stalls: number[] = [];
-  for (let round = 0; round < calls; round++) {
-    for (const c of ORACLE) {
-      const probe = await armBystanderProbe({ cadenceMs: 4 });
-      const spawnsBefore = gitSpawns;
-      const bytesBefore = gitStdoutBytes;
-      const started = performance.now();
-      await check(arm, service, c);
-      wall.push(performance.now() - started);
-      const reading = probe.stop();
-      if (reading.probeMisses > 0) throw new Error("bystander probe never armed");
-      spawns.push(gitSpawns - spawnsBefore);
-      bytes.push(gitStdoutBytes - bytesBefore);
-      stalls.push(reading.longestStallMs);
-    }
+async function measureCall(arm: Arm, service: Service, c: OracleCase, into: Samples) {
+  const probe = await armBystanderProbe({ cadenceMs: 4 });
+  const spawnsBefore = gitSpawns;
+  const bytesBefore = gitStdoutBytes;
+  const started = performance.now();
+  let elapsed: number;
+  let reading: BystanderReading;
+  try {
+    await check(arm, service, c);
+  } finally {
+    elapsed = performance.now() - started;
+    reading = probe.stop();
   }
-  // Every call of either arm starts git, so a zero means the spawn hook missed it.
-  if (spawns.some((n) => n === 0)) throw new Error(`${arm}: spawn counter observed no git start`);
-  return {
-    arm,
-    wallMsPerCall: median(wall),
-    gitSpawnsPerCall: median(spawns),
-    gitStdoutBytesPerCall: median(bytes),
-    longestStallMsPerCall: median(stalls),
-    longestStallMsMax: Math.max(...stalls),
-  };
+  if (reading.probeMisses > 0) throw new Error("bystander probe never armed");
+  into.wall.push(elapsed);
+  (into.wallByCase[c.name] ??= []).push(elapsed);
+  into.spawns.push(gitSpawns - spawnsBefore);
+  into.bytes.push(gitStdoutBytes - bytesBefore);
+  into.gaps.push(reading.longestStallMs);
 }
 
-/** The probe's floor: the same reading over an idle window, nothing running. */
+/**
+ * Both arms against one fixture, interleaved call by call with the order
+ * alternating each round, so neither inherits the other's garbage or a warmer
+ * machine more often. Every timed call also runs the oracle.
+ */
+async function measureSize(service: Service): Promise<ArmResult[]> {
+  for (const arm of ARM_NAMES) for (const c of ORACLE) await check(arm, service, c);
+  globalThis.gc?.();
+  const samples = Object.fromEntries(
+    ARM_NAMES.map((arm) => [arm, { wall: [], wallByCase: {}, spawns: [], bytes: [], gaps: [] }])
+  ) as Record<Arm, Samples>;
+  for (let round = 0; round < calls; round++) {
+    const order = round % 2 === 0 ? ARM_NAMES : [...ARM_NAMES].reverse();
+    for (const c of ORACLE) {
+      for (const arm of order) await measureCall(arm, service, c, samples[arm]);
+    }
+  }
+  return ARM_NAMES.map((arm) => {
+    const s = samples[arm];
+    // Every call of either arm starts git, so a zero means the spawn hook missed it.
+    if (s.spawns.some((n) => n === 0)) throw new Error(`${arm}: spawn counter saw no git start`);
+    return {
+      arm,
+      wallMsPerCall: median(s.wall),
+      wallMsPerCallByCase: Object.fromEntries(
+        Object.entries(s.wallByCase).map(([name, wall]) => [name, median(wall)])
+      ),
+      gitSpawnsPerCall: median(s.spawns),
+      gitStdoutBytesPerCall: median(s.bytes),
+      longestGapMsPerCall: median(s.gaps),
+      longestGapMsMax: Math.max(...s.gaps),
+    };
+  });
+}
+
+/**
+ * The same reading over an idle window about as long as one `current` call: the
+ * probe's floor, timer slop included, so a call reading near it blocked for
+ * less than the probe can resolve.
+ */
 async function idleControlMs(): Promise<number> {
-  const stalls: number[] = [];
+  const gaps: number[] = [];
   for (let i = 0; i < 20; i++) {
     const probe = await armBystanderProbe({ cadenceMs: 4 });
-    await new Promise((resolve) => setTimeout(resolve, 8));
-    stalls.push(probe.stop().longestStallMs);
+    await new Promise((resolve) => setTimeout(resolve, 6));
+    gaps.push(probe.stop().longestStallMs);
   }
-  return median(stalls);
+  return median(gaps);
 }
 
 const versions = {
@@ -249,23 +288,39 @@ const versions = {
     ) as { version: string }
   ).version,
 };
-const idleStallMs = await idleControlMs();
+
+let idleGapMs: number;
 const results: SizeResult[] = [];
-for (const totalRefs of sizes) {
-  const repo = buildFixture(totalRefs);
-  const service = new GitService(repo);
-  const arms: ArmResult[] = [];
-  for (const arm of Object.keys(ARMS) as Arm[]) arms.push(await measureArm(arm, service));
-  results.push({
-    refs: totalRefs,
-    localBranches: localCount(totalRefs) + ORACLE_LOCAL.length,
-    arms,
-  });
+try {
+  idleGapMs = await idleControlMs();
+  for (const totalRefs of sizes) {
+    const repo = buildFixture(totalRefs);
+    results.push({
+      refs: totalRefs,
+      // `main` plus the generated and oracle branches.
+      localBranches: 1 + localCount(totalRefs) + ORACLE_LOCAL.length,
+      arms: await measureSize(new GitService(repo)),
+    });
+  }
+} finally {
+  proto.spawn = originalSpawn;
 }
-proto.spawn = originalSpawn;
 
 if (values.json) {
-  console.log(JSON.stringify({ versions, calls, idleStallMs, oracle: ORACLE, results }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        classification: BRANCH_NAME_AVAILABILITY_CLASS,
+        versions,
+        calls,
+        idleGapMs,
+        oracle: ORACLE,
+        results,
+      },
+      null,
+      2
+    )
+  );
 } else {
   console.log(
     `findAvailableBranchName(), median of ${calls} rounds x ${ORACLE.length} oracle cases; ` +
@@ -273,7 +328,7 @@ if (values.json) {
   );
   console.log(
     `${versions.git}, Node ${versions.node}, simple-git ${versions.simpleGit}; ` +
-      `idle control longest stall ${idleStallMs.toFixed(1)} ms`
+      `idle control longest gap ${idleGapMs.toFixed(1)} ms`
   );
   for (const r of results) {
     console.log(`\n${r.refs} refs (${r.localBranches} local)`);
@@ -282,8 +337,8 @@ if (values.json) {
         `  ${a.arm.padEnd(8)} wall ${a.wallMsPerCall.toFixed(2).padStart(8)} ms` +
           `  git spawns ${String(a.gitSpawnsPerCall).padStart(2)}` +
           `  stdout ${String(a.gitStdoutBytesPerCall).padStart(9)} B` +
-          `  longest stall ${a.longestStallMsPerCall.toFixed(1).padStart(6)} ms` +
-          ` (max ${a.longestStallMsMax.toFixed(1)})`
+          `  longest gap ${a.longestGapMsPerCall.toFixed(1).padStart(6)} ms` +
+          ` (max ${a.longestGapMsMax.toFixed(1)})`
       );
     }
   }

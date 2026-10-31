@@ -929,8 +929,8 @@ export class GitService {
       const raw = await git.raw(["for-each-ref", "--format=%(refname)", LOCAL_BRANCH_REF_PREFIX]);
       const names = new Set<string>();
       for (const line of raw.split("\n")) {
-        // Refnames cannot contain whitespace, so trimming only drops a CR.
-        const ref = line.trim();
+        // Only a CR comes off: git allows Unicode whitespace (NBSP) in refnames.
+        const ref = line.endsWith("\r") ? line.slice(0, -1) : line;
         if (ref.startsWith(LOCAL_BRANCH_REF_PREFIX)) {
           names.add(ref.slice(LOCAL_BRANCH_REF_PREFIX.length));
         }

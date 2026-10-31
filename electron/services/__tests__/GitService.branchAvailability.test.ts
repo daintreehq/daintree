@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -12,37 +12,43 @@ import { GitOperationError } from "../../utils/errorTypes.js";
  * enumerates, and must answer the same as before on every case it covered.
  */
 
-function git(cwd: string, args: string[]): void {
-  execFileSync("git", ["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", ...args], {
-    cwd,
-    stdio: "pipe",
-    timeout: 10_000,
-    env: {
-      ...process.env,
-      GIT_CONFIG_GLOBAL: os.devNull,
-      GIT_CONFIG_SYSTEM: os.devNull,
-      GIT_TERMINAL_PROMPT: "0",
-      GIT_AUTHOR_NAME: "Test",
-      GIT_AUTHOR_EMAIL: "test@example.com",
-      GIT_COMMITTER_NAME: "Test",
-      GIT_COMMITTER_EMAIL: "test@example.com",
-    },
-  });
-}
-
 describe("GitService.findAvailableBranchName (real git)", () => {
   let tempRoot: string;
   let repoDir: string;
+  let emptyConfig: string;
+
+  // Fixture setup only. An empty file rather than the null device, whose
+  // Windows spelling from Node (`\\.\nul`) git may not accept.
+  function git(cwd: string, args: string[]): void {
+    execFileSync("git", args, {
+      cwd,
+      stdio: "pipe",
+      timeout: 10_000,
+      env: {
+        ...process.env,
+        GIT_CONFIG_GLOBAL: emptyConfig,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+  }
 
   beforeEach(() => {
     tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-branch-availability-"));
+    emptyConfig = path.join(tempRoot, "empty.gitconfig");
+    fs.writeFileSync(emptyConfig, "");
     repoDir = path.join(tempRoot, "repo");
     fs.mkdirSync(repoDir);
     git(repoDir, ["init", "-q", "-b", "main"]);
-    git(repoDir, ["commit", "-q", "--allow-empty", "-m", "init"]);
+    git(repoDir, ["commit", "-q", "--allow-empty", "--no-verify", "-m", "init"]);
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
 
@@ -92,13 +98,26 @@ describe("GitService.findAvailableBranchName (real git)", () => {
     expect(await service.findAvailableBranchName("packed")).toBe("packed-5");
   });
 
-  it("counts a local branch whose name starts with remotes/ as local", async () => {
-    branch("remotes/local-topic");
+  it("counts local branches the `git branch -a` parse misread as conflicts", async () => {
+    // It filed `remotes/...` under remote branches and skipped names ending in
+    // `/HEAD`, though `git worktree add -b` rejects both as existing.
+    branch("remotes/local-topic", "topic/HEAD");
+    git(repoDir, ["symbolic-ref", "refs/heads/alias", "refs/heads/main"]);
     const service = new GitService(repoDir);
 
     expect(await service.findAvailableBranchName("remotes/local-topic")).toBe(
       "remotes/local-topic-2"
     );
+    expect(await service.findAvailableBranchName("topic/HEAD")).toBe("topic/HEAD-2");
+    expect(await service.findAvailableBranchName("alias")).toBe("alias-2");
+  });
+
+  it("keeps Unicode whitespace that is part of a branch name", async () => {
+    branch("nbsp\u00a0", "nbsp\u00a0-4");
+    const service = new GitService(repoDir);
+
+    expect(await service.findAvailableBranchName("nbsp")).toBe("nbsp");
+    expect(await service.findAvailableBranchName("nbsp\u00a0")).toBe("nbsp\u00a0-5");
   });
 
   it("does not treat a detached HEAD's tag as a branch", async () => {
@@ -146,6 +165,8 @@ describe("GitService.findAvailableBranchName (real git)", () => {
   it("throws a classified GitOperationError outside a repository", async () => {
     const plain = path.join(tempRoot, "not-a-repo");
     fs.mkdirSync(plain);
+    // So a TMPDIR inside some checkout cannot hand git an enclosing repository.
+    vi.stubEnv("GIT_CEILING_DIRECTORIES", tempRoot);
     const service = new GitService(plain);
 
     const caught = await service.findAvailableBranchName("anything").then(

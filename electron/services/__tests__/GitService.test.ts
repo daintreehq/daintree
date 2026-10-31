@@ -188,7 +188,14 @@ index 1a2b3c4..5d6e7f8 100644
 
   it("finds next local branch suffix from local branch names alone", async () => {
     gitClientMock.raw.mockResolvedValue(
-      "refs/heads/feature/foo+bar\nrefs/heads/feature/foo+bar-2\r\nrefs/heads/feature/foo+bar-10\n"
+      [
+        "refs/heads/feature/foo+bar\r",
+        "refs/heads/feature/foo+bar-2",
+        "refs/heads/feature/foo+bar-10\r",
+        "refs/heads/other/feature/foo+bar-99",
+        "refs/remotes/origin/feature/foo+bar-999",
+        "",
+      ].join("\n")
     );
 
     const service = new GitService(tempDir);
@@ -218,6 +225,7 @@ index 1a2b3c4..5d6e7f8 100644
     expect(caught).toBeInstanceOf(GitOperationError);
     const opError = caught as GitOperationError;
     expect(opError.reason).toBe("not-a-repository");
+    expect(opError.op).toBe("list-branches");
     expect(opError.context).toEqual(expect.objectContaining({ cwd: tempDir }));
   });
 
