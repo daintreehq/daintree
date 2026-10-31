@@ -15,6 +15,7 @@ const KILL_ESCALATION_MS = 500;
 interface FakeTerminal {
   generation: number;
   trashed: boolean;
+  exited: boolean;
   ignoresGracefulShutdown: boolean;
   graceTimer?: ReturnType<typeof setTimeout>;
 }
@@ -22,17 +23,20 @@ interface FakeTerminal {
 /**
  * The pty-host as a wait sees it: a closed panel's process runs through the
  * trash grace, then a graceful shutdown that a stubborn process ignores until
- * the kill escalates. An exit reaches main as the host's `exit` event and the
- * record goes with it, as a plain shell's does.
+ * the kill escalates. An exit reaches main as the host's `exit` event; a plain
+ * shell's record goes with it, while an agent pane's stays, marked exited,
+ * until the trash lets it go.
  */
 class FakeHost {
   readonly exits = new RecentTerminalExits();
   readonly terminals = new Map<string, FakeTerminal>();
   readonly endGraceCalls: Array<[string, number]> = [];
+  readonly shutdownsStarted: string[] = [];
+  reads = 0;
   failReads = false;
 
   spawn(id: string, generation: number, ignoresGracefulShutdown = false): void {
-    this.terminals.set(id, { generation, trashed: false, ignoresGracefulShutdown });
+    this.terminals.set(id, { generation, trashed: false, exited: false, ignoresGracefulShutdown });
   }
 
   close(id: string): void {
@@ -41,12 +45,25 @@ class FakeHost {
     terminal.graceTimer = setTimeout(() => this.expire(id), GRACE_MS);
   }
 
+  /** The process ends; a plain shell's record goes with it. */
   exit(id: string, exitCode = 0, signal?: number): void {
     const terminal = this.terminals.get(id);
     if (terminal === undefined) return;
     clearTimeout(terminal.graceTimer);
     this.terminals.delete(id);
     this.exits.record({ terminalId: id, launchGeneration: terminal.generation, exitCode, signal });
+  }
+
+  /** An agent pane's process ends and its record stays, marked exited, in the trash. */
+  exitKeepingRecord(id: string, exitCode = 0): void {
+    const terminal = this.terminals.get(id)!;
+    terminal.exited = true;
+    this.exits.record({
+      terminalId: id,
+      launchGeneration: terminal.generation,
+      exitCode,
+      signal: undefined,
+    });
   }
 
   /** The host dropping a record without ever seeing its process exit. */
@@ -61,6 +78,11 @@ class FakeHost {
     if (terminal === undefined) return;
     terminal.trashed = false;
     clearTimeout(terminal.graceTimer);
+    if (terminal.exited) {
+      this.terminals.delete(id);
+      return;
+    }
+    this.shutdownsStarted.push(id);
     if (terminal.ignoresGracefulShutdown) {
       setTimeout(() => this.exit(id, 0, 9), SHUTDOWN_MS + KILL_ESCALATION_MS);
     } else {
@@ -73,11 +95,12 @@ class FakeHost {
       findExit: (id, generation) => this.exits.find(id, generation),
       onExit: (listener) => this.exits.onExit(listener),
       readRecord: async (id): Promise<ClosedPanelExitRecord | null> => {
+        this.reads++;
         if (this.failReads) throw new Error("timed out");
         const terminal = this.terminals.get(id);
         return terminal === undefined
           ? null
-          : { isExited: false, launchGeneration: terminal.generation };
+          : { isExited: terminal.exited, launchGeneration: terminal.generation };
       },
       endTrashGrace: async (id, generation): Promise<EndTrashGraceStatus | null> => {
         this.endGraceCalls.push([id, generation]);
@@ -93,9 +116,14 @@ class FakeHost {
 
 async function settleWithin<T>(promise: Promise<T>, ms: number): Promise<T> {
   let settled = false;
-  void promise.then(() => {
-    settled = true;
-  });
+  void promise.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    }
+  );
   await vi.advanceTimersByTimeAsync(ms);
   expect(settled).toBe(true);
   return promise;
@@ -131,15 +159,37 @@ describe("waitForClosedPanelExits (#15728)", () => {
   it("reports a process that ignores the graceful shutdown as running at the deadline", async () => {
     host.spawn("t1", 3, true);
     host.close("t1");
+    await vi.advanceTimersByTimeAsync(GRACE_MS - 1_000);
+    // The deadline falls after the grace ends and the graceful shutdown starts,
+    // and before the kill escalates.
+    const timeoutMs = 1_000 + SHUTDOWN_MS + 100;
     const wait = waitForClosedPanelExits(
       [{ terminalId: "t1", launchGeneration: 3 }],
-      { timeoutMs: 5_000, endGrace: false },
+      { timeoutMs, endGrace: false },
       host.deps()
     );
 
-    const result = await settleWithin(wait, 5_000);
+    const result = await settleWithin(wait, timeoutMs);
+    expect(host.shutdownsStarted).toEqual(["t1"]);
     expect(result.processes).toEqual([{ terminalId: "t1", outcome: "running" }]);
     expect(host.endGraceCalls).toEqual([]);
+  });
+
+  it("reports a process that honours the graceful shutdown as exited under the same deadline", async () => {
+    host.spawn("t1", 3, false);
+    host.close("t1");
+    await vi.advanceTimersByTimeAsync(GRACE_MS - 1_000);
+    const timeoutMs = 1_000 + SHUTDOWN_MS + 100;
+
+    const result = await settleWithin(
+      waitForClosedPanelExits(
+        [{ terminalId: "t1", launchGeneration: 3 }],
+        { timeoutMs, endGrace: false },
+        host.deps()
+      ),
+      timeoutMs
+    );
+    expect(result.processes).toEqual([{ terminalId: "t1", outcome: "exited", exitCode: 0 }]);
   });
 
   it("ends the grace early on request, so the same stubborn process is killed and reported exited", async () => {
@@ -161,20 +211,40 @@ describe("waitForClosedPanelExits (#15728)", () => {
   it("still reports an exit seen during the grace after the trash let the panel go", async () => {
     host.spawn("t1", 3);
     host.close("t1");
-    await vi.advanceTimersByTimeAsync(GRACE_MS + SHUTDOWN_MS);
+    await vi.advanceTimersByTimeAsync(5_000);
+    host.exitKeepingRecord("t1", 2);
+    await vi.advanceTimersByTimeAsync(GRACE_MS);
     expect(host.terminals.has("t1")).toBe(false);
 
-    const wait = waitForClosedPanelExits(
-      [{ terminalId: "t1", launchGeneration: 3 }],
-      { timeoutMs: 5_000, endGrace: true },
-      host.deps()
+    const result = await settleWithin(
+      waitForClosedPanelExits(
+        [{ terminalId: "t1", launchGeneration: 3 }],
+        { timeoutMs: 5_000, endGrace: true },
+        host.deps()
+      ),
+      0
     );
-
-    const result = await settleWithin(wait, 0);
     expect(result.processes).toEqual([
-      { terminalId: "t1", outcome: "exited", exitCode: 0, graceEnded: false },
+      { terminalId: "t1", outcome: "exited", exitCode: 2, graceEnded: false },
     ]);
     expect(host.endGraceCalls).toEqual([]);
+    expect(host.reads).toBe(0);
+  });
+
+  it("reads an exit off a record the host still holds marked exited when main kept none", async () => {
+    host.spawn("t1", 3);
+    host.close("t1");
+    host.terminals.get("t1")!.exited = true;
+
+    const result = await settleWithin(
+      waitForClosedPanelExits(
+        [{ terminalId: "t1", launchGeneration: 3 }],
+        { timeoutMs: 5_000, endGrace: false },
+        host.deps()
+      ),
+      0
+    );
+    expect(result.processes).toEqual([{ terminalId: "t1", outcome: "exited" }]);
   });
 
   it("never reads a record that vanished without an exit as one", async () => {
@@ -209,6 +279,38 @@ describe("waitForClosedPanelExits (#15728)", () => {
     expect(host.endGraceCalls).toEqual([]);
   });
 
+  it("ignores another incarnation's exit while it waits", async () => {
+    host.spawn("t1", 3);
+    host.close("t1");
+    const wait = waitForClosedPanelExits(
+      [{ terminalId: "t1", launchGeneration: 3 }],
+      { timeoutMs: 2_000, endGrace: false },
+      host.deps()
+    );
+    await vi.advanceTimersByTimeAsync(500);
+    host.exits.record({ terminalId: "t1", launchGeneration: 2, exitCode: 1, signal: undefined });
+
+    const result = await settleWithin(wait, 1_500);
+    expect(result.processes).toEqual([{ terminalId: "t1", outcome: "running" }]);
+  });
+
+  it("never matches a kept exit to a panel whose closed incarnation main didn't know", async () => {
+    host.exits.record({ terminalId: "t1", launchGeneration: 1, exitCode: 0, signal: undefined });
+    host.spawn("t1", 2);
+    host.close("t1");
+
+    const result = await settleWithin(
+      waitForClosedPanelExits(
+        [{ terminalId: "t1", launchGeneration: undefined }],
+        { timeoutMs: 0, endGrace: true },
+        host.deps()
+      ),
+      0
+    );
+    expect(host.endGraceCalls).toEqual([]);
+    expect(result.processes).toEqual([{ terminalId: "t1", outcome: "running", graceEnded: false }]);
+  });
+
   it("keeps a still-unanswered read at the deadline as unknown, not running", async () => {
     host.spawn("t1", 3);
     host.close("t1");
@@ -223,6 +325,39 @@ describe("waitForClosedPanelExits (#15728)", () => {
       2_000
     );
     expect(result.processes).toEqual([{ terminalId: "t1", outcome: "unknown" }]);
+  });
+
+  it("reads each panel once for a zero deadline", async () => {
+    host.spawn("t1", 3);
+    host.close("t1");
+
+    const result = await settleWithin(
+      waitForClosedPanelExits(
+        [{ terminalId: "t1", launchGeneration: 3 }],
+        { timeoutMs: 0, endGrace: false },
+        host.deps()
+      ),
+      0
+    );
+    expect(host.reads).toBe(1);
+    expect(result.processes).toEqual([{ terminalId: "t1", outcome: "running" }]);
+  });
+
+  it("holds a first read that never answers to the deadline plus the budget", async () => {
+    host.spawn("t1", 3);
+    host.close("t1");
+    const hung: ClosedPanelExitDeps = { ...host.deps(), readRecord: () => new Promise(() => {}) };
+
+    const result = await settleWithin(
+      waitForClosedPanelExits(
+        [{ terminalId: "t1", launchGeneration: 3 }],
+        { timeoutMs: 0, endGrace: true },
+        hung
+      ),
+      // The read still out at the budget is given up a tick later.
+      FINAL_READ_BUDGET_MS + 1
+    );
+    expect(result.processes).toEqual([{ terminalId: "t1", outcome: "unknown", graceEnded: false }]);
   });
 
   it("gives a final read that never answers a bounded budget past the deadline", async () => {
@@ -246,15 +381,64 @@ describe("waitForClosedPanelExits (#15728)", () => {
     expect(result.processes).toEqual([{ terminalId: "t1", outcome: "unknown" }]);
   });
 
-  it("does not end the grace of a panel whose closed incarnation main never knew", async () => {
+  it("leaves graceEnded out when the host never answered the request", async () => {
     host.spawn("t1", 3);
     host.close("t1");
+    const silent: ClosedPanelExitDeps = {
+      ...host.deps(),
+      endTrashGrace: () => new Promise(() => {}),
+    };
 
     const result = await settleWithin(
       waitForClosedPanelExits(
-        [{ terminalId: "t1", launchGeneration: undefined }],
-        { timeoutMs: 0, endGrace: true },
-        host.deps()
+        [{ terminalId: "t1", launchGeneration: 3 }],
+        { timeoutMs: 1_000, endGrace: true },
+        silent
+      ),
+      1_000 + FINAL_READ_BUDGET_MS
+    );
+    expect(result.processes).toEqual([{ terminalId: "t1", outcome: "running" }]);
+  });
+
+  it("asks before each grace is ended, and stops nothing once that is refused", async () => {
+    host.spawn("t1", 3);
+    host.close("t1");
+    const refused = new Error("not driving");
+
+    const wait = waitForClosedPanelExits(
+      [{ terminalId: "t1", launchGeneration: 3 }],
+      {
+        timeoutMs: 5_000,
+        endGrace: true,
+        authorizeEndGrace: () => {
+          throw refused;
+        },
+      },
+      host.deps()
+    );
+
+    await expect(settleWithin(wait, 0)).rejects.toBe(refused);
+    expect(host.endGraceCalls).toEqual([]);
+  });
+
+  it("starts no shutdown once the call is cancelled", async () => {
+    host.spawn("t1", 3);
+    host.close("t1");
+    const controller = new AbortController();
+    const deps = host.deps();
+    const slow: ClosedPanelExitDeps = {
+      ...deps,
+      readRecord: async (id) => {
+        controller.abort();
+        return deps.readRecord(id);
+      },
+    };
+
+    const result = await settleWithin(
+      waitForClosedPanelExits(
+        [{ terminalId: "t1", launchGeneration: 3 }],
+        { timeoutMs: 30_000, endGrace: true, signal: controller.signal },
+        slow
       ),
       0
     );

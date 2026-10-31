@@ -5,6 +5,12 @@ import { events } from "../../events.js";
 
 const TTL_MS = 20_000;
 
+/** The expiries the registry still holds, read through the one private field this suite checks. */
+function heldExpiries(registry: TerminalRegistry): number {
+  return (registry as unknown as { trashExpiryCallbacks: Map<string, unknown> })
+    .trashExpiryCallbacks.size;
+}
+
 function addTerminal(registry: TerminalRegistry, id: string): void {
   registry.add(id, { getInfo: () => ({ id }) } as unknown as TerminalProcess);
 }
@@ -82,5 +88,22 @@ describe("TerminalRegistry early trash expiry (#15728)", () => {
 
     expect(first).not.toHaveBeenCalled();
     expect(second).toHaveBeenCalledOnce();
+  });
+
+  it("lets go of a trash's expiry when it is restored, deleted, run or disposed", () => {
+    const registry = new TerminalRegistry(TTL_MS);
+    for (const id of ["restored", "deleted", "expired", "disposed"]) {
+      addTerminal(registry, id);
+      registry.trash(id, () => {});
+    }
+    expect(heldExpiries(registry)).toBe(4);
+
+    registry.restore("restored");
+    registry.delete("deleted");
+    registry.expireTrashNow("expired");
+    expect(heldExpiries(registry)).toBe(1);
+
+    registry.dispose();
+    expect(heldExpiries(registry)).toBe(0);
   });
 });

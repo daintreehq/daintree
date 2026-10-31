@@ -82,6 +82,12 @@ export interface ClosedTerminalRecord {
   terminalId: string;
   /** The incarnation that was closed, when main knew it. */
   launchGeneration: number | undefined;
+  /**
+   * The workspace the close ran in, when known. One principal can hold
+   * sessions bound to several projects, so ending the grace asks this
+   * project's drive rule, not the asking session's.
+   */
+  workspaceId?: string;
   closedAt: number;
 }
 
@@ -254,6 +260,7 @@ export class ResourceOwnershipLedger {
   noteClosed(
     owner: string,
     closed: ReadonlyArray<{ terminalId: string; launchGeneration: number | undefined }>,
+    workspaceId?: string,
     now: number = Date.now()
   ): void {
     if (closed.length === 0) return;
@@ -266,7 +273,12 @@ export class ResourceOwnershipLedger {
     for (const { terminalId, launchGeneration } of closed) {
       if (terminalId.length === 0) continue;
       records.delete(terminalId);
-      records.set(terminalId, { terminalId, launchGeneration, closedAt: now });
+      records.set(terminalId, {
+        terminalId,
+        launchGeneration,
+        ...(workspaceId !== undefined ? { workspaceId } : {}),
+        closedAt: now,
+      });
     }
     this.pruneClosed(owner, now);
   }

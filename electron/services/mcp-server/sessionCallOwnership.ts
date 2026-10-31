@@ -583,18 +583,20 @@ export async function dispatchOwnedResource(
  * the creation record `terminal.closeOwned` releases. Read from the close's
  * own result, never its arguments, so an empty `closedIds` notes nothing. A
  * session that lost its transport mid-close notes nothing either, as with a
- * creation.
+ * creation. `generationOf` names the incarnation each close reached, read
+ * before the close was sent where the call named it.
  */
 export function noteClosedTerminals(
   call: {
     readonly sessionId: string;
     readonly sessionStore: Pick<
       SessionStore,
-      "resourceOwnership" | "launchGenerationOf" | "hasLiveTransport"
+      "resourceOwnership" | "hasLiveTransport" | "sessionWorkspaceMap"
     >;
     readonly ownershipOwner: string;
   },
-  envelope: DispatchEnvelope
+  envelope: DispatchEnvelope,
+  generationOf: (terminalId: string) => number | undefined
 ): void {
   const { sessionId, sessionStore, ownershipOwner } = call;
   if (!envelope.result.ok) return;
@@ -612,10 +614,8 @@ export function noteClosedTerminals(
     ownershipOwner,
     closedIds
       .filter((id): id is string => typeof id === "string" && id.length > 0)
-      .map((terminalId) => ({
-        terminalId,
-        launchGeneration: sessionStore.launchGenerationOf(terminalId) ?? undefined,
-      }))
+      .map((terminalId) => ({ terminalId, launchGeneration: generationOf(terminalId) })),
+    envelope.dispatchedWorkspace?.workspaceId ?? sessionStore.sessionWorkspaceMap.get(sessionId)
   );
 }
 

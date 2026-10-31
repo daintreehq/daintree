@@ -225,6 +225,13 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    * already checked each target against what it closed. Absent,
    * `terminal.waitForExit` refuses: nothing here can observe an exit.
    */
+  /**
+   * The incarnation running under a terminal id as far as main can tell, or
+   * the last one launched there (#15728). Read for each close, so the wait
+   * after it asks about the process that close reached. Absent, closes are
+   * noted with no incarnation, and their waits never match an exit.
+   */
+  terminalGenerationOf?: (terminalId: string) => number | undefined;
   waitForClosedPanelExits?: (
     targets: readonly import("./closedPanelExits.js").ClosedPanelExitTarget[],
     options: import("./closedPanelExits.js").ClosedPanelExitWaitOptions

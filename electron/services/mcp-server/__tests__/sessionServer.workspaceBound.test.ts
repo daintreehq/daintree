@@ -568,6 +568,34 @@ describe("workspace-bound external sessions (#11789)", () => {
         }
       });
 
+      it("waits for a closed panel's exit at core with no live view (#15728)", async () => {
+        const result = {
+          processes: [{ terminalId: "t-1", outcome: "exited" as const, exitCode: 0 }],
+        };
+        const waitForClosedPanelExits = vi.fn(async () => result);
+        const deps = viewlessDeps({ waitForClosedPanelExits });
+        vi.mocked(deps.sessionStore.getTier).mockReturnValue("core");
+        deps.sessionStore.resourceOwnership.noteClosed(SESSION, [
+          { terminalId: "t-1", launchGeneration: 2 },
+        ]);
+        const server = createSessionServer(SESSION, deps);
+        await server.connect(makeMockTransport());
+
+        const answer = await callTool(server, {
+          name: "terminal.waitForExit",
+          arguments: { terminalIds: ["t-1"], endGrace: true },
+        });
+
+        expect(answer.isError).toBeFalsy();
+        expect(answer.structuredContent).toEqual(result);
+        expect(waitForClosedPanelExits).toHaveBeenCalledWith(
+          [{ terminalId: "t-1", launchGeneration: 2 }],
+          expect.objectContaining({ endGrace: true })
+        );
+        expect(deps.requestManifest).not.toHaveBeenCalled();
+        expect(deps.dispatchAction).not.toHaveBeenCalled();
+      });
+
       it("still refuses a renderer action with no live view", async () => {
         const deps = viewlessDeps();
         const server = createSessionServer(SESSION, deps);

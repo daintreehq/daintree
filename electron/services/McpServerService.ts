@@ -31,6 +31,7 @@ import type {
 import { SessionStore } from "./mcp-server/sessionStore.js";
 import { readClosedPanelProcess } from "./mcp-server/closedPanelProcesses.js";
 import { waitForClosedPanelExits } from "./mcp-server/closedPanelExits.js";
+import { getLifecycleLedger } from "./pty/lifecycleLedger.js";
 import { readPtyTerminalProcesses } from "./mcp-server/worktreeProcessGuard.js";
 import {
   helpOwnershipPrincipal,
@@ -496,6 +497,10 @@ export class McpServerService {
           return client ? client.getTerminalAsync(id, undefined, { strict: true }) : null;
         }),
       readTerminalProcesses: () => readPtyTerminalProcesses(getPtyClient()),
+      // The live incarnation, or after its exit the last one launched there.
+      terminalGenerationOf: (terminalId) =>
+        getPtyClient()?.getLiveGeneration(terminalId) ??
+        getLifecycleLedger().currentGeneration(terminalId),
       // From exits main kept and the host's own records, never a guess: a
       // record gone with no exit seen, or a host that never answered, is
       // unknown.

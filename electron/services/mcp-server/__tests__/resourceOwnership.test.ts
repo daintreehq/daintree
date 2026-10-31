@@ -284,12 +284,13 @@ describe("ResourceOwnershipLedger", () => {
     it("keeps what an owner closed after its creation record is released", () => {
       const ledger = new ResourceOwnershipLedger();
       ledger.record("session-a", [{ kind: "terminal", id: "t1" }]);
-      ledger.noteClosed("session-a", [{ terminalId: "t1", launchGeneration: 3 }], 1_000);
+      ledger.noteClosed("session-a", [{ terminalId: "t1", launchGeneration: 3 }], "ws-a", 1_000);
       ledger.release("session-a", "terminal", "t1");
 
       expect(ledger.closedRecord("session-a", "t1", 1_000)).toEqual({
         terminalId: "t1",
         launchGeneration: 3,
+        workspaceId: "ws-a",
         closedAt: 1_000,
       });
       expect(ledger.closedRecord("session-b", "t1", 1_000)).toBeUndefined();
@@ -297,9 +298,9 @@ describe("ResourceOwnershipLedger", () => {
 
     it("forgets a close once its window passes, and the newest close of an id replaces the last", () => {
       const ledger = new ResourceOwnershipLedger();
-      ledger.noteClosed("session-a", [{ terminalId: "t1", launchGeneration: 1 }], 0);
-      ledger.noteClosed("session-a", [{ terminalId: "t2", launchGeneration: 1 }], 0);
-      ledger.noteClosed("session-a", [{ terminalId: "t1", launchGeneration: 2 }], 1_000);
+      ledger.noteClosed("session-a", [{ terminalId: "t1", launchGeneration: 1 }], undefined, 0);
+      ledger.noteClosed("session-a", [{ terminalId: "t2", launchGeneration: 1 }], undefined, 0);
+      ledger.noteClosed("session-a", [{ terminalId: "t1", launchGeneration: 2 }], undefined, 1_000);
 
       const later = CLOSED_TERMINAL_TTL_MS + 500;
       expect(ledger.closedRecord("session-a", "t2", later)).toBeUndefined();
@@ -310,8 +311,8 @@ describe("ResourceOwnershipLedger", () => {
       const ledger = new ResourceOwnershipLedger();
       ledger.bindPrincipal("pane-session", "principal-p");
       const principal = ledger.ownerOf("pane-session");
-      ledger.noteClosed("api-session", [{ terminalId: "t1", launchGeneration: 1 }], 0);
-      ledger.noteClosed(principal, [{ terminalId: "t2", launchGeneration: 1 }], 0);
+      ledger.noteClosed("api-session", [{ terminalId: "t1", launchGeneration: 1 }], undefined, 0);
+      ledger.noteClosed(principal, [{ terminalId: "t2", launchGeneration: 1 }], undefined, 0);
 
       ledger.clearAllSessions();
       expect(ledger.closedRecord("api-session", "t1", 0)).toBeUndefined();
@@ -319,14 +320,14 @@ describe("ResourceOwnershipLedger", () => {
 
       ledger.revokePrincipal("principal-p");
       expect(ledger.closedRecord(principal, "t2", 0)).toBeUndefined();
-      ledger.noteClosed(principal, [{ terminalId: "t3", launchGeneration: 1 }], 0);
+      ledger.noteClosed(principal, [{ terminalId: "t3", launchGeneration: 1 }], undefined, 0);
       expect(ledger.closedRecord(principal, "t3", 0)).toBeUndefined();
     });
 
     it("clears one session's closes and leaves another's", () => {
       const ledger = new ResourceOwnershipLedger();
-      ledger.noteClosed("session-a", [{ terminalId: "t1", launchGeneration: 1 }], 0);
-      ledger.noteClosed("session-b", [{ terminalId: "t2", launchGeneration: 1 }], 0);
+      ledger.noteClosed("session-a", [{ terminalId: "t1", launchGeneration: 1 }], undefined, 0);
+      ledger.noteClosed("session-b", [{ terminalId: "t2", launchGeneration: 1 }], undefined, 0);
 
       ledger.clearSession("session-a");
 
