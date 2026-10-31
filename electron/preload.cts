@@ -713,10 +713,10 @@ ipcRenderer.on(CHANNELS.APP_VIEW_CACHED, (_event, payload?: { flushId?: unknown 
       return Promise.reject(error);
     }
   });
+  // Settled even when main isn't waiting, so a failed flush never goes unhandled.
   const flushId = payload?.flushId;
-  if (typeof flushId !== "string") return;
   void Promise.allSettled(flushes).then(() => {
-    ipcRenderer.send(CHANNELS.APP_VIEW_CACHED_FLUSHED, flushId);
+    if (typeof flushId === "string") ipcRenderer.send(CHANNELS.APP_VIEW_CACHED_FLUSHED, flushId);
   });
 });
 // Warm activation — not reveal — owns the clear: main only sends

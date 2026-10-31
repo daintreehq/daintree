@@ -186,15 +186,18 @@ describe("SettingsDialog when main caches its project view (#15633)", () => {
 
   it("saves the draft, then the project form, before main is told it can freeze", async () => {
     const finishEnvSave = deferEnvSave();
+    let finishProjectSave!: () => void;
+    projectForm.flush.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (finishProjectSave = resolve))
+    );
     const onClose = await openOnEnvironment();
     fireEvent.change(screen.getByLabelText("Environment variable value"), {
       target: { value: "2" },
     });
 
     let answered = false;
-    let edge!: Promise<unknown>;
     await act(async () => {
-      edge = cacheView().then(() => {
+      void cacheView().then(() => {
         answered = true;
       });
     });
@@ -202,14 +205,12 @@ describe("SettingsDialog when main caches its project view (#15633)", () => {
     expect(document.hidden).toBe(false);
     expect(window.electron.globalEnv.set).toHaveBeenCalledWith({ GOOD: "2" });
     expect(projectForm.flush).not.toHaveBeenCalled();
+
+    await act(async () => finishEnvSave());
+    expect(projectForm.flush).toHaveBeenCalledTimes(1);
     expect(answered).toBe(false);
 
-    await act(async () => {
-      finishEnvSave();
-      await edge;
-    });
-
-    expect(projectForm.flush).toHaveBeenCalledTimes(1);
+    await act(async () => finishProjectSave());
     expect(answered).toBe(true);
     expect(onClose).not.toHaveBeenCalled();
   });
@@ -223,15 +224,18 @@ describe("SettingsDialog when main caches its project view (#15633)", () => {
     await pressEscape();
     expect(window.electron.globalEnv.set).toHaveBeenCalledTimes(1);
 
-    let edge!: Promise<unknown>;
+    let answered = false;
     await act(async () => {
-      edge = cacheView();
+      void cacheView().then(() => {
+        answered = true;
+      });
     });
-    await act(async () => {
-      finishEnvSave();
-      await edge;
-    });
+    // The edge waits on the close's save rather than answering at once.
+    expect(answered).toBe(false);
 
+    await act(async () => finishEnvSave());
+
+    expect(answered).toBe(true);
     expect(window.electron.globalEnv.set).toHaveBeenCalledTimes(1);
     expect(projectForm.flush).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));

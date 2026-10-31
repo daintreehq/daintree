@@ -403,6 +403,22 @@ describe("preload event subscriptions", () => {
       expect(sentOn("app:view-cached-flush-armed")).toEqual([true, false]);
     });
 
+    it("keeps the other registration when the same function is registered twice", async () => {
+      const flush = vi.fn();
+      const offFirst = app.onViewCachedFlush(flush);
+      const offSecond = app.onViewCachedFlush(flush);
+      offFirst();
+      expect(sentOn("app:view-cached-flush-armed")).toEqual([true]);
+
+      ipcRenderer.emit("app:view-cached", {}, { flushId: "dup" });
+      expect(flush).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(flushed()).toEqual(["dup"]));
+
+      offSecond();
+      expect(sentOn("app:view-cached-flush-armed")).toEqual([true, false]);
+      ipcRenderer.emit("app:view-warm-activated", {});
+    });
+
     it("answers main's flush id only once every flush has settled", async () => {
       let finishSlow!: () => void;
       const slow = vi.fn(() => new Promise<void>((resolve) => (finishSlow = resolve)));
@@ -445,11 +461,25 @@ describe("preload event subscriptions", () => {
     });
 
     it("still flushes on an edge main isn't holding, without answering it", async () => {
+      const unhandled = vi.fn();
+      process.on("unhandledRejection", unhandled);
       const flush = vi.fn();
-      const off = app.onViewCachedFlush(flush);
-      ipcRenderer.emit("app:view-cached", {});
-      off();
+      const offs = [
+        app.onViewCachedFlush(flush),
+        app.onViewCachedFlush(() => Promise.reject(new Error("save failed"))),
+        app.onViewCachedFlush(() => {
+          throw new Error("boom");
+        }),
+      ];
+      try {
+        ipcRenderer.emit("app:view-cached", {});
+        for (const off of offs) off();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      } finally {
+        process.off("unhandledRejection", unhandled);
+      }
 
+      expect(unhandled).not.toHaveBeenCalled();
       expect(flush).toHaveBeenCalledTimes(1);
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(flushed()).toEqual([]);

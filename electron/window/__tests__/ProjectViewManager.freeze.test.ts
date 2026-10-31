@@ -194,6 +194,9 @@ describe("ProjectViewManager — efficiency freeze", () => {
   });
 
   afterEach(() => {
+    // Every manager subscribes to flush settles, and the next test reuses its webContents ids.
+    if (!manager.disposed) manager.dispose();
+    _resetCachedViewFlushForTests();
     vi.useRealTimers();
   });
 
@@ -306,7 +309,7 @@ describe("ProjectViewManager — efficiency freeze", () => {
   });
 
   describe("a view still flushing unsaved edits on its cached edge (#15633)", () => {
-    afterEach(() => _resetCachedViewFlushForTests());
+    afterEach(() => _resetDictationViewHoldsForTests());
 
     const flushIdSentTo = (wc: ReturnType<typeof createMockWebContents>) =>
       (
@@ -365,6 +368,25 @@ describe("ProjectViewManager — efficiency freeze", () => {
       vi.advanceTimersByTime(CACHED_VIEW_FLUSH_TIMEOUT_MS);
 
       expect(frozeInitial()).toBe(false);
+    });
+
+    it("freezes only the view that settled, not every unfrozen cached view", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      const flushId = flushIdSentTo(initialWc);
+      const wcB = manager.getActiveView()!.webContents;
+      // A dictation keeps proj-b unfrozen as the user leaves it; once it lets go,
+      // only the periodic pass would freeze it.
+      const release = holdDictationView(wcB.id);
+      await manager.switchTo("proj-c", "/path/c");
+      release();
+      vi.mocked(freezeWebContents).mockClear();
+
+      settleCachedViewFlush(initialWc as never, flushId);
+      vi.advanceTimersByTime(1);
+
+      const frozen = vi.mocked(freezeWebContents).mock.calls.map(([wc]) => wc as unknown);
+      expect(frozen).toHaveLength(1);
+      expect(frozen[0]).toBe(initialWc);
     });
 
     it("is frozen at once, as before, once its renderer has nothing registered", async () => {

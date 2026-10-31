@@ -23,7 +23,6 @@ import {
   purgeMemoryWebContents,
   readJsHeapUsedBytes,
 } from "../utils/webContentsLifecycle.js";
-import { CHANNELS } from "../ipc/channels.js";
 import { logWarn } from "../utils/logger.js";
 import * as AgentStateCache from "./ProjectViewAgentStateCache.js";
 import { updateViewBounds } from "./ProjectViewFactory.js";

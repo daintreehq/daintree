@@ -242,7 +242,7 @@ describe("useFlushOnHide", () => {
     const edge = lifecycle.cache().then(() => {
       settled = true;
     });
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(fn).toHaveBeenCalledTimes(1);
     expect(settled).toBe(false);
 
