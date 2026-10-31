@@ -7,6 +7,7 @@ import { TerminalSnapshotSchema, filterValidTerminalEntries } from "../schemas/i
 import { getProjectStateDir, stateFilePath } from "./projectStorePaths.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { markPerformance, withPerformanceSpan } from "../utils/performance.js";
+import { AppError } from "../utils/errorTypes.js";
 
 const PROJECT_STATE_CACHE_TTL_MS = 60_000;
 const PROJECT_STATE_CACHE_SWEEP_MS = 60_000;
@@ -114,6 +115,12 @@ export class ProjectStateManager {
   private unreadableInPlaceProjectIds = new Set<string>();
   /** When a read may next try to move an unreadable file aside, after a failed rename. */
   private quarantineRetryAt = new Map<string, number>();
+  /**
+   * Projects with a quarantine rename still retrying. Nothing but that rename's
+   * own outcome may lift the save block meanwhile: a clear or a fresh save that
+   * landed in the gap would put a file at the live path for the rename to move.
+   */
+  private quarantinesInFlight = new Set<string>();
   /**
    * Updates waiting BEHIND the batch a project's runner is currently applying.
    *
@@ -362,9 +369,13 @@ export class ProjectStateManager {
   private async runBatch(projectId: string, batch: QueuedUpdate[]): Promise<void> {
     let existing: ProjectState | null;
     try {
-      existing = await this.getProjectState(projectId);
+      const read = await this.readProjectState(projectId);
       // Before any updater runs: they all treat null as "nothing saved yet".
+      // This read's own answer counts, not just the shared flag, which a
+      // concurrent read that did manage to parse the file may have cleared.
+      if (read.unreadableInPlace) throw this.unreadableInPlaceError(projectId);
       this.assertNotUnreadableInPlace(projectId);
+      existing = read.state;
     } catch (error) {
       for (const entry of batch) entry.reject(error);
       return;
@@ -462,10 +473,16 @@ export class ProjectStateManager {
    * saving it would replace the only copy of the real one.
    */
   private assertNotUnreadableInPlace(projectId: string): void {
-    if (!this.unreadableInPlaceProjectIds.has(projectId)) return;
-    throw new Error(
-      `State file for project ${projectId} could not be read or moved aside; leaving it untouched`
-    );
+    if (this.unreadableInPlaceProjectIds.has(projectId)) {
+      throw this.unreadableInPlaceError(projectId);
+    }
+  }
+
+  private unreadableInPlaceError(projectId: string): AppError {
+    return new AppError({
+      code: "PROJECT_STATE_UNREADABLE",
+      message: `State file for project ${projectId} could not be read or moved aside; leaving it untouched`,
+    });
   }
 
   async saveProjectState(projectId: string, state: ProjectState): Promise<void> {
@@ -541,6 +558,9 @@ export class ProjectStateManager {
     // because the cache happened to be warm. The bump retires any read still in
     // flight, which would otherwise land its older bytes on top of this.
     this.bumpStateGeneration(projectId);
+    // What is at the live path now is what this save wrote, whatever a read
+    // that overlapped it made of the file it replaced.
+    this.markStateFileUsable(projectId);
     this.setProjectStateCache(projectId, { ...validatedState, projectId });
     // After the cache, so an observer that reads back through this manager sees
     // the state it was just handed rather than the previous one.
@@ -548,16 +568,27 @@ export class ProjectStateManager {
   }
 
   async getProjectState(projectId: string): Promise<ProjectState | null> {
+    return (await this.readProjectState(projectId)).state;
+  }
+
+  /**
+   * The read behind {@link getProjectState}, also saying whether its null
+   * stands in for a file that is still there. A cached answer never does: the
+   * cache only holds what a read could use, a save wrote, or an absent file.
+   */
+  private async readProjectState(
+    projectId: string
+  ): Promise<{ state: ProjectState | null; unreadableInPlace: boolean }> {
     for (let attempt = 1; ; attempt++) {
       const cachedState = this.getCachedProjectState(projectId);
       if (cachedState !== undefined) {
-        return cachedState;
+        return { state: cachedState, unreadableInPlace: false };
       }
 
       const filePath = stateFilePath(this.projectsConfigDir, projectId);
       if (!filePath) {
         this.setProjectStateCache(projectId, null);
-        return null;
+        return { state: null, unreadableInPlace: false };
       }
 
       // A save or clear that finishes while this read is out makes its bytes
@@ -570,7 +601,7 @@ export class ProjectStateManager {
       // Checked again here: a save can land between the helper publishing and
       // this resuming, and the retry then serves the save's cached state.
       if (read.current && this.isReadCurrent(projectId, fence)) {
-        return read.state;
+        return { state: read.state, unreadableInPlace: read.unreadableInPlace === true };
       }
       if (attempt >= PROJECT_STATE_READ_ATTEMPTS) {
         throw new Error(
@@ -589,7 +620,7 @@ export class ProjectStateManager {
     projectId: string,
     filePath: string,
     fence: ProjectStateReadFence
-  ): Promise<{ state: ProjectState | null; current: boolean }> {
+  ): Promise<{ state: ProjectState | null; current: boolean; unreadableInPlace?: true }> {
     const superseded = { state: null, current: false };
     // Nothing at the live path is authoritative emptiness: safe to cache and to
     // build a fresh state on.
@@ -605,7 +636,7 @@ export class ProjectStateManager {
     const leaveInPlace = () => {
       this.unreadableInPlaceProjectIds.add(projectId);
       this.projectStateCache.delete(projectId);
-      return { state: null, current: true };
+      return { state: null, current: true, unreadableInPlace: true as const };
     };
     // Only a rename that succeeded makes the project empty. A failed one is not
     // retried until the cooldown passes, so a lock that outlasts
@@ -613,25 +644,38 @@ export class ProjectStateManager {
     const quarantine = async (quarantinePath: string, describeMove: () => string) => {
       const retryAt = this.quarantineRetryAt.get(projectId);
       if (retryAt !== undefined && Date.now() < retryAt) return leaveInPlace();
+      // Another read is already moving this file; a second rename can only fail.
+      if (this.quarantinesInFlight.has(projectId)) return leaveInPlace();
       // Set before the rename so a save can't land while it retries.
       this.unreadableInPlaceProjectIds.add(projectId);
+      this.quarantinesInFlight.add(projectId);
       markPerformance(PERF_MARKS.PROJECT_STATE_QUARANTINE, { projectId });
+      let renameError: { error: unknown } | undefined;
       try {
         await resilientRename(filePath, quarantinePath);
-      } catch (renameError) {
-        // Already gone from the live path (a concurrent read moved it aside, or
-        // a clear removed it), so there is nothing left there to protect.
-        if (errnoCode(renameError) === "ENOENT") return publishNull();
+      } catch (error) {
+        renameError = { error };
+      } finally {
+        this.quarantinesInFlight.delete(projectId);
+      }
+      // ENOENT means something else already emptied the live path (a clear),
+      // which is as good as moving it: nothing there is left to protect.
+      if (renameError && errnoCode(renameError.error) !== "ENOENT") {
         this.quarantineRetryAt.set(projectId, Date.now() + PROJECT_STATE_QUARANTINE_RETRY_MS);
         console.error(
           `[ProjectStateManager] Failed to quarantine unreadable state for ${projectId}; leaving it in place:`,
-          renameError
+          renameError.error
         );
         if (!this.isReadCurrent(projectId, fence)) return superseded;
         return leaveInPlace();
       }
-      this.pendingQuarantines.set(projectId, quarantinePath);
-      console.warn(`[ProjectStateManager] ${describeMove()}`);
+      // Lifted whether or not this read is still current: no save could fill
+      // the live path while the rename held the block.
+      this.markStateFileUsable(projectId);
+      if (!renameError) {
+        this.pendingQuarantines.set(projectId, quarantinePath);
+        console.warn(`[ProjectStateManager] ${describeMove()}`);
+      }
       return publishNull();
     };
 
@@ -763,6 +807,7 @@ export class ProjectStateManager {
   }
 
   private markStateFileUsable(projectId: string): void {
+    if (this.quarantinesInFlight.has(projectId)) return;
     this.unreadableInPlaceProjectIds.delete(projectId);
     this.quarantineRetryAt.delete(projectId);
   }
@@ -780,16 +825,17 @@ export class ProjectStateManager {
   }
 
   async getProjectStateWithRecovery(projectId: string): Promise<ProjectStateReadResult> {
-    const state = await this.getProjectState(projectId);
+    const { state, unreadableInPlace } = await this.readProjectState(projectId);
+    const result: ProjectStateReadResult = { state };
+    // Both can hold at once: an earlier file was moved aside, and the one a
+    // save wrote since can't be read either.
     const quarantinedPath = this.pendingQuarantines.get(projectId);
     if (quarantinedPath !== undefined) {
       this.pendingQuarantines.delete(projectId);
-      return { state, quarantinedPath };
+      result.quarantinedPath = quarantinedPath;
     }
-    if (this.unreadableInPlaceProjectIds.has(projectId)) {
-      return { state, unreadableInPlace: true };
-    }
-    return { state };
+    if (unreadableInPlace) result.unreadableInPlace = true;
+    return result;
   }
 
   /**

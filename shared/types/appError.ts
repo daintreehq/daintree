@@ -56,6 +56,9 @@ export type AppErrorCode =
   // represent — unknown fields, or terminals of an unrecognized type — that a
   // newer build (or a plugin) put in the tracked file (#12261).
   | "RECIPE_FORWARD_COMPAT_CONFLICT"
+  // A project's state.json is still at its live path but could neither be read
+  // nor moved aside, so the save that would replace it was refused (#15613).
+  | "PROJECT_STATE_UNREADABLE"
   | "PLUGIN_ACTIVATION_FAILED"
   // A project-bound plugin host call had no live renderer for its own project.
   // Deliberately not a fallback to the focused view: delivering it elsewhere is

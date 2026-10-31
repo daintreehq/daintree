@@ -297,9 +297,14 @@ export class ProjectSettingsManager {
     return quarantinePath;
   }
 
+  /**
+   * `beforeSave` is a file a save moved aside on its way to replacing it, so
+   * the save's settings, not defaults, are what take effect.
+   */
   private async broadcastCorruption(
     quarantinedPath: string,
-    kind?: "future-version"
+    kind?: "future-version",
+    beforeSave = false
   ): Promise<void> {
     try {
       // Lazy import keeps the workspace-host bundle clean of `BrowserWindow`.
@@ -313,8 +318,11 @@ export class ProjectSettingsManager {
       broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
         type: "error",
         title: kind === "future-version" ? "Settings file too new" : "Project settings corrupted",
-        message:
-          kind === "future-version"
+        message: beforeSave
+          ? kind === "future-version"
+            ? `Settings written by a newer version of Daintree were preserved at ${quarantinedPath} before saving.`
+            : `Project settings on disk couldn't be read and were preserved at ${quarantinedPath} before saving.`
+          : kind === "future-version"
             ? `Settings file written by a newer version of Daintree was quarantined to ${quarantinedPath}. Defaults are in effect until you reload with a newer build.`
             : `Project settings couldn't be read and have been preserved at ${quarantinedPath}. Defaults are in effect until you reload the project.`,
       });
@@ -386,12 +394,18 @@ export class ProjectSettingsManager {
     } catch {
       // Unparseable: there is nothing in it for the save to keep, but its bytes
       // are moved aside before the save replaces them, or the save fails.
-      await this.quarantine(projectId, filePath, "corrupted");
+      const quarantinedPath = await this.quarantine(projectId, filePath, "corrupted");
+      void this.broadcastCorruption(quarantinedPath, undefined, true);
       return undefined;
     }
     const decoded = decode(parsed);
     if (!decoded.ok) {
-      await this.quarantine(projectId, filePath, `future-v${decoded.onDiskVersion}`);
+      const quarantinedPath = await this.quarantine(
+        projectId,
+        filePath,
+        `future-v${decoded.onDiskVersion}`
+      );
+      void this.broadcastCorruption(quarantinedPath, "future-version", true);
       return undefined;
     }
     return decoded.settings;

@@ -458,15 +458,19 @@ describe("ProjectStateManager never writes over an unpreserved state file (#1561
   });
 
   const unreadable: Array<[string, () => void]> = [
-    ["malformed JSON", () => fsPromisesMock.readFile.mockResolvedValue("{ not valid json")],
     [
-      "a future-schema file",
+      "malformed JSON whose rename is rejected",
+      () => fsPromisesMock.readFile.mockResolvedValue("{ not valid json"),
+    ],
+    [
+      "a future-schema file whose rename is rejected",
       () =>
         fsPromisesMock.readFile.mockResolvedValue(
           JSON.stringify({ _schemaVersion: 99, terminals: [terminal("t1")] })
         ),
     ],
     [
+      // Never renamed at all: an errno is no evidence the bytes are bad.
       "a non-ENOENT read error",
       () =>
         fsPromisesMock.readFile.mockRejectedValue(
@@ -476,7 +480,7 @@ describe("ProjectStateManager never writes over an unpreserved state file (#1561
   ];
 
   it.each(unreadable)(
-    "%s with a rejected rename refuses a queued update instead of saving an empty state",
+    "%s refuses a queued update instead of saving an empty state",
     async (_label, arrange) => {
       arrange();
 
@@ -495,18 +499,15 @@ describe("ProjectStateManager never writes over an unpreserved state file (#1561
     }
   );
 
-  it.each(unreadable)(
-    "%s with a rejected rename refuses a direct save",
-    async (_label, arrange) => {
-      arrange();
+  it.each(unreadable)("%s refuses a direct save", async (_label, arrange) => {
+    arrange();
 
-      expect(await manager.getProjectState(projectId)).toBeNull();
-      await expect(manager.saveProjectState(projectId, makeState())).rejects.toThrow(
-        /leaving it untouched/
-      );
-      expect(utilsMock.resilientAtomicWriteFile).not.toHaveBeenCalled();
-    }
-  );
+    expect(await manager.getProjectState(projectId)).toBeNull();
+    await expect(manager.saveProjectState(projectId, makeState())).rejects.toThrow(
+      /leaving it untouched/
+    );
+    expect(utilsMock.resilientAtomicWriteFile).not.toHaveBeenCalled();
+  });
 
   it("does not move a file aside for an operational read error", async () => {
     fsPromisesMock.readFile.mockRejectedValue(
@@ -650,5 +651,191 @@ describe("ProjectStateManager never writes over an unpreserved state file (#1561
     expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(3);
     expect(read.unreadableInPlace).toBe(true);
     expect(utilsMock.resilientRename).not.toHaveBeenCalled();
+  });
+
+  describe.each([
+    ["linux", 1],
+    ["win32", 3],
+  ] as const)("a permission error on %s", (platform, attempts) => {
+    const realPlatform = process.platform;
+    beforeEach(() => {
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    });
+    afterEach(() => {
+      Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
+    });
+
+    it.each(["EACCES", "EPERM"])(
+      `is read ${attempts === 1 ? "once" : "again, as a lock"} (%s)`,
+      async (code) => {
+        fsPromisesMock.readFile.mockRejectedValue(Object.assign(new Error(code), { code }));
+
+        const read = await manager.getProjectStateWithRecovery(projectId);
+
+        expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(attempts);
+        expect(read.unreadableInPlace).toBe(true);
+        expect(utilsMock.resilientRename).not.toHaveBeenCalled();
+      }
+    );
+  });
+
+  it.each([
+    [
+      "a read that finds the file gone",
+      async (m: ProjectStateManager) => {
+        fsPromisesMock.readFile.mockRejectedValue(
+          Object.assign(new Error("ENOENT"), { code: "ENOENT" })
+        );
+        await m.getProjectState(projectId);
+      },
+    ],
+    [
+      "a clear that finds the file gone",
+      async (m: ProjectStateManager) => {
+        utilsMock.resilientUnlink.mockRejectedValueOnce(
+          Object.assign(new Error("ENOENT"), { code: "ENOENT" })
+        );
+        await m.clearProjectState(projectId);
+      },
+    ],
+  ])("lifts the block after %s", async (_label, release) => {
+    fsPromisesMock.readFile.mockRejectedValue(
+      Object.assign(new Error("EIO: i/o error"), { code: "EIO" })
+    );
+    expect((await manager.getProjectStateWithRecovery(projectId)).unreadableInPlace).toBe(true);
+    await expect(manager.saveProjectState(projectId, makeState())).rejects.toThrow(
+      /leaving it untouched/
+    );
+
+    await release(manager);
+
+    await manager.saveProjectState(projectId, makeState());
+    expect(utilsMock.resilientAtomicWriteFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a queued update whose own read failed even when a concurrent read then succeeds", async () => {
+    let failQueuedRead!: (error: Error) => void;
+    let passOtherRead!: (bytes: string) => void;
+    fsPromisesMock.readFile
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => (failQueuedRead = reject)))
+      .mockImplementationOnce(() => new Promise((resolve) => (passOtherRead = resolve)));
+
+    const updater = vi.fn((existing: ProjectState | null) => existing ?? makeState());
+    const queued = manager.enqueueProjectStateUpdate(projectId, updater);
+    const other = manager.getProjectState(projectId);
+    await vi.waitFor(() => expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(2));
+
+    // The queued read fails first and the other parses the file straight after,
+    // clearing the shared flag before the queued batch resumes.
+    failQueuedRead(Object.assign(new Error("EIO: i/o error"), { code: "EIO" }));
+    passOtherRead(validBytes());
+
+    await expect(queued).rejects.toThrow(/leaving it untouched/);
+    expect(updater).not.toHaveBeenCalled();
+    expect((await other)?.terminals.map((t) => t.id)).toEqual(["t1"]);
+    expect(utilsMock.resilientAtomicWriteFile).not.toHaveBeenCalled();
+  });
+
+  it("does not keep serving a state another read just failed to read", async () => {
+    let passFirst!: (bytes: string) => void;
+    let failSecond!: (error: Error) => void;
+    fsPromisesMock.readFile
+      .mockImplementationOnce(() => new Promise((resolve) => (passFirst = resolve)))
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => (failSecond = reject)));
+
+    const first = manager.getProjectState(projectId);
+    const second = manager.getProjectState(projectId);
+    await vi.waitFor(() => expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(2));
+    passFirst(validBytes());
+    await first;
+    failSecond(Object.assign(new Error("EIO: i/o error"), { code: "EIO" }));
+    expect(await second).toBeNull();
+
+    // The failure is the newer word on the file, so the next read goes back to disk.
+    fsPromisesMock.readFile.mockResolvedValue(validBytes());
+    expect((await manager.getProjectState(projectId))?.terminals.map((t) => t.id)).toEqual(["t1"]);
+    expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(3);
+  });
+
+  it("lifts the block once a save that overlapped a failing read lands", async () => {
+    fsPromisesMock.readFile.mockResolvedValue(validBytes());
+    await manager.getProjectState(projectId);
+
+    let finishWrite!: () => void;
+    utilsMock.resilientAtomicWriteFile.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (finishWrite = resolve))
+    );
+    const saving = manager.saveProjectState(projectId, makeState({ terminals: [terminal("new")] }));
+    await vi.waitFor(() => expect(utilsMock.resilientAtomicWriteFile).toHaveBeenCalledTimes(1));
+
+    // A read that opens the file the save is replacing fails, and flags it.
+    manager.invalidateProjectStateCache(projectId);
+    fsPromisesMock.readFile.mockRejectedValueOnce(
+      Object.assign(new Error("EIO: i/o error"), { code: "EIO" })
+    );
+    expect((await manager.getProjectStateWithRecovery(projectId)).unreadableInPlace).toBe(true);
+
+    finishWrite();
+    await saving;
+
+    // The live path now holds what the save wrote, so updates build on it.
+    await manager.enqueueProjectStateUpdate(projectId, (existing) => ({
+      ...existing!,
+      sidebarWidth: 400,
+    }));
+    const calls = utilsMock.resilientAtomicWriteFile.mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(JSON.parse(calls[1][1] as string).terminals.map((t: { id: string }) => t.id)).toEqual([
+      "new",
+    ]);
+  });
+
+  it("keeps saves blocked while a quarantine rename is still retrying, even across a clear", async () => {
+    fsPromisesMock.readFile.mockResolvedValue("{ not valid json");
+    let finishRename!: (error?: Error) => void;
+    utilsMock.resilientRename.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          finishRename = (error) => (error ? reject(error) : resolve());
+        })
+    );
+
+    const reading = manager.getProjectStateWithRecovery(projectId);
+    await vi.waitFor(() => expect(utilsMock.resilientRename).toHaveBeenCalledTimes(1));
+
+    // A clear removes the file mid-rename; a save in that gap would put a new
+    // file at the live path for the still-retrying rename to move aside.
+    await manager.clearProjectState(projectId);
+    await expect(manager.saveProjectState(projectId, makeState())).rejects.toThrow(
+      /leaving it untouched/
+    );
+    // A concurrent read can't start a second rename of the same file either.
+    expect((await manager.getProjectStateWithRecovery(projectId)).unreadableInPlace).toBe(true);
+    expect(utilsMock.resilientRename).toHaveBeenCalledTimes(1);
+
+    fsPromisesMock.readFile.mockRejectedValue(
+      Object.assign(new Error("ENOENT"), { code: "ENOENT" })
+    );
+    finishRename(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+    await reading;
+
+    await manager.saveProjectState(projectId, makeState());
+    expect(utilsMock.resilientAtomicWriteFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a file left in place alongside an earlier quarantine nobody has shown yet", async () => {
+    utilsMock.resilientRename.mockResolvedValue(undefined);
+    fsPromisesMock.readFile.mockResolvedValueOnce("{ not valid json");
+    // Not the recovery read: the moved-aside path waits for hydration.
+    expect(await manager.getProjectState(projectId)).toBeNull();
+
+    manager.invalidateProjectStateCache(projectId);
+    fsPromisesMock.readFile.mockRejectedValue(
+      Object.assign(new Error("EIO: i/o error"), { code: "EIO" })
+    );
+    const read = await manager.getProjectStateWithRecovery(projectId);
+
+    expect(read.quarantinedPath).toMatch(/\.corrupted\.\d+$/);
+    expect(read.unreadableInPlace).toBe(true);
   });
 });

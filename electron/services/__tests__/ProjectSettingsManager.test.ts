@@ -620,6 +620,39 @@ describe("ProjectSettingsManager caching", () => {
         "{{invalid json"
       );
       expect((await manager.getProjectSettings(projectId)).devServerCommand).toBe("x");
+      await vi.waitFor(() => expect(broadcastSpy).toHaveBeenCalledTimes(1));
+      const [, payload] = broadcastSpy.mock.calls[0];
+      expect(payload).toMatchObject({ type: "error", title: "Project settings corrupted" });
+      expect(payload.message).toContain(quarantined[0]);
+      expect(payload.message).not.toMatch(/Defaults are in effect/);
+    });
+
+    it("moves a future-version file aside before a save replaces it, and says so", async () => {
+      const settingsPath = path.join(tempDir, projectId, "settings.json");
+      const newer = JSON.stringify({
+        _schemaVersion: PROJECT_SETTINGS_SCHEMA_VERSION + 1,
+        runCommands: [],
+      });
+      await fs.writeFile(settingsPath, newer, "utf-8");
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        await manager.saveProjectSettings(projectId, { runCommands: [], devServerCommand: "x" });
+      } finally {
+        warnSpy.mockRestore();
+      }
+
+      const preserved = path.join(
+        tempDir,
+        projectId,
+        `settings.json.future-v${PROJECT_SETTINGS_SCHEMA_VERSION + 1}`
+      );
+      expect(await fs.readFile(preserved, "utf-8")).toBe(newer);
+      expect((await manager.getProjectSettings(projectId)).devServerCommand).toBe("x");
+      await vi.waitFor(() => expect(broadcastSpy).toHaveBeenCalledTimes(1));
+      const [, payload] = broadcastSpy.mock.calls[0];
+      expect(payload).toMatchObject({ type: "error", title: "Settings file too new" });
+      expect(payload.message).not.toMatch(/Defaults are in effect/);
     });
   });
 

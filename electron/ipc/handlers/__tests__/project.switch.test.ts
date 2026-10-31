@@ -184,6 +184,7 @@ import type {
   WindowServices,
 } from "../../../window/WindowRegistry.js";
 import { DisposableStore } from "../../../utils/lifecycle.js";
+import { AppError } from "../../../utils/errorTypes.js";
 // Disposes the stats/fleet pollers this registration starts; see the helper for
 // why dropping the disposer leaks live timers into the rest of the file.
 const registerProjectCrudHandlers = createProjectCrudRegistrar();
@@ -1000,6 +1001,62 @@ describe("project:switch activeWorktreeId pre-apply (#5000)", () => {
       "proj-old",
       expect.objectContaining({ activeWorktreeId: "wt-feature" })
     );
+  });
+
+  it.each([
+    ["a refused save over an unreadable state file", true],
+    ["any other save failure", false],
+  ])("handles %s when persisting the outgoing state", async (_label, refused) => {
+    const mockView = {
+      webContents: { id: 100, isDestroyed: () => false, send: vi.fn() },
+    };
+    const pvm = {
+      switchTo: vi.fn().mockResolvedValue({ view: mockView, isNew: false }),
+      getProjectIdForWebContents: vi.fn(),
+    };
+    mockGetWindowForWebContents.mockReturnValue(null);
+    projectStoreMock.getCurrentProjectId.mockReturnValue("proj-old");
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-new",
+      name: "New Project",
+      path: "/projects/new",
+    });
+    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
+    projectStoreMock.getProjectState.mockResolvedValue(null);
+    projectStoreMock.saveProjectState.mockRejectedValueOnce(
+      refused
+        ? new AppError({ code: "PROJECT_STATE_UNREADABLE", message: "leaving it untouched" })
+        : new Error("ENOSPC: no space left on device")
+    );
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    registerProjectCrudHandlers({
+      mainWindow: { id: 1 } as unknown,
+      projectViewManager: pvm,
+    } as unknown as HandlerDependencies);
+    const handleMap = new Map<string, (...args: unknown[]) => unknown>();
+    for (const call of (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls) {
+      handleMap.set(call[0] as string, call[1] as (...args: unknown[]) => unknown);
+    }
+    const switching = Promise.resolve(
+      handleMap.get(CHANNELS.PROJECT_SWITCH)!({ sender: { id: 99 } }, "proj-new", {
+        draftInputs: {},
+        activeWorktreeId: "wt-feature",
+      })
+    );
+
+    try {
+      // Leaving is navigation: only the refusal that protects the file lets the
+      // switch through with the outgoing layout unsaved.
+      if (refused) {
+        await expect(switching).resolves.toMatchObject({ outcome: "switched" });
+      } else {
+        await expect(switching).rejects.toThrow(/ENOSPC/);
+      }
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(pvm.switchTo).toHaveBeenCalled();
   });
 
   it("clears stale activeWorktreeId when outgoingState sends undefined", async () => {
