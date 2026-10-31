@@ -106,7 +106,7 @@ vi.mock("../../services/ProjectSwitchService.js", () => ({
 }));
 vi.mock("../../menu.js", () => ({
   createApplicationMenu: createApplicationMenuMock,
-  rebuildApplicationMenuIfPluginVisibilityChanged: rebuildMenuIfChangedMock,
+  rebuildApplicationMenuIfStale: rebuildMenuIfChangedMock,
 }));
 vi.mock("../../services/plugin/PluginTourRegistry.js", () => ({
   onPluginToursChanged: vi.fn((listener: () => void) => {

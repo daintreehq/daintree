@@ -91,6 +91,31 @@ export function remoteWorkspaceName(key: string): string | null {
     : null;
 }
 
+const titleListeners = new Set<() => void>();
+
+/**
+ * Window titles were just rewritten. Listeners read them back with `getTitle()`
+ * rather than being handed them, so this module stays free of Electron.
+ */
+export function notifyWindowTitlesChanged(): void {
+  for (const listener of titleListeners) {
+    try {
+      listener();
+    } catch (error) {
+      // Runs after a title write that has already committed; a listener must
+      // never turn that into a failure.
+      console.error("[windowTitle] title listener threw:", error);
+    }
+  }
+}
+
+export function onWindowTitlesChanged(listener: () => void): () => void {
+  titleListeners.add(listener);
+  return () => {
+    titleListeners.delete(listener);
+  };
+}
+
 function openProjectName(projectId: string | null, lookup: ProjectTitleLookup): string | null {
   if (!projectId) return null;
   const remote = remoteWorkspaceName(projectId);

@@ -22,7 +22,7 @@ import { PortalManager } from "../services/PortalManager.js";
 import { EventBuffer } from "../services/EventBuffer.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
-import { createApplicationMenu, rebuildApplicationMenuIfPluginVisibilityChanged } from "../menu.js";
+import { createApplicationMenu, rebuildApplicationMenuIfStale } from "../menu.js";
 import { onPluginToursChanged } from "../services/plugin/PluginTourRegistry.js";
 import { onProjectPresenceChanged } from "./projectPresenceChanges.js";
 import { ProjectSwitchService } from "../services/ProjectSwitchService.js";
@@ -164,8 +164,10 @@ export async function initPerWindowServices(
   // change also signals. Plugin menu items and tours are filtered by this
   // window's project too (#13765), so a project switch or a focus change may
   // call for a different menu; those rebuild only when it actually differs,
-  // since a rebuild dismisses a menu the user has open. Debounced: one plugin
-  // load or unload can change the tour set several times in a tick.
+  // since a rebuild dismisses a menu the user has open. A window registering or
+  // unregistering signals presence too, which is how the Window menu's list of
+  // open windows (off macOS) gains or loses an item. Debounced: one plugin load
+  // or unload can change the tour set several times in a tick.
   let pluginMenuRebuild: ReturnType<typeof setTimeout> | null = null;
   let pluginMenuRebuildForced = false;
   const schedulePluginMenuRebuild = (force: boolean): void => {
@@ -184,7 +186,7 @@ export async function initPerWindowServices(
       if (focused ? focused !== win : !forced) return;
       try {
         if (forced) createApplicationMenu(win, cliService);
-        else rebuildApplicationMenuIfPluginVisibilityChanged(win, cliService);
+        else rebuildApplicationMenuIfStale(win, cliService);
       } catch (err) {
         console.error("[MAIN] Plugin menu rebuild failed:", err);
       }

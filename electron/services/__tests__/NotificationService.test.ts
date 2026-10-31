@@ -82,7 +82,11 @@ vi.mock("../../window/linuxWindowIcon.js", () => iconMock);
 
 import { sendToRenderer } from "../../ipc/utils.js";
 import { notificationService } from "../NotificationService.js";
-import type { ProjectTitleLookup, ProjectTitleRow } from "../../window/windowTitle.js";
+import {
+  onWindowTitlesChanged,
+  type ProjectTitleLookup,
+  type ProjectTitleRow,
+} from "../../window/windowTitle.js";
 
 const sendToRendererMock = vi.mocked(sendToRenderer);
 
@@ -298,6 +302,52 @@ describe("NotificationService", () => {
 
       expect(lastTitle(winA)).toBe("alpha-app");
       expect(lastTitle(winB)).toBe("beta-app");
+    });
+
+    it("announces the new titles once every one is written", () => {
+      const winA = createWindowMock(false, [11]);
+      const winB = createWindowMock(false, [21]);
+      winA.activeProjectId = "alpha";
+      winB.activeProjectId = "beta";
+      notificationService.initialize(createRegistryMock([winA, winB]) as never, rows);
+      const listener = vi.fn();
+      const unsubscribe = onWindowTitlesChanged(listener);
+
+      notificationService.refreshTitles();
+      unsubscribe();
+
+      const announced = listener.mock.invocationCallOrder;
+      expect(announced).toHaveLength(1);
+      const titleWrites = [
+        ...winA.setTitle.mock.invocationCallOrder,
+        ...winB.setTitle.mock.invocationCallOrder,
+      ];
+      expect(Math.max(...titleWrites)).toBeLessThan(announced[0]!);
+    });
+
+    it("announces the new titles once a waiting count reaches every one", () => {
+      const winA = createWindowMock(false, [11]);
+      const winB = createWindowMock(false, [21]);
+      winA.activeProjectId = "alpha";
+      winB.activeProjectId = "beta";
+      notificationService.initialize(createRegistryMock([winA, winB]) as never, rows);
+      const listener = vi.fn();
+      const unsubscribe = onWindowTitlesChanged(listener);
+
+      notificationService.updateNotifications(11, { waitingCount: 3 });
+      expect(listener).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(301);
+      unsubscribe();
+
+      expect(lastTitle(winA)).toBe("(3) alpha-app");
+      const announced = listener.mock.invocationCallOrder;
+      expect(announced).toHaveLength(1);
+      const titleWrites = [
+        ...winA.setTitle.mock.invocationCallOrder,
+        ...winB.setTitle.mock.invocationCallOrder,
+      ];
+      expect(titleWrites).toHaveLength(2);
+      expect(Math.max(...titleWrites)).toBeLessThan(announced[0]!);
     });
 
     it("scopes the waiting count to the window that owns it", () => {

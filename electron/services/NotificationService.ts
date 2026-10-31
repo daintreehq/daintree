@@ -11,6 +11,7 @@ import { getLinuxWindowIcon } from "../window/linuxWindowIcon.js";
 import {
   FALLBACK_WINDOW_TITLE,
   composeWindowTitle,
+  notifyWindowTitlesChanged,
   resolveWindowProjectName,
   type ProjectTitleLookup,
 } from "../window/windowTitle.js";
@@ -276,6 +277,7 @@ class NotificationService {
       totalWaiting += waitingCount;
       this.writeTitle(ctx, waitingCount);
     }
+    notifyWindowTitlesChanged();
 
     if (process.platform === "darwin") {
       app.setBadgeCount(totalWaiting);
@@ -299,6 +301,7 @@ class NotificationService {
     for (const ctx of this.registry.all()) {
       this.writeTitle(ctx, countsByWindow.get(ctx.windowId) ?? 0);
     }
+    notifyWindowTitlesChanged();
   }
 
   /**

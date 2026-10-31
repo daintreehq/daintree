@@ -16,7 +16,7 @@ vi.mock("../../ipc/handlers.js", async () => ({
 }));
 vi.mock("../../menu.js", () => ({
   createApplicationMenu: vi.fn(),
-  rebuildApplicationMenuIfPluginVisibilityChanged: vi.fn(),
+  rebuildApplicationMenuIfStale: vi.fn(),
 }));
 vi.mock("../../setup/environment.js", () => ({ isDemoMode: false }));
 vi.mock("../../services/PtyClient.js", () => ({ PtyClient: class {} }));
