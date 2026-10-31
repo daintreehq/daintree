@@ -78,7 +78,8 @@ export function mapTerminalInfo(
       : (ctx.ptyManager.analysisObservedSince(t.id) ?? undefined),
     spawnedAt: t.spawnedAt,
     isTrashed,
-    trashExpiresAt: t.trashExpiresAt ?? (isTrashed ? ctx.ptyManager.getTrashExpiresAt(t.id) : undefined),
+    trashExpiresAt:
+      t.trashExpiresAt ?? (isTrashed ? ctx.ptyManager.getTrashExpiresAt(t.id) : undefined),
     activityTier: ctx.ptyManager.getActivityTier(t.id),
     hasPty,
     // The raw flag is only written by the exit handler, so a terminal that is

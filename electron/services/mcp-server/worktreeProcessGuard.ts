@@ -108,7 +108,9 @@ export async function refuseWorktreeDeleteWhileRunning(
     .map(
       (terminal) =>
         `'${terminal.terminalId}' (` +
-        (terminal.createdByThisSession ? "created by this session" : "not created by this session") +
+        (terminal.createdByThisSession
+          ? "created by this session"
+          : "not created by this session") +
         (terminal.trashed ? ", closed and still in its trash grace" : "") +
         ")"
     )
