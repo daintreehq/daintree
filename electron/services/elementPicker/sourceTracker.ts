@@ -41,7 +41,7 @@ export interface SourceTrackerOptions {
 }
 
 interface FileRecord {
-  /** Every workspace-relative path a resolve reached this file by, first read first. */
+  /** The workspace-relative paths a resolve reached this file by, least recently read first. */
   refs: SourceFileRef[];
   directory: string;
   revision: FileRevision | null;
@@ -76,6 +76,8 @@ export class SourceTracker {
   private readonly dropped = new Map<string, FileRecord>();
   /** Workspace-relative path to its place in the view's list: lower ranks first. */
   private held = new Map<string, number>();
+  /** Each workspace-relative path to the file it was last read as: one path names one file at a time. */
+  private readonly owners = new Map<string, string>();
   private reads = 0;
   private disposed = false;
 
@@ -85,17 +87,18 @@ export class SourceTracker {
   observe(absolutePath: string, ref: SourceFileRef, revision: FileRevision): void {
     if (this.disposed) return;
     const readAt = ++this.reads;
+    this.claim(absolutePath, ref.path);
     const existing = this.files.get(absolutePath);
     if (existing) {
       existing.revision = revision;
       existing.readAt = readAt;
-      existing.refs = withRef(existing.refs, ref);
+      existing.refs = this.withRef(absolutePath, existing.refs, ref);
       return;
     }
     const remembered = this.dropped.get(absolutePath);
     this.dropped.delete(absolutePath);
     const directory = path.dirname(absolutePath);
-    const refs = withRef(remembered?.refs ?? [], ref);
+    const refs = this.withRef(absolutePath, remembered?.refs ?? [], ref);
     this.admit([[absolutePath, { refs, directory, revision, readAt }]]);
   }
 
@@ -132,6 +135,38 @@ export class SourceTracker {
     this.directories.clear();
     this.files.clear();
     this.dropped.clear();
+    this.owners.clear();
+  }
+
+  /**
+   * `refPath` now leads to `absolutePath`. A link retargeted since it was last
+   * read leads somewhere else now, so the file it led to stops answering to it.
+   */
+  private claim(absolutePath: string, refPath: string): void {
+    const previous = this.owners.get(refPath);
+    this.owners.set(refPath, absolutePath);
+    if (previous === undefined || previous === absolutePath) return;
+    const tracked = this.files.get(previous);
+    const record = tracked ?? this.dropped.get(previous);
+    if (!record) return;
+    record.refs = record.refs.filter((entry) => entry.path !== refPath);
+    if (!tracked && record.refs.length === 0) this.dropped.delete(previous);
+  }
+
+  /** `refs` with `ref` as the most recently read; past the bound, the least recent one not held goes. */
+  private withRef(
+    absolutePath: string,
+    refs: readonly SourceFileRef[],
+    ref: SourceFileRef
+  ): SourceFileRef[] {
+    const next = refs.filter((entry) => entry.path !== ref.path);
+    next.push(ref);
+    if (next.length > MAX_REFS_PER_FILE) {
+      const unheld = next.findIndex((entry) => !this.held.has(entry.path));
+      const [gone] = next.splice(unheld === -1 ? 0 : unheld, 1);
+      if (gone && this.owners.get(gone.path) === absolutePath) this.owners.delete(gone.path);
+    }
+    return next;
   }
 
   /**
@@ -212,6 +247,9 @@ export class SourceTracker {
       if (excess <= 0) return;
       if (this.rank(record) !== undefined) continue;
       this.dropped.delete(absolutePath);
+      for (const ref of record.refs) {
+        if (this.owners.get(ref.path) === absolutePath) this.owners.delete(ref.path);
+      }
       excess -= 1;
     }
   }
@@ -292,12 +330,6 @@ export class SourceTracker {
       file.checking = false;
     }
   }
-}
-
-/** The refs with `ref` added, newest kept when there are too many. */
-function withRef(refs: SourceFileRef[], ref: SourceFileRef): SourceFileRef[] {
-  if (refs.some((entry) => entry.path === ref.path)) return refs;
-  return [...refs, ref].slice(-MAX_REFS_PER_FILE);
 }
 
 /** Closes a watch at most once, however many times it is given up. */

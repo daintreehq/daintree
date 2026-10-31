@@ -258,23 +258,28 @@ describe("SourceTracker", () => {
   it("still fills a kept directory after a held file finds no directory slot", async () => {
     const t = tracker({}, true);
     const at = (index: number) => path.join("/repo", `d${index}`, "x.svelte");
-    const sibling = path.join("/repo", "d0", "y.svelte");
+    const sibling = path.join("/repo", "d1", "y.svelte");
     const extra = path.join("/repo", "extra", "x.svelte");
-    t.subject.hold([
-      ...Array.from({ length: MAX_WATCHED_DIRECTORIES }, (_, i) => ref(`d${i}/x.svelte`).path),
-      ref("extra/x.svelte").path,
-      ref("d0/y.svelte").path,
-    ]);
-    for (let index = 0; index < MAX_WATCHED_DIRECTORIES; index++) {
+    // Both read early, then given up to newer reads.
+    t.subject.observe(sibling, ref("d1/y.svelte"), revision(1));
+    t.subject.observe(extra, ref("extra/x.svelte"), revision(1));
+    for (let index = 2; index <= MAX_WATCHED_DIRECTORIES; index++) {
       t.subject.observe(at(index), ref(`d${index}/x.svelte`), revision(1));
     }
-    t.subject.observe(sibling, ref("d0/y.svelte"), revision(1));
-    t.subject.observe(extra, ref("extra/x.svelte"), revision(1));
+    t.subject.observe(at(1), ref("d1/x.svelte"), revision(1));
+    expect(t.disposed).toEqual([path.dirname(sibling), path.dirname(extra)]);
+
+    // Both come back in one hold: `extra` ranks higher but finds no directory
+    // slot, and the scan goes on to `sibling`, whose directory is kept.
+    const pinned = Array.from(
+      { length: MAX_WATCHED_DIRECTORIES },
+      (_, index) => ref(`d${index + 1}/x.svelte`).path
+    );
+    t.subject.hold([...pinned, ref("extra/x.svelte").path, ref("d1/y.svelte").path]);
     expect(t.subject.usage()).toEqual({
       files: MAX_WATCHED_DIRECTORIES + 1,
       directories: MAX_WATCHED_DIRECTORIES,
     });
-    expect(t.listeners.has(path.dirname(extra))).toBe(false);
     await t.settle();
     t.readRevision.mockClear();
     t.listeners.get(path.dirname(sibling))!(sibling);
@@ -451,6 +456,50 @@ describe("SourceTracker", () => {
       { file: ref("lib/Real.svelte"), revision: revision(2) },
       { file: ref("lib/Alias.svelte"), revision: revision(2) },
     ]);
+  });
+
+  it("stops reporting a link's path for the file it led to before it was retargeted", async () => {
+    const t = tracker({}, true);
+    const first = path.join("/repo", "lib", "First.svelte");
+    const second = path.join("/repo", "lib", "Second.svelte");
+    t.subject.observe(first, ref("lib/First.svelte"), revision(1));
+    t.subject.observe(first, ref("lib/Link.svelte"), revision(1));
+    t.subject.observe(second, ref("lib/Link.svelte"), revision(1));
+    await t.settle();
+
+    t.disk.set(first, revision(2));
+    t.disk.set(second, revision(2));
+    t.listeners.get(path.join("/repo", "lib"))!(path.join("/repo", "lib"));
+    await t.settle();
+    expect(t.changes).toEqual([
+      { file: ref("lib/First.svelte"), revision: revision(2) },
+      { file: ref("lib/Link.svelte"), revision: revision(2) },
+    ]);
+  });
+
+  it("keeps a held path among a file's many paths, and the one read last", async () => {
+    const t = tracker({}, true);
+    const real = path.join("/repo", "lib", "Real.svelte");
+    const alias = (index: number) => ref(`lib/A${index}.svelte`);
+    t.subject.observe(real, alias(0), revision(1));
+    t.subject.hold([alias(0).path]);
+    for (let index = 1; index <= 7; index++) t.subject.observe(real, alias(index), revision(1));
+    t.subject.observe(real, alias(1), revision(1));
+    // A ninth path: A2 is the least recently read path not held, so it goes.
+    t.subject.observe(real, alias(8), revision(1));
+    for (let index = 0; index < MAX_WATCHED_DIRECTORIES; index++) {
+      const other = path.join("/repo", `d${index}`, "x.svelte");
+      t.subject.observe(other, ref(`d${index}/x.svelte`), revision(1));
+    }
+    expect(t.disposed).not.toContain(path.dirname(real));
+
+    await t.settle();
+    t.disk.set(real, revision(2));
+    t.listeners.get(path.dirname(real))!(real);
+    await t.settle();
+    expect(t.changes.map((change) => change.file.path)).toEqual(
+      [0, 3, 4, 5, 6, 7, 1, 8].map((index) => alias(index).path)
+    );
   });
 
   it("survives a watch that fails", () => {

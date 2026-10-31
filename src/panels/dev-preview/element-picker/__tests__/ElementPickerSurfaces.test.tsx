@@ -1759,10 +1759,24 @@ describe("keeping the selection's files watched", () => {
 
   /** The same selection about other files, as an older pick of another element would be. */
   function elsewhere(selection: PickedSelection, name: string): PickedSelection {
-    const moved = JSON.stringify(selection)
-      .replaceAll(FILE, `src/${name}/+page.svelte`)
-      .replaceAll(CARD_FILE, `src/${name}/Card.svelte`);
-    return { ...(JSON.parse(moved) as PickedSelection), selectionId: `${name}-selection` };
+    const moved = structuredClone(selection);
+    const move = (file: { path: string }) => {
+      if (file.path === FILE) file.path = `src/${name}/+page.svelte`;
+      else if (file.path === CARD_FILE) file.path = `src/${name}/Card.svelte`;
+    };
+    for (const results of Object.values(moved.results)) {
+      for (const result of results) {
+        if (
+          result.state === "verified" ||
+          result.state === "mapped" ||
+          result.state === "observed"
+        ) {
+          move(result.target.file);
+        }
+        if (result.state === "verified" && result.definition) move(result.definition.file);
+      }
+    }
+    return { ...moved, selectionId: `${name}-selection` };
   }
 
   const delivery = (id: string, subject: PickedSelection, state: DeliveryState) => ({
