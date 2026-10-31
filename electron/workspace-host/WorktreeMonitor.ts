@@ -1804,6 +1804,9 @@ export class WorktreeMonitor {
   stop(): void {
     this._isRunning = false;
     this._pollAbortController.abort();
+    // An in-flight pass belongs to the lifecycle that just ended. Free its slot
+    // so a restart can run its own instead of waiting for the old one to settle.
+    this.gitStatusPass.abandon();
     this.clearTimers();
     this.watcherController.stop();
     // A parked automatic pass would run against a stopped monitor.
@@ -2388,6 +2391,8 @@ export class WorktreeMonitor {
       if (!this.statusWorkAllowed) return;
       const startTime = Date.now();
       const queueDelayMs = Math.max(0, startTime - queuedAt);
+      const lifecycle = this._pollAbortController.signal;
+      const abandon = new AbortController();
 
       try {
         // Force a status refresh when an elevated worktree (focused or
@@ -2400,12 +2405,17 @@ export class WorktreeMonitor {
         // this monitor's loop (and, via the shared pollQueue slot, the whole
         // sidebar) wedge permanently.
         await withTimeout(
-          this.updateGitStatus(forceRefresh),
+          this.updateGitStatus(forceRefresh, abandon.signal),
           POLL_WATCHDOG_TIMEOUT_MS,
           `poll watchdog: ${this.path}`
         );
+        if (lifecycle.aborted) return;
         this.pollingStrategy.recordSuccess(Date.now() - startTime, queueDelayMs);
       } catch (_error) {
+        // Once the watchdog stops waiting, the hung pass must not land late
+        // over a newer one, nor hold the slot the next poll needs.
+        abandon.abort();
+        if (lifecycle.aborted) return;
         tripped = this.pollingStrategy.recordFailure(Date.now() - startTime, queueDelayMs);
 
         if (tripped) {
@@ -2453,8 +2463,8 @@ export class WorktreeMonitor {
 
   // --- Git status ---
 
-  async updateGitStatus(forceRefresh: boolean = false): Promise<void> {
-    return this.gitStatusPass.run(forceRefresh);
+  async updateGitStatus(forceRefresh: boolean = false, abandonSignal?: AbortSignal): Promise<void> {
+    return this.gitStatusPass.run(forceRefresh, abandonSignal);
   }
 
   /**

@@ -2314,6 +2314,9 @@ export class WorkspaceService {
   }
 
   private handleMonitorUpdate(monitor: WorktreeMonitor, snapshot: WorktreeSnapshot): void {
+    // A removed or replaced monitor can still settle work it started; its id now
+    // belongs to nobody, or to a newer incarnation.
+    if (this.monitors.get(monitor.id) !== monitor) return;
     this.statusTiming.noteEmit(monitor, snapshot.worktreeChanges != null);
     const tick = this.emitGate.next(monitor, snapshot);
     if (tick) {

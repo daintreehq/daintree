@@ -747,10 +747,15 @@ describe("GitStatusPass", () => {
       return { ...made, controller, recordFullPass, dropBaseline };
     }
 
-    // The host side of WorktreeMonitor.stop(): not running, lifecycle signal aborted.
+    // The host side of WorktreeMonitor.stop(): not running, lifecycle signal
+    // aborted. What the pass did while still live is cleared, so assertions
+    // read only what it did after the stop.
     function stopHost(made: ReturnType<typeof setUp>) {
       (made.host as { isRunning: boolean }).isRunning = false;
       made.controller.abort();
+      vi.mocked(made.watcherController.setUpstreamRef).mockClear();
+      vi.mocked(made.pollingStrategy.recordStateChange).mockClear();
+      vi.mocked(made.pollingStrategy.recordNoChange).mockClear();
     }
 
     function expectNothingPublished(made: ReturnType<typeof setUp>) {
@@ -763,6 +768,7 @@ describe("GitStatusPass", () => {
       expect(made.watcherController.setUpstreamRef).not.toHaveBeenCalled();
       expect(made.watcherController.flushPendingIfReady).not.toHaveBeenCalled();
       expect(made.pollingStrategy.recordStateChange).not.toHaveBeenCalled();
+      expect(made.pollingStrategy.recordNoChange).not.toHaveBeenCalled();
       expect(made.recordFullPass).not.toHaveBeenCalled();
       expect(made.host.isUpdating).toBe(false);
     }
