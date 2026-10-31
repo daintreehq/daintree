@@ -317,7 +317,17 @@ describe("WorktreeBulkRemoveDialog — the preview is the consent (#12416)", () 
       change(`/repo/a/out/f${String(i).padStart(3, "0")}.txt`, "untracked")
     );
     renderDialog({
-      targets: [target("a", { status: verified({ changes: listed, omittedUntrackedCount: 5 }) })],
+      targets: [
+        target("a", {
+          // The summary production builds: the omitted files are already in it.
+          status: verified({
+            changes: listed,
+            omittedUntrackedCount: 5,
+            untrackedFileCount: 205,
+            hasUntrackedFiles: true,
+          }),
+        }),
+      ],
     });
 
     const text = document.body.textContent ?? "";
