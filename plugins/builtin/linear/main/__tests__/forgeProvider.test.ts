@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import type { RepoRef } from "../../../../../shared/types/forge.js";
+import type { ListOptions, RepoRef } from "../../../../../shared/types/forge.js";
 import {
   clearLinearCaches,
   linearForgeProvider,
@@ -253,57 +253,69 @@ describe("listIssues", () => {
         const ordered = [...ISSUES].sort((a, b) =>
           String(b[variables.orderBy]).localeCompare(String(a[variables.orderBy]))
         );
-        const start = variables.after ? ordered.findIndex((n) => n.id === variables.after) + 1 : 0;
+        let start = 0;
+        if (variables.after !== null) {
+          const at = ordered.findIndex((n) => `cursor:${n.id}` === variables.after);
+          if (at < 0) return gql(null, { errors: [{ message: "Invalid cursor" }] });
+          start = at + 1;
+        }
         const nodes = ordered.slice(start, start + variables.first);
         const hasNextPage = start + variables.first < ordered.length;
-        return gql({
-          issues: { nodes, pageInfo: { hasNextPage, endCursor: nodes.at(-1)?.id ?? null } },
-        });
+        const endCursor = nodes.length > 0 ? `cursor:${nodes[nodes.length - 1].id}` : null;
+        return gql({ issues: { nodes, pageInfo: { hasNextPage, endCursor } } });
       });
     }
 
-    async function listAll(opts: { sort?: string; direction?: "asc" | "desc" }) {
-      const numbers: number[] = [];
-      let cursor: string | null = null;
-      do {
-        const page = await linearForgeProvider.listIssues(REPO, { ...opts, perPage: 2, cursor });
-        numbers.push(...page.items.map((issue) => issue.number));
-        cursor = page.nextCursor;
-      } while (cursor);
-      return numbers;
+    async function listTwoPages(opts: Pick<ListOptions, "sort" | "direction">) {
+      const first = await linearForgeProvider.listIssues(REPO, { ...opts, perPage: 2 });
+      expect(first.hasMore).toBe(true);
+      const second = await linearForgeProvider.listIssues(REPO, {
+        ...opts,
+        perPage: 2,
+        cursor: first.nextCursor,
+      });
+      expect(second.hasMore).toBe(false);
+      expect(second.nextCursor).toBeNull();
+      return [...first.items, ...second.items].map((issue) => issue.number);
     }
 
     it("orders the whole collection by creation for sort created", async () => {
       serveOrderedIssues();
-      expect(await listAll({ sort: "created", direction: "desc" })).toEqual([3, 2, 1]);
-      expect(fetchMock()).toHaveBeenCalledTimes(2);
-      // The mock orders by the variable, so the query has to actually apply it.
+      expect(await listTwoPages({ sort: "created", direction: "desc" })).toEqual([3, 2, 1]);
+      // The mock orders and pages by the variables, so the query has to actually apply them.
       expect(body(0).query).toMatch(/\$orderBy: PaginationOrderBy!/);
       expect(body(0).query).toMatch(/orderBy: \$orderBy\b/);
-      expect(body(0).variables.orderBy).toBe("createdAt");
-      expect(body(1).variables).toMatchObject({ orderBy: "createdAt", after: "i2" });
+      expect(body(0).query).toMatch(/after: \$after\b/);
+      expect(body(0).variables).toMatchObject({ orderBy: "createdAt", after: null });
+      expect(body(1).variables).toMatchObject({ orderBy: "createdAt", after: "cursor:i2" });
     });
 
     it("orders the whole collection by last update for sort updated", async () => {
       serveOrderedIssues();
-      expect(await listAll({ sort: "updated" })).toEqual([1, 3, 2]);
+      expect(await listTwoPages({ sort: "updated" })).toEqual([1, 3, 2]);
       expect(body(0).variables.orderBy).toBe("updatedAt");
-      expect(body(1).variables).toMatchObject({ orderBy: "updatedAt", after: "i3" });
+      expect(body(1).variables).toMatchObject({ orderBy: "updatedAt", after: "cursor:i3" });
     });
 
     it("orders by creation when no sort is given, as the action documents", async () => {
       serveOrderedIssues();
-      expect(await listAll({})).toEqual([3, 2, 1]);
+      expect(await listTwoPages({})).toEqual([3, 2, 1]);
       expect(body(0).variables.orderBy).toBe("createdAt");
     });
 
-    it("refuses an ascending list by name instead of answering newest first", async () => {
-      serveOrderedIssues();
-      await expect(
-        linearForgeProvider.listIssues(REPO, { sort: "created", direction: "asc" })
-      ).rejects.toThrow(/direction "asc"/);
-      expect(fetchMock()).not.toHaveBeenCalled();
-    });
+    it.each(["asc", "sideways"])(
+      "refuses direction %j by name instead of answering newest first",
+      async (direction) => {
+        serveOrderedIssues();
+        await expect(
+          linearForgeProvider.listIssues(REPO, {
+            sort: "created",
+            direction: direction as ListOptions["direction"],
+          })
+        ).rejects.toThrow(`direction "${direction}"`);
+        expect(fetchMock()).not.toHaveBeenCalled();
+      }
+    );
 
     it("refuses a sort field Linear can't order by", async () => {
       serveOrderedIssues();
