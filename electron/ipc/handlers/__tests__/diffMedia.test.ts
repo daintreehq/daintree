@@ -550,7 +550,9 @@ describe("diffMedia readFileVersions", () => {
 
       readFileInIndexMock.mockResolvedValueOnce({
         ok: true,
-        content: Buffer.from("version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 12\n"),
+        content: Buffer.from(
+          "version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 12\n"
+        ),
       });
       const pointer = await invoke({ cwd: REPO_ROOT, filePath: "img.png", side: "staged" });
       expect(pointer.working).toEqual({ ok: false, error: "UNSUPPORTED" });

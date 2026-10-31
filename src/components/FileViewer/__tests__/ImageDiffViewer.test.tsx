@@ -658,9 +658,9 @@ describe("ImageDiffViewer sides of a partially staged file (#15610)", () => {
     await act(async () => {
       next.resolve(bothOkWith(B_HEAD_URL, B_WORKING_URL));
     });
-    expect(
-      (await screen.findByAltText("Index version of logo.png")).getAttribute("src")
-    ).toBe(B_HEAD_URL);
+    expect((await screen.findByAltText("Index version of logo.png")).getAttribute("src")).toBe(
+      B_HEAD_URL
+    );
     expect(screen.getByAltText("Working tree version of logo.png").getAttribute("src")).toBe(
       B_WORKING_URL
     );
