@@ -121,6 +121,10 @@ import { hostEnvDrafts } from "./Hosts/hostEnvDrafts";
 let rememberedTab: SettingsTab = "general";
 let rememberedProjectTab: SettingsTab = "project:general";
 
+// The project form's save error, above every project page: a close the form
+// couldn't save lands here, since the form isn't one page's draft.
+const PROJECT_SAVE_ERROR_ID = "project-settings-save-error";
+
 // Hover-intent delay before speculatively mounting a settings tab's lazy
 // panel. Short enough that the panel's IPC reads are usually settled by the
 // time the user clicks; long enough that a mouse sweep across nav items
@@ -522,7 +526,15 @@ function SettingsDialogInner({
     if (flushInFlightRef.current) return flushInFlightRef.current;
     const pending = (async () => {
       const failed = flushAllTabs ? await flushAllTabs() : [];
-      await projectForm.flush();
+      if (await projectForm.flush()) {
+        // The project page shown, else the one last shown: that is where the
+        // edit was made, and every project page carries the form's error.
+        const tab =
+          scopeForTab(activeTabRef.current) === "project"
+            ? activeTabRef.current
+            : rememberedProjectTab;
+        return [...failed, { tab, landOn: PROJECT_SAVE_ERROR_ID }];
+      }
       return failed;
     })();
     flushInFlightRef.current = pending;
@@ -641,8 +653,11 @@ function SettingsDialogInner({
   };
 
   // Everything that could cover the page goes: search, another machine's page,
-  // the hidden-setting note. Its tab is already mounted, since only a mounted
+  // the hidden-setting note. A page's tab is already mounted, since only a mounted
   // tab registers a flush, so the switch can't suspend and needs no transition.
+  // The project form's failure can name a project page that unmounted when the
+  // user left project scope, so it is marked visited to mount again; every tab
+  // is preloaded at idle, so that doesn't suspend either.
   const revealFailedFlush = ({ tab, landOn }: FailedSettingsFlush) => {
     const scope = scopeForTab(tab);
     // Judged by the scope the page is in, not the one shown: a close from project
@@ -654,6 +669,7 @@ function SettingsDialogInner({
     setSearchQuery("");
     setHiddenSettingBanner(null);
     pendingRequirementRef.current = null;
+    markTabVisited(tab);
     setActiveScope(scope);
     setActiveTab(tab);
     setScrollToSection(landOn);
@@ -1202,9 +1218,14 @@ function SettingsDialogInner({
                 )}
                 {projectForm.projectAutoSaveError && (
                   <SettingsLoadErrorBanner
+                    id={PROJECT_SAVE_ERROR_ID}
                     title={`Couldn't save settings for ${projectLabel}`}
                     message={projectForm.projectAutoSaveError}
+                    announceKey={projectForm.projectAutoSaveFailures}
                     onRetry={() => void projectForm.saveNow()}
+                    // A close stays open while the edit won't save, so there has to
+                    // be a way to give the edit up and close.
+                    onDiscard={projectForm.discardUnsavedChanges}
                   />
                 )}
                 {showProjectLoading && (
@@ -1563,6 +1584,7 @@ function ProjectFormTabContent({
           settings={projectForm.projectSettings}
           isOpen={isOpen}
           onFlush={projectForm.saveNow}
+          projectSaveFailed={projectForm.projectAutoSaveError !== null}
           projectLabel={projectLabel}
           globalEnvironmentVariables={globalEnvVars}
         />

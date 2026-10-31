@@ -365,7 +365,10 @@ describe("EnvironmentVariablesEditor close-time flush", () => {
     return null;
   }
 
-  const renderEditor = (onChange: (value: EnvVar[]) => void, onFlush: () => Promise<void>) =>
+  const renderEditor = (
+    onChange: (value: EnvVar[]) => void,
+    onFlush: () => Promise<void | { message: string }>
+  ) =>
     render(
       <>
         <CaptureFlush />
@@ -427,6 +430,25 @@ describe("EnvironmentVariablesEditor close-time flush", () => {
     const landing = document.getElementById(failed[0]!.landOn);
     expect(landing?.contains(value)).toBe(true);
     expect(landing?.contains(screen.getByRole("alert"))).toBe(true);
+  });
+
+  // The project form reports a failed save by resolving with it, never by rejecting.
+  it("keeps a draft whose save resolved with a failure when the dialog flushes", async () => {
+    const onChange = vi.fn<(value: EnvVar[]) => void>();
+    const onFlush = vi
+      .fn<() => Promise<void | { message: string }>>()
+      .mockResolvedValue({ message: "Read-only checkout" });
+    renderEditor(onChange, onFlush);
+    const value = screen.getByLabelText("Environment variable value");
+    fireEvent.change(value, { target: { value: "b" } });
+    let failed: FailedSettingsFlush[] = [];
+    await act(async () => {
+      failed = await flushAll!();
+    });
+    expect(failed).toHaveLength(1);
+    const landing = document.getElementById(failed[0]!.landOn);
+    expect(landing?.contains(value)).toBe(true);
+    expect(screen.getByRole("alert").textContent).toBe("Read-only checkout");
   });
 
   it("registers nothing while the draft is clean", async () => {

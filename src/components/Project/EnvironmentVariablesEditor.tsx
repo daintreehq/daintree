@@ -22,8 +22,10 @@ import { isSecretEnvEntry } from "@/utils/secretDetection";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { EnvVar } from "./projectSettingsDirty";
 import type { ProjectSettings } from "@shared/types/project";
+import type { ProjectSettingsSaveFailure } from "@/hooks/useProjectSettingsForm";
 
-type OnFlush = () => Promise<void>;
+// The project form resolves with its failure instead of rejecting.
+type OnFlush = () => Promise<void | ProjectSettingsSaveFailure>;
 
 interface EnvironmentVariablesEditorProps {
   environmentVariables: EnvVar[];
@@ -31,6 +33,8 @@ interface EnvironmentVariablesEditorProps {
   settings: ProjectSettings | null;
   isOpen: boolean;
   onFlush?: OnFlush;
+  /** Whether the project form's last save failed; a later one landing clears this page's error. */
+  projectSaveFailed?: boolean;
   projectLabel: string;
   globalEnvironmentVariables?: Record<string, string>;
 }
@@ -49,6 +53,7 @@ export function EnvironmentVariablesEditor({
   settings,
   isOpen,
   onFlush,
+  projectSaveFailed,
   projectLabel,
   globalEnvironmentVariables,
 }: EnvironmentVariablesEditorProps) {
@@ -72,6 +77,12 @@ export function EnvironmentVariablesEditor({
     setSaveAttempted(false);
     setSaveError(null);
   }, [environmentVariables, isOpen]);
+
+  // After a failed Save the rows are the form's, so the save that finally lands
+  // (the banner's Retry, a close) never passes through this page.
+  useEffect(() => {
+    if (projectSaveFailed === false) setSaveError(null);
+  }, [projectSaveFailed]);
 
   const rowErrors = useMemo(
     () => (saveAttempted ? validateEnvRows(rows) : {}),
@@ -143,8 +154,10 @@ export function EnvironmentVariablesEditor({
     onEnvironmentVariablesChange(normalizedRows);
 
     try {
-      if (onFlush) {
-        await onFlush();
+      const failure = await onFlush?.();
+      if (failure) {
+        setSaveError(failure.message);
+        return { landOn: PROJECT_VARIABLES_SECTION_ID };
       }
       return undefined;
     } catch (err) {
