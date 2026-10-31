@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 vi.mock("electron", () => ({
   app: {
@@ -185,7 +185,7 @@ function runMigrations(config: FakeConfig): void {
 }
 
 let tempDir: string;
-let openSqlite: ReturnType<typeof vi.fn<() => Database.Database | null>>;
+let openSqlite: Mock<() => Database.Database | null>;
 
 function deps(config: FakeConfig, overrides: Partial<LegacyAuditRingImportDeps> = {}) {
   return {
