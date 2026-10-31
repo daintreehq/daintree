@@ -7,6 +7,7 @@ import { DIFF_ROW_BATCH } from "../diffRowStaging";
 import { buildDiffLineIndex, hashLineRange } from "../diffNotes";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useDiffNotesStore } from "@/store/diffNotesStore";
+import { readDiffViewerCss } from "@/__tests__/support/cssManifest";
 
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn().mockResolvedValue({ ok: true }) },
@@ -52,11 +53,11 @@ function addedTypeScript(lines: number): string {
 }
 
 /** A modify diff: 1,000-line file, a 191-change first hunk and two small ones far below it. */
-function gappedModify(): { diff: string; source: string } {
+function gappedModify({ revision = true } = {}): { diff: string; source: string } {
   const newLines = Array.from({ length: 1000 }, (_, i) => `line ${i + 1}`);
   const out = [
     "diff --git a/src/gaps.txt b/src/gaps.txt",
-    "index 1111111..2222222 100644",
+    ...(revision ? ["index 1111111..2222222 100644"] : []),
     "--- a/src/gaps.txt",
     "+++ b/src/gaps.txt",
     "@@ -1,190 +1,190 @@",
@@ -141,13 +142,16 @@ async function runFrame() {
   });
 }
 
+/** How long to yield when no frame is queued: the in-thread tokenizer may still be working. */
+const TOKENIZER_POLL_MS = 5;
+
 /** Runs frames (and waits out the tokenizer between them) until `done`, or fails. */
 async function runUntil(done: () => boolean, maxSteps = 300) {
   for (let i = 0; i < maxSteps && !done(); i++) {
     if (frames.size > 0) await runFrame();
     else {
       await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 5));
+        await new Promise((resolve) => setTimeout(resolve, TOKENIZER_POLL_MS));
       });
     }
   }
@@ -347,16 +351,17 @@ describe("DiffViewer staged rows", () => {
       />
     );
     ref.container = container;
-    await runUntil(
-      () =>
-        rowCount(container) === ROWS && tokenizedRowCount(container) === ROWS && frames.size === 0
-    );
-    // Staged: several notifications, each after more rows were highlighted.
-    const progress = seen.filter((count) => count > 0);
-    expect(progress.length).toBeGreaterThan(1);
-    for (let i = 1; i < progress.length; i++) {
-      expect(progress[i]).toBeGreaterThan(progress[i - 1]!);
-    }
+    const observed: number[] = [];
+    let last = tokenizedRowCount(container);
+    await runUntil(() => {
+      const now = tokenizedRowCount(container);
+      if (now !== last) observed.push(now);
+      last = now;
+      return rowCount(container) === ROWS && now === ROWS && frames.size === 0;
+    });
+    // Staged, and one notification per highlighted batch, each seeing that batch.
+    expect(observed.length).toBeGreaterThan(1);
+    expect(seen.filter((count) => count > 0)).toEqual(observed);
     expect(seen[seen.length - 1]).toBe(ROWS);
   });
 
@@ -409,18 +414,72 @@ describe("DiffViewer staged rows", () => {
     expect(screen.getByText(/Show 10 more hunks/)).not.toBeNull();
   });
 
-  it("records the column a split selection started in, for rows mounted after it", () => {
+  /** The selectors of the stylesheet rule that restricts late rows to one column. */
+  function columnSelectors(): string[] {
+    const css = readDiffViewerCss().replace(/\/\*[\s\S]*?\*\//g, "");
+    const rule = css.match(/([^{}]*data-diff-select-side[^{}]*)\{([^}]*)\}/);
+    expect(rule).not.toBeNull();
+    expect(rule![2]).toMatch(/user-select:\s*none/);
+    return rule![1]!
+      .split(",")
+      .map((selector) => selector.trim())
+      .filter(Boolean);
+  }
+
+  function restricted(cell: Element): boolean {
+    return columnSelectors().some((selector) => cell.matches(selector));
+  }
+
+  it("restricts rows mounted after a split selection starts to the column it started in", async () => {
     const { diff, source } = gappedModify();
     const { container } = renderViewer(<DiffViewer diff={diff} source={source} />);
     const region = container.querySelector<HTMLElement>("[role='region']")!;
-    const row = container.querySelector("tr.diff-line")!;
-    fireEvent.mouseDown(row.children[3]!, { button: 0 });
+    const first = container.querySelector("tr.diff-line")!;
+    fireEvent.mouseDown(first.children[3]!, { button: 0 });
     expect(region.dataset.diffSelectSide).toBe("new");
-    fireEvent.mouseDown(row.children[1]!, { button: 0 });
+    const mountedBefore = rowCount(container);
+    await runUntil(() => frames.size === 0);
+    const late = container.querySelectorAll("tr.diff-line")[mountedBefore]!;
+    // A row react-diff-view never saw at mousedown: no inline style of its own.
+    const lateOldCode = late.children[1];
+    expect(lateOldCode instanceof HTMLElement && lateOldCode.style.userSelect).toBe("");
+    expect(restricted(late.children[1]!)).toBe(true);
+    expect(restricted(late.children[3]!)).toBe(false);
+
+    fireEvent.mouseDown(first.children[1]!, { button: 0 });
     expect(region.dataset.diffSelectSide).toBe("old");
+    expect(restricted(late.children[1]!)).toBe(false);
+    expect(restricted(late.children[3]!)).toBe(true);
     // A gutter press scopes nothing, as in react-diff-view itself.
-    fireEvent.mouseDown(row.children[0]!, { button: 0 });
+    fireEvent.mouseDown(first.children[0]!, { button: 0 });
     expect(region.dataset.diffSelectSide).toBe("old");
+  });
+
+  it("never restricts the only code column of a single-sided table", () => {
+    const { container } = renderViewer(<DiffViewer diff={addedDiff(20)} wrapLines />);
+    const scroller = container.querySelector<HTMLElement>("[role='region']")!;
+    for (const side of ["old", "new"]) {
+      scroller.dataset.diffSelectSide = side;
+      for (const cell of container.querySelectorAll("tr.diff-line > td.diff-code")) {
+        expect(restricted(cell)).toBe(false);
+      }
+    }
+  });
+
+  it("forgets the selected column when another file takes over the same region", () => {
+    // Revisionless patches keep their index key, so React reuses the scroller.
+    const { diff } = gappedModify({ revision: false });
+    const { container, rerender } = renderViewer(<DiffViewer diff={diff} wrapLines />);
+    const scroller = container.querySelector<HTMLElement>("[role='region']")!;
+    fireEvent.mouseDown(container.querySelector("tr.diff-line")!.children[3]!, { button: 0 });
+    expect(scroller.dataset.diffSelectSide).toBe("new");
+    rerender(
+      <TooltipProvider>
+        <DiffViewer diff={addedDiff(20, { revision: false })} wrapLines />
+      </TooltipProvider>
+    );
+    expect(container.querySelector("[role='region']")).toBe(scroller);
+    expect(scroller.dataset.diffSelectSide).toBeUndefined();
   });
 
   it("hands focus to the expanded hunk's header once a later batch mounts it", async () => {

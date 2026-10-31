@@ -928,6 +928,13 @@ const EMPTY_NOTES: readonly DiffNote[] = [];
 const EMPTY_HUNKS: HunkData[] = [];
 const EMPTY_KEYS: string[] = [];
 
+interface PendingHeaderFocus {
+  file: FileDiffProps["file"];
+  oldSource: string[] | null;
+  /** An old-side line the hunk whose header gets focus holds. */
+  line: number;
+}
+
 interface ExpandedHunks {
   file: FileDiffProps["file"];
   oldSource: string[] | null;
@@ -984,7 +991,7 @@ function FileDiff({
   // its first batch from them, and a render over the previous file's rows
   // would let a file that grew from small to giant mount whole.
   const [expanded, setExpanded] = useState<ExpandedHunks | null>(null);
-  const hunks =
+  const hunks: HunkData[] =
     expanded !== null && expanded.file === file && expanded.oldSource === oldSource
       ? expanded.hunks
       : (file.hunks ?? EMPTY_HUNKS);
@@ -1492,6 +1499,16 @@ function FileDiff({
     event.currentTarget.dataset.diffSelectSide = index === 1 ? "old" : "new";
   };
 
+  // The recorded side belongs to the table it was chosen in. React reuses the
+  // region element across files, layouts and scopes (a revisionless patch keeps
+  // its key), and a stale side would disable selection on whatever column
+  // happens to sit there next.
+  useLayoutEffect(() => {
+    for (const element of [regionRef.current, nativeScrollerRef.current]) {
+      if (element) delete element.dataset.diffSelectSide;
+    }
+  }, [stageOwner, scopesColumnSelection]);
+
   // Arrow-key horizontal scrolling parity with the focusable native scroller
   // used by the other view modes.
   const handleRegionKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -1554,16 +1571,20 @@ function FileDiff({
   // focus would drop to the body. The hunk is remembered by an old-side line
   // it holds, and the keyboard handed to the header of whichever hunk holds
   // that line afterwards.
-  const pendingHeaderLineRef = useRef<number | null>(null);
+  const pendingHeaderLineRef = useRef<PendingHeaderFocus | null>(null);
   useLayoutEffect(() => {
-    const line = pendingHeaderLineRef.current;
-    if (line === null) return;
+    const pending = pendingHeaderLineRef.current;
+    if (pending === null) return;
     const active = document.activeElement;
     const region = regionRef.current ?? nativeScrollerRef.current;
-    if ((active && active !== document.body && active.isConnected) || !region) {
+    // A line only means something against the file and source it came from;
+    // a refresh while the hand-off waited makes it point at unrelated code.
+    const stale = pending.file !== file || pending.oldSource !== oldSource;
+    if (stale || (active && active !== document.body && active.isConnected) || !region) {
       pendingHeaderLineRef.current = null;
       return;
     }
+    const { line } = pending;
     let index = visibleHunks.findIndex(
       (hunk) => hunk.oldStart <= line && line < hunk.oldStart + Math.max(hunk.oldLines, 1)
     );
@@ -1580,7 +1601,7 @@ function FileDiff({
     // and its replacement's tooltip must not open over the code they revealed.
     armTooltipFocusSuppression();
     target.focus({ preventScroll: true });
-  }, [visibleHunks, mountedHunks, allRowsMounted]);
+  }, [visibleHunks, mountedHunks, allRowsMounted, file, oldSource]);
 
   const handleExpandContext = useCallback(
     (start: number, end: number) => {
@@ -1593,7 +1614,7 @@ function FileDiff({
         // A header past the last hunk is the trailing expander: its gap ends
         // the file, so the last hunk is the one it grows.
         const hunk = index === -1 ? undefined : (visibleHunks[index] ?? visibleHunks.at(-1));
-        pendingHeaderLineRef.current = hunk ? hunk.oldStart : null;
+        pendingHeaderLineRef.current = hunk ? { file, oldSource, line: hunk.oldStart } : null;
       }
       setExpanded((prev) => {
         const base =
