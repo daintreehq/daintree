@@ -141,7 +141,11 @@ describe("migration022 — audit logs store", () => {
   it("warns and leaves a malformed non-array ring in config.json (#15615)", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const data: Record<string, unknown> = {
-      mcpServer: { auditEnabled: true, auditLog: { not: "an array" }, turnOutcomeLog: [turnRecord] },
+      mcpServer: {
+        auditEnabled: true,
+        auditLog: { not: "an array" },
+        turnOutcomeLog: [turnRecord],
+      },
     };
     const store = makeStoreMock(data);
 

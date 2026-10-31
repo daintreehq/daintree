@@ -41,7 +41,10 @@ vi.mock("../../../store.js", async (importOriginal) => {
   const nodeFs = await import("node:fs");
   const read = (): Record<string, unknown> => {
     try {
-      return JSON.parse(nodeFs.readFileSync(harness.sidecarPath, "utf8")) as Record<string, unknown>;
+      return JSON.parse(nodeFs.readFileSync(harness.sidecarPath, "utf8")) as Record<
+        string,
+        unknown
+      >;
     } catch {
       return {};
     }
@@ -153,10 +156,19 @@ function preV019Config(): Record<string, unknown> {
       auditLog: two("mcpAuditLog"),
       turnOutcomeLog: two("mcpTurnOutcomeLog"),
     },
-    plugins: { disabled: [], auditEnabled: true, auditMaxRecords: 500, auditLog: two("pluginAuditLog") },
+    plugins: {
+      disabled: [],
+      auditEnabled: true,
+      auditMaxRecords: 500,
+      auditLog: two("pluginAuditLog"),
+    },
     forgeAudit: { auditEnabled: true, auditMaxRecords: 500, auditLog: two("forgeAuditLog") },
     runHistory: { records: two("runHistoryRecords") },
-    pluginMcpAudit: { auditEnabled: true, auditMaxRecords: 500, auditLog: two("pluginMcpAuditLog") },
+    pluginMcpAudit: {
+      auditEnabled: true,
+      auditMaxRecords: 500,
+      auditLog: two("pluginMcpAuditLog"),
+    },
   };
 }
 
@@ -203,20 +215,20 @@ function ids(ring: AuditRingName): string[] {
 }
 
 function insertRow(ring: AuditRingName, record: Rec, recordId: string | null = record.id): void {
-  harness.db!
-    .prepare("INSERT INTO audit_rings (ring, record_id, record, created_at) VALUES (?, ?, ?, ?)")
+  harness
+    .db!.prepare(
+      "INSERT INTO audit_rings (ring, record_id, record, created_at) VALUES (?, ?, ?, ?)"
+    )
     .run(ring, recordId, JSON.stringify(record), 1);
 }
 
 function archives(): string[] {
-  return fs
-    .readdirSync(tempDir)
-    .filter((name) => name.startsWith("audit-logs.json.imported-"));
+  return fs.readdirSync(tempDir).filter((name) => name.startsWith("audit-logs.json.imported-"));
 }
 
 function receipt(): unknown {
-  return harness.db!
-    .prepare("SELECT value FROM app_state WHERE key = ?")
+  return harness
+    .db!.prepare("SELECT value FROM app_state WHERE key = ?")
     .get(LEGACY_AUDIT_IMPORT_RECEIPT_KEY);
 }
 
@@ -260,9 +272,9 @@ describe("importLegacyAuditRings — pre-v0.19 upgrade", () => {
     const newestFirst = (ring: AuditRingName) => [`${ring}-new`, `${ring}-old`];
     const byId = (records: { id: string }[]) => records.map((record) => record.id);
 
-    expect(
-      byId(new AuditService(() => {}, noConfig, adapter("mcpAuditLog")).getRecords())
-    ).toEqual(newestFirst("mcpAuditLog"));
+    expect(byId(new AuditService(() => {}, noConfig, adapter("mcpAuditLog")).getRecords())).toEqual(
+      newestFirst("mcpAuditLog")
+    );
     expect(
       byId(
         new TurnOutcomeService({
@@ -288,7 +300,11 @@ describe("importLegacyAuditRings — pre-v0.19 upgrade", () => {
     ).toEqual(newestFirst("pluginMcpAuditLog"));
 
     // Sources retired: config.json keeps its flags, the sidecar is archived.
-    expect(config.data.mcpServer).toEqual({ enabled: true, auditEnabled: true, auditMaxRecords: 500 });
+    expect(config.data.mcpServer).toEqual({
+      enabled: true,
+      auditEnabled: true,
+      auditMaxRecords: 500,
+    });
     expect(config.data.runHistory).toEqual({});
     expect(fs.existsSync(harness.sidecarPath)).toBe(false);
     expect(archives()).toHaveLength(1);
@@ -343,8 +359,8 @@ describe("importLegacyAuditRings — merge", () => {
     const records = new AuditRingStore().readAll<Rec>(ring);
     expect(records.find((record) => record.id === "e1")?.recipeName).toBe("sqlite copy");
     // Legacy rows go in keyed; the pre-keying row keeps its NULL record_id.
-    const unkeyed = harness.db!
-      .prepare("SELECT COUNT(*) AS n FROM audit_rings WHERE ring = ? AND record_id IS NULL")
+    const unkeyed = harness
+      .db!.prepare("SELECT COUNT(*) AS n FROM audit_rings WHERE ring = ? AND record_id IS NULL")
       .get(ring) as { n: number };
     expect(unkeyed.n).toBe(1);
   });
@@ -353,7 +369,9 @@ describe("importLegacyAuditRings — merge", () => {
     const ring = "pluginAuditLog";
     const noId = { ts: 1, pluginId: "acme", actionId: "acme.legacy" };
     insertRow(ring, noId as Rec, null);
-    const config = makeConfig({ plugins: { auditLog: [noId, { ...noId, ts: 2 }, { ...noId, ts: 2 }] } });
+    const config = makeConfig({
+      plugins: { auditLog: [noId, { ...noId, ts: 2 }, { ...noId, ts: 2 }] },
+    });
 
     importLegacyAuditRings(deps(config));
 
@@ -528,7 +546,10 @@ describe("importLegacyAuditRings — unreadable sources", () => {
 describe("importLegacyAuditRings — nothing to import", () => {
   it("retires empty sources without opening the database", () => {
     const config = makeConfig({ mcpServer: { enabled: true, auditLog: [], turnOutcomeLog: [] } });
-    fs.writeFileSync(harness.sidecarPath, JSON.stringify({ mcpAuditLog: [], runHistoryRecords: [] }));
+    fs.writeFileSync(
+      harness.sidecarPath,
+      JSON.stringify({ mcpAuditLog: [], runHistoryRecords: [] })
+    );
 
     importLegacyAuditRings(deps(config));
 

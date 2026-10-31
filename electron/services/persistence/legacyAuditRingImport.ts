@@ -140,7 +140,10 @@ export function mergeLegacyRing(
       continue;
     }
     consumed.add(entry);
-    legacyRows.push({ recordId: identity.startsWith("id:") ? identity.slice(3) : null, record: serialized });
+    legacyRows.push({
+      recordId: identity.startsWith("id:") ? identity.slice(3) : null,
+      record: serialized,
+    });
   }
   return { legacyRows, duplicates, invalid };
 }
@@ -187,7 +190,10 @@ function commitLegacyRings(
           consumed
         );
         const cap = RING_CAPS[ring];
-        const overCap = Math.max(0, Math.min(legacyRows.length, legacyRows.length + existing.length - cap));
+        const overCap = Math.max(
+          0,
+          Math.min(legacyRows.length, legacyRows.length + existing.length - cap)
+        );
         if (legacyRows.length > 0) {
           stmts.clear.run(ring);
           for (const row of legacyRows) stmts.insert.run(ring, row.recordId, row.record, now);
@@ -214,9 +220,7 @@ function archiveName(sidecarPath: string, now: number): string {
   return `${sidecarPath}.imported-${new Date(now).toISOString().replace(/[:.]/g, "-")}`;
 }
 
-export function importLegacyAuditRings(
-  deps: LegacyAuditRingImportDeps = defaultDeps()
-): void {
+export function importLegacyAuditRings(deps: LegacyAuditRingImportDeps = defaultDeps()): void {
   // An in-memory config store holds none of the disk's rings, and stripping
   // its keys would prove nothing; a durable boot retries.
   if (deps.config.path === "") return;
@@ -279,7 +283,9 @@ export function importLegacyAuditRings(
     }
     for (const ring of pending.keys()) {
       if (!deps.fence(ring)) {
-        console.warn(`[LegacyAuditRingImport] Could not fence "${ring}" writes; retrying next boot`);
+        console.warn(
+          `[LegacyAuditRingImport] Could not fence "${ring}" writes; retrying next boot`
+        );
         return;
       }
     }
@@ -304,7 +310,10 @@ export function importLegacyAuditRings(
       }
       deps.config.set(parentKey, rest);
     } catch (error) {
-      console.warn(`[LegacyAuditRingImport] Could not strip imported rings from ${parentKey}:`, error);
+      console.warn(
+        `[LegacyAuditRingImport] Could not strip imported rings from ${parentKey}:`,
+        error
+      );
     }
   }
   if (sidecarImported && deps.sidecarPath) {
