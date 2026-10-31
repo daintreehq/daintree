@@ -275,7 +275,9 @@ describe("MarkdownEditorView (#12323)", () => {
     const path = (await screen.findByTestId("markdown-editor-save-as-path")) as HTMLInputElement;
     expect(path.value).toBe("/repo/docs/plan-draft.md");
     await act(async () => {
-      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save file" }));
+      fireEvent.click(
+        within(screen.getByRole("dialog")).getByRole("button", { name: "Save file" })
+      );
     });
     await waitFor(() =>
       expect(main.files.get("/repo/docs/plan-draft.md")).toBe("# Plan\n\nBody\n\nmine")

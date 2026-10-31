@@ -64,7 +64,8 @@ type BoundedRead =
   | { status: "refused"; reason: "NOT_A_FILE" | "SYMLINK" | "TOO_LARGE" }
   | { status: "unavailable" };
 
-type DiskState = { status: "ok"; revision: string } | { status: "too-large" } | { status: "unavailable" };
+type DiskState =
+  { status: "ok"; revision: string } | { status: "too-large" } | { status: "unavailable" };
 
 interface OpenDocument {
   identity: DocumentIdentity;
