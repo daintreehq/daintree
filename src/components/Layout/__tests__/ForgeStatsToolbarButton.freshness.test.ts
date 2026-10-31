@@ -437,9 +437,13 @@ describe("ForgeStatsToolbarButton list-count badge wiring", () => {
 
   it("uses the exact display count in the issue + PR aria-labels and tooltips", () => {
     // The badge is compacted; names and tooltips carry the exact figure.
-    expect(source).toContain("${formatExactCount(issueDisplayCount)} open issues");
-    expect(source).toContain("${formatExactCount(prDisplayCount)} open pull requests");
-    expect(source).toContain("${formatExactCount(prDisplayCount)} open PRs");
+    expect(source).toContain(
+      '${formatExactCountNoun(issueDisplayCount, "open issue", "open issues")}'
+    );
+    expect(source).toContain(
+      '${formatExactCountNoun(prDisplayCount, "open pull request", "open pull requests")}'
+    );
+    expect(source).toContain('${formatExactCountNoun(prDisplayCount, "open PR", "open PRs")}');
   });
 
   it("resets the list counts + timestamps via a project-path effect (issue #9741)", () => {

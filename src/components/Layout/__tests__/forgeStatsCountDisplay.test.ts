@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   formatExactCount,
+  formatExactCountNoun,
   formatForgeBadgeCount,
   resolveForgeDisplayCount,
 } from "../forgeStatsCountDisplay";
@@ -76,5 +77,20 @@ describe("formatForgeBadgeCount / formatExactCount", () => {
   it("passes null through for the em-dash placeholder", () => {
     expect(formatForgeBadgeCount(null)).toBeNull();
     expect(formatExactCount(null)).toBe("—");
+  });
+});
+
+describe("formatExactCountNoun", () => {
+  it("uses the singular noun for exactly one", () => {
+    expect(formatExactCountNoun(1, "commit")).toBe("1 commit");
+    expect(formatExactCountNoun(1, "open issue", "open issues")).toBe("1 open issue");
+  });
+
+  it("uses the plural for zero, many, and approximate counts", () => {
+    expect(formatExactCountNoun(0, "commit")).toBe("0 commits");
+    expect(formatExactCountNoun(23645, "commit")).toBe("23,645 commits");
+    expect(formatExactCountNoun("99+", "open pull request", "open pull requests")).toBe(
+      "99+ open pull requests"
+    );
   });
 });
