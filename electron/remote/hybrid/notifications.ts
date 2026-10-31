@@ -123,18 +123,14 @@ export function installRemoteNotificationSink(): () => void {
         ...(notification.id !== undefined ? { id: notification.id } : {}),
         ...(supersedes.length > 0 ? { supersedes } : {}),
       };
-      endpoint
-        .request(NOTIFICATION_SHOW_METHOD, payload)
-        .catch(oweOnFailure(endpoint, supersedes));
+      endpoint.request(NOTIFICATION_SHOW_METHOD, payload).catch(oweOnFailure(endpoint, supersedes));
     },
     close(ownerHandle: number, ids: readonly string[]) {
       const endpoint = remoteView(ownerHandle);
       if (!endpoint) return;
       const all = takeOwed(endpoint.handle, ids);
       if (all.length === 0) return;
-      endpoint
-        .request(NOTIFICATION_CLOSE_METHOD, { ids: all })
-        .catch(oweOnFailure(endpoint, all));
+      endpoint.request(NOTIFICATION_CLOSE_METHOD, { ids: all }).catch(oweOnFailure(endpoint, all));
     },
   });
 

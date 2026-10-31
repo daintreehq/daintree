@@ -397,7 +397,10 @@ export function installViewReverseRequests(): () => void {
     }),
     registerReverseRequestMethod(NOTIFICATION_CLOSE_METHOD, ({ hostId, payload }) => {
       if (!closeHostNotifications(payload, hostId)) {
-        throw new AppError({ code: "VALIDATION", message: "Malformed notification close from the host" });
+        throw new AppError({
+          code: "VALIDATION",
+          message: "Malformed notification close from the host",
+        });
       }
       return null;
     }),

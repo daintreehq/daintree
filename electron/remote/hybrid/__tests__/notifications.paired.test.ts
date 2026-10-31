@@ -104,7 +104,8 @@ function remoteView(handle: number, webContentsId: number, host = STUDIO) {
     },
     request: vi.fn(async (method: string, payload: unknown) => {
       await Promise.resolve();
-      if (down) throw Object.assign(new Error("Shell is not attached"), { code: "HOST_DISCONNECTED" });
+      if (down)
+        throw Object.assign(new Error("Shell is not attached"), { code: "HOST_DISCONNECTED" });
       if (holdCloses && method === NOTIFICATION_CLOSE_METHOD) {
         return new Promise((resolve) => heldCloses.push(() => resolve(answer(method, payload))));
       }
@@ -194,7 +195,9 @@ describe("a remote view's banners, host sink to Shell", () => {
     notificationService.closeNotificationsForPanel("t2");
     await settle();
     expect(shellBanners()).toEqual([]);
-    const closes = view.endpoint.request.mock.calls.filter(([method]) => method === NOTIFICATION_CLOSE_METHOD);
+    const closes = view.endpoint.request.mock.calls.filter(
+      ([method]) => method === NOTIFICATION_CLOSE_METHOD
+    );
     expect(closes).toHaveLength(1);
   });
 
