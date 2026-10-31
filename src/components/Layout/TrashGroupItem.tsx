@@ -4,15 +4,13 @@ import { cn } from "@/lib/utils";
 import { DOCK_POPOVER_ROW_HOVER_CLASS } from "./dockStatusPill";
 import { Button } from "@/components/ui/button";
 import { usePanelStore } from "@/store";
-import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
+import type { PanelInstance } from "@shared/types/panel";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { TrashedTerminal, TrashedTerminalGroupMetadata } from "@/store/slices";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { isUselessTitle } from "@shared/utils/isUselessTitle";
-import { cleanTaskTitle } from "@shared/utils/taskTitle";
-import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { resolveTrashedPanelName } from "./trashedPanelName";
 import {
   subscribeToPluginAgentRegistry,
   getPluginAgentRegistrySnapshot,
@@ -54,7 +52,7 @@ export function TrashGroupItem({
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
   // Re-render when a plugin loads/unloads mid-session so trashed terminals'
   // icon/name pick up the updated registry (#9879). Subscription is the
-  // mechanism; the value itself is read via getEffectiveAgentConfig below.
+  // mechanism; the value itself is read in resolveTrashedPanelName.
   useSyncExternalStore(subscribeToPluginAgentRegistry, getPluginAgentRegistrySnapshot);
 
   const [isExpanded, setIsExpanded] = useState(false);
@@ -81,23 +79,7 @@ export function TrashGroupItem({
   // label keeps the header and expanded list consistent.
   const activeEntry = terminals.find(({ terminal }) => terminal.id === groupMetadata.activeTabId);
 
-  const resolvedActiveTitle = (() => {
-    if (!activeEntry) return null;
-    const { terminal } = activeEntry;
-    if (isPtyPanel(terminal)) {
-      // A user-locked title is fully frozen — it outranks the observed task.
-      if ((terminal.titleMode ?? "default") === "user") return terminal.title;
-      const observed = cleanTaskTitle(terminal.lastObservedTitle);
-      if (observed && !isUselessTitle(observed)) return observed;
-      if (terminal.launchAgentId) {
-        if (terminal.title && !isUselessTitle(terminal.title)) return terminal.title;
-        const agentConfig = getEffectiveAgentConfig(terminal.launchAgentId);
-        return agentConfig?.name ?? terminal.launchAgentId;
-      }
-    }
-    if (terminal.title && !isUselessTitle(terminal.title)) return terminal.title;
-    return null;
-  })();
+  const resolvedActiveTitle = activeEntry ? resolveTrashedPanelName(activeEntry.terminal) : null;
 
   const fallbackName = `Tab group (${pluralize(tabCount, "tab")})`;
   const groupName = resolvedActiveTitle
@@ -106,7 +88,13 @@ export function TrashGroupItem({
       : resolvedActiveTitle
     : fallbackName;
 
-  const childName = useCallback((terminal: PanelInstance) => terminal.title || "Terminal", []);
+  // Members are named the way the group header and single rows are: the task
+  // a "Claude" was on, not "Claude" four times over.
+  const childName = useCallback(
+    (terminal: PanelInstance) =>
+      resolveTrashedPanelName(terminal) ?? (terminal.title || "Terminal"),
+    []
+  );
 
   const handleRemoveAll = useCallback(() => {
     // Every member by name, not just the count: a bundled destruction owes the
@@ -175,8 +163,8 @@ export function TrashGroupItem({
                 <span aria-hidden="true" className="text-text-muted">
                   &middot;
                 </span>
-                <span className="inline-flex shrink-0 items-center gap-1 text-status-warning">
-                  <Unlink className="h-2.5 w-2.5" aria-hidden="true" />
+                <span className="inline-flex shrink-0 items-center gap-1 text-text-secondary">
+                  <Unlink className="h-2.5 w-2.5 text-status-warning" aria-hidden="true" />
                   Worktree deleted
                 </span>
               </>
@@ -195,6 +183,7 @@ export function TrashGroupItem({
                   // Focusable while unavailable, so it stays the row's keyboard
                   // target instead of Remove all.
                   aria-disabled={!canRestore || undefined}
+                  data-dock-row-target=""
                   aria-label={
                     isOrphan
                       ? canRestore
@@ -249,7 +238,7 @@ export function TrashGroupItem({
               return 0;
             })
             .map(({ terminal }) => {
-              const terminalName = terminal.title || "Terminal";
+              const terminalName = childName(terminal);
               const isActiveTab = groupMetadata.activeTabId === terminal.id;
               return (
                 <div

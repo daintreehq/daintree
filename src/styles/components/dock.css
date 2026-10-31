@@ -58,6 +58,35 @@
   box-shadow: inset 0 0 0 1px var(--color-border-strong);
 }
 
+/* The tray's scope caption: the one place the strip says, in words, that these
+ * counts are project-wide. It outlasts the pill words — those go first when the
+ * rail runs short (data-condensed), the caption stays, so the crowded strip
+ * still says what it counts — and only in a narrow dock (under 64rem) shortens
+ * to "All". It never stands alone in an empty tray. Secondary text: it labels
+ * the cluster, it is not a control. */
+.dock-status-tray > .dock-status-tray-scope {
+  display: none;
+  align-items: center;
+  padding-inline: 8px 4px;
+  font-size: var(--text-3xs);
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.dock-status-tray:has(> .dock-status-pill[data-visible="true"]) > .dock-status-tray-scope--full {
+  display: inline-flex;
+}
+
+@container dock (max-width: 64rem) {
+  .dock-status-tray:has(> .dock-status-pill[data-visible="true"]) > .dock-status-tray-scope--full {
+    display: none;
+  }
+  .dock-status-tray:has(> .dock-status-pill[data-visible="true"]) > .dock-status-tray-scope--short {
+    display: inline-flex;
+  }
+}
+
 /* Forced colours drops box-shadow; redraw the tray edge as a border. */
 @media (forced-colors: active) {
   .dock-status-tray:has(> .dock-status-pill[data-visible="true"]) {

@@ -1928,10 +1928,13 @@ function PanelHeaderComponent({
               }}
               onPointerDown={(e) => e.stopPropagation()}
               // Quiet at rest like its neighbours; the destructive hue arrives
-              // only on hover and focus, where it names what the click does.
+              // only on hover and focus, where it names what the click does. In
+              // a dock preview the click only dismisses the preview, so it stays
+              // a neutral control there.
               className={cn(
                 CONTROL_ICON,
-                "hover:bg-status-error/15 hover:text-status-error focus-visible:bg-status-error/15 focus-visible:text-status-error focus-visible:outline-status-error"
+                location !== "dock" &&
+                  "hover:bg-status-error/15 hover:text-status-error focus-visible:bg-status-error/15 focus-visible:text-status-error focus-visible:outline-status-error"
               )}
               data-testid="panel-close"
               aria-label={formatShortcutForTooltip(

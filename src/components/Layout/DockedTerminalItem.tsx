@@ -67,12 +67,17 @@ import { useDismissableTooltip } from "@/hooks/useDismissableTooltip";
 import { DockPopoverChildProvider } from "@/components/ui/DockPopoverChildContext";
 import { animatePanelMove } from "@/components/Panel/animatePanelMove";
 import { isScratchpadElement } from "@/lib/terminalScratchpad";
+import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
+import { DockChipLabel } from "./DockChipLabel";
 
+import { useRevealDockChipOnOpen } from "./useRevealDockChipOnOpen";
 interface DockedTerminalItemProps {
   terminal: PtyPanelData;
+  /** When this session started, given only when another chip shares its title. */
+  sessionTag?: string;
 }
 
-export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
+export function DockedTerminalItem({ terminal, sessionTag }: DockedTerminalItemProps) {
   // Forward only the pointer/touch drag listeners SortableDockItem publishes via
   // DragHandleProvider, so the chip becomes a real drag source (reorder/eject)
   // instead of just grab-cursor styling. The KeyboardSensor's onKeyDown is
@@ -95,9 +100,11 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   // hover tooltip stranded open.
   const commandTip = useDismissableTooltip();
   const stateTip = useDismissableTooltip();
+  const titleTip = useDismissableTooltip();
   const dismissTips = () => {
     commandTip.dismiss();
     stateTip.dismiss();
+    titleTip.dismiss();
   };
 
   const openDockTerminal = usePanelStore((s) => s.openDockTerminal);
@@ -109,6 +116,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   // A boolean, not the raw id: opening or closing another chip's popover must
   // not re-render this one.
   const isOpen = usePanelStore((s) => s.activeDockTerminalId === terminal.id);
+  const chipRef = useRevealDockChipOnOpen(isOpen);
 
   // Tracks whether the worktree sidebar is hidden by the chrome gesture, so
   // popover collision padding can extend left when there's no sidebar there.
@@ -360,8 +368,26 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const pluginActivity = displayAgentState ? null : reportedActivity;
   const badge = useDockChipBadge(terminal.id);
   const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
-  // Use shortened title without command summary for dock items
-  const displayTitle = terminal.title;
+  const showAgentTaskTitles = usePreferencesStore((s) => s.showAgentTaskTitles);
+  // Four "Claude" chips are told apart by what each is doing, so the chip shows
+  // the task alone, as the grid's tab strips do; the kind icon carries identity.
+  // The full "Claude: task" goes to the tooltip and the accessible name.
+  const displayTitle = getTerminalDisplayTitle(terminal, "compact", {
+    showTask: showAgentTaskTitles,
+  });
+  const titleOnly = getTerminalDisplayTitle(terminal, "full", { showTask: showAgentTaskTitles });
+  const fullTitle = sessionTag ? `${titleOnly}, started ${sessionTag}` : titleOnly;
+
+  // A chip showing its task keeps the live command for the tooltip: inline,
+  // the two squeeze each other to nothing. A plain terminal titled by its own
+  // command ("npm run dev") doesn't repeat it either.
+  const showsTask = titleOnly !== displayTitle;
+  const showInlineCommand = !!commandText && !showsTask && commandText !== displayTitle;
+  const titleTooltip =
+    showsTask && commandText && (isActive || plainWorking)
+      ? `${fullTitle} — ${commandText}`
+      : fullTitle;
+  const showTitleTip = titleTooltip !== displayTitle || displayTitle.length > 18;
   // The glyph is smoothed (idle/missing shows as waiting); the words are not.
   // Name and tooltip say what was observed, and nothing when nothing was.
   const observedStateLabel = agentState ? getEffectiveStateLabel(agentState) : undefined;
@@ -394,6 +420,15 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
           <TerminalContextMenu terminalId={terminal.id} forceLocation="dock">
             <PopoverTrigger asChild>
               <button
+                ref={chipRef}
+                // Keyboard arrival shows the full title the label may truncate,
+                // as hovering it does; the name itself is in the aria-label.
+                onFocus={(e) => {
+                  if (showTitleTip && e.currentTarget.matches(":focus-visible")) {
+                    titleTip.onOpenChange(true);
+                  }
+                }}
+                onBlur={() => titleTip.onOpenChange(false)}
                 {...dragPointerListeners}
                 data-dock-item=""
                 className={cn(
@@ -421,17 +456,29 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                   e.stopPropagation();
                   handleMoveToGrid();
                 }}
-                aria-label={`${terminal.title}${displayAgentState ? (stateLabel ? ` — agent ${stateLabel}` : "") : pluginActivity ? pluginPanelActivityLabelSuffix(pluginActivity) : plainWorking ? " — command running" : ""}${dockChipBadgeLabelSuffix(badge)} - Click to preview, double-click to move to grid, drag to reorder`}
+                aria-label={`${fullTitle}${displayAgentState ? (stateLabel ? ` — agent ${stateLabel}` : "") : pluginActivity ? pluginPanelActivityLabelSuffix(pluginActivity) : plainWorking ? " — command running" : ""}${dockChipBadgeLabelSuffix(badge)} - Click to preview, double-click to move to grid, drag to reorder`}
               >
                 <div className="flex items-center justify-center shrink-0">
                   <TerminalIcon kind={terminal.kind} chrome={chrome} className="w-3.5 h-3.5" />
                 </div>
-                <span className="truncate min-w-[48px] max-w-[140px] font-sans font-medium">
-                  {displayTitle}
-                </span>
+                {showTitleTip ? (
+                  <Tooltip open={titleTip.open} onOpenChange={titleTip.onOpenChange}>
+                    <TooltipTrigger asChild onPointerEnter={titleTip.onPointerEnter}>
+                      <DockChipLabel title={displayTitle} />
+                    </TooltipTrigger>
+                    <TooltipContent side="top">{titleTooltip}</TooltipContent>
+                  </Tooltip>
+                ) : (
+                  <DockChipLabel title={displayTitle} />
+                )}
+                {sessionTag && (
+                  <span className="shrink-0 text-2xs text-text-secondary tabular-nums">
+                    {sessionTag}
+                  </span>
+                )}
                 <DockChipBadge model={badge} />
 
-                {(isActive || plainWorking) && commandText && (
+                {(isActive || plainWorking) && showInlineCommand && (
                   <>
                     <div className={DOCK_CHIP_RULE_CLASS} aria-hidden="true" />
                     <Tooltip open={commandTip.open} onOpenChange={commandTip.onOpenChange}>
@@ -489,6 +536,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
         </div>
 
         <PopoverContent
+          aria-label={`Preview: ${fullTitle}`}
           className="w-[700px] max-w-[90vw] max-h-[80vh] p-0 bg-daintree-bg/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden"
           style={{ height: popoverHeight }}
           side="top"

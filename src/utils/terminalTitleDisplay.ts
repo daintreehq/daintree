@@ -9,11 +9,11 @@ import { cleanTaskTitle, stripIdentityAffixes } from "@shared/utils/taskTitle";
  *
  * - `"full"` — grid panel headers, tooltips, aria labels: `"Claude: fix auth
  *   tests"`.
- * - `"compact"` — narrow tab strips (~100px): the task alone; the agent icon
- *   already carries identity, and an identity prefix would push the task out
- *   of the truncation window entirely.
- * - `"base"` — dock rows and other identity-dense chrome: the identity title
- *   only, no task.
+ * - `"compact"` — narrow tab strips and dock chips: the task alone; the agent
+ *   icon already carries identity, and an identity prefix would push the task
+ *   out of the truncation window entirely.
+ * - `"base"` — identity-dense chrome that must not change as the task does:
+ *   the identity title only, no task.
  */
 export type TerminalTitleVariant = "full" | "compact" | "base";
 

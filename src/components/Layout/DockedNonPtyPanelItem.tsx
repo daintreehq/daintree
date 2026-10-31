@@ -28,6 +28,10 @@ import {
 import { DockPopoverChildProvider } from "@/components/ui/DockPopoverChildContext";
 import { animatePanelMove } from "@/components/Panel/animatePanelMove";
 
+import { useRevealDockChipOnOpen } from "./useRevealDockChipOnOpen";
+import { DockChipLabel } from "./DockChipLabel";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useDismissableTooltip } from "@/hooks/useDismissableTooltip";
 interface DockedNonPtyPanelItemProps {
   /**
    * Any non-PTY dock panel. The chip only reads `id`/`kind`/`title`, so it
@@ -63,6 +67,11 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
   const moveTerminalToGrid = usePanelStore((s) => s.moveTerminalToGrid);
 
   const isOpen = usePanelStore((s) => s.activeDockTerminalId === panel.id);
+  const chipRef = useRevealDockChipOnOpen(isOpen);
+  // A long file or page title may lose its middle; hover and keyboard arrival
+  // show it whole, as on the terminal chips.
+  const titleTip = useDismissableTooltip();
+  const showTitleTip = displayTitle.length > 18;
 
   const sidebarHidden = useFocusStore((s) => s.gestureSidebarHidden);
   const collisionPadding = useMemo(() => {
@@ -95,6 +104,23 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
       moveToDestination(panel.id, null);
     };
   }, [isOpen, portalContainer, panel.id, moveToDestination]);
+
+  // A keyboard open owes the keyboard somewhere to land. The host asks the
+  // panel to focus its own input once relocated; when the panel has none, focus
+  // would stay on the chip with the preview's content a Tab-walk away, so the
+  // preview itself takes it. Pointer opens leave focus where it is.
+  const openedFromKeyboardRef = useRef(false);
+  useEffect(() => {
+    if (!isOpen || !portalContainer || !openedFromKeyboardRef.current) return;
+    openedFromKeyboardRef.current = false;
+    const rafId = requestAnimationFrame(() => {
+      if (portalContainer.contains(document.activeElement)) return;
+      const active = document.activeElement;
+      if (active !== chipRef.current && active !== document.body) return;
+      portalContainer.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(rafId);
+  }, [isOpen, portalContainer, chipRef]);
 
   // Auto-close popover when drag starts for this panel
   useDndMonitor({
@@ -138,6 +164,7 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
           <TerminalContextMenu terminalId={panel.id} forceLocation="dock">
             <PopoverTrigger asChild>
               <button
+                ref={chipRef}
                 {...dragPointerListeners}
                 data-dock-item=""
                 className={cn(
@@ -148,10 +175,19 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
                     activity?.shown === "waiting" &&
                     DOCK_CHIP_WAITING_CLASS
                 )}
+                onFocus={(e) => {
+                  if (showTitleTip && e.currentTarget.matches(":focus-visible")) {
+                    titleTip.onOpenChange(true);
+                  }
+                }}
+                onBlur={() => titleTip.onOpenChange(false)}
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
+                  titleTip.dismiss();
                   if (e.detail >= 2) return;
+                  // Enter/Space fire click with no pointer detail.
+                  openedFromKeyboardRef.current = !isOpen && e.detail === 0;
                   if (isOpen) {
                     closeDockTerminal(panel.id);
                   } else {
@@ -168,9 +204,16 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
                 <div className="flex items-center justify-center shrink-0">
                   <TerminalIcon kind={panel.kind} chrome={chrome} className="w-3.5 h-3.5" />
                 </div>
-                <span className="truncate min-w-[48px] max-w-[140px] font-sans font-medium">
-                  {displayTitle}
-                </span>
+                {showTitleTip ? (
+                  <Tooltip open={titleTip.open} onOpenChange={titleTip.onOpenChange}>
+                    <TooltipTrigger asChild onPointerEnter={titleTip.onPointerEnter}>
+                      <DockChipLabel title={displayTitle} />
+                    </TooltipTrigger>
+                    <TooltipContent side="top">{displayTitle}</TooltipContent>
+                  </Tooltip>
+                ) : (
+                  <DockChipLabel title={displayTitle} />
+                )}
                 <DockChipBadge model={badge} />
                 {activity && <PluginPanelActivityDockCue activity={activity} />}
               </button>
@@ -179,6 +222,7 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
         </div>
 
         <PopoverContent
+          aria-label={`Preview: ${displayTitle}`}
           className="w-[700px] max-w-[90vw] max-h-[80vh] p-0 bg-daintree-bg/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden"
           style={{ height: popoverHeight }}
           side="top"
@@ -199,7 +243,8 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
                 and is relocated here on open. */}
             <div
               ref={portalContainerRef}
-              className="w-full h-full flex flex-col"
+              tabIndex={-1}
+              className="w-full h-full flex flex-col outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
               data-dock-portal-target={panel.id}
             />
           </div>
