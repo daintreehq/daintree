@@ -111,7 +111,10 @@ async function flush() {
 }
 
 /** Open the confirm and let every queued preview settle. */
-async function openAndSettle(hook: ReturnType<typeof setup>["hook"]) {
+/** Only `result` is read, so hooks rendered with their own props fit too. */
+type BulkRemoveHook = Pick<ReturnType<typeof setup>["hook"], "result">;
+
+async function openAndSettle(hook: BulkRemoveHook) {
   act(() => hook.result.current.handleRemoveClick());
   await flush();
 }
