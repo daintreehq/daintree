@@ -418,18 +418,26 @@ describe("HybridInputBar dictated send reopened by the next dictation (#14804, #
     });
     await pressEnter(view);
     act(() => {
+      // A hint a writer left for the text the composer already shows.
+      setPendingComposerSelection(makeDraftKey(PANEL_ID, undefined), "hello wrld", {
+        from: 0,
+        to: "hello".length,
+      });
       useVoiceRecordingStore.getState().setArming({ panelId: PANEL_ID });
     });
     expect(view.state.selection.main.head).toBe("hello wrld".length);
 
     act(() => {
-      view.dispatch({ selection: { anchor: 0, head: "hello".length } });
+      view.dispatch({ selection: { anchor: "hello ".length, head: "hello wrld".length } });
     });
     await act(async () => {
       pending.resolve({ action: "no_change", correctedText: "hello wrld" });
     });
 
-    expect(view.state.selection.main).toMatchObject({ from: 0, to: "hello".length });
+    expect(view.state.selection.main).toMatchObject({
+      from: "hello ".length,
+      to: "hello wrld".length,
+    });
   });
 
   it("leaves both passages unsent, and the note gone, when the next dictation stops without a send", async () => {
