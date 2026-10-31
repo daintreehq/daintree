@@ -127,8 +127,14 @@ class AgentNotificationService {
   private lastOwnerByPanel = new Map<string, NotificationOwnerId>();
   /** Each panel's dock, worktree and title, from its project's saved record (#15636). */
   private panels = new PanelRecordIndex();
-  /** Projects whose alert overrides were asked for: once read, their saves keep them current. */
-  private overridesRequested = new Set<string>();
+  /** Projects whose alert overrides are being read now. */
+  private overridesLoading = new Set<string>();
+  /**
+   * The project each agent's live terminal last named. A natural exit drops
+   * the live record before the agent's last transition, and a panel that was
+   * never saved has no record to fall back on.
+   */
+  private projectByTerminal = new Map<string, string>();
   /**
    * The worktree each view has selected, as it last reported. Every view has
    * its own, so the global `appState.activeWorktreeId` (whichever view changed
@@ -345,18 +351,19 @@ class AgentNotificationService {
 
   /**
    * The project an agent belongs to, whose overrides decide its alerts
-   * (#15635): its live terminal's, else the one whose save last listed its
-   * panel, which outlasts a natural exit. `null` when neither knows, and then
-   * the globals decide alone, never the overrides of whichever project is
-   * current.
+   * (#15635): its live terminal's, else the last one that terminal named,
+   * else the one whose save last listed its panel. `null` when none knows,
+   * and then the globals decide alone, never the overrides of whichever
+   * project is current.
    */
   private projectOf(terminalId: string | undefined): string | null {
     if (!terminalId) return null;
-    return (
-      getPtyClient()?.getTerminalProjectId(terminalId) ??
-      this.panels.workspaceOf(terminalId) ??
-      null
-    );
+    const live = getPtyClient()?.getTerminalProjectId(terminalId);
+    if (live) {
+      this.projectByTerminal.set(terminalId, live);
+      return live;
+    }
+    return this.projectByTerminal.get(terminalId) ?? this.panels.workspaceOf(terminalId) ?? null;
   }
 
   /**
@@ -431,6 +438,8 @@ class AgentNotificationService {
       if (agentKey) {
         this.agentSpawnTimestamps.set(agentKey, Date.now());
       }
+      // Its project's overrides, read now, are in by its first transition.
+      if (payload.terminalId) this.loadPanelProject(payload.terminalId);
       const settings = projectStore.getEffectiveNotificationSettings(
         this.projectOf(payload.terminalId)
       );
@@ -458,6 +467,7 @@ class AgentNotificationService {
     const unsubDetected = events.on("agent:detected", (payload) => {
       if (!payload.agentType || !payload.terminalId) return;
       this.agentSpawnTimestamps.set(payload.terminalId, Date.now());
+      this.loadPanelProject(payload.terminalId);
     });
 
     // Prune spawn-grace tracking when an agent exits — otherwise an agent that
@@ -485,6 +495,7 @@ class AgentNotificationService {
         this.activeTerminalIds.delete(payload.terminalId);
         this.activeSeedTouched?.add(payload.terminalId);
         this.forgetPanelOwnership(payload.terminalId);
+        this.projectByTerminal.delete(payload.terminalId);
         this.dismissWaitingAlerts(payload.terminalId);
       }
     });
@@ -577,17 +588,16 @@ class AgentNotificationService {
 
   /**
    * A project's saved panels, and its alert overrides, which on a cold cache
-   * would leave the globals deciding for its agents. Its first alert is a
-   * debounce or more away, which is the read's head start; a failed read is
-   * tried again on the next sighting.
+   * would leave the globals deciding for its agents. Asked on every sighting,
+   * one read at a time: the store answers at once while it holds them, and
+   * reads again if a failed read has since dropped them.
    */
   private loadProject(projectId: string): void {
     this.panels.load(projectId, this.readSavedPanels);
-    if (this.overridesRequested.has(projectId)) return;
-    this.overridesRequested.add(projectId);
-    projectStore
-      .loadNotificationOverrides(projectId)
-      .catch(() => this.overridesRequested.delete(projectId));
+    if (this.overridesLoading.has(projectId)) return;
+    this.overridesLoading.add(projectId);
+    const done = () => this.overridesLoading.delete(projectId);
+    projectStore.loadNotificationOverrides(projectId).then(done, done);
   }
 
   /** Where a panel is now, by its saved record; what the event said only when there is none. */
@@ -628,6 +638,8 @@ class AgentNotificationService {
     // The agent's own project decides its alerts (#15635), frozen now for
     // every timer this event starts.
     const projectId = this.projectOf(terminalId);
+    // An agent's last transition: nothing later needs its terminal's project.
+    if (state === "exited" && terminalId) this.projectByTerminal.delete(terminalId);
     this.checkAllClear(state, previousState, terminalId, projectId);
     if (state === previousState) return;
     if (terminalId) this.loadPanelProject(terminalId);
@@ -1519,7 +1531,8 @@ class AgentNotificationService {
     this.lastOwnerByPanel.clear();
     this.selectedWorktreeByOwner.clear();
     this.panels.clear();
-    this.overridesRequested.clear();
+    this.overridesLoading.clear();
+    this.projectByTerminal.clear();
     this.activeSeedTouched = null;
     this.allClearHeldForSeed = false;
     this.notificationQueue = [];

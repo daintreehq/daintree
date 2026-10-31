@@ -142,7 +142,13 @@ export class ProjectSettingsManager {
         void this.broadcastCorruption(quarantinedPath);
         return { runCommands: [] };
       }
-      if (isMissingFileError(error)) return { runCommands: [] };
+      if (isMissingFileError(error)) {
+        // No file, no overrides: remembered, so asking again reads nothing.
+        if (!this.overlapsWrite(projectId, generation)) {
+          this.notificationOverridesCache.set(projectId, undefined);
+        }
+        return { runCommands: [] };
+      }
       // The file is there but couldn't be read. Defaults here would become the
       // draft the next save writes over it, so the read fails instead.
       console.error(`[ProjectSettingsManager] Failed to load settings for ${projectId}:`, error);
@@ -219,15 +225,20 @@ export class ProjectSettingsManager {
       unresolvedSecureEnvironmentVariables: unresolvedKeys.length > 0 ? unresolvedKeys : undefined,
     };
 
-    const overlappedWrite =
-      this.projectsBeingWritten.has(projectId) ||
-      (this.writeGenerations.get(projectId) ?? 0) !== generation;
-    if (!overlappedWrite) {
+    if (!this.overlapsWrite(projectId, generation)) {
       this.notificationOverridesCache.set(projectId, settings.notificationOverrides);
       this.settingsCache.set(projectId, settings);
     }
 
     return settings;
+  }
+
+  /** Whether a write started or ended since a read began at `generation`: its file may be stale. */
+  private overlapsWrite(projectId: string, generation: number): boolean {
+    return (
+      this.projectsBeingWritten.has(projectId) ||
+      (this.writeGenerations.get(projectId) ?? 0) !== generation
+    );
   }
 
   private serializeWrite<T>(projectId: string, write: () => Promise<T>): Promise<T> {

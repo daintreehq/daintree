@@ -201,8 +201,8 @@ vi.mock("../ProjectSettingsManager.js", () => ({
   ProjectSettingsManager: class {
     deleteAllEnvForProject() {}
     migrateEnvForProject() {}
-    getEffectiveNotificationSettings() {
-      return {};
+    getEffectiveNotificationSettings(...args: unknown[]) {
+      return { forwarded: args };
     }
   },
 }));
@@ -720,6 +720,32 @@ describe("ProjectStore disk pressure suppression", () => {
     expect(row?.frecencyScore).toBeGreaterThan(seededFrecencyScore - 0.01);
     // lastOpened still tracks the real open, debounced or not.
     expect(row?.lastOpened).toBeGreaterThan(justLeft);
+  });
+});
+
+describe("ProjectStore.getEffectiveNotificationSettings (#15635)", () => {
+  beforeEach(() => {
+    sqlite = new Database(":memory:");
+    sqlite.exec(CREATE_TABLES_SQL);
+    db = drizzle(sqlite, { schema });
+    db.insert(schema.appState).values({ key: "currentProjectId", value: "current" }).run();
+  });
+
+  afterEach(() => {
+    sqlite.close();
+  });
+
+  it("asks for the named project's overrides, never the current one's", () => {
+    const store = new ProjectStore();
+    const shell = { waitingEnabled: false };
+
+    expect(store.getCurrentProjectId()).toBe("current");
+    expect(store.getEffectiveNotificationSettings("other", shell)).toEqual({
+      forwarded: ["other", shell],
+    });
+    expect(store.getEffectiveNotificationSettings(null)).toEqual({
+      forwarded: [null, undefined],
+    });
   });
 });
 
