@@ -11,15 +11,40 @@
  * which is what these assert on.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   createPluginStyleRuntime,
+  type PluginStyleInstallFailure,
   type PluginStyleRuntime,
 } from "@/services/plugin/tailwind/pluginStyleRuntime";
 import { tokenizePluginSource } from "@/services/plugin/tailwind/candidateTokenizer";
 import { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "@shared/types/plugin";
+
+const { builds } = vi.hoisted(() => ({ builds: [] as Array<{ candidates: string[]; css: string }> }));
+
+// Calls through to the real compiler and only records each build, so a test can
+// tell a batch that generated nothing from one that never reached the compiler.
+vi.mock("@/services/plugin/tailwind/pluginTailwindAdapter", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/services/plugin/tailwind/pluginTailwindAdapter")>();
+  return {
+    ...actual,
+    createPluginCssCompiler: async (
+      ...args: Parameters<typeof actual.createPluginCssCompiler>
+    ) => {
+      const compiler = await actual.createPluginCssCompiler(...args);
+      return {
+        build(candidates: string[]) {
+          const css = compiler.build(candidates);
+          builds.push({ candidates: [...candidates], css });
+          return css;
+        },
+      };
+    },
+  };
+});
 
 const FIXTURE = path.resolve(
   import.meta.dirname,
@@ -50,9 +75,49 @@ async function afterObserver(): Promise<void> {
   await Promise.resolve();
 }
 
+interface SheetWrites {
+  /** Every CSS text that reached the sheet, in order. */
+  readonly installed: string[];
+  /** Writes whose CSS was already exactly what the sheet held. */
+  identical: number;
+  /** Make this many upcoming writes throw before they apply. */
+  failNext: number;
+}
+
+/**
+ * Watch the writes to the runtime's `<style>` element, which is its sink under
+ * jsdom, through that one element's `textContent` setter. Counts replacements
+ * from outside the runtime, and can refuse them the way a sheet that rejects a
+ * replacement does.
+ */
+function watchSheetWrites(): SheetWrites {
+  const sheet = document.querySelector("style[data-daintree-plugin-styles]");
+  const native = Object.getOwnPropertyDescriptor(Node.prototype, "textContent");
+  if (!sheet || !native?.get || !native.set) throw new Error("no plugin sheet to watch");
+  const { get, set } = native;
+  const writes: SheetWrites = { installed: [], identical: 0, failNext: 0 };
+  Object.defineProperty(sheet, "textContent", {
+    configurable: true,
+    get() {
+      return get.call(this);
+    },
+    set(css: string) {
+      if (writes.failNext > 0) {
+        writes.failNext--;
+        throw new Error("simulated sheet failure");
+      }
+      if (css === get.call(this)) writes.identical++;
+      writes.installed.push(css);
+      set.call(this, css);
+    },
+  });
+  return writes;
+}
+
 beforeEach(async () => {
   document.body.innerHTML = "";
   document.head.innerHTML = "";
+  builds.length = 0;
   runtime = await createPluginStyleRuntime(document);
 });
 
@@ -161,14 +226,205 @@ describe("pluginStyleRuntime — the sheet", () => {
     runtime.registerRoot(root);
     const sheet = document.querySelector("style[data-daintree-plugin-styles]");
     const before = sheet?.textContent;
+    const writes = watchSheetWrites();
 
     // Re-adding a known class is the common case for a re-rendering view. It
-    // must not reinstall the sheet: a replacement re-registers the output's
-    // `@property` rules, which is the expensive part of installing this CSS.
+    // must not reinstall the sheet: a replacement invalidates style for the
+    // whole document, whatever the new sheet contains.
     root.querySelector("span")?.classList.add("p-4");
     await afterObserver();
 
     expect(sheet?.textContent).toBe(before);
+    expect(writes.installed).toEqual([]);
+  });
+});
+
+describe("pluginStyleRuntime — batches that change nothing", () => {
+  it("leaves the sheet alone for new classes that generate no CSS", async () => {
+    const root = mountRoot(`<span class="p-4"></span>`);
+    runtime.registerRoot(root);
+    const writes = watchSheetWrites();
+
+    // Each arrives on its own, as an icon of a new kind, a third-party widget's
+    // state class or a plugin's own hook class does.
+    const span = root.querySelector("span");
+    for (const token of ["lucide-folder-open", "cm-focused", "is-selected"]) {
+      span?.classList.add(token);
+      await afterObserver();
+    }
+
+    expect(builds.at(-1)?.candidates).toEqual(["is-selected"]);
+    expect(writes.installed).toEqual([]);
+    expect(installedCss()).toContain(".p-4");
+  });
+
+  it("still installs a batch that mixes a new utility in, inside the observer callback", async () => {
+    const root = mountRoot(`<span class="p-4"></span>`);
+    runtime.registerRoot(root);
+    root.querySelector("span")?.classList.add("is-selected");
+    await afterObserver();
+    const writes = watchSheetWrites();
+
+    root.querySelector("span")?.classList.add("is-open", "gap-2");
+    await afterObserver();
+
+    expect(writes.installed).toHaveLength(1);
+    expect(installedCss()).toContain(".gap-2");
+  });
+
+  it("remembers classes that generated nothing instead of re-offering them", async () => {
+    const root = mountRoot(`<span class="p-4"></span>`);
+    runtime.registerRoot(root);
+    const span = root.querySelector("span");
+    span?.classList.add("is-selected");
+    await afterObserver();
+
+    span?.classList.remove("is-selected");
+    await afterObserver();
+    span?.classList.add("is-selected");
+    await afterObserver();
+
+    const offered = builds.filter((build) => build.candidates.includes("is-selected"));
+    expect(offered).toHaveLength(1);
+  });
+
+  it("installs a batch on its retry after its replacement failed", async () => {
+    runtime.dispose();
+    const failures: PluginStyleInstallFailure[] = [];
+    runtime = await createPluginStyleRuntime(document, {
+      onInstallFailure: (failure) => failures.push(failure),
+    });
+    const root = mountRoot(`<span class="p-4"></span>`);
+    runtime.registerRoot(root);
+    const writes = watchSheetWrites();
+
+    writes.failNext = 1;
+    root.innerHTML = `<span class="p-4 gap-2"></span>`;
+    await afterObserver();
+
+    expect(failures).toEqual([{ phase: "rebuild", error: "simulated sheet failure", candidates: 1 }]);
+    expect(installedCss()).toContain(".p-4");
+    expect(installedCss()).not.toContain(".gap-2");
+
+    // The compiler absorbed `gap-2` before the sheet refused it, so the retry
+    // builds the very CSS that failed. It differs from what the sheet holds, and
+    // that is the comparison that decides whether to install.
+    root.innerHTML = `<span class="p-4 gap-2"></span>`;
+    await afterObserver();
+
+    expect(builds.at(-1)?.css).toBe(builds.at(-2)?.css);
+    expect(installedCss()).toContain(".gap-2");
+    expect(failures).toHaveLength(1);
+  });
+
+  it("installs on the next batch after both the replacement and its restore failed", async () => {
+    const root = mountRoot(`<span class="p-4"></span>`);
+    runtime.registerRoot(root);
+    const writes = watchSheetWrites();
+
+    writes.failNext = 2;
+    root.innerHTML = `<span class="p-4 gap-2"></span>`;
+    await afterObserver();
+    expect(installedCss()).not.toContain(".gap-2");
+
+    root.querySelector("span")?.classList.add("is-selected");
+    await afterObserver();
+
+    expect(installedCss()).toContain(".gap-2");
+  });
+});
+
+describe("pluginStyleRuntime — a kit view session", () => {
+  // The source pass reads string literals, so this stands in for the view's
+  // built module: its class strings and its copy.
+  const VIEW_SOURCE = `jsx("div", { className: "flex flex-col gap-2 p-2", children: [
+    jsx(Callout, { severity: "info", children: "Cmd+S saves" }),
+    jsx(Button, { size: "sm", children: "Show warning" }),
+    jsx(CodeEditor, { language: "json" }) ] })`;
+
+  it("installs only CSS that changed, from mount through a hot reload", async () => {
+    // Loaded here rather than at the top so the rest of the file never pulls
+    // in the kit and CodeMirror.
+    const [{ act }, { createElement, useState }, { createRoot }, kit, { EditorView }] =
+      await Promise.all([
+        import("@testing-library/react"),
+        import("react"),
+        import("react-dom/client"),
+        import("@daintreehq/plugin-ui"),
+        import("@codemirror/view"),
+      ]);
+    await kit.whenPluginUiReady();
+
+    function View() {
+      const [warned, setWarned] = useState(false);
+      return createElement(
+        "div",
+        { className: "flex flex-col gap-2 p-2" },
+        createElement(kit.Callout, { severity: "info" }, "Cmd+S saves"),
+        createElement(kit.Button, { size: "sm", onClick: () => setWarned(true) }, "Show warning"),
+        warned ? createElement(kit.Callout, { severity: "warning", className: "mt-3" }, "Unsaved") : null,
+        createElement(kit.CodeEditor, {
+          defaultValue: '{\n  "name": "demo",\n  "items": [1, 2, 3]\n}\n',
+          language: "json",
+          "aria-label": "config.json",
+          maxHeight: 240,
+        })
+      );
+    }
+
+    /** One view generation, mounted the way the host mounts a plugin view. */
+    async function mountGeneration(): Promise<{ wrapper: HTMLElement; unmount: () => void }> {
+      const wrapper = mountRoot();
+      const unregister = runtime.registerRoot(wrapper);
+      const reactRoot = createRoot(wrapper);
+      await act(async () => reactRoot.render(createElement(View)));
+      // The editor loads on first use; its classes arrive once it has.
+      for (let tries = 0; tries < 50 && !wrapper.querySelector(".cm-content"); tries++) {
+        await act(() => new Promise((resolve) => setTimeout(resolve, 10)));
+      }
+      expect(wrapper.querySelector(".cm-content")).not.toBeNull();
+      return {
+        wrapper,
+        unmount: () => {
+          act(() => reactRoot.unmount());
+          unregister();
+          wrapper.remove();
+        },
+      };
+    }
+
+    const writes = watchSheetWrites();
+    runtime.addSourceText(VIEW_SOURCE);
+    let generation = await mountGeneration();
+    expect(generation.wrapper.querySelector("svg.lucide")).not.toBeNull();
+
+    const content = generation.wrapper.querySelector<HTMLElement>(".cm-content");
+    const view = content ? EditorView.findFromDOM(content) : null;
+    await act(async () => {
+      view?.focus();
+      view?.dispatch({ changes: { from: 2, insert: '"k": 1,\n  ' } });
+    });
+    await afterObserver();
+
+    const show = [...generation.wrapper.querySelectorAll("button")].find(
+      (button) => button.textContent === "Show warning"
+    );
+    await act(async () => show?.click());
+    await afterObserver();
+    expect(installedCss()).toContain(".mt-3");
+
+    // A hot reload: an edit to the view's copy, a new generation's source, the
+    // old view torn down and the new one mounted against the same runtime.
+    generation.unmount();
+    runtime.addSourceText(VIEW_SOURCE.replace("Show warning", "Show the warning"));
+    generation = await mountGeneration();
+    generation.unmount();
+
+    // Not vacuous: the session did offer batches that generated nothing.
+    const unchanged = builds.filter((build, index) => build.css === builds[index - 1]?.css);
+    expect(unchanged.length).toBeGreaterThan(0);
+    expect(writes.installed.length).toBeGreaterThan(0);
+    expect(writes.identical).toBe(0);
   });
 });
 
