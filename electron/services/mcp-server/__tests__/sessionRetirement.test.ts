@@ -12,11 +12,10 @@ vi.mock("electron", () => ({
   ipcMain: { on: () => undefined, removeListener: () => undefined },
 }));
 
-const sleep = vi.hoisted(() => ({ awake: 0 }));
-
+// A machine that never sleeps: awake time is wall-clock time.
 vi.mock("../../SystemSleepService.js", () => ({
   getSystemSleepService: () => ({
-    getAwakeTimeSince: () => sleep.awake,
+    getAwakeTimeSince: (startedAt: number) => Date.now() - startedAt,
     onWake: () => () => {},
   }),
 }));
@@ -29,13 +28,16 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 import { AbusePolicy } from "../abusePolicy.js";
 import { HttpLifecycle, type HttpLifecycleDeps } from "../httpLifecycle.js";
+import { helpOwnershipPrincipal } from "../resourceOwnership.js";
 import { cleanupResourceSubscriptions } from "../sessionResources.js";
 import { SessionStore, type SessionRetireReason } from "../sessionStore.js";
 import { MCP_PANE_SESSION_CAP, MCP_SSE_IDLE_TIMEOUT_MS } from "../shared.js";
 import {
+  OPAQUE_HOLDERS,
   RETAINED_COLLECTIONS,
   findResidue,
   observeGrantEvent,
+  opaqueHolders,
   seedSessionState,
   stateCollections,
   type ObservedGrantEvent,
@@ -115,7 +117,7 @@ describe("SessionStore retirement routes (#15624)", () => {
     } as never;
     if (transport === "sse") store.sessions.set(sessionId, entry);
     else store.httpSessions.set(sessionId, entry);
-    return handle;
+    return { transport: handle, idleTimer };
   }
 
   function openRelay(store: SessionStore, sessionId: string) {
@@ -127,18 +129,11 @@ describe("SessionStore retirement routes (#15624)", () => {
       helpSessionId: "relay-help",
       shellName: "shell",
     });
-    return handle;
-  }
-
-  /** A pane session alongside every route: no idle timer, so no route reaps it by accident. */
-  function survivor(store: SessionStore) {
-    openSession(store, "survivor", "streamable-http", "survivor-pane");
-    return seed(store, "survivor", OTHER_PIN).needles;
+    return { transport: handle, idleTimer: undefined };
   }
 
   beforeEach(() => {
     vi.useFakeTimers();
-    sleep.awake = 0;
   });
 
   afterEach(() => {
@@ -148,9 +143,9 @@ describe("SessionStore retirement routes (#15624)", () => {
   type Route = {
     name: string;
     reason: SessionRetireReason;
-    open: (store: SessionStore) => { close: ReturnType<typeof vi.fn> };
-    /** Seed, then end the session by this route. */
-    retire: (store: SessionStore, seedTarget: () => void) => void;
+    open: (store: SessionStore) => ReturnType<typeof openSession>;
+    /** End the session by this route, calling `seed` at the last moment its state can be written. */
+    retire: (store: SessionStore, seed: () => void) => void;
   };
 
   const ROUTES: Route[] = [
@@ -158,12 +153,11 @@ describe("SessionStore retirement routes (#15624)", () => {
       name: "SSE idle expiry",
       reason: "session-idle",
       open: (store) => openSession(store, "target", "sse"),
-      retire: (_store, seedTarget) => {
-        // Seeded just before the deadline, so its grants are still live
-        // rather than swept as expired on the way there.
+      retire: (_store, seedNow) => {
+        // Seeded just before the deadline, so no grant or elevation ages out
+        // on the way there and every row the scan reads is still live.
         vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS - 1_000);
-        seedTarget();
-        sleep.awake = MCP_SSE_IDLE_TIMEOUT_MS;
+        seedNow();
         vi.advanceTimersByTime(1_000);
       },
     },
@@ -171,10 +165,9 @@ describe("SessionStore retirement routes (#15624)", () => {
       name: "Streamable HTTP idle expiry",
       reason: "session-idle",
       open: (store) => openSession(store, "target", "streamable-http"),
-      retire: (_store, seedTarget) => {
+      retire: (_store, seedNow) => {
         vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS - 1_000);
-        seedTarget();
-        sleep.awake = MCP_SSE_IDLE_TIMEOUT_MS;
+        seedNow();
         vi.advanceTimersByTime(1_000);
       },
     },
@@ -182,9 +175,11 @@ describe("SessionStore retirement routes (#15624)", () => {
       name: "expiry found on wake",
       reason: "session-idle",
       open: (store) => openSession(store, "target", "sse"),
-      retire: (store, seedTarget) => {
-        seedTarget();
-        sleep.awake = MCP_SSE_IDLE_TIMEOUT_MS;
+      retire: (store, seedNow) => {
+        // The clock jumps past the deadline without the timer firing: what a
+        // resume finds after the machine slept through it.
+        vi.setSystemTime(Date.now() + MCP_SSE_IDLE_TIMEOUT_MS);
+        seedNow();
         store.recomputeIdleTimers();
       },
     },
@@ -192,8 +187,8 @@ describe("SessionStore retirement routes (#15624)", () => {
       name: "revokeSession on an SSE session",
       reason: "session-ended",
       open: (store) => openSession(store, "target", "sse"),
-      retire: (store, seedTarget) => {
-        seedTarget();
+      retire: (store, seedNow) => {
+        seedNow();
         expect(store.revokeSession("target")).toBe(true);
       },
     },
@@ -201,8 +196,8 @@ describe("SessionStore retirement routes (#15624)", () => {
       name: "revokeSession on a Streamable HTTP session",
       reason: "session-ended",
       open: (store) => openSession(store, "target", "streamable-http"),
-      retire: (store, seedTarget) => {
-        seedTarget();
+      retire: (store, seedNow) => {
+        seedNow();
         expect(store.revokeSession("target")).toBe(true);
       },
     },
@@ -210,8 +205,8 @@ describe("SessionStore retirement routes (#15624)", () => {
       name: "revokeSession on a relay session",
       reason: "session-ended",
       open: (store) => openRelay(store, "target"),
-      retire: (store, seedTarget) => {
-        seedTarget();
+      retire: (store, seedNow) => {
+        seedNow();
         expect(store.revokeSession("target")).toBe(true);
       },
     },
@@ -219,8 +214,8 @@ describe("SessionStore retirement routes (#15624)", () => {
       name: "the per-pane cap retiring the least recently used session",
       reason: "session-ended",
       open: (store) => openSession(store, "target", "sse", "capped-pane"),
-      retire: (store, seedTarget) => {
-        seedTarget();
+      retire: (store, seedNow) => {
+        seedNow();
         for (let i = 1; i < MCP_PANE_SESSION_CAP; i++) {
           openSession(store, `pane-${i}`, "sse", "capped-pane");
         }
@@ -234,40 +229,32 @@ describe("SessionStore retirement routes (#15624)", () => {
     "$name leaves nothing behind and revokes grants to the pinned renderer",
     ({ reason, open, retire }) => {
       const { store, events, dropped } = storeFixture();
-      const survivorNeedles = survivor(store);
-      const transport = open(store);
-      let seeded: ReturnType<typeof seed> | null = null;
+      // A pane session alongside, with no idle timer for any route to reap it by.
+      openSession(store, "survivor", "streamable-http", "survivor-pane");
+      const { transport, idleTimer } = open(store);
+      const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+      let target: ReturnType<typeof seed> | null = null;
+      let survivorNeedles: string[] = [];
+      let survivorBefore: string[] = [];
 
       retire(store, () => {
-        seeded = seed(store, "target");
+        target = seed(store, "target");
+        survivorNeedles = seed(store, "survivor", OTHER_PIN).needles;
+        survivorBefore = findResidue(store, survivorNeedles);
         // Premise: the seed reached the collections the scan then reads.
-        expect(findResidue(store, seeded.needles).length).toBeGreaterThan(20);
+        expect(findResidue(store, target.needles).length).toBeGreaterThan(20);
       });
 
-      const { needles, unsubscribe } = seeded!;
+      const { needles, unsubscribe } = target!;
       expect(findResidue(store, needles)).toEqual([]);
       expectGrantsRevokedToPin(events, "target", reason);
       expect(unsubscribe).toHaveBeenCalledTimes(1);
       expect(dropped.abuse).toContain("target");
       expect(dropped.bearer).toContain("target");
       expect(transport.close).toHaveBeenCalled();
-      // Nothing of the session alongside was retired with it. Its grants and
-      // elevation may have aged out on the idle routes' clock; these may not.
-      expect(findResidue(store, survivorNeedles)).toEqual(
-        expect.arrayContaining([
-          "httpSessions[survivor]",
-          "paneSessions[survivor]",
-          "sessionTierMap[survivor]",
-          "sessionWebContentsMap[survivor]",
-          "sessionCredentialMap[survivor]",
-          "sessionHelpIdMap[survivor]",
-          "figureCounters[help-survivor]",
-          "resourceSubscriptions[survivor]",
-          "dedupResultCache[survivor]",
-          "toolListRouteWatch.listed[survivor]",
-          "resourceOwnership.byOwner[survivor]",
-        ])
-      );
+      if (idleTimer !== undefined) expect(clearTimeoutSpy).toHaveBeenCalledWith(idleTimer);
+      // The session alongside keeps every row it had.
+      expect(findResidue(store, survivorNeedles)).toEqual(survivorBefore);
       expect(
         events.filter((e) => e.sessionId === "survivor" && e.type === "grant.revoked")
       ).toEqual([]);
@@ -289,17 +276,27 @@ describe("SessionStore retirement routes (#15624)", () => {
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps a principal's ownership records through retirement and drain (#12487)", () => {
+  it.each([
+    ["a pane bearer's", "pane-principal"],
+    ["a help-session bearer's", helpOwnershipPrincipal("help-1")],
+  ])("keeps %s ownership records through retirement and drain (#12487, #12993)", (_, id) => {
     const { store } = storeFixture();
     const ledger = store.resourceOwnership;
-    openSession(store, "pane-session", "streamable-http", "pane-principal");
-    ledger.bindPrincipal("pane-session", "pane-principal");
-    const principal = ledger.ownerOf("pane-session");
+    openSession(store, "first", "streamable-http");
+    ledger.bindPrincipal("first", id);
+    const principal = ledger.ownerOf("first");
     ledger.record(principal, [{ kind: "terminal", id: "terminal-held" }]);
 
-    store.revokeSession("pane-session");
+    store.revokeSession("first");
 
-    expect(findResidue(store, ["pane-session"])).toEqual([]);
+    expect(findResidue(store, ["first"])).toEqual([]);
+    expect(ledger.owns(principal, "terminal", "terminal-held")).toBe(true);
+
+    openSession(store, "second", "streamable-http");
+    ledger.bindPrincipal("second", id);
+    store.drain();
+
+    expect(findResidue(store, ["second"])).toEqual([]);
     expect(ledger.owns(principal, "terminal", "terminal-held")).toBe(true);
   });
 
@@ -323,7 +320,8 @@ describe("SessionStore retirement routes (#15624)", () => {
     // on the store, or on a ledger it holds, fails here until `seedSessionState`
     // (or the session it is opened as) gives it a row — at which point every
     // route is checked against it — or `RETAINED_COLLECTIONS` says why a
-    // session's traces may outlive it.
+    // session's traces may outlive it. A ledger nested inside a ledger, which
+    // no scan walks into, fails here until it is named in `OPAQUE_HOLDERS`.
     const { store } = storeFixture();
     openSession(store, "sse-1", "sse");
     openSession(store, "http-1", "streamable-http");
@@ -342,6 +340,37 @@ describe("SessionStore retirement routes (#15624)", () => {
     );
 
     expect(unseeded).toEqual([]);
+    expect(opaqueHolders(store).filter((path) => !(path in OPAQUE_HOLDERS))).toEqual([]);
+  });
+
+  it("the scan reads private fields and ledgers, and the inventory flags a ledger nested past them", () => {
+    class Inner {
+      readonly rows = new Map([["s1", 1]]);
+    }
+    class Ledger {
+      private readonly bySession = new Map([["s1:tool", { sessionId: "s1" }]]);
+      readonly nested = new Inner();
+      size() {
+        return this.bySession.size;
+      }
+    }
+    class Holder {
+      private readonly own = new Set(["s1"]);
+      readonly ledger = new Ledger();
+      readonly plain = { rows: [{ owner: "s1" }] };
+      count() {
+        return this.own.size;
+      }
+    }
+    const holder = new Holder();
+
+    expect(findResidue(holder, ["s1"])).toEqual([
+      "own{s1}",
+      "ledger.bySession[s1:tool]",
+      "plain.rows.0.owner",
+    ]);
+    expect(stateCollections(holder)).toEqual(["own", "ledger.bySession"]);
+    expect(opaqueHolders(holder)).toEqual(["ledger.nested"]);
   });
 });
 
@@ -428,6 +457,7 @@ describe("HttpLifecycle retirement routes against a real store (#15624)", () => 
     };
 
     return {
+      lifecycle,
       store,
       events,
       residue,
@@ -491,6 +521,26 @@ describe("HttpLifecycle retirement routes against a real store (#15624)", () => 
     return sessionId;
   }
 
+  /**
+   * Every retirement and transport close, in the order they happen, so a route
+   * whose own retirement is missing can't pass on the retirement a transport's
+   * `onclose` performs when it is closed afterwards.
+   */
+  function traceTeardown(h: Harness, transportPrototype: { close(): Promise<void> }): string[] {
+    const trace: string[] = [];
+    const retire = h.store.retireSession.bind(h.store);
+    vi.spyOn(h.store, "retireSession").mockImplementation((sessionId, reason) => {
+      trace.push("retire");
+      retire(sessionId, reason);
+    });
+    const close = transportPrototype.close;
+    vi.spyOn(transportPrototype, "close").mockImplementation(async function (this: unknown) {
+      trace.push("close");
+      return close.call(this);
+    });
+    return trace;
+  }
+
   async function expectRetired(
     h: Harness,
     sessionId: string,
@@ -530,11 +580,15 @@ describe("HttpLifecycle retirement routes against a real store (#15624)", () => 
       throw new Error("socket gone");
     });
 
+    const trace = traceTeardown(h, SSEServerTransport.prototype);
+
     const response = await fetch(h.sseUrl, { headers: { Authorization: AUTH } });
     await response.body?.cancel();
 
     expect(response.status).toBe(500);
     await expectRetired(h, target!.sessionId, target!.seeded);
+    // `onclose` was detached before the close, so the close retired nothing again.
+    expect(trace).toEqual(["retire", "close"]);
   });
 
   it("the client terminating its /mcp session with DELETE", async () => {
@@ -592,12 +646,14 @@ describe("HttpLifecycle retirement routes against a real store (#15624)", () => 
       }
     );
     vi.spyOn(console, "error").mockImplementation(() => {});
+    const trace = traceTeardown(h, StreamableHTTPServerTransport.prototype);
 
     const response = await postMcp(h, INITIALIZE);
     await response.body?.cancel();
 
     expect(response.status).toBe(500);
     await expectRetired(h, target!.sessionId, target!.seeded);
+    expect(trace.slice(0, 2)).toEqual(["retire", "close"]);
   });
 
   it("an /mcp handshake request throwing after the session initialized", async () => {
@@ -614,10 +670,33 @@ describe("HttpLifecycle retirement routes against a real store (#15624)", () => 
       }
     );
     vi.spyOn(console, "error").mockImplementation(() => {});
+    const trace = traceTeardown(h, StreamableHTTPServerTransport.prototype);
 
     const response = await postMcp(h, INITIALIZE);
     await response.text();
 
     await expectRetired(h, target!.sessionId, target!.seeded);
+    expect(trace.slice(0, 2)).toEqual(["retire", "close"]);
+  });
+
+  it("a relay session's handle closing", async () => {
+    const h = await startLifecycle();
+    const handle = await h.lifecycle.openRelaySession({
+      tier: "core",
+      workspaceId: "a".repeat(64),
+      caller: {
+        linkSessionId: "link-1",
+        senderId: "b".repeat(64),
+        helpSessionId: "relay-help",
+        shellName: "shell",
+      },
+    });
+    const seeded = h.seedLive(handle!.sessionId);
+    expect(h.residue(seeded.needles)).toContain(`sessionRelayMap[${handle!.sessionId}]`);
+
+    handle!.close();
+
+    expect(handle!.isOpen()).toBe(false);
+    await expectRetired(h, handle!.sessionId, seeded);
   });
 });

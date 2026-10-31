@@ -19,6 +19,7 @@ import type {
 import { CHANNELS } from "../../ipc/channels.js";
 import type { McpGrantLifecyclePayload } from "../../../shared/types/ipc/mcpServer.js";
 import { ACTIONS_LIST_TOOL } from "../mcp-server/shared.js";
+import { findResidue, seedSessionState } from "../mcp-server/__tests__/helpers/sessionResidue.js";
 
 const testHomeDir = vi.hoisted(
   () => `${process.cwd()}/.vitest-mcp-home-${Math.random().toString(36).slice(2)}`
@@ -1004,6 +1005,62 @@ describe("McpServerService", () => {
 
       expect(auditLogsState.mcpAuditLog).toHaveLength(1);
       expect(getAuditRecords(service)).toHaveLength(1);
+    });
+  });
+
+  describe("session teardown through the production wiring (#15624)", () => {
+    it("disconnectBearer retires every session the bearer holds and revokes grants to the pinned renderer", async () => {
+      const { window, webContents } = createMockWindow();
+      await service.start(window);
+      const port = service.currentPort!;
+      const sse = await connectClient(port);
+      transports.push(sse.transport);
+      const http = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
+        requestInit: { headers: { Authorization: `Bearer ${getServiceApiKey()}` } },
+      });
+      httpTransports.push(http);
+      await new Client({ name: "mcp-test-client", version: "1.0.0" }).connect(http);
+      const store = service._sessionStore;
+      const sessionIds = [...store.sessions.keys(), ...store.httpSessions.keys()];
+      expect(sessionIds).toHaveLength(2);
+      const abusePolicy = (
+        service._httpLifecycle as unknown as {
+          deps: { abusePolicy: { recordDenial(id: string, kind: "tierMismatch"): unknown } };
+        }
+      ).deps.abusePolicy;
+      const needles = sessionIds.flatMap((sessionId) => {
+        abusePolicy.recordDenial(sessionId, "tierMismatch");
+        return seedSessionState(store, sessionId, {
+          helpSessionId: `help-${sessionId}`,
+          webContentsId: webContents.id,
+          unsubscribe: vi.fn(),
+        });
+      });
+      const [bearer] = service.listActiveBearers();
+      const scan = () => [
+        ...findResidue(store, needles),
+        ...findResidue(service._httpLifecycle, needles),
+        ...findResidue(abusePolicy, needles),
+      ];
+      expect(scan().length).toBeGreaterThan(40);
+
+      expect(service.disconnectBearer(bearer!.tokenHash)).toEqual({
+        tokenHash: bearer!.tokenHash,
+        disconnected: true,
+      });
+
+      expect(scan()).toEqual([]);
+      expect(service.listActiveBearers()).toEqual([]);
+      // Pushed by the real lifecycle emitter, which reaches the renderer only
+      // while the session's origin and pin are still bound.
+      const revoked = webContents.send.mock.calls
+        .filter(([channel]) => channel === CHANNELS.MCP_GRANT_LIFECYCLE)
+        .map(([, payload]) => payload as McpGrantLifecyclePayload)
+        .filter((payload) => payload.type === "grant.revoked")
+        .map((payload) => `${payload.sessionId}:${payload.revokedReason}`);
+      expect(revoked.sort()).toEqual(
+        sessionIds.flatMap((sessionId) => Array(2).fill(`${sessionId}:session-ended`)).sort()
+      );
     });
   });
 });

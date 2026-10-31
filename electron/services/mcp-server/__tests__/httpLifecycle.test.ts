@@ -198,7 +198,7 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
       resolveLiveTransportForHelpSession: vi.fn(() => null),
       grantCache: {
         clearDenialCounts: vi.fn(),
-        revokeSession: vi.fn(() => 0),
+        revokeSession: vi.fn<(sessionId: string, reason?: string) => number>(() => 0),
         revokeGrant: vi.fn(() => false),
         issueGrant: vi.fn(),
         issueNativeGrant: vi.fn(),

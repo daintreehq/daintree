@@ -366,9 +366,10 @@ export class SessionStore {
 
   /**
    * Forget everything held for `sessionId`: the one teardown every route a
-   * session ends by goes through — stream close, connect or request failure,
-   * an uninitialized handshake, idle expiry and {@link revokeSession}. A new
-   * piece of per-session state is cleared here and nowhere else.
+   * single session ends by goes through — stream close, connect or request
+   * failure, an uninitialized handshake, idle expiry and {@link revokeSession}.
+   * A new piece of per-session state is cleared here, and in {@link drain},
+   * which ends every session at once in bulk.
    *
    * Removes the session's transport entry and cancels its idle timer, but
    * never closes the transport: the caller either is the transport's own

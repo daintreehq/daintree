@@ -91,6 +91,28 @@ export function stateCollections(root: object): string[] {
   return paths;
 }
 
+/**
+ * Objects a ledger holds that {@link findResidue} will not walk into: class
+ * instances one level below the store's own ledgers. A ledger nested there
+ * would hide its collections from every scan, so each one found must be named
+ * in {@link OPAQUE_HOLDERS} as holding no session state.
+ */
+export function opaqueHolders(root: object): string[] {
+  const paths: string[] = [];
+  for (const [key, value] of Object.entries(root)) {
+    if (typeof value !== "object" || value === null || isPlainData(value)) continue;
+    for (const [inner, held] of Object.entries(value)) {
+      if (typeof held === "object" && held !== null && !isPlainData(held)) {
+        paths.push(`${key}.${inner}`);
+      }
+    }
+  }
+  return paths;
+}
+
+/** Class instances below the store's ledgers known to hold no session state, by path. */
+export const OPAQUE_HOLDERS: Readonly<Record<string, string>> = {};
+
 export interface SeedOptions {
   helpSessionId: string;
   webContentsId: number;
