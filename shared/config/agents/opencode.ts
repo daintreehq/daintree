@@ -15,15 +15,20 @@ export const config: AgentConfig = {
   tooltip: "Open-source CLI",
   usageUrl: "https://opencode.ai/",
   externalLinks: [{ label: "View docs", url: "https://opencode.ai/docs/" }],
+  // The registry entry targets the OpenCode 1 CLI (`--mini`, `-s`). OpenCode 2
+  // also installs an `opencode` binary, and the unqualified homebrew-core
+  // formula is V2, so every install option here must resolve to V1. The
+  // version feed uses anomalyco/opencode (opencode-ai/opencode is an archived,
+  // unrelated project).
   version: {
     args: ["--version"],
-    githubRepo: "opencode-ai/opencode",
+    githubRepo: "anomalyco/opencode",
     npmPackage: "opencode-ai",
-    releaseNotesUrl: "https://github.com/opencode-ai/opencode/releases",
+    releaseNotesUrl: "https://github.com/anomalyco/opencode/releases",
   },
   update: {
     npm: "npm install -g opencode-ai@latest",
-    brew: "brew upgrade opencode",
+    brew: "brew upgrade anomalyco/tap/opencode",
     curl: "curl -fsSL https://opencode.ai/install | bash",
   },
   install: {
@@ -40,7 +45,7 @@ export const config: AgentConfig = {
         },
         {
           label: "Homebrew",
-          commands: ["brew install opencode"],
+          commands: ["brew install anomalyco/tap/opencode"],
         },
       ],
       windows: [
@@ -50,7 +55,7 @@ export const config: AgentConfig = {
         },
         {
           label: "Scoop",
-          commands: ["scoop bucket add extras", "scoop install extras/opencode"],
+          commands: ["scoop install main/opencode"],
         },
         {
           label: "Chocolatey",
@@ -68,7 +73,7 @@ export const config: AgentConfig = {
         },
         {
           label: "Homebrew",
-          commands: ["brew install opencode"],
+          commands: ["brew install anomalyco/tap/opencode"],
         },
         {
           label: "Paru (Arch)",
@@ -80,6 +85,7 @@ export const config: AgentConfig = {
       "Restart Daintree after installation to update PATH",
       "Ensure Node.js is installed for npm-based installation",
       "Verify installation with: opencode --version",
+      "Daintree targets OpenCode 1 (1.x); OpenCode 2 uses the same 'opencode' command but is not supported. If 'opencode --version' reports 2.x (e.g. from 'brew install opencode'), reinstall with 'brew install anomalyco/tap/opencode' or 'npm install -g opencode-ai@latest'",
       "Run '/connect' in OpenCode to configure LLM provider",
       "For provider setup, authenticate at opencode.ai/auth",
     ],

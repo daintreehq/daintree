@@ -633,6 +633,35 @@ describe("AgentVersionService resilience", () => {
     });
   });
 
+  describe("GitHub version feed", () => {
+    beforeEach(() => {
+      spawnMock.mockReset();
+    });
+
+    it("reads OpenCode's latest release from the active anomalyco/opencode repository", async () => {
+      const { config } = await import("../../../shared/config/agents/opencode.js");
+      (registryMock.getEffectiveAgentConfig as Mock).mockReturnValue(config);
+
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ tag_name: "v1.19.5" }),
+        headers: new Headers(),
+      } as Response);
+      setSpawnSuccess("1.19.5\n");
+
+      const { service } = createService(async () => ({ opencode: "ready" }));
+      const result = await service.getVersion("opencode" as AgentId);
+
+      expect(result.latestVersion).toBe("1.19.5");
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "https://api.github.com/repos/anomalyco/opencode/releases/latest",
+        expect.anything()
+      );
+      fetchSpy.mockRestore();
+    });
+  });
+
   describe("PyPI version feed", () => {
     // execFile is used for the installed-version probe; default to a synthetic
     // success so getInstalledVersion returns a parseable value and the

@@ -1610,3 +1610,34 @@ describe("UserAgentConfigSchema supports field", () => {
     }
   });
 });
+
+describe("opencode install targets OpenCode 1", () => {
+  const config = getAgentConfig("opencode")!;
+  const installCommands = Object.values(config.install?.byOs ?? {}).flatMap((methods) =>
+    (methods ?? []).flatMap((m) => m.commands)
+  );
+  const allCommands = [...installCommands, ...Object.values(config.update ?? {})];
+
+  it("never uses the unqualified homebrew-core formula (OpenCode 2)", () => {
+    const brew = allCommands.filter((c) => /\bbrew\s+(install|upgrade)\b/.test(c));
+    expect(brew.length).toBeGreaterThan(0);
+    for (const c of brew) {
+      expect(c).toMatch(/\banomalyco\/tap\/opencode\b/);
+    }
+  });
+
+  it("never references the deprecated Scoop extras manifest", () => {
+    const scoop = allCommands.filter((c) => c.startsWith("scoop "));
+    expect(scoop.length).toBeGreaterThan(0);
+    expect(scoop.join("\n")).not.toMatch(/\bextras\b/);
+  });
+
+  it("points version metadata at the active upstream repository", () => {
+    expect(config.version?.githubRepo).toBe("anomalyco/opencode");
+    expect(config.version?.releaseNotesUrl).toContain("anomalyco/opencode");
+  });
+
+  it("explains that OpenCode 2 is not the integration target", () => {
+    expect(config.install?.troubleshooting?.join("\n")).toMatch(/OpenCode 2/);
+  });
+});
