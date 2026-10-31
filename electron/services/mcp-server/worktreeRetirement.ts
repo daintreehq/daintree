@@ -25,7 +25,7 @@ export interface RetirementAttribution extends TerminalAttribution {
 /** A pane a retirement closes, and the run the checks found under its id. */
 export interface RetirementClose {
   terminalId: string;
-  /** Undefined when the host could not say; the close then rests on the ledger alone, as `terminal.closeOwned` does. */
+  /** Undefined when main could not say, as for an exited run; the close then rests on the ledger alone, as `terminal.closeOwned` does. */
   launchGeneration: number | undefined;
 }
 

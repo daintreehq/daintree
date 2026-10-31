@@ -3074,9 +3074,15 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 };
               }
               // The run the checks found, and no other: a pane restarted
-              // since then is a run they never looked at.
+              // since then is a run they never looked at. Asked only when
+              // both runs are known; otherwise the ledger answers alone, as
+              // it does for `terminal.closeOwned`.
               const generation = deps.terminalGenerationOf?.(terminalId);
-              if (launchGeneration !== undefined && generation !== launchGeneration) {
+              if (
+                launchGeneration !== undefined &&
+                generation !== undefined &&
+                generation !== launchGeneration
+              ) {
                 return {
                   code: "DISABLED",
                   message: `Pane '${terminalId}' was restarted after the checks, so it was not closed.`,

@@ -275,10 +275,7 @@ export interface PtyTerminalProcessSource {
  *
  * The generation is main's own for the running incarnation, the one
  * `workerCreations` was noted against, so a respawn under a reused id is never
- * attributed to the session that created the earlier run. Main stops tracking
- * a run once it exits, so an exited record keeps the generation the host
- * adopted from main's ledger for that run (#15737): without it, a pane the
- * person restarted and that then exited would be credited by the ledger alone.
+ * attributed to the session that created the earlier run.
  */
 export async function readPtyTerminalProcesses(
   client: PtyTerminalProcessSource | null
@@ -287,9 +284,7 @@ export async function readPtyTerminalProcesses(
   const { terminals, degraded } = await client.getAllTerminalsWithCompletenessAsync();
   if (degraded) throw new Error("A pty host shard did not answer.");
   return terminals.map((terminal) => {
-    const launchGeneration =
-      client.getLiveGeneration(terminal.id) ??
-      (terminal.isExited === true ? (terminal.launchGeneration ?? null) : null);
+    const launchGeneration = client.getLiveGeneration(terminal.id);
     return {
       id: terminal.id,
       ...(terminal.worktreeId !== undefined ? { worktreeId: terminal.worktreeId } : {}),

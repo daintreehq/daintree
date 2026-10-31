@@ -437,6 +437,23 @@ describe("worktree.retireOwned (#15737)", () => {
     expect(store.resourceOwnership.owns("s-exited-pane", "worktree", WORKTREE)).toBe(false);
   });
 
+  it("closes an exited pane of its own after main has forgotten which run it was", async () => {
+    // The census carries no generation for an exited run, and main's history
+    // of it can run out; the ledger alone answers, as for `terminal.closeOwned`.
+    const { store, census, server, dispatchAction } = harness("s-forgotten", {
+      terminalGenerationOf: () => undefined,
+    });
+    await launchPane(server);
+    census.processes = [ownPane({ isExited: true, launchGeneration: undefined })];
+
+    const result = await callTool(server, retireCall());
+
+    expect(result.isError).toBeUndefined();
+    expect(payloadOf(result)).toMatchObject({ closedTerminalIds: ["terminal-1"] });
+    expect(dispatched(dispatchAction, "terminal.close")).toHaveLength(1);
+    expect(store.resourceOwnership.owns("s-forgotten", "worktree", WORKTREE)).toBe(false);
+  });
+
   describe("after its panes were closed", () => {
     it("reports the closed pane when its process is not seen to exit, and sends no delete", async () => {
       const { store, census, server, dispatchAction } = harness("s-wait-out", {

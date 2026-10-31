@@ -300,7 +300,7 @@ describe("refuseWorktreeDeleteWhileRunning (#15729)", () => {
 });
 
 describe("readPtyTerminalProcesses (#15729)", () => {
-  it("returns the host's records with main's generation for each running incarnation, and the host's for an exited one", async () => {
+  it("returns the host's records with main's generation for each running incarnation", async () => {
     const client = {
       getAllTerminalsWithCompletenessAsync: vi.fn().mockResolvedValue({
         terminals: [
@@ -332,9 +332,7 @@ describe("readPtyTerminalProcesses (#15729)", () => {
         trashExpiresAt: 5,
         launchGeneration: 7,
       },
-      // Main stops tracking a run once it exits; the host still holds the
-      // generation main minted for it (#15737).
-      { id: "b", cwd: "/wt/other", isExited: true, launchGeneration: 4 },
+      { id: "b", cwd: "/wt/other", isExited: true },
     ]);
   });
 

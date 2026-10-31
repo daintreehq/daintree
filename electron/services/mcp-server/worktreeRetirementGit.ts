@@ -85,7 +85,8 @@ export async function readWorktreeGitObservation(
   );
   const compare = { caseInsensitive: process.platform === "win32" };
   const [foundTop, ownTop] = await Promise.all([
-    realpath(top.stdout.toString("utf8").trim()),
+    // Only git's own line ending comes off: a directory name may end in a space.
+    realpath(top.stdout.toString("utf8").replace(/\r?\n$/, "")),
     realpath(worktreePath),
   ]);
   if (pathComparisonKey(foundTop, compare) !== pathComparisonKey(ownTop, compare)) {

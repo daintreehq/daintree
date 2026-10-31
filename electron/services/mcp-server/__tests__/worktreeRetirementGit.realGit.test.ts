@@ -180,6 +180,20 @@ describe("readWorktreeGitObservation", () => {
     });
   });
 
+  // Windows has no directory names ending in a space.
+  it.skipIf(process.platform === "win32")(
+    "reads a worktree whose directory name ends in a space",
+    async () => {
+      const dir = path.join(root, "spaced ");
+      git(repo, "worktree", "add", "-q", "--no-track", "-b", "spaced", dir, "origin/main");
+
+      expect(await readWorktreeGitObservation(dir)).toMatchObject({
+        branch: "spaced",
+        unpushedCommits: 0,
+      });
+    }
+  );
+
   it("rejects for a directory that is not its repository's top level", async () => {
     const nested = path.join(repo, "nested");
     fs.mkdirSync(nested, { recursive: true });
