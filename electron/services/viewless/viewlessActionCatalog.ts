@@ -25,9 +25,10 @@ const write = (danger: ActionDanger = "safe"): ViewlessActionEntry => ({ danger,
  * Everything else is a question for a renderer, and is refused as "no
  * frontend attached" rather than guessed at.
  *
- * The danger is restated here, not read from a manifest, because no manifest
- * is reachable with no view: the host's generated base surface covers only the
- * external tier. `viewlessActionParity.test.ts` holds each entry to the real
+ * The danger is restated here, not read from a manifest, because no live
+ * manifest is reachable with no view. The host's generated viewless base surface
+ * now describes these tools too (#15731), but this stays the fallback for a
+ * tool that surface lacks. `viewlessActionParity.test.ts` holds each entry to the real
  * registry, so a definition that gains a confirmation fails there rather than
  * running here unattended.
  *
