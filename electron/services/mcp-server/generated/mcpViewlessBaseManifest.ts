@@ -19,6 +19,290 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "agent",
     danger: "safe",
     description:
+      "Create a managed worktree and launch one agent in it: source as for any managed worktree (no recipe), the rest as for any agent launch. Launches only once setup ends ready, else stops and says which. The session owns both. A failure after creation is PARTIAL_SUCCESS carrying worktreeId: use that worktree, don't retry.",
+    enabled: true,
+    id: "agent.launchInNewWorktree",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        agentId: {
+          anyOf: [
+            {
+              type: "string",
+              enum: [
+                "claude",
+                "opencode",
+                "aider",
+                "gemini",
+                "antigravity",
+                "codex",
+                "grok",
+                "cursor",
+                "copilot",
+                "goose",
+                "amp",
+                "crush",
+                "qwen",
+                "kimi",
+                "interpreter",
+                "mistral",
+                "kiro",
+                "terminal",
+                "browser",
+                "dev-preview",
+              ],
+            },
+            {
+              type: "string",
+              minLength: 1,
+            },
+          ],
+          description:
+            "Agent CLI id from the agent listing. Other strings are accepted, so a bad id fails at launch, not validation.",
+        },
+        location: {
+          type: "string",
+          enum: ["grid", "dock", "overlay", "background"],
+          description: 'Default "grid". "background" runs it unmounted until restored.',
+        },
+        cwd: {
+          description:
+            "Absolute launch directory, not a worktree selector. Defaults to the worktree root.",
+          type: "string",
+        },
+        prompt: {
+          description: "First turn, submitted once the agent starts. Omit to leave it waiting.",
+          type: "string",
+        },
+        handback: {
+          description:
+            "Ask the agent to end its reply to `prompt` with a Daintree marker, read back as `lastHandback`.",
+          type: "boolean",
+        },
+        notify: {
+          description:
+            "When this agent next stops, Daintree types its handback summary, else its screen, into your prompt; may be missed: poll too. Agent panes and assistants only.",
+          type: "boolean",
+        },
+        replyLines: {
+          description:
+            "With notify: screen lines quoted (default 40, 0 for none); with handback, up to the marker. Set, it quotes despite a summary.",
+          type: "integer",
+          minimum: 0,
+          maximum: 200,
+        },
+        waitForReply: {
+          description: "Hold the call until the agent finishes; its reply comes back in `reply`.",
+          type: "boolean",
+        },
+        waitSeconds: {
+          description: "Longest wait, 1-1800 s (default 300).",
+          type: "integer",
+          minimum: 1,
+          maximum: 1800,
+        },
+        systemPrompt: {
+          description:
+            "Appended to the agent's system prompt, at most 2000 characters, kept on resume. Claude and Codex only; others refuse it.",
+          type: "string",
+          maxLength: 2000,
+        },
+        interactive: {
+          description: "Run as a conversation the user can continue, not one non-interactive pass.",
+          type: "boolean",
+        },
+        model: {
+          description:
+            "Omit for the CLI's default; set only when the user names a model. No preset needed.",
+          type: "string",
+        },
+        presetId: {
+          description:
+            "One of the user's saved launch presets. Explicit null ignores the default preset.",
+          type: ["string", "null"],
+        },
+        activateDockOnCreate: {
+          description: "Open the sidebar dock when placing the agent there.",
+          type: "boolean",
+        },
+        env: {
+          description:
+            "Extra env vars merged over the inherited environment. They reach a real process: never add credentials the user has not exposed.",
+          type: "object",
+          propertyNames: {
+            type: "string",
+          },
+          additionalProperties: {
+            type: "string",
+          },
+        },
+        excludeFromPersistence: {
+          description:
+            "Hide the terminal from the saved session, listings, status reads and bulk close or kill, so it can't be polled later. For throwaway work.",
+          type: "boolean",
+        },
+        removeOnExit: {
+          description: "Close the panel when the agent exits, discarding its output.",
+          type: "boolean",
+        },
+        agentLaunchFlags: {
+          description:
+            'Extra CLI flags for this launch, verbatim, e.g. Codex effort ["-c", "model_reasoning_effort=high"]. Bad ones fail at CLI start.',
+          type: "array",
+          items: {
+            type: "string",
+          },
+        },
+        spawnedBy: {
+          type: "string",
+          enum: ["quickrun", "recipe", "agent", "palette", "mcp", "assistant"],
+          description: "Run-history provenance only. Leave unset over MCP.",
+        },
+        focusPolicy: {
+          type: "string",
+          enum: ["auto", "preserve", "take"],
+          description:
+            'Focus the new panel: "auto" (default) unless the assistant owns input, "preserve" never, "take" always. Use preserve for background spawns.',
+        },
+        requestedId: {
+          description: "Panel id to create the terminal with, to correlate the launch.",
+          type: "string",
+        },
+        force: {
+          description:
+            "Skip the CLI launchability check, so an unlaunchable CLI starts and fails instead of opening a setup diagnostic. Leave off.",
+          type: "boolean",
+        },
+        name: {
+          description:
+            "Always pass a short tab title ('Claude: auth refactor') so parallel agents are told apart. Blank uses the default.",
+          type: "string",
+          maxLength: 200,
+        },
+        source: {
+          oneOf: [
+            {
+              type: "object",
+              properties: {
+                kind: {
+                  type: "string",
+                  const: "newBranch",
+                  description: "Branch off a base; a taken name follows collisionPolicy.",
+                },
+                branchName: {
+                  type: "string",
+                  minLength: 1,
+                  description: "New branch name; an invalid git ref is rejected, not rewritten.",
+                },
+                baseBranch: {
+                  description: "Base branch (default: the main worktree's branch).",
+                  type: "string",
+                  minLength: 1,
+                },
+                fromRemote: {
+                  description: "True if baseBranch is a remote branch, e.g. origin/develop.",
+                  type: "boolean",
+                },
+                fetchBase: {
+                  description:
+                    "Fetch the base (a local one via its upstream) and branch from that commit, returned as startCommit. A failed fetch fails; a taken name is never reused.",
+                  type: "boolean",
+                },
+                collisionPolicy: {
+                  description:
+                    "If the name is taken: 'suffix' (default) reuses the branch when nothing has it checked out, else creates name-2, and reports which; 'error' fails.",
+                  type: "string",
+                  enum: ["suffix", "error"],
+                },
+                issueNumber: {
+                  description:
+                    "Issue this worktree is for, passed to the recipe and assignToSelf; not attached.",
+                  type: "integer",
+                  exclusiveMinimum: 0,
+                  maximum: 9007199254740991,
+                },
+                assignToSelf: {
+                  description:
+                    "Assign the issue to the current user. Omit for the saved 'Assign issue to me' preference.",
+                  type: "boolean",
+                },
+              },
+              required: ["kind", "branchName"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: {
+                kind: {
+                  type: "string",
+                  const: "existingBranch",
+                  description: "Check out an existing local branch exactly as named.",
+                },
+                branchName: {
+                  type: "string",
+                  minLength: 1,
+                  description: "Existing local branch, used verbatim: never suffixed or created.",
+                },
+                issueNumber: {
+                  description:
+                    "Issue this worktree is for, passed to the recipe and assignToSelf; not attached.",
+                  type: "integer",
+                  exclusiveMinimum: 0,
+                  maximum: 9007199254740991,
+                },
+                assignToSelf: {
+                  description:
+                    "Assign the issue to the current user. Omit for the saved 'Assign issue to me' preference.",
+                  type: "boolean",
+                },
+              },
+              required: ["kind", "branchName"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: {
+                kind: {
+                  type: "string",
+                  const: "pullRequest",
+                  description:
+                    "Check out a pull request's head branch; a closed or merged PR works while its head ref exists.",
+                },
+                pullRequestNumber: {
+                  type: "integer",
+                  exclusiveMinimum: 0,
+                  maximum: 9007199254740991,
+                  description: "Pull request to check out; its head branch is fetched for you.",
+                },
+              },
+              required: ["kind", "pullRequestNumber"],
+              additionalProperties: false,
+            },
+          ],
+          description: "Where the branch comes from; exactly one mode.",
+        },
+        setupTimeoutMs: {
+          description:
+            "Ms to wait for setup, 0-600000 (default 300000). With waitForReply, it plus waitSeconds stays within 1800 s.",
+          type: "integer",
+          minimum: 0,
+          maximum: 600000,
+        },
+      },
+      required: ["agentId", "source"],
+    },
+    keywords: ["branch", "issue", "unit", "setup"],
+    kind: "command",
+    name: "agent.launchInNewWorktree",
+    requiresArgs: true,
+    title: "Create worktree and launch agent",
+  },
+  {
+    band: "reversible",
+    category: "agent",
+    danger: "safe",
+    description:
       "Each agent CLI's current model ids and names, to turn a model the user names into an id. With none named, launch without a model.",
     enabled: true,
     examples: [

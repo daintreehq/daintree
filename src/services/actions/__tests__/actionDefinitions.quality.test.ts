@@ -563,7 +563,13 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // to exit before deleting the worktree. The prose has to carry the three
   // outcomes and that the grace can be ended early. In-app only, off the
   // external surface.
-  const MAX_COHORT_TOTAL_BYTES = 23_970;
+  // 23_970 → 24_250 for `agent.launchInNewWorktree` (#15738), measured at
+  // 24_222 B. What the prose has to carry is that the source and the launch
+  // work as they do on their own, that it launches only once setup ends ready
+  // and otherwise says which way it ended, that the session owns both, and
+  // that a failure after creation hands back the worktree rather than inviting
+  // a retry that makes a second one. In-app only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 24_250;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1570,6 +1576,10 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "terminal.placeOwned": { terminalId: "t-placeholder", location: "dock" },
       "terminal.restartOnPresetOwned": { terminalId: "t-placeholder", presetId: "p-placeholder" },
       "agent.launchMany": { agentIds: ["claude"], prompt: "p" },
+      "agent.launchInNewWorktree": {
+        source: { kind: "newBranch", branchName: "b-placeholder" },
+        agentId: "claude",
+      },
       "terminal.sendCommandMany": { sends: [{ terminalId: "t-placeholder", command: "c" }] },
       "terminal.closeMany": { terminalIds: ["t-placeholder"] },
       "assistant.list": {},

@@ -98,6 +98,9 @@ export const CORE_TIER_TOOLS = [
   "agent.launch",
   // One prompt to every named agent in one call, each run as `agent.launch`.
   "agent.launchMany",
+  // A new worktree and its agent in one call, run as its create, setup wait
+  // and launch; core because `worktree.waitUntilReady` is (#15738).
+  "agent.launchInNewWorktree",
   // `agent.launch` accepts user- and plugin-contributed agent ids; only Daintree
   // knows the effective registry and live launchability.
   "agent.listAvailable",

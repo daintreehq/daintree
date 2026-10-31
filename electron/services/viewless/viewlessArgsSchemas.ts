@@ -1,6 +1,17 @@
 import { z } from "zod";
 import { BUILT_IN_AGENT_IDS } from "../../../shared/config/agentIds.js";
+import { NotifyReplyLinesSchema } from "../../../shared/types/terminalNotify.js";
+import {
+  REPLY_WAIT_MAX_SECONDS,
+  WaitForReplySchema,
+  WaitSecondsSchema,
+} from "../../../shared/types/replyWait.js";
+import { SYSTEM_PROMPT_MAX_LENGTH } from "../../../shared/utils/agentSystemPrompt.js";
 import { ForgeListViewSchema } from "../../../shared/utils/forgeListProjection.js";
+import {
+  LAUNCH_SETUP_WAIT_MAX_MS,
+  launchWaitsExceedHold,
+} from "../../../shared/utils/launchInNewWorktree.js";
 import {
   MAX_WAIT_FOR_PR_TARGETS,
   MAX_WAIT_FOR_PR_TIMEOUT_MS,
@@ -101,6 +112,56 @@ export const WorktreeCreateWithRecipeArgsSchema = z.object({
   spawnedBy: z.unknown().optional(),
   focusPolicy: z.unknown().optional(),
 });
+
+/** `agent.launch`'s arguments, as its renderer action takes them; the UI-only ones have no effect with no view. */
+export const AgentLaunchArgsSchema = z.object({
+  agentId: z.string().min(1),
+  location: z.enum(["grid", "dock", "overlay", "background"]).optional(),
+  cwd: z.string().optional(),
+  worktreeId: z.string().optional(),
+  prompt: z.string().optional(),
+  handback: z.boolean().optional(),
+  notify: z.boolean().optional(),
+  replyLines: NotifyReplyLinesSchema,
+  waitForReply: WaitForReplySchema,
+  waitSeconds: WaitSecondsSchema,
+  systemPrompt: z.string().max(SYSTEM_PROMPT_MAX_LENGTH).optional(),
+  interactive: z.boolean().optional(),
+  model: z.string().optional(),
+  presetId: z.string().nullable().optional(),
+  activateDockOnCreate: z.boolean().optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  excludeFromPersistence: z.boolean().optional(),
+  removeOnExit: z.boolean().optional(),
+  agentLaunchFlags: z.array(z.string()).optional(),
+  spawnedBy: z.unknown().optional(),
+  focusPolicy: z.unknown().optional(),
+  requestedId: z.string().optional(),
+  force: z.boolean().optional(),
+  name: z.string().max(200).optional(),
+});
+
+/**
+ * `agent.launchInNewWorktree`'s arguments (#15738), which main parses before
+ * anything is created: `createWithRecipe`'s source and every launch argument
+ * but the worktree, which the call makes. Strict, so a `worktreeId` or a
+ * `recipeId` is refused rather than dropped.
+ */
+export const AgentLaunchInNewWorktreeArgsSchema = AgentLaunchArgsSchema.omit({ worktreeId: true })
+  .extend({
+    source: WorktreeCreateWithRecipeArgsSchema.shape.source,
+    setupTimeoutMs: z.number().int().min(0).max(LAUNCH_SETUP_WAIT_MAX_MS).optional(),
+  })
+  .strict()
+  .refine((args) => !launchWaitsExceedHold(args), {
+    message: `setupTimeoutMs and waitSeconds together can't exceed ${REPLY_WAIT_MAX_SECONDS} s, the longest a call is held`,
+    path: ["setupTimeoutMs"],
+  })
+  // The launch refuses it too, but only after the worktree exists.
+  .refine((args) => args.handback !== true || (args.prompt ?? "").trim() !== "", {
+    message: "handback marks the end of the reply to `prompt`, so it needs a non-empty `prompt`",
+    path: ["handback"],
+  });
 
 /** `slashCommands.list`'s arguments: a project selector, as a view takes it, and a built-in agent. */
 export const SlashCommandsListArgsSchema = z

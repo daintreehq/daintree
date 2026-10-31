@@ -118,6 +118,10 @@ const OVERSIZED_PARAMS_ALLOWLIST: Readonly<Record<string, string>> = {
   // on failure.
   "agent.launch": "single-round-trip launch; splitting it leaks a half-created panel on failure",
   "worktree.createWithRecipe": "composite create-plus-launch; splitting is the plain create tool",
+  // The create's source and every launch argument, in one call: the split is
+  // the three calls it exists to replace, with a worktree left behind when the
+  // last one fails (#15738).
+  "agent.launchInNewWorktree": "create, setup wait and launch in one call; split, it is three",
 };
 
 /**
@@ -925,7 +929,15 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // panes' processes to exit (and can end their trash grace early) instead of
   // polling a status that forgets them when the trash lets them go. In-app
   // only, so the external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 162_140;
+  // 162_140 → 168_780 for #15738, measured at 168_746 B (+6_614):
+  // `agent.launchInNewWorktree` takes a managed worktree's source and every
+  // argument `agent.launch` takes, with the same descriptions, plus its setup
+  // budget, so one call starts a unit of work on a host with no window instead
+  // of four. The launch fields are repeated rather than summarised because
+  // they carry the warnings (credentials in `env`, what `excludeFromPersistence`
+  // hides) a caller needs at the point of use. Core only, so the external
+  // ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 168_780;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

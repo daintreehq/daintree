@@ -9,9 +9,11 @@ import {
 } from "../HostCallRuntime.js";
 import { MAX_RELAY_ARGS_BYTES, MAX_RELAY_RUN_MS, type McpCallAnswer } from "../linkMethods.js";
 import {
+  MCP_DISPATCH_TIMEOUT_MS,
   MCP_REMOTE_CONFIRM_MARGIN_MS,
   MCP_REMOTE_DISPATCH_TIMEOUT_MS,
 } from "../../../../shared/config/mcpConfirmWindow.js";
+import { LAUNCH_SETUP_WAIT_DEFAULT_MS } from "../../../../shared/utils/launchInNewWorktree.js";
 
 const RUN_A: OpenRun = {
   projectId: "proj-1",
@@ -350,6 +352,30 @@ describe("relayRunMs", () => {
     );
     // A check with no timeout of its own runs to its default.
     expect(relayRunMs("project.runCheck", {})).toBeGreaterThan(relayRunMs("terminal.list", {}));
+  });
+
+  it("gives a new-worktree launch its setup wait and its reply wait back to back (#15738)", () => {
+    expect(
+      relayRunMs("agent.launchInNewWorktree", {
+        setupTimeoutMs: 400_000,
+        waitForReply: true,
+        waitSeconds: 1_200,
+      })
+    ).toBeGreaterThan(400_000 + 1_200_000);
+    // With no budget named, the setup wait it will still run counts.
+    expect(
+      relayRunMs("agent.launchInNewWorktree", { waitForReply: true, waitSeconds: 1_200 })
+    ).toBeGreaterThan(LAUNCH_SETUP_WAIT_DEFAULT_MS + 1_200_000);
+    // Each wait moves it by exactly its own length: summed, not the larger.
+    const at = (setupTimeoutMs: number, waitSeconds: number) =>
+      relayRunMs("agent.launchInNewWorktree", { setupTimeoutMs, waitForReply: true, waitSeconds });
+    expect(at(500_000, 1_200) - at(400_000, 1_200)).toBe(100_000);
+    expect(at(400_000, 1_300) - at(400_000, 1_200)).toBe(100_000);
+    // A setup wait alone, and room for the create and launch dispatches around it.
+    expect(relayRunMs("agent.launchInNewWorktree", { setupTimeoutMs: 600_000 })).toBeGreaterThan(
+      600_000 + 2 * MCP_DISPATCH_TIMEOUT_MS
+    );
+    expect(at(600_000, 1_800)).toBeLessThan(MAX_RELAY_RUN_MS);
   });
 
   it("never asks the host for more than it allows", () => {

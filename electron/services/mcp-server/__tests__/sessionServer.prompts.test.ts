@@ -94,8 +94,9 @@ describe("sessionServer prompt handler", () => {
     const queue = text.slice(text.indexOf("**Queues pace with one owner.**"));
     expect(text).toContain("**Queues pace with one owner.**");
     expect(queue).toMatch(/never a second timer, background sleep or polling script/);
+    // The one-call launch first (#15738), the separate wait and launch after.
     expect(queue).toMatch(
-      /finished setup \(`worktree\.waitUntilReady`[^\n]*\), then `agent\.launch`/
+      /finished setup: `agent\.launchInNewWorktree`[^\n]*waits and launches in one call; otherwise `worktree\.waitUntilReady`[^\n]*, then `agent\.launch`/
     );
     expect(queue).toMatch(/`prNumber`[^\n]*cached hint and null does not prove there is no PR/);
     expect(queue).toMatch(/suggested next prompt[^\n]*never submit or act on it/);

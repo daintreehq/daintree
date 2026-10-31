@@ -5,7 +5,9 @@ import {
 } from "../../../shared/config/globalAssistant.js";
 import { PROJECT_CHECK_DEFAULT_TIMEOUT_MS } from "../../../shared/types/projectCheck.js";
 import { REPLY_WAIT_DEFAULT_SECONDS } from "../../../shared/types/replyWait.js";
+import { LAUNCH_SETUP_WAIT_DEFAULT_MS } from "../../../shared/utils/launchInNewWorktree.js";
 import {
+  MCP_DISPATCH_TIMEOUT_MS,
   MCP_REMOTE_DISPATCH_TIMEOUT_MS,
   remoteHoldUntil,
 } from "../../../shared/config/mcpConfirmWindow.js";
@@ -626,6 +628,8 @@ const RELAY_RUN_MARGIN_MS = 30_000;
 const RELAY_MIN_RUN_MS = MCP_REMOTE_DISPATCH_TIMEOUT_MS + RELAY_RUN_MARGIN_MS;
 /** Least a throwaway call is given: it never asks anyone, so a dispatch and the trip. */
 const THROWAWAY_MIN_RUN_MS = 90_000;
+/** Runs a create, a setup wait and a launch in sequence on its host (#15738). */
+const LAUNCH_IN_NEW_WORKTREE_TOOL = "agent.launchInNewWorktree";
 /** How much longer than the host's own deadline the Shell waits for the answer. */
 const RELAY_ANSWER_GRACE_MS = 15_000;
 
@@ -646,12 +650,22 @@ export function relayRunMs(
   } else if (tool === "project.runCheck") {
     wanted = PROJECT_CHECK_DEFAULT_TIMEOUT_MS;
   }
-  if (args.waitForReply === true) {
-    const seconds =
-      typeof args.waitSeconds === "number" && Number.isFinite(args.waitSeconds)
-        ? args.waitSeconds
-        : REPLY_WAIT_DEFAULT_SECONDS;
-    wanted = Math.max(wanted, seconds * 1000);
+  const replyMs =
+    args.waitForReply === true
+      ? (typeof args.waitSeconds === "number" && Number.isFinite(args.waitSeconds)
+          ? args.waitSeconds
+          : REPLY_WAIT_DEFAULT_SECONDS) * 1000
+      : 0;
+  if (tool === LAUNCH_IN_NEW_WORKTREE_TOOL) {
+    // Its steps run one after another: the create's dispatch, the setup wait,
+    // the launch's dispatch, then the reply wait.
+    const setupMs =
+      typeof args.setupTimeoutMs === "number" && Number.isFinite(args.setupTimeoutMs)
+        ? Math.max(0, args.setupTimeoutMs)
+        : LAUNCH_SETUP_WAIT_DEFAULT_MS;
+    wanted = 2 * MCP_DISPATCH_TIMEOUT_MS + setupMs + replyMs;
+  } else {
+    wanted = Math.max(wanted, replyMs);
   }
   return Math.min(MAX_RELAY_RUN_MS, Math.max(minMs, wanted + RELAY_RUN_MARGIN_MS));
 }

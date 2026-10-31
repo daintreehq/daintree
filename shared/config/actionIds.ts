@@ -399,6 +399,7 @@ export const BUILT_IN_ACTION_IDS = [
   // -- agentActions --
   "agent.launch",
   "agent.launchMany",
+  "agent.launchInNewWorktree",
   "agent.terminal",
   "agent.focusNextWaiting",
   "agent.focusNextWorking",
@@ -679,6 +680,8 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "terminal.sendCommandMany",
   "terminal.closeMany",
   "agent.launchMany",
+  // Runs its create, wait and launch as single calls through main's MCP gate.
+  "agent.launchInNewWorktree",
   "terminal.readLastMessageOwned",
   // Main checks ownership before dispatching it; nothing in its `run()` does.
   "terminal.restartOnPresetOwned",

@@ -76,6 +76,11 @@ import { buildImageToolCallResult, isImageResultTool } from "./imageToolResult.j
 import { buildSurfaceManifest, MCP_SURFACE_TOOL_ID } from "./surfaceManifest.js";
 import { viewlessStatusArgsAreAnswerable } from "./terminalStatus.js";
 import { viewlessActionDanger } from "../viewless/viewlessActionCatalog.js";
+import {
+  AGENT_LAUNCH_IN_NEW_WORKTREE_TOOL,
+  createStepRequestKey,
+  runLaunchInNewWorktree,
+} from "./launchInNewWorktree.js";
 import { parseLastMessageReadArgs } from "./lastMessageArgs.js";
 import { withClosedPanelProcesses } from "./closedPanelProcesses.js";
 import type { ClosedPanelExitTarget } from "./closedPanelExits.js";
@@ -329,6 +334,7 @@ const AGENT_LAUNCH_TOOL = "agent.launch";
 const BATCH_REPLY_TEXT_BUDGET = 32_000;
 const AGENT_NAMING_LAUNCH_TOOLS: ReadonlySet<string> = new Set([
   AGENT_LAUNCH_TOOL,
+  AGENT_LAUNCH_IN_NEW_WORKTREE_TOOL,
   "workflow.startWorkOnIssue",
 ]);
 
@@ -1688,8 +1694,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           );
         }
         if (AGENT_NAMING_LAUNCH_TOOLS.has(actionId)) {
+          // Checked on the composite too, before it creates a worktree its
+          // launch would then be refused into.
           const requestedId =
-            actionId === AGENT_LAUNCH_TOOL ? readStringArg(args, "requestedId") : undefined;
+            actionId === AGENT_LAUNCH_TOOL || actionId === AGENT_LAUNCH_IN_NEW_WORKTREE_TOOL
+              ? readStringArg(args, "requestedId")
+              : undefined;
           if (requestedId !== undefined && deps.isTerminalIdInUse(requestedId)) {
             const message =
               `A terminal with id '${requestedId}' already exists, so '${actionId}' will not ` +
@@ -1699,6 +1709,75 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               value: { ok: false, error: { code: "VALIDATION_ERROR", message } },
             };
             return buildToolError({ code: "VALIDATION_ERROR", message });
+          }
+        }
+
+        // One unit of work in one call (#15738): the create, the setup wait
+        // and the launch each run through this handler again as their single
+        // calls, so the session owns what they make, the launch's notice and
+        // reply wait work as on `agent.launch`, and each step dispatches with
+        // no view where it can. The composite adds no authority of its own.
+        if (actionId === AGENT_LAUNCH_IN_NEW_WORKTREE_TOOL) {
+          // What the launch step would refuse `notify` for is refused here,
+          // before a worktree is made for an agent that won't be launched.
+          if (
+            typeof args === "object" &&
+            args !== null &&
+            (args as Record<string, unknown>).notify === true
+          ) {
+            const refuse = (code: string, message: string) => {
+              outcome = {
+                kind: "result",
+                value: { ok: false, error: { code: auditCodeForNotifyRefusal(code), message } },
+              };
+              return buildToolError({ code, message });
+            };
+            const pane = tier === "external" ? null : ownPane();
+            if (pane === null || terminalNotify === undefined) {
+              return refuse(
+                NOTIFY_NOT_ELIGIBLE,
+                "`notify` types into the caller's own pane, and this connection has none: only an agent pane or an assistant session can ask for it. Nothing was created."
+              );
+            }
+            if (pane.relay !== undefined && pane.relay.callId === undefined) {
+              return refuse(
+                NOTIFY_NOT_ELIGIBLE,
+                "This relayed call carries no call id, so its notice could not reach the assistant that asked. Nothing was created."
+              );
+            }
+            if ((readStringArg(args, "prompt") ?? "").trim().length === 0) {
+              return refuse(
+                NOTIFY_VALIDATION_ERROR,
+                "`notify` needs a `prompt`: there is no work to finish without one. Nothing was created."
+              );
+            }
+          }
+          emitToolCallStarted(false, false);
+          const stepOptions =
+            confirmationsSkipped || relayCallId !== undefined
+              ? {
+                  ...(confirmationsSkipped ? { confirmationsSkipped: true } : {}),
+                  ...(relayCallId !== undefined ? { relayCallId } : {}),
+                }
+              : undefined;
+          try {
+            const answer = await runLaunchInNewWorktree(args, {
+              callTool: (name, stepArgs) =>
+                handleCallTool(
+                  { method: "tools/call", params: { name, arguments: stepArgs } },
+                  extra,
+                  stepOptions
+                ),
+              signal: extra.signal,
+              ...(dedupKey !== undefined
+                ? { createRequestKey: createStepRequestKey(dedupKey) }
+                : {}),
+            });
+            outcome = { kind: "result", value: answer.outcome };
+            return answer.result;
+          } catch (err) {
+            outcome = { kind: "throw", error: err };
+            throw err;
           }
         }
 
@@ -3166,6 +3245,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       sessionScopedOwner &&
       (actionId === AGENT_LAUNCH_TOOL ||
         actionId === "agent.launchMany" ||
+        actionId === AGENT_LAUNCH_IN_NEW_WORKTREE_TOOL ||
         (actionId === "terminal.list" && ownedOnly));
     const answerPromise: Promise<CallToolResultLike> = notesOwnership
       ? repliedPromise.then((result) =>
@@ -3188,7 +3268,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         dedupKey,
         argsHash!,
         answerPromise,
-        () => outcome?.kind === "result" && outcome.value.ok
+        // The one-call launch's partial answer is kept as well: it names a
+        // worktree that exists, and a retry run again would make another.
+        () =>
+          outcome?.kind === "result" &&
+          (outcome.value.ok ||
+            (actionId === AGENT_LAUNCH_IN_NEW_WORKTREE_TOOL &&
+              outcome.value.error.code === "PARTIAL_SUCCESS"))
       );
     }
 

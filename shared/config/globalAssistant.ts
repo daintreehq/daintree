@@ -80,6 +80,7 @@ export const GLOBAL_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "recipe.run",
   "agent.launch",
   "agent.launchMany",
+  "agent.launchInNewWorktree",
   "agent.listAvailable",
   "agent.listPresets",
   "agent.listModels",
