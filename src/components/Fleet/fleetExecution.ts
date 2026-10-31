@@ -257,30 +257,20 @@ function submitAndNote(submission: ResolvedSubmission, retry: boolean): Promise<
   });
 }
 
-/** This view's armed panes and the other hosts' armed agents, as the fleet stands now. */
-function currentFleetMembers(): Set<string> {
-  const { armedIds, crossHostTargets } = useFleetArmingStore.getState();
-  const members = new Set(armedIds);
-  for (const target of crossHostTargets) members.add(target.key);
-  return members;
-}
-
 /**
  * Callers pick targets from the fleet as it stood when the send began, but a
  * context read or a large paste's batches leave time for that to change. A
- * target that was a member then and has since left (disarmed, Exit Fleet, the
- * fleet's panes trashed) gets nothing that hasn't gone out yet, nor does a
- * pane that was locked, docked, backgrounded or lost its PTY. Another host's
- * agent exists here only while it is armed, so once it leaves there is
- * nowhere left to send it, and its key must never reach this view's terminals.
+ * target that has since left the fleet (disarmed, Exit Fleet, the fleet's panes
+ * trashed) gets nothing that hasn't gone out yet, nor does a pane that was
+ * locked, docked, backgrounded or lost its PTY. Another host's agent exists
+ * here only while it is armed, so once it leaves there is nowhere left to send
+ * it, and its key must never reach this view's terminals.
  */
-function isStillRecipient(terminalId: string, startingMembers: ReadonlySet<string>): boolean {
+function isStillRecipient(terminalId: string): boolean {
   if (isHostQualifiedTargetId(terminalId)) return isCrossHostTargetId(terminalId);
-  if (startingMembers.has(terminalId) && !useFleetArmingStore.getState().armedIds.has(terminalId)) {
-    return false;
-  }
-  return isTerminalFleetBroadcastTarget(
-    getNarrowPanel(usePanelStore.getState().panelsById, terminalId)
+  return (
+    useFleetArmingStore.getState().armedIds.has(terminalId) &&
+    isTerminalFleetBroadcastTarget(getNarrowPanel(usePanelStore.getState().panelsById, terminalId))
   );
 }
 
@@ -312,11 +302,15 @@ let latestRun = 0;
  * absorbed by `Promise.allSettled` and reported as rejected entries in
  * `perTarget` / `failedIds`. The caller decides whether to surface them.
  *
- * Cancellation is cooperative: `signal` is checked at inter-batch
- * boundaries (and once before the non-batched path's allSettled completes).
- * Already-dispatched IPC writes cannot be revoked — the result reports
- * what actually fired and marks `cancelled: true` plus a `skippedCount` of
- * targets in unstarted batches.
+ * Cancellation is cooperative: `signal` is checked after context expansion
+ * and at inter-batch boundaries (and once before the non-batched path's
+ * allSettled completes). Already-dispatched IPC writes cannot be revoked — the
+ * result reports what actually fired and marks `cancelled: true` plus a
+ * `skippedCount` of targets in unstarted batches.
+ *
+ * Only fleet members are sent to: each target is checked again right before
+ * its submit, and one that has left the fleet or stopped being a broadcast
+ * target since is counted in `skippedCount`, neither sent nor failed.
  */
 export async function executeFleetBroadcast(
   draft: string,
@@ -329,10 +323,9 @@ export async function executeFleetBroadcast(
   const run = ++latestRun;
   const progress = () => (run === latestRun ? useFleetBroadcastProgressStore.getState() : null);
   let resolved = resolveSubmissions(draft, targetIds, perTargetOverrides);
-  const startingMembers = currentFleetMembers();
   // Checked right before each submit, so a target that stops being a recipient
   // while its context is read or between batches is skipped, never sent.
-  const canDispatch = (r: ResolvedSubmission) => isStillRecipient(r.terminalId, startingMembers);
+  const canDispatch = (r: ResolvedSubmission) => isStillRecipient(r.terminalId);
   const results: PromiseSettledResult<void>[] = [];
   // Parallel to `results`: what was actually sent, since a target that stops
   // being a recipient mid-broadcast drops out of its batch.

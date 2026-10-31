@@ -38,6 +38,29 @@ export function cancelActiveBroadcast(): void {
 }
 
 /**
+ * Exit Fleet, the fleet Trash action, and anything else that empties the fleet
+ * withdraws the send still going out to it, as Cancel does: the ribbon and its
+ * Cancel button leave with the fleet, so nothing else could stop it. Only the
+ * submission is withdrawn; a run already watching its agents carries on.
+ */
+function cancelWhenFleetEmpties(controller: AbortController): () => void {
+  const cancelIfEmpty = (state: ReturnType<typeof useFleetArmingStore.getState>) => {
+    if (selectFleetMemberCount(state) > 0) return;
+    // A newer send owns the controller and the progress store now.
+    if (activeBroadcastController !== controller) return;
+    cancelActiveBroadcast();
+  };
+  const unsubscribe = useFleetArmingStore.subscribe(cancelIfEmpty);
+  const stop = () => {
+    unsubscribe();
+    controller.signal.removeEventListener("abort", stop);
+  };
+  controller.signal.addEventListener("abort", stop);
+  cancelIfEmpty(useFleetArmingStore.getState());
+  return stop;
+}
+
+/**
  * Run a fleet broadcast through the shared single-flight controller so it
  * participates in the same coordination as the Enter path: a newer broadcast
  * pre-empts an older one (they share `fleetBroadcastProgressStore`, which only
@@ -58,6 +81,7 @@ export async function runManagedFleetBroadcast(
   activeBroadcastController?.abort();
   const controller = new AbortController();
   activeBroadcastController = controller;
+  const stopWatchingFleet = cancelWhenFleetEmpties(controller);
   // Zero-target dispatches (every pane went ineligible between snapshot and
   // send) are structural no-ops — don't mint a run record for them.
   // `draftPreview` lets the retry path (empty draft, payload in overrides)
@@ -100,6 +124,7 @@ export async function runManagedFleetBroadcast(
     }
     throw error;
   } finally {
+    stopWatchingFleet();
     if (activeBroadcastController === controller) {
       activeBroadcastController = null;
     }
@@ -147,9 +172,9 @@ function buildBroadcastAnnouncement(
     return `Broadcast cancelled — ${result.successCount} sent${skipped}`;
   }
   if (result.failureCount > 0) {
-    return `Broadcast sent to ${result.successCount} — ${describeFailureSplit(permanent, transient)}${failedHostsSuffix(failedHosts)}`;
+    return `Broadcast sent to ${result.successCount} — ${describeFailureSplit(permanent, transient)}${failedHostsSuffix(failedHosts)}${skipped}`;
   }
-  return `Broadcast sent to ${pluralize(result.successCount, "terminal", "terminals")}`;
+  return `Broadcast sent to ${pluralize(result.successCount, "terminal", "terminals")}${skipped}`;
 }
 
 /**

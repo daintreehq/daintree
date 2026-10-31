@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   buildFleetTargetPreviews,
   executeFleetBroadcast,
@@ -102,6 +102,11 @@ function makeAgent(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelD
   } as PtyPanelData;
 }
 
+/**
+ * Seeds the panels as this view's armed fleet, since a broadcast only reaches
+ * fleet members. Tests about a narrower selection arm it afterwards. Agents on
+ * other hosts already armed are left in place.
+ */
 function seedPanels(terminals: PanelInstance[]): void {
   const panelsById: Record<string, PanelInstance> = {};
   const panelIds: string[] = [];
@@ -110,6 +115,12 @@ function seedPanels(terminals: PanelInstance[]): void {
     panelIds.push(t.id);
   }
   usePanelStore.setState({ panelsById, panelIds });
+  useFleetArmingStore.setState({
+    armedIds: new Set(panelIds),
+    armOrder: panelIds,
+    armOrderById: Object.fromEntries(panelIds.map((id, i) => [id, i])),
+    lastArmedId: panelIds[panelIds.length - 1] ?? null,
+  });
 }
 
 function reset() {
@@ -738,7 +749,6 @@ describe("executeFleetBroadcast — context tokens (#14953)", () => {
 
   it("sends nothing to a pane disarmed while its context was read (#15560)", async () => {
     seedPanels([makeAgent("a", { cwd: "/wt/a" }), makeAgent("b", { cwd: "/wt/b" })]);
-    useFleetArmingStore.getState().armIds(["a", "b"]);
     const answer = holdDiffs();
     const sending = executeFleetBroadcast("Review @diff", ["a", "b"]);
     useFleetArmingStore.getState().disarmId("b");
@@ -754,7 +764,6 @@ describe("executeFleetBroadcast — context tokens (#14953)", () => {
 
   it("sends nothing once the fleet is cleared while its context was read (#15560)", async () => {
     seedPanels([makeAgent("a", { cwd: "/wt/a" }), makeAgent("b", { cwd: "/wt/b" })]);
-    useFleetArmingStore.getState().armIds(["a", "b"]);
     const answer = holdDiffs();
     const sending = executeFleetBroadcast("Review @diff", ["a", "b"]);
     useFleetArmingStore.getState().clear();
@@ -770,13 +779,12 @@ describe("executeFleetBroadcast — context tokens (#14953)", () => {
 
   it("skips an agent on another host removed while the context was read (#15560)", async () => {
     const remote = crossHostTargetKey("host-2", "t9");
-    seedPanels([makeAgent("a", { cwd: "/wt/a" })]);
-    useFleetArmingStore.getState().armIds(["a"]);
     useFleetArmingStore.setState({
       crossHostTargets: [
         { key: remote, hostId: "host-2", hostName: "Studio", terminalId: "t9", title: "t9" },
       ],
     });
+    seedPanels([makeAgent("a", { cwd: "/wt/a" })]);
     const answer = holdDiffs();
     const sending = executeFleetBroadcast("Review @diff", ["a", remote]);
     useFleetArmingStore.getState().disarmId(remote);
@@ -1038,7 +1046,8 @@ describe("executeFleetBroadcast — panes locked after targets were picked (#149
 });
 
 describe("executeFleetBroadcast — targets that leave the fleet between large-paste batches (#15560)", () => {
-  const remoteSubmit = vi.fn();
+  const remoteSubmit = vi.fn<(request: { terminalId: string }) => Promise<void>>();
+  const originalAdvance = useFleetBroadcastProgressStore.getState().advance;
 
   beforeEach(() => {
     reset();
@@ -1046,29 +1055,44 @@ describe("executeFleetBroadcast — targets that leave the fleet between large-p
     Object.assign(window, { electron: { hostMetrics: { submitFleet: remoteSubmit } } });
   });
 
+  afterEach(() => {
+    useFleetBroadcastProgressStore.setState({ advance: originalAdvance });
+  });
+
   const batchedIds = () =>
     Array.from({ length: FLEET_LARGE_PASTE_BATCH_SIZE + 2 }, (_, i) => `t${i}`);
+  const bigPayload = "x".repeat(120_000);
+  const sentIds = () => submitMock.mock.calls.map((call) => call[0]);
 
-  /** Runs `change` once the first batch's submits have gone out. */
-  function afterFirstBatch(ids: string[], change: () => void): void {
-    submitMock.mockImplementation(async (id) => {
-      if (id === ids[0]) change();
+  /** Runs `change` once every submit in the first batch has settled. */
+  function afterFirstBatch(change: () => void): void {
+    let batches = 0;
+    useFleetBroadcastProgressStore.setState({
+      advance: (size, failures) => {
+        originalAdvance(size, failures);
+        batches += 1;
+        if (batches === 1) change();
+      },
     });
+  }
+
+  function moveTo(id: string, location: "dock" | "background" | "trash"): void {
+    usePanelStore.setState((s) => ({
+      panelsById: { ...s.panelsById, [id]: { ...s.panelsById[id]!, location } },
+    }));
   }
 
   it("sends nothing to a pane disarmed after the first batch went out", async () => {
     const ids = batchedIds();
     seedPanels(ids.map((id) => makeAgent(id)));
-    useFleetArmingStore.getState().armIds(ids);
     const lateId = ids[ids.length - 1]!;
-    afterFirstBatch(ids, () => useFleetArmingStore.getState().disarmId(lateId));
+    afterFirstBatch(() => useFleetArmingStore.getState().disarmId(lateId));
 
-    const result = await executeFleetBroadcast("x".repeat(120_000), ids);
+    const result = await executeFleetBroadcast(bigPayload, ids);
 
-    const sent = submitMock.mock.calls.map((call) => call[0]);
-    expect(sent).not.toContain(lateId);
+    expect(sentIds()).not.toContain(lateId);
     expect(notifyUserInputMock).not.toHaveBeenCalledWith(lateId, expect.anything());
-    expect(sent).toHaveLength(ids.length - 1);
+    expect(sentIds()).toHaveLength(ids.length - 1);
     expect(result.successCount).toBe(ids.length - 1);
     expect(result.failureCount).toBe(0);
     expect(result.skippedCount).toBe(1);
@@ -1077,58 +1101,86 @@ describe("executeFleetBroadcast — targets that leave the fleet between large-p
   it("sends nothing more once the fleet's panes are trashed and the fleet cleared", async () => {
     const ids = batchedIds();
     seedPanels(ids.map((id) => makeAgent(id)));
-    useFleetArmingStore.getState().armIds(ids);
-    afterFirstBatch(ids, () => {
-      usePanelStore.setState((s) => ({
-        panelsById: Object.fromEntries(
-          Object.entries(s.panelsById).map(([id, panel]) => [id, { ...panel, location: "trash" }])
-        ),
-      }));
+    afterFirstBatch(() => {
+      for (const id of ids) moveTo(id, "trash");
       useFleetArmingStore.getState().clear();
     });
 
-    const result = await executeFleetBroadcast("x".repeat(120_000), ids);
+    const result = await executeFleetBroadcast(bigPayload, ids);
 
-    expect(submitMock).toHaveBeenCalledTimes(FLEET_LARGE_PASTE_BATCH_SIZE);
+    expect(sentIds()).toEqual(ids.slice(0, FLEET_LARGE_PASTE_BATCH_SIZE));
     expect(result.successCount).toBe(FLEET_LARGE_PASTE_BATCH_SIZE);
+    expect(result.failureCount).toBe(0);
     expect(result.skippedCount).toBe(ids.length - FLEET_LARGE_PASTE_BATCH_SIZE);
   });
 
-  it("sends nothing to a pane docked after the first batch, though it stays armed", async () => {
-    const ids = batchedIds();
-    seedPanels(ids.map((id) => makeAgent(id)));
-    useFleetArmingStore.getState().armIds(ids);
-    const lateId = ids[ids.length - 1]!;
-    afterFirstBatch(ids, () =>
-      usePanelStore.setState((s) => ({
-        panelsById: { ...s.panelsById, [lateId]: makeAgent(lateId, { location: "dock" }) },
-      }))
-    );
+  it.each(["dock", "background", "trash"] as const)(
+    "sends nothing to a pane moved to %s after the first batch, though it stays armed",
+    async (location) => {
+      const ids = batchedIds();
+      seedPanels(ids.map((id) => makeAgent(id)));
+      const lateId = ids[ids.length - 1]!;
+      afterFirstBatch(() => moveTo(lateId, location));
 
-    const result = await executeFleetBroadcast("x".repeat(120_000), ids);
+      const result = await executeFleetBroadcast(bigPayload, ids);
 
-    expect(submitMock.mock.calls.map((call) => call[0])).not.toContain(lateId);
-    expect(result.skippedCount).toBe(1);
-  });
+      expect(useFleetArmingStore.getState().armedIds.has(lateId)).toBe(true);
+      expect(sentIds()).not.toContain(lateId);
+      expect(result.successCount).toBe(ids.length - 1);
+      expect(result.skippedCount).toBe(1);
+    }
+  );
 
   it("skips an agent on another host removed after the first batch, never sending it locally", async () => {
     const local = Array.from({ length: FLEET_LARGE_PASTE_BATCH_SIZE + 1 }, (_, i) => `t${i}`);
     const remote = crossHostTargetKey("host-2", "r1");
     seedPanels(local.map((id) => makeAgent(id)));
-    useFleetArmingStore.getState().armIds(local);
     useFleetArmingStore.setState({
       crossHostTargets: [
         { key: remote, hostId: "host-2", hostName: "Studio", terminalId: "r1", title: "r1" },
       ],
     });
-    afterFirstBatch(local, () => useFleetArmingStore.getState().disarmId(remote));
+    afterFirstBatch(() => useFleetArmingStore.getState().disarmId(remote));
 
-    const result = await executeFleetBroadcast("x".repeat(120_000), [...local, remote]);
+    const result = await executeFleetBroadcast(bigPayload, [...local, remote]);
 
     expect(remoteSubmit).not.toHaveBeenCalled();
-    expect(submitMock.mock.calls.map((call) => call[0])).not.toContain(remote);
+    expect(sentIds()).not.toContain(remote);
     expect(result.failedIds).toEqual([]);
     expect(result.successCount).toBe(local.length);
     expect(result.skippedCount).toBe(1);
+  });
+
+  it("keeps an in-flight submit to another host's agent remote after it leaves the fleet", async () => {
+    const remote = crossHostTargetKey("host-2", "r1");
+    seedPanels([makeAgent("a")]);
+    useFleetArmingStore.setState({
+      crossHostTargets: [
+        { key: remote, hostId: "host-2", hostName: "Studio", terminalId: "r1", title: "r1" },
+      ],
+    });
+    let land!: () => void;
+    remoteSubmit.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          land = resolve;
+        })
+    );
+
+    const sending = executeFleetBroadcast("hello", ["a", remote]);
+    useFleetArmingStore.getState().disarmId(remote);
+    land();
+    const result = await sending;
+
+    expect(sentIds()).toEqual(["a"]);
+    expect(result.perTarget).toEqual([
+      { terminalId: "a", status: "fulfilled" },
+      { terminalId: remote, status: "fulfilled" },
+    ]);
+    expect(result.skippedCount).toBe(0);
+    for (const mock of [notifyUserInputMock, notifyEnterPressedMock, clearDirectingStateMock]) {
+      expect(mock.mock.calls.map((call) => call[0])).not.toContain(remote);
+    }
+    expect(sentTo(remote)).toEqual([]);
   });
 });
