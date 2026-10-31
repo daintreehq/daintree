@@ -1923,11 +1923,9 @@ describe("useGlobalKeybindings — panel menu keys follow the action's bindings"
 
       expect(event.defaultPrevented).toBe(true);
       expect(mocks.actionService.dispatch).toHaveBeenCalledTimes(1);
-      expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
-        "terminal.contextMenu",
-        undefined,
-        { source: "keybinding" }
-      );
+      expect(mocks.actionService.dispatch).toHaveBeenCalledWith("terminal.contextMenu", undefined, {
+        source: "keybinding",
+      });
     });
 
     it.each([
