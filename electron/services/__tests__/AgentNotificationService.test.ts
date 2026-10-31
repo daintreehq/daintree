@@ -4105,17 +4105,20 @@ describe("each project's own choices across a burst (#15635)", () => {
     expect(banners()).toEqual([["Agent waiting", "term-b"]]);
   });
 
-  it("asks once across a burst of transitions, and again a while later", async () => {
+  it("asks once while a read is out, and again on a later sighting", async () => {
     settings({ waitingEnabled: true });
+    let answer!: () => void;
+    projectStoreMock.loadNotificationOverrides.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (answer = resolve))
+    );
 
     transition("working", "idle", "term-b");
-    await vi.advanceTimersByTimeAsync(0);
     transition("waiting", "working", "term-b");
-    transition("working", "waiting", "term-b");
     expect(projectStoreMock.loadNotificationOverrides).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(30_000);
-    transition("waiting", "working", "term-b");
+    answer();
+    await vi.advanceTimersByTimeAsync(0);
+    transition("working", "waiting", "term-b");
 
     expect(projectStoreMock.loadNotificationOverrides.mock.calls).toEqual([
       [PROJECT_B],
@@ -4134,28 +4137,36 @@ describe("each project's own choices across a burst (#15635)", () => {
     expect(projectStoreMock.loadNotificationOverrides).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps the project the startup seed named for an agent running since before it", async () => {
-    settings({ completedEnabled: true }, { [PROJECT_B]: MUTED });
-    agentNotificationService.dispose();
-    let answer!: (result: { terminals: object[]; degraded: boolean }) => void;
-    setPtyClientRef({
-      getTerminalProjectId: () => null,
-      getAllTerminalsWithCompletenessAsync: () => new Promise((resolve) => (answer = resolve)),
-    } as never);
-    agentNotificationService.initialize();
-    agentNotificationService.syncWatchedPanels(VIEW_B, ["term-z"]);
+  it.each([
+    { name: "the seed names", seeded: PROJECT_B, live: null },
+    { name: "its live record names over the seed's", seeded: PROJECT_A, live: PROJECT_B },
+  ])(
+    "keeps the project $name for an agent running since before the service",
+    async ({ seeded, live }) => {
+      settings({ completedEnabled: true }, { [PROJECT_B]: MUTED });
+      agentNotificationService.dispose();
+      let liveProject: string | null = live;
+      let answer!: (result: { terminals: object[]; degraded: boolean }) => void;
+      setPtyClientRef({
+        getTerminalProjectId: () => liveProject,
+        getAllTerminalsWithCompletenessAsync: () => new Promise((resolve) => (answer = resolve)),
+      } as never);
+      agentNotificationService.initialize();
+      agentNotificationService.syncWatchedPanels(VIEW_B, ["term-z"]);
 
-    answer({
-      terminals: [{ id: "term-z", projectId: PROJECT_B, agentState: "working" }],
-      degraded: false,
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    events.emit("agent:exited", { terminalId: "term-z", timestamp: Date.now() });
-    transition("exited", "working", "term-z");
-    vi.advanceTimersByTime(2_500);
+      answer({
+        terminals: [{ id: "term-z", projectId: seeded, agentState: "working" }],
+        degraded: false,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      liveProject = null;
+      events.emit("agent:exited", { terminalId: "term-z", timestamp: Date.now() });
+      transition("exited", "working", "term-z");
+      vi.advanceTimersByTime(2_500);
 
-    expect(banners()).toEqual([]);
-  });
+      expect(banners()).toEqual([]);
+    }
+  );
 
   it("pages Canopy asks from two projects apart, each with its own sound", () => {
     settings(

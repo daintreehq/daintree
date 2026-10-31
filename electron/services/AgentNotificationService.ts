@@ -40,12 +40,6 @@ const WORKING_PULSE_INITIAL_DELAY_MS = 10_000;
 const WORKING_PULSE_MIN_INTERVAL_MS = 8_000;
 const WORKING_PULSE_MAX_INTERVAL_MS = 10_000;
 const ALL_CLEAR_DEBOUNCE_MS = 500;
-/**
- * How long a project's alert overrides go unasked after being asked for. The
- * store answers at once while it holds them, but a project with no settings
- * file is read from disk every time, and a read error can drop them.
- */
-const OVERRIDES_RECHECK_MS = 30_000;
 const ACTIVE_AGENT_STATES = new Set(["working", "directing"]);
 
 /**
@@ -133,8 +127,8 @@ class AgentNotificationService {
   private lastOwnerByPanel = new Map<string, NotificationOwnerId>();
   /** Each panel's dock, worktree and title, from its project's saved record (#15636). */
   private panels = new PanelRecordIndex();
-  /** When each project's alert overrides were last asked for. */
-  private overridesAskedAt = new Map<string, number>();
+  /** Projects whose alert overrides are being read now. */
+  private overridesLoading = new Set<string>();
   /**
    * The project each agent's live terminal last named. A natural exit drops
    * the live record before the agent's last transition, and a panel that was
@@ -539,11 +533,14 @@ class AgentNotificationService {
           if (isHostThrowawayTerminalId(terminal.id)) continue;
           // Read each live terminal's project now, while the host still names
           // it: a natural exit drops that attribution before its last event.
-          if (terminal.projectId) this.loadProject(terminal.projectId);
+          const projectId = ptyClient.getTerminalProjectId(terminal.id) ?? terminal.projectId;
+          if (projectId) this.loadProject(projectId);
           if (touched.has(terminal.id) || terminal.isExited) continue;
-          // Running since before this service: its next transition may be a
-          // natural exit, by which time only this answer still names its project.
-          if (terminal.projectId) this.projectByTerminal.set(terminal.id, terminal.projectId);
+          // An agent running since before this service: its next transition
+          // may be a natural exit, by which time only this answer names its project.
+          if (projectId && terminal.agentState && terminal.agentState !== "exited") {
+            this.projectByTerminal.set(terminal.id, projectId);
+          }
           if (terminal.agentState && ACTIVE_AGENT_STATES.has(terminal.agentState)) {
             this.activeTerminalIds.add(terminal.id);
             seeded = true;
@@ -597,18 +594,16 @@ class AgentNotificationService {
 
   /**
    * A project's saved panels, and its alert overrides, which on a cold cache
-   * would leave the globals deciding for its agents. Asked again on a later
-   * sighting, at once after a failed read.
+   * would leave the globals deciding for its agents. Asked on every sighting,
+   * one read at a time: the store answers at once while it holds them, and
+   * reads again once something has dropped them.
    */
   private loadProject(projectId: string): void {
     this.panels.load(projectId, this.readSavedPanels);
-    const now = Date.now();
-    const askedAt = this.overridesAskedAt.get(projectId);
-    if (askedAt !== undefined && now - askedAt < OVERRIDES_RECHECK_MS) return;
-    this.overridesAskedAt.set(projectId, now);
-    projectStore.loadNotificationOverrides(projectId).catch(() => {
-      if (this.overridesAskedAt.get(projectId) === now) this.overridesAskedAt.delete(projectId);
-    });
+    if (this.overridesLoading.has(projectId)) return;
+    this.overridesLoading.add(projectId);
+    const done = () => this.overridesLoading.delete(projectId);
+    projectStore.loadNotificationOverrides(projectId).then(done, done);
   }
 
   /** Where a panel is now, by its saved record; what the event said only when there is none. */
@@ -1542,7 +1537,7 @@ class AgentNotificationService {
     this.lastOwnerByPanel.clear();
     this.selectedWorktreeByOwner.clear();
     this.panels.clear();
-    this.overridesAskedAt.clear();
+    this.overridesLoading.clear();
     this.projectByTerminal.clear();
     this.activeSeedTouched = null;
     this.allClearHeldForSeed = false;

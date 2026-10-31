@@ -16,8 +16,17 @@ import { CHANNELS } from "../ipc/channels.js";
 import { mergeBrowserAllowedHosts } from "../../shared/utils/urlUtils.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
+/** How long a read that found no settings file answers for its project's alert overrides. */
+const NO_SETTINGS_FILE_TTL_MS = 30_000;
+
 export class ProjectSettingsManager {
   private notificationOverridesCache = new Map<string, Partial<NotificationSettings> | undefined>();
+  /**
+   * When a read last found no settings file, and so no overrides, for a
+   * project. Kept apart from the cache and bounded, so a file that appears
+   * later is still read.
+   */
+  private readonly noSettingsFileAt = new Map<string, number>();
   private readonly settingsCache = new Cache<string, ProjectSettings>({
     maxSize: 20,
     defaultTTL: 30_000,
@@ -81,7 +90,11 @@ export class ProjectSettingsManager {
    */
   async loadNotificationOverrides(projectId: string): Promise<void> {
     if (this.notificationOverridesCache.has(projectId)) return;
+    const missingAt = this.noSettingsFileAt.get(projectId);
+    if (missingAt !== undefined && Date.now() - missingAt < NO_SETTINGS_FILE_TTL_MS) return;
     await this.getProjectSettings(projectId);
+    if (this.notificationOverridesCache.has(projectId)) this.noSettingsFileAt.delete(projectId);
+    else this.noSettingsFileAt.set(projectId, Date.now());
   }
 
   /**
