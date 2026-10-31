@@ -12,6 +12,7 @@ import {
   MCP_REMOTE_CONFIRM_MARGIN_MS,
   MCP_REMOTE_DISPATCH_TIMEOUT_MS,
 } from "../../../../shared/config/mcpConfirmWindow.js";
+import { LAUNCH_SETUP_WAIT_DEFAULT_MS } from "../../../../shared/utils/launchInNewWorktree.js";
 
 const RUN_A: OpenRun = {
   projectId: "proj-1",
@@ -350,6 +351,20 @@ describe("relayRunMs", () => {
     );
     // A check with no timeout of its own runs to its default.
     expect(relayRunMs("project.runCheck", {})).toBeGreaterThan(relayRunMs("terminal.list", {}));
+  });
+
+  it("gives a new-worktree launch its setup wait and its reply wait back to back (#15738)", () => {
+    expect(
+      relayRunMs("agent.launchInNewWorktree", {
+        setupTimeoutMs: 400_000,
+        waitForReply: true,
+        waitSeconds: 1_200,
+      })
+    ).toBeGreaterThan(400_000 + 1_200_000);
+    // With no budget named, the setup wait it will still run counts.
+    expect(
+      relayRunMs("agent.launchInNewWorktree", { waitForReply: true, waitSeconds: 1_200 })
+    ).toBeGreaterThan(LAUNCH_SETUP_WAIT_DEFAULT_MS + 1_200_000);
   });
 
   it("never asks the host for more than it allows", () => {

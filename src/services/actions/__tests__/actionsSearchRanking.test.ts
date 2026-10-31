@@ -89,6 +89,8 @@ const CONTROLS: Array<[query: string, expected: string]> = [
   ["agent state", "terminal.getStatus"],
   ["agent history", "agentSessionHistory.resume"],
   ["start dev server", "devPreview.restart"],
+  // #15738: a launch that names a new worktree reaches the call that makes one.
+  ["launch an agent in a new worktree", "agent.launchInNewWorktree"],
 ];
 
 describe("actions.search ranking over the real registry", () => {

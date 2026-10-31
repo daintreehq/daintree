@@ -1079,6 +1079,11 @@ describe("McpServerService", () => {
         description: "Launch several agents with one prompt",
       }),
       createManifestEntry({
+        id: "agent.launchInNewWorktree" as ActionId,
+        title: "Create Worktree and Launch Agent",
+        description: "Create a worktree and launch an agent in it once setup is ready",
+      }),
+      createManifestEntry({
         id: "terminal.sendCommandMany" as ActionId,
         title: "Submit to Several Terminals",
         description: "Send each terminal its own message",

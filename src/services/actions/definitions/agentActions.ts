@@ -193,15 +193,15 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.launchInNewWorktree", () => ({
     id: "agent.launchInNewWorktree",
-    title: "Launch agent in new worktree",
+    title: "Create worktree and launch agent",
     description:
-      "Create a managed worktree (source as for worktree.createWithRecipe, no recipe) and launch one agent in it (arguments as for agent.launch). Waits for setup; any end but ready stops before the launch and says which. The session owns both. A failure after creation is PARTIAL_SUCCESS with the worktreeId: use that worktree, don't retry.",
+      "Create a managed worktree and launch one agent in it: source as for any managed worktree (no recipe), the rest as for any agent launch. Launches only once setup ends ready, else stops and says which. The session owns both. A failure after creation is PARTIAL_SUCCESS carrying worktreeId: use that worktree, don't retry.",
     category: "agent",
     kind: "command",
     danger: "safe",
     denyPluginDispatch: true,
     scope: "renderer",
-    keywords: ["worktree", "spawn", "start", "unit", "branch", "issue"],
+    keywords: ["branch", "issue", "unit", "setup"],
     palette: { mode: "hidden" },
     argsSchema: AgentLaunchArgsSchema.omit({ worktreeId: true }).extend({
       source: WorktreeCreationSourceSchema,

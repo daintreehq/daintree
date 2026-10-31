@@ -27,6 +27,8 @@ import {
   AgentSessionHistoryListArgsSchema,
   GitGetProjectPulseArgsSchema,
   SlashCommandsListArgsSchema,
+  AgentLaunchArgsSchema,
+  AgentLaunchInNewWorktreeArgsSchema,
   AgentListModelsArgsSchema,
   AgentListPresetsArgsSchema,
   RecipeListArgsSchema,
@@ -105,6 +107,10 @@ describe("viewless argument schemas", () => {
     "worktree.waitForPullRequest": WorktreeWaitForPullRequestArgsSchema,
     "agentSessionHistory.list": AgentSessionHistoryListArgsSchema,
     "git.getProjectPulse": GitGetProjectPulseArgsSchema,
+    "agent.launch": AgentLaunchArgsSchema,
+    // Parsed in main before its create runs (#15738), so a key the renderer's
+    // advertised schema gained would otherwise be refused there.
+    "agent.launchInNewWorktree": AgentLaunchInNewWorktreeArgsSchema,
   };
 
   it.each(Object.entries(schemas))(
@@ -131,5 +137,15 @@ describe("viewless argument schemas", () => {
       "pullRequest",
     ]);
     expect(sourceArmKeys(WorktreeCreateWithRecipeArgsSchema)).toEqual(rendererArms);
+  });
+
+  it("takes the source modes agent.launchInNewWorktree's renderer action advertises", async () => {
+    const registry = await createActionRegistry();
+    const rendererSchema: unknown = registry.get("agent.launchInNewWorktree")?.()?.argsSchema;
+    if (!isZodSchema(rendererSchema)) throw new Error("launchInNewWorktree has no args schema");
+
+    expect(sourceArmKeys(AgentLaunchInNewWorktreeArgsSchema)).toEqual(
+      sourceArmKeys(rendererSchema)
+    );
   });
 });
