@@ -22,6 +22,7 @@ import {
   type HostListingState,
   type HostProjectRef,
 } from "./hostProjects";
+import { HighlightedText, wordMatchIndices } from "@/components/ui/HighlightedText";
 import { matchesTokens, queryTokens } from "./hostProjectSearch";
 import { useHostWorktreeListings } from "./hostWorktrees";
 import type { HostWorktreeEntry } from "@shared/types/ipc/hostMetrics";
@@ -400,8 +401,10 @@ function rowClass(inset: string) {
 
 function WorktreeRowContent({
   option,
+  query,
 }: {
   option: Extract<OtherHostOption, { kind: "worktree" }>;
+  query?: string;
 }) {
   const { worktree } = option;
   const state = worktreeState(worktree);
@@ -417,7 +420,10 @@ function WorktreeRowContent({
             "group-aria-selected:text-text-primary"
           )}
         >
-          {worktree.branch ?? worktree.name}
+          <HighlightedText
+            text={worktree.branch ?? worktree.name}
+            indices={wordMatchIndices(worktree.branch ?? worktree.name, query)}
+          />
         </div>
         <div className="mt-0.5 truncate text-2xs leading-tight text-text-secondary">
           {[worktree.projectName, state].filter(Boolean).join(" · ")}
@@ -427,7 +433,13 @@ function WorktreeRowContent({
   );
 }
 
-function ProjectRowContent({ option }: { option: Extract<OtherHostOption, { kind: "project" }> }) {
+function ProjectRowContent({
+  option,
+  query,
+}: {
+  option: Extract<OtherHostOption, { kind: "project" }>;
+  query?: string;
+}) {
   return (
     <>
       <StatusSlotSpacer />
@@ -442,10 +454,16 @@ function ProjectRowContent({ option }: { option: Extract<OtherHostOption, { kind
             "group-aria-selected:text-text-primary"
           )}
         >
-          {option.project.name}
+          <HighlightedText
+            text={option.project.name}
+            indices={wordMatchIndices(option.project.name, query)}
+          />
         </div>
         {option.showPath && (
-          <PathTail className="mt-0.5 block text-2xs leading-tight text-text-secondary">
+          <PathTail
+            className="mt-0.5 block text-2xs leading-tight text-text-secondary"
+            indices={wordMatchIndices(option.project.path, query)}
+          >
             {option.project.path}
           </PathTail>
         )}
@@ -472,10 +490,13 @@ export function OtherHostsSection({
   activeKey,
   onChosen,
   onHoverKey,
+  query,
 }: {
   groups: OtherHostGroup[];
   activeKey: string | null;
   onChosen: () => void;
+  /** The switcher's query, so a row shows what it matched like the rows above it. */
+  query?: string;
   /** The pointer moves the switcher's cursor, as every other result row's does. */
   onHoverKey?: (key: string) => void;
 }) {
@@ -506,9 +527,9 @@ export function OtherHostsSection({
         }}
       >
         {option.kind === "project" ? (
-          <ProjectRowContent option={option} />
+          <ProjectRowContent option={option} query={query} />
         ) : option.kind === "worktree" ? (
-          <WorktreeRowContent option={option} />
+          <WorktreeRowContent option={option} query={query} />
         ) : group.options.length === 1 ? (
           // The host's own row: the host is the tile, its state the second line.
           <>

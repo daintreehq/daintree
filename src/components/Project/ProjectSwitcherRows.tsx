@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { formatChordText } from "@/lib/kbdShortcut";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import { HighlightedText, substringMatchIndices } from "@/components/ui/HighlightedText";
 import {
   ContextMenu,
   ContextMenuCheckboxItem,
@@ -52,6 +53,7 @@ import {
 import { pluralize } from "@/lib/pluralize";
 import { OpenOnHostSubmenu } from "@/components/Hosts/OpenOnHostSubmenu";
 import { CommandTile, ProjectTile } from "./paletteTiles";
+import { PaletteCurrentLabel as CurrentLabel } from "@/components/ui/PaletteCurrentLabel";
 import { type OtherHostOption } from "@/components/Hosts/OtherHostsSection";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 
@@ -81,6 +83,8 @@ export interface ProjectListItemProps {
   showGroupLabel?: boolean;
   /** Drawn under band headers (browse) rather than in the flat ranked list. */
   inBands?: boolean;
+  /** The live query, so the name can show what it matched — the family's match emphasis. */
+  highlightQuery?: string;
   onSelect: (row: ProjectSwitcherProjectRow, source?: ProjectSwitchSelectSource) => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
@@ -305,7 +309,7 @@ export function RowStatusLine({ status }: { status: ProjectRowStatus }) {
       // Muted, and never in the demand tone. The age is the one fragment here
       // that asks for nothing, and colouring it made the coloured run long
       // enough to outweigh the count leading the line.
-      <span key="age" className="truncate text-daintree-text/50">
+      <span key="age" className="truncate text-text-secondary">
         {status.ageDetail}
       </span>
     ),
@@ -313,7 +317,7 @@ export function RowStatusLine({ status }: { status: ProjectRowStatus }) {
       // `shrink` where the count takes `shrink-0`: the hint answers which
       // project this is, which the name above already mostly does, while the
       // count is the row's headline figure.
-      <span key="path" className="truncate shrink text-daintree-text/50">
+      <span key="path" className="truncate shrink text-text-secondary">
         {status.pathHint}
       </span>
     ),
@@ -402,13 +406,6 @@ export function ResumableAgentsLabel({ count }: { count: number }) {
 }
 
 /**
- * Where you are, in words. A trailing check read as "done" among rows that are
- * all agent status, and the check is this app's mark for a chosen value in a
- * picker — the switcher is navigation, so it says "Current" the way the branch
- * and move-to-worktree pickers do. Hidden from readers because every row that
- * draws it already carries the fact in its accessible name or selection state.
- */
-/**
  * Where a row is filed, said after its name wherever no band header says it:
  * its group in search, and "Archived" anywhere outside the Archived band. Muted
  * and plain like the host label beside it — it is provenance, not status.
@@ -453,13 +450,7 @@ function ProjectFilingLabel({
   );
 }
 
-export function CurrentLabel() {
-  return (
-    <span aria-hidden="true" className="shrink-0 text-xs text-text-secondary">
-      Current
-    </span>
-  );
-}
+export { CurrentLabel };
 
 /**
  * Whether a project row offers "Sleep" — shutting that one project down the way
@@ -561,22 +552,24 @@ export function getProjectSwitcherEnterHint(
 ): { keys: string; label: string } | null {
   if (!row) return null;
   // A missing project's Enter opens the relocation dialog, not a switch.
-  if (row.kind === "project" && row.isMissing) return { keys: "↵", label: "Locate" };
+  if (row.kind === "project" && row.isMissing) return { keys: "↵", label: "to locate" };
   const opensWindow = modifierHeld && modEnterOpensWindow(row, canOpenWindow);
   // The keydown takes Meta or Control, so the modifier is whichever this
   // platform calls primary — a literal ⌘ tells Windows and Linux to press a key
   // they don't have. The Enter glyph stays the footer family's ↵.
   const modEnter = `${formatChordText("Cmd", mac)}${mac ? "" : "+"}↵`;
   if (opensWindow && row.kind === "project" && movesCachedView(row)) {
-    return { keys: modEnter, label: "New window" };
+    return { keys: modEnter, label: "to open in new window" };
   }
   // A row this window is already bringing in front switches here, whatever
   // another window still caches.
   if (row.kind === "project" && isOpenElsewhere(row) && !row.isOpenInThisWindow) {
-    return { keys: opensWindow ? modEnter : "↵", label: "Go to window" };
+    return { keys: opensWindow ? modEnter : "↵", label: "to go to window" };
   }
-  if (opensWindow && !row.isOpenInThisWindow) return { keys: modEnter, label: "New window" };
-  return { keys: "↵", label: "Switch" };
+  if (opensWindow && !row.isOpenInThisWindow) {
+    return { keys: modEnter, label: "to open in new window" };
+  }
+  return { keys: "↵", label: "to switch" };
 }
 
 /**
@@ -591,15 +584,18 @@ export function getOtherHostEnterHint(
   modifierHeld: boolean,
   mac: boolean = isMac()
 ): { keys: string; label: string; host?: string } | null {
-  if (option.kind === "retry") return option.busy ? null : { keys: "↵", label: "Retry" };
+  if (option.kind === "retry") return option.busy ? null : { keys: "↵", label: "to retry" };
   if (modifierHeld) {
-    return { keys: `${formatChordText("Cmd", mac)}${mac ? "" : "+"}↵`, label: "New window" };
+    return {
+      keys: `${formatChordText("Cmd", mac)}${mac ? "" : "+"}↵`,
+      label: "to open in new window",
+    };
   }
-  if (option.kind === "connect") return { keys: "↵", label: "Connect" };
-  if (option.kind === "host") return { keys: "↵", label: "Switch" };
+  if (option.kind === "connect") return { keys: "↵", label: "to connect" };
+  if (option.kind === "host") return { keys: "↵", label: "to switch" };
   // The host apart from the words, so the footer can clip a long name the way
   // the band does — keeping the part that tells two machines apart.
-  return { keys: "↵", label: "Open on", host: option.hostName };
+  return { keys: "↵", label: "to open on", host: option.hostName };
 }
 
 export function ProjectListItem({
@@ -610,6 +606,7 @@ export function ProjectListItem({
   hostName,
   showGroupLabel = false,
   inBands = false,
+  highlightQuery,
   onSelect,
   onStopProject,
   onCloseProject,
@@ -696,7 +693,12 @@ export function ProjectListItem({
                   : "text-daintree-text/85"
             )}
           >
-            {project.name}
+            <HighlightedText
+              text={project.name}
+              indices={
+                highlightQuery ? substringMatchIndices(project.name, highlightQuery) : undefined
+              }
+            />
           </span>
           {hostName && (
             <span className="ml-1.5 shrink-0 text-xs text-text-secondary">
@@ -940,11 +942,14 @@ export function ScratchListItem({
   isSelected,
   nowMs,
   showCurrentLabel,
+  highlightQuery,
   onSelect,
   onHoverRow,
 }: {
   scratch: ProjectSwitcherScratchRow;
   isSelected: boolean;
+  /** See `ProjectListItemProps`. */
+  highlightQuery?: string;
   /** The clock this row renders against, passed rather than read — see `ProjectListItemProps`. */
   nowMs: number;
   /** See `ProjectListItemProps`. */
@@ -991,7 +996,12 @@ export function ScratchListItem({
               scratch.isActive || isSelected ? "text-text-primary" : "text-daintree-text/85"
             )}
           >
-            {scratch.name}
+            <HighlightedText
+              text={scratch.name}
+              indices={
+                highlightQuery ? substringMatchIndices(scratch.name, highlightQuery) : undefined
+              }
+            />
           </span>
           <span className="text-2xs leading-none text-text-secondary shrink-0">· Scratch</span>
           {scratch.isActive && <span className="sr-only">, current</span>}

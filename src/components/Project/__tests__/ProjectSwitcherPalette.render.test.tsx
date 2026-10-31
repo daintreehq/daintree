@@ -1083,7 +1083,7 @@ describe("ProjectSwitcherPalette modal mode", () => {
   it("shows Right-click hint but not Remove shortcut in modal mode footer", () => {
     render(<ProjectSwitcherPalette {...modalProps} results={multiProjects} />);
     const footer = screen.getByTestId("palette-footer");
-    expect(footer.textContent).toContain("Switch");
+    expect(footer.textContent).toContain("to switch");
     expect(footer.textContent).not.toContain("Remove");
     expect(footer.textContent).toContain("Right-click for more");
   });
@@ -1168,7 +1168,7 @@ describe("ProjectSwitcherPalette modal mode", () => {
     // query — a presence assertion here would pass on text no user ever sees.
     render(<ProjectSwitcherPalette {...dropdownProps} results={multiProjects} />);
     const footer = screen.getByTestId("palette-footer");
-    expect(footer.textContent).toContain("Switch");
+    expect(footer.textContent).toContain("to switch");
     expect(footer.textContent).not.toContain("Remove");
   });
 });
@@ -1506,7 +1506,9 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
   it("keeps the scratch origin legible beside the name", () => {
     render(<ProjectSwitcherPalette {...rankedProps({ activeAgentCount: 1 })} />);
 
-    const nameLine = screen.getByText("Spike notes").parentElement!;
+    // Found through its origin label: the name itself is split by the match
+    // emphasis on the query.
+    const nameLine = screen.getByText("· Scratch").parentElement!;
     expect(Array.from(nameLine.children).map((el) => el.textContent!.trim())).toEqual([
       "Spike notes",
       "· Scratch",

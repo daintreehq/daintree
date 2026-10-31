@@ -12,7 +12,8 @@ vi.mock("@/components/Terminal/TerminalIcon", () => ({
   TerminalIcon: () => <span data-testid="terminal-icon" />,
 }));
 
-vi.mock("@/components/icons", () => ({
+vi.mock("@/components/icons", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/icons")>()),
   FolderGit2: () => <span data-testid="folder-icon" />,
 }));
 

@@ -923,6 +923,7 @@ function ProjectPaletteInner({
         )}
         <OtherHostsSection
           groups={hostGroups}
+          query={query}
           activeKey={activeHostOption?.key ?? null}
           onChosen={onClose}
           // Also turns an automatic pick under the pointer into a chosen one.
