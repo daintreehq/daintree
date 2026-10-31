@@ -1264,20 +1264,21 @@ describe("claude providerTemplates endpoints and credentials", () => {
   const messagesUrl = (base: string) => `${base.replace(/\/+$/, "")}/v1/messages`;
 
   // Each provider's published Claude Code setup: the Messages endpoint it
-  // serves, and whether its guide blanks an inherited ANTHROPIC_API_KEY.
+  // serves, the token it documents (blank for the user's key, or a local
+  // placeholder), and whether its guide blanks an inherited ANTHROPIC_API_KEY.
   it.each([
-    ["zai", "https://api.z.ai/api/anthropic/v1/messages", false],
-    ["openrouter", "https://openrouter.ai/api/v1/messages", true],
-    ["deepseek", "https://api.deepseek.com/anthropic/v1/messages", false],
-    ["ollama", "http://localhost:11434/v1/messages", true],
+    ["zai", "https://api.z.ai/api/anthropic/v1/messages", "", undefined],
+    ["openrouter", "https://openrouter.ai/api/v1/messages", "", ""],
+    ["deepseek", "https://api.deepseek.com/anthropic/v1/messages", "", undefined],
+    ["ollama", "http://localhost:11434/v1/messages", "ollama", ""],
   ] as const)(
-    "%s posts to its provider's documented Messages endpoint",
-    (id, endpoint, blanksApiKey) => {
+    "%s follows its provider's documented Claude Code setup",
+    (id, endpoint, authToken, apiKey) => {
       const env = templates.find((t) => t.id === id)?.env ?? {};
       expect(env.ANTHROPIC_BASE_URL).toBeDefined();
       expect(messagesUrl(env.ANTHROPIC_BASE_URL ?? "")).toBe(endpoint);
-      expect(env).toHaveProperty("ANTHROPIC_AUTH_TOKEN");
-      expect(env.ANTHROPIC_API_KEY).toBe(blanksApiKey ? "" : undefined);
+      expect(env.ANTHROPIC_AUTH_TOKEN).toBe(authToken);
+      expect(env.ANTHROPIC_API_KEY).toBe(apiKey);
     }
   );
 
@@ -1305,23 +1306,23 @@ describe("claude providerTemplates endpoints and credentials", () => {
     for (const t of routed) expect(t.env, t.id).toHaveProperty("ANTHROPIC_AUTH_TOKEN");
   });
 
-  it("ships no secret: every non-local template leaves its credentials blank", () => {
+  // The one non-blank credential a template may carry is a local server's
+  // placeholder token: there is no key to issue, and Claude Code needs one set.
+  it("ships no secret: every credential is blank but a local server's token", () => {
     for (const t of templates) {
       const base = t.env?.ANTHROPIC_BASE_URL;
-      if (base !== undefined && isLoopback(base)) continue;
-      for (const [key, value] of credentials(t.env)) expect(value, `${t.id} ${key}`).toBe("");
+      const local = base !== undefined && isLoopback(base);
+      for (const [key, value] of credentials(t.env)) {
+        if (local && key === "ANTHROPIC_AUTH_TOKEN") continue;
+        expect(value, `${t.id} ${key}`).toBe("");
+      }
     }
   });
 
-  it("gives a local server a placeholder word as its token, never an issued key", () => {
+  it("gives a local server a placeholder token, so it launches without a key", () => {
     const local = routed.filter((t) => isLoopback(t.base));
     expect(local.length).toBeGreaterThan(0);
-    for (const t of local) {
-      expect(t.env.ANTHROPIC_AUTH_TOKEN, t.id).toMatch(/^[a-z]{1,16}$/);
-      for (const [key, value] of credentials(t.env)) {
-        expect(value, `${t.id} ${key}`).toMatch(/^[a-z]{0,16}$/);
-      }
-    }
+    for (const t of local) expect(t.env.ANTHROPIC_AUTH_TOKEN, t.id).toBeTruthy();
   });
 });
 
