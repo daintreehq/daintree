@@ -7,6 +7,7 @@ import { helpSessionService } from "../../services/HelpSessionService.js";
 import { peekGlobalAssistantService } from "../../services/globalAssistant.js";
 import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
 import { setHostControlRuntime } from "../../services/mcp-server/hostControlTools.js";
+import { readAssistantConfirmationsSkipped } from "../../services/mcp-server/assistantConfirmationsPreference.js";
 import type { LaneWake } from "../../services/mcp-server/terminalNotify.js";
 import { getSharedDb, getSharedSqlite } from "../../services/persistence/db.js";
 import { machineDisplayName } from "../../utils/machineName.js";
@@ -37,6 +38,7 @@ declare module "../runtime.js" {
     hostCallRelayClient: Pick<
       HostCallRuntime,
       | "hasCallInFlight"
+      | "skipsRelayedDispatch"
       | "awaitsNotices"
       | "receiveNotices"
       | "noticeCalls"
@@ -203,6 +205,9 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
       const { askHostApprovalInWindow } = await import("../client/viewRequests.js");
       return askHostApprovalInWindow(webContentsId, ask);
     },
+    // This machine's own preference for the assistant that made the call, never the host's (#15698).
+    confirmationsSkipped: (helpSessionId) =>
+      readAssistantConfirmationsSkipped(helpSessionService.getSessionAgent(helpSessionId)),
     // A host's settings, read and changed by name with no view there (#14167).
     settingsClient: () => getRemoteService("settingsControlClient") ?? null,
     askSettingsApproval: async ({ helpSessionId, ...ask }) => {

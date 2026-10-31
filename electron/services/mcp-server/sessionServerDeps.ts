@@ -1,15 +1,9 @@
-// eager-import-allow: reads the assistant's confirmation settings via store.get on each call
 import { webContents as webContentsModule } from "electron";
 import type { WindowRegistry } from "../../window/WindowRegistry.js";
-import { store } from "../../store.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import {
-  assistantSkipsDaintreeConfirmations,
-  resolveAssistantAgentSkip,
-} from "../../../shared/utils/assistantDaintreeConfirmations.js";
-import { isStorableAssistantAgentId } from "../../../shared/types/ipc/agentDefaults.js";
+import { readAssistantConfirmationsSkipped } from "./assistantConfirmationsPreference.js";
 import type { ActionManifestEntry } from "../../../shared/types/actions.js";
 import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
 import { summarizeMcpArgs, summarizeMcpResult } from "../../../shared/utils/mcpArgsSummary.js";
@@ -906,6 +900,9 @@ export function createSessionServerDeps(
               readOnly:
                 relayEntry !== undefined && buildAnnotations(relayEntry).readOnlyHint === true,
               ...(relay.local === true ? { local: true as const } : {}),
+              ...(relayCallId !== undefined
+                ? { call: { callId: relayCallId, helpSessionId: relay.helpSessionId } }
+                : {}),
               ...(askShell !== undefined && relayCallId !== undefined
                 ? { requestApproval: (ask) => askShell({ ...ask, callId: relayCallId }) }
                 : {}),
@@ -1248,19 +1245,12 @@ export function createSessionServerDeps(
     // assistant's next call. sessionServer consults it for help sessions only.
     // The default follows the skip setting of the agent this session runs,
     // else the assistant's chosen agent (#14141).
-    readAssistantConfirmationsSkipped: () => {
-      const helpAssistant = store.get("helpAssistant");
-      const storedAgentId = helpAssistant?.agentId;
-      const chosenAgentId = isStorableAssistantAgentId(storedAgentId) ? storedAgentId : null;
-      const agentId =
+    readAssistantConfirmationsSkipped: () =>
+      readAssistantConfirmationsSkipped(
         (helpSessionId !== null
           ? host.assistantControlBinding()?.sessionAgent?.(helpSessionId)
-          : null) ?? chosenAgentId;
-      return assistantSkipsDaintreeConfirmations(
-        helpAssistant?.daintreeConfirmations,
-        resolveAssistantAgentSkip(agentId, store.get("agentSettings")).skips
-      );
-    },
+          : null) ?? null
+      ),
     notifyToolCallStarted,
     notifyToolCallSettled,
     notifyDisplayImage,

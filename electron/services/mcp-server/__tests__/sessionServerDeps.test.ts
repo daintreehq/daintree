@@ -162,6 +162,34 @@ describe("createSessionServerDeps", () => {
     expect(sessionDeps.relay?.global).toBe(expected);
   });
 
+  // #15698: the Shell's view can only match a dispatch to its own call if the call is named.
+  it("names the Shell's own call on each of a relay session's dispatches, and only its own", async () => {
+    const deps = fakeSource();
+    const dispatchActionForWorkspace = vi.fn(async () => ({ result: { ok: true, result: null } }));
+    (deps as { dispatchActionForWorkspace?: unknown }).dispatchActionForWorkspace =
+      dispatchActionForWorkspace;
+    const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
+      sessionId: "s",
+      workspaceBinding: { workspaceId: WS_A },
+      relay: {
+        linkSessionId: "link-1",
+        senderId: "shell-1",
+        helpSessionId: "help-1",
+        shellName: "Shell",
+      },
+    });
+
+    await sessionDeps.dispatchAction("worktree.delete", { worktreeId: "/wt" }, false, undefined, "call-1");
+    await sessionDeps.dispatchAction("worktree.delete", { worktreeId: "/wt" }, false);
+
+    const relays = dispatchActionForWorkspace.mock.calls.map(
+      (call) => ((call as unknown[])[5] as { relay?: { call?: unknown } }).relay
+    );
+    expect(relays[0]?.call).toEqual({ callId: "call-1", helpSessionId: "help-1" });
+    expect(relays[1]).toBeDefined();
+    expect(relays[1]).not.toHaveProperty("call");
+  });
+
   // #14551: only a relay caller its Shell's runtime named global is handed the
   // steer, from this machine's global Assistant or another's.
   const RELAY = {

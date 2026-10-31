@@ -88,6 +88,11 @@ export async function askShellApproval(
   switch (parsed.data.decision) {
     case "approved":
       return now() > deadline ? { decision: "timeout" } : { decision: "approved", deadline };
+    // The Shell's own "Never ask" (#15698): covered as an approval is, and said as a skip.
+    case "skip-preference":
+      return now() > deadline
+        ? { decision: "timeout" }
+        : { decision: "approved", deadline, authorization: "skip-preference" };
     case "rejected":
     case "timeout":
       return { decision: parsed.data.decision };

@@ -53,8 +53,15 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
   let runtime: HostCallRuntime;
   let duringCall: ((runtime: HostCallRuntime, callId: string) => Promise<unknown>) | undefined;
   let answers: RelayApproveAnswer[];
+  // This Shell's own preference for the asking assistant (#15698), and what read it.
+  let skips: boolean | Error;
+  let skipReads: string[];
+  let skipNotes: number;
 
   beforeEach(() => {
+    skips = false;
+    skipReads = [];
+    skipNotes = 0;
     runs = new Map([["a", RUN_A]]);
     control = new Set(["studio"]);
     asked = [];
@@ -84,6 +91,11 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
         asked.push(question);
         return decision;
       },
+      confirmationsSkipped: (helpSessionId) => {
+        skipReads.push(helpSessionId);
+        if (skips instanceof Error) throw skips;
+        return skips;
+      },
       newId: () => `00000000-0000-4000-8000-00000000000${++ids}`,
     });
   });
@@ -104,7 +116,12 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
   const deleteCall = (
     tool = "worktree.delete",
     args: Record<string, unknown> = { worktreeId: "/wt/feature" }
-  ) => runtime.call("a", { hostId: "studio", projectId: "proj-2", tool, args }, { tier: "full" });
+  ) =>
+    runtime.call(
+      "a",
+      { hostId: "studio", projectId: "proj-2", tool, args },
+      { tier: "full", noteSkipPreference: () => (skipNotes += 1) }
+    );
 
   it("asks the person about exactly the call in flight, and echoes the ask in its answer", async () => {
     duringCall = (r, callId) => r.receiveApproval("studio", ask({ callId }));
@@ -235,5 +252,165 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
       await deleteCall();
       expect(answers[0]?.decision).toBe(next ?? "refused");
     }
+  });
+  describe("under the asking assistant's own Never ask on this Shell (#15698)", () => {
+    it("answers a host's ask about its own call as a skip, asking nobody, and notes it on the call", async () => {
+      skips = true;
+      duringCall = (r, callId) => r.receiveApproval("studio", ask({ callId }));
+
+      await deleteCall("worktree.deleteOwned");
+
+      expect(asked).toEqual([]);
+      expect(skipReads).toEqual(["a"]);
+      expect(answers).toEqual([
+        { approvalId: "approval-1", argsHash: ask().argsHash, decision: "skip-preference" },
+      ]);
+      expect(skipNotes).toBe(1);
+    });
+
+    it("still asks under Always ask, or when the preference can't be read", async () => {
+      for (const next of [false, new Error("store unreadable")]) {
+        skips = next;
+        asked = [];
+        answers = [];
+        duringCall = (r, callId) => r.receiveApproval("studio", ask({ callId }));
+        await deleteCall();
+        expect(asked).toHaveLength(1);
+        expect(answers[0]?.decision).toBe("approved");
+      }
+      expect(skipNotes).toBe(0);
+    });
+
+    it("never turns a host's ask about some other call into a skip", async () => {
+      skips = true;
+      duringCall = async (r, callId) => {
+        answers.push(await r.receiveApproval("studio", ask({ callId: "someone-elses-call" })));
+        answers.push(await r.receiveApproval("studio", ask({ callId, helpSessionId: "b" })));
+        answers.push(
+          await r.receiveApproval("studio", ask({ callId, args: { worktreeId: "/wt/other" } }))
+        );
+        return r.receiveApproval("elsewhere", ask({ callId }));
+      };
+
+      await deleteCall();
+
+      expect(answers.map((answer) => answer.decision)).toEqual(new Array(4).fill("refused"));
+      expect(skipReads).toEqual([]);
+      expect(skipNotes).toBe(0);
+    });
+
+    describe("a host's dispatch into this Shell's view", () => {
+      const dispatch = (
+        callId: string,
+        overrides: Partial<Parameters<HostCallRuntime["skipsRelayedDispatch"]>[1]> = {}
+      ) => ({
+        callId,
+        helpSessionId: "a",
+        projectId: "proj-2",
+        actionId: "worktree.delete",
+        args: { worktreeId: "/wt/feature" } as unknown,
+        ...overrides,
+      });
+      let verdicts: boolean[];
+      const during = (check: (r: HostCallRuntime, callId: string) => void) => {
+        verdicts = [];
+        duringCall = async (r, callId) => {
+          check(r, callId);
+          return { decision: "unused" };
+        };
+      };
+
+      it("skips exactly the call out to that host, for the action an owned tool stands in for", async () => {
+        skips = true;
+        during((r, callId) => verdicts.push(r.skipsRelayedDispatch("studio", dispatch(callId))));
+
+        await deleteCall("worktree.deleteOwned");
+
+        expect(verdicts).toEqual([true]);
+        expect(skipNotes).toBe(1);
+      });
+
+      it("skips a direct call's own action with the arguments it was sent", async () => {
+        skips = true;
+        during((r, callId) =>
+          verdicts.push(
+            r.skipsRelayedDispatch(
+              "studio",
+              dispatch(callId, { args: { worktreeId: "/wt/feature", force: true } })
+            )
+          )
+        );
+
+        await deleteCall("worktree.delete", {
+          worktreeId: "/wt/feature",
+          force: true,
+          requestKey: "rk-1",
+        });
+
+        expect(verdicts).toEqual([true]);
+      });
+
+      it("asks for anything that isn't that call, or with the skip off", async () => {
+        skips = true;
+        during((r, callId) => {
+          for (const candidate of [
+            dispatch("someone-elses-call"),
+            dispatch(callId, { helpSessionId: "b" }),
+            dispatch(callId, { projectId: "proj-9" }),
+            dispatch(callId, { args: { worktreeId: "/wt/other" } }),
+            // An owned delete never carries more than the id.
+            dispatch(callId, { args: { worktreeId: "/wt/feature", force: true } }),
+            dispatch(callId, { actionId: "terminal.close", args: { terminalId: "t-1" } }),
+            dispatch(callId, { args: null }),
+          ]) {
+            verdicts.push(r.skipsRelayedDispatch("studio", candidate));
+          }
+          verdicts.push(r.skipsRelayedDispatch("elsewhere", dispatch(callId)));
+          skips = false;
+          verdicts.push(r.skipsRelayedDispatch("studio", dispatch(callId)));
+          skips = new Error("store unreadable");
+          verdicts.push(r.skipsRelayedDispatch("studio", dispatch(callId)));
+        });
+
+        await deleteCall("worktree.deleteOwned");
+
+        expect(verdicts).toEqual(new Array(10).fill(false));
+        expect(skipNotes).toBe(0);
+      });
+
+      it("asks with the control switch off or the asking run replaced, and once the call settles", async () => {
+        skips = true;
+        during((r, callId) => {
+          control.delete("studio");
+          verdicts.push(r.skipsRelayedDispatch("studio", dispatch(callId)));
+          control.add("studio");
+          runs.set("a", { ...RUN_A, launchGeneration: 2 });
+          verdicts.push(r.skipsRelayedDispatch("studio", dispatch(callId)));
+        });
+
+        const settled = await deleteCall("worktree.deleteOwned");
+        if (!settled.ok) throw new Error("refused");
+        runs.set("a", RUN_A);
+        verdicts.push(runtime.skipsRelayedDispatch("studio", dispatch(settled.value.callId!)));
+
+        expect(verdicts).toEqual([false, false, false]);
+      });
+
+      it.each(["host.switch", "project.openOnHost"])(
+        "always asks before %s moves this window",
+        async (actionId) => {
+          skips = true;
+          during((r, callId) =>
+            verdicts.push(
+              r.skipsRelayedDispatch("studio", dispatch(callId, { actionId, args: {} }))
+            )
+          );
+
+          await deleteCall(actionId, {});
+
+          expect(verdicts).toEqual([false]);
+        }
+      );
+    });
   });
 });

@@ -216,6 +216,12 @@ export interface WorkspaceDispatchOptions {
     linkSessionId: string;
     readOnly: boolean;
     /**
+     * The Shell's own `host.call` this dispatch runs (#15698), named to that
+     * Shell's view so it can match the call to one of its own and apply its
+     * own assistant's confirmations preference. Grants nothing here.
+     */
+    call?: { callId: string; helpSessionId: string };
+    /**
      * One of this machine's own assistants reaching another of its projects
      * (#14024): a change runs through this machine's own view of it, or here
      * while no view shows it, and never while another machine drives it.
@@ -1186,6 +1192,12 @@ export interface DispatchEnvelope {
    * the dispatch offered it; absent otherwise.
    */
   approvalScope?: McpApprovalScope;
+  /**
+   * A relayed call the Shell it came from ran, or let run, under its own
+   * assistant's skip preference (#15698): nobody was asked. Never beside a
+   * `confirmationDecision`, which says a dialog was raised after all.
+   */
+  authorization?: "skip-preference";
   /**
    * Absent when identity could not be resolved (view torn down between
    * dispatch and response, or a webContents with no registered workspace).

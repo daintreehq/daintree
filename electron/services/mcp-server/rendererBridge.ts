@@ -1544,6 +1544,7 @@ export function createRendererBridge(
       result?: { ok?: unknown };
       confirmationDecision?: unknown;
       approvalScope?: unknown;
+      authorization?: unknown;
     } | null;
     if (
       payload === null ||
@@ -1563,6 +1564,9 @@ export function createRendererBridge(
       ...(confirmationDecision !== undefined ? { confirmationDecision } : {}),
       ...(confirmationDecision === "approved" && payload.approvalScope === "session"
         ? { approvalScope: "session" as const }
+        : {}),
+      ...(confirmationDecision === undefined && payload.authorization === "skip-preference"
+        ? { authorization: "skip-preference" as const }
         : {}),
     };
   }
@@ -1592,6 +1596,8 @@ export function createRendererBridge(
           ),
           // Display only: the Shell's dialog says its own assistant asked, through this host.
           ...(options.relay ? { relayed: true } : {}),
+          // The Shell's own call, for it to match before its own preference skips the dialog (#15698).
+          ...(options.relay?.call ? { relayCall: options.relay.call } : {}),
         },
         { timeoutMs: MCP_DISPATCH_TIMEOUT_MS }
       );
@@ -1628,6 +1634,7 @@ export function createRendererBridge(
     const relay = options.relay;
     const askRelay = relay?.requestApproval;
     let confirmationDecision: DispatchEnvelope["confirmationDecision"];
+    let authorization: DispatchEnvelope["authorization"];
     const result = await runViewlessAction({
       workspaceId,
       actionId,
@@ -1644,7 +1651,12 @@ export function createRendererBridge(
         ? {
             requestApproval: async (ask: ViewlessApprovalAsk) => {
               const answer = await askRelay(ask);
-              if (answer.decision !== "unavailable") confirmationDecision = answer.decision;
+              // The Shell's own "Never ask" ran it, not a person's approval (#15698).
+              if (answer.decision === "approved" && answer.authorization === "skip-preference") {
+                authorization = answer.authorization;
+              } else if (answer.decision !== "unavailable") {
+                confirmationDecision = answer.decision;
+              }
               return answer;
             },
           }
@@ -1655,6 +1667,7 @@ export function createRendererBridge(
     return {
       result,
       ...(confirmationDecision !== undefined ? { confirmationDecision } : {}),
+      ...(authorization !== undefined ? { authorization } : {}),
       ...(dispatchedWorkspace ? { dispatchedWorkspace } : {}),
     };
   }

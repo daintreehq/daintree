@@ -64,6 +64,11 @@ export interface HostControlRuntimeHandle {
 export interface HostCallContext {
   /** The tier the call was admitted at here, which is all it may have on the host. */
   tier: "core" | "full";
+  /**
+   * Told when the call ran on the host under this machine's own skip
+   * preference (#15698), never anything the host said: for its audit record.
+   */
+  noteSkipPreference?: () => void;
 }
 
 let installedRuntime: HostControlRuntimeHandle | null = null;

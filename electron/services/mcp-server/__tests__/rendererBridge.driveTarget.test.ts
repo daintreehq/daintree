@@ -797,6 +797,90 @@ describe("rendererBridge — relayed calls (#13493)", () => {
     expect(envelope.confirmationDecision).toBe("rejected");
   });
 
+  it("reports the Shell's own Never ask as the skip it is, not anyone's decision (#15698)", async () => {
+    setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+    const requestApproval = vi.fn(async () => ({
+      decision: "approved" as const,
+      deadline: Date.now() + 40_000,
+      authorization: "skip-preference" as const,
+    }));
+    viewless.runViewlessAction.mockImplementation(
+      async (request: { requestApproval?: (ask: unknown) => Promise<unknown> }) => {
+        await request.requestApproval?.({ actionId: "worktree.delete", args: {}, lines: [] });
+        return { ok: true, result: { deleted: true } };
+      }
+    );
+
+    const envelope = await bridge.dispatchActionForWorkspace(
+      WORKSPACE,
+      "worktree.delete",
+      { worktreeId: "/repo-wt/x" },
+      false,
+      "external",
+      { relay: { ...write.relay, requestApproval } }
+    );
+
+    expect(envelope.confirmationDecision).toBeUndefined();
+    expect(envelope.authorization).toBe("skip-preference");
+  });
+
+  it("names the Shell's own call to its driving view, and reads back a skip it granted (#15698)", async () => {
+    const endpoint: ClientEndpoint = {
+      ...ownEndpoint("shell-a"),
+      request: vi.fn(async () => ({
+        result: { ok: true, result: { ran: true } },
+        authorization: "skip-preference",
+      })),
+    };
+    setMcpDriveTargetResolver(() => ({ state: "live", endpoint, holderName: "greg-mbp" }));
+    const call = { callId: "call-1", helpSessionId: "help-a" };
+
+    const envelope = await bridge.dispatchActionForWorkspace(
+      WORKSPACE,
+      "worktree.delete",
+      { worktreeId: "/repo-wt/x" },
+      false,
+      "external",
+      { relay: { ...write.relay, call } }
+    );
+
+    expect(endpoint.request).toHaveBeenCalledWith(
+      MCP_DISPATCH_ACTION_METHOD,
+      expect.objectContaining({ confirmed: false, relayed: true, relayCall: call }),
+      expect.anything()
+    );
+    expect(envelope.authorization).toBe("skip-preference");
+  });
+
+  it("keeps a decision over a skip the same answer claims", async () => {
+    const endpoint: ClientEndpoint = {
+      ...ownEndpoint("shell-a"),
+      request: vi.fn(async () => ({
+        result: { ok: true, result: { ran: true } },
+        confirmationDecision: "approved",
+        authorization: "skip-preference",
+      })),
+    };
+    setMcpDriveTargetResolver(() => ({ state: "live", endpoint, holderName: "greg-mbp" }));
+
+    const envelope = await bridge.dispatchActionForWorkspace(
+      WORKSPACE,
+      "worktree.delete",
+      { worktreeId: "/repo-wt/x" },
+      false,
+      "external",
+      write
+    );
+
+    expect(envelope.confirmationDecision).toBe("approved");
+    expect(envelope.authorization).toBeUndefined();
+    expect(endpoint.request).toHaveBeenCalledWith(
+      MCP_DISPATCH_ACTION_METHOD,
+      expect.not.objectContaining({ relayCall: expect.anything() }),
+      expect.anything()
+    );
+  });
+
   it("lets a read through wherever the project is driven", async () => {
     const other = ownEndpoint("shell-b");
     setMcpDriveTargetResolver(() => ({ state: "live", endpoint: other, holderName: "studio-02" }));

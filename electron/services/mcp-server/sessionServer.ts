@@ -2084,9 +2084,16 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           emitToolCallStarted(false, false);
           try {
             // `host.call` carries the tier it was admitted at here: all it may have on the host.
+            // Its record says when what it ran there ran under this machine's
+            // own skip preference (#15698), which only this machine decides.
             const callContext =
               actionId === HOST_CALL_TOOL && (tier === "core" || tier === "full")
-                ? { tier }
+                ? {
+                    tier,
+                    noteSkipPreference: () => {
+                      dispatchAuthorization = "skip-preference";
+                    },
+                  }
                 : undefined;
             const settled = await runHostControlTool(
               actionId,
@@ -2768,6 +2775,16 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             if (pane !== null && targetId !== undefined) terminalNotify.supersede(pane, targetId);
           }
           confirmationDecision = confirmationDecision ?? envelope.confirmationDecision;
+          // A relayed call the Shell ran under its own assistant's "Never ask"
+          // (#15698): that, not an unasked run, is what its audit says. Only a
+          // relayed session's: no other caller's view speaks for its preference.
+          if (
+            relayCallId !== undefined &&
+            dispatchAuthorization === undefined &&
+            envelope.authorization === "skip-preference"
+          ) {
+            dispatchAuthorization = "skip-preference";
+          }
           // "Allow for this session" on the ordinary confirm dialog of a pane's
           // own-tier tool (#12692). The bridge only reports the scope for an
           // approval that offered it; the pane check here is the one that
