@@ -242,9 +242,9 @@ describe("WorkspaceService adversarial", () => {
 
     it("stamps each monitor's first status from either emit path, once", () => {
       const withStatus = { worktreeChanges: { changedFileCount: 0 } };
-      const viaCallback = { getSnapshot: () => withStatus };
-      const viaEmit = { getSnapshot: () => withStatus };
-      const quiet = { getSnapshot: () => ({ worktreeChanges: null }) };
+      const viaCallback = { id: "wt-a", getSnapshot: () => withStatus };
+      const viaEmit = { id: "wt-b", getSnapshot: () => withStatus };
+      const quiet = { id: "wt-c", getSnapshot: () => ({ worktreeChanges: null }) };
       const monitors = service["monitors"] as Map<string, unknown>;
       monitors.set("wt-a", viaCallback);
       monitors.set("wt-b", viaEmit);
@@ -280,6 +280,7 @@ describe("WorkspaceService adversarial", () => {
     function fakeMonitor(initial: Snap) {
       let current: Snap = { id: "wt-a", worktreeId: "wt-a", generation: 1, ...initial };
       return {
+        id: "wt-a",
         set(next: Snap) {
           current = { ...current, ...next };
         },
@@ -971,6 +972,7 @@ describe("WorkspaceService adversarial", () => {
         prCiStatus = info.prCiStatus;
       });
       const monitor = {
+        id: opts.worktreeId,
         branch: opts.branch,
         get hasInitialStatus() {
           return true;
