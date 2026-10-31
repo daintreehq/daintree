@@ -232,6 +232,7 @@ describe("mermaid fences in rendered Markdown", () => {
         filePath="/repo/docs/plan.md"
         rootPath="/repo"
         attemptKey="attempt-1"
+        requestKey="pane-1"
       />
     );
 

@@ -45,15 +45,31 @@ vi.mock("@/components/Worktree/DiffViewer", () => ({
 
 // The rendered layout pulls react-markdown behind a lazy boundary; these tests
 // exercise the toolbar's plumbing, not the renderer, so it stays a stub.
+interface RenderedMockProps {
+  newSource?: string;
+  status: string;
+  attemptKey: string;
+  requestKey: string;
+  onChangeCount?: (count: number, forAttempt: string) => void;
+}
+// The latest props the stub was rendered with, so a test can report up through
+// the same callbacks the real view uses.
+const { renderedProps } = vi.hoisted(() => ({
+  renderedProps: { current: null as RenderedMockProps | null },
+}));
 vi.mock("@/components/Worktree/RenderedMarkdownDiff", () => ({
-  RenderedMarkdownDiff: (props: { newSource?: string; status: string; attemptKey: string }) => (
-    <div
-      data-testid="rendered-markdown-mock"
-      data-has-source={String(props.newSource !== undefined)}
-      data-status={props.status}
-      data-attempt-key={props.attemptKey}
-    />
-  ),
+  RenderedMarkdownDiff: (props: RenderedMockProps) => {
+    renderedProps.current = props;
+    return (
+      <div
+        data-testid="rendered-markdown-mock"
+        data-has-source={String(props.newSource !== undefined)}
+        data-status={props.status}
+        data-attempt-key={props.attemptKey}
+        data-request-key={props.requestKey}
+      />
+    );
+  },
 }));
 
 // Controllable so a test can put the pane in image mode; `beforeEach` returns it
@@ -1405,6 +1421,77 @@ describe("DiffPane — rendered Markdown layout (#12171)", () => {
 
     const second = await screen.findByTestId("rendered-markdown-mock");
     expect(second.getAttribute("data-attempt-key")).not.toBe(firstAttempt);
+  });
+
+  it("steps only through the change count reported for the attempt on screen", async () => {
+    preferences.diffMarkdownRendered = true;
+    useDiffFileSourceMock.mockReturnValue({ source: "# Guide\n", errorCode: null });
+    seedPanel({ filePath: "docs/guide.md", fileStatus: "modified" });
+    const { rerender } = renderPane();
+
+    const first = await screen.findByTestId("rendered-markdown-mock");
+    const firstAttempt = first.getAttribute("data-attempt-key") ?? "";
+    act(() => renderedProps.current?.onChangeCount?.(3, firstAttempt));
+    expect(screen.getByText("1 of 3")).toBeTruthy();
+
+    // The source moves on. The view reports nothing until its new comparison is
+    // built, so the first document's three changes must not stay steppable.
+    useDiffFileSourceMock.mockReturnValue({ source: "# Guide edited\n", errorCode: null });
+    rerender(paneElement());
+    const second = await screen.findByTestId("rendered-markdown-mock");
+    const secondAttempt = second.getAttribute("data-attempt-key") ?? "";
+    expect(secondAttempt).not.toBe(firstAttempt);
+    expect(screen.queryByRole("group", { name: "Changes" })).toBe(null);
+
+    // A count for the old attempt arriving late is not this one's either.
+    act(() => renderedProps.current?.onChangeCount?.(3, firstAttempt));
+    expect(screen.queryByRole("group", { name: "Changes" })).toBe(null);
+
+    act(() => renderedProps.current?.onChangeCount?.(2, secondAttempt));
+    expect(screen.getByText("1 of 2")).toBeTruthy();
+  });
+
+  it("keeps one comparison slot per pane: stable across files, distinct between panes", async () => {
+    preferences.diffMarkdownRendered = true;
+    useDiffFileSourceMock.mockReturnValue({ source: "# Guide\n", errorCode: null });
+    seedPanel({ filePath: "docs/guide.md", fileStatus: "modified" });
+    const { rerender, unmount } = renderPane();
+    const requestKey = (await screen.findByTestId("rendered-markdown-mock")).getAttribute(
+      "data-request-key"
+    );
+    expect(requestKey).toBeTruthy();
+
+    // Stepping to another file supersedes the last one's comparison only if
+    // both are filed under the same key.
+    seedPanel({ filePath: "docs/other.md", fileStatus: "modified" });
+    rerender(paneElement());
+    const next = await screen.findByTestId("rendered-markdown-mock");
+    expect(next.getAttribute("data-attempt-key")).toContain("docs/other.md");
+    expect(next.getAttribute("data-request-key")).toBe(requestKey);
+    unmount();
+
+    // A second pane must not supersede the first one's comparison.
+    panelsById["diff-2"] = {
+      id: "diff-2",
+      kind: "diff",
+      diffSource: "working-tree",
+      filePath: "docs/guide.md",
+      fileStatus: "modified",
+    };
+    render(
+      <DiffPane
+        id="diff-2"
+        title="pane"
+        isFocused
+        location="dialog"
+        worktreeId={WORKTREE_ID}
+        onFocus={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const other = await screen.findByTestId("rendered-markdown-mock");
+    expect(other.getAttribute("data-request-key")).toBeTruthy();
+    expect(other.getAttribute("data-request-key")).not.toBe(requestKey);
   });
 });
 

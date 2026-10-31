@@ -39,6 +39,7 @@ import { imagePathProbeScenarios } from "./imagePathProbe";
 import { windowsCensusScenarios } from "./windowsCensus";
 import { elementPickerScenarios } from "./elementPicker";
 import { claudeSubagentScenarios } from "./claudeSubagents";
+import { markdownDiffScenarios } from "./markdownDiff";
 
 export const allScenarios: PerfScenario[] = [
   ...startupScenarios,
@@ -81,6 +82,7 @@ export const allScenarios: PerfScenario[] = [
   ...windowsCensusScenarios,
   ...elementPickerScenarios,
   ...claudeSubagentScenarios,
+  ...markdownDiffScenarios,
 ];
 
 export function getScenariosForMode(mode: PerfMode): PerfScenario[] {
@@ -279,6 +281,8 @@ export const EXPECTED_SCENARIO_IDS: ReadonlySet<string> = new Set([
   "PERF-416",
   "PERF-417",
   "PERF-418",
+  "PERF-419",
+  "PERF-420",
 ]);
 
 /**

@@ -304,6 +304,14 @@ const FAMILIES: readonly Family[] = [
       "The real DiffTokenizeClient, unmodified, admitting work to a real worker thread running the real tokenizer. Its own family because the subject is the CLIENT, not the tokenizer, and the transport is node:worker_threads rather than a Chromium Web Worker — so the latency includes real cross-thread serialization but nothing about Chromium's scheduler. It ends at a resolved token tree, not at a highlighted diff on screen.",
   },
   {
+    label: "rendered Markdown diff",
+    ids: ["PERF-419", "PERF-420"],
+    kind: "mechanism",
+    fidelity: withFidelity({ entryPoint: "public-api", electronTransport: "node-channel" }),
+    claim:
+      "The real Markdown diff engine on generated documents sized to #15679's table, built in-thread and through the unmodified MarkdownDiffClient on a real worker thread in the same run, graded for an exact model match. The stall figures are main-thread availability under node:worker_threads, including real cross-thread serialization — not Chromium's scheduler, the worker bundle's startup in Electron, the whole-file read, react-markdown rendering the blocks, or paint. PERF-420's completion time ends at a resolved model, not at a painted document.",
+  },
+  {
     label: "action palette ranking",
     ids: ["PERF-170", "PERF-171"],
     kind: "mechanism",
