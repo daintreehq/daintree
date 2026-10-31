@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import {
   dictationFollow,
+  dictationFollowField,
   interimWidgetField,
   revealDictationStart,
   setDictationFollow,
@@ -332,6 +333,26 @@ describe("dictationFollow", () => {
     // Only the new dictation's own following moves it.
     expect(writes).toEqual([lineBottom(DRAFT.length - 1) + 5 - VIEW_PX]);
     view.destroy();
+  });
+
+  it("ignores an end outside the draft, and takes the next edit (#15716)", () => {
+    const view = mount("");
+    onTestFinished(() => view.destroy());
+    const follow = (end: number) => setDictationFollow.of({ session: "s1", end });
+    view.dispatch({ effects: follow(312) });
+    expect(view.state.field(dictationFollowField)).toEqual({ session: "s1", end: null });
+
+    // Measured against the text the same transaction writes.
+    view.dispatch({ changes: { from: 0, insert: "next" }, effects: follow(4) });
+    expect(view.state.field(dictationFollowField).end).toBe(4);
+    view.dispatch({ effects: follow(0) });
+    expect(view.state.field(dictationFollowField).end).toBe(0);
+    view.dispatch({ effects: follow(4) });
+    // Kept from before, mapped through the edit.
+    view.dispatch({ effects: follow(-1) });
+    view.dispatch({ effects: follow(312) });
+    view.dispatch({ changes: { from: 0, insert: "the " } });
+    expect(view.state.field(dictationFollowField)).toEqual({ session: "s1", end: 8 });
   });
 
   it("doesn't move to a passage start already in view", () => {

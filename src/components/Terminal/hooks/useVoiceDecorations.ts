@@ -51,7 +51,8 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
     (s) => s.panelBuffers[terminalId]?.dictationSessionId ?? null
   );
   const projectId = useVoiceRecordingStore((s) => s.panelBuffers[terminalId]?.projectId);
-  const anchor = useDictationRangeStore((s) =>
+  // Only says when the anchor moved: the pass below reads it with the draft.
+  const anchorSeen = useDictationRangeStore((s) =>
     sessionId ? s.getAnchor({ sessionId, panelId: terminalId, projectId }) : null
   );
   // How the mic stands for a session writing words into this draft.
@@ -77,7 +78,13 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
     if (!view) return;
 
     const draft = useTerminalInputStore.getState().getDraftInput(terminalId, projectId);
-    // Store positions only mean something in the text they were taken in.
+    // Store positions only mean something in the text they were taken in, so
+    // the anchor is read with the draft: one from the render can predate a
+    // send that has emptied both since, and point into the words it took
+    // (#15716).
+    const anchor = sessionId
+      ? useDictationRangeStore.getState().getAnchor({ sessionId, panelId: terminalId, projectId })
+      : null;
     const inStep = view.state.doc.toString() === draft;
 
     let preview: InterimPreview = { text: "", pos: null };
@@ -171,7 +178,7 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
     dictating,
     caretPhase,
     correctionRanges,
-    anchor,
+    anchorSeen,
     sessionId,
     terminalId,
     projectId,

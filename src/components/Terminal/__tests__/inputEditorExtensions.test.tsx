@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, onTestFinished, vi } from "vitest";
 
 // jsdom does not implement Trusted Types — mock the renderer policy module
 // with a pass-through so chip widgets that call setTrustedInnerHTML in
@@ -224,6 +224,23 @@ describe("createAutoSize integration", () => {
       expect(view.dom.style.height).toBe("10px");
 
       view.destroy();
+    });
+
+    it("shows a preview placed outside the draft at its end, and takes the next edit (#15716)", () => {
+      const { view } = mountInterim(25);
+      onTestFinished(() => view.destroy());
+      const preview = (pos: number) => setInterimText.of({ text: "next words", pos });
+      view.dispatch({ effects: preview(312) });
+      expect(view.state.field(interimWidgetField)).toEqual({ text: "next words", pos: null });
+      view.dispatch({ effects: preview(-1) });
+      expect(view.state.field(interimWidgetField)).toEqual({ text: "next words", pos: null });
+
+      // Measured against the text the same transaction writes, its end included.
+      view.dispatch({ changes: { from: 0, insert: "so " }, effects: preview(3) });
+      expect(view.state.doc.toString()).toBe("so ");
+      expect(view.state.field(interimWidgetField).pos).toBe(3);
+      view.dispatch({ effects: preview(0) });
+      expect(view.state.field(interimWidgetField).pos).toBe(0);
     });
 
     it("keeps its height when interim text is committed to the draft", () => {
