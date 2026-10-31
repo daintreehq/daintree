@@ -1,5 +1,10 @@
 import type { TerminalRuntimeStatus } from "@/types";
-import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
+import type {
+  AddPanelCommitOptions,
+  AddPanelOptions,
+  PanelRegistryStoreApi,
+  PanelRegistrySlice,
+} from "./types";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import {
   load as loadTerminalService,
@@ -36,7 +41,8 @@ import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { cancelDriveLeaseHold, clearPanelDriveLeaseMark } from "@/store/driveLeaseWaitStore";
 import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
-import { countPanelsTowardLimit } from "./panelCount";
+import { countPanelLimitUsage, countsTowardPanelLimit } from "./panelCount";
+import { reservePanelSlots } from "./panelSlotReservations";
 import { isUsableTerminalGeometry } from "@shared/types/terminal";
 import {
   commitPtyPanel,
@@ -61,10 +67,6 @@ async function resolveProjectStore() {
 
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
-
-function countNonTrashTerminals(state: PanelRegistrySlice): number {
-  return countPanelsTowardLimit(state.panelsById, state.panelIds);
-}
 
 // Chrome allowance for the overlay (help panel) grid estimate: horizontal =
 // panel border + terminal-host inset; vertical = header + banners + hybrid
@@ -102,51 +104,11 @@ function estimateOverlayGridDims(fontSize: number): { cols: number; rows: number
   );
 }
 
-export const createAddPanelActions = (
-  set: Set,
-  get: Get
-): Pick<PanelRegistrySlice, "addPanel"> => ({
-  addPanel: async (options, commit) => {
-    // Panel limit enforcement: only the hard ceiling blocks a single-panel add.
-    // The confirm band (>= confirmationLimit) is intentionally non-blocking —
-    // adding a panel is reversible (one-click close), so the step-throttled
-    // `TerminalCountWarning` banner (shown from `softWarningLimit` upward, with
-    // no upper bound) is the right calibration, not a focus-stealing modal. The
-    // blocking confirm survives only for batch spawns (`preflightSpawnBatchLimit`),
-    // where the blast radius of many panels at once warrants it. See #10547.
-    // Launching a pane held for recovery replaces it rather than adding one, so
-    // it must not be refused by a limit the held pane already counts toward.
-    const replacesHeldPane =
-      options.replacesRestoreRecovery === true &&
-      options.requestedId !== undefined &&
-      isHeldForRecovery(get().panelsById[options.requestedId]);
-    if (!options.bypassLimits && !replacesHeldPane) {
-      const { softWarningLimit, confirmationLimit, hardLimit } = usePanelLimitStore.getState();
-      const snapshot = buildPanelLimitSnapshot(countNonTrashTerminals(get()), {
-        softWarningLimit,
-        confirmationLimit,
-        hardLimit,
-      });
-
-      if (snapshot.tier === "hard") {
-        logWarn("[TerminalStore] Refused a panel at the hard panel limit", {
-          kind: options.kind ?? "terminal",
-          count: snapshot.count,
-          hardLimit,
-        });
-        commit?.onLimitRefused?.(snapshot);
-        notify({
-          type: "warning",
-          priority: "high",
-          title: "Panel limit reached",
-          message: `Maximum of ${hardLimit} panels reached. Close some panels before adding new ones.`,
-          duration: 5000,
-          context: { worktreeId: options.worktreeId ?? undefined },
-        });
-        return null;
-      }
-    }
-
+export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySlice, "addPanel"> => {
+  const createPanel = async (
+    options: AddPanelOptions,
+    commit: AddPanelCommitOptions | undefined
+  ): Promise<string | null> => {
     const requestedKind = options.kind ?? "terminal";
 
     // Handle panels that use custom UI (browser, dev-preview, extensions) separately
@@ -679,5 +641,76 @@ export const createAddPanelActions = (
     });
 
     return id;
-  },
-});
+  };
+
+  return {
+    addPanel: async (options, commit) => {
+      // Panel limit enforcement: only the hard ceiling blocks a single-panel add.
+      // The confirm band (>= confirmationLimit) is intentionally non-blocking —
+      // adding a panel is reversible (one-click close), so the step-throttled
+      // `TerminalCountWarning` banner (shown from `softWarningLimit` upward, with
+      // no upper bound) is the right calibration, not a focus-stealing modal. The
+      // blocking confirm survives only for batch spawns (`preflightSpawnBatchLimit`),
+      // where the blast radius of many panels at once warrants it. See #10547.
+      // Launching a pane held for recovery replaces it rather than adding one, so
+      // it must not be refused by a limit the held pane already counts toward.
+      const replacesHeldPane =
+        options.replacesRestoreRecovery === true &&
+        options.requestedId !== undefined &&
+        isHeldForRecovery(get().panelsById[options.requestedId]);
+      if (!options.bypassLimits && !replacesHeldPane) {
+        const { softWarningLimit, confirmationLimit, hardLimit } = usePanelLimitStore.getState();
+        const snapshot = buildPanelLimitSnapshot(countPanelLimitUsage(get()), {
+          softWarningLimit,
+          confirmationLimit,
+          hardLimit,
+        });
+
+        if (snapshot.tier === "hard") {
+          logWarn("[TerminalStore] Refused a panel at the hard panel limit", {
+            kind: options.kind ?? "terminal",
+            count: snapshot.count,
+            hardLimit,
+          });
+          commit?.onLimitRefused?.(snapshot);
+          notify({
+            type: "warning",
+            priority: "high",
+            title: "Panel limit reached",
+            message: `Maximum of ${hardLimit} panels reached. Close some panels before adding new ones.`,
+            duration: 5000,
+            context: { worktreeId: options.worktreeId ?? undefined },
+          });
+          return null;
+        }
+      }
+
+      // The check above and the commit are separated by awaits, so hold the
+      // slot it admitted until the add returns, claimed under the id the panel
+      // will take: an overlapping gate or add sees it as taken either way
+      // (#15607). Only an add the limit was checked for holds one.
+      if (options.bypassLimits || replacesHeldPane || !countsTowardPanelLimit(options)) {
+        return createPanel(options, commit);
+      }
+      const requestedKind = options.kind ?? "terminal";
+      const idKind = panelKindUsesTerminalUi(requestedKind)
+        ? requestedKind === "dev-preview"
+          ? "dev-preview"
+          : "terminal"
+        : requestedKind;
+      const id = options.existingId ?? options.requestedId ?? `${idKind}-${crypto.randomUUID()}`;
+      const slot = reservePanelSlots(1);
+      slot.claim(id);
+      try {
+        return await createPanel(
+          options.existingId === undefined && options.requestedId === undefined
+            ? { ...options, requestedId: id }
+            : options,
+          commit
+        );
+      } finally {
+        slot.release();
+      }
+    },
+  };
+};

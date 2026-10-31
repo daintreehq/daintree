@@ -15,6 +15,10 @@ import {
   type PanelLimitSnapshot,
   type PanelLimitTier,
 } from "@shared/utils/panelLimit";
+import {
+  reservePanelSlots,
+  type PanelSlotGrant,
+} from "./slices/panelRegistry/panelSlotReservations";
 
 export { buildPanelLimitSnapshot, computeHardwareDefaults, evaluatePanelLimit };
 export type { PanelLimitSnapshot, PanelLimitTier };
@@ -329,46 +333,60 @@ export function _resetInitPromise(): void {
   _initPromise = null;
 }
 
+function notifyPanelLimitReached(hardLimit: number, worktreeId: string | undefined): void {
+  notify({
+    type: "warning",
+    priority: "high",
+    title: "Panel limit reached",
+    message: `Maximum of ${hardLimit} panels reached. Close some panels before adding new ones.`,
+    duration: 5000,
+    context: {
+      eventKind: "uiFeedback",
+      ...(worktreeId ? { worktreeId } : {}),
+    },
+  });
+}
+
 /**
  * Aggregate panel-limit gate for batch spawns (recipes, worktree spin-up).
  *
  * Batched `addPanel` defers the `panelIds` append, so the per-call limit check
  * in `addPanel` would read the same stale count for every panel in the burst
- * and under-enforce the ceiling. Callers run this once up front against the
- * pre-batch `currentCount`, spawn only the returned `allowed` count with
- * `bypassLimits: true`, and report the rest as "Panel limit reached" — or, when
- * `declined`, as `PANEL_LIMIT_DECLINED_REASON`. The confirmation dialog
- * (if the burst crosses the confirm threshold) is awaited here, before the
- * batch opens, so it never renders mid-commit. See #9165.
+ * and under-enforce the ceiling. Callers run this once up front, spawn only the
+ * returned `allowed` count with `bypassLimits: true`, and report the rest as
+ * "Panel limit reached" — or, when `declined`, as `PANEL_LIMIT_DECLINED_REASON`.
+ * The confirmation dialog (if the burst crosses the confirm threshold) is
+ * awaited here, before the batch opens, so it never renders mid-commit. See #9165.
  *
+ * The granted slots are reserved in the same tick the count is read, so an
+ * overlapping gate or single add can't be granted them too (#15607). The
+ * caller claims a slot with each panel's id right before its `addPanel`, and
+ * releases the grant once its batch has flushed. No capacity is held while the
+ * confirm is open: the count is read again once it's answered, and the grant
+ * shrinks to whatever is still free.
+ *
+ * @param readUsage - Reads the live count, `countPanelLimitUsage` over the
+ *   current panel store state; called again after the confirm.
  * @returns `allowed` — how many of the requested panels may be spawned now
  *   (0 when the hard limit is already reached or the user declines the confirm);
- *   `declined` — true only when the user answered the confirm with no.
+ *   `declined` — true only when the user answered the confirm with no;
+ *   `grant` — the reserved slots, `null` when `allowed` is 0.
  */
 export async function preflightSpawnBatchLimit(
-  currentCount: number,
+  readUsage: () => number,
   requestedCount: number,
   options: { source?: PanelLimitBatchSource; worktreeId?: string } = {}
-): Promise<{ allowed: number; declined: boolean }> {
-  if (requestedCount <= 0) return { allowed: 0, declined: false };
+): Promise<{ allowed: number; declined: boolean; grant: PanelSlotGrant | null }> {
+  if (requestedCount <= 0) return { allowed: 0, declined: false, grant: null };
 
   const { confirmationLimit, hardLimit, warningsDisabled, requestConfirmation } =
     usePanelLimitStore.getState();
 
+  const currentCount = readUsage();
   const available = Math.max(0, hardLimit - currentCount);
   if (available === 0) {
-    notify({
-      type: "warning",
-      priority: "high",
-      title: "Panel limit reached",
-      message: `Maximum of ${hardLimit} panels reached. Close some panels before adding new ones.`,
-      duration: 5000,
-      context: {
-        eventKind: "uiFeedback",
-        ...(options.worktreeId ? { worktreeId: options.worktreeId } : {}),
-      },
-    });
-    return { allowed: 0, declined: false };
+    notifyPanelLimitReached(hardLimit, options.worktreeId);
+    return { allowed: 0, declined: false, grant: null };
   }
 
   const allowed = Math.min(available, requestedCount);
@@ -387,8 +405,22 @@ export async function preflightSpawnBatchLimit(
       hardLimit,
       ...(options.source ? { source: options.source } : {}),
     });
-    if (!confirmed) return { allowed: 0, declined: true };
+    if (!confirmed) return { allowed: 0, declined: true, grant: null };
+
+    // Other adds kept going while the dialog was open. Never more than the
+    // user agreed to, and never more than is free now.
+    const liveHardLimit = usePanelLimitStore.getState().hardLimit;
+    const confirmedAllowed = Math.min(allowed, Math.max(0, liveHardLimit - readUsage()));
+    if (confirmedAllowed === 0) {
+      notifyPanelLimitReached(liveHardLimit, options.worktreeId);
+      return { allowed: 0, declined: false, grant: null };
+    }
+    return {
+      allowed: confirmedAllowed,
+      declined: false,
+      grant: reservePanelSlots(confirmedAllowed),
+    };
   }
 
-  return { allowed, declined: false };
+  return { allowed, declined: false, grant: reservePanelSlots(allowed) };
 }

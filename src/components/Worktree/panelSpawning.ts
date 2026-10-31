@@ -11,7 +11,7 @@ import { preflightSpawnBatchLimit, type PanelLimitBatchSource } from "@/store/pa
 import { PANEL_LIMIT_DECLINED_REASON } from "@/services/actions/definitions/panelLimitError";
 import { isMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
 import { isAssistantFocused } from "@/store/macroFocusStore";
-import { countPanelsTowardLimit } from "@/store/slices/panelRegistry/panelCount";
+import { countPanelLimitUsage } from "@/store/slices/panelRegistry/panelCount";
 import { isRemoteWindow, resolveHostTmpDir } from "@/hooks/useHostPlatform";
 import { agentClipboardDirectory } from "@shared/types/agentSettings";
 
@@ -64,13 +64,17 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
   // Aggregate panel-limit gate before opening the batch. The batched `addPanel`
   // path defers the `panelIds` append, so per-call limit checks would all read
   // the same stale count; gate the whole burst once and pass `bypassLimits` on
-  // each call. (#9165)
-  const currentCount = countPanelsTowardLimit(store.panelsById, store.panelIds);
-  const { allowed, declined } = await preflightSpawnBatchLimit(currentCount, terminals.length, {
-    source: options.source,
-    worktreeId,
-  });
-  if (signal?.aborted) return;
+  // each call. (#9165) The granted slots stay reserved until the burst's
+  // panels are visible to every other gate and add (#15607).
+  const { allowed, declined, grant } = await preflightSpawnBatchLimit(
+    () => countPanelLimitUsage(usePanelStore.getState()),
+    terminals.length,
+    { source: options.source, worktreeId }
+  );
+  if (signal?.aborted) {
+    grant?.release();
+    return;
+  }
 
   // The user answered the panel-limit confirm with no. Without a per-panel
   // callback there is nobody to tell, and throwing would report their own
@@ -79,28 +83,38 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
 
   const errors: { index: number; error: unknown }[] = [];
 
-  // Panels beyond the resolved limit can't spawn — report them as failures.
-  for (let index = allowed; index < terminals.length; index++) {
-    const err = new Error(declined ? PANEL_LIMIT_DECLINED_REASON : "Panel limit reached");
-    if (onPanelSpawned) {
-      onPanelSpawned(index, null, err);
-    } else {
-      errors.push({ index, error: err });
-    }
-  }
-
   // Capture focus intent before the batch (the batched path suppresses the
   // per-panel focus mutation that would otherwise focus the last grid panel).
   const suppressFocus = isMcpSpawnFocusSuppressed() || isAssistantFocused();
 
   type Outcome = { index: number; panelId: string | null; error?: unknown; skipped?: boolean };
 
-  // One batch for the whole burst: each `addPanel` commits `panelsById`
-  // immediately but defers the `panelIds` append, collapsing N grid reflows
-  // into one at flush. Skip opening it when the limit leaves no room. (#9165)
-  const batchToken = allowed > 0 ? store.beginSpawnBatch() : null;
+  let batchToken: ReturnType<typeof store.beginSpawnBatch> = null;
   let outcomes: Outcome[];
+  // Slots are reserved from here on, and the caller's callbacks can throw, so
+  // every exit has to give them back.
   try {
+    // Panels beyond the resolved limit can't spawn — report them as failures.
+    for (let index = allowed; index < terminals.length; index++) {
+      const err = new Error(declined ? PANEL_LIMIT_DECLINED_REASON : "Panel limit reached");
+      if (onPanelSpawned) {
+        onPanelSpawned(index, null, err);
+      } else {
+        errors.push({ index, error: err });
+      }
+    }
+
+    // One batch for the whole burst: each `addPanel` commits `panelsById`
+    // immediately but defers the `panelIds` append, collapsing N grid reflows
+    // into one at flush. Skip opening it when the limit leaves no room. (#9165)
+    batchToken = allowed > 0 ? store.beginSpawnBatch() : null;
+    // Claimed right before each `addPanel`, so the slot is counted under the
+    // panel's own id from the moment it can land.
+    const claimPanelId = (kind: "terminal" | "dev-preview"): string => {
+      const id = `${kind}-${crypto.randomUUID()}`;
+      grant?.claim(id);
+      return id;
+    };
     outcomes = await Promise.all(
       terminals.slice(0, allowed).map(async (t, index): Promise<Outcome> => {
         // Re-check between (parallel) dispatches: a synchronous abort from an
@@ -113,6 +127,7 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
           if (t.type === "dev-preview") {
             panelId = await store.addPanel({
               kind: "dev-preview",
+              requestedId: claimPanelId("dev-preview"),
               title: t.title,
               cwd,
               worktreeId,
@@ -165,6 +180,7 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
 
             panelId = await store.addPanel({
               kind: "terminal",
+              requestedId: claimPanelId("terminal"),
               launchAgentId: agentId,
               command,
               title: t.title,
@@ -180,6 +196,7 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
           } else {
             panelId = await store.addPanel({
               kind: "terminal",
+              requestedId: claimPanelId("terminal"),
               title: t.title,
               cwd,
               worktreeId,
@@ -197,7 +214,13 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
       })
     );
   } finally {
-    store.flushSpawnBatch(batchToken);
+    // Release after the flush, once the burst's panels count from `panelIds`
+    // (or from the batch that still holds them); unclaimed slots go back.
+    try {
+      store.flushSpawnBatch(batchToken);
+    } finally {
+      grant?.release();
+    }
   }
 
   // Report in index order (parallel settle order is non-deterministic).

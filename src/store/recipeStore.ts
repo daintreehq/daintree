@@ -10,7 +10,7 @@ import { launcherItemToolbarButtonId } from "@shared/types/toolbar";
 import { recipeToolbarSourceId } from "@/utils/recipeScope";
 import { preflightSpawnBatchLimit } from "./panelLimitStore";
 import { PANEL_LIMIT_DECLINED_REASON } from "@/services/actions/definitions/panelLimitError";
-import { countPanelsTowardLimit } from "./slices/panelRegistry/panelCount";
+import { countPanelLimitUsage } from "./slices/panelRegistry/panelCount";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { isMcpSpawnFocusSuppressed } from "./mcpSpawnFocusGuard";
 import { isAssistantFocused } from "./macroFocusStore";
@@ -1273,11 +1273,11 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // same stale count and under-enforce the ceiling; gate the whole burst once
     // here and pass `bypassLimits` on each individual call. (#9165)
     // Read fresh: the plugin panels opened above already count toward the limit,
-    // and the snapshot taken before them would let the batch overshoot it.
-    const livePanels = usePanelStore.getState();
-    const currentCount = countPanelsTowardLimit(livePanels.panelsById, livePanels.panelIds);
-    const { allowed, declined } = await preflightSpawnBatchLimit(
-      currentCount,
+    // and the snapshot taken before them would let the batch overshoot it. The
+    // live count also covers overlapping runs and adds still in flight, and the
+    // granted slots stay reserved until this run's panels are visible (#15607).
+    const { allowed, declined, grant } = await preflightSpawnBatchLimit(
+      () => countPanelLimitUsage(usePanelStore.getState()),
       validIndices.length,
       { source: { kind: "recipe", name: recipe.name }, worktreeId }
     );
@@ -1319,6 +1319,13 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         : ptySpawnCount > 1
           ? { spawnBatchId: crypto.randomUUID(), spawnBatchSize: ptySpawnCount }
           : {};
+    // Claimed right before each `addPanel`, after any await the step makes, so
+    // the slot is counted under the panel's own id from the moment it can land.
+    const claimPanelId = (kind: "terminal" | "dev-preview"): string => {
+      const id = `${kind}-${crypto.randomUUID()}`;
+      grant?.claim(id);
+      return id;
+    };
     try {
       const settled = await Promise.allSettled(
         spawnIndices.map(async (index) => {
@@ -1327,6 +1334,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           if (terminal.type === "dev-preview") {
             return terminalStore.addPanel({
               kind: "dev-preview",
+              requestedId: claimPanelId("dev-preview"),
               title: terminal.title || "Dev server",
               cwd: worktreePath,
               worktreeId: worktreeId,
@@ -1480,6 +1488,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               : undefined;
             return terminalStore.addPanel({
               kind: "terminal",
+              requestedId: claimPanelId("terminal"),
               launchAgentId: agentId,
               command,
               title: terminal.title,
@@ -1508,6 +1517,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
           return terminalStore.addPanel({
             kind: "terminal",
+            requestedId: claimPanelId("terminal"),
             title: terminal.title,
             ...titlePin,
             cwd: worktreePath,
@@ -1539,8 +1549,14 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       });
     } finally {
       // Always flush so the batch can never be left open (a no-op for a `null`
-      // token when a concurrent run already owns the active batch).
-      terminalStore.flushSpawnBatch(batchToken);
+      // token when a concurrent run already owns the active batch). Release
+      // after it: this run's panels count from `panelIds`, or from the batch
+      // that still holds them, and slots never claimed go back to the pool.
+      try {
+        terminalStore.flushSpawnBatch(batchToken);
+      } finally {
+        grant?.release();
+      }
     }
 
     // Keep the index-ordered contract callers rely on; parallel settle order
