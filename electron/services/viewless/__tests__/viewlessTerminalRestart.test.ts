@@ -88,6 +88,41 @@ describe("restartTerminalWithoutView", () => {
     expect(spawned(invoke).command).toBe("claude --model opus");
   });
 
+  it("leaves a pane saved with a retired model for a view to restart (#15652)", async () => {
+    const { deps, invoke } = setup(
+      {
+        id: "t1",
+        launchAgentId: "copilot",
+        command: "copilot --model claude-opus-4.6",
+        agentModelId: "claude-opus-4.6",
+        agentLaunchFlags: ["--model", "claude-opus-4.6"],
+      },
+      { agentState: "working", launchAgentId: "copilot" },
+      "sess-123"
+    );
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("unsupported");
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("relaunches a pane on a model Copilot still offers (#15652)", async () => {
+    const { deps, invoke } = setup(
+      {
+        id: "t1",
+        launchAgentId: "copilot",
+        command: "copilot --model gpt-6.1-sol",
+        agentModelId: "gpt-6.1-sol",
+      },
+      { agentState: "working", launchAgentId: "copilot" }
+    );
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("restarted");
+    expect(spawned(invoke)).toMatchObject({
+      command: "copilot --model gpt-6.1-sol",
+      agentModelId: "gpt-6.1-sol",
+    });
+  });
+
   it("keeps the run's first prompt across a resume (#15521)", async () => {
     const firstPrompt = { text: "Fix the login bug", via: "send" as const, at: 5 };
     const { deps, invoke, store } = setup(
