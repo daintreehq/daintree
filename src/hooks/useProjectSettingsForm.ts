@@ -460,8 +460,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     projectError,
   ]);
 
-  const persistDraft = async (force: boolean): Promise<SaveOutcome> => {
-    const generation = discardGenerationRef.current;
+  const persistDraft = async (force: boolean, generation: number): Promise<SaveOutcome> => {
     const abandoned = () => discardingRef.current || generation !== discardGenerationRef.current;
     if (!projectSettings || !currentProject || !projectId || abandoned()) {
       return undefined;
@@ -542,9 +541,13 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   };
 
   // One save at a time: each diffs against the baseline the previous one left.
-  const projectPersist = (options?: { force?: boolean }) => {
+  // The discard generation is taken when a save is queued, not when it starts:
+  // one queued behind a save still running carries the same draft.
+  const projectPersist = (options?: { force?: boolean }): Promise<SaveOutcome> => {
+    if (discardingRef.current) return Promise.resolve(undefined);
+    const generation = discardGenerationRef.current;
     const run = Promise.resolve(persistChainRef.current).then(() =>
-      persistDraft(options?.force === true)
+      persistDraft(options?.force === true, generation)
     );
     persistChainRef.current = run;
     return run;

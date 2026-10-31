@@ -648,6 +648,35 @@ describe("useProjectSettingsForm", () => {
     expect(hook.result.current.projectAutoSaveError).toBeNull();
   });
 
+  it("a save queued behind one still running is discarded with it", async () => {
+    vi.useFakeTimers();
+    const hook = await renderSeededForm();
+    let rejectSave!: (err: Error) => void;
+    mockSaveSettings.mockImplementationOnce(
+      () => new Promise<void>((_, reject) => (rejectSave = reject))
+    );
+    let saving!: Promise<unknown>;
+    act(() => {
+      // Retry pressed twice: the second waits for the first.
+      saving = Promise.all([hook.result.current.saveNow(), hook.result.current.saveNow()]);
+    });
+    await vi.waitFor(() => {
+      expect(mockSaveSettings).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      hook.result.current.discardUnsavedChanges();
+    });
+    hook.rerender({ isOpen: false, tick: 3, projectId: "proj-1" });
+    await act(async () => {
+      rejectSave(new Error("Disk full"));
+      await saving;
+    });
+
+    expect(mockSaveSettings).toHaveBeenCalledTimes(1);
+    expect(hook.result.current.projectAutoSaveError).toBeNull();
+  });
+
   it("stays uninitialized while loading with no settings yet (backs the Doherty loader)", async () => {
     mockIsLoading.value = true;
     mockSettings.value = null;
