@@ -1007,6 +1007,12 @@ describe("McpServerService", () => {
         description: "Remove a worktree this MCP session created",
         danger: "confirm",
       }),
+      createManifestEntry({
+        id: "worktree.retireOwned" as ActionId,
+        title: "Retire Owned Worktree",
+        description: "Close this session's panes in a worktree it created, then delete it",
+        danger: "confirm",
+      }),
       // Full-only (#12214): re-running project plugin discovery restarts
       // running code, so a core session must not reach it.
       createManifestEntry({

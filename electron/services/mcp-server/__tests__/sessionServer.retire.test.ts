@@ -50,7 +50,7 @@ describe("worktree.retireOwned (#15737)", () => {
 
   function manifest(): ActionManifestEntry[] {
     return [
-      makeManifestEntry("terminal.new"),
+      makeManifestEntry("agent.launch"),
       { ...makeManifestEntry("terminal.closeOwned"), kind: "command", danger: "safe" as const },
       { ...makeManifestEntry("worktree.deleteOwned"), kind: "command", danger: "confirm" as const },
       { ...makeManifestEntry("worktree.retireOwned"), kind: "command", danger: "confirm" as const },
@@ -63,10 +63,15 @@ describe("worktree.retireOwned (#15737)", () => {
    * launch with generation 1. The exit wait marks every process it reports
    * exited in the census too, as the host's records would show.
    */
-  function harness(sessionId: string, overrides?: Partial<SessionServerDeps>) {
+  function harness(
+    sessionId: string,
+    overrides?: Partial<SessionServerDeps>,
+    tier: "core" | "external" = "core"
+  ) {
     const store = new RealSessionStore(() => {}, { launchGenerationOf: () => 1 });
     liveStores.push(store);
-    seedLiveSession(store, sessionId, "external");
+    // A pane bearer or a relayed host call: a core tier with an external origin.
+    seedLiveSession(store, sessionId, tier);
     store.sessionOriginMap.set(sessionId, "external");
     const census: { processes: TerminalProcessRecord[] } = { processes: [] };
     const git: { current: WorktreeGitObservation } = { current: CLEAN };
@@ -77,7 +82,7 @@ describe("worktree.retireOwned (#15737)", () => {
     const readTerminalProcesses = vi.fn(async () => census.processes);
     const dispatchAction = vi.fn(
       async (actionId: string, args: unknown): Promise<DispatchEnvelope> => {
-        if (actionId === "terminal.new") {
+        if (actionId === "agent.launch") {
           return { result: { ok: true, result: { terminalId: "terminal-1" } } };
         }
         if (actionId === "terminal.close") {
@@ -165,7 +170,7 @@ describe("worktree.retireOwned (#15737)", () => {
     dispatchAction.mock.calls.filter(([id]) => id === actionId);
 
   async function launchPane(server: ReturnType<typeof createSessionServer>) {
-    await callTool(server, { name: "terminal.new", arguments: {} });
+    await callTool(server, { name: "agent.launch", arguments: { agentId: "claude" } });
   }
 
   describe("refuses before anything changes", () => {
@@ -180,6 +185,16 @@ describe("worktree.retireOwned (#15737)", () => {
       expect(payloadOf<Refusal>(result).code).toBe("RESOURCE_NOT_OWNED");
       expect(readWorktreeGit).not.toHaveBeenCalled();
       expect(readTerminalProcesses).not.toHaveBeenCalled();
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("is off the external tier, whose clients compose the owned close and delete", async () => {
+      const { server, dispatchAction, readWorktreeGit } = harness("s-api-key", undefined, "external");
+
+      const result = await callTool(server, retireCall());
+
+      expect(payloadOf<Refusal>(result).code).toBe("TIER_NOT_PERMITTED");
+      expect(readWorktreeGit).not.toHaveBeenCalled();
       expect(dispatchAction).not.toHaveBeenCalled();
     });
 
@@ -290,7 +305,7 @@ describe("worktree.retireOwned (#15737)", () => {
     // The order the issue sets, and the delete exactly as the owned delete
     // sends it: the literal id the preview keys on, the id alone, unconfirmed.
     expect(dispatchAction.mock.calls.map(([id]) => id)).toEqual([
-      "terminal.new",
+      "agent.launch",
       "terminal.close",
       "worktree.delete",
     ]);
@@ -403,7 +418,7 @@ describe("worktree.retireOwned (#15737)", () => {
     it("reports the closed pane when the delete throws", async () => {
       const { census, server, dispatchAction } = harness("s-throws");
       dispatchAction.mockImplementation(async (actionId: string, args: unknown) => {
-        if (actionId === "terminal.new") {
+        if (actionId === "agent.launch") {
           return { result: { ok: true, result: { terminalId: "terminal-1" } } };
         }
         if (actionId === "terminal.close") {

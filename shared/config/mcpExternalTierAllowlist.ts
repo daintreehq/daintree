@@ -257,12 +257,6 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   // withholds it entirely from a workspace-bound session whose view nobody is
   // watching — at discovery and at dispatch, from the manifest field alone.
   "worktree.deleteOwned",
-  // The same delete with its preconditions run first (#15737): it refuses a
-  // dirty or unpushed tree and someone else's process before anything
-  // changes, closes only panes the ledger says this session created, and ends
-  // in the same confirmed `worktree.delete`, so it reaches nothing the owned
-  // delete and owned close do not.
-  "worktree.retireOwned",
   "worktree.setActive",
 
   // A deliberate product exception rather than a clean pass of the rule above,

@@ -2812,6 +2812,39 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     title: "Delete worktree",
   },
   {
+    band: "destructive-local",
+    category: "worktree",
+    danger: "confirm",
+    dangerRationale:
+      "Closes the session's own panes in the worktree and deletes the working tree from disk. Recovery requires re-creating the worktree, so the session's own ownership record is a precondition rather than the approval.",
+    description:
+      "Delete a worktree this session created, after the user confirms, once it is clean, every commit is on a remote, and no terminal you don't own runs there. Closes your panes there and waits for their processes to exit first. Never forces or deletes the branch.",
+    enabled: true,
+    id: "worktree.retireOwned",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        worktreeId: {
+          type: "string",
+          minLength: 1,
+          description: "The `worktreeId` this session got when creating the worktree.",
+        },
+        timeoutMs: {
+          description: "Wait for closed panes to exit, 0 to 60000; default 30000.",
+          type: "integer",
+          minimum: 0,
+          maximum: 60000,
+        },
+      },
+      required: ["worktreeId"],
+    },
+    kind: "command",
+    name: "worktree.retireOwned",
+    requiresArgs: true,
+    title: "Retire owned worktree",
+  },
+  {
     band: "reversible",
     category: "worktree",
     danger: "safe",

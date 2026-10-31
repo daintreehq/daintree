@@ -28,6 +28,7 @@ import {
 } from "../../../services/mcp-server/sessionServer.js";
 import { SessionStore } from "../../../services/mcp-server/sessionStore.js";
 import type { TerminalProcessRecord } from "../../../services/mcp-server/worktreeProcessGuard.js";
+import type { WorktreeGitObservation } from "../../../services/mcp-server/worktreeRetirementGit.js";
 import {
   RELAY_CALL_ID_META_KEY,
   type DispatchEnvelope,
@@ -130,6 +131,7 @@ const MANIFEST: ActionManifestEntry[] = [
     },
   },
   entry("worktree.deleteOwned", "command", "confirm"),
+  entry("worktree.retireOwned", "command", "confirm"),
 ];
 
 function deferred<T = void>() {
@@ -155,6 +157,16 @@ class Destination {
   readonly dirty = new Set<string>();
   /** What this host's pty host reports running; nothing unless a test says so. */
   processes: TerminalProcessRecord[] = [];
+  /** What git reports of a worktree here: clean and pushed unless a test says otherwise. */
+  git: WorktreeGitObservation = {
+    headOid: "c".repeat(40),
+    branch: "feature/done",
+    staged: 0,
+    unstaged: 0,
+    untracked: 0,
+    conflicted: 0,
+    unpushedCommits: 0,
+  };
   readonly submissions = new Map<string, string[]>();
   accepts = true;
   /** Set to hold the next change until released, as a slow host would. */
@@ -193,6 +205,22 @@ class Destination {
       handleTerminalReadLastMessageOwned: vi.fn(),
       isTerminalIdInUse: (id: string) => this.terminals.has(id),
       readTerminalProcesses: async () => this.processes,
+      readWorktreeGit: async () => this.git,
+      // A closed pane's process exits once its grace is ended, as the pty host reports it.
+      waitForClosedPanelExits: async (targets: Array<{ terminalId: string }>) => {
+        const ids = new Set(targets.map((target) => target.terminalId));
+        this.processes = this.processes.map((record) =>
+          ids.has(record.id) ? { ...record, isExited: true } : record
+        );
+        return {
+          processes: targets.map(({ terminalId }) => ({
+            terminalId,
+            outcome: "exited" as const,
+            exitCode: 0,
+            graceEnded: true,
+          })),
+        };
+      },
       appendAuditRecord: vi.fn(),
       getCachedManifest: vi.fn(() => MANIFEST),
       resolveOwnPane: () => null,
@@ -949,6 +977,61 @@ describe("cleanup that keeps what it may not remove (#14169)", () => {
     expect(destination.worktrees.has("/wt/busy")).toBe(true);
     expect(
       destination.store.resourceOwnership.owns(principal("help-a"), "worktree", "/wt/busy")
+    ).toBe(true);
+  });
+});
+
+describe("retiring a worktree through host.call with no window open there (#15737)", () => {
+  async function ownedWorktreeWithWorker(worktreeId: string) {
+    await launchWorker();
+    destination.worktrees.add(worktreeId);
+    destination.store.resourceOwnership.record(
+      principal("help-a"),
+      [{ kind: "worktree", id: worktreeId }],
+      PROJECT
+    );
+    destination.processes = [{ id: "w-1", cwd: worktreeId, isExited: false }];
+  }
+
+  it("closes its worker, waits for it, and deletes after the one question at the Shell", async () => {
+    await ownedWorktreeWithWorker("/wt/done");
+
+    const retired = await settled(call("worktree.retireOwned", { worktreeId: "/wt/done" }));
+
+    expect(retired.result).toMatchObject({
+      isError: false,
+      structured: {
+        worktreeId: "/wt/done",
+        closedTerminalIds: ["w-1"],
+        processes: [{ terminalId: "w-1", outcome: "exited" }],
+      },
+    });
+    // The delete's own confirmation, relayed here, is the only thing asked.
+    expect(asked).toEqual(["worktree.delete"]);
+    expect(destination.count("terminal.close")).toBe(1);
+    expect(destination.terminals.has("w-1")).toBe(false);
+    expect(destination.worktrees.has("/wt/done")).toBe(false);
+  });
+
+  it("says its worker was closed when the person at the Shell rejects the delete", async () => {
+    await ownedWorktreeWithWorker("/wt/kept");
+    decision = "rejected";
+
+    const kept = await settled(call("worktree.retireOwned", { worktreeId: "/wt/kept" }));
+
+    expect(kept.result).toMatchObject({ isError: true });
+    expect(JSON.parse((kept.result as { text: string }).text)).toMatchObject({
+      code: "PARTIAL_SUCCESS",
+      details: {
+        failedStep: "delete",
+        closedTerminalIds: ["w-1"],
+        cause: { code: "USER_REJECTED" },
+      },
+    });
+    expect(destination.terminals.has("w-1")).toBe(false);
+    expect(destination.worktrees.has("/wt/kept")).toBe(true);
+    expect(
+      destination.store.resourceOwnership.owns(principal("help-a"), "worktree", "/wt/kept")
     ).toBe(true);
   });
 });

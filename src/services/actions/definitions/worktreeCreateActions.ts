@@ -14,10 +14,7 @@ import {
 import { PartialSuccessError } from "@shared/utils/partialSuccess";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { WORKTREE_BRANCH_KEPT_MARKER } from "@shared/utils/worktreeSummary";
-import {
-  WorktreeRetireOwnedArgsSchema,
-  WorktreeRetireOwnedResultSchema,
-} from "@shared/types/worktreeRetirement";
+import { WorktreeRetireOwnedArgsSchema } from "@shared/types/worktreeRetirement";
 
 export function registerWorktreeCreateActions(
   actions: ActionRegistry,
@@ -252,7 +249,7 @@ export function registerWorktreeCreateActions(
       id: "worktree.retireOwned",
       title: "Retire owned worktree",
       description:
-        "Retire a worktree this session created: refuses unless it is clean with every commit on a remote, or while a terminal not yours runs there; then closes your panes there, waits for their processes to exit, and deletes it after the user confirms. Never forces or deletes the branch. A failure after closing says what was done.",
+        "Delete a worktree this session created, after the user confirms, once it is clean, every commit is on a remote, and no terminal you don't own runs there. Closes your panes there and waits for their processes to exit first. Never forces or deletes the branch.",
       category: "worktree",
       kind: "command",
       danger: "confirm",
@@ -261,8 +258,6 @@ export function registerWorktreeCreateActions(
         "Closes the session's own panes in the worktree and deletes the working tree from disk. Recovery requires re-creating the worktree, so the session's own ownership record is a precondition rather than the approval.",
       palette: { mode: "hidden" },
       argsSchema: WorktreeRetireOwnedArgsSchema,
-      resultSchema: WorktreeRetireOwnedResultSchema,
-      mcpOutputSchema: true,
       run: async () => {
         throw new Error(
           "worktree.retireOwned must be invoked through the MCP main-process path, not renderer dispatch."

@@ -569,7 +569,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // and otherwise says which way it ended, that the session owns both, and
   // that a failure after creation hands back the worktree rather than inviting
   // a retry that makes a second one. In-app only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 24_250;
+  // 24_250 → 24_510 for `worktree.retireOwned` (#15737), measured at
+  // 24_480 B (+258): retiring a finished worktree on a host took six or
+  // seven calls, each a check the caller had to remember and order. The prose
+  // names the three refusals and that its own panes are closed and waited for
+  // first. In-app only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 24_510;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

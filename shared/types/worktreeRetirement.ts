@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { MAX_TERMINAL_EXIT_WAIT_MS, TerminalExitObservationSchema } from "./terminalExitWait.js";
+import { MAX_TERMINAL_EXIT_WAIT_MS, type TerminalExitObservation } from "./terminalExitWait.js";
 
 /**
  * Retiring a worktree the calling session created, in one call (#15737): its
@@ -19,19 +19,19 @@ export const WorktreeRetireOwnedArgsSchema = z.object({
     .min(0)
     .max(MAX_TERMINAL_EXIT_WAIT_MS)
     .optional()
-    .describe("How long closed panes' processes get to exit, 0 to 60000; default 30000."),
+    .describe("Wait for closed panes to exit, 0 to 60000; default 30000."),
 });
 
 export type WorktreeRetireOwnedArgs = z.infer<typeof WorktreeRetireOwnedArgsSchema>;
 
-export const WorktreeRetireOwnedResultSchema = z.object({
-  worktreeId: z.string(),
-  closedTerminalIds: z.array(z.string()).describe("This session's panes the call closed."),
-  processes: z
-    .array(TerminalExitObservationSchema)
-    .describe("Each awaited process, as the host saw it exit."),
-  headOid: z.string().describe("The commit the worktree was on, found on a remote-tracking ref."),
-  branch: z.string().nullable().describe("Its branch, kept; null when detached."),
-});
-
-export type WorktreeRetireOwnedResult = z.infer<typeof WorktreeRetireOwnedResultSchema>;
+export interface WorktreeRetireOwnedResult {
+  worktreeId: string;
+  /** This session's panes the call closed. */
+  closedTerminalIds: string[];
+  /** Each process it waited for, as the host saw it exit. */
+  processes: TerminalExitObservation[];
+  /** The commit the worktree was on, found on a remote-tracking ref. */
+  headOid: string;
+  /** Its branch, which is kept; null when HEAD was detached. */
+  branch: string | null;
+}
