@@ -382,6 +382,36 @@ describe("terminal.getStatus with no frontend", () => {
       );
     });
 
+    it("reads only the named terminals when every location is asked for too (#15732)", async () => {
+      const { deps, readTerminalStatus } = fleet();
+
+      const result = await executeViewlessAction(
+        request("terminal.getStatus", { terminalIds: ["t-trash", "t-bg"], location: "all" }),
+        deps
+      );
+
+      expect(readTerminalStatus).toHaveBeenCalledWith(
+        { terminalIds: ["t-trash", "t-bg"], location: "all" },
+        PROJECT.id
+      );
+      expect(
+        (result as { result: { terminals: Array<{ terminalId: string }> } }).result.terminals.map(
+          (t) => t.terminalId
+        )
+      ).toEqual(["t-trash", "t-bg"]);
+    });
+
+    it.each(["terminal.list", "terminal.getStatus"])(
+      "refuses a location %s doesn't know",
+      async (actionId) => {
+        const { deps } = fleet();
+
+        const result = await executeViewlessAction(request(actionId, { location: "bogus" }), deps);
+
+        expect(result).toMatchObject({ ok: false, error: { code: "VALIDATION_ERROR" } });
+      }
+    );
+
     it("answers an empty fleet with no terminals rather than an error", async () => {
       const { deps, readTerminalStatus } = fleet();
 

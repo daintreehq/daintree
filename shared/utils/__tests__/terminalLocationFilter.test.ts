@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchesTerminalLocationFilter } from "../terminalLocationFilter";
+import { matchesTerminalLocationFilter } from "../terminalLocationFilter.js";
 
 const PLACES = ["grid", "dock", "overlay", "trash", "background", undefined] as const;
 

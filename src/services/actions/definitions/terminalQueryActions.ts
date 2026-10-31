@@ -92,7 +92,7 @@ export function registerTerminalQueryActions(
         location: z
           .enum(TERMINAL_LOCATION_FILTERS)
           .optional()
-          .describe('Only this location, or "all". Omitted, trash and background are excluded.'),
+          .describe("Omit to skip trash and background; `all` includes them."),
         owned: z
           .boolean()
           .optional()
@@ -276,7 +276,7 @@ export function registerTerminalQueryActions(
         location: z
           .enum(TERMINAL_LOCATION_FILTERS)
           .optional()
-          .describe('Filter by location, or "all". Omitted, trash and background are excluded.'),
+          .describe("Omit to skip trash and background; `all` includes them."),
         submissionToken: z
           .string()
           .min(1)

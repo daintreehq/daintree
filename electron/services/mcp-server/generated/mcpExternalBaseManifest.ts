@@ -1510,7 +1510,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
         },
         location: {
-          description: 'Filter by location, or "all". Omitted, trash and background are excluded.',
+          description: "Omit to skip trash and background; `all` includes them.",
           type: "string",
           enum: ["grid", "dock", "trash", "background", "all"],
         },
@@ -1847,7 +1847,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
         },
         location: {
-          description: 'Only this location, or "all". Omitted, trash and background are excluded.',
+          description: "Omit to skip trash and background; `all` includes them.",
           type: "string",
           enum: ["grid", "dock", "trash", "background", "all"],
         },

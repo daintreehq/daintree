@@ -1017,17 +1017,20 @@ describe("every location in one call (#15732)", () => {
     ]);
   });
 
-  it("terminal.getStatus with named terminals still ignores location", async () => {
-    seedEveryLocation();
+  it.each(["grid", "all"])(
+    "terminal.getStatus with named terminals still ignores location %s",
+    async (location) => {
+      seedEveryLocation();
 
-    const { terminals } = (await dispatch("terminal.getStatus", {
-      terminalIds: ["bg-c", "trash-d"],
-      location: "grid",
-    })) as { terminals: Array<{ terminalId: string; error?: string }> };
+      const { terminals } = (await dispatch("terminal.getStatus", {
+        terminalIds: ["bg-c", "trash-d"],
+        location,
+      })) as { terminals: Array<{ terminalId: string; error?: string }> };
 
-    expect(terminals.map((t) => [t.terminalId, t.error])).toEqual([
-      ["bg-c", undefined],
-      ["trash-d", undefined],
-    ]);
-  });
+      expect(terminals.map((t) => [t.terminalId, t.error])).toEqual([
+        ["bg-c", undefined],
+        ["trash-d", undefined],
+      ]);
+    }
+  );
 });
