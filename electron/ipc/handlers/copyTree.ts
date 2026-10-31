@@ -7,6 +7,11 @@ import { CHANNELS } from "../channels.js";
 import { ValidationError } from "../validationError.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
+  BRACKETED_PASTE_END,
+  BRACKETED_PASTE_START,
+  neutralizeControlCharacters,
+} from "../../../shared/utils/terminalInputProtocol.js";
+import {
   broadcastToRenderer,
   checkRateLimit,
   sendToRenderer,
@@ -806,6 +811,89 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     )
   );
 
+  const checkPasteDestination = async (terminalId: string): Promise<string | null> => {
+    const info = await deps.ptyClient!.getTerminalInfo(terminalId);
+    if (!info?.hasPty) return "Terminal no longer exists";
+    if (!info.detectedAgentId) {
+      return "Context can only be injected into a running agent, not a shell";
+    }
+    if (info.bracketedPasteMode !== true) {
+      return "The agent isn't accepting pasted text yet. Try again once its prompt is ready";
+    }
+    return null;
+  };
+
+  /**
+   * Stream `sources` into the terminal as ONE bracketed paste: the wrapper
+   * opens once, each surrogate-safe chunk is neutralised on its way out, and
+   * the wrapper closes after the last source. `formatWithBracketedPaste` does
+   * the same in one string; this payload is too large to hold twice or to
+   * write without a cancellation point.
+   *
+   * Once delivery stops — cancelled, terminal gone, a write that throws — no
+   * further body byte is written. The terminator is the one exception, so a
+   * terminal that is still alive is never left inside an open paste.
+   */
+  const writeBracketedPaste = async (
+    terminalId: string,
+    sources: string[],
+    isCancelled: () => boolean,
+    traceId: string
+  ): Promise<string | null> => {
+    const ptyClient = deps.ptyClient!;
+    const CHUNK_SIZE = 4096;
+    if (sources.every((source) => source.length === 0)) return null;
+    let opened = false;
+
+    const stop = (error: string): string => {
+      if (opened && ptyClient.hasTerminal(terminalId)) {
+        try {
+          ptyClient.write(terminalId, BRACKETED_PASTE_END, traceId);
+        } catch {
+          // The write that failed first is the error worth reporting.
+        }
+      }
+      return error;
+    };
+
+    try {
+      ptyClient.write(terminalId, BRACKETED_PASTE_START, traceId);
+      opened = true;
+      for (const source of sources) {
+        for (let i = 0; i < source.length; ) {
+          if (isCancelled()) {
+            console.log(`[${traceId}] CopyTree inject cancelled by user`);
+            return stop(INJECTION_CANCELLED);
+          }
+          if (!ptyClient.hasTerminal(terminalId)) {
+            return stop("Terminal closed during injection");
+          }
+          const end = nextChunkBoundary(source, i, CHUNK_SIZE);
+          // Neutralising maps each code unit to one code unit, so a chunk cut
+          // on a surrogate boundary stays cut on one.
+          const chunk = neutralizeControlCharacters(source.slice(i, end), {
+            insideBracketedPaste: true,
+          });
+          ptyClient.write(terminalId, chunk, traceId);
+          i = end;
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+      }
+    } catch (error) {
+      return stop(`Failed to write context to the terminal: ${formatErrorMessage(error, "unknown error")}`);
+    }
+
+    if (!ptyClient.hasTerminal(terminalId)) {
+      return "Terminal closed during injection";
+    }
+    try {
+      ptyClient.write(terminalId, BRACKETED_PASTE_END, traceId);
+    } catch (error) {
+      return `Failed to write context to the terminal: ${formatErrorMessage(error, "unknown error")}`;
+    }
+    return null;
+  };
+
   const handleCopyTreeInject = async (
     ctx: IpcContext,
     payload: CopyTreeInjectPayload,
@@ -912,40 +1000,24 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
         return result;
       }
 
-      const remoteComputeBlock = buildRemoteComputeBlock(worktree);
-      const CHUNK_SIZE = 4096;
-
-      // Write directly over each source string rather than concatenating into a
-      // single (possibly multi-MB) buffer that would stay pinned alongside
-      // result.content across the whole setImmediate-yielding loop. The
-      // remoteComputeBlock — usually empty — is written as trailing chunks.
-      const writeChunked = async (source: string): Promise<string | null> => {
-        for (let i = 0; i < source.length;) {
-          if (contextInjectionTracker.isCancelled(injectionId)) {
-            console.log(`[${traceId}] CopyTree inject cancelled by user`);
-            return INJECTION_CANCELLED;
-          }
-
-          if (!deps.ptyClient!.hasTerminal(validated.terminalId)) {
-            return "Terminal closed during injection";
-          }
-
-          const end = nextChunkBoundary(source, i, CHUNK_SIZE);
-          const chunk = source.slice(i, end);
-          deps.ptyClient!.write(validated.terminalId, chunk, traceId);
-          i = end;
-          if (i < source.length) {
-            await new Promise((resolve) => setImmediate(resolve));
-          }
-        }
-        return null;
-      };
-
-      let injectError = await writeChunked(result.content);
-      if (!injectError && remoteComputeBlock) {
-        await new Promise((resolve) => setImmediate(resolve));
-        injectError = await writeChunked(remoteComputeBlock);
+      // Admitted only now, against what the host has parsed since generation
+      // started: the bundle is written as one bracketed paste, which a shell's
+      // line editor would still leave as a multi-megabyte draft, and a program
+      // with bracketed paste off reads every newline in it as Enter.
+      const refusal = await checkPasteDestination(validated.terminalId);
+      if (refusal) {
+        return { content: "", fileCount: 0, error: refusal };
       }
+      if (contextInjectionTracker.isCancelled(injectionId)) {
+        return { content: "", fileCount: 0, error: INJECTION_CANCELLED };
+      }
+
+      const injectError = await writeBracketedPaste(
+        validated.terminalId,
+        [result.content, buildRemoteComputeBlock(worktree)],
+        () => contextInjectionTracker.isCancelled(injectionId),
+        traceId
+      );
       if (injectError) {
         return { content: "", fileCount: 0, error: injectError };
       }

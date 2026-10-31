@@ -188,7 +188,13 @@ export type WorkerToHostMessage =
   | { type: "waiting-timeout"; terminalId: string; spawnedAt: number }
   | { type: "boot-complete"; terminalId: string; spawnedAt: number; timestamp: number }
   | { type: "pty-response"; terminalId: string; data: string }
-  | { type: "viewport"; terminalId: string; lines: string[]; cursorLine: string | null }
+  | {
+      type: "viewport";
+      terminalId: string;
+      lines: string[];
+      cursorLine: string | null;
+      bracketedPasteMode: boolean;
+    }
   | {
       type: "response";
       requestId: number;

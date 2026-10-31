@@ -932,3 +932,20 @@ describe("TerminalProcess write-error throttle", () => {
     expect(errorLogs()).toHaveLength(0);
   });
 });
+
+describe("TerminalProcess in-thread bracketed paste (#15629)", () => {
+  it("reports the mode its own mirror parsed from the output", async () => {
+    ptyOnDataCallback = null;
+    const terminal = createTerminal();
+    expect(terminal.isBracketedPasteMode()).toBe(false);
+
+    ptyOnDataCallback!("\x1b[?2004h❯ ");
+    await vi.waitFor(() => expect(terminal.isBracketedPasteMode()).toBe(true));
+
+    ptyOnDataCallback!("\x1b[?2004l$ ");
+    await vi.waitFor(() => expect(terminal.isBracketedPasteMode()).toBe(false));
+
+    terminal.dispose();
+    expect(terminal.isBracketedPasteMode()).toBe(false);
+  });
+});

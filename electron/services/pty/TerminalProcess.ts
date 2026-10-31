@@ -1166,6 +1166,10 @@ export class TerminalProcess {
     return this.analysis.observedSince();
   }
 
+  isBracketedPasteMode(): boolean {
+    return this.analysis.isBracketedPasteMode();
+  }
+
   /**
    * Stage `text` into the terminal's input WITHOUT submitting it — the no-Enter
    * counterpart to {@link submit}. Reuses the same bracketed-paste / soft-newline

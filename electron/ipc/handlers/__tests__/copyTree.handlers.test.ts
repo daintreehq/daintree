@@ -120,6 +120,9 @@ function getInvokeHandler(channel: string): (...args: unknown[]) => Promise<unkn
   return call[1] as (...args: unknown[]) => Promise<unknown>;
 }
 
+/** What the host reports for an agent whose prompt takes a bracketed paste. */
+const PASTE_READY_AGENT = { hasPty: true, detectedAgentId: "claude", bracketedPasteMode: true };
+
 describe("copyTree handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -482,6 +485,7 @@ describe("copyTree handlers", () => {
         ptyClient: {
           hasTerminal: vi.fn(() => true),
           isAssistantTerminal: vi.fn(() => false),
+          getTerminalInfo: vi.fn(async () => PASTE_READY_AGENT),
           write: vi.fn(),
         },
         worktreeService: {
@@ -902,6 +906,7 @@ describe("file-backed generation", () => {
       ptyClient: {
         hasTerminal: vi.fn(() => true),
         isAssistantTerminal: vi.fn(() => false),
+        getTerminalInfo: vi.fn(async () => PASTE_READY_AGENT),
         write: vi.fn(),
       },
       worktreeService: {
@@ -1570,6 +1575,7 @@ describe("copy-tree run history recording", () => {
   let ptyClient: {
     hasTerminal: ReturnType<typeof vi.fn>;
     isAssistantTerminal: ReturnType<typeof vi.fn>;
+    getTerminalInfo: ReturnType<typeof vi.fn>;
     write: ReturnType<typeof vi.fn>;
   };
 
@@ -1601,6 +1607,7 @@ describe("copy-tree run history recording", () => {
     ptyClient = {
       hasTerminal: vi.fn(() => hasTerminal),
       isAssistantTerminal: vi.fn(() => isAssistantTerminal),
+      getTerminalInfo: vi.fn(async () => (hasTerminal ? PASTE_READY_AGENT : null)),
       write: vi.fn(),
     };
     registerCopyTreeHandlers({
@@ -1832,7 +1839,8 @@ describe("copy-tree run history recording", () => {
 
     expect(result).toMatchObject({ fileCount: 12 });
     expect(result).not.toHaveProperty("error");
-    expect(ptyClient.write).toHaveBeenCalledWith("t-1", "<files/>", expect.any(String));
+    const written = ptyClient.write.mock.calls.map(([, data]) => data).join("");
+    expect(written).toBe("\x1b[200~<files/>\x1b[201~");
   });
 
   it("does not record a rejected payload", async () => {
@@ -2032,5 +2040,252 @@ describe("copyTree generate-and-copy-file — workspace root (#13210)", () => {
     );
     await (call![1] as (...args: unknown[]) => Promise<void>)(sender, {});
     expect(rootCopyMock.cancelAllWorkspaceRootContext).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("context injection paste boundary (#15629)", () => {
+  const PROJECT_ID = "f0e1d2c3".repeat(8);
+  const PASTE_START = "\x1b[200~";
+  const PASTE_END = "\x1b[201~";
+
+  let writes: string[];
+  let ptyClient: {
+    hasTerminal: ReturnType<typeof vi.fn>;
+    isAssistantTerminal: ReturnType<typeof vi.fn>;
+    getTerminalInfo: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+  };
+
+  function register(content: string, worktree: Record<string, unknown> = {}) {
+    browserWindowMock.fromWebContents.mockReturnValue({ id: 7, isDestroyed: () => false });
+    ipcMainMock.handle.mockClear();
+    writes = [];
+    ptyClient = {
+      hasTerminal: vi.fn(() => true),
+      isAssistantTerminal: vi.fn(() => false),
+      getTerminalInfo: vi.fn(async () => PASTE_READY_AGENT),
+      write: vi.fn((_id: string, data: string) => {
+        writes.push(data);
+      }),
+    };
+    const generateContext = vi.fn(async () => ({ content, fileCount: 3 }));
+    registerCopyTreeHandlers({
+      mainWindow: {
+        isDestroyed: () => false,
+        webContents: { isDestroyed: () => false, send: vi.fn() },
+      },
+      ptyClient,
+      worktreeService: {
+        getAllStatesForProjectAsync: vi.fn(async () => [
+          { id: "wt-1", path: "/repos/daintree", branch: "main", ...worktree },
+        ]),
+        generateContext,
+        testConfig: vi.fn(),
+        getContextFileTree: vi.fn(),
+      },
+    } as never);
+    return generateContext;
+  }
+
+  function inject(payload: Record<string, unknown> = {}) {
+    return getInvokeHandler(CHANNELS.COPYTREE_INJECT)(mockSender, {
+      terminalId: "t-1",
+      worktreeId: "wt-1",
+      ...payload,
+    }) as Promise<{ fileCount: number; error?: string }>;
+  }
+
+  function cancel(injectionId: string) {
+    return getInvokeHandler(CHANNELS.COPYTREE_CANCEL)(mockSender, { injectionId });
+  }
+
+  function count(haystack: string, needle: string): number {
+    return haystack.split(needle).length - 1;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetRateLimitQueuesForTest();
+    copyTreeHistoryMock.recordCopyTreeRun.mockReset().mockResolvedValue(undefined);
+    projectStoreMock.getCurrentProjectId.mockReturnValue(PROJECT_ID);
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: PROJECT_ID,
+      path: "/repos/daintree",
+      status: "active",
+    });
+    projectStoreMock.getProjectSettings.mockReset();
+  });
+
+  it("delivers an XML bundle as one bracketed paste with nothing outside the wrapper", async () => {
+    const bundle = '<file path="build.sh">\nrm -rf dist\nmake all\n</file>\n';
+    register(bundle);
+
+    const result = await inject();
+
+    expect(result).not.toHaveProperty("error");
+    const written = writes.join("");
+    expect(written).toBe(`${PASTE_START}${bundle}${PASTE_END}`);
+  });
+
+  it("turns control bytes in a Markdown bundle into visible text", async () => {
+    const bundle = "## notes.txt\n\n```\nbefore\x1b[201~after\x03 rest\x7f\x1b[2J\r\n```\n";
+    register(bundle);
+
+    const result = await inject({ options: { format: "markdown" } });
+
+    expect(result).not.toHaveProperty("error");
+    const written = writes.join("");
+    expect(written.startsWith(PASTE_START)).toBe(true);
+    expect(written.endsWith(PASTE_END)).toBe(true);
+    expect(count(written, PASTE_START)).toBe(1);
+    expect(count(written, PASTE_END)).toBe(1);
+    const body = written.slice(PASTE_START.length, -PASTE_END.length);
+    // eslint-disable-next-line no-control-regex -- asserting the absence of control bytes
+    expect(body).not.toMatch(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/);
+    expect(body).toContain("before␛[201~after␃ rest␡␛[2J");
+  });
+
+  it("keeps the remote-compute block inside the same paste", async () => {
+    register("<files/>\n", {
+      resourceStatus: { lastStatus: "ready", endpoint: "10.0.0.5:22", provider: "acme" },
+      resourceConnectCommand: "ssh dev@10.0.0.5",
+    });
+
+    await inject();
+
+    const written = writes.join("");
+    expect(count(written, PASTE_START)).toBe(1);
+    expect(count(written, PASTE_END)).toBe(1);
+    expect(written.startsWith(`${PASTE_START}<files/>\n`)).toBe(true);
+    expect(written.endsWith(PASTE_END)).toBe(true);
+    expect(written).toContain("ssh dev@10.0.0.5");
+  });
+
+  it("closes the paste and writes no more of the bundle once cancelled between chunks", async () => {
+    const bundle = `${"a".repeat(5000)}\n${"b".repeat(5000)}\n${"c".repeat(5000)}\n`;
+    register(bundle);
+    ptyClient.write.mockImplementation((_id: string, data: string) => {
+      writes.push(data);
+      if (writes.length === 2) void cancel("inj-1");
+    });
+
+    const result = await inject({ injectionId: "inj-1" });
+
+    expect(result.error).toBeTruthy();
+    expect(result.fileCount).toBe(0);
+    const written = writes.join("");
+    expect(written.startsWith(PASTE_START)).toBe(true);
+    expect(written.endsWith(PASTE_END)).toBe(true);
+    expect(count(written, PASTE_END)).toBe(1);
+    const delivered = written.slice(PASTE_START.length, -PASTE_END.length);
+    expect(delivered.length).toBeLessThan(bundle.length);
+    expect(bundle.startsWith(delivered)).toBe(true);
+    expect(copyTreeHistoryMock.recordCopyTreeRun).not.toHaveBeenCalled();
+  });
+
+  it("writes nothing more once the terminal exits mid-delivery", async () => {
+    const bundle = "x".repeat(12_000);
+    register(bundle);
+    ptyClient.write.mockImplementation((_id: string, data: string) => {
+      writes.push(data);
+      if (writes.length === 2) ptyClient.hasTerminal.mockReturnValue(false);
+    });
+
+    const result = await inject();
+
+    expect(result.error).toBeTruthy();
+    expect(writes.join("")).not.toContain(PASTE_END);
+    expect(bundle.startsWith(writes.join("").slice(PASTE_START.length))).toBe(true);
+  });
+
+  it("keeps surrogate pairs whole across chunk boundaries", async () => {
+    const bundle = `${"a".repeat(4095)}😀${"b".repeat(10)}`;
+    register(bundle);
+
+    await inject();
+
+    for (const chunk of writes) {
+      const last = chunk.charCodeAt(chunk.length - 1);
+      expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
+    }
+    expect(writes.join("")).toBe(`${PASTE_START}${bundle}${PASTE_END}`);
+  });
+  it.each([
+    ["a shell", { hasPty: true, bracketedPasteMode: true }, "not a shell"],
+    [
+      "an agent with bracketed paste off",
+      { hasPty: true, detectedAgentId: "claude", bracketedPasteMode: false },
+      "accepting pasted text",
+    ],
+    ["an agent the host has no mode for", { hasPty: true, detectedAgentId: "claude" }, "accepting"],
+    ["an exited terminal", { hasPty: false, detectedAgentId: "claude" }, "no longer exists"],
+    ["a terminal the host doesn't know", null, "no longer exists"],
+  ])("refuses %s without writing a byte", async (_label, info, message) => {
+    register('<file path="run.sh">\nrm -rf ~/work\n</file>\n');
+    ptyClient.getTerminalInfo.mockResolvedValue(info);
+
+    const result = await inject();
+
+    expect(result.error).toContain(message);
+    expect(result.fileCount).toBe(0);
+    expect(ptyClient.write).not.toHaveBeenCalled();
+    expect(copyTreeHistoryMock.recordCopyTreeRun).not.toHaveBeenCalled();
+  });
+
+  it("judges the destination after generation, when the agent may have exited", async () => {
+    const generateContext = register("<files/>\n");
+    generateContext.mockImplementation(async () => {
+      ptyClient.getTerminalInfo.mockResolvedValue({ hasPty: true, bracketedPasteMode: false });
+      return { content: "<files/>\n", fileCount: 3 };
+    });
+
+    const result = await inject();
+
+    expect(result.error).toBeTruthy();
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
+  it("writes nothing when cancelled while the destination is being checked", async () => {
+    register("<files/>\n");
+    ptyClient.getTerminalInfo.mockImplementation(async () => {
+      await cancel("inj-2");
+      return PASTE_READY_AGENT;
+    });
+
+    const result = await inject({ injectionId: "inj-2" });
+
+    expect(result.error).toBe("Injection cancelled");
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
+  it("drops the remote-compute block when cancelled after the last bundle chunk", async () => {
+    register("x".repeat(100), {
+      resourceStatus: { lastStatus: "ready", endpoint: "10.0.0.5:22", provider: "acme" },
+      resourceConnectCommand: "ssh dev@10.0.0.5",
+    });
+    ptyClient.write.mockImplementation((_id: string, data: string) => {
+      writes.push(data);
+      if (data.startsWith("x")) void cancel("inj-3");
+    });
+
+    const result = await inject({ injectionId: "inj-3" });
+
+    expect(result.error).toBe("Injection cancelled");
+    expect(writes).toEqual([PASTE_START, "x".repeat(100), PASTE_END]);
+  });
+
+  it("stops at a write that throws, closes the paste once, and reports the failure", async () => {
+    register("y".repeat(12_000));
+    ptyClient.write.mockImplementation((_id: string, data: string) => {
+      writes.push(data);
+      if (writes.length === 2) throw new Error("host gone");
+    });
+
+    const result = await inject();
+
+    expect(result.error).toContain("host gone");
+    expect(writes).toHaveLength(3);
+    expect(writes[2]).toBe(PASTE_END);
+    expect(copyTreeHistoryMock.recordCopyTreeRun).not.toHaveBeenCalled();
   });
 });

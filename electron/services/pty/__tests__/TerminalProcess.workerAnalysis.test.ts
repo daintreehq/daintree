@@ -269,6 +269,7 @@ describe("TerminalProcess worker-mode output progress (#12428)", () => {
     terminalId: "t1",
     lines,
     cursorLine: null,
+    bracketedPasteMode: false,
   });
 
   it("stamps the record from the worker's viewport digest", () => {
@@ -305,5 +306,36 @@ describe("TerminalProcess worker-mode output progress (#12428)", () => {
     worker.emit("message", viewport(["a line long", "enough to wrap"]));
 
     expect(terminal.getPublicState().lastOutputChangeAt).toBe(10_000);
+  });
+});
+
+describe("TerminalProcess worker-mode bracketed paste (#15629)", () => {
+  const viewport = (bracketedPasteMode: boolean): WorkerToHostMessage => ({
+    type: "viewport",
+    terminalId: "t1",
+    lines: ["❯ "],
+    cursorLine: "❯ ",
+    bracketedPasteMode,
+  });
+
+  it("reports the mode the worker's mirror last parsed", () => {
+    const { terminal, worker } = createWorkerModeTerminal();
+    expect(terminal.isBracketedPasteMode()).toBe(false);
+
+    worker.emit("message", viewport(true));
+    expect(terminal.isBracketedPasteMode()).toBe(true);
+
+    worker.emit("message", viewport(false));
+    expect(terminal.isBracketedPasteMode()).toBe(false);
+    terminal.dispose();
+  });
+
+  it("forgets the mode once the analysis slot is released", () => {
+    const { terminal, worker } = createWorkerModeTerminal();
+    worker.emit("message", viewport(true));
+
+    terminal.dispose();
+
+    expect(terminal.isBracketedPasteMode()).toBe(false);
   });
 });

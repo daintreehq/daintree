@@ -646,6 +646,7 @@ export class AnalysisSession {
         terminalId: this.terminalId,
         lines: readViewportNonEmptyLines(this.headlessTerminal),
         cursorLine: readCursorLine(this.headlessTerminal),
+        bracketedPasteMode: this.headlessTerminal.modes.bracketedPasteMode,
       });
     }, VIEWPORT_DIGEST_THROTTLE_MS);
     this.digestTimer.unref?.();

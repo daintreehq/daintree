@@ -119,6 +119,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   private continuousSince = Date.now();
   private viewportLines: string[] = [];
   private cursorLine: string | null = null;
+  private bracketedPasteMode = false;
   private monitorSpec: MonitorStartOptions | null = null;
   private pollingIntervalMs: number | undefined;
   private lastCols: number;
@@ -446,6 +447,10 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     return this.cursorLine;
   }
 
+  isBracketedPasteMode(): boolean {
+    return !this.inactive() && this.bracketedPasteMode;
+  }
+
   async serialize(options?: SerializeReadOptions): Promise<SerializedTerminalSnapshot | null> {
     if (this.inactive()) return null;
     const flushed = this.flushHeldFeed();
@@ -523,6 +528,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
       case "viewport":
         this.viewportLines = msg.lines;
         this.cursorLine = msg.cursorLine;
+        this.bracketedPasteMode = msg.bracketedPasteMode;
         this.delegate.onViewport(msg.lines);
         return;
       default:
@@ -592,6 +598,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     this.heldFeed = null;
     this.viewportLines = [];
     this.cursorLine = null;
+    this.bracketedPasteMode = false;
     this.persistSuppressed = true;
     // The old mirror is gone, so its last reported grid says nothing about the
     // replacement; the `create` below carries the geometry instead, and a
