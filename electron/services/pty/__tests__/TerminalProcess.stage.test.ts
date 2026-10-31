@@ -275,13 +275,18 @@ describe("TerminalProcess.stage and the submit lane (#15554)", () => {
     const terminal = createAgentTerminal("claude");
     info(terminal).detectedAgentId = undefined;
 
-    terminal.submit("first prompt");
+    terminal.submit("first prompt", "tok-first");
     terminal.stage(DRAFT);
+    expect(writes()).toEqual(["first prompt"]);
     info(terminal).detectedAgentId = "claude";
 
     await vi.advanceTimersByTimeAsync(3_000);
 
-    expect(writes()).toEqual(["first prompt", "\r", DRAFT]);
+    // The submission's body went out before detection, when the shell may still
+    // have read it, so it loses its Enter (#15553). The draft is written only
+    // once the launched agent is known to own the pty.
+    expect(writes()).toEqual(["first prompt", DRAFT]);
+    expect(terminal.getSubmission("tok-first")).toMatchObject({ phase: "cancelled" });
   });
 
   it("keeps a deferred multi-line draft inside one bracketed paste with no Enter after it", async () => {
