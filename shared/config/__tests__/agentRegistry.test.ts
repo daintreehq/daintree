@@ -1266,12 +1266,14 @@ describe("claude providerTemplates endpoints and credentials", () => {
   // Each provider's published Claude Code setup: the Messages endpoint it
   // serves, the token it documents (blank for the user's key, or a local
   // placeholder), and whether its guide blanks an inherited ANTHROPIC_API_KEY.
-  it.each([
+  const documented = [
     ["zai", "https://api.z.ai/api/anthropic/v1/messages", "", undefined],
     ["openrouter", "https://openrouter.ai/api/v1/messages", "", ""],
     ["deepseek", "https://api.deepseek.com/anthropic/v1/messages", "", undefined],
     ["ollama", "http://localhost:11434/v1/messages", "ollama", ""],
-  ] as const)(
+  ] as const;
+
+  it.each(documented)(
     "%s follows its provider's documented Claude Code setup",
     (id, endpoint, authToken, apiKey) => {
       const env = templates.find((t) => t.id === id)?.env ?? {};
@@ -1281,6 +1283,12 @@ describe("claude providerTemplates endpoints and credentials", () => {
       expect(env.ANTHROPIC_API_KEY).toBe(apiKey);
     }
   );
+
+  // Exhaustive, so a new routed template (and any local placeholder token it
+  // carries) can't ship without its provider's setup pinned above.
+  it("pins a documented setup for every routed template", () => {
+    expect(routed.map((t) => t.id).sort()).toEqual(documented.map(([id]) => id).sort());
+  });
 
   it("never points a routed template at a /v1 base", () => {
     expect(routed.length).toBeGreaterThan(0);
