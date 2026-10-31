@@ -154,6 +154,7 @@ function pushPreview(overrides: Partial<GitPushCommitPreview> = {}): GitPushComm
     commits: [],
     total: 0,
     behind: 0,
+    headOid: "0".repeat(40),
     ...overrides,
   };
 }
