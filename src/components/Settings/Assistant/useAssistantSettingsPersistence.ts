@@ -4,8 +4,9 @@ import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { HelpAssistantSettings } from "@shared/types";
 import { useSettingsTabValidation } from "../SettingsValidationRegistry";
-import { useSettingsTabFlush } from "../SettingsFlushRegistry";
+import { useSettingsTabFlush, type SettingsFlushFailure } from "../SettingsFlushRegistry";
 import {
+  ASSISTANT_LAUNCH_SECTION_ID,
   DEFAULT_SETTINGS,
   applySettingsPatch,
   revertSettingsPatch,
@@ -14,6 +15,16 @@ import {
 } from "./assistantSettingsModel";
 
 const CUSTOM_ARGS_DEBOUNCE_MS = 500;
+
+export interface CustomArgsFailure {
+  value: string;
+  message: string;
+}
+
+interface CustomArgsSave {
+  value: string;
+  promise: Promise<boolean>;
+}
 
 export interface McpStatusSnapshot {
   enabled: boolean;
@@ -32,21 +43,35 @@ export function useAssistantSettingsPersistence() {
   const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
 
   // customArgs is a free-form text input; persisting on every keystroke would
-  // spam IPC. We track a pending edit alongside the persisted value: when the
-  // pending value is null the input mirrors `settings.customArgs` directly
-  // (no extra render round-trip on initial load), and when non-null it holds
-  // the user's in-flight edit until the debounced persist catches up. A flush
-  // hook captures the pending value before dialog dismissal (#7260).
+  // spam IPC. The typed draft lives in `pendingCustomArgs` (null mirrors the
+  // saved value) and only becomes `settings.customArgs` once main has stored
+  // it, so a value main refuses stays in the field with its reason instead of
+  // reading as saved (#15576). Saves run one at a time in the order they were
+  // asked for, so an older response never lands on top of a newer one, and a
+  // flush catches the draft before the dialog dismisses (#7260).
   const [pendingCustomArgs, setPendingCustomArgs] = useState<string | null>(null);
+  const [customArgsFailure, setCustomArgsFailure] = useState<CustomArgsFailure | null>(null);
+  const [customArgsSavesInFlight, setCustomArgsSavesInFlight] = useState(0);
   const debouncedPendingCustomArgs = useDebounce(pendingCustomArgs, CUSTOM_ARGS_DEBOUNCE_MS);
   const displayedCustomArgs = pendingCustomArgs ?? settings.customArgs;
   const isCustomArgsDirty = pendingCustomArgs !== null && pendingCustomArgs !== settings.customArgs;
-  const pendingCustomArgsRef = useRef(pendingCustomArgs);
-  useEffect(() => {
-    pendingCustomArgsRef.current = pendingCustomArgs;
-  }, [pendingCustomArgs]);
+  // A failure only speaks for the text it was about; typing past it clears the message.
+  const customArgsError =
+    pendingCustomArgs !== null && customArgsFailure?.value === pendingCustomArgs
+      ? customArgsFailure.message
+      : null;
 
-  useSettingsTabValidation("assistant", Boolean(loadError || saveFailure));
+  // Saves and the close flush read these after an await, so they're written
+  // alongside the state rather than mirrored after a render.
+  const pendingCustomArgsRef = useRef<string | null>(null);
+  const savedCustomArgsRef = useRef(DEFAULT_SETTINGS.customArgs);
+  const customArgsFailureRef = useRef<CustomArgsFailure | null>(null);
+  const customArgsSaveRef = useRef<CustomArgsSave | null>(null);
+  // Each value is sent once: a refused one would otherwise re-fire the debounced
+  // save and retry in a loop. Retry lives on the error banner instead.
+  const lastAttemptedCustomArgsRef = useRef<string | null>(null);
+
+  useSettingsTabValidation("assistant", Boolean(loadError || saveFailure || customArgsError));
 
   useEffect(() => {
     let cancelled = false;
@@ -73,6 +98,7 @@ export function useAssistantSettingsPersistence() {
       .getSettings()
       .then((s) => {
         if (cancelled) return;
+        savedCustomArgsRef.current = s.customArgs;
         setSettings(s);
       })
       .catch((err) => {
@@ -123,43 +149,111 @@ export function useAssistantSettingsPersistence() {
     [settings]
   );
 
-  // Persist the pending value once the debounce settles. Skipped when pending
-  // matches what's already persisted (e.g., user typed and undid, or the
-  // value just landed via the optimistic update inside `persist`).
-  // Each settled value is attempted once: a rejected save rolls settings.customArgs
-  // back, which would otherwise re-fire this effect and retry in a loop. Retry
-  // lives on the group's error banner instead.
-  const lastAttemptedCustomArgsRef = useRef<string | null>(null);
+  const editCustomArgs = useCallback((value: string | null) => {
+    pendingCustomArgsRef.current = value;
+    setPendingCustomArgs(value);
+  }, []);
+
+  // Resolves with whether main stored the value; never rejects. A request for
+  // the value already queued last joins it instead of sending it twice.
+  const saveCustomArgs = useCallback(
+    (value: string): Promise<boolean> => {
+      const previous = customArgsSaveRef.current;
+      if (previous?.value === value) return previous.promise;
+      lastAttemptedCustomArgsRef.current = value;
+      setCustomArgsSavesInFlight((count) => count + 1);
+      const send = async (): Promise<boolean> => {
+        if (previous) await previous.promise;
+        try {
+          await window.electron.helpAssistant.setSettings({ customArgs: value });
+        } catch (err) {
+          const failure = {
+            value,
+            message: formatErrorMessage(err, "Couldn't save custom CLI args"),
+          };
+          customArgsFailureRef.current = failure;
+          setCustomArgsFailure(failure);
+          logError("Failed to save Daintree Assistant custom CLI args", err);
+          return false;
+        }
+        savedCustomArgsRef.current = value;
+        customArgsFailureRef.current = null;
+        setCustomArgsFailure(null);
+        setSettings((current) => ({ ...current, customArgs: value }));
+        // Text typed since this save started stays in the field for its own save.
+        if (pendingCustomArgsRef.current === value) editCustomArgs(null);
+        return true;
+      };
+      const save: CustomArgsSave = { value, promise: send() };
+      customArgsSaveRef.current = save;
+      void save.promise.finally(() => {
+        if (customArgsSaveRef.current === save) customArgsSaveRef.current = null;
+        setCustomArgsSavesInFlight((count) => count - 1);
+      });
+      return save.promise;
+    },
+    [editCustomArgs]
+  );
+
+  // Persist the draft once the debounce settles. While a save is running it
+  // decides what's stored, so this waits and re-runs once it settles: a draft
+  // typed back to the stored value mid-save still has to be sent.
   useEffect(() => {
     if (debouncedPendingCustomArgs === null) {
       lastAttemptedCustomArgsRef.current = null;
       return;
     }
+    if (customArgsSavesInFlight > 0) return;
+    if (debouncedPendingCustomArgs !== pendingCustomArgsRef.current) return;
     if (debouncedPendingCustomArgs === lastAttemptedCustomArgsRef.current) return;
-    if (debouncedPendingCustomArgs !== settings.customArgs) {
-      lastAttemptedCustomArgsRef.current = debouncedPendingCustomArgs;
-      void persist({ customArgs: debouncedPendingCustomArgs });
-    }
-  }, [debouncedPendingCustomArgs, settings.customArgs, persist]);
+    if (debouncedPendingCustomArgs === settings.customArgs) return;
+    void saveCustomArgs(debouncedPendingCustomArgs);
+  }, [debouncedPendingCustomArgs, settings.customArgs, customArgsSavesInFlight, saveCustomArgs]);
 
-  // Once the persisted value catches up, clear the pending flag so the input
-  // resumes mirroring `settings.customArgs` directly.
+  // A draft typed back to the stored value lets the input mirror it again, but
+  // only once nothing is in flight that could still move the stored value.
   useEffect(() => {
+    if (customArgsSavesInFlight > 0) return;
     if (pendingCustomArgs !== null && pendingCustomArgs === settings.customArgs) {
-      setPendingCustomArgs(null);
+      editCustomArgs(null);
     }
-  }, [pendingCustomArgs, settings.customArgs]);
+  }, [pendingCustomArgs, settings.customArgs, customArgsSavesInFlight, editCustomArgs]);
 
-  // Pre-close flush bypasses the debounce so closing the dialog mid-edit
-  // still captures the in-flight value.
+  const resetCustomArgs = () => {
+    const value = DEFAULT_SETTINGS.customArgs;
+    editCustomArgs(value);
+    if (!customArgsSaveRef.current && savedCustomArgsRef.current === value) return;
+    void saveCustomArgs(value);
+  };
+
+  const retryCustomArgs = () => {
+    const draft = pendingCustomArgsRef.current;
+    if (draft !== null) void saveCustomArgs(draft);
+  };
+
+  // A close reports the draft's real outcome: it waits out any save in flight,
+  // sends a draft not yet tried (bypassing the debounce), and holds the dialog
+  // on Launch options while the field's text isn't what main has stored.
+  const flushCustomArgs = async (): Promise<SettingsFlushFailure | undefined> => {
+    for (;;) {
+      const running = customArgsSaveRef.current;
+      if (running) {
+        await running.promise;
+        continue;
+      }
+      const draft = pendingCustomArgsRef.current;
+      if (draft === null || draft === savedCustomArgsRef.current) return undefined;
+      if (customArgsFailureRef.current?.value === draft) {
+        return { landOn: ASSISTANT_LAUNCH_SECTION_ID };
+      }
+      await saveCustomArgs(draft);
+    }
+  };
+
   useSettingsTabFlush(
     "assistant",
-    () => {
-      const pending = pendingCustomArgsRef.current;
-      if (pending === null) return;
-      return persist({ customArgs: pending });
-    },
-    isCustomArgsDirty
+    flushCustomArgs,
+    isCustomArgsDirty || customArgsSavesInFlight > 0
   );
 
   // Rotation replaces only the fetched key; a snapshot that never loaded stays empty.
@@ -182,6 +276,7 @@ export function useAssistantSettingsPersistence() {
     window.electron.helpAssistant
       .getSettings()
       .then((s) => {
+        savedCustomArgsRef.current = s.customArgs;
         setSettings(s);
         setLoadError(null);
       })
@@ -200,7 +295,10 @@ export function useAssistantSettingsPersistence() {
     saveFailure,
     persist,
     displayedCustomArgs,
-    setPendingCustomArgs,
+    editCustomArgs,
+    resetCustomArgs,
+    customArgsError,
+    retryCustomArgs,
     mcpStatus,
     retryMcpStatus,
     updateApiKey,
