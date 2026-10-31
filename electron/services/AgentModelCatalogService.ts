@@ -362,14 +362,16 @@ export class AgentModelCatalogService {
     const fetched = await this.fetchRemote();
     if (fetched) {
       this.memCache = { data: fetched.parsed, fetchedAt: fetched.fetchedAt, complete: true };
-      // Best-effort persist; never block the resolver on a write failure.
-      void this.writeDisk({
-        fetchedAt: fetched.fetchedAt,
-        raw: fetched.persisted,
-        providers: PERSISTED_PROVIDER_KEYS,
-      }).catch((err) => {
-        console.warn("[AgentModelCatalogService] disk write failed", err);
-      });
+      if (fetched.persisted) {
+        // Best-effort persist; never block the resolver on a write failure.
+        void this.writeDisk({
+          fetchedAt: fetched.fetchedAt,
+          raw: fetched.persisted,
+          providers: PERSISTED_PROVIDER_KEYS,
+        }).catch((err) => {
+          console.warn("[AgentModelCatalogService] disk write failed", err);
+        });
+      }
       return fetched.parsed;
     }
 
@@ -385,8 +387,13 @@ export class AgentModelCatalogService {
 
   private async fetchRemote(): Promise<{
     parsed: ParsedCatalog;
-    /** The mapped providers out of the response, for the disk cache. */
-    persisted: Record<string, unknown>;
+    /**
+     * The mapped providers out of the response, for the disk cache, or null
+     * when one this build doesn't read is malformed: older builds validate
+     * every provider in the file, so writing it would cost them a usable
+     * stale cache.
+     */
+    persisted: Record<string, unknown> | null;
     fetchedAt: number;
   } | null> {
     const fetchImpl = this.deps.fetchImpl ?? (await getElectronNetFetch());
@@ -412,9 +419,10 @@ export class AgentModelCatalogService {
       }
       // Only the picked providers outlive this call; the full response is
       // garbage as soon as it returns.
+      const persisted = pickProviders(raw, PERSISTED_PROVIDER_KEYS);
       return {
         parsed: parsed.data,
-        persisted: pickProviders(raw, PERSISTED_PROVIDER_KEYS) ?? {},
+        persisted: persisted && CatalogSchema.safeParse(persisted).success ? persisted : null,
         fetchedAt: Date.now(),
       };
     } catch (err) {
@@ -642,7 +650,9 @@ function parseActiveProviders(
  */
 function coversActiveProviders(providers: unknown): boolean {
   if (providers === undefined) return true;
-  if (!Array.isArray(providers)) return false;
+  if (!Array.isArray(providers) || !providers.every((key) => typeof key === "string")) {
+    return false;
+  }
   return ACTIVE_PROVIDER_KEYS.every((key) => providers.includes(key));
 }
 

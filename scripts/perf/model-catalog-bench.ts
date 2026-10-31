@@ -11,9 +11,10 @@
 // "busy" is event-loop active time from performance.eventLoopUtilization(): the
 // synchronous Main-thread work, excluding time spent waiting on I/O.
 //
-// The oracle resolves every agent in PROVIDER_TO_AGENT_ID on the cold, stale and
-// warm paths. `--oracle-out` records it (run on the implementation being
-// replaced); `--oracle` compares against that record and exits 1 on a mismatch.
+// The oracle resolves every built-in agent on the cold, stale, warm and
+// offline-stale paths. `--oracle-out` records it (run on the implementation
+// being replaced); `--oracle` compares against that record and exits 1 on a
+// mismatch.
 import { createHash } from "node:crypto";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -29,6 +30,7 @@ import {
 } from "../../shared/config/agentRegistry.js";
 import { BUILT_IN_AGENT_IDS } from "../../shared/config/agentIds.js";
 import { armBystanderProbe } from "./lib/bystander.js";
+import { MODEL_CATALOG_CLASS } from "./config/benchmarkClasses.js";
 
 type Deps = NonNullable<ConstructorParameters<typeof AgentModelCatalogService>[0]>;
 type Resolved = Awaited<ReturnType<AgentModelCatalogService["getResolvedModels"]>>;
@@ -36,6 +38,13 @@ type Resolved = Awaited<ReturnType<AgentModelCatalogService["getResolvedModels"]
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(name);
   return i >= 0 ? process.argv[i + 1] : undefined;
+}
+
+const oracleOut = arg("--oracle-out");
+const oracleIn = arg("--oracle");
+if (oracleOut && oracleIn) {
+  console.error("--oracle-out and --oracle are exclusive: record on one tree, compare on another");
+  process.exit(2);
 }
 
 const runsArg = Number(arg("--runs"));
@@ -127,12 +136,25 @@ function entry(id: string, name: string, kind: Kind = "chat"): Record<string, un
   }
 }
 
-/** Mapped providers, carrying each mapped agent's bundled IDs so merges see real overlaps. */
+/**
+ * Mapped providers. Each carries its agent's bundled IDs, all but the first and
+ * in reverse, so merges see overlaps, a bundled-only ID, and a remote order that
+ * differs from the curated one. A planted chat model owns the context maximum,
+ * and a planted image model with a larger window must not.
+ */
 function mappedProvider(key: string, count: number): Record<string, unknown> {
   const agentId = PROVIDER_TO_AGENT_ID[key]!;
   const bundled = getEffectiveAgentConfig(agentId)?.models ?? [];
   const models: Record<string, unknown> = {};
-  for (const m of bundled) models[m.id] = entry(m.id, `${m.name} (models.dev)`);
+  for (const m of bundled.slice(1).reverse()) models[m.id] = entry(m.id, `${m.name} (models.dev)`);
+  models[`${key}-widest`] = {
+    ...entry(`${key}-widest`, "Widest Chat"),
+    limit: { context: 2_000_000 },
+  };
+  models[`${key}-image-wider`] = {
+    ...entry(`${key}-image-wider`, "Wider Image", "image"),
+    limit: { context: 9_000_000 },
+  };
   const kinds: Kind[] = [
     "chat",
     "chat",
@@ -195,11 +217,26 @@ function syntheticCatalog(): Record<string, unknown> {
   return catalog;
 }
 
+/**
+ * A supplied catalog: a profile's `models-catalog.json` or a bare models.dev
+ * payload. A cache an implementation already cut down would time a workload a
+ * fraction of the size the readings claim, so it is refused.
+ */
+function suppliedCatalog(file: string): object {
+  const parsed = JSON.parse(readFileSync(file, "utf-8")) as Record<string, unknown>;
+  if ("providers" in parsed) {
+    throw new Error(`${file} is a cut-down cache; pass a full models.dev payload or legacy cache`);
+  }
+  const catalog = "raw" in parsed && "fetchedAt" in parsed ? parsed.raw : parsed;
+  if (!catalog || typeof catalog !== "object") throw new Error(`${file} holds no catalog object`);
+  if (Buffer.byteLength(JSON.stringify(catalog)) < 1024 * 1024) {
+    throw new Error(`${file} is under 1 MB, not a full models.dev catalog`);
+  }
+  return catalog;
+}
+
 const catalogPath = arg("--catalog");
-const raw: unknown = catalogPath
-  ? (JSON.parse(readFileSync(catalogPath, "utf-8")) as { raw?: unknown }).raw
-  : syntheticCatalog();
-if (!raw || typeof raw !== "object") throw new Error("catalog has no `raw` object");
+const raw: object = catalogPath ? suppliedCatalog(catalogPath) : syntheticCatalog();
 const rawText = JSON.stringify(raw);
 const fixtureHash = createHash("sha256").update(rawText).digest("hex").slice(0, 16);
 const providerCount = Object.keys(raw).length;
@@ -275,8 +312,14 @@ const codexCli: Deps["execFileImpl"] = (async () => ({
   stderr: "",
 })) as unknown as Deps["execFileImpl"];
 
+// An absolute command keeps the Codex CLI lookup from needing `codex` installed.
 const service = (fetchImpl: Deps["fetchImpl"]) =>
-  new AgentModelCatalogService({ cachePath, fetchImpl, execFileImpl: codexCli });
+  new AgentModelCatalogService({
+    cachePath,
+    fetchImpl,
+    execFileImpl: codexCli,
+    codexCommand: process.execPath,
+  });
 
 /** Fails the run when a sample did not do the work it claims to time. */
 function expectFetches(expected: number, label: string): void {
@@ -292,6 +335,9 @@ interface Sample {
 }
 
 async function timed(fn: () => Promise<unknown>): Promise<Sample> {
+  // Setup garbage (fixture strings, the previous sample's catalog) is collected
+  // here, so a collection inside the window belongs to the workload.
+  fullGc();
   const probe = await armBystanderProbe({ cadenceMs: 4 });
   const elu0 = performance.eventLoopUtilization();
   const t0 = performance.now();
@@ -431,13 +477,19 @@ for (const [name, resolved] of Object.entries(paths)) {
   if (!isDeepStrictEqual(resolved, paths.cold))
     failures.push(`${name} path disagrees with the cold path`);
 }
-const remoteAgents = Object.entries(paths.cold)
-  .filter(([, r]) => r.source !== "bundled")
-  .map(([id]) => id);
+// Codex resolves from its CLI stub, so its non-bundled source says nothing
+// about the catalog.
+const catalogAgents = [...new Set(Object.values(PROVIDER_TO_AGENT_ID))].filter(
+  (id) => id !== "codex"
+);
+const remoteAgents = catalogAgents.filter((id) => paths.cold[id]?.source !== "bundled");
 if (remoteAgents.length === 0) failures.push("no agent resolved from the catalog");
+if (!catalogPath && remoteAgents.length !== catalogAgents.length) {
+  failures.push(
+    `synthetic fixture left ${catalogAgents.filter((id) => !remoteAgents.includes(id)).join(", ")} on bundled`
+  );
+}
 
-const oracleOut = arg("--oracle-out");
-const oracleIn = arg("--oracle");
 if (oracleOut) {
   writeFileSync(oracleOut, JSON.stringify({ fixtureHash, resolved: paths.cold }, null, 2));
 }
@@ -476,11 +528,11 @@ console.log(fmt("warm start: full legacy cache", warmLegacy));
 console.log(`${"retained heap: its own persisted cache".padEnd(40)} ${mb(heap)} MB`);
 console.log(`${"retained heap: full legacy cache".padEnd(40)} ${mb(heapLegacy)} MB`);
 console.log(
-  `oracle (${BUILT_IN_AGENT_IDS.length} agents, ${remoteAgents.length} from the catalog: ${remoteAgents.join(", ")}): ` +
+  `oracle (${BUILT_IN_AGENT_IDS.length} agents; from the catalog: ${remoteAgents.join(", ")}): ` +
     (failures.length === 0 ? "ok" : failures.join("; "))
 );
 console.log(
-  `RESULT ${JSON.stringify({ fixtureHash, providerCount, modelCount, persistedBytes: Buffer.byteLength(persistedText), staleFromLegacy, staleSteady, warm, warmLegacy, heapBytes: heap, heapLegacyBytes: heapLegacy, oracle: failures })}`
+  `RESULT ${JSON.stringify({ classification: MODEL_CATALOG_CLASS, fixtureHash, providerCount, modelCount, persistedBytes: Buffer.byteLength(persistedText), staleFromLegacy, staleSteady, warm, warmLegacy, heapBytes: heap, heapLegacyBytes: heapLegacy, oracle: failures })}`
 );
 
 rmSync(dir, { recursive: true, force: true });

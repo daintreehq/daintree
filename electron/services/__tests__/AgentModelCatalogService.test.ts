@@ -571,6 +571,8 @@ describe("AgentModelCatalogService", () => {
         "anthropic",
         "google",
       ]);
+      // Let the cut-down write land first, or it could replace the legacy seed.
+      await readPersistedCache(cachePath);
 
       await seedCache(cachePath, { fetchedAt: Date.now(), raw: full });
       const fetchImpl = mockFailingFetch(new Error("offline"));
@@ -601,6 +603,28 @@ describe("AgentModelCatalogService", () => {
       expect(claude.source).toBe("merged");
       expect(claude.contextWindow).toBe(1_000_000);
       expect(qwen.source).toBe("bundled");
+
+      // Served from memory now: with the file gone, a re-read would come up empty.
+      await fs.rm(cachePath);
+      expect(await service.getResolvedModels("claude")).toEqual(claude);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it("retries the network for an expired file it can still serve offline", async () => {
+      await seedCache(cachePath, {
+        fetchedAt: Date.now() - 2 * 24 * 60 * 60 * 1000,
+        raw: makeCatalog(),
+        providers: Object.keys(PROVIDER_TO_AGENT_ID),
+      });
+      const fetchImpl = mockFailingFetch(new Error("offline"));
+      const service = new AgentModelCatalogService({ cachePath, fetchImpl });
+
+      const first = await service.getResolvedModels("claude");
+      const second = await service.getResolvedModels("claude");
+
+      expect(first.source).toBe("merged");
+      expect(second).toEqual(first);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
     });
 
     it("refetches a fresh file cut down without a provider this build reads", async () => {
@@ -645,20 +669,27 @@ describe("AgentModelCatalogService", () => {
       expect(fetchImpl).toHaveBeenCalledTimes(2);
     });
 
-    it("treats a malformed provider marker as incomplete rather than as a full legacy file", async () => {
-      await seedCache(cachePath, {
-        fetchedAt: Date.now(),
-        raw: makeCatalog(),
-        providers: "anthropic,google",
-      });
-      const fetchImpl = mockFailingFetch(new Error("offline"));
-      const service = new AgentModelCatalogService({ cachePath, fetchImpl });
+    it.each([
+      ["a string naming every provider", Object.keys(PROVIDER_TO_AGENT_ID).join(",")],
+      ["an array with a non-string entry", [...Object.keys(PROVIDER_TO_AGENT_ID), 42]],
+      ["null", null],
+    ])(
+      "treats a malformed provider marker (%s) as incomplete, not as a full legacy file",
+      async (_label, providers) => {
+        await seedCache(cachePath, {
+          fetchedAt: Date.now(),
+          raw: makeCatalog(),
+          providers,
+        });
+        const fetchImpl = mockFailingFetch(new Error("offline"));
+        const service = new AgentModelCatalogService({ cachePath, fetchImpl });
 
-      const result = await service.getResolvedModels("claude");
+        const result = await service.getResolvedModels("claude");
 
-      expect(fetchImpl).toHaveBeenCalledTimes(1);
-      expect(result.source).toBe("merged");
-    });
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+        expect(result.source).toBe("merged");
+      }
+    );
 
     it("ignores a malformed provider it never reads", async () => {
       const fetchImpl = mockFetch({
@@ -674,15 +705,31 @@ describe("AgentModelCatalogService", () => {
       expect(result.contextWindow).toBe(1_000_000);
     });
 
-    it("rejects a payload that isn't a catalog object", async () => {
-      const service = new AgentModelCatalogService({
-        cachePath,
-        fetchImpl: mockFetch([makeCatalog()]),
-      });
+    it("keeps the previous file when a provider older builds validate is malformed", async () => {
+      // An older build rejects the whole file over one bad provider, so writing
+      // this response would take away its stale fallback.
+      const seededAt = Date.now() - 2 * 24 * 60 * 60 * 1000;
+      await seedCache(cachePath, { fetchedAt: seededAt, raw: makeCatalog() });
+      const fetchImpl = mockFetch({ ...makeCatalog(), openai: { models: "not-a-record" } });
+      const service = new AgentModelCatalogService({ cachePath, fetchImpl });
 
       const result = await service.getResolvedModels("claude");
+      await new Promise((r) => setTimeout(r, 250));
 
-      expect(result.source).toBe("bundled");
+      expect(result.source).toBe("merged");
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect((await readPersistedCache(cachePath)).fetchedAt).toBe(seededAt);
+    });
+
+    it.each([
+      ["an array", [makeCatalog()]],
+      ["null", null],
+      ["a string", "catalog"],
+    ])("rejects a payload that isn't a catalog object (%s)", async (_label, payload) => {
+      const service = new AgentModelCatalogService({ cachePath, fetchImpl: mockFetch(payload) });
+
+      expect(await service.getCatalog()).toBeNull();
+      expect((await service.getResolvedModels("claude")).source).toBe("bundled");
     });
   });
 

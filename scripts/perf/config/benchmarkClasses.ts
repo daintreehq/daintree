@@ -16,6 +16,21 @@ export const FOREGROUND_TERMINAL_CLASS: BenchmarkClass = {
     "App-process CPU and device GPU time while a fixture agent launched through the toolbar renders deterministic output in visible WebGL terminals. Real working/waiting transitions are checked using OSC heartbeats. This does not measure model inference, arbitrary live-agent detection accuracy, other applications, or WindowServer's compositing cost. GPU time is not GPU-core occupancy.",
 };
 
+export const MODEL_CATALOG_CLASS: BenchmarkClass = {
+  kind: "mechanism",
+  family: "models.dev catalog",
+  fidelity: {
+    entryPoint: "public-api",
+    renderer: "absent",
+    electronTransport: "none",
+    pty: "none",
+    processTopology: "single-process",
+    externalDependencies: "hermetic",
+  },
+  claim:
+    "Event-loop busy time, longest stall and retained JS heap while the real AgentModelCatalogService loads a multi-megabyte models.dev catalog from disk or a mocked fetch under Node. This does not measure network transfer, Electron's net.fetch, V8 differences between Node and Electron, or anything else Main does at startup.",
+};
+
 /**
  * What each scenario's numbers are allowed to be claimed to mean.
  *
