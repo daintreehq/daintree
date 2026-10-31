@@ -207,6 +207,23 @@ describe("toCanopyReading", () => {
     expect(finished.riskReason).toBeNull();
   });
 
+  it("reads a worktree agent's git -C command, and lets a merged-branch cleanup through", async () => {
+    const ask = ["Do you want to proceed?", "1. Yes", "2. No"];
+    const reset = await toCanopyReading(
+      reading({ risk: "none", status_line: 0, question_line: 1, action_line: 0 }),
+      input({ lines: ["⏺ Bash(git -C /Users/me/wt reset --hard HEAD)", ...ask] })
+    ).words();
+    expect(reset.risk).toBe("caution");
+    expect(reset.riskReason).toBe("Discards uncommitted changes");
+    // `-d` refuses an unmerged branch: no second press, and no claim of lost work.
+    const cleanup = await toCanopyReading(
+      reading({ risk: "none", status_line: 0, question_line: 1, action_line: 0 }),
+      input({ lines: ["⏺ Bash(git branch -d feature-x)", ...ask] })
+    ).words();
+    expect(cleanup.risk).toBe("none");
+    expect(cleanup.riskReason).toBeNull();
+  });
+
   it("counts three or more repeats as three, capped where the screen hasn't moved", async () => {
     const many = await toCanopyReading(
       reading({ category: "working", failure_repeats: "3+" }),
