@@ -55,6 +55,24 @@ export const config: AgentConfig = {
     { id: "gpt-5.3-codex", name: "GPT-5.3 Codex", shortLabel: "GPT-5.3" },
     { id: "gemini-3.8-flash", name: "Gemini 3.8 Flash", shortLabel: "Gem 3.8 Flash" },
   ],
+  // Earlier bundled IDs GitHub has deprecated, from its changelog. Panes and
+  // recipes that saved one relaunch without it, with a notice naming it,
+  // because `--model <retired id>` fails the launch.
+  retiredModels: {
+    "gemini-3-pro-preview": "2026-03-26",
+    "gpt-5.2": "2026-06-05",
+    "gemini-2.5-pro": "2026-07-31",
+    "gemini-3.1-pro-preview": "2026-09-01",
+    "claude-opus-4.5": "2026-09-01",
+    "claude-opus-4.6": "2026-09-01",
+    "claude-sonnet-4.5": "2026-09-01",
+    // Individual annual-plan subscribers keep it, everyone else is refused; the
+    // drop's notice names it, so a subscriber sees what changed.
+    "claude-sonnet-4.6": "2026-09-01",
+    "gpt-5.4": "2026-10-19",
+    "gpt-5.4-mini": "2026-10-19",
+    "gpt-5-mini": "2026-10-19",
+  },
   version: {
     args: ["--version"],
     npmPackage: "@github/copilot",

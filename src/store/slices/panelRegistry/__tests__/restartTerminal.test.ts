@@ -1,4 +1,4 @@
-import { beforeAll, describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { beforeAll, describe, it, expect, beforeEach, afterAll, afterEach, vi } from "vitest";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 
 const mockSpawn = vi.fn().mockResolvedValue({ id: "test-1" });
@@ -113,6 +113,11 @@ vi.mock("@shared/types", async () => {
     resolveEffectiveBypass: () => false,
   };
 });
+
+const notifyRetiredModelDroppedMock = vi.hoisted(() => vi.fn());
+vi.mock("@/services/terminal/retiredModelNotice", () => ({
+  notifyRetiredModelDropped: notifyRetiredModelDroppedMock,
+}));
 
 vi.mock("@/store/ccrPresetsStore", () => ({
   useCcrPresetsStore: {
@@ -2796,5 +2801,242 @@ describe("restartTerminal starts a moved pane where it is filed (#14954)", () =>
 
     expect(mockSpawn.mock.calls[0]![0].command).not.toContain("--continue");
     expect(paneAfterRestart().callerLaunchFlags).toBeUndefined();
+  });
+});
+
+describe("restartTerminal with a retired Copilot model (#15652)", () => {
+  const retiredCopilot = {
+    ...agentPanelBase,
+    launchAgentId: "copilot",
+    title: "GitHub Copilot",
+    agentState: "idle" as const,
+    agentModelId: "claude-opus-4.6",
+    agentLaunchFlags: ["--model", "claude-opus-4.6", "--allow-all-tools"],
+    command: "copilot --model claude-opus-4.6 --allow-all-tools",
+  };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    getMergedPresetMock.mockReturnValue(undefined);
+    buildAgentLaunchFlagsMock.mockReturnValue([]);
+    mockGracefulKill.mockResolvedValue(null);
+    const { agentSettingsClient, projectClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    (projectClient.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    const { getAgentConfig } = await import("@/config/agents");
+    vi.mocked(getAgentConfig).mockReturnValue({ command: "copilot" } as never);
+    // The real builders, so the command under test is the one that would run.
+    const actual = await vi.importActual<typeof import("@shared/types")>("@shared/types");
+    const shared = await import("@shared/types");
+    vi.mocked(shared.buildLaunchCommandFromFlags).mockImplementation(
+      actual.buildLaunchCommandFromFlags
+    );
+    vi.mocked(shared.buildResumeCommand).mockImplementation(actual.buildResumeCommand);
+    vi.mocked(shared.buildResumeLatestCommand).mockReturnValue(null as never);
+    vi.mocked(shared.generateAgentCommand).mockImplementation(actual.generateAgentCommand);
+    buildAgentLaunchFlagsMock.mockImplementation(actual.buildAgentLaunchFlags as never);
+    const { reset } = usePanelStore.getState();
+    await reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+    });
+  });
+
+  // `clearAllMocks` keeps implementations, so the file's stand-ins go back
+  // before any other block runs.
+  afterEach(async () => {
+    const { getAgentConfig } = await import("@/config/agents");
+    vi.mocked(getAgentConfig)
+      .mockReset()
+      .mockReturnValue({ command: "claude" } as never);
+    const shared = await import("@shared/types");
+    vi.mocked(shared.buildLaunchCommandFromFlags).mockReset().mockReturnValue("claude --flag");
+    vi.mocked(shared.buildResumeCommand)
+      .mockReset()
+      .mockReturnValue(null as never);
+    vi.mocked(shared.buildResumeLatestCommand)
+      .mockReset()
+      .mockReturnValue(null as never);
+    vi.mocked(shared.generateAgentCommand).mockReset().mockReturnValue("claude");
+    buildAgentLaunchFlagsMock.mockReset().mockReturnValue([]);
+  });
+
+  function show(panel: Record<string, unknown>) {
+    usePanelStore.setState({
+      panelsById: { [panel.id as string]: panel as unknown as PtyPanelData },
+      panelIds: [panel.id as string],
+    });
+  }
+
+  function paneAfterRestart(): PtyPanelData {
+    const panel = usePanelStore.getState().panelsById["test-1"];
+    if (!panel || !isPtyPanel(panel)) throw new Error("pane missing");
+    return panel;
+  }
+
+  it("relaunches on the CLI default and saves the launch without the retired model", async () => {
+    show(retiredCopilot);
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("copilot --allow-all-tools");
+    expect(payload.agentLaunchFlags).toEqual(["--allow-all-tools"]);
+    expect(payload.agentModelId).toBeUndefined();
+    const pane = paneAfterRestart();
+    expect(pane.agentModelId).toBeUndefined();
+    expect(pane.agentLaunchFlags).toEqual(["--allow-all-tools"]);
+    expect(pane.command).toBe("copilot --allow-all-tools");
+    expect(notifyRetiredModelDroppedMock).toHaveBeenCalledWith("copilot", ["claude-opus-4.6"], {
+      panelId: "test-1",
+      worktreeId: "wt-1",
+    });
+  });
+
+  it("resumes the captured conversation without the retired model", async () => {
+    mockGracefulKill.mockResolvedValue("live-7");
+    show(retiredCopilot);
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("copilot --allow-all-tools --resume=live-7");
+    expect(payload.agentModelId).toBeUndefined();
+    // A resume keeps the saved command as the next fresh launch, so it too has
+    // to be the cleaned one.
+    expect(paneAfterRestart().command).toBe("copilot --allow-all-tools");
+  });
+
+  it("drops a retired model saved only in the caller's flags", async () => {
+    show({
+      ...retiredCopilot,
+      agentModelId: undefined,
+      agentLaunchFlags: ["--allow-all-tools", "--model=gpt-5.4"],
+      callerLaunchFlags: ["--model=gpt-5.4"],
+      command: "copilot --allow-all-tools --model=gpt-5.4",
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].command).toBe("copilot --allow-all-tools");
+    expect(paneAfterRestart().callerLaunchFlags).toBeUndefined();
+    expect(notifyRetiredModelDroppedMock).toHaveBeenCalledWith(
+      "copilot",
+      ["gpt-5.4"],
+      expect.anything()
+    );
+  });
+
+  it("relaunches a model Copilot still offers with the same --model", async () => {
+    show({
+      ...retiredCopilot,
+      agentModelId: "claude-sonnet-5.5",
+      agentLaunchFlags: ["--model", "claude-sonnet-5.5", "--allow-all-tools"],
+      command: "copilot --model claude-sonnet-5.5 --allow-all-tools",
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("copilot --model 'claude-sonnet-5.5' --allow-all-tools");
+    expect(payload.agentModelId).toBe("claude-sonnet-5.5");
+    expect(paneAfterRestart().agentModelId).toBe("claude-sonnet-5.5");
+    expect(notifyRetiredModelDroppedMock).not.toHaveBeenCalled();
+  });
+
+  it("rebuilds from settings when the retired model was the only saved flag", async () => {
+    const { agentSettingsClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+      agents: { copilot: { customFlags: "--yolo" } },
+    });
+    show({
+      ...retiredCopilot,
+      agentLaunchFlags: ["--model", "claude-opus-4.6"],
+      command: "copilot --model claude-opus-4.6",
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("copilot --yolo");
+    expect(payload.agentLaunchFlags).toEqual(["--yolo"]);
+    expect(paneAfterRestart().command).toBe("copilot --yolo");
+  });
+
+  it("drops a retired model the pane's preset adds back after the saved fields are cleaned", async () => {
+    getMergedPresetMock.mockReturnValue({ id: "old", name: "Old", args: ["--model", "gpt-5.4"] });
+    show({ ...retiredCopilot, agentPresetId: "old" });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("copilot --allow-all-tools");
+    expect(payload.agentLaunchFlags).toEqual(["--allow-all-tools"]);
+    expect(paneAfterRestart().agentLaunchFlags).toEqual(["--allow-all-tools"]);
+    expect(notifyRetiredModelDroppedMock).toHaveBeenCalledWith(
+      "copilot",
+      ["claude-opus-4.6", "gpt-5.4"],
+      expect.anything()
+    );
+  });
+
+  it("moves to another preset carrying neither the pane's nor the preset's retired model", async () => {
+    getMergedPresetMock.mockReturnValue({
+      id: "amber",
+      name: "Amber",
+      args: ["--amber", "--model", "gpt-5.4"],
+    });
+    show(retiredCopilot);
+
+    await usePanelStore.getState().restartTerminalOnPreset("test-1", "amber");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("copilot --amber");
+    expect(payload.agentLaunchFlags).toEqual(["--amber"]);
+    expect(payload.agentModelId).toBeUndefined();
+    const pane = paneAfterRestart();
+    expect(pane.agentModelId).toBeUndefined();
+    expect(pane.agentLaunchFlags).toEqual(["--amber"]);
+    expect(notifyRetiredModelDroppedMock).toHaveBeenCalledWith(
+      "copilot",
+      ["claude-opus-4.6", "gpt-5.4"],
+      expect.anything()
+    );
+  });
+
+  it("keeps the cleaned launch when a preset move's spawn fails after it was saved", async () => {
+    getMergedPresetMock.mockReturnValue({ id: "amber", name: "Amber", args: ["--amber"] });
+    mockSpawn.mockRejectedValueOnce(new Error("spawn failed"));
+    show(retiredCopilot);
+
+    await usePanelStore.getState().restartTerminalOnPreset("test-1", "amber");
+
+    const pane = paneAfterRestart();
+    expect(pane.agentModelId).toBeUndefined();
+    expect(pane.agentLaunchFlags).toEqual(["--allow-all-tools"]);
+    expect(pane.command).toBe("copilot --allow-all-tools");
+    expect(pane.callerLaunchFlags).toBeUndefined();
+    expect(notifyRetiredModelDroppedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the saved launch alone when a preset move fails before it starts", async () => {
+    getMergedPresetMock.mockReturnValue(undefined);
+    show(retiredCopilot);
+
+    await usePanelStore.getState().restartTerminalOnPreset("test-1", "missing");
+
+    expect(mockSpawn).not.toHaveBeenCalled();
+    const pane = paneAfterRestart();
+    expect(pane.agentModelId).toBe("claude-opus-4.6");
+    expect(pane.agentLaunchFlags).toEqual(retiredCopilot.agentLaunchFlags);
+    expect(pane.command).toBe(retiredCopilot.command);
+    expect(notifyRetiredModelDroppedMock).not.toHaveBeenCalled();
   });
 });

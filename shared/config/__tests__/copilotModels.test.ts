@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getAgentConfig } from "../agentRegistry.js";
+import { getAgentConfig, isRetiredAgentModel } from "../agentRegistry.js";
 
 // Copilot's bundled list is the only source of its model IDs (multi-provider,
 // no CLI catalog), and `copilot --model <retired id>` exits with an error. When
@@ -51,6 +51,11 @@ describe("copilot bundled models", () => {
   it("offers no model GitHub has retired", () => {
     const retired = bundledIds().filter((id) => id in RETIRED);
     expect(retired).toEqual([]);
+  });
+
+  it("drops every retired model a pane may have saved, and no model it offers", () => {
+    expect(Object.keys(RETIRED).filter((id) => !isRetiredAgentModel("copilot", id))).toEqual([]);
+    expect(bundledIds().filter((id) => isRetiredAgentModel("copilot", id))).toEqual([]);
   });
 
   it("gives every model a name and label the picker can show", () => {

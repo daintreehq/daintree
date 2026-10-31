@@ -681,6 +681,15 @@ export interface AgentConfig {
    */
   curatedModels?: boolean;
   /**
+   * Model IDs the CLI once took that its maker has since retired, each with
+   * the day it was retired. A pane or recipe that saved one of these relaunches
+   * without it, with a notice naming it, instead of failing on every start
+   * (#15652), so a plan that still serves one sees what changed. Declared
+   * rather than inferred from {@link models}: an ID the list doesn't carry may
+   * still be one the CLI accepts, so absence alone never drops a saved choice.
+   */
+  retiredModels?: Readonly<Record<string, string>>;
+  /**
    * Model the Daintree assistant launches this agent with until the user picks
    * one (no entry in `HelpAssistantSettings.modelIds`). Unset means the CLI's own
    * default.
@@ -1345,6 +1354,16 @@ export function resolveAssistantModelId(
     return availableIds.includes(recommended) ? recommended : "";
   }
   return recommended;
+}
+
+/** Whether `agentId` declares `modelId` retired (see `AgentConfig.retiredModels`). */
+export function isRetiredAgentModel(
+  agentId: string | undefined,
+  modelId: string | undefined
+): boolean {
+  if (!agentId || !modelId) return false;
+  const retired = getEffectiveAgentConfig(agentId)?.retiredModels;
+  return retired !== undefined && Object.hasOwn(retired, modelId);
 }
 
 export function getAgentDisplayTitle(agentId: string, modelId?: string): string {
