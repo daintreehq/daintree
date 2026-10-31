@@ -202,7 +202,10 @@ function editedFields(
   );
 }
 
-export function hasFormEdits(baseline: FormOwnedSettings | null, draft: FormOwnedSettings): boolean {
+export function hasFormEdits(
+  baseline: FormOwnedSettings | null,
+  draft: FormOwnedSettings
+): boolean {
   return editedFields(baseline, draft).length > 0;
 }
 
