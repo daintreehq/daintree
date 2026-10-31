@@ -111,6 +111,12 @@ export const PUSH_BANNER_CONFIGS: Record<GitOperationReason, PushBannerConfig> =
       "This remote's settings would push more than this branch.",
     detailPolicy: "collapse",
   },
+  "push-review-stale": {
+    message:
+      getGitRecoveryHint("push-review-stale") ??
+      "The branch changed since the push was reviewed. Nothing was pushed.",
+    detailPolicy: "hide",
+  },
   "hook-rejected": {
     message: getGitRecoveryHint("hook-rejected") ?? "A server-side hook rejected the push.",
     detailPolicy: "collapse",

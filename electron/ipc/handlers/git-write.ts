@@ -26,6 +26,7 @@ import type {
   GitBaseIntegrationCommitPreview,
   GitBaseIntegrationKind,
   GitPushCommitPreview,
+  GitPushReview,
   GitRebaseCommitPreview,
   GitRemoteCommitPreview,
   GitStatus,
@@ -81,6 +82,7 @@ import type {
 import { classifyGitError } from "../../../shared/utils/gitOperationErrors.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AppError, GitOperationError } from "../../utils/errorTypes.js";
+import { logWarn } from "../../utils/logger.js";
 import {
   resolveGitPushDestination,
   resolveGitPushAndUpstream,
@@ -169,6 +171,67 @@ async function requireRemoteTarget(
 }
 
 /**
+ * The destination a reviewed push may write to, or a refusal (#15646).
+ *
+ * The confirm showed one branch, at one commit, going to one destination, and
+ * agents keep working in the worktree while it is open. So each of the three is
+ * read again here and compared, and any difference refuses the push without
+ * touching the network. Nothing is reconciled: re-resolving and pushing
+ * whatever is true now is the "if X changed, use Y" substitution the
+ * destructive-action rules forbid, and the push that was approved no longer
+ * exists. A destination that no longer resolves is a change like any other.
+ *
+ * The remote side is deliberately NOT compared. A destination that moved is
+ * git's ordinary non-fast-forward rejection, which captures the lease the
+ * force-push recovery needs; refusing it here would take that recovery away.
+ */
+async function requireReviewedTarget(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw" | "getRemotes">,
+  branchName: string,
+  review: GitPushReview,
+  cwd: string
+): Promise<ResolvedGitPushDestination> {
+  if (branchName !== review.branch) {
+    throw pushReviewStaleError(
+      cwd,
+      branchName,
+      branchName === "HEAD"
+        ? `this worktree is on a detached HEAD, not '${review.branch}'`
+        : `this worktree switched from '${review.branch}' to '${branchName}'`
+    );
+  }
+  const reviewed = formatGitPushDestination(review.destination);
+  const resolution = await resolveGitPushDestination(git, branchName);
+  if (resolution.status !== "resolved") {
+    throw pushReviewStaleError(
+      cwd,
+      branchName,
+      `'${branchName}' no longer has a push destination (it was ${reviewed})`
+    );
+  }
+  const destination = resolution.destination;
+  if (
+    destination.remote !== review.destination.remote ||
+    destination.branch !== review.destination.branch
+  ) {
+    throw pushReviewStaleError(
+      cwd,
+      branchName,
+      `'${branchName}' now pushes to ${formatGitPushDestination(destination)}, not ${reviewed}`
+    );
+  }
+  const tip = await readOid(git, `refs/heads/${branchName}`);
+  if (tip?.toLowerCase() !== review.headOid) {
+    throw pushReviewStaleError(
+      cwd,
+      branchName,
+      tip ? `'${branchName}' moved to a different commit` : `'${branchName}' no longer exists`
+    );
+  }
+  return destination;
+}
+
+/**
  * The arguments for a push that writes exactly one branch to `destination`.
  *
  * A bare `git push` sends whatever the repository's config says, which can be
@@ -194,6 +257,101 @@ function singleBranchPushArgs(
     destination.remote,
     `refs/heads/${branchName}:refs/heads/${destination.branch}`,
   ];
+}
+
+/**
+ * The arguments for a push that writes the reviewed COMMIT to `destination`.
+ *
+ * The commit, not the branch: a commit an agent lands after the final check
+ * but before git reads `refs/heads/<branch>` would otherwise ride along under
+ * an approval that never showed it (#15646). No `+`, so the remote still only
+ * fast-forwards, and a destination that moved meanwhile is git's ordinary
+ * non-fast-forward rejection. `^{commit}` so no ref spelled like the OID can
+ * stand in for it.
+ */
+function reviewedCommitPushArgs(headOid: string, destination: ResolvedGitPushDestination): string[] {
+  return [
+    "--no-follow-tags",
+    "--recurse-submodules=no",
+    destination.remote,
+    `${headOid}^{commit}:refs/heads/${destination.branch}`,
+  ];
+}
+
+const FULL_OID_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
+
+/**
+ * The review a push payload carries, or `null` when it carries none.
+ *
+ * All four fields or none. A partial record is refused rather than enforced
+ * field by field: a caller that sent the branch and commit but lost the
+ * destination would otherwise get a push pinned on two axes and free on the
+ * third, which reads as "reviewed" while publishing somewhere nobody saw.
+ */
+function readPushReview(payload: GitPushPayload): GitPushReview | null {
+  const fields = [
+    payload.expectedBranch,
+    payload.expectedHeadOid,
+    payload.expectedRemote,
+    payload.expectedRemoteBranch,
+  ];
+  if (fields.every((field) => field === undefined)) return null;
+  const [branch, headOid, remote, remoteBranch] = fields;
+  if (
+    typeof branch !== "string" ||
+    !branch ||
+    typeof headOid !== "string" ||
+    !FULL_OID_PATTERN.test(headOid) ||
+    typeof remote !== "string" ||
+    !remote ||
+    typeof remoteBranch !== "string" ||
+    !remoteBranch
+  ) {
+    throw new AppError({ code: "VALIDATION", message: "Invalid push review" });
+  }
+  return {
+    branch,
+    headOid: headOid.toLowerCase(),
+    destination: { remote, branch: remoteBranch },
+  };
+}
+
+function pushReviewStaleError(cwd: string, branchName: string, detail: string): GitOperationError {
+  const message = `The branch changed since this push was reviewed: ${detail}. Nothing was pushed. Review the push again to see what it would publish now.`;
+  return new GitOperationError(
+    "push-review-stale",
+    encodeGitOperationErrorMessage("push-review-stale", message, { branchName }),
+    { cwd, op: "push", rawMessage: message, branchName }
+  );
+}
+
+/**
+ * Record `destination` as `branchName`'s upstream, the way `git push
+ * --set-upstream` would have.
+ *
+ * Needed because a push whose source is a commit gets no upstream from git:
+ * `--set-upstream` only installs tracking for a local branch source. So this
+ * writes what git's own installer writes — the remote, the merge ref replacing
+ * any earlier one (a repair must overwrite, not add), and `rebase=true` where
+ * `branch.autoSetupRebase` asks for it on remote-tracking branches.
+ */
+async function installPushUpstream(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">,
+  branchName: string,
+  destination: ResolvedGitPushDestination
+): Promise<void> {
+  const key = `branch.${branchName}`;
+  await git.raw(["config", `${key}.remote`, destination.remote]);
+  await git.raw(["config", "--replace-all", `${key}.merge`, `refs/heads/${destination.branch}`]);
+  let autoSetupRebase = "";
+  try {
+    autoSetupRebase = (await git.raw(["config", "--get", "branch.autoSetupRebase"])).trim();
+  } catch {
+    // Unset: git's default is `never`.
+  }
+  if (autoSetupRebase === "remote" || autoSetupRebase === "always") {
+    await git.raw(["config", `${key}.rebase`, "true"]);
+  }
 }
 
 /**
@@ -268,7 +426,21 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
           // reach argv as one: `refs/heads/` and `refs/remotes/` prefixes make a
           // leading `-` impossible. The remote name is already argv-guarded by
           // `isSafeRemoteName` inside the resolver.
-          const localRef = `refs/heads/${branchName}`;
+          //
+          // The branch is read ONCE, to a commit, and every range below runs
+          // from that commit rather than from the ref. The commit is what an
+          // approval of this preview pins the push to (#15646), so the rows and
+          // the pin have to describe the same tip: a commit landing between two
+          // of these reads would otherwise be counted but not pinned.
+          const headOid = await readOid(git, `refs/heads/${branchName}`);
+          if (!headOid) {
+            const message = `Branch '${branchName}' does not resolve to a commit, so there is nothing to preview.`;
+            throw new GitOperationError(
+              "pathspec-invalid",
+              encodeGitOperationErrorMessage("pathspec-invalid", message, { branchName }),
+              { cwd: payload.cwd, op: "list-push-commits", rawMessage: message, branchName }
+            );
+          }
           const hasRemoteRef = await refExists(git, destination.remoteTrackingRef);
 
           // With no remote-tracking ref there is nothing to subtract locally, and
@@ -290,7 +462,7 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
           if (hasRemoteRef) {
             rangeBasis = "tracked";
             destinationTip = destination.remoteTrackingRef;
-            revArgs = [`${destination.remoteTrackingRef}..${localRef}`];
+            revArgs = [`${destination.remoteTrackingRef}..${headOid}`];
           } else {
             const remoteTip = await readRemoteBranchTip(
               git,
@@ -301,18 +473,18 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
               // The remote answered and has no such branch: the push creates it,
               // and what it publishes is the branch's own history.
               rangeBasis = "creates";
-              revArgs = [localRef];
+              revArgs = [headOid];
             } else if (remoteTip && (await refExists(git, remoteTip))) {
               // The remote named a tip this repository already holds, so the
               // delta is exact even without a tracking ref.
               rangeBasis = "tracked";
               destinationTip = remoteTip;
-              revArgs = [`${remoteTip}..${localRef}`];
+              revArgs = [`${remoteTip}..${headOid}`];
             } else {
               // No answer, or a tip we cannot resolve. Fall back to the local
               // approximation and mark it as what it is.
               rangeBasis = "unverified";
-              revArgs = [localRef, "--not", `--remotes=${destination.remote}`];
+              revArgs = [headOid, "--not", `--remotes=${destination.remote}`];
             }
           }
 
@@ -326,13 +498,14 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
           const behind =
             destinationTip === null
               ? 0
-              : await countCommitsInRange(git, [`${localRef}..${destinationTip}`]);
+              : await countCommitsInRange(git, [`${headOid}..${destinationTip}`]);
 
           return {
             destination: { remote: destination.remote, branch: destination.branch },
             rangeBasis,
             total,
             behind,
+            headOid,
             commits: log.all.map((commit) => ({
               hash: commit.hash,
               date: commit.date,
@@ -1143,6 +1316,9 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     if (rawOpId !== undefined && opId === null) {
       throw new AppError({ code: "VALIDATION", message: "Invalid operation id" });
     }
+    // Read before joining: a named push with a different review is a different
+    // push, and must not attach to one already running under another approval.
+    const review = readPushReview(payload);
     // Only a caller that names its operation (a remote view) is recorded,
     // published and joinable. Without an opId the push runs exactly as it
     // always has, and one already in flight for the cwd is a silent no-op.
@@ -1152,7 +1328,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
           kind: "git-push" as const,
           projectId: ctx.projectId,
           dedupKey: `git-push:${payload.cwd}`,
-          fingerprint: JSON.stringify({ setUpstream: Boolean(payload.setUpstream) }),
+          fingerprint: JSON.stringify({ setUpstream: Boolean(payload.setUpstream), review }),
         }
       : null;
     // Reached only for a named push, so a local push never constructs the
@@ -1177,9 +1353,9 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     pushingCwds.add(payload.cwd);
     try {
       if (input) {
-        await getOperationRegistry().run(input, (op) => runPush(ctx, payload, op));
+        await getOperationRegistry().run(input, (op) => runPush(ctx, payload, review, op));
       } else {
-        await runPush(ctx, payload, untrackedOperationHandle());
+        await runPush(ctx, payload, review, untrackedOperationHandle());
       }
     } finally {
       pushingCwds.delete(payload.cwd);
@@ -1189,6 +1365,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
   const runPush = async (
     ctx: IpcContext,
     payload: { cwd: string; setUpstream?: boolean },
+    review: GitPushReview | null,
     op: OperationHandle
   ): Promise<void> => {
     const git = await createAuthenticatedGit(payload.cwd);
@@ -1212,7 +1389,9 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       // event, is the only ref the push writes, and pins the lease ref if the
       // push is rejected. Refuses the push outright when git has no answer,
       // rather than reporting one target and writing to another.
-      destination = await requireRemoteTarget(git, branchName, payload.cwd, "push");
+      destination = review
+        ? await requireReviewedTarget(git, branchName, review, payload.cwd)
+        : await requireRemoteTarget(git, branchName, payload.cwd, "push");
       const targetBranch = formatGitPushDestination(destination);
 
       sendProgress({
@@ -1246,12 +1425,28 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
         payload.setUpstream ||
         destination.requiresUpstreamRepair ||
         destination.establishesUpstream;
-      await authGit.push([
-        ...(setUpstream ? ["--set-upstream"] : []),
-        ...singleBranchPushArgs(branchName, destination),
-      ]);
+      if (review) {
+        await authGit.push(reviewedCommitPushArgs(review.headOid, destination));
+      } else {
+        await authGit.push([
+          ...(setUpstream ? ["--set-upstream"] : []),
+          ...singleBranchPushArgs(branchName, destination),
+        ]);
+      }
       if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
         playSoundFireAndForget("git-push");
+      }
+      if (review && setUpstream) {
+        // Outside the rejection path below: the commit is already published,
+        // so a failure here must not be reported as a failed push or capture a
+        // lease. Untracked is what the next push finds and sets up again.
+        try {
+          await installPushUpstream(git, branchName, destination);
+        } catch (error) {
+          logWarn("[git-write] push landed but its upstream could not be recorded", {
+            error: formatErrorMessage(error, "git config failed"),
+          });
+        }
       }
     } catch (error) {
       if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
