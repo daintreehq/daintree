@@ -168,7 +168,7 @@ vi.mock("@/store/createWorktreeStore", () => ({
 }));
 
 vi.mock("@/store/worktreeStore", () => {
-  const state = { activeWorktreeId: null as string | null };
+  const state = { activeWorktreeId: null as string | null, isFleetScopeActive: false };
   const getState = () => ({ ...state, selectWorktree: vi.fn() });
   return { useWorktreeSelectionStore: Object.assign(getState, { getState }), __state: state };
 });
@@ -1728,6 +1728,7 @@ describe("VoiceRecordingService — the key with no agent focused (#15550)", () 
   type PanelState = {
     focusedId: string | null;
     panelsById: Record<string, unknown>;
+    panelIds: string[];
     mruList: string[];
     activeDockTerminalId: string | null;
     trashedTerminals: Map<string, unknown>;
@@ -1744,17 +1745,38 @@ describe("VoiceRecordingService — the key with no agent focused (#15550)", () 
     const panel = Reflect.get(await import("@/store/panelStore"), "__state") as PanelState;
     panel.focusedId = null;
     panel.panelsById = {};
+    panel.panelIds = [];
     panel.mruList = [];
     panel.activeDockTerminalId = null;
     panel.trashedTerminals = new Map();
     panel.activateTerminal.mockClear();
-    Reflect.get(await import("@/store/worktreeStore"), "__state").activeWorktreeId = null;
+    Object.assign(Reflect.get(await import("@/store/worktreeStore"), "__state"), {
+      activeWorktreeId: null,
+      isFleetScopeActive: false,
+    });
     const voice = (await import("@/store/voiceRecordingStore")) as unknown as {
-      __state: { lockedTarget: object | null };
+      __state: {
+        lockedTarget: object | null;
+        status: string;
+        activeTarget: object | null;
+        sessionElsewhere: unknown;
+      };
     };
     voice.__state.lockedTarget = null;
+    voice.__state.status = "idle";
+    voice.__state.activeTarget = null;
+    voice.__state.sessionElsewhere = null;
     terminalInput.hybridInputEnabled = true;
     (await import("@/store/storeAccessors")).resetStoreAccessorsForTesting();
+    (await import("@/services/terminal/optimisticPanelCloseIds")).replaceClosingIds(new Set());
+    (await import("@/store/fleetArmingStore")).useFleetArmingStore.setState({
+      armedIds: new Set<string>(),
+      armOrder: [],
+    });
+    (await import("@/store/fleetScopeFlagStore")).useFleetScopeFlagStore.setState({
+      mode: "scoped",
+    });
+    (await import("@/store/canopyStore")).useCanopyStore.getState().isOpen = false;
     const { voiceRecordingService } = await import("../VoiceRecordingService");
     voiceRecordingService.destroy();
     vi.unstubAllGlobals();
@@ -1768,7 +1790,13 @@ describe("VoiceRecordingService — the key with no agent focused (#15550)", () 
     launchAgentId: "claude",
     ...extra,
   });
-  const shell = (id: string) => ({ id, title: id, kind: "terminal", location: "grid" });
+  const shell = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    title: id,
+    kind: "terminal",
+    location: "grid",
+    ...extra,
+  });
 
   async function arrange({
     panels,
@@ -1789,6 +1817,7 @@ describe("VoiceRecordingService — the key with no agent focused (#15550)", () 
     macro.isAssistantFocused.mockReturnValue(false);
     const panel = Reflect.get(await import("@/store/panelStore"), "__state") as PanelState;
     panel.panelsById = Object.fromEntries(panels.map((p) => [p.id, p]));
+    panel.panelIds = panels.map((p) => p.id);
     panel.focusedId = focusedId;
     panel.mruList = mru;
     Reflect.get(await import("@/store/worktreeStore"), "__state").activeWorktreeId =
@@ -1805,7 +1834,8 @@ describe("VoiceRecordingService — the key with no agent focused (#15550)", () 
     vi.mocked(notify).mockClear();
     const { voiceRecordingService } = await import("../VoiceRecordingService");
     const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
-    return { voiceRecordingService, toggleSpy, panel, notify: vi.mocked(notify) };
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+    return { voiceRecordingService, toggleSpy, stopSpy, panel, notify: vi.mocked(notify) };
   }
 
   async function expectStartedIn(
@@ -1847,7 +1877,7 @@ describe("VoiceRecordingService — the key with no agent focused (#15550)", () 
 
   it("starts in the agent last focused once focus has left every pane", async () => {
     const arranged = await arrange({
-      panels: [agent("agent-a"), agent("agent-b")],
+      panels: [agent("agent-b"), agent("agent-a")],
       mru: ["terminal:agent-a"],
     });
 
@@ -1873,7 +1903,11 @@ describe("VoiceRecordingService — the key with no agent focused (#15550)", () 
 
   it("passes over a more recent agent in a worktree that isn't showing", async () => {
     const arranged = await arrange({
-      panels: [agent("agent-a", { worktreeId: "wt-1" }), agent("agent-b", { worktreeId: "wt-2" })],
+      panels: [
+        agent("agent-c", { worktreeId: "wt-1" }),
+        agent("agent-a", { worktreeId: "wt-1" }),
+        agent("agent-b", { worktreeId: "wt-2" }),
+      ],
       activeWorktreeId: "wt-1",
       mru: ["terminal:agent-b", "worktree:wt-2", "terminal:agent-a", "worktree:wt-1"],
     });
@@ -1884,17 +1918,22 @@ describe("VoiceRecordingService — the key with no agent focused (#15550)", () 
   });
 
   it.each([
-    ["closed", [] as Array<{ id: string }>, new Map<string, unknown>()],
-    ["trashed", [agent("recent", { location: "trash" })], new Map<string, unknown>()],
-    ["in the trash map", [agent("recent")], new Map<string, unknown>([["recent", {}]])],
+    ["closed", [] as Array<{ id: string }>, new Map<string, unknown>(), false],
+    ["trashed", [agent("recent", { location: "trash" })], new Map<string, unknown>(), false],
+    ["in the trash map", [agent("recent")], new Map<string, unknown>([["recent", {}]]), false],
+    ["closed a moment ago", [agent("recent")], new Map<string, unknown>(), true],
   ])(
     "falls to the one agent on screen when the most recent was %s",
-    async (_name, recent, trashed) => {
+    async (_name, recent, trashed, closing) => {
       const arranged = await arrange({
         panels: [...recent, agent("survivor"), shell("zsh")],
         mru: ["terminal:recent", "terminal:zsh"],
       });
       arranged.panel.trashedTerminals = trashed;
+      if (closing) {
+        const closeIds = await import("@/services/terminal/optimisticPanelCloseIds");
+        closeIds.replaceClosingIds(new Set(["recent"]));
+      }
 
       await arranged.voiceRecordingService.toggleFocusedPanel();
 
@@ -1916,13 +1955,63 @@ describe("VoiceRecordingService — the key with no agent focused (#15550)", () 
       mru: ["terminal:docked", "terminal:agent-a"],
     });
     arranged.panel.activeDockTerminalId = "docked";
-    // The dock draws its chips from the registered order.
-    Reflect.set(arranged.panel, "panelIds", ["docked", "agent-a"]);
 
     await arranged.voiceRecordingService.toggleFocusedPanel();
 
     await expectStartedIn("docked", arranged);
-    Reflect.set(arranged.panel, "panelIds", []);
+  });
+
+  async function drawFleet(armed: string[]) {
+    Reflect.get(await import("@/store/worktreeStore"), "__state").isFleetScopeActive = true;
+    (await import("@/store/fleetArmingStore")).useFleetArmingStore.setState({
+      armedIds: new Set(armed),
+      armOrder: armed,
+    });
+  }
+
+  it("never picks a grid agent the fleet scope is drawn over", async () => {
+    const arranged = await arrange({
+      panels: [agent("agent-a"), shell("armed", { worktreeId: "wt-2" })],
+      mru: ["terminal:agent-a"],
+    });
+    await drawFleet(["armed"]);
+
+    await arranged.voiceRecordingService.toggleFocusedPanel();
+
+    expectUnavailable(arranged);
+  });
+
+  it("still starts in the open dock while the fleet scope is drawn", async () => {
+    const arranged = await arrange({
+      panels: [agent("docked", { location: "dock" }), shell("armed", { worktreeId: "wt-2" })],
+      mru: ["terminal:docked"],
+    });
+    arranged.panel.activeDockTerminalId = "docked";
+    await drawFleet(["armed"]);
+
+    await arranged.voiceRecordingService.toggleFocusedPanel();
+
+    await expectStartedIn("docked", arranged);
+  });
+
+  it.each([
+    ["the legacy fleet mode draws the grid", "legacy" as const, false],
+    ["the fleet's only armed pane is closing", "scoped" as const, true],
+  ])("picks a grid agent when %s", async (_name, mode, closing) => {
+    const arranged = await arrange({
+      panels: [agent("agent-a"), shell("armed", { worktreeId: "wt-2" })],
+      mru: ["terminal:agent-a"],
+    });
+    await drawFleet(["armed"]);
+    (await import("@/store/fleetScopeFlagStore")).useFleetScopeFlagStore.setState({ mode });
+    if (closing) {
+      const closeIds = await import("@/services/terminal/optimisticPanelCloseIds");
+      closeIds.replaceClosingIds(new Set(["armed"]));
+    }
+
+    await arranged.voiceRecordingService.toggleFocusedPanel();
+
+    await expectStartedIn("agent-a", arranged);
   });
 
   it.each([
@@ -1933,7 +2022,11 @@ describe("VoiceRecordingService — the key with no agent focused (#15550)", () 
       [agent("agent-a", { worktreeId: "wt-2" })],
       ["terminal:agent-a"],
     ],
-    ["the only agent in a closed dock", [agent("agent-a", { location: "dock" })], []],
+    [
+      "the only agent in a closed dock",
+      [agent("agent-a", { location: "dock" })],
+      ["terminal:agent-a"],
+    ],
     [
       "the only agent backgrounded",
       [agent("agent-a", { location: "background" })],
@@ -2015,6 +2108,38 @@ describe("VoiceRecordingService — the key with no agent focused (#15550)", () 
 
     expect(arranged.toggleSpy).not.toHaveBeenCalled();
     expect(arranged.panel.activateTerminal).not.toHaveBeenCalled();
+  });
+
+  it("lets the key stop a running session rather than start in the last agent", async () => {
+    const arranged = await arrange({
+      panels: [agent("agent-a"), agent("recording")],
+      mru: ["terminal:agent-a"],
+    });
+    const voice = (await import("@/store/voiceRecordingStore")) as unknown as {
+      __state: { status: string; activeTarget: object | null };
+    };
+    voice.__state.status = "recording";
+    voice.__state.activeTarget = { panelId: "recording" };
+
+    await arranged.voiceRecordingService.toggleFocusedPanel();
+
+    expect(arranged.stopSpy).toHaveBeenCalledTimes(1);
+    expect(arranged.toggleSpy).not.toHaveBeenCalled();
+    expect(arranged.panel.activateTerminal).not.toHaveBeenCalled();
+  });
+
+  it("sends the key to Canopy's reply while Canopy is open", async () => {
+    const arranged = await arrange({ panels: [agent("agent-a")], mru: ["terminal:agent-a"] });
+    (await import("@/store/canopyStore")).useCanopyStore.getState().isOpen = true;
+    const message = "Pick a row to reply to.";
+    const registry = await import("@/services/canopyReplyDictation");
+    registry.registerCanopyReplyDictation(() => ({ ok: false, message }));
+
+    await arranged.voiceRecordingService.toggleFocusedPanel();
+
+    expect(arranged.toggleSpy).not.toHaveBeenCalled();
+    expect(arranged.panel.activateTerminal).not.toHaveBeenCalled();
+    expect(arranged.notify.mock.calls[0]![0]).toMatchObject({ message });
   });
 
   it("reads the target at the press, before anything awaits", async () => {

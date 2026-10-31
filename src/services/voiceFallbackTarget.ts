@@ -42,7 +42,9 @@ export function listVisiblePaneIds(state: VisiblePaneState): string[] {
     }
     const options = {
       activeWorktreeId: state.activeWorktreeId,
-      maximizedId: state.maximizedId,
+      // As the grid reads it: a closing maximized pane no longer covers the rest.
+      maximizedId:
+        state.maximizedId !== null && state.isClosing(state.maximizedId) ? null : state.maximizedId,
       maximizeTarget: state.maximizeTarget,
       getPanelGroupInfo: (id: string) => groupByPanel.get(id),
     };

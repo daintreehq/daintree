@@ -91,17 +91,27 @@ describe("listVisiblePaneIds", () => {
     expect(listVisiblePaneIds(state)).toEqual(["b"]);
   });
 
-  it("shows the active tab of a maximized group", () => {
+  it("shows the active tab of a maximized group, whichever tab was maximized from", () => {
     const state = arrange([pane("a"), pane("b"), pane("c")], {
       gridGroups: [
-        { id: "group-1", panelIds: ["a", "b"], activeTabId: "a" },
+        { id: "group-1", panelIds: ["a", "b"], activeTabId: "b" },
         { id: "c", panelIds: ["c"], activeTabId: "c" },
       ],
       maximizedId: "a",
       maximizeTarget: { type: "group", id: "group-1" },
     });
 
-    expect(listVisiblePaneIds(state)).toEqual(["a"]);
+    expect(listVisiblePaneIds(state)).toEqual(["b"]);
+  });
+
+  it("shows the grid again once the maximized pane is closing", () => {
+    const state = arrange([pane("a"), pane("b"), pane("c")], {
+      maximizedId: "a",
+      maximizeTarget: { type: "panel", id: "a" },
+      isClosing: (id) => id === "a",
+    });
+
+    expect(listVisiblePaneIds(state)).toEqual(["b", "c"]);
   });
 
   it("treats a half-set maximize as the plain grid, as ContentGrid does", () => {
@@ -127,13 +137,28 @@ describe("listVisiblePaneIds", () => {
     expect(listVisiblePaneIds(state)).toEqual(["a", "docked"]);
   });
 
-  it.each([
-    ["a closed dock", { activeDockTerminalId: null }],
-    ["a dock pointer left over from another worktree", { activeDockTerminalId: "docked" }],
-  ])("lists nothing for %s", (_name, overrides) => {
+  it("lists nothing for a closed dock", () => {
+    const state = arrange([pane("docked", { location: "dock", worktreeId: "wt-1" })], {
+      activeWorktreeId: "wt-1",
+      activeDockTerminalId: null,
+    });
+
+    expect(listVisiblePaneIds(state)).toEqual([]);
+  });
+
+  it("lists nothing for a dock pointer left over from another worktree", () => {
     const state = arrange([pane("docked", { location: "dock", worktreeId: "wt-2" })], {
       activeWorktreeId: "wt-1",
-      ...overrides,
+      activeDockTerminalId: "docked",
+    });
+
+    expect(listVisiblePaneIds(state)).toEqual([]);
+  });
+
+  it("drops an open dock pane that is closing", () => {
+    const state = arrange([pane("docked", { location: "dock" })], {
+      activeDockTerminalId: "docked",
+      isClosing: (id) => id === "docked",
     });
 
     expect(listVisiblePaneIds(state)).toEqual([]);
