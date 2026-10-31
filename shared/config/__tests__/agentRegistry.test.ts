@@ -513,6 +513,25 @@ describe("mistral configuration", () => {
     expect(match?.[1]).toBe("abc-123-def-456");
     expect("vibe --continue".match(re)).toBeNull();
   });
+
+  it("only selects agents Vibe 3 ships, and labels none of them read-only (#15568)", () => {
+    // Vibe 3.0 removed the `plan` agent; an explicit `--agent` naming a missing
+    // agent fails at startup. Built-ins per vibe/cli-rust/src/cli.rs in 3.0.4.
+    const vibeBuiltins = new Set(["ask", "accept-edits", "smart-approve", "auto-approve"]);
+    const presets = getAgentConfig("mistral")?.presets ?? [];
+    const selected = presets.flatMap((preset) =>
+      (preset.args ?? []).flatMap((arg, i, args) => {
+        if (arg === "--agent") return [args[i + 1]];
+        return arg.startsWith("--agent=") ? [arg.slice("--agent=".length)] : [];
+      })
+    );
+
+    expect(selected.length).toBeGreaterThan(0);
+    for (const agent of selected) expect(vibeBuiltins.has(agent!)).toBe(true);
+    for (const preset of presets) {
+      expect(`${preset.name} ${preset.description ?? ""}`).not.toMatch(/\bread[-\s]*only\b/i);
+    }
+  });
 });
 
 describe("copilot configuration", () => {
