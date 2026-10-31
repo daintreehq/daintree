@@ -504,9 +504,7 @@ export class WarmCache<T> {
     while (this.slots.size >= this.maxEntries || this.totalBytes + bytes > this.maxBytes) {
       const oldest = this.slots.entries().next().value;
       if (!oldest) break;
-      // A clock that went backwards proves nothing about use, so it counts as cold.
-      const age = now - oldest[1].touchedAt;
-      if (age >= 0 && age < CACHE_WARM_MS) return;
+      if (now - oldest[1].touchedAt < CACHE_WARM_MS) return;
       this.delete(oldest[0]);
     }
     this.slots.set(key, { fingerprint, value, bytes, touchedAt: now });
@@ -693,12 +691,17 @@ export async function listSubagentsInDir(
   // A candidate whose probe fails costs its row, as it always has, and the
   // next one down takes its place: each pass asks for exactly the rows still
   // missing, so the list is only probed past its length when something failed.
+  // Retention age runs on a monotonic clock: `now` is the status clock, a wall
+  // clock a test can pin and the system can step.
+  const touchedAt = performance.now();
   const rows: AgentSubagent[] = [];
   let cursor = 0;
   while (rows.length < SUBAGENT_LIST_LIMIT && cursor < candidates.length) {
     const batch = candidates.slice(cursor, cursor + SUBAGENT_LIST_LIMIT - rows.length);
     cursor += batch.length;
-    const built = await mapPool(batch, LIST_CONCURRENCY, (child) => buildRow(dir, child, now));
+    const built = await mapPool(batch, LIST_CONCURRENCY, (child) =>
+      buildRow(dir, child, now, touchedAt)
+    );
     for (const row of built) if (row) rows.push(row);
   }
   return rows;
@@ -737,8 +740,13 @@ async function statChild(dir: string, id: string): Promise<ChildStat | null> {
   }
 }
 
-async function buildRow(dir: string, child: ChildStat, now: number): Promise<AgentSubagent | null> {
-  let probe = probeCache.get(child.file, child.fingerprint, now);
+async function buildRow(
+  dir: string,
+  child: ChildStat,
+  now: number,
+  touchedAt: number
+): Promise<AgentSubagent | null> {
+  let probe = probeCache.get(child.file, child.fingerprint, touchedAt);
   if (!probe) {
     try {
       probe = summarizeProbe(await probeTranscript(child.file, child.size));
@@ -750,11 +758,11 @@ async function buildRow(dir: string, child: ChildStat, now: number): Promise<Age
       child.fingerprint,
       probe,
       CACHE_ENTRY_OVERHEAD_BYTES + stringBytes(child.file, child.fingerprint, probe.preview),
-      now
+      touchedAt
     );
   }
 
-  const meta = await readMeta(path.join(dir, `agent-${child.id}.meta.json`), now);
+  const meta = await readMeta(path.join(dir, `agent-${child.id}.meta.json`), touchedAt);
 
   return {
     id: child.id,
@@ -775,11 +783,11 @@ async function buildRow(dir: string, child: ChildStat, now: number): Promise<Age
   } satisfies AgentSubagent;
 }
 
-async function readMeta(file: string, now: number): Promise<SubagentMeta> {
+async function readMeta(file: string, touchedAt: number): Promise<SubagentMeta> {
   const identity = await regularFileIdentity(file);
   // No sidecar at all is normal for a child spawned without one.
   if (identity === null) return EMPTY_META;
-  const cached = metaCache.get(file, identity.fingerprint, now);
+  const cached = metaCache.get(file, identity.fingerprint, touchedAt);
   if (cached) return cached;
   let meta: SubagentMeta;
   try {
@@ -801,7 +809,7 @@ async function readMeta(file: string, now: number): Promise<SubagentMeta> {
     meta,
     CACHE_ENTRY_OVERHEAD_BYTES +
       stringBytes(file, identity.fingerprint, meta.agentType, meta.description, meta.model),
-    now
+    touchedAt
   );
   return meta;
 }

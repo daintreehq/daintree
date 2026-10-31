@@ -637,7 +637,10 @@ describe("listSubagentsInDir past what it shows", () => {
     await writeChild(dir, "aaa1", [userRecord("go")]);
     expect((await listSubagentsInDir(dir))[0]?.label).toBeNull();
 
-    await writeFile(path.join(dir, "agent-aaa1.meta.json"), JSON.stringify({ description: "Late" }));
+    await writeFile(
+      path.join(dir, "agent-aaa1.meta.json"),
+      JSON.stringify({ description: "Late" })
+    );
     expect((await listSubagentsInDir(dir))[0]?.label).toBe("Late");
   });
 
@@ -745,14 +748,6 @@ describe("WarmCache", () => {
     cache.set("a", "v1", "old", 10, 0);
     expect(cache.get("a", "v2", 0)).toBeUndefined();
     expect(cache.stats()).toEqual({ entries: 0, bytes: 0 });
-  });
-
-  it("treats a clock that went backwards as no evidence of use", () => {
-    const cache = new WarmCache<string>(1, 1_000);
-    cache.set("a", "v1", "a", 10, HOUR);
-    cache.set("b", "v1", "b", 10, 0);
-    expect(cache.get("b", "v1", 0)).toBe("b");
-    expect(cache.stats().entries).toBe(1);
   });
 });
 
