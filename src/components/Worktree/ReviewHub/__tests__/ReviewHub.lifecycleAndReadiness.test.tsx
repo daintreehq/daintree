@@ -284,6 +284,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
 import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { useReviewCommitDraftStore } from "@/store/reviewCommitDraftStore";
+import { isHoldingUnrecoverableWork } from "@/services/plugin/panelRecoveryHold";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -641,9 +642,20 @@ describe("ReviewHub", () => {
       expect(second.textarea.value).toBe("human edit");
     });
 
+    it("holds the project view while a typed message waits, closed hub or not (#15574)", async () => {
+      const first = await openHub({ initialCommitMessage: "from AI note" });
+      expect(isHoldingUnrecoverableWork()).toBe(false);
+
+      fireEvent.change(first.textarea, { target: { value: "feat: carefully worded" } });
+      expect(isHoldingUnrecoverableWork()).toBe(true);
+      first.unmount();
+      expect(isHoldingUnrecoverableWork()).toBe(true);
+    });
+
     it("never keeps an untouched seed as a draft", async () => {
       const first = await openHub({ initialCommitMessage: "from AI note" });
       expect(first.textarea.value).toBe("from AI note");
+      expect(isHoldingUnrecoverableWork()).toBe(false);
       first.unmount();
 
       const second = await openHub();
@@ -655,6 +667,7 @@ describe("ReviewHub", () => {
       const first = await openHub();
       fireEvent.change(first.textarea, { target: { value: "feat: second thoughts" } });
       fireEvent.change(first.textarea, { target: { value: "" } });
+      expect(isHoldingUnrecoverableWork()).toBe(false);
       first.unmount();
 
       const second = await openHub();

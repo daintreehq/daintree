@@ -3,6 +3,7 @@ import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { usePanelRecoveryResponder } from "../usePanelRecoveryResponder";
 import { useFileDocumentStore, type FileDocumentProjection } from "@/store/fileDocumentStore";
+import { useReviewCommitDraftStore } from "@/store/reviewCommitDraftStore";
 import {
   resetPluginPanelLifecycleForTests,
   setViewUnsavedChanges,
@@ -40,6 +41,7 @@ describe("usePanelRecoveryResponder", () => {
       },
     });
     useFileDocumentStore.setState({ byPanelId: {} });
+    useReviewCommitDraftStore.setState({ draftsByWorktree: {} });
     resetPluginPanelLifecycleForTests();
   });
   afterEach(() => vi.restoreAllMocks());
@@ -76,6 +78,23 @@ describe("usePanelRecoveryResponder", () => {
     expect(reply).toHaveBeenCalledWith("r1", true);
   });
 
+  it("holds while a typed commit message waits in Review & commit (#15574)", () => {
+    useReviewCommitDraftStore.getState().setDraft("/repo/a", "feat: carefully worded");
+    renderHook(() => usePanelRecoveryResponder());
+    ask("r1");
+    expect(reply).toHaveBeenCalledWith("r1", true);
+  });
+
+  it("answers that an emptied or whitespace-only commit draft holds nothing", () => {
+    const { setDraft } = useReviewCommitDraftStore.getState();
+    setDraft("/repo/a", "feat: second thoughts");
+    setDraft("/repo/a", "");
+    setDraft("/repo/b", " \n\t");
+    renderHook(() => usePanelRecoveryResponder());
+    ask("r1");
+    expect(reply).toHaveBeenCalledWith("r1", false);
+  });
+
   it("stops listening on unmount", () => {
     const { unmount } = renderHook(() => usePanelRecoveryResponder());
     unmount();
@@ -109,6 +128,16 @@ describe("usePanelRecoveryResponder", () => {
         byPanelId: { a: projection({ dirty: true, recoveryStored: true }) },
       });
       expect(report.mock.calls).toEqual([[false], [true], [false]]);
+    });
+
+    it("reports a commit draft appearing, then going with its commit or its worktree", () => {
+      renderHook(() => usePanelRecoveryResponder());
+      const { setDraft, clearCommitted, clearWorktree } = useReviewCommitDraftStore.getState();
+      setDraft("/repo/a", "feat: a");
+      clearCommitted("/repo/a", "feat: a");
+      setDraft("/repo/b", "fix: b");
+      clearWorktree("/repo/b");
+      expect(report.mock.calls).toEqual([[false], [true], [false], [true], [false]]);
     });
 
     it("stops reporting on unmount", () => {
