@@ -1,10 +1,10 @@
 # Forge Provider Abstraction
 
-**Status: implemented, host fully forge-neutral.** The forge contract, the host registry, the main↔workspace-host RPC bridge, the built-in GitHub plugin, the `forge.*` actions, the manifest schema, and the Preferences → Forge Integrations UI all landed (commits `df083b1d8`, `6ad8e2595`, `7cad3add0`, `f3db66c7a`). The forge-neutral-host conversion then completed the teardown the original plan deferred: the `github:*` IPC channels, the `window.electron.github` preload namespace, `electron/ipc/handlers/github.ts`, the `electron/services/github/*` shim layer, and the GitHub-shaped shared types are all gone — GitHub-specific code now lives only under `plugins/builtin/github/`. The host consumes providers exclusively through `ForgeProviderImpl` capabilities (`repoStats`, `projectHealth`, `tooltips`, `avatars`, `healthEvents`, `clone`, `batchLookups`, `identity`, `reviews`), providerId-keyed `forge:*` channels, manifest-declared view slots (`slots.settingsTab`/`icon`/`statsDropdown`/`bulkCreateWorktreeDialog`/`issueSelector`), and registry-driven hostname matching (`matchedForgeProviderId` on worktree snapshots replaced the old `isGitHubRemote` boolean; CI status crosses every boundary in the normalized `CIStatusState` vocabulary). Builtin plugins are auto-discovered by the build (manifest copy, esbuild main entry, eager renderer glob) — adding a forge plugin requires no host or build-config edits. This doc describes the as-built design and keeps the original rationale.
+**Status: implemented, host fully forge-neutral.** The forge contract, the host registry, the main↔workspace-host RPC bridge, the built-in GitHub plugin, the `forge.*` actions, the manifest schema, and the Preferences → Forge Integrations UI all landed (commits `df083b1d8`, `6ad8e2595`, `7cad3add0`, `f3db66c7a`). The forge-neutral-host conversion then completed the teardown the original plan deferred: the `github:*` IPC channels, the `window.electron.github` preload namespace, `electron/ipc/handlers/github.ts`, the `electron/services/github/*` shim layer, and the GitHub-shaped shared types are all gone — GitHub-specific code now lives only under `plugins/builtin/github/`. The host consumes providers exclusively through `ForgeProviderImpl` capabilities (`repoStats`, `projectHealth`, `tooltips`, `avatars`, `healthEvents`, `clone`, `batchLookups`, `identity`, `reviews`), providerId-keyed `forge:*` channels, manifest-declared view slots (`slots.settingsTab`/`icon`/`statsDropdown`/`bulkCreateWorktreeDialog`/`issueSelector`), and registry-driven hostname matching (`matchedForgeProviderId` on worktree snapshots replaced the old `isGitHubRemote` boolean; CI status crosses every boundary in the normalized `CIStatusState` vocabulary). Builtin plugins are auto-discovered by the build (manifest copy, esbuild main entry, eager renderer glob) — adding a forge plugin requires no host or build-config edits. This doc describes the as-built design and keeps the original rationale. Sections that speak of "this stage", "later work" or future providers record the original migration plan and are historical: three built-in providers now ship, GitHub and GitLab (`plugins/builtin/gitlab`) in the code role and Linear (`plugins/builtin/linear`, `roles: ["issues"]`) as the issues-only role.
 
 Daintree previously had GitHub hardwired across the IPC layer, services, components, stores, and actions. This document captures the decision to refactor that integration into a plugin-shaped abstraction.
 
-**Scope of this stage:** ship the plugin contract for forge integrations, and rehome GitHub as the first plugin on top of it. No other providers ship in this work. The contract is _designed_ to admit future providers (GitLab, Gitea, Bitbucket, Forgejo) without re-shaping the host, but those plugins are explicitly later work.
+**Scope of the original migration stage (historical):** ship the plugin contract for forge integrations, and rehome GitHub as the first plugin on top of it. No other providers shipped in that work. The contract was _designed_ to admit further providers without re-shaping the host, and GitLab and Linear have since shipped as built-ins on it. Gitea, Bitbucket and Forgejo remain unbuilt.
 
 The motivation is decoupling, not eviction: GitHub stays as a built-in plugin shipped with the app. The load-bearing test that the contract is honest is that GitHub fits through it cleanly.
 
@@ -164,7 +164,7 @@ interface ReleaseCapability {
 
 New capabilities are added as sibling optional fields. The base interface does not change when a new capability is introduced.
 
-GitHub implements every base method and every capability listed above. Future providers will implement the base contract and whichever capabilities they actually support; the contract is designed to admit that variation without re-shaping the host. Validating against a second provider is later work — not part of this stage.
+GitHub implements every base method and every capability listed above. Other providers implement the base contract and whichever capabilities they actually support; the contract admits that variation without re-shaping the host. GitLab (a full code forge with issues, merge requests, CI and releases) is the second provider to validate it, and Linear exercises the issues-only role. Validating against a second provider was out of scope for the original migration stage.
 
 ### `rawData` on Every Domain Object
 
@@ -201,13 +201,13 @@ The host bridges the boundary so plugin authors never see it.
 
 **Race on first poll.** `PullRequestService` in the workspace-host starts polling before main's `PluginService.initialize()` finishes — the workspace-host is spawned early, the plugin scan completes asynchronously. The bridge handles this by allowing every poll to re-attempt resolution: when `providerNamespacedId` is null, `checkForPRs` calls `resolveProvider()` first. To keep the user from staring at empty PR sub-rows for an entire blurred-cadence interval (120s) on cold start, the next poll fires at the fast `FOCUS_CATCHUP_THROTTLE_MS` (5s) until resolution lands. Once a provider is bound, the normal 30s/120s cadence resumes. Explicit invalidation (`refresh()`, `setForgeSettings`) clears the cache.
 
-**For plugin authors:** there is nothing to do. `host.registerForgeProvider(descriptor, impl)` in the plugin's `activate()` is the entire surface. The bridge is invisible — the provider impl lives in main, and the workspace-host transparently proxies through. This means every forge plugin (built-in GitHub, future GitLab/Gitea/Bitbucket/Forgejo, third-party plugins) participates in PR detection without any extra wiring. Auth tokens, network state, and rate-limit accounting all stay in one process where they belong.
+**For plugin authors:** there is nothing to do. `host.registerForgeProvider(descriptor, impl)` in the plugin's `activate()` is the entire surface. The bridge is invisible — the provider impl lives in main, and the workspace-host transparently proxies through. This means every forge plugin (built-in GitHub and GitLab, any other forge plugin) participates in PR detection without any extra wiring. Auth tokens, network state, and rate-limit accounting all stay in one process where they belong.
 
 **Why not just load plugins in the workspace-host too?** Activating plugins twice risks duplicating side effects (IPC handlers, broadcasts, scheduled timers), duplicates auth state across processes, and exposes plugin authors to a second host-API surface with a different set of capabilities (no `registerHandler`, no `broadcastToRenderer`). The single-process activation with an RPC bridge keeps the plugin contract simple and main as the single source of truth.
 
 ## State Normalization
 
-Even though only GitHub ships in this stage, the interface normalizes states so future providers don't force a re-shape. PR state enums diverge across providers (GitHub `OPEN | CLOSED | MERGED`, GitLab `opened | closed | locked | merged`, Bitbucket `OPEN | MERGED | DECLINED | SUPERSEDED`, Gitea `open | closed`). The host's normalized enum is:
+The interface normalizes states so that each provider's native vocabulary maps onto one host enum, without re-shaping the host per provider. PR state enums diverge across providers (GitHub `OPEN | CLOSED | MERGED`, GitLab `opened | closed | locked | merged`, Bitbucket `OPEN | MERGED | DECLINED | SUPERSEDED`, Gitea `open | closed`). The host's normalized enum is:
 
 ```ts
 type NormalizedPRState = "open" | "merged" | "closed" | "declined";
@@ -257,7 +257,7 @@ Settings UI for auth is contributed by each plugin's own `settings` contribution
 
 `PRIntegrationService` (the worktree-PR linker) becomes provider-routed. The active provider for a worktree is determined by matching the worktree's remote URL hostname against registered providers' `matches` entries.
 
-The shared interface delegates to each provider's native query. Client-side filtering across paged results is forbidden — GitHub uses GraphQL `pullRequests(headRefName: $branch)`, future GitLab plugins will use REST `/projects/:id/merge_requests?source_branch=`, etc.
+The shared interface delegates to each provider's native query. Client-side filtering across paged results is forbidden — GitHub uses GraphQL `pullRequests(headRefName: $branch)`, GitLab uses REST `/projects/:id/merge_requests?source_branch=`, etc.
 
 Detection events became provider-aware in the same shape as the snapshot projection — a `providerId` plus optional `issue` / `pr` refs carrying the normalized state — replacing the old GitHub-specific `PR_DETECTED` payload. The live types are in [`shared/types/forge.ts`](../../shared/types/forge.ts); read them there rather than from a sketch here.
 
@@ -333,7 +333,7 @@ Even with only GitHub shipping, we land `forge.*` now so the action shape doesn'
 Preferences → Forge Integrations:
 
 - Lists detected git remotes per active project
-- Shows the matched provider for each remote (with only GitHub registered, that's "GitHub" or "No provider")
+- Shows the matched provider for each remote (for example "GitHub", "GitLab", or "No provider"; an issues-only provider such as Linear is never matched by remote)
 - Per-provider section rendered by the plugin's own `settings` contribution (auth, etc.)
 
 A project binds one active provider per role (#13700). The **code** role — PRs, CI, repository stats, clone, everything addressed through the git remote — is the provider the precedence chain picks. The **issues** role — issue reads and writes, the issue picker, "Assign to me", the toolbar issue count — is that same provider unless the project's `issueProviderOverride` names another. That lets an issues-only tracker (a manifest declaring `roles: ["issues"]`, implementing `ForgeIssueProviderImpl` plus `resolveIssueRepo`) serve a project's issues while the code forge keeps the rest. The resolver returns both roles in one `ResolvedForgeProvider` (`entry` is code, `issues` is the issues role) so every surface reads the same answer, and an issues override that names nothing usable leaves the project with no issues provider rather than falling back to the code forge's.
@@ -374,9 +374,11 @@ The refactor landed across multiple PRs in this order. It is retained because th
 
 Each step was a separate PR. The contract was allowed to evolve while GitHub was being migrated (steps 1–7); after step 7 it froze. Note two naming drifts against the plan above: the host registry shipped as `electron/services/forgeProviderRegistry.ts` (lowercase), and the `github.*` action aliases from step 7 have since been removed.
 
-## Non-Goals (For This Stage)
+## Non-Goals (Original Migration Stage)
 
-- **Additional provider plugins.** GitLab, Gitea, Bitbucket, Forgejo all later work.
+These were the non-goals of the original migration and are kept as historical rationale; the first item has since been partly superseded.
+
+- **Additional provider plugins.** At the time, GitLab, Gitea, Bitbucket and Forgejo were all later work. GitLab and Linear have since shipped as built-ins; Gitea, Bitbucket and Forgejo are still unbuilt.
 - **Multi-active providers per role.** A project has one code provider and one issues provider, which may be the same; v1 never mirrors a role across several.
 - **Git operations themselves.** Local git via `simple-git` and `node-pty` is unaffected. The forge layer sits on top of git; it doesn't replace git.
 - **Federation / ForgeFed actor URLs.** Pattern matching is hostname-based; ActivityPub actor matching is not in scope.
@@ -387,10 +389,10 @@ Each step was a separate PR. The contract was allowed to evolve while GitHub was
 
 ## Trade-offs
 
-- **Plugin views run in-process with full Node privileges.** Future GitLab/Gitea plugins will ship React panels rendered inside Daintree's renderer. This matches Daintree's existing curated-trust model (see [plugins/architecture.md](../plugins/architecture.md)). Capability disclosure is the user-facing safeguard.
+- **Plugin views share the host renderer's DOM and preload bridge.** Forge plugins ship React panels rendered inline in the project renderer. That renderer is sandboxed and has no Node (`contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`), but view code shares Daintree's DOM and the same `window.electron` bridge as the host UI. Full Node privileges belong to plugin main code: built-ins run in-process in Electron main, and user-installed and project plugins run in `utilityProcess` workers. This matches Daintree's existing curated-trust model (see [plugins/architecture.md](../plugins/architecture.md) and, as the authoritative account, [plugins/trust-model.md](../plugins/trust-model.md)). Capability disclosure is the user-facing safeguard.
 - **Built-in GitHub adds bundle weight.** The GitHub plugin ships with the app even for users who don't use GitHub. The alternative (lazy-loading the entire GitHub integration) costs first-paint latency for the common case. Tradeoff favors bundle weight.
 - **Breaking SDK change is painful for early plugin authors.** The `PluginWorktreeSnapshot` field rename forces a recompile. Acceptable because the SDK is pre-1.0; communicate clearly in the CHANGELOG.
-- **The contract is designed for providers we haven't built.** Capability shapes for releases, approvals, and merge-trains exist in the type system before any non-GitHub provider validates them. Some shapes may need adjustment when the second provider arrives. The alternative — design the contract minimally and expand later — risks a second breaking change on the next provider.
+- **The contract was designed before a second provider existed.** Capability shapes for releases, approvals, and merge-trains were in the type system before any non-GitHub provider validated them; GitLab has since exercised much of that surface, but shapes no shipped provider implements remain unproven and may need adjustment. The alternative — design the contract minimally and expand later — risks a second breaking change on the next provider.
 
 ## Naming
 
