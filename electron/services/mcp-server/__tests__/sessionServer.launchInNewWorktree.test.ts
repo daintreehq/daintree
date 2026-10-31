@@ -12,6 +12,7 @@ import { getViewlessHelpBaseManifest } from "../baseManifest.js";
 import { SESSION_OWNERSHIP_NOTE } from "../sessionCallOwnership.js";
 import { createSessionServer } from "../sessionServer.js";
 import { RELAY_CALL_ID_META_KEY } from "../shared.js";
+import { relayNoticePane, type TerminalNotifyHandlers } from "../terminalNotify.js";
 import type { SessionServerDeps } from "../sessionServer.js";
 import { SessionStore } from "../sessionStore.js";
 import {
@@ -370,6 +371,7 @@ describe("agent.launchInNewWorktree through the session server (#15738)", () => 
     const second = await callTool(server, call);
 
     expect(toolErrorPayload(first).code).toBe("PARTIAL_SUCCESS");
+    expect(second.isError).toBe(true);
     expect(second.content).toEqual(first.content);
     expect(dispatchAction.mock.calls.map((c) => c[0])).toEqual([
       "worktree.createWithRecipe",
@@ -389,6 +391,30 @@ describe("agent.launchInNewWorktree through the session server (#15738)", () => 
     expect(toolErrorPayload(result).code).toBe("NOTIFY_NOT_ELIGIBLE");
     expect(JSON.stringify(result.content)).toContain("Nothing was created");
     expect(dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("refuses a relayed notify with no call id to pin it to before anything is created", async () => {
+    const prepareLaunch = vi.fn();
+    const { dispatchAction, server } = harness({}, "core", {
+      relay: { shellName: "shell-mbp", refuseWrite: vi.fn(() => null) },
+      resolveOwnPane: () =>
+        relayNoticePane("relay-principal", {
+          projectId: "project-1",
+          helpSessionId: "help-1",
+          deliver: vi.fn(),
+        }),
+      terminalNotify: { prepareLaunch } as unknown as TerminalNotifyHandlers,
+    });
+
+    const result = await callTool(server, {
+      name: "agent.launchInNewWorktree",
+      arguments: { source: SOURCE, agentId: "claude", prompt: "Fix it", notify: true },
+    });
+
+    expect(toolErrorPayload(result).code).toBe("NOTIFY_NOT_ELIGIBLE");
+    expect(JSON.stringify(result.content)).toContain("no call id");
+    expect(dispatchAction).not.toHaveBeenCalled();
+    expect(prepareLaunch).not.toHaveBeenCalled();
   });
 
   it("carries a relayed call's id to every step it dispatches", async () => {

@@ -154,24 +154,38 @@ describe("viewless argument schemas", () => {
     const rendererSchema: unknown = registry.get("agent.launchInNewWorktree")?.()?.argsSchema;
     if (!isZodSchema(rendererSchema)) throw new Error("launchInNewWorktree has no args schema");
     const newBranch = { kind: "newBranch", branchName: "unit-1" };
-    // Main additionally refuses unknown keys and a combined wait past the
-    // hold, neither of which the renderer's advertised schema can express.
-    const cases: Array<Record<string, unknown>> = [
-      { source: newBranch, agentId: "claude" },
-      { source: { ...newBranch, fetchBase: true, collisionPolicy: "error" }, agentId: "codex" },
-      { source: { kind: "pullRequest", pullRequestNumber: 7 }, agentId: "claude", model: "sol" },
-      { source: { kind: "existingBranch", branchName: "x", baseBranch: "develop" }, agentId: "a" },
-      { source: { kind: "pullRequest", pullRequestNumber: 0 }, agentId: "claude" },
-      { source: newBranch },
-      { source: { ...newBranch, branchName: "  " }, agentId: "claude" },
-      { source: newBranch, agentId: "claude", setupTimeoutMs: 600_001 },
-      { source: newBranch, agentId: "claude", location: "overlay", interactive: true },
-      { source: newBranch, agentId: "claude", name: "x".repeat(201) },
+    // Main additionally refuses unknown keys, a combined wait past the hold
+    // and handback without a prompt, none of which the renderer's advertised
+    // schema can express.
+    const cases: Array<[args: Record<string, unknown>, accepted: boolean]> = [
+      [{ source: newBranch, agentId: "claude" }, true],
+      [
+        { source: { ...newBranch, fetchBase: true, collisionPolicy: "error" }, agentId: "codex" },
+        true,
+      ],
+      [
+        { source: { kind: "pullRequest", pullRequestNumber: 7 }, agentId: "claude", model: "sol" },
+        true,
+      ],
+      [{ source: { kind: "existingBranch", branchName: "topic" }, agentId: "gemini" }, true],
+      [{ source: newBranch, agentId: "claude", location: "overlay", interactive: true }, true],
+      [
+        {
+          source: { kind: "existingBranch", branchName: "x", baseBranch: "develop" },
+          agentId: "a",
+        },
+        false,
+      ],
+      [{ source: { kind: "pullRequest", pullRequestNumber: 0 }, agentId: "claude" }, false],
+      [{ source: newBranch }, false],
+      [{ source: { ...newBranch, branchName: "  " }, agentId: "claude" }, false],
+      [{ source: newBranch, agentId: "claude", setupTimeoutMs: 600_001 }, false],
+      [{ source: newBranch, agentId: "claude", name: "x".repeat(201) }, false],
     ];
-    for (const args of cases) {
-      expect(AgentLaunchInNewWorktreeArgsSchema.safeParse(args).success, JSON.stringify(args)).toBe(
-        rendererSchema.safeParse(args).success
-      );
+    for (const [args, accepted] of cases) {
+      const label = JSON.stringify(args);
+      expect(rendererSchema.safeParse(args).success, label).toBe(accepted);
+      expect(AgentLaunchInNewWorktreeArgsSchema.safeParse(args).success, label).toBe(accepted);
     }
   });
 });

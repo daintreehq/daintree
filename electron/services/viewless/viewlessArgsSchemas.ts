@@ -156,6 +156,11 @@ export const AgentLaunchInNewWorktreeArgsSchema = AgentLaunchArgsSchema.omit({ w
   .refine((args) => !launchWaitsExceedHold(args), {
     message: `setupTimeoutMs and waitSeconds together can't exceed ${REPLY_WAIT_MAX_SECONDS} s, the longest a call is held`,
     path: ["setupTimeoutMs"],
+  })
+  // The launch refuses it too, but only after the worktree exists.
+  .refine((args) => args.handback !== true || (args.prompt ?? "").trim() !== "", {
+    message: "handback marks the end of the reply to `prompt`, so it needs a non-empty `prompt`",
+    path: ["handback"],
   });
 
 /** `slashCommands.list`'s arguments: a project selector, as a view takes it, and a built-in agent. */

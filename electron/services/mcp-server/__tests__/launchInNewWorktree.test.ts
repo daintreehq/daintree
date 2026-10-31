@@ -404,6 +404,23 @@ describe("runLaunchInNewWorktree (#15738)", () => {
     expect(envelope.message).toMatch(/isn't known whether a worktree was made/);
   });
 
+  it("leaves a create whose deadline passed before it was sent as the error it is", async () => {
+    // Nothing was sent, so nothing can have been made.
+    const notSent = buildToolError({
+      code: "EXECUTION_ERROR",
+      message:
+        "Action dispatch timed out: worktree.createWithRecipe — its deadline passed before it was sent",
+    });
+    const run = steps({ "worktree.createWithRecipe": [() => notSent] });
+
+    const { result } = await runLaunchInNewWorktree(
+      { source: SOURCE, agentId: "claude" },
+      { callTool: run.callTool, signal: live() }
+    );
+
+    expect(result).toBe(notSent);
+  });
+
   it("passes the call's create key to the create step", async () => {
     const run = steps({
       "worktree.createWithRecipe": [() => buildToolError({ code: "X", message: "no" })],
@@ -435,6 +452,7 @@ describe("runLaunchInNewWorktree (#15738)", () => {
         },
         /together can't exceed 1800 s/,
       ],
+      [{ source: SOURCE, agentId: "claude", handback: true }, /needs a non-empty `prompt`/],
     ])("refuses %j before anything is created", async (args, message) => {
       const runner = run();
       const refused = runLaunchInNewWorktree(args, { callTool: runner.callTool, signal: live() });

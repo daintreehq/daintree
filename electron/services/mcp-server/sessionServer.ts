@@ -1732,10 +1732,17 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               };
               return buildToolError({ code, message });
             };
-            if ((tier === "external" ? null : ownPane()) === null || terminalNotify === undefined) {
+            const pane = tier === "external" ? null : ownPane();
+            if (pane === null || terminalNotify === undefined) {
               return refuse(
                 NOTIFY_NOT_ELIGIBLE,
                 "`notify` types into the caller's own pane, and this connection has none: only an agent pane or an assistant session can ask for it. Nothing was created."
+              );
+            }
+            if (pane.relay !== undefined && pane.relay.callId === undefined) {
+              return refuse(
+                NOTIFY_NOT_ELIGIBLE,
+                "This relayed call carries no call id, so its notice could not reach the assistant that asked. Nothing was created."
               );
             }
             if ((readStringArg(args, "prompt") ?? "").trim().length === 0) {
