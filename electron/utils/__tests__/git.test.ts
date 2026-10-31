@@ -1745,7 +1745,11 @@ describe("getWorktreeChangesWithStats untracked totals past the enrichment cap (
     "reports all %i untracked files beside tracked changes",
     async (n) => {
       const cwd = `/untracked-total-${n}/` + Math.random();
-      mockGit.status.mockResolvedValue({ ...emptyStatus, modified: tracked, not_added: untracked(n) });
+      mockGit.status.mockResolvedValue({
+        ...emptyStatus,
+        modified: tracked,
+        not_added: untracked(n),
+      });
 
       const result = await getWorktreeChangesWithStats(cwd, { forceRefresh: true });
 

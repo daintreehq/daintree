@@ -2281,7 +2281,11 @@ describe("WorktreeDeleteDialog — untracked files past the enrichment cap (#155
       omittedUntrackedCount: 5,
     });
     render(
-      <WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={makeWorktree(makeChanges([]))} />
+      <WorktreeDeleteDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        worktree={makeWorktree(makeChanges([]))}
+      />
     );
 
     await waitFor(() => {

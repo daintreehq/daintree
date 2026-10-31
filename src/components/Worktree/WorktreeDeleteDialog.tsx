@@ -146,8 +146,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // Untracked files the status read counted but did not list, from the same
   // read as `previewChanges`, so the counts and the list tail agree (#15559).
   const omittedUntrackedCount =
-    (freshPreview ? freshPreview.omittedUntrackedCount : worktree.worktreeChanges?.omittedUntrackedCount) ??
-    0;
+    (freshPreview
+      ? freshPreview.omittedUntrackedCount
+      : worktree.worktreeChanges?.omittedUntrackedCount) ?? 0;
   const previewRootPath =
     freshPreview?.rootPath ?? worktree.worktreeChanges?.rootPath ?? worktree.path;
 
