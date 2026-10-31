@@ -105,6 +105,12 @@ export const PUSH_BANNER_CONFIGS: Record<GitOperationReason, PushBannerConfig> =
       "The remote rejected this push (protected branch or repository rule).",
     detailPolicy: "collapse",
   },
+  "push-config-unsupported": {
+    message:
+      getGitRecoveryHint("push-config-unsupported") ??
+      "This remote's settings would push more than this branch.",
+    detailPolicy: "collapse",
+  },
   "hook-rejected": {
     message: getGitRecoveryHint("hook-rejected") ?? "A server-side hook rejected the push.",
     detailPolicy: "collapse",

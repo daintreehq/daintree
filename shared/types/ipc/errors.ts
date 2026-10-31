@@ -139,6 +139,7 @@ export type GitOperationReason =
   | "conflict-unresolved"
   | "push-rejected-outdated"
   | "push-rejected-policy"
+  | "push-config-unsupported"
   | "pathspec-invalid"
   | "lfs-missing"
   | "lfs-quota-exceeded"

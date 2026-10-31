@@ -169,6 +169,34 @@ async function requireRemoteTarget(
 }
 
 /**
+ * The arguments for a push that writes exactly one branch to `destination`.
+ *
+ * A bare `git push` sends whatever the repository's config says, which can be
+ * far more than the one branch every push confirm shows (#15556):
+ * `push.default=matching` or a `remote.<name>.push` wildcard publishes every
+ * other branch's unpushed commits, and a mirror remote is rewritten wholesale.
+ * A refspec on the command line overrides the first two and makes git refuse a
+ * mirror remote outright; the flags keep `push.followTags` and
+ * `push.recurseSubmodules` from adding tags or submodule pushes nobody saw.
+ *
+ * Fully qualified on both sides: a short `topic` is ambiguous against a local
+ * tag of the same name, and on the remote side can resolve to a tag instead of
+ * the branch. No `--` separator, because simple-git appends its own flags after
+ * these arguments; the remote name is already guarded against leading dashes.
+ */
+function singleBranchPushArgs(
+  branchName: string,
+  destination: ResolvedGitPushDestination
+): string[] {
+  return [
+    "--no-follow-tags",
+    "--recurse-submodules=no",
+    destination.remote,
+    `refs/heads/${branchName}:refs/heads/${destination.branch}`,
+  ];
+}
+
+/**
  * Does `ref` name a commit that exists in this repository right now?
  *
  * `rev-parse --verify --quiet` exits non-zero without writing to stderr when it
@@ -1181,7 +1209,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       branchName = branch.trim();
 
       // Resolved once, up front: the same destination labels the progress
-      // event, backs the `--set-upstream` argv, and pins the lease ref if the
+      // event, is the only ref the push writes, and pins the lease ref if the
       // push is rejected. Refuses the push outright when git has no answer,
       // rather than reporting one target and writing to another.
       destination = await requireRemoteTarget(git, branchName, payload.cwd, "push");
@@ -1208,35 +1236,20 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
         },
       });
 
-      // `<local>:<remote>` explicitly, because the remote-side branch need not
-      // share the local name — with `push.default=upstream` a local `topic` can
-      // push to `release/topic`.
-      const refspec = `${branchName}:${destination.branch}`;
-
-      // `requiresUpstreamRepair` forces the explicit form too. That branch's
-      // upstream names a different branch, so a plain `git push` fails on the
-      // name mismatch rather than on a missing upstream — the recovery in the
-      // catch below would never see the message it looks for. Pushing with
-      // `--set-upstream` to the destination the confirm already showed both
-      // completes the push and rewrites the tracking config that broke it.
-      if (payload.setUpstream || destination.requiresUpstreamRepair) {
-        await authGit.push(["--set-upstream", destination.remote, refspec]);
-      } else {
-        try {
-          await authGit.push();
-        } catch (pushErr) {
-          const msg = formatErrorMessage(pushErr, "git push failed");
-          if (msg.includes("no upstream branch") || msg.includes("has no upstream")) {
-            // The branch has no tracking config yet — the normal state of a
-            // freshly created worktree branch. `destination` was resolved above
-            // and is either git's own answer or the repository's single remote,
-            // never a guessed `origin`, so establishing tracking to it is safe.
-            await authGit.push(["--set-upstream", destination.remote, refspec]);
-          } else {
-            throw pushErr;
-          }
-        }
-      }
+      // Tracking is written in the same push when it is asked for, when the
+      // branch's upstream names a different branch (a plain push would fail on
+      // that mismatch, and the confirm already showed the same-name
+      // destination), or when the branch tracks nothing yet — the normal state
+      // of a freshly created worktree branch, whose destination is the
+      // repository's single remote, never a guessed `origin`.
+      const setUpstream =
+        payload.setUpstream ||
+        destination.requiresUpstreamRepair ||
+        destination.establishesUpstream;
+      await authGit.push([
+        ...(setUpstream ? ["--set-upstream"] : []),
+        ...singleBranchPushArgs(branchName, destination),
+      ]);
       if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
         playSoundFireAndForget("git-push");
       }
@@ -1378,15 +1391,18 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       // not always the local branch name (#11746). Passing the local name in a
       // triangular setup would lease against a ref that does not exist there,
       // and git treats an unmatched lease ref as no protection at all.
-      await git.push(destination.remote, `${branchName}:${destination.branch}`, [
-        `--force-with-lease=${destination.branch}:${payload.leaseSha}`,
+      await git.push([
+        `--force-with-lease=refs/heads/${destination.branch}:${payload.leaseSha}`,
         "--force-if-includes",
         // A force-push is a normal way to reach this destination — the plain
         // push is rejected as non-fast-forward, the lease is captured, and the
-        // user force-pushes. Without this the push lands but the tracking
-        // config that made the destination unresolvable in the first place
-        // survives the recovery, so the next push is broken again.
-        ...(destination.requiresUpstreamRepair ? ["--set-upstream"] : []),
+        // user force-pushes. Without this the push lands but the tracking the
+        // plain push would have written is never set, and a mismatched upstream
+        // survives its own recovery, so the next push is broken again.
+        ...(destination.requiresUpstreamRepair || destination.establishesUpstream
+          ? ["--set-upstream"]
+          : []),
+        ...singleBranchPushArgs(branchName, destination),
       ]);
       if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
         playSoundFireAndForget("git-push");

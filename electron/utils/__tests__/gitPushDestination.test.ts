@@ -281,6 +281,24 @@ describe("resolveGitPushDestination — fails closed", () => {
       remote: "fork",
       branch: "topic",
       remoteTrackingRef: "refs/remotes/fork/topic",
+      establishesUpstream: true,
+    });
+  });
+
+  it("never re-tracks a branch git already names a push remote for, even with no upstream", async () => {
+    // In a triangular setup that would move where the branch pulls from.
+    const repo = makeRepo();
+    git(repo, ["remote", "add", "origin", makeBare()]);
+    git(repo, ["remote", "add", "fork", makeBare()]);
+    git(repo, ["config", "branch.topic.pushRemote", "fork"]);
+    git(repo, ["config", "push.default", "current"]);
+
+    const result = await resolve(repo);
+
+    expect(result.status === "resolved" && result.destination).toEqual({
+      remote: "fork",
+      branch: "topic",
+      remoteTrackingRef: "refs/remotes/fork/topic",
     });
   });
 

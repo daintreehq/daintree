@@ -22,6 +22,16 @@ export interface ResolvedGitPushDestination extends GitPushDestination {
    * is invoked, not what the renderer renders.
    */
   requiresUpstreamRepair?: boolean;
+  /**
+   * The branch tracks nothing and git named no push remote, so the destination
+   * above is the repository's only remote. The push names its refspec
+   * explicitly, which unlike a bare `git push` never fails for want of an
+   * upstream, so the caller passes `--set-upstream` to write the tracking the
+   * fresh branch would otherwise never get.
+   *
+   * Main-process-only, like {@link requiresUpstreamRepair}.
+   */
+  establishesUpstream?: boolean;
 }
 
 export type GitPushDestinationResolution =
@@ -222,7 +232,7 @@ async function resolvePushFromFields(
   const upstreamRef = upstreamRefField ?? "";
 
   if (!remote) {
-    return resolveUnconfigured(remotes, branchName);
+    return resolveUnconfigured(remotes, branchName, upstreamRef);
   }
   if (!isSafeRemoteName(remote)) {
     return { status: "unresolved", reason: "unsafe-remote" };
@@ -384,10 +394,14 @@ async function hasDefaultSimplePushConfig(git: Pick<SimpleGit, "raw">): Promise<
  * the D2 confirm renders it for approval before anything is written. Two or more
  * is a real ambiguity, and picking `origin` by name there is precisely the bug
  * #11746 reports — so it fails closed even when an `origin` exists.
+ *
+ * An existing upstream is never overwritten: tracking is only established for a
+ * branch that has none.
  */
 function resolveUnconfigured(
   remotes: readonly string[],
-  branchName: string
+  branchName: string,
+  upstreamRef: string
 ): GitPushDestinationResolution {
   if (remotes.length !== 1) {
     return { status: "unresolved", reason: remotes.length === 0 ? "not-configured" : "ambiguous" };
@@ -402,6 +416,7 @@ function resolveUnconfigured(
       remote,
       branch: branchName,
       remoteTrackingRef: `${REMOTE_TRACKING_PREFIX}${remote}/${branchName}`,
+      ...(upstreamRef ? {} : { establishesUpstream: true }),
     },
   };
 }
