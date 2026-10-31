@@ -1659,3 +1659,89 @@ describe("persistence boundary hardening", () => {
     });
   });
 });
+
+describe("createSafeStringStorage", () => {
+  const quotaError = () => new DOMException("The quota has been exceeded.", "QuotaExceededError");
+
+  it("stores the string as given, with no envelope or backup", async () => {
+    const mock = createStorageMock();
+    installLocalStorage(mock);
+    const { createSafeStringStorage } = await import("../persistence/safeStorage");
+    const storage = createSafeStringStorage();
+
+    expect(storage.setItem("plain-key", "[1,2]")).toBe("durable");
+    expect(mock.getItem("plain-key")).toBe("[1,2]");
+    expect(mock.getItem("plain-key.__bak")).toBeNull();
+    expect(storage.getItem("plain-key")).toBe("[1,2]");
+
+    storage.removeItem("plain-key");
+    expect(storage.getItem("plain-key")).toBeNull();
+  });
+
+  it("skips a write the quota refuses, retries storage on the next, and raises no notice", async () => {
+    const notifySpy = vi.fn();
+    const setItem = vi.fn().mockImplementationOnce(() => {
+      throw quotaError();
+    });
+    installLocalStorage(createStorageMock({ setItem }));
+    const { createSafeStringStorage, setPermanentFallbackHandler } =
+      await import("../persistence/safeStorage");
+    setPermanentFallbackHandler(notifySpy);
+    try {
+      const storage = createSafeStringStorage();
+
+      expect(storage.setItem("quota-key", "big")).toBe("quota");
+      expect(storage.setItem("quota-key", "small")).toBe("durable");
+      expect(setItem).toHaveBeenCalledTimes(2);
+      expect(notifySpy).not.toHaveBeenCalled();
+    } finally {
+      setPermanentFallbackHandler(null);
+    }
+  });
+
+  it("moves to memory for good after a structural write failure, with one notice", async () => {
+    const notifySpy = vi.fn();
+    const setItem = vi.fn(() => {
+      throw new Error("SecurityError");
+    });
+    installLocalStorage(createStorageMock({ setItem }));
+    const { createSafeStringStorage, setPermanentFallbackHandler } =
+      await import("../persistence/safeStorage");
+    setPermanentFallbackHandler(notifySpy);
+    try {
+      const storage = createSafeStringStorage();
+
+      expect(storage.setItem("broken-key", "first")).toBe("memory");
+      expect(storage.setItem("broken-key", "second")).toBe("memory");
+
+      expect(storage.getItem("broken-key")).toBe("second");
+      expect(setItem).toHaveBeenCalledTimes(1);
+      expect(notifySpy).toHaveBeenCalledTimes(1);
+    } finally {
+      setPermanentFallbackHandler(null);
+    }
+  });
+
+  it("reads as absent and raises the notice when the read itself throws", async () => {
+    const notifySpy = vi.fn();
+    installLocalStorage(
+      createStorageMock({
+        getItem: () => {
+          throw new Error("SecurityError");
+        },
+      })
+    );
+    const { createSafeStringStorage, setPermanentFallbackHandler } =
+      await import("../persistence/safeStorage");
+    setPermanentFallbackHandler(notifySpy);
+    try {
+      const storage = createSafeStringStorage();
+
+      expect(storage.getItem("denied-key")).toBeNull();
+      expect(storage.getItem("denied-key")).toBeNull();
+      expect(notifySpy).toHaveBeenCalledTimes(1);
+    } finally {
+      setPermanentFallbackHandler(null);
+    }
+  });
+});
