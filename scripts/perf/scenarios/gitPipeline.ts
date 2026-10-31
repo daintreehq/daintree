@@ -35,6 +35,14 @@ import {
   type LargeChangesetShape,
 } from "../lib/largeChangesetFixture";
 import {
+  flipClassifications,
+  getUntrackedBinaryFixture,
+  measureWorkload,
+  observeUntrackedReads,
+  restoreClassifications,
+  rowOracleMisses,
+} from "../lib/untrackedBinaryFixture";
+import {
   EmitRecorder,
   PIPELINE_QUIESCE_SETTLE_MS,
   pollUntil,
@@ -480,6 +488,131 @@ async function runLargeChangesetRound(shape: LargeChangesetShape): Promise<Scena
     },
     ...(cpu ? {} : { notes: "git child CPU replay unavailable here (needs python3 on POSIX)" }),
   };
+}
+
+// --- Untracked binary verdict retention (PERF-113) ----------------------------
+
+const UNTRACKED_REPEAT_PASSES = 5;
+
+/**
+ * One first-sighting pass, then repeat passes with nothing changed, over a
+ * worktree holding ~54 MB of untracked binaries beside untracked text and one
+ * tracked edit. The per-file cache is cleared first, so every iteration
+ * measures the same two things: what a first sighting reads, and what passes
+ * over unchanged files read after it.
+ *
+ * The passes call `getWorktreeChangesWithStats` directly, as PERF-108 does:
+ * the subject is the untracked line counter inside it.
+ *
+ * Every reading is paired with the same evidence:
+ *  - `rowOracleMisses`: every row of every pass carries its constructed line
+ *    count or binary `null`, and `changedFileCount` covers every file.
+ *  - `readObserverMisses`: the first pass must hand every binary's full size
+ *    back through the observer, which is what lets a zero repeat reading mean
+ *    "not read" rather than "the observer went blind".
+ *  - `classificationFlipMisses`: after the timed passes, a cached binary
+ *    rewritten as text and a cached text file rewritten as binary at the same
+ *    size must both flip on the next pass.
+ *  - `statusPassMisses`: one `git status` per pass, so a pass answered from
+ *    the result cache cannot read as a cheap one.
+ *
+ * Bytes are those `readFile` returned to the line counter, not disk I/O. CPU
+ * is `process.cpuUsage` over the same bracket as the wall time: this process,
+ * threadpool reads included, git children excluded.
+ */
+async function runUntrackedBinaryRound(): Promise<ScenarioSample> {
+  const { getWorktreeChangesWithStats, __clearPerFileDiffStatCacheForTesting } =
+    await loadGitStatusModule();
+  const fixture = getUntrackedBinaryFixture();
+  const workload = measureWorkload(fixture);
+  const pass = () => getWorktreeChangesWithStats(fixture.repoPath, { forceRefresh: true });
+  const cpuMs = (usage: NodeJS.CpuUsage) => (usage.user + usage.system) / 1000;
+
+  const observerMisses = spawnObserverMisses();
+  __clearPerFileDiffStatCacheForTesting();
+  (globalThis as { gc?: () => void }).gc?.();
+  const reads = observeUntrackedReads(fixture);
+  try {
+    const idleProbe = await armBystanderProbe();
+    try {
+      await sleep(LARGE_IDLE_CONTROL_MS);
+    } finally {
+      idleProbe.stop();
+    }
+    const idle = idleProbe.stop();
+
+    const mark = gitSpawnMark();
+    let cpuStart = process.cpuUsage();
+    let start = performance.now();
+    const first = await pass();
+    const firstPassDurationMs = performance.now() - start;
+    const firstPassCpuMs = cpuMs(process.cpuUsage(cpuStart));
+    const firstReads = reads.take();
+
+    const results: WorktreeChanges[] = [];
+    const probe = await armBystanderProbe();
+    cpuStart = process.cpuUsage();
+    start = performance.now();
+    try {
+      for (let i = 0; i < UNTRACKED_REPEAT_PASSES; i++) results.push(await pass());
+    } finally {
+      probe.stop();
+    }
+    const durationMs = performance.now() - start;
+    const repeatCpuMs = cpuMs(process.cpuUsage(cpuStart));
+    const stall = probe.stop();
+    const repeatReads = reads.take();
+    const statusSpawns = gitSpawnsSince(mark).bySubcommand["status"] ?? 0;
+
+    let rowMisses = rowOracleMisses(fixture, first);
+    for (const result of results) rowMisses += rowOracleMisses(fixture, result);
+
+    let flipMisses = 0;
+    try {
+      const want = flipClassifications(fixture);
+      const flipped = await pass();
+      for (const [path, insertions] of want) {
+        const row = flipped.changes.find((change) => change.path === path);
+        if (!row || row.insertions !== insertions) flipMisses++;
+      }
+    } finally {
+      restoreClassifications(fixture);
+    }
+
+    const repeatPassCount = results.length;
+    return {
+      durationMs,
+      metrics: {
+        ...workload,
+        repeatPassCount,
+        firstPassDurationMs,
+        firstPassCpuMs,
+        firstBinaryBytesRead: firstReads.binaryBytes,
+        firstUntrackedBytesRead: firstReads.untrackedBytes,
+        passDurationMs: durationMs / repeatPassCount,
+        passCpuMs: repeatCpuMs / repeatPassCount,
+        binaryBytesReadPerPass: repeatReads.binaryBytes / repeatPassCount,
+        untrackedBytesReadPerPass: repeatReads.untrackedBytes / repeatPassCount,
+        untrackedReadsPerPass: repeatReads.untrackedReads / repeatPassCount,
+        passLongestStallMs: stall.longestStallMs,
+        passBlockedMs: stall.blockedMs,
+        idleLongestStallMs: idle.longestStallMs,
+        idleBlockedMs: idle.blockedMs,
+        rowOracleMisses: rowMisses,
+        readObserverMisses:
+          firstReads.binaryReads === workload.binaryFileCount &&
+          firstReads.binaryBytes === workload.binaryFixtureBytes
+            ? 0
+            : 1,
+        classificationFlipMisses: flipMisses,
+        statusPassMisses: Math.abs(statusSpawns - (repeatPassCount + 1)),
+        spawnObserverMisses: observerMisses,
+        probeMisses: stall.probeMisses + idle.probeMisses,
+      },
+    };
+  } finally {
+    reads.dispose();
+  }
 }
 
 const LARGE_CHANGESET_CORRECTNESS = [
@@ -1149,5 +1282,31 @@ export const gitPipelineScenarios: PerfScenario[] = [
     correctness: LARGE_CHANGESET_CORRECTNESS,
     workloadFloors: { dirtyTrackedFiles: 4_000, worktreeCount: 4 },
     run: () => runLargeChangesetRound(LARGE_SIBLING_SHAPE),
+  },
+  {
+    id: "PERF-113",
+    name: "Git Repeated Status Passes (untracked binaries)",
+    description:
+      "Forced full passes over a worktree with ~54 MB of untracked binaries (1 B, 8 KiB, 2 MiB, 9.5 MiB and 20 x 2 MiB) and untracked text: bytes the untracked line counter reads once nothing has changed.",
+    tier: "heavy",
+    modes: ["smoke", "ci", "nightly"],
+    iterations: { smoke: 5, ci: 8, nightly: 12 },
+    warmups: 1,
+    correctness: [
+      "rowOracleMisses",
+      "readObserverMisses",
+      "classificationFlipMisses",
+      "statusPassMisses",
+      "spawnObserverMisses",
+      "probeMisses",
+    ],
+    workloadFloors: {
+      binaryFileCount: 24,
+      binaryFixtureBytes: 54_009_857,
+      batchBinaryBytes: 40 * 1024 * 1024,
+      untrackedFileCount: 28,
+      repeatPassCount: UNTRACKED_REPEAT_PASSES,
+    },
+    run: runUntrackedBinaryRound,
   },
 ];
