@@ -7,7 +7,6 @@ import type { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import type { WorktreeBranchCollisionPolicy } from "@shared/types/git";
 import { worktreeClient, forgeClient } from "@/clients";
-import { injectContextUnlessLocked } from "@/services/contextInjectionGuard";
 import { useProjectStore } from "@/store/projectStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
@@ -567,6 +566,8 @@ export const workflowCreationActionRuns = {
         // the same check useContextInjection makes. Without it every
         // resolved call reported success, which now matters: the flag is
         // published as structuredContent rather than buried in text.
+        // Lazily, as in `copyTree.injectToTerminal`: the guard reads panelStore.
+        const { injectContextUnlessLocked } = await import("@/services/contextInjectionGuard");
         const injection = await injectContextUnlessLocked({
           terminalId,
           worktreeId,

@@ -14,7 +14,6 @@ import {
 } from "./locationArgs";
 import { copiesWorkspaceRoot } from "./workspaceRootCopyTarget";
 import { notify } from "@/lib/notify";
-import { injectContextUnlessLocked } from "@/services/contextInjectionGuard";
 import { announceCopyTreeCopy } from "@/lib/copyTreeFeedback";
 import { panelNotificationAddress } from "@/lib/notificationAddress";
 import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
@@ -385,7 +384,9 @@ export const systemActionRuns: {
       ...panelNotificationAddress(terminalId),
     };
     // Refuses a locked pane before generation and stops the run if it is
-    // locked while in flight.
+    // locked while in flight. Imported lazily: the guard reads panelStore,
+    // whose persistence pulls `projectClient` in at module scope.
+    const { injectContextUnlessLocked } = await import("@/services/contextInjectionGuard");
     const result = await injectContextUnlessLocked({
       terminalId,
       worktreeId: resolvedWorktreeId,
