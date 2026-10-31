@@ -93,6 +93,7 @@ function remoteView(clientEndpointId: string, webContentsId: number, host = STUD
   let holding = false;
   const held: Array<{ deliver: () => void; fail: (error: Error) => void }> = [];
   let shellAnswers = true;
+  let busyFor = 0;
   const answer = (method: string, payload: unknown): unknown => {
     if (method === NOTIFICATION_SHOW_METHOD) {
       if (!showHostNotification(webContentsId, payload, host)) {
@@ -129,6 +130,10 @@ function remoteView(clientEndpointId: string, webContentsId: number, host = STUD
         if (down) {
           throw new AppError({ code: "HOST_DISCONNECTED", message: "Shell is not attached" });
         }
+        if (busyFor > 0) {
+          busyFor--;
+          throw Object.assign(new Error("Request allowance full"), { code: "RATE_LIMITED" });
+        }
         if (holding && method === NOTIFICATION_CLOSE_METHOD) {
           return new Promise((resolve, reject) =>
             held.push({
@@ -164,6 +169,10 @@ function remoteView(clientEndpointId: string, webContentsId: number, host = STUD
         .map(([, payload]) => (payload as { live: string[] }).live),
     setDown(value: boolean) {
       down = value;
+    },
+    /** The next `count` requests fail with the link still up. */
+    busyFor(count: number) {
+      busyFor = count;
     },
     /** A Shell from before closes and reconciles existed. */
     refuseCloses() {
@@ -345,6 +354,56 @@ describe("a remote view's banners, host sink to Shell", () => {
     await settle();
     expect(shellBanners()).toEqual(["Studio Mac: second wait"]);
     expect(view.reconcilesSent()).toHaveLength(1);
+  });
+
+  describe("with the link up but a request refused", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("reconciles again on its own until the Shell hears it", async () => {
+      const view = remoteView("view-12", 12);
+      hostWaiting(view.handle, "first wait", ["t1"]);
+      await settle();
+
+      view.busyFor(2);
+      notificationService.closeNotificationsForPanel("t1");
+      await settle();
+      vi.advanceTimersByTime(2_000);
+      await settle();
+      expect(shellBanners()).toEqual(["Studio Mac: first wait"]);
+      vi.advanceTimersByTime(15_000);
+      await settle();
+      expect(shellBanners()).toEqual([]);
+
+      vi.advanceTimersByTime(600_000);
+      await settle();
+      expect(view.reconcilesSent()).toHaveLength(2);
+    });
+
+    it("stops after its last try while the link stays down, and when the view goes away", async () => {
+      const view = remoteView("view-12", 12);
+      const other = remoteView("view-13", 13);
+      hostWaiting(view.handle, "first wait", ["t1"]);
+      hostWaiting(other.handle, "other wait", ["t2"]);
+      await settle();
+
+      view.setDown(true);
+      other.setDown(true);
+      notificationService.closeNotificationsForPanel("t1");
+      notificationService.closeNotificationsForPanel("t2");
+      await settle();
+      other.close();
+      for (const wait of [2_000, 15_000, 60_000, 600_000]) {
+        vi.advanceTimersByTime(wait);
+        await settle();
+      }
+      expect(view.reconcilesSent()).toHaveLength(3);
+      expect(other.reconcilesSent()).toEqual([]);
+    });
   });
 
   it("never lets a close that arrives late take down a newer banner", async () => {

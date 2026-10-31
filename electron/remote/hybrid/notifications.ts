@@ -82,6 +82,13 @@ const NotificationReconcileSchema = z.object({
   live: z.array(NoticeIdSchema).max(MAX_LIVE_IDS),
 });
 
+/**
+ * When to reconcile again after a request to a view failed with its link still
+ * up (its request allowance was full, say). A link that is down fails each try
+ * at once, and its resume reconciles anyway, so the tries stop after these.
+ */
+const RECONCILE_RETRY_MS = [2_000, 15_000, 60_000];
+
 /** Endpoint ids whose link dropped (`attached` false) or came back on a resume (true). */
 export type RemoteTransportFeed = (
   listener: (endpointIds: string[], attached: boolean) => void
@@ -103,6 +110,14 @@ export function installRemoteNotificationSink(
   const watched = new Map<number, Disposable>();
   /** Views whose Shell may have missed a close since it last heard what is live. */
   const unsure = new Set<number>();
+  /** Each unsure view's pending retry, and how many it has had since a reconcile went through. */
+  const retries = new Map<number, { timer: NodeJS.Timeout | null; tries: number }>();
+
+  const stopRetrying = (handle: number): void => {
+    const retry = retries.get(handle);
+    if (retry?.timer) clearTimeout(retry.timer);
+    retries.delete(handle);
+  };
 
   const remoteView = (endpoint: ClientEndpoint | undefined): ClientEndpoint | null =>
     endpoint && endpoint.kind === "remote-view" && !endpoint.isClosed() ? endpoint : null;
@@ -115,6 +130,7 @@ export function installRemoteNotificationSink(
       endpoint.onClose(() => {
         watched.delete(handle);
         unsure.delete(handle);
+        stopRetrying(handle);
         notificationService.forgetRemoteOwner(handle);
       })
     );
@@ -126,12 +142,29 @@ export function installRemoteNotificationSink(
     const code = (error as { code?: unknown } | null)?.code;
     if (code === "UNSUPPORTED" || code === "VALIDATION" || endpoint.isClosed()) return;
     unsure.add(endpoint.handle);
+    scheduleRetry(endpoint);
+  };
+
+  const scheduleRetry = (endpoint: ClientEndpoint): void => {
+    const { handle } = endpoint;
+    const retry = retries.get(handle) ?? { timer: null, tries: 0 };
+    if (retry.timer || retry.tries >= RECONCILE_RETRY_MS.length) return;
+    retry.timer = setTimeout(() => {
+      retry.timer = null;
+      retry.tries++;
+      if (unsure.has(handle) && !endpoint.isClosed()) reconcile(endpoint);
+    }, RECONCILE_RETRY_MS[retry.tries]);
+    retry.timer.unref?.();
+    retries.set(handle, retry);
   };
 
   const reconcile = (endpoint: ClientEndpoint): void => {
     unsure.delete(endpoint.handle);
     const live = notificationService.remoteBannerIds(endpoint.handle).slice(-MAX_LIVE_IDS);
-    endpoint.request(NOTIFICATION_RECONCILE_METHOD, { live }).catch(markUnsure(endpoint));
+    endpoint.request(NOTIFICATION_RECONCILE_METHOD, { live }).then(() => {
+      // Heard: a later failure starts its retries over.
+      if (!unsure.has(endpoint.handle)) stopRetrying(endpoint.handle);
+    }, markUnsure(endpoint));
   };
 
   const sendCloses = (endpoint: ClientEndpoint, ids: readonly string[]): void => {
@@ -186,6 +219,7 @@ export function installRemoteNotificationSink(
     for (const watch of watched.values()) watch.dispose();
     watched.clear();
     unsure.clear();
+    for (const handle of [...retries.keys()]) stopRetrying(handle);
   };
 }
 
