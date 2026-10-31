@@ -443,7 +443,7 @@ export function registerForgeDataHandlers(): () => void {
         throw new Error("Invalid payload");
       }
       const cwd = requireCwd(payload.cwd);
-      const { impl, repoRef, namespaceId } = await resolveForCwd(cwd);
+      const { impl, repoRef, namespaceId, providerName } = await resolveForCwd(cwd);
       return auditForgeCall(
         {
           providerId: namespaceId,
@@ -454,6 +454,9 @@ export function registerForgeDataHandlers(): () => void {
         async () => ({
           ...(await impl.getRepoMetadata(repoRef)),
           autoMergeSupported: Boolean(impl.autoMerge),
+          // Host-owned and written last: the name comes from the contribution
+          // that answered, never from the provider's own payload.
+          providerName,
         })
       );
     })

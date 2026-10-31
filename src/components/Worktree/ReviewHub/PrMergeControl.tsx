@@ -28,7 +28,13 @@ import {
 
 type ControlState =
   | { kind: "loading" }
-  | { kind: "ready"; model: PrMergeControlModel; pr: PR | null }
+  | {
+      kind: "ready";
+      model: PrMergeControlModel;
+      pr: PR | null;
+      /** The provider's display name, when the repository read carried it. */
+      forgeName: string | null;
+    }
   | { kind: "error" };
 
 const METHOD_SEGMENT_LABEL: Record<PRMergeMethod, string> = {
@@ -125,7 +131,7 @@ export function PrMergeControl({
         const model = derivePrMergeControl(pr, metadata);
         refocusActionRef.current = retryOwnsFocus();
         setRetrying(false);
-        setState({ kind: "ready", model, pr });
+        setState({ kind: "ready", model, pr, forgeName: metadata?.providerName || null });
         setMethod(model.kind === "arm" || model.kind === "merge" ? model.defaultMethod : null);
       },
       () => {
@@ -157,7 +163,7 @@ export function PrMergeControl({
   // just after the gate doesn't flash them for a frame.
   const loading = state.kind === "loading";
   const holdSkeleton = useSkeletonFloor(useDohertyGate(loading));
-  const status = state.kind === "ready" ? rowStatus(state.model) : null;
+  const status = state.kind === "ready" ? rowStatus(state.model, state.forgeName) : null;
   const statusText =
     loading || holdSkeleton
       ? "Reading merge options"
@@ -217,7 +223,8 @@ export function PrMergeControl({
             Icon: SEVERITY_GLYPH.error,
             tone: "error",
             title: "Couldn't check whether it can merge",
-            detail: "GitHub didn't answer when the pull request was read",
+            // Neither read landed, so which forge this is isn't known here.
+            detail: "The forge didn't answer when the pull request was read",
           }}
         />
         <div className={ACTION_ROW_CLASS}>{retryButton}</div>
@@ -225,7 +232,7 @@ export function PrMergeControl({
     );
   }
 
-  const { model, pr } = state;
+  const { model, pr, forgeName } = state;
   if (model.kind === "hidden" || !status || !pr) return null;
 
   const statusLine = (
@@ -252,8 +259,8 @@ export function PrMergeControl({
           {status.retry ? (
             retryButton
           ) : (
-            // Whatever is in the way is settled on GitHub: marking it ready,
-            // resolving conflicts there, or just looking at it.
+            // Whatever is in the way is settled on the forge: marking it
+            // ready, resolving conflicts there, merging it, or just looking.
             <Button
               type="button"
               variant="outline"
@@ -264,7 +271,9 @@ export function PrMergeControl({
               className="ml-auto transition-colors"
             >
               <ExternalLink aria-hidden="true" />
-              Open pull request
+              {model.kind === "unavailable" && model.reason === "unsupported" && forgeName
+                ? `Open on ${forgeName}`
+                : "Open pull request"}
             </Button>
           )}
         </div>
@@ -411,15 +420,20 @@ function RetryButton({
   );
 }
 
-function waitingTitle(mergeStatus: PRMergeStatus | null, baseRef: string): string {
+function waitingTitle(mergeStatus: PRMergeStatus | null, baseRef: string, forge: string): string {
   if (mergeStatus === "blocked") return "Waiting on required checks or reviews";
   if (mergeStatus === "behind") return `Behind ${baseRef}`;
-  if (mergeStatus === "unknown") return "GitHub is still checking whether it can merge";
+  if (mergeStatus === "unknown") return `${forge} is still checking whether it can merge`;
   return "Not ready to merge yet";
 }
 
-/** What the row says about the PR, from the model alone. */
-function rowStatus(model: PrMergeControlModel): RowStatus | null {
+/**
+ * What the row says about the PR, from the model and the forge's name. With
+ * no name the copy stays forge-neutral rather than guessing one.
+ */
+function rowStatus(model: PrMergeControlModel, forgeName: string | null): RowStatus | null {
+  const forge = forgeName ?? "The forge";
+  const onForge = forgeName ? ` on ${forgeName}` : "";
   switch (model.kind) {
     case "hidden":
       return null;
@@ -437,14 +451,14 @@ function rowStatus(model: PrMergeControlModel): RowStatus | null {
             Icon: GitPullRequestClosed,
             tone: "neutral",
             title: "Closed without merging",
-            detail: "Reopen it on GitHub to merge it",
+            detail: `Reopen it${onForge} to merge it`,
           };
         case "draft":
           return {
             Icon: GitPullRequestDraft,
             tone: "neutral",
             title: "Draft pull request",
-            detail: "Mark it ready for review on GitHub to merge it",
+            detail: `Mark it ready for review${onForge} to merge it`,
           };
         case "conflicts":
           return {
@@ -466,14 +480,24 @@ function rowStatus(model: PrMergeControlModel): RowStatus | null {
             Icon: SEVERITY_GLYPH.warning,
             tone: "warning",
             title: "Merge status not reported",
-            detail: "GitHub didn't say whether it can merge yet",
+            detail: `${forge} didn't say whether it can merge yet`,
             retry: true,
+          };
+        case "unsupported":
+          // Permanent for this provider, so no Retry: the way forward is the forge.
+          return {
+            Icon: GitMerge,
+            tone: "neutral",
+            title: forgeName
+              ? `Merging isn't available here for ${forgeName}`
+              : "Merging isn't available here",
+            detail: `Open it${onForge || " on the forge"} to merge it`,
           };
         case "no-auto-merge":
           return {
             Icon: GitMerge,
             tone: "neutral",
-            title: waitingTitle(model.mergeStatus, model.baseRef),
+            title: waitingTitle(model.mergeStatus, model.baseRef, forge),
             detail: "Auto-merge isn't available for this repository",
           };
       }
@@ -491,7 +515,7 @@ function rowStatus(model: PrMergeControlModel): RowStatus | null {
               : "In the merge queue",
           detail: cannotCancel
             ? CANNOT_CANCEL_DETAIL_SENTENCE
-            : `GitHub merges it into ${model.baseRef} when it reaches the front`,
+            : `${forge} merges it into ${model.baseRef} when it reaches the front`,
         };
       }
       const how = intent.method ? `${METHOD_SEGMENT_LABEL[intent.method]} · ` : "";
@@ -530,7 +554,7 @@ function rowStatus(model: PrMergeControlModel): RowStatus | null {
           Icon: GitMerge,
           tone: "neutral",
           title: "Merge queue required",
-          detail: `GitHub queues it for ${model.baseRef} once requirements pass`,
+          detail: `${forge} queues it for ${model.baseRef} once requirements pass`,
         };
       }
       if (model.kind === "merge") {
@@ -541,13 +565,13 @@ function rowStatus(model: PrMergeControlModel): RowStatus | null {
           detail:
             model.mergeStatus === "unstable"
               ? "Some checks that aren't required failed"
-              : "GitHub reports nothing left blocking it",
+              : `${forge} reports nothing left blocking it`,
         };
       }
       return {
         Icon: GitMerge,
         tone: "neutral",
-        title: waitingTitle(model.mergeStatus, model.baseRef),
+        title: waitingTitle(model.mergeStatus, model.baseRef, forge),
         detail:
           model.mergeStatus === "blocked"
             ? "Auto-merge can merge it once they pass"

@@ -47,7 +47,9 @@ function graphqlMR(overrides: Record<string, unknown> = {}): Record<string, unkn
   };
 }
 
-// What the GitLab provider's repository read carries through the host today.
+// What the GitLab provider's repository read carries through the host: the
+// provider declares no merge preview (pinned in its own forgeProvider tests),
+// implements no `autoMerge`, and the host names the contribution.
 const GITLAB_METADATA: ForgeRepoMetadataPayload = {
   defaultBranch: "main",
   isPrivate: true,
@@ -55,7 +57,9 @@ const GITLAB_METADATA: ForgeRepoMetadataPayload = {
   isArchived: false,
   description: null,
   license: null,
+  mergePreviewSupported: false,
   autoMergeSupported: false,
+  providerName: "GitLab",
   rawData: {},
 };
 
@@ -71,5 +75,29 @@ describe("derivePrMergeControl for a GitLab merge request", () => {
       GITLAB_METADATA
     );
     expect(model).toMatchObject({ kind: "unavailable", reason: "unsupported" });
+  });
+
+  it("still says a closed or merged MR is closed or merged", () => {
+    expect(
+      derivePrMergeControl(mergeRequestToForgePR(restMR({ state: "closed" }), HOST), GITLAB_METADATA)
+    ).toMatchObject({ kind: "unavailable", reason: "closed" });
+    expect(
+      derivePrMergeControl(
+        mergeRequestToForgePR(
+          restMR({ state: "merged", merged_at: "2026-07-03T10:00:00Z" }),
+          HOST
+        ),
+        GITLAB_METADATA
+      )
+    ).toMatchObject({ kind: "unavailable", reason: "merged" });
+  });
+
+  // The declaration is the only thing that ends the retry: a provider that
+  // makes no claim keeps today's transient reading of a missing status.
+  it("keeps the unreported retry for a provider that makes no such declaration", () => {
+    const { mergePreviewSupported: _declared, ...undeclared } = GITLAB_METADATA;
+    expect(
+      derivePrMergeControl(mergeRequestToForgePR(restMR(), HOST), undeclared)
+    ).toMatchObject({ kind: "unavailable", reason: "unreported" });
   });
 });

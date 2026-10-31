@@ -31,7 +31,14 @@ export interface PrMergeRequest {
 
 /** Why the row offers no write at all. Each one is said, never hidden. */
 export type PrMergeUnavailableReason =
-  "draft" | "conflicts" | "unreported" | "settings-unread" | "no-auto-merge" | "merged" | "closed";
+  | "draft"
+  | "conflicts"
+  | "unreported"
+  | "settings-unread"
+  | "no-auto-merge"
+  | "unsupported"
+  | "merged"
+  | "closed";
 
 export type PrMergeControlModel =
   | { kind: "hidden" }
@@ -95,7 +102,8 @@ export function effectiveMergeMode(pr: PR, requested: PrMergeMode): PrMergeMode 
  * What the merge control offers for a PR, from a read taken when the popover
  * opened. Where GitHub wouldn't offer a write either (draft, closed, merged,
  * conflicting, no merge status reported, settings unreadable) the row still
- * answers, with the reason. Only a read that returned no PR at all hides it:
+ * answers, with the reason, as it does for a provider that declares it can't
+ * supply the preview. Only a read that returned no PR at all hides it:
  * the checks above already say that one.
  */
 export function derivePrMergeControl(
@@ -117,6 +125,9 @@ export function derivePrMergeControl(
   if (pr.isDraft) return unavailable("draft");
   // Whether the forge can arm or cancel at all lives in the settings.
   if (!metadata) return unavailable("settings-unread");
+  // A provider that never reports what the confirm previews won't on a
+  // retry either, so the row links out instead of offering one.
+  if (metadata.mergePreviewSupported === false) return unavailable("unsupported");
 
   if (pr.mergeIntent) {
     if (!metadata.autoMergeSupported) return unavailable("no-auto-merge");

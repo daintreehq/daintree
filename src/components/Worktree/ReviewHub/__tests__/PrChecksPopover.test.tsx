@@ -6,6 +6,8 @@ import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-libra
 import { primeRadix } from "@/components/ui/radix-loader";
 import type { ForgeCheckRun } from "@shared/types/ipc/forge";
 import type { AgentHandoffContent } from "@/services/agentHandoff/agentDraft";
+import { mergeRequestToForgePR } from "../../../../../plugins/builtin/gitlab/main/mappers";
+import type { GitLabMergeRequest } from "../../../../../plugins/builtin/gitlab/shared/types";
 
 const getChecksMock = vi.fn();
 const getPRMock = vi.fn<(cwd: string, prNumber: number) => Promise<unknown>>();
@@ -649,6 +651,98 @@ describe("PrChecksPopover", () => {
       await openAndSettle();
       await screen.findByTestId("pr-checks-list");
       expect(screen.queryByTestId("pr-merge-control")).toBeNull();
+    });
+
+    it("names the forge the host reports in its own words", async () => {
+      getChecksMock.mockResolvedValue({ checks: [check()] });
+      getPRMock.mockResolvedValue({ ...openPR, mergeStatus: "clean" });
+      getRepoMetadataMock.mockResolvedValue({ ...metadata, providerName: "GitHub" });
+      renderPopover();
+
+      await openAndSettle();
+      expect((await screen.findByTestId("pr-merge-action")).textContent).toBe("Merge pull request");
+      expect(screen.getByTestId("pr-merge-control-status").textContent).toMatch(
+        /GitHub reports nothing left blocking it/
+      );
+    });
+
+    describe("on a GitLab merge request (#15603)", () => {
+      const WEB_URL = "https://gitlab.com/group/project/-/merge_requests/42";
+      const gitlabMR = (overrides: Partial<GitLabMergeRequest> = {}) =>
+        mergeRequestToForgePR(
+          {
+            iid: 42,
+            title: "Add feature",
+            state: "opened",
+            draft: false,
+            web_url: WEB_URL,
+            source_branch: "feature",
+            target_branch: "main",
+            detailed_merge_status: "mergeable",
+            has_conflicts: false,
+            created_at: "2026-07-01T10:00:00Z",
+            updated_at: "2026-07-02T10:00:00Z",
+            ...overrides,
+          },
+          "gitlab.com"
+        );
+      const gitlabMetadata = {
+        defaultBranch: "main",
+        isPrivate: true,
+        isFork: false,
+        isArchived: false,
+        mergePreviewSupported: false,
+        autoMergeSupported: false,
+        providerName: "GitLab",
+        rawData: {},
+      };
+
+      it("says merging isn't available here and links out, with nothing to retry", async () => {
+        getChecksMock.mockResolvedValue({ checks: [check()] });
+        getPRMock.mockResolvedValue(gitlabMR());
+        getRepoMetadataMock.mockResolvedValue(gitlabMetadata);
+        renderPopover({ prUrl: WEB_URL });
+
+        await openAndSettle();
+        const row = await screen.findByTestId("pr-merge-control");
+        expect(row.getAttribute("data-merge-state")).toBe("unsupported");
+        expect(row.textContent).toMatch(/Merging isn't available here for GitLab/);
+        expect(row.textContent).not.toMatch(/GitHub/);
+        expect(screen.queryByTestId("pr-merge-control-retry")).toBeNull();
+        expect(screen.queryByTestId("pr-merge-action")).toBeNull();
+
+        const open = screen.getByTestId("pr-merge-open-pr");
+        expect(open.textContent).toBe("Open on GitLab");
+        fireEvent.click(open);
+        expect(onOpenExternal).toHaveBeenCalledWith(WEB_URL);
+      });
+
+      it.each([
+        ["closed", { state: "closed" }, /Reopen it on GitLab to merge it/],
+        ["draft", { draft: true }, /Mark it ready for review on GitLab to merge it/],
+      ] as const)("names GitLab on a %s MR", async (_label, overrides, wording) => {
+        getChecksMock.mockResolvedValue({ checks: [check()] });
+        getPRMock.mockResolvedValue(gitlabMR(overrides));
+        getRepoMetadataMock.mockResolvedValue(gitlabMetadata);
+        renderPopover({ prUrl: WEB_URL });
+
+        await openAndSettle();
+        const row = await screen.findByTestId("pr-merge-control");
+        expect(row.textContent).toMatch(wording);
+        expect(row.textContent).not.toMatch(/GitHub/);
+      });
+
+      it("names no forge when the read fails", async () => {
+        getChecksMock.mockResolvedValue({ checks: [check()] });
+        getPRMock.mockRejectedValue(new Error("offline"));
+        getRepoMetadataMock.mockResolvedValue(gitlabMetadata);
+        renderPopover({ prUrl: WEB_URL });
+
+        await openAndSettle();
+        const error = await screen.findByTestId("pr-merge-control-error");
+        expect(error.textContent).toMatch(/The forge didn't answer/);
+        expect(error.textContent).not.toMatch(/GitHub/);
+      });
     });
   });
 });

@@ -664,6 +664,29 @@ describe("registerForgeDataHandlers", () => {
     expect(result).toMatchObject({ autoMergeSupported: true });
   });
 
+  it("getRepoMetadata names the contribution that answered, not whatever the provider claims (#15603)", async () => {
+    fakeImpl.getRepoMetadata.mockResolvedValue({
+      defaultBranch: "main",
+      isPrivate: false,
+      isFork: false,
+      isArchived: false,
+      mergePreviewSupported: false,
+      providerName: "Spoofed",
+      rawData: null,
+    });
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      providerName: "Fake Forge",
+      repoRef,
+      impl: fakeImpl as unknown as ForgeProviderImpl,
+    });
+    registerForgeDataHandlers();
+
+    const result = await findHandler("forge:get-repo-metadata")(null, { cwd: "/repo" });
+
+    expect(result).toMatchObject({ providerName: "Fake Forge", mergePreviewSupported: false });
+  });
+
   it("getRepoStats short-circuits to a zero snapshot when the project directory is gone (#10663)", async () => {
     // The project directory was deleted/moved externally; the renderer keeps
     // polling this handler. The guard must return a commits-only zero snapshot

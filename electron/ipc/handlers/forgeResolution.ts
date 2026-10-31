@@ -51,6 +51,8 @@ export interface ResolvedForgeContext {
   namespaceId: string;
   /** The resolved provider's `contribution.id` — also the settings subtab key. */
   providerId: string;
+  /** The resolved provider's display name, from its `contribution.name`. */
+  providerName: string;
   repoRef: RepoRef;
   impl: ForgeProviderImpl;
 }
@@ -452,6 +454,7 @@ export async function resolveForCwd(
   const context: ResolvedForgeContext = {
     namespaceId,
     providerId: resolved.entry.contribution.id,
+    providerName: resolved.entry.contribution.name,
     repoRef: { ...repoRef, projectPath: mainWorktreePath },
     impl,
   };

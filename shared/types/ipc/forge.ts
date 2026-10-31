@@ -116,6 +116,8 @@ export interface ForgeCIStatusSummary {
 export type ForgeRepoMetadataPayload = RepoMetadata & {
   /** The provider implements `autoMerge` (arm or cancel "merge when ready"). */
   autoMergeSupported: boolean;
+  /** Display name of the provider that answered ("GitHub", "GitLab"), for copy that names the forge. */
+  providerName?: string;
 };
 
 /**
