@@ -51,26 +51,48 @@ describe("appendHistory", () => {
     ]);
   });
 
-  it("keeps the spelling it was run with, replacing the earlier spelling", () => {
-    const next = appendHistory([item("ls"), item("npm run test")], 'npm  run "test"', 9);
-
-    expect(next).toEqual([{ command: 'npm  run "test"', timestamp: 9 }, item("ls")]);
-  });
-
-  it("replaces an earlier entry that differs only by whitespace or quoting", () => {
+  it("moves a command run again to the front with its new timestamp", () => {
     const next = appendHistory(
-      [item("ls"), item('npm run "test"'), item("npm  run   test")],
+      [item("ls", 1), item("npm run test", 2), item("pwd", 3)],
       "npm run test",
       9
     );
 
+    expect(next).toEqual([
+      { command: "npm run test", timestamp: 9 },
+      item("ls", 1),
+      item("pwd", 3),
+    ]);
+  });
+
+  it("treats a stored entry with space around it as the same command", () => {
+    const next = appendHistory([item("ls"), item(" npm run test ")], "npm run test", 9);
+
     expect(next.map((h) => h.command)).toEqual(["npm run test", "ls"]);
   });
 
-  it("keeps quotes that protect a space", () => {
-    const next = appendHistory([item('echo "a b"')], "echo a b", 9);
+  it("treats the same text with space around it as the same command", () => {
+    const next = appendHistory([item("ls"), item("npm run test")], "  npm run test\n", 9);
 
-    expect(next.map((h) => h.command)).toEqual(["echo a b", 'echo "a b"']);
+    expect(next.map((h) => h.command)).toEqual(["  npm run test\n", "ls"]);
+  });
+
+  it.each([
+    ["'$SHELL'", "$SHELL"],
+    ["echo '$HOME'", 'echo "$HOME"'],
+    ["rm '*.log'", "rm *.log"],
+    ["printf 'a  b'", "printf 'a b'"],
+    ['npm run "test"', "npm run test"],
+    ["npm  run test", "npm run test"],
+  ])("keeps %s and %s as separate entries", (earlier, later) => {
+    expect(appendHistory([item(earlier)], later, 9).map((h) => h.command)).toEqual([
+      later,
+      earlier,
+    ]);
+    expect(appendHistory([item(later)], earlier, 9).map((h) => h.command)).toEqual([
+      earlier,
+      later,
+    ]);
   });
 
   it("drops the oldest entries past ten", () => {

@@ -549,6 +549,332 @@ describe("QuickRun", () => {
     }
   });
 
+  describe("commands that differ only in quoting or in whitespace inside quotes", () => {
+    // Pairs a shell reads differently, each of which the old folding made one command.
+    const PAIRS: Array<[string, string]> = [
+      ["'$SHELL'", "$SHELL"],
+      ["echo '$HOME'", 'echo "$HOME"'],
+      ["rm '*.log'", "rm *.log"],
+      ["printf 'a  b'", "printf 'a b'"],
+    ];
+
+    const commandsListed = () => commandOptions().map((o) => o.getAttribute("data-command"));
+    const bandOf = (option: HTMLElement) => {
+      const all = screen.getAllByRole("option");
+      return all
+        .slice(0, all.indexOf(option))
+        .reverse()
+        .find((o) => o.getAttribute("aria-disabled") === "true")
+        ?.getAttribute("aria-label");
+    };
+
+    it("runs what was typed, not a quoted history row that looks the same once quotes are dropped", async () => {
+      seedHistory("'$SHELL'");
+      mockAddTerminal.mockResolvedValue(undefined);
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.change(input, { target: { value: "$SHELL" } });
+
+      const [typed, quoted] = commandOptions();
+      expect(typed!.getAttribute("data-command")).toBe("$SHELL");
+      expect(typed!.textContent).toMatch(/^Run/);
+      expect(quoted!.getAttribute("data-command")).toBe("'$SHELL'");
+      expect(document.getElementById(input.getAttribute("aria-activedescendant")!)).toBe(typed);
+
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
+      expect(mockAddTerminal).toHaveBeenCalledTimes(1);
+      expect(mockAddTerminal).toHaveBeenCalledWith(expect.objectContaining({ command: "$SHELL" }));
+    });
+
+    it("lights the row that is exactly what was typed when a quoted spelling sits above it", async () => {
+      seedHistory("'$SHELL'", "$SHELL");
+      mockAddTerminal.mockResolvedValue(undefined);
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.change(input, { target: { value: "$SHELL" } });
+
+      expect(commandsListed()).toEqual(["'$SHELL'", "$SHELL"]);
+      expect(document.getElementById(input.getAttribute("aria-activedescendant")!)).toBe(
+        commandOptions()[1]
+      );
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
+      expect(mockAddTerminal).toHaveBeenCalledWith(expect.objectContaining({ command: "$SHELL" }));
+    });
+
+    it("runs the quoted command when it is the typed one, even with the unquoted spelling in history", async () => {
+      seedHistory("$SHELL");
+      mockAddTerminal.mockResolvedValue(undefined);
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.change(input, { target: { value: "'$SHELL'" } });
+
+      expect(commandsListed()[0]).toBe("'$SHELL'");
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
+      expect(mockAddTerminal).toHaveBeenCalledWith(
+        expect.objectContaining({ command: "'$SHELL'" })
+      );
+    });
+
+    it("completes a row that differs from the typed text only by its quotes", () => {
+      seedHistory("'$SHELL'");
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.change(input, { target: { value: "$SHELL" } });
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+
+      expect(document.getElementById(input.getAttribute("aria-activedescendant")!)).toBe(
+        commandOptions()[1]
+      );
+      expect(fireEvent.keyDown(input, { key: "Tab" })).toBe(false);
+      expect(screen.getByDisplayValue("'$SHELL'")).toBe(input);
+      expect(mockAddTerminal).not.toHaveBeenCalled();
+      // The field now holds the lit command, so the next Tab moves on as usual.
+      expect(fireEvent.keyDown(input, { key: "Tab" })).toBe(true);
+    });
+
+    it("keeps a completed pin lit, with its own settings, when its saved text has space around it", async () => {
+      settingsMock.runCommands = [
+        { id: "s", name: "Ready", command: "echo ready ", preferredLocation: "dock" },
+      ];
+      mockAddTerminal.mockResolvedValue(undefined);
+      try {
+        render(<Footer projectId="test-project" />);
+        const input = openPanel();
+        fireEvent.change(input, { target: { value: "echo" } });
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        expect(fireEvent.keyDown(input, { key: "Tab" })).toBe(false);
+
+        // No second "Run echo ready" row beside the pin it was completed from.
+        expect(commandsListed()).toEqual(["echo ready "]);
+        const lit = document.getElementById(input.getAttribute("aria-activedescendant")!);
+        expect(lit).toBe(commandOptions()[0]);
+        expect(fireEvent.keyDown(input, { key: "Tab" })).toBe(true);
+
+        await act(async () => {
+          fireEvent.keyDown(input, { key: "Enter" });
+        });
+        expect(mockAddTerminal).toHaveBeenCalledWith(
+          expect.objectContaining({ command: "echo ready ", location: "dock" })
+        );
+      } finally {
+        settingsMock.runCommands = [];
+      }
+    });
+
+    describe("when a pin's saved text and a history entry differ only by surrounding space", () => {
+      beforeEach(() => {
+        settingsMock.runCommands = [
+          { id: "s", name: "Ready", command: "echo ready ", preferredLocation: "dock" },
+        ];
+        seedHistory("echo ready");
+        mockAddTerminal.mockResolvedValue(undefined);
+      });
+      afterEach(() => {
+        settingsMock.runCommands = [];
+      });
+
+      it("runs the history entry a Tab completed, not the pin it trims equal to", async () => {
+        render(<Footer projectId="test-project" />);
+        const input = openPanel();
+        fireEvent.change(input, { target: { value: "echo" } });
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        expect(fireEvent.keyDown(input, { key: "Tab" })).toBe(false);
+
+        expect(commandsListed()).toEqual(["echo ready ", "echo ready"]);
+        expect(document.getElementById(input.getAttribute("aria-activedescendant")!)).toBe(
+          commandOptions()[1]
+        );
+        await act(async () => {
+          fireEvent.keyDown(input, { key: "Enter" });
+        });
+        expect(mockAddTerminal).toHaveBeenCalledWith(
+          expect.objectContaining({ command: "echo ready", location: "grid" })
+        );
+      });
+
+      it.each([
+        ["with the list open", false],
+        ["with the list shut", true],
+      ])("runs the entry that is exactly what was typed, %s", async (_label, shut) => {
+        render(<Footer projectId="test-project" />);
+        const input = openPanel();
+        fireEvent.change(input, { target: { value: "echo ready" } });
+        if (shut) fireEvent.keyDown(input, { key: "Escape" });
+
+        await act(async () => {
+          fireEvent.keyDown(input, { key: "Enter" });
+        });
+        expect(mockAddTerminal).toHaveBeenCalledWith(
+          expect.objectContaining({ command: "echo ready", location: "grid" })
+        );
+      });
+    });
+
+    it.each(PAIRS)("keeps %s and %s as two suggestions", (first, second) => {
+      seedHistory(first, second);
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+
+      expect(commandsListed()).toEqual([first, second]);
+    });
+
+    it("still collapses a history entry stored twice, without losing the spelling beside it", () => {
+      seedHistory("'$SHELL'", "$SHELL", "$SHELL");
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+
+      expect(commandsListed()).toEqual(["'$SHELL'", "$SHELL"]);
+    });
+
+    it.each(PAIRS)("leaves both %s and %s recallable once each has run", async (first, second) => {
+      mockAddTerminal.mockResolvedValue(undefined);
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      for (const command of [first, second]) {
+        fireEvent.change(input, { target: { value: command } });
+        await act(async () => {
+          fireEvent.keyDown(input, { key: "Enter" });
+        });
+      }
+      expect(mockAddTerminal).toHaveBeenCalledTimes(2);
+      expect(mockAddTerminal.mock.calls.map(([panel]) => panel.command)).toEqual([first, second]);
+
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      expect(commandsListed()).toEqual([second, first]);
+    });
+
+    it.each([
+      [
+        "a pinned command",
+        () => {
+          settingsMock.runCommands = [{ id: "s", name: "Shell", command: "'$SHELL'" }];
+        },
+      ],
+      [
+        "a detected script",
+        () => {
+          settingsMock.allDetectedRunners = [{ id: "r", name: "shell", command: "'$SHELL'" }];
+        },
+      ],
+    ])(
+      "runs what was typed, not %s that looks the same once quotes are dropped",
+      async (_source, arrange) => {
+        arrange();
+        mockAddTerminal.mockResolvedValue(undefined);
+        try {
+          render(<Footer projectId="test-project" />);
+          const input = openPanel();
+          fireEvent.change(input, { target: { value: "$SHELL" } });
+
+          expect(commandsListed()).toEqual(["$SHELL", "'$SHELL'"]);
+          await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Run" }));
+          });
+          expect(mockAddTerminal).toHaveBeenCalledWith(
+            expect.objectContaining({ command: "$SHELL" })
+          );
+        } finally {
+          settingsMock.allDetectedRunners = [];
+          settingsMock.runCommands = [];
+        }
+      }
+    );
+
+    it("keeps a pin written with quotes apart from the detected script, and unpins the text it was saved as", () => {
+      settingsMock.runCommands = [{ id: "s", name: "Tests", command: 'npm run "test"' }];
+      settingsMock.allDetectedRunners = [{ id: "r", name: "test", command: "npm run test" }];
+      try {
+        render(<Footer projectId="test-project" />);
+        const input = openPanel();
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+
+        expect(commandsListed()).toEqual(['npm run "test"', "npm run test"]);
+        fireEvent.keyDown(input, { key: "π", code: "KeyP", altKey: true });
+        expect(settingsMock.removeFromSaved).toHaveBeenCalledWith('npm run "test"');
+      } finally {
+        settingsMock.allDetectedRunners = [];
+        settingsMock.runCommands = [];
+        settingsMock.removeFromSaved.mockReset();
+      }
+    });
+
+    it("still shows a pin and the detected script it matches as one pinned row", () => {
+      settingsMock.runCommands = [{ id: "s", name: "Tests", command: "npm run test" }];
+      settingsMock.allDetectedRunners = [{ id: "r", name: "test", command: "npm run test" }];
+      try {
+        render(<Footer projectId="test-project" />);
+        const input = openPanel();
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+
+        expect(commandsListed()).toEqual(["npm run test"]);
+        expect(bandOf(commandOptions()[0]!)).toBe("Pinned");
+      } finally {
+        settingsMock.allDetectedRunners = [];
+        settingsMock.runCommands = [];
+      }
+    });
+
+    it("takes a detected script's pinned name and settings from the pin that is exactly its text", () => {
+      settingsMock.runCommands = [
+        { id: "q", name: "Quoted", command: 'npm run "test"' },
+        { id: "e", name: "Exact", command: "npm run test", preferredLocation: "dock" },
+      ];
+      settingsMock.allDetectedRunners = [{ id: "r", name: "test", command: "npm run test" }];
+      try {
+        render(<Footer projectId="test-project" />);
+        const input = openPanel();
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+
+        expect(commandsListed()).toEqual(["npm run test", 'npm run "test"']);
+        const [exact, quoted] = commandOptions();
+        expect(exact!.textContent).toContain("Exact");
+        expect(quoted!.textContent).toContain("Quoted");
+        const summary = document.getElementById(exact!.getAttribute("aria-describedby")!)!;
+        expect(summary.textContent).toContain("Dock");
+      } finally {
+        settingsMock.allDetectedRunners = [];
+        settingsMock.runCommands = [];
+      }
+    });
+
+    it.each([
+      [
+        "a pinned command",
+        () => {
+          settingsMock.runCommands = [{ id: "s", name: "Wipe", command: "rm *.log" }];
+        },
+      ],
+      [
+        "a detected script",
+        () => {
+          settingsMock.allDetectedRunners = [{ id: "r", name: "wipe", command: "rm *.log" }];
+        },
+      ],
+    ])("keeps %s apart from a history entry that differs only by quoting", (_source, arrange) => {
+      arrange();
+      seedHistory("rm '*.log'");
+      try {
+        render(<Footer projectId="test-project" />);
+        const input = openPanel();
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+
+        expect(commandsListed()).toEqual(["rm *.log", "rm '*.log'"]);
+      } finally {
+        settingsMock.allDetectedRunners = [];
+        settingsMock.runCommands = [];
+      }
+    });
+  });
+
   it("describes the lit row with what running it will do", () => {
     settingsMock.runCommands = [
       { id: "s", name: "Docs", command: "npx serve docs", preferredLocation: "dock" },
