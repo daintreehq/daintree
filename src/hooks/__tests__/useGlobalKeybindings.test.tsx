@@ -6,6 +6,7 @@ import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
 import { APP_MODAL_SELECTOR } from "@/lib/appModal";
 import { PANE_DIALOG_ATTR } from "@/lib/paneDialog";
 import { claimVoiceWaitKeys } from "@/lib/voiceWaitKeys";
+import { claimWaitingSend } from "@/services/voiceDraftSend";
 import type { PaletteId } from "@/store/paletteStore";
 
 function parseComboLite(combo: string) {
@@ -287,6 +288,39 @@ describe("useGlobalKeybindings — isolated surfaces", () => {
     pressDictationIn(false, '<div class="cm-editor"><textarea></textarea></div>');
     expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
     expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+  });
+
+  // #15705: pressed again, it sends a waiting send it started wherever the keyboard is.
+  describe("while a send the stop-and-send key started waits", () => {
+    const STOP_AND_SEND = {
+      actionId: "voiceInput.stopAndSend",
+      combo: "Cmd+Alt+D",
+      event: { key: "d", code: "KeyD", metaKey: true, altKey: true },
+    };
+    let release: () => void = () => {};
+    afterEach(() => release());
+
+    it("lets that key through from an isolated terminal", () => {
+      release = claimWaitingSend("term-1", new Set(["s1"]), () => {});
+      pressDictationIn(false, '<div class="xterm"><textarea></textarea></div>', STOP_AND_SEND);
+      expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
+        "voiceInput.stopAndSend",
+        undefined,
+        expect.anything()
+      );
+    });
+
+    it("keeps it out once nothing it started waits, or for a send Enter started", () => {
+      release = claimWaitingSend("term-1", new Set(["s1"]));
+      pressDictationIn(false, '<div class="xterm"><textarea></textarea></div>', STOP_AND_SEND);
+      expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+    });
+
+    it("still keeps the dictation key out", () => {
+      release = claimWaitingSend("term-1", new Set(["s1"]), () => {});
+      pressDictationIn(false, '<div class="xterm"><textarea></textarea></div>');
+      expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+    });
   });
 });
 
