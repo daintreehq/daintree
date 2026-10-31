@@ -114,6 +114,19 @@ describe("askShellApproval (#13501)", () => {
       expect(link.call).toHaveBeenCalledTimes(1);
     });
 
+    it("is still asked with exactly the plain deadline and its margin left", async () => {
+      let clock = 1_000;
+      const leastAsked = MCP_DISPATCH_TIMEOUT_MS + MCP_REMOTE_CONFIRM_MARGIN_MS;
+      const link = olderShell("UNSUPPORTED", () => {
+        clock = 1_001;
+      });
+
+      await expect(
+        askShellApproval(link, ASK, { now: () => clock, windowMs: leastAsked + 1 })
+      ).resolves.toMatchObject({ decision: "approved" });
+      expect(link.call.mock.calls[1]![2].timeoutMs).toBe(leastAsked);
+    });
+
     it.each([
       ["OUTCOME_UNKNOWN", "timeout"],
       ["HOST_DISCONNECTED", "unavailable"],
