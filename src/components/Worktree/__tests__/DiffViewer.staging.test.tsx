@@ -112,7 +112,9 @@ describe("DiffViewer staged rows", () => {
     expect(previous).toBe(ROWS);
     // Still one logical hunk: its header was never repeated for the batches.
     expect(container.querySelectorAll(".diff-hunk-header-inner")).toHaveLength(1);
-    const lastCell = container.querySelectorAll("tr.diff-line")[ROWS - 1]!.querySelector(".diff-code");
+    const lastCell = container
+      .querySelectorAll("tr.diff-line")
+      [ROWS - 1]!.querySelector(".diff-code");
     expect(lastCell?.textContent).toBe(`row ${ROWS} of the added file`);
   });
 
@@ -150,7 +152,9 @@ describe("DiffViewer staged rows", () => {
     });
     expect(rowCount(container)).toBe(ROWS);
     const selection = window.getSelection()!;
-    const lastCell = container.querySelectorAll("tr.diff-line")[ROWS - 1]!.querySelector(".diff-code")!;
+    const lastCell = container
+      .querySelectorAll("tr.diff-line")
+      [ROWS - 1]!.querySelector(".diff-code")!;
     expect(selection.containsNode(lastCell, true)).toBe(true);
     selection.removeAllRanges();
   });
@@ -165,7 +169,13 @@ describe("DiffViewer staged rows", () => {
       useDiffNotesStore.getState().addNote({
         worktreePath: "/repo",
         filePath: PATH,
-        anchor: { kind: "lines", side: "new", startLine: line, endLine: line, contentHash: contentHash! },
+        anchor: {
+          kind: "lines",
+          side: "new",
+          startLine: line,
+          endLine: line,
+          contentHash: contentHash!,
+        },
         body: "Check this row",
       });
     });
@@ -189,7 +199,9 @@ describe("DiffViewer staged rows", () => {
     // Directly under the row it was written on.
     const widgetRow = card.closest("tr")!;
     const anchorRow = widgetRow.previousElementSibling as HTMLElement;
-    expect(anchorRow.querySelector(".diff-code")?.textContent).toBe(`row ${line} of the added file`);
+    expect(anchorRow.querySelector(".diff-code")?.textContent).toBe(
+      `row ${line} of the added file`
+    );
   });
 
   it("tells a row-set consumer about each slice after it commits", async () => {
@@ -197,7 +209,10 @@ describe("DiffViewer staged rows", () => {
     let container!: HTMLElement;
     ({ container } = render(
       <TooltipProvider>
-        <DiffViewer diff={addedDiff(ROWS)} onToggleCollapse={() => seen.push(rowCount(container))} />
+        <DiffViewer
+          diff={addedDiff(ROWS)}
+          onToggleCollapse={() => seen.push(rowCount(container))}
+        />
       </TooltipProvider>
     ));
     // The first commit is the initial render, not a change.

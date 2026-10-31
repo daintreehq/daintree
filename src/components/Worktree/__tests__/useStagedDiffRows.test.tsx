@@ -36,7 +36,12 @@ function runFrame() {
 function addedHunk(lines: number): HunkData {
   const changes: ChangeData[] = [];
   for (let i = 1; i <= lines; i++) {
-    changes.push({ type: "insert", content: `line ${i}`, lineNumber: i, isInsert: true } as ChangeData);
+    changes.push({
+      type: "insert",
+      content: `line ${i}`,
+      lineNumber: i,
+      isInsert: true,
+    } as ChangeData);
   }
   return {
     content: `@@ -0,0 +1,${lines} @@`,
@@ -64,8 +69,9 @@ interface Props {
 }
 
 function renderStage(initial: Props) {
-  return renderHook((props: Props) =>
-    useStagedDiffRows(props.hunks, props.tokens, props.owner, props.flush, props.enabled),
+  return renderHook(
+    (props: Props) =>
+      useStagedDiffRows(props.hunks, props.tokens, props.owner, props.flush, props.enabled),
     { initialProps: initial }
   );
 }
@@ -87,7 +93,13 @@ describe("useStagedDiffRows", () => {
     const hunks = [addedHunk(10)];
     const tokens = tokensFor(10, "t");
     const owner = {};
-    const { result, rerender } = renderStage({ hunks, tokens: null, owner, flush: 0, enabled: true });
+    const { result, rerender } = renderStage({
+      hunks,
+      tokens: null,
+      owner,
+      flush: 0,
+      enabled: true,
+    });
     rerender({ hunks, tokens, owner, flush: 0, enabled: true });
     expect(result.current.tokens).toBe(tokens);
     expect(frames.size).toBe(0);
@@ -125,7 +137,13 @@ describe("useStagedDiffRows", () => {
     const hunks = [addedHunk(ROWS)];
     const tokens = tokensFor(ROWS, "t");
     const owner = {};
-    const { result, rerender } = renderStage({ hunks, tokens: null, owner, flush: 0, enabled: true });
+    const { result, rerender } = renderStage({
+      hunks,
+      tokens: null,
+      owner,
+      flush: 0,
+      enabled: true,
+    });
     runFrame(); // two batches mounted, plain
     expect(mountedRows(result.current.mountedHunks)).toBe(DIFF_ROW_BATCH * 2);
 
@@ -164,7 +182,13 @@ describe("useStagedDiffRows", () => {
     const first = tokensFor(ROWS, "a");
     const second = tokensFor(ROWS, "b");
     const owner = {};
-    const { result, rerender } = renderStage({ hunks, tokens: first, owner, flush: 0, enabled: true });
+    const { result, rerender } = renderStage({
+      hunks,
+      tokens: first,
+      owner,
+      flush: 0,
+      enabled: true,
+    });
     while (!result.current.allRowsMounted || result.current.tokens !== first) runFrame();
 
     rerender({ hunks, tokens: second, owner, flush: 0, enabled: true });
@@ -222,7 +246,13 @@ describe("useStagedDiffRows", () => {
   it("mounts later growth of a finished view at once", () => {
     const hunks = [addedHunk(ROWS)];
     const owner = {};
-    const { result, rerender } = renderStage({ hunks, tokens: null, owner, flush: 0, enabled: true });
+    const { result, rerender } = renderStage({
+      hunks,
+      tokens: null,
+      owner,
+      flush: 0,
+      enabled: true,
+    });
     while (!result.current.allRowsMounted) runFrame();
     const grown = [addedHunk(ROWS + 20)];
     rerender({ hunks: grown, tokens: null, owner, flush: 0, enabled: true });
@@ -252,7 +282,13 @@ describe("useStagedDiffRows", () => {
     const hunks = [addedHunk(ROWS)];
     const tokens = tokensFor(ROWS, "t");
     const owner = {};
-    const { result, rerender } = renderStage({ hunks, tokens: null, owner, flush: 0, enabled: true });
+    const { result, rerender } = renderStage({
+      hunks,
+      tokens: null,
+      owner,
+      flush: 0,
+      enabled: true,
+    });
     expect(result.current.allRowsMounted).toBe(false);
     rerender({ hunks, tokens: null, owner, flush: 1, enabled: true });
     expect(result.current.mountedHunks).toBe(hunks);

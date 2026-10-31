@@ -385,7 +385,7 @@ const FAMILIES: readonly Family[] = [
     kind: "mechanism",
     fidelity: withFidelity({ renderer: "headless", processTopology: "partial" }),
     claim:
-      'The real DiffViewer, react-diff-view table and refractor token pass, mounted with react-dom under jsdom, counting the rows each commit adds and highlights. `renderer: "headless"` means a DOM without layout, as for PERF-247: no compositor, paint or Chromium layout, which is where most of the stall #15677 measured in Electron\'s Chromium actually was, so a shorter commit here does not by itself mean a shorter frame. Frames are driven by hand and the token pass is delivered on cue, so the worker\'s compute and transport are excluded (PERF-160..164 own them). The child runs the ordinary vitest config: development React, WITHOUT the React Compiler transform production ships.',
+      "The real DiffViewer, react-diff-view table and refractor token pass, mounted with react-dom under jsdom, counting the rows each commit adds and highlights. `renderer: \"headless\"` means a DOM without layout, as for PERF-247: no compositor, paint or Chromium layout, which is where most of the stall #15677 measured in Electron's Chromium actually was, so a shorter commit here does not by itself mean a shorter frame. Frames are driven by hand and the token pass is delivered on cue, so the worker's compute and transport are excluded (PERF-160..164 own them). The child runs the ordinary vitest config: development React, WITHOUT the React Compiler transform production ships.",
   },
   {
     label: "file viewer",

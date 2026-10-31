@@ -111,7 +111,9 @@ describe("sliceHunksToRowBudget", () => {
   });
 
   it("grows as a prefix: each budget's rows start with the previous budget's", () => {
-    const changes = Array.from({ length: 23 }, (_, i) => (i % 3 === 1 ? del(i + 1) : insert(i + 1)));
+    const changes = Array.from({ length: 23 }, (_, i) =>
+      i % 3 === 1 ? del(i + 1) : insert(i + 1)
+    );
     const hunks = [hunk(changes.slice(0, 10)), hunk(changes.slice(10), 20)];
     let previous: ChangeData[] = [];
     for (let budget = 0; budget <= 24; budget += 4) {

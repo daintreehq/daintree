@@ -159,9 +159,9 @@ export interface DiffViewerProps {
   /** Case-insensitive plain-text query; matches render as .diff-search-match spans */
   searchQuery?: string;
   onRetry?: () => void;
-  /** Fired whenever rendered hunk rows change (collapse toggles, context expansion, progressive reveal), so consumers can re-scan the live DOM */
+  /** Fired whenever rendered hunk rows change (collapse toggles, context expansion, progressive reveal, each staged batch of a large file), so consumers can re-scan the live DOM */
   onToggleCollapse?: () => void;
-  /** Fired after a file's token pass commits (highlighting, search marks) — the signal that .diff-search-match spans are scannable */
+  /** Fired after each commit of a file's token pass (highlighting, search marks) — the signal that .diff-search-match spans are scannable. A large file's pass lands in batches; the last call has every row highlighted. */
   onTokensRendered?: () => void;
   /**
    * Enables review notes for a local diff of this worktree. Omit for diffs
@@ -924,8 +924,6 @@ interface FileDiffProps {
 }
 
 const EMPTY_NOTES: readonly DiffNote[] = [];
-
-
 const EMPTY_KEYS: string[] = [];
 
 type DiffNoteDraft =
@@ -1256,8 +1254,8 @@ function FileDiff({
   }, [displayTokens, onTokensRendered]);
 
   // Single notification point for the rendered row set changing — manual gap
-  // expansion, progressive reveal, the full-file scope, and a source arriving
-  // after the diff all land here, so each fires exactly once and none can be
+  // expansion, progressive reveal, each staged batch, the full-file scope, and
+  // a source arriving after the diff all land here, so each fires exactly once and none can be
   // forgotten. Collapse/expand is separate: it changes visibility, not rows,
   // and notifies from its own handler. The first commit is the initial render
   // rather than a transition, so the ref starts already-notified.

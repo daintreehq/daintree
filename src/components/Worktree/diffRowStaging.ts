@@ -71,8 +71,7 @@ export function stageTokens(
   base: HunkTokens | null,
   budget: number
 ): HunkTokens {
-  const size = (side: "old" | "new") =>
-    Math.max(lineCount(target[side]), lineCount(base?.[side]));
+  const size = (side: "old" | "new") => Math.max(lineCount(target[side]), lineCount(base?.[side]));
   const old: (TokenNode[] | null)[] = new Array<TokenNode[] | null>(size("old")).fill(null);
   const next: (TokenNode[] | null)[] = new Array<TokenNode[] | null>(size("new")).fill(null);
   let row = 0;
