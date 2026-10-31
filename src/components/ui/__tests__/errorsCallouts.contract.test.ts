@@ -71,10 +71,6 @@ const EXEMPT: Record<string, string[]> = {
     "flex items-center gap-1.5 ml-auto text-2xs text-status-error",
     "flex items-center gap-1.5 ml-auto text-2xs text-status-warning",
   ],
-  // A destructive row button ("Delete all"), not a message.
-  "src/components/Project/ProjectSwitcherScratchSection.tsx": [
-    "text-xs font-medium text-status-error transition-colors hover:bg-status-error/10",
-  ],
   // Raw setup output behind a "Show details" disclosure: a log, not a callout.
   "src/components/Worktree/WorktreeCard/WorktreeDetailsSection.tsx": [
     "mt-1.5 max-h-32 overflow-auto rounded-[var(--radius-md)] bg-status-error/5 p-2 font-mono text-2xs text-text-secondary whitespace-pre-wrap break-all select-text",

@@ -1,14 +1,14 @@
 /**
  * @vitest-environment jsdom
  *
- * Scratch deletion from the switcher palette: bulk "delete all" from the visible
- * button under the create control and from the section header's context menu
+ * Scratch deletion from the switcher palette: bulk "delete all" from the section
+ * header's ⋯ menu, its context menu and the end of every row's context menu
  * (#11086, #11705), plus single delete from a row's context menu (#11522). All
  * share this harness because they share the surface — the section header and the
  * rows under it — and splitting them would fork 150 lines of identical mocks.
  *
- * Uses the REAL context-menu primitives — the whole point of the feature is that a
- * right-click on the collapse toggle opens a menu instead of collapsing the section,
+ * Uses the REAL menu primitives — the whole point of the feature is that a
+ * right-click on the header opens a menu instead of collapsing the section,
  * and an inline stub that renders items as plain buttons would pass even if the
  * trigger were never wired. `ConfirmDialog` is stubbed to a prop-rendering seam: its
  * own gates (typed-name, cooldown, aria) have their own suite, so what matters here
@@ -138,6 +138,9 @@ vi.mock("@/components/ui/popover", () => ({
 
 vi.mock("@/components/ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
 }));
 
 // Prop-rendering seam. Everything the palette decides — the counted title, the
@@ -283,16 +286,35 @@ function renderPalette(overrides: Record<string, unknown> = {}) {
 }
 
 /**
- * The Scratch section's collapse toggle, which doubles as the context-menu trigger.
- * Keyed on `aria-controls` rather than the accessible name: the name absorbs the
- * count badge ("Scratch2"), so it shifts with the fixture.
+ * The Scratch band's header, the context-menu trigger. It leads the band's one
+ * listbox in both lives: a pointer-only bar while open, an option while folded.
+ * Found in the DOM rather than by role: open, the bar is hidden from the a11y
+ * tree on purpose.
  */
 function scratchHeader(): HTMLElement {
-  const header = document.querySelector<HTMLElement>(
-    'button[aria-controls="scratch-section-list"]'
-  );
-  if (!header) throw new Error("Scratch section header not found");
+  const header = document.getElementById("scratch-list")?.firstElementChild;
+  if (!(header instanceof HTMLElement)) throw new Error("Scratch section header not found");
   return header;
+}
+
+/** What a click folds or unfolds with: the bar's toggle open, the whole header folded. */
+function scratchFoldTarget(): HTMLElement {
+  return (
+    document.getElementById("band-option-scratch") ?? screen.getByTestId("scratch-band-toggle")
+  );
+}
+
+function isScratchFolded(): boolean {
+  return document.getElementById("band-option-scratch") !== null;
+}
+
+/** Radix opens a dropdown on primary-button pointerdown, not on click. */
+function openHeaderMenu(): void {
+  fireEvent.pointerDown(screen.getByTestId("scratch-band-menu"), {
+    button: 0,
+    ctrlKey: false,
+    pointerType: "mouse",
+  });
 }
 
 /**
@@ -301,19 +323,6 @@ function scratchHeader(): HTMLElement {
  */
 function deleteAllItem(): HTMLElement | null {
   return screen.queryByRole("menuitem");
-}
-
-/**
- * Where a control sits among the section's stacked children. Compared between
- * two controls rather than asserted against a fixed number, so inserting
- * anything else into the section doesn't rewrite every ordering spec.
- */
-function orderInScratchSection(testId: string): number {
-  const element = screen.getByTestId(testId);
-  const siblings = Array.from(element.parentElement?.children ?? []);
-  const index = siblings.indexOf(element);
-  if (index === -1) throw new Error(`${testId} is not a child of its own parent`);
-  return index;
 }
 
 function snapshotOf(count: number): DeleteAllScratchesSnapshot {
@@ -412,43 +421,44 @@ describe.each(["modal", "dropdown"] as const)("Scratch section header menu (%s)"
 });
 
 /**
- * The visible control (#11705). The header menu it duplicates stays, but nothing
- * in the palette advertised that the header was right-clickable, so the practical
- * experience was deleting scratches one row at a time.
+ * The header's ⋯ (#11705). Nothing advertised that the header was
+ * right-clickable, so the practical experience was deleting scratches one row
+ * at a time. It replaces the standing red row that used to sit one slip below
+ * "New scratch workspace…".
  */
-describe.each(["modal", "dropdown"] as const)("Visible bulk delete button (%s)", (mode) => {
-  it("sits below the create control once scratches exist", () => {
-    const { view } = renderPalette({ mode, scratchResults: [makeScratch(1)] });
+describe.each(["modal", "dropdown"] as const)("Scratch header actions menu (%s)", (mode) => {
+  it("offers the bulk delete from the header once scratches exist", () => {
+    const { props, view } = renderPalette({ mode, scratchResults: [makeScratch(1)] });
 
-    // Order, not adjacency: the issue asks for it *below* the create button —
-    // one rendered above reads as the primary action — but a helper line landing
-    // between them later is not a regression, so pinning them as siblings would
-    // fail on a change that still honours the contract.
-    expect(orderInScratchSection("scratch-delete-all-button")).toBeGreaterThan(
-      orderInScratchSection("scratch-create-button")
-    );
+    // The standing row is gone; the header carries the action instead.
+    expect(screen.queryByTestId("scratch-delete-all-button")).toBeNull();
+    openHeaderMenu();
+    const item = screen.getByRole("menuitem", { name: /Delete all scratch workspaces…/ });
+    fireEvent.click(item);
+    expect(props.onRequestDeleteAllScratches).toHaveBeenCalledTimes(1);
 
-    // Paired with the positive case so this can't pass by the button simply
+    // Paired with the positive case so this can't pass by the menu simply
     // never existing — "absent when empty" only means something next to it.
     view.rerender(<ProjectSwitcherPalette {...baseProps()} mode={mode} scratchResults={[]} />);
 
-    expect(screen.queryByTestId("scratch-delete-all-button")).toBeNull();
+    expect(screen.queryByTestId("scratch-band-menu")).toBeNull();
   });
 
   it("stays available while the create-name editor is open", () => {
-    // Clicking it moves focus off the editor input, whose blur cancels the
-    // create. The button must survive that re-render and still take the click —
-    // and the abandoned name must not be created on the way past.
+    // Opening the menu moves focus off the editor input. The menu must survive
+    // that re-render and still take the click — and the abandoned name must
+    // not be created on the way past.
     const { props } = renderPalette({ mode, scratchResults: [makeScratch(1)] });
     fireEvent.click(screen.getByTestId("scratch-create-button"));
     expect(screen.getByTestId("scratch-create-input")).toBeTruthy();
 
-    const deleteAll = screen.getByTestId("scratch-delete-all-button");
+    const menu = screen.getByTestId("scratch-band-menu");
     // A real focus move, not fireEvent.blur: the ordering of blur against the
     // click is the whole risk here.
-    deleteAll.focus();
-    expect(deleteAll.isConnected).toBe(true);
-    fireEvent.click(deleteAll);
+    menu.focus();
+    expect(menu.isConnected).toBe(true);
+    openHeaderMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Delete all scratch workspaces…/ }));
 
     expect(props.onRequestDeleteAllScratches).toHaveBeenCalledTimes(1);
     expect(props.onCreateScratch).not.toHaveBeenCalled();
@@ -456,18 +466,17 @@ describe.each(["modal", "dropdown"] as const)("Visible bulk delete button (%s)",
 
   it("leaves the reach of the section it belongs to", () => {
     const { view } = renderPalette({ mode, scratchResults: [makeScratch(1)] });
-    const named = { name: "Delete all scratch workspaces" };
-    expect(screen.queryByRole("button", named)).not.toBeNull();
+    expect(screen.queryByTestId("scratch-band-menu")).not.toBeNull();
 
-    // Collapsing unmounts the section's contents.
-    fireEvent.click(scratchHeader());
-    expect(screen.queryByRole("button", named)).toBeNull();
-    fireEvent.click(scratchHeader());
-    expect(screen.queryByRole("button", named)).not.toBeNull();
+    // Folded, the header is an option and carries no ⋯.
+    fireEvent.click(scratchFoldTarget());
+    expect(isScratchFolded()).toBe(true);
+    expect(screen.queryByTestId("scratch-band-menu")).toBeNull();
+    fireEvent.click(scratchFoldTarget());
+    expect(screen.queryByTestId("scratch-band-menu")).not.toBeNull();
 
     // Searching only sets `hidden` — the subtree stays mounted so a deliberate
-    // collapse survives clearing the box — so this has to be asked of the
-    // accessibility tree rather than the DOM.
+    // collapse survives clearing the box — so the menu has to sit under it.
     view.rerender(
       <ProjectSwitcherPalette
         {...baseProps()}
@@ -477,17 +486,17 @@ describe.each(["modal", "dropdown"] as const)("Visible bulk delete button (%s)",
       />
     );
 
-    expect(screen.queryByRole("button", named)).toBeNull();
+    expect(screen.getByTestId("scratch-band-menu").closest("[hidden]")).not.toBeNull();
   });
 
-  it("hides the button when the host wires no handler, but shows it when wired", () => {
+  it("hides the menu when the host wires no handler, but shows it when wired", () => {
     const { view } = renderPalette({
       mode,
       scratchResults: [makeScratch(1)],
       onRequestDeleteAllScratches: undefined,
     });
 
-    expect(screen.queryByTestId("scratch-delete-all-button")).toBeNull();
+    expect(screen.queryByTestId("scratch-band-menu")).toBeNull();
 
     view.rerender(
       <ProjectSwitcherPalette
@@ -498,33 +507,31 @@ describe.each(["modal", "dropdown"] as const)("Visible bulk delete button (%s)",
       />
     );
 
-    expect(screen.queryByTestId("scratch-delete-all-button")).not.toBeNull();
+    expect(screen.queryByTestId("scratch-band-menu")).not.toBeNull();
   });
 });
 
 describe("Scratch section header collapse toggle", () => {
   it("opens the menu without collapsing the section", () => {
     renderPalette({ scratchResults: [makeScratch(1)] });
-    const header = scratchHeader();
 
-    fireEvent.contextMenu(header);
+    fireEvent.contextMenu(scratchHeader());
 
-    // The trigger IS the collapse toggle. If the right-click also reached its
+    // The header is also the fold target. If the right-click also reached its
     // onClick, the section would snap shut under the menu it just opened.
-    expect(header.getAttribute("aria-expanded")).toBe("true");
+    expect(isScratchFolded()).toBe(false);
     expect(deleteAllItem()).not.toBeNull();
   });
 
   it("still collapses on an ordinary click, with the menu left intact", () => {
     renderPalette({ scratchResults: [makeScratch(1)] });
-    const header = scratchHeader();
 
-    fireEvent.click(header);
-    expect(header.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(scratchFoldTarget());
+    expect(isScratchFolded()).toBe(true);
 
-    // Non-regression, but only if the menu it now shares the button with survives:
+    // Non-regression, but only if the menu it shares the header with survives:
     // asserting the collapse alone would still pass with the whole feature reverted.
-    fireEvent.contextMenu(header);
+    fireEvent.contextMenu(scratchHeader());
     expect(deleteAllItem()).not.toBeNull();
   });
 });
@@ -674,12 +681,12 @@ describe("Bulk delete confirmation", () => {
  * it opens narrates the run rather than sitting mute on a spinner.
  */
 describe("Single scratch delete", () => {
-  /** The row menu's delete item, addressed by role so wording changes don't break specs. */
+  /**
+   * The row menu's single delete item. Not the last item any more: the bulk
+   * delete closes every row's menu, as the keyboard's way to it.
+   */
   function deleteItem(): HTMLElement {
-    const items = screen.getAllByRole("menuitem");
-    const item = items.at(-1);
-    if (!item) throw new Error("No context-menu items rendered");
-    return item;
+    return screen.getByRole("menuitem", { name: /^Delete scratch/ });
   }
 
   function target(overrides: Record<string, unknown> = {}) {
@@ -717,6 +724,19 @@ describe("Single scratch delete", () => {
       fireEvent.click(deleteItem());
 
       expect(props.onRequestDeleteScratch).toHaveBeenCalledWith("scratch-1");
+      expect(props.onRequestDeleteAllScratches).not.toHaveBeenCalled();
+    });
+
+    it("ends the row menu with the bulk delete, the keyboard's way to it", () => {
+      const { props } = renderPalette({ mode, scratchResults: [makeScratch(1), makeScratch(2)] });
+
+      fireEvent.contextMenu(screen.getByRole("option", { name: /Spike 1/ }));
+      const last = screen.getAllByRole("menuitem").at(-1)!;
+      expect(last.textContent).toContain("Delete all scratch workspaces…");
+      fireEvent.click(last);
+
+      expect(props.onRequestDeleteAllScratches).toHaveBeenCalledTimes(1);
+      expect(props.onRequestDeleteScratch).not.toHaveBeenCalled();
     });
 
     it("hides the delete when the host wires no handler, but shows it when wired", () => {

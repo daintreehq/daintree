@@ -261,7 +261,13 @@ const BAND_HEADER_CLASS = cn(
   PALETTE_SECTION_LABEL_CLASS,
   "flex min-h-6 items-center justify-between gap-2 px-2 border border-transparent rounded-[var(--radius-sm)]"
 );
-const FOLDED_BAND_HEADER_CLASS = cn(PALETTE_ROW_CLASS, "cursor-pointer");
+// The row box restated beside the highlight, so a header row is drawn like
+// every other row; `min-h-6` keeps it the open header's height, which is what
+// stops a fold moving the label.
+const FOLDED_BAND_HEADER_CLASS = cn(
+  PALETTE_ROW_CLASS,
+  "cursor-pointer rounded-[var(--radius-sm)] px-2 py-1"
+);
 
 /**
  * A band key made safe for an element id. Group keys carry a colon

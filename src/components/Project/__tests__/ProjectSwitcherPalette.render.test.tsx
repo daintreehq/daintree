@@ -143,6 +143,9 @@ vi.mock("@/components/ui/popover", () => ({
 
 vi.mock("@/components/ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
 }));
 
 vi.mock("@/components/ui/ConfirmDialog", () => ({
@@ -247,6 +250,27 @@ const dropdownProps = {
 };
 
 const baseProps = dropdownProps;
+
+/**
+ * Scratch's fold control. Open, it is the button in the pointer-only header
+ * bar; folded, the header itself is an option the cursor can land on.
+ */
+function scratchHeader(): HTMLElement {
+  return (
+    document.getElementById("band-option-scratch") ?? screen.getByTestId("scratch-band-toggle")
+  );
+}
+
+function isScratchFolded(): boolean {
+  const folded = document.getElementById("band-option-scratch");
+  if (folded) {
+    expect(folded.getAttribute("role")).toBe("option");
+    expect(screen.queryByTestId("scratch-band-toggle")).toBeNull();
+    return true;
+  }
+  expect(screen.getByTestId("scratch-band-toggle")).toBeTruthy();
+  return false;
+}
 
 describe("ProjectSwitcherPalette secondary text waterfall", () => {
   it("shows 'Directory not found' for missing projects", () => {
@@ -1080,12 +1104,23 @@ describe("ProjectSwitcherPalette modal mode", () => {
     expect(screen.queryByText("Create new folder…")).toBeNull();
   });
 
-  it("shows Right-click hint but not Remove shortcut in modal mode footer", () => {
-    render(<ProjectSwitcherPalette {...modalProps} results={multiProjects} />);
+  it("shows the Sections hint but not Remove shortcut in modal mode browse footer", () => {
+    // On a row elsewhere, as the hook opens: Enter on the current row closes.
+    render(<ProjectSwitcherPalette {...modalProps} results={multiProjects} selectedIndex={1} />);
     const footer = screen.getByTestId("palette-footer");
     expect(footer.textContent).toContain("to switch");
     expect(footer.textContent).not.toContain("Remove");
-    expect(footer.textContent).toContain("Right-click for more");
+    // Browse spends the rail on band jumps; the right-click rail is for search,
+    // where there are no headers to jump between.
+    const bandKeys = within(footer).getByTestId("project-switcher-band-keys-hint");
+    expect(bandKeys.textContent).toContain("Sections");
+    expect(bandKeys.textContent).toMatch(/(Option|Alt) plus up or down arrow/);
+    expect(footer.textContent).not.toContain("Right-click for more");
+  });
+
+  it("says Enter closes the palette while the current project is highlighted", () => {
+    render(<ProjectSwitcherPalette {...modalProps} results={multiProjects} selectedIndex={0} />);
+    expect(screen.getByTestId("palette-footer").textContent).toContain("to close");
   });
 
   it("emits one header for a multi-row band, not one per row", () => {
@@ -1166,7 +1201,7 @@ describe("ProjectSwitcherPalette modal mode", () => {
     // while the anchored tier was 352px, and #11736's widening has not brought
     // it back. Asserted as an absence because jsdom evaluates no container
     // query — a presence assertion here would pass on text no user ever sees.
-    render(<ProjectSwitcherPalette {...dropdownProps} results={multiProjects} />);
+    render(<ProjectSwitcherPalette {...dropdownProps} results={multiProjects} selectedIndex={1} />);
     const footer = screen.getByTestId("palette-footer");
     expect(footer.textContent).toContain("to switch");
     expect(footer.textContent).not.toContain("Remove");
@@ -1429,18 +1464,16 @@ describe("ProjectSwitcherPalette scratch section across search", () => {
 
   it("keeps a collapsed section collapsed across a search round-trip", () => {
     const { rerender } = render(<ProjectSwitcherPalette {...browseProps} />);
-    const header = screen.getByRole("button", { name: /Scratch/ });
-    fireEvent.click(header);
-    expect(header.getAttribute("aria-expanded")).toBe("false");
+    expect(isScratchFolded()).toBe(false);
+    fireEvent.click(scratchHeader());
+    expect(isScratchFolded()).toBe(true);
 
     rerender(<ProjectSwitcherPalette {...browseProps} query="spike" rankedSearch />);
     rerender(<ProjectSwitcherPalette {...browseProps} />);
 
     // Unmounting instead would reseed `collapsed` from the scratch count and
     // spring the section back open under a user who deliberately shut it.
-    expect(screen.getByRole("button", { name: /Scratch/ }).getAttribute("aria-expanded")).toBe(
-      "false"
-    );
+    expect(isScratchFolded()).toBe(true);
   });
 
   it("keeps the section visible while the ranking is still catching up", () => {
@@ -1543,11 +1576,17 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
 
   it("keeps the cleanup countdown beside the status line", () => {
     // Opened just inside the countdown window, so both facts are due at once.
+    // Snoozed rather than running: a running scratch is drawn up in the Running
+    // band, and this is about the pinned section's row.
     const lastOpened = Date.now() - (SCRATCH_CLEANUP_TTL_MS - 2 * 24 * 3600_000);
-    render(<ProjectSwitcherPalette {...browseProps({ lastOpened, activeAgentCount: 1 })} />);
+    render(<ProjectSwitcherPalette {...browseProps({ lastOpened, snoozedAgentCount: 1 })} />);
 
-    expect(screen.getByTestId("workspace-running-count").textContent).toBe("1 agent running");
-    expect(screen.getByTestId("scratch-cleanup-countdown")).toBeTruthy();
+    const row = within(screen.getByRole("listbox", { name: "Scratch workspaces" })).getByRole(
+      "option",
+      { name: /Spike notes/ }
+    );
+    expect(row.textContent).toMatch(/snoozed/i);
+    expect(within(row).getByTestId("scratch-cleanup-countdown")).toBeTruthy();
   });
 
   it("stays quiet in the pinned section when the scratch has no activity", () => {
@@ -1568,17 +1607,32 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
     expect(screen.getByTestId("scratch-cleanup-countdown")).toBeTruthy();
   });
 
-  // This list has no roving cursor, so `aria-selected` is free to mean "the one
-  // you're in" and says it alone — a second attribute for the same fact would
-  // have a reader announce one state as two.
-  it("marks the pinned scratch you are in without doubling the signal", () => {
-    render(<ProjectSwitcherPalette {...browseProps({ isActive: true })} />);
+  // The pinned rows are on the palette's one cursor now, so `aria-selected` is
+  // the Enter target there as everywhere else, never "the one you're in".
+  it("marks a pinned scratch under the cursor as selected, not current", () => {
+    render(<ProjectSwitcherPalette {...browseProps({})} />);
 
     const row = within(screen.getByRole("listbox", { name: "Scratch workspaces" })).getByRole(
-      "option"
+      "option",
+      { name: /Spike notes/ }
     );
+    expect(row.id).toBe("scratch-option-s1");
     expect(row.getAttribute("aria-selected")).toBe("true");
     expect(row.getAttribute("aria-current")).toBeNull();
+    expect(row.getAttribute("tabindex")).toBeNull();
+  });
+
+  // The scratch you're in is drawn with the workspace you're in, at the top,
+  // where `aria-current` marks it and the cursor stays free to sit elsewhere.
+  it("draws the scratch you are in in the current band rather than the pinned section", () => {
+    render(<ProjectSwitcherPalette {...browseProps({ isActive: true })} />);
+
+    const scratchList = screen.getByRole("listbox", { name: "Scratch workspaces" });
+    expect(within(scratchList).queryByRole("option", { name: /Spike notes/ })).toBeNull();
+    const row = document.getElementById("project-option-s1");
+    expect(row).toBeTruthy();
+    expect(row!.getAttribute("aria-current")).toBe("true");
+    expect(row!.textContent).toContain("· Scratch");
   });
 
   // The tick lives at the palette level, not inside the project list. Moved
@@ -1996,6 +2050,15 @@ describe("ProjectSwitcherPalette band collapse", () => {
     return screen.getByTestId(`band-collapse-toggle-${key}`);
   }
 
+  /** Folded, a band's header is itself an option and the whole row is the target. */
+  function foldedHeaderFor(key: string): HTMLElement {
+    const header = document.getElementById(`band-option-${key}`);
+    if (!header) throw new Error(`no folded header for ${key}`);
+    expect(header.getAttribute("role")).toBe("option");
+    expect(screen.queryByTestId(`band-collapse-toggle-${key}`)).toBeNull();
+    return header;
+  }
+
   function makeScratchRow(id: string, name: string): ProjectSwitcherScratchRow {
     return {
       kind: "scratch",
@@ -2140,8 +2203,8 @@ describe("ProjectSwitcherPalette band collapse", () => {
       />
     );
 
-    expect(toggleFor("running").getAttribute("aria-expanded")).toBe("false");
-    fireEvent.click(toggleFor("running"));
+    expect(foldedHeaderFor("running").textContent).toContain("folded");
+    fireEvent.click(foldedHeaderFor("running"));
 
     expect(usePreferencesStore.getState().projectSwitcherCollapsedBands).toEqual({
       running: false,
@@ -2160,7 +2223,9 @@ describe("ProjectSwitcherPalette band collapse", () => {
     // The group has to survive: it is the only thing left to click to get the
     // rows back, and an unnamed or absent one strands them.
     const band = screen.getByRole("group", { name: "Running" });
-    expect(within(band).queryAllByRole("option")).toHaveLength(0);
+    // The header is the band's one option, and none of its rows remain.
+    const options = within(band).queryAllByRole("option");
+    expect(options).toEqual([foldedHeaderFor("running")]);
     expect(screen.queryByRole("option", { name: /Running One/ })).toBeNull();
     // Its neighbours are untouched.
     expect(screen.getByRole("option", { name: /Other One/ })).toBeTruthy();
@@ -2203,7 +2268,7 @@ describe("ProjectSwitcherPalette band collapse", () => {
     // with — and it would take away the headers that are the only way back.
     expect(screen.queryByTestId("project-empty-state")).toBeNull();
     expect(screen.getByRole("group", { name: "Running" })).toBeTruthy();
-    expect(toggleFor("other").getAttribute("aria-expanded")).toBe("false");
+    expect(foldedHeaderFor("other").textContent).toContain("folded");
   });
 
   it("offers no fold control on a surface that declares no bands", () => {
@@ -2275,18 +2340,15 @@ describe("ProjectSwitcherPalette band collapse", () => {
     const props = { ...modalProps, results: banded, scratchResults: [scratch] };
 
     const { unmount } = render(<ProjectSwitcherPalette {...props} />);
-    const header = screen.getByRole("button", { name: /Scratch/ });
-    expect(header.getAttribute("aria-expanded")).toBe("true");
-    fireEvent.click(header);
+    expect(isScratchFolded()).toBe(false);
+    fireEvent.click(scratchHeader());
 
     // Closing the palette really does unmount it, which is exactly what used to
     // reseed the local `collapsed` from the scratch count.
     unmount();
     render(<ProjectSwitcherPalette {...props} />);
 
-    expect(screen.getByRole("button", { name: /Scratch/ }).getAttribute("aria-expanded")).toBe(
-      "false"
-    );
+    expect(isScratchFolded()).toBe(true);
   });
 
   it("holds an empty Scratch open once the user says so, against its own default", () => {
@@ -2295,16 +2357,13 @@ describe("ProjectSwitcherPalette band collapse", () => {
     const props = { ...modalProps, results: banded, scratchResults: [], onCreateScratch: vi.fn() };
 
     const { unmount } = render(<ProjectSwitcherPalette {...props} />);
-    const header = screen.getByRole("button", { name: /Scratch/ });
-    expect(header.getAttribute("aria-expanded")).toBe("false");
-    fireEvent.click(header);
+    expect(isScratchFolded()).toBe(true);
+    fireEvent.click(scratchHeader());
 
     unmount();
     render(<ProjectSwitcherPalette {...props} />);
 
-    expect(screen.getByRole("button", { name: /Scratch/ }).getAttribute("aria-expanded")).toBe(
-      "true"
-    );
+    expect(isScratchFolded()).toBe(false);
   });
 
   it("keeps Scratch folded through its first entry once the user has folded it", () => {
@@ -2313,19 +2372,15 @@ describe("ProjectSwitcherPalette band collapse", () => {
     // user chose.
     const props = { ...modalProps, results: banded, onCreateScratch: vi.fn() };
     const { rerender } = render(<ProjectSwitcherPalette {...props} scratchResults={[]} />);
-    fireEvent.click(screen.getByRole("button", { name: /Scratch/ }));
-    fireEvent.click(screen.getByRole("button", { name: /Scratch/ }));
-    expect(screen.getByRole("button", { name: /Scratch/ }).getAttribute("aria-expanded")).toBe(
-      "false"
-    );
+    fireEvent.click(scratchHeader());
+    fireEvent.click(scratchHeader());
+    expect(isScratchFolded()).toBe(true);
 
     rerender(
       <ProjectSwitcherPalette {...props} scratchResults={[makeScratchRow("scratch-1", "Spike")]} />
     );
 
-    expect(screen.getByRole("button", { name: /Scratch/ }).getAttribute("aria-expanded")).toBe(
-      "false"
-    );
+    expect(isScratchFolded()).toBe(true);
   });
 
   it("opens Scratch on its first entry without a stored preference", () => {
@@ -2340,9 +2395,7 @@ describe("ProjectSwitcherPalette band collapse", () => {
         onCreateScratch={vi.fn()}
       />
     );
-    expect(screen.getByRole("button", { name: /Scratch/ }).getAttribute("aria-expanded")).toBe(
-      "false"
-    );
+    expect(isScratchFolded()).toBe(true);
 
     rerender(
       <ProjectSwitcherPalette
@@ -2352,9 +2405,7 @@ describe("ProjectSwitcherPalette band collapse", () => {
         onCreateScratch={vi.fn()}
       />
     );
-    expect(screen.getByRole("button", { name: /Scratch/ }).getAttribute("aria-expanded")).toBe(
-      "true"
-    );
+    expect(isScratchFolded()).toBe(false);
   });
 });
 

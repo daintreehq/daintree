@@ -400,7 +400,7 @@ export function ScratchSection({
                 className={cn(
                   PALETTE_SECTION_LABEL_CLASS,
                   PALETTE_ROW_CLASS,
-                  "flex min-h-6 cursor-pointer items-center justify-between gap-2 rounded-[var(--radius-sm)] px-2"
+                  "flex min-h-6 cursor-pointer items-center justify-between gap-2 rounded-[var(--radius-sm)] px-2 py-1"
                 )}
               >
                 <span className="flex items-center gap-1.5">

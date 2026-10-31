@@ -604,24 +604,31 @@ describe("AppPaletteDialog.Body results region (#11431)", () => {
     expect(document.getElementById(activeDescendant!)).not.toBeNull();
   });
 
-  it.each(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", "Enter"])(
-    "forwards %s to the palette's navigation handler",
-    (key) => {
-      const onNavigationKeyDown = vi.fn();
-      fireEvent.keyDown(renderBody(onNavigationKeyDown), { key });
+  it.each([
+    "ArrowUp",
+    "ArrowDown",
+    "PageUp",
+    "PageDown",
+    "Home",
+    "End",
+    "Enter",
+    // The project switcher folds bands on the horizontal arrows and opens a
+    // row's menu from the keyboard.
+    "ArrowLeft",
+    "ArrowRight",
+    "F10",
+    "ContextMenu",
+  ])("forwards %s to the palette's navigation handler", (key) => {
+    const onNavigationKeyDown = vi.fn();
+    fireEvent.keyDown(renderBody(onNavigationKeyDown), { key });
 
-      expect(onNavigationKeyDown).toHaveBeenCalledTimes(1);
-      expect(onNavigationKeyDown.mock.calls[0]![0].key).toBe(key);
-    }
-  );
+    expect(onNavigationKeyDown).toHaveBeenCalledTimes(1);
+    expect(onNavigationKeyDown.mock.calls[0]![0].key).toBe(key);
+  });
 
   it.each([
     ["Tab", false],
     ["Tab", true],
-    // No list on this shell has a horizontal axis since the one palette with
-    // collapsible groups dropped its disclosure.
-    ["ArrowLeft", false],
-    ["ArrowRight", false],
     [" ", false],
     ["Escape", false],
   ])("leaves %s (shift: %s) to its native behaviour", (key, shiftKey) => {
