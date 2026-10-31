@@ -49,6 +49,7 @@ describe("loadPtyIntegration", () => {
     expect(result.available).toBe(false);
     if (result.available) return;
     expect(result.reason).toContain("node-pty native addon");
+    expect(result.reason).toContain(process.version);
     expect(result.reason).toContain(original.message);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(result.reason));
     expect(loadModules).not.toHaveBeenCalled();
@@ -94,7 +95,8 @@ describe("loadPtyIntegration", () => {
   it.each([false, true])(
     "rethrows a production module or helper import error unchanged (ci: %s)",
     async (ci) => {
-      const original = new Error("module-scope throw in the import graph");
+      // Addon-shaped on purpose: only the probe's catch may classify it, never the suite's imports.
+      const original = addonFailure();
 
       await expect(
         loadPtyIntegration(() => Promise.reject(original), {
@@ -116,7 +118,7 @@ describe("loadPtyIntegration", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("treats an empty CI variable as a developer machine and a set one as CI", async () => {
+  it("treats an empty CI variable as a developer machine and any set one as CI", async () => {
     const loadNativePty = () => Promise.reject(addonFailure());
 
     vi.stubEnv("CI", "");
@@ -124,8 +126,31 @@ describe("loadPtyIntegration", () => {
       available: false,
     });
 
-    vi.stubEnv("CI", "true");
-    await expect(loadPtyIntegration(vi.fn(), { loadNativePty })).rejects.toThrow("required on CI");
+    for (const value of ["true", "1"]) {
+      vi.stubEnv("CI", value);
+      await expect(loadPtyIntegration(vi.fn(), { loadNativePty })).rejects.toThrow(
+        "required on CI"
+      );
+    }
+
+    await expect(loadPtyIntegration(vi.fn(), { ci: false, loadNativePty })).resolves.toMatchObject({
+      available: false,
+    });
+  });
+
+  it("probes the real node-pty module by default", async () => {
+    let probed = false;
+    vi.doMock("node-pty", () => {
+      probed = true;
+      return {};
+    });
+    try {
+      const result = await loadPtyIntegration(async () => "loaded", { ci: false });
+      expect(probed).toBe(true);
+      expect(result).toEqual({ available: true, modules: "loaded" });
+    } finally {
+      vi.doUnmock("node-pty");
+    }
   });
 });
 
@@ -143,6 +168,9 @@ describe("isNativeAddonLoadFailure", () => {
 
   it("rejects other errors and non-errors", () => {
     expect(isNativeAddonLoadFailure(new Error("Cannot find module 'node-pty'"))).toBe(false);
+    expect(isNativeAddonLoadFailure(new Error("Failed to load native module: pty.node"))).toBe(
+      false
+    );
     expect(
       isNativeAddonLoadFailure(
         new Error("wrapped: Failed to load native module: pty.node, checked: x")
