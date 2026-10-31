@@ -978,6 +978,17 @@ describe("notificationHistorySlice", () => {
       ).toBeNull();
     });
 
+    it("bounds future timestamps against the clock it is given", () => {
+      const now = 1_000_000;
+      const raw = { id: "a", timestamp: now + 30_000, type: "info", message: "x" };
+      expect(sanitizePersistedEntry(raw, now)).not.toBeNull();
+      expect(sanitizePersistedEntry(raw, now - 60_000)).toBeNull();
+      expect(
+        sanitizePersistedEntry({ ...raw, timestamp: now, archivedAt: now + 90_000 }, now)!
+          .archivedAt
+      ).toBeNull();
+    });
+
     it("coerces archivedAt: 0 to null (preserves truthy-check consistency)", () => {
       const result = sanitizePersistedEntry({
         id: "a",
