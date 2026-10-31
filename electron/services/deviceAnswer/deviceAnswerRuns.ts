@@ -1,6 +1,7 @@
 import { listChoices, parseChoiceList } from "../../../shared/utils/terminalChoice.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import type { FleetRunRow, FleetSnapshot } from "../../../shared/types/ipc/fleet.js";
+import { isHandBackStop } from "../../../shared/utils/runHandBack.js";
 import { readPluginTerminalScreen } from "../plugin/pluginTerminalScreenRead.js";
 import { redactSecrets } from "../redactSecrets.js";
 import { ANSWER_SCREEN_LINES, isAnswerLabel, type AnswerPtyClient } from "../terminalAnswer.js";
@@ -8,6 +9,14 @@ import { questionIdOf } from "./questionId.js";
 
 /** Runs a page lists at once; screens are read for each on every poll. */
 export const MAX_LISTED_RUNS = 20;
+/** Waiting runs past the screens read that are named without one; the count covers the rest. */
+export const MAX_OMITTED_RUNS = 100;
+
+/** One run exactly: an id respawned since is someone else's terminal. */
+export interface WaitingRunRef {
+  runId: string;
+  spawnedAt: number;
+}
 
 /**
  * One waiting run as a paired device sees it: what Daintree observed, nothing
@@ -37,14 +46,47 @@ export interface WaitingRunView {
   questionId: string | null;
 }
 
-/** A waiting run with the machine it waits on, as the page lists it. */
-export interface DeviceWaitingRun extends WaitingRunView {
+/** A waiting run the cap left unread: what the fleet shows of it, without its screen. */
+export type WaitingRunSummary = Omit<WaitingRunView, "screen" | "choices" | "questionId">;
+
+/** One machine's waiting runs: the ones read, and the ones the cap left unread. */
+export interface WaitingRuns {
+  runs: WaitingRunView[];
+  /** The most pressing of the runs left unread, up to `MAX_OMITTED_RUNS`. */
+  omitted: WaitingRunSummary[];
+  /** Every run still waiting of those it set out to list, read or not. */
+  waiting: number;
+}
+
+interface MachineOf {
   /** `LOCAL_HOST_ID` for this machine's own runs. */
   hostId: string;
   /** The machine's name, as the person knows it. */
   host: string;
   /** The agent's name as Daintree shows it, when it is one Daintree knows. */
   agentName?: string | null;
+}
+
+/** A waiting run with the machine it waits on, as the page lists it. */
+export interface DeviceWaitingRun extends WaitingRunView, MachineOf {}
+
+/** A run left unread, with the machine it waits on. */
+export interface DeviceOmittedRun extends WaitingRunSummary, MachineOf {}
+
+/** A run on one machine, as a device names it to have its screen read. */
+export interface DeviceRunRef extends WaitingRunRef {
+  hostId: string;
+}
+
+/**
+ * How much of one machine's waiting list was read. `waiting` is null for a
+ * host from before it said, which may have cut its list without saying so.
+ */
+export interface DeviceWaitingCoverage {
+  hostId: string;
+  host: string;
+  listed: number;
+  waiting: number | null;
 }
 
 /** How reading one host's runs went; a host with no link is `not-connected`, never dialled to find out. */
@@ -61,6 +103,10 @@ export interface DeviceWaitingList {
   /** This machine's name, so the page can say what it read when nothing is waiting. */
   computer?: string;
   runs: DeviceWaitingRun[];
+  /** Runs left unread on any machine, so the page can name them and have one read. */
+  omitted?: DeviceOmittedRun[];
+  /** One entry for this machine and one for each host that was read. */
+  coverage?: DeviceWaitingCoverage[];
   hosts: DeviceWaitingHost[];
   /** The host list itself couldn't be read, so hosts may be missing from `hosts`. */
   hostsUnlisted?: boolean;
@@ -76,6 +122,10 @@ function isWaiting(row: FleetRunRow): boolean {
   return row.agentState === "waiting";
 }
 
+function runKey(runId: string, spawnedAt: number): string {
+  return `${runId}\u0000${spawnedAt}`;
+}
+
 /** Whether the fleet still shows this exact run waiting: nothing is answered on an older word. */
 export function isRunStillWaiting(
   snapshot: FleetSnapshot | null,
@@ -87,32 +137,92 @@ export function isRunStillWaiting(
   );
 }
 
+type Need = Pick<
+  WaitingRunSummary,
+  "runId" | "spawnedAt" | "waitingReason" | "since" | "parked" | "snoozed"
+>;
+
 /**
- * Every project's waiting runs, longest waiting first, each with its screen
- * read now. Runs come from the fleet snapshot main keeps for every view, so
- * the list needs no window open, no project loaded and no Canopy.
+ * Approvals, questions and errors ask something of the person; an agent at
+ * its prompt has handed back. Either set aside (parked, snoozed) comes after
+ * the same kind left in front of them.
  */
-export async function listWaitingRuns(deps: DeviceAnswerRunsDeps): Promise<WaitingRunView[]> {
-  const rows = (deps.fleet()?.runs ?? [])
+function tierOf(run: Need): number {
+  const asks = !isHandBackStop("waiting", run.waitingReason ?? undefined);
+  return (asks ? 0 : 2) + (run.parked || run.snoozed ? 1 : 0);
+}
+
+function compareSince(a: number | null, b: number | null): number {
+  if (a === b) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return a - b;
+}
+
+/**
+ * The order runs are read and shown in, whichever machine they wait on:
+ * what asks something of the person first, then longest waiting.
+ */
+export function compareWaitingRuns(a: Need, b: Need): number {
+  return (
+    tierOf(a) - tierOf(b) ||
+    compareSince(a.since, b.since) ||
+    (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0) ||
+    a.spawnedAt - b.spawnedAt
+  );
+}
+
+function needOf(row: FleetRunRow): Need {
+  return {
+    runId: row.runId,
+    spawnedAt: row.spawnedAt,
+    waitingReason: row.waitingReason ?? null,
+    since: row.since ?? null,
+    parked: row.park !== undefined,
+    snoozed: row.snooze !== undefined,
+  };
+}
+
+function summaryOf(deps: DeviceAnswerRunsDeps, row: FleetRunRow): WaitingRunSummary {
+  const title = row.title ?? row.lastObservedTitle ?? null;
+  return {
+    ...needOf(row),
+    project: deps.projectName(row.workspaceId),
+    title: title === null ? null : redactSecrets(title),
+    agentId: row.agentId ?? row.launchAgentId ?? null,
+    agentState: row.agentState ?? "waiting",
+  };
+}
+
+/**
+ * Every project's waiting runs, the most pressing first, with the screens of
+ * up to `MAX_LISTED_RUNS` of them read now and the rest named without one.
+ * `read` names one run to read ahead of the rest, so any run can be reached
+ * while each request still reads a bounded number of screens. Runs come from
+ * the fleet snapshot main keeps for every view, so the list needs no window
+ * open, no project loaded and no Canopy.
+ */
+export async function listWaitingRuns(
+  deps: DeviceAnswerRunsDeps,
+  options: { read?: WaitingRunRef | null } = {}
+): Promise<WaitingRuns> {
+  const ranked = (deps.fleet()?.runs ?? [])
     .filter(isWaiting)
-    .sort((a, b) => (a.since ?? Infinity) - (b.since ?? Infinity))
-    .slice(0, MAX_LISTED_RUNS);
+    .map((row) => ({ row, need: needOf(row) }))
+    .sort((a, b) => compareWaitingRuns(a.need, b.need));
+  const { read } = options;
+  const wanted = read
+    ? ranked.findIndex(({ row }) => row.runId === read.runId && row.spawnedAt === read.spawnedAt)
+    : -1;
+  if (wanted > 0) ranked.unshift(...ranked.splice(wanted, 1));
+  const picked = ranked.slice(0, MAX_LISTED_RUNS);
+  const cut = ranked.slice(MAX_LISTED_RUNS);
   const pty = deps.pty();
   const views = await Promise.all(
-    rows.map(async (row): Promise<WaitingRunView> => {
+    picked.map(async ({ row }): Promise<WaitingRunView> => {
       const screen = await readScreenOf(pty, row);
-      const title = row.title ?? row.lastObservedTitle ?? null;
       return {
-        runId: row.runId,
-        spawnedAt: row.spawnedAt,
-        project: deps.projectName(row.workspaceId),
-        title: title === null ? null : redactSecrets(title),
-        agentId: row.agentId ?? row.launchAgentId ?? null,
-        agentState: row.agentState ?? "waiting",
-        waitingReason: row.waitingReason ?? null,
-        since: row.since ?? null,
-        parked: row.park !== undefined,
-        snoozed: row.snooze !== undefined,
+        ...summaryOf(deps, row),
         // The whole screen at once: a key block or quoted value spans rows.
         screen: screen === null ? null : redactSecrets(screen),
         // Parsed from the raw screen, since redacting can swallow rows of the
@@ -121,9 +231,21 @@ export async function listWaitingRuns(deps: DeviceAnswerRunsDeps): Promise<Waiti
       };
     })
   );
-  // A run that moved on while its screen was read isn't listed on an old word.
-  const after = deps.fleet();
-  return views.filter((view) => isRunStillWaiting(after, view.runId, view.spawnedAt));
+  // A run that moved on while its screen was read isn't listed on an old
+  // word, and one left unread isn't counted once it has.
+  const still = new Set(
+    (deps.fleet()?.runs ?? [])
+      .filter(isWaiting)
+      .map((row) => runKey(row.runId, row.spawnedAt))
+  );
+  const isStill = (run: WaitingRunRef) => still.has(runKey(run.runId, run.spawnedAt));
+  const runs = views.filter(isStill).sort(compareWaitingRuns);
+  const left = cut.filter(({ row }) => isStill(row));
+  return {
+    runs,
+    omitted: left.slice(0, MAX_OMITTED_RUNS).map(({ row }) => summaryOf(deps, row)),
+    waiting: runs.length + left.length,
+  };
 }
 
 type Answerable = Pick<WaitingRunView, "choices" | "questionId">;

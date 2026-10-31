@@ -8,7 +8,14 @@ import { LOCAL_HOST_ID, isLocalHostId } from "../../../shared/types/remoteHosts.
 import { answerRefused } from "../terminalAnswer.js";
 import { DeviceAnswerService } from "./DeviceAnswerService.js";
 import { sanitizeDeviceAnswerSettings } from "./deviceAnswerSettings.js";
-import type { DeviceWaitingList, DeviceWaitingRun } from "./deviceAnswerRuns.js";
+import {
+  compareWaitingRuns,
+  type DeviceOmittedRun,
+  type DeviceRunRef,
+  type DeviceWaitingCoverage,
+  type DeviceWaitingList,
+  type DeviceWaitingRun,
+} from "./deviceAnswerRuns.js";
 import { answerLocalRun, listLocalWaitingRuns } from "./localDeviceAnswer.js";
 import { machineDisplayName } from "../../utils/machineName.js";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
@@ -43,20 +50,19 @@ function agentName(agentId: string | null): string | null {
   return agentId ? (getEffectiveAgentConfig(agentId)?.name ?? null) : null;
 }
 
-/** Longest waiting first, whichever machine it waits on. */
-function bySince(a: DeviceWaitingRun, b: DeviceWaitingRun): number {
-  return (a.since ?? Infinity) - (b.since ?? Infinity);
-}
-
-async function listWaiting(options: { hosts: boolean }): Promise<DeviceWaitingList> {
+async function listWaiting(options: {
+  hosts: boolean;
+  read?: DeviceRunRef | null;
+}): Promise<DeviceWaitingList> {
+  const { read } = options;
   const remote = options.hosts ? getRemoteService("deviceAnswerHosts") : undefined;
   let hostsUnlisted = false;
   const [local, hosts] = await Promise.all([
-    listLocalWaitingRuns(),
+    listLocalWaitingRuns({ read: read && isLocalHostId(read.hostId) ? read : null }),
     // Hosts that can't be read never hide this machine's own runs.
     remote
       ? Promise.resolve()
-          .then(() => remote.listWaiting())
+          .then(() => remote.listWaiting({ read: read && !isLocalHostId(read.hostId) ? read : null }))
           .catch((error: unknown) => {
             console.warn(
               "[DeviceAnswer] Couldn't list connected hosts:",
@@ -68,15 +74,30 @@ async function listWaiting(options: { hosts: boolean }): Promise<DeviceWaitingLi
       : [],
   ]);
   const name = thisMachineName();
-  const runs: DeviceWaitingRun[] = [
-    ...local.map((run) => ({ ...run, hostId: LOCAL_HOST_ID, host: name })),
-    ...hosts.flatMap(({ hostId, host, runs: hostRuns }) =>
-      hostRuns.map((run) => ({ ...run, hostId, host }))
-    ),
-  ].map((run) => ({ ...run, agentName: agentName(run.agentId) }));
+  const machines = [
+    { hostId: LOCAL_HOST_ID, host: name, status: "ok" as const, ...local },
+    ...hosts,
+  ];
+  const runs: DeviceWaitingRun[] = machines.flatMap(({ hostId, host, runs: listed }) =>
+    listed.map((run) => ({ ...run, hostId, host, agentName: agentName(run.agentId) }))
+  );
+  const omitted: DeviceOmittedRun[] = machines.flatMap(({ hostId, host, omitted: left }) =>
+    left.map((run) => ({ ...run, hostId, host, agentName: agentName(run.agentId) }))
+  );
+  // Only a machine that was read says how much of it was.
+  const coverage: DeviceWaitingCoverage[] = machines
+    .filter((machine) => machine.status === "ok")
+    .map(({ hostId, host, runs: listed, waiting }) => ({
+      hostId,
+      host,
+      listed: listed.length,
+      waiting,
+    }));
   return {
     computer: name,
-    runs: runs.sort(bySince),
+    runs: runs.sort(compareWaitingRuns),
+    omitted: omitted.sort(compareWaitingRuns),
+    coverage,
     hosts: hosts.map(({ hostId, host, status }) => ({ hostId, host, status })),
     ...(hostsUnlisted ? { hostsUnlisted } : {}),
   };

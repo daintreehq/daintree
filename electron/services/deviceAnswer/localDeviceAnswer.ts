@@ -6,7 +6,12 @@ import { scratchStore } from "../ScratchStore.js";
 import { planListedChoice } from "../../../shared/utils/terminalChoice.js";
 import { answerRefused, answerRunByLabel } from "../terminalAnswer.js";
 import { redactSecrets } from "../redactSecrets.js";
-import { isRunStillWaiting, listWaitingRuns, type WaitingRunView } from "./deviceAnswerRuns.js";
+import {
+  isRunStillWaiting,
+  listWaitingRuns,
+  type WaitingRunRef,
+  type WaitingRuns,
+} from "./deviceAnswerRuns.js";
 import { questionIdOf } from "./questionId.js";
 
 /**
@@ -25,16 +30,21 @@ function drivesRun(standing: DeviceLeaseStanding, runId: string): boolean {
 
 const DRIVEN_ELSEWHERE = "This project is being driven from another screen. Nothing was pressed.";
 
-/** This machine's waiting runs, as a paired device is shown them. */
-export function listLocalWaitingRuns(): Promise<WaitingRunView[]> {
-  return listWaitingRuns({
-    fleet: () => getFleetSnapshotServiceRef()?.getLastBroadcast() ?? null,
-    pty: () => getPtyClient(),
-    projectName: (workspaceId) =>
-      projectStore.getProjectById(workspaceId)?.name ??
-      scratchStore.getScratchById(workspaceId)?.name ??
-      null,
-  });
+/** This machine's waiting runs, as a paired device is shown them, with `read` read first. */
+export function listLocalWaitingRuns(
+  options: { read?: WaitingRunRef | null } = {}
+): Promise<WaitingRuns> {
+  return listWaitingRuns(
+    {
+      fleet: () => getFleetSnapshotServiceRef()?.getLastBroadcast() ?? null,
+      pty: () => getPtyClient(),
+      projectName: (workspaceId) =>
+        projectStore.getProjectById(workspaceId)?.name ??
+        scratchStore.getScratchById(workspaceId)?.name ??
+        null,
+    },
+    options
+  );
 }
 
 /**

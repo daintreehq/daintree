@@ -1,5 +1,8 @@
 import { DEVICE_ANSWER_ENDPOINT_PREFIX } from "../../ipc/endpoint.js";
-import type { WaitingRunView } from "../../services/deviceAnswer/deviceAnswerRuns.js";
+import type {
+  WaitingRunRef,
+  WaitingRuns,
+} from "../../services/deviceAnswer/deviceAnswerRuns.js";
 import type { DeviceLeaseStanding } from "../../services/deviceAnswer/localDeviceAnswer.js";
 import type { LinkClientInfo } from "../link/messages.js";
 import type { LinkSession } from "../link/session.js";
@@ -30,7 +33,7 @@ export interface DeviceAnswerSessionSource {
 }
 
 export interface DeviceAnswerHostDeps {
-  list(): Promise<WaitingRunView[]>;
+  list(options: { read?: WaitingRunRef | null }): Promise<WaitingRuns>;
   answer(request: {
     standing: DeviceLeaseStanding;
     runId: string;
@@ -74,10 +77,10 @@ export function installDeviceAnswerHostWith(
       session.registerCallHandler(
         DeviceAnswerLinkMethod.LIST,
         DeviceAnswerListPayloadSchema,
-        async (): Promise<DeviceAnswerListResult> => ({
-          runs: await deps.list(),
-          questionIds: true,
-        })
+        async ({ read }): Promise<DeviceAnswerListResult> => {
+          const { runs, omitted, waiting } = await deps.list({ read: read ?? null });
+          return { runs, omitted, waiting, questionIds: true };
+        }
       ),
       // A Shell from before answers named their question can't say which one
       // its device was shown, so it is told to update and nothing is pressed.
