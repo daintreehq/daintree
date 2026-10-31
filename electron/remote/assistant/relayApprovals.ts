@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   MCP_DISPATCH_TIMEOUT_MS,
+  MCP_REMOTE_CONFIRM_MARGIN_MS,
   MCP_REMOTE_DISPATCH_TIMEOUT_MS,
 } from "../../../shared/config/mcpConfirmWindow.js";
 import { canonicalArgsHash } from "../../services/mcp-server/sessionDedup.js";
@@ -92,24 +93,30 @@ export async function askShellApproval(
     ...(ask.subject ? { subject: ask.subject.slice(0, 256) } : {}),
     lines: ask.lines,
   };
+  // It may have been answered and the answer lost: nothing approved it here.
+  const unanswered = (error: unknown): ViewlessApprovalDecision =>
+    codeOf(error) === "OUTCOME_UNKNOWN" ? { decision: "timeout" } : { decision: "unavailable" };
   const timed: RelayApproveTimedPayload = { ...payload, holdBudgetMs: windowMs };
   let answer: unknown;
   try {
-    answer = await session
-      .call(AssistantLinkMethod.RELAY_APPROVE_TIMED, timed, { timeoutMs: windowMs })
-      .catch((error: unknown) => {
-        if (codeOf(error) !== "UNSUPPORTED") throw error;
-        // A Shell too old to be told the wait holds its dialog to the plain
-        // deadline, well inside it.
-        return session.call(AssistantLinkMethod.RELAY_APPROVE, payload, {
-          timeoutMs: Math.max(1, answerBy - now()),
-        });
-      });
+    answer = await session.call(AssistantLinkMethod.RELAY_APPROVE_TIMED, timed, {
+      timeoutMs: windowMs,
+    });
   } catch (error) {
-    // It may have been answered and the answer lost: nothing approved it here.
-    return codeOf(error) === "OUTCOME_UNKNOWN"
-      ? { decision: "timeout" }
-      : { decision: "unavailable" };
+    if (codeOf(error) !== "UNSUPPORTED") return unanswered(error);
+    // A Shell too old to be told the wait holds its dialog to the plain
+    // deadline whatever is left of it, so it is asked only while that fits.
+    const remainingMs = answerBy - now();
+    if (remainingMs < MCP_DISPATCH_TIMEOUT_MS + MCP_REMOTE_CONFIRM_MARGIN_MS) {
+      return { decision: "timeout" };
+    }
+    try {
+      answer = await session.call(AssistantLinkMethod.RELAY_APPROVE, payload, {
+        timeoutMs: remainingMs,
+      });
+    } catch (plainError) {
+      return unanswered(plainError);
+    }
   }
   const parsed = RelayApproveAnswerSchema.safeParse(answer);
   if (

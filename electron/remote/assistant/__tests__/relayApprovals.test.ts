@@ -66,31 +66,68 @@ describe("askShellApproval (#13501)", () => {
     });
   });
 
-  it("asks a Shell too old to be told the wait the plain way, inside what is left of it (#15699)", async () => {
-    let clock = 1_000;
-    const link = {
-      call: vi.fn(async (method: string, payload: unknown, _options: { timeoutMs: number }) => {
-        if (method === AssistantLinkMethod.RELAY_APPROVE_TIMED) {
-          clock = 3_000;
-          throw Object.assign(new Error("No handler"), { code: "UNSUPPORTED" });
-        }
-        const asked = payload as Record<string, unknown>;
-        return { approvalId: asked.approvalId, argsHash: asked.argsHash, decision: "approved" };
-      }),
-    };
+  describe("a Shell too old to be told the wait (#15699)", () => {
+    // Refuses the timed ask with `timedError` and approves anything asked the plain way.
+    function olderShell(timedError: string, onTimed: () => void = () => {}) {
+      return {
+        call: vi.fn(async (method: string, payload: unknown, _options: { timeoutMs: number }) => {
+          if (method === AssistantLinkMethod.RELAY_APPROVE_TIMED) {
+            onTimed();
+            throw Object.assign(new Error("refused"), { code: timedError });
+          }
+          const asked = payload as Record<string, unknown>;
+          return { approvalId: asked.approvalId, argsHash: asked.argsHash, decision: "approved" };
+        }),
+      };
+    }
 
-    const decision = await askShellApproval(link, ASK, {
-      now: () => clock,
-      newId: () => "approval-1",
-      windowMs: 40_000,
+    it("is asked the plain way, with only what is left of the wait", async () => {
+      let clock = 1_000;
+      const link = olderShell("UNSUPPORTED", () => {
+        clock = 3_000;
+      });
+
+      const decision = await askShellApproval(link, ASK, {
+        now: () => clock,
+        newId: () => "approval-1",
+        windowMs: 100_000,
+      });
+
+      expect(decision).toEqual({ decision: "approved", deadline: 3_000 + MCP_DISPATCH_TIMEOUT_MS });
+      const [method, payload, options] = link.call.mock.calls[1]!;
+      expect(method).toBe(AssistantLinkMethod.RELAY_APPROVE);
+      // The plain payload an older Shell's strict schema takes.
+      expect(RelayApprovePayloadSchema.safeParse(payload).success).toBe(true);
+      expect(options.timeoutMs).toBe(98_000);
     });
 
-    expect(decision).toEqual({ decision: "approved", deadline: 3_000 + MCP_DISPATCH_TIMEOUT_MS });
-    const [method, payload, options] = link.call.mock.calls[1]!;
-    expect(method).toBe(AssistantLinkMethod.RELAY_APPROVE);
-    // The plain payload an older Shell's strict schema takes, and only the wait left.
-    expect(RelayApprovePayloadSchema.safeParse(payload).success).toBe(true);
-    expect(options.timeoutMs).toBe(38_000);
+    it("isn't asked once too little is left for the plain deadline it holds its dialog to", async () => {
+      let clock = 1_000;
+      const link = olderShell("UNSUPPORTED", () => {
+        clock = 1_001;
+      });
+      const leastAsked = MCP_DISPATCH_TIMEOUT_MS + MCP_REMOTE_CONFIRM_MARGIN_MS;
+
+      await expect(
+        askShellApproval(link, ASK, { now: () => clock, windowMs: leastAsked })
+      ).resolves.toEqual({ decision: "timeout" });
+      expect(link.call).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ["OUTCOME_UNKNOWN", "timeout"],
+      ["HOST_DISCONNECTED", "unavailable"],
+      ["VALIDATION", "unavailable"],
+    ])(
+      "is never asked again after the timed ask fails any other way (%s)",
+      async (code, decision) => {
+        const link = olderShell(code);
+
+        await expect(askShellApproval(link, ASK)).resolves.toEqual({ decision });
+        // The timed ask may have reached the Shell: asking again could ask the person twice.
+        expect(link.call).toHaveBeenCalledTimes(1);
+      }
+    );
   });
 
   it("takes the Shell's own Never ask as covering the call, marked as the skip it is (#15698)", async () => {
