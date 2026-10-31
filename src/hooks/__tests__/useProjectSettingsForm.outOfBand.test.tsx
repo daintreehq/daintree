@@ -304,6 +304,26 @@ describe("useProjectSettingsForm with settings written outside the form (#15573)
     expect(stored().unresolvedSecureEnvironmentVariables).toEqual(["API_TOKEN"]);
   });
 
+  it("waits for a successful read before seeding when the read on open fails", async () => {
+    const hook = await renderClosedForm();
+    await setProjectDefaultTier("full");
+    vi.mocked(projectClient.getSettings).mockRejectedValueOnce(new Error("disk unavailable"));
+
+    hook.rerender({ isOpen: true });
+    await waitFor(() => {
+      expect(hook.result.current.projectError).not.toBeNull();
+    });
+    expect(hook.result.current.projectIsInitialized).toBe(false);
+
+    await act(async () => {
+      await hook.result.current.refreshProjectSettings();
+    });
+    await waitFor(() => {
+      expect(hook.result.current.projectIsInitialized).toBe(true);
+    });
+    expect(hook.result.current.daintreeMcpTier).toBe("full");
+  });
+
   it("writes nothing when an untouched dialog closes", async () => {
     const hook = await renderClosedForm();
     await openForm(hook);

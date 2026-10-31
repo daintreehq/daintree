@@ -472,6 +472,8 @@ describe("useProjectSettingsForm", () => {
 
     expect(mockRefresh).toHaveBeenCalledTimes(1);
     expect(result.current.projectIsInitialized).toBe(false);
+    // The store's own flag stays down through a revalidation.
+    expect(result.current.projectIsLoading).toBe(true);
 
     mockSettings.value = baseSettings;
     await act(async () => finishRefresh());
@@ -479,6 +481,7 @@ describe("useProjectSettingsForm", () => {
     await waitFor(() => {
       expect(result.current.projectIsInitialized).toBe(true);
     });
+    expect(result.current.projectIsLoading).toBe(false);
     expect(result.current.devServerCommand).toBe("npm run dev");
   });
 

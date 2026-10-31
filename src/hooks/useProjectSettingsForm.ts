@@ -98,7 +98,16 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   // that differ from it, laid over the settings as they are on disk.
   const lastSavedFieldsRef = useRef<FormOwnedSettings | null>(null);
   const persistChainRef = useRef<Promise<void> | null>(null);
-  const [refreshedProjectId, setRefreshedProjectId] = useState<string | null>(null);
+  // Retry bumps the attempt so the read made on open runs again.
+  const [openReadAttempt, setOpenReadAttempt] = useState(0);
+  const [settledOpenRead, setSettledOpenRead] = useState<{
+    projectId: string;
+    attempt: number;
+  } | null>(null);
+  const openReadSettled =
+    !!projectId &&
+    settledOpenRead?.projectId === projectId &&
+    settledOpenRead.attempt === openReadAttempt;
   const prevProjectIdRef = useRef(projectId);
   const projectPersistRef = useRef<(options?: { force?: boolean }) => Promise<void>>(undefined);
   // Stable debounce instance initialized on mount. Uninitialized ref + mount
@@ -215,12 +224,16 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       // A failed read reports through projectError and leaves the cache as it was.
       .catch(() => undefined)
       .then(() => {
-        if (!cancelled) setRefreshedProjectId(projectId);
+        if (!cancelled) setSettledOpenRead({ projectId, attempt: openReadAttempt });
       });
     return () => {
       cancelled = true;
     };
-  }, [isOpen, projectId, refreshProjectSettings]);
+  }, [isOpen, projectId, refreshProjectSettings, openReadAttempt]);
+
+  const retryProjectSettingsRead = async () => {
+    setOpenReadAttempt((attempt) => attempt + 1);
+  };
 
   useEffect(() => {
     if (!isOpen) {
@@ -252,14 +265,16 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       setResourceEnvironments(undefined);
       setActiveResourceEnvironment(undefined);
       setDefaultWorktreeMode(undefined);
-      setRefreshedProjectId(null);
+      setSettledOpenRead(null);
       lastSavedSnapshotRef.current = null;
       lastSavedFieldsRef.current = null;
       return;
     }
 
     if (projectIsLoading || !projectSettings || !currentProject) return;
-    if (refreshedProjectId !== projectId) return;
+    // A failed read leaves only the cache, which may predate what main stores;
+    // the error banner's Retry seeds once a read succeeds.
+    if (!openReadSettled || projectError) return;
     if (projectIsInitialized) return;
 
     const initialRunCommands = projectSettings.runCommands || [];
@@ -409,7 +424,8 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     currentProject,
     projectIsLoading,
     projectId,
-    refreshedProjectId,
+    openReadSettled,
+    projectError,
   ]);
 
   const persistDraft = async (force: boolean) => {
@@ -595,9 +611,11 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     defaultWorktreeMode,
     setDefaultWorktreeMode,
     projectSettings,
-    projectIsLoading,
+    // A revalidation leaves the store's own flag down, so the read made on open
+    // reports here or the dialog never shows it is still loading.
+    projectIsLoading: projectIsLoading || (isOpen && !!projectId && !openReadSettled),
     projectError,
-    refreshProjectSettings,
+    refreshProjectSettings: retryProjectSettingsRead,
     currentProject,
     enableInRepoSettings,
     disableInRepoSettings,

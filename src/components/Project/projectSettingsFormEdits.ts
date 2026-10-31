@@ -213,16 +213,23 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
+// Own properties only: a variable named `constructor` or `toString` that is
+// absent from a record must not read back as Object.prototype's function.
+function ownValue(record: Record<string, unknown>, key: string): unknown {
+  return Object.hasOwn(record, key) ? record[key] : undefined;
+}
+
 function mergeKeyEdits(stored: unknown, baseline: unknown, draft: unknown): unknown {
   const before = asRecord(baseline);
   const after = asRecord(draft);
-  const merged = { ...asRecord(stored) };
+  const merged: Record<string, unknown> = Object.assign(Object.create(null), asRecord(stored));
   for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
-    if (deepEqualIgnoringUndefined(before[key], after[key])) continue;
-    if (after[key] === undefined) delete merged[key];
-    else merged[key] = after[key];
+    const next = ownValue(after, key);
+    if (deepEqualIgnoringUndefined(ownValue(before, key), next)) continue;
+    if (next === undefined) delete merged[key];
+    else merged[key] = next;
   }
-  return Object.keys(merged).length > 0 ? merged : undefined;
+  return Object.keys(merged).length > 0 ? { ...merged } : undefined;
 }
 
 /**
