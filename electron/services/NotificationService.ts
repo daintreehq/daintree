@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { app, Notification, webContents as webContentsModule } from "electron";
 import type { WindowRegistry, WindowContext } from "../window/WindowRegistry.js";
 import { sendToRenderer } from "../ipc/utils.js";
@@ -89,6 +90,13 @@ const DEBOUNCE_MS = 300;
  */
 const MAX_KEYED_NOTIFICATIONS = 50;
 
+/**
+ * Most remote banners this host keeps closable. Past it the oldest is closed on
+ * its Shell and forgotten, so a view that never deals with its agents can't
+ * grow the map without end.
+ */
+const MAX_REMOTE_BANNERS = 200;
+
 /** A decided notification whose owner is a view on a remote Shell. */
 export interface RemoteNotification {
   /** The owning remote endpoint's handle (negative). */
@@ -97,14 +105,34 @@ export interface RemoteNotification {
   body: string;
   category: NotificationCategory;
   navigation?: NotificationNavigation;
+  /**
+   * This banner's identity, present when this host may later take it down
+   * (it closes with panels, or a later one replaces it). Never reused, so a
+   * close that arrives late can only reach the banner it was meant for.
+   */
+  id?: string;
+  /** Banners of the same owner this one replaces, taken down before it shows. */
+  supersedes?: string[];
 }
 
 /**
- * Delivers a notification to the Shell that owns it. Installed by the Remote
- * Hosts host side; with none installed a remote owner's notification is
- * dropped, since this machine's screen is not the one being watched.
+ * Delivers notifications to the Shell that owns them, and takes them down
+ * there once they have been dealt with. Installed by the Remote Hosts host
+ * side; with none installed a remote owner's notification is dropped, since
+ * this machine's screen is not the one being watched.
  */
-export type RemoteNotificationSink = (notification: RemoteNotification) => void;
+export interface RemoteNotificationSink {
+  show(notification: RemoteNotification): void;
+  close(ownerHandle: number, ids: readonly string[]): void;
+}
+
+/** A banner this host showed on a remote Shell and may still have to take down. */
+interface RemoteBanner {
+  ownerHandle: number;
+  /** Panels still outstanding; empty for a banner only a replacement takes down. */
+  pending: Set<string>;
+  replaceKey?: string;
+}
 
 /**
  * Whether the owner is a view on a remote Shell. Remote endpoint handles are
@@ -134,6 +162,8 @@ class NotificationService {
   /** Panels still outstanding for each banner that asked to close with them. */
   private pendingPanelsByNotification = new Map<Notification, Set<string>>();
   private notificationsByReplaceKey = new Map<string, Notification>();
+  /** Closable banners on remote Shells, by id, oldest first. */
+  private remoteBanners = new Map<string, RemoteBanner>();
 
   private remoteSink: RemoteNotificationSink | null = null;
 
@@ -417,6 +447,80 @@ class NotificationService {
         console.warn("[NotificationService] failed to close native notification:", err);
       }
     }
+    const doneByOwner = new Map<number, string[]>();
+    for (const [id, banner] of [...this.remoteBanners]) {
+      if (!banner.pending.delete(panelId) || banner.pending.size > 0) continue;
+      this.remoteBanners.delete(id);
+      const done = doneByOwner.get(banner.ownerHandle);
+      if (done) done.push(id);
+      else doneByOwner.set(banner.ownerHandle, [id]);
+    }
+    for (const [ownerHandle, ids] of doneByOwner) this.closeRemote(ownerHandle, ids);
+  }
+
+  /**
+   * The remote view is gone, and so is any way to reach its banners: its
+   * Shell takes them down itself when its views go away.
+   */
+  forgetRemoteOwner(ownerHandle: number): void {
+    for (const [id, banner] of [...this.remoteBanners]) {
+      if (banner.ownerHandle === ownerHandle) this.remoteBanners.delete(id);
+    }
+  }
+
+  private closeRemote(ownerHandle: number, ids: readonly string[]): void {
+    try {
+      this.remoteSink?.close(ownerHandle, ids);
+    } catch (error) {
+      console.warn("[NotificationService] remote notification close failed:", error);
+    }
+  }
+
+  /**
+   * Hand a remote owner's notification to its Shell, giving it an identity
+   * when this host may take it down later, as `closeWithPanels` and
+   * `replaceKey` do for a banner on this screen.
+   */
+  private showRemote(
+    notification: Omit<RemoteNotification, "id" | "supersedes">,
+    closeWithPanels: readonly string[] | undefined,
+    replaceKey: string | undefined
+  ): void {
+    if (!this.remoteSink) return;
+    const { ownerHandle } = notification;
+    const closable = (closeWithPanels && closeWithPanels.length > 0) || replaceKey !== undefined;
+    let id: string | undefined;
+    const supersedes: string[] = [];
+    if (closable) {
+      if (replaceKey !== undefined) {
+        for (const [heldId, banner] of [...this.remoteBanners]) {
+          if (banner.ownerHandle !== ownerHandle || banner.replaceKey !== replaceKey) continue;
+          this.remoteBanners.delete(heldId);
+          supersedes.push(heldId);
+        }
+      }
+      id = randomUUID();
+      this.remoteBanners.set(id, {
+        ownerHandle,
+        pending: new Set(closeWithPanels ?? []),
+        ...(replaceKey !== undefined ? { replaceKey } : {}),
+      });
+      for (const [oldestId, oldest] of this.remoteBanners) {
+        if (this.remoteBanners.size <= MAX_REMOTE_BANNERS) break;
+        this.remoteBanners.delete(oldestId);
+        if (oldest.ownerHandle === ownerHandle) supersedes.push(oldestId);
+        else this.closeRemote(oldest.ownerHandle, [oldestId]);
+      }
+    }
+    try {
+      this.remoteSink?.show({
+        ...notification,
+        ...(id !== undefined ? { id } : {}),
+        ...(supersedes.length > 0 ? { supersedes } : {}),
+      });
+    } catch (error) {
+      console.warn("[NotificationService] remote notification delivery failed:", error);
+    }
   }
 
   private forgetNotification(notification: Notification): void {
@@ -476,11 +580,11 @@ class NotificationService {
       replaceKey,
     } = options;
     if (isRemoteNotificationOwner(ownerWebContentsId)) {
-      try {
-        this.remoteSink?.({ ownerHandle: ownerWebContentsId, title, body, category, navigation });
-      } catch (error) {
-        console.warn("[NotificationService] remote notification delivery failed:", error);
-      }
+      this.showRemote(
+        { ownerHandle: ownerWebContentsId, title, body, category, navigation },
+        closeWithPanels,
+        replaceKey
+      );
       return;
     }
 
@@ -682,6 +786,7 @@ class NotificationService {
     this.activeNotifications.clear();
     this.pendingPanelsByNotification.clear();
     this.notificationsByReplaceKey.clear();
+    this.remoteBanners.clear();
 
     this.registry = null;
     this.projectLookup = null;

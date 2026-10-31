@@ -1366,9 +1366,13 @@ describe("NotificationService remote owners", () => {
     notificationService.dispose();
   });
 
+  function fakeSink() {
+    return { show: vi.fn(), close: vi.fn() };
+  }
+
   it("hands a remote view's notification to its Shell, as a category, instead of this screen", () => {
     const shown = electronMock.notificationInstances.length;
-    const sink = vi.fn();
+    const sink = fakeSink();
     notificationService.setRemoteNotificationSink(sink);
     const context = { panelId: "t1", panelTitle: "Claude" };
 
@@ -1378,7 +1382,7 @@ describe("NotificationService remote owners", () => {
       category: "waiting",
     });
 
-    expect(sink).toHaveBeenCalledWith({
+    expect(sink.show).toHaveBeenCalledWith({
       ownerHandle: -4,
       title: "Agent waiting",
       body: "b",
@@ -1389,10 +1393,78 @@ describe("NotificationService remote owners", () => {
   });
 
   it("sends an uncategorised notification to a Shell as info, which carries no sound", () => {
-    const sink = vi.fn();
+    const sink = fakeSink();
     notificationService.setRemoteNotificationSink(sink);
     notificationService.showNativeNotification("t", "b", { ownerWebContentsId: -4 });
-    expect(sink).toHaveBeenCalledWith(expect.objectContaining({ category: "info" }));
+    expect(sink.show).toHaveBeenCalledWith(expect.objectContaining({ category: "info" }));
+    expect(sink.show.mock.calls[0]![0]).not.toHaveProperty("id");
+  });
+
+  it("closes a remote banner on its owner once every panel it names is dealt with", () => {
+    const sink = fakeSink();
+    notificationService.setRemoteNotificationSink(sink);
+    notificationService.showNativeNotification("Agents waiting", "b", {
+      ownerWebContentsId: -4,
+      closeWithPanels: ["t1", "t2"],
+    });
+    notificationService.showNativeNotification("Agent waiting", "b", {
+      ownerWebContentsId: -6,
+      closeWithPanels: ["t1"],
+    });
+    const [grouped, single] = sink.show.mock.calls.map(([n]) => (n as { id: string }).id);
+    expect(grouped).not.toBe(single);
+
+    notificationService.closeNotificationsForPanel("t1");
+    expect(sink.close.mock.calls).toEqual([[-6, [single]]]);
+    notificationService.closeNotificationsForPanel("t2");
+    notificationService.closeNotificationsForPanel("t2");
+    expect(sink.close.mock.calls).toEqual([
+      [-6, [single]],
+      [-4, [grouped]],
+    ]);
+  });
+
+  it("supersedes a remote banner under the same key for the same owner", () => {
+    const sink = fakeSink();
+    notificationService.setRemoteNotificationSink(sink);
+    const keyed = (owner: number) =>
+      notificationService.showNativeNotification("t", "b", {
+        ownerWebContentsId: owner,
+        replaceKey: "k",
+      });
+    keyed(-4);
+    keyed(-6);
+    keyed(-4);
+    const shown = sink.show.mock.calls.map(([n]) => n as { id: string; supersedes?: string[] });
+    expect(shown[1]!.supersedes).toBeUndefined();
+    expect(shown[2]!.supersedes).toEqual([shown[0]!.id]);
+  });
+
+  it("stops tracking a remote owner's banners once it is forgotten", () => {
+    const sink = fakeSink();
+    notificationService.setRemoteNotificationSink(sink);
+    notificationService.showNativeNotification("t", "b", {
+      ownerWebContentsId: -4,
+      closeWithPanels: ["t1"],
+    });
+    notificationService.forgetRemoteOwner(-4);
+    notificationService.closeNotificationsForPanel("t1");
+    expect(sink.close).not.toHaveBeenCalled();
+  });
+
+  it("bounds remote banners it keeps closable, closing the oldest on its Shell", () => {
+    const sink = fakeSink();
+    notificationService.setRemoteNotificationSink(sink);
+    for (let i = 0; i < 201; i++) {
+      notificationService.showNativeNotification("t", "b", {
+        ownerWebContentsId: i === 0 ? -6 : -4,
+        closeWithPanels: [`p${i}`],
+      });
+    }
+    const firstId = (sink.show.mock.calls[0]![0] as { id: string }).id;
+    expect(sink.close).toHaveBeenCalledWith(-6, [firstId]);
+    notificationService.closeNotificationsForPanel("p0");
+    expect(sink.close).toHaveBeenCalledTimes(1);
   });
 
   it("never shows a remote owner's notification here, even with no sink", () => {
@@ -1404,10 +1476,10 @@ describe("NotificationService remote owners", () => {
 
   it("keeps showing local owners' notifications natively", () => {
     const shown = electronMock.notificationInstances.length;
-    const sink = vi.fn();
+    const sink = fakeSink();
     notificationService.setRemoteNotificationSink(sink);
     notificationService.showNativeNotification("t", "b", { ownerWebContentsId: 12 });
-    expect(sink).not.toHaveBeenCalled();
+    expect(sink.show).not.toHaveBeenCalled();
     expect(electronMock.notificationInstances.length).toBe(shown + 1);
   });
 });

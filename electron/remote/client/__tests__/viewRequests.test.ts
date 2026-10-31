@@ -4,6 +4,7 @@ const m = vi.hoisted(() => ({
   dispatchActionForHost: vi.fn(),
   requestManifestForHost: vi.fn(),
   showHostNotification: vi.fn(() => true),
+  closeHostNotifications: vi.fn(() => true),
   // Hosts this Shell's assistant has a `host.call` out to right now (#13493).
   callsOut: new Set<string>(),
   // This Shell's runtime's verdict on a host's dispatch of one of its calls (#15698).
@@ -34,7 +35,9 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
 }));
 vi.mock("../../hybrid/notifications.js", () => ({
   NOTIFICATION_SHOW_METHOD: "notification.show",
+  NOTIFICATION_CLOSE_METHOD: "notification.close",
   showHostNotification: m.showHostNotification,
+  closeHostNotifications: m.closeHostNotifications,
 }));
 
 import { toHostScopedKey } from "../../../../shared/types/remoteHosts.js";
@@ -721,10 +724,24 @@ describe("view reverse requests", () => {
     });
   });
 
+  it("takes down a host's banners by the ids it names, scoped to that host", async () => {
+    installViewReverseRequests();
+    await expect(ask("notification.close", { ids: ["n1"] })).resolves.toBeNull();
+    expect(m.closeHostNotifications).toHaveBeenCalledWith({ ids: ["n1"] }, "studio");
+
+    m.closeHostNotifications.mockReturnValueOnce(false);
+    await expect(ask("notification.close", { ids: "n1" })).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+  });
+
   it("stops answering once uninstalled", async () => {
     const uninstall = installViewReverseRequests();
     uninstall();
     await expect(ask("mcp:get-manifest")).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    await expect(ask("notification.close", { ids: ["n1"] })).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
   });
 });
 

@@ -13,7 +13,12 @@ import { LOCAL_HOST_ID, parseHostScopedKey } from "../../../shared/types/remoteH
 import { getProjectForWebContents } from "../../window/webContentsRegistry.js";
 import { resolveEffectiveActionDanger } from "../../../shared/utils/effectiveActionDanger.js";
 import { AppError } from "../../utils/errorTypes.js";
-import { NOTIFICATION_SHOW_METHOD, showHostNotification } from "../hybrid/notifications.js";
+import {
+  NOTIFICATION_CLOSE_METHOD,
+  NOTIFICATION_SHOW_METHOD,
+  closeHostNotifications,
+  showHostNotification,
+} from "../hybrid/notifications.js";
 import { getRemoteService } from "../runtime.js";
 import {
   HOST_ALWAYS_ASKS_ACTION_IDS,
@@ -374,7 +379,7 @@ async function requestManifest(webContentsId: number): Promise<ActionManifestEnt
 /**
  * The reverse requests a host may send this Shell's views: MCP dispatch and
  * manifest reads for the view that drives a project, and notifications the
- * host decided to show. Returns a teardown.
+ * host decided to show or take down. Returns a teardown.
  */
 export function installViewReverseRequests(): () => void {
   const disposers = [
@@ -387,6 +392,12 @@ export function installViewReverseRequests(): () => void {
     registerReverseRequestMethod(NOTIFICATION_SHOW_METHOD, ({ hostId, webContentsId, payload }) => {
       if (!showHostNotification(webContentsId, payload, { id: hostId, name: hostName(hostId) })) {
         throw new AppError({ code: "VALIDATION", message: "Malformed notification from the host" });
+      }
+      return null;
+    }),
+    registerReverseRequestMethod(NOTIFICATION_CLOSE_METHOD, ({ hostId, payload }) => {
+      if (!closeHostNotifications(payload, hostId)) {
+        throw new AppError({ code: "VALIDATION", message: "Malformed notification close from the host" });
       }
       return null;
     }),

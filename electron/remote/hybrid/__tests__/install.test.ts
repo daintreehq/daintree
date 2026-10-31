@@ -2,8 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   relay: null as null | ((id: number, channel: string, args: unknown[]) => boolean),
-  sink: null as null | ((notification: Record<string, unknown>) => void),
+  sink: null as null | {
+    show: (notification: Record<string, unknown>) => void;
+    close: (ownerHandle: number, ids: string[]) => void;
+  },
   showNativeNotification: vi.fn(),
+  closeNotificationsForPanel: vi.fn(),
   playFile: vi.fn(),
   isSessionMuted: vi.fn(() => false),
   notificationSettings: {} as Record<string, unknown>,
@@ -22,6 +26,8 @@ vi.mock("../../../ipc/handlers/notifications.js", () => ({
 vi.mock("../../../services/NotificationService.js", () => ({
   notificationService: {
     showNativeNotification: mocks.showNativeNotification,
+    closeNotificationsForPanel: mocks.closeNotificationsForPanel,
+    forgetRemoteOwner: vi.fn(),
     setRemoteNotificationSink: vi.fn((sink) => {
       mocks.sink = sink;
       return () => {
@@ -143,20 +149,27 @@ describe("admitHybridHostLegs", () => {
   it("sends a remote owner's notification to its Shell", () => {
     admitHybridHostLegs({ dispatcher: fakeDispatcher() });
     const request = vi.fn(async () => null);
-    mocks.endpoints.set(-3, { kind: "remote-view", isClosed: () => false, request });
+    mocks.endpoints.set(-3, {
+      kind: "remote-view",
+      handle: -3,
+      isClosed: () => false,
+      onClose: () => ({ dispose: () => {} }),
+      request,
+    });
     const navigation = {
       channel: CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
       context: { panelId: "t1", panelTitle: "Claude" },
     };
 
-    mocks.sink!({
+    mocks.sink!.show({
       ownerHandle: -3,
       title: "Agent waiting",
       body: "b",
       category: "waiting",
       navigation,
     });
-    mocks.sink!({ ownerHandle: -9, title: "gone", body: "b", category: "info" });
+    mocks.sink!.show({ ownerHandle: -9, title: "gone", body: "b", category: "info" });
+    mocks.sink!.close(-9, ["gone"]);
 
     expect(request).toHaveBeenCalledTimes(1);
     expect(request).toHaveBeenCalledWith(NOTIFICATION_SHOW_METHOD, {

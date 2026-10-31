@@ -38,6 +38,7 @@ const m = vi.hoisted(() => {
 
   const clientOpenedListeners = new Set<(hostId: string, info: unknown) => void>();
   const clientClosedListeners = new Set<(hostId: string, info: unknown) => void>();
+  const sessionAttachedListeners = new Set<(hostId: string, info: { resumed: boolean }) => void>();
   const viewHosts = new Map<number, string>();
   const clientHooks: {
     current: {
@@ -68,6 +69,10 @@ const m = vi.hoisted(() => {
     hostForView: (id: number) => viewHosts.get(id) ?? null,
     manager: {
       onSessionOpened: vi.fn((_l: unknown) => () => {}),
+      onSessionAttached: vi.fn((l: (hostId: string, info: { resumed: boolean }) => void) => {
+        sessionAttachedListeners.add(l);
+        return () => sessionAttachedListeners.delete(l);
+      }),
       touch: vi.fn((_hostId: string) => {}),
       hold: vi.fn((_hostId: string) => () => {}),
       addUseCheck: vi.fn((_check: unknown) => () => {}),
@@ -162,10 +167,12 @@ const m = vi.hoisted(() => {
     installNotificationPolicyPush: vi.fn(() => vi.fn()),
     installNotificationPolicyHost: vi.fn(() => vi.fn()),
     acceptLocalPushForRemoteView: vi.fn((channel: string) => channel === "shell:ok"),
+    releaseHostNotifications: vi.fn(),
     uninstallViewRequests: vi.fn(),
     uninstallWorktreeRedelivery: vi.fn(),
     clientOpenedListeners,
     clientClosedListeners,
+    sessionAttachedListeners,
     viewHosts,
     clientHooks,
     remoteViewHooks,
@@ -315,6 +322,7 @@ vi.mock("../hybrid/index.js", () => ({
   installNotificationPolicyPush: m.installNotificationPolicyPush,
   installNotificationPolicyHost: m.installNotificationPolicyHost,
   acceptLocalPushForRemoteView: m.acceptLocalPushForRemoteView,
+  releaseHostNotifications: m.releaseHostNotifications,
   ViewVisibilityReporter: vi.fn(function ViewVisibilityReporter() {
     return m.visibility;
   }),
@@ -579,6 +587,7 @@ beforeEach(() => {
   m.transportListeners.clear();
   m.clientOpenedListeners.clear();
   m.clientClosedListeners.clear();
+  m.sessionAttachedListeners.clear();
   m.viewHosts.clear();
   m.clientHooks.current = {};
   m.remoteViewHooks.current = null;
@@ -977,6 +986,24 @@ describe("startRemoteHosts", () => {
     }
     expect(m.detachClientTerminalRelayFor).toHaveBeenCalledWith(11, "studio-01", "view-11");
     expect(m.detachClientWorktreeRelayFor).toHaveBeenCalledWith(11, "studio-01", "view-11");
+  });
+
+  it("takes down a host's banners once nothing on it can close them, and keeps them across a resume", async () => {
+    await startRemoteHosts({ hostMode: false });
+    m.clientHooks.current.onFirstUse?.();
+    for (const l of m.clientClosedListeners) {
+      l("studio-01", { webContentsId: 11, endpointId: "view-11" });
+    }
+    expect(m.releaseHostNotifications).toHaveBeenCalledWith("studio-01", 11);
+
+    m.releaseHostNotifications.mockClear();
+    for (const l of m.sessionAttachedListeners) l("studio-01", { resumed: true });
+    expect(m.releaseHostNotifications).not.toHaveBeenCalled();
+    for (const l of m.sessionAttachedListeners) l("studio-01", { resumed: false });
+    expect(m.releaseHostNotifications).toHaveBeenCalledWith("studio-01");
+
+    await stopRemoteHosts();
+    expect(m.sessionAttachedListeners.size).toBe(0);
   });
 
   it("retires the local pair when a remote view is shown, and re-posts a cached view's worktree port", async () => {

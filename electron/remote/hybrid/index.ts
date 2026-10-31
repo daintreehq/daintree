@@ -13,7 +13,11 @@ export {
   eventsPushSource,
   unclassifiedPushName,
 } from "./eventsPush.js";
-export { NOTIFICATION_SHOW_METHOD, showHostNotification } from "./notifications.js";
+export {
+  NOTIFICATION_SHOW_METHOD,
+  releaseHostNotifications,
+  showHostNotification,
+} from "./notifications.js";
 export {
   installNotificationPolicyHost,
   installNotificationPolicyPush,
