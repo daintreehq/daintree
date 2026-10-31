@@ -113,7 +113,7 @@ function resetStores(): void {
     lastArmedId: null,
   });
   useFleetPendingActionStore.setState({ pending: null });
-  useFleetFailureStore.setState({ failedIds: new Set(), payload: null });
+  useFleetFailureStore.getState().clear();
   usePanelStore.setState({
     panelsById: {},
     panelIds: [],
@@ -651,6 +651,45 @@ describe("fleet.retryFailures", () => {
     expect(draft).toBe("");
     expect(targets.slice().sort()).toEqual(["t1", "t2"]);
     expect(overrides).toEqual({ t1: "ls\r", t2: "ls\r" });
+  });
+
+  it("sends each target its own text again, with the broadcast's images (#15600)", async () => {
+    useFleetFailureStore.getState().recordFailure("look at /tmp/shot.png", ["t1", "t2", "t3"], 0, {
+      imagePaths: ["/tmp/shot.png"],
+      perTargetOverrides: { t2: "described in words", t3: "" },
+    });
+    const registry = await buildRegistry();
+    await run(registry, "fleet.retryFailures");
+    expect(runManagedFleetBroadcast).toHaveBeenCalledTimes(1);
+    const [draft, targets, overrides, opts] = vi.mocked(runManagedFleetBroadcast).mock.calls[0]!;
+    expect(draft).toBe("");
+    expect(targets.slice().sort()).toEqual(["t1", "t2", "t3"]);
+    expect(overrides).toEqual({ t1: "look at /tmp/shot.png", t2: "described in words", t3: "" });
+    expect(opts).toMatchObject({ isRetry: true, imagePaths: ["/tmp/shot.png"] });
+  });
+
+  it("asks whether another host may get an agent's own text twice, not the draft", async () => {
+    const remote = "host-fleet:studio:r-1";
+    vi.mocked(needsCrossHostResendConfirmation).mockImplementation(
+      (id, text) => id === remote && text === "described in words"
+    );
+    useFleetFailureStore.getState().recordFailure("look at /tmp/shot.png", ["t1", remote], 0, {
+      imagePaths: ["/tmp/shot.png"],
+      perTargetOverrides: { [remote]: "described in words" },
+    });
+    const registry = await buildRegistry();
+    try {
+      await run(registry, "fleet.retryFailures");
+    } finally {
+      vi.mocked(needsCrossHostResendConfirmation).mockImplementation(() => false);
+    }
+    expect(needsCrossHostResendConfirmation).toHaveBeenCalledWith(remote, "described in words");
+    expect(vi.mocked(runManagedFleetBroadcast).mock.calls[0]?.[1]).toEqual(["t1"]);
+    // It waits, with the text it was sent, for the person to confirm.
+    expect(useFleetFailureStore.getState().failedIds.has(remote)).toBe(true);
+    expect(useFleetFailureStore.getState().perTargetOverrides).toEqual({
+      [remote]: "described in words",
+    });
   });
 
   it("filters out targets that went ineligible before dispatch", async () => {

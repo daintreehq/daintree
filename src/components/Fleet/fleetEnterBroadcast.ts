@@ -13,13 +13,26 @@ import {
   executeFleetBroadcast,
   filterEligibleIds,
   findCrossHostContextTargets,
+  findCrossHostImageTargets,
   type FleetExecutionResult,
 } from "./fleetExecution";
+import type { FleetFailureReplay } from "@/store/fleetFailureStore";
 import { pluralize } from "@/lib/pluralize";
 
 /** Why a fleet send carrying context to another host's agent didn't go. */
 export const CROSS_HOST_CONTEXT_REFUSAL =
   "Not sent: context such as @diff can't reach an agent on another host. The draft is still here.";
+/** Why a fleet send carrying an image chip to another host's agent didn't go. */
+export const CROSS_HOST_IMAGE_REFUSAL =
+  "Not sent: an image can't reach an agent on another host. The draft is still here.";
+
+/** What a fleet send refused for another host's agent would have handed it. */
+export type CrossHostRefusal = "context" | "image";
+
+const CROSS_HOST_REFUSAL: Record<CrossHostRefusal, string> = {
+  context: CROSS_HOST_CONTEXT_REFUSAL,
+  image: CROSS_HOST_IMAGE_REFUSAL,
+};
 
 let activeBroadcastController: AbortController | null = null;
 // The composer send that owns the draft's cleanup. A newer Enter takes it
@@ -73,7 +86,7 @@ export async function runManagedFleetBroadcast(
   draft: string,
   targetIds: string[],
   perTargetOverrides?: Record<string, string>,
-  opts?: { isRetry?: boolean; draftPreview?: string }
+  opts?: { isRetry?: boolean; draftPreview?: string; imagePaths?: readonly string[] }
 ): Promise<FleetExecutionResult> {
   // A newer broadcast pre-empts the in-flight one — leaving a stale controller
   // would race two runs against the shared progress store. Abort then take over.
@@ -98,7 +111,7 @@ export async function runManagedFleetBroadcast(
       targetIds,
       perTargetOverrides,
       controller.signal,
-      { retry: opts?.isRetry === true }
+      { retry: opts?.isRetry === true, imagePaths: opts?.imagePaths }
     );
     if (runId !== null) {
       useFleetRunStore.getState().applySubmissionResult(runId, result);
@@ -183,9 +196,14 @@ function buildBroadcastAnnouncement(
 /**
  * What a structured broadcast's outcome does to the fleet: dead targets are
  * disarmed, retryable ones get the failure chip, delivered ones lose any old
- * failure dot, and the result is announced.
+ * failure dot, and the result is announced. `replay` is what a retry needs to
+ * send each target what this broadcast sent it.
  */
-function applyFleetBroadcastOutcome(text: string, result: FleetExecutionResult): void {
+function applyFleetBroadcastOutcome(
+  text: string,
+  result: FleetExecutionResult,
+  replay?: FleetFailureReplay
+): void {
   // Read before the dead ones are disarmed: afterwards nothing here knows them.
   const failedRemote = result.failedIds
     .map((id) => getCrossHostTarget(id))
@@ -227,7 +245,7 @@ function applyFleetBroadcastOutcome(text: string, result: FleetExecutionResult):
       // (whose run may be superseded by the time the banner renders).
       useFleetFailureStore
         .getState()
-        .recordFailure(text, retryable, result.permanentlyFailedIds.length);
+        .recordFailure(text, retryable, result.permanentlyFailedIds.length, replay);
     }
     // Successful targets in a partial-failure run still clear their
     // stale failure dots — same logic as the all-success branch below.
@@ -334,14 +352,19 @@ export async function sendDraftToFleet(text: string): Promise<boolean> {
  * Context tokens expand per agent here (`executeFleetBroadcast`), but an
  * agent on another host can't be given this machine's context: a send that
  * would hand one a token is consumed without going anywhere, and
- * `onContextRefused` lets the composer say so. Skipping that agent, or
+ * `onRefused` lets the composer say so. Skipping that agent, or
  * editing the token out of its text, lets the send go.
+ *
+ * `imagePaths` are the draft's image chips, in order. Each agent here gets the
+ * ones its own text names as attachments; one on another host can't open a
+ * file saved on this machine, so a send handing it one is refused the same way.
  */
 export function tryFleetBroadcastFromEditor(
   terminalId: string,
   text: string,
   onDelivered: () => void,
-  onContextRefused?: () => void
+  onRefused?: (reason: CrossHostRefusal) => void,
+  imagePaths: readonly string[] = []
 ): boolean {
   const arming = useFleetArmingStore.getState();
   if (!arming.armedIds.has(terminalId) || selectFleetMemberCount(arming) < 2) return false;
@@ -368,10 +391,17 @@ export function tryFleetBroadcastFromEditor(
     return true;
   }
 
+  const images = [...imagePaths];
   const included = targets.filter((id) => !initialSkipped.has(id));
-  if (findCrossHostContextTargets(text, included, initialOverrides).length > 0) {
-    if (onContextRefused) onContextRefused();
-    else useAnnouncerStore.getState().announce(CROSS_HOST_CONTEXT_REFUSAL, "polite");
+  const refusal: CrossHostRefusal | null =
+    findCrossHostContextTargets(text, included, initialOverrides).length > 0
+      ? "context"
+      : findCrossHostImageTargets(text, included, images, initialOverrides).length > 0
+        ? "image"
+        : null;
+  if (refusal) {
+    if (onRefused) onRefused(refusal);
+    else useAnnouncerStore.getState().announce(CROSS_HOST_REFUSAL[refusal], "polite");
     return true;
   }
 
@@ -420,11 +450,16 @@ export function tryFleetBroadcastFromEditor(
       // the shared controller lets the ribbon Cancel button abort it too.
       // Run-history recording now happens when the supervised run finalizes
       // (fleetRunStore), so the record carries watch-phase outcomes too.
-      const result = await runManagedFleetBroadcast(text, eligibleTargets, overridesArg);
+      const result = await runManagedFleetBroadcast(text, eligibleTargets, overridesArg, {
+        imagePaths: images,
+      });
       // A cancel can't take back writes that already landed, so a cancelled
       // run that reached anyone still counts as sent.
       delivered = result.successCount > 0;
-      applyFleetBroadcastOutcome(text, result);
+      applyFleetBroadcastOutcome(text, result, {
+        imagePaths: images,
+        perTargetOverrides: effectiveOverrides,
+      });
     } finally {
       // Per-target overrides are ephemeral per-broadcast (#8691 constraint).
       // Clear them so the next broadcast starts from the resolved defaults.

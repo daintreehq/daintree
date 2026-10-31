@@ -5,6 +5,7 @@ import {
   executeFleetBroadcast,
   filterEligibleIds,
   findCrossHostContextTargets,
+  findCrossHostImageTargets,
 } from "../fleetExecution";
 import { crossHostTargetKey } from "../crossHostFleet";
 import { FLEET_LARGE_PASTE_BATCH_SIZE } from "../fleetBroadcast";
@@ -18,6 +19,7 @@ import type { PtyPanelData, PanelInstance } from "@shared/types/panel";
 import type { RecipeContext } from "@/utils/recipeVariables";
 
 const submitMock = vi.fn<(id: string, text: string) => Promise<void>>();
+const submitWithImagesMock = vi.fn<(id: string, text: string, paths: string[]) => Promise<void>>();
 const notifyUserInputMock = vi.hoisted(() => vi.fn<(id: string, data?: string) => void>());
 const notifyEnterPressedMock = vi.hoisted(() => vi.fn<(id: string) => void>());
 const clearDirectingStateMock = vi.hoisted(() => vi.fn<(id: string) => void>());
@@ -45,6 +47,8 @@ vi.mock("@/clients", async (importOriginal) => {
     terminalClient: {
       ...actual.terminalClient,
       submit: (id: string, text: string) => submitMock(id, text),
+      submitWithImages: (id: string, text: string, paths: string[]) =>
+        submitWithImagesMock(id, text, paths),
     },
   };
 });
@@ -132,6 +136,8 @@ function seedPanels(terminals: PanelInstance[]): void {
 function reset() {
   submitMock.mockReset();
   submitMock.mockResolvedValue(undefined);
+  submitWithImagesMock.mockReset();
+  submitWithImagesMock.mockResolvedValue(undefined);
   notifyUserInputMock.mockReset();
   notifyEnterPressedMock.mockReset();
   clearDirectingStateMock.mockReset();
@@ -844,6 +850,177 @@ describe("executeFleetBroadcast — context tokens (#14953)", () => {
     seedPanels([makeAgent("a"), makeAgent("b")]);
     void executeFleetBroadcast("plain text", ["a", "b"]);
     expect(submitMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("executeFleetBroadcast — image chips (#15600)", () => {
+  const ONE = "/tmp/shots/one.png";
+  const TWO = "/tmp/shots/two.png";
+  const REMOTE = crossHostTargetKey("host-2", "t9");
+  const remoteSubmit = vi.fn();
+
+  beforeEach(() => {
+    reset();
+    remoteSubmit.mockReset().mockResolvedValue(undefined);
+    Object.assign(window, {
+      electron: {
+        git: { getWorkingDiff: vi.fn(async () => `+ see ${TWO}`) },
+        hostMetrics: { submitFleet: remoteSubmit },
+      },
+    });
+  });
+
+  const imagesBy = () =>
+    new Map(submitWithImagesMock.mock.calls.map(([id, , paths]) => [id, paths]));
+
+  it("attaches to each pane the images its own text names, in the order it names them", async () => {
+    seedPanels([makeAgent("a"), makeAgent("b"), makeAgent("c"), makeAgent("d"), makeAgent("e")]);
+    const draft = `compare ${ONE} with ${TWO}`;
+    const result = await executeFleetBroadcast(
+      draft,
+      ["a", "b", "c", "d", "e"],
+      { b: `only ${TWO}`, c: "no pictures", d: "", e: `${TWO} before ${ONE}` },
+      undefined,
+      { imagePaths: [ONE, TWO] }
+    );
+
+    expect(result.successCount).toBe(5);
+    expect(imagesBy()).toEqual(
+      new Map([
+        ["a", [ONE, TWO]],
+        ["b", [TWO]],
+        // The chips' order would leave the second one as text.
+        ["e", [TWO, ONE]],
+      ])
+    );
+    expect(submitWithImagesMock.mock.calls.find(([id]) => id === "a")?.[1]).toBe(draft);
+    expect(submitMock.mock.calls).toEqual([
+      ["c", "no pictures"],
+      ["d", ""],
+    ]);
+  });
+
+  it("gives a pane sent the draft the chips in the editor's order, as one pane's send would", async () => {
+    // A chip whose name starts with another chip's path, then a space, is
+    // still two chips: the editor knows where each one is.
+    const LONG = "/tmp/shots/one.png extra.png";
+    const draft = `${LONG} ${TWO} ${ONE}`;
+    seedPanels([makeAgent("a")]);
+    await executeFleetBroadcast(draft, ["a"], undefined, undefined, {
+      imagePaths: [LONG, TWO, ONE],
+    });
+
+    expect(imagesBy().get("a")).toEqual([LONG, TWO, ONE]);
+  });
+
+  it("attaches a draft's image whose path a recipe variable sits against", async () => {
+    seedPanels([makeAgent("a")]);
+    await executeFleetBroadcast(`see ${ONE}{{issue_number}}`, ["a"], undefined, undefined, {
+      imagePaths: [ONE],
+    });
+
+    expect(submitWithImagesMock.mock.calls[0]![1]).toBe(`see ${ONE}`);
+    expect(imagesBy().get("a")).toEqual([ONE]);
+  });
+
+  it("doesn't attach an image a pane's recipe variables fill in", async () => {
+    buildFleetBroadcastRecipeContextMock.mockReturnValue({ worktreePath: TWO });
+    seedPanels([makeAgent("a")]);
+    await executeFleetBroadcast(
+      `Review {{worktree_path}} and ${ONE}`,
+      ["a"],
+      undefined,
+      undefined,
+      {
+        imagePaths: [ONE, TWO],
+      }
+    );
+
+    expect(submitWithImagesMock.mock.calls[0]![1]).toBe(`Review ${TWO} and ${ONE}`);
+    expect(imagesBy().get("a")).toEqual([ONE]);
+  });
+
+  it("doesn't attach an image a pane's expanded context happens to mention", async () => {
+    seedPanels([makeAgent("a")]);
+    await executeFleetBroadcast(`Review @diff and ${ONE}`, ["a"], undefined, undefined, {
+      imagePaths: [ONE, TWO],
+    });
+
+    expect(imagesBy().get("a")).toEqual([ONE]);
+    expect(submitWithImagesMock.mock.calls[0]![1]).toContain(`see ${TWO}`);
+  });
+
+  it("counts a refused image submit as a failure of that pane alone", async () => {
+    submitWithImagesMock.mockImplementation(async (id) => {
+      if (id === "b") throw new Error("ENOSPC: disk full");
+    });
+    seedPanels([makeAgent("a"), makeAgent("b")]);
+    const result = await executeFleetBroadcast(`see ${ONE}`, ["a", "b"], undefined, undefined, {
+      imagePaths: [ONE],
+    });
+
+    expect(result.successCount).toBe(1);
+    expect(result.transientlyFailedIds).toEqual(["b"]);
+  });
+
+  it("never hands an image's path to an agent on another host", async () => {
+    useFleetArmingStore.setState({
+      crossHostTargets: [
+        { key: REMOTE, hostId: "host-2", hostName: "Studio", terminalId: "t9", title: "remote" },
+      ],
+    });
+    seedPanels([makeAgent("a")]);
+    const result = await executeFleetBroadcast(`see ${ONE}`, ["a", REMOTE], undefined, undefined, {
+      imagePaths: [ONE],
+    });
+
+    expect(remoteSubmit).not.toHaveBeenCalled();
+    expect(result.failedIds).toEqual([REMOTE]);
+    expect(imagesBy().get("a")).toEqual([ONE]);
+  });
+
+  it("sends the other host's agent text that leaves the image out", async () => {
+    useFleetArmingStore.setState({
+      crossHostTargets: [
+        { key: REMOTE, hostId: "host-2", hostName: "Studio", terminalId: "t9", title: "remote" },
+      ],
+    });
+    seedPanels([makeAgent("a")]);
+    const result = await executeFleetBroadcast(
+      `see ${ONE}`,
+      ["a", REMOTE],
+      { [REMOTE]: "described in words" },
+      undefined,
+      { imagePaths: [ONE] }
+    );
+
+    expect(result.successCount).toBe(2);
+    expect(remoteSubmit.mock.calls[0]![0]).toMatchObject({ text: "described in words" });
+  });
+});
+
+describe("findCrossHostImageTargets", () => {
+  const REMOTE = crossHostTargetKey("host-2", "t9");
+  const IMAGE = "/tmp/shot.png";
+
+  it("names the other host's agents whose text still carries an image", () => {
+    expect(findCrossHostImageTargets(`see ${IMAGE}`, ["a", REMOTE], [IMAGE])).toEqual([REMOTE]);
+    expect(findCrossHostImageTargets(`see ${IMAGE}`, ["a", REMOTE], [])).toEqual([]);
+    expect(
+      findCrossHostImageTargets(`see ${IMAGE}`, ["a", REMOTE], [IMAGE], { [REMOTE]: "see it" })
+    ).toEqual([]);
+    expect(
+      findCrossHostImageTargets(`see ${IMAGE}`, ["a", REMOTE], [IMAGE], { [REMOTE]: "" })
+    ).toEqual([]);
+    // One image of several is enough to refuse.
+    expect(findCrossHostImageTargets(`see ${IMAGE}`, [REMOTE], ["/tmp/other.png", IMAGE])).toEqual([
+      REMOTE,
+    ]);
+    // Pasted straight after a word, it is still this machine's path.
+    expect(findCrossHostImageTargets(`see at${IMAGE}`, [REMOTE], [IMAGE])).toEqual([REMOTE]);
+    expect(
+      findCrossHostImageTargets("see it", ["a", REMOTE], [IMAGE], { [REMOTE]: IMAGE })
+    ).toEqual([REMOTE]);
   });
 });
 

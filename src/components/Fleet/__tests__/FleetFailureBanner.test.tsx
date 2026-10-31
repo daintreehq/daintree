@@ -37,9 +37,15 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 const unconfirmed = vi.hoisted(() => new Map<string, number>());
+// The text each unconfirmed submit carried, where a test cares: the host only
+// holds the record of that exact text.
+const unconfirmedText = vi.hoisted(() => new Map<string, string>());
 const confirmCrossHostResend = vi.hoisted(() => vi.fn());
 vi.mock("../crossHostFleet", () => ({
-  crossHostSafeRetryDeadline: (id: string) => unconfirmed.get(id) ?? null,
+  crossHostSafeRetryDeadline: (id: string, text: string) =>
+    unconfirmedText.has(id) && unconfirmedText.get(id) !== text
+      ? null
+      : (unconfirmed.get(id) ?? null),
   confirmCrossHostResend,
   getCrossHostTarget: (id: string) =>
     unconfirmed.has(id) ? { key: id, hostName: "studio-01", hostId: "h1", terminalId: "t" } : null,
@@ -50,17 +56,14 @@ import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { actionService } from "@/services/ActionService";
 
 function resetStore() {
-  useFleetFailureStore.setState({
-    failedIds: new Set(),
-    payload: null,
-    disarmedCount: 0,
-  });
+  useFleetFailureStore.getState().clear();
 }
 
 describe("FleetFailureBanner", () => {
   beforeEach(() => {
     resetStore();
     unconfirmed.clear();
+    unconfirmedText.clear();
     vi.clearAllMocks();
   });
 
@@ -180,6 +183,18 @@ describe("FleetFailureBanner", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("judges another host's agent by the text it was sent, not the draft (#15600)", () => {
+    unconfirmed.set("host-fleet:h1:t", Date.now() - 1);
+    unconfirmedText.set("host-fleet:h1:t", "described in words");
+    useFleetFailureStore.getState().recordFailure("see /tmp/shot.png", ["host-fleet:h1:t"], 0, {
+      imagePaths: ["/tmp/shot.png"],
+      perTargetOverrides: { "host-fleet:h1:t": "described in words" },
+    });
+    render(<FleetFailureBanner />);
+    expect(screen.getByText("Broadcast unconfirmed")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
   it("retries the safe targets first when a broadcast mixes both", () => {

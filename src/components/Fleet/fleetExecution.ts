@@ -11,6 +11,7 @@ import {
 import { isTerminalFleetBroadcastTarget, isTerminalFleetEligible } from "@/store/fleetEligibility";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { isPtyPanel } from "@shared/types/panel";
+import { findImagePathsInText } from "@shared/utils/imageAttachmentInput";
 import { replaceRecipeVariables, detectUnresolvedVariables } from "@/utils/recipeVariables";
 import {
   buildFleetBroadcastRecipeContext,
@@ -146,6 +147,26 @@ export function findCrossHostContextTargets(
 }
 
 /**
+ * The agents on other hosts whose text in this send still names one of the
+ * draft's image chips. The image was saved on this machine, so its path means
+ * nothing over there, and sent as text it can't become an attachment either.
+ * Any mention counts, a path glued to a word included: refusing keeps the draft.
+ */
+export function findCrossHostImageTargets(
+  draft: string,
+  targetIds: readonly string[],
+  imagePaths: readonly string[],
+  perTargetOverrides?: Record<string, string>
+): string[] {
+  if (imagePaths.length === 0) return [];
+  return targetIds.filter(
+    (id) =>
+      isHostQualifiedTargetId(id) &&
+      imagePaths.some((path) => (perTargetOverrides?.[id] ?? draft).includes(path))
+  );
+}
+
+/**
  * Drop ids whose backing panel is no longer fleet-eligible (trashed,
  * backgrounded, no PTY, etc.) or whose input is locked. Exported so the Enter-broadcast confirm
  * path can re-check eligibility at dispatch time — a pane that went
@@ -161,12 +182,21 @@ export function filterEligibleIds(ids: string[]): string[] {
 }
 
 /**
- * Local submits go through this view's terminal client; another host's go over
- * its link, where a retry reuses the opId of a submit the host never confirmed.
+ * Local submits go through this view's terminal client, carrying the images
+ * the target's text names so each can go as an attachment (#12792); another
+ * host's go over its link, where a retry reuses the opId of a submit the host
+ * never confirmed. An image path never goes there: the send is refused first.
  */
-function submitTarget(terminalId: string, payload: string, retry: boolean): Promise<void> {
-  return isHostQualifiedTargetId(terminalId)
-    ? submitCrossHostTarget(terminalId, payload, { retry })
+function submitTarget(submission: ResolvedSubmission, retry: boolean): Promise<void> {
+  const { terminalId, payload, imagePaths } = submission;
+  if (isHostQualifiedTargetId(terminalId)) {
+    if (imagePaths.length > 0) {
+      return Promise.reject(new Error("An image can't reach an agent on another host"));
+    }
+    return submitCrossHostTarget(terminalId, payload, { retry });
+  }
+  return imagePaths.length > 0
+    ? terminalClient.submitWithImages(terminalId, payload, [...imagePaths])
     : terminalClient.submit(terminalId, payload);
 }
 
@@ -189,12 +219,15 @@ interface ResolvedSubmission {
   payload: string;
   /** What the user wrote for this target, before its recipe variables were filled. */
   authored: string;
+  /** The draft's image chips this target's own text still names, in order. */
+  imagePaths: readonly string[];
 }
 
 function resolveSubmissions(
   draft: string,
   targetIds: string[],
-  perTargetOverrides?: Record<string, string>
+  perTargetOverrides: Record<string, string> | undefined,
+  imagePaths: readonly string[]
 ): ResolvedSubmission[] {
   return targetIds.map((terminalId) => {
     // Another host's agent has no worktree here to resolve against: it gets the draft as typed,
@@ -203,12 +236,31 @@ function resolveSubmissions(
       ? draft
       : replaceRecipeVariables(draft, buildFleetBroadcastRecipeContext(terminalId) ?? {});
     const override = perTargetOverrides?.[terminalId];
+    const authored = override ?? draft;
     return {
       terminalId,
       payload: override ?? baseResolved,
-      authored: override ?? draft,
+      authored,
+      imagePaths: imagesNamedBy(authored, override, imagePaths),
     };
   });
+}
+
+/**
+ * The chips a target's text still names, in the order a submit of it attaches
+ * them. Read from what the user wrote, not the expanded payload: a diff that
+ * happens to mention a path doesn't make it an attachment. The draft names
+ * them in the editor's order, which is what a single-pane send passes; a
+ * target's own edit may name them in another, and the pty-host looks for each
+ * path only after the one before it.
+ */
+function imagesNamedBy(
+  authored: string,
+  override: string | undefined,
+  imagePaths: readonly string[]
+): string[] {
+  const named = imagePaths.filter((path) => authored.includes(path));
+  return override === undefined ? named : findImagePathsInText(override, named);
 }
 
 /**
@@ -249,7 +301,7 @@ function carriesLocalContext(submission: ResolvedSubmission): boolean {
 // send. Another host's agent keeps its own.
 function submitAndNote(submission: ResolvedSubmission, retry: boolean): Promise<void> {
   const sentAt = Date.now();
-  return submitTarget(submission.terminalId, submission.payload, retry).then(() => {
+  return submitTarget(submission, retry).then(() => {
     if (isHostQualifiedTargetId(submission.terminalId)) return;
     useTerminalInputStore
       .getState()
@@ -311,18 +363,21 @@ let latestRun = 0;
  * Only fleet members are sent to: each target is checked again right before
  * its submit, and one that has left the fleet or stopped being a broadcast
  * target since is counted in `skippedCount`, neither sent nor failed.
+ *
+ * `imagePaths` are the composer's image chips: each local target is given the
+ * ones its own text still names, as a single-pane send of that text would be.
  */
 export async function executeFleetBroadcast(
   draft: string,
   targetIds: string[],
   perTargetOverrides?: Record<string, string>,
   signal?: AbortSignal,
-  options: { retry?: boolean } = {}
+  options: { retry?: boolean; imagePaths?: readonly string[] } = {}
 ): Promise<FleetExecutionResult> {
   const retry = options.retry === true;
   const run = ++latestRun;
   const progress = () => (run === latestRun ? useFleetBroadcastProgressStore.getState() : null);
-  let resolved = resolveSubmissions(draft, targetIds, perTargetOverrides);
+  let resolved = resolveSubmissions(draft, targetIds, perTargetOverrides, options.imagePaths ?? []);
   // Checked right before each submit, so a target that stops being a recipient
   // while its context is read or between batches is skipped, never sent.
   const canDispatch = (r: ResolvedSubmission) => isStillRecipient(r.terminalId);
