@@ -65,6 +65,7 @@ import {
   isDictationViewHeld,
   onDictationViewReleased,
 } from "../services/voice/dictationViewHold.js";
+import { isCachedViewFlushPending, onCachedViewFlushSettled } from "../services/cachedViewFlush.js";
 
 // Trailing-edge debounce on freeze entry: the lag-pressure path can flip
 // efficiency on/off without going through the 30 s downgrade hysteresis, so
@@ -535,28 +536,40 @@ export class ProjectViewManager {
     this.remoteMcpBindingLive = opts.remoteMcpBindingLive;
     this.mcpViewActivity = opts.mcpViewActivity;
     this.windowRegistry = opts.windowRegistry;
-    // A view kept over the cap by its unsaved work (#14095) or by a dictation
-    // (#14773) is evictable again once that work is saved or dropped, or the
-    // dictation and its cleanup are done; nothing else would re-run the cap
-    // until the next cold switch or limit change. Deferred so a view is never
-    // torn down inside its own navigation or IPC callback.
-    const reclaimReleased = (webContentsId: number) => {
-      if (this.disposed) return;
-      const ours = [...this.views.values()].some(
+    // A view kept over the cap by its unsaved work (#14095), by a dictation
+    // (#14773) or by its cached-edge flush (#15633) is evictable again once that
+    // work is saved or dropped, or the dictation and its cleanup are done;
+    // nothing else would re-run the cap until the next cold switch or limit
+    // change. Deferred so a view is never torn down inside its own navigation
+    // or IPC callback.
+    const isOurs = (webContentsId: number) =>
+      [...this.views.values()].some(
         (entry) =>
           !entry.view.webContents.isDestroyed() && entry.view.webContents.id === webContentsId
       );
+    const reclaimReleased = (webContentsId: number) => {
+      if (this.disposed || !isOurs(webContentsId)) return;
       // Every window's count, not this one's: the cap is app-wide (#14218).
-      if (!ours || EvictionController.scopeViewCount(this) <= this.maxCachedViews) return;
+      if (EvictionController.scopeViewCount(this) <= this.maxCachedViews) return;
       setImmediate(() => {
         if (!this.disposed) EvictionController.evictStaleViews(this, "lru");
       });
     };
     const offRecovery = onPanelRecoveryHoldReleased(reclaimReleased);
     const offDictation = onDictationViewReleased(reclaimReleased);
+    // The flush also held back the efficiency freeze `deactivateEntry` would
+    // have applied, and nothing else would apply it before the next sampler tick.
+    const offCachedFlush = onCachedViewFlushSettled((webContentsId) => {
+      reclaimReleased(webContentsId);
+      if (this.disposed || !isOurs(webContentsId)) return;
+      setImmediate(() => {
+        if (!this.disposed) this.refreezeUnprotectedCachedViews();
+      });
+    });
     this.holdReleaseCleanup = () => {
       offRecovery();
       offDictation();
+      offCachedFlush();
     };
     if (opts.cachedProjectViews != null) {
       this.maxCachedViews = opts.cachedProjectViews;
@@ -1576,6 +1589,8 @@ export class ProjectViewManager {
       if (this.remoteAssistantLive?.(wc.id) === true) continue;
       // A dictation started here captures its audio in this renderer (#14773).
       if (isDictationViewHeld(wc)) continue;
+      // Its cached-edge flush is still reaching main (#15633).
+      if (isCachedViewFlushPending(wc)) continue;
       void freezeWebContents(wc);
     }
   }
@@ -1694,6 +1709,8 @@ export class ProjectViewManager {
     // Unsaved work the view says nothing would bring back (#14095): moving the
     // project to another window would destroy it, which a move never means.
     if (isPanelRecoveryHeldReported(wc)) return false;
+    // Its unsaved edits are still being flushed on the cached edge (#15633).
+    if (isCachedViewFlushPending(wc)) return false;
     // A dictation running there, or its cleanup, would end with the view
     // (#14773). Another window asking for the project brings this one forward.
     if (isDictationViewHeld(wc)) return false;

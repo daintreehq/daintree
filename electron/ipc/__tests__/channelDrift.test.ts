@@ -82,6 +82,11 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   // fire-and-forget — renderer→main `ipcRenderer.send` of the same answer,
   // pushed whenever it changes so eviction can read it synchronously.
   "project:panel-recovery-state",
+  // fire-and-forget — renderer→main `ipcRenderer.send` of whether the view has
+  // flush work registered for the cached edge, and its answer for each edge
+  // (`app:view-cached` carries the id), consumed by cachedViewFlush.ts.
+  "app:view-cached-flush-armed",
+  "app:view-cached-flushed",
   "mcp:dispatch-action-response",
   "mcp:get-manifest-response",
   "plugin:dispatch-action-response",

@@ -190,6 +190,8 @@ export const CHANNELS = {
   APP_VIEW_REVEALED: "app:view-revealed",
   APP_VIEW_WARM_ACTIVATED: "app:view-warm-activated",
   APP_VIEW_CACHED: "app:view-cached",
+  APP_VIEW_CACHED_FLUSH_ARMED: "app:view-cached-flush-armed",
+  APP_VIEW_CACHED_FLUSHED: "app:view-cached-flushed",
   APP_DISMISS_ROSETTA_WARNING: "app:dismiss-rosetta-warning",
   MENU_ACTION: "menu:action",
   MENU_SHOW_CONTEXT: "menu:show-context",

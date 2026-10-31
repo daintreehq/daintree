@@ -2211,7 +2211,9 @@ export interface IpcEventMap {
   // resume event on reattach, so this is the renderer's deterministic trigger
   // to run the wake fan-out whose completion releases the warm paint gate.
   "app:view-warm-activated": { switchId?: string } | undefined;
-  "app:view-cached": void;
+  // Carries a flush id only when main is holding the view for the renderer's
+  // cached-edge flush, which the renderer echoes back once it settles (#15633).
+  "app:view-cached": { flushId: string } | undefined;
 
   // Privacy events
   "privacy:telemetry-consent-changed": {

@@ -105,6 +105,8 @@ export const CHANNEL_LOCALITY = {
   "app:set-state": "hybrid",
   "app:skeleton-parsed": "shell",
   "app:view-cached": "shell",
+  "app:view-cached-flush-armed": "shell",
+  "app:view-cached-flushed": "shell",
   "app:view-painted": "shell",
   "app:view-revealed": "shell",
   "app:view-warm-activated": "shell",

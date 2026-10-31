@@ -687,7 +687,14 @@ let _viewCached = false;
 // A view the efficiency profile freezes inside the delay keeps its cache.
 const CACHED_VIEW_CACHE_CLEAR_DELAY_MS = 2_000;
 let _cacheClearTimer: ReturnType<typeof setTimeout> | null = null;
-ipcRenderer.on(CHANNELS.APP_VIEW_CACHED, () => {
+/**
+ * Work that persists unsaved edits when this view is cached (#15633), run here
+ * rather than by `_typedOn` subscribers so their promises can be awaited. Main
+ * holds the view unfrozen and resident only while this is non-empty, and lets
+ * go when the edge's flush id comes back.
+ */
+const _viewCachedFlushers = new Set<() => unknown>();
+ipcRenderer.on(CHANNELS.APP_VIEW_CACHED, (_event, payload?: { flushId?: unknown }) => {
   _viewCached = true;
   if (_cacheClearTimer !== null) clearTimeout(_cacheClearTimer);
   _cacheClearTimer = setTimeout(() => {
@@ -699,6 +706,18 @@ ipcRenderer.on(CHANNELS.APP_VIEW_CACHED, () => {
       // Best-effort reclaim; a renderer mid-teardown has nothing to free.
     }
   }, CACHED_VIEW_CACHE_CLEAR_DELAY_MS);
+  const flushes = Array.from(_viewCachedFlushers, (flush) => {
+    try {
+      return flush();
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  });
+  const flushId = payload?.flushId;
+  if (typeof flushId !== "string") return;
+  void Promise.allSettled(flushes).then(() => {
+    ipcRenderer.send(CHANNELS.APP_VIEW_CACHED_FLUSHED, flushId);
+  });
 });
 // Warm activation — not reveal — owns the clear: main only sends
 // APP_VIEW_REVEALED while the view is still the active project, so a superseded
@@ -1407,6 +1426,20 @@ function buildElectronApi(): ElectronAPI {
         _typedOn(CHANNELS.APP_VIEW_WARM_ACTIVATED, callback),
       onViewCached: (callback: () => void) => _typedOn(CHANNELS.APP_VIEW_CACHED, callback),
       isViewCached: () => _viewCached,
+      onViewCachedFlush: (callback: () => unknown) => {
+        // Wrapped so registering the same function twice still unsubscribes each.
+        const flush = () => callback();
+        _viewCachedFlushers.add(flush);
+        if (_viewCachedFlushers.size === 1) {
+          ipcRenderer.send(CHANNELS.APP_VIEW_CACHED_FLUSH_ARMED, true);
+        }
+        return () => {
+          if (!_viewCachedFlushers.delete(flush)) return;
+          if (_viewCachedFlushers.size === 0) {
+            ipcRenderer.send(CHANNELS.APP_VIEW_CACHED_FLUSH_ARMED, false);
+          }
+        };
+      },
     },
 
     menu: buildMenuPreloadBindings(_unwrappingInvoke),
