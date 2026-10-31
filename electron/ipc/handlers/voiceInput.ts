@@ -71,6 +71,7 @@ import {
 } from "../../services/voiceContextKeyterms.js";
 import {
   readTerminalContextForCorrection,
+  redactRecentPrompts,
   type TerminalCorrectionContext,
 } from "../../services/voiceTerminalContext.js";
 import {
@@ -2575,17 +2576,28 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   // The prompts the view says it last sent to the passage's terminal. They
   // follow its output's ownership rule: none outside the view, and none for a
   // terminal here another project owns. A host's pane is the host's project's
-  // view, whose own sends they are.
+  // view, whose own sends they are. Either way they go redacted as its output does.
   const ownRecentPrompts = (
     viewProjectId: string | null,
     request: VoiceInputCorrectPayload
   ): string[] | undefined => {
     const prompts = request.recentPrompts;
     if (!prompts?.length || !request.terminalId || request.outsideView) return undefined;
-    if (hostPaneFor(viewProjectId, false)) return prompts;
-    return resolveKeytermTarget(viewProjectId, request.terminalId, deps.ptyClient).terminalId
-      ? prompts
-      : undefined;
+    if (
+      !hostPaneFor(viewProjectId, false) &&
+      !resolveKeytermTarget(viewProjectId, request.terminalId, deps.ptyClient).terminalId
+    ) {
+      return undefined;
+    }
+    const redacted = redactRecentPrompts(prompts);
+    if (redacted.withheldLines > 0) {
+      logDebug("[VoiceInput] Recent prompt lines withheld", {
+        promptCount: prompts.length,
+        withheldPrompts: redacted.withheldPrompts,
+        withheldLines: redacted.withheldLines,
+      });
+    }
+    return redacted.prompts.length > 0 ? redacted.prompts : undefined;
   };
 
   // Cleanup requests still out, cancelled when the handlers go.
