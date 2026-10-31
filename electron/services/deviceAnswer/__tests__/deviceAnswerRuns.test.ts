@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const screens = new Map<string, string | null>();
 vi.mock("../../plugin/pluginTerminalScreenRead.js", () => ({
@@ -11,7 +11,13 @@ vi.mock("../../plugin/pluginTerminalScreenRead.js", () => ({
 }));
 
 import type { FleetRunRow, FleetSnapshot } from "../../../../shared/types/ipc/fleet.js";
-import { isRunStillWaiting, listWaitingRuns } from "../deviceAnswerRuns.js";
+import { readPluginTerminalScreen } from "../../plugin/pluginTerminalScreenRead.js";
+import {
+  MAX_LISTED_RUNS,
+  MAX_OMITTED_RUNS,
+  isRunStillWaiting,
+  listWaitingRuns,
+} from "../deviceAnswerRuns.js";
 import type { AnswerPtyClient } from "../../terminalAnswer.js";
 
 /** A PTY whose terminals were all spawned at `spawnedAt`. */
@@ -33,11 +39,16 @@ function snapshot(runs: FleetRunRow[]): FleetSnapshot {
   return { runs, changedAt: 0 } as unknown as FleetSnapshot;
 }
 
+beforeEach(() => {
+  screens.clear();
+  vi.mocked(readPluginTerminalScreen).mockClear();
+});
+
 describe("listWaitingRuns", () => {
-  it("lists every project's waiting runs, longest waiting first, with what was observed", async () => {
+  it("lists every project's waiting runs, what asks something first, with what was observed", async () => {
     screens.set("a", "❯ 1. Yes\n  2. No\n\n Esc to cancel");
     screens.set("b", null);
-    const runs = await listWaitingRuns({
+    const { runs, omitted, waiting } = await listWaitingRuns({
       fleet: () =>
         snapshot([
           row({
@@ -60,25 +71,28 @@ describe("listWaitingRuns", () => {
       pty: () => ptyAt(100),
       projectName: (id) => (id === "ws-1" ? "daintree" : null),
     });
-    expect(runs.map((r) => r.runId)).toEqual(["b", "a"]);
+    // The parked error has waited longer, but parking set it aside.
+    expect(runs.map((r) => r.runId)).toEqual(["a", "b"]);
     expect(runs[0]).toMatchObject({
+      waitingReason: "approval",
+      parked: false,
+      project: "daintree",
+      choices: ["Yes", "No"],
+    });
+    expect(runs[1]).toMatchObject({
       waitingReason: "error",
       parked: true,
       project: null,
       screen: null,
       choices: [],
     });
-    expect(runs[1]).toMatchObject({
-      waitingReason: "approval",
-      parked: false,
-      project: "daintree",
-      choices: ["Yes", "No"],
-    });
+    expect(omitted).toEqual([]);
+    expect(waiting).toBe(2);
   });
 
   it("shows no screen for an id respawned since the fleet row was taken", async () => {
     screens.set("a", "❯ 1. Yes\n  2. No\n\n Esc to cancel");
-    const runs = await listWaitingRuns({
+    const { runs } = await listWaitingRuns({
       fleet: () => snapshot([row({ runId: "a", agentState: "waiting", spawnedAt: 100 })]),
       pty: () => ptyAt(200),
       projectName: () => null,
@@ -89,13 +103,13 @@ describe("listWaitingRuns", () => {
   it("drops a run that stopped waiting while its screen was read", async () => {
     screens.set("a", "❯ 1. Yes\n  2. No\n\n Esc to cancel");
     let reads = 0;
-    const runs = await listWaitingRuns({
+    const listed = await listWaitingRuns({
       fleet: () =>
         snapshot([row({ runId: "a", agentState: reads++ === 0 ? "waiting" : "working" })]),
       pty: () => ptyAt(100),
       projectName: () => null,
     });
-    expect(runs).toEqual([]);
+    expect(listed).toEqual({ runs: [], omitted: [], waiting: 0 });
   });
 
   it("redacts secrets from the screen, the title and each option before they leave", async () => {
@@ -110,7 +124,7 @@ describe("listWaitingRuns", () => {
         " Esc to cancel",
       ].join("\n")
     );
-    const runs = await listWaitingRuns({
+    const { runs } = await listWaitingRuns({
       fleet: () =>
         snapshot([row({ runId: "a", agentState: "waiting", title: "deploy password=hunter22" })]),
       pty: () => ptyAt(100),
@@ -136,7 +150,7 @@ describe("listWaitingRuns", () => {
         " Esc to cancel",
       ].join("\n")
     );
-    const runs = await listWaitingRuns({
+    const { runs } = await listWaitingRuns({
       fleet: () => snapshot([row({ runId: "a", agentState: "waiting" })]),
       pty: () => ptyAt(100),
       projectName: () => null,
@@ -148,7 +162,7 @@ describe("listWaitingRuns", () => {
   it("offers no options when redacting lengthens one past what an answer may carry", async () => {
     const long = `${"x".repeat(181)} password=abc`;
     screens.set("a", ["❯ 1. Yes", `  2. ${long}`, "", " Esc to cancel"].join("\n"));
-    const runs = await listWaitingRuns({
+    const { runs } = await listWaitingRuns({
       fleet: () => snapshot([row({ runId: "a", agentState: "waiting" })]),
       pty: () => ptyAt(100),
       projectName: () => null,
@@ -169,7 +183,9 @@ describe("listWaitingRuns", () => {
       ].join("\n");
     const questionIdFor = async (screen: string | null) => {
       screens.set("a", screen);
-      const [run] = await listWaitingRuns({
+      const {
+        runs: [run],
+      } = await listWaitingRuns({
         fleet: () => snapshot([row({ runId: "a", agentState: "waiting" })]),
         pty: () => ptyAt(100),
         projectName: () => null,
@@ -187,7 +203,156 @@ describe("listWaitingRuns", () => {
   it("lists nothing when the fleet has no snapshot yet", async () => {
     expect(
       await listWaitingRuns({ fleet: () => null, pty: () => null, projectName: () => null })
-    ).toEqual([]);
+    ).toEqual({ runs: [], omitted: [], waiting: 0 });
+  });
+});
+
+const DIALOG = "❯ 1. Yes\n  2. No\n\n Esc to cancel";
+
+/** `count` runs waiting at their prompt, `idle-0` the longest; every screen draws a dialog. */
+function idleRuns(count: number, overrides: Partial<FleetRunRow> = {}): FleetRunRow[] {
+  return Array.from({ length: count }, (_, i) => {
+    screens.set(`idle-${i}`, DIALOG);
+    return row({
+      runId: `idle-${i}`,
+      agentState: "waiting",
+      waitingReason: "prompt",
+      since: i + 1,
+      ...overrides,
+    });
+  });
+}
+
+const readCount = () => vi.mocked(readPluginTerminalScreen).mock.calls.length;
+
+describe("listWaitingRuns past the screens it reads", () => {
+  it("names a run the cap left unread and counts it, and reads it when the device picks it", async () => {
+    const rows = idleRuns(MAX_LISTED_RUNS + 1);
+    const deps = { fleet: () => snapshot(rows), pty: () => ptyAt(100), projectName: () => "web" };
+
+    const first = await listWaitingRuns(deps);
+    expect(readCount()).toBe(MAX_LISTED_RUNS);
+    expect(first.runs).toHaveLength(MAX_LISTED_RUNS);
+    expect(first.waiting).toBe(MAX_LISTED_RUNS + 1);
+    expect(first.omitted).toEqual([
+      {
+        runId: "idle-20",
+        spawnedAt: 100,
+        project: "web",
+        title: null,
+        agentId: null,
+        agentState: "waiting",
+        waitingReason: "prompt",
+        since: 21,
+        parked: false,
+        snoozed: false,
+      },
+    ]);
+
+    vi.mocked(readPluginTerminalScreen).mockClear();
+    const picked = await listWaitingRuns(deps, { read: { runId: "idle-20", spawnedAt: 100 } });
+    expect(readCount()).toBe(MAX_LISTED_RUNS);
+    const reached = picked.runs.find((run) => run.runId === "idle-20");
+    expect(reached).toMatchObject({ choices: ["Yes", "No"], spawnedAt: 100 });
+    expect(reached!.questionId).not.toBeNull();
+    // The slot it took is the least pressing run's, which is named instead.
+    expect(picked.omitted.map((run) => run.runId)).toEqual(["idle-19"]);
+    expect(picked.waiting).toBe(MAX_LISTED_RUNS + 1);
+  });
+
+  it("reads a newer approval ahead of twenty agents idle at their prompt", async () => {
+    screens.set("approval", DIALOG);
+    const rows = [
+      ...idleRuns(MAX_LISTED_RUNS),
+      row({ runId: "approval", agentState: "waiting", waitingReason: "approval", since: 1_000 }),
+    ];
+    const { runs, omitted } = await listWaitingRuns({
+      fleet: () => snapshot(rows),
+      pty: () => ptyAt(100),
+      projectName: () => null,
+    });
+    expect(runs[0]).toMatchObject({ runId: "approval", choices: ["Yes", "No"] });
+    expect(omitted.map((run) => run.runId)).toEqual([`idle-${MAX_LISTED_RUNS - 1}`]);
+  });
+
+  it("reads what asks something before what's set aside, and both before hand-backs", async () => {
+    const asks = (runId: string, extra: Partial<FleetRunRow>) =>
+      row({ runId, agentState: "waiting", since: 50, ...extra });
+    const rows = [
+      ...idleRuns(MAX_LISTED_RUNS - 3),
+      asks("question-snoozed", { waitingReason: "question", snooze: {} as never }),
+      asks("error", { waitingReason: "error", since: 90 }),
+      asks("approval-parked", { waitingReason: "approval", park: {} as never }),
+      asks("no-reason", { since: 0 }),
+      asks("idle-parked", { waitingReason: "prompt", since: 0, park: {} as never }),
+    ];
+    const { runs, omitted } = await listWaitingRuns({
+      fleet: () => snapshot(rows),
+      pty: () => ptyAt(100),
+      projectName: () => null,
+    });
+    expect(runs.slice(0, 4).map((run) => run.runId)).toEqual([
+      "error",
+      "approval-parked",
+      "question-snoozed",
+      // No reason given is a hand-back, the longest waiting of them first.
+      "no-reason",
+    ]);
+    // A hand-back parked comes after every hand-back left in front.
+    expect(omitted.map((run) => run.runId)).toEqual([
+      `idle-${MAX_LISTED_RUNS - 4}`,
+      "idle-parked",
+    ]);
+  });
+
+  it("counts no unread run that stopped waiting, and no run that started while screens were read", async () => {
+    const rows = idleRuns(MAX_LISTED_RUNS + 2);
+    let reads = 0;
+    const { runs, omitted, waiting } = await listWaitingRuns({
+      fleet: () =>
+        snapshot(
+          reads++ === 0
+            ? rows
+            : [
+                ...rows.filter((r) => r.runId !== "idle-21"),
+                row({ runId: "idle-21", agentState: "working" }),
+                row({ runId: "new", agentState: "waiting", waitingReason: "approval" }),
+              ]
+        ),
+      pty: () => ptyAt(100),
+      projectName: () => null,
+    });
+    expect(runs).toHaveLength(MAX_LISTED_RUNS);
+    expect(omitted.map((run) => run.runId)).toEqual(["idle-20"]);
+    expect(waiting).toBe(MAX_LISTED_RUNS + 1);
+  });
+
+  it("reads nothing ahead for a pick whose id was respawned or that isn't waiting", async () => {
+    const rows = idleRuns(MAX_LISTED_RUNS + 1);
+    const deps = { fleet: () => snapshot(rows), pty: () => ptyAt(100), projectName: () => null };
+    for (const read of [
+      { runId: "idle-20", spawnedAt: 99 },
+      { runId: "elsewhere", spawnedAt: 100 },
+    ]) {
+      const { omitted } = await listWaitingRuns(deps, { read });
+      expect(omitted.map((run) => run.runId)).toEqual(["idle-20"]);
+    }
+  });
+
+  it("names unread runs with secrets redacted and no screen, and counts past the ones it names", async () => {
+    const rows = idleRuns(MAX_LISTED_RUNS + MAX_OMITTED_RUNS + 5, {
+      title: "deploy password=hunter22",
+    });
+    const { omitted, waiting } = await listWaitingRuns({
+      fleet: () => snapshot(rows),
+      pty: () => ptyAt(100),
+      projectName: () => null,
+    });
+    expect(readCount()).toBe(MAX_LISTED_RUNS);
+    expect(omitted).toHaveLength(MAX_OMITTED_RUNS);
+    expect(waiting).toBe(MAX_LISTED_RUNS + MAX_OMITTED_RUNS + 5);
+    expect(omitted[0]!.title).toBe("deploy password=[redacted]");
+    expect(JSON.stringify(omitted)).not.toMatch(/hunter22|questionId|choices|screen/);
   });
 });
 

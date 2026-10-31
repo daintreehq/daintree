@@ -432,4 +432,145 @@ describe("the paired device's page", () => {
       "Couldn't read the waiting agents on Mini."
     );
   });
+
+  /** A run as listed past the cap: no screen, no options, no question. */
+  const unreadRun = (overrides: Record<string, unknown>) => {
+    const { screen: _screen, choices: _choices, questionId: _questionId, ...rest } = run(overrides);
+    return rest;
+  };
+  const here = { hostId: "local", host: "greg-studio" };
+  /** Three runs waiting on this computer, the third left unread by the cap. */
+  const capped = () => ({
+    computer: "greg-studio",
+    runs: [run(here), run({ ...here, runId: "run-2", project: "api" })],
+    omitted: [unreadRun({ ...here, runId: "run-3", project: "docs", waitingReason: "prompt" })],
+    coverage: [{ ...here, listed: 2, waiting: 3 }],
+    hosts: [],
+  });
+  const CUT = "Showing 2 of 3 waiting agents on greg-studio. Pick one under Others waiting to read its screen.";
+  const live = () => document.getElementById("announce")!.textContent;
+  const count = () => document.getElementById("count")!.textContent;
+  const notes = () => document.getElementById("hosts")!;
+
+  it("says how many of a machine's waiting agents it shows, counts them all, and tells a screen reader", async () => {
+    await openPage(capped());
+    await vi.advanceTimersByTimeAsync(60);
+    expect(notes().hidden).toBe(false);
+    expect(notes().textContent).toBe(CUT);
+    expect(count()).toBe("3");
+    expect(live()).toBe(CUT);
+    expect(emptyText()).toBeNull();
+    const more = document.getElementById("more")!;
+    expect(more.hidden).toBe(false);
+    expect(more.querySelector(".other .project")!.textContent).toBe("docs");
+    expect(more.querySelector(".other .meta")!.textContent).toBe("Waiting for input");
+
+    // The same cut read again isn't said again; a different one is.
+    document.getElementById("announce")!.textContent = "";
+    await vi.advanceTimersByTimeAsync(3000 + 60);
+    expect(live()).toBe("");
+  });
+
+  it("says it again when the cut changes", async () => {
+    const waiting = capped();
+    await openPage(waiting);
+    waiting.coverage = [{ ...here, listed: 2, waiting: 4 }];
+    await vi.advanceTimersByTimeAsync(3000 + 60);
+    expect(live()).toBe(
+      "Showing 2 of 4 waiting agents on greg-studio. Pick one under Others waiting to read its screen. 1 more isn't listed."
+    );
+    expect(count()).toBe("4");
+  });
+
+  it("never says it's up to date over a list that was cut", async () => {
+    await openPage(capped());
+    waitingReply = "pending";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(500);
+    expect(live()).toContain("Checking for changes");
+    settlePending("ok");
+    await vi.advanceTimersByTimeAsync(60);
+    expect(live()).toBe("Up to date. " + CUT);
+  });
+
+  it("reads the run picked from the others on every read, moving focus to its card, until it stops waiting", async () => {
+    const waiting = capped();
+    await openPage(waiting);
+    const show = document.querySelector<HTMLButtonElement>("#others button")!;
+    expect(show.textContent).toBe("Show its screen");
+    show.focus();
+    // Read first, the picked run takes the slot of the least pressing one.
+    waiting.runs = [run(here), run({ ...here, runId: "run-3", project: "docs" })];
+    waiting.omitted = [unreadRun({ ...here, runId: "run-2", project: "api" })];
+    show.click();
+    expect(show.textContent).toBe("Reading its screen…");
+    expect(show.getAttribute("aria-disabled")).toBe("true");
+    await vi.advanceTimersByTimeAsync(0);
+    const asked = sent.at(-1)!.path;
+    expect(asked.startsWith("/api/waiting?hosts=1&read=")).toBe(true);
+    expect(JSON.parse(decodeURIComponent(asked.split("read=")[1]!))).toEqual({
+      hostId: "local",
+      runId: "run-3",
+      spawnedAt: 100,
+    });
+    const card = [...document.querySelectorAll(".run")].find(
+      (candidate) => candidate.querySelector(".project")!.textContent === "docs"
+    )!;
+    expect(card.querySelector("pre")!.textContent).toContain("Yes");
+    expect(document.activeElement).toBe(card.querySelector(".project"));
+    expect(document.querySelector("#others .project")!.textContent).toBe("api");
+
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(sent.at(-1)!.path).toBe(asked);
+
+    // Listed nowhere once it stops waiting, so the next read asks for it no more.
+    waiting.runs = [run(here)];
+    waiting.omitted = [unreadRun({ ...here, runId: "run-2", project: "api" })];
+    waiting.coverage = [{ ...here, listed: 1, waiting: 2 }];
+    await vi.advanceTimersByTimeAsync(3000);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(sent.at(-1)!.path).toBe("/api/waiting?hosts=1");
+  });
+
+  it("never says a run pushed past the cap stopped waiting", async () => {
+    const waiting = capped();
+    await openPage(waiting, async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    const second = [...document.querySelectorAll(".run")][1]!;
+    waiting.runs = [run(here), run({ ...here, runId: "run-3", project: "docs" })];
+    waiting.omitted = [unreadRun({ ...here, runId: "run-2", project: "api" })];
+    button(second, "Yes").click();
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = second.querySelector(".result")!.textContent;
+    expect(result).toContain("It's still waiting, listed under Others waiting without its screen.");
+    expect(result).not.toContain("isn't listed as waiting");
+  });
+
+  it("never calls a host that can't say how many wait there complete", async () => {
+    const old = { hostId: "old", host: "Old" };
+    const waiting = {
+      computer: "greg-studio",
+      runs: [run(here)],
+      omitted: [],
+      coverage: [
+        { ...here, listed: 1, waiting: 1 },
+        { ...old, listed: 0, waiting: null },
+      ],
+      hosts: [{ ...old, status: "ok" }],
+    };
+    await openPage(waiting);
+    expect(notes().textContent).toBe(
+      "Old runs an older Daintree that doesn't say whether more agents are waiting there than are shown. Update it there to see them all."
+    );
+    expect(count()).toBe("1+");
+
+    waiting.runs = [];
+    waiting.coverage = [
+      { ...here, listed: 0, waiting: 0 },
+      { ...old, listed: 0, waiting: null },
+    ];
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(emptyText()).toBe("No agent is waiting on greg-studio.");
+  });
 });

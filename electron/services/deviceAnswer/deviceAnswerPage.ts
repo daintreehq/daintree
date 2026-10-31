@@ -443,7 +443,7 @@ const SCRIPT = String.raw`
       "Showing " + machine.listed + " of " + machine.waiting + " waiting agents on ",
       machine.host,
       "." + (named ? " Pick one under Others waiting to read its screen." : "")
-        + (unnamed > 0 ? " " + unnamed + " more aren't listed." : ""),
+        + (unnamed === 1 ? " 1 more isn't listed." : unnamed > 1 ? " " + unnamed + " more aren't listed." : ""),
     ]];
   });
 

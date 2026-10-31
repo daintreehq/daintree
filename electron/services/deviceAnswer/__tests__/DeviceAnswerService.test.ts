@@ -92,10 +92,12 @@ async function setup(overrides: Partial<DeviceAnswerSettings> = {}) {
     { hostId: "studio-03", host: "studio-03", status: "ok" },
     { hostId: "mini", host: "Mini", status: "not-connected" },
   ];
-  const listWaiting = vi.fn(async (_options: { hosts: boolean }): Promise<DeviceWaitingList> => ({
-    runs: [RUN],
-    hosts,
-  }));
+  const listWaiting = vi.fn(
+    async (_options: Parameters<DeviceAnswerServiceDeps["listWaiting"]>[0]): Promise<DeviceWaitingList> => ({
+      runs: [RUN],
+      hosts,
+    })
+  );
   const onStatusChanged = vi.fn();
   const service = new DeviceAnswerService({
     readSettings: () => settings,
@@ -207,7 +209,7 @@ describe("DeviceAnswerService", () => {
       headers: { ...api, Authorization: `Bearer ${token}` },
     });
     expect(waiting.status).toBe(200);
-    expect(listWaiting).toHaveBeenLastCalledWith({ hosts: true });
+    expect(listWaiting).toHaveBeenLastCalledWith({ hosts: true, read: null });
     expect(waiting.json().runs).toEqual([RUN]);
     expect(waiting.json().hosts).toEqual([
       { hostId: "studio-03", host: "studio-03", status: "ok" },
@@ -220,13 +222,65 @@ describe("DeviceAnswerService", () => {
     const unlisted = await request(port(), "GET", "/api/waiting?hosts=1", {
       headers: { ...api, Authorization: `Bearer ${token}` },
     });
-    expect(unlisted.json()).toEqual({ runs: [RUN], hosts: [], hostsUnlisted: true });
+    expect(unlisted.json()).toEqual({
+      runs: [RUN],
+      omitted: [],
+      coverage: [],
+      hosts: [],
+      hostsUnlisted: true,
+    });
 
     // A page from before hosts were listed would answer theirs as this machine's.
     await request(port(), "GET", "/api/waiting", {
       headers: { ...api, Authorization: `Bearer ${token}` },
     });
-    expect(listWaiting).toHaveBeenLastCalledWith({ hosts: false });
+    expect(listWaiting).toHaveBeenLastCalledWith({ hosts: false, read: null });
+  });
+
+  it("reads the run a device picked first, and refuses a pick it can't understand before reading any", async () => {
+    const { service, port, api, pair, listWaiting } = await setup();
+    await service.setEnabled({ enabled: true });
+    const token = await pair();
+    const get = (query: string) =>
+      request(port(), "GET", `/api/waiting${query}`, {
+        headers: { ...api, Authorization: `Bearer ${token}` },
+      });
+    const pick = (value: unknown) => `read=${encodeURIComponent(JSON.stringify(value))}`;
+
+    const { runId: _runId, spawnedAt: _spawnedAt, screen: _s, choices: _c, questionId: _q, ...rest } =
+      RUN;
+    const omitted = [{ ...rest, runId: "run-2", spawnedAt: 100 }];
+    const coverage = [{ hostId: "local", host: "greg-studio", listed: 1, waiting: 2 }];
+    listWaiting.mockResolvedValueOnce({ runs: [RUN], omitted, coverage, hosts: [] });
+    const picked = await get(`?hosts=1&${pick({ hostId: "local", runId: "run-2", spawnedAt: 100 })}`);
+    expect(picked.status).toBe(200);
+    expect(listWaiting).toHaveBeenLastCalledWith({
+      hosts: true,
+      read: { hostId: "local", runId: "run-2", spawnedAt: 100 },
+    });
+    expect(picked.json()).toMatchObject({ omitted, coverage });
+
+    await get(`?hosts=1&${pick({ hostId: "studio-03", runId: "run-2", spawnedAt: 100 })}`);
+    expect(listWaiting).toHaveBeenLastCalledWith({
+      hosts: true,
+      read: { hostId: "studio-03", runId: "run-2", spawnedAt: 100 },
+    });
+    // A page that isn't shown hosts' runs can't pick one.
+    await get(`?${pick({ hostId: "studio-03", runId: "run-2", spawnedAt: 100 })}`);
+    expect(listWaiting).toHaveBeenLastCalledWith({ hosts: false, read: null });
+
+    const calls = listWaiting.mock.calls.length;
+    for (const query of [
+      "?hosts=1&read=not-json",
+      `?hosts=1&${pick({ hostId: "local", runId: "", spawnedAt: 100 })}`,
+      `?hosts=1&${pick({ hostId: "local", runId: "run-2" })}`,
+      `?hosts=1&${pick({ hostId: "has:colon", runId: "run-2", spawnedAt: 100 })}`,
+      `?hosts=1&${pick({ hostId: "local", runId: "x".repeat(257), spawnedAt: 100 })}`,
+      `?hosts=1&${pick({ hostId: "local", runId: "a", spawnedAt: 1 })}&${pick({ hostId: "local", runId: "b", spawnedAt: 1 })}`,
+    ]) {
+      expect((await get(query)).status).toBe(400);
+    }
+    expect(listWaiting).toHaveBeenCalledTimes(calls);
   });
 
   it("refuses a wrong code, and a code that was used", async () => {
