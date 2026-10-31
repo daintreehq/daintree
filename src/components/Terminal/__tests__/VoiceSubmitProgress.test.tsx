@@ -160,7 +160,10 @@ describe("voiceSubmitWaitStatus", () => {
     );
     // Only the transcript holds it: nothing sends it sooner.
     expect(
-      voiceSubmitWaitStatus({ ...finishing, byStopAndSend: true }, { ...ELSEWHERE, skip: SKIP_COMBO })
+      voiceSubmitWaitStatus(
+        { ...finishing, byStopAndSend: true },
+        { ...ELSEWHERE, skip: SKIP_COMBO }
+      )
     ).toBe("Finishing dictation.");
   });
 });
