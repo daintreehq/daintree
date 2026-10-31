@@ -46,6 +46,7 @@ const appMock = vi.hoisted(() => ({
 }));
 
 const mockBroadcastToRenderer = vi.hoisted(() => vi.fn());
+const mockSendToOneVisibleRenderer = vi.hoisted(() => vi.fn());
 const mockBroadcastToVisibleRenderers = vi.hoisted(() => vi.fn());
 const mockGetAllWindows = vi.hoisted(() => vi.fn<() => unknown[]>(() => []));
 
@@ -66,6 +67,7 @@ vi.mock("../../utils/soundPlayer.js", () => ({
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: mockBroadcastToRenderer,
   broadcastToVisibleRenderers: mockBroadcastToVisibleRenderers,
+  sendToOneVisibleRenderer: mockSendToOneVisibleRenderer,
 }));
 
 const originalResourcesPath = process.resourcesPath;
@@ -124,14 +126,17 @@ describe("SoundService", () => {
 
   // -- Web Audio IPC routing --
 
-  it("routes sound:trigger to visible renderers only, never the global broadcast", () => {
-    mockGetAllWindows.mockReturnValue([{ id: 1 }]);
+  it("routes sound:trigger to one renderer, never a broadcast", () => {
+    mockGetAllWindows.mockReturnValue([{ id: 1 }, { id: 2 }]);
 
     soundService.preview("error");
 
-    expect(mockBroadcastToVisibleRenderers).toHaveBeenCalledWith("sound:trigger", {
+    expect(mockSendToOneVisibleRenderer).toHaveBeenCalledTimes(1);
+    expect(mockSendToOneVisibleRenderer).toHaveBeenCalledWith("sound:trigger", {
       soundFile: "error.wav",
     });
+    // A visible-only broadcast still reaches every window's shown view (#15682).
+    expect(mockBroadcastToVisibleRenderers).not.toHaveBeenCalled();
     expect(mockBroadcastToRenderer).not.toHaveBeenCalled();
     expect(mockPlaySound).not.toHaveBeenCalled();
   });
@@ -143,7 +148,7 @@ describe("SoundService", () => {
 
     expect(mockPlaySound).toHaveBeenCalled();
     expect(mockBroadcastToRenderer).not.toHaveBeenCalled();
-    expect(mockBroadcastToVisibleRenderers).not.toHaveBeenCalled();
+    expect(mockSendToOneVisibleRenderer).not.toHaveBeenCalled();
   });
 
   it("cancel sends sound:cancel IPC via broadcast when renderer windows exist", () => {
@@ -155,7 +160,8 @@ describe("SoundService", () => {
       name: "sound:cancel",
       payload: undefined,
     });
-    // Cancel must reach cached views too — see the WHY in SoundService.cancel().
+    // Cancel must reach cached views and every window — see the WHY in SoundService.cancel().
+    expect(mockSendToOneVisibleRenderer).not.toHaveBeenCalled();
     expect(mockBroadcastToVisibleRenderers).not.toHaveBeenCalled();
     expect(mockCancel).not.toHaveBeenCalled();
   });
@@ -201,21 +207,23 @@ describe("SoundService", () => {
 
     soundService.preview("chime");
 
-    expect(mockBroadcastToVisibleRenderers).toHaveBeenCalledWith("sound:trigger", {
+    expect(mockSendToOneVisibleRenderer).toHaveBeenCalledWith("sound:trigger", {
       soundFile: "chime.wav",
     });
   });
 
-  it("routes dampened sound:trigger to visible renderers only, never the global broadcast", () => {
-    mockGetAllWindows.mockReturnValue([{ id: 1 }]);
+  it("routes dampened sound:trigger to one renderer, never a broadcast", () => {
+    mockGetAllWindows.mockReturnValue([{ id: 1 }, { id: 2 }]);
 
     soundService.play("error");
 
-    expect(mockBroadcastToVisibleRenderers).toHaveBeenCalledWith("sound:trigger", {
+    expect(mockSendToOneVisibleRenderer).toHaveBeenCalledTimes(1);
+    expect(mockSendToOneVisibleRenderer).toHaveBeenCalledWith("sound:trigger", {
       soundFile: "error.wav",
       volume: 1,
     });
     // Catches an accidental dual-send, which the positive assertion alone would not.
+    expect(mockBroadcastToVisibleRenderers).not.toHaveBeenCalled();
     expect(mockBroadcastToRenderer).not.toHaveBeenCalled();
     expect(mockPlaySound).not.toHaveBeenCalled();
   });
@@ -237,7 +245,7 @@ describe("SoundService", () => {
 
     soundService.playPulse("pulse.wav", 12);
 
-    expect(mockBroadcastToVisibleRenderers).toHaveBeenCalledWith("sound:trigger", {
+    expect(mockSendToOneVisibleRenderer).toHaveBeenCalledWith("sound:trigger", {
       soundFile: "pulse.wav",
       detune: 12,
     });
@@ -249,7 +257,7 @@ describe("SoundService", () => {
 
     soundService.playPulse("pulse.wav");
 
-    expect(mockBroadcastToVisibleRenderers).toHaveBeenCalledWith("sound:trigger", {
+    expect(mockSendToOneVisibleRenderer).toHaveBeenCalledWith("sound:trigger", {
       soundFile: "pulse.wav",
     });
   });
@@ -259,7 +267,7 @@ describe("SoundService", () => {
 
     soundService.playPulse("pulse.wav", 0);
 
-    expect(mockBroadcastToVisibleRenderers).toHaveBeenCalledWith("sound:trigger", {
+    expect(mockSendToOneVisibleRenderer).toHaveBeenCalledWith("sound:trigger", {
       soundFile: "pulse.wav",
       detune: 0,
     });
@@ -271,7 +279,7 @@ describe("SoundService", () => {
     soundService.playPulse("pulse.wav", 12);
 
     expect(mockBroadcastToRenderer).not.toHaveBeenCalled();
-    expect(mockBroadcastToVisibleRenderers).not.toHaveBeenCalled();
+    expect(mockSendToOneVisibleRenderer).not.toHaveBeenCalled();
     expect(mockPlaySound).toHaveBeenCalledWith(expect.stringContaining("pulse.wav"));
     expect(mockPlaySound.mock.calls[0][1]).toBeUndefined();
   });

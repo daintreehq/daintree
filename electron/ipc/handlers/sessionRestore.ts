@@ -1,6 +1,7 @@
 // eager-import-allow: reads the session-restore preference via store.get so settings replies use the same default-on rule as startup
 import { store } from "../../store.js";
 import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
+import { markViewHydrated } from "../../window/viewHydration.js";
 import type { SessionRestoreConfig } from "../../../shared/types/ipc/sessionRestore.js";
 import type { HandlerDependencies } from "../types.js";
 import { defineIpcNamespace, op } from "../define.js";
@@ -45,6 +46,7 @@ export function registerSessionRestoreHandlers(deps: HandlerDependencies): () =>
           // A view attached over a link is restored by its own Shell; nothing
           // on this host is waiting on it.
           if (ctx.event === null) return;
+          markViewHydrated(ctx.event.sender);
           const senderWindow = getWindowForWebContents(ctx.event.sender);
           const pvm =
             (senderWindow &&
