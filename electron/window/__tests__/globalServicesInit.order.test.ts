@@ -8,6 +8,7 @@ const registeredTaskRuns = new Map<string, () => unknown>();
 // Hoisted: the HelpSessionService mock factory now runs at import time
 // (globalServicesInit value-imports the singleton statically).
 const setMcpRegistry = vi.hoisted(() => vi.fn());
+const dbMaintenanceCalls = vi.hoisted(() => [] as string[]);
 const setProjectMetadataReader = vi.hoisted(() => vi.fn());
 let migrationCurrentVersion = 1;
 let migrationShouldThrow = false;
@@ -203,9 +204,13 @@ vi.mock("../../services/SystemSleepService.js", () => ({
 vi.mock("../../services/DatabaseMaintenanceService.js", () => ({
   getDatabaseMaintenanceService: () => ({
     initialize: vi.fn(),
-    startMaintenance: vi.fn(),
+    startMaintenance: vi.fn(() => dbMaintenanceCalls.push("startMaintenance")),
     dispose: vi.fn(),
   }),
+}));
+
+vi.mock("../../services/databaseBackupNotice.js", () => ({
+  installDatabaseBackupNotice: vi.fn(() => dbMaintenanceCalls.push("installNotice")),
 }));
 
 vi.mock("../../services/TrashedPidTracker.js", () => ({
@@ -1141,6 +1146,16 @@ describe("initGlobalServices task ordering", () => {
     expect(sleepIndex).toBeGreaterThanOrEqual(0);
     expect(dbMaintIndex).toBeGreaterThanOrEqual(0);
     expect(dbMaintIndex).toBeGreaterThan(sleepIndex);
+  });
+
+  it("subscribes the backup-suspension notice before database maintenance can tick", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+    dbMaintenanceCalls.length = 0;
+
+    registeredTaskRuns.get("database-maintenance")!();
+
+    expect(dbMaintenanceCalls).toEqual(["installNotice", "startMaintenance"]);
   });
 
   it("plugin-service task swaps in the live plugin:// resolver (#10322)", async () => {
