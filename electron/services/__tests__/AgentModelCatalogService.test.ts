@@ -230,6 +230,21 @@ describe("AgentModelCatalogService", () => {
     expect(result.models.map((m) => m.id)).not.toContain("gemini-2.5-pro");
   });
 
+  it("serves Copilot's bundled list untouched, since models.dev can't speak for a multi-provider CLI", async () => {
+    const service = new AgentModelCatalogService({
+      cachePath,
+      fetchImpl: mockFetch({
+        ...makeCatalog(),
+        copilot: { models: { "copilot-remote-only": chatModel("Copilot Remote Only", 128_000) } },
+      }),
+    });
+
+    const result = await service.getResolvedModels("copilot");
+
+    expect(result.models).toEqual(getEffectiveAgentConfig("copilot")!.models);
+    expect(result.source).toBe("bundled");
+  });
+
   it("falls back to bundled when fetch fails", async () => {
     const fetchImpl = mockFailingFetch(new Error("network down"));
     const service = new AgentModelCatalogService({ cachePath, fetchImpl });
