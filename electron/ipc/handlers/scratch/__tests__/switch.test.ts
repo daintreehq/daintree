@@ -387,10 +387,13 @@ describe("scratch:switch claims the scratch until the switch commits", () => {
       settle = () => (lands ? resolve({ view: null }) : reject(new Error("swap failed")));
     });
     const claimedAtCommit: string[][] = [];
-    scratchStoreMock.setCurrentScratch.mockImplementationOnce((id: string) => {
-      claimedAtCommit.push(getAllPendingActivationIds());
-      return { id, path: `/tmp/${id}` };
-    });
+    // Only a landed swap commits, so only it may queue a one-shot the next test would inherit.
+    if (lands) {
+      scratchStoreMock.setCurrentScratch.mockImplementationOnce((id: string) => {
+        claimedAtCommit.push(getAllPendingActivationIds());
+        return { id, path: `/tmp/${id}` };
+      });
+    }
     const deps = {
       mainWindow: { id: 82 },
       projectViewManager: { setPendingFocusIntent: vi.fn(), switchTo: vi.fn(() => swap) },
