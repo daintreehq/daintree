@@ -21,6 +21,7 @@ import {
 import { UserAgentConfigSchema } from "../../types/userAgentRegistry.js";
 import { buildResumeCommand, buildResumeLatestCommand } from "../../types/agentSettings.js";
 import { BUILT_IN_AGENT_IDS } from "../agentIds.js";
+import { isSensitiveEnvKey } from "../../utils/envVars.js";
 
 describe("agentRegistry", () => {
   beforeEach(() => {
@@ -1246,28 +1247,44 @@ describe("claude providerTemplates descriptions", () => {
   });
 });
 
-// #15570: Claude Code speaks only the Anthropic Messages API and appends
-// `/v1/messages` to ANTHROPIC_BASE_URL itself, so a template aimed at an
+// #15570: Claude Code speaks only the Anthropic Messages API and posts to
+// `/v1/messages` under ANTHROPIC_BASE_URL, so a template aimed at an
 // OpenAI-style `/v1` surface creates a preset that can't reach the model.
 describe("claude providerTemplates endpoints and credentials", () => {
   const templates = getAgentConfig("claude")?.providerTemplates ?? [];
   const routed = templates.flatMap((t) =>
     t.env?.ANTHROPIC_BASE_URL !== undefined
-      ? [{ id: t.id, env: t.env, base: new URL(t.env.ANTHROPIC_BASE_URL) }]
+      ? [{ id: t.id, env: t.env, base: t.env.ANTHROPIC_BASE_URL }]
       : []
   );
-  const isLoopback = (base: URL) => ["localhost", "127.0.0.1", "[::1]"].includes(base.hostname);
-  const local = routed.filter((t) => isLoopback(t.base));
-  const remote = routed.filter((t) => !isLoopback(t.base));
+  const isLoopback = (base: string) =>
+    ["localhost", "127.0.0.1", "[::1]"].includes(new URL(base).hostname);
+  const credentials = (env: Record<string, string> = {}) =>
+    Object.entries(env).filter(([key]) => isSensitiveEnvKey(key));
+  const messagesUrl = (base: string) => `${base.replace(/\/+$/, "")}/v1/messages`;
 
-  it("has both remote and local routed templates to check", () => {
-    expect(remote.length).toBeGreaterThan(0);
-    expect(local.length).toBeGreaterThan(0);
-  });
+  // Each provider's published Claude Code setup: the Messages endpoint it
+  // serves, and whether its guide blanks an inherited ANTHROPIC_API_KEY.
+  it.each([
+    ["zai", "https://api.z.ai/api/anthropic/v1/messages", false],
+    ["openrouter", "https://openrouter.ai/api/v1/messages", true],
+    ["deepseek", "https://api.deepseek.com/anthropic/v1/messages", false],
+    ["ollama", "http://localhost:11434/v1/messages", true],
+  ] as const)(
+    "%s posts to its provider's documented Messages endpoint",
+    (id, endpoint, blanksApiKey) => {
+      const env = templates.find((t) => t.id === id)?.env ?? {};
+      expect(env.ANTHROPIC_BASE_URL).toBeDefined();
+      expect(messagesUrl(env.ANTHROPIC_BASE_URL ?? "")).toBe(endpoint);
+      expect(env).toHaveProperty("ANTHROPIC_AUTH_TOKEN");
+      expect(env.ANTHROPIC_API_KEY).toBe(blanksApiKey ? "" : undefined);
+    }
+  );
 
-  it("never points ANTHROPIC_BASE_URL at a /v1 path", () => {
+  it("never points a routed template at a /v1 base", () => {
+    expect(routed.length).toBeGreaterThan(0);
     for (const t of routed) {
-      const segments = t.base.pathname.split("/").filter(Boolean);
+      const segments = new URL(t.base).pathname.split("/").filter(Boolean);
       expect(segments, t.id).not.toContain("v1");
     }
   });
@@ -1285,25 +1302,26 @@ describe("claude providerTemplates endpoints and credentials", () => {
   });
 
   it("carries the credential variable on every routed template", () => {
-    for (const t of routed) expect(Object.keys(t.env), t.id).toContain("ANTHROPIC_AUTH_TOKEN");
+    for (const t of routed) expect(t.env, t.id).toHaveProperty("ANTHROPIC_AUTH_TOKEN");
   });
 
-  it("ships no secret: remote templates leave every credential blank", () => {
-    for (const t of remote) {
-      expect(t.env.ANTHROPIC_AUTH_TOKEN, t.id).toBe("");
-      if ("ANTHROPIC_API_KEY" in t.env) expect(t.env.ANTHROPIC_API_KEY, t.id).toBe("");
+  it("ships no secret: every non-local template leaves its credentials blank", () => {
+    for (const t of templates) {
+      const base = t.env?.ANTHROPIC_BASE_URL;
+      if (base !== undefined && isLoopback(base)) continue;
+      for (const [key, value] of credentials(t.env)) expect(value, `${t.id} ${key}`).toBe("");
     }
   });
 
-  it("gives a local server a placeholder token, so it launches without a key", () => {
+  it("gives a local server a placeholder word as its token, never an issued key", () => {
+    const local = routed.filter((t) => isLoopback(t.base));
+    expect(local.length).toBeGreaterThan(0);
     for (const t of local) {
-      expect(t.env.ANTHROPIC_AUTH_TOKEN, t.id).toBeTruthy();
-      expect(t.env.ANTHROPIC_API_KEY, t.id).toBe("");
+      expect(t.env.ANTHROPIC_AUTH_TOKEN, t.id).toMatch(/^[a-z]{1,16}$/);
+      for (const [key, value] of credentials(t.env)) {
+        expect(value, `${t.id} ${key}`).toMatch(/^[a-z]{0,16}$/);
+      }
     }
-  });
-
-  it("blanks an inherited ANTHROPIC_API_KEY where the provider's guide does", () => {
-    expect(templates.find((t) => t.id === "openrouter")?.env?.ANTHROPIC_API_KEY).toBe("");
   });
 });
 

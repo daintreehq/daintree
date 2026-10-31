@@ -667,6 +667,26 @@ describe("EnvVarEditor", () => {
       expect(onChange).toHaveBeenLastCalledWith({ LOCAL_ONLY: "" });
     });
 
+    it("tabbing through a blank override the preset already holds keeps it blank", () => {
+      // #15570: provider templates blank an inherited ANTHROPIC_API_KEY on
+      // purpose; passing through the field must not hand the key back.
+      const { getAllByTestId } = render(
+        <EnvVarEditor
+          env={{ API_KEY: "" }}
+          onChange={onChange}
+          inheritedEnv={{ API_KEY: "from-global" }}
+        />
+      );
+
+      fireEvent.focus(getAllByTestId("env-editor-value")[0]!);
+      fireEvent.blur(getAllByTestId("env-editor-value")[0]!);
+
+      const valueInput = getAllByTestId("env-editor-value")[0] as HTMLInputElement;
+      expect(valueInput.value).toBe("");
+      expect(valueInput.disabled).toBe(false);
+      expect(onChange).not.toHaveBeenCalledWith({});
+    });
+
     it("Remove on an override that shadows an inherited key reverts to inherited (preserves row)", () => {
       const { getAllByTestId, queryAllByTestId } = render(
         <EnvVarEditor
