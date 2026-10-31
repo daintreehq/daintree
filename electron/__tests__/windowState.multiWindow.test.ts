@@ -445,6 +445,32 @@ describe("windows on a host's project or a scratch", () => {
     expect(fakes.store.state.__legacy__).toMatchObject({ x: 640 });
   });
 
+  it("stops saving under a host's project once the picker gives up waiting for it", () => {
+    const hostBounds = { x: 900, y: 0, width: 1000, height: 700, isMaximized: false };
+    fakes.store.state = { [ON_BUILD_BOX]: hostBounds };
+    // Not registered yet when created, so it names nothing until the restore is noted.
+    const shown = { key: null as string | null };
+    const listeners: Array<() => void> = [];
+    const win = open(ON_BUILD_BOX, {
+      getShownBoundsKey: () => shown.key,
+      onShownProjectChange: (listener) => {
+        listeners.push(listener);
+        return () => {};
+      },
+    });
+
+    shown.key = ON_BUILD_BOX;
+    for (const listener of listeners) listener();
+    // The host's project is open in another window, so this one stays a picker.
+    shown.key = null;
+    for (const listener of listeners) listener();
+    win.bounds = { ...win.bounds, x: 40 };
+    win.emit("close");
+
+    expect(fakes.store.state[ON_BUILD_BOX]).toEqual(hostBounds);
+    expect(fakes.store.state.__legacy__).toMatchObject({ x: 40 });
+  });
+
   it("stops saving under a removed host's project from a window that never showed it", () => {
     const win = open(ON_BUILD_BOX, { getShownBoundsKey: () => null });
 
