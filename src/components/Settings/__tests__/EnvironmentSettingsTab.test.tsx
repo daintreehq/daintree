@@ -234,9 +234,7 @@ describe("EnvironmentSettingsTab close-time save", () => {
     expect(failed[0]!.tab).toBe("environment");
     const landing = document.getElementById(failed[0]!.landOn);
     expect(landing?.contains(badName)).toBe(true);
-    expect(landing?.contains(screen.getAllByLabelText(/^Name of variable \d+$/)[0]!)).toBe(
-      false
-    );
+    expect(landing?.contains(screen.getAllByLabelText(/^Name of variable \d+$/)[0]!)).toBe(false);
     // The reason is on screen once the close has tried to save.
     expect(badName.getAttribute("aria-invalid")).toBe("true");
     expect(badName.value).toBe("1BAD");
