@@ -109,6 +109,42 @@ describe("linkDevPlugin", () => {
     expect(await fs.readlink(link.linkPath)).toBe(alias);
   });
 
+  it("takes back the link and marker it made when it can't read the link back", async () => {
+    const readlink = vi
+      .spyOn(fs, "readlink")
+      .mockRejectedValueOnce(Object.assign(new Error("i/o error"), { code: "EIO" }));
+    try {
+      await expect(
+        linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" })
+      ).rejects.toThrow(/i\/o/);
+    } finally {
+      readlink.mockRestore();
+    }
+    expect(await lstatSafe(path.join(pluginsRoot, "acme.demo"))).toBeNull();
+    expect(await lstatSafe(path.join(pluginDir, ".dev-marker"))).toBeNull();
+  });
+
+  it("gives up, leaving the other link alone, when relinked while it reads the link", async () => {
+    const otherDir = path.join(tmpDir, "other-worktree");
+    await fs.mkdir(otherDir, { recursive: true });
+    const linkPath = path.join(pluginsRoot, "acme.demo");
+    const realReadlink = fs.readlink.bind(fs);
+    const readlink = vi.spyOn(fs, "readlink").mockImplementationOnce(async (target) => {
+      await fs.unlink(linkPath);
+      await fs.symlink(otherDir, linkPath);
+      return realReadlink(target);
+    });
+    try {
+      await expect(
+        linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" })
+      ).rejects.toThrow(/relinked/);
+    } finally {
+      readlink.mockRestore();
+    }
+    expect(path.resolve(pluginsRoot, await fs.readlink(linkPath))).toBe(otherDir);
+    expect(await lstatSafe(path.join(pluginDir, ".dev-marker"))).toBeNull();
+  });
+
   it("creates no link when it can't write the marker", async () => {
     // A directory where the marker belongs makes the write fail.
     await fs.mkdir(path.join(pluginDir, ".dev-marker"));

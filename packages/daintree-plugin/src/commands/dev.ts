@@ -214,7 +214,7 @@ export async function linkDevPlugin(args: {
   // and a link that can't be made takes the marker back off.
   await claimDevMarker(pluginId, markerPath, sessionId);
 
-  let createdSymlink: boolean;
+  let createdSymlink = false;
   let linkTarget: string;
   let dirIdentity: DirIdentity | null;
   try {
@@ -245,7 +245,19 @@ export async function linkDevPlugin(args: {
     linkTarget = await fs.readlink(linkPath);
     dirIdentity = await directoryIdentity(pluginDir);
     if (!dirIdentity) throw new Error(`Can't dev-link "${pluginId}": ${pluginDir} is unreadable.`);
+    const reached = await directoryIdentity(linkPath);
+    if (!reached || !isSameIdentity(reached, dirIdentity)) {
+      // Another directory's session relinked it in between, so the text just
+      // read may be that session's.
+      throw new Error(
+        `Can't dev-link "${pluginId}": ${linkPath} was relinked to another directory meanwhile. Try again.`
+      );
+    }
   } catch (err) {
+    // Take back what this call made, link before marker as in cleanupDevLink.
+    if (createdSymlink && (await isSameDirectory(linkPath, pluginDir))) {
+      await fs.unlink(linkPath).catch(() => {});
+    }
     await removeOwnMarker(markerPath, sessionId).catch(() => {});
     throw err;
   }
