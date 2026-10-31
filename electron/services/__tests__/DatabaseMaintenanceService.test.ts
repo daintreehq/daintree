@@ -34,6 +34,9 @@ const mockDbModule = vi.hoisted(() => ({
     quarantinedPath: "/fake/daintree.db.corrupt-2026-01-01",
   }),
   closeSharedDb: vi.fn(),
+  isRecoveryPending: vi.fn().mockReturnValue(false),
+  markRecoveryPending: vi.fn(),
+  clearRecoveryPending: vi.fn(),
 }));
 
 // Worker unavailable in unit tests — runDbWork executes the fallback
@@ -116,6 +119,9 @@ describe("DatabaseMaintenanceService", () => {
     mockDbModule.probeDb.mockReturnValue(true);
     mockDbModule.probeDbFile.mockReturnValue("ok");
     mockDbModule.attemptRecovery.mockReturnValue(RESTORED_RECOVERY);
+    mockDbModule.isRecoveryPending.mockReturnValue(false);
+    mockDbModule.markRecoveryPending.mockImplementation(() => undefined);
+    mockDbModule.clearRecoveryPending.mockImplementation(() => undefined);
     mockSqlite.backup.mockResolvedValue(undefined);
     mockPowerMonitor.getSystemIdleTime.mockReturnValue(120);
     mockRunDbWork.mockImplementation((_op: unknown, fallback: () => unknown) =>
@@ -928,5 +934,230 @@ describe("DatabaseMaintenanceService", () => {
 
     expect(mockSqlite.backup).not.toHaveBeenCalled();
     expect(mockSqlite.pragma).not.toHaveBeenCalled();
+  });
+  describe("confirmed corruption across a clean restart", () => {
+    const DB_PATH = "/fake/daintree.db";
+    const CORRUPT_RESULT = "*** in database main *** Tree 3 page 37 cell 2: Offset 65535 out of range";
+    const RESET_RECOVERY = { kind: "reset-to-fresh" as const, quarantinedPath: "/fake/x.corrupt" };
+    let markerOnDisk: boolean;
+    let liveVerdict: "ok" | "corrupt" | "unknown";
+
+    beforeEach(() => {
+      // Back the marker helpers with one flag so a pending verdict written by
+      // one service instance is what the next instance's boot reads.
+      markerOnDisk = false;
+      mockDbModule.isRecoveryPending.mockImplementation(() => markerOnDisk);
+      mockDbModule.markRecoveryPending.mockImplementation(() => {
+        markerOnDisk = true;
+      });
+      mockDbModule.clearRecoveryPending.mockImplementation(() => {
+        markerOnDisk = false;
+      });
+      // Real SQLite: the cheap clean-exit open reads page 1 only, so page-level
+      // corruption passes it and only a full scan catches it.
+      mockDbModule.probeDb.mockImplementation((_dbPath: string, fullCheck = true) => !fullCheck);
+      liveVerdict = "corrupt";
+      mockDbModule.probeDbFile.mockImplementation((file: string) =>
+        file === DB_PATH ? liveVerdict : "ok"
+      );
+    });
+
+    function quickCheckReturns(result: string | Promise<string>): void {
+      mockRunDbWork.mockImplementation((op: unknown, fallback: () => unknown) =>
+        (op as { op: string }).op === "quickCheck"
+          ? Promise.resolve(result)
+          : Promise.resolve(fallback())
+      );
+    }
+
+    async function sessionThatConfirmsCorruption(): Promise<void> {
+      quickCheckReturns(CORRUPT_RESULT);
+      const session = new DatabaseMaintenanceService();
+      session.initialize(true);
+      session.startMaintenance();
+      vi.advanceTimersByTime(TICK);
+      await drainMicrotasks();
+      await session.dispose();
+      expect(mockSqlite.backup).not.toHaveBeenCalled();
+      expect(markerOnDisk).toBe(true);
+      mockRunDbWork.mockImplementation((_op: unknown, fallback: () => unknown) =>
+        Promise.resolve(fallback())
+      );
+      vi.clearAllMocks();
+    }
+
+    it.each([
+      ["restored from backup", RESTORED_RECOVERY],
+      ["reset to a fresh database", RESET_RECOVERY],
+    ])(
+      "runs the full check on the clean-exit boot after a session confirmed corruption, and clears it once %s",
+      async (_label, outcome) => {
+        await sessionThatConfirmsCorruption();
+        mockDbModule.attemptRecovery.mockReturnValue(outcome);
+
+        const nextBoot = new DatabaseMaintenanceService();
+        nextBoot.initialize(true);
+        nextBoot.startMaintenance();
+
+        expect(mockDbModule.probeDbFile).toHaveBeenCalledWith(DB_PATH);
+        expect(mockDbModule.probeDb).not.toHaveBeenCalled();
+        expect(mockDbModule.attemptRecovery).toHaveBeenCalledWith(DB_PATH);
+        expect(nextBoot.consumeRecovery()).toEqual(outcome);
+        expect(markerOnDisk).toBe(false);
+
+        // The recovered database backs up again, straight from the first idle tick.
+        vi.advanceTimersByTime(TICK);
+        await drainMicrotasks();
+        expect(quickCheckOps()).toHaveLength(0);
+        expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
+        await nextBoot.dispose();
+      }
+    );
+
+    it("keeps the pending state and backups suspended when recovery fails, and retries next launch", async () => {
+      await sessionThatConfirmsCorruption();
+      mockDbModule.attemptRecovery.mockReturnValue(null);
+
+      const failedBoot = new DatabaseMaintenanceService();
+      failedBoot.initialize(true);
+      failedBoot.startMaintenance();
+
+      expect(mockDbModule.attemptRecovery).toHaveBeenCalledTimes(1);
+      expect(failedBoot.consumeRecovery()).toBeNull();
+      expect(markerOnDisk).toBe(true);
+
+      // The corrupt database is still the live one: nothing may overwrite the backup.
+      vi.advanceTimersByTime(TICK);
+      await drainMicrotasks();
+      await failedBoot.dispose();
+      expect(mockSqlite.backup).not.toHaveBeenCalled();
+      expect(markerOnDisk).toBe(true);
+
+      mockDbModule.attemptRecovery.mockReturnValue(RESTORED_RECOVERY);
+      const retryBoot = new DatabaseMaintenanceService();
+      retryBoot.initialize(true);
+
+      expect(mockDbModule.attemptRecovery).toHaveBeenCalledTimes(2);
+      expect(retryBoot.consumeRecovery()).toEqual(RESTORED_RECOVERY);
+      expect(markerOnDisk).toBe(false);
+      await retryBoot.dispose();
+    });
+
+    it("clears the pending state and resumes backups when the full check finds the database healthy", async () => {
+      await sessionThatConfirmsCorruption();
+      liveVerdict = "ok";
+
+      const nextBoot = new DatabaseMaintenanceService();
+      nextBoot.initialize(true);
+      nextBoot.startMaintenance();
+
+      expect(mockDbModule.probeDbFile).toHaveBeenCalledWith(DB_PATH);
+      expect(mockDbModule.attemptRecovery).not.toHaveBeenCalled();
+      expect(nextBoot.consumeRecovery()).toBeNull();
+      expect(markerOnDisk).toBe(false);
+
+      // The boot already ran the full scan, so the first idle tick backs up directly.
+      vi.advanceTimersByTime(TICK);
+      await drainMicrotasks();
+      expect(quickCheckOps()).toHaveLength(0);
+      expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
+      await nextBoot.dispose();
+    });
+
+    it("neither recovers nor clears when the full check cannot verify the database", async () => {
+      await sessionThatConfirmsCorruption();
+      liveVerdict = "unknown";
+
+      const nextBoot = new DatabaseMaintenanceService();
+      nextBoot.initialize(true);
+      nextBoot.startMaintenance();
+
+      // An unreadable file is no grounds to quarantine it, nor proof it healed.
+      expect(mockDbModule.attemptRecovery).not.toHaveBeenCalled();
+      expect(nextBoot.consumeRecovery()).toBeNull();
+      expect(markerOnDisk).toBe(true);
+
+      vi.advanceTimersByTime(TICK);
+      await drainMicrotasks();
+      await nextBoot.dispose();
+      expect(mockSqlite.backup).not.toHaveBeenCalled();
+      expect(markerOnDisk).toBe(true);
+    });
+
+    it("persists the pending state when an unclean-exit boot cannot recover", () => {
+      mockDbModule.probeDb.mockReturnValue(false);
+      mockDbModule.attemptRecovery.mockReturnValue(null);
+
+      const service = new DatabaseMaintenanceService();
+      service.initialize(false);
+
+      // Otherwise a later clean exit would hand the next launch only the cheap probe.
+      expect(markerOnDisk).toBe(true);
+      void service.dispose();
+    });
+
+    it("persists corruption that the in-flight check reports while dispose drains it", async () => {
+      const quickCheck = createDeferred<string>();
+      quickCheckReturns(quickCheck.promise);
+
+      const service = new DatabaseMaintenanceService();
+      service.initialize(true);
+      service.startMaintenance();
+      vi.advanceTimersByTime(TICK);
+      await drainMicrotasks();
+
+      const disposePromise = service.dispose();
+      quickCheck.resolve(CORRUPT_RESULT);
+      await disposePromise;
+
+      expect(mockSqlite.backup).not.toHaveBeenCalled();
+      expect(markerOnDisk).toBe(true);
+    });
+
+    it("does not force recovery after suspension caused only by failed backup verification", async () => {
+      mockDbModule.probeDbFile.mockReturnValue("corrupt");
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      quickCheckReturns("ok");
+
+      const session = new DatabaseMaintenanceService();
+      session.initialize(true);
+      session.startMaintenance();
+      for (let i = 0; i < 6; i++) {
+        vi.advanceTimersByTime(TICK);
+        await drainMicrotasks();
+      }
+      await session.dispose();
+      expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
+      expect(markerOnDisk).toBe(false);
+
+      vi.clearAllMocks();
+      const nextBoot = new DatabaseMaintenanceService();
+      nextBoot.initialize(true);
+
+      expect(mockDbModule.probeDb).toHaveBeenCalledWith(DB_PATH, false);
+      expect(mockDbModule.attemptRecovery).not.toHaveBeenCalled();
+      await nextBoot.dispose();
+    });
+
+    it("keeps the cheap probe on a clean-exit boot after a healthy session", async () => {
+      quickCheckReturns("ok");
+      const session = new DatabaseMaintenanceService();
+      session.initialize(true);
+      session.startMaintenance();
+      vi.advanceTimersByTime(TICK);
+      await drainMicrotasks();
+      await session.dispose();
+      expect(markerOnDisk).toBe(false);
+
+      vi.clearAllMocks();
+      const nextBoot = new DatabaseMaintenanceService();
+      nextBoot.initialize(true);
+
+      expect(mockDbModule.probeDb).toHaveBeenCalledTimes(1);
+      expect(mockDbModule.probeDb).toHaveBeenCalledWith(DB_PATH, false);
+      expect(mockDbModule.probeDbFile).not.toHaveBeenCalledWith(DB_PATH);
+      expect(mockDbModule.attemptRecovery).not.toHaveBeenCalled();
+      await nextBoot.dispose();
+    });
   });
 });
