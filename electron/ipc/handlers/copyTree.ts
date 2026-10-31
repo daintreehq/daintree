@@ -1270,7 +1270,9 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       if (wasActive) {
         console.log(`[cancel] Marked injection ${validated.injectionId} for cancellation`);
       } else {
-        console.log(`[cancel] Holding cancel for injection ${validated.injectionId} not yet active`);
+        console.log(
+          `[cancel] Holding cancel for injection ${validated.injectionId} not yet active`
+        );
       }
     } else {
       const count = contextInjectionTracker.markAllCancelled();

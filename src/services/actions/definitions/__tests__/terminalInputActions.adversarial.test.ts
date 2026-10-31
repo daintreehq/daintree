@@ -460,14 +460,21 @@ describe("terminalInputActions adversarial", () => {
     ])(
       "refuses an agent naming a pane locked on %s, as a refusal it can't retry",
       async (_label, panel, managed) => {
-        setPanelState({ focusedId: "other", panelsById: { "term-9": { ...panel, kind: "terminal" } } });
+        setPanelState({
+          focusedId: "other",
+          panelsById: { "term-9": { ...panel, kind: "terminal" } },
+        });
         terminalInstanceMock.get.mockImplementation((id: string) =>
           id === "term-9" ? managed : undefined
         );
         const { run, callbacks } = setupActions();
         vi.mocked(callbacks.getActiveWorktreeId).mockReturnValue("wt-1");
 
-        const attempt = run("terminal.inject", { terminalId: "term-9" }, { dispatchSource: "agent" });
+        const attempt = run(
+          "terminal.inject",
+          { terminalId: "term-9" },
+          { dispatchSource: "agent" }
+        );
 
         await expect(attempt).rejects.toBeInstanceOf(UnactionableTargetError);
         await expect(attempt).rejects.toThrow(/input is locked/);
