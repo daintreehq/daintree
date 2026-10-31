@@ -1666,7 +1666,8 @@ function buildSpawnEnv(customEnv: Record<string, string>): Record<string, string
 function readSetupFailureSummary(chunks: string[]): string | undefined {
   const full = chunks.join("");
   // A last line longer than this isn't a one-line summary.
-  const end = full.length > FAILURE_SUMMARY_SCAN_CHARS ? full.slice(-FAILURE_SUMMARY_SCAN_CHARS) : full;
+  const end =
+    full.length > FAILURE_SUMMARY_SCAN_CHARS ? full.slice(-FAILURE_SUMMARY_SCAN_CHARS) : full;
   const lastLine = end
     .split("\n")
     .map((line) => line.trim())

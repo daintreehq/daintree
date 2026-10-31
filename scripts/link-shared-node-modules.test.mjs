@@ -146,7 +146,10 @@ describe("linkAndCheck", () => {
     install(root, { "node_modules/react": "19.0.0", "node_modules/typescript7": "7.0.0" });
     const symlinkSync = vi.fn(fs.symlinkSync);
 
-    linkAndCheck({ worktreePath: worktree, projectRoot: root, platform: "win32" }, { ...fs, symlinkSync });
+    linkAndCheck(
+      { worktreePath: worktree, projectRoot: root, platform: "win32" },
+      { ...fs, symlinkSync }
+    );
 
     expect(symlinkSync).toHaveBeenCalledWith(
       path.join(root, "node_modules"),
@@ -162,14 +165,20 @@ describe("linkAndCheck", () => {
       throw Object.assign(new Error("EEXIST: file already exists"), { code: "EEXIST" });
     };
 
-    const result = linkAndCheck({ worktreePath: worktree, projectRoot: root }, { ...fs, symlinkSync });
+    const result = linkAndCheck(
+      { worktreePath: worktree, projectRoot: root },
+      { ...fs, symlinkSync }
+    );
 
     expect(result.ok).toBe(true);
   });
 
   it("refuses a lockfile it can't check against", () => {
     install(root, { "node_modules/react": "19.0.0" });
-    fs.writeFileSync(path.join(worktree, "package-lock.json"), JSON.stringify({ lockfileVersion: 1 }));
+    fs.writeFileSync(
+      path.join(worktree, "package-lock.json"),
+      JSON.stringify({ lockfileVersion: 1 })
+    );
 
     expect(linkAndCheck({ worktreePath: worktree, projectRoot: root }).reason).toContain(
       "has no `packages` map"
@@ -244,15 +253,19 @@ describe("findLockfileDrift", () => {
   });
 
   it("skips what ships inside a bundled dependency", () => {
-    expect(check({ "node_modules/a/node_modules/b": { version: "1.0.0", inBundle: true } })).toEqual(
-      []
-    );
+    expect(
+      check({ "node_modules/a/node_modules/b": { version: "1.0.0", inBundle: true } })
+    ).toEqual([]);
   });
 });
 
 describe("describeSharedDrift", () => {
   it("lists three packages and counts the rest", () => {
-    const line = describeSharedDrift(["a missing", "b missing", "c missing", "d missing"], "/r", true);
+    const line = describeSharedDrift(
+      ["a missing", "b missing", "c missing", "d missing"],
+      "/r",
+      true
+    );
 
     expect(line).toContain(": a missing; b missing; c missing (+1 more). Run `npm ci` in /r.");
   });
@@ -261,7 +274,10 @@ describe("describeSharedDrift", () => {
 describe("as setup", () => {
   const run = (env) => {
     try {
-      return { status: 0, out: execFileSync(process.execPath, [SCRIPT], { env, encoding: "utf8", stdio: "pipe" }) };
+      return {
+        status: 0,
+        out: execFileSync(process.execPath, [SCRIPT], { env, encoding: "utf8", stdio: "pipe" }),
+      };
     } catch (err) {
       return { status: err.status, out: `${err.stdout}${err.stderr}` };
     }
@@ -295,7 +311,9 @@ describe("as setup", () => {
   });
 
   it("is what this repo's worktree setup runs", () => {
-    const config = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, ".daintree", "config.json"), "utf8"));
+    const config = JSON.parse(
+      fs.readFileSync(path.join(REPO_ROOT, ".daintree", "config.json"), "utf8")
+    );
 
     expect(config.setup).toEqual(["node scripts/link-shared-node-modules.mjs"]);
   });

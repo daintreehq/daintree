@@ -115,7 +115,10 @@ function lstatOrNull(target, fsImpl) {
  * `node_modules` is never replaced or removed. Returns the lines to print, and
  * on failure the one-line reason.
  */
-export function linkAndCheck({ worktreePath, projectRoot, platform = process.platform }, fsImpl = fs) {
+export function linkAndCheck(
+  { worktreePath, projectRoot, platform = process.platform },
+  fsImpl = fs
+) {
   const lines = [];
   const fail = (reason) => ({ ok: false, lines, reason });
   const linkPath = path.join(worktreePath, "node_modules");
@@ -124,7 +127,9 @@ export function linkAndCheck({ worktreePath, projectRoot, platform = process.pla
 
   if (!isMainCheckout && lstatOrNull(linkPath, fsImpl) === null) {
     if (!isDirectory(sharedPath, fsImpl)) {
-      return fail(`The main checkout has no node_modules to share. Run \`npm ci\` in ${projectRoot}.`);
+      return fail(
+        `The main checkout has no node_modules to share. Run \`npm ci\` in ${projectRoot}.`
+      );
     }
     try {
       // A junction needs neither Developer Mode nor admin rights on Windows.
@@ -154,7 +159,9 @@ export function linkAndCheck({ worktreePath, projectRoot, platform = process.pla
     return fail("This worktree's package-lock.json isn't valid JSON.");
   }
   if (typeof lock?.packages !== "object" || lock.packages === null) {
-    return fail("This worktree's package-lock.json has no `packages` map (lockfileVersion 2 or later).");
+    return fail(
+      "This worktree's package-lock.json has no `packages` map (lockfileVersion 2 or later)."
+    );
   }
 
   // Read through the link, so this checks exactly what the worktree resolves.
@@ -177,10 +184,21 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     const projectRoot = process.env.DAINTREE_PROJECT_ROOT;
     result = projectRoot
-      ? linkAndCheck({ worktreePath: process.env.DAINTREE_WORKTREE_PATH || process.cwd(), projectRoot })
-      : { ok: false, lines: [], reason: "DAINTREE_PROJECT_ROOT isn't set: this runs as Daintree's worktree setup." };
+      ? linkAndCheck({
+          worktreePath: process.env.DAINTREE_WORKTREE_PATH || process.cwd(),
+          projectRoot,
+        })
+      : {
+          ok: false,
+          lines: [],
+          reason: "DAINTREE_PROJECT_ROOT isn't set: this runs as Daintree's worktree setup.",
+        };
   } catch (err) {
-    result = { ok: false, lines: [], reason: `Couldn't set up node_modules: ${err?.message ?? err}` };
+    result = {
+      ok: false,
+      lines: [],
+      reason: `Couldn't set up node_modules: ${err?.message ?? err}`,
+    };
   }
   // One stream, so the summary stays the last line of the captured output, and
   // `exitCode` rather than `exit()`, which can drop a pipe write still pending.
