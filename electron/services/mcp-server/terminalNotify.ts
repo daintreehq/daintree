@@ -1734,6 +1734,14 @@ export class TerminalNotifyService {
       notice.handbackSeen = true;
       notice.handback = change.lastHandback;
     }
+    // The agent left its terminal, from whatever state: a CLI quit from its
+    // own dialog never worked, so waiting for a settle out of `working` would
+    // wait forever. An exit is reported as one even when it carried the marker.
+    if (change.state === "exited") {
+      clearSettling(notice);
+      this.fire(owner, notice, { kind: "exit", handback: notice.handbackSeen }, null);
+      return;
+    }
     // The agent printed the marker this prompt asked for: its reply is
     // finished, so the notice goes now rather than after the settle window.
     if (handbackNow && change.state !== "working") {
@@ -1749,14 +1757,6 @@ export class TerminalNotifyService {
         },
         change.timestamp
       );
-      return;
-    }
-    // The agent left its terminal, from whatever state: a CLI quit from its
-    // own dialog never worked, so waiting for a settle out of `working` would
-    // wait forever.
-    if (change.state === "exited") {
-      clearSettling(notice);
-      this.fire(owner, notice, { kind: "exit", handback: notice.handbackSeen }, null);
       return;
     }
     if (change.state === "working") {

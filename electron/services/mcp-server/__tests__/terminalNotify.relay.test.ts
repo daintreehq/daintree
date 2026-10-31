@@ -164,11 +164,19 @@ describe("relayed notices (#13500)", () => {
 
   it("relays a close with null, since no transition matches it (#15726)", async () => {
     const h = setup();
+    // Its record holds a transition, which is not the close's.
+    h.client.terminals.set("t-a", { ...working(), lastStateChange: Date.now() - 90_000 });
     await h.service.whenIdle(h.pane(), { terminalId: "t-a" });
     h.kill("t-a");
     await flushNotice();
     expect(h.delivered.flat()).toEqual([
-      expect.objectContaining({ observation: { kind: "closed" }, lastTransitionAt: null }),
+      {
+        helpSessionId: "help-1",
+        callId: "call-1",
+        terminalId: "t-a",
+        observation: { kind: "closed" },
+        lastTransitionAt: null,
+      },
     ]);
   });
 

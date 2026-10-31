@@ -33,7 +33,18 @@ describe("a relayed notice's transition on the wire (#15726)", () => {
     expect(parsed).not.toHaveProperty("lastTransitionAt");
   });
 
-  it("refuses a transition that is not a time", () => {
-    expect(RelayNoticeSchema.safeParse(relayed({ lastTransitionAt: "10:00" })).success).toBe(false);
+  it("drops a transition that is not a time and keeps the notices around it", () => {
+    const parsed = RelayNoticesPayloadSchema.parse({
+      notices: [
+        relayed({ lastTransitionAt: "10:00" }),
+        relayed({ noticeId: "n-2", lastTransitionAt: Number.NaN }),
+        relayed({ noticeId: "n-3", lastTransitionAt: AT }),
+      ],
+    });
+    expect(parsed.notices.map((n) => [n.noticeId, n.lastTransitionAt])).toEqual([
+      ["n-1", undefined],
+      ["n-2", undefined],
+      ["n-3", AT],
+    ]);
   });
 });

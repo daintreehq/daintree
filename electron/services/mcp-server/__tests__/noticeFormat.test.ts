@@ -178,15 +178,31 @@ describe("the delivered line", () => {
         notice(`t-${i}`, { lastTransitionAt: AT + i })
       );
       const line = formatNoticeLine(notices);
-      expect(line).toContain(
-        `t-0 stopped working, now waiting at its prompt (lastTransitionAt ${AT})`
-      );
+      for (let i = 0; i < 10; i++) {
+        expect(line).toContain(
+          `t-${i} stopped working, now waiting at its prompt (lastTransitionAt ${AT + i})`
+        );
+      }
       expect(line).toContain(
         `; and 2 more: t-10 (lastTransitionAt ${AT + 10}), t-11 (lastTransitionAt ${AT + 11}).`
       );
       expect(formatHostNoticeLine("studio-01", notices)).toContain(
         `t-11 (lastTransitionAt ${AT + 11})`
       );
+    });
+
+    it("says so of the host's clock when any notice carries a transition, even past the ten", () => {
+      const plain = Array.from({ length: 11 }, (_, i) => stopped(`t-${i}`));
+      const tail = "through host.call, whose lastTransitionAt is on the same host clock.";
+      expect(formatHostNoticeLine("studio-01", plain)).not.toContain(tail);
+      expect(
+        formatHostNoticeLine("studio-01", [
+          { ...stopped("t-x"), lastTransitionAt: null },
+          { ...stopped("t-y"), lastTransitionAt: AT },
+        ])
+      ).toContain(tail);
+      const onlyPastTen = [...plain.slice(0, 10), { ...plain[10]!, lastTransitionAt: AT }];
+      expect(formatHostNoticeLine("studio-01", onlyPastTen)).toContain(tail);
     });
 
     it("says a host's transition is on the host's clock, which its own status answers on", () => {

@@ -152,7 +152,15 @@ describe("bridgePtyEvent", () => {
     events.on("agent:handback-observed", (payload) => seen.push(payload.lastStateChange));
     const handback = { message: "done", observedAt: 1_000, truncated: false };
 
-    for (const lastStateChange of [900, Number.NaN, "900", undefined]) {
+    for (const lastStateChange of [
+      900,
+      0,
+      1_792_317_600_123,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      "900",
+      undefined,
+    ]) {
       bridgePtyEvent({
         type: "agent-handback-observed",
         terminalId: "term-1",
@@ -162,7 +170,7 @@ describe("bridgePtyEvent", () => {
       });
     }
 
-    expect(seen).toEqual([900, undefined, undefined, undefined]);
+    expect(seen).toEqual([900, 0, 1_792_317_600_123, undefined, undefined, undefined, undefined]);
   });
 
   it("forwards waitingReason from agent-state events", () => {

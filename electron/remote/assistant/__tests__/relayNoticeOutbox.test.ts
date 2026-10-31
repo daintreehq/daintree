@@ -197,7 +197,10 @@ describe("RelayNoticeOutbox (#13500, #13930)", () => {
       Promise.reject(Object.assign(new Error("lost"), { code: "OUTCOME_UNKNOWN" }))
     );
     h.attach(link.ctx);
-    h.outbox.enqueue("sender-a", [notice()]);
+    const queued = notice();
+    h.outbox.enqueue("sender-a", [queued]);
+    // Whatever becomes of the object handed in, the queued notice keeps what it said.
+    queued.lastTransitionAt = 0;
     await vi.advanceTimersByTimeAsync(0);
     expect(link.payloads).toHaveLength(1);
 

@@ -1235,12 +1235,16 @@ describe("TerminalNotifyService", () => {
       expect(h.service.getPaneState(OWN)).toMatchObject({ pendingCount: 1 });
 
       await paneTookItsTurn(h);
+      const resumedAt = Date.now();
       h.resume("t-new");
-      h.handbackObserved("t-new", undefined, "sleep finished, KUMQUAT");
+      await vi.advanceTimersByTimeAsync(1_000);
+      h.handbackObserved("t-new", undefined, "sleep finished, KUMQUAT", false, resumedAt);
       await flushNotice();
 
       expect(h.client.submitted).toHaveLength(2);
-      expect(h.client.submitted[1].text).toContain("t-new printed its done marker");
+      expect(h.client.submitted[1].text).toContain(
+        `t-new printed its done marker (lastTransitionAt ${resumedAt})`
+      );
       expect(h.client.submitted[1].text).toContain("sleep finished, KUMQUAT");
       expect(h.service.getPaneState(OWN)?.pendingCount ?? 0).toBe(0);
     });
@@ -2110,17 +2114,19 @@ describe("TerminalNotifyService", () => {
       ]);
     });
 
-    it("names the transition of the stop that carried the marker", async () => {
+    it("names the transition of the stop that carried the marker, not when it arrived", async () => {
       const h = setup();
       const pending = await h.service.prepareSend(PANE, "t-a");
       pending.complete({ submissionToken: "tok-1" });
       await vi.advanceTimersByTimeAsync(100);
 
-      const stoppedAt = Date.now();
+      // Committed on the pty-host a moment before main hears of it.
+      const stoppedAt = Date.now() - 40;
       h.settle("t-a", {
+        timestamp: stoppedAt,
         lastHandback: {
           message: "done",
-          observedAt: stoppedAt,
+          observedAt: stoppedAt - 25,
           submissionToken: "tok-1",
           truncated: false,
         },
@@ -2130,6 +2136,23 @@ describe("TerminalNotifyService", () => {
       expect(h.client.submitted[0].text).toContain(
         `t-a stopped working, now waiting at its prompt (lastTransitionAt ${stoppedAt}), handback seen`
       );
+    });
+
+    it("keeps each notice's own transition when several go out on one line", async () => {
+      const h = setup();
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+      await h.service.whenIdle(PANE, { terminalId: "t-b" });
+
+      const aAt = Date.now();
+      h.settle("t-a");
+      await vi.advanceTimersByTimeAsync(300);
+      const bAt = Date.now();
+      h.settle("t-b", { waitingReason: "approval" });
+      await flushNotice();
+
+      expect(line(h)).toEqual([
+        `Daintree: 2 terminals you asked about changed. t-a stopped working, now waiting at its prompt (lastTransitionAt ${aAt}); t-b stopped working, now waiting on an approval (lastTransitionAt ${bAt}). Check them with terminal.getStatus.`,
+      ]);
     });
 
     it("names the state a marker was printed in, as the pty-host had it then", async () => {
@@ -2150,9 +2173,10 @@ describe("TerminalNotifyService", () => {
 
     it("names no transition for a close, or for a send that was never written", async () => {
       const h = setup();
-      await h.service.whenIdle(PANE, { terminalId: "t-a" });
-      // A pane that left working long ago: its record still holds a transition.
+      // Both records hold a transition a careless reader could pass off as the close's.
+      h.client.terminals.set("t-a", { ...working(), lastStateChange: Date.now() - 90_000 });
       h.client.terminals.set("t-b", atPrompt(Date.now() - 60_000));
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
       const pending = await h.service.prepareSend(PANE, "t-b");
       h.client.records.set("tok-1", { phase: "failed", at: Date.now() });
       pending.complete({ sent: true, submissionToken: "tok-1" });
@@ -2163,6 +2187,34 @@ describe("TerminalNotifyService", () => {
       expect(line(h).join("\n")).not.toContain("lastTransitionAt");
       expect(line(h).join("\n")).toContain("t-a was closed");
       expect(line(h).join("\n")).toContain("t-b was not confirmed to receive your prompt (failed)");
+    });
+
+    it("reports an agent's exit as an exit with no transition, marker or not", async () => {
+      const h = setup();
+      const pending = await h.service.prepareSend(PANE, "t-a");
+      pending.complete({ submissionToken: "tok-1" });
+      await h.service.whenIdle(PANE, { terminalId: "t-b" });
+      await vi.advanceTimersByTimeAsync(100);
+
+      h.stateChange({
+        terminalId: "t-a",
+        state: "exited",
+        previousState: "working",
+        lastHandback: {
+          message: "done",
+          observedAt: Date.now(),
+          submissionToken: "tok-1",
+          truncated: false,
+        },
+      });
+      h.stateChange({ terminalId: "t-b", state: "exited", previousState: "working" });
+      await flushNotice();
+
+      expect(h.client.submitted).toHaveLength(1);
+      const [head] = h.client.submitted[0].text.split("\n");
+      expect(head).toBe(
+        "Daintree: 2 terminals you asked about changed. t-a exited, handback seen; t-b exited. Check them with terminal.getStatus."
+      );
     });
   });
 });
