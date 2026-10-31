@@ -154,11 +154,12 @@ export function DownloadDiagnosticsSection() {
 
 const CPU_PROFILE_DURATION_SECONDS = 15;
 
-function RendererCpuProfileSection() {
-  const [phase, setPhase] = useState<"idle" | "recording" | "saving">("idle");
+export function RendererCpuProfileSection() {
+  const [phase, setPhase] = useState<"idle" | "starting" | "recording" | "saving">("idle");
   const [secondsLeft, setSecondsLeft] = useState(CPU_PROFILE_DURATION_SECONDS);
   const [error, setError] = useState<string | null>(null);
   const expiresAtRef = useRef(0);
+  const startInFlightRef = useRef(false);
   const stopInFlightRef = useRef(false);
 
   const handleStop = useCallback(async () => {
@@ -175,7 +176,10 @@ function RendererCpuProfileSection() {
         setError(
           result.reason === "devtools-detached"
             ? "Recording stopped because DevTools attached to this window. Close DevTools and try again."
-            : (result.message ?? "Couldn't save the profile")
+            : (result.message ??
+                (result.reason === "capture-failed"
+                  ? "Couldn't capture the profile"
+                  : "Couldn't save the profile"))
         );
       }
     } catch (err) {
@@ -197,7 +201,12 @@ function RendererCpuProfileSection() {
   }, [phase, handleStop]);
 
   const handleRecord = async () => {
+    // A lagging renderer is why this control gets used, so a second click often
+    // lands before the first start resolves; it must not send its own start.
+    if (startInFlightRef.current) return;
+    startInFlightRef.current = true;
     setError(null);
+    setPhase("starting");
     try {
       const result = await systemClient.startRendererCpuProfile();
       if (result.status === "failed") {
@@ -206,6 +215,7 @@ function RendererCpuProfileSection() {
             ? "A recording is already in progress. Wait for it to finish and try again."
             : (result.message ?? "Couldn't start the profiler")
         );
+        setPhase("idle");
         return;
       }
       expiresAtRef.current = result.expiresAt;
@@ -213,6 +223,9 @@ function RendererCpuProfileSection() {
       setPhase("recording");
     } catch (err) {
       setError(formatErrorMessage(err, "Couldn't start the profiler"));
+      setPhase("idle");
+    } finally {
+      startInFlightRef.current = false;
     }
   };
 
@@ -235,7 +248,7 @@ function RendererCpuProfileSection() {
             variant="subtle"
             size="sm"
             onClick={() => void handleRecord()}
-            loading={phase === "saving"}
+            loading={phase === "starting" || phase === "saving"}
           >
             Record profile
           </Button>

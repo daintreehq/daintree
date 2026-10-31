@@ -287,6 +287,13 @@ const CPU_PROFILE_SAMPLING_INTERVAL_US = 1000;
 
 interface RendererCpuProfileSession {
   wc: Electron.WebContents;
+  webContentsId: number;
+  /**
+   * True until `Profiler.start` is acknowledged. The session holds its slot in
+   * `cpuProfileSessions` from before the first CDP command, so a concurrent
+   * start is refused instead of interleaving its commands with this one's.
+   */
+  starting: boolean;
   timer: NodeJS.Timeout | null;
   /**
    * Memoized `Profiler.stop` call. Both the auto-stop timer and the renderer's
@@ -301,16 +308,20 @@ interface RendererCpuProfileSession {
    * new recording on the same debugger, and the stale disable would kill it.
    */
   discarded: boolean;
+  /** Latched by this session's own `detach` listener. */
+  detached: boolean;
   onDetach: () => void;
   onDestroyed: () => void;
 }
 
 const cpuProfileSessions = new Map<number, RendererCpuProfileSession>();
 
-function cleanupCpuProfileSession(webContentsId: number): void {
-  const session = cpuProfileSessions.get(webContentsId);
-  if (!session) return;
-  cpuProfileSessions.delete(webContentsId);
+function cleanupCpuProfileSession(session: RendererCpuProfileSession): void {
+  // Identity, not id: a stale callback must never release a newer session.
+  if (cpuProfileSessions.get(session.webContentsId) === session) {
+    cpuProfileSessions.delete(session.webContentsId);
+  }
+  if (session.discarded) return;
   session.discarded = true;
   if (session.timer) {
     clearTimeout(session.timer);
@@ -320,6 +331,17 @@ function cleanupCpuProfileSession(webContentsId: number): void {
   if (!wc.isDestroyed()) {
     wc.debugger.removeListener("detach", session.onDetach);
     wc.removeListener("destroyed", session.onDestroyed);
+  }
+}
+
+// The detach listener is the signal; `isAttached()` backs it up in case the
+// capture's rejection is handled before the event reaches the listener.
+function wasCpuProfileDebuggerDetached(session: RendererCpuProfileSession): boolean {
+  if (session.detached) return true;
+  try {
+    return !session.wc.isDestroyed() && !session.wc.debugger.isAttached();
+  } catch {
+    return false;
   }
 }
 
@@ -691,48 +713,35 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
     if (existing) {
       // A finished-but-uncollected session (auto-stop fired while Settings was
       // closed, so no stop IPC ever arrived) must not block re-recording.
-      if (existing.timer === null && !existing.stopping) {
+      if (!existing.starting && existing.timer === null && !existing.stopping) {
         if (existing.capture) {
           console.warn(
             `[diagnostics] Discarding uncollected renderer CPU profile for webContents ${wc.id}`
           );
         }
-        cleanupCpuProfileSession(wc.id);
+        cleanupCpuProfileSession(existing);
       } else {
         return { status: "failed", reason: "already-recording" };
       }
     }
 
-    try {
-      ensureAttached(wc);
-      await wc.debugger.sendCommand("Profiler.enable");
-      await wc.debugger.sendCommand("Profiler.setSamplingInterval", {
-        interval: CPU_PROFILE_SAMPLING_INTERVAL_US,
-      });
-      await wc.debugger.sendCommand("Profiler.start");
-    } catch (err) {
-      // Don't leave the Profiler domain enabled after a partial start.
-      try {
-        if (!wc.isDestroyed()) {
-          wc.debugger.sendCommand("Profiler.disable").catch(() => {});
-        }
-      } catch {
-        // detached between failure and cleanup — nothing left to disable
-      }
-      return {
-        status: "failed",
-        reason: "cdp-error",
-        message: formatErrorMessage(err, "CPU profiler failed to start"),
-      };
-    }
-
     const session: RendererCpuProfileSession = {
       wc,
+      webContentsId: wc.id,
+      starting: true,
       timer: null,
       capture: null,
       stopping: false,
       discarded: false,
+      detached: false,
       onDetach: () => {
+        session.detached = true;
+        // A detach mid-start frees the slot so a retry can record; the start
+        // sees `discarded` and sends nothing more.
+        if (session.starting) {
+          cleanupCpuProfileSession(session);
+          return;
+        }
         // DevTools (or another client) stole the CDP session — an in-flight
         // recording is unrecoverable. Stop the timer and poison the capture so
         // the stop handler reports the failure; an already-completed capture
@@ -744,15 +753,68 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
         session.capture ??= Promise.reject(new Error("Debugger detached during recording"));
         session.capture.catch(() => {});
       },
-      onDestroyed: () => cleanupCpuProfileSession(wc.id),
+      onDestroyed: () => cleanupCpuProfileSession(session),
     };
+    // Claimed before the first await: invoke handlers aren't serialised, and a
+    // second start interleaving its commands on the shared debugger can disable
+    // or orphan this one's recording.
+    cpuProfileSessions.set(wc.id, session);
+    wc.debugger.on("detach", session.onDetach);
+    wc.once("destroyed", session.onDestroyed);
+
+    let startError: unknown = null;
+    try {
+      ensureAttached(wc);
+      const steps = [
+        () => wc.debugger.sendCommand("Profiler.enable"),
+        () =>
+          wc.debugger.sendCommand("Profiler.setSamplingInterval", {
+            interval: CPU_PROFILE_SAMPLING_INTERVAL_US,
+          }),
+        () => wc.debugger.sendCommand("Profiler.start"),
+      ];
+      for (const step of steps) {
+        if (session.discarded) break;
+        await step();
+      }
+    } catch (err) {
+      startError = err;
+    }
+
+    // Discarded mid-start, the Profiler domain may already belong to a retry,
+    // so nothing here may disable it.
+    if (session.discarded) {
+      return wc.isDestroyed()
+        ? { status: "failed", reason: "webcontents-destroyed" }
+        : {
+            status: "failed",
+            reason: "cdp-error",
+            message: "The debugger detached while the profiler was starting",
+          };
+    }
+
+    if (startError !== null) {
+      // Don't leave the Profiler domain enabled after a partial start.
+      try {
+        if (!wc.isDestroyed()) {
+          wc.debugger.sendCommand("Profiler.disable").catch(() => {});
+        }
+      } catch {
+        // detached between failure and cleanup — nothing left to disable
+      }
+      cleanupCpuProfileSession(session);
+      return {
+        status: "failed",
+        reason: "cdp-error",
+        message: formatErrorMessage(startError, "CPU profiler failed to start"),
+      };
+    }
+
+    session.starting = false;
     session.timer = setTimeout(() => {
       session.timer = null;
       beginCpuProfileCapture(session).catch(() => {});
     }, CPU_PROFILE_DURATION_MS);
-    wc.debugger.on("detach", session.onDetach);
-    wc.once("destroyed", session.onDestroyed);
-    cpuProfileSessions.set(wc.id, session);
 
     return { status: "started", expiresAt: Date.now() + CPU_PROFILE_DURATION_MS };
   };
@@ -768,7 +830,7 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
     ctx: IpcContext
   ): Promise<RendererCpuProfileStopResult> => {
     const session = cpuProfileSessions.get(ctx.webContentsId);
-    if (!session) return { status: "failed", reason: "not-recording" };
+    if (!session || session.starting) return { status: "failed", reason: "not-recording" };
     if (session.stopping) return { status: "failed", reason: "already-stopping" };
     session.stopping = true;
     if (session.timer) {
@@ -780,14 +842,14 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
     try {
       profile = await beginCpuProfileCapture(session);
     } catch (err) {
-      cleanupCpuProfileSession(ctx.webContentsId);
+      cleanupCpuProfileSession(session);
       return {
         status: "failed",
-        reason: "devtools-detached",
+        reason: wasCpuProfileDebuggerDetached(session) ? "devtools-detached" : "capture-failed",
         message: formatErrorMessage(err, "Profiler stopped unexpectedly"),
       };
     }
-    cleanupCpuProfileSession(ctx.webContentsId);
+    cleanupCpuProfileSession(session);
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const win =

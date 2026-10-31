@@ -1189,7 +1189,12 @@ describe("registerDiagnosticsHandlers", () => {
     const PROFILE_FIXTURE = { nodes: [], startTime: 0, endTime: 15, samples: [1, 2] };
 
     function makeProfilerEvent(id: number) {
-      const listeners: Record<string, Array<(...args: unknown[]) => void>> = {};
+      type Listener = (...args: unknown[]) => void;
+      const listeners: Record<string, Listener[]> = {};
+      const off = (key: string, fn: Listener) => {
+        listeners[key] = (listeners[key] ?? []).filter((l) => l !== fn);
+      };
+      let attached = false;
       const sendCommand = vi.fn((method: string) => {
         if (method === "Profiler.stop") return Promise.resolve({ profile: PROFILE_FIXTURE });
         return Promise.resolve({});
@@ -1197,24 +1202,39 @@ describe("registerDiagnosticsHandlers", () => {
       const sender = {
         id,
         isDestroyed: vi.fn(() => false),
-        once: vi.fn((event: string, fn: (...args: unknown[]) => void) => {
-          (listeners[`wc:${event}`] ??= []).push(fn);
+        once: vi.fn((event: string, fn: Listener) => {
+          const key = `wc:${event}`;
+          const wrapped: Listener = (...args) => {
+            off(key, wrapped);
+            fn(...args);
+          };
+          (wrapped as { listener?: Listener }).listener = fn;
+          (listeners[key] ??= []).push(wrapped);
         }),
-        removeListener: vi.fn(),
+        removeListener: vi.fn((event: string, fn: Listener) => {
+          const key = `wc:${event}`;
+          listeners[key] = (listeners[key] ?? []).filter(
+            (l) => l !== fn && (l as { listener?: Listener }).listener !== fn
+          );
+        }),
         debugger: {
-          isAttached: vi.fn(() => false),
-          attach: vi.fn(),
+          isAttached: vi.fn(() => attached),
+          attach: vi.fn(() => {
+            attached = true;
+          }),
           sendCommand,
-          on: vi.fn((event: string, fn: (...args: unknown[]) => void) => {
+          on: vi.fn((event: string, fn: Listener) => {
             (listeners[`dbg:${event}`] ??= []).push(fn);
           }),
-          removeListener: vi.fn(),
+          removeListener: vi.fn((event: string, fn: Listener) => off(`dbg:${event}`, fn)),
         },
       };
       const emit = (key: string, ...args: unknown[]) => {
-        listeners[key]?.forEach((fn) => fn(...args));
+        if (key === "dbg:detach") attached = false;
+        [...(listeners[key] ?? [])].forEach((fn) => fn(...args));
       };
-      return { event: { sender }, sender, sendCommand, emit };
+      const listenerCount = (key: string) => (listeners[key] ?? []).length;
+      return { event: { sender }, sender, sendCommand, emit, listenerCount };
     }
 
     function profilerStopCalls(sendCommand: ReturnType<typeof vi.fn>): number {
@@ -1518,6 +1538,271 @@ describe("registerDiagnosticsHandlers", () => {
       const result = await stop(event);
 
       expect(result).toEqual({ status: "failed", reason: "not-recording" });
+    });
+
+    describe("concurrent starts on one webContents", () => {
+      // Mirrors V8ProfilerAgentImpl's guards: enable and start are no-ops when
+      // already done, setSamplingInterval refuses while a profile runs, disable
+      // throws away a running profile, and stop needs one to be running. State
+      // changes when a command is sent; `hold` delays only its reply.
+      function makeV8ProfilerEvent(
+        id: number,
+        hold?: (method: string, nth: number) => Promise<void> | undefined
+      ) {
+        const base = makeProfilerEvent(id);
+        const v8 = { enabled: false, recording: false };
+        const counts: Record<string, number> = {};
+        base.sendCommand.mockImplementation(((method: string) => {
+          const nth = (counts[method] = (counts[method] ?? 0) + 1);
+          let outcome: () => unknown;
+          switch (method) {
+            case "Profiler.enable":
+              v8.enabled = true;
+              outcome = () => ({});
+              break;
+            case "Profiler.setSamplingInterval":
+              outcome = v8.recording
+                ? () => {
+                    throw new Error("Cannot change sampling interval when profiling.");
+                  }
+                : () => ({});
+              break;
+            case "Profiler.start":
+              if (!v8.enabled) {
+                outcome = () => {
+                  throw new Error("Profiler is not enabled");
+                };
+              } else {
+                v8.recording = true;
+                outcome = () => ({});
+              }
+              break;
+            case "Profiler.stop":
+              if (v8.recording) {
+                v8.recording = false;
+                outcome = () => ({ profile: PROFILE_FIXTURE });
+              } else {
+                outcome = () => {
+                  throw new Error("No recording profiles found");
+                };
+              }
+              break;
+            case "Profiler.disable":
+              v8.enabled = false;
+              v8.recording = false;
+              outcome = () => ({});
+              break;
+            default:
+              outcome = () => ({});
+          }
+          const gate = hold?.(method, nth);
+          return (async () => {
+            if (gate) await gate;
+            return outcome();
+          })();
+        }) as (method: string) => Promise<Record<string, unknown>>);
+        return { ...base, v8 };
+      }
+
+      function sentMethods(sendCommand: ReturnType<typeof vi.fn>): string[] {
+        return sendCommand.mock.calls.map((c: unknown[]) => c[0] as string);
+      }
+
+      function expectSingleWinner(
+        v: ReturnType<typeof makeV8ProfilerEvent>,
+        results: Array<{ status: string; reason?: string }>,
+        timersBefore: number
+      ) {
+        expect(results.filter((r) => r.status === "started")).toHaveLength(1);
+        expect(results.filter((r) => r.status === "failed")).toEqual([
+          { status: "failed", reason: "already-recording" },
+        ]);
+        expect(sentMethods(v.sendCommand)).toEqual([
+          "Profiler.enable",
+          "Profiler.setSamplingInterval",
+          "Profiler.start",
+        ]);
+        expect(v.v8.recording).toBe(true);
+        expect(vi.getTimerCount() - timersBefore).toBe(1);
+        expect(v.listenerCount("dbg:detach")).toBe(1);
+        expect(v.listenerCount("wc:destroyed")).toBe(1);
+      }
+
+      async function expectNoOrphans(v: ReturnType<typeof makeV8ProfilerEvent>) {
+        const sentAfterStop = v.sendCommand.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(v.sendCommand.mock.calls.length).toBe(sentAfterStop);
+        expect(profilerStopCalls(v.sendCommand)).toBe(1);
+        expect(v.listenerCount("dbg:detach")).toBe(0);
+        expect(v.listenerCount("wc:destroyed")).toBe(0);
+      }
+
+      it("two starts whose command sequences interleave before either profiles yield one recording", async () => {
+        const v = makeV8ProfilerEvent(720);
+        dialogMock.showSaveDialog.mockResolvedValueOnce({
+          filePath: "/tmp/race.cpuprofile",
+          canceled: false,
+        });
+        registerDiagnosticsHandlers(deps);
+        const start = getHandlerFn("system:renderer-cpu-profile-start");
+        const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+        const timersBefore = vi.getTimerCount();
+
+        const results = (await Promise.all([start(v.event), start(v.event)])) as Array<{
+          status: string;
+          reason?: string;
+        }>;
+
+        expectSingleWinner(v, results, timersBefore);
+        expect(results[0].status).toBe("started");
+
+        expect(await stop(v.event)).toEqual({ status: "saved" });
+        expect(resilientAtomicWriteFileMock).toHaveBeenCalledWith(
+          "/tmp/race.cpuprofile",
+          JSON.stringify(PROFILE_FIXTURE),
+          "utf-8",
+          { mode: 0o600 }
+        );
+        await expectNoOrphans(v);
+      });
+
+      it("a second start whose interval would land after the first's Profiler.start loses without disabling the winner", async () => {
+        let releaseSecondEnable!: () => void;
+        const secondEnable = new Promise<void>((resolve) => {
+          releaseSecondEnable = resolve;
+        });
+        const v = makeV8ProfilerEvent(721, (method, nth) =>
+          method === "Profiler.enable" && nth === 2 ? secondEnable : undefined
+        );
+        dialogMock.showSaveDialog.mockResolvedValueOnce({
+          filePath: "/tmp/race2.cpuprofile",
+          canceled: false,
+        });
+        registerDiagnosticsHandlers(deps);
+        const start = getHandlerFn("system:renderer-cpu-profile-start");
+        const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+        const timersBefore = vi.getTimerCount();
+
+        const first = start(v.event) as Promise<{ status: string; reason?: string }>;
+        const second = start(v.event) as Promise<{ status: string; reason?: string }>;
+        const firstResult = await first;
+        releaseSecondEnable();
+        const results = [firstResult, await second];
+
+        expectSingleWinner(v, results, timersBefore);
+        expect(sentMethods(v.sendCommand)).not.toContain("Profiler.disable");
+
+        expect(await stop(v.event)).toEqual({ status: "saved" });
+        await expectNoOrphans(v);
+      });
+
+      it("a start abandoned by a detach can't disable the retry that replaced it", async () => {
+        let rejectFirstEnable!: (err: Error) => void;
+        const firstEnable = new Promise<void>((_resolve, reject) => {
+          rejectFirstEnable = reject;
+        });
+        const v = makeV8ProfilerEvent(726, (method, nth) =>
+          method === "Profiler.enable" && nth === 1 ? firstEnable : undefined
+        );
+        dialogMock.showSaveDialog.mockResolvedValueOnce({
+          filePath: "/tmp/retry.cpuprofile",
+          canceled: false,
+        });
+        registerDiagnosticsHandlers(deps);
+        const start = getHandlerFn("system:renderer-cpu-profile-start");
+        const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+
+        const first = start(v.event) as Promise<{ status: string; reason?: string }>;
+        v.emit("dbg:detach");
+        const retry = (await start(v.event)) as { status: string };
+        expect(retry.status).toBe("started");
+
+        rejectFirstEnable(new Error("target closed while handling command"));
+        const abandoned = await first;
+
+        expect(abandoned.status).toBe("failed");
+        expect(abandoned.reason).toBe("cdp-error");
+        expect(sentMethods(v.sendCommand)).not.toContain("Profiler.disable");
+        expect(v.v8.recording).toBe(true);
+        expect(v.listenerCount("dbg:detach")).toBe(1);
+        expect(v.listenerCount("wc:destroyed")).toBe(1);
+        expect(await stop(v.event)).toEqual({ status: "saved" });
+      });
+
+      it("only the winning session's auto-stop captures the profile", async () => {
+        const v = makeV8ProfilerEvent(722);
+        dialogMock.showSaveDialog.mockResolvedValueOnce({
+          filePath: "/tmp/auto-race.cpuprofile",
+          canceled: false,
+        });
+        registerDiagnosticsHandlers(deps);
+        const start = getHandlerFn("system:renderer-cpu-profile-start");
+        const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+
+        await Promise.all([start(v.event), start(v.event)]);
+        await vi.advanceTimersByTimeAsync(15_000);
+
+        expect(profilerStopCalls(v.sendCommand)).toBe(1);
+        expect(await stop(v.event)).toEqual({ status: "saved" });
+      });
+
+      it("stop while the start is still in flight leaves the recording to finish starting", async () => {
+        let releaseEnable!: () => void;
+        const enable = new Promise<void>((resolve) => {
+          releaseEnable = resolve;
+        });
+        const v = makeV8ProfilerEvent(723, (method) =>
+          method === "Profiler.enable" ? enable : undefined
+        );
+        dialogMock.showSaveDialog.mockResolvedValueOnce({ filePath: undefined, canceled: true });
+        registerDiagnosticsHandlers(deps);
+        const start = getHandlerFn("system:renderer-cpu-profile-start");
+        const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+
+        const pending = start(v.event) as Promise<{ status: string }>;
+        expect(await stop(v.event)).toEqual({ status: "failed", reason: "not-recording" });
+        releaseEnable();
+
+        expect((await pending).status).toBe("started");
+        expect(await stop(v.event)).toEqual({ status: "canceled" });
+      });
+
+      it("a view destroyed mid-start leaves no session and never disables the profiler", async () => {
+        let releaseEnable!: () => void;
+        const enable = new Promise<void>((resolve) => {
+          releaseEnable = resolve;
+        });
+        const v = makeV8ProfilerEvent(724, (method) =>
+          method === "Profiler.enable" ? enable : undefined
+        );
+        registerDiagnosticsHandlers(deps);
+        const start = getHandlerFn("system:renderer-cpu-profile-start");
+        const timersBefore = vi.getTimerCount();
+
+        const pending = start(v.event) as Promise<{ status: string; reason?: string }>;
+        v.emit("wc:destroyed");
+        v.sender.isDestroyed.mockReturnValue(true);
+        releaseEnable();
+
+        expect(await pending).toEqual({ status: "failed", reason: "webcontents-destroyed" });
+        expect(vi.getTimerCount() - timersBefore).toBe(0);
+        expect(sentMethods(v.sendCommand)).not.toContain("Profiler.disable");
+      });
+
+      it("a capture that fails without a detach is not blamed on DevTools", async () => {
+        const v = makeV8ProfilerEvent(725);
+        registerDiagnosticsHandlers(deps);
+        const start = getHandlerFn("system:renderer-cpu-profile-start");
+        const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+
+        await start(v.event);
+        v.v8.recording = false;
+        const result = (await stop(v.event)) as { status: string; reason: string; message?: string };
+
+        expect(result.status).toBe("failed");
+        expect(result.reason).toBe("capture-failed");
+        expect(result.message).toContain("No recording profiles found");
+      });
     });
   });
 });
