@@ -1212,6 +1212,7 @@ export class PtyManager extends EventEmitter {
       hasPty,
       agentSessionId: terminalInfo.agentSessionId,
       detectedAgentId: terminalInfo.detectedAgentId,
+      bracketedPasteMode: hasPty && terminal.isBracketedPasteMode(),
       analysisEnabled: terminalInfo.analysisEnabled,
       resizeStrategy: terminal.getResizeStrategy(),
       ptyPid: ptyProcess?.pid,

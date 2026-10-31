@@ -398,6 +398,11 @@ export interface TerminalInfoPayload {
   agentSessionId?: string;
   /** Live detected identity — the agent currently running. Source of truth for chrome. */
   detectedAgentId?: BuiltInAgentId;
+  /**
+   * The program reading the PTY has bracketed paste on, as the host's mirror
+   * last parsed it. False when nothing reads the output.
+   */
+  bracketedPasteMode?: boolean;
   /** Whether semantic analysis is enabled for this terminal */
   analysisEnabled?: boolean;
   /** Resize strategy: "default" (immediate) or "settled" (batched for TUI agents) */

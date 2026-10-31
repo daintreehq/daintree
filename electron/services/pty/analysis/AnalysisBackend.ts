@@ -73,6 +73,13 @@ export interface AnalysisBackend {
 
   getViewportLines(n: number): string[];
   getCursorLine(): string | null;
+  /**
+   * Whether the program reading this PTY has turned bracketed paste on
+   * (DECSET 2004), as far as the mirror has parsed. False when no mirror reads
+   * the output, so a caller deciding whether multiline text is safe to write
+   * fails closed.
+   */
+  isBracketedPasteMode(): boolean;
 
   /**
    * Snapshot of the mirror's buffer bundled with the grid it was captured at.

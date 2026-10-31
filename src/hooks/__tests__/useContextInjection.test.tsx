@@ -176,6 +176,23 @@ describe("useContextInjection", () => {
       expect(notifyMock).not.toHaveBeenCalled();
     });
 
+    it("surfaces a refused shell target as an error instead of announcing it", async () => {
+      // A shell skips the agent-readiness wait and goes straight to main, which
+      // refuses it there (#15629); the refusal has to reach the user.
+      const refusal = "Context can only be injected into a running agent, not a shell";
+      isAvailableMock.mockResolvedValue(true);
+      injectMock.mockResolvedValue({ error: refusal });
+      const { result } = renderHook(() => useContextInjection("term-1"));
+
+      await act(async () => {
+        await result.current.inject("wt-1", "term-1");
+      });
+
+      expect(injectMock).toHaveBeenCalledTimes(1);
+      expect(result.current.error).toBe(refusal);
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
     it("never announces a cancelled injection", async () => {
       // Cancellation returns before the success branch; announcing would claim
       // the agent got context the user deliberately stopped.

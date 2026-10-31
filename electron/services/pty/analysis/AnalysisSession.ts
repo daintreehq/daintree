@@ -106,6 +106,7 @@ export class AnalysisSession {
   private agentOutputNoteTimer: NodeJS.Timeout | null = null;
 
   private digestTimer: NodeJS.Timeout | null = null;
+  private reportedBracketedPasteMode = false;
   private pendingAckBytes = 0;
   private ackTimer: NodeJS.Timeout | null = null;
   private disposed = false;
@@ -147,6 +148,7 @@ export class AnalysisSession {
         this.scheduleDigest();
       }
     }
+    if (spec.bracketedPasteMode) this.feedPrelude("\x1b[?2004h");
   }
 
   feedChunk(
@@ -637,17 +639,33 @@ export class AnalysisSession {
   }
 
   private scheduleDigest(): void {
-    if (this.disposed || this.digestTimer) return;
+    if (this.disposed) return;
+    // A paste-mode flip skips the throttle: context injection admits its
+    // destination on this mode, and a stale "on" would let it paste into a
+    // program that just turned bracketed paste off.
+    if (this.headlessTerminal?.modes.bracketedPasteMode !== this.reportedBracketedPasteMode) {
+      if (this.digestTimer) clearTimeout(this.digestTimer);
+      this.digestTimer = null;
+      this.emitDigest();
+      return;
+    }
+    if (this.digestTimer) return;
     this.digestTimer = setTimeout(() => {
       this.digestTimer = null;
-      if (this.disposed || !this.headlessTerminal) return;
-      this.emit({
-        type: "viewport",
-        terminalId: this.terminalId,
-        lines: readViewportNonEmptyLines(this.headlessTerminal),
-        cursorLine: readCursorLine(this.headlessTerminal),
-      });
+      this.emitDigest();
     }, VIEWPORT_DIGEST_THROTTLE_MS);
     this.digestTimer.unref?.();
+  }
+
+  private emitDigest(): void {
+    if (this.disposed || !this.headlessTerminal) return;
+    this.reportedBracketedPasteMode = this.headlessTerminal.modes.bracketedPasteMode;
+    this.emit({
+      type: "viewport",
+      terminalId: this.terminalId,
+      lines: readViewportNonEmptyLines(this.headlessTerminal),
+      cursorLine: readCursorLine(this.headlessTerminal),
+      bracketedPasteMode: this.reportedBracketedPasteMode,
+    });
   }
 }

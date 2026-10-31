@@ -426,7 +426,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "copyTree.injectToTerminal",
       title: "Inject context to terminal",
       description:
-        "Bundle a worktree's context and type it straight into a terminal, the way to give an agent a large codebase context. Only budget flags come back, so check them for completeness. Target an idle terminal: the payload can be enormous.",
+        "Paste a worktree's context into an agent, never a shell, as an unsent draft: the way to give an agent a large codebase context. Only budget flags come back, so check them for completeness. Target an idle agent: it can be enormous.",
       category: "copyTree",
       kind: "command",
       danger: "safe",

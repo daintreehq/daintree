@@ -119,6 +119,9 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   private continuousSince = Date.now();
   private viewportLines: string[] = [];
   private cursorLine: string | null = null;
+  private bracketedPasteMode = false;
+  // A rebuild whose `create` was dropped still owes the next session the mode.
+  private bracketedPasteSeedPending = false;
   private monitorSpec: MonitorStartOptions | null = null;
   private pollingIntervalMs: number | undefined;
   private lastCols: number;
@@ -446,6 +449,10 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     return this.cursorLine;
   }
 
+  isBracketedPasteMode(): boolean {
+    return !this.inactive() && this.bracketedPasteMode;
+  }
+
   async serialize(options?: SerializeReadOptions): Promise<SerializedTerminalSnapshot | null> {
     if (this.inactive()) return null;
     const flushed = this.flushHeldFeed();
@@ -523,6 +530,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
       case "viewport":
         this.viewportLines = msg.lines;
         this.cursorLine = msg.cursorLine;
+        this.bracketedPasteMode = msg.bracketedPasteMode;
         this.delegate.onViewport(msg.lines);
         return;
       default:
@@ -585,6 +593,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   // epoch and resets the flow-control ledger so acks from the old generation
   // (and the dropped hold) can't debit the new one.
   private rebuildFreshSlot(): void {
+    const carriesBracketedPaste = this.bracketedPasteMode || this.bracketedPasteSeedPending;
     this.continuityLost = true;
     this.continuousSince = Date.now();
     this.feedEpoch++;
@@ -592,6 +601,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     this.heldFeed = null;
     this.viewportLines = [];
     this.cursorLine = null;
+    this.bracketedPasteMode = false;
     this.persistSuppressed = true;
     // The old mirror is gone, so its last reported grid says nothing about the
     // replacement; the `create` below carries the geometry instead, and a
@@ -606,12 +616,19 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
       restore: false,
       spawnedAt: this.spec.spawnedAt,
       epoch: this.feedEpoch,
+      bracketedPasteMode: carriesBracketedPaste,
     });
     // The create carries the geometry, so landing it converges the mirror and
     // dropping it leaves no session at all — the two failure states this slot
     // can be in, and both are cleared by the same successful post.
     this.geometryPostFailed = !created;
     this.sessionCreatePending = !created;
+    // The program set bracketed paste once and won't say so again; without
+    // the carry the fresh mirror would report it off for as long as the
+    // program runs, and context injection would refuse a perfectly good agent.
+    // Riding on `create` makes it land with the session or not at all.
+    this.bracketedPasteMode = carriesBracketedPaste && created;
+    this.bracketedPasteSeedPending = carriesBracketedPaste && !created;
     if (this.monitorSpec) {
       this.postAgentContext();
       // Preserve-state semantics (mirrors the in-thread preserveState path):

@@ -406,6 +406,10 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
     return readCursorLine(this.terminalInfo.headlessTerminal);
   }
 
+  isBracketedPasteMode(): boolean {
+    return this.terminalInfo.headlessTerminal?.modes.bracketedPasteMode ?? false;
+  }
+
   getVisibleActivityLines(n: number): string[] {
     return readVisibleActivityLines(this.terminalInfo.headlessTerminal, n);
   }

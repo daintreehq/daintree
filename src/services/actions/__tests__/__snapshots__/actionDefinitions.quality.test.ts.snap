@@ -1188,7 +1188,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "copyTree",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Bundle a worktree's context and type it straight into a terminal, the way to give an agent a large codebase context. Only budget flags come back, so check them for completeness. Target an idle terminal: the payload can be enormous.",
+    "description": "Paste a worktree's context into an agent, never a shell, as an unsent draft: the way to give an agent a large codebase context. Only budget flags come back, so check them for completeness. Target an idle agent: it can be enormous.",
     "examples": undefined,
     "id": "copyTree.injectToTerminal",
     "keywords": [
