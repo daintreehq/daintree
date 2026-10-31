@@ -353,6 +353,20 @@ describe("resolveGitPushDestination — fails closed", () => {
     expect(result.status === "resolved" && result.destination.establishesUpstream).toBeUndefined();
   });
 
+  it("ignores merge config without a branch remote under push.autoSetupRemote, as git does", async () => {
+    const repo = makeRepo();
+    git(repo, ["remote", "add", "origin", makeBare()]);
+    git(repo, ["remote", "add", "fork", makeBare()]);
+    git(repo, ["config", "branch.topic.merge", "refs/heads/elsewhere"]);
+    git(repo, ["config", "branch.topic.pushRemote", "fork"]);
+    git(repo, ["config", "push.default", "current"]);
+    git(repo, ["config", "push.autoSetupRemote", "true"]);
+
+    const result = await resolve(repo);
+
+    expect(result.status === "resolved" && result.destination.establishesUpstream).toBe(true);
+  });
+
   it("leaves tracking alone under push.autoSetupRemote when the remote has its own push refspecs", async () => {
     const repo = makeRepo();
     git(repo, ["remote", "add", "origin", makeBare()]);

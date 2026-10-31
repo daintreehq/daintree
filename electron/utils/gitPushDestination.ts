@@ -288,7 +288,8 @@ async function resolvePushFromFields(
  * flag is only ever switched on, so a later `false` does not clear an earlier
  * `true`), `push.default` honours it (all but `matching` and `nothing`), the
  * remote has no push refspecs of its own (those bypass default-push setup), and
- * the branch has no merge config (which counts as tracked even when no fetch
+ * the branch has no merge config alongside a branch remote (git keeps merge
+ * config only with a remote, and then counts it as tracked even when no fetch
  * refspec maps it to a ref, so `%(upstream)` alone would miss it).
  *
  * A failed read answers false. Unlike {@link hasDefaultSimplePushConfig}, this
@@ -309,6 +310,8 @@ async function autoSetupRemoteApplies(
 
   let autoSetup = false;
   let pushDefault: string | null = null;
+  let hasMerge = false;
+  let hasBranchRemote = false;
   for (const entry of out.split("\u0000")) {
     if (!entry) continue;
     const newline = entry.indexOf("\n");
@@ -322,11 +325,14 @@ async function autoSetupRemoteApplies(
       pushDefault = (value ?? "").trim().toLowerCase();
     } else if (lower.startsWith("branch.") && lower.endsWith(".merge")) {
       // Section and variable names are case-insensitive; the subsection isn't.
-      if (key.slice("branch.".length, -".merge".length) === branchName) return false;
+      if (key.slice("branch.".length, -".merge".length) === branchName) hasMerge = true;
+    } else if (lower.startsWith("branch.") && lower.endsWith(".remote")) {
+      if (key.slice("branch.".length, -".remote".length) === branchName) hasBranchRemote = true;
     } else if (lower.startsWith("remote.") && lower.endsWith(".push")) {
       if (key.slice("remote.".length, -".push".length) === remote) return false;
     }
   }
+  if (hasMerge && hasBranchRemote) return false;
   return autoSetup && pushDefault !== "matching" && pushDefault !== "nothing";
 }
 
