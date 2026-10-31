@@ -58,6 +58,8 @@ describe("buildDefaultKeybindings", () => {
     expect(holds({ dictationActive: true, voiceSendWaiting: false })).toBe(true);
     // #15705: pressed again while its send waits on the cleanup, it sends what stands.
     expect(holds({ dictationActive: false, voiceSendWaiting: true })).toBe(true);
+    // An older send still waiting doesn't take the key from a dictation running now.
+    expect(holds({ dictationActive: true, voiceSendWaiting: true })).toBe(true);
     expect(whenOf(windows)).toBeUndefined();
     expect(whenOf(linux)).toBeUndefined();
   });

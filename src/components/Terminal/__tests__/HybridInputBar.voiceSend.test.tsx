@@ -37,7 +37,8 @@ import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { registerVoiceActions } from "@/services/actions/definitions/voiceActions";
 import type { ActionRegistry } from "@/services/actions/actionTypes";
-import { formatChordText } from "@/lib/kbdShortcut";
+import { describeChord, formatChordText } from "@/lib/kbdShortcut";
+import { hasWaitingStopAndSend } from "@/services/voiceDraftSend";
 import { isMac } from "@/lib/platform";
 import { addImageChip } from "../inputEditorExtensions";
 
@@ -893,6 +894,7 @@ describe("HybridInputBar dictated send whose composer went disabled before it un
 });
 
 describe("HybridInputBar stop-and-send pressed again while its send waits (#15705)", () => {
+  const panes: HTMLElement[] = [];
   beforeEach(() => {
     const actions: ActionRegistry = new Map();
     registerVoiceActions(actions);
@@ -900,6 +902,8 @@ describe("HybridInputBar stop-and-send pressed again while its send waits (#1570
   });
   afterEach(() => {
     actionService.unregister("voiceInput.stopAndSend");
+    panes.splice(0).forEach((pane) => pane.remove());
+    useVoiceRecordingStore.setState({ status: "idle", activeTarget: null });
   });
 
   function GlobalKeys() {
@@ -927,67 +931,163 @@ describe("HybridInputBar stop-and-send pressed again while its send waits (#1570
     return event;
   }
 
+  /** Another pane's text field, which records every key that reaches it. */
+  function otherPane() {
+    const pane = document.createElement("textarea");
+    const received: string[] = [];
+    pane.addEventListener("keydown", (event) => received.push(event.key));
+    document.body.appendChild(pane);
+    panes.push(pane);
+    return { pane, received };
+  }
+
   const caption = () => document.querySelector("[data-voice-submit-caption]")?.textContent ?? "";
+  const keyText = () => formatChordText(combo(), isMac());
+  const status = () => statuses().find((text) => text.startsWith("Polishing")) ?? "";
+  const inComposer = () =>
+    document.activeElement?.closest(`[data-hybrid-input-root="${PANEL_ID}"]`) != null;
 
-  it.each(["its composer", "another pane"])(
-    "sends what stands at the key pressed again with the keyboard in %s",
-    async (where) => {
-      const pending = deferred<CorrectResult>();
-      correct.mockReturnValueOnce(pending.promise);
-      const onSend = vi.fn();
-      act(() => {
-        dictate("hello wrld");
-      });
-      const view = await mount(onSend, <GlobalKeys />);
-      const pane = document.createElement("textarea");
-      document.body.appendChild(pane);
-      if (where === "another pane") pane.focus();
-      else view.focus();
+  async function pastTheGate() {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, UI_INLINE_LOADING_GATE_MS + 50));
+    });
+  }
 
-      let first!: KeyboardEvent;
-      await act(async () => {
-        first = pressStopAndSend();
-      });
-      expect(first.defaultPrevented).toBe(true);
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, UI_INLINE_LOADING_GATE_MS + 50));
-      });
-      expect(onSend).not.toHaveBeenCalled();
-      expect(caption()).toContain(`${formatChordText(combo(), isMac())} to send as dictated`);
-      if (where === "another pane") {
-        expect(caption()).not.toMatch(/· Enter to send|Esc/);
-        // Enter and Escape typed there are that pane's.
-        for (const key of ["Enter", "Escape"]) {
-          const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
-          pane.dispatchEvent(event);
-          expect(event.defaultPrevented).toBe(false);
-        }
-        expect(onSend).not.toHaveBeenCalled();
-      } else {
-        expect(caption()).toMatch(/Esc to cancel/);
-      }
+  /** Dictates a passage whose cleanup is held, and sends it with the key. */
+  async function sendWithTheKey(onSend: (payload: { text: string }) => void, inPane: boolean) {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    act(() => {
+      dictate("hello wrld");
+    });
+    const view = await mount(onSend, <GlobalKeys />);
+    const other = otherPane();
+    if (inPane) other.pane.focus();
+    else view.focus();
+    expect(inPane ? document.activeElement === other.pane : inComposer()).toBe(true);
 
-      let second!: KeyboardEvent;
-      await act(async () => {
-        second = pressStopAndSend();
-      });
+    let first!: KeyboardEvent;
+    await act(async () => {
+      first = pressStopAndSend();
+    });
+    expect(first.defaultPrevented).toBe(true);
+    await pastTheGate();
+    expect(onSend).not.toHaveBeenCalled();
+    return { pending, ...other };
+  }
 
-      expect(second.defaultPrevented).toBe(true);
-      expect(onSend.mock.calls.map(([payload]) => payload.text)).toEqual(["hello wrld"]);
-      expect(caption()).toMatch(/cleanup skipped/);
-      if (where === "another pane") expect(document.activeElement).toBe(pane);
+  it("sends what stands at the key pressed again with the keyboard in its composer", async () => {
+    const onSend = vi.fn();
+    const { pending } = await sendWithTheKey(onSend, false);
+    expect(inComposer()).toBe(true);
+    expect(caption()).toContain(`${keyText()} to send as dictated`);
+    expect(caption()).toMatch(/Esc to cancel/);
+    expect(status()).toContain(`Press ${describeChord(combo(), isMac())} to send it as dictated`);
+    expect(status()).toMatch(/Escape to cancel the send/);
 
-      // With no send waiting, the key is free for whatever else holds it.
-      let after!: KeyboardEvent;
-      await act(async () => {
-        after = pressStopAndSend();
-      });
-      expect(after.defaultPrevented).toBe(false);
+    let second!: KeyboardEvent;
+    await act(async () => {
+      second = pressStopAndSend();
+    });
 
-      await act(async () => {
-        pending.resolve({ action: "replace", correctedText: "Hello world." });
-      });
-      expect(onSend).toHaveBeenCalledTimes(1);
+    expect(second.defaultPrevented).toBe(true);
+    expect(onSend.mock.calls.map(([payload]) => payload.text)).toEqual(["hello wrld"]);
+    expect(caption()).toMatch(/cleanup skipped/);
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends what stands at the key pressed again with the keyboard in another pane, whose own keys stay its", async () => {
+    const onSend = vi.fn();
+    const { pending, pane, received } = await sendWithTheKey(onSend, true);
+    expect(caption()).toBe(`Polishing… · ${keyText()} to send as dictated`);
+    expect(status()).toBe(
+      `Polishing dictation. Press ${describeChord(combo(), isMac())} to send it as dictated.`
+    );
+    for (const key of ["Enter", "Escape"]) {
+      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      pane.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
     }
-  );
+    expect(received).toEqual(["Enter", "Escape"]);
+    expect(onSend).not.toHaveBeenCalled();
+
+    let second!: KeyboardEvent;
+    await act(async () => {
+      second = pressStopAndSend();
+    });
+
+    expect(second.defaultPrevented).toBe(true);
+    expect(onSend.mock.calls.map(([payload]) => payload.text)).toEqual(["hello wrld"]);
+    expect(caption()).toMatch(/cleanup skipped/);
+    expect(document.activeElement).toBe(pane);
+
+    // With no send waiting, the key is the pane's again.
+    received.length = 0;
+    let after!: KeyboardEvent;
+    await act(async () => {
+      after = pressStopAndSend();
+    });
+    expect(after.defaultPrevented).toBe(false);
+    expect(received).toHaveLength(1);
+
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the key to a dictation running elsewhere, and names it again once that ends", async () => {
+    const onSend = vi.fn();
+    const { pending } = await sendWithTheKey(onSend, true);
+    const sendElsewhere = vi.fn();
+    const unregister = voiceRecordingService.onSpokenSend("term-2", undefined, sendElsewhere);
+    try {
+      act(() => {
+        useVoiceRecordingStore.getState().beginSession({ panelId: "term-2" });
+        useVoiceRecordingStore.getState().setStatus("recording");
+      });
+      expect(caption()).toBe("Polishing…");
+
+      await act(async () => {
+        pressStopAndSend();
+      });
+      expect(sendElsewhere).toHaveBeenCalledWith({ spoken: false });
+      expect(onSend).not.toHaveBeenCalled();
+
+      act(() => {
+        useVoiceRecordingStore.setState({ status: "idle", activeTarget: null });
+      });
+      expect(caption()).toContain(`${keyText()} to send as dictated`);
+      await act(async () => {
+        pressStopAndSend();
+      });
+      expect(onSend.mock.calls.map(([payload]) => payload.text)).toEqual(["hello wrld"]);
+    } finally {
+      unregister();
+      await act(async () => {
+        pending.resolve({ action: "no_change", correctedText: "hello wrld" });
+      });
+    }
+  });
+
+  // #15703: a dictation started in its draft reopens it, and the key no longer sends it.
+  it("lets go of the key once a dictation in its draft reopens the send", async () => {
+    const onSend = vi.fn();
+    const { pending } = await sendWithTheKey(onSend, true);
+    expect(hasWaitingStopAndSend()).toBe(true);
+
+    act(() => {
+      dictate("and more");
+    });
+
+    expect(hasWaitingStopAndSend()).toBe(false);
+    expect(onSend).not.toHaveBeenCalled();
+    await act(async () => {
+      pending.resolve({ action: "no_change", correctedText: "hello wrld" });
+    });
+    expect(onSend).not.toHaveBeenCalled();
+  });
 });

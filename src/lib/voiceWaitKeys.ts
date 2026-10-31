@@ -90,26 +90,43 @@ function onKeyDown(event: KeyboardEvent): void {
   routeVoiceWaitKey(event);
 }
 
-/** Which of Enter and Escape, typed where the keyboard is now, reach a waiting send. */
+/** Which keys, typed where the keyboard is now, reach a waiting send. */
 export interface VoiceWaitKeysReach {
   /** Enter sends what stands. */
   enter: boolean;
   /** Escape calls the send off. */
   escape: boolean;
+  /** A shortcut reaches this page at all, the stop-and-send key among them. */
+  page: boolean;
 }
 
-export const NO_VOICE_WAIT_KEYS: VoiceWaitKeysReach = { enter: false, escape: false };
-const REACHES_BOTH: VoiceWaitKeysReach = { enter: true, escape: true };
-const REACHES_ESCAPE: VoiceWaitKeysReach = { enter: false, escape: true };
+export const NO_VOICE_WAIT_KEYS: VoiceWaitKeysReach = { enter: false, escape: false, page: false };
+const REACHES_PAGE: VoiceWaitKeysReach = { enter: false, escape: false, page: true };
+const REACHES_BOTH: VoiceWaitKeysReach = { enter: true, escape: true, page: true };
+const REACHES_ESCAPE: VoiceWaitKeysReach = { enter: false, escape: true, page: true };
+
+// Whether this page's window holds the keyboard, which another app, or another
+// view in the window (a portal tab), takes from it. Read while observed.
+let windowFocused = true;
 
 /**
- * Where Enter and Escape typed now would go, by the same rule that routes
- * them, so a wait names only the keys that reach it. One of three shared
+ * Whether a key typed now reaches this page's listeners: not from a guest
+ * page inside it (a browser pane's webview, an iframe), whose keys never
+ * reach the page, nor while its window doesn't hold the keyboard.
+ */
+function keysReachPage(active: Element | null): boolean {
+  return windowFocused && !(active instanceof HTMLIFrameElement) && active?.tagName !== "WEBVIEW";
+}
+
+/**
+ * Where keys typed now would go, by the same rule that routes Enter and
+ * Escape, so a wait names only the keys that reach it. One of four shared
  * values, so a caller can tell a change by identity.
  */
 export function voiceWaitKeysReach(claim: VoiceWaitKeyClaim): VoiceWaitKeysReach {
   const active = document.activeElement;
-  if (claimAt(active) !== claim) return NO_VOICE_WAIT_KEYS;
+  if (!keysReachPage(active)) return NO_VOICE_WAIT_KEYS;
+  if (claimAt(active) !== claim) return REACHES_PAGE;
   // Enter on Cancel send calls the send off rather than sending it.
   return active instanceof Element && active.closest("[data-voice-wait-cancel]") !== null
     ? REACHES_ESCAPE
@@ -128,20 +145,34 @@ function onFocusOut(): void {
   queueMicrotask(notifyReach);
 }
 
+function onWindowFocus(event: FocusEvent): void {
+  windowFocused = event.type === "focus";
+  notifyReach();
+}
+
 /**
  * Calls `listener` whenever where the wait keys go may have changed: the
- * keyboard moved, or a waiting composer claimed or released them.
+ * keyboard moved, within the page or off it, or a waiting composer claimed or
+ * released them.
  */
 export function observeVoiceWaitKeysReach(listener: () => void): () => void {
   if (reachListeners.size === 0) {
+    // Taken to hold the keyboard as the first wait starts, which is from a key
+    // press or a click here but for a spoken "send it"; its blur says otherwise.
+    windowFocused = true;
     window.addEventListener("focusin", notifyReach, true);
     window.addEventListener("focusout", onFocusOut, true);
+    // Not capture: only the window's own focus and blur, which don't bubble.
+    window.addEventListener("focus", onWindowFocus);
+    window.addEventListener("blur", onWindowFocus);
   }
   reachListeners.add(listener);
   return () => {
     if (!reachListeners.delete(listener) || reachListeners.size > 0) return;
     window.removeEventListener("focusin", notifyReach, true);
     window.removeEventListener("focusout", onFocusOut, true);
+    window.removeEventListener("focus", onWindowFocus);
+    window.removeEventListener("blur", onWindowFocus);
   };
 }
 

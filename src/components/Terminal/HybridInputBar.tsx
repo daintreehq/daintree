@@ -1492,15 +1492,17 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       onSpokenSendTooShort: noteSpokenSendTooShort,
     });
     // The stop-and-send key sends a wait it started as it stands, from
-    // anywhere, unless a dictation running elsewhere takes the press first.
+    // anywhere in the page, unless a dictation running elsewhere takes the
+    // press first.
     const stopAndSendCombo = useEffectiveCombo("voiceInput.stopAndSend");
     const voiceSessionTakesStopAndSend = useVoiceRecordingStore(
       (s) => s.activeTarget !== null && s.status !== "finishing" && isActiveVoiceSession(s.status)
     );
     const voiceSubmitKeys: VoiceSubmitWaitKeys = {
-      ...voiceWaitKeys,
+      enter: voiceWaitKeys.enter,
+      escape: voiceWaitKeys.escape,
       skip:
-        voiceSubmitWait?.byStopAndSend && !voiceSessionTakesStopAndSend
+        voiceSubmitWait?.byStopAndSend && voiceWaitKeys.page && !voiceSessionTakesStopAndSend
           ? (stopAndSendCombo ?? null)
           : null,
     };

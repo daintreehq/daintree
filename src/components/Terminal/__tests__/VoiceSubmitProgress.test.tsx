@@ -88,13 +88,21 @@ describe("voiceSubmitWaitCaption", () => {
     }
   });
 
+  it("says what the wait is on, whichever keys reach it", () => {
+    for (const keys of [IN_REACH, ELSEWHERE, { ...ELSEWHERE, skip: SKIP_COMBO }]) {
+      expect(voiceSubmitWaitCaption(polishing(1_000, 3_000, 5_000, true), keys)).toMatch(
+        /^Polishing…/
+      );
+      expect(voiceSubmitWaitCaption({ ...finishing, byStopAndSend: true }, keys)).toMatch(
+        /^Finishing…/
+      );
+    }
+  });
+
   // #15705: Enter and Escape typed in another pane are that pane's.
   it("names neither Enter nor Escape when they don't reach the wait", () => {
-    for (const wait of [polishing(1_000, 3_000), finishing]) {
-      const caption = voiceSubmitWaitCaption(wait, ELSEWHERE);
-      expect(caption).not.toMatch(/Enter|Esc/);
-      expect(caption).toMatch(/…$/);
-    }
+    expect(voiceSubmitWaitCaption(polishing(1_000, 3_000), ELSEWHERE)).toBe("Polishing…");
+    expect(voiceSubmitWaitCaption(finishing, ELSEWHERE)).toBe("Finishing…");
   });
 
   it("doesn't offer Enter to send from Cancel send, where Enter cancels", () => {
@@ -139,6 +147,7 @@ describe("voiceSubmitWaitStatus", () => {
       "Finishing dictation. Press Escape to cancel the send."
     );
     expect(voiceSubmitWaitStatus(polishing(1_000, 3_000), ELSEWHERE)).toBe("Polishing dictation.");
+    expect(voiceSubmitWaitStatus(finishing, ELSEWHERE)).toBe("Finishing dictation.");
   });
 
   it("reads the stop-and-send key aloud for a send it started", () => {
@@ -149,6 +158,10 @@ describe("voiceSubmitWaitStatus", () => {
     expect(status).toBe(
       `Polishing dictation. Press ${describeChord(SKIP_COMBO, isMac())} to send it as dictated.`
     );
+    // Only the transcript holds it: nothing sends it sooner.
+    expect(
+      voiceSubmitWaitStatus({ ...finishing, byStopAndSend: true }, { ...ELSEWHERE, skip: SKIP_COMBO })
+    ).toBe("Finishing dictation.");
   });
 });
 

@@ -113,31 +113,45 @@ describe("buildKeybindingWhenContext", () => {
   });
 
   // #15705: the stop-and-send key, pressed again, sends a waiting send it started.
-  it("reports voiceSendWaiting only while a send the stop-and-send key started waits", () => {
-    const waiting = () => buildKeybindingWhenContext(eventFrom(null)).voiceSendWaiting;
-    const releaseEnter = claimWaitingSend("enter-panel", new Set(["s0"]));
-    expect(waiting()).toBe(false);
+  describe("while a send waits", () => {
+    const releases: Array<() => void> = [];
+    afterEach(() => releases.splice(0).forEach((release) => release()));
+    const claim = (panelId: string, sendNow?: () => void) => {
+      const release = claimWaitingSend(panelId, new Set(["s1"]), sendNow);
+      releases.push(release);
+      return release;
+    };
 
-    const release = claimWaitingSend("key-panel", new Set(["s1"]), () => {});
-    expect(waiting()).toBe(true);
+    it("reports voiceSendWaiting only while a send the stop-and-send key started waits", () => {
+      const waiting = () => buildKeybindingWhenContext(eventFrom(null)).voiceSendWaiting;
+      claim("enter-panel");
+      expect(waiting()).toBe(false);
 
-    release();
-    releaseEnter();
-    expect(waiting()).toBe(false);
+      const release = claim("key-panel", () => {});
+      expect(waiting()).toBe(true);
+
+      release();
+      expect(waiting()).toBe(false);
+    });
+
+    it("holds the macOS stop-and-send key while a send it started waits, dictating or not", () => {
+      const when = buildDefaultKeybindings(false).find(
+        (binding) => binding.actionId === "voiceInput.stopAndSend"
+      )!.when!;
+      const holds = () => evaluate(parse(when), buildKeybindingWhenContext(eventFrom(null)));
+      expect(holds()).toBe(false);
+
+      const release = claim("key-panel", () => {});
+      expect(holds()).toBe(true);
+      useVoiceRecordingStore.setState({ status: "recording" });
+      expect(holds()).toBe(true);
+
+      release();
+      useVoiceRecordingStore.setState({ status: "idle" });
+      expect(holds()).toBe(false);
+    });
   });
 
-  it("holds the macOS stop-and-send key while a send it started waits, with dictation over", () => {
-    const when = buildDefaultKeybindings(false).find(
-      (binding) => binding.actionId === "voiceInput.stopAndSend"
-    )!.when!;
-    const holds = () => evaluate(parse(when), buildKeybindingWhenContext(eventFrom(null)));
-    expect(holds()).toBe(false);
-
-    const release = claimWaitingSend("key-panel", new Set(["s1"]), () => {});
-    expect(holds()).toBe(true);
-    release();
-    expect(holds()).toBe(false);
-  });
   it("reports terminalFocused only for targets inside an xterm host", () => {
     const xterm = document.createElement("div");
     xterm.className = "xterm";

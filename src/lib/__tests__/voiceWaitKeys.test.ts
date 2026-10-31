@@ -239,6 +239,10 @@ describe("voiceWaitKeys", () => {
 
   // #15705: a wait names only the keys that reach it from where the keyboard is.
   describe("voiceWaitKeysReach", () => {
+    const BOTH = { enter: true, escape: true, page: true };
+    const PAGE_ONLY = { enter: false, escape: false, page: true };
+    const NONE = { enter: false, escape: false, page: false };
+
     function composer() {
       const bar = document.createElement("div");
       const editor = document.createElement("div");
@@ -250,30 +254,38 @@ describe("voiceWaitKeys", () => {
       return { bar, editor, cancel };
     }
 
+    function otherPane() {
+      const pane = document.createElement("textarea");
+      const received: string[] = [];
+      pane.addEventListener("keydown", (event) => received.push(event.key));
+      document.body.appendChild(pane);
+      return { pane, received };
+    }
+
     it("says both reach from the composer, and neither from another pane, where they stay", () => {
       const { bar, editor } = composer();
-      const pane = document.createElement("textarea");
-      document.body.appendChild(pane);
+      const { pane, received } = otherPane();
       const owner = claim({ holds: (element) => bar.contains(element) });
 
       editor.focus();
-      expect(voiceWaitKeysReach(owner)).toEqual({ enter: true, escape: true });
+      expect(voiceWaitKeysReach(owner)).toEqual(BOTH);
 
       pane.focus();
-      expect(voiceWaitKeysReach(owner)).toEqual({ enter: false, escape: false });
+      expect(voiceWaitKeysReach(owner)).toEqual(PAGE_ONLY);
       expect(press("Enter", pane).defaultPrevented).toBe(false);
       expect(press("Escape", pane).defaultPrevented).toBe(false);
+      expect(received).toEqual(["Enter", "Escape"]);
       expect(owner.sendNow).not.toHaveBeenCalled();
       expect(owner.cancel).not.toHaveBeenCalled();
     });
 
     it("gives the keyboard nowhere to the one waiting composer, or the selected one of several", () => {
       const only = claim();
-      expect(voiceWaitKeysReach(only)).toEqual({ enter: true, escape: true });
+      expect(voiceWaitKeysReach(only)).toEqual(BOTH);
 
       const selected = claim({ isSelected: () => true });
-      expect(voiceWaitKeysReach(only)).toEqual({ enter: false, escape: false });
-      expect(voiceWaitKeysReach(selected)).toEqual({ enter: true, escape: true });
+      expect(voiceWaitKeysReach(only)).toEqual(PAGE_ONLY);
+      expect(voiceWaitKeysReach(selected)).toEqual(BOTH);
     });
 
     it("says only Escape reaches from Cancel send, where Enter calls the send off", () => {
@@ -282,37 +294,86 @@ describe("voiceWaitKeys", () => {
 
       cancel.focus();
 
-      expect(voiceWaitKeysReach(owner)).toEqual({ enter: false, escape: true });
+      expect(voiceWaitKeysReach(owner)).toEqual({ enter: false, escape: true, page: true });
     });
 
-    it("tells observers when the keyboard moves or a composer claims or releases the keys", async () => {
-      const { bar, editor } = composer();
-      const pane = document.createElement("textarea");
-      document.body.appendChild(pane);
-      const changed = vi.fn();
-      const stop = observeVoiceWaitKeysReach(changed);
+    it.each(["iframe", "webview"])(
+      "says no key reaches the page from a guest page in an %s",
+      (tag) => {
+        const guest = document.createElement(tag);
+        guest.tabIndex = 0;
+        document.body.appendChild(guest);
+        const owner = claim();
+
+        guest.focus();
+
+        expect(document.activeElement).toBe(guest);
+        expect(voiceWaitKeysReach(owner)).toEqual(NONE);
+      }
+    );
+
+    it("says no key reaches the page while its window doesn't hold the keyboard", () => {
+      const owner = claim();
+      const seen: unknown[] = [];
+      const stop = observeVoiceWaitKeysReach(() => seen.push(voiceWaitKeysReach(owner)));
       try {
-        claim({ holds: (element) => bar.contains(element) });
-        expect(changed).toHaveBeenCalledTimes(1);
+        window.dispatchEvent(new FocusEvent("blur"));
+        expect(voiceWaitKeysReach(owner)).toEqual(NONE);
 
-        pane.focus();
-        expect(changed).toHaveBeenCalledTimes(2);
-
-        changed.mockClear();
-        pane.blur();
-        await Promise.resolve();
-        expect(changed).toHaveBeenCalled();
-
-        changed.mockClear();
-        releases.shift()!();
-        expect(changed).toHaveBeenCalledTimes(1);
-
-        stop();
-        changed.mockClear();
-        editor.focus();
-        expect(changed).not.toHaveBeenCalled();
+        window.dispatchEvent(new FocusEvent("focus"));
+        expect(voiceWaitKeysReach(owner)).toEqual(BOTH);
+        expect(seen).toEqual([NONE, BOTH]);
       } finally {
         stop();
+      }
+    });
+
+    it("tells observers where the keys go once the keyboard moves or a composer claims or releases them", async () => {
+      const { bar, editor } = composer();
+      const { pane } = otherPane();
+      let owner!: VoiceWaitKeyClaim;
+      const seen: unknown[] = [];
+      const stop = observeVoiceWaitKeysReach(() => seen.push(owner && voiceWaitKeysReach(owner)));
+      try {
+        owner = claim({ holds: (element) => bar.contains(element) });
+        expect(seen).toHaveLength(1);
+
+        pane.focus();
+        expect(seen.at(-1)).toEqual(PAGE_ONLY);
+
+        seen.length = 0;
+        pane.blur();
+        // Told once focus has settled on nothing, not while it is still leaving.
+        expect(seen).toEqual([]);
+        await Promise.resolve();
+        expect(seen).toEqual([BOTH]);
+
+        editor.focus();
+        seen.length = 0;
+        releases.shift()!();
+        expect(seen).toEqual([PAGE_ONLY]);
+      } finally {
+        stop();
+      }
+    });
+
+    it("listens for focus only while someone observes, however many do", () => {
+      const add = vi.spyOn(window, "addEventListener");
+      const remove = vi.spyOn(window, "removeEventListener");
+      try {
+        const first = observeVoiceWaitKeysReach(() => {});
+        const second = observeVoiceWaitKeysReach(() => {});
+        const types = (calls: unknown[][]) => calls.map(([type]) => type).sort();
+        expect(types(add.mock.calls)).toEqual(["blur", "focus", "focusin", "focusout"]);
+
+        first();
+        expect(remove).not.toHaveBeenCalled();
+        second();
+        expect(types(remove.mock.calls)).toEqual(["blur", "focus", "focusin", "focusout"]);
+        for (const call of add.mock.calls) expect(remove).toHaveBeenCalledWith(...call);
+      } finally {
+        add.mockRestore();
+        remove.mockRestore();
       }
     });
   });

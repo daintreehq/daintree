@@ -168,6 +168,9 @@ describe("waiting sends the stop-and-send key started (#15705)", () => {
     expect(sendWaitingStopAndSends()).toBe(true);
     expect(first).toHaveBeenCalledTimes(1);
     expect(second).toHaveBeenCalledTimes(1);
+    // Still waiting, still holding a newer session back, and not the one it takes.
+    expect(isHeldBackSession("enter-panel", "a-later-session")).toBe(true);
+    expect(isHeldBackSession("enter-panel", "s1")).toBe(false);
   });
 
   it("keeps a newer send for the same panel when an older one's release comes late", () => {

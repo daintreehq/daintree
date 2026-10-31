@@ -96,9 +96,9 @@ export function polishingShareAt(wait: VoiceSubmitWait, now: number): number {
 /**
  * The keys that end a wait from where the keyboard is: Enter and Escape when
  * they reach it, and the stop-and-send key (`skip`, its combo) for a send that
- * key started, which reaches it from anywhere (#15705).
+ * key started, which reaches it from anywhere in the page (#15705).
  */
-export interface VoiceSubmitWaitKeys extends VoiceWaitKeysReach {
+export interface VoiceSubmitWaitKeys extends Pick<VoiceWaitKeysReach, "enter" | "escape"> {
   skip: string | null;
 }
 
