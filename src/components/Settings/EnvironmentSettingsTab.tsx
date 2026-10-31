@@ -8,6 +8,7 @@ import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { EnvVarRow, validateEnvRows, type EnvVarDraft } from "./EnvVarRow";
 import { useRowFocus } from "./useRowFocus";
 import { isSensitiveEnvKey } from "@shared/utils/envVars";
+import { isSecretEnvEntry } from "@/utils/secretDetection";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 import { useSettingsTabFlush, type SettingsFlushFailure } from "./SettingsFlushRegistry";
