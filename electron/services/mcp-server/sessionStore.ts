@@ -1,6 +1,9 @@
 import { timingSafeEqual } from "node:crypto";
 import type { ActionContext } from "../../../shared/types/actions.js";
-import type { McpActiveClientInfo } from "../../../shared/types/ipc/mcpServer.js";
+import type {
+  McpActiveClientInfo,
+  McpGrantRevokedReason,
+} from "../../../shared/types/ipc/mcpServer.js";
 import type {
   McpTier,
   McpSseSession,
@@ -38,22 +41,20 @@ export interface SessionStoreOptions {
    */
   emitGrantLifecycle?: GrantLifecycleEmitter;
   /**
-   * Callback fired alongside the other per-session cleanup hooks
-   * (idle expiry, explicit revoke, drain) so the {@link AbusePolicy}
-   * denial counter can be pruned in lockstep. Without this, the
-   * policy's internal Map grows for every session that ever opens
-   * and is only pruned on the rare abuse-trip path. Optional so test
+   * Fired by {@link SessionStore.retireSession}, on every route a session
+   * ends by, so the {@link AbusePolicy} denial counter is pruned in lockstep.
+   * Without this, the policy's internal Map grows for every session that ever
+   * opens and is only pruned on the rare abuse-trip path. Optional so test
    * fixtures construct without one.
    */
   dropAbuseState?: (sessionId: string) => void;
   /**
-   * Fired alongside the other per-session cleanup hooks so the live
-   * bearer-connection register in `httpLifecycle` drops this session from
-   * its owning bearer entry (and the entry itself once its last session
-   * closes). Mirrors {@link dropAbuseState} — the register is owned by
-   * `HttpLifecycle`, so the store reaches it through this callback rather
-   * than holding a reference. Optional so bare test fixtures construct
-   * without one.
+   * Fired by {@link SessionStore.retireSession} so the live bearer-connection
+   * register in `httpLifecycle` drops this session from its owning bearer
+   * entry (and the entry itself once its last session closes). Mirrors
+   * {@link dropAbuseState} — the register is owned by `HttpLifecycle`, so the
+   * store reaches it through this callback rather than holding a reference.
+   * Optional so bare test fixtures construct without one.
    */
   dropBearerState?: (sessionId: string) => void;
   /**
@@ -71,6 +72,9 @@ export interface SessionStoreOptions {
    */
   onTierDecayed?: (sessionId: string, previousTier: McpTier, newTier: McpTier) => void;
 }
+
+/** Why a session ended, as its grants' `grant.revoked` records report it. */
+export type SessionRetireReason = Extract<McpGrantRevokedReason, "session-idle" | "session-ended">;
 
 export class SessionStore {
   readonly sessions = new Map<string, McpSseSession>();
@@ -218,8 +222,8 @@ export class SessionStore {
   // awake-time correction as the idle reaper; `tierElevationToken` records
   // the tier captured when the timer was armed so a fresh re-elevation
   // between arm and fire is never wiped (#2243 stale-token guard). Stored
-  // off the session object (unlike `idleTimer`) so the four inline cleanup
-  // paths in `httpLifecycle` can tear it down via `clearElevationTimer`.
+  // off the session object (unlike `idleTimer`) because a session can be
+  // retired before, or without, ever being filed in a transport map.
   private readonly tierElevationTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly tierElevationStartedAt = new Map<string, number>();
   private readonly tierElevationToken = new Map<string, McpTier>();
@@ -332,9 +336,8 @@ export class SessionStore {
    * dispatch into a view the session no longer owns, a stale ownership
    * record would hand a recycled id authority over another session's
    * terminals, and a stale credential row would let a recycled id admit the
-   * previous owner's bearer. Teardown is duplicated across ~9 call sites (four here, five
-   * inline in `httpLifecycle`), so the lockstep lives in one method rather
-   * than in nine copies that drift.
+   * previous owner's bearer. Called from {@link retireSession}, which owns the
+   * rest of a session's state.
    *
    * Dropping the ownership records revokes *authority*, not the resources
    * (#11909). A disconnected client's terminals and worktrees stay exactly
@@ -359,6 +362,52 @@ export class SessionStore {
     this.paneSessions.delete(sessionId);
     this.resourceOwnership.clearSession(sessionId);
     this.toolListRouteWatch.forget(sessionId);
+  }
+
+  /**
+   * Forget everything held for `sessionId`: the one teardown every route a
+   * session ends by goes through — stream close, connect or request failure,
+   * an uninitialized handshake, idle expiry and {@link revokeSession}. A new
+   * piece of per-session state is cleared here and nowhere else.
+   *
+   * Removes the session's transport entry and cancels its idle timer, but
+   * never closes the transport: the caller either is the transport's own
+   * `onclose`, or closes it afterwards. Idempotent and needs no live
+   * transport, so a late `onclose` after a revoke is harmless and a session
+   * that never reached a transport map is still reclaimed.
+   *
+   * Order matters in one place: grants are revoked while the origin and the
+   * WebContents pin are still bound, because the lifecycle emitter resolves
+   * the pinned renderer to push `grant.revoked` and drops the push without
+   * them. The figure counter is likewise cleared before the help id it is
+   * keyed through.
+   */
+  retireSession(sessionId: string, reason: SessionRetireReason): void {
+    const sse = this.sessions.get(sessionId);
+    if (sse) {
+      clearTimeout(sse.idleTimer);
+      this.sessions.delete(sessionId);
+    }
+    const http = this.httpSessions.get(sessionId);
+    if (http) {
+      clearTimeout(http.idleTimer);
+      this.httpSessions.delete(sessionId);
+    }
+    this.relaySessions.delete(sessionId);
+    this.idleStartedAt.delete(sessionId);
+    this.httpIdleStartedAt.delete(sessionId);
+    this.clearElevationTimer(sessionId);
+    this.sessionTierMap.delete(sessionId);
+    this.grantCache.revokeSession(sessionId, reason);
+    this.grantCache.clearDenialCounts(sessionId);
+    this.clearSessionBinding(sessionId);
+    this.clearFigureCounter(sessionId);
+    this.sessionHelpIdMap.delete(sessionId);
+    this.clearDedupState(sessionId);
+    this.clearClientMetadata(sessionId);
+    this.dropAbuseStateFn(sessionId);
+    this.dropBearerStateFn(sessionId);
+    this.cleanupResourceSubscriptionsFn(sessionId);
   }
 
   /**
@@ -391,7 +440,7 @@ export class SessionStore {
    * Record handshake-time connection metadata for a session so the
    * MCP-disable confirmation can name it later (#8779). Called once per
    * session from the SSE and Streamable HTTP handshake paths, after the
-   * tier has been stamped. Cleared by every per-session teardown path.
+   * tier has been stamped. Cleared by {@link retireSession}.
    */
   registerClientMetadata(
     sessionId: string,
@@ -403,12 +452,7 @@ export class SessionStore {
     this.sessionTransport.set(sessionId, transport);
   }
 
-  /**
-   * Drop a session's connection metadata. Public so the inline
-   * `transport.onclose` / connect-failure cleanup closures in `httpLifecycle`
-   * can tear it down in lockstep with the other per-session maps on a normal
-   * disconnect (not just idle expiry / revoke / drain).
-   */
+  /** Drop a session's connection metadata. */
   clearClientMetadata(sessionId: string): void {
     this.sessionConnectedAtMs.delete(sessionId);
     this.sessionUserAgent.delete(sessionId);
@@ -460,10 +504,7 @@ export class SessionStore {
   /**
    * Drop a help session's figure counter. Resolve the public help-session id
    * from {@link sessionHelpIdMap} BEFORE that entry is deleted, since the
-   * counter is keyed by the public id, not the transport sessionId. Public so
-   * the inline `transport.onclose` / connect-failure cleanup closures in
-   * `httpLifecycle` can tear it down on a normal disconnect, in lockstep with
-   * the other per-session maps (mirrors {@link clearClientMetadata}).
+   * counter is keyed by the public id, not the transport sessionId.
    */
   clearFigureCounter(sessionId: string): void {
     const helpSessionId = this.sessionHelpIdMap.get(sessionId);
@@ -472,26 +513,15 @@ export class SessionStore {
     }
   }
 
-  private expireSseSession(sessionId: string): void {
-    const session = this.sessions.get(sessionId);
+  /**
+   * Reap an idle SSE or Streamable HTTP session. Retired before its transport
+   * closes, so its grants report `session-idle` rather than the
+   * `session-ended` the transport's own `onclose` would retire it with.
+   */
+  private expireIdleSession(sessionId: string): void {
+    const session = this.sessions.get(sessionId) ?? this.httpSessions.get(sessionId);
     if (!session) return;
-    this.sessions.delete(sessionId);
-    this.sessionTierMap.delete(sessionId);
-    // Revoke BEFORE deleting the WebContents pin so the lifecycle
-    // emitter can still resolve the pinned renderer and dispatch the
-    // `grant.revoked` event. The audit-record write tolerates a
-    // missing pin (it doesn't need one); the targeted `wc.send` does.
-    this.grantCache.revokeSession(sessionId, "session-idle");
-    this.clearSessionBinding(sessionId);
-    this.clearFigureCounter(sessionId);
-    this.sessionHelpIdMap.delete(sessionId);
-    this.clearDedupState(sessionId);
-    this.clearClientMetadata(sessionId);
-    this.idleStartedAt.delete(sessionId);
-    this.clearElevationTimer(sessionId);
-    this.dropAbuseStateFn(sessionId);
-    this.dropBearerStateFn(sessionId);
-    this.cleanupResourceSubscriptionsFn(sessionId);
+    this.retireSession(sessionId, "session-idle");
     session.transport.close().catch(() => {
       // ignore close errors during idle timeout cleanup
     });
@@ -516,7 +546,7 @@ export class SessionStore {
           // Fall through to expiry.
         }
       }
-      this.expireSseSession(sessionId);
+      this.expireIdleSession(sessionId);
     };
     const timer = setTimeout(checkAndExpire, MCP_SSE_IDLE_TIMEOUT_MS);
     timer.unref?.();
@@ -528,29 +558,6 @@ export class SessionStore {
     if (!session || this.touchPaneSession(sessionId)) return;
     clearTimeout(session.idleTimer);
     session.idleTimer = this.createIdleTimer(sessionId);
-  }
-
-  private expireHttpSession(sessionId: string): void {
-    const session = this.httpSessions.get(sessionId);
-    if (!session) return;
-    this.httpSessions.delete(sessionId);
-    this.sessionTierMap.delete(sessionId);
-    // Revoke BEFORE deleting the WebContents pin — same reasoning
-    // as `expireSseSession` above.
-    this.grantCache.revokeSession(sessionId, "session-idle");
-    this.clearSessionBinding(sessionId);
-    this.clearFigureCounter(sessionId);
-    this.sessionHelpIdMap.delete(sessionId);
-    this.clearDedupState(sessionId);
-    this.clearClientMetadata(sessionId);
-    this.httpIdleStartedAt.delete(sessionId);
-    this.clearElevationTimer(sessionId);
-    this.dropAbuseStateFn(sessionId);
-    this.dropBearerStateFn(sessionId);
-    this.cleanupResourceSubscriptionsFn(sessionId);
-    session.transport.close().catch(() => {
-      // ignore close errors during idle timeout cleanup
-    });
   }
 
   createHttpIdleTimer(sessionId: string): ReturnType<typeof setTimeout> {
@@ -572,7 +579,7 @@ export class SessionStore {
           // Fall through to expiry.
         }
       }
-      this.expireHttpSession(sessionId);
+      this.expireIdleSession(sessionId);
     };
     const timer = setTimeout(checkAndExpire, MCP_SSE_IDLE_TIMEOUT_MS);
     timer.unref?.();
@@ -647,12 +654,12 @@ export class SessionStore {
       try {
         const awakeElapsed = getSystemSleepService().getAwakeTimeSince(startedAt);
         if (awakeElapsed >= MCP_SSE_IDLE_TIMEOUT_MS) {
-          this.expireSseSession(sessionId);
+          this.expireIdleSession(sessionId);
         } else {
           clearTimeout(session.idleTimer);
           const remaining = Math.max(1, MCP_SSE_IDLE_TIMEOUT_MS - awakeElapsed);
           session.idleTimer = setTimeout(() => {
-            this.expireSseSession(sessionId);
+            this.expireIdleSession(sessionId);
           }, remaining);
           (session.idleTimer as ReturnType<typeof setTimeout>).unref?.();
         }
@@ -673,12 +680,12 @@ export class SessionStore {
       try {
         const awakeElapsed = getSystemSleepService().getAwakeTimeSince(startedAt);
         if (awakeElapsed >= MCP_SSE_IDLE_TIMEOUT_MS) {
-          this.expireHttpSession(sessionId);
+          this.expireIdleSession(sessionId);
         } else {
           clearTimeout(session.idleTimer);
           const remaining = Math.max(1, MCP_SSE_IDLE_TIMEOUT_MS - awakeElapsed);
           session.idleTimer = setTimeout(() => {
-            this.expireHttpSession(sessionId);
+            this.expireIdleSession(sessionId);
           }, remaining);
           (session.idleTimer as ReturnType<typeof setTimeout>).unref?.();
         }
@@ -792,11 +799,8 @@ export class SessionStore {
   }
 
   /**
-   * Tear down a session's tier-elevation timer and bookkeeping. Public so
-   * the inline cleanup paths in `httpLifecycle` (SSE/HTTP `transport.onclose`
-   * and the two connect-failure catch blocks) can clear it without routing
-   * through the private session-expiry helpers (#4851: every setTimeout must
-   * be cleared in every exit path).
+   * Tear down a session's tier-elevation timer and bookkeeping (#4851: every
+   * setTimeout must be cleared in every exit path).
    */
   clearElevationTimer(sessionId: string): void {
     const timer = this.tierElevationTimers.get(sessionId);
@@ -942,44 +946,23 @@ export class SessionStore {
     return null;
   }
 
+  /**
+   * End a live session from this side: retire it, then close its transport.
+   * False, touching nothing, when no live transport owns `sessionId`.
+   */
   revokeSession(sessionId: string): boolean {
-    const sseSession = this.sessions.get(sessionId);
-    const httpSession = this.httpSessions.get(sessionId);
-    const relaySession = this.relaySessions.get(sessionId);
-    if (!sseSession && !httpSession && !relaySession) return false;
-
-    if (sseSession) {
-      clearTimeout(sseSession.idleTimer);
-      this.sessions.delete(sessionId);
-      sseSession.transport.close().catch(() => {});
+    const transports = [
+      this.sessions.get(sessionId)?.transport,
+      this.httpSessions.get(sessionId)?.transport,
+      this.relaySessions.get(sessionId)?.transport,
+    ].filter((transport) => transport !== undefined);
+    if (transports.length === 0) return false;
+    // Retired first, so the store is clean whether or not a transport's
+    // `onclose` runs synchronously inside `close()` — it retires again, as a no-op.
+    this.retireSession(sessionId, "session-ended");
+    for (const transport of transports) {
+      transport.close().catch(() => {});
     }
-    if (httpSession) {
-      clearTimeout(httpSession.idleTimer);
-      this.httpSessions.delete(sessionId);
-      httpSession.transport.close().catch(() => {});
-    }
-    if (relaySession) {
-      this.relaySessions.delete(sessionId);
-      relaySession.transport.close().catch(() => {});
-    }
-
-    this.sessionTierMap.delete(sessionId);
-    // Revoke BEFORE deleting the WebContents pin so the lifecycle
-    // emitter can still resolve the pinned renderer for the
-    // `grant.revoked` push. Without this, any outstanding per-tool
-    // grants would be left in the cache while the session entry is
-    // torn down — the renderer would never receive the `revoked`
-    // lifecycle event and the grant state would leak (#8467).
-    this.grantCache.revokeSession(sessionId, "session-ended");
-    this.clearSessionBinding(sessionId);
-    this.clearFigureCounter(sessionId);
-    this.sessionHelpIdMap.delete(sessionId);
-    this.clearDedupState(sessionId);
-    this.clearClientMetadata(sessionId);
-    this.clearElevationTimer(sessionId);
-    this.dropAbuseStateFn(sessionId);
-    this.dropBearerStateFn(sessionId);
-    this.cleanupResourceSubscriptionsFn(sessionId);
     return true;
   }
 
