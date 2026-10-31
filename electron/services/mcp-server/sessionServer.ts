@@ -2814,6 +2814,16 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           };
         };
 
+        // The incarnation each named close reaches, read before it is sent: a
+        // successor launched under the id while the close is out is not the
+        // process the caller closed (#15728).
+        const closeGenerations = new Map<string, number | undefined>();
+        if (CLOSE_TOOLS.has(actionId)) {
+          for (const terminalId of namedTerminalIds(args)) {
+            closeGenerations.set(terminalId, deps.terminalGenerationOf?.(terminalId));
+          }
+        }
+
         // An assistant target runs in main (#13496), with the notice and the
         // reply wait set up above around it like any send. Its refusals are
         // its own words, and a refused send cancels the notice in `finally`.
@@ -2847,16 +2857,6 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               code: EXECUTION_ERROR_CODE,
               message: formatErrorMessage(err, `${actionId} failed`),
             });
-          }
-        }
-
-        // The incarnation each named close reaches, read before it is sent: a
-        // successor launched under the id while the close is out is not the
-        // process the caller closed (#15728).
-        const closeGenerations = new Map<string, number | undefined>();
-        if (CLOSE_TOOLS.has(actionId)) {
-          for (const terminalId of namedTerminalIds(args)) {
-            closeGenerations.set(terminalId, deps.terminalGenerationOf?.(terminalId));
           }
         }
 

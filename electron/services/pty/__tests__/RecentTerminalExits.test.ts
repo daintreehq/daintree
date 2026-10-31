@@ -24,6 +24,16 @@ describe("RecentTerminalExits (#15728)", () => {
     expect(listener).toHaveBeenCalledOnce();
   });
 
+  it("names the incarnation whose exit it saw last under an id", () => {
+    const exits = new RecentTerminalExits();
+    exits.record({ terminalId: "t1", launchGeneration: 1, exitCode: 0, signal: undefined });
+    exits.record({ terminalId: "t2", launchGeneration: 7, exitCode: 0, signal: undefined });
+    exits.record({ terminalId: "t1", launchGeneration: 3, exitCode: 0, signal: undefined });
+
+    expect(exits.latestGeneration("t1")).toBe(3);
+    expect(exits.latestGeneration("t3")).toBeUndefined();
+  });
+
   it("forgets exits older than its window", () => {
     let now = 1_000;
     const exits = new RecentTerminalExits(() => now, 60_000);

@@ -421,6 +421,82 @@ describe("waitForClosedPanelExits (#15728)", () => {
     expect(host.endGraceCalls).toEqual([]);
   });
 
+  it("asks before each panel's grace, and sends none after the first refusal", async () => {
+    for (const [id, generation] of [
+      ["a", 1],
+      ["b", 2],
+      ["c", 3],
+    ] as const) {
+      host.spawn(id, generation);
+      host.close(id);
+    }
+    const deps = host.deps();
+    const delays: Record<string, number> = { a: 10, b: 20, c: 30 };
+    const staggered: ClosedPanelExitDeps = {
+      ...deps,
+      readRecord: (id) =>
+        new Promise((resolve) => setTimeout(() => resolve(deps.readRecord(id)), delays[id])),
+      // The first request is never answered, so the refusal can't wait on it.
+      endTrashGrace: (id, generation) => {
+        host.endGraceCalls.push([id, generation]);
+        return new Promise(() => {});
+      },
+    };
+    let asked = 0;
+    const refused = new Error("not driving");
+
+    const wait = waitForClosedPanelExits(
+      [
+        { terminalId: "a", launchGeneration: 1 },
+        { terminalId: "b", launchGeneration: 2 },
+        { terminalId: "c", launchGeneration: 3 },
+      ],
+      {
+        timeoutMs: 5_000,
+        endGrace: true,
+        authorizeEndGrace: () => {
+          if (++asked === 2) throw refused;
+        },
+      },
+      staggered
+    );
+
+    await expect(settleWithin(wait, 30)).rejects.toBe(refused);
+    expect(asked).toBe(2);
+    expect(host.endGraceCalls).toEqual([["a", 1]]);
+  });
+
+  it("starts nothing for a first read that answers after its budget", async () => {
+    host.spawn("t1", 3);
+    host.close("t1");
+    const deps = host.deps();
+    let release: () => void = () => {};
+    let reads = 0;
+    const late: ClosedPanelExitDeps = {
+      ...deps,
+      readRecord: (id) => {
+        if (++reads === 1) {
+          return new Promise((resolve) => {
+            release = () => resolve(deps.readRecord(id));
+          });
+        }
+        // The final read lets the first one answer, after its budget lapsed.
+        release();
+        return deps.readRecord(id);
+      },
+    };
+    const result = await settleWithin(
+      waitForClosedPanelExits(
+        [{ terminalId: "t1", launchGeneration: 3 }],
+        { timeoutMs: 1_000, endGrace: true },
+        late
+      ),
+      1_000 + FINAL_READ_BUDGET_MS
+    );
+    expect(host.endGraceCalls).toEqual([]);
+    expect(result.processes).toEqual([{ terminalId: "t1", outcome: "running", graceEnded: false }]);
+  });
+
   it("starts no shutdown once the call is cancelled", async () => {
     host.spawn("t1", 3);
     host.close("t1");

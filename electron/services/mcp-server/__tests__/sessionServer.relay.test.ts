@@ -12,6 +12,7 @@ import { SessionStore } from "../sessionStore.js";
 import { RelayDrivenElsewhereError } from "../rendererBridge.js";
 import { RELAY_CALL_ID_META_KEY } from "../shared.js";
 import { relayNoticePane, type OwnPane, type TerminalNotifyHandlers } from "../terminalNotify.js";
+import { relayOwnershipPrincipal } from "../resourceOwnership.js";
 import type { HostCallContext } from "../hostControlTools.js";
 
 function entry(
@@ -42,6 +43,8 @@ const MANIFEST = [
   entry("host.call", "command"),
   entry("help.displayImage", "command"),
   entry("terminal.notifyWhenIdle", "command"),
+  entry("terminal.closeOwned", "command"),
+  entry("terminal.waitForExit", "command"),
 ];
 
 interface Harness {
@@ -62,16 +65,18 @@ afterEach(async () => {
 async function relayed(
   tier: "core" | "full",
   overrides: Partial<SessionServerDeps> = {},
-  relay: boolean = true
+  relay: boolean = true,
+  bound: { store?: SessionStore; sessionId?: string; projectId?: string } = {}
 ): Promise<Harness> {
-  const store = new SessionStore(() => {});
-  const sessionId = "relay-session";
+  const store = bound.store ?? new SessionStore(() => {});
+  const sessionId = bound.sessionId ?? "relay-session";
+  const projectId = bound.projectId ?? "project-1";
   store.sessionTierMap.set(sessionId, tier);
   store.sessionOriginMap.set(sessionId, "external");
-  store.sessionWorkspaceMap.set(sessionId, "project-1");
+  store.sessionWorkspaceMap.set(sessionId, projectId);
   const deps: SessionServerDeps = {
     sessionStore: store,
-    workspaceBinding: { workspaceId: "project-1" },
+    workspaceBinding: { workspaceId: projectId },
     requestManifest: vi.fn().mockResolvedValue(MANIFEST),
     dispatchAction: vi.fn().mockResolvedValue({ result: { ok: true, result: { ran: true } } }),
     handleWaitUntilIdle: vi.fn(),
@@ -111,6 +116,7 @@ async function relayed(
     deps,
     close: async () => {
       await client.close();
+      if (bound.store !== undefined) return;
       store.drain();
       store.grantCache.dispose();
     },
@@ -123,6 +129,81 @@ function errorCode(result: { content: unknown }): string {
   const [first] = result.content as Array<{ text: string }>;
   return (JSON.parse(first!.text) as { code: string }).code;
 }
+
+describe("waiting on a relayed close (#15728)", () => {
+  // One Shell assistant's sessions on this host share a relay principal, one
+  // per project it drives here, so a close in one project must not let a
+  // session in another end that panel's grace past the first project's drive rule.
+  it("asks the drive rule of the project a panel was closed in, not the asking session's", async () => {
+    const store = new SessionStore(() => {});
+    const principal = relayOwnershipPrincipal("shell-1", "help-1");
+    // The contract: null while this Shell drives the bound project and a named
+    // project is that one.
+    const refuseWriteFor = (bound: string) =>
+      vi.fn((projectId: string | undefined) =>
+        projectId === undefined || projectId === bound
+          ? null
+          : { code: "VALIDATION_ERROR", message: `This call can only act in project ${bound}.` }
+      );
+    const waitForClosedPanelExits = vi.fn(async () => ({
+      processes: [{ terminalId: "t-1", outcome: "running" as const, graceEnded: true }],
+    }));
+    const inA = await relayed(
+      "core",
+      {
+        relay: { shellName: "greg-mbp", refuseWrite: refuseWriteFor("project-1") },
+        waitForClosedPanelExits,
+        terminalGenerationOf: () => 4,
+        dispatchAction: vi.fn().mockResolvedValue({
+          result: { ok: true, result: { closedIds: ["t-1"] } },
+          dispatchedWorkspace: { kind: "project", workspaceId: "project-1", workspacePath: "/a" },
+        }),
+      },
+      true,
+      { store, sessionId: "relay-a", projectId: "project-1" }
+    );
+    const inB = await relayed(
+      "core",
+      {
+        relay: { shellName: "greg-mbp", refuseWrite: refuseWriteFor("project-2") },
+        waitForClosedPanelExits,
+      },
+      true,
+      { store, sessionId: "relay-b", projectId: "project-2" }
+    );
+    store.resourceOwnership.bindPrincipal("relay-a", principal);
+    store.resourceOwnership.bindPrincipal("relay-b", principal);
+    store.resourceOwnership.record(store.resourceOwnership.ownerOf("relay-a"), [
+      { kind: "terminal", id: "t-1" },
+    ]);
+
+    const closed = await inA.client.callTool({
+      name: "terminal.closeOwned",
+      arguments: { terminalId: "t-1" },
+    });
+    expect(closed.isError).not.toBe(true);
+
+    const fromB = await inB.client.callTool({
+      name: "terminal.waitForExit",
+      arguments: { terminalIds: ["t-1"], endGrace: true },
+    });
+    expect(errorCode(fromB as { content: unknown })).toBe("VALIDATION_ERROR");
+    expect(waitForClosedPanelExits).not.toHaveBeenCalled();
+
+    const fromA = await inA.client.callTool({
+      name: "terminal.waitForExit",
+      arguments: { terminalIds: ["t-1"], endGrace: true },
+    });
+    expect(fromA.isError).not.toBe(true);
+    expect(waitForClosedPanelExits).toHaveBeenCalledExactlyOnceWith(
+      [{ terminalId: "t-1", launchGeneration: 4 }],
+      expect.objectContaining({ endGrace: true })
+    );
+
+    store.drain();
+    store.grantCache.dispose();
+  });
+});
 
 describe("a relayed session (#13493)", () => {
   it("is live for its tier only while the relay holds its transport", async () => {

@@ -142,9 +142,12 @@ export async function waitForClosedPanelExits(
   };
 
   let refusal: { error: unknown } | undefined;
+  // Set once the first reads' budget lapses: a read answering after that
+  // starts nothing this call could still report or refuse.
+  let tooLateForGrace = false;
   const requestEndGrace = (target: ClosedPanelExitTarget) => {
     if (!options.endGrace || !pending.has(target.terminalId)) return;
-    if (options.signal?.aborted === true || refusal !== undefined) return;
+    if (options.signal?.aborted === true || refusal !== undefined || tooLateForGrace) return;
     const generation = target.launchGeneration;
     if (generation === undefined) {
       graceEnded.set(target.terminalId, false);
@@ -185,6 +188,7 @@ export async function waitForClosedPanelExits(
       undefined,
       budgetEnds
     );
+    tooLateForGrace = true;
     if (refusal !== undefined) throw refusal.error;
 
     await Promise.all([

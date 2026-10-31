@@ -227,9 +227,9 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    */
   /**
    * The incarnation running under a terminal id as far as main can tell, or
-   * the last one launched there (#15728). Read for each close, so the wait
-   * after it asks about the process that close reached. Absent, closes are
-   * noted with no incarnation, and their waits never match an exit.
+   * after its exit the one main saw exit (#15728). Read for each close, so the
+   * wait after it asks about the process that close reached. Absent, closes
+   * are noted with no incarnation, and their waits never match a kept exit.
    */
   terminalGenerationOf?: (terminalId: string) => number | undefined;
   waitForClosedPanelExits?: (

@@ -67,6 +67,19 @@ export class RecentTerminalExits {
     return this.exits.get(`${terminalId}\u0000${launchGeneration}`);
   }
 
+  /**
+   * The incarnation under this id whose exit main saw last: the one a panel
+   * still shows after its process ended, unlike a launch the host refused.
+   */
+  latestGeneration(terminalId: string): number | undefined {
+    this.prune();
+    let latest: number | undefined;
+    for (const exit of this.exits.values()) {
+      if (exit.terminalId === terminalId) latest = exit.launchGeneration;
+    }
+    return latest;
+  }
+
   onExit(listener: (exit: RecentTerminalExit) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);

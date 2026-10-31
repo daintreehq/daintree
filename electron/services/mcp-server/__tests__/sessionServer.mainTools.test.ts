@@ -965,6 +965,28 @@ describe("one assistant addressing another (#13496)", () => {
     expect(deps.dispatchAction).not.toHaveBeenCalled();
   });
 
+  it("notes the incarnation an assistant close reached, not one launched while it ran (#15728)", async () => {
+    const { deps, control } = assistantDeps({ caller: CALLER });
+    let generation = 5;
+    deps.terminalGenerationOf = () => generation;
+    control.close.mockImplementation(async () => {
+      generation = 6;
+      return { closedIds: [ASSISTANT_TERMINAL] };
+    });
+    deps.sessionStore.resourceOwnership.bindPrincipal("sess", "help-hub");
+    const server = await serve(deps);
+
+    await callTool(server, {
+      name: "terminal.close",
+      arguments: { terminalId: ASSISTANT_TERMINAL },
+    });
+
+    const owner = deps.sessionStore.resourceOwnership.ownerOf("sess");
+    expect(
+      deps.sessionStore.resourceOwnership.closedRecord(owner, ASSISTANT_TERMINAL)?.launchGeneration
+    ).toBe(5);
+  });
+
   it("closes an assistant in a closeMany without putting it to the person", async () => {
     const requestCloseApproval = vi.fn();
     const { deps, control } = assistantDeps({ caller: CALLER, requestCloseApproval });
