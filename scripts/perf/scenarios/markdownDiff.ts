@@ -63,7 +63,11 @@ function fixtureMisses(fixture: MarkdownDiffFixture, reference: MarkdownDiffResu
   if (fixture.editedLines === 0) misses++;
   if (fixture.sourceLines > MARKDOWN_DIFF_MAX_LINES) misses++;
   const blocks = parseMarkdownBlocks(fixture.input.newSource ?? "").blocks.length;
-  if (spec.expected === "too-large" ? blocks <= MARKDOWN_DIFF_MAX_BLOCKS : blocks > MARKDOWN_DIFF_MAX_BLOCKS) {
+  if (
+    spec.expected === "too-large"
+      ? blocks <= MARKDOWN_DIFF_MAX_BLOCKS
+      : blocks > MARKDOWN_DIFF_MAX_BLOCKS
+  ) {
     misses++;
   }
   if (verdictOf(reference) !== spec.expected) misses++;
@@ -144,7 +148,13 @@ export const markdownDiffScenarios: PerfScenario[] = [
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 4, ci: 8, nightly: 12 },
     warmups: 1,
-    correctness: ["verdictMisses", "modelMisses", "fixtureMisses", "workerRoutingMisses", "probeMisses"],
+    correctness: [
+      "verdictMisses",
+      "modelMisses",
+      "fixtureMisses",
+      "workerRoutingMisses",
+      "probeMisses",
+    ],
     async run(): Promise<ScenarioSample> {
       const fixtures = OPEN_FIXTURES.map(buildMarkdownDiffFixture);
       const { factory, harnesses } = createNodeMarkdownDiffWorkerFactory();
@@ -198,7 +208,10 @@ export const markdownDiffScenarios: PerfScenario[] = [
           inThreadMaxStall = Math.max(inThreadMaxStall, inThread.reading.longestStallMs);
           workerMaxStall = Math.max(workerMaxStall, worker.reading.longestStallMs);
           if (fixture.sourceBytes >= LARGE_DOCUMENT_BYTES) {
-            largeInThreadMaxStall = Math.max(largeInThreadMaxStall, inThread.reading.longestStallMs);
+            largeInThreadMaxStall = Math.max(
+              largeInThreadMaxStall,
+              inThread.reading.longestStallMs
+            );
             largeWorkerMaxStall = Math.max(largeWorkerMaxStall, worker.reading.longestStallMs);
           }
         }
@@ -315,7 +328,9 @@ export const markdownDiffScenarios: PerfScenario[] = [
             last = client.build(WORKER_KEY, fixtures[sequence[step]!]!.input);
             if (step < SELECTIONS - 1) {
               const document = sequence[step]!;
-              earlier.push(last.then((result) => ({ result, settledAt: performance.now(), document })));
+              earlier.push(
+                last.then((result) => ({ result, settledAt: performance.now(), document }))
+              );
             }
           }
           const result = await last;

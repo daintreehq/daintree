@@ -1,7 +1,4 @@
-import type {
-  MarkdownDiffResult,
-  ReconstructInput,
-} from "@/components/Worktree/markdownBlockDiff";
+import type { MarkdownDiffResult, ReconstructInput } from "@/components/Worktree/markdownBlockDiff";
 
 /** One comparison posted to the rendered-Markdown diff worker. */
 export interface MarkdownDiffWorkerRequest {
@@ -15,5 +12,4 @@ export interface MarkdownDiffWorkerRequest {
  * a failure of the worker. `ok: false` means the engine threw.
  */
 export type MarkdownDiffWorkerResponse =
-  | { id: number; ok: true; result: MarkdownDiffResult }
-  | { id: number; ok: false; error: string };
+  { id: number; ok: true; result: MarkdownDiffResult } | { id: number; ok: false; error: string };

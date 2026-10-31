@@ -1,8 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  MarkdownDiffResult,
-  ReconstructInput,
-} from "@/components/Worktree/markdownBlockDiff";
+import type { MarkdownDiffResult, ReconstructInput } from "@/components/Worktree/markdownBlockDiff";
 import type {
   MarkdownDiffWorkerRequest,
   MarkdownDiffWorkerResponse,
@@ -56,7 +53,13 @@ function resultFor(marker: string): MarkdownDiffResult {
       changes: [
         {
           kind: "added",
-          block: { type: "paragraph", source: marker, text: marker, referenceIds: [], segments: [] },
+          block: {
+            type: "paragraph",
+            source: marker,
+            text: marker,
+            referenceIds: [],
+            segments: [],
+          },
         },
       ],
       oldDefinitions: "",
