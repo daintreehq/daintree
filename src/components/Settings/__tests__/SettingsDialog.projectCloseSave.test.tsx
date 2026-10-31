@@ -90,7 +90,7 @@ async function openOnProjectVariables() {
 }
 
 function valueInput() {
-  return screen.getByLabelText<HTMLInputElement>("Environment variable value");
+  return screen.getByLabelText<HTMLInputElement>(/^Value of /);
 }
 
 function variablesSection() {

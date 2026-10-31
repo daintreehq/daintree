@@ -123,11 +123,11 @@ describe("EnvironmentVariablesEditor", () => {
 
       expect(screen.getByText("Inherited from global")).toBeTruthy();
 
-      const nameInputs = screen.getAllByLabelText("Environment variable name");
+      const nameInputs = screen.getAllByLabelText(/^Name of variable \d+$/);
       expect(nameInputs.length).toBe(1);
       expect((nameInputs[0] as HTMLInputElement).value).toBe("MY_VAR");
 
-      const valueInputs = screen.getAllByLabelText("Environment variable value");
+      const valueInputs = screen.getAllByLabelText(/^Value of /);
       expect(valueInputs.length).toBe(1);
       expect((valueInputs[0] as HTMLInputElement).value).toBe("my-value");
 
@@ -189,7 +189,7 @@ describe("EnvironmentVariablesEditor", () => {
       const addButton = screen.getByRole("button", { name: /add variable/i });
       fireEvent.click(addButton);
 
-      const nameInputs = screen.getAllByLabelText("Environment variable name");
+      const nameInputs = screen.getAllByLabelText(/^Name of variable \d+$/);
       expect(nameInputs.length).toBe(1);
     });
   });
@@ -345,7 +345,7 @@ describe("EnvironmentVariablesEditor save controls", () => {
     expect(save.disabled).toBe(true);
     expect(discard.disabled).toBe(true);
 
-    fireEvent.change(screen.getByLabelText("Environment variable value"), {
+    fireEvent.change(screen.getByLabelText(/^Value of /), {
       target: { value: "b" },
     });
     expect(save.disabled).toBe(false);
@@ -385,7 +385,7 @@ describe("EnvironmentVariablesEditor close-time flush", () => {
     const onChange = vi.fn<(value: EnvVar[]) => void>();
     const onFlush = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
     renderEditor(onChange, onFlush);
-    fireEvent.change(screen.getByLabelText("Environment variable value"), {
+    fireEvent.change(screen.getByLabelText(/^Value of /), {
       target: { value: "b" },
     });
     await expect(flushAll!()).resolves.toEqual([]);
@@ -399,7 +399,7 @@ describe("EnvironmentVariablesEditor close-time flush", () => {
     const onFlush = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
     renderEditor(onChange, onFlush);
     fireEvent.click(screen.getAllByRole("button", { name: /add variable/i })[0]!);
-    const [healthy, name] = screen.getAllByLabelText("Environment variable name");
+    const [healthy, name] = screen.getAllByLabelText(/^Name of variable \d+$/);
     fireEvent.change(name!, { target: { value: "1BAD" } });
     let failed: FailedSettingsFlush[] = [];
     await act(async () => {
@@ -420,7 +420,7 @@ describe("EnvironmentVariablesEditor close-time flush", () => {
     const onChange = vi.fn<(value: EnvVar[]) => void>();
     const onFlush = vi.fn<() => Promise<void>>().mockRejectedValue(new Error("disk full"));
     renderEditor(onChange, onFlush);
-    const value = screen.getByLabelText("Environment variable value");
+    const value = screen.getByLabelText(/^Value of /);
     fireEvent.change(value, { target: { value: "b" } });
     let failed: FailedSettingsFlush[] = [];
     await act(async () => {
@@ -439,7 +439,7 @@ describe("EnvironmentVariablesEditor close-time flush", () => {
       .fn<() => Promise<void | { message: string }>>()
       .mockResolvedValue({ message: "Read-only checkout" });
     renderEditor(onChange, onFlush);
-    const value = screen.getByLabelText("Environment variable value");
+    const value = screen.getByLabelText(/^Value of /);
     fireEvent.change(value, { target: { value: "b" } });
     let failed: FailedSettingsFlush[] = [];
     await act(async () => {
