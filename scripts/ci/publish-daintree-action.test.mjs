@@ -27,12 +27,19 @@ const SETUP_NODE_INSTALL = "./.github/actions/setup-node-install";
 // puts its options before the subcommand.
 const PACKAGE_MANAGER = /\b(npm|npx|yarn|pnpm|corepack|bun)\b/;
 
+const NODE_SCRIPT = /\bnode\s[^\n]*?["']?(?:\.\/)?(scripts\/[^\s"']+\.[mc]?js)\b/;
+
+// Every `node` line must name a repo script, so an invocation this parser can't
+// read fails the guard instead of escaping the import check.
 const scriptsRunByAction = () =>
-  steps.flatMap((s) =>
-    [
-      ...(s.run ?? "").matchAll(/\bnode\s+(?:-\S+\s+)*["']?(?:\.\/)?(scripts\/[^\s"']+\.m?js)/g),
-    ].map((m) => m[1])
-  );
+  steps
+    .flatMap((s) => (s.run ?? "").split("\n"))
+    .filter((line) => /\bnode\s/.test(line))
+    .map((line) => {
+      const match = line.match(NODE_SCRIPT);
+      expect(match, `node invocation "${line.trim()}"`).not.toBeNull();
+      return match[1];
+    });
 
 // Static, side-effect and dynamic imports, re-exports and require(), following
 // relative imports so a package reached through a local helper still counts.
@@ -72,10 +79,11 @@ describe("publish-daintree composite (#15625)", () => {
 
     // The checkout runs `git clean -ffdx`, which would delete node_modules if
     // it came after the install.
-    const checkoutIdx = steps.findIndex((s) => s.uses?.startsWith("actions/checkout"));
+    const checkouts = steps.filter((s) => s.uses?.startsWith("actions/checkout"));
+    expect(checkouts).toHaveLength(1);
+    const checkoutIdx = steps.indexOf(checkouts[0]);
     const installIdx = steps.findIndex((s) => s.uses === SETUP_NODE_INSTALL);
     const firstScriptIdx = steps.findIndex((s) => /\bnode\s/.test(s.run ?? ""));
-    expect(checkoutIdx).toBeGreaterThanOrEqual(0);
     expect(installIdx).toBeGreaterThan(checkoutIdx);
     expect(firstScriptIdx).toBeGreaterThan(installIdx);
   });
