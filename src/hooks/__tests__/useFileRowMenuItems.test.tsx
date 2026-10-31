@@ -705,6 +705,20 @@ describe("useFileRowMenuItems — Copy host path in a remote window (#15722)", (
     expect(useAnnouncerStore.getState().polite?.msg).toBe("Host path copied");
     expect(getCopyFlash()).not.toBeNull();
   });
+
+  it("leaves a surface's own failed reveal unconfirmed", async () => {
+    // The file panel reports the failure in its own banner.
+    const onReveal = vi.fn(() => Promise.resolve(false));
+    const menu = await openMenu({ options: { onReveal } });
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Copy host path" }));
+    await act(async () => {});
+
+    expect(onReveal).toHaveBeenCalledTimes(1);
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+    expect(getCopyFlash()).toBeNull();
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("useFileRowMenuItems — path semantics", () => {

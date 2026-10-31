@@ -9,12 +9,17 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 
+// The client's own platform: it names a local file manager, and only a Windows
+// PC can reach a WSL distro.
+const client = vi.hoisted(() => ({ mac: true, windows: false }));
 vi.mock("@/lib/platform", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/platform")>()),
-  isMac: () => true,
-  isWindows: () => false,
+  isMac: () => client.mac,
+  isWindows: () => client.windows,
 }));
 
+import { Copy } from "lucide-react";
+import { FolderOpen } from "@/components/icons";
 import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 import { _resetCopyFlashForTests, getCopyFlash } from "@/lib/copyFlash";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -45,48 +50,109 @@ function deferred() {
 }
 
 const politeMessage = () => useAnnouncerStore.getState().polite?.msg ?? null;
+const politeId = () => useAnnouncerStore.getState().polite?.id ?? 0;
 
 beforeEach(() => {
+  client.mac = true;
+  client.windows = false;
   _resetCopyFlashForTests();
-  useAnnouncerStore.setState({ polite: null, assertive: null });
+  useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
 });
 
 afterEach(() => {
   // Unmounted before the host resets, so no subscriber hears it.
   cleanup();
   vi.useRealTimers();
+  vi.restoreAllMocks();
+  _resetCopyFlashForTests();
   delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
   _resetHostPlatformForTests();
 });
 
 describe("useRevealCopy", () => {
-  it("drops the copy once main reports the window is a WSL distro", () => {
-    // The host id is known from the first render, the connection kind only
-    // once main reports it: a reveal still wearing "Copy host path" after that
-    // would confirm a copy main never made.
+  const summary = (copy: ReturnType<typeof revealCopy>) => ({
+    label: copy.label,
+    icon: copy.icon,
+    copiedAnnouncement: copy.copiedAnnouncement,
+  });
+
+  it.each([
+    ["a Mac", true, false, "Reveal in Finder"],
+    ["a Windows PC", false, true, "Show in Explorer"],
+    ["a Linux PC", false, false, "Show in folder"],
+  ])("reveals in %s's own file manager, claiming no copy", (_name, mac, windows, label) => {
+    client.mac = mac;
+    client.windows = windows;
+    const { result } = renderHook(() => useRevealCopy());
+    expect(summary(result.current)).toEqual({ label, icon: FolderOpen, copiedAnnouncement: null });
+  });
+
+  it("copies for an ssh host from a Mac, before main has named the connection", () => {
+    // Only a Windows PC reaches a WSL distro, so nowhere else is an unknown
+    // connection anything but ssh.
+    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+    const { result } = renderHook(() => useRevealCopy());
+    expect(summary(result.current)).toEqual({
+      label: "Copy host path",
+      icon: Copy,
+      copiedAnnouncement: "Host path copied",
+    });
+  });
+
+  it("claims no copy on a Windows PC until main says the host is a WSL distro", () => {
+    client.mac = false;
+    client.windows = true;
     window.__DAINTREE_HOST_ID__ = { id: "wsl-ubuntu" };
     const { result } = renderHook(() => useRevealCopy());
-    expect(result.current.label).toBe("Copy host path");
-    expect(result.current.copiedAnnouncement).toBe("Host path copied");
+    // The label and glyph it has always had while the answer is in flight.
+    expect(summary(result.current)).toEqual({
+      label: "Copy host path",
+      icon: FolderOpen,
+      copiedAnnouncement: null,
+    });
 
     act(() => setHostPlatformInfo({ connection: { kind: "wsl", distro: "Ubuntu" } }));
 
-    expect(result.current.label).toBe("Show in Explorer");
-    expect(result.current.copiedAnnouncement).toBeNull();
+    expect(summary(result.current)).toEqual({
+      label: "Show in Explorer",
+      icon: FolderOpen,
+      copiedAnnouncement: null,
+    });
   });
 
-  it("agrees with revealCopy", () => {
+  it("copies on a Windows PC once main says the host is reached over ssh", () => {
+    client.mac = false;
+    client.windows = true;
+    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
     const { result } = renderHook(() => useRevealCopy());
-    expect(result.current).toEqual(revealCopy());
+    expect(result.current.copiedAnnouncement).toBeNull();
+
+    act(() => setHostPlatformInfo({ connection: { kind: "ssh", target: "greg@studio-01" } }));
+
+    expect(summary(result.current)).toEqual({
+      label: "Copy host path",
+      icon: Copy,
+      copiedAnnouncement: "Host path copied",
+    });
   });
 });
 
 describe("runTransientReveal", () => {
-  it("announces and flashes a remote copy once it succeeded", async () => {
+  it("announces once and flashes where it was asked for, after the copy succeeded", async () => {
     enterRemoteWindow();
+    // Where the gesture happened: the chosen row holds focus only until the
+    // menu closes, so the flash has to be anchored before the copy settles.
+    const row = document.createElement("button");
+    const elsewhere = document.createElement("button");
+    document.body.append(row, elsewhere);
+    vi.spyOn(row, "getBoundingClientRect").mockReturnValue(new DOMRect(40, 120, 160, 24));
+    vi.spyOn(elsewhere, "getBoundingClientRect").mockReturnValue(new DOMRect(400, 600, 80, 24));
+    row.focus();
     const copy = deferred();
 
     runTransientReveal(revealCopy(), () => copy.promise);
+    elsewhere.focus();
+    row.remove();
     // Nothing is claimed while main is still writing.
     expect(politeMessage()).toBeNull();
     expect(getCopyFlash()).toBeNull();
@@ -94,7 +160,15 @@ describe("runTransientReveal", () => {
     await act(async () => copy.resolve(true));
 
     expect(politeMessage()).toBe("Host path copied");
-    expect(getCopyFlash()).not.toBeNull();
+    expect(politeId()).toBe(1);
+    expect(getCopyFlash()?.origin).toEqual({
+      kind: "rect",
+      left: 40,
+      top: 120,
+      right: 200,
+      bottom: 144,
+    });
+    elsewhere.remove();
   });
 
   it("claims nothing when the copy failed", async () => {
@@ -139,24 +213,30 @@ describe.each([
   ],
 ])("%s", (_name, renderButton) => {
   const glyph = (name: string) => screen.getByRole("button", { name }).querySelector("svg");
+  const shows = (name: string) =>
+    glyph("Copy host path")?.classList.contains(`lucide-${name}`) ?? false;
 
-  it("wears the copy glyph in a remote window and swaps to a check once the copy landed", async () => {
+  it("wears the copy glyph in a remote window and swaps to a check for the dwell once the copy landed", async () => {
     enterRemoteWindow();
     vi.useFakeTimers();
     const copy = deferred();
     render(renderButton(() => copy.promise));
-    expect(glyph("Copy host path")?.classList.contains("lucide-copy")).toBe(true);
+    expect(shows("copy")).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Copy host path" }));
-    expect(glyph("Copy host path")?.classList.contains("lucide-check")).toBe(false);
+    expect(shows("check")).toBe(false);
     await act(async () => copy.resolve(true));
 
-    // The name stays put while the glyph confirms; the announcer speaks.
-    expect(glyph("Copy host path")?.classList.contains("lucide-check")).toBe(true);
+    // The name stays put while the glyph confirms; the announcer speaks once.
+    expect(shows("check")).toBe(true);
     expect(politeMessage()).toBe("Host path copied");
+    expect(politeId()).toBe(1);
+    expect(getCopyFlash()).toBeNull();
 
-    act(() => void vi.advanceTimersByTime(2000));
-    expect(glyph("Copy host path")?.classList.contains("lucide-copy")).toBe(true);
+    act(() => void vi.advanceTimersByTime(1999));
+    expect(shows("check")).toBe(true);
+    act(() => void vi.advanceTimersByTime(1));
+    expect(shows("copy")).toBe(true);
   });
 
   it("leaves a failed copy to the pane's banner", async () => {
@@ -168,7 +248,7 @@ describe.each([
     await act(async () => {});
 
     expect(onReveal).toHaveBeenCalledTimes(1);
-    expect(glyph("Copy host path")?.classList.contains("lucide-check")).toBe(false);
+    expect(shows("check")).toBe(false);
     expect(politeMessage()).toBeNull();
   });
 
@@ -177,11 +257,40 @@ describe.each([
     const { rerender } = render(renderButton(() => Promise.resolve(true)));
     fireEvent.click(screen.getByRole("button", { name: "Copy host path" }));
     await act(async () => {});
-    expect(glyph("Copy host path")?.classList.contains("lucide-check")).toBe(true);
+    expect(shows("check")).toBe(true);
 
     rerender(renderButton(() => Promise.resolve(true), "/home/greg/repo/README.md"));
 
-    expect(glyph("Copy host path")?.classList.contains("lucide-copy")).toBe(true);
+    expect(shows("copy")).toBe(true);
+  });
+
+  it("doesn't confirm a new file with a copy of the old one that lands late", async () => {
+    enterRemoteWindow();
+    const copy = deferred();
+    const { rerender } = render(renderButton(() => copy.promise));
+    fireEvent.click(screen.getByRole("button", { name: "Copy host path" }));
+
+    rerender(renderButton(() => Promise.resolve(true), "/home/greg/repo/README.md"));
+    await act(async () => copy.resolve(true));
+
+    // The copy of the first file did happen, so it is still announced.
+    expect(shows("copy")).toBe(true);
+    expect(politeMessage()).toBe("Host path copied");
+  });
+
+  it("confirms where it was asked for when the control is gone before the copy lands", async () => {
+    // A toolbar narrowed mid-copy folds the button into its menu.
+    enterRemoteWindow();
+    const copy = deferred();
+    const { unmount } = render(renderButton(() => copy.promise));
+    fireEvent.click(screen.getByRole("button", { name: "Copy host path" }));
+
+    unmount();
+    await act(async () => copy.resolve(true));
+
+    expect(politeMessage()).toBe("Host path copied");
+    expect(politeId()).toBe(1);
+    expect(getCopyFlash()).not.toBeNull();
   });
 
   it("keeps a local reveal's folder glyph and adds no feedback", async () => {
@@ -195,5 +304,6 @@ describe.each([
     expect(onReveal).toHaveBeenCalledTimes(1);
     expect(glyph("Reveal in Finder")?.classList.contains("lucide-folder-open")).toBe(true);
     expect(politeMessage()).toBeNull();
+    expect(getCopyFlash()).toBeNull();
   });
 });

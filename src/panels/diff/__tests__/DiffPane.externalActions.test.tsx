@@ -728,8 +728,30 @@ describe("DiffPane toolbar — Copy host path in a remote window (#15722)", () =
 
   afterEach(() => {
     cleanup();
+    _resetCopyFlashForTests();
     delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
     _resetHostPlatformForTests();
+  });
+
+  it("confirms a double click once, after the one copy it made", async () => {
+    seedPanel("src/index.ts");
+    const gate = deferred();
+    dispatchMock.mockReturnValueOnce(gate.promise);
+    renderPane();
+    const announcedBefore = useAnnouncerStore.getState().nextId;
+
+    await click(copyButton());
+    await click(copyButton());
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(useAnnouncerStore.getState().nextId).toBe(announcedBefore);
+
+    await act(async () => {
+      gate.resolve(ok());
+      await gate.promise;
+    });
+
+    expect(glyph("check")).toBe(true);
+    expect(useAnnouncerStore.getState().nextId).toBe(announcedBefore + 1);
   });
 
   it("wears the copy glyph and swaps to a check once main copied the path", async () => {

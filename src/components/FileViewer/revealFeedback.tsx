@@ -1,4 +1,4 @@
-import type { ComponentProps } from "react";
+import { useEffect, useRef, type ComponentProps } from "react";
 import { Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
@@ -60,9 +60,25 @@ export function useRevealControl(
         if (!ok) throw new RevealFailed();
       }),
   });
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   const onClick = () => {
-    if (copies) void copy(path);
-    else void run();
+    if (!copies) {
+      void run();
+      return;
+    }
+    // The control can unmount before main answers (a toolbar folding into its
+    // menu), and the hook then confirms nothing: the copy is confirmed where it
+    // was asked for instead, as a menu row's is. Mounted, the hook owns it.
+    const confirmUnmounted = beginRevealConfirm(reveal);
+    void copy(path).then((ok) => {
+      if (ok && !mountedRef.current) confirmUnmounted?.();
+    });
   };
   return { copied: copies && copiedText === path, onClick };
 }

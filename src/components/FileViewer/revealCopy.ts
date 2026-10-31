@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { Copy, type LucideIcon } from "lucide-react";
 import { FolderOpen } from "@/components/icons";
+import { isWindows } from "@/lib/platform";
 import {
   getHostPlatformInfo,
   isHostMac,
@@ -42,6 +43,18 @@ const COPY_HOST_PATH: RevealCopy = {
   copiedAnnouncement: "Host path copied",
 };
 
+/**
+ * A remote window on a Windows PC before main has said how its host is reached:
+ * a WSL distro reveals in Explorer, an ssh host copies, and until the answer
+ * lands the control keeps its old folder glyph and claims no copy, rather than
+ * confirm one that main then doesn't make.
+ */
+const COPY_HOST_PATH_UNRESOLVED: RevealCopy = {
+  ...COPY_HOST_PATH,
+  icon: FolderOpen,
+  copiedAnnouncement: null,
+};
+
 const REVEAL_IN_FINDER: RevealCopy = {
   label: "Reveal in Finder",
   errorTitle: "Couldn't reveal in Finder",
@@ -64,7 +77,11 @@ const SHOW_IN_FOLDER: RevealCopy = {
  */
 function revealCopyFor(host: HostPlatformInfo): RevealCopy {
   if (isRemoteWindow()) {
-    return host.connection?.kind === "wsl" ? SHOW_IN_EXPLORER : COPY_HOST_PATH;
+    if (host.connection?.kind === "wsl") return SHOW_IN_EXPLORER;
+    // A WSL distro is only ever reached from a Windows PC (`wsl.exe`), so
+    // anywhere else a host whose connection is still unknown is an ssh one.
+    if (host.connection === null && isWindows()) return COPY_HOST_PATH_UNRESOLVED;
+    return COPY_HOST_PATH;
   }
   if (isHostMac()) return REVEAL_IN_FINDER;
   if (isHostWindows()) return SHOW_IN_EXPLORER;
