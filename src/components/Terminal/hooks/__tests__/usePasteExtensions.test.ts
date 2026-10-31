@@ -425,4 +425,27 @@ describe("usePasteExtensions: a paste still on its way (#15599)", () => {
     expect(getHeldBackAttachments("composer:t1")).toEqual([]);
     expect(isComposerSendHeld("composer:t1")).toBe(false);
   });
+
+  it("drops pasted files that resolve after their editor is gone, holding nothing back", async () => {
+    let resolveAll!: () => void;
+    const gate = new Promise<void>((resolve) => (resolveAll = resolve));
+    setRemoteMaterializer(async (source) => {
+      await gate;
+      const path = source.kind === "local-file" ? source.path : "";
+      return { hostPath: path, displayName: path, bytes: null };
+    });
+    const { view, dispatch } = fakeView();
+    const ref: { current: EditorView | null } = { current: view };
+    renderHook(() => usePasteExtensions(CWD, "composer:t1", false, ref));
+
+    const pending = captured.filePaste?.(view, [pasted("a.ts", `${CWD}/a.ts`)]);
+    advanceComposerDraft(view);
+    ref.current = null;
+    resolveAll();
+    await pending;
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(getHeldBackAttachments("composer:t1")).toEqual([]);
+    expect(isComposerSendHeld("composer:t1")).toBe(false);
+  });
 });

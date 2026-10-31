@@ -1137,7 +1137,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const view = editorViewRef.current;
       if (!view) return;
       // A recalled prompt is another draft, even one that reads the same.
-      if (inputState.draftReplacingRevision > appliedBefore) advanceComposerDraft(view);
+      const replacedAt = inputState.replacedDraftRevisions.get(makeDraftKey(terminalId, projectId));
+      if (replacedAt !== undefined && replacedAt > appliedBefore) advanceComposerDraft(view);
       const landed = takeLandedCorrection(terminalId, projectId, draft);
       const reviewed = landed !== null && isLatestDictation(voiceId, landed);
       const scratched = takeScratchLanded(terminalId, projectId, draft);
