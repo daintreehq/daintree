@@ -491,7 +491,7 @@ export function WorktreeMenuItems({
   );
 
   // ---------------------------------------------------------------- Review
-  const changedFileCount = worktree?.worktreeChanges?.changes.length ?? 0;
+  const changedFileCount = worktree?.worktreeChanges?.changedFileCount ?? 0;
   const reviewRows = !worktree
     ? []
     : [

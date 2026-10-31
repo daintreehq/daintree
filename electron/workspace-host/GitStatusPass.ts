@@ -712,6 +712,11 @@ export class GitStatusPass {
           `${c.path}:${c.status}:${c.insertions ?? 0}:${c.deletions ?? 0}:${String(c.mtimeMs ?? c.mtime ?? "")}`
       )
       .sort();
+    // Files past the untracked enrichment cap have no row above, so a count
+    // that grows from 201 to 205 would otherwise publish nothing.
+    if (changes.omittedUntrackedCount) {
+      fileState.push(`omitted-untracked:${String(changes.omittedUntrackedCount)}`);
+    }
     if (changes.changedFileCount > 0 && changes.latestFileMtime !== undefined) {
       fileState.push(`latest-file-mtime:${String(changes.latestFileMtime)}`);
     }

@@ -2248,3 +2248,87 @@ describe("WorktreeDeleteDialog — submodule entries, rechecks, teardown", () =>
     expect(consequences).not.toContain("devbox destroy helios");
   });
 });
+
+describe("WorktreeDeleteDialog — untracked files past the enrichment cap (#15559)", () => {
+  // The status read lists 200 untracked files and counts the rest. The dialog
+  // must state the full count, never the listed 200 as if it were exact.
+  const listed = [
+    { path: "/test/worktree/src/app.ts", status: "modified" as GitStatus },
+    { path: "/test/worktree/src/old.ts", status: "deleted" as GitStatus },
+    ...Array.from({ length: 200 }, (_, i) => ({
+      path: `/test/worktree/out/f${String(i).padStart(3, "0")}.txt`,
+      status: "untracked" as GitStatus,
+    })),
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    terminalCountsMock.total = 0;
+    terminalsMock.length = 0;
+    devPreviewGetByWorktreeMock.mockResolvedValue(null);
+    buildPreviewMock.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("states the full untracked count from the fresh read, in the tally, the loss and the list tail", async () => {
+    const preview = makePreview(listed);
+    buildPreviewMock.mockResolvedValue({
+      ...preview,
+      untrackedFileCount: 205,
+      omittedUntrackedCount: 5,
+    });
+    render(
+      <WorktreeDeleteDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        worktree={makeWorktree(makeChanges([]))}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("delete-worktree-change-tally").textContent).toBe(
+        "2 tracked · 205 untracked"
+      );
+    });
+    const rows = screen.getByTestId("delete-worktree-file-list").textContent ?? "";
+    // 202 listed + 5 counted, 12 shown.
+    expect(rows).toContain("…and 195 more");
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+    expect(screen.getByText(/will be permanently lost/).textContent).toContain(
+      "and 205 untracked files"
+    );
+  });
+
+  it("takes the omitted count from the fresh read once it lands, not the seed", async () => {
+    // The seed counted five more than it listed; the fresh read lists all three.
+    const seed = { ...makeChanges(listed), changedFileCount: 207, omittedUntrackedCount: 5 };
+    buildPreviewMock.mockResolvedValue(
+      makePreview([
+        { path: "/test/worktree/a.txt", status: "untracked" },
+        { path: "/test/worktree/b.txt", status: "untracked" },
+        { path: "/test/worktree/c.txt", status: "untracked" },
+      ])
+    );
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={makeWorktree(seed)} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("delete-worktree-change-tally").textContent).toBe("3 untracked");
+    });
+    expect(screen.getByTestId("delete-worktree-file-list").textContent).not.toMatch(/more/);
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+    expect(screen.getByText(/will be permanently lost/).textContent).toContain("3 untracked files");
+  });
+
+  it("states the full count from the prop seed before the fresh read lands", () => {
+    const seed = { ...makeChanges(listed), changedFileCount: 207, omittedUntrackedCount: 5 };
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={makeWorktree(seed)} />);
+
+    expect(screen.getByTestId("delete-worktree-change-tally").textContent).toBe(
+      "2 tracked · 205 untracked"
+    );
+  });
+});

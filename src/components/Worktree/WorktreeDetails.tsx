@@ -303,6 +303,7 @@ export function WorktreeDetails({
                 ref={fileChangeListRef}
                 changes={worktree.worktreeChanges.changes}
                 rootPath={worktree.worktreeChanges.rootPath}
+                unlistedCount={worktree.worktreeChanges.omittedUntrackedCount}
                 maxVisible={MAX_VISIBLE_FILES}
                 isStale={isStale}
                 className="rounded-[var(--radius-md)] bg-surface-inset p-2"

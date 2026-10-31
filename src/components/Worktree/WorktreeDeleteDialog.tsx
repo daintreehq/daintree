@@ -126,7 +126,10 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // snapshot as an initial seed. A failed fetch fails closed via
   // `hasTrackedChanges` so the D3 typed-name gate is never skipped on stale
   // (or unverifiable) state.
-  const seedSummary = summarizeWorktreeChanges(worktree.worktreeChanges?.changes);
+  const seedSummary = summarizeWorktreeChanges(
+    worktree.worktreeChanges?.changes,
+    worktree.worktreeChanges?.omittedUntrackedCount
+  );
   const effectiveSummary = freshPreview ?? seedSummary;
   const hasTrackedChanges = verifyFailed || effectiveSummary.hasTrackedChanges;
   const hasUntrackedFiles = effectiveSummary.hasUntrackedFiles;
@@ -140,6 +143,12 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // repeating the full path on every row buries the filename past the wrap,
   // which is the one part of a row that distinguishes it (#11977).
   const previewChanges = freshPreview?.changes ?? worktree.worktreeChanges?.changes ?? [];
+  // Untracked files the status read counted but did not list, from the same
+  // read as `previewChanges`, so the counts and the list tail agree (#15559).
+  const omittedUntrackedCount =
+    (freshPreview
+      ? freshPreview.omittedUntrackedCount
+      : worktree.worktreeChanges?.omittedUntrackedCount) ?? 0;
   const previewRootPath =
     freshPreview?.rootPath ?? worktree.worktreeChanges?.rootPath ?? worktree.path;
 
@@ -174,9 +183,10 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const previewChangeRows = buildWorktreeChangeRows(
     [...submoduleRows, ...fileChanges],
     PREVIEW_FILE_LIMIT,
-    previewRootPath
+    previewRootPath,
+    omittedUntrackedCount
   );
-  const fileSummary = summarizeWorktreeChanges(fileChanges);
+  const fileSummary = summarizeWorktreeChanges(fileChanges, omittedUntrackedCount);
   const submoduleEntryCount = pointerOnlyChanges.length;
   const submoduleFileRows = buildSubmoduleFileRows(submodules?.risk ?? null);
   const submoduleCommitRows = buildSubmoduleCommitRows(submodules?.risk ?? null);

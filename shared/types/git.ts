@@ -62,8 +62,18 @@ export interface WorktreeChanges {
   rootPath: string;
   /** List of individual file changes */
   changes: FileChangeDetail[];
-  /** Total count of changed files */
+  /**
+   * Total count of changed files, including untracked files left out of
+   * {@link changes}: `changes.length + (omittedUntrackedCount ?? 0)`.
+   */
   changedFileCount: number;
+  /**
+   * Untracked files git status reported that are not in {@link changes}.
+   * Per-file enrichment (stat, line count) is capped, the count is not, so the
+   * untracked total is the listed untracked rows plus this. Absent means zero;
+   * line totals and `latestFileMtime` cover the listed rows only.
+   */
+  omittedUntrackedCount?: number;
   /** Total lines inserted across all files */
   totalInsertions?: number;
   /** Total lines deleted across all files */

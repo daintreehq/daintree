@@ -21,7 +21,10 @@ import { pluralize } from "./pluralize.js";
 export interface WorktreeChangeSummary {
   /** Tracked (non-untracked, non-ignored) changes — the D3 escalation input. */
   trackedChangeCount: number;
-  /** Untracked files (D2-relevant, never D3 on their own — see #4927). */
+  /**
+   * Untracked files (D2-relevant, never D3 on their own — see #4927),
+   * including the ones the status read counted but did not list.
+   */
   untrackedFileCount: number;
   hasTrackedChanges: boolean;
   hasUntrackedFiles: boolean;
@@ -39,6 +42,13 @@ export interface WorktreeDeletePreview extends WorktreeChangeSummary {
    * whole worktree path on every row and buries the filename.
    */
   rootPath: string;
+  /**
+   * Untracked files the status read counted but left out of {@link changes}
+   * (`WorktreeChanges.omittedUntrackedCount`). Every count and "…and N more"
+   * tail adds it back, or a worktree holding 5,000 untracked files previews
+   * as the 200 the producer enriched (#15559). Absent means zero.
+   */
+  omittedUntrackedCount?: number;
   /**
    * What the same delete would destroy INSIDE this worktree's submodules —
    * work the parent's `git status` either describes as a single ` M vendor/lib`
@@ -179,15 +189,21 @@ export function submoduleFileCount(state: WorktreeSubmoduleRiskState): number {
  * (they aren't part of the working tree the user cares about); untracked files
  * are surfaced separately because they gate the D2 preview but must NOT drive
  * the D3 typed-name gate on their own (regressing that collapse is #4927).
+ *
+ * `omittedUntrackedCount` is added to the untracked count only, after any
+ * display split: the omitted files have no rows, so a split cannot have
+ * removed them.
  */
 export function summarizeWorktreeChanges(
-  changes: FileChangeDetail[] | null | undefined
+  changes: FileChangeDetail[] | null | undefined,
+  omittedUntrackedCount: number = 0
 ): WorktreeChangeSummary {
   const list = changes ?? [];
   const trackedChangeCount = list.filter(
     (c) => c.status !== "untracked" && c.status !== "ignored"
   ).length;
-  const untrackedFileCount = list.filter((c) => c.status === "untracked").length;
+  const untrackedFileCount =
+    list.filter((c) => c.status === "untracked").length + Math.max(0, omittedUntrackedCount);
   return {
     trackedChangeCount,
     untrackedFileCount,
@@ -574,21 +590,30 @@ export function formatWorktreeDeleteNoteLines(
  * dropped — they're not part of what a delete discards.
  *
  * Pass `rootPath` to get worktree-relative rows; without it the raw (absolute)
- * paths are rendered, which is the legacy behaviour.
+ * paths are rendered, which is the legacy behaviour. `unlistedCount` is files
+ * the change set counted without rows ({@link WorktreeDeletePreview.omittedUntrackedCount});
+ * they join the overflow tail.
  */
 export function formatWorktreeChangeRows(
   changes: FileChangeDetail[],
   limit: number = PREVIEW_FILE_LIMIT,
-  rootPath?: string
+  rootPath?: string,
+  unlistedCount: number = 0
 ): string[] {
   const shown = changes.filter((c) => c.status !== "ignored");
   const rows = shown
     .slice(0, limit)
     .map((c) => `  ${STATUS_GLYPH[c.status] ?? "?"} ${toDisplayPath(c.path, rootPath)}`);
-  if (shown.length > limit) {
-    rows.push(`  …and ${shown.length - limit} more`);
+  const overflow = overflowCount(shown.length, limit, unlistedCount);
+  if (overflow > 0) {
+    rows.push(`  …and ${overflow} more`);
   }
   return rows;
+}
+
+/** Rows past the limit plus files counted without a row. */
+function overflowCount(shown: number, limit: number, unlistedCount: number): number {
+  return Math.max(0, shown - limit) + Math.max(0, unlistedCount);
 }
 
 /** One row of the rendered change preview, split so the UI can lay it out. */
@@ -618,7 +643,8 @@ export interface WorktreeChangeRow {
 export function buildWorktreeChangeRows(
   changes: FileChangeDetail[],
   limit: number = PREVIEW_FILE_LIMIT,
-  rootPath?: string
+  rootPath?: string,
+  unlistedCount: number = 0
 ): WorktreeChangeRow[] {
   const shown = changes.filter((c) => c.status !== "ignored");
   const rows: WorktreeChangeRow[] = shown.slice(0, limit).map((c) => ({
@@ -627,11 +653,12 @@ export function buildWorktreeChangeRows(
     label: toDisplayPath(c.path, rootPath),
     isOverflow: false,
   }));
-  if (shown.length > limit) {
+  const overflow = overflowCount(shown.length, limit, unlistedCount);
+  if (overflow > 0) {
     rows.push({
       glyph: null,
       statusLabel: null,
-      label: `…and ${shown.length - limit} more`,
+      label: `…and ${overflow} more`,
       isOverflow: true,
     });
   }
@@ -796,6 +823,7 @@ export function formatWorktreeDeletePreviewLines(preview: WorktreeDeletePreview 
     ];
   }
   const { changes, rootPath, submodules } = preview;
+  const omittedUntracked = preview.omittedUntrackedCount ?? 0;
   const submoduleLines = formatSubmodulePreviewLines(submodules);
   // A submodule's own parent row is listed as a submodule, never counted as a
   // file, and counted as a change only when the nested list doesn't already
@@ -805,8 +833,11 @@ export function formatWorktreeDeletePreviewLines(preview: WorktreeDeletePreview 
     rootPath,
     submodules
   );
-  const { trackedChangeCount, untrackedFileCount } = summarizeWorktreeChanges(files);
-  if (files.length === 0 && submoduleRows.length === 0) {
+  const { trackedChangeCount, untrackedFileCount } = summarizeWorktreeChanges(
+    files,
+    omittedUntracked
+  );
+  if (files.length === 0 && submoduleRows.length === 0 && omittedUntracked === 0) {
     // Only claim a clean tree when nothing nested contradicts it. Saying "No
     // uncommitted changes." above a list of submodule commits about to be
     // destroyed is the misleading-precision failure this whole surface exists
@@ -835,7 +866,7 @@ export function formatWorktreeDeletePreviewLines(preview: WorktreeDeletePreview 
       const row = formatWorktreeChangeRows([change], 1, rootPath)[0] ?? `  ${path}`;
       return `${row} (${pointerDescriptions.get(path) ?? "submodule"})`;
     }),
-    ...formatWorktreeChangeRows(files, PREVIEW_FILE_LIMIT, rootPath),
+    ...formatWorktreeChangeRows(files, PREVIEW_FILE_LIMIT, rootPath, omittedUntracked),
     ...submoduleLines,
   ];
 }

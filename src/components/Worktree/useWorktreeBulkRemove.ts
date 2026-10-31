@@ -169,11 +169,14 @@ export function describeBulkRemoveLosses(target: BulkRemoveTarget): string[] {
   const risks: string[] = [];
   const status = target.status;
   if (status.state === "verified") {
-    const { changes, rootPath, submodules } = status.preview;
+    const { changes, rootPath, submodules, omittedUntrackedCount } = status.preview;
     // Counted over files only: a submodule's own parent row stands for the
     // nested files counted below, and counting it too stated one loss twice.
     const { files, pointerOnly } = splitDisplayChanges(changes, rootPath, submodules);
-    const { trackedChangeCount, untrackedFileCount } = summarizeWorktreeChanges(files);
+    const { trackedChangeCount, untrackedFileCount } = summarizeWorktreeChanges(
+      files,
+      omittedUntrackedCount
+    );
     if (trackedChangeCount > 0) {
       risks.push(`${pluralize(trackedChangeCount, "uncommitted file")}`);
     }
@@ -202,9 +205,12 @@ export function describeBulkRemoveLosses(target: BulkRemoveTarget): string[] {
 export function bulkRemoveDiscardedFileCount(target: BulkRemoveTarget): number {
   const status = target.status;
   if (status.state !== "verified") return 0;
-  const { changes, rootPath, submodules } = status.preview;
+  const { changes, rootPath, submodules, omittedUntrackedCount } = status.preview;
   const { files } = splitDisplayChanges(changes, rootPath, submodules);
-  const { trackedChangeCount, untrackedFileCount } = summarizeWorktreeChanges(files);
+  const { trackedChangeCount, untrackedFileCount } = summarizeWorktreeChanges(
+    files,
+    omittedUntrackedCount
+  );
   return trackedChangeCount + untrackedFileCount + submoduleFileCount(submodules);
 }
 
@@ -230,6 +236,9 @@ export function bulkRemoveEvidenceKey(target: BulkRemoveTarget): string {
       status.state === "verified"
         ? status.preview.changes.map((c) => `${c.status}:${c.path}`).sort()
         : null,
+    // Counted files with no row: 201 and 205 untracked list the same rows.
+    omittedUntracked:
+      status.state === "verified" ? (status.preview.omittedUntrackedCount ?? 0) : null,
     // Kept apart: a nested file moving from untracked to modified changes the
     // row's glyph and the loss line's wording.
     dirty: risk ? [...risk.dirtyFiles].sort() : null,
