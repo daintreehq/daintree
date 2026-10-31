@@ -113,7 +113,7 @@ ROW_MENU_TARGET_CLASS; // data-[state=open]: a 1px inset border-strong outline, 
 
 ```tsx
 documentTabClassName(isActive); // text-xs font-medium, border-r divider, inset -2px accent focus ring
-// selected: bg-tint/[0.04] text-text-primary + <DocumentTabIndicator /> (2px accent underline)
+// selected: bg-tint/[0.04] text-text-primary + <DocumentTabIndicator /> (2px underline: accent in the focused region, text-secondary elsewhere)
 // unselected: text-text-secondary hover:text-text-primary hover:bg-overlay-subtle
 ```
 

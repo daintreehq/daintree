@@ -79,6 +79,12 @@ export interface TabButtonProps {
   parked?: boolean;
   /** Where the tab's panel lives, for its own context menu's layout commands. */
   menuLocation?: PanelLocation;
+  /**
+   * Whether the pane this strip belongs to is the one the keyboard is in. Only
+   * that strip's selected tab wears the accent underline; the rest keep it in
+   * neutral ink.
+   */
+  isStripFocused?: boolean;
 }
 
 /** The DOM id a tab carries, so the panel it controls can name it back. */
@@ -108,6 +114,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     tabPanelId,
     parked = false,
     menuLocation,
+    isStripFocused = true,
   },
   ref
 ) {
@@ -352,7 +359,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
               {...sortablePointerListeners}
               onPointerDown={handleTabPointerDown}
             >
-              {isActive && <DocumentTabIndicator />}
+              {isActive && <DocumentTabIndicator inFocusedRegion={isStripFocused} />}
               <span className="shrink-0 flex items-center justify-center w-3.5 h-3.5">
                 <TerminalIcon
                   kind={kind}
@@ -365,7 +372,10 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
               <span
                 ref={labelRef}
                 className={cn(
-                  "truncate max-w-[100px] inline-block border border-transparent px-1",
+                  // Room for a task title's distinguishing words: agent tabs are named by
+                  // the task, and at 100px two tabs read the same. The strip's
+                  // overflow chevron takes what no longer fits.
+                  "truncate max-w-40 inline-block border border-transparent px-1",
                   onRename && "cursor-text",
                   // Holds the label's slot while the rename field sits over it.
                   isEditing && "invisible min-w-[60px]"

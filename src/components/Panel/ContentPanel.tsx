@@ -720,7 +720,10 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
             agentLaunchFlags={agentLaunchFlags}
             worktreeAccentColor={worktreeAccentColor}
             worktreeBranch={worktreeBranch}
-            isFocused={isFocused}
+            // The header lifts with the frame, not with the store's focused id:
+            // while the assistant holds the keyboard, the pane it will hand back
+            // to keeps neither, so only one surface reads as where you are.
+            isFocused={showSelectedChrome}
             isMaximized={isMaximized}
             location={location}
             isEditingTitle={titleEditing.isEditingTitle}
