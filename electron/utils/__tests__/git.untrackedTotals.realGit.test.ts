@@ -35,10 +35,11 @@ beforeEach(() => {
   repo = path.join(root, "repo");
   fs.mkdirSync(path.join(root, "home"));
   fs.mkdirSync(repo);
-  // The helper spawns git with the process environment; keep the developer's
-  // global excludes away from the fixture.
+  // The helper spawns git with the process environment; keep the machine's
+  // global and system excludes away from the fixture.
   vi.stubEnv("HOME", path.join(root, "home"));
   vi.stubEnv("XDG_CONFIG_HOME", path.join(root, "home"));
+  vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
   git(repo, "init", "-q", "-b", "main");
   fs.writeFileSync(path.join(repo, "tracked.txt"), "base\n");
   git(repo, "add", "tracked.txt");

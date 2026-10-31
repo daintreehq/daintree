@@ -312,6 +312,23 @@ describe("WorktreeBulkRemoveDialog — the preview is the consent (#12416)", () 
     expect(body).toContain("1 file inside submodules");
   });
 
+  it("counts untracked files the status read left unlisted, in the loss, the tail and the batch total (#15559)", () => {
+    const listed = Array.from({ length: 200 }, (_, i) =>
+      change(`/repo/a/out/f${String(i).padStart(3, "0")}.txt`, "untracked")
+    );
+    renderDialog({
+      targets: [target("a", { status: verified({ changes: listed, omittedUntrackedCount: 5 }) })],
+    });
+
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("205 untracked files");
+    expect(text).toContain("205 uncommitted files discarded");
+    const list = document.querySelector('[data-testid="bulk-remove-file-list"]')!;
+    const rows = Array.from(list.querySelectorAll("li")).map((li) => li.textContent ?? "");
+    const withheld = Number(/and (\d+) more/.exec(rows[rows.length - 1] ?? "")?.[1]);
+    expect(rows.length - 1 + withheld).toBe(205);
+  });
+
   it("caps a long file list and says how many it withheld", () => {
     renderDialog({
       targets: [

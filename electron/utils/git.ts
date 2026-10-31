@@ -885,9 +885,6 @@ export async function getWorktreeChangesWithStats(
           ...status.staged,
         ]),
       ];
-      if (status.not_added.length <= MAX_UNTRACKED_FILES) {
-        warnedLargeUntracked.delete(cwd);
-      }
 
       // Early stat pass: gather (mtimeMs, size) for each tracked file so we can
       // probe the per-file cache before shelling out to `git diff`. Stat failures
@@ -1106,9 +1103,11 @@ export async function getWorktreeChangesWithStats(
         untrackedFiles.length > MAX_UNTRACKED_FILES
           ? untrackedFiles.slice(0, MAX_UNTRACKED_FILES)
           : untrackedFiles;
-      const omittedUntrackedCount = untrackedFiles.length - limitedUntrackedFiles.length;
+      const omittedUntrackedFiles = untrackedFiles.slice(limitedUntrackedFiles.length);
 
-      if (untrackedFiles.length > MAX_UNTRACKED_FILES) {
+      if (untrackedFiles.length <= MAX_UNTRACKED_FILES) {
+        warnedLargeUntracked.delete(cwd);
+      } else {
         if (!warnedLargeUntracked.has(cwd)) {
           warnedLargeUntracked.add(cwd);
           logWarn("Large number of untracked files; limiting to first 200", {
@@ -1132,6 +1131,14 @@ export async function getWorktreeChangesWithStats(
           insertions: stats.insertions ?? 0,
           deletions: stats.deletions ?? 0,
         });
+      }
+
+      // Reconciled against the final map: a path staged between the status
+      // read and the scoped diff can arrive above as a numstat row, and must
+      // not also be counted as omitted.
+      let omittedUntrackedCount = 0;
+      for (const file of omittedUntrackedFiles) {
+        if (!changesMap.has(resolve(gitRoot, file))) omittedUntrackedCount++;
       }
 
       const mtimes = await Promise.all(

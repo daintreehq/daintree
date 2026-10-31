@@ -1776,6 +1776,49 @@ describe("getWorktreeChangesWithStats untracked totals past the enrichment cap (
     expect(cached.changedFileCount).toBe(205);
   });
 
+  it("never counts an omitted path that also arrived as a numstat row", async () => {
+    // A tracked `gen` replaced by a directory: the scoped `git diff HEAD -- gen`
+    // also matches its children, so one staged after the status read comes
+    // back as a row while still sitting in the omitted tail.
+    const cwd = "/untracked-total-overlap/" + Math.random();
+    const children = Array.from({ length: 205 }, (_, i) => `gen/f${i}.txt`);
+    mockGit.status.mockResolvedValue({ ...emptyStatus, deleted: ["gen"], not_added: children });
+    mockGit.diff.mockResolvedValue("0\t1\tgen\n1\t0\tgen/f204.txt\n");
+
+    const result = await getWorktreeChangesWithStats(cwd, { forceRefresh: true });
+
+    const distinct = new Set(result.changes.map((c) => c.path)).size;
+    expect(result.omittedUntrackedCount).toBe(4);
+    expect(result.changedFileCount).toBe(distinct + 4);
+    expect(result.changedFileCount).toBe(1 + children.length);
+  });
+
+  it("re-arms the large-set warning on the files it would enrich, not the raw list", async () => {
+    const cwd = "/untracked-total-warn-rearm/" + Math.random();
+    const warns = () =>
+      vi
+        .mocked(logWarn)
+        .mock.calls.filter(
+          ([msg]) => msg === "Large number of untracked files; limiting to first 200"
+        ).length;
+    mockGit.status.mockResolvedValue({ ...emptyStatus, not_added: untracked(250) });
+    await getWorktreeChangesWithStats(cwd, { forceRefresh: true });
+
+    // 201 raw entries, two of them already listed as tracked: 199 candidates,
+    // which is under the cap.
+    const listedTwice = untracked(199);
+    mockGit.status.mockResolvedValue({
+      ...emptyStatus,
+      modified: tracked,
+      not_added: [...listedTwice, ...tracked],
+    });
+    await getWorktreeChangesWithStats(cwd, { forceRefresh: true });
+    mockGit.status.mockResolvedValue({ ...emptyStatus, not_added: untracked(250) });
+    await getWorktreeChangesWithStats(cwd, { forceRefresh: true });
+
+    expect(warns()).toBe(2);
+  });
+
   it("drops the omitted count once the set falls back under the cap", async () => {
     const cwd = "/untracked-total-shrink/" + Math.random();
     mockGit.status.mockResolvedValue({ ...emptyStatus, not_added: untracked(205) });

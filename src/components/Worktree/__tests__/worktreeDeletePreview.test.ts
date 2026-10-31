@@ -987,6 +987,31 @@ describe("untracked files past the producer's enrichment cap (#15559)", () => {
     expect(rows[rows.length - 1]).toMatchObject({ isOverflow: true, label: "…and 195 more" });
   });
 
+  it("adds an overflow row for unlisted files when the listed rows fit", () => {
+    const rows = buildWorktreeChangeRows(
+      [file("a.ts", "modified"), file("n.txt", "untracked")],
+      12,
+      ROOT,
+      4
+    );
+    expect(rows.map((r) => r.label)).toEqual(["a.ts", "n.txt", "…and 4 more"]);
+    expect(rows[2]?.isOverflow).toBe(true);
+  });
+
+  it("never calls a worktree clean when every untracked file is unlisted", () => {
+    const preview: WorktreeDeletePreview = {
+      ...summarizeWorktreeChanges([], 3),
+      changes: [],
+      rootPath: ROOT,
+      omittedUntrackedCount: 3,
+      submodules: CLEAR,
+    };
+    expect(formatWorktreeDeletePreviewLines(preview)).toEqual([
+      "3 untracked files:",
+      "  …and 3 more",
+    ]);
+  });
+
   it("states the full untracked count in the MCP confirm lines", () => {
     const all = [...tracked, ...listedUntracked];
     const preview: WorktreeDeletePreview = {
