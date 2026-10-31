@@ -941,6 +941,7 @@ function HostEnvironmentSection({
               row={row}
               position={index + 1}
               error={rowErrors[row.id]}
+              // Name or value, as the global editor masks; a reveal holds while the row is edited.
               sensitive={isSecretEnvEntry(row.key, row.value)}
               revealed={revealed.has(row.id)}
               onToggleReveal={() =>
