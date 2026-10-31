@@ -47,9 +47,7 @@ const AgentLaunchArgsSchema = z.object({
   cwd: z
     .string()
     .optional()
-    .describe(
-      "Absolute launch directory, not a worktree selector. Defaults to the worktree root."
-    ),
+    .describe("Absolute launch directory, not a worktree selector. Defaults to the worktree root."),
   worktreeId: z
     .string()
     .optional()
@@ -91,9 +89,7 @@ const AgentLaunchArgsSchema = z.object({
     .string()
     .nullable()
     .optional()
-    .describe(
-      "One of the user's saved launch presets. Explicit null ignores the default preset."
-    ),
+    .describe("One of the user's saved launch presets. Explicit null ignores the default preset."),
   activateDockOnCreate: z
     .boolean()
     .optional()

@@ -929,7 +929,7 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // panes' processes to exit (and can end their trash grace early) instead of
   // polling a status that forgets them when the trash lets them go. In-app
   // only, so the external ceiling does not move.
-  // 162_140 → 168_780 for #15738, measured at 168_738 B (+6_606):
+  // 162_140 → 168_780 for #15738, measured at 168_746 B (+6_614):
   // `agent.launchInNewWorktree` takes a managed worktree's source and every
   // argument `agent.launch` takes, with the same descriptions, plus its setup
   // budget, so one call starts a unit of work on a host with no window instead

@@ -292,11 +292,11 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       },
       required: ["agentId", "source"],
     },
-    keywords: ["worktree", "spawn", "start", "unit", "branch", "issue"],
+    keywords: ["branch", "issue", "unit", "setup"],
     kind: "command",
     name: "agent.launchInNewWorktree",
     requiresArgs: true,
-    title: "Launch agent in new worktree",
+    title: "Create worktree and launch agent",
   },
   {
     band: "reversible",

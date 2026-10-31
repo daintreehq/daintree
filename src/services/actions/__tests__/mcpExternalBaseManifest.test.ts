@@ -77,11 +77,7 @@ const MAIN_PROCESS_COMPOSITES = ["agent.launchInNewWorktree"];
  * runs, where the external tier doesn't already describe them.
  */
 const VIEWLESS_EXTRA_TOOLS = [
-  ...new Set([
-    ...Object.keys(VIEWLESS_ACTIONS),
-    ...MAIN_PROCESS_TOOLS,
-    ...MAIN_PROCESS_COMPOSITES,
-  ]),
+  ...new Set([...Object.keys(VIEWLESS_ACTIONS), ...MAIN_PROCESS_TOOLS, ...MAIN_PROCESS_COMPOSITES]),
 ]
   .filter((id) => !(MCP_EXTERNAL_TIER_TOOLS as readonly string[]).includes(id))
   .sort();

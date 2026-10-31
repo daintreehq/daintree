@@ -22,7 +22,13 @@ const setup = (setupState: string, extra: Record<string, unknown> = {}) =>
   ok({ worktreeId: WORKTREE, setupState, stage: null, error: null, timedOut: false, ...extra });
 
 const launchedOk = (extra: Record<string, unknown> = {}) =>
-  ok({ launched: true, terminalId: "claude-1a2b", spawnStatus: null, worktreeId: WORKTREE, ...extra });
+  ok({
+    launched: true,
+    terminalId: "claude-1a2b",
+    spawnStatus: null,
+    worktreeId: WORKTREE,
+    ...extra,
+  });
 
 type Step = (args: Record<string, unknown>) => CallToolResult | Promise<CallToolResult>;
 
@@ -65,7 +71,9 @@ describe("runLaunchInNewWorktree (#15738)", () => {
         },
         () => setup("ready"),
       ],
-      "agent.launch": [(args) => launchedOk({ reply: { outcome: "handback", echoed: args.prompt } })],
+      "agent.launch": [
+        (args) => launchedOk({ reply: { outcome: "handback", echoed: args.prompt } }),
+      ],
     });
 
     const { result, outcome } = await runLaunchInNewWorktree(

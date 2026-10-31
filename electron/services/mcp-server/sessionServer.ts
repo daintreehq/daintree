@@ -1735,7 +1735,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                   stepOptions
                 ),
               signal: extra.signal,
-              ...(dedupKey !== undefined ? { createRequestKey: createStepRequestKey(dedupKey) } : {}),
+              ...(dedupKey !== undefined
+                ? { createRequestKey: createStepRequestKey(dedupKey) }
+                : {}),
             });
             outcome = { kind: "result", value: answer.outcome };
             return answer.result;

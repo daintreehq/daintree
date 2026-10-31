@@ -563,13 +563,13 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // to exit before deleting the worktree. The prose has to carry the three
   // outcomes and that the grace can be ended early. In-app only, off the
   // external surface.
-  // 23_970 → 24_300 for `agent.launchInNewWorktree` (#15738), measured at
-  // 24_280 B. What the prose has to carry is that the source and the launch
+  // 23_970 → 24_250 for `agent.launchInNewWorktree` (#15738), measured at
+  // 24_222 B. What the prose has to carry is that the source and the launch
   // work as they do on their own, that it launches only once setup ends ready
   // and otherwise says which way it ended, that the session owns both, and
   // that a failure after creation hands back the worktree rather than inviting
   // a retry that makes a second one. In-app only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 24_300;
+  const MAX_COHORT_TOTAL_BYTES = 24_250;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

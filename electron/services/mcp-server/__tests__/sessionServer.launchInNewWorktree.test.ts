@@ -88,7 +88,13 @@ describe("agent.launchInNewWorktree through the session server (#15738)", () => 
   const ready = {
     result: {
       ok: true,
-      result: { worktreeId: WORKTREE, setupState: "ready", stage: null, error: null, timedOut: false },
+      result: {
+        worktreeId: WORKTREE,
+        setupState: "ready",
+        stage: null,
+        error: null,
+        timedOut: false,
+      },
     },
   };
   const launched = (args: Record<string, unknown>) => ({
@@ -273,11 +279,9 @@ describe("agent.launchInNewWorktree through the session server (#15738)", () => 
   });
 
   it("refuses a panel id already in use before anything is created", async () => {
-    const { dispatchAction, server } = harness(
-      {},
-      "core",
-      { isTerminalIdInUse: vi.fn((id: string) => id === "taken") }
-    );
+    const { dispatchAction, server } = harness({}, "core", {
+      isTerminalIdInUse: vi.fn((id: string) => id === "taken"),
+    });
 
     const result = await callTool(server, {
       name: "agent.launchInNewWorktree",
@@ -325,9 +329,9 @@ describe("agent.launchInNewWorktree through the session server (#15738)", () => 
       arguments: { source: SOURCE, agentId: "codex" },
     });
 
-    expect(dispatchAction.mock.calls.filter((c) => c[0] === "worktree.createWithRecipe")).toHaveLength(
-      2
-    );
+    expect(
+      dispatchAction.mock.calls.filter((c) => c[0] === "worktree.createWithRecipe")
+    ).toHaveLength(2);
   });
 
   it("reuses the worktree its first try made when the same call is retried after a stop", async () => {
@@ -351,8 +355,8 @@ describe("agent.launchInNewWorktree through the session server (#15738)", () => 
     expect(toolErrorPayload(first).code).toBe("PARTIAL_SUCCESS");
     expect(second.isError).toBeFalsy();
     expect((second.structuredContent as Record<string, unknown>).worktreeId).toBe(WORKTREE);
-    expect(dispatchAction.mock.calls.filter((c) => c[0] === "worktree.createWithRecipe")).toHaveLength(
-      1
-    );
+    expect(
+      dispatchAction.mock.calls.filter((c) => c[0] === "worktree.createWithRecipe")
+    ).toHaveLength(1);
   });
 });

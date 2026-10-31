@@ -66,7 +66,6 @@ import {
   viewlessValidationFailure as validationFailure,
 } from "./viewlessResult.js";
 
-
 /** Launch ids the launcher always turns into a panel, never an agent. */
 const PANEL_LAUNCH_IDS: ReadonlySet<string> = new Set(["browser", "dev-preview"]);
 
