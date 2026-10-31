@@ -253,6 +253,7 @@ vi.mock("../../utils/logger.js", () => ({
 }));
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
+import { CHANNELS } from "../../ipc/channels.js";
 import { attachAppViewRendererGoneHandler } from "../appViewRendererGone.js";
 import { notifyError } from "../../ipc/errorHandlers.js";
 import { onProjectPresenceChanged } from "../projectPresenceChanges.js";
@@ -1811,7 +1812,7 @@ describe("ProjectViewManager adversarial", () => {
     ).toEqual(["proj-a", "proj-b"]);
   });
 
-  it("requests GC immediately on deactivation, even when the view is evicted by a later switch", async () => {
+  it("tells the renderer it is cached on deactivation, and eviction injects no collection (#15680)", async () => {
     const win = createMockWindow();
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
@@ -1828,23 +1829,22 @@ describe("ProjectViewManager adversarial", () => {
       "proj-a",
       "/a"
     );
+    const cachedSignals = () =>
+      initialWc.send.mock.calls.filter(([channel]) => channel === CHANNELS.APP_VIEW_CACHED).length;
 
     wcQueue.push(createMockWebContents(), createMockWebContents());
 
-    // Switch to B — deactivates A, GC requested immediately
+    // Switch to B — deactivates A, whose renderer schedules its own idle GC on the signal
     await manager.switchTo("proj-b", "/b");
-    expect(initialWc.executeJavaScript).toHaveBeenCalledOnce();
-    expect(initialWc.executeJavaScript).toHaveBeenCalledWith(
-      expect.stringContaining("requestIdleCallback")
-    );
+    expect(cachedSignals()).toBe(1);
 
     // Switch to C — evicts A (LRU, cache limit 2)
     await manager.switchTo("proj-c", "/c");
     await flushImmediates();
 
     expect(initialWc.close).toHaveBeenCalledTimes(1);
-    // executeJavaScript was already called during deactivation — not called again on eviction
-    expect(initialWc.executeJavaScript).toHaveBeenCalledTimes(1);
+    expect(cachedSignals()).toBe(1);
+    expect(initialWc.executeJavaScript).not.toHaveBeenCalled();
     expect(manager.getActiveProjectId()).toBe("proj-c");
   });
 

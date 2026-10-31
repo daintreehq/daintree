@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * Subscribe/unsubscribe through the real preload bridge. Every renderer event
@@ -66,6 +66,22 @@ interface TerminalConfigBridge {
 }
 
 const originalWindow = (globalThis as { window?: unknown }).window;
+// The renderer globals the cached-edge idle GC reaches for (#15680). Idle
+// callbacks run only when a test says so, standing in for an idle period or a
+// thaw running whatever is still queued.
+const idleGlobals = ["document", "requestIdleCallback", "cancelIdleCallback", "gc"] as const;
+const originalIdleGlobals = idleGlobals.map(
+  (key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const
+);
+const fakeDocument = new EventTarget();
+const fakeGc = vi.fn();
+const idleCallbacks = new Map<number, () => void>();
+let nextIdleHandle = 1;
+const runIdleCallbacks = () => {
+  const due = [...idleCallbacks.values()];
+  idleCallbacks.clear();
+  for (const callback of due) callback();
+};
 let terminal: TerminalBridge;
 let plugin: PluginBridge;
 let projectPresentation: ProjectPresentationBridge;
@@ -82,6 +98,16 @@ beforeAll(async () => {
   } as Record<string, unknown>;
   fakeWindow.top = fakeWindow;
   (globalThis as { window?: unknown }).window = fakeWindow;
+  Object.assign(globalThis, {
+    document: fakeDocument,
+    requestIdleCallback: (callback: () => void) => {
+      const handle = nextIdleHandle++;
+      idleCallbacks.set(handle, callback);
+      return handle;
+    },
+    cancelIdleCallback: (handle: number) => idleCallbacks.delete(handle),
+    gc: fakeGc,
+  });
 
   const bundle = await build({
     entryPoints: [PRELOAD_CTS],
@@ -125,6 +151,10 @@ beforeAll(async () => {
 
 afterAll(() => {
   (globalThis as { window?: unknown }).window = originalWindow;
+  for (const [key, descriptor] of originalIdleGlobals) {
+    if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+    else delete (globalThis as Record<string, unknown>)[key];
+  }
 });
 
 describe("preload event subscriptions", () => {
@@ -386,6 +416,97 @@ describe("preload event subscriptions", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe("cached-edge idle GC (#15680)", () => {
+    const freeze = () => fakeDocument.dispatchEvent(new Event("freeze"));
+    // Faking every timer would swap out the idle-callback stand-in too.
+    const fakeTimeoutsOnly = () => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+    beforeEach(() => {
+      fakeGc.mockClear();
+      fakeElectron.webFrame.clearCache.mockClear();
+      idleCallbacks.clear();
+    });
+    afterEach(() => {
+      ipcRenderer.emit("app:view-warm-activated", {});
+    });
+
+    it("collects in the first idle period while the view is still cached", () => {
+      ipcRenderer.emit("app:view-cached", {});
+      expect(fakeGc).not.toHaveBeenCalled();
+
+      runIdleCallbacks();
+      expect(fakeGc).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops a pending collection once the view is active again", () => {
+      for (const channel of ["app:view-warm-activated", "app:view-revealed"]) {
+        ipcRenderer.emit("app:view-cached", {});
+        expect(idleCallbacks.size).toBe(1);
+        ipcRenderer.emit(channel, {});
+        expect(idleCallbacks.size).toBe(0);
+      }
+      runIdleCallbacks();
+      expect(fakeGc).not.toHaveBeenCalled();
+    });
+
+    it("checks again when it runs, so one already dispatched as the view returns collects nothing", () => {
+      ipcRenderer.emit("app:view-cached", {});
+      const [dispatched] = [...idleCallbacks.values()];
+      ipcRenderer.emit("app:view-warm-activated", {});
+
+      dispatched!();
+      expect(fakeGc).not.toHaveBeenCalled();
+    });
+
+    it("keeps one pending collection through a cache storm", () => {
+      ipcRenderer.emit("app:view-cached", {});
+      ipcRenderer.emit("app:view-cached", {});
+      expect(idleCallbacks.size).toBe(1);
+
+      runIdleCallbacks();
+      expect(fakeGc).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops the collection and the cache clear when a freeze lands, so the thaw that activation causes runs neither", () => {
+      fakeTimeoutsOnly();
+      try {
+        ipcRenderer.emit("app:view-cached", {});
+        expect(idleCallbacks.size).toBe(1);
+
+        freeze();
+        // A thaw runs whatever is still queued before warm-activated is handled.
+        runIdleCallbacks();
+        vi.advanceTimersByTime(10_000);
+        expect(fakeGc).not.toHaveBeenCalled();
+        expect(fakeElectron.webFrame.clearCache).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("schedules nothing for a cached signal handled after the freeze, until the view has been active again", () => {
+      fakeTimeoutsOnly();
+      try {
+        // IPC still runs in a frozen renderer, so the signal can trail the freeze.
+        freeze();
+        ipcRenderer.emit("app:view-cached", {});
+        expect(app.isViewCached()).toBe(true);
+        expect(idleCallbacks.size).toBe(0);
+        vi.advanceTimersByTime(10_000);
+        expect(fakeElectron.webFrame.clearCache).not.toHaveBeenCalled();
+
+        ipcRenderer.emit("app:view-warm-activated", {});
+        ipcRenderer.emit("app:view-cached", {});
+        runIdleCallbacks();
+        expect(fakeGc).toHaveBeenCalledTimes(1);
+        vi.advanceTimersByTime(2_000);
+        expect(fakeElectron.webFrame.clearCache).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe("cached-edge flush (#15633)", () => {

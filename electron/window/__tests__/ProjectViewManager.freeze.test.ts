@@ -150,6 +150,13 @@ import {
   settleCachedViewFlush,
 } from "../../services/cachedViewFlush.js";
 
+/** When main last told this renderer it is cached, the edge it schedules its idle GC on. */
+function cachedSignalOrder(wc: ReturnType<typeof createMockWebContents>): number | undefined {
+  const channels = wc.send.mock.calls.map(([channel]) => channel as unknown);
+  const index = channels.lastIndexOf(CHANNELS.APP_VIEW_CACHED);
+  return index === -1 ? undefined : wc.send.mock.invocationCallOrder[index];
+}
+
 function createMockWindow() {
   return {
     isDestroyed: vi.fn(() => false),
@@ -264,20 +271,17 @@ describe("ProjectViewManager — efficiency freeze", () => {
     expect(vi.mocked(unfreezeWebContents)).toHaveBeenCalledWith(initialWc);
   });
 
-  it("deactivateCurrentView calls freezeWebContents only when efficiency is on, and AFTER GC", async () => {
+  it("deactivateCurrentView calls freezeWebContents only when efficiency is on, and AFTER the cached signal", async () => {
     manager.setEfficiencyFreeze(true);
     vi.advanceTimersByTime(500);
     vi.mocked(freezeWebContents).mockClear();
-    initialWc.executeJavaScript.mockClear();
 
     await manager.switchTo("proj-b", "/path/b");
 
-    expect(initialWc.executeJavaScript).toHaveBeenCalledOnce();
     expect(vi.mocked(freezeWebContents)).toHaveBeenCalledWith(initialWc);
-
-    const gcOrder = initialWc.executeJavaScript.mock.invocationCallOrder[0];
+    // The renderer schedules its idle GC on that signal (lesson #4684).
     const freezeOrder = vi.mocked(freezeWebContents).mock.invocationCallOrder[0];
-    expect(gcOrder).toBeLessThan(freezeOrder);
+    expect(cachedSignalOrder(initialWc)).toBeLessThan(freezeOrder);
   });
 
   describe("a view a dictation still needs (#14773)", () => {
@@ -341,10 +345,9 @@ describe("ProjectViewManager — efficiency freeze", () => {
       vi.advanceTimersByTime(0);
       expect(vi.mocked(freezeWebContents)).toHaveBeenCalledWith(initialWc);
 
-      // Still after the GC deactivation scheduled (lesson #4684).
-      const gcOrder = initialWc.executeJavaScript.mock.invocationCallOrder.at(-1)!;
+      // Still after the cached signal the renderer schedules its GC on (lesson #4684).
       const freezeOrder = vi.mocked(freezeWebContents).mock.invocationCallOrder.at(-1)!;
-      expect(gcOrder).toBeLessThan(freezeOrder);
+      expect(cachedSignalOrder(initialWc)).toBeLessThan(freezeOrder);
     });
 
     it("is frozen anyway once a renderer that never answers runs out its wait", async () => {
@@ -1594,41 +1597,22 @@ describe("ProjectViewManager — GC on deactivate", () => {
     manager.registerInitialView(initialView as never, "proj-a", "/path/a");
   });
 
-  it("triggers GC via requestIdleCallback immediately on deactivation", async () => {
+  it("leaves the cached-time GC to the renderer, injecting nothing that could outlive activation (#15680)", async () => {
     await manager.switchTo("proj-b", "/path/b");
 
-    expect(initialWc.executeJavaScript).toHaveBeenCalledOnce();
-    expect(initialWc.executeJavaScript).toHaveBeenCalledWith(
-      expect.stringContaining("requestIdleCallback")
-    );
-    expect(initialWc.executeJavaScript).toHaveBeenCalledWith(expect.stringContaining("window.gc"));
-    expect(initialWc.executeJavaScript).toHaveBeenCalledWith(
-      expect.stringContaining("timeout: 1000")
-    );
+    expect(cachedSignalOrder(initialWc)).toBeDefined();
+    expect(initialWc.executeJavaScript).not.toHaveBeenCalled();
+
+    // Coming back injects nothing either: the renderer cancels its own GC.
+    await manager.switchTo("proj-a", "/path/a");
+    expect(initialWc.executeJavaScript).not.toHaveBeenCalled();
   });
 
-  it("requests GC, flushStorageData, and navigationHistory.clear in order on deactivation", async () => {
+  it("flushes storage and clears navigation history on deactivation", async () => {
     await manager.switchTo("proj-b", "/path/b");
 
-    expect(initialWc.executeJavaScript).toHaveBeenCalledOnce();
     expect(initialWc.session.flushStorageData).toHaveBeenCalledOnce();
     expect(initialWc.navigationHistory.clear).toHaveBeenCalledOnce();
-
-    const flushOrder = initialWc.session.flushStorageData.mock.invocationCallOrder[0];
-    const clearOrder = initialWc.navigationHistory.clear.mock.invocationCallOrder[0];
-    const gcOrder = initialWc.executeJavaScript.mock.invocationCallOrder[0];
-
-    expect(flushOrder).toBeLessThan(gcOrder);
-    expect(clearOrder).toBeLessThan(gcOrder);
-  });
-
-  it("suppresses executeJavaScript rejection without unhandled promise", async () => {
-    initialWc.executeJavaScript.mockRejectedValue(new Error("renderer gone"));
-
-    await manager.switchTo("proj-b", "/path/b");
-
-    // Should have been called (and rejected silently)
-    expect(initialWc.executeJavaScript).toHaveBeenCalledOnce();
   });
 
   it("does not throw when flushStorageData throws", async () => {
@@ -1647,18 +1631,22 @@ describe("ProjectViewManager — GC on deactivate", () => {
       throw new Error("renderer gone");
     });
 
+    manager.setEfficiencyFreeze(true);
+    vi.mocked(freezeWebContents).mockClear();
+
     await expect(manager.switchTo("proj-b", "/path/b")).resolves.toBeDefined();
     expect(initialWc.navigationHistory.clear).toHaveBeenCalledOnce();
-    // executeJavaScript should still fire despite clear() throwing
-    expect(initialWc.executeJavaScript).toHaveBeenCalledOnce();
+    // The freeze after it should still land despite clear() throwing
+    expect(vi.mocked(freezeWebContents)).toHaveBeenCalledWith(initialWc);
+    manager.setEfficiencyFreeze(false);
   });
 
-  it("skips flushStorageData, clearHistory, and GC when webContents is destroyed at outer guard", async () => {
+  it("skips flushStorageData, clearHistory, and the cached signal when webContents is destroyed at outer guard", async () => {
     initialWc.isDestroyed.mockReturnValue(true);
     await manager.switchTo("proj-b", "/path/b");
 
     expect(initialWc.session.flushStorageData).not.toHaveBeenCalled();
     expect(initialWc.navigationHistory.clear).not.toHaveBeenCalled();
-    expect(initialWc.executeJavaScript).not.toHaveBeenCalled();
+    expect(cachedSignalOrder(initialWc)).toBeUndefined();
   });
 });

@@ -109,7 +109,7 @@ export async function unthrottleCpuWebContents(wc: Electron.WebContents): Promis
 
 /**
  * Collect a cached renderer's JavaScript garbage, main-side over CDP (works
- * even when the renderer is frozen — the renderer-side `window.gc()` idle
+ * even when the renderer is frozen — the renderer-side `gc()` idle
  * callback cannot make that guarantee). Target-scoped, but activation only
  * clears the *next* timer, so a sequence already in flight can reach a view
  * that just went active: `shouldCollect` is re-checked after the enable round

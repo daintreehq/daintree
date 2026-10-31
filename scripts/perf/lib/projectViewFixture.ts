@@ -299,10 +299,10 @@ class StubWebContents extends EventEmitter {
 
   async executeJavaScript(script: string): Promise<unknown> {
     // Only the bootstrap probe gets a modelled answer. Every other eval the
-    // product runs against a view (skeleton identity, idle GC) returns
-    // undefined, which the product already treats as "unmodelled" — so the
-    // probe counter stays a clean tally of real bootstrap verifications
-    // rather than of evals in general.
+    // product runs against a view (skeleton identity) returns undefined,
+    // which the product already treats as "unmodelled" — so the probe
+    // counter stays a clean tally of real bootstrap verifications rather
+    // than of evals in general.
     if (!script.includes("__DAINTREE_INITIAL_PROJECT__")) return undefined;
     this.ledger.bootstrapProbes++;
     // Reports the id the PRODUCT threaded through `additionalArguments`, not
