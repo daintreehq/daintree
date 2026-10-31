@@ -55,6 +55,13 @@ describe.skipIf(!outPath)("PERF-248 measurement", () => {
     expect(metrics.unstagedFullFile5000StagingMisses).toBeGreaterThan(0);
     expect(metrics.stagedAdded5000StagingMisses).toBe(0);
     expect(metrics.stagedFullFile5000StagingMisses).toBe(0);
+    // And both arms finished the same work, or their timings price different things.
+    for (const arm of ["staged", "unstaged"]) {
+      for (const table of ["Added5000", "FullFile5000"]) {
+        expect(metrics[`${arm}${table}FinalRows`]).toBe(metrics[`${arm}${table}ExpectedRows`]);
+        expect(metrics[`${arm}${table}TokenMisses`]).toBe(0);
+      }
+    }
 
     writeFileSync(outPath as string, JSON.stringify(metrics, null, 2));
   }, 300_000);

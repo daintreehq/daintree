@@ -126,43 +126,57 @@ describe("sliceHunksToRowBudget", () => {
 });
 
 describe("stageTokens", () => {
-  const changes = [normal(1, 1), del(2), insert(2), insert(3)];
-  const hunks = [hunk(changes)];
-  const target: HunkTokens = {
-    old: [tokenLine("t-old-1"), tokenLine("t-old-2")],
-    new: [tokenLine("t-new-1"), tokenLine("t-new-2"), tokenLine("t-new-3")],
-  };
-  const base: HunkTokens = {
-    old: [tokenLine("b-old-1"), tokenLine("b-old-2")],
-    new: [tokenLine("b-new-1"), tokenLine("b-new-2"), tokenLine("b-new-3")],
-  };
+  // Realistic addressing: a later hunk past a gap, and normal lines whose old
+  // and new numbers differ by the inserts above them.
+  const changes = [normal(10, 12), del(11), insert(13), insert(14), normal(12, 15), normal(40, 43)];
+  const hunks = [hunk(changes.slice(0, 5), 10), hunk(changes.slice(5), 40)];
+  const sideLines = (label: string, count: number) =>
+    Array.from({ length: count }, (_, i) => tokenLine(`${label}-${i + 1}`));
+  const target: HunkTokens = { old: sideLines("t-old", 40), new: sideLines("t-new", 43) };
+  const base: HunkTokens = { old: sideLines("b-old", 40), new: sideLines("b-new", 43) };
 
   it("takes the first rows from the target and the rest from the base, by identity", () => {
     const staged = stageTokens(hunks, target, base, 2);
-    // Row 0 (normal) and row 1 (delete) are inside the budget.
-    expect(staged.old[0]).toBe(target.old[0]);
-    expect(staged.new[0]).toBe(target.new[0]);
-    expect(staged.old[1]).toBe(target.old[1]);
-    // Rows 2 and 3 (inserts) keep the base pass.
-    expect(staged.new[1]).toBe(base.new[1]);
-    expect(staged.new[2]).toBe(base.new[2]);
+    // Row 0 (normal 10 -> 12): each side looked up by its own line number.
+    expect(staged.old[9]).toBe(target.old[9]);
+    expect(staged.new[11]).toBe(target.new[11]);
+    // Row 1 (delete old 11).
+    expect(staged.old[10]).toBe(target.old[10]);
+    // Rows 2-5 keep the base pass, the later hunk included.
+    expect(staged.new[12]).toBe(base.new[12]);
+    expect(staged.new[13]).toBe(base.new[13]);
+    expect(staged.old[11]).toBe(base.old[11]);
+    expect(staged.new[14]).toBe(base.new[14]);
+    expect(staged.old[39]).toBe(base.old[39]);
+    expect(staged.new[42]).toBe(base.new[42]);
   });
 
-  it("gives rows past the cursor an explicit null when nothing was shown before", () => {
+  it("leaves rows past the cursor without an entry when nothing was shown before", () => {
     const staged = stageTokens(hunks, target, null, 1);
-    expect(staged.old[0]).toBe(target.old[0]);
-    expect(staged.new[0]).toBe(target.new[0]);
-    // The same value a row reads when the table has no tokens at all, so a
-    // memoized row that hasn't been reached sees no prop change.
-    expect(staged.old[1]).toBeNull();
-    expect(staged.new[1]).toBeNull();
-    expect(staged.new[2]).toBeNull();
+    expect(staged.old[9]).toBe(target.old[9]);
+    expect(staged.new[11]).toBe(target.new[11]);
+    // A hole reads `undefined`, the value a staged table hands every row before
+    // any pass, so a memoized row the cursor hasn't reached sees no change.
+    expect(10 in staged.old).toBe(false);
+    expect(12 in staged.new).toBe(false);
+    expect(Object.keys(staged.old)).toEqual(["9"]);
+    expect(Object.keys(staged.new)).toEqual(["11"]);
   });
 
-  it("covers every row once the budget reaches the end", () => {
+  it("copies only lines the rows actually address", () => {
     const staged = stageTokens(hunks, target, base, changes.length);
-    expect(staged.old).toEqual(target.old);
-    expect(staged.new).toEqual(target.new);
-    staged.new.forEach((line, i) => expect(line).toBe(target.new[i]));
+    expect(Object.keys(staged.old).map(Number)).toEqual([9, 10, 11, 39]);
+    expect(Object.keys(staged.new).map(Number)).toEqual([11, 12, 13, 14, 42]);
+    for (const line of [9, 10, 11, 39]) expect(staged.old[line]).toBe(target.old[line]);
+    for (const line of [11, 12, 13, 14, 42]) expect(staged.new[line]).toBe(target.new[line]);
+  });
+
+  it("skips lines a pass has no tokens for", () => {
+    const sparse: HunkTokens = { old: [], new: [] };
+    sparse.new[11] = tokenLine("only");
+    const staged = stageTokens(hunks, sparse, null, changes.length);
+    expect(Object.keys(staged.old)).toEqual([]);
+    expect(Object.keys(staged.new)).toEqual(["11"]);
+    expect(staged.new[11]).toBe(sparse.new[11]);
   });
 });

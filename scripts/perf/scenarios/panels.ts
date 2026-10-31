@@ -1046,19 +1046,22 @@ export const panelScenarios: PerfScenario[] = [
       );
       // Inverted on purpose: the control arm is SUPPOSED to commit every row at
       // once and be caught doing it. A control that quietly staged would make
-      // every "before" number below a fiction.
-      const controlMisses = ["unstagedAdded5000", "unstagedFullFile5000"].reduce(
-        (sum, key) =>
+      // every "before" number below a fiction — and so would one that never
+      // finished, or never got its tokens, since its timings would then price
+      // less work than the staged arm does.
+      const controlMisses = ["unstagedAdded5000", "unstagedFullFile5000"].reduce((sum, key) => {
+        const expected = requireMetric(m, `${key}ExpectedRows`);
+        return (
           sum +
-          (requireMetric(m, `${key}InitialMountedRows`) === requireMetric(m, `${key}ExpectedRows`)
-            ? 0
-            : 1) +
-          (requireMetric(m, `${key}StagingMisses`) > 0 ? 0 : 1),
-        0
-      );
+          (requireMetric(m, `${key}InitialMountedRows`) === expected ? 0 : 1) +
+          (requireMetric(m, `${key}StagingMisses`) > 0 ? 0 : 1) +
+          (requireMetric(m, `${key}FinalRows`) === expected ? 0 : 1) +
+          (requireMetric(m, `${key}TokenMisses`) === 0 ? 0 : 1)
+        );
+      }, 0);
 
-      // The headline is the worst single commit a user would sit through: the
-      // first one plus the slowest slice after it, per table.
+      // Per table, the first commit plus the slowest commit after it, summed
+      // over both tables: the two commits a reader waits through on opening each.
       const durationMs = staged.reduce(
         (sum, key) =>
           sum + requireMetric(m, `${key}InitialRenderMs`) + requireMetric(m, `${key}MaxSliceMs`),

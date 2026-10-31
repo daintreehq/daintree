@@ -1,3 +1,4 @@
+import { computeNewLineNumber, computeOldLineNumber } from "react-diff-view";
 import type { HunkData, HunkTokens, TokenNode } from "react-diff-view";
 
 /**
@@ -54,16 +55,14 @@ export function sliceHunksToRowBudget(hunks: HunkData[], budget: number): HunkDa
   return out;
 }
 
-function lineCount(lines: readonly unknown[] | undefined): number {
-  return lines?.length ?? 0;
-}
-
 /**
  * Tokens for the first `budget` rows from `target`, the rest from `base` (the
  * pass already on screen, or nothing). Each row keeps the exact per-line token
  * array it would get from either pass, so react-diff-view's memoized rows only
- * re-render where the line actually changed hands; rows with no tokens get an
- * explicit `null`, the same value they see when the table has no tokens at all.
+ * re-render where the line actually changed hands. Lines with nothing to show
+ * stay holes, which a row reads as `undefined` — the same value a staged table
+ * hands every row before any pass arrives (see `useStagedDiffRows`), so a row
+ * the cursor hasn't reached sees no prop change.
  */
 export function stageTokens(
   hunks: readonly HunkData[],
@@ -71,24 +70,22 @@ export function stageTokens(
   base: HunkTokens | null,
   budget: number
 ): HunkTokens {
-  const size = (side: "old" | "new") => Math.max(lineCount(target[side]), lineCount(base?.[side]));
-  const old: (TokenNode[] | null)[] = new Array<TokenNode[] | null>(size("old")).fill(null);
-  const next: (TokenNode[] | null)[] = new Array<TokenNode[] | null>(size("new")).fill(null);
+  const old: TokenNode[][] = [];
+  const next: TokenNode[][] = [];
   let row = 0;
   for (const hunk of hunks) {
     for (const change of hunk.changes) {
       const from = row < budget ? target : base;
       row++;
       if (!from) continue;
-      if (change.type === "insert") {
-        next[change.lineNumber - 1] = from.new[change.lineNumber - 1] ?? null;
-      } else if (change.type === "delete") {
-        old[change.lineNumber - 1] = from.old[change.lineNumber - 1] ?? null;
-      } else {
-        old[change.oldLineNumber - 1] = from.old[change.oldLineNumber - 1] ?? null;
-        next[change.newLineNumber - 1] = from.new[change.newLineNumber - 1] ?? null;
-      }
+      // The same line lookups react-diff-view's rows make for their token props.
+      const oldLine = computeOldLineNumber(change);
+      const newLine = computeNewLineNumber(change);
+      const oldTokens = oldLine > 0 ? from.old[oldLine - 1] : undefined;
+      const newTokens = newLine > 0 ? from.new[newLine - 1] : undefined;
+      if (oldTokens) old[oldLine - 1] = oldTokens;
+      if (newTokens) next[newLine - 1] = newTokens;
     }
   }
-  return { old: old as TokenNode[][], new: next as TokenNode[][] };
+  return { old, new: next };
 }

@@ -412,13 +412,55 @@ describe("useScopedSelectAll beforeSelect", () => {
     expect(selectedText()).toContain("late rows");
   });
 
-  it("does not run when the chord is left to someone else", () => {
+  it("does not run when the chord is left to a text field", () => {
     const onBefore = vi.fn();
     const { getByTestId } = render(<LazyHarness onBefore={onBefore} />);
 
     const event = pressSelectAll(getByTestId("search"));
 
     expect(event.defaultPrevented).toBe(false);
+    expect(onBefore).not.toHaveBeenCalled();
+  });
+
+  it("does not run for a target outside its own pane", () => {
+    const onBefore = vi.fn();
+    const { getByTestId } = render(
+      <>
+        <LazyHarness onBefore={onBefore} />
+        <div data-testid="other-pane" data-panel-id="pane-2" tabIndex={-1} />
+      </>
+    );
+
+    const event = pressSelectAll(getByTestId("other-pane"));
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(onBefore).not.toHaveBeenCalled();
+  });
+
+  it("does not run when a higher-priority owner already claimed the chord", () => {
+    const onBefore = vi.fn();
+    const { getByTestId } = render(<LazyHarness onBefore={onBefore} />);
+    const pane = getByTestId("pane");
+    const claim = (event: Event) => event.preventDefault();
+    pane.addEventListener("keydown", claim);
+
+    pressSelectAll(pane);
+    pane.removeEventListener("keydown", claim);
+
+    expect(onBefore).not.toHaveBeenCalled();
+    expect(selectedText()).toBe("");
+  });
+
+  it.each([
+    ["the Shift chord", { shiftKey: true }],
+    ["an Alt chord", { altKey: true }],
+    ["a keystroke the IME is composing", { isComposing: true }],
+  ])("does not run for %s", (_label, init) => {
+    const onBefore = vi.fn();
+    const { getByTestId } = render(<LazyHarness onBefore={onBefore} />);
+
+    pressSelectAll(getByTestId("pane"), init);
+
     expect(onBefore).not.toHaveBeenCalled();
   });
 });

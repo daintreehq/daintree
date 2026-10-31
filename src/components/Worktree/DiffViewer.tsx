@@ -16,6 +16,7 @@ import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import type {
   CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
   ReactElement,
   ReactNode,
   Ref,
@@ -924,7 +925,14 @@ interface FileDiffProps {
 }
 
 const EMPTY_NOTES: readonly DiffNote[] = [];
+const EMPTY_HUNKS: HunkData[] = [];
 const EMPTY_KEYS: string[] = [];
+
+interface ExpandedHunks {
+  file: FileDiffProps["file"];
+  oldSource: string[] | null;
+  hunks: HunkData[];
+}
 
 type DiffNoteDraft =
   { kind: "file" } | { kind: "lines"; side: DiffNoteSide; startLine: number; endLine: number };
@@ -969,13 +977,17 @@ function FileDiff({
     setIsCollapsed(collapseDecision.collapse);
   }, [collapseDecision.collapse]);
 
-  // Manual per-gap expansion. Reset when the file changes, and when the source
-  // changes under it — context revealed from a previous revision must not
-  // survive into a newly loaded one.
-  const [hunks, setHunks] = useState<HunkData[]>(file.hunks ?? []);
-  useEffect(() => {
-    setHunks(file.hunks ?? []);
-  }, [file, oldSource]);
+  // Manual per-gap expansion, owned by the file and source it was made from:
+  // context revealed from a previous revision must not survive into a newly
+  // loaded one. Derived during render rather than reset by an effect, so a new
+  // file's first render already sees its own hunks — the staged mount sizes
+  // its first batch from them, and a render over the previous file's rows
+  // would let a file that grew from small to giant mount whole.
+  const [expanded, setExpanded] = useState<ExpandedHunks | null>(null);
+  const hunks =
+    expanded !== null && expanded.file === file && expanded.oldSource === oldSource
+      ? expanded.hunks
+      : (file.hunks ?? EMPTY_HUNKS);
 
   // Full file is derived from the file's own hunks rather than folded into
   // `hunks`, so toggling it off restores whatever the user had manually
@@ -1463,6 +1475,23 @@ function FileDiff({
     syncNativeHScroll,
   ]);
 
+  // Split view scopes a selection to the code column it started in: on
+  // mousedown react-diff-view writes `user-select` onto the cells of every row
+  // that exists at that moment. Rows a staged mount adds afterwards would carry
+  // no restriction, and a drag through them would copy the other column too,
+  // so the chosen side is mirrored onto the region where CSS
+  // (DiffViewer.lines.css) applies the same rule to late rows.
+  const scopesColumnSelection = viewType === "split" && isTwoColumnDiff(diffType);
+  const handleColumnSelect = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || !(event.target instanceof Element)) return;
+    const cell = event.target.closest(".diff-code");
+    const row = cell?.parentElement;
+    if (!cell || !row) return;
+    const index = Array.from(row.children).indexOf(cell);
+    if (index !== 1 && index !== 3) return;
+    event.currentTarget.dataset.diffSelectSide = index === 1 ? "old" : "new";
+  };
+
   // Arrow-key horizontal scrolling parity with the focusable native scroller
   // used by the other view modes.
   const handleRegionKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -1529,23 +1558,29 @@ function FileDiff({
   useLayoutEffect(() => {
     const line = pendingHeaderLineRef.current;
     if (line === null) return;
-    pendingHeaderLineRef.current = null;
     const active = document.activeElement;
-    if (active && active !== document.body && active.isConnected) return;
     const region = regionRef.current ?? nativeScrollerRef.current;
-    if (!region) return;
+    if ((active && active !== document.body && active.isConnected) || !region) {
+      pendingHeaderLineRef.current = null;
+      return;
+    }
     let index = visibleHunks.findIndex(
       (hunk) => hunk.oldStart <= line && line < hunk.oldStart + Math.max(hunk.oldLines, 1)
     );
     if (index === -1) index = visibleHunks.findIndex((hunk) => hunk.oldStart >= line);
     const headers = region.querySelectorAll<HTMLElement>(".diff-hunk-header-inner");
+    // Mid-stage the header can sit past the mounted prefix (the expansion grew
+    // the rows above it), and the trailing expander isn't drawn yet: keep the
+    // hand-off until a later batch mounts it.
+    if (!allRowsMounted && (index === -1 || index >= headers.length)) return;
+    pendingHeaderLineRef.current = null;
     const header = index === -1 ? headers[headers.length - 1] : headers[index];
     const target = header?.querySelector<HTMLElement>("button") ?? region;
     // A hand-off, not a move the user made: the expander they pressed is gone,
     // and its replacement's tooltip must not open over the code they revealed.
     armTooltipFocusSuppression();
     target.focus({ preventScroll: true });
-  }, [visibleHunks]);
+  }, [visibleHunks, mountedHunks, allRowsMounted]);
 
   const handleExpandContext = useCallback(
     (start: number, end: number) => {
@@ -1560,15 +1595,19 @@ function FileDiff({
         const hunk = index === -1 ? undefined : (visibleHunks[index] ?? visibleHunks.at(-1));
         pendingHeaderLineRef.current = hunk ? hunk.oldStart : null;
       }
-      setHunks((prev) => {
+      setExpanded((prev) => {
+        const base =
+          prev !== null && prev.file === file && prev.oldSource === oldSource
+            ? prev.hunks
+            : (file.hunks ?? EMPTY_HUNKS);
         try {
-          return expandFromRawCode(prev, oldSource, start, end);
+          return { file, oldSource, hunks: expandFromRawCode(base, oldSource, start, end) };
         } catch {
           return prev;
         }
       });
     },
-    [oldSource, visibleHunks]
+    [file, oldSource, visibleHunks]
   );
 
   const handleShowMoreHunks = () => {
@@ -1847,6 +1886,7 @@ function FileDiff({
             role="region"
             aria-label={relPath || "Diff"}
             onKeyDown={handleRegionKeyDown}
+            onMouseDown={scopesColumnSelection ? handleColumnSelect : undefined}
           >
             {diffBody}
             {hScrollbar}
@@ -1868,6 +1908,7 @@ function FileDiff({
               role="region"
               aria-label={relPath || "Diff"}
               onScroll={usesNativeHScrollProxy ? handleNativeHScroll : undefined}
+              onMouseDown={scopesColumnSelection ? handleColumnSelect : undefined}
             >
               {diffBody}
             </div>

@@ -85,8 +85,8 @@ export function buildAddedFileFixture(lines: number): DiffTableFixture {
  * after the first as blank rows, with or without staging: the synthetic old
  * side the viewer rebuilds leaves lines inside hunks empty, and the expansion
  * takes those over the hunk's own. A pre-existing quirk of the full-file view,
- * not of this benchmark; it is why token completeness counts highlightable
- * rows.
+ * not of this benchmark; it is why token completeness is counted over the
+ * plain table's non-blank cells.
  */
 export function buildFullFileFixture(lines: number): DiffTableFixture {
   const oldLines = Array.from({ length: lines }, (_, i) => sourceLine(i + 1));
@@ -131,21 +131,25 @@ export interface DiffTableSample {
   /** Commits after the first: frames run plus the token delivery. */
   slices: number;
   finalRows: number;
-  /** Rows whose code cell holds a token span. */
-  finalTokenizedRows: number;
   /**
-   * Rows with code to highlight. A blank line has nothing to tokenize, and the
-   * full-file merge renders some (see `buildFullFileFixture`), so completeness
-   * is stated against this rather than the row count.
+   * Code cells with text in them, counted on the plain table before the token
+   * pass is delivered, so a pass that erased text cannot lower its own bar. A
+   * blank line has nothing to tokenize, and the full-file merge renders some
+   * (see `buildFullFileFixture`), so completeness is stated per cell against
+   * this rather than per row against the fixture.
    */
-  finalHighlightableRows: number;
+  highlightableCells: number;
+  /** Code cells holding a token span once everything has landed. */
+  finalTokenizedCells: number;
+  /** Code cells whose text differs from the plain table's: tokens must never change the code. */
+  textMismatches: number;
   /** Every timed commit summed: the JS cost of getting the whole table on screen. */
   completeMs: number;
   /** Token requests the viewer made. One pass per open, however many slices. */
   tokenRequests: number;
   /** Nonzero when a commit exceeded the ceiling, nothing rendered, or rows went missing. */
   stagingMisses: number;
-  /** Nonzero when the token pass never reached every row with code in it. */
+  /** Nonzero when the pass missed a cell with code in it, or changed any cell's text. */
   tokenMisses: number;
 }
 
@@ -161,17 +165,8 @@ function tokenizedRowCount(root: HTMLElement): number {
   return count;
 }
 
-function highlightableRowCount(root: HTMLElement): number {
-  let count = 0;
-  for (const row of root.querySelectorAll("tr.diff-line")) {
-    for (const cell of row.querySelectorAll("td.diff-code")) {
-      if (cell.textContent?.trim()) {
-        count++;
-        break;
-      }
-    }
-  }
-  return count;
+function codeCells(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>("tr.diff-line > td.diff-code"));
 }
 
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -193,16 +188,29 @@ export function scoreStaging(sample: Omit<DiffTableSample, "stagingMisses" | "to
   if (sample.maxSliceTokenizedRows > SLICE_ROW_CEILING) stagingMisses++;
   if (sample.finalRows !== sample.expectedRows) stagingMisses++;
   let tokenMisses = 0;
-  if (sample.finalHighlightableRows === 0) tokenMisses++;
-  if (sample.finalTokenizedRows !== sample.finalHighlightableRows) tokenMisses++;
+  if (sample.highlightableCells === 0) tokenMisses++;
+  if (sample.finalTokenizedCells !== sample.highlightableCells) tokenMisses++;
+  if (sample.textMismatches > 0) tokenMisses++;
   return { stagingMisses, tokenMisses };
+}
+
+export interface MeasureOptions {
+  /**
+   * Withhold the token pass. A negative control for `tokenMisses`: the table
+   * renders every row correctly and plain, which only the token predicate can
+   * tell apart from a healthy run.
+   */
+  withholdTokens?: boolean;
 }
 
 /**
  * Mount the fixture, run frames until nothing is scheduled, deliver the token
  * pass, then run frames again until nothing is scheduled.
  */
-export async function measureDiffTable(fixture: DiffTableFixture): Promise<DiffTableSample> {
+export async function measureDiffTable(
+  fixture: DiffTableFixture,
+  { withholdTokens = false }: MeasureOptions = {}
+): Promise<DiffTableSample> {
   const frames = new Map<number, FrameRequestCallback>();
   let nextFrame = 1;
   const originalRaf = globalThis.requestAnimationFrame;
@@ -217,6 +225,7 @@ export async function measureDiffTable(fixture: DiffTableFixture): Promise<DiffT
   };
 
   const held: (() => void)[] = [];
+  const failures: unknown[] = [];
   let computing = 0;
   let tokenRequests = 0;
   // An own property shadowing the prototype method; deleting it restores the client.
@@ -224,10 +233,16 @@ export async function measureDiffTable(fixture: DiffTableFixture): Promise<DiffT
     new Promise<DiffTokenizeResult | null>((resolve) => {
       tokenRequests++;
       computing++;
-      void runDiffTokenize(request).then((result) => {
-        computing--;
-        held.push(() => resolve(result));
-      });
+      runDiffTokenize(request).then(
+        (result) => {
+          computing--;
+          held.push(() => resolve(result));
+        },
+        (error: unknown) => {
+          computing--;
+          failures.push(error);
+        }
+      );
     });
 
   const container = document.createElement("div");
@@ -282,21 +297,36 @@ export async function measureDiffTable(fixture: DiffTableFixture): Promise<DiffT
 
     runFrames();
 
-    // The tokenizer runs untimed: the grammar load and the walk are the
-    // worker's cost, not the table's.
-    await act(async () => {
-      for (let guard = 0; (computing > 0 || held.length === 0) && guard < 2_000; guard++) {
-        await settle();
-      }
-    });
-    const deliverStart = performance.now();
-    await act(async () => {
-      for (const release of held.splice(0)) release();
-      await settle();
-    });
-    recordSlice(performance.now() - deliverStart);
+    // The plain table is the reference the token pass is judged against: its
+    // text is the code, and its non-blank cells are the ones to highlight.
+    const plainText = codeCells(container).map((cell) => cell.textContent ?? "");
+    const highlightableCells = plainText.filter((text) => text.trim() !== "").length;
 
-    runFrames();
+    if (!withholdTokens) {
+      // The tokenizer runs untimed: the grammar load and the walk are the
+      // worker's cost, not the table's.
+      await act(async () => {
+        for (let guard = 0; (computing > 0 || held.length === 0) && guard < 2_000; guard++) {
+          if (failures.length > 0) break;
+          await settle();
+        }
+      });
+      if (failures.length > 0) throw failures[0];
+      if (held.length === 0) throw new Error("the tokenizer never produced a pass");
+      const deliverStart = performance.now();
+      await act(async () => {
+        for (const release of held.splice(0)) release();
+      });
+      recordSlice(performance.now() - deliverStart);
+
+      runFrames();
+    }
+
+    const finalCells = codeCells(container);
+    let textMismatches = Math.abs(finalCells.length - plainText.length);
+    finalCells.forEach((cell, i) => {
+      if ((cell.textContent ?? "") !== plainText[i]) textMismatches++;
+    });
 
     const partial = {
       expectedRows: fixture.expectedRows,
@@ -307,8 +337,9 @@ export async function measureDiffTable(fixture: DiffTableFixture): Promise<DiffT
       maxSliceMs,
       slices,
       finalRows: rowCount(container),
-      finalTokenizedRows: tokenizedRowCount(container),
-      finalHighlightableRows: highlightableRowCount(container),
+      highlightableCells,
+      finalTokenizedCells: finalCells.filter((cell) => cell.querySelector("span") !== null).length,
+      textMismatches,
       completeMs,
       tokenRequests,
     };

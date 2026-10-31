@@ -1,28 +1,33 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChangeData, HunkData, HunkTokens, TokenNode } from "react-diff-view";
 import { countHunkRows, DIFF_ROW_BATCH } from "../diffRowStaging";
-import { useStagedDiffRows } from "../useStagedDiffRows";
+import { useStagedDiffRows, type StagedDiffRows } from "../useStagedDiffRows";
 
 let frames: Map<number, FrameRequestCallback>;
 let nextFrame: number;
+let originalRaf: typeof globalThis.requestAnimationFrame;
+let originalCancel: typeof globalThis.cancelAnimationFrame;
 
 beforeEach(() => {
   frames = new Map();
   nextFrame = 1;
-  vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+  originalRaf = globalThis.requestAnimationFrame;
+  originalCancel = globalThis.cancelAnimationFrame;
+  globalThis.requestAnimationFrame = (cb: FrameRequestCallback) => {
     const id = nextFrame++;
     frames.set(id, cb);
     return id;
-  });
-  vi.stubGlobal("cancelAnimationFrame", (id: number) => {
+  };
+  globalThis.cancelAnimationFrame = (id: number) => {
     frames.delete(id);
-  });
+  };
 });
 
 afterEach(() => {
-  vi.unstubAllGlobals();
+  globalThis.requestAnimationFrame = originalRaf;
+  globalThis.cancelAnimationFrame = originalCancel;
 });
 
 function runFrame() {
@@ -33,9 +38,18 @@ function runFrame() {
   });
 }
 
-function addedHunk(lines: number): HunkData {
+/** Runs frames until `done`, failing (rather than spinning) if the stage stops making progress. */
+function drainUntil(done: () => boolean, maxFrames = 40) {
+  for (let i = 0; i < maxFrames && !done(); i++) {
+    if (frames.size === 0) throw new Error("stage stalled: nothing scheduled and not done");
+    runFrame();
+  }
+  expect(done()).toBe(true);
+}
+
+function insertsFrom(first: number, lines: number): ChangeData[] {
   const changes: ChangeData[] = [];
-  for (let i = 1; i <= lines; i++) {
+  for (let i = first; i < first + lines; i++) {
     changes.push({
       type: "insert",
       content: `line ${i}`,
@@ -43,19 +57,33 @@ function addedHunk(lines: number): HunkData {
       isInsert: true,
     } as ChangeData);
   }
+  return changes;
+}
+
+function addedHunk(lines: number, first = 1): HunkData {
   return {
-    content: `@@ -0,0 +1,${lines} @@`,
+    content: `@@ -0,0 +${first},${lines} @@`,
     oldStart: 0,
-    newStart: 1,
+    newStart: first,
     oldLines: 0,
     newLines: lines,
-    changes,
+    changes: insertsFrom(first, lines),
   };
 }
 
 function tokensFor(lines: number, label: string): HunkTokens {
   const line = (i: number): TokenNode[] => [{ type: "text", value: `${label}${i}` }];
   return { old: [], new: Array.from({ length: lines }, (_, i) => line(i + 1)) };
+}
+
+/** How many of the table's new-side lines currently show this pass's own arrays. */
+function appliedFrom(shown: HunkTokens | null, pass: HunkTokens): number {
+  if (shown === null) return 0;
+  let count = 0;
+  pass.new.forEach((line: TokenNode[], i: number) => {
+    if (shown.new[i] === line) count++;
+  });
+  return count;
 }
 
 const mountedRows = (hunks: HunkData[]) => countHunkRows(hunks);
@@ -68,10 +96,19 @@ interface Props {
   enabled: boolean;
 }
 
-function renderStage(initial: Props) {
+function renderStage(initial: Props, onRender?: (result: StagedDiffRows) => void) {
   return renderHook(
-    (props: Props) =>
-      useStagedDiffRows(props.hunks, props.tokens, props.owner, props.flush, props.enabled),
+    (props: Props) => {
+      const result = useStagedDiffRows(
+        props.hunks,
+        props.tokens,
+        props.owner,
+        props.flush,
+        props.enabled
+      );
+      onRender?.(result);
+      return result;
+    },
     { initialProps: initial }
   );
 }
@@ -79,13 +116,12 @@ function renderStage(initial: Props) {
 const ROWS = DIFF_ROW_BATCH * 3 + 7;
 
 describe("useStagedDiffRows", () => {
-  it("leaves a set within one batch alone: whole on the first render, tokens straight through", () => {
+  it("leaves a set within one batch alone: whole on the first render, nothing scheduled", () => {
     const hunks = [addedHunk(DIFF_ROW_BATCH)];
-    const tokens = tokensFor(DIFF_ROW_BATCH, "t");
-    const owner = {};
-    const { result } = renderStage({ hunks, tokens: null, owner, flush: 0, enabled: true });
+    const { result } = renderStage({ hunks, tokens: null, owner: {}, flush: 0, enabled: true });
     expect(result.current.mountedHunks).toBe(hunks);
     expect(result.current.allRowsMounted).toBe(true);
+    expect(result.current.tokens).toBeNull();
     expect(frames.size).toBe(0);
   });
 
@@ -112,19 +148,25 @@ describe("useStagedDiffRows", () => {
     expect(result.current.allRowsMounted).toBe(false);
 
     let previous = DIFF_ROW_BATCH;
-    let slices = 0;
-    while (!result.current.allRowsMounted) {
-      runFrame();
+    drainUntil(() => {
       const now = mountedRows(result.current.mountedHunks);
       expect(now - previous).toBeLessThanOrEqual(DIFF_ROW_BATCH);
-      expect(now).toBeGreaterThan(previous);
       previous = now;
-      slices++;
-      expect(slices).toBeLessThan(10);
-    }
+      return result.current.allRowsMounted;
+    });
     expect(result.current.mountedHunks).toBe(hunks);
     // Nothing left scheduled once the stage is done.
     expect(frames.size).toBe(0);
+  });
+
+  it("hands a staged table an empty pass, not none, before any tokens arrive", () => {
+    // Rows past the cursor of a partial pass read `undefined`; reading the same
+    // before any pass keeps their memoized props unchanged when one lands.
+    const hunks = [addedHunk(ROWS)];
+    const { result } = renderStage({ hunks, tokens: null, owner: {}, flush: 0, enabled: true });
+    expect(result.current.tokens).not.toBeNull();
+    expect(result.current.tokens!.new).toHaveLength(0);
+    expect(result.current.tokens!.old).toHaveLength(0);
   });
 
   it("does not stage while disabled (a collapsed file)", () => {
@@ -149,31 +191,24 @@ describe("useStagedDiffRows", () => {
 
     rerender({ hunks, tokens, owner, flush: 0, enabled: true });
     // Nothing applied before the first slice: the table keeps plain rows.
-    expect(result.current.tokens).toBeNull();
-
-    const applied = () =>
-      result.current.tokens === null
-        ? 0
-        : result.current.tokens.new.filter((line, i) => line === tokens.new[i]).length;
+    expect(appliedFrom(result.current.tokens, tokens)).toBe(0);
 
     runFrame();
     // Mounted rows get tokens first; no new rows join in the same slice.
-    expect(applied()).toBe(DIFF_ROW_BATCH);
+    expect(appliedFrom(result.current.tokens, tokens)).toBe(DIFF_ROW_BATCH);
     expect(mountedRows(result.current.mountedHunks)).toBe(DIFF_ROW_BATCH * 2);
-    // Rows past the cursor read null, as they did with no tokens at all.
-    expect(result.current.tokens!.new[DIFF_ROW_BATCH]).toBeNull();
+    expect(result.current.tokens!.new[DIFF_ROW_BATCH]).toBeUndefined();
 
     runFrame();
-    expect(applied()).toBe(DIFF_ROW_BATCH * 2);
+    expect(appliedFrom(result.current.tokens, tokens)).toBe(DIFF_ROW_BATCH * 2);
     expect(mountedRows(result.current.mountedHunks)).toBe(DIFF_ROW_BATCH * 2);
 
     runFrame();
     // Every mounted row is highlighted, so this slice mounts the next batch with its tokens.
     expect(mountedRows(result.current.mountedHunks)).toBe(DIFF_ROW_BATCH * 3);
-    expect(applied()).toBe(DIFF_ROW_BATCH * 3);
+    expect(appliedFrom(result.current.tokens, tokens)).toBe(DIFF_ROW_BATCH * 3);
 
-    while (!result.current.allRowsMounted || result.current.tokens !== tokens) runFrame();
-    expect(result.current.tokens).toBe(tokens);
+    drainUntil(() => result.current.allRowsMounted && result.current.tokens === tokens);
     expect(frames.size).toBe(0);
   });
 
@@ -189,7 +224,7 @@ describe("useStagedDiffRows", () => {
       flush: 0,
       enabled: true,
     });
-    while (!result.current.allRowsMounted || result.current.tokens !== first) runFrame();
+    drainUntil(() => result.current.allRowsMounted && result.current.tokens === first);
 
     rerender({ hunks, tokens: second, owner, flush: 0, enabled: true });
     expect(result.current.tokens).toBe(first);
@@ -200,7 +235,7 @@ describe("useStagedDiffRows", () => {
     expect(shown.new[DIFF_ROW_BATCH]).toBe(first.new[DIFF_ROW_BATCH]);
     expect(shown.new[ROWS - 1]).toBe(first.new[ROWS - 1]);
 
-    while (result.current.tokens !== second) runFrame();
+    drainUntil(() => result.current.tokens === second);
     expect(frames.size).toBe(0);
   });
 
@@ -209,9 +244,32 @@ describe("useStagedDiffRows", () => {
     const tokens = tokensFor(ROWS, "t");
     const owner = {};
     const { result, rerender } = renderStage({ hunks, tokens, owner, flush: 0, enabled: true });
-    while (!result.current.allRowsMounted || result.current.tokens !== tokens) runFrame();
+    drainUntil(() => result.current.allRowsMounted && result.current.tokens === tokens);
     rerender({ hunks, tokens: null, owner, flush: 0, enabled: true });
-    expect(result.current.tokens).toBeNull();
+    expect(appliedFrom(result.current.tokens, tokens)).toBe(0);
+  });
+
+  it("never brings an invalidated pass back as the base for the next one", () => {
+    // A grammar change over the same hunks: the old pass is dropped (null),
+    // then the new one lands. Rows the new pass hasn't reached stay plain.
+    const hunks = [addedHunk(ROWS)];
+    const oldGrammar = tokensFor(ROWS, "old");
+    const newGrammar = tokensFor(ROWS, "new");
+    const owner = {};
+    const { result, rerender } = renderStage({
+      hunks,
+      tokens: oldGrammar,
+      owner,
+      flush: 0,
+      enabled: true,
+    });
+    drainUntil(() => result.current.allRowsMounted && result.current.tokens === oldGrammar);
+    rerender({ hunks, tokens: null, owner, flush: 0, enabled: true });
+    rerender({ hunks, tokens: newGrammar, owner, flush: 0, enabled: true });
+    expect(appliedFrom(result.current.tokens, oldGrammar)).toBe(0);
+    runFrame();
+    expect(appliedFrom(result.current.tokens, newGrammar)).toBe(DIFF_ROW_BATCH);
+    expect(appliedFrom(result.current.tokens, oldGrammar)).toBe(0);
   });
 
   it("drops tokens built for other hunks", () => {
@@ -219,28 +277,27 @@ describe("useStagedDiffRows", () => {
     const tokens = tokensFor(ROWS, "t");
     const owner = {};
     const { result, rerender } = renderStage({ hunks, tokens, owner, flush: 0, enabled: true });
-    while (!result.current.allRowsMounted || result.current.tokens !== tokens) runFrame();
+    drainUntil(() => result.current.allRowsMounted && result.current.tokens === tokens);
     const regrown = [addedHunk(ROWS + 5)];
     const newTokens = tokensFor(ROWS + 5, "n");
     rerender({ hunks: regrown, tokens: newTokens, owner, flush: 0, enabled: true });
-    expect(result.current.tokens).toBeNull();
+    expect(appliedFrom(result.current.tokens, tokens)).toBe(0);
+    expect(appliedFrom(result.current.tokens, newTokens)).toBe(0);
   });
 
-  it("starts over within the same render when the owner changes", () => {
+  it("never hands a new owner the previous owner's budget, not even for one render", () => {
+    const seen: number[] = [];
     const hunks = [addedHunk(ROWS)];
-    const { result, rerender } = renderStage({
-      hunks,
-      tokens: null,
-      owner: {},
-      flush: 0,
-      enabled: true,
-    });
-    while (!result.current.allRowsMounted) runFrame();
-    // A new view is never handed the previous view's finished budget, even
-    // for the one render before an effect could catch up.
-    const next = [addedHunk(ROWS)];
-    rerender({ hunks: next, tokens: null, owner: {}, flush: 0, enabled: true });
-    expect(mountedRows(result.current.mountedHunks)).toBe(DIFF_ROW_BATCH);
+    const { result, rerender } = renderStage(
+      { hunks, tokens: null, owner: {}, flush: 0, enabled: true },
+      (staged) => seen.push(mountedRows(staged.mountedHunks))
+    );
+    drainUntil(() => result.current.allRowsMounted);
+    seen.length = 0;
+    rerender({ hunks: [addedHunk(ROWS)], tokens: null, owner: {}, flush: 0, enabled: true });
+    // Every render of the new owner, the one before its effect syncs included.
+    expect(seen.length).toBeGreaterThan(0);
+    expect(Math.max(...seen)).toBe(DIFF_ROW_BATCH);
   });
 
   it("mounts later growth of a finished view at once", () => {
@@ -253,7 +310,7 @@ describe("useStagedDiffRows", () => {
       flush: 0,
       enabled: true,
     });
-    while (!result.current.allRowsMounted) runFrame();
+    drainUntil(() => result.current.allRowsMounted);
     const grown = [addedHunk(ROWS + 20)];
     rerender({ hunks: grown, tokens: null, owner, flush: 0, enabled: true });
     expect(result.current.mountedHunks).toBe(grown);
@@ -269,12 +326,13 @@ describe("useStagedDiffRows", () => {
       flush: 0,
       enabled: true,
     });
-    while (!result.current.allRowsMounted) runFrame();
+    drainUntil(() => result.current.allRowsMounted);
     act(() => result.current.extend());
-    const more: HunkData = { ...addedHunk(ROWS), oldStart: 9000, newStart: 9000 };
+    const more = addedHunk(ROWS, ROWS + 100);
     rerender({ hunks: [first, more], tokens: null, owner, flush: 0, enabled: true });
     expect(mountedRows(result.current.mountedHunks)).toBe(ROWS + DIFF_ROW_BATCH);
-    while (!result.current.allRowsMounted) runFrame();
+    expect(result.current.mountedHunks[0]).toBe(first);
+    drainUntil(() => result.current.allRowsMounted);
     expect(mountedRows(result.current.mountedHunks)).toBe(ROWS * 2);
   });
 
@@ -295,11 +353,11 @@ describe("useStagedDiffRows", () => {
 
     // A pass arriving after the flush still lands in slices on the whole table.
     rerender({ hunks, tokens, owner, flush: 1, enabled: true });
-    expect(result.current.tokens).toBeNull();
+    expect(appliedFrom(result.current.tokens, tokens)).toBe(0);
     runFrame();
     expect(result.current.mountedHunks).toBe(hunks);
-    expect(result.current.tokens!.new[0]).toBe(tokens.new[0]);
-    expect(result.current.tokens!.new[ROWS - 1]).toBeNull();
+    expect(appliedFrom(result.current.tokens, tokens)).toBe(DIFF_ROW_BATCH);
+    expect(result.current.tokens!.new[ROWS - 1]).toBeUndefined();
   });
 
   it("cancels its pending frame on unmount", () => {

@@ -38,6 +38,15 @@ export interface StagedDiffRows {
   extend: () => void;
 }
 
+/**
+ * What a staged table hands react-diff-view while it shows no tokens. An empty
+ * pass rather than none, so every row reads `undefined` for its tokens from
+ * the first commit, exactly as rows past the cursor of a partial pass do — a
+ * missing pass would hand them `null`, and the first partial one would then
+ * re-render every row it hasn't reached.
+ */
+const NO_TOKENS: HunkTokens = { old: [], new: [] };
+
 function freshStage(owner: unknown, flush: number, rows: number): Stage {
   return {
     owner,
@@ -148,15 +157,28 @@ export function useStagedDiffRows(
     [hunks, current.mounted]
   );
 
-  // A set within one batch takes its tokens directly, and a stale pass (null)
-  // clears at once: stale tokens must never sit on rows they weren't built for.
-  const staged = shouldStageRows(rows) && tokens !== null;
-  const shownTokens = !staged ? tokens : current.tokenHunks === hunks ? current.shown : null;
+  // A set within one batch takes its tokens directly. A staged one shows what
+  // the stage has applied, and a stale pass (null) clears at once: stale
+  // tokens must never sit on rows they weren't built for.
+  const big = shouldStageRows(rows);
+  const staged = big && tokens !== null;
+  const shownTokens = !big
+    ? tokens
+    : staged && current.tokenHunks === hunks && current.shown !== null
+      ? current.shown
+      : NO_TOKENS;
 
   useEffect(() => {
     if (!enabled) return;
     if (stage !== current) {
       setStage(current);
+      return;
+    }
+    if (tokens === null && stage.tokenHunks !== null) {
+      // The pass was invalidated (another grammar, another highlight mode).
+      // Forget it, or it would return as the base the next pass over these
+      // same hunks builds on.
+      setStage({ ...stage, tokenHunks: null, target: null, base: null, applied: 0, shown: null });
       return;
     }
     const tokensDone =

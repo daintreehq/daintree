@@ -422,3 +422,12 @@
 .diff-viewer .diff-code *::selection {
   background: color-mix(in srgb, var(--color-accent-primary) 30%, transparent);
 }
+
+/* Column-scoped selection in split view. react-diff-view restricts a selection
+   to the code column it started in by writing inline user-select onto the
+   cells of the rows present at mousedown; FileDiff records that side on the
+   region so rows a staged mount adds later are restricted the same way. */
+.diff-viewer [data-diff-select-side="old"] .diff-line > td:nth-child(4),
+.diff-viewer [data-diff-select-side="new"] .diff-line > td:nth-child(2) {
+  user-select: none;
+}
