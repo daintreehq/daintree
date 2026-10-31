@@ -26,13 +26,13 @@ function makeSpec(tool: string, severity: "fatal" | "warn" | "silent" = "fatal")
   };
 }
 
-function makeResult(tool: string) {
+function makeResult(tool: string, severity: "fatal" | "warn" = "fatal") {
   return {
     tool,
     label: tool,
     available: true,
     version: "1.0.0",
-    severity: "fatal" as const,
+    severity,
     meetsMinVersion: true,
     minVersion: null,
     installUrl: null,
@@ -244,5 +244,54 @@ describe("useSystemHealthCheck — focus re-check", () => {
     await act(async () => {
       await Promise.resolve();
     });
+  });
+});
+
+describe("useSystemHealthCheck — hasFatalFailure", () => {
+  function missing(tool: string, severity: "fatal" | "warn") {
+    return { ...makeResult(tool, severity), available: false, version: null };
+  }
+
+  function mockTools(results: Record<string, ReturnType<typeof makeResult>>) {
+    mockCheckTool.mockImplementation(async (spec: { tool: string }) => results[spec.tool]);
+  }
+
+  beforeEach(() => {
+    mockGetSpecs.mockReset();
+    mockCheckTool.mockReset();
+  });
+
+  it("does not block when only a warn-severity tool such as Node.js is missing", async () => {
+    mockGetSpecs.mockResolvedValue([makeSpec("git"), makeSpec("node", "warn")]);
+    mockTools({ git: makeResult("git"), node: missing("node", "warn") });
+
+    const { result } = renderHook(() => useSystemHealthCheck());
+
+    await waitFor(() => expect(result.current.allDone).toBe(true));
+    expect(result.current.checkStates.node).toMatchObject({ available: false });
+    expect(result.current.hasFatalFailure).toBe(false);
+  });
+
+  it("does not block on a warn-severity tool below its minimum version", async () => {
+    mockGetSpecs.mockResolvedValue([makeSpec("git"), makeSpec("node", "warn")]);
+    mockTools({
+      git: makeResult("git"),
+      node: { ...makeResult("node", "warn"), meetsMinVersion: false },
+    });
+
+    const { result } = renderHook(() => useSystemHealthCheck());
+
+    await waitFor(() => expect(result.current.allDone).toBe(true));
+    expect(result.current.hasFatalFailure).toBe(false);
+  });
+
+  it("blocks when a fatal tool such as Git is missing, even with Node.js present", async () => {
+    mockGetSpecs.mockResolvedValue([makeSpec("git"), makeSpec("node", "warn")]);
+    mockTools({ git: missing("git", "fatal"), node: makeResult("node", "warn") });
+
+    const { result } = renderHook(() => useSystemHealthCheck());
+
+    await waitFor(() => expect(result.current.allDone).toBe(true));
+    expect(result.current.hasFatalFailure).toBe(true);
   });
 });

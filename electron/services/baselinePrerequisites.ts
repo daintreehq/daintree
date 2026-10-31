@@ -218,7 +218,11 @@ export function buildBaselinePrerequisites(
       tool: "node",
       label: "Node.js",
       versionArgs: ["--version"],
-      severity: "fatal",
+      // Guidance, not a gate: Daintree's own Node work runs on Electron's
+      // binary, and an external Node is needed only by npm agent installs and
+      // plugin MCP servers declaring `command: "node"`. An npm-installed agent
+      // that can't run without it still fails its own binary prerequisite.
+      severity: "warn",
       minVersion: "18.0.0",
       installUrl: "https://nodejs.org",
       installBlocks: {

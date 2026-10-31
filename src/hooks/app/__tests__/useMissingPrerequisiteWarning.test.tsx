@@ -125,6 +125,7 @@ describe("useMissingPrerequisiteWarning", () => {
     expect(payload.priority).toBe("low");
     expect(payload.supersedeKey).toBeTruthy();
     expect(payload.message).toContain("Git");
+    expect(payload.message).not.toMatch(/agent launches|Node/);
   });
 
   it("does not re-notify on a later re-check", async () => {

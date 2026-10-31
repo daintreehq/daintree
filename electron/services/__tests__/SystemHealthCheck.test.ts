@@ -302,6 +302,27 @@ describe("runSystemHealthCheck", () => {
     const result = await runSystemHealthCheck();
 
     expect(result.prerequisites.find((p) => p.tool === "node")?.meetsMinVersion).toBe(false);
+    // Node is guidance, so an outdated one is reported without failing the gate.
+    expect(result.allRequired).toBe(true);
+  });
+
+  it("allRequired holds when Node.js and npm are absent but Git is present", async () => {
+    mockLookup(["git", "gh"], ALL_VERSIONS);
+
+    const result = await runSystemHealthCheck();
+
+    const node = result.prerequisites.find((p) => p.tool === "node");
+    expect(node?.available).toBe(false);
+    expect(node?.severity).toBe("warn");
+    expect(result.allRequired).toBe(true);
+  });
+
+  it("allRequired is false when only Git is missing", async () => {
+    mockLookup(["node", "npm", "gh"], ALL_VERSIONS);
+
+    const result = await runSystemHealthCheck();
+
+    expect(result.prerequisites.find((p) => p.tool === "node")?.available).toBe(true);
     expect(result.allRequired).toBe(false);
   });
 
@@ -417,6 +438,25 @@ describe("runSystemHealthCheck", () => {
       expect(result.prerequisites.length).toBeGreaterThan(0);
       expect(result.prerequisites.every((p) => p.severity === "fatal")).toBe(true);
       expect(result.prerequisites.some((p) => p.tool === "gh")).toBe(false);
+    });
+
+    it("never reports a missing Node.js, and passes with Git alone", async () => {
+      mockLookup(["git"], ALL_VERSIONS);
+
+      const result = await runSystemHealthCheck({ fatalOnly: true });
+
+      expect(result.prerequisites.map((p) => p.tool)).toEqual(["git"]);
+      expect(result.allRequired).toBe(true);
+    });
+
+    it("still fails when Git is missing even though Node.js is present", async () => {
+      mockLookup(["node", "npm", "gh"], ALL_VERSIONS);
+
+      const result = await runSystemHealthCheck({ fatalOnly: true });
+
+      expect(result.prerequisites.map((p) => p.tool)).toEqual(["git"]);
+      expect(result.prerequisites[0]?.available).toBe(false);
+      expect(result.allRequired).toBe(false);
     });
   });
 
@@ -725,7 +765,8 @@ describe("runSystemHealthCheck", () => {
         return "v20.11.0\n";
       });
 
-      const result = await runSystemHealthCheck({ fatalOnly: true });
+      // The full check: Node is guidance now, so the fatal-only subset no longer probes it.
+      const result = await runSystemHealthCheck();
 
       expect(result.prerequisites.find((p) => p.tool === "node")?.available).toBe(true);
     });

@@ -10,7 +10,7 @@ function isMissing(result: { available: boolean; meetsMinVersion: boolean }): bo
 }
 
 /**
- * Surfaces missing fatal prerequisites (Git, Node) as a global banner. The
+ * Surfaces missing fatal prerequisites (Git) as a global banner. The
  * baseline check already existed but was only reachable from Settings and the
  * Agent Setup wizard, and the wizard is deliberately skipped on first run — so
  * a fresh install learned Git was missing from a raw `spawn git ENOENT` part
@@ -46,7 +46,7 @@ export function useMissingPrerequisiteWarning(enabled: boolean) {
           type: "warning",
           priority: "low",
           title: "Missing required tools",
-          message: `${names} ${missing.length === 1 ? "is" : "are"} not installed or not on PATH. Git operations and agent launches will fail until ${missing.length === 1 ? "it's" : "they're"} available.`,
+          message: `${names} ${missing.length === 1 ? "is" : "are"} not installed or not on PATH. Git operations will fail until ${missing.length === 1 ? "it's" : "they're"} available.`,
           supersedeKey: "missing-prerequisites",
           countable: false,
           context: { eventKind: "host" },
