@@ -1,5 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  helperPath,
+  spawnStubHost,
+  waitForChildMessage,
+  type StubHostHandle,
+} from "./helpers/ipcContractTestUtils.js";
 
 const shared = vi.hoisted(() => {
   const forkMock = vi.fn();
@@ -29,24 +35,14 @@ vi.mock("../TrashedPidTracker.js", () => ({
   }),
 }));
 
-// Try to load the helpers — if worker_threads isn't available in this
-// runtime, skip the suite cleanly (matches PtyManager.integration precedent).
-let helpers: typeof import("./helpers/ipcContractTestUtils.js") | undefined;
-try {
-  helpers = await import("./helpers/ipcContractTestUtils.js");
-} catch (_err) {
-  console.warn("worker_threads helpers unavailable, skipping IPC contract tests");
-}
+const stubWorkerPath = helperPath("stubPtyHost.worker.mjs");
 
-const shouldSkip = !helpers;
-const stubWorkerPath = helpers ? helpers.helperPath("stubPtyHost.worker.mjs") : "";
-
-describe.skipIf(shouldSkip)("PtyClient IPC contract (real worker_threads boundary)", () => {
-  let handle: import("./helpers/ipcContractTestUtils.js").StubHostHandle;
+describe("PtyClient IPC contract (real worker_threads boundary)", () => {
+  let handle: StubHostHandle;
   let PtyClientCtor: typeof import("../PtyClient.js").PtyClient;
 
   beforeEach(async () => {
-    handle = helpers!.spawnStubHost(stubWorkerPath);
+    handle = spawnStubHost(stubWorkerPath);
     shared.forkMock.mockReset();
     shared.forkMock.mockReturnValue(handle.fakeChild);
     shared.appMock.getPath.mockClear();
@@ -101,7 +97,7 @@ describe.skipIf(shouldSkip)("PtyClient IPC contract (real worker_threads boundar
       // it back unchanged. Asserting on the echoed value proves both
       // serialization and deserialization preserve the types — a one-way
       // assertion would only catch half the contract.
-      const resultPromise = helpers!.waitForChildMessage<{
+      const resultPromise = waitForChildMessage<{
         type: string;
         requestId: string;
         payload: typeof payload;
@@ -215,7 +211,7 @@ describe.skipIf(shouldSkip)("PtyClient IPC contract (real worker_threads boundar
       // Send a health-check directly through the fakeChild — the worker
       // stub echoes pong via the real port, so this exercises the full
       // health-check round-trip across the V8 boundary.
-      const pongPromise = helpers!.waitForChildMessage(
+      const pongPromise = waitForChildMessage(
         handle.fakeChild,
         (m: any) => m?.type === "pong",
         5000

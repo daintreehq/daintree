@@ -1,20 +1,20 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { randomUUID } from "crypto";
 import type { PtyManager } from "../PtyManager.js";
+import { loadPtyIntegration } from "./helpers/nativePtyCapability.js";
 
-let PtyManagerClass: any;
-let testUtils: any;
+const loadSuiteModules = async () => ({
+  PtyManager: (await import("../PtyManager.js")).PtyManager,
+  testUtils: await import("./helpers/ptyTestUtils.js"),
+});
 
-try {
-  PtyManagerClass = (await import("../PtyManager.js")).PtyManager;
-  testUtils = await import("./helpers/ptyTestUtils.js");
-} catch (_error) {
-  console.warn("node-pty not available, skipping PTY integration tests");
-}
+const ptyIntegration = await loadPtyIntegration(loadSuiteModules);
 
-const shouldSkip = !PtyManagerClass;
-
-describe.skipIf(shouldSkip)("PtyManager Integration", () => {
+describe.skipIf(!ptyIntegration.available)("PtyManager Integration", () => {
+  // Vitest still runs a skipped suite's collector, so this body must not assume the modules loaded.
+  const { PtyManager: PtyManagerClass, testUtils } = (
+    ptyIntegration.available ? ptyIntegration.modules : { testUtils: {} }
+  ) as Awaited<ReturnType<typeof loadSuiteModules>>;
   const {
     cleanupPtyManager,
     waitForData,
@@ -23,7 +23,7 @@ describe.skipIf(shouldSkip)("PtyManager Integration", () => {
     spawnShellTerminal,
     sleep,
     getShellCommand,
-  } = testUtils || {};
+  } = testUtils;
   let manager: PtyManager;
 
   beforeEach(() => {
