@@ -1309,7 +1309,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           minLength: 1,
         },
         perPage: {
-          description: "Rows per page, 1-100 (default: 20).",
+          description: "1-100 rows; default varies.",
           type: "integer",
           minimum: 1,
           maximum: 100,
@@ -1320,7 +1320,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           enum: ["created", "updated"],
         },
         direction: {
-          description: "Sort direction (default: desc).",
+          description: "Default desc; asc may be refused.",
           type: "string",
           enum: ["asc", "desc"],
         },
@@ -1388,7 +1388,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           minLength: 1,
         },
         perPage: {
-          description: "Rows per page, 1-100 (default: 20).",
+          description: "1-100 rows; default varies.",
           type: "integer",
           minimum: 1,
           maximum: 100,
@@ -1399,7 +1399,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           enum: ["created", "updated"],
         },
         direction: {
-          description: "Sort direction (default: desc).",
+          description: "Default desc; asc may be refused.",
           type: "string",
           enum: ["asc", "desc"],
         },

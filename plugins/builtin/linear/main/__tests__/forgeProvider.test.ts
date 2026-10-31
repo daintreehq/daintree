@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import type { RepoRef } from "../../../../../shared/types/forge.js";
+import type { ListOptions, RepoRef } from "../../../../../shared/types/forge.js";
 import {
   clearLinearCaches,
   linearForgeProvider,
@@ -218,6 +218,112 @@ describe("listIssues", () => {
       { title: { containsIgnoreCase: "eng-42" } },
       { number: { eq: 42 } },
     ]);
+  });
+
+  describe("ordering", () => {
+    // Created order is 3, 2, 1 and updated order is 1, 3, 2, so a page in the
+    // wrong order can't pass for the right one.
+    const ISSUES = [
+      issueNode({
+        id: "i1",
+        number: 1,
+        createdAt: "2026-10-01T00:00:00.000Z",
+        updatedAt: "2026-10-30T00:00:00.000Z",
+      }),
+      issueNode({
+        id: "i2",
+        number: 2,
+        createdAt: "2026-10-05T00:00:00.000Z",
+        updatedAt: "2026-10-06T00:00:00.000Z",
+      }),
+      issueNode({
+        id: "i3",
+        number: 3,
+        createdAt: "2026-10-10T00:00:00.000Z",
+        updatedAt: "2026-10-20T00:00:00.000Z",
+      }),
+    ];
+
+    /** Answers like Linear: the whole collection ordered by `orderBy`, newest first, cursor-paged. */
+    function serveOrderedIssues(): void {
+      fetchMock().mockImplementation(async (_url: string, init: RequestInit) => {
+        const { variables } = JSON.parse(String(init.body)) as {
+          variables: { first: number; after: string | null; orderBy: "createdAt" | "updatedAt" };
+        };
+        const ordered = [...ISSUES].sort((a, b) =>
+          String(b[variables.orderBy]).localeCompare(String(a[variables.orderBy]))
+        );
+        let start = 0;
+        if (variables.after !== null) {
+          const at = ordered.findIndex((n) => `cursor:${n.id}` === variables.after);
+          if (at < 0) return gql(null, { errors: [{ message: "Invalid cursor" }] });
+          start = at + 1;
+        }
+        const nodes = ordered.slice(start, start + variables.first);
+        const hasNextPage = start + variables.first < ordered.length;
+        const endCursor = nodes.length > 0 ? `cursor:${nodes[nodes.length - 1].id}` : null;
+        return gql({ issues: { nodes, pageInfo: { hasNextPage, endCursor } } });
+      });
+    }
+
+    async function listTwoPages(opts: Pick<ListOptions, "sort" | "direction">) {
+      const first = await linearForgeProvider.listIssues(REPO, { ...opts, perPage: 2 });
+      expect(first.hasMore).toBe(true);
+      const second = await linearForgeProvider.listIssues(REPO, {
+        ...opts,
+        perPage: 2,
+        cursor: first.nextCursor,
+      });
+      expect(second.hasMore).toBe(false);
+      expect(second.nextCursor).toBeNull();
+      return [...first.items, ...second.items].map((issue) => issue.number);
+    }
+
+    it("orders the whole collection by creation for sort created", async () => {
+      serveOrderedIssues();
+      expect(await listTwoPages({ sort: "created", direction: "desc" })).toEqual([3, 2, 1]);
+      // The mock orders and pages by the variables, so the query has to actually apply them.
+      expect(body(0).query).toMatch(/\$orderBy: PaginationOrderBy!/);
+      expect(body(0).query).toMatch(/orderBy: \$orderBy\b/);
+      expect(body(0).query).toMatch(/after: \$after\b/);
+      expect(body(0).variables).toMatchObject({ orderBy: "createdAt", after: null });
+      expect(body(1).variables).toMatchObject({ orderBy: "createdAt", after: "cursor:i2" });
+    });
+
+    it("orders the whole collection by last update for sort updated", async () => {
+      serveOrderedIssues();
+      expect(await listTwoPages({ sort: "updated" })).toEqual([1, 3, 2]);
+      expect(body(0).variables.orderBy).toBe("updatedAt");
+      expect(body(1).variables).toMatchObject({ orderBy: "updatedAt", after: "cursor:i3" });
+    });
+
+    it("orders by creation when no sort is given, as the action documents", async () => {
+      serveOrderedIssues();
+      expect(await listTwoPages({})).toEqual([3, 2, 1]);
+      expect(body(0).variables.orderBy).toBe("createdAt");
+    });
+
+    it.each(["asc", "sideways"])(
+      "refuses direction %j by name instead of answering newest first",
+      async (direction) => {
+        serveOrderedIssues();
+        await expect(
+          linearForgeProvider.listIssues(REPO, {
+            sort: "created",
+            direction: direction as ListOptions["direction"],
+          })
+        ).rejects.toThrow(`direction "${direction}"`);
+        expect(fetchMock()).not.toHaveBeenCalled();
+      }
+    );
+
+    it("refuses a sort field Linear can't order by", async () => {
+      serveOrderedIssues();
+      await expect(linearForgeProvider.listIssues(REPO, { sort: "comments" })).rejects.toThrow(
+        /sort issues by "comments"/
+      );
+      expect(fetchMock()).not.toHaveBeenCalled();
+    });
   });
 });
 
