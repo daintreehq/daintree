@@ -286,13 +286,13 @@ let shellProbePromise: Promise<string | null> | null = null;
 
 /**
  * Fallback shim/bin directories to add to PATH on macOS/Linux when the
- * shell-env probe fails or times out. Each candidate is gated by
+ * login-shell read fails or times out. Each candidate is gated by
  * `existsSync` so we never prepend nonexistent directories.
  *
  * Rationale: Electron apps launched from Finder/dock inherit a minimal
  * PATH that excludes user-level version managers (mise/asdf/Volta) and the
- * native Claude installer bin dir. The shell-env probe covers the common
- * case, but corporate `.zshrc` files can hang shell-env past the timeout.
+ * native Claude installer bin dir. The login-shell read covers the common
+ * case, but corporate `.zshrc` files can hang it past the timeout.
  * Without this fallback those users would see every CLI as "missing".
  * POSIX path rules throughout: these lists only ever apply on macOS and Linux.
  */
@@ -616,7 +616,7 @@ async function runRefreshPath(): Promise<void> {
           // Startup's first PATH search for the shell and git, off this loop.
           prewarmWindowsSpawnTargets();
         } else if (process.env.DAINTREE_SHELL_PROBE === "1") {
-          // Opt-in markered shell-probe path (#6063). Replaces shell-env
+          // Opt-in markered shell-probe path (#6063). Replaces the env read
           // with a real `$SHELL -i -l -c` invocation so lazy-loaded version
           // managers (mise/asdf), eval-based activations (pyenv/rbenv,
           // `eval "$(tool init)"`), and non-bashrc layouts (fnm, pnpm)
@@ -631,34 +631,30 @@ async function runRefreshPath(): Promise<void> {
           }
         } else {
           try {
-            const { shellEnv } = (await import("shell-env")) as {
-              shellEnv: (shell?: string) => Promise<Record<string, string>>;
-            };
+            const { readLoginShellEnvironment } = await import("./loginShellEnvironment.js");
             // The shell is named first because only a named shell fails loudly.
-            // Left to choose, shell-env quietly tries other shells and then hands
+            // Left to choose, the read quietly tries other shells and then hands
             // back this process's own environment: fine for PATH, but it says
             // nothing about what a terminal's shell exports (#12371).
-            const probeShell = process.env.SHELL || undefined;
-            let env = probeShell ? await shellEnv(probeShell).catch(() => undefined) : undefined;
+            const read = await readLoginShellEnvironment(process.env.SHELL || undefined, {
+              timeoutMs: REFRESH_TIMEOUT_MS,
+              killGraceMs: SHELL_PROBE_KILL_GRACE_MS,
+            });
             if (timedOut) return;
-            if (env && probeShell) {
-              recordShellEnvironment(probeShell, env);
-            } else {
-              env = await shellEnv();
-              if (timedOut) return;
+            if (!read) {
+              // Only reached by joining a read whose shell timed out and has
+              // not exited yet; starting another next to it is what #15565 stops.
+              shellEnvFailed = true;
+              return;
             }
-            if (env.PATH) {
-              process.env.PATH = deduplicatePath(env.PATH, false);
+            if (read.namedShell) recordShellEnvironment(read.namedShell, read.env);
+            if (read.env.PATH) {
+              process.env.PATH = deduplicatePath(read.env.PATH, false);
             }
           } catch (err) {
-            // shell-env can throw when the user's shell profile errors out
-            // (e.g. broken .zshrc, missing sourced file). Previously this
-            // was swallowed silently, leaving the Electron process with an
-            // unexpanded PATH and no diagnostic. Log the failure so the
-            // fallback path below is correlated with the root cause.
             shellEnvFailed = true;
             console.warn(
-              "[refreshPath] shell-env failed:",
+              "[refreshPath] login shell read failed:",
               // eslint-disable-next-line no-restricted-syntax -- diagnostic console.warn passes the raw error if not an Error; not a user-visible string.
               err instanceof Error ? err.message : err
             );
@@ -677,10 +673,10 @@ async function runRefreshPath(): Promise<void> {
       console.warn("[refreshPath] Timed out after", REFRESH_TIMEOUT_MS, "ms — using existing PATH");
     }
 
-    // On macOS/Linux, when shell-env fails or times out we still want the
+    // On macOS/Linux, when the shell read fails or times out we still want the
     // native installer bin dir (~/.local/bin) and common version-manager
     // shims (mise/asdf/Volta) on PATH so downstream CLI probes can find
-    // binaries installed via those tools. The common case (shell-env
+    // binaries installed via those tools. The common case (the read
     // succeeded) also benefits — shell profile may have been activated
     // but the user's version manager shim dirs may not be in the PATH
     // it exported.
