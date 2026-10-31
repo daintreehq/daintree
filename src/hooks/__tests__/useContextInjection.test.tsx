@@ -27,7 +27,9 @@ const notifyMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 
-const { terminalState, usePanelStoreMock } = vi.hoisted(() => {
+type PanelListener = (state: unknown, prevState: unknown) => void;
+
+const { terminalState, usePanelStoreMock, panelListeners } = vi.hoisted(() => {
   const terminalState = {
     focusedId: "term-1",
     panelsById: {
@@ -44,13 +46,27 @@ const { terminalState, usePanelStoreMock } = vi.hoisted(() => {
   const storeFn = vi.fn((selector: (state: typeof terminalState) => unknown) =>
     selector(terminalState)
   );
+  const panelListeners = new Set<PanelListener>();
   const usePanelStoreMock = Object.assign(storeFn, {
-    subscribe: vi.fn(() => () => {}),
+    subscribe: vi.fn((listener: PanelListener) => {
+      panelListeners.add(listener);
+      return () => panelListeners.delete(listener);
+    }),
     getState: () => terminalState,
   });
 
-  return { terminalState, usePanelStoreMock };
+  return { terminalState, usePanelStoreMock, panelListeners };
 });
+
+/** Change one panel the way the store would, telling every subscriber. */
+function updatePanel(id: string, patch: Record<string, unknown>): void {
+  const prevState = { ...terminalState, panelsById: { ...terminalState.panelsById } };
+  terminalState.panelsById = {
+    ...terminalState.panelsById,
+    [id]: { ...terminalState.panelsById[id], ...patch },
+  };
+  for (const listener of [...panelListeners]) listener(terminalState, prevState);
+}
 
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: usePanelStoreMock,
@@ -89,6 +105,7 @@ describe("useContextInjection", () => {
     // Reset the module-level singleton between tests via its public API
     cancelContextInjection();
     vi.clearAllMocks();
+    panelListeners.clear();
     isAvailableMock.mockImplementation(() => new Promise<boolean>(() => {}));
     terminalState.focusedId = "term-1";
     terminalState.panelsById = {
@@ -398,5 +415,96 @@ describe("useContextInjection", () => {
     expect(addErrorMock).not.toHaveBeenCalled();
     expect(result.current.error).toBeNull();
     expect(result.current.isInjecting).toBe(false);
+  });
+  // #15644 — injection is the largest single write into a terminal, and it
+  // ignored the pane's input lock.
+  describe("input lock", () => {
+    const LOCK_REFUSAL = "Context can't be injected while the terminal's input is locked";
+
+    it("refuses a locked focused pane before generating anything, where every caller sees it", async () => {
+      terminalState.panelsById["term-1"]!.isInputLocked = true;
+      // App's own instance: the keybinding and the actions reach the hook through it.
+      const { result } = renderHook(() => useContextInjection());
+
+      await act(async () => {
+        await result.current.inject("wt-1");
+      });
+
+      expect(isAvailableMock).not.toHaveBeenCalled();
+      expect(injectMock).not.toHaveBeenCalled();
+      expect(addErrorMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: `Context injection failed: ${LOCK_REFUSAL}`,
+          context: { worktreeId: "wt-1", terminalId: "term-1" },
+          retryability: "user-gated",
+        })
+      );
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("gives up waiting for a busy agent once its pane is locked", async () => {
+      terminalState.panelsById = {
+        "term-agent": {
+          id: "term-agent",
+          worktreeId: "wt-1",
+          detectedAgentId: "claude",
+          agentState: "working",
+        },
+      };
+      const { result } = renderHook(() => useContextInjection("term-agent"));
+
+      let injectPromise!: Promise<void>;
+      act(() => {
+        injectPromise = result.current.inject("wt-1", "term-agent");
+      });
+      await vi.waitFor(() => expect(result.current.isPendingInjection).toBe(true));
+
+      await act(async () => {
+        updatePanel("term-agent", { isInputLocked: true });
+        await injectPromise;
+      });
+
+      expect(result.current.isPendingInjection).toBe(false);
+      expect(injectMock).not.toHaveBeenCalled();
+      expect(addErrorMock).toHaveBeenCalledWith(
+        expect.objectContaining({ message: `Context injection failed: ${LOCK_REFUSAL}` })
+      );
+    });
+
+    it("stops a run locked mid-flight and reports the stop rather than hiding it as a cancel", async () => {
+      isAvailableMock.mockResolvedValue(true);
+      let resolveInject!: (value: { error?: string; fileCount?: number }) => void;
+      injectMock.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveInject = resolve;
+          })
+      );
+      const { result } = renderHook(() => useContextInjection("term-1"));
+
+      let injectPromise!: Promise<void>;
+      act(() => {
+        injectPromise = result.current.inject("wt-1", "term-1");
+      });
+      await vi.waitFor(() => expect(injectMock).toHaveBeenCalled());
+      const injectionUuid = injectMock.mock.calls[0]?.[3];
+
+      act(() => {
+        updatePanel("term-1", { isInputLocked: true });
+      });
+      expect(cancelMock).toHaveBeenCalledWith(injectionUuid, "input-locked");
+
+      const stopped = "Injection stopped: the terminal's input was locked";
+      await act(async () => {
+        resolveInject({ error: stopped, fileCount: 0 });
+        await injectPromise;
+      });
+
+      expect(result.current.error).toBe(stopped);
+      expect(addErrorMock).toHaveBeenCalledWith(
+        expect.objectContaining({ message: `Context injection failed: ${stopped}` })
+      );
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
   });
 });

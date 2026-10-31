@@ -86,6 +86,7 @@ const mocks = vi.hoisted(() => {
   };
 
   const terminalInstanceService = {
+    get: vi.fn(() => undefined),
     wake: vi.fn(),
     resetRenderer: vi.fn(),
     destroy: vi.fn(),
@@ -1400,6 +1401,46 @@ describe("worktree action hardening", () => {
     );
 
     expect(onInject).not.toHaveBeenCalled();
+  });
+
+  describe("worktree.inject into a locked pane (#15644)", () => {
+    function lockPane(isInputLocked: boolean): void {
+      usePanelStore.setState({
+        panelsById: {
+          "term-1": { id: "term-1", kind: "terminal", isInputLocked } as never,
+        },
+      });
+    }
+
+    it("refuses an agent before anything is generated", async () => {
+      lockPane(true);
+      const onInject = vi.fn();
+      const inject = buildRegistry(registerWorktreeActions, { onInject }).get("worktree.inject")!();
+
+      const attempt = inject.run(undefined, {
+        focusedTerminalId: "term-1",
+        activeWorktreeId: "wt-1",
+        dispatchSource: "agent",
+      } as never);
+
+      await expect(attempt).rejects.toBeInstanceOf(UnactionableTargetError);
+      await expect(attempt).rejects.toThrow(/input is locked/);
+      expect(onInject).not.toHaveBeenCalled();
+    });
+
+    it("hands a person's request to the injection with the pane it checked", async () => {
+      lockPane(false);
+      const onInject = vi.fn();
+      const inject = buildRegistry(registerWorktreeActions, { onInject }).get("worktree.inject")!();
+
+      await inject.run(undefined, {
+        focusedTerminalId: "term-1",
+        activeWorktreeId: "wt-1",
+        dispatchSource: "user",
+      } as never);
+
+      expect(onInject).toHaveBeenCalledWith("wt-1", "term-1");
+    });
   });
 });
 

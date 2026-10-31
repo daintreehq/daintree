@@ -30,7 +30,10 @@ const projectStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const recipeStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const preferencesStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const currentViewStoreMock = vi.hoisted(() => ({ getCurrentViewStore: vi.fn() }));
-const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
+const panelStoreMock = vi.hoisted(() => ({
+  getState: vi.fn(),
+  subscribe: vi.fn(() => () => {}),
+}));
 const selectorMock = vi.hoisted(() => ({
   selectOrderedTerminals: vi.fn<() => unknown[]>(() => []),
 }));
@@ -1054,10 +1057,11 @@ describe("workflow.startWorkOnIssue", () => {
       "term-1",
       "wt-new",
       undefined,
-      undefined,
+      expect.any(String),
       // Workflow creation is its own surface in the run history (#11732) — not
       // a toolbar copy and not an agent tool call.
-      "workflow"
+      "workflow",
+      undefined
     );
     expect(result.terminalId).toBe("term-1");
     expect(result.contextInjected).toBe(true);
@@ -1067,6 +1071,29 @@ describe("workflow.startWorkOnIssue", () => {
     expect(result.issueTitle).toBe("Add workflow macro tools");
     // The result is published as structuredContent now (#11547), so it has to
     // satisfy the schema MCP advertises for it.
+    expectMatchesResultSchema("workflow.startWorkOnIssue", result);
+  });
+
+  it("injects nothing into a launched agent whose pane is already locked (#15644)", async () => {
+    forgeClientMock.getIssue.mockResolvedValue({ number: 42, title: "t", url: "u" });
+    panelStoreMock.getState.mockReturnValue({
+      panelsById: { "term-1": { id: "term-1", kind: "terminal", isInputLocked: true } },
+      panelIds: ["term-1"],
+      isInTrash: vi.fn().mockReturnValue(false),
+      focusNextWaiting: vi.fn(),
+      focusNextWorking: vi.fn(),
+    });
+    const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
+
+    const result = (await def.run({ issueNumber: 42, agentId: "claude" }, {} as never)) as Record<
+      string,
+      unknown
+    >;
+
+    expect(copyTreeClientMock.injectToTerminal).not.toHaveBeenCalled();
+    expect(result.contextInjected).toBe(false);
+    // The launch stands; only the context was withheld.
+    expect(result.terminalId).toBe("term-1");
     expectMatchesResultSchema("workflow.startWorkOnIssue", result);
   });
 
