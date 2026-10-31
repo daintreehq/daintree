@@ -141,6 +141,8 @@ describe("a host answering for a device paired with its Shell", () => {
       waitingReason: "prompt",
       since: i + 1,
       workspaceId: "project-1",
+      // A title past what a run is sent with never hides the host's list.
+      ...(i === 20 ? { title: `${"x".repeat(5_000)} password=hunter22` } : {}),
     }));
     const [listed] = await client.listWaiting();
     expect(state.screenReads).toBe(20);
@@ -149,6 +151,7 @@ describe("a host answering for a device paired with its Shell", () => {
     expect(listed!.omitted).toEqual([
       expect.objectContaining({ runId: "run-21", spawnedAt: 100, project: "api" }),
     ]);
+    expect(listed!.omitted[0]!.title).toBe("x".repeat(1024));
 
     state.screenReads = 0;
     const [picked] = await client.listWaiting({

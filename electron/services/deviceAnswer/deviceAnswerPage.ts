@@ -117,6 +117,7 @@ const SCRIPT = String.raw`
 
   // Everything said within one beat goes out as one message, so none replaces another unheard.
   let saying = null;
+  let sayTimer = null;
   const announce = (text) => {
     if (saying) {
       saying.push(text);
@@ -124,7 +125,7 @@ const SCRIPT = String.raw`
     }
     saying = [text];
     $("announce").textContent = "";
-    setTimeout(() => {
+    sayTimer = setTimeout(() => {
       $("announce").textContent = saying.join(" ");
       saying = null;
     }, 50);
@@ -142,6 +143,10 @@ const SCRIPT = String.raw`
       hostRead.clear();
       hostDownSince.clear();
       hostsSaid = null;
+      // Nothing about the agents of a pairing that ended is still to be said.
+      clearTimeout(sayTimer);
+      saying = null;
+      $("announce").textContent = "";
       limitsSaid = "";
       beyond = 0;
       uncounted = false;
@@ -411,6 +416,10 @@ const SCRIPT = String.raw`
       entry.state = state.kind === "answered" ? { ...state, kind: "earlier", collapsed: false } : null;
     } else if (state && state.kind === "answered") {
       state.collapsed = true;
+    } else if (state && (state.kind === "refused" || state.kind === "unheard")) {
+      // Listed again, maybe read back from Others waiting: its screen shows once more.
+      state.collapsed = false;
+      state.unread = false;
     }
     showResult(entry);
     refreshCard(entry);
@@ -509,7 +518,8 @@ const SCRIPT = String.raw`
     const meta = el("div", "meta");
     const button = el("button", "read");
     button.type = "button";
-    button.setAttribute("aria-describedby", id);
+    meta.id = id + "-meta";
+    button.setAttribute("aria-describedby", meta.id);
     item.append(head, title, where, meta, button);
     const entry = { key, item, project, tags, title, where, meta, button, run: null };
     button.addEventListener("click", () => pick(entry));
@@ -521,7 +531,11 @@ const SCRIPT = String.raw`
     // Held, not disabled, so focus stays on it until its card takes it.
     const picked = !!selected && selected.key === entry.key;
     entry.button.setAttribute("aria-disabled", String(picked));
-    setText(entry.button, picked ? "Reading its screen…" : "Show its screen");
+    const label = picked ? "Reading its screen…" : "Show its screen";
+    setText(entry.button, label);
+    // Named by what it would show, so runs of one project still sound apart; the visible words come first.
+    const which = [run.project || "Unknown project", run.title || "", entry.where.textContent].filter(Boolean).join(", ");
+    if (entry.button.getAttribute("aria-label") !== label + ": " + which) entry.button.setAttribute("aria-label", label + ": " + which);
   };
 
   // Its screen is read ahead of its machine's others from the next read on.
@@ -537,6 +551,8 @@ const SCRIPT = String.raw`
 
   const renderOthers = (omitted) => {
     const list = $("others");
+    // Moving a row takes focus out of it; it's put back once the rows are in order.
+    const active = list.contains(document.activeElement) ? document.activeElement : null;
     const seen = new Set();
     let prev = null;
     for (const run of omitted) {
@@ -565,6 +581,7 @@ const SCRIPT = String.raw`
       entry.item.remove();
       others.delete(entry.key);
     }
+    if (active && list.contains(active) && document.activeElement !== active) active.focus();
     show($("more"), omitted.length > 0);
   };
 
@@ -633,7 +650,9 @@ const SCRIPT = String.raw`
     if (selected && asked && asked.key === selected.key && !seen.has(selected.key)) {
       const machine = selected.hostId;
       const read = coverage.some((entry) => entry.hostId === machine);
-      if (read || !hosts.some((host) => host.hostId === machine)) selected = null;
+      // A host list that couldn't be read says nothing of whether the host left.
+      const left = data.hostsUnlisted !== true && !hosts.some((host) => host.hostId === machine);
+      if (read || left) selected = null;
     }
     renderOthers(omitted);
     // A new or grown screen opens at its bottom, where the prompt is; this

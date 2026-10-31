@@ -344,7 +344,7 @@ describe("createDeviceAnswerService and connected hosts", () => {
       { hostId: "old", host: "Old", listed: 0, waiting: null },
     ]);
     // The host's unread approval comes before this machine's unread hand-back.
-    expect(omitted.map((run) => [run.hostId, run.runId, run.agentName])).toEqual([
+    expect(omitted!.map((run) => [run.hostId, run.runId, run.agentName])).toEqual([
       ["studio-03", "run-2", "Codex"],
       [LOCAL_HOST_ID, "local-20", null],
     ]);
@@ -369,7 +369,7 @@ describe("createDeviceAnswerService and connected hosts", () => {
       read: { hostId: "studio-03", runId: "local-20", spawnedAt: 100 },
     });
     // Same id here, but the pick was the host's: this machine reads its usual runs.
-    expect(remote.omitted.map((run) => run.runId)).toEqual(["local-20"]);
+    expect(remote.omitted!.map((run) => run.runId)).toEqual(["local-20"]);
     expect(state.remote!.listWaiting).toHaveBeenLastCalledWith({
       read: { hostId: "studio-03", runId: "local-20", spawnedAt: 100 },
     });

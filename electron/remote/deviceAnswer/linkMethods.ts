@@ -2,6 +2,8 @@ import { z } from "zod";
 import {
   MAX_LISTED_RUNS,
   MAX_OMITTED_RUNS,
+  MAX_PROJECT_NAME_LENGTH,
+  MAX_RUN_TITLE_LENGTH,
   type WaitingRunSummary,
   type WaitingRunView,
 } from "../../services/deviceAnswer/deviceAnswerRuns.js";
@@ -68,8 +70,8 @@ const nullableText = (max: number) => z.string().max(max).nullable();
 export const WaitingRunViewSchema = z.object({
   runId: z.string().min(1).max(256),
   spawnedAt: z.number().finite(),
-  project: nullableText(256),
-  title: nullableText(1024),
+  project: nullableText(MAX_PROJECT_NAME_LENGTH),
+  title: nullableText(MAX_RUN_TITLE_LENGTH),
   agentId: nullableText(128),
   agentState: z.enum(["idle", "working", "waiting", "directing", "completed", "exited"]),
   waitingReason: z.enum(["prompt", "question", "approval", "error"]).nullable(),

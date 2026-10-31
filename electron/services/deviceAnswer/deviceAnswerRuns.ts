@@ -11,6 +11,9 @@ import { questionIdOf } from "./questionId.js";
 export const MAX_LISTED_RUNS = 20;
 /** Waiting runs past the screens read that are named without one; the count covers the rest. */
 export const MAX_OMITTED_RUNS = 100;
+/** The longest project name and title a run is sent with; a host's longer one fails the Shell's read. */
+export const MAX_PROJECT_NAME_LENGTH = 256;
+export const MAX_RUN_TITLE_LENGTH = 1024;
 
 /** One run exactly: an id respawned since is someone else's terminal. */
 export interface WaitingRunRef {
@@ -185,10 +188,12 @@ function needOf(row: FleetRunRow): Need {
 
 function summaryOf(deps: DeviceAnswerRunsDeps, row: FleetRunRow): WaitingRunSummary {
   const title = row.title ?? row.lastObservedTitle ?? null;
+  const project = deps.projectName(row.workspaceId);
   return {
     ...needOf(row),
-    project: deps.projectName(row.workspaceId),
-    title: title === null ? null : redactSecrets(title),
+    project: project === null ? null : project.slice(0, MAX_PROJECT_NAME_LENGTH),
+    // Redacted whole before it is cut, so a cut never leaves part of a secret.
+    title: title === null ? null : redactSecrets(title).slice(0, MAX_RUN_TITLE_LENGTH),
     agentId: row.agentId ?? row.launchAgentId ?? null,
     agentState: row.agentState ?? "waiting",
   };

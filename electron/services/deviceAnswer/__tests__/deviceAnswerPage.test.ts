@@ -546,6 +546,114 @@ describe("the paired device's page", () => {
     const result = second.querySelector(".result")!.textContent;
     expect(result).toContain("It's still waiting, listed under Others waiting without its screen.");
     expect(result).not.toContain("isn't listed as waiting");
+
+    // Read back from Others waiting with the same screen, it shows that screen again.
+    waiting.runs = [run(here), run({ ...here, runId: "run-2", project: "api" })];
+    waiting.omitted = [unreadRun({ ...here, runId: "run-3", project: "docs" })];
+    document.querySelector<HTMLButtonElement>("#others button")!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(second.isConnected).toBe(true);
+    expect(second.classList.contains("answered")).toBe(false);
+    expect(second.querySelector(".result")!.textContent).not.toContain("Others waiting");
+    // A fresh read of it offers its options again.
+    expect(button(second, "Yes").disabled).toBe(false);
+  });
+
+  it("names each run under Others waiting apart, and keeps focus on it as they reorder", async () => {
+    const waiting = capped();
+    waiting.omitted = [
+      unreadRun({ ...here, runId: "run-3", project: "docs", title: "Fix the index" }),
+      unreadRun({ ...here, runId: "run-4", project: "docs", title: "Write the guide" }),
+    ];
+    waiting.coverage = [{ ...here, listed: 2, waiting: 4 }];
+    await openPage(waiting);
+    const shows = () => [...document.querySelectorAll<HTMLButtonElement>("#others button")];
+    expect(shows().map((b) => b.getAttribute("aria-label"))).toEqual([
+      "Show its screen: docs, Fix the index, greg-studio · Claude",
+      "Show its screen: docs, Write the guide, greg-studio · Claude",
+    ]);
+    const second = shows()[1]!;
+    second.focus();
+    waiting.omitted = [waiting.omitted[1]!, waiting.omitted[0]!];
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(shows()[0]).toBe(second);
+    expect(document.activeElement).toBe(second);
+  });
+
+  it("says nothing waiting while only runs left unread are listed", async () => {
+    await openPage({
+      ...capped(),
+      runs: [],
+      coverage: [{ ...here, listed: 0, waiting: 1 }],
+    });
+    expect(emptyText()).toBeNull();
+    expect(count()).toBe("1");
+  });
+
+  it("says coming back and a changed cut as one message, so neither replaces the other", async () => {
+    const waiting = capped();
+    await openPage(waiting);
+    await vi.advanceTimersByTimeAsync(60);
+    waitingReply = "unreachable";
+    await vi.advanceTimersByTimeAsync(3000 + 60);
+    waitingReply = "ok";
+    waiting.coverage = [{ ...here, listed: 2, waiting: 4 }];
+    await vi.advanceTimersByTimeAsync(3000 + 60);
+    expect(live()).toBe(
+      "Back in touch with Daintree. Showing 2 of 4 waiting agents on greg-studio. Pick one under Others waiting to read its screen. 1 more isn't listed."
+    );
+  });
+
+  it("says nothing of the agents once it unpairs, though it was about to", async () => {
+    await openPage(capped());
+    // The cut is still queued when the unpairing lands.
+    document.getElementById("forget")!.click();
+    document.getElementById("unpair-confirm")!.click();
+    await vi.advanceTimersByTimeAsync(60);
+    expect(live()).toBe("Unpaired. This device was removed from Daintree on greg-studio.");
+  });
+
+  it("keeps a host's pick while the host list can't be read, and lets it go once the host has left", async () => {
+    const studio = { hostId: "studio-03", host: "Studio" };
+    const waiting: Record<string, unknown> = {
+      ...capped(),
+      omitted: [unreadRun({ ...studio, runId: "far", project: "infra" })],
+      coverage: [
+        { ...here, listed: 2, waiting: 2 },
+        { ...studio, listed: 0, waiting: 1 },
+      ],
+      hosts: [{ ...studio, status: "ok" }],
+    };
+    await openPage(waiting);
+    Object.assign(waiting, {
+      runs: [...capped().runs, run({ ...studio, runId: "far", project: "infra" })],
+      omitted: [],
+      coverage: [
+        { ...here, listed: 2, waiting: 2 },
+        { ...studio, listed: 1, waiting: 1 },
+      ],
+    });
+    document.querySelector<HTMLButtonElement>("#others button")!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    const asked = sent.at(-1)!.path;
+    expect(asked).toContain("read=");
+    expect(asked).toContain(encodeURIComponent('"hostId":"studio-03"'));
+
+    Object.assign(waiting, {
+      runs: capped().runs,
+      omitted: [],
+      coverage: [{ ...here, listed: 2, waiting: 2 }],
+      hosts: [],
+      hostsUnlisted: true,
+    });
+    await vi.advanceTimersByTimeAsync(3000);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(sent.at(-1)!.path).toBe(asked);
+
+    waiting.hostsUnlisted = false;
+    await vi.advanceTimersByTimeAsync(3000);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(sent.at(-1)!.path).toBe("/api/waiting?hosts=1");
   });
 
   it("never calls a host that can't say how many wait there complete", async () => {

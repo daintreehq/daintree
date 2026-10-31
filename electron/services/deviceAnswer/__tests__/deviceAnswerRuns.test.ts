@@ -325,15 +325,51 @@ describe("listWaitingRuns past the screens it reads", () => {
   });
 
   it("reads nothing ahead for a pick whose id was respawned or that isn't waiting", async () => {
-    const rows = idleRuns(MAX_LISTED_RUNS + 1);
+    screens.set("busy", DIALOG);
+    const rows = [...idleRuns(MAX_LISTED_RUNS + 1), row({ runId: "busy", agentState: "working" })];
     const deps = { fleet: () => snapshot(rows), pty: () => ptyAt(100), projectName: () => null };
     for (const read of [
       { runId: "idle-20", spawnedAt: 99 },
+      { runId: "busy", spawnedAt: 100 },
       { runId: "elsewhere", spawnedAt: 100 },
     ]) {
-      const { omitted } = await listWaitingRuns(deps, { read });
+      vi.mocked(readPluginTerminalScreen).mockClear();
+      const { runs, omitted } = await listWaitingRuns(deps, { read });
       expect(omitted.map((run) => run.runId)).toEqual(["idle-20"]);
+      expect(runs.map((run) => run.runId)).not.toContain(read.runId);
+      const readIds = vi.mocked(readPluginTerminalScreen).mock.calls.map(([, runId]) => runId);
+      expect(readIds).toHaveLength(MAX_LISTED_RUNS);
+      expect(readIds).not.toContain("busy");
+      expect(readIds).not.toContain("idle-20");
     }
+  });
+
+  it("neither lists nor counts a read or unread run whose id was respawned while screens were read", async () => {
+    const rows = idleRuns(MAX_LISTED_RUNS + 2);
+    let reads = 0;
+    const respawned = (runId: string) => row({ runId, agentState: "waiting", spawnedAt: 200 });
+    const { runs, omitted, waiting } = await listWaitingRuns(
+      {
+        fleet: () =>
+          snapshot(
+            reads++ === 0
+              ? rows
+              : [
+                  ...rows.filter((r) => r.runId !== "idle-21" && r.runId !== "idle-0"),
+                  respawned("idle-21"),
+                  respawned("idle-0"),
+                ]
+          ),
+        pty: () => ptyAt(100),
+        projectName: () => null,
+      },
+      // Picked, and then respawned too.
+      { read: { runId: "idle-0", spawnedAt: 100 } }
+    );
+    expect(runs.map((run) => run.runId)).not.toContain("idle-0");
+    expect(runs).toHaveLength(MAX_LISTED_RUNS - 1);
+    expect(omitted.map((run) => run.runId)).toEqual(["idle-20"]);
+    expect(waiting).toBe(MAX_LISTED_RUNS);
   });
 
   it("names unread runs with secrets redacted and no screen, and counts past the ones it names", async () => {
