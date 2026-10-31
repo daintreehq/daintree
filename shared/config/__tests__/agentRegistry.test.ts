@@ -1246,6 +1246,67 @@ describe("claude providerTemplates descriptions", () => {
   });
 });
 
+// #15570: Claude Code speaks only the Anthropic Messages API and appends
+// `/v1/messages` to ANTHROPIC_BASE_URL itself, so a template aimed at an
+// OpenAI-style `/v1` surface creates a preset that can't reach the model.
+describe("claude providerTemplates endpoints and credentials", () => {
+  const templates = getAgentConfig("claude")?.providerTemplates ?? [];
+  const routed = templates.flatMap((t) =>
+    t.env?.ANTHROPIC_BASE_URL !== undefined
+      ? [{ id: t.id, env: t.env, base: new URL(t.env.ANTHROPIC_BASE_URL) }]
+      : []
+  );
+  const isLoopback = (base: URL) => ["localhost", "127.0.0.1", "[::1]"].includes(base.hostname);
+  const local = routed.filter((t) => isLoopback(t.base));
+  const remote = routed.filter((t) => !isLoopback(t.base));
+
+  it("has both remote and local routed templates to check", () => {
+    expect(remote.length).toBeGreaterThan(0);
+    expect(local.length).toBeGreaterThan(0);
+  });
+
+  it("never points ANTHROPIC_BASE_URL at a /v1 path", () => {
+    for (const t of routed) {
+      const segments = t.base.pathname.split("/").filter(Boolean);
+      expect(segments, t.id).not.toContain("v1");
+    }
+  });
+
+  it("never offers an endpoint as OpenAI-compatible", () => {
+    for (const t of templates) {
+      expect(`${t.id} ${t.name} ${t.description ?? ""}`, t.id).not.toMatch(/openai/i);
+    }
+  });
+
+  it("offers the custom endpoint as Anthropic-compatible", () => {
+    const custom = templates.find((t) => t.id.startsWith("custom"));
+    expect(custom?.name).toMatch(/anthropic/i);
+    expect(custom?.description).toMatch(/anthropic/i);
+  });
+
+  it("carries the credential variable on every routed template", () => {
+    for (const t of routed) expect(Object.keys(t.env), t.id).toContain("ANTHROPIC_AUTH_TOKEN");
+  });
+
+  it("ships no secret: remote templates leave every credential blank", () => {
+    for (const t of remote) {
+      expect(t.env.ANTHROPIC_AUTH_TOKEN, t.id).toBe("");
+      if ("ANTHROPIC_API_KEY" in t.env) expect(t.env.ANTHROPIC_API_KEY, t.id).toBe("");
+    }
+  });
+
+  it("gives a local server a placeholder token, so it launches without a key", () => {
+    for (const t of local) {
+      expect(t.env.ANTHROPIC_AUTH_TOKEN, t.id).toBeTruthy();
+      expect(t.env.ANTHROPIC_API_KEY, t.id).toBe("");
+    }
+  });
+
+  it("blanks an inherited ANTHROPIC_API_KEY where the provider's guide does", () => {
+    expect(templates.find((t) => t.id === "openrouter")?.env?.ANTHROPIC_API_KEY).toBe("");
+  });
+});
+
 describe("opencode detection patterns", () => {
   function compileAgentPatterns(agentId: string, key: string): RegExp[] {
     const config = getAgentConfig(agentId);

@@ -213,6 +213,11 @@ export const config: AgentConfig = {
       hint: "Any value stops telemetry and updates, and hides Monitor",
     },
   ],
+  // Each routed template follows its provider's published Claude Code setup.
+  // Claude Code appends `/v1/messages` to ANTHROPIC_BASE_URL, so the base is
+  // never an OpenAI-style `/v1` path. The key goes in ANTHROPIC_AUTH_TOKEN,
+  // left blank for the user to fill; an empty ANTHROPIC_API_KEY keeps an
+  // inherited Anthropic key from taking over where the provider's guide says so.
   providerTemplates: [
     {
       id: "anthropic-native",
@@ -225,6 +230,7 @@ export const config: AgentConfig = {
       description: "Anthropic-compatible via Z.AI.",
       env: {
         ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic",
+        ANTHROPIC_AUTH_TOKEN: "",
         ANTHROPIC_DEFAULT_OPUS_MODEL: "glm-5.2",
         ANTHROPIC_DEFAULT_SONNET_MODEL: "glm-4.7",
         ANTHROPIC_DEFAULT_HAIKU_MODEL: "glm-4.5-air",
@@ -236,29 +242,35 @@ export const config: AgentConfig = {
       name: "OpenRouter",
       description: "Model routing via OpenRouter.",
       env: {
-        ANTHROPIC_BASE_URL: "https://openrouter.ai/api/v1",
+        ANTHROPIC_BASE_URL: "https://openrouter.ai/api",
+        ANTHROPIC_AUTH_TOKEN: "",
+        ANTHROPIC_API_KEY: "",
       },
     },
     {
       id: "deepseek",
       name: "DeepSeek",
-      description: "OpenAI-compatible via DeepSeek.",
+      description: "Anthropic-compatible via DeepSeek.",
       env: {
-        ANTHROPIC_BASE_URL: "https://api.deepseek.com/v1",
+        ANTHROPIC_BASE_URL: "https://api.deepseek.com/anthropic",
+        ANTHROPIC_AUTH_TOKEN: "",
       },
     },
     {
       id: "ollama",
       name: "Ollama (local)",
-      description: "Local models via Ollama — no API key needed.",
+      description: "Local models via Ollama.",
       env: {
-        ANTHROPIC_BASE_URL: "http://localhost:11434/v1",
+        ANTHROPIC_BASE_URL: "http://localhost:11434",
+        // Ollama's documented non-secret placeholder; the local server ignores it.
+        ANTHROPIC_AUTH_TOKEN: "ollama",
+        ANTHROPIC_API_KEY: "",
       },
     },
     {
-      id: "custom-openai",
-      name: "Custom (OpenAI-compatible)",
-      description: "Custom OpenAI-compatible endpoint.",
+      id: "custom-anthropic",
+      name: "Custom (Anthropic-compatible)",
+      description: "Custom endpoint serving the Anthropic Messages API.",
     },
   ],
   completionSources: [
