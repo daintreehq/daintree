@@ -156,6 +156,21 @@ describe("listClaudeSubagents", () => {
     });
   });
 
+  it("lists a first child on the poll after an empty answer", async () => {
+    getTerminalAsync.mockResolvedValue(claudeTerminal());
+    // Running and recorded, with nothing delegated yet.
+    const projectDir = path.join(root, "projects", deriveProjectSlug(CWD));
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(path.join(projectDir, `${SESSION}.jsonl`), TASK + "\n", "utf8");
+
+    const before = await listClaudeSubagents("t1");
+    expect(before.status === "ok" && before.subagents).toEqual([]);
+
+    await seedChild("aaa1", [TASK]);
+    const after = await listClaudeSubagents("t1");
+    expect(after.status === "ok" && after.subagents.map((child) => child.id)).toEqual(["aaa1"]);
+  });
+
   it("keys the parent off the assigned session id rather than guessing from the folder", async () => {
     getTerminalAsync.mockResolvedValue(claudeTerminal());
     await seedChild("aaa1", [TASK, REPLY]);
