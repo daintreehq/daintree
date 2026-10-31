@@ -486,16 +486,27 @@ describe("preload event subscriptions", () => {
       }
     });
 
-    it("schedules nothing for a cached signal handled after the freeze, until the view has been active again", () => {
+    it("schedules nothing for a cached signal handled after the freeze, until the view has been active again", async () => {
       fakeTimeoutsOnly();
+      ipcRenderer.send.mockClear();
+      const flush = vi.fn();
+      const offFlush = app.onViewCachedFlush(flush);
       try {
         // IPC still runs in a frozen renderer, so the signal can trail the freeze.
         freeze();
-        ipcRenderer.emit("app:view-cached", {});
+        ipcRenderer.emit("app:view-cached", {}, { flushId: "after-freeze" });
         expect(app.isViewCached()).toBe(true);
+        expect(flush).toHaveBeenCalledTimes(1);
+        expect(idleCallbacks.size).toBe(0);
+        // A thaw that isn't an activation (efficiency exit, a dispatch) keeps it suppressed.
+        fakeDocument.dispatchEvent(new Event("resume"));
+        ipcRenderer.emit("app:view-cached", {});
         expect(idleCallbacks.size).toBe(0);
         vi.advanceTimersByTime(10_000);
         expect(fakeElectron.webFrame.clearCache).not.toHaveBeenCalled();
+        await vi.waitFor(() =>
+          expect(ipcRenderer.send).toHaveBeenCalledWith("app:view-cached-flushed", "after-freeze")
+        );
 
         ipcRenderer.emit("app:view-warm-activated", {});
         ipcRenderer.emit("app:view-cached", {});
@@ -504,6 +515,7 @@ describe("preload event subscriptions", () => {
         vi.advanceTimersByTime(2_000);
         expect(fakeElectron.webFrame.clearCache).toHaveBeenCalledTimes(1);
       } finally {
+        offFlush();
         vi.useRealTimers();
       }
     });

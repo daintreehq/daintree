@@ -685,8 +685,7 @@ let _viewCached = false;
 // map. Dropping it saves ~30 MB per cached view, and the view stays smaller
 // after it returns (#14219). Live images and fonts are held by their elements.
 // clearCache() also raises critical memory pressure in this renderer, so it
-// waits out a quick switch back and never runs once the view is active again,
-// including when a freeze held the cached signal until the next activation.
+// waits out a quick switch back and never runs once the view is active again.
 // A view the efficiency profile freezes inside the delay keeps its cache.
 const CACHED_VIEW_CACHE_CLEAR_DELAY_MS = 2_000;
 let _cacheClearTimer: ReturnType<typeof setTimeout> | null = null;
@@ -762,7 +761,6 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
 const _viewCachedFlushers = new Set<() => unknown>();
 ipcRenderer.on(CHANNELS.APP_VIEW_CACHED, (_event, payload?: { flushId?: unknown }) => {
   _viewCached = true;
-  scheduleCachedViewReclaim();
   const flushes = Array.from(_viewCachedFlushers, (flush) => {
     try {
       return flush();
@@ -770,6 +768,7 @@ ipcRenderer.on(CHANNELS.APP_VIEW_CACHED, (_event, payload?: { flushId?: unknown 
       return Promise.reject(error);
     }
   });
+  scheduleCachedViewReclaim();
   // Settled even when main isn't waiting, so a failed flush never goes unhandled.
   const flushId = payload?.flushId;
   void Promise.allSettled(flushes).then(() => {
