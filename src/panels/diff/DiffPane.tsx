@@ -16,7 +16,6 @@ import type { GitStatus } from "@shared/types/git";
 import type { DiffPanelData } from "@shared/types/panel";
 import { isAbsolute, join, resolveWorktreePathScope } from "@shared/utils/path";
 import { useShallow } from "zustand/react/shallow";
-import { FolderOpen } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
@@ -41,7 +40,8 @@ import {
 } from "@/components/FileViewer/hostFileActions";
 import { getFileTypeIcon } from "@/panels/file-browser/fileTypeIcons";
 import { DiffChangeStepper } from "@/components/FileViewer/DiffChangeStepper";
-import { revealCopy } from "@/components/FileViewer/revealCopy";
+import { useRevealCopy, type RevealCopy } from "@/components/FileViewer/revealCopy";
+import { RevealActionButton, runTransientReveal } from "@/components/FileViewer/revealFeedback";
 import { DiffFileSidebar } from "@/components/FileViewer/DiffFileSidebar";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
 import { FileAudioPreview } from "@/components/FileViewer/FileAudioPreview";
@@ -554,10 +554,12 @@ export function DiffPane({
   }, [id, absolutePath]);
 
   const handleExternalAction = useCallback(
-    async (target: ExternalTarget) => {
-      if (!absolutePath) return;
-      if (target === "file-browser" && (!browserScope || fileStatus === "deleted")) return;
-      if (externalInFlightRef.current.has(target)) return;
+    // Resolves true once the action succeeded, so a remote window's reveal —
+    // a host-path copy that changes nothing on screen — can confirm itself.
+    async (target: ExternalTarget): Promise<boolean> => {
+      if (!absolutePath) return false;
+      if (target === "file-browser" && (!browserScope || fileStatus === "deleted")) return false;
+      if (externalInFlightRef.current.has(target)) return false;
       externalInFlightRef.current.add(target);
       const generation = externalGenerationRef.current;
       setPendingTargets((current) => (current.includes(target) ? current : [...current, target]));
@@ -574,16 +576,18 @@ export function DiffPane({
           { source: "user" }
         );
         // The file (or its worktree) moved while this was in flight: the result
-        // describes a location the pane no longer shows.
-        if (externalGenerationRef.current !== generation) return;
+        // describes a location the pane no longer shows, so it touches no
+        // banner. A success still reports, since a copy it made is real.
+        if (externalGenerationRef.current !== generation) return result.ok;
         if (result.ok) {
           // Clears only its own failure — the other button's banner stands
           // until that button's own retry succeeds.
           setExternalError((current) => (current?.target === target ? null : current));
-          return;
+          return true;
         }
         logError(`[DiffPane] ${EXTERNAL_ACTIONS[target]} failed`, result.error);
         setExternalError({ message: result.error.message, target });
+        return false;
       } finally {
         // Releasing in `finally` keeps a rejection from wedging the button for
         // good; the generation check leaves a reset's clean slate alone.
@@ -1034,7 +1038,7 @@ export function DiffPane({
   const fileName = filePath?.split(/[/\\]/).filter(Boolean).pop();
   const displayTitle = panel?.titleMode === "user" ? title : (fileName ?? title);
 
-  const reveal = revealCopy();
+  const reveal = useRevealCopy();
   const externalErrorCopy =
     externalError?.target === "reveal"
       ? {
@@ -1136,8 +1140,12 @@ export function DiffPane({
                 )}
                 {absolutePath && (
                   <>
-                    <DropdownMenuItem onSelect={() => void handleExternalAction("reveal")}>
-                      <FolderOpen className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+                    <DropdownMenuItem
+                      onSelect={() =>
+                        runTransientReveal(reveal, () => handleExternalAction("reveal"))
+                      }
+                    >
+                      <reveal.icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
                       {reveal.label}
                     </DropdownMenuItem>
                     <DropdownMenuItem onSelect={() => void handleExternalAction("editor")}>
@@ -1177,12 +1185,11 @@ export function DiffPane({
                         <FolderTree className={TOOLBAR_ICON_CLASS} />
                       </FileViewerToolbar.IconButton>
                     )}
-                    <FileViewerToolbar.IconButton
-                      label={reveal.label}
-                      onClick={() => void handleExternalAction("reveal")}
-                    >
-                      <FolderOpen className={TOOLBAR_ICON_CLASS} />
-                    </FileViewerToolbar.IconButton>
+                    <FileViewerToolbar.RevealButton
+                      reveal={reveal}
+                      path={absolutePath}
+                      onReveal={() => handleExternalAction("reveal")}
+                    />
                     <FileViewerToolbar.IconButton
                       label="Open in editor"
                       onClick={() => void handleExternalAction("editor")}
@@ -1222,7 +1229,12 @@ export function DiffPane({
             variant: "dangerFilled",
             loading: showRetrySpinner,
             disabled: isErrorTargetPending,
-            onClick: () => void handleExternalAction(externalError.target),
+            // A retried copy confirms like the first attempt would have; the
+            // banner it came from unmounts on success.
+            onClick: () =>
+              externalError.target === "reveal"
+                ? runTransientReveal(reveal, () => handleExternalAction("reveal"))
+                : void handleExternalAction(externalError.target),
             ariaLabel: externalErrorCopy.retry,
           }}
           onClose={() => setExternalError(null)}
@@ -1394,8 +1406,8 @@ export function DiffPane({
                   error={previewError}
                   fileReason="MEDIA_FAILED"
                   remote={remoteFile}
-                  revealLabel={reveal.label}
-                  onExternal={(target) => void handleExternalAction(target)}
+                  reveal={reveal}
+                  onExternal={handleExternalAction}
                 />
               ) : isAudioMode ? (
                 <FileAudioPreview
@@ -1435,8 +1447,8 @@ export function DiffPane({
                   error={previewError}
                   fileReason="PDF_FAILED"
                   remote={remoteFile}
-                  revealLabel={reveal.label}
-                  onExternal={(target) => void handleExternalAction(target)}
+                  reveal={reveal}
+                  onExternal={handleExternalAction}
                 />
               ) : (
                 <FilePdfPreview
@@ -1633,7 +1645,7 @@ function DiffPreviewUnavailable({
   error,
   fileReason,
   remote,
-  revealLabel,
+  reveal,
   onExternal,
 }: {
   filePath: string;
@@ -1641,8 +1653,9 @@ function DiffPreviewUnavailable({
   error: MediaPreviewError;
   fileReason: "MEDIA_FAILED" | "PDF_FAILED";
   remote: RemoteFileContext | null;
-  revealLabel: string;
-  onExternal: (target: "reveal" | "default-app") => void;
+  reveal: RevealCopy;
+  /** Resolves true once the hand-off succeeded; the pane reports a failure. */
+  onExternal: (target: "reveal" | "default-app") => Promise<boolean>;
 }) {
   const refused = refusalReason(error);
   if (refused === "DRIVEN_ELSEWHERE") {
@@ -1668,12 +1681,14 @@ function DiffPreviewUnavailable({
         copy.action === "save" ? (
           <SaveHostFileButton hostPath={hostPath} variant="contrast" />
         ) : copy.action === "reveal" ? (
-          <Button variant="contrast" size="sm" onClick={() => onExternal("reveal")}>
-            <FolderOpen />
-            {revealLabel}
-          </Button>
+          <RevealActionButton
+            reveal={reveal}
+            path={hostPath}
+            onReveal={() => onExternal("reveal")}
+            variant="contrast"
+          />
         ) : (
-          <Button variant="contrast" size="sm" onClick={() => onExternal("default-app")}>
+          <Button variant="contrast" size="sm" onClick={() => void onExternal("default-app")}>
             <ExternalLink />
             Open in default app
           </Button>

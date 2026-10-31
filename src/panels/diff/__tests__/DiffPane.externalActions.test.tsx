@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ReactNode } from "react";
-import { act, render, fireEvent, screen } from "@testing-library/react";
+import { act, cleanup, render, fireEvent, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitStatus } from "@shared/types/git";
 import type { ActionDispatchResult } from "@shared/types/actions";
@@ -94,6 +94,9 @@ vi.mock("@/store/diffViewedStore", () => ({
 }));
 
 import { DiffPane } from "../DiffPane";
+import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
+import { _resetCopyFlashForTests, getCopyFlash } from "@/lib/copyFlash";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 
 const PANEL_ID = "diff-1";
 const WORKTREE_ID = "wt-1";
@@ -705,5 +708,92 @@ describe("DiffPane — file browser access", () => {
     await click(screen.getByLabelText("Retry opening file browser"));
     expect(dispatchCall(1)).toEqual(dispatchCall(0));
     expect(screen.queryByText("Couldn't open file browser")).toBeNull();
+  });
+});
+
+describe("DiffPane toolbar — Copy host path in a remote window (#15722)", () => {
+  const copyButton = () => screen.getByLabelText("Copy host path");
+  const glyph = (name: string) =>
+    copyButton().querySelector("svg")?.classList.contains(`lucide-${name}`) ?? false;
+
+  beforeEach(() => {
+    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+    setHostPlatformInfo({
+      platform: "linux",
+      connection: { kind: "ssh", target: "greg@studio-01" },
+    });
+    _resetCopyFlashForTests();
+    useAnnouncerStore.setState({ polite: null, assertive: null });
+  });
+
+  afterEach(() => {
+    cleanup();
+    _resetCopyFlashForTests();
+    delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+    _resetHostPlatformForTests();
+  });
+
+  it("confirms a double click once, after the one copy it made", async () => {
+    seedPanel("src/index.ts");
+    const gate = deferred();
+    dispatchMock.mockReturnValueOnce(gate.promise);
+    renderPane();
+    const announcedBefore = useAnnouncerStore.getState().nextId;
+
+    await click(copyButton());
+    await click(copyButton());
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(useAnnouncerStore.getState().nextId).toBe(announcedBefore);
+
+    await act(async () => {
+      gate.resolve(ok());
+      await gate.promise;
+    });
+
+    expect(glyph("check")).toBe(true);
+    expect(useAnnouncerStore.getState().nextId).toBe(announcedBefore + 1);
+  });
+
+  it("wears the copy glyph and swaps to a check once main copied the path", async () => {
+    seedPanel("src/index.ts");
+    const gate = deferred();
+    dispatchMock.mockReturnValueOnce(gate.promise);
+    renderPane();
+    expect(glyph("copy")).toBe(true);
+
+    await click(copyButton());
+    expect(glyph("check")).toBe(false);
+    await act(async () => {
+      gate.resolve(ok());
+      await gate.promise;
+    });
+
+    expect(dispatchCall(0)).toEqual([
+      "file.showItemInFolder",
+      { path: `${WORKTREE_ROOT}/src/index.ts` },
+      { source: "user" },
+    ]);
+    expect(glyph("check")).toBe(true);
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Host path copied");
+  });
+
+  it("leaves a failed copy to the banner, and confirms a Retry that succeeds", async () => {
+    seedPanel("src/index.ts");
+    dispatchMock.mockResolvedValueOnce(fail("Host unreachable"));
+    renderPane();
+
+    await click(copyButton());
+
+    expect(screen.getByText("Couldn't copy host path")).toBeTruthy();
+    expect(glyph("check")).toBe(false);
+    expect(useAnnouncerStore.getState().polite).toBeNull();
+
+    // The banner unmounts on success, so its Retry confirms the way a menu row
+    // does: the announcement and a flash where it was pressed.
+    await click(screen.getByRole("button", { name: "Retry copying host path" }));
+
+    expect(screen.queryByText("Couldn't copy host path")).toBeNull();
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Host path copied");
+    expect(getCopyFlash()).not.toBeNull();
   });
 });

@@ -1,5 +1,6 @@
-import { FileText, FolderOpen } from "@/components/icons";
-import { revealCopy } from "@/components/FileViewer/revealCopy";
+import { FileText } from "@/components/icons";
+import { useRevealCopy } from "@/components/FileViewer/revealCopy";
+import { runTransientReveal } from "@/components/FileViewer/revealFeedback";
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { useMenuActionSource } from "@/components/ui/menu-source";
 import { actionService } from "@/services/ActionService";
@@ -32,6 +33,7 @@ export function SelectedFileMenuItems({
   onView,
 }: SelectedFileMenuItemsProps) {
   const source = useMenuActionSource();
+  const revealCopy = useRevealCopy();
   return (
     <>
       <ContextMenuItem
@@ -61,21 +63,24 @@ export function SelectedFileMenuItems({
       {reveal && (
         <ContextMenuItem
           onSelect={() => {
-            void actionService
-              .dispatch("file.showItemInFolder", { path: absolutePath }, { source })
-              .then((result) => {
-                if (!result.ok) {
-                  reportFileLinkFailure(
-                    "Failed to reveal in file manager",
-                    result.error.details,
-                    absolutePath
-                  );
-                }
-              });
+            runTransientReveal(revealCopy, () =>
+              actionService
+                .dispatch("file.showItemInFolder", { path: absolutePath }, { source })
+                .then((result) => {
+                  if (!result.ok) {
+                    reportFileLinkFailure(
+                      "Failed to reveal in file manager",
+                      result.error.details,
+                      absolutePath
+                    );
+                  }
+                  return result.ok;
+                })
+            );
           }}
         >
-          <FolderOpen className={ICON_CLASS} aria-hidden="true" />
-          {revealCopy().label}
+          <revealCopy.icon className={ICON_CLASS} aria-hidden="true" />
+          {revealCopy.label}
         </ContextMenuItem>
       )}
     </>

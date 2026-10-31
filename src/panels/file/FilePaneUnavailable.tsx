@@ -1,6 +1,5 @@
 import { ExternalLink, Globe, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { FolderOpen } from "@/components/icons";
 import { getFileTypeIcon } from "@/panels/file-browser/fileTypeIcons";
 import {
   FileUnavailableState,
@@ -9,6 +8,8 @@ import {
   type UnavailableReason,
 } from "@/components/FileViewer/FileUnavailableState";
 import { ControlRefusedState, SaveHostFileButton } from "@/components/FileViewer/hostFileActions";
+import type { RevealCopy } from "@/components/FileViewer/revealCopy";
+import { RevealActionButton } from "@/components/FileViewer/revealFeedback";
 import {
   isAudioFilePath,
   isImageFilePath,
@@ -83,7 +84,7 @@ export function FilePaneUnavailable({
   errorMessage,
   filePath,
   fileName,
-  revealLabel,
+  reveal,
   openTarget,
   canOpenInDefaultApp,
   remote,
@@ -94,12 +95,13 @@ export function FilePaneUnavailable({
   errorMessage: string | null;
   filePath: string;
   fileName: string;
-  revealLabel: string;
+  reveal: RevealCopy;
   openTarget: "browser" | "editor";
   canOpenInDefaultApp: boolean;
   remote: RemoteFileContext | null;
   onRetry: () => void;
-  onExternal: (target: ExternalTarget) => void;
+  /** Resolves true once the hand-off succeeded; the pane reports a failure. */
+  onExternal: (target: ExternalTarget) => Promise<boolean>;
 }) {
   const reason = toUnavailableReason(filePath, errorCode, errorMessage);
   if (reason === "DRIVEN_ELSEWHERE") {
@@ -148,7 +150,7 @@ export function FilePaneUnavailable({
         <div className="flex flex-wrap items-center justify-center gap-2">
           {copy.action === "save" && <SaveHostFileButton hostPath={filePath} />}
           {openVia !== null && (
-            <Button variant="subtle" size="sm" onClick={() => onExternal(openVia)}>
+            <Button variant="subtle" size="sm" onClick={() => void onExternal(openVia)}>
               {openVia === "browser" ? <Globe /> : <ExternalLink />}
               {openVia === "default-app"
                 ? "Open in default app"
@@ -158,10 +160,12 @@ export function FilePaneUnavailable({
             </Button>
           )}
           {offersReveal && (
-            <Button variant="subtle" size="sm" onClick={() => onExternal("reveal")}>
-              <FolderOpen />
-              {revealLabel}
-            </Button>
+            <RevealActionButton
+              reveal={reveal}
+              path={filePath}
+              onReveal={() => onExternal("reveal")}
+              variant="subtle"
+            />
           )}
           {offersRetry && (
             <Button variant="subtle" size="sm" onClick={onRetry}>

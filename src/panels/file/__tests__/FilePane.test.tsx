@@ -354,6 +354,8 @@ import { fileEditorSlotKey } from "@shared/types/plugin";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FILE_READ_ERROR_MESSAGES } from "@/components/FileViewer/fileReadErrors";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
+import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
+import { _resetCopyFlashForTests, getCopyFlash } from "@/lib/copyFlash";
 import { ClientAppError } from "@/utils/clientAppError";
 import type { DriveLeaseView } from "@shared/types/ipc/driveLease";
 import {
@@ -842,6 +844,99 @@ describe("FilePane reveal in file manager (#11386)", () => {
     await act(async () => {
       liveReveal.resolve({ ok: true, result: undefined });
       await liveReveal.promise;
+    });
+  });
+
+  describe("in a remote window, where reveal copies the host path (#15722)", () => {
+    const glyph = (button: HTMLElement, name: string) =>
+      button.querySelector("svg")?.classList.contains(`lucide-${name}`) ?? false;
+
+    beforeEach(() => {
+      window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+      setHostPlatformInfo({
+        platform: "linux",
+        connection: { kind: "ssh", target: "greg@studio-01" },
+      });
+    });
+
+    afterEach(() => {
+      cleanup();
+      delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+      _resetHostPlatformForTests();
+    });
+
+    it("wears the copy glyph and swaps to a check once main copied the path", async () => {
+      const copy = deferred();
+      dispatchMock.mockReturnValueOnce(copy.promise);
+      const { container } = renderFilePane();
+      expect(glyph(findButton(container, "Copy host path"), "copy")).toBe(true);
+
+      await click(findButton(container, "Copy host path"));
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "file.showItemInFolder",
+        { path: PATH, allowOutsideRoots: true },
+        { source: "user" }
+      );
+      // Nothing is confirmed while the copy is still in flight.
+      expect(glyph(findButton(container, "Copy host path"), "check")).toBe(false);
+
+      await act(async () => {
+        copy.resolve({ ok: true, result: undefined });
+        await copy.promise;
+      });
+
+      expect(glyph(findButton(container, "Copy host path"), "check")).toBe(true);
+    });
+
+    it("leaves a failed copy to the reveal banner, unconfirmed", async () => {
+      dispatchMock.mockResolvedValueOnce({
+        ok: false,
+        error: { code: "EXECUTION_ERROR", message: "Host unreachable" },
+      });
+      const { container } = renderFilePane();
+
+      await click(findButton(container, "Copy host path"));
+
+      const alert = container.querySelector('[role="alert"]');
+      expect(alert?.textContent).toContain("Couldn't copy host path");
+      expect(alert?.textContent).toContain("Host unreachable");
+      expect(glyph(findButton(container, "Copy host path"), "check")).toBe(false);
+      expect(glyph(findButton(container, "Copy host path"), "copy")).toBe(true);
+    });
+
+    it("confirms a Retry that succeeds where it was pressed, since the banner goes", async () => {
+      _resetCopyFlashForTests();
+      dispatchMock.mockResolvedValueOnce({
+        ok: false,
+        error: { code: "EXECUTION_ERROR", message: "Host unreachable" },
+      });
+      const { container } = renderFilePane();
+      await click(findButton(container, "Copy host path"));
+      expect(getCopyFlash()).toBeNull();
+
+      dispatchMock.mockResolvedValueOnce({ ok: true, result: undefined });
+      await click(findButton(container, "Retry copying host path"));
+
+      expect(container.querySelector('[role="alert"]')).toBeNull();
+      expect(getCopyFlash()).not.toBeNull();
+      _resetCopyFlashForTests();
+    });
+
+    it("offers the copy in the unavailable body of a file outside the project", async () => {
+      readMock.mockRejectedValueOnce(new ClientAppError("OUTSIDE_ROOT", "outside"));
+      renderFilePane("/srv/elsewhere/notes.ts");
+      const body = await screen.findByTestId("file-pane-unavailable");
+      const copy = () => within(body).getByRole("button", { name: "Copy host path" });
+      expect(glyph(copy(), "copy")).toBe(true);
+
+      await click(copy());
+
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "file.showItemInFolder",
+        { path: "/srv/elsewhere/notes.ts", allowOutsideRoots: true },
+        { source: "user" }
+      );
+      expect(glyph(copy(), "check")).toBe(true);
     });
   });
 });
