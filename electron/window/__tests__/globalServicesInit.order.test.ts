@@ -692,11 +692,11 @@ describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
     });
 
     it("reads workspace states with a bounded fan-out", async () => {
-      // Not a style preference: `ProjectStateManager` cannot tell an EMFILE from
-      // a corrupt file, so a descriptor exhaustion here marks a workspace
-      // unreadable AND renames its healthy state.json to `.corrupted.*`. An
+      // Not a style preference: a descriptor exhaustion that outlasts
+      // `ProjectStateManager`'s read retry marks a workspace unreadable for the
+      // session, so it hydrates empty and the orphan pass stands down. An
       // unbounded read over every project and scratch would make the sweep the
-      // thing that destroys the state it exists to preserve.
+      // thing that costs the restores it exists to keep.
       projectStoreMock.getAllProjects.mockReturnValue(
         Array.from({ length: 40 }, (_, i) => ({ id: `proj-${i}` }))
       );

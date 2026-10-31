@@ -232,13 +232,12 @@ function reconcileScratchResumableAgentCounts(
  * How many workspace states the sweep reads at once.
  *
  * Bounded rather than a bare `Promise.all` over every workspace, because the
- * failure mode is not a slow sweep — it is lost state. `ProjectStateManager`
- * cannot tell a descriptor exhaustion from a corrupt file: an `EMFILE` lands in
- * the same catch as a parse error, which marks the workspace unreadable AND
- * renames its perfectly healthy `state.json` to `.corrupted.<ts>`. A sweep that
- * exists to reclaim disk must not be the thing that destroys restorable panels,
- * and adding scratches to it (#11821) roughly doubled the fan-out that gets
- * there.
+ * failure mode is not a slow sweep — it is lost restores. An `EMFILE` that
+ * outlasts `ProjectStateManager`'s brief read retry marks the workspace
+ * unreadable for the session: its panels hydrate empty, its resumable count
+ * goes unknown, and the orphan pass below stands down for every workspace. A
+ * sweep that exists to reclaim disk must not be what causes that, and adding
+ * scratches to it (#11821) roughly doubled the fan-out that gets there.
  */
 const STATE_READ_CONCURRENCY = 8;
 

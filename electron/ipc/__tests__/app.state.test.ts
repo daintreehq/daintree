@@ -1814,6 +1814,67 @@ describe("app:boot handler", () => {
       expect(captureProjectLayoutSeed).not.toHaveBeenCalled();
     });
 
+    describe("a state file that is unreadable and still in place (#15613)", () => {
+      const legacyPanel = {
+        id: "t1",
+        type: "terminal",
+        title: "Shell",
+        cwd: "/p",
+        location: "grid",
+      } as const;
+
+      beforeEach(() => {
+        setCurrentProject();
+        vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+          state: null,
+          unreadableInPlace: true,
+        });
+        vi.mocked(projectStore.wasStateUnreadableThisSession).mockReturnValue(true);
+      });
+
+      it("hydrates empty without seeding a fresh state over it", async () => {
+        const result = await invokeBoot();
+
+        expect(result.workspaceId).toBe("p1");
+        expect((result.appState as Record<string, unknown>).terminals).toEqual([]);
+        expect(projectStore.enqueueProjectStateUpdate).not.toHaveBeenCalled();
+        expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p1", false);
+      });
+
+      it("neither shows nor migrates the heir's legacy terminals", async () => {
+        globalAppStateRef.current = { ...DEFAULT_GLOBAL_APP_STATE, terminals: [legacyPanel] };
+
+        const result = await invokeBoot();
+
+        expect((result.appState as Record<string, unknown>).terminals).toEqual([]);
+        expect(projectStore.enqueueProjectStateUpdate).not.toHaveBeenCalled();
+      });
+
+      it("still restores the crash snapshot's panels, without writing them over it", async () => {
+        globalAppStateRef.current = { ...DEFAULT_GLOBAL_APP_STATE, terminals: [legacyPanel] };
+        crashService.consumePanelFilter.mockReturnValue(["t1"] as unknown as null);
+
+        const result = await invokeBoot();
+        const terminals = (result.appState as Record<string, unknown>).terminals as Array<
+          Record<string, unknown>
+        >;
+
+        expect(terminals.map((t) => t.id)).toEqual(["t1"]);
+        expect(projectStore.enqueueProjectStateUpdate).not.toHaveBeenCalled();
+      });
+
+      it("still seeds once the read reports a file that really was moved aside", async () => {
+        vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+          state: null,
+          quarantinedPath: "/p/state.json.corrupted.1",
+        });
+
+        await invokeBoot();
+
+        expect(projectStore.enqueueProjectStateUpdate).toHaveBeenCalledTimes(1);
+      });
+    });
+
     it("hydrates normally when the seed can't be recorded", async () => {
       setCurrentProject();
       vi.mocked(captureProjectLayoutSeed).mockImplementationOnce(() => {

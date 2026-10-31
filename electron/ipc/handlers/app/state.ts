@@ -510,8 +510,11 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     let draftInputsToUse: Record<string, string> | undefined;
 
     if (workspaceId) {
-      const { state: projectState, quarantinedPath } =
-        await projectStore.getProjectStateWithRecovery(workspaceId);
+      const {
+        state: projectState,
+        quarantinedPath,
+        unreadableInPlace,
+      } = await projectStore.getProjectStateWithRecovery(workspaceId);
       projectStateQuarantinedPath = quarantinedPath;
       if (currentProject !== null) {
         // Read before this hydrate writes the project's fresh state below. A
@@ -586,6 +589,14 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
             `[AppHydrate] Migrated focusMode (${focusModeToUse}) to per-project state for ${currentProject?.name}`
           );
         }
+      } else if (unreadableInPlace && !hasCrashRestoreTerminals) {
+        // state.json is still there but could neither be read nor moved aside,
+        // so this null is not a project without history: seeding it, or
+        // migrating legacy panels into it, would write over the only copy.
+        // Hydrate empty; saves stay refused until a read can use or move it.
+        console.warn(
+          `[AppHydrate] State for ${workspaceId} is unreadable and still in place; hydrating empty without writing`
+        );
       } else if (
         canInheritLegacyWorkspaceState &&
         globalAppState.terminals &&
@@ -603,8 +614,10 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         );
         terminalsSource = "migration";
 
-        // Migrate terminals to per-project state with kind inference
-        if (terminalsToUse.length > 0) {
+        // Migrate terminals to per-project state with kind inference. A crash
+        // restore over an unreadable file still shows its panels, but writes
+        // nothing until a read can use or move that file.
+        if (!unreadableInPlace && terminalsToUse.length > 0) {
           // Saved held: the hold above found no per-project panes to hold.
           const migratedTerminals = holdTerminalsForHostEnds(
             terminalsToUse.map(
@@ -647,7 +660,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
           console.log(
             `[AppHydrate] Migrated ${migratedTerminals.length} terminals and focusMode to per-project state`
           );
-        } else {
+        } else if (!unreadableInPlace) {
           // Normalize legacy focusPanelState
           const normalizedFocusPanelState = globalAppState.focusPanelState
             ? {

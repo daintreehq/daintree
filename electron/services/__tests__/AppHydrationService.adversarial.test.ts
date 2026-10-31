@@ -482,6 +482,30 @@ describe("AppHydrationService adversarial", () => {
     expect(result.appState.terminals).toEqual([]);
   });
 
+  it("does not let a prefetch keep the empty payload for a state file still in place (#15613)", async () => {
+    const { buildSwitchHydrateResult } = await import("../AppHydrationService.js");
+    const { prefetchHydrateResult, _peekPrefetchCacheForTests, _resetPrefetchHydrateCacheForTests } =
+      await import("../prefetchHydrateCache.js");
+    _resetPrefetchHydrateCacheForTests();
+    getProjectStateWithRecoveryMock.mockResolvedValueOnce({
+      state: undefined,
+      unreadableInPlace: true,
+    } as unknown as Awaited<ReturnType<typeof getProjectStateWithRecoveryMock>>);
+
+    expect(await prefetchHydrateResult("project-1", buildSwitchHydrateResult)).toBeNull();
+    expect(_peekPrefetchCacheForTests("project-1")).toBeUndefined();
+
+    // Once the file reads again, the next prefetch caches what is really there.
+    mockState.projectState = {
+      terminals: [
+        { id: "project-terminal", type: "terminal", title: "T", cwd: "/p", location: "grid" },
+      ],
+    };
+    const recovered = await prefetchHydrateResult("project-1", buildSwitchHydrateResult);
+    expect(recovered?.appState.terminals.map((t) => t.id)).toEqual(["project-terminal"]);
+    expect(_peekPrefetchCacheForTests("project-1")).toBe(recovered);
+  });
+
   it("UNKNOWN_PROJECT_ID_STILL_VALID", async () => {
     const { buildSwitchHydrateResult } = await import("../AppHydrationService.js");
     const result = await buildSwitchHydrateResult("missing-project");

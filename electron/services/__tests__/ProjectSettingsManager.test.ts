@@ -546,16 +546,16 @@ describe("ProjectSettingsManager caching", () => {
         const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
         try {
-          await expect(manager.getProjectSettings(projectId)).rejects.toThrow(/left untouched/);
+          await expect(manager.getProjectSettings(projectId)).rejects.toThrow(/leaving it untouched/);
           await expect(
             manager.saveProjectSettings(projectId, { runCommands: [], devServerCommand: "x" })
-          ).rejects.toThrow(/left untouched/);
+          ).rejects.toThrow(/leaving it untouched/);
           await expect(
             manager.changeVoiceDictionary(projectId, (entries) => [
               ...entries,
               { term: "Daintree", heardAs: ["dain tree"], source: "manual", addedAt: 1 },
             ])
-          ).rejects.toThrow(/left untouched/);
+          ).rejects.toThrow(/leaving it untouched/);
         } finally {
           vi.mocked(resilientRename).mockReset();
           errorSpy.mockRestore();
@@ -578,7 +578,7 @@ describe("ProjectSettingsManager caching", () => {
       );
       const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       try {
-        await expect(manager.getProjectSettings(projectId)).rejects.toThrow(/left untouched/);
+        await expect(manager.getProjectSettings(projectId)).rejects.toThrow(/leaving it untouched/);
       } finally {
         errorSpy.mockRestore();
       }
@@ -589,6 +589,26 @@ describe("ProjectSettingsManager caching", () => {
         await manager.saveProjectSettings(projectId, { runCommands: [], devServerCommand: "x" });
       } finally {
         vi.mocked(resilientRename).mockReset();
+      }
+
+      const dirEntries = await fs.readdir(path.join(tempDir, projectId));
+      const quarantined = dirEntries.filter((name) => name.startsWith("settings.json.corrupted."));
+      expect(quarantined).toHaveLength(1);
+      expect(await fs.readFile(path.join(tempDir, projectId, quarantined[0]), "utf-8")).toBe(
+        "{{invalid json"
+      );
+      expect((await manager.getProjectSettings(projectId)).devServerCommand).toBe("x");
+    });
+
+    it("moves a damaged file aside before a save with no read ahead of it replaces it", async () => {
+      const settingsPath = path.join(tempDir, projectId, "settings.json");
+      await fs.writeFile(settingsPath, "{{invalid json", "utf-8");
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        await manager.saveProjectSettings(projectId, { runCommands: [], devServerCommand: "x" });
+      } finally {
+        warnSpy.mockRestore();
       }
 
       const dirEntries = await fs.readdir(path.join(tempDir, projectId));
