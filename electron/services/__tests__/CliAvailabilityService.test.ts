@@ -1042,6 +1042,157 @@ describe("CliAvailabilityService", () => {
     });
   });
 
+  // The current Rust product keeps its credentials under ~/.openinterpreter,
+  // which INTERPRETER_HOME relocates. The Python package's profiles/default.yaml
+  // is a different program's config.
+  describe("Open Interpreter auth discovery (#15567)", () => {
+    const interpreterOnPath = () =>
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (cmdOf(args) === "interpreter") return Buffer.from("");
+        throw new Error("not found");
+      });
+
+    const withEnv = async (key: string, value: string, run: () => Promise<void>) => {
+      const prev = process.env[key];
+      process.env[key] = value;
+      try {
+        await run();
+      } finally {
+        if (prev === undefined) delete process.env[key];
+        else process.env[key] = prev;
+      }
+    };
+
+    const authProbes = (calls: unknown[][]) =>
+      calls
+        .map((call) => String(call[0]))
+        .filter((p) => /openinterpreter|open-interpreter|Open Interpreter[\\/]profiles/i.test(p));
+
+    it.each([
+      ["the default auth.json", ["auth.json"]],
+      ["the keyring backend's encrypted copy", ["secrets", "codex_auth.age"]],
+      ["a provider OAuth sign-in", ["secrets", "gateway_oauth.age"]],
+    ])("reaches 'ready' on %s under ~/.openinterpreter", async (_label, segments) => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      interpreterOnPath();
+
+      const credential = join(homedir(), ".openinterpreter", ...segments);
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path) === credential) return;
+        throw new Error("ENOENT");
+      });
+
+      const result = await service.checkAvailability();
+      expect(result.interpreter).toBe("ready");
+      expect(service.getDetails()!.interpreter?.authConfirmed).toBe(true);
+    });
+
+    it("probes INTERPRETER_HOME instead of ~/.openinterpreter when it is set", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      interpreterOnPath();
+
+      const customHome = join("/opt", "oi-home");
+      const relocated = join(customHome, "auth.json");
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path) === relocated) return;
+        throw new Error("ENOENT");
+      });
+
+      await withEnv("INTERPRETER_HOME", customHome, async () => {
+        const result = await service.checkAvailability();
+        expect(result.interpreter).toBe("ready");
+      });
+
+      const probed = mockedAccess.mock.calls.map((call) => String(call[0]));
+      expect(probed).toContain(relocated);
+      expect(probed.some((p) => p.startsWith(join(homedir(), ".openinterpreter")))).toBe(false);
+    });
+
+    it("does not read CODEX_HOME, which the Rust product ignores", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      interpreterOnPath();
+
+      const codexHome = join("/opt", "codex-home");
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path).startsWith(codexHome)) return;
+        throw new Error("ENOENT");
+      });
+
+      await withEnv("CODEX_HOME", codexHome, async () => {
+        const result = await service.checkAvailability();
+        expect(result.interpreter).toBe("unauthenticated");
+      });
+    });
+
+    it("no longer counts the Python package's profile as a sign-in", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      interpreterOnPath();
+      // Every Python-era location exists; none is the Rust product's.
+      mockedAccess.mockImplementation(async (path) => {
+        if (/open-interpreter|Open Interpreter[\\/]profiles/i.test(String(path))) return;
+        throw new Error("ENOENT");
+      });
+
+      const result = await service.checkAvailability();
+      expect(result.interpreter).toBe("unauthenticated");
+      expect(authProbes(mockedAccess.mock.calls)).toEqual([
+        join(homedir(), ".openinterpreter", "auth.json"),
+        join(homedir(), ".openinterpreter", "secrets", "codex_auth.age"),
+        join(homedir(), ".openinterpreter", "secrets", "gateway_oauth.age"),
+      ]);
+    });
+
+    it.each(["OPENAI_API_KEY", "GEMINI_API_KEY"])(
+      "reaches 'ready' from a %s in the environment",
+      async (key) => {
+        const { access } = await import("fs/promises");
+        const mockedAccess = vi.mocked(access);
+        interpreterOnPath();
+        mockedAccess.mockRejectedValue(new Error("ENOENT"));
+
+        await withEnv(key, "sk-test", async () => {
+          const result = await service.checkAvailability();
+          expect(result.interpreter).toBe("ready");
+        });
+      }
+    );
+
+    it("does not treat GOOGLE_API_KEY as a provider key", async () => {
+      // The provider catalog reads GEMINI_API_KEY for Gemini, not GOOGLE_API_KEY.
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      interpreterOnPath();
+      mockedAccess.mockRejectedValue(new Error("ENOENT"));
+
+      await withEnv("GOOGLE_API_KEY", "test-key", async () => {
+        const result = await service.checkAvailability();
+        expect(result.interpreter).toBe("unauthenticated");
+      });
+    });
+
+    it("finds the standalone install in ~/.local/bin when it is off PATH", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      mockedExecFileSync.mockImplementation(() => {
+        throw new Error("not found");
+      });
+
+      const installed = join(homedir(), ".local", "bin", "interpreter");
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path) === installed) return;
+        throw new Error("ENOENT");
+      });
+
+      const result = await service.checkAvailability();
+      expect(result.interpreter).not.toBe("missing");
+      expect(service.getDetails()!.interpreter?.resolvedPath).toBe(installed);
+    });
+  });
+
   describe("isFullyQualifiedPath (#15566)", () => {
     it.each([
       ["/opt/kimi", true],
@@ -1830,7 +1981,7 @@ describe("CliAvailabilityService", () => {
     });
 
     it("does not synthesise PyPI paths when packages.pypi is unset", async () => {
-      // Agents that legitimately declare `packages.pypi` (interpreter, mistral, aider)
+      // Agents that legitimately declare `packages.pypi` (mistral, aider)
       // SHOULD probe uv/pipx layouts; every other built-in does not, and must not
       // produce PyPI-shaped fs.access calls. This guards against accidental
       // probing when an agent has e.g. `npmGlobalPackage` only.
@@ -1845,7 +1996,8 @@ describe("CliAvailabilityService", () => {
       await service.checkAvailability();
 
       // Filter out paths synthesised for agents whose `packages.pypi`
-      // legitimately triggers uv/pipx probing (interpreter, mistral, aider).
+      // legitimately triggers uv/pipx probing (mistral, aider). Open Interpreter
+      // left PyPI for a standalone installer (#15567), so its paths are not exempt.
       // Remaining probed paths must not include any uv/pipx layouts.
       // Normalize separators so substring checks work regardless of host OS
       // (Windows runners produce backslashed paths post-`path.join`).
@@ -1853,8 +2005,6 @@ describe("CliAvailabilityService", () => {
       const allProbedPaths = mockedAccess.mock.calls.map((c) => norm(String(c[0])));
       const probedPaths = allProbedPaths.filter(
         (p) =>
-          !p.includes("open-interpreter") &&
-          !p.includes("/interpreter") &&
           !p.includes("mistral") &&
           !p.includes("/vibe") &&
           !p.includes("aider")

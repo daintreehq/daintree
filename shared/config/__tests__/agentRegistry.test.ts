@@ -619,6 +619,147 @@ describe("kimi detection patterns", () => {
   });
 });
 
+// The entry describes the current Rust product only. The Python package it
+// used to install is a different program with its own commands and docs.
+describe("Open Interpreter configuration (#15567)", () => {
+  const config = getAgentConfig("interpreter");
+
+  function compilePatterns(key: string): RegExp[] {
+    const patterns = config?.detection?.[key as keyof NonNullable<typeof config.detection>] as
+      string[] | undefined;
+    return (patterns ?? []).map((p: string) => new RegExp(p, "im"));
+  }
+  const anyMatch = (key: string, line: string) => compilePatterns(key).some((p) => p.test(line));
+
+  const installCommands = Object.values(config?.install?.byOs ?? {}).flatMap((blocks) =>
+    (blocks ?? []).flatMap((block) => block.commands ?? [])
+  );
+  const updateCommands = Object.values(config?.update ?? {}).filter(
+    (command): command is string => typeof command === "string"
+  );
+  const docsUrls = [
+    config?.usageUrl,
+    config?.install?.docsUrl,
+    ...(config?.externalLinks ?? []).map((link) => link.url),
+    ...(config?.prerequisites ?? []).map((prerequisite) => prerequisite.installUrl),
+  ].filter((url): url is string => typeof url === "string");
+  const urlsIn = (command: string) => command.match(/https:\/\/[^\s'"|]+/g) ?? [];
+
+  it("installs from the same site its docs live on, on every OS", () => {
+    for (const os of ["macos", "linux", "windows"] as const) {
+      expect(config?.install?.byOs?.[os]?.length, `${os} has no install block`).toBeGreaterThan(0);
+    }
+    const docsHosts = new Set(docsUrls.map((url) => new URL(url).host));
+    expect(docsHosts.size).toBe(1);
+    for (const command of installCommands) {
+      const urls = urlsIn(command);
+      expect(urls, `${command} names no installer`).toHaveLength(1);
+      expect(docsHosts.has(new URL(urls[0] as string).host), command).toBe(true);
+    }
+  });
+
+  it("names none of the Python package's install or update commands", () => {
+    for (const command of [...installCommands, ...updateCommands]) {
+      expect(command).not.toMatch(/\b(?:pip|pipx|uv)\b|open-interpreter/);
+    }
+    expect(config?.packages?.pypi).toBeUndefined();
+    expect(config?.version?.pypiPackage).toBeUndefined();
+  });
+
+  it("updates through the installed CLI itself", () => {
+    expect(updateCommands.length).toBeGreaterThan(0);
+    for (const command of updateCommands) {
+      expect(command.split(/\s+/)[0]).toBe(config?.command);
+    }
+  });
+
+  it("links no docs page that documents a different program", () => {
+    // docs.openinterpreter.com redirects to the Rust product's pages, which
+    // install a different program than the Python commands this entry carried.
+    for (const url of docsUrls) {
+      expect(new URL(url).host).not.toBe("docs.openinterpreter.com");
+    }
+    // The install card's docs link and the missing-CLI gate send users to the
+    // same install page.
+    expect(new Set(config?.prerequisites?.map((p) => p.installUrl))).toEqual(
+      new Set([config?.install?.docsUrl])
+    );
+  });
+
+  it("reads its latest version and release notes from one repository", () => {
+    const repo = config?.version?.githubRepo;
+    expect(repo).toBeDefined();
+    expect(config?.version?.releaseNotesUrl).toContain(`github.com/${repo}/`);
+  });
+
+  it("looks for the binary where the standalone installers put it", () => {
+    for (const path of config?.nativePaths ?? []) {
+      expect(path).toMatch(new RegExp(`[\\\\/]${config?.command}(?:\\.exe)?$`));
+    }
+    expect(config?.nativePaths?.some((p) => p.startsWith("~/"))).toBe(true);
+    expect(config?.nativePaths?.some((p) => p.startsWith("%LOCALAPPDATA%"))).toBe(true);
+  });
+
+  it.each([
+    ["the session header card", "│ >_ Open Interpreter (v0.0.57)                  │"],
+    ["the plain transcript header", "Open Interpreter (v0.0.56)"],
+  ])("treats %s as boot-complete", (_label, line) => {
+    expect(anyMatch("bootCompletePatterns", line)).toBe(true);
+  });
+
+  it.each([
+    // The Python TUI's banner lines.
+    ["Welcome to **Open Interpreter**."],
+    ["▌ Model set to gpt-4o"],
+    // Onboarding only, not every launch.
+    ["Welcome to Open Interpreter"],
+    ["Open Interpreter docs"],
+  ])("does not treat %j as boot-complete", (line) => {
+    expect(anyMatch("bootCompletePatterns", line)).toBe(false);
+  });
+
+  it.each([
+    ["the empty composer", "› Ask Codex to do anything"],
+    ["a draft", "› fix the failing test"],
+    ["a bare glyph", "›"],
+  ])("matches %s as the prompt", (_label, line) => {
+    expect(anyMatch("promptPatterns", line)).toBe(true);
+  });
+
+  it.each([
+    // The Python TUI's bare prompt.
+    [">"],
+    ["> "],
+    ["│ >_ Open Interpreter (v0.0.57)                  │"],
+    ["> npm test"],
+  ])("does not treat %j as the prompt", (line) => {
+    expect(anyMatch("promptPatterns", line)).toBe(false);
+  });
+
+  it.each([
+    ["the default header", "• Working (0s • esc to interrupt)"],
+    [
+      "a reasoning header with a note",
+      "◦ Planning the migration (1m 05s • esc to interrupt) · 2 background terminals running",
+    ],
+    ["an hour-long turn", "⠋ Working (1h 02m 03s • esc to interrupt)"],
+  ])("matches %s as working", (_label, line) => {
+    expect(anyMatch("primaryPatterns", line)).toBe(true);
+  });
+
+  it.each([
+    // The Python TUI's working lines.
+    ["• Running code"],
+    ["· Executing python"],
+    ["```python"],
+    // The same line once the interrupt hint is gone.
+    ["• Working (12s)"],
+  ])("does not treat %j as working", (line) => {
+    const patterns = [...compilePatterns("primaryPatterns"), ...compilePatterns("fallbackPatterns")];
+    expect(patterns.some((p) => p.test(line))).toBe(false);
+  });
+});
+
 describe("amp configuration", () => {
   it("compiles all detection regex strings without throwing", () => {
     const detection = getAgentConfig("amp")?.detection;

@@ -124,6 +124,17 @@ describe("digestHistory", () => {
     expect(digestHistory("┃ fix the build", "opencode").requests).toBeNull();
   });
 
+  it("reads Open Interpreter's Codex-style echo, not the Python CLI's bare > (#15567)", () => {
+    expect(
+      digestHistory(
+        ["› Add pagination to GET /recipes", "", "• Working (3s • esc to interrupt)"].join("\n"),
+        "interpreter"
+      ).requests
+    ).toEqual(["Add pagination to GET /recipes"]);
+    // A shell prompt in tool output is not something the user asked.
+    expect(digestHistory("> npm test", "interpreter").requests).toEqual([]);
+  });
+
   it("redacts secrets in what it lifts", () => {
     const raw = "❯ Use OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwx to call the API";
     expect(digestHistory(raw, "claude").requests?.[0]).not.toContain("abcdefghijklmnop");

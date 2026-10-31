@@ -13,7 +13,8 @@ export const config: AgentConfig = {
   supports: false,
   continuity: {
     tier: "unverified",
-    detail: "Open Interpreter resumes by session ID; resuming after a move isn't confirmed",
+    detail:
+      "Open Interpreter continues its most recent session in the folder; resuming after a move isn't confirmed",
   },
   tooltip: "Open Interpreter's CLI",
   usageUrl: "https://www.openinterpreter.com/docs/terminal",
@@ -95,23 +96,16 @@ export const config: AgentConfig = {
     primaryConfidence: 0.95,
     promptConfidence: 0.85,
   },
+  // `resume --last` reopens the newest session recorded in the launch
+  // directory and starts fresh when there is none (tui/src/lib.rs,
+  // `latest_session_cwd_filter`). Session ids exist, but quitting isn't
+  // measured: Codex's gated Ctrl-C was calibrated on Codex only, and a slash
+  // command typed into a busy composer becomes chat text. So nothing is sent at
+  // teardown and no id is scraped from the exit summary, which also still
+  // prints `codex resume <id>` (tui/src/app/exit_summary.rs).
   resume: {
-    kind: "session-id",
-    args: (sessionId: string) => ["resume", sessionId],
-    // On exit it prints "To continue this session, run:" then the command. The
-    // exit summary still hardcodes `codex resume <id>` (tui/src/app/exit_summary.rs)
-    // even though the binary is `interpreter`, so both names are accepted. A UUID
-    // capture keeps the follow-up "Or run codex resume and select <name>." out.
-    sessionIdPattern:
-      "(?:codex|interpreter) resume ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
-    // Scoped to the launch directory, and starts fresh when it holds no session
-    // (tui/src/lib.rs, `latest_session_cwd_filter`).
-    resumeLatestArgs: ["resume", "--last"],
-    // No automated quit: Codex's gated Ctrl-C was measured on Codex only, and a
-    // slash command typed into a busy composer becomes chat text. The id is
-    // still captured when the user quits, and a restore without one falls back
-    // to the latest session.
-    quitCommand: "",
+    kind: "rolling-history",
+    args: () => ["resume", "--last"],
   },
   authCheck: {
     // Everything lives under ~/.openinterpreter, or INTERPRETER_HOME when set;

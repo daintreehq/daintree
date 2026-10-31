@@ -460,11 +460,12 @@ describe("cold restore of agents that resume by history alone (#13847)", () => {
     expect(byId.get("old")?.sessionLostOnRestore).toBe("sibling-owns-resume-latest-slot");
   });
 
-  it("starts Interpreter fresh rather than leave its picker on the pane", async () => {
+  it("reopens Open Interpreter's latest session in its folder when no id was captured", async () => {
     const byId = await restore([pane("i", "interpreter")]);
 
+    expect(byId.get("i")?.command).toBe("interpreter resume --last");
     expect(byId.get("i")?.command).not.toContain("--conversations");
-    expect(byId.get("i")?.sessionLostOnRestore).toBe("no-resume-path");
+    expect(byId.get("i")?.sessionLostOnRestore).toBeUndefined();
   });
 
   it("keeps Aider's auto-commits off when a deleted preset voids its captured flags", async () => {
