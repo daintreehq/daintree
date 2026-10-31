@@ -248,9 +248,7 @@ describe("HybridInputBar while an attachment is being prepared (#15599)", () => 
 describe("HybridInputBar when an attachment outlives its draft (#15599)", () => {
   it("holds it back with a note instead of adding it to the next draft, and adds it on request", async () => {
     const submit = deferred<boolean>();
-    const submitText = vi.fn<NonNullable<HybridInputBarProps["submitText"]>>(
-      () => submit.promise
-    );
+    const submitText = vi.fn<NonNullable<HybridInputBarProps["submitText"]>>(() => submit.promise);
     const thumbnail = deferred<{ thumbnailDataUrl: string }>();
     thumbnailFromPath.mockReturnValue(thumbnail.promise);
     const { view, type, pressEnter, settle, attach, heldBack } = await mount({ submitText });
