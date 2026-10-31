@@ -1457,7 +1457,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               // instruction; apply it to this launch as well (#12431).
               systemPromptArgs,
               recipeArgs: terminal.args?.trim() || undefined,
-              presetArgs: preset?.args?.join(" "),
+              presetArgs: preset?.args,
               globalSkipPermissions,
               globalUseAltScreen,
             });

@@ -724,8 +724,11 @@ export interface GenerateAgentCommandOptions {
   systemPromptArgs?: readonly string[];
   /** Additional CLI arguments from recipe terminal (whitespace-separated string) */
   recipeArgs?: string;
-  /** Additional CLI arguments from agent preset (whitespace-separated string) */
-  presetArgs?: string;
+  /**
+   * The agent preset's argv elements. Each element is one argument, quoted
+   * whole like the persisted launch flags, so first launch and resume agree.
+   */
+  presetArgs?: readonly string[];
   /** Global skip-permissions override (#10432); forwarded to {@link generateAgentFlags}. */
   globalSkipPermissions?: boolean;
   /**
@@ -836,14 +839,8 @@ export function generateAgentCommand(
   }
 
   // Add preset-level args (env overrides applied separately via spawn env)
-  if (options?.presetArgs) {
-    for (const token of options.presetArgs.trim().split(/\s+/).filter(Boolean)) {
-      if (isSafeShellOption(token)) {
-        parts.push(token);
-      } else {
-        parts.push(quoteAgentArg(token));
-      }
-    }
+  for (const arg of options?.presetArgs ?? []) {
+    parts.push(isSafeShellOption(arg) ? arg : quoteAgentArg(arg));
   }
 
   // Add recipe-level args (per-terminal overrides from recipe editor)
@@ -869,7 +866,7 @@ export function generateAgentCommand(
   // The caller's standing instruction (#12431) goes after preset, recipe and
   // settings args so it wins over one they carry — the CLI keeps the last. It
   // is one argv token even when it holds spaces, so it is quoted whole rather
-  // than split like the preset/recipe strings above.
+  // than split like the recipe string above.
   for (const arg of options?.systemPromptArgs ?? []) {
     parts.push(isSafeShellOption(arg) ? arg : quoteAgentArg(arg));
   }

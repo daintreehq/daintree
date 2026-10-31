@@ -3066,7 +3066,7 @@ describe("adversarial: behavioral overrides flow through to generateAgentCommand
     expect(entry.customFlags).toBe("--base-flag");
   });
 
-  it("preset.args are joined and passed as presetArgs option", () => {
+  it("preset.args are passed as presetArgs element by element (#15638)", () => {
     getMergedPresetMock.mockReturnValue({
       id: "user-x",
       name: "WithArgs",
@@ -3074,7 +3074,7 @@ describe("adversarial: behavioral overrides flow through to generateAgentCommand
     });
     buildArgsForRespawn(BASE, "agent", "/p", { agents: { claude: {} } }, false, undefined);
     const opts = generateAgentCommandMock.mock.calls[0]![3] as Record<string, unknown>;
-    expect(opts.presetArgs).toBe("--system-prompt be concise");
+    expect(opts.presetArgs).toEqual(["--system-prompt", "be concise"]);
   });
 
   it("no preset → generateAgentCommand receives unmodified base entry", () => {

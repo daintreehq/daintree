@@ -765,7 +765,7 @@ describe("adversarial: behavioral overrides flow to generateAgentCommand in dupl
     expect(entry.dangerousEnabled).toBe(true);
   });
 
-  it("preset.args are joined and passed as presetArgs option", async () => {
+  it("preset.args are passed as presetArgs element by element (#15638)", async () => {
     const spy = await getGenerateAgentCommandSpy();
     const { agentSettingsClient } = await import("@/clients");
     (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -785,7 +785,7 @@ describe("adversarial: behavioral overrides flow to generateAgentCommand in dupl
     await buildPanelDuplicateOptions(panel, "grid");
 
     const opts = spy.mock.calls[0]![3] as Record<string, unknown>;
-    expect(opts.presetArgs).toBe("--verbose --trace");
+    expect(opts.presetArgs).toEqual(["--verbose", "--trace"]);
   });
 
   it("presetArgs is undefined when preset has no args", async () => {

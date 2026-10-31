@@ -168,6 +168,7 @@ export interface AgentPreset {
   name: string;
   description?: string;
   env?: Record<string, string>;
+  /** Argv elements, each one argument as-is: never re-split on whitespace (#15638). */
   args?: string[];
   /** Legacy per-preset bypass override; superseded by `dangerousMode`. */
   dangerousEnabled?: boolean;

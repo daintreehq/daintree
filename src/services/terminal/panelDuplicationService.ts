@@ -133,7 +133,7 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
             clipboardDirectory,
             modelId: panel.agentModelId,
             systemPromptArgs,
-            presetArgs: preset?.args?.join(" "),
+            presetArgs: preset?.args,
             globalSkipPermissions,
             globalUseAltScreen,
             sessionId: agentSessionId,

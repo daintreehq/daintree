@@ -245,7 +245,7 @@ describe("standing instruction through the launch builders", () => {
     const presetPair = ["--append-system-prompt", "preset"];
     const cmd = generateAgentCommand("claude", {}, "claude", {
       systemPromptArgs: claudeArgs,
-      presetArgs: presetPair.join(" "),
+      presetArgs: presetPair,
     });
     expect(cmd.indexOf(quoted)).toBeGreaterThan(cmd.indexOf("preset"));
 

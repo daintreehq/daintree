@@ -1765,7 +1765,7 @@ describe("restartTerminal keeps the launch's standing instruction", () => {
       expect.any(String),
       expect.anything(),
       "claude",
-      expect.objectContaining({ systemPromptArgs: pair, presetArgs: "--provider amber" })
+      expect.objectContaining({ systemPromptArgs: pair, presetArgs: ["--provider", "amber"] })
     );
     expect(mockSpawn.mock.calls[0]![0].agentLaunchFlags).toEqual(["--rebuilt", ...pair]);
   });
