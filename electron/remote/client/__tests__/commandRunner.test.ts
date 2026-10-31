@@ -63,7 +63,20 @@ async function run(script: string, options: CommandOptions = {}) {
   return { result, elapsed: performance.now() - started };
 }
 
-const stopPaths: Array<{ name: string; options: () => CommandOptions; timedOut: boolean }> = [
+/** Resolves once a script has written its pid file: the sign that it is set up. */
+async function whenRecorded(name: string): Promise<void> {
+  const file = path.join(dir, `${name}.pid`);
+  for (let waited = 0; waited < 10_000; waited += 20) {
+    if ((await fs.readFile(file, "utf8").catch(() => "")).trim()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+const stopPaths: Array<{
+  name: string;
+  options: (ready: string) => CommandOptions;
+  timedOut: boolean;
+}> = [
   { name: "deadline", options: () => ({ timeoutMs: STOP_AT_MS }), timedOut: true },
   {
     name: "collectForMs",
@@ -72,7 +85,12 @@ const stopPaths: Array<{ name: string; options: () => CommandOptions; timedOut: 
   },
   {
     name: "abort",
-    options: () => ({ signal: AbortSignal.timeout(STOP_AT_MS), timeoutMs: 60_000 }),
+    // Cancelled once the script is set up, however long that took.
+    options: (ready) => {
+      const controller = new AbortController();
+      void whenRecorded(ready).then(() => controller.abort());
+      return { signal: controller.signal, timeoutMs: 60_000 };
+    },
     timedOut: false,
   },
 ];
@@ -83,8 +101,8 @@ describe.skipIf(process.platform === "win32")("defaultCommandRunner settlement",
       // `sh` dies on SIGTERM, but the background sleep keeps its stdout and
       // stderr pipes open, the way an ssh ControlMaster does for a mux client.
       const { result, elapsed } = await run(
-        `sleep 30 & echo $! > "$PIDS/holder.pid"; echo out; echo err >&2; wait`,
-        options()
+        `sleep 30 & holder=$!; echo out; echo err >&2; echo $holder > "$PIDS/holder.pid"; wait`,
+        options("holder")
       );
       expect(isAlive(await recordedPid("holder"))).toBe(true);
       expect(result).toEqual({
@@ -100,8 +118,8 @@ describe.skipIf(process.platform === "win32")("defaultCommandRunner settlement",
     it("kills a program that ignores SIGTERM once the grace is up", async () => {
       // "ready" is only printed once SIGTERM is ignored.
       const { result, elapsed } = await run(
-        `trap "" TERM; echo $$ > "$PIDS/child.pid"; echo ready; exec sleep 30`,
-        options()
+        `trap "" TERM; echo ready; echo $$ > "$PIDS/child.pid"; exec sleep 30`,
+        options("child")
       );
       expect(result).toMatchObject({ code: null, stdout: "ready\n", spawnError: null, timedOut });
       expect(elapsed).toBeLessThan(STOP_AT_MS + COMMAND_STOP_GRACE_MS + SLACK_MS);
