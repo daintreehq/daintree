@@ -332,6 +332,28 @@ describe("QuickRun", () => {
     expect(lit()).toBe(rows[0]);
   });
 
+  it("leaves Enter, Tab and Escape to the IME mid-composition, then runs on a plain Enter", async () => {
+    seedHistory("npm test");
+    render(<Footer projectId="test-project" />);
+    const input = openPanel() as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "np" } });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+
+    for (const init of [{ isComposing: true }, { keyCode: 229 }]) {
+      for (const key of ["Enter", "Tab", "Escape"]) {
+        expect(fireEvent.keyDown(input, { key, ...init })).toBe(true);
+      }
+    }
+    expect(mockAddTerminal).not.toHaveBeenCalled();
+    expect(input.value).toBe("np");
+    expect(input.getAttribute("aria-expanded")).toBe("true");
+
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    expect(mockAddTerminal).toHaveBeenCalledTimes(1);
+  });
+
   it("dismisses suggestions on Escape without leaving the field", () => {
     localStorage.setItem(
       "daintree_cmd_history_test-project",
