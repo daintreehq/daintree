@@ -260,7 +260,9 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
               <span className="flex shrink-0 items-center gap-1.5">
                 {isArmed && armBadge !== undefined && (
                   <span
-                    className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-accent-primary px-1 text-4xs font-mono font-semibold text-accent-primary-foreground tabular-nums"
+                    // Neutral: every armed row carries one, and accent is for the
+                    // single focus anchor, which the primary row's outline marks.
+                    className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-overlay-strong px-1 text-4xs font-mono font-semibold text-text-primary tabular-nums"
                     aria-label={`Armed position ${armBadge}`}
                   >
                     {armBadge}
@@ -593,9 +595,10 @@ export function WorktreeTerminalSection({
      baseline, and "no sessions" and "the sessions row did not render" looked
      the same. The row names the next action rather than the absence.
 
-     The comfortable sidebar card keeps it in a well, where it is also the
-     card's terminator: every card ends on the same row shape, sessions or
-     not. The compact card drops it. Repeated down a 25-card list it was a
+     The comfortable sidebar card keeps it as a plain row in the sessions
+     slot, so the action stays where sessions would be; no well, since a box
+     around nothing gave an idle card the same footer shape as a busy one.
+     The compact card drops it. Repeated down a 25-card list it was a
      30px box on every idle card, the largest single share of the list's
      height. Starting a session stays one step away in the card's menus. */
   if (!showMetaFooter) {
@@ -604,15 +607,17 @@ export function WorktreeTerminalSection({
     return (
       <div
         id={terminalsId}
-        // The grid has no well: with no sessions there is nothing to contain.
-        className={isSidebar ? density.well : "mt-1.5"}
+        // No well: with no sessions there is nothing to contain. The sidebar
+        // keeps the well's 1px border, transparent, so the + lands on the same
+        // x as the Details chevron above it.
+        className={isSidebar ? "mt-1 border border-transparent" : "mt-1.5"}
       >
         <button
           type="button"
           onClick={onStartSession}
           className={cn(
             density.row,
-            "gap-1.5 text-2xs text-text-secondary transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
+            "min-h-6 gap-1.5 text-2xs text-text-secondary transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
           )}
         >
           <Plus className="h-3 w-3 shrink-0" aria-hidden="true" />
@@ -624,14 +629,14 @@ export function WorktreeTerminalSection({
 
   if (inline && !isExpanded) {
     return (
-      <div id={terminalsId} className="mt-1 shrink-0">
+      <div id={terminalsId} className="mt-1 shrink-0 border border-transparent">
         <button
           onClick={onToggle}
           aria-expanded={false}
           aria-controls={terminalsPanelId}
           aria-label={collapsedTriggerLabel}
           className={cn(
-            "worktree-section-button flex items-center gap-1.5 text-left text-xs text-text-secondary transition-colors",
+            "worktree-section-button flex min-h-6 items-center gap-1.5 text-left text-xs text-text-secondary transition-colors",
             density.rowBox,
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
           )}
@@ -643,7 +648,18 @@ export function WorktreeTerminalSection({
           ) : (
             <SquareTerminal className="w-3 h-3" />
           )}
-          <span className="font-mono tabular-nums">{counts.total}</span>
+          {/* One session's count is already beside its state glyph on the
+              title row, so beside the Details row the trigger names it only
+              past one. Stacked on its own row below 20rem it keeps the count,
+              or it would be a chevron and an icon with nothing to say. */}
+          <span
+            className={cn(
+              "font-mono tabular-nums",
+              stateGlyphsElsewhere && counts.total === 1 && "@xs/card:hidden"
+            )}
+          >
+            {counts.total}
+          </span>
         </button>
       </div>
     );

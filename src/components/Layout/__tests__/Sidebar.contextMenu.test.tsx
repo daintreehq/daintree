@@ -58,6 +58,23 @@ vi.mock("@/components/ui/context-menu", async (importOriginal) => ({
     <div data-testid="context-menu-content">{children}</div>
   ),
   ContextMenuSeparator: () => <hr data-testid="menu-separator" />,
+  ContextMenuSub: ({ children }: { children: ReactNode }) => (
+    <div data-testid="menu-sub">{children}</div>
+  ),
+  ContextMenuSubTrigger: ({ children }: { children: ReactNode }) => (
+    <div data-testid="menu-sub-trigger">{children}</div>
+  ),
+  ContextMenuSubContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  ContextMenuRadioGroup: ({ value, children }: { value: string; children: ReactNode }) => (
+    <div role="group" data-value={value}>
+      {children}
+    </div>
+  ),
+  ContextMenuRadioItem: ({ value, children }: { value: string; children: ReactNode }) => (
+    <div role="menuitemradio" data-value={value}>
+      {children}
+    </div>
+  ),
   ContextMenuActionItem: ({
     actionId,
     args,
@@ -74,6 +91,7 @@ vi.mock("@/components/ui/context-menu", async (importOriginal) => ({
 }));
 
 const { Sidebar } = await import("../Sidebar");
+const { useWorktreeFilterStore } = await import("@/store/worktreeFilterStore");
 
 const GIT_PROJECT: WorkspaceRoot = {
   kind: "project",
@@ -139,11 +157,26 @@ describe("Sidebar background context menu — workspace kind (#11499)", () => {
     ]);
   });
 
+  it("offers the card density under View for a git-backed project, set to the stored value", () => {
+    workspaceRoot.mockReturnValue(GIT_PROJECT);
+
+    renderSidebar();
+
+    expect(screen.getByTestId("menu-sub-trigger").textContent).toContain("View");
+    expect(screen.getAllByRole("menuitemradio").map((el) => el.getAttribute("data-value"))).toEqual(
+      ["comfortable", "compact"]
+    );
+    expect(screen.getByRole("group").getAttribute("data-value")).toBe(
+      useWorktreeFilterStore.getState().cardDensity
+    );
+  });
+
   it("drops every worktree entry in a scratch", () => {
     workspaceRoot.mockReturnValue(SCRATCH);
 
     renderSidebar();
     const ids = renderedActionIds();
+    expect(screen.queryByTestId("menu-sub-trigger")).toBeNull();
 
     expect(ids).not.toContain("worktree.createDialog.open");
     expect(ids).not.toContain("worktree.refresh");

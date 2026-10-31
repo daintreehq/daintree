@@ -949,9 +949,20 @@ describe("WorktreeHeader collapsed alarm pill", () => {
     expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
   });
 
-  it("renders on an expanded sidebar card too, in the title row's attention column", () => {
+  it("leaves a failed CI to the PR badge on an expanded sidebar card, rather than saying it twice", () => {
     renderHeader({
       isCollapsed: false,
+      worktree: { ...baseWorktree, ...ciFailureLinked(101) },
+    });
+    expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
+    expect(screen.getByText("#101")).toBeTruthy();
+  });
+
+  it("raises a failed CI on an expanded main card, whose stack has no PR line", () => {
+    renderHeader({
+      isCollapsed: false,
+      isMainWorktree: true,
+      isMainOnStandardBranch: true,
       worktree: { ...baseWorktree, ...ciFailureLinked(101) },
     });
     expect(screen.getByTestId("collapsed-alarm-pill").getAttribute("data-alarm-kind")).toBe(

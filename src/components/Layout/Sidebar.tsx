@@ -8,18 +8,11 @@ import {
   ContextMenu,
   ContextMenuActionItem,
   ContextMenuContent,
-  ContextMenuRadioGroup,
-  ContextMenuRadioItem,
   ContextMenuSeparator,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { FolderGit2, FolderOpen, GitBranchPlus, RefreshCw, Ruler, Settings } from "lucide-react";
-import { Rows3 } from "@/components/icons";
-import { CARD_DENSITY_OPTIONS } from "@/components/Worktree/cardDensityOptions";
-import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
+import { WorktreeDensitySubmenu } from "@/components/Worktree/WorktreeDensitySubmenu";
 import { ResizeHandle } from "@/components/ui/ResizeHandle";
 import { useSplitterKeys } from "@/hooks/useSplitterKeys";
 
@@ -223,7 +216,7 @@ export function Sidebar({
               <RefreshCw className={ICON_CLASS} />
               Refresh sidebar
             </ContextMenuActionItem>
-            <WorktreeDensitySubmenu />
+            <WorktreeDensitySubmenu iconClassName={ICON_CLASS} />
             <ContextMenuSeparator />
           </>
         )}
@@ -254,37 +247,5 @@ export function Sidebar({
         )}
       </ContextMenuContent>
     </ContextMenu>
-  );
-}
-
-/**
- * View ▸ Comfortable / Compact. The same choice as Settings → Worktree, read
- * from the same store, so the radio and the settings segment always agree.
- */
-function WorktreeDensitySubmenu() {
-  const density = useWorktreeFilterStore((s) => s.cardDensity);
-  const setDensity = useWorktreeFilterStore((s) => s.setCardDensity);
-  return (
-    <ContextMenuSub>
-      <ContextMenuSubTrigger>
-        <Rows3 className={ICON_CLASS} aria-hidden="true" />
-        View
-      </ContextMenuSubTrigger>
-      <ContextMenuSubContent>
-        <ContextMenuRadioGroup
-          value={density}
-          onValueChange={(value) => {
-            const picked = CARD_DENSITY_OPTIONS.find((option) => option.value === value);
-            if (picked) setDensity(picked.value);
-          }}
-        >
-          {CARD_DENSITY_OPTIONS.map((option) => (
-            <ContextMenuRadioItem key={option.value} value={option.value}>
-              {option.label}
-            </ContextMenuRadioItem>
-          ))}
-        </ContextMenuRadioGroup>
-      </ContextMenuSubContent>
-    </ContextMenuSub>
   );
 }

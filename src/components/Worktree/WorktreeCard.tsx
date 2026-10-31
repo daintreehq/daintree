@@ -71,6 +71,7 @@ import { notifyAttachmentFailure } from "./WorktreeCard/notifyAttachmentFailure"
 import { WorktreeHeader } from "./WorktreeCard/WorktreeHeader";
 import { WorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSection";
 import { deriveSetupAlarm } from "./WorktreeCard/setupAlarm";
+import { syncLineHasNews } from "./WorktreeCard/syncLineNews";
 import { WslGitBanner } from "./WorktreeCard/WslGitBanner";
 import type { AggregateCounts } from "./WorktreeCard/aggregateCounts";
 import { useInputReceiptKey } from "./WorktreeCard/hooks/useInputReceiptKey";
@@ -78,6 +79,7 @@ import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
 import { copyWithToast } from "@/lib/copyWithToast";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { WorktreeDensitySubmenu } from "./WorktreeDensitySubmenu";
 import {
   CONTEXT_COMPONENTS,
   WorktreeMenuItems,
@@ -1111,6 +1113,21 @@ export function WorktreeCard({
   };
 
   const lifecycleAlarm = deriveSetupAlarm(worktree, lifecycleLabel, Boolean(isLifecycleRunning));
+  // What the open card's body is already saying, so the title row's marks
+  // don't repeat it. Details' resting row names a conflict unless deleting or
+  // a lifecycle label outranks it there; the setup recovery and approval blocks
+  // sit outside the disclosure, so an open card always shows them.
+  const restingRowShowsLifecycle =
+    Boolean(lifecycleLabel) &&
+    (Boolean(isLifecycleRunning) || worktree.lifecycleStatus?.state !== "success");
+  const gitStateShownInBody =
+    !effectiveIsCollapsed &&
+    !isExpanded &&
+    gitStateIndicator?.kind === "conflicted" &&
+    reviewState === "conflicted" &&
+    !isBeingDeleted &&
+    !restingRowShowsLifecycle;
+  const lifecycleAlarmShownInBody = !effectiveIsCollapsed;
   // On the compact card Details and Sessions share one footer row while both
   // are closed: two disclosures that each used a full row to say one line.
   const isSessionsFooterInline =
@@ -1610,6 +1627,8 @@ export function WorktreeCard({
                   }}
                   gitStateIndicator={gitStateIndicator}
                   lifecycleAlarm={lifecycleAlarm}
+                  gitStateShownInBody={gitStateShownInBody}
+                  lifecycleAlarmShownInBody={lifecycleAlarmShownInBody}
                   quietGit={quietGit}
                   menu={menuActions}
                 />
@@ -1705,7 +1724,10 @@ export function WorktreeCard({
                         onResourceTeardown={hasTeardownCommand ? handleResourceTeardown : undefined}
                         onResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
                         syncDetail={
-                          isCompactCard && !quietGit && !isMainWorktree ? (
+                          variant === "sidebar" &&
+                          !quietGit &&
+                          !isMainWorktree &&
+                          (isCompactCard || !syncLineHasNews(worktree)) ? (
                             <QuietGitDetails
                               worktree={worktree}
                               branchLabel={branchLabel}
@@ -1782,6 +1804,11 @@ export function WorktreeCard({
           components={CONTEXT_COMPONENTS}
           isPinned={isPinned}
           {...menuActions}
+          viewSubmenu={
+            variant === "sidebar" ? (
+              <WorktreeDensitySubmenu key="view" iconClassName="mr-2 h-3.5 w-3.5 shrink-0" />
+            ) : undefined
+          }
         />
       </ContextMenuContent>
     </ContextMenu>

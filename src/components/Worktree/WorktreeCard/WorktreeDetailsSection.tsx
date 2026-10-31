@@ -1,6 +1,7 @@
 import type React from "react";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { DiffStat } from "@/components/ui/DiffStat";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { prefetchStagingStatus } from "@/components/Worktree/ReviewHub/stagingStatusCache";
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import type { WorktreeState } from "@/types";
@@ -200,6 +201,20 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   }, [changedFileCount, prefersReducedMotion]);
 
   const isConflicted = reviewState === "conflicted";
+
+  // The resting row's words truncate on whichever inner span holds them, so
+  // the trigger measures on hover or focus and reveals the full text only
+  // when something was cut.
+  const summaryRef = useRef<HTMLSpanElement>(null);
+  const [summaryReveal, setSummaryReveal] = useState<string | null>(null);
+  const measureSummary = () => {
+    const el = summaryRef.current;
+    if (!el) return;
+    const cut = [el, ...el.querySelectorAll<HTMLElement>(".truncate")].some(
+      (node) => node.scrollWidth > node.clientWidth + 1
+    );
+    setSummaryReveal(cut ? el.textContent?.trim() || null : null);
+  };
   // A clean tree with unpushed commits still has a Review Hub next step —
   // push — so the opener stays visible; only the label shifts to match.
   const isUnpushedClean = reviewState === "unpushed-clean" && !hasChanges;
@@ -411,17 +426,30 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   density.rowBox
                 )}
               >
-                <button
-                  type="button"
-                  aria-expanded={false}
-                  aria-controls={detailsPanelId}
-                  id={`${detailsId}-button`}
-                  aria-label="Show details"
-                  className={cn(
-                    "absolute inset-0 cursor-pointer rounded-[var(--radius-lg)]",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
-                  )}
-                />
+                <TruncatedTooltip
+                  content={summaryReveal}
+                  isTruncated={summaryReveal !== null}
+                  side="bottom"
+                  contentClassName="max-w-xs [overflow-wrap:anywhere]"
+                  focusable={false}
+                >
+                  <button
+                    type="button"
+                    aria-expanded={false}
+                    aria-controls={detailsPanelId}
+                    id={`${detailsId}-button`}
+                    onPointerEnter={measureSummary}
+                    onFocus={measureSummary}
+                    aria-label="Show details"
+                    // The row's own words, so the disclosure names what it
+                    // summarises rather than only that it opens.
+                    aria-describedby={`${detailsId}-summary`}
+                    className={cn(
+                      "absolute inset-0 cursor-pointer rounded-[var(--radius-lg)]",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
+                    )}
+                  />
+                </TruncatedTooltip>
                 {/* The closed half of the same disclosure vocabulary the
                     expanded state uses. Flattening removed the well that used
                     to say "this is a thing you open", so without a chevron the
@@ -430,7 +458,11 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   className="pointer-events-none relative z-10 mr-1.5 h-3 w-3 shrink-0 text-text-secondary"
                   aria-hidden="true"
                 />
-                <span className="relative z-10 text-xs truncate min-w-0 flex-1 pointer-events-none">
+                <span
+                  ref={summaryRef}
+                  id={`${detailsId}-summary`}
+                  className="relative z-10 text-xs truncate min-w-0 flex-1 pointer-events-none"
+                >
                   {isBeingDeleted && !deleteError ? (
                     <span
                       className="flex items-center gap-1.5 text-text-secondary"
@@ -496,17 +528,31 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       )}
                     </span>
                   ) : (
-                    <span className={cn(reviewChangeLine && "flex items-center gap-1.5")}>
-                      <span
-                        className={cn(
-                          reviewChangeLine && "truncate",
-                          computedSubtitle.tone === "warning" && "text-status-warning",
-                          computedSubtitle.tone === "info" && "text-status-info",
-                          computedSubtitle.tone === "muted" && "text-text-muted"
-                        )}
-                      >
-                        {computedSubtitle.text}
-                      </span>
+                    // Secondary words whatever the tone, with the hue on a
+                    // severity glyph: status hues and text-muted both miss
+                    // 4.5:1 as text on several themes.
+                    <span
+                      className={cn(
+                        "text-text-secondary",
+                        (reviewChangeLine ||
+                          computedSubtitle.tone === "warning" ||
+                          computedSubtitle.tone === "info") &&
+                          "flex items-center gap-1.5"
+                      )}
+                    >
+                      {computedSubtitle.tone === "warning" && (
+                        <SEVERITY_GLYPH.warning
+                          className="w-3 h-3 shrink-0 text-status-warning"
+                          aria-hidden="true"
+                        />
+                      )}
+                      {computedSubtitle.tone === "info" && (
+                        <SEVERITY_GLYPH.info
+                          className="w-3 h-3 shrink-0 text-status-info"
+                          aria-hidden="true"
+                        />
+                      )}
+                      <span className="truncate">{computedSubtitle.text}</span>
                       {reviewChangeLine && (
                         <span className="truncate text-text-secondary">· {reviewChangeLine}</span>
                       )}
@@ -622,6 +668,46 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                     </span>
                   )}
 
+                {/* Before the age, so every card's age ends on the same right
+                    edge whether or not it has something to review. */}
+                {showReviewHubButton && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={(event) => {
+                          // Inside the resting row, whose own click opens Details.
+                          event.stopPropagation();
+                          onOpenReviewHub?.();
+                        }}
+                        onPointerEnter={() => void prefetchStagingStatus(worktree.path)}
+                        className={cn(
+                          // Neutral, like the row's other controls: in the
+                          // working hue it read as one more status mark, green
+                          // beside a merge conflict.
+                          "relative z-10 shrink-0 transition-colors",
+                          "text-text-secondary hover:bg-overlay-soft hover:text-text-primary",
+                          // Both variants: a trailing icon button in the same
+                          // row. The fenced right segment the grid used to draw
+                          // — a left border plus a right-rounded cap — made one
+                          // summary read as a split pill whose second half was
+                          // an unlabelled glyph nobody could name.
+                          //
+                          // `min-h-6 min-w-6` is the 24px target floor
+                          // (WCAG 2.2 SC 2.5.8): a 14px glyph in `px-1.5 py-1`
+                          // is 26x22, which fails on the short axis.
+                          // -my-1 lets the 24px target overlap the row's own padding, so
+                          // a card with something to review is no taller than one without.
+                          "-my-1 mr-0.5 flex min-h-6 min-w-6 items-center justify-center rounded-[var(--radius-md)] px-1.5",
+                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
+                        )}
+                        aria-label={`Open ${reviewHubButtonLabel}`}
+                      >
+                        <GitCommitHorizontal className="w-3.5 h-3.5" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">{reviewHubButtonLabel}</TooltipContent>
+                  </Tooltip>
+                )}
                 {quietGitDetail === undefined && (
                   <WorktreeActivityChip
                     lastCommitTimestampMs={worktree.worktreeChanges?.lastCommitTimestampMs}
@@ -634,76 +720,55 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   />
                 )}
               </div>
-
-              {showReviewHubButton && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      onClick={onOpenReviewHub}
-                      onPointerEnter={() => void prefetchStagingStatus(worktree.path)}
-                      className={cn(
-                        "shrink-0 transition-colors",
-                        "text-[var(--color-state-active)] hover:bg-[var(--color-state-active)]/10",
-                        // Both variants: a trailing icon button in the same
-                        // row. The fenced right segment the grid used to draw
-                        // — a left border plus a right-rounded cap — made one
-                        // summary read as a split pill whose second half was
-                        // an unlabelled glyph nobody could name.
-                        //
-                        // `min-h-6 min-w-6` is the 24px target floor
-                        // (WCAG 2.2 SC 2.5.8): a 14px glyph in `px-1.5 py-1`
-                        // is 26x22, which fails on the short axis.
-                        "ml-0.5 flex min-h-6 min-w-6 items-center justify-center rounded-[var(--radius-md)] px-1.5",
-                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
-                      )}
-                      aria-label={`Open ${reviewHubButtonLabel}`}
-                    >
-                      <GitCommitHorizontal className="w-3.5 h-3.5" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">{reviewHubButtonLabel}</TooltipContent>
-                </Tooltip>
-              )}
             </div>
+          </div>
+        )}
 
-            {lifecycleFailed && (
-              <div
-                className={cn(
-                  // No rule above it in either variant: this block follows
-                  // the collapsed summary row on the card's own surface, and
-                  // a full-width hairline there reads as another section
-                  // boundary rather than as this row's own continuation.
-                  "flex flex-col gap-2 py-1",
-                  isSidebar ? "mt-1" : "mt-1 pl-1.5 pr-2.5"
-                )}
+        {lifecycleFailed && (
+          <div
+            className={cn(
+              // No rule above it in either variant: this block follows
+              // the summary row on the card's own surface, and a full-width
+              // hairline there reads as another section boundary rather than
+              // as this row's own continuation.
+              "flex flex-col gap-2 py-1",
+              // Outside the Details disclosure, like the approval block below:
+              // opening Details to look into a failed setup must not take
+              // away the way to re-run it.
+              isExpanded
+                ? isSidebar
+                  ? "px-2.5"
+                  : "px-3"
+                : isSidebar
+                  ? "mt-1"
+                  : "mt-1 pl-1.5 pr-2.5"
+            )}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="min-w-0 text-xs text-text-secondary">
+                Setup didn't finish. Re-run when you're ready.
+              </span>
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={handleRetrySetup}
+                loading={isRetryingSetup}
+                className="shrink-0 shadow-none inset-shadow-none"
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="min-w-0 text-xs text-text-secondary">
-                    Setup didn't finish. Re-run when you're ready.
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="xs"
-                    onClick={handleRetrySetup}
-                    loading={isRetryingSetup}
-                    className="shrink-0 shadow-none inset-shadow-none"
-                  >
-                    <RefreshCw aria-hidden="true" />
-                    Retry setup
-                  </Button>
-                </div>
-                {hasLifecycleDetails && (
-                  <details className="text-xs">
-                    <summary className="flex items-center gap-1 rounded-[var(--radius-xs)] text-text-secondary cursor-pointer select-none transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary">
-                      <ChevronDown className="w-3 h-3" aria-hidden="true" />
-                      Show details
-                    </summary>
-                    <pre className="mt-1.5 max-h-32 overflow-auto rounded-[var(--radius-md)] bg-status-error/5 p-2 font-mono text-2xs text-text-secondary whitespace-pre-wrap break-all select-text">
-                      {[lifecycleError, lifecycleOutput].filter(Boolean).join("\n\n")}
-                    </pre>
-                  </details>
-                )}
-              </div>
+                <RefreshCw aria-hidden="true" />
+                Retry setup
+              </Button>
+            </div>
+            {hasLifecycleDetails && (
+              <details className="text-xs">
+                <summary className="flex items-center gap-1 rounded-[var(--radius-xs)] text-text-secondary cursor-pointer select-none transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary">
+                  <ChevronDown className="w-3 h-3" aria-hidden="true" />
+                  Show details
+                </summary>
+                <pre className="mt-1.5 max-h-32 overflow-auto rounded-[var(--radius-md)] bg-status-error/5 p-2 font-mono text-2xs text-text-secondary whitespace-pre-wrap break-all select-text">
+                  {[lifecycleError, lifecycleOutput].filter(Boolean).join("\n\n")}
+                </pre>
+              </details>
             )}
           </div>
         )}
