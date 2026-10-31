@@ -283,7 +283,7 @@ const GAP_CASES: ReadonlyArray<{
   {
     name: "a JSX element",
     language: "tsx",
-    head: ["return (", "  <div className=\"x\">"],
+    head: ["return (", '  <div className="x">'],
     tail: ["  </div>", ");"],
   },
   {

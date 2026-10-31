@@ -1456,7 +1456,9 @@ export const diffTokenizeScenarios: PerfScenario[] = [
           kinds.delete !== 5 ||
           kinds.insert !== 5
         ) {
-          throw new Error(`PERF-165: fixture at line ${atLine} is not one 3/5/5 hunk starting there`);
+          throw new Error(
+            `PERF-165: fixture at line ${atLine} is not one 3/5/5 hunk starting there`
+          );
         }
       }
 
