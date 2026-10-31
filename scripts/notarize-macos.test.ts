@@ -52,6 +52,9 @@ function mockOs() {
 
 const BUNDLE_CDHASH = "887831fb4cf162bf70182271b4b571a62ff7d7da";
 const REBUILT_CDHASH = "0b1d2c3e4f5061728394a5b6c7d8e9f001122334";
+const X64_CDHASH = "5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7081";
+const BUNDLE_ID = `arm64=${BUNDLE_CDHASH}`;
+const APP_PATH = "/build/mac-arm64/Daintree.app";
 
 function codesignDisplay(cdhash: string) {
   return {
@@ -67,6 +70,18 @@ function codesignDisplay(cdhash: string) {
       "",
     ].join("\n"),
   };
+}
+
+function stateWrites(): any[] {
+  return mockWriteFileSync.mock.calls
+    .filter((c: any[]) => c[0].endsWith(".tmp"))
+    .map((c: any[]) => JSON.parse(c[1]));
+}
+
+function execOrder(): string[] {
+  return mockExecFileSync.mock.calls.map((c: any[]) =>
+    c[0] === "ditto" ? "ditto" : c[1].slice(0, 3).join(" ")
+  );
 }
 
 function setAppleCredentials() {
@@ -123,6 +138,7 @@ describe("notarize-macos", () => {
     setPlatform("linux");
     await afterSign(createContext());
     expect(mockExecFileSync).not.toHaveBeenCalled();
+    expect(mockSpawnSync).not.toHaveBeenCalled();
   });
 
   it("should return early when DAINTREE_SKIP_NOTARIZATION is set", async () => {
@@ -130,6 +146,7 @@ describe("notarize-macos", () => {
     mockExistsSync.mockReturnValue(true);
     await afterSign(createContext());
     expect(mockExecFileSync).not.toHaveBeenCalled();
+    expect(mockSpawnSync).not.toHaveBeenCalled();
   });
 
   it("should skip when credentials are missing", async () => {
@@ -137,6 +154,7 @@ describe("notarize-macos", () => {
     mockExistsSync.mockReturnValue(true);
     await afterSign(createContext());
     expect(mockExecFileSync).not.toHaveBeenCalled();
+    expect(mockSpawnSync).not.toHaveBeenCalled();
   });
 
   it("should throw when .app bundle is missing", async () => {
@@ -190,6 +208,17 @@ describe("notarize-macos", () => {
         recursive: true,
         force: true,
       });
+
+      expect(mockSpawnSync).toHaveBeenCalledWith(
+        "codesign",
+        ["-dvvv", "--arch", "arm64", APP_PATH],
+        expect.anything()
+      );
+      expect(stateWrites().map((w) => [w["3"].status, w["3"].cdhash])).toEqual([
+        ["submitted", BUNDLE_ID],
+        ["accepted", BUNDLE_ID],
+        ["stapled", BUNDLE_ID],
+      ]);
     });
 
     it("should submit the zip, not the .app", async () => {
@@ -267,15 +296,17 @@ describe("notarize-macos", () => {
         throw err;
       });
 
-      await expect(afterSign(createContext())).rejects.toThrow(
-        /Notarization wait timed out.*sub-789/
-      );
+      const rejection = afterSign(createContext());
+      await expect(rejection).rejects.toThrow(/Notarization wait timed out.*sub-789/);
+      await expect(rejection).rejects.toThrow(/xcrun notarytool info sub-789/);
+      await expect(rejection).rejects.toThrow(/fresh CI runner rebuilds and submits again/);
+      await expect(rejection).rejects.not.toThrow(/Re-run the workflow to reattach/);
 
-      // State was persisted with submission ID before the wait
-      const tmpWrites = mockWriteFileSync.mock.calls.filter((c: any[]) => c[0].endsWith(".tmp"));
-      const lastWrite = JSON.parse(tmpWrites[tmpWrites.length - 1][1]);
+      // State was persisted with submission ID and bundle identity before the wait
+      const lastWrite = stateWrites().at(-1);
       expect(lastWrite["3"].submissionId).toBe("sub-789");
       expect(lastWrite["3"].status).toBe("submitted");
+      expect(lastWrite["3"].cdhash).toBe(BUNDLE_ID);
     });
 
     it("should throw when notarization is rejected", async () => {
@@ -311,10 +342,10 @@ describe("notarize-macos", () => {
           mockExecFileSync.mock.calls.filter((c: any[]) => c[1].includes("stapler")).length
         ).toBeGreaterThan(1);
 
-        // State should be left as "accepted" so recovery can staple-only
-        const tmpWrites = mockWriteFileSync.mock.calls.filter((c: any[]) => c[0].endsWith(".tmp"));
-        const lastWrite = JSON.parse(tmpWrites[tmpWrites.length - 1][1]);
+        // State should be left as "accepted" so a run with the same bundle can staple-only
+        const lastWrite = stateWrites().at(-1);
         expect(lastWrite["3"].status).toBe("accepted");
+        expect(lastWrite["3"].cdhash).toBe(BUNDLE_ID);
       } finally {
         vi.useRealTimers();
       }
@@ -363,7 +394,7 @@ describe("notarize-macos", () => {
           "3": {
             submissionId: "sub-existing",
             status: "submitted",
-            cdhash: BUNDLE_CDHASH,
+            cdhash: BUNDLE_ID,
             timestamp: "2026-01-01",
           },
         })
@@ -380,6 +411,10 @@ describe("notarize-macos", () => {
       expect(mockExecFileSync.mock.calls[1][1]).toContain("staple");
       expect(mockExecFileSync.mock.calls.flat().join(" ")).not.toContain("submit");
       expect(mockExecFileSync.mock.calls.flat().join(" ")).not.toContain("ditto");
+      expect(stateWrites().map((w) => [w["3"].status, w["3"].cdhash])).toEqual([
+        ["accepted", BUNDLE_ID],
+        ["stapled", BUNDLE_ID],
+      ]);
     });
 
     it("should throw on reattach timeout with submission ID", async () => {
@@ -388,7 +423,7 @@ describe("notarize-macos", () => {
           "3": {
             submissionId: "sub-existing",
             status: "submitted",
-            cdhash: BUNDLE_CDHASH,
+            cdhash: BUNDLE_ID,
             timestamp: "2026-01-01",
           },
         })
@@ -400,9 +435,10 @@ describe("notarize-macos", () => {
         throw err;
       });
 
-      await expect(afterSign(createContext())).rejects.toThrow(
-        /Notarization wait timed out.*sub-existing/
-      );
+      const rejection = afterSign(createContext());
+      await expect(rejection).rejects.toThrow(/Notarization wait timed out.*sub-existing/);
+      await expect(rejection).rejects.toThrow(/xcrun notarytool info sub-existing/);
+      await expect(rejection).rejects.toThrow(/fresh CI runner rebuilds and submits again/);
     });
   });
 
@@ -417,7 +453,7 @@ describe("notarize-macos", () => {
           "3": {
             submissionId: "sub-accepted",
             status: "accepted",
-            cdhash: BUNDLE_CDHASH,
+            cdhash: BUNDLE_ID,
             timestamp: "2026-01-01",
           },
         })
@@ -430,6 +466,9 @@ describe("notarize-macos", () => {
       const stapleCall = mockExecFileSync.mock.calls[0];
       expect(stapleCall[1]).toContain("stapler");
       expect(stapleCall[1]).toContain("staple");
+      expect(stateWrites().map((w) => [w["3"].status, w["3"].cdhash])).toEqual([
+        ["stapled", BUNDLE_ID],
+      ]);
     });
 
     it("should throw when staple fails in recovery", async () => {
@@ -438,7 +477,7 @@ describe("notarize-macos", () => {
           "3": {
             submissionId: "sub-accepted",
             status: "accepted",
-            cdhash: BUNDLE_CDHASH,
+            cdhash: BUNDLE_ID,
             timestamp: "2026-01-01",
           },
         })
@@ -475,15 +514,101 @@ describe("notarize-macos", () => {
       mockSpawnSync.mockReturnValue(codesignDisplay(REBUILT_CDHASH));
     });
 
-    it("submits fresh instead of stapling an accepted submission for another bundle", async () => {
+    it.each(["accepted", "submitted"])(
+      "submits fresh instead of resuming a %s submission for another bundle",
+      async (status) => {
+        mockReadFileSync.mockReturnValue(
+          JSON.stringify({
+            "3": { submissionId: "sub-old", status, cdhash: BUNDLE_ID, timestamp: "2026-01-01" },
+          })
+        );
+        mockExecFileSync
+          .mockReturnValueOnce("") // ditto
+          .mockReturnValueOnce(JSON.stringify({ id: "sub-new", status: "In Progress" }))
+          .mockReturnValueOnce(JSON.stringify({ id: "sub-new", status: "Accepted" }))
+          .mockReturnValueOnce("stapled");
+
+        await afterSign(createContext());
+
+        expect(execOrder()).toEqual([
+          "ditto",
+          "notarytool submit /tmp/daintree-notarize-xxxx/Daintree.zip",
+          "notarytool wait sub-new",
+          "stapler staple /build/mac-arm64/Daintree.app",
+        ]);
+        expect(mockExecFileSync.mock.calls.flat().join(" ")).not.toContain("sub-old");
+        expect(consoleLogSpy).toHaveBeenCalledWith(expect.stringMatching(/Not resuming.*sub-old/));
+        expect(
+          stateWrites().map((w) => [w["3"].submissionId, w["3"].status, w["3"].cdhash])
+        ).toEqual([
+          ["sub-new", "submitted", `arm64=${REBUILT_CDHASH}`],
+          ["sub-new", "accepted", `arm64=${REBUILT_CDHASH}`],
+          ["sub-new", "stapled", `arm64=${REBUILT_CDHASH}`],
+        ]);
+      }
+    );
+  });
+
+  describe("legacy and malformed state entries", () => {
+    beforeEach(() => {
+      mockExistsSync.mockReturnValue(true);
+      mockExecFileSync
+        .mockReturnValueOnce("") // ditto
+        .mockReturnValueOnce(JSON.stringify({ id: "sub-fresh", status: "In Progress" }))
+        .mockReturnValueOnce(JSON.stringify({ id: "sub-fresh", status: "Accepted" }))
+        .mockReturnValueOnce("stapled");
+    });
+
+    it.each(["accepted", "submitted"])(
+      "submits fresh for a %s entry with no recorded bundle identity",
+      async (status) => {
+        mockReadFileSync.mockReturnValue(
+          JSON.stringify({ "3": { submissionId: "sub-legacy", status, timestamp: "2026-01-01" } })
+        );
+
+        await afterSign(createContext());
+
+        expect(execOrder()[0]).toBe("ditto");
+        expect(execOrder()[1]).toMatch(/^notarytool submit/);
+        expect(mockExecFileSync.mock.calls.flat().join(" ")).not.toContain("sub-legacy");
+        expect(consoleLogSpy).toHaveBeenCalledWith(
+          expect.stringMatching(/Not resuming.*sub-legacy.*CDHash none/)
+        );
+      }
+    );
+
+    it("submits fresh when the entry's submission ID is not a string", async () => {
+      mockReadFileSync.mockReturnValue(
+        JSON.stringify({ "3": { submissionId: 42, status: "accepted", cdhash: BUNDLE_ID } })
+      );
+
+      await afterSign(createContext());
+
+      expect(execOrder()[1]).toMatch(/^notarytool submit/);
+    });
+
+    it.each(["[]", "5", '"state"', "null", "true"])(
+      "warns and submits fresh when the state file holds %s",
+      async (raw) => {
+        mockReadFileSync.mockReturnValue(raw);
+
+        await afterSign(createContext());
+
+        expect(consoleWarnSpy).toHaveBeenCalledWith(
+          "[notarize-macos] Notarization state file is not an object — starting fresh"
+        );
+        expect(execOrder()[1]).toMatch(/^notarytool submit/);
+        expect(stateWrites()[0]).toEqual({ "3": expect.objectContaining({ status: "submitted" }) });
+      }
+    );
+  });
+
+  describe("unreadable bundle identity", () => {
+    beforeEach(() => {
+      mockExistsSync.mockReturnValue(true);
       mockReadFileSync.mockReturnValue(
         JSON.stringify({
-          "3": {
-            submissionId: "sub-old",
-            status: "accepted",
-            cdhash: BUNDLE_CDHASH,
-            timestamp: "2026-01-01",
-          },
+          "3": { submissionId: "sub-old", status: "accepted", cdhash: BUNDLE_ID },
         })
       );
       mockExecFileSync
@@ -491,14 +616,90 @@ describe("notarize-macos", () => {
         .mockReturnValueOnce(JSON.stringify({ id: "sub-new", status: "In Progress" }))
         .mockReturnValueOnce(JSON.stringify({ id: "sub-new", status: "Accepted" }))
         .mockReturnValueOnce("stapled");
+    });
+
+    it.each([
+      [
+        "codesign exits non-zero",
+        { status: 1, stdout: "", stderr: "code object is not signed at all" },
+      ],
+      ["codesign cannot spawn", { status: null, error: new Error("spawn codesign ENOENT") }],
+      ["no CDHash line", { status: 0, stdout: "", stderr: "Identifier=org.daintree.app\n" }],
+    ])("submits fresh without resuming when %s", async (_label, result) => {
+      mockSpawnSync.mockReturnValue(result);
 
       await afterSign(createContext());
 
-      expect(mockExecFileSync).toHaveBeenCalledTimes(4);
-      expect(mockExecFileSync.mock.calls[0][0]).toBe("ditto");
-      expect(mockExecFileSync.mock.calls[1][1]).toContain("submit");
-      expect(mockExecFileSync.mock.calls[2][1]).toContain("sub-new");
+      expect(execOrder()[0]).toBe("ditto");
       expect(mockExecFileSync.mock.calls.flat().join(" ")).not.toContain("sub-old");
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Could not read the code signature")
+      );
+      expect(stateWrites().map((w) => w["3"].cdhash)).toEqual([null, null, null]);
+    });
+  });
+
+  describe("universal bundle", () => {
+    const UNIVERSAL_ID = `arm64=${BUNDLE_CDHASH},x86_64=${X64_CDHASH}`;
+
+    beforeEach(() => {
+      mockExistsSync.mockReturnValue(true);
+      mockReadFileSync.mockReturnValue(
+        JSON.stringify({
+          "4": { submissionId: "sub-universal", status: "accepted", cdhash: UNIVERSAL_ID },
+        })
+      );
+    });
+
+    it("reads every slice and resumes when all of them match", async () => {
+      mockSpawnSync.mockImplementation((_cmd: string, args: string[]) =>
+        codesignDisplay(args.includes("x86_64") ? X64_CDHASH : BUNDLE_CDHASH)
+      );
+      mockExecFileSync.mockReturnValueOnce("stapled");
+
+      await afterSign(createContext({ arch: 4 }));
+
+      expect(mockSpawnSync.mock.calls.map((c: any[]) => c[1].slice(0, 3))).toEqual([
+        ["-dvvv", "--arch", "arm64"],
+        ["-dvvv", "--arch", "x86_64"],
+      ]);
+      expect(execOrder()).toEqual(["stapler staple /build/mac-arm64/Daintree.app"]);
+    });
+
+    it("submits fresh when only the x86_64 slice changed", async () => {
+      mockSpawnSync.mockImplementation((_cmd: string, args: string[]) =>
+        codesignDisplay(args.includes("x86_64") ? REBUILT_CDHASH : BUNDLE_CDHASH)
+      );
+      mockExecFileSync
+        .mockReturnValueOnce("") // ditto
+        .mockReturnValueOnce(JSON.stringify({ id: "sub-new", status: "In Progress" }))
+        .mockReturnValueOnce(JSON.stringify({ id: "sub-new", status: "Accepted" }))
+        .mockReturnValueOnce("stapled");
+
+      await afterSign(createContext({ arch: 4 }));
+
+      expect(execOrder()[1]).toMatch(/^notarytool submit/);
+      expect(stateWrites().at(-1)["4"].cdhash).toBe(
+        `arm64=${BUNDLE_CDHASH},x86_64=${REBUILT_CDHASH}`
+      );
+    });
+
+    it("submits fresh when one slice cannot be read", async () => {
+      mockSpawnSync.mockImplementation((_cmd: string, args: string[]) =>
+        args.includes("x86_64")
+          ? { status: 1, stdout: "", stderr: "object file format unrecognized" }
+          : codesignDisplay(BUNDLE_CDHASH)
+      );
+      mockExecFileSync
+        .mockReturnValueOnce("") // ditto
+        .mockReturnValueOnce(JSON.stringify({ id: "sub-new", status: "In Progress" }))
+        .mockReturnValueOnce(JSON.stringify({ id: "sub-new", status: "Accepted" }))
+        .mockReturnValueOnce("stapled");
+
+      await afterSign(createContext({ arch: 4 }));
+
+      expect(execOrder()[1]).toMatch(/^notarytool submit/);
+      expect(stateWrites().at(-1)["4"].cdhash).toBeNull();
     });
   });
 
@@ -546,7 +747,12 @@ describe("notarize-macos", () => {
     it("should not reattach when state has different arch", async () => {
       mockReadFileSync.mockReturnValue(
         JSON.stringify({
-          "1": { submissionId: "sub-x64", status: "submitted", timestamp: "2026-01-01" },
+          "1": {
+            submissionId: "sub-x64",
+            status: "submitted",
+            cdhash: `x86_64=${X64_CDHASH}`,
+            timestamp: "2026-01-01",
+          },
         })
       );
       mockExecFileSync
@@ -559,6 +765,9 @@ describe("notarize-macos", () => {
 
       // Should submit (not wait), because arch 3 !== 1
       expect(mockExecFileSync.mock.calls[1][1]).toContain("submit");
+      expect(stateWrites().at(-1)["1"]).toEqual(
+        expect.objectContaining({ submissionId: "sub-x64", status: "submitted" })
+      );
     });
   });
 

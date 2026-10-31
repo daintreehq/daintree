@@ -43,30 +43,51 @@ function runNotaryTool(args, options) {
   return execFileSync("xcrun", fullArgs, { encoding: "utf-8", ...options });
 }
 
-// The main executable's code directory hash seals Info.plist and CodeResources,
-// which in turn lists the cdhash of every nested binary, so it identifies the
-// whole signed bundle. It is also what stapler looks the ticket up by, so a
-// stored submission only applies to a bundle with the same CDHash. `codesign
-// -d` prints its details to stderr, hence spawnSync.
-function readBundleCdhash(appPath) {
-  const result = spawnSync("codesign", ["-dvvv", appPath], { encoding: "utf-8", timeout: 60000 });
+// Mach-O slices per electron-builder Arch enum value (x64 = 1, arm64 = 3,
+// universal = 4). Each slice of a universal binary carries its own signature,
+// and `codesign -d` shows only the host's unless asked for a slice. It prints
+// its details to stderr, hence spawnSync.
+const ARCH_SLICES = { 1: ["x86_64"], 3: ["arm64"], 4: ["arm64", "x86_64"] };
+
+function readSliceCdhash(appPath, slice) {
+  const args = slice ? ["-dvvv", "--arch", slice, appPath] : ["-dvvv", appPath];
+  const result = spawnSync("codesign", args, { encoding: "utf-8", timeout: 60000 });
   const output = `${result.stdout || ""}${result.stderr || ""}`;
-  const match = !result.error && result.status === 0 && output.match(/^CDHash=([0-9a-f]+)$/m);
+  const match = !result.error && result.status === 0 && output.match(/^CDHash=([0-9a-f]{40})$/im);
   if (!match) {
     const detail = result.error ? result.error.message : output.trim() || `exit ${result.status}`;
-    console.warn(`[notarize-macos] Could not read the code signature of ${appPath}: ${detail}`);
+    console.warn(
+      `[notarize-macos] Could not read the code signature of ${appPath}` +
+        `${slice ? ` (${slice})` : ""}: ${detail}`
+    );
     return null;
   }
-  return match[1];
+  return match[1].toLowerCase();
+}
+
+// The main executable's code directory hash seals Info.plist and CodeResources,
+// which lists the cdhash of every nested binary, so it identifies the whole
+// signed bundle, and it is what stapler looks the ticket up by. A stored
+// submission is only reused for a bundle with the same CDHash on every slice.
+function readBundleIdentity(appPath, arch) {
+  const slices = ARCH_SLICES[arch];
+  if (!slices) return readSliceCdhash(appPath, null);
+  const parts = [];
+  for (const slice of slices) {
+    const cdhash = readSliceCdhash(appPath, slice);
+    if (!cdhash) return null;
+    parts.push(`${slice}=${cdhash}`);
+  }
+  return parts.join(",");
 }
 
 function timeoutError(submissionId) {
   return new Error(
     `[notarize-macos] Notarization wait timed out (${WAIT_TIMEOUT_SECONDS}s). ` +
       `Submission ID: ${submissionId}; it continues on Apple's side, check it with ` +
-      `\`xcrun notarytool info ${submissionId}\` (or \`notarytool log\`). A re-run on a fresh CI ` +
-      `runner rebuilds and submits again; only a re-run in this out dir with an identically ` +
-      `signed bundle reattaches to this submission.`
+      `\`xcrun notarytool info ${submissionId}\` or \`xcrun notarytool log ${submissionId}\`. ` +
+      `A re-run on a fresh CI runner rebuilds and submits again; only a re-run in the same out dir, ` +
+      `with the saved state and a bundle with the same code signature, reattaches to it.`
   );
 }
 
@@ -114,16 +135,19 @@ exports.default = async function afterSign(context) {
 
   const state = readState(outDir) || {};
   const archKey = String(arch);
-  const cdhash = readBundleCdhash(appPath);
+  const cdhash = readBundleIdentity(appPath, arch);
   const entry = state[archKey];
   const resumable =
-    entry?.submissionId && (entry.status === "accepted" || entry.status === "submitted");
+    typeof entry?.submissionId === "string" &&
+    entry.submissionId !== "" &&
+    (entry.status === "accepted" || entry.status === "submitted");
 
   if (resumable && (!cdhash || entry.cdhash !== cdhash)) {
+    const recorded = typeof entry.cdhash === "string" && entry.cdhash ? entry.cdhash : "none";
     console.log(
       `[notarize-macos] Not resuming ${entry.status} submission ${entry.submissionId} (arch ${archKey}): ` +
-        `it was recorded for ${entry.cdhash ? `bundle CDHash ${entry.cdhash}` : "an unidentified bundle"}, ` +
-        `the bundle at ${appPath} is ${cdhash ? `CDHash ${cdhash}` : "unidentified"} — submitting fresh`
+        `it was recorded for bundle CDHash ${recorded}, the bundle at ${appPath} has ` +
+        `${cdhash || "an unreadable CDHash"} — submitting fresh`
     );
     await submitAndWait(state, archKey, appPath, appName, outDir, cdhash);
   } else if (resumable && entry.status === "accepted") {
