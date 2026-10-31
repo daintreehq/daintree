@@ -493,7 +493,10 @@ describe("row state across the buffer cap", () => {
   };
 
   function enqueueLoggedEvent(): number {
-    const id = enqueueConsoleRow({ cdpType: "startGroupCollapsed", summaryText: `event ${nextId}` });
+    const id = enqueueConsoleRow({
+      cdpType: "startGroupCollapsed",
+      summaryText: `event ${nextId}`,
+    });
     enqueueConsoleRow({ summaryText: "event payload", groupDepth: 1 });
     return id;
   }
@@ -532,9 +535,9 @@ describe("row state across the buffer cap", () => {
         screen.getByRole("button", { name: "folded by user" }).getAttribute("aria-expanded")
       ).toBe("false");
       expect(screen.queryByText("inside folded")).toBeNull();
-      expect(screen.getByRole("button", { name: /stack trace/i }).getAttribute("aria-expanded")).toBe(
-        "true"
-      );
+      expect(
+        screen.getByRole("button", { name: /stack trace/i }).getAttribute("aria-expanded")
+      ).toBe("true");
     };
 
     // Four frames of a collapsed logger push the buffer past its cap.
