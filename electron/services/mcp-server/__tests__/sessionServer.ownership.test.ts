@@ -1799,6 +1799,26 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(store.resourceOwnership.owns("s-del", "worktree", "/tmp/wt")).toBe(false);
     });
 
+    it("dispatches a second delete of a worktree recreated at the same path (#15791)", async () => {
+      // The same policy `worktree.delete` follows: neither delete is deduped,
+      // so a repeat with identical args is a real delete of whatever the path
+      // names now, never a replay of the first answer.
+      const { store, server, dispatchAction } = harness("s-redel", {
+        "worktree.delete": { result: { ok: true, result: null } },
+      });
+      const args = { worktreeId: "/tmp/wt" };
+      store.resourceOwnership.record("s-redel", [{ kind: "worktree", id: "/tmp/wt" }]);
+      await callTool(server, { name: "worktree.deleteOwned", arguments: args });
+
+      store.resourceOwnership.record("s-redel", [{ kind: "worktree", id: "/tmp/wt" }]);
+      const second = await callTool(server, { name: "worktree.deleteOwned", arguments: args });
+
+      expect(second.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledTimes(2);
+      expect(dispatchAction).toHaveBeenNthCalledWith(2, "worktree.delete", args, false);
+      expect(store.resourceOwnership.owns("s-redel", "worktree", "/tmp/wt")).toBe(false);
+    });
+
     // The confirmation fires on the delegated call, so that is where the skip
     // preference has to land — and ownership must still be checked first (#12874).
     it("carries the skip preference to the delegated worktree.delete for a help session", async () => {

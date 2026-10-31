@@ -791,13 +791,21 @@ export const MCP_ASSISTANT_SERVER_INSTRUCTIONS =
  * returns, and the state stays unset (#11534 dropped `forge.assignIssue` for
  * exactly this).
  *
- * An entry that *does* have an inverse is kept only when the replay it
- * absorbs outweighs the suppression it risks. `worktree.delete` creates
- * nothing on a replay; it is here to return the original success instead of
- * the error a redundant redispatch would raise, which is a different
- * justification from the duplicate-artifact one and should not be confused
- * with it. The forge writes that used to sit here left MCP with the core/full
- * split, so no replay of them can arrive.
+ * Deletes are out, both `worktree.delete` and `worktree.deleteOwned`, on the
+ * path-reuse ground that keeps `worktree.create` off: worktree ids are paths,
+ * and delete → recreate at the same path is a supported workflow, so an
+ * identical second delete inside the TTL can name a genuinely different
+ * worktree. A cached answer there reported success for a delete that never
+ * ran and asked no confirmation (#15791). Concurrent identical deletes are not
+ * singleflighted either: lookup runs before the ownership check, the process
+ * guard and the confirmation, so a shared promise would answer the duplicate
+ * with the first call's checks instead of its own, and a path carries no
+ * instance identity to prove both still name the same worktree. Every delete
+ * call runs its own checks and asks its own confirmation; the cost is an
+ * honest error on a redundant one.
+ *
+ * The forge writes that used to sit here left MCP with the core/full split, so
+ * no replay of them can arrive.
  *
  * `git.commit` and `git.push` are the tempting case that still fails (c), so
  * #11534 dropped them. Neither takes an argument a legitimate repeat varies:
@@ -813,6 +821,7 @@ export const MCP_ASSISTANT_SERVER_INSTRUCTIONS =
  * guard (#8429), widened again in #9156, then corrected against the criterion
  * above in #11534 — which added the creation tools that were missing and
  * dropped the navigation, idempotent and git-write entries that never met it.
+ * #15791 dropped `worktree.delete`, the last entry kept for its replay alone.
  */
 const MCP_DEDUP_ALLOWLIST_ENTRIES = [
   // Panel/agent spawns — a replay leaves an orphaned terminal or a second
@@ -832,15 +841,9 @@ const MCP_DEDUP_ALLOWLIST_ENTRIES = [
   "worktree.createWithRecipe",
   "workflow.startWorkOnIssue",
   "worktree.resource.provision",
-  "worktree.delete",
-  // `worktree.deleteOwned` is deliberately NOT here, though the "replay the
-  // original success" argument for `worktree.delete` above reads like it should
-  // be. Worktree ids are paths, and create → delete → recreate with the same
-  // path is a supported workflow — the very reason `worktree.create` is absent
-  // from this list. Caching a delete would then suppress a genuine second
-  // deletion of a genuinely different worktree and report success for it. The
-  // replay it would have absorbed is only a confusing `RESOURCE_NOT_OWNED` on a
-  // redundant call, which is a worse error message but an honest one (#11909).
+  // Neither delete variant belongs here, cached or singleflighted: see the
+  // path-reuse paragraph above (#11909 for `worktree.deleteOwned`, #15791 for
+  // `worktree.delete`).
 ] as const satisfies readonly BuiltInActionId[];
 
 export const MCP_DEDUP_ALLOWLIST: ReadonlySet<string> = new Set(MCP_DEDUP_ALLOWLIST_ENTRIES);

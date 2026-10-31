@@ -451,16 +451,15 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     const server = createSessionServer("s", deps);
     await server.connect(makeMockTransport());
 
-    // Distinct args on the second call: worktree.delete is on the dedup
-    // allowlist, so a replay would return the cached result and never reach
-    // the gate this test is about.
+    // Identical args on purpose: a repeated delete reaches the gate again
+    // rather than replaying the first answer (#15791).
     const first = (await callTool(server, {
       name: "worktree.delete",
       arguments: { worktreeId: "wt-1" },
     })) as { isError?: boolean };
     const second = (await callTool(server, {
       name: "worktree.delete",
-      arguments: { worktreeId: "wt-2" },
+      arguments: { worktreeId: "wt-1" },
     })) as { isError?: boolean };
 
     expect(first.isError).not.toBe(true);
