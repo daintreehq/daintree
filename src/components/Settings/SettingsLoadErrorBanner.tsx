@@ -12,6 +12,10 @@ interface SettingsLoadErrorBannerProps {
   title?: string;
   /** Defaults to "Retry" — the recovery verb for inline banners. */
   retryLabel?: string;
+  /** Gives up the unsaved edit the failure is holding, beside Retry. */
+  onDiscard?: () => void;
+  /** Lets a settings landing find the banner. */
+  id?: string;
 }
 
 /**
@@ -24,19 +28,27 @@ export function SettingsLoadErrorBanner({
   onRetry,
   title,
   retryLabel = "Retry",
+  onDiscard,
+  id,
 }: SettingsLoadErrorBannerProps) {
+  const retry = (
+    <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+      {retryLabel}
+    </Button>
+  );
   return (
-    <Callout
-      severity="error"
-      role="alert"
-      title={title}
-      action={
-        <Button type="button" variant="outline" size="sm" onClick={onRetry}>
-          {retryLabel}
-        </Button>
-      }
-    >
+    <Callout severity="error" role="alert" id={id} title={title} action={onDiscard ? undefined : retry}>
       <p className="select-text">{message}</p>
+      {/* Two ways forward sit under the words, Retry first: a landing on the banner
+          focuses its first button, and that mustn't be the one that drops the edit. */}
+      {onDiscard && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {retry}
+          <Button type="button" variant="outline" size="sm" onClick={onDiscard}>
+            Discard changes
+          </Button>
+        </div>
+      )}
     </Callout>
   );
 }

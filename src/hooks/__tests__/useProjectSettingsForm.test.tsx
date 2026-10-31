@@ -98,6 +98,8 @@ const baseSettings: ProjectSettings = {
 function resetMocks() {
   mockSettings.value = null;
   mockStoredSettings.value = null;
+  mockSaveSettings.mockResolvedValue(undefined);
+  mockUpdateProject.mockResolvedValue(undefined);
   mockRefresh.mockResolvedValue(undefined);
   mockIsLoading.value = false;
   mockProjects.value = [
@@ -128,6 +130,16 @@ function renderOpenForm(projectId = "proj-1") {
   mockSettings.value = baseSettings;
   hook.rerender({ isOpen: true, tick: 2, projectId });
 
+  return hook;
+}
+
+// Opened and seeded, with the open read settled. Needs fake timers installed.
+async function renderSeededForm() {
+  const hook = renderOpenForm();
+  await act(async () => {
+    await vi.runAllTimersAsync();
+  });
+  expect(hook.result.current.projectIsInitialized).toBe(true);
   return hook;
 }
 
@@ -441,6 +453,103 @@ describe("useProjectSettingsForm", () => {
 
     expect(result.current.projectAutoSaveError).toBe("Save failed");
     vi.useRealTimers();
+  });
+
+  it("flush() resolves with the failure and keeps the draft for the next close", async () => {
+    vi.useFakeTimers();
+    const { result } = await renderSeededForm();
+    mockSaveSettings.mockRejectedValue(new Error("Disk full"));
+    act(() => {
+      result.current.setDevServerCommand("npm run edited");
+    });
+
+    let outcome: Awaited<ReturnType<typeof result.current.flush>>;
+    await act(async () => {
+      outcome = await result.current.flush();
+    });
+    expect(outcome).toEqual({ message: "Disk full" });
+    expect(result.current.projectAutoSaveError).toBe("Disk full");
+    expect(result.current.devServerCommand).toBe("npm run edited");
+
+    // The failed write left the baseline alone, so the next close tries again.
+    mockSaveSettings.mockResolvedValue(undefined);
+    await act(async () => {
+      outcome = await result.current.flush();
+    });
+    expect(outcome).toBeUndefined();
+    expect(result.current.projectAutoSaveError).toBeNull();
+    expect(mockSaveSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ devServerCommand: "npm run edited" })
+    );
+
+    mockSaveSettings.mockClear();
+    await act(async () => {
+      outcome = await result.current.flush();
+    });
+    expect(outcome).toBeUndefined();
+    expect(mockSaveSettings).not.toHaveBeenCalled();
+  });
+
+  it("saveNow() resolves with the failure instead of rejecting", async () => {
+    vi.useFakeTimers();
+    const { result } = await renderSeededForm();
+    mockSaveSettings.mockRejectedValue(new Error("Read-only checkout"));
+
+    let outcome: Awaited<ReturnType<typeof result.current.saveNow>>;
+    await act(async () => {
+      outcome = await result.current.saveNow();
+    });
+    expect(outcome).toEqual({ message: "Read-only checkout" });
+    expect(result.current.projectAutoSaveError).toBe("Read-only checkout");
+  });
+
+  it("a failed identity update is a failure too", async () => {
+    vi.useFakeTimers();
+    const { result } = await renderSeededForm();
+    mockUpdateProject.mockRejectedValue(new Error("Couldn't rename"));
+    act(() => {
+      result.current.setProjectName("Renamed");
+    });
+
+    let outcome: Awaited<ReturnType<typeof result.current.flush>>;
+    await act(async () => {
+      outcome = await result.current.flush();
+    });
+    expect(outcome).toEqual({ message: "Couldn't rename" });
+    expect(result.current.projectName).toBe("Renamed");
+  });
+
+  it("discardUnsavedChanges() reseeds from main, so a close has nothing to write", async () => {
+    vi.useFakeTimers();
+    const { result } = await renderSeededForm();
+    mockSaveSettings.mockRejectedValue(new Error("Disk full"));
+    act(() => {
+      result.current.setDevServerCommand("npm run edited");
+    });
+    await act(async () => {
+      await result.current.flush();
+    });
+    expect(result.current.projectAutoSaveError).toBe("Disk full");
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+
+    mockSaveSettings.mockClear();
+    act(() => {
+      result.current.discardUnsavedChanges();
+    });
+    expect(result.current.projectAutoSaveError).toBeNull();
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+
+    expect(mockRefresh).toHaveBeenCalledTimes(2);
+    expect(result.current.projectIsInitialized).toBe(true);
+    expect(result.current.devServerCommand).toBe("npm run dev");
+    let outcome: Awaited<ReturnType<typeof result.current.flush>>;
+    await act(async () => {
+      outcome = await result.current.flush();
+    });
+    expect(outcome).toBeUndefined();
+    expect(mockSaveSettings).not.toHaveBeenCalled();
   });
 
   it("stays uninitialized while loading with no settings yet (backs the Doherty loader)", async () => {

@@ -30,6 +30,13 @@ import type { CommandOverride } from "@shared/types/commands";
 import type { NotificationSettings } from "@shared/types/ipc/api";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
+/** A form save that didn't go through: the draft stays in the form, and `message` says why. */
+export interface ProjectSettingsSaveFailure {
+  message: string;
+}
+
+type SaveOutcome = ProjectSettingsSaveFailure | undefined;
+
 interface UseProjectSettingsFormParams {
   projectId: string | null;
   isOpen: boolean;
@@ -97,7 +104,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   // What the form last wrote, as stored values: a save sends only the fields
   // that differ from it, laid over the settings as they are on disk.
   const lastSavedFieldsRef = useRef<FormOwnedSettings | null>(null);
-  const persistChainRef = useRef<Promise<void> | null>(null);
+  const persistChainRef = useRef<Promise<SaveOutcome> | null>(null);
   // Retry bumps the attempt so the read made on open runs again.
   const [openReadAttempt, setOpenReadAttempt] = useState(0);
   const [settledOpenRead, setSettledOpenRead] = useState<{
@@ -109,13 +116,16 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     settledOpenRead?.projectId === projectId &&
     settledOpenRead.attempt === openReadAttempt;
   const prevProjectIdRef = useRef(projectId);
-  const projectPersistRef = useRef<(options?: { force?: boolean }) => Promise<void>>(undefined);
+  const projectPersistRef =
+    useRef<(options?: { force?: boolean }) => Promise<SaveOutcome>>(undefined);
   // Stable debounce instance initialized on mount. Uninitialized ref + mount
   // effect keeps the render pure so the React Compiler can optimize this hook.
   const debouncedProjectSaveRef = useRef<ReturnType<typeof debounce<[]>> | null>(null);
   useEffect(() => {
-    debouncedProjectSaveRef.current = debounce(() => {
-      return projectPersistRef.current?.();
+    // A failed autosave reports through projectAutoSaveError; the outcome is for
+    // callers that can hold something open on it.
+    debouncedProjectSaveRef.current = debounce(async () => {
+      await projectPersistRef.current?.();
     }, 500);
     return () => {
       debouncedProjectSaveRef.current?.cancel();
@@ -232,6 +242,15 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   }, [isOpen, projectId, refreshProjectSettings, openReadAttempt]);
 
   const retryProjectSettingsRead = async () => {
+    setOpenReadAttempt((attempt) => attempt + 1);
+  };
+
+  // Gives up an edit that won't save. The form seeds again from a fresh read, so
+  // it holds what main stores and a close after it has nothing left to write.
+  const discardUnsavedChanges = () => {
+    debouncedProjectSaveRef.current?.cancel();
+    setProjectAutoSaveError(null);
+    setProjectIsInitialized(false);
     setOpenReadAttempt((attempt) => attempt + 1);
   };
 
@@ -428,9 +447,9 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     projectError,
   ]);
 
-  const persistDraft = async (force: boolean) => {
+  const persistDraft = async (force: boolean): Promise<SaveOutcome> => {
     if (!projectSettings || !currentProject || !projectId) {
-      return;
+      return undefined;
     }
 
     const baseline = lastSavedFieldsRef.current;
@@ -492,9 +511,12 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       if (currentProjectSnapshot) {
         lastSavedSnapshotRef.current = currentProjectSnapshot;
       }
+      return undefined;
     } catch (err) {
       logError("Failed to auto-save project settings", err);
-      setProjectAutoSaveError(formatErrorMessage(err, "Failed to save settings"));
+      const message = formatErrorMessage(err, "Failed to save settings");
+      setProjectAutoSaveError(message);
+      return { message };
     }
   };
 
@@ -525,28 +547,30 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
 
   // Explicit user-initiated save. Persists unconditionally, so a re-save of
   // unchanged values still reaches main — the environment-variable migration
-  // button relies on that to relocate insecure values.
-  const saveNow = async () => {
+  // button relies on that to relocate insecure values. Resolves with the failure
+  // rather than rejecting, the way flush does.
+  const saveNow = async (): Promise<SaveOutcome> => {
     await debouncedProjectSaveRef.current?.flush();
-    if (projectIsInitialized && projectPersistRef.current) {
-      await projectPersistRef.current({ force: true });
-    }
+    if (!projectIsInitialized || !projectPersistRef.current) return undefined;
+    return projectPersistRef.current({ force: true });
   };
 
   // Lifecycle save, run on dialog close and on WebContentsView detach. Unlike
   // saveNow it must not write when the form is clean: nothing was edited, so
-  // there is nothing for a write to say (#12326).
-  const flush = async () => {
+  // there is nothing for a write to say (#12326). Resolves with the failure when
+  // the draft couldn't be saved, so a close can stay open on it; a detach can't,
+  // and ignores it.
+  const flush = async (): Promise<SaveOutcome> => {
     // First drain any pending debounced save — that also settles an in-flight
     // one, so the snapshot comparison below sees its result.
     await debouncedProjectSaveRef.current?.flush();
-    if (!projectIsInitialized || !projectPersistRef.current) return;
+    if (!projectIsInitialized || !projectPersistRef.current) return undefined;
     const lastSaved = lastSavedSnapshotRef.current;
     const current = currentProjectSnapshotRef.current;
     // Missing either snapshot means we cannot prove the form is clean; persist
     // rather than risk losing an edit on close.
-    if (lastSaved && current && areSnapshotsEqual(lastSaved, current)) return;
-    await projectPersistRef.current();
+    if (lastSaved && current && areSnapshotsEqual(lastSaved, current)) return undefined;
+    return projectPersistRef.current();
   };
 
   return {
@@ -625,6 +649,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     worktrees,
     flush,
     saveNow,
+    discardUnsavedChanges,
   };
 }
 
