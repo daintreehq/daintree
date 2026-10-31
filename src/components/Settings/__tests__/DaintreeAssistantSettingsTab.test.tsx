@@ -117,12 +117,14 @@ vi.mock("../SettingsInput", () => ({
     onChange,
     placeholder,
     disabled,
+    error,
   }: {
     label: string;
     value: string;
     onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
     placeholder?: string;
     disabled?: boolean;
+    error?: string;
   }) => (
     <label>
       {label}
@@ -133,6 +135,7 @@ vi.mock("../SettingsInput", () => ({
         placeholder={placeholder}
         disabled={disabled}
       />
+      {error && <span data-testid={`${label}-error`}>{error}</span>}
     </label>
   ),
 }));
@@ -197,6 +200,7 @@ vi.mock("@/config/agents", () => ({
 }));
 
 import { DaintreeAssistantSettingsTab } from "../DaintreeAssistantSettingsTab";
+import { ASSISTANT_LAUNCH_SECTION_ID } from "../Assistant/assistantSettingsModel";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { actionService } from "@/services/ActionService";
@@ -2296,6 +2300,59 @@ describe("DaintreeAssistantSettingsTab", () => {
         customArgs: "",
       });
     });
+  });
+
+  it("keeps a custom args value main refuses in the field with its reason and a Retry (#15576)", async () => {
+    const refusal = "Custom CLI args can't contain these characters: ; | & > < $( ${ ` \\";
+    installApi({
+      getSettings: vi.fn().mockResolvedValue({
+        docSearch: true,
+        daintreeControl: true,
+        tier: "core" as const,
+        bypassPermissions: false,
+        auditRetention: 7,
+        customArgs: "--verbose",
+      }),
+      setSettings: vi.fn().mockRejectedValueOnce(new Error(refusal)).mockResolvedValue(undefined),
+    });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Custom CLI args");
+    const input = screen.getByLabelText("Custom CLI args") as HTMLInputElement;
+    await waitFor(() => {
+      expect(input.value).toBe("--verbose");
+      expect(input.disabled).toBe(false);
+    });
+    // A held close lands on the section that holds this field.
+    expect(container.querySelector(`#${ASSISTANT_LAUNCH_SECTION_ID}`)?.contains(input)).toBe(true);
+
+    fireEvent.change(input, { target: { value: "--add-dir C:\\work" } });
+
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("Custom CLI args-error").textContent).toBe(refusal);
+      },
+      { timeout: 5000 }
+    );
+    expect(input.value).toBe("--add-dir C:\\work");
+    expect(container.textContent).toContain("Couldn't save custom CLI args");
+    expect(container.textContent).not.toContain("is back to its previous value");
+    expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => {
+      expect(screen.queryByTestId("Custom CLI args-error")).toBeNull();
+    });
+    expect(container.textContent).not.toContain("Couldn't save custom CLI args");
+    expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledTimes(2);
+    expect(window.electron.helpAssistant.setSettings).toHaveBeenLastCalledWith({
+      customArgs: "--add-dir C:\\work",
+    });
+    expect(input.value).toBe("--add-dir C:\\work");
   });
 });
 

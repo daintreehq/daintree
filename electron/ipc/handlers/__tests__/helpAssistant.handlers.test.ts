@@ -549,20 +549,55 @@ describe("registerHelpAssistantHandlers", () => {
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
 
-    await handler(null, { customArgs: "--model sonnet; rm -rf /" });
-    await handler(null, { customArgs: "--model $(whoami)" });
-    await handler(null, { customArgs: "--model `id`" });
-    await handler(null, { customArgs: "--model | tee out" });
-    // Extended deny-list (#7078): chaining, redirection, variable expansion, escape.
-    await handler(null, { customArgs: "--model sonnet & whoami" });
-    await handler(null, { customArgs: "--verbose > /etc/passwd" });
-    await handler(null, { customArgs: "--config < /etc/shadow" });
-    await handler(null, { customArgs: "--log >> /tmp/out" });
-    await handler(null, { customArgs: "--err 2> /tmp/err" });
-    await handler(null, { customArgs: "--model ${HOME}" });
-    await handler(null, { customArgs: "--flag\\;evil" });
+    const refused = [
+      "--model sonnet; rm -rf /",
+      "--model $(whoami)",
+      "--model `id`",
+      "--model | tee out",
+      // Extended deny-list (#7078): chaining, redirection, variable expansion, escape.
+      "--model sonnet & whoami",
+      "--verbose > /etc/passwd",
+      "--config < /etc/shadow",
+      "--log >> /tmp/out",
+      "--err 2> /tmp/err",
+      "--model ${HOME}",
+      "--flag\\;evil",
+    ];
+    for (const customArgs of refused) {
+      await expect(handler(null, { customArgs })).rejects.toMatchObject({ code: "VALIDATION" });
+    }
 
     expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("reports a refused Windows path and leaves the stored value and listeners alone (#15576)", async () => {
+    const { onHelpAssistantSettingsChanged } = await import("../helpAssistant.js");
+    let heard = 0;
+    const off = onHelpAssistantSettingsChanged(() => heard++);
+    registerHelpAssistantHandlers();
+    const setHandler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    try {
+      await expect(
+        setHandler(null, { customArgs: "--add-dir C:\\work\\shared" })
+      ).rejects.toMatchObject({ code: "VALIDATION", message: expect.stringContaining("\\") });
+      expect(storeMock.set).not.toHaveBeenCalled();
+      expect(heard).toBe(0);
+    } finally {
+      off();
+    }
+  });
+
+  it("writes nothing from a patch whose customArgs is refused", async () => {
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await expect(
+      handler(null, { docSearch: false, customArgs: "--a | b", auditRetention: 30 })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+    expect(mcpServiceMock.pruneAuditByRetention).not.toHaveBeenCalled();
   });
 
   it("allows customArgs containing a bare $ without ( or { (no over-blocking)", async () => {
@@ -583,7 +618,9 @@ describe("registerHelpAssistantHandlers", () => {
 
     // Metachar at position > CUSTOM_ARGS_MAX_LEN must still be caught — the
     // deny-list check runs on the full collapsed string before slice().
-    await handler(null, { customArgs: "x".repeat(10000) + "; touch /tmp/pwned" });
+    await expect(
+      handler(null, { customArgs: "x".repeat(10000) + "; touch /tmp/pwned" })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
 
     expect(storeMock.set).not.toHaveBeenCalled();
   });
@@ -595,7 +632,9 @@ describe("registerHelpAssistantHandlers", () => {
     // Control-char stripping happens before the deny-list check, so a value
     // crafted to hide `$(` behind a NUL byte must still be rejected once the
     // NUL is removed.
-    await handler(null, { customArgs: "--x $\x00(whoami)" });
+    await expect(handler(null, { customArgs: "--x $\x00(whoami)" })).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
 
     expect(storeMock.set).not.toHaveBeenCalled();
   });
