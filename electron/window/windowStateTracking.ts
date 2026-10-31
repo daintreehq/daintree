@@ -29,9 +29,7 @@ export function resolveBoundsKey(
   if (!workspaceId) return null;
   const folderless = folderlessBoundsKey(workspaceId);
   if (folderless) {
-    return isScratchWorkspaceId(workspaceId) && !isLiveScratchSync(workspaceId)
-      ? null
-      : folderless;
+    return isScratchWorkspaceId(workspaceId) && !isLiveScratchSync(workspaceId) ? null : folderless;
   }
   return readProjectPathSync(workspaceId);
 }

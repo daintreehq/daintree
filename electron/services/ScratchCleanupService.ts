@@ -50,7 +50,10 @@
 import fs from "fs/promises";
 import path from "path";
 import PQueue from "p-queue";
-import { scratchStore as defaultScratchStore, removeScratchPersistedState } from "./ScratchStore.js";
+import {
+  scratchStore as defaultScratchStore,
+  removeScratchPersistedState,
+} from "./ScratchStore.js";
 import type { ScratchRow } from "./persistence/schema.js";
 import { logError, logInfo } from "../utils/logger.js";
 import {
