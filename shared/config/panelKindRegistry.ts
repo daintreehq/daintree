@@ -135,8 +135,6 @@ export interface PanelKindConfig {
   dialogFullHeight?: boolean;
   /** Whether this panel kind uses the standard terminal UI */
   usesTerminalUi?: boolean;
-  /** Whether this panel kind should keep its runtime alive across project switches */
-  keepAliveOnProjectSwitch?: boolean;
   /**
    * Whether a persisted panel of this kind restores synchronously from session
    * state, so its `React.lazy()` chunk is needed on the first-render path of a
@@ -297,7 +295,6 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     hasPty: true,
     canRestart: true,
     canConvert: true,
-    keepAliveOnProjectSwitch: true,
     showInPalette: false,
     launchActionId: "agent.launch",
   },
@@ -311,7 +308,6 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     canConvert: false,
     // Dockable by default (no explicit flag) — a reading surface with a
     // meaningful compact chip form.
-    keepAliveOnProjectSwitch: true,
     showInPalette: true,
     searchAliases: ["web", "chrome", "internet", "www"],
     firstRenderRestore: true,
@@ -332,7 +328,6 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     // Dockable by default (no explicit flag). Like browser, the chip row is only
     // a label — the live preview itself is moved into the dock popover (#12397).
     usesTerminalUi: false,
-    keepAliveOnProjectSwitch: true,
     showInPalette: true,
     searchAliases: ["localhost", "server", "preview", "port"],
     firstRenderRestore: true,
@@ -356,7 +351,6 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     // form (like diff).
     dockable: false,
     usesTerminalUi: false,
-    keepAliveOnProjectSwitch: true,
     showInPalette: true,
     searchAliases: ["diff", "commit", "stage", "git"],
     firstRenderRestore: true,
@@ -377,7 +371,6 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     // Dockable by default (no explicit flag) — a reading surface with a
     // meaningful compact chip form.
     usesTerminalUi: false,
-    keepAliveOnProjectSwitch: true,
     showInPalette: true,
     searchAliases: ["file", "md", "markdown", "readme", "docs", "spec", "document", "viewer"],
     firstRenderRestore: true,
@@ -399,7 +392,6 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     // two-pane browser has the same room there as the file viewer (#11917).
     dialogFullHeight: true,
     usesTerminalUi: false,
-    keepAliveOnProjectSwitch: true,
     // Spawnable from a bare palette entry: unlike diff and file, the browser
     // needs no target beyond the worktree it opens against.
     showInPalette: true,
@@ -429,7 +421,6 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     // under the cursor (#11364) — same treatment as the file browser.
     dialogFullHeight: true,
     usesTerminalUi: false,
-    keepAliveOnProjectSwitch: true,
     // Opened against a specific file, so there is nothing sensible to spawn
     // from a bare palette entry — the entry points all carry a file with them.
     showInPalette: false,
@@ -907,15 +898,6 @@ export function panelKindUsesTerminalUi(kind: PanelKind): boolean {
   const config = getPanelKindConfig(kind);
   if (!config) return false;
   return config.usesTerminalUi ?? config.hasPty;
-}
-
-/**
- * Check if a panel kind should keep its runtime alive across project switches.
- */
-export function panelKindKeepsAliveOnProjectSwitch(kind: PanelKind): boolean {
-  const config = getPanelKindConfig(kind);
-  if (!config) return false;
-  return config.keepAliveOnProjectSwitch ?? config.hasPty;
 }
 
 /**
