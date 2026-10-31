@@ -122,6 +122,18 @@ describe("voiceCaret", () => {
     expect(textBefore(view)).toBe("please fix the");
   });
 
+  it("ignores a position outside the draft, and takes the next edit (#15716)", () => {
+    const view = mount("fix the bug");
+    show(view, "live", 7);
+    show(view, "held", 312);
+    expect(textBefore(view)).toBe("fix the");
+    view.dispatch({ changes: { from: 0, to: 11, insert: "" } });
+    show(view, "held", 312);
+    view.dispatch({ changes: { from: 0, insert: "next" } });
+    expect(view.state.doc.toString()).toBe("next");
+    expect(textBefore(view)).toBe("next");
+  });
+
   it("sits past the dictation's preview while one shows, wherever the preview is", () => {
     const view = mount("fix the bug");
     show(view, "live", 3);

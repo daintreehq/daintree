@@ -4,6 +4,7 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import {
   dictationFollow,
+  dictationFollowField,
   interimWidgetField,
   revealDictationStart,
   setDictationFollow,
@@ -331,6 +332,20 @@ describe("dictationFollow", () => {
 
     // Only the new dictation's own following moves it.
     expect(writes).toEqual([lineBottom(DRAFT.length - 1) + 5 - VIEW_PX]);
+    view.destroy();
+  });
+
+  it("ignores an end outside the draft, and takes the next edit (#15716)", () => {
+    const view = mount("");
+    view.dispatch({ effects: setDictationFollow.of({ session: "s1", end: 312 }) });
+    expect(view.state.field(dictationFollowField)).toEqual({ session: "s1", end: null });
+
+    view.dispatch({ changes: { from: 0, insert: "next" } });
+    view.dispatch({ effects: setDictationFollow.of({ session: "s1", end: 4 }) });
+    // Kept from before, mapped through the edit.
+    view.dispatch({ effects: setDictationFollow.of({ session: "s1", end: 312 }) });
+    view.dispatch({ changes: { from: 0, insert: "the " } });
+    expect(view.state.field(dictationFollowField)).toEqual({ session: "s1", end: 8 });
     view.destroy();
   });
 

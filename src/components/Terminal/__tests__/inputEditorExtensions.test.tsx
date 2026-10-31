@@ -226,6 +226,17 @@ describe("createAutoSize integration", () => {
       view.destroy();
     });
 
+    it("shows a preview placed outside the draft at its end, and takes the next edit (#15716)", () => {
+      const { view } = mountInterim(25);
+      view.dispatch({ effects: setInterimText.of({ text: "next words", pos: 312 }) });
+      expect(view.state.field(interimWidgetField)).toEqual({ text: "next words", pos: null });
+
+      view.dispatch({ changes: { from: 0, insert: "so " } });
+      expect(view.state.doc.toString()).toBe("so ");
+
+      view.destroy();
+    });
+
     it("keeps its height when interim text is committed to the draft", () => {
       const { view } = mountInterim(25);
       view.dispatch({ effects: setInterimText.of("a long dictated sentence") });

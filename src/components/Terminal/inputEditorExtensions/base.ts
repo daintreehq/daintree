@@ -484,8 +484,12 @@ export const interimWidgetField = StateField.define<InterimPreview>({
     }
     for (const effect of tr.effects) {
       if (effect.is(setInterimText)) {
-        const preview =
+        let preview =
           typeof effect.value === "string" ? { text: effect.value, pos: null } : effect.value;
+        // A position outside this text shows the preview at the end instead (#15716).
+        if (preview.pos !== null && (preview.pos < 0 || preview.pos > tr.newDoc.length)) {
+          preview = { ...preview, pos: null };
+        }
         next =
           preview.text === next.text && preview.pos === next.pos && preview.trail === next.trail
             ? next

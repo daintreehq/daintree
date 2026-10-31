@@ -80,6 +80,7 @@ const originalGetAnchor = useDictationRangeStore.getState().getAnchor;
 afterEach(() => {
   reveals = [];
   useDictationRangeStore.setState({ getAnchor: originalGetAnchor });
+  useDictationRangeStore.getState().clear();
   useVoiceRecordingStore.getState().finishSession();
   useVoiceRecordingStore.getState().setCorrectionRanges(PANEL, []);
   useTerminalInputStore.getState().clearDraftInput(PANEL);
@@ -199,6 +200,34 @@ describe("useVoiceDecorations", () => {
       useDictationRangeStore.setState({ getAnchor: () => moved });
     });
     expect(view.state.field(dictationFollowField)).toEqual({ session: "s1", end: 12 });
+    view.destroy();
+  });
+
+  it("keeps working when a send empties the draft while the session is still finishing (#15716)", () => {
+    const sent = "x".repeat(389);
+    useTerminalInputStore.getState().setDraftInput(PANEL, sent);
+    const view = mount(sent);
+    startDictation();
+    const target = { sessionId: "s1", panelId: PANEL, projectId: undefined };
+    act(() => {
+      useDictationRangeStore.getState().setAnchor(target, { from: 312, to: 312 });
+      useVoiceRecordingStore.getState().setStatus("finishing");
+    });
+    expect(view.state.field(dictationFollowField)).toEqual({ session: "s1", end: 312 });
+
+    act(() => {
+      view.dispatch({ changes: { from: 0, to: sent.length } });
+      useTerminalInputStore.getState().setDraftInput(PANEL, "");
+    });
+    // A position taken in the text that went, arriving after the send.
+    act(() => useDictationRangeStore.getState().setAnchor(target, { from: 312, to: 312 }));
+    expect(view.state.field(dictationFollowField).end).not.toBe(312);
+
+    // The next words into the emptied composer.
+    act(() => {
+      view.dispatch({ changes: { from: 0, insert: "next" } });
+    });
+    expect(view.state.doc.toString()).toBe("next");
     view.destroy();
   });
 
