@@ -20,11 +20,7 @@ import {
   slicePausePositions,
 } from "@shared/utils/voicePausePositions";
 import { panelHasComposer } from "@/components/Terminal/terminalComposer";
-import {
-  useHelpPanelStore,
-  selectActiveSlot,
-  selectSlotTerminalIds,
-} from "@/store/helpPanelStore";
+import { useHelpPanelStore, selectActiveSlot, selectSlotTerminalIds } from "@/store/helpPanelStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import {
