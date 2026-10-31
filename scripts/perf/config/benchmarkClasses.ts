@@ -234,6 +234,14 @@ const FAMILIES: readonly Family[] = [
       "Real git status, watchers, polling and quiescence against real repositories, with real git subprocesses. Backend detection is measured; whether the sidebar visibly updated is not. Spawn tallies count Node child starts only (see README).",
   },
   {
+    label: "large changeset diff stats",
+    ids: ["PERF-108", "PERF-109"],
+    kind: "mechanism",
+    fidelity: withFidelity({ processTopology: "partial" }),
+    claim:
+      "Real forced status passes and real git subprocesses over deterministic worktrees with thousands of stable modified files, sharing one process as a project's worktrees share its workspace host. The status utility is called directly, without a monitor, renderer or IPC. Git child CPU is a replay of the pass's recorded git commands, not the original children's own accounting, and is absent where python3 is unavailable; retained cache bytes are an accounting estimate, not heap usage.",
+  },
+  {
     label: "terminal reflow and resize",
     ids: ["PERF-110", "PERF-111", "PERF-112"],
     kind: "mechanism",

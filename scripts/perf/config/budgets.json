@@ -404,6 +404,18 @@
         "mapIdentityChanges": 0
       }
     },
+    "PERF-108": {
+      "maxRegressionPct": 50,
+      "maxMetricValues": {
+        "numstatFilesDiffed": 0
+      }
+    },
+    "PERF-109": {
+      "maxRegressionPct": 50,
+      "maxMetricValues": {
+        "numstatFilesDiffed": 0
+      }
+    },
     "PERF-110": {
       "p95Ms": 80,
       "maxRegressionPct": 50

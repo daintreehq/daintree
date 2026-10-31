@@ -144,6 +144,19 @@ export function __clearPerFileDiffStatCacheForTesting(): void {
   PER_FILE_DIFF_STAT_CACHE.clear();
 }
 
+export function __getPerFileDiffStatCacheStatsForPerf(): {
+  entries: number;
+  estimatedBytes: number;
+} {
+  let entries = 0;
+  let estimatedBytes = 0;
+  PER_FILE_DIFF_STAT_CACHE.forEach((_value, key) => {
+    entries++;
+    estimatedBytes += 160 + key.length * 2;
+  });
+  return { entries, estimatedBytes };
+}
+
 // Cache last-commit metadata keyed on HEAD OID. The log output is a pure
 // function of the commit object, so the OID is sufficient for invalidation —
 // commits, amends, resets, and checkouts all change the OID. Per-worktree
