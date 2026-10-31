@@ -295,7 +295,10 @@ describe("runDev", () => {
     ]);
     const sessionId = (calls[0][1] as { sessionId: string }).sessionId;
     expect(sessionId).not.toBe("");
-    expect(calls[calls.length - 1]).toEqual(["plugin.dev.stop", { pluginId: "acme.demo", sessionId }]);
+    expect(calls[calls.length - 1]).toEqual([
+      "plugin.dev.stop",
+      { pluginId: "acme.demo", sessionId },
+    ]);
   });
 
   it("never asks for metrics with metrics disabled, and stops polling before unloading", async () => {
@@ -474,7 +477,11 @@ describe("runDev", () => {
       let newerLink: DevLink | null = null;
       vi.mocked(sendCliRequest).mockImplementation(async (method) => {
         if (method === "plugin.dev.stop") {
-          newerLink = await linkDevPlugin({ pluginDir: otherDir, pluginsRoot, pluginId: "acme.demo" });
+          newerLink = await linkDevPlugin({
+            pluginDir: otherDir,
+            pluginsRoot,
+            pluginId: "acme.demo",
+          });
         }
         return { status: "ok" };
       });
