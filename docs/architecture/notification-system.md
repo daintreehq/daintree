@@ -158,7 +158,7 @@ safe-mode            safeMode && !dismissed               (panels not restored a
   ↓
 restore-confirmation restoreVisible                       (session-recovered, auto-dismiss timer)
   ↓
-missing-prerequisite prerequisiteVisible                  (a fatal tool — Git, Node — isn't installed)
+missing-prerequisite prerequisiteVisible                  (a fatal tool — Git — isn't installed)
   ↓
 cloud-sync           cloudSyncService !== null            (environmental warning)
   ↓

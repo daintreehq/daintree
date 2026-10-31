@@ -39,7 +39,7 @@ export type GlobalBannerSlot =
 //   host-memory-stall  — a terminal host's memory pause isn't recovering (#12375)
 //   safe-mode          — panels weren't restored after a crash loop
 //   restore-confirmation — informational "session recovered" toast-banner
-//   missing-prerequisite — a fatal tool (Git, Node) isn't installed (#11763)
+//   missing-prerequisite — a fatal tool (Git) isn't installed (#11763)
 //   plugin-document    — plugin registrations need document replacement
 //   cloud-sync         — project sits in a synced folder; environmental warning
 //   rosetta            — x64 build translated on Apple Silicon; permanent perf warning

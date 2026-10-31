@@ -253,7 +253,7 @@ host-crash           backendStatus !== "connected" — backend unusable now
 watchdog-disabled    watchdogStatus === "disabled" — deadlock detector gone
 safe-mode            safeMode && !dismissed        — panels held back after a crash loop
 restore-confirmation                               — informational "session recovered"
-missing-prerequisite                               — a fatal tool (Git, Node) isn't installed
+missing-prerequisite                               — a fatal tool (Git) isn't installed
 cloud-sync                                         — synced-folder warning
 rosetta                                            — x64 build translated on Apple Silicon
 ```
@@ -302,7 +302,7 @@ It fires only when an agent has been `idle` longer than `maxWaitingSilenceMs` (a
 | `src/components/Recovery/SafeModeBanner.tsx` | Safe-mode banner + quarantine list |
 | `src/components/Recovery/WatchdogDisabledBanner.tsx` | Degraded-detector banner |
 | `src/components/Recovery/HostCrashBanner.tsx` | PTY-host-down banner (via `backendStatus`) |
-| `src/components/Recovery/MissingPrerequisiteBanner.tsx` | Missing fatal tool (Git, Node) banner; re-checks on window focus |
+| `src/components/Recovery/MissingPrerequisiteBanner.tsx` | Missing fatal tool (Git) banner; re-checks on window focus |
 
 ## See also
 

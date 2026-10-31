@@ -91,7 +91,7 @@ export const config: AgentConfig = {
     },
     troubleshooting: [
       "Restart Daintree after installation to update PATH",
-      "Ensure Node.js and npm are installed first",
+      "For npm-based installation, ensure Node.js and npm are installed first",
       "Verify installation with: claude --version",
       "Run 'claude auth login' to authenticate after installing",
     ],

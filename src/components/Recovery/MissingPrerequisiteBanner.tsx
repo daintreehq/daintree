@@ -65,7 +65,6 @@ function pickGuidance(result: PrerequisiteCheckResult): Guidance | null {
 /** What actually stops working without each fatal tool; the spec carries no such field. */
 const CONSEQUENCE: Record<string, string> = {
   git: "git operations",
-  node: "agent launches",
 };
 
 /** One tool's own condition — a missing Git and an outdated Node are not the same sentence. */
