@@ -1015,11 +1015,14 @@ export const createRestartActions = (
         consumedSessionId || usedResumeLatest
           ? (currentTerminal.command ?? (forcedResume ? freshCommand : undefined))
           : spawnCommand;
-      const durableCommand = durableSource
-        ? dropRetiredAgentModel(effectiveAgentId, {
-            command: stripAssignedSessionIdArgs(durableSource, effectiveAgentId),
-          }).launch.command
-        : durableSource;
+      let durableCommand = durableSource;
+      if (durableSource) {
+        const durable = dropRetiredAgentModel(effectiveAgentId, {
+          command: stripAssignedSessionIdArgs(durableSource, effectiveAgentId),
+        });
+        durableCommand = durable.launch.command;
+        for (const modelId of durable.droppedModelIds) droppedModelIds.add(modelId);
+      }
       // An assigned id stays valid across a resume — the CLI reuses it rather
       // than minting a new one — so carrying it through the restart keeps the
       // pane's conversation addressable without waiting on a teardown scrape.

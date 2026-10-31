@@ -2952,6 +2952,10 @@ describe("restartTerminal with a retired Copilot model (#15652)", () => {
   });
 
   it("rebuilds from settings when the retired model was the only saved flag", async () => {
+    const { agentSettingsClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+      agents: { copilot: { customFlags: "--yolo" } },
+    });
     show({
       ...retiredCopilot,
       agentLaunchFlags: ["--model", "claude-opus-4.6"],
@@ -2961,9 +2965,9 @@ describe("restartTerminal with a retired Copilot model (#15652)", () => {
     await usePanelStore.getState().restartTerminal("test-1");
 
     const payload = mockSpawn.mock.calls[0]![0];
-    expect(payload.command).toBe("copilot");
-    expect(payload.agentLaunchFlags ?? []).toEqual([]);
-    expect(paneAfterRestart().command).toBe("copilot");
+    expect(payload.command).toBe("copilot --yolo");
+    expect(payload.agentLaunchFlags).toEqual(["--yolo"]);
+    expect(paneAfterRestart().command).toBe("copilot --yolo");
   });
 
   it("drops a retired model the pane's preset adds back after the saved fields are cleaned", async () => {
@@ -2983,8 +2987,12 @@ describe("restartTerminal with a retired Copilot model (#15652)", () => {
     );
   });
 
-  it("moves to another preset without carrying the retired model", async () => {
-    getMergedPresetMock.mockReturnValue({ id: "amber", name: "Amber", args: ["--amber"] });
+  it("moves to another preset carrying neither the pane's nor the preset's retired model", async () => {
+    getMergedPresetMock.mockReturnValue({
+      id: "amber",
+      name: "Amber",
+      args: ["--amber", "--model", "gpt-5.4"],
+    });
     show(retiredCopilot);
 
     await usePanelStore.getState().restartTerminalOnPreset("test-1", "amber");
@@ -2998,9 +3006,24 @@ describe("restartTerminal with a retired Copilot model (#15652)", () => {
     expect(pane.agentLaunchFlags).toEqual(["--amber"]);
     expect(notifyRetiredModelDroppedMock).toHaveBeenCalledWith(
       "copilot",
-      ["claude-opus-4.6"],
+      ["claude-opus-4.6", "gpt-5.4"],
       expect.anything()
     );
+  });
+
+  it("keeps the cleaned launch when a preset move's spawn fails after it was saved", async () => {
+    getMergedPresetMock.mockReturnValue({ id: "amber", name: "Amber", args: ["--amber"] });
+    mockSpawn.mockRejectedValueOnce(new Error("spawn failed"));
+    show(retiredCopilot);
+
+    await usePanelStore.getState().restartTerminalOnPreset("test-1", "amber");
+
+    const pane = paneAfterRestart();
+    expect(pane.agentModelId).toBeUndefined();
+    expect(pane.agentLaunchFlags).toEqual(["--allow-all-tools"]);
+    expect(pane.command).toBe("copilot --allow-all-tools");
+    expect(pane.callerLaunchFlags).toBeUndefined();
+    expect(notifyRetiredModelDroppedMock).toHaveBeenCalledTimes(1);
   });
 
   it("leaves the saved launch alone when a preset move fails before it starts", async () => {

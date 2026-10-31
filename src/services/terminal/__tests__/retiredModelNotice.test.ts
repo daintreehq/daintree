@@ -68,6 +68,18 @@ describe("notifyRetiredModelDropped", () => {
     expect(bars[0]?.message).toContain("3 GitHub Copilot panes");
     expect(bars[0]?.context?.panelId).toBeUndefined();
     expect(inboxRows()).toHaveLength(1);
+    // The bars it replaced are gone, not just hidden.
+    expect(useNotificationStore.getState().notifications).toHaveLength(1);
+  });
+
+  it("counts one pane restarted twice in a burst as one pane", () => {
+    notifyRetiredModelDropped("copilot", ["gpt-5.4"], { panelId: "p1" });
+    now += 500;
+    notifyRetiredModelDropped("copilot", ["gpt-5.4"], { panelId: "p1" });
+
+    const [bar] = liveBars();
+    expect(bar?.message).toContain("This GitHub Copilot pane");
+    expect(bar?.context?.panelId).toBe("p1");
   });
 
   it("keeps different models, and a later drop of the same one, as separate notices", () => {
@@ -78,7 +90,9 @@ describe("notifyRetiredModelDropped", () => {
 
     expect(liveBars()).toHaveLength(3);
     expect(inboxRows()).toHaveLength(3);
-    expect(liveBars().every((bar) => bar.message.includes("This GitHub Copilot pane"))).toBe(true);
+    expect(
+      liveBars().every((bar) => String(bar.message).includes("This GitHub Copilot pane"))
+    ).toBe(true);
   });
 
   it("still leaves an inbox row naming the model during quiet hours", () => {
