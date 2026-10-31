@@ -591,6 +591,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   // epoch and resets the flow-control ledger so acks from the old generation
   // (and the dropped hold) can't debit the new one.
   private rebuildFreshSlot(): void {
+    const carriesBracketedPaste = this.bracketedPasteMode;
     this.continuityLost = true;
     this.continuousSince = Date.now();
     this.feedEpoch++;
@@ -619,6 +620,17 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     // can be in, and both are cleared by the same successful post.
     this.geometryPostFailed = !created;
     this.sessionCreatePending = !created;
+    // The program set bracketed paste once and won't say so again; without
+    // this the fresh mirror would report it off for as long as the program
+    // runs, and context injection would refuse a perfectly good agent.
+    if (created && carriesBracketedPaste) {
+      this.pool.post(this.spec.terminalId, {
+        type: "prelude",
+        terminalId: this.spec.terminalId,
+        data: "\x1b[?2004h",
+      });
+      this.bracketedPasteMode = true;
+    }
     if (this.monitorSpec) {
       this.postAgentContext();
       // Preserve-state semantics (mirrors the in-thread preserveState path):

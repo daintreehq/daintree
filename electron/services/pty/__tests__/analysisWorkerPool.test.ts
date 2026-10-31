@@ -214,6 +214,30 @@ describe("AnalysisWorkerPool", () => {
     vi.useRealTimers();
   });
 
+  it.each([true, false])(
+    "carries bracketed paste (%s) into the respawned mirror, which the program won't re-send",
+    async (mode) => {
+      vi.useFakeTimers();
+      const backend = pool.createBackend(makeSpec("t1"), makeDelegate())!;
+      workers[0].emit("message", {
+        type: "viewport",
+        terminalId: "t1",
+        lines: ["❯ "],
+        cursorLine: "❯ ",
+        bracketedPasteMode: mode,
+      });
+      expect(backend.isBracketedPasteMode()).toBe(mode);
+
+      workers[0].emit("exit", 1);
+      await vi.advanceTimersByTimeAsync(600);
+      const replacement = workers[1];
+
+      const preludes = replacement.messagesOfType("prelude").map((m) => m.data);
+      expect(preludes.includes("\x1b[?2004h")).toBe(mode);
+      expect(backend.isBracketedPasteMode()).toBe(mode);
+    }
+  );
+
   it("seeds the respawned monitor busy when the host FSM is mid-work", async () => {
     vi.useFakeTimers();
     const delegate = makeDelegate();
