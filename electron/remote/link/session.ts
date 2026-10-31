@@ -141,6 +141,8 @@ export const HANDSHAKE_MAX_FRAME_BYTES = 64 * 1024;
 
 const MAX_REQUEST_ID = 0xffffffff;
 const END_GRACE_MS = 2_000;
+/** How often an open session pings its peer, unless its options say otherwise. */
+export const DEFAULT_PING_INTERVAL_MS = 5_000;
 /** A host paging under memory pressure can miss pings for a minute and still catch up. */
 const DEFAULT_IDLE_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_PENDING_REQUESTS = 4096;
@@ -336,7 +338,7 @@ export class LinkSession {
     if (options.holdInbound) this.held = [];
     this.clearHandshakeTimer();
     this._lastReceivedAt = this.now();
-    const pingMs = this.opts.pingIntervalMs ?? 5_000;
+    const pingMs = this.opts.pingIntervalMs ?? DEFAULT_PING_INTERVAL_MS;
     if (pingMs > 0) {
       this.pingTimer = setInterval(() => this.ping(), pingMs);
       this.pingTimer.unref?.();
