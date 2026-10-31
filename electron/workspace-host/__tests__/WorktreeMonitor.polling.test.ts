@@ -2269,6 +2269,146 @@ describe("WorktreeMonitor", () => {
     });
   });
 
+  describe("a pass that outlives the watchdog (#15645)", () => {
+    const never = () => new Promise<never>(() => {});
+    const dirty = {
+      worktreeId: TEST_WORKTREE.id,
+      rootPath: TEST_WORKTREE.path,
+      changes: [
+        { path: `${TEST_WORKTREE.path}/a.ts`, status: "modified", insertions: 1, deletions: 0 },
+      ],
+      changedFileCount: 1,
+      tracking: null,
+      lastCommitMessage: "Last commit",
+    };
+    // A poll fires 2s after the last one settles; the watchdog gives up 40s in.
+    const POLL_THEN_EXPIRE_MS = 2_000 + 40_000;
+
+    async function useRealPollingStrategy(): Promise<void> {
+      const actual = await vi.importActual<
+        typeof import("../../services/worktree/AdaptivePollingStrategy.js")
+      >("../../services/worktree/AdaptivePollingStrategy.js");
+      const { AdaptivePollingStrategy } = await import("../../services/worktree/index.js");
+      vi.mocked(AdaptivePollingStrategy).mockImplementationOnce(function (
+        config?: ConstructorParameters<typeof actual.AdaptivePollingStrategy>[0]
+      ) {
+        return new actual.AdaptivePollingStrategy(config);
+      } as never);
+    }
+
+    async function startSeeded(callbacks = makeCallbacks()) {
+      mockGetWorktreeChangesWithStats.mockReset().mockResolvedValueOnce(dirty);
+      mockCategorizeWorktree.mockReturnValue("active");
+      const monitor = new WorktreeMonitor(
+        TEST_WORKTREE,
+        { ...TEST_CONFIG, circuitBreakerThreshold: 3 },
+        callbacks,
+        "main"
+      );
+      await monitor.start();
+      await flushInitialStatus();
+      expect(monitor.getSnapshot().mood).toBe("active");
+      return monitor;
+    }
+
+    it("shows stale on expiry and the breaker on repeated expiry, until a working pass clears both", async () => {
+      await useRealPollingStrategy();
+      const monitor = await startSeeded();
+      const observedSummary = monitor.getSnapshot().summary;
+      mockGetWorktreeChangesWithStats.mockImplementation(never);
+
+      await vi.advanceTimersByTimeAsync(POLL_THEN_EXPIRE_MS);
+      expect(monitor.getSnapshot().mood).toBe("stale");
+      expect(monitor.isCircuitBreakerTripped()).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(2 * POLL_THEN_EXPIRE_MS);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(4);
+      expect(monitor.isCircuitBreakerTripped()).toBe(true);
+      expect(monitor.getSnapshot().mood).toBe("error");
+      expect(monitor.getSnapshot().summary).toBe("⚠️ Polling delayed after consecutive failures");
+
+      // The dependency answers again, with exactly what it said before.
+      mockGetWorktreeChangesWithStats.mockReset().mockResolvedValue(dirty);
+      // Cooldown retry: max(pollIntervalMax, interval) with jitter pinned to 0.
+      await vi.advanceTimersByTimeAsync(TEST_CONFIG.pollIntervalMax);
+
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+      expect(monitor.isCircuitBreakerTripped()).toBe(false);
+      expect(monitor.getSnapshot().mood).toBe("active");
+      expect(monitor.getSnapshot().summary).toBe(observedSummary);
+
+      monitor.stop();
+    });
+
+    it("counts no poll that found an out-of-band pass in flight, and frees the slot at the deadline", async () => {
+      const monitor = await startSeeded();
+      const strategy = (
+        monitor as unknown as {
+          pollingStrategy: { recordSuccess: () => void; recordFailure: () => boolean };
+        }
+      ).pollingStrategy;
+      mockGetWorktreeChangesWithStats.mockImplementation(never);
+
+      // A manual refresh starts the pass that hangs; polls keep firing behind it.
+      monitor.triggerRefreshIfUpdating();
+      await vi.advanceTimersByTimeAsync(38_000);
+
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(2);
+      expect(strategy.recordSuccess).not.toHaveBeenCalled();
+      expect(strategy.recordFailure).not.toHaveBeenCalled();
+      expect(monitor.getSnapshot().mood).toBe("active");
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(monitor.getSnapshot().mood).toBe("stale");
+
+      // The next poll gets the slot and runs a pass of its own.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(3);
+
+      monitor.stop();
+    });
+
+    it("runs a refresh parked behind the hung pass as soon as the watchdog gives up", async () => {
+      mockGetWorktreeChangesWithStats.mockReset().mockImplementation(never);
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+      (monitor as unknown as { _isRunning: boolean })._isRunning = true;
+
+      monitor.triggerRefreshIfUpdating();
+      await vi.advanceTimersByTimeAsync(0);
+      // Arrives while the first pass holds the slot, so it is parked.
+      monitor.triggerRefreshIfUpdating();
+      await vi.advanceTimersByTimeAsync(39_999);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(2);
+
+      monitor.stop();
+    });
+
+    it("keeps polling after an elevated first pass fails", async () => {
+      mockGetWorktreeChangesWithStats
+        .mockReset()
+        .mockRejectedValueOnce(new Error("fatal: bad object"))
+        .mockResolvedValue(dirty);
+      const monitor = new WorktreeMonitor(
+        { ...TEST_WORKTREE, isCurrent: true },
+        TEST_CONFIG,
+        makeCallbacks(),
+        "main"
+      );
+
+      await expect(monitor.start()).rejects.toThrow("bad object");
+      expect(monitor.getSnapshot().mood).toBe("error");
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(2);
+      expect(monitor.getSnapshot().mood).toBe("stable");
+
+      monitor.stop();
+    });
+  });
+
   describe("stop mid-pass (#15630)", () => {
     it("lets a restart run its own pass and drops the stopped lifecycle's late result", async () => {
       let releaseOld!: (changes: unknown) => void;

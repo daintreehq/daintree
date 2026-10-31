@@ -10,6 +10,45 @@ import { createHardenedGit, createWslHardenedGit } from "./hardenedGit.js";
 import type { WslGitInvocation } from "./hardenedGit.js";
 import { getGitDir } from "./gitUtils.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { TimeoutError, timeoutSignal, withTimeout } from "./withTimeout.js";
+
+// Ceiling for one filesystem call on the status path, as on the rest of the
+// poll path. A stalled mount (hard NFS, a dropped SMB share, a disk that won't
+// wake) would otherwise hold the whole pass until the poll watchdog gave up.
+const FS_OP_TIMEOUT_MS = 5_000;
+
+// `stat` and `realpath` take no AbortSignal, so a stalled one is abandoned,
+// not cancelled. Timeout messages carry no path: they reach logs, and the
+// removal heuristics below match on message text.
+function statBounded(path: string): Promise<Stats> {
+  return withTimeout(fs.stat(path), FS_OP_TIMEOUT_MS, "stat timed out");
+}
+
+function realpathBounded(path: string): Promise<string> {
+  return withTimeout(fs.realpath(path), FS_OP_TIMEOUT_MS, "realpath timed out");
+}
+
+// The signal reclaims the read's buffers once it times out; the race settles
+// the call even when the open itself never returns.
+async function readFileBounded(path: string): Promise<Buffer>;
+async function readFileBounded(path: string, encoding: "utf-8"): Promise<string>;
+async function readFileBounded(path: string, encoding?: "utf-8"): Promise<Buffer | string> {
+  const { signal, dispose } = timeoutSignal(FS_OP_TIMEOUT_MS);
+  try {
+    return await withTimeout<Buffer | string>(
+      encoding ? fs.readFile(path, { encoding, signal }) : fs.readFile(path, { signal }),
+      FS_OP_TIMEOUT_MS,
+      "readFile timed out"
+    );
+  } catch (error) {
+    // A read that honours the abort rejects with an AbortError first; it is
+    // still this bound expiring, and the per-file stall latch keys on that.
+    if (signal.aborted && signal.reason instanceof TimeoutError) throw signal.reason;
+    throw error;
+  } finally {
+    dispose();
+  }
+}
 
 const GIT_WORKTREE_CHANGES_CACHE = new Cache<string, WorktreeChanges>({
   maxSize: 100,
@@ -18,7 +57,11 @@ const GIT_WORKTREE_CHANGES_CACHE = new Cache<string, WorktreeChanges>({
 
 const inFlightWorktreeChanges = new Map<
   string,
-  { promise: Promise<WorktreeChanges>; signal: AbortSignal | undefined }
+  {
+    promise: Promise<WorktreeChanges>;
+    signal: AbortSignal | undefined;
+    abandonSignal: AbortSignal | undefined;
+  }
 >();
 
 // Oversized-repo warning fires once per cwd and re-arms only when a later fetch
@@ -578,7 +621,7 @@ async function resolveCommonDirForGitDir(gitDir: string): Promise<string> {
   const cached = COMMON_DIR_CACHE.get(gitDir);
   if (cached !== undefined) return cached;
   try {
-    const content = (await fs.readFile(resolve(gitDir, "commondir"), "utf-8")).trim();
+    const content = (await readFileBounded(resolve(gitDir, "commondir"), "utf-8")).trim();
     const result = content ? (isAbsolute(content) ? content : resolve(gitDir, content)) : gitDir;
     COMMON_DIR_CACHE.set(gitDir, result);
     return result;
@@ -596,7 +639,7 @@ async function resolvePackedRef(commonDir: string, refName: string): Promise<str
   const packedPath = resolve(commonDir, "packed-refs");
   let stat: Stats;
   try {
-    stat = await fs.stat(packedPath);
+    stat = await statBounded(packedPath);
   } catch {
     return null;
   }
@@ -607,7 +650,7 @@ async function resolvePackedRef(commonDir: string, refName: string): Promise<str
   let refs = PACKED_REFS_CACHE.get(cacheKey);
   if (!refs) {
     try {
-      const content = await fs.readFile(packedPath, "utf-8");
+      const content = await readFileBounded(packedPath, "utf-8");
       refs = new Map();
       for (const line of content.split("\n")) {
         // Skip the header and peeled-tag (^<oid>) lines.
@@ -648,7 +691,7 @@ async function resolveHeadOidFromFs(cwd: string): Promise<string | null> {
 export async function resolveHeadOidFromGitDir(gitDir: string): Promise<string | null> {
   let head: string;
   try {
-    head = (await fs.readFile(resolve(gitDir, "HEAD"), "utf-8")).trim();
+    head = (await readFileBounded(resolve(gitDir, "HEAD"), "utf-8")).trim();
   } catch {
     return null;
   }
@@ -661,7 +704,7 @@ export async function resolveHeadOidFromGitDir(gitDir: string): Promise<string |
   if (!refName.startsWith("refs/heads/") || !isSafeRefName(refName)) return null;
   const commonDir = await resolveCommonDirForGitDir(gitDir);
   try {
-    const loose = (await fs.readFile(resolve(commonDir, refName), "utf-8")).trim();
+    const loose = (await readFileBounded(resolve(commonDir, refName), "utf-8")).trim();
     return OID_RE.test(loose) ? loose : null;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
@@ -684,6 +727,13 @@ export interface GetWorktreeChangesOptions {
    * processes instead of abandoning them.
    */
   signal?: AbortSignal;
+  /**
+   * Aborted when the caller stops waiting without stopping the owner (the
+   * poll watchdog). The read may still be stuck, so nothing joins it from
+   * then on and a late result is not cached. It does not kill the children:
+   * `signal` keys the reusable git instance.
+   */
+  abandonSignal?: AbortSignal;
 }
 
 // One SimpleGit per (cancellation owner, route). Construction runs a
@@ -757,7 +807,7 @@ export async function getWorktreeChangesWithStats(
     // Shared only between callers with the same cancellation owner: a read
     // joined across owners would hand one caller the other's abort.
     const inFlight = inFlightWorktreeChanges.get(cwd);
-    if (inFlight && inFlight.signal === options.signal) {
+    if (inFlight && inFlight.signal === options.signal && !inFlight.abandonSignal?.aborted) {
       return inFlight.promise;
     }
   }
@@ -765,10 +815,12 @@ export async function getWorktreeChangesWithStats(
   const fetchPromise = (async () => {
     const MAX_UNTRACKED_FILES = 200;
     // stat instead of access: the (dev, ino) pair doubles as the validity
-    // check for the static-info cache below. Error mapping is unchanged.
+    // check for the static-info cache below. Error mapping is unchanged; a
+    // timeout is not ENOENT, so a stalled mount fails the pass instead of
+    // retiring the worktree.
     let cwdStat: Stats;
     try {
-      cwdStat = await fs.stat(cwd);
+      cwdStat = await statBounded(cwd);
     } catch (accessError) {
       const nodeError = accessError as NodeJS.ErrnoException;
       if (nodeError.code === "ENOENT") {
@@ -817,8 +869,8 @@ export async function getWorktreeChangesWithStats(
             return { headOid: "", toplevelRaw };
           });
         headOid = revParsed.headOid;
-        gitRoot = await fs.realpath(revParsed.toplevelRaw.trim());
-        realCwd = await fs.realpath(cwd);
+        gitRoot = await realpathBounded(revParsed.toplevelRaw.trim());
+        realCwd = await realpathBounded(cwd);
         WORKTREE_STATIC_CACHE.set(cwd, {
           gitRoot,
           realCwd,
@@ -905,9 +957,22 @@ export async function getWorktreeChangesWithStats(
       }
       const absPathToMeta = new Map<string, { mtimeMs: number; size: number }>();
 
+      // The per-file reads below all degrade on failure. Once one has timed
+      // out the mount has stalled, so the rest fail fast: hundreds of files
+      // each waiting out their own bound would outlast the poll watchdog, and
+      // every abandoned syscall holds a threadpool thread.
+      let mountStalled = false;
+      const perFile = <T>(read: () => Promise<T>): Promise<T> => {
+        if (mountStalled) return Promise.reject(new TimeoutError("mount stalled earlier"));
+        return read().catch((error: unknown) => {
+          if (error instanceof TimeoutError) mountStalled = true;
+          throw error;
+        });
+      };
+
       if (useScopedDiff) {
         const statResults = await Promise.allSettled(
-          trackedChangedFiles.map((rel) => fs.stat(resolve(gitRoot, rel)))
+          trackedChangedFiles.map((rel) => perFile(() => statBounded(resolve(gitRoot, rel))))
         );
         for (let i = 0; i < trackedChangedFiles.length; i++) {
           const rel = trackedChangedFiles[i];
@@ -995,7 +1060,7 @@ export async function getWorktreeChangesWithStats(
 
       const countFileLines = async (filePath: string): Promise<number | null> => {
         try {
-          const stats = await fs.stat(filePath);
+          const stats = await perFile(() => statBounded(filePath));
           // Reused by the mtime pass below instead of a second stat.
           absPathToMeta.set(filePath, { mtimeMs: stats.mtimeMs, size: stats.size });
           const MAX_FILE_SIZE = 10 * 1024 * 1024;
@@ -1009,7 +1074,7 @@ export async function getWorktreeChangesWithStats(
             return cached.insertions;
           }
 
-          const buffer = await fs.readFile(filePath);
+          const buffer = await perFile(() => readFileBounded(filePath));
 
           const sampleSize = Math.min(buffer.length, 8192);
           if (buffer.subarray(0, sampleSize).indexOf(0) !== -1) {
@@ -1151,7 +1216,7 @@ export async function getWorktreeChangesWithStats(
           const targetPath = change.status === "deleted" ? dirname(change.path) : change.path;
 
           try {
-            const stat = await fs.stat(targetPath);
+            const stat = await perFile(() => statBounded(targetPath));
             change.mtimeMs = stat.mtimeMs;
             return stat.mtimeMs;
           } catch {
@@ -1192,7 +1257,9 @@ export async function getWorktreeChangesWithStats(
       // Other enrichment steps degrade instead of throwing; a cancelled run
       // must not publish what it half-read.
       options.signal?.throwIfAborted();
-      GIT_WORKTREE_CHANGES_CACHE.set(cwd, result, cacheTTL);
+      if (!options.abandonSignal?.aborted) {
+        GIT_WORKTREE_CHANGES_CACHE.set(cwd, result, cacheTTL);
+      }
       return result;
     } catch (error) {
       if (error instanceof WorktreeRemovedError) {
@@ -1206,7 +1273,7 @@ export async function getWorktreeChangesWithStats(
       // A spawn into a directory removed after the stat above also reports
       // `spawn git ENOENT`; tell it apart from a missing binary by looking.
       if (isMissingGitExecutableError(error)) {
-        const cwdGone = await fs.stat(cwd).then(
+        const cwdGone = await statBounded(cwd).then(
           () => false,
           (statError: NodeJS.ErrnoException) => statError.code === "ENOENT"
         );
@@ -1222,6 +1289,8 @@ export async function getWorktreeChangesWithStats(
         // simply has no Git installed, so it falls through to the classified
         // `toGitOperationError` path instead (#11764).
         !isMissingGitExecutableError(error) &&
+        // Not seeing an answer is not proof the worktree is gone.
+        !(error instanceof TimeoutError) &&
         (errorMessage.includes("ENOENT") ||
           errorMessage.includes("no such file or directory") ||
           errorMessage.includes("Unable to read current working directory") ||
@@ -1237,7 +1306,11 @@ export async function getWorktreeChangesWithStats(
   })();
 
   if (!forceRefresh) {
-    inFlightWorktreeChanges.set(cwd, { promise: fetchPromise, signal: options.signal });
+    inFlightWorktreeChanges.set(cwd, {
+      promise: fetchPromise,
+      signal: options.signal,
+      abandonSignal: options.abandonSignal,
+    });
   }
 
   try {

@@ -37,6 +37,12 @@ interface PassClaim {
   readonly lifecycleSignal: AbortSignal;
 }
 
+/**
+ * `skipped`: no pass started, because another held the single-flight slot or
+ * the monitor isn't running. A poll that got `skipped` checked nothing.
+ */
+export type GitStatusPassOutcome = "ran" | "skipped";
+
 interface HeadState {
   branch: string | undefined;
   isDetached: boolean;
@@ -139,6 +145,10 @@ export class GitStatusPass {
   // The pass holding the single-flight slot. Losing it (stop, watchdog) ends
   // that pass's right to write, whenever it settles.
   private claim: PassClaim | null = null;
+  // The card is showing a degraded mood (a failed or expired pass) over its
+  // last snapshot. Until a full read publishes, every pass is forced, so an
+  // unchanged tree still replaces the degraded mood and summary.
+  private degraded = false;
 
   constructor(
     private readonly host: GitStatusPassHost,
@@ -209,6 +219,15 @@ export class GitStatusPass {
     return this.activityTimestamp;
   }
 
+  get isDegraded(): boolean {
+    return this.degraded;
+  }
+
+  /** The monitor put a degraded mood on the card; only a full read clears it. */
+  markDegraded(): void {
+    this.degraded = true;
+  }
+
   /**
    * Give up on the in-flight pass: nothing it finds from here on lands, and
    * the slot is free for the next one. The stat baseline goes too, since the
@@ -222,10 +241,18 @@ export class GitStatusPass {
    * `abandonSignal` lets a caller that stops waiting (the poll watchdog) give
    * up on exactly the pass this call started, never a newer one.
    */
-  async run(forceRefresh: boolean = false, abandonSignal?: AbortSignal): Promise<void> {
+  async run(
+    forceRefresh: boolean = false,
+    abandonSignal?: AbortSignal
+  ): Promise<GitStatusPassOutcome> {
     if (this.host.isUpdating || !this.host.isRunning || this.host.abortSignal.aborted) {
-      return;
+      return "skipped";
     }
+    await this.runClaimed(forceRefresh || this.degraded, abandonSignal);
+    return "ran";
+  }
+
+  private async runClaimed(forceRefresh: boolean, abandonSignal?: AbortSignal): Promise<void> {
     // Claim the single-flight slot before the first await. Everything below
     // suspends (git-dir resolution, the stat pre-check), and forced refreshes
     // bypass both the worktree-changes in-flight cache and the pre-check — so
@@ -376,6 +403,7 @@ export class GitStatusPass {
         cacheTTL,
         wsl: this.host.wslInvocation,
         signal,
+        abandonSignal,
       });
 
       if (!this.isLive(claim)) {
@@ -534,7 +562,13 @@ export class GitStatusPass {
 
       // A placeholder snapshot (startWithoutGitStatus) seeds every comparison
       // above, so "unchanged" can't be trusted until a status has published.
-      if (!anythingChanged && !forceRefresh && this.host.worktreeChanges !== null) {
+      // Nor can it while the card shows a degraded mood the hash never saw.
+      if (
+        !anythingChanged &&
+        !forceRefresh &&
+        !this.degraded &&
+        this.host.worktreeChanges !== null
+      ) {
         checkSucceeded = true;
         return;
       }
@@ -542,9 +576,12 @@ export class GitStatusPass {
       const isInitialLoad = !this.host.hasInitialStatus;
       const isNowClean = newChanges.changedFileCount === 0;
 
+      // Recovery recomputes the summary as a first load would: a degraded
+      // card's summary may be the watchdog's warning, not an observation.
       const nextSummary =
         isNowClean ||
         isInitialLoad ||
+        this.degraded ||
         (this.host.worktreeChanges && this.host.worktreeChanges.changedFileCount === 0)
           ? await this.fetchLastCommitMessage(newChanges, signal)
           : undefined;
@@ -591,6 +628,7 @@ export class GitStatusPass {
       this.baseMatchesUpstreamValue = nextBaseMatchesUpstream;
       this.baseCompareRefValue = nextBaseCompareRef;
       this.host.hasInitialStatus = true;
+      this.degraded = false;
 
       this.host.emitUpdate();
       checkSucceeded = true;
@@ -616,6 +654,7 @@ export class GitStatusPass {
       }
 
       this.host.mood = "error";
+      this.degraded = true;
       this.host.emitUpdate();
       throw error;
     } finally {

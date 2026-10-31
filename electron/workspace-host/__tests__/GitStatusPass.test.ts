@@ -635,7 +635,7 @@ describe("GitStatusPass", () => {
     (host as { abortSignal: AbortSignal }).abortSignal = new AbortController().signal;
     rejectStatus(new Error("the operation was aborted"));
 
-    await expect(running).resolves.toBeUndefined();
+    await expect(running).resolves.toBe("ran");
     expect(host.mood).toBe("stable");
     expect(host.emitUpdate).not.toHaveBeenCalled();
     expect(host.isUpdating).toBe(false);
@@ -651,7 +651,7 @@ describe("GitStatusPass", () => {
 
   it("is a no-op single-flight guard while a pass is already in flight", async () => {
     const { pass, host } = makePass({ isUpdating: true });
-    await pass.run(false);
+    await expect(pass.run(false)).resolves.toBe("skipped");
     expect(mockGetGitDir).not.toHaveBeenCalled();
     expect(host.isUpdating).toBe(true);
   });
@@ -733,6 +733,97 @@ describe("GitStatusPass", () => {
     expect(host.clearLinked).toHaveBeenCalledTimes(1);
     expect(host.onBranchChanged).toHaveBeenCalledWith("feature/y");
     vi.mocked(readFile).mockRejectedValue(new Error("ENOENT"));
+  });
+
+  describe("recovering a degraded card (#15645)", () => {
+    const dirty = () =>
+      makeChanges({
+        changes: [{ path: "/test/worktree/a.ts", status: "modified", insertions: 1, deletions: 0 }],
+        changedFileCount: 1,
+      });
+
+    function makeSeededPass() {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(dirty());
+      vi.mocked(categorizeWorktree).mockResolvedValue("active");
+      return makePass({}, {
+        compute: vi.fn().mockResolvedValue(null),
+      } as unknown as BaseDivergence);
+    }
+
+    it("publishes an unchanged read in full once, replacing the degraded mood and summary", async () => {
+      const made = makeSeededPass();
+      await made.pass.run(false);
+      const observedSummary = made.host.summary;
+      expect(observedSummary).toBe("✅ Last commit");
+
+      // The monitor's breaker put its warning over the snapshot.
+      made.host.mood = "error";
+      made.host.summary = "⚠️ Polling delayed after consecutive failures";
+      made.pass.markDegraded();
+      vi.mocked(made.host.emitUpdate).mockClear();
+      mockGetWorktreeChangesWithStats.mockClear();
+
+      await made.pass.run(false);
+
+      expect(made.host.emitUpdate).toHaveBeenCalledTimes(1);
+      expect(made.host.mood).toBe("active");
+      expect(made.host.summary).toBe(observedSummary);
+      expect(made.pass.isDegraded).toBe(false);
+      // A forced read: neither the TTL cache nor a joined in-flight read.
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledWith(
+        "/test/worktree",
+        expect.objectContaining({ forceRefresh: true })
+      );
+
+      vi.mocked(made.host.emitUpdate).mockClear();
+      await made.pass.run(false);
+      expect(made.host.emitUpdate).not.toHaveBeenCalled();
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenLastCalledWith(
+        "/test/worktree",
+        expect.objectContaining({ forceRefresh: false })
+      );
+    });
+
+    it("keeps a failed pass's error until a later read succeeds", async () => {
+      const made = makeSeededPass();
+      await made.pass.run(false);
+
+      mockGetWorktreeChangesWithStats.mockRejectedValueOnce(new Error("fatal: bad object"));
+      await expect(made.pass.run(false)).rejects.toThrow("bad object");
+      expect(made.host.mood).toBe("error");
+      expect(made.pass.isDegraded).toBe(true);
+
+      vi.mocked(made.host.emitUpdate).mockClear();
+      await made.pass.run(false);
+
+      expect(made.host.emitUpdate).toHaveBeenCalledTimes(1);
+      expect(made.host.mood).toBe("active");
+      expect(made.pass.isDegraded).toBe(false);
+    });
+
+    it("stays degraded through a sentinel-only observation", async () => {
+      const made = makeSeededPass();
+      await made.pass.run(false);
+      made.pass.markDegraded();
+      mockGetGitDir.mockResolvedValue("/test/worktree/.git");
+      mockGetRepoOperationStateSync.mockReturnValue("merge");
+
+      await expect(made.pass.run(false)).resolves.toBe("ran");
+
+      expect(made.pass.isDegraded).toBe(true);
+    });
+
+    it("hands the abandon signal to the status read", async () => {
+      const made = makeSeededPass();
+      const abandon = new AbortController();
+
+      await made.pass.run(false, abandon.signal);
+
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledWith(
+        "/test/worktree",
+        expect.objectContaining({ abandonSignal: abandon.signal })
+      );
+    });
   });
 
   describe("a pass that outlives its lifecycle (#15630)", () => {
@@ -1077,7 +1168,7 @@ describe("GitStatusPass", () => {
         made.dropBaseline.mockClear();
 
         rejectStale(new Error(message));
-        await expect(stale).resolves.toBeUndefined();
+        await expect(stale).resolves.toBe("ran");
 
         expect(made.host.mood).toBe("stable");
         expect(made.host.emitUpdate).not.toHaveBeenCalled();

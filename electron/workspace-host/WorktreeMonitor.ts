@@ -24,9 +24,13 @@ import { WatcherController, type WatcherControllerHost } from "./WatcherControll
 import { SnapshotBuilder, type SnapshotBuilderHost } from "./SnapshotBuilder.js";
 import { StatPrecheck, type StatPrecheckHost } from "./StatPrecheck.js";
 import { BaseDivergence, type BaseDivergenceHost } from "./BaseDivergence.js";
-import { GitStatusPass, type GitStatusPassHost } from "./GitStatusPass.js";
+import {
+  GitStatusPass,
+  type GitStatusPassHost,
+  type GitStatusPassOutcome,
+} from "./GitStatusPass.js";
 import type { StatusAdmissionController } from "./StatusAdmissionController.js";
-import { withTimeout } from "../utils/withTimeout.js";
+import { TimeoutError, withTimeout } from "../utils/withTimeout.js";
 import type { ClaimedIssue, IssueClaimProvenance } from "../services/issueBranchClaim.js";
 
 // Hard ceiling for individual filesystem syscalls on the poll path. On a
@@ -36,11 +40,12 @@ import type { ClaimedIssue, IssueClaimProvenance } from "../services/issueBranch
 // AbortSignal so the syscall is actually cancelled, not merely abandoned.
 const FS_OP_TIMEOUT_MS = 5_000;
 
-// Backstop watchdog around a full git-status pass. The git calls inside carry a
-// 30s simple-git block timeout and the fs calls are bounded above, so a normal
-// pass settles well under this; the watchdog only catches an await we didn't
-// individually bound, guaranteeing the poll loop always reschedules.
-const POLL_WATCHDOG_TIMEOUT_MS = 40_000;
+// Backstop watchdog around every git-status pass, whoever started it. The git
+// calls inside carry a 30s simple-git block timeout and the fs calls their own
+// bounds, so a normal pass settles well under this; the watchdog catches an
+// await nothing else bounded, so no pass can hold the single-flight slot, or
+// leave the card looking current, indefinitely.
+const STATUS_PASS_WATCHDOG_MS = 40_000;
 const RESOURCE_POLL_DEFAULT_ACTIVE_MS = 30_000;
 const RESOURCE_POLL_DEFAULT_BACKGROUND_MS = 300_000;
 const HEARTBEAT_GAP_MULTIPLIER = 3;
@@ -1700,11 +1705,14 @@ export class WorktreeMonitor {
     // together don't all fork git at t=0. The fetch scheduler already has
     // its own initial jitter on a separate cadence.
     if (this.isElevated) {
-      await this.updateGitStatus(true);
-
-      if (this._isRunning) {
-        this.scheduleNextPoll();
-        this.fetchScheduler.schedule(true);
+      try {
+        await this.updateGitStatus(true);
+      } finally {
+        // A failed or expired first pass still needs the loop that retries it.
+        if (this._isRunning) {
+          this.scheduleNextPoll();
+          this.fetchScheduler.schedule(true);
+        }
       }
     } else {
       this.fetchScheduler.schedule(true);
@@ -2303,7 +2311,15 @@ export class WorktreeMonitor {
       // Skip the gap check while a refresh is already in flight: it would
       // false-emit "stale" for any updateGitStatus that happens to take
       // longer than the floor (e.g., a slow git on a frozen filesystem).
-      if (!this._isUpdating && this.lastGitStatusCompletedAt > 0) {
+      // Skip it on a degraded card too: the card already says so and its next
+      // pass is already forced, while the gap, measured from the last pass
+      // that finished, would route every later poll to the uncounted
+      // out-of-band pass and keep repeated expiries from the breaker.
+      if (
+        !this._isUpdating &&
+        !this.gitStatusPass.isDegraded &&
+        this.lastGitStatusCompletedAt > 0
+      ) {
         const elapsedMs = Date.now() - this.lastGitStatusCompletedAt;
         const threshold = Math.min(
           Math.max(delayMs * HEARTBEAT_GAP_MULTIPLIER, HEARTBEAT_GAP_FLOOR_MS),
@@ -2343,9 +2359,12 @@ export class WorktreeMonitor {
       }
       // Read at run time: a worktree that gained or lost elevation while the
       // request waited for its slot gets the pass it needs now.
-      return this.updateGitStatus(forceRefresh()).catch(() => {
-        // updateGitStatus's own error path emits "error" mood; nothing to do here.
-      });
+      return this.updateGitStatus(forceRefresh()).then(
+        () => {},
+        () => {
+          // updateGitStatus's own error path emits "error" mood; nothing to do here.
+        }
+      );
     };
     try {
       if (this.pollQueue) {
@@ -2392,7 +2411,6 @@ export class WorktreeMonitor {
       const startTime = Date.now();
       const queueDelayMs = Math.max(0, startTime - queuedAt);
       const lifecycle = this._pollAbortController.signal;
-      const abandon = new AbortController();
 
       try {
         // Force a status refresh when an elevated worktree (focused or
@@ -2400,25 +2418,22 @@ export class WorktreeMonitor {
         // git-only modes can miss mid-edit changes that haven't reached
         // .git/ yet.
         const forceRefresh = this.isElevated && this.watcherController.currentMode !== "recursive";
-        // Watchdog the whole pass: if any await inside updateGitStatus hangs
-        // past the ceiling, treat it as a failure and move on rather than let
-        // this monitor's loop (and, via the shared pollQueue slot, the whole
-        // sidebar) wedge permanently.
-        await withTimeout(
-          this.updateGitStatus(forceRefresh, abandon.signal),
-          POLL_WATCHDOG_TIMEOUT_MS,
-          `poll watchdog: ${this.path}`
-        );
+        // The pass is watchdogged, so a hung await fails this poll rather than
+        // wedging this monitor's loop (and, via the shared pollQueue slot, the
+        // whole sidebar).
+        const outcome = await this.updateGitStatus(forceRefresh);
         if (lifecycle.aborted) return;
+        // Another pass held the slot, so this poll checked nothing. Counted as
+        // a success, it would reset the failure count that repeated expiry
+        // builds toward the breaker.
+        if (outcome === "skipped") return;
         this.pollingStrategy.recordSuccess(Date.now() - startTime, queueDelayMs);
       } catch (_error) {
-        // Once the watchdog stops waiting, the hung pass must not land late
-        // over a newer one, nor hold the slot the next poll needs.
-        abandon.abort();
         if (lifecycle.aborted) return;
         tripped = this.pollingStrategy.recordFailure(Date.now() - startTime, queueDelayMs);
 
         if (tripped) {
+          this.gitStatusPass.markDegraded();
           this.mood = "error";
           this.summary = "⚠️ Polling delayed after consecutive failures";
           this.emitUpdate();
@@ -2463,8 +2478,48 @@ export class WorktreeMonitor {
 
   // --- Git status ---
 
-  async updateGitStatus(forceRefresh: boolean = false, abandonSignal?: AbortSignal): Promise<void> {
-    return this.gitStatusPass.run(forceRefresh, abandonSignal);
+  /**
+   * One status pass under the watchdog. On expiry it gives up on exactly the
+   * pass it started, never a newer one, and rejects.
+   */
+  async updateGitStatus(forceRefresh: boolean = false): Promise<GitStatusPassOutcome> {
+    const lifecycle = this._pollAbortController.signal;
+    const abandon = new AbortController();
+    const pass = this.gitStatusPass.run(forceRefresh, abandon.signal);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<"expired">((resolve) => {
+      timer = setTimeout(() => resolve("expired"), STATUS_PASS_WATCHDOG_MS);
+    });
+    let result: GitStatusPassOutcome | "expired";
+    try {
+      result = await Promise.race([pass, expired]);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (result === "expired") {
+      abandon.abort();
+      // A stop already dropped the pass, and a restart's card isn't its to mark.
+      if (!lifecycle.aborted) this.handleStatusPassExpired();
+      throw new TimeoutError(`status pass watchdog: ${this.path}`);
+    }
+    return result;
+  }
+
+  /**
+   * The abandoned pass never finished, so the last snapshot is no longer a
+   * current observation. Shown as stale until a full read replaces it; an
+   * error mood already on the card stays.
+   */
+  private handleStatusPassExpired(): void {
+    if (!this._isRunning) return;
+    this.gitStatusPass.markDegraded();
+    if (this._hasInitialStatus && this.mood !== "error") {
+      this.mood = "stale";
+      this.emitUpdate();
+    }
+    // Refreshes parked behind the hung pass (watcher events, resume catch-up)
+    // get their fresh pass now instead of waiting for the next one to finish.
+    this.watcherController.flushPendingIfReady(true);
   }
 
   /**
