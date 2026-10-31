@@ -788,6 +788,35 @@ describe("adversarial: behavioral overrides flow to generateAgentCommand in dupl
     expect(opts.presetArgs).toEqual(["--verbose", "--trace"]);
   });
 
+  it("duplicates a multi-word preset element as one argument in both the command and its launch flags (#15638)", async () => {
+    const actual = await vi.importActual<typeof import("@shared/types")>("@shared/types");
+    const mod = await import("@shared/types");
+    vi.mocked(mod.generateAgentCommand).mockImplementationOnce(actual.generateAgentCommand);
+    vi.mocked(mod.buildAgentLaunchFlags).mockImplementationOnce(actual.buildAgentLaunchFlags);
+    const { agentSettingsClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+      agents: { claude: {} },
+    });
+    getMergedPresetMock.mockReturnValue({
+      id: "user-abc",
+      name: "Prompted",
+      args: ["--system-prompt", "two words"],
+    });
+
+    const panel = makePanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      agentPresetId: "user-abc",
+    });
+    const result = await buildPanelDuplicateOptions(panel, "grid");
+
+    expect(result.command).toContain("--system-prompt 'two words'");
+    expect(result.agentLaunchFlags).toEqual(["--system-prompt", "two words"]);
+    expect(actual.stripAssignedSessionIdArgs(result.command!, "claude")).toBe(
+      actual.buildLaunchCommandFromFlags("claude-cmd", "claude", result.agentLaunchFlags!)
+    );
+  });
+
   it("presetArgs is undefined when preset has no args", async () => {
     const spy = await getGenerateAgentCommandSpy();
     const { agentSettingsClient } = await import("@/clients");
