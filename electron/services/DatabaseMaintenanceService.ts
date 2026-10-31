@@ -32,9 +32,7 @@ const QUICK_CHECK_DRAIN_TIMEOUT_MS = 2000;
 const MAX_BACKUP_VERIFY_FAILURES = 3;
 
 export type BackupFileState =
-  | { kind: "saved"; writtenAt: number }
-  | { kind: "missing" }
-  | { kind: "unreadable" };
+  { kind: "saved"; writtenAt: number } | { kind: "missing" } | { kind: "unreadable" };
 
 /**
  * Backups stopped mid-session. `corruption`: the live database failed its full

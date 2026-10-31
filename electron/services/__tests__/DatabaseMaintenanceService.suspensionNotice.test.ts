@@ -178,8 +178,9 @@ describe("DatabaseMaintenanceService backup suspension notices", () => {
     startSession(true);
     await idleTicks(1);
     const rerunCheck = () =>
-      (service as unknown as { runDeferredQuickCheck(): Promise<boolean> | null })
-        .runDeferredQuickCheck();
+      (
+        service as unknown as { runDeferredQuickCheck(): Promise<boolean> | null }
+      ).runDeferredQuickCheck();
 
     await expect(rerunCheck()).resolves.toBe(false);
     await expect(rerunCheck()).resolves.toBe(false);
