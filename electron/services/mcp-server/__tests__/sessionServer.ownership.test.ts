@@ -337,6 +337,174 @@ describe("session-scoped resource ownership (#11909)", () => {
     });
   });
 
+  // #15728: a close trashes the panel and its process runs on through the
+  // grace, and `terminal.closeOwned` releases the creation record as it
+  // succeeds. The wait answers to what this owner closed instead.
+  describe("terminal.waitForExit", () => {
+    const WAIT_RESULT = {
+      processes: [{ terminalId: "terminal-1", outcome: "exited" as const, exitCode: 0 }],
+    };
+
+    function waitHarness(sessionId: string, overrides?: Partial<SessionServerDeps>) {
+      const store = new RealSessionStore(() => {}, {
+        launchGenerationOf: (terminalId) => (terminalId === "terminal-1" ? 7 : null),
+      });
+      liveStores.push(store);
+      seedLiveSession(store, sessionId, "core");
+      store.sessionOriginMap.set(sessionId, "external");
+      const manifest: ActionManifestEntry[] = [
+        ...ownedManifest(),
+        { ...makeManifestEntry("terminal.waitForExit"), kind: "command", danger: "safe" },
+      ];
+      const dispatchAction = vi.fn(async (_id: string, args: unknown) => ({
+        result: {
+          ok: true as const,
+          result: { closedIds: [(args as { terminalId: string }).terminalId] },
+        },
+      }));
+      const waitForClosedPanelExits = vi.fn(async () => WAIT_RESULT);
+      const deps = fakeDeps({
+        sessionStore: store,
+        dispatchAction,
+        waitForClosedPanelExits,
+        requestManifest: vi.fn().mockResolvedValue(manifest),
+        getCachedManifest: vi.fn(() => manifest),
+        ...overrides,
+      });
+      return {
+        store,
+        deps,
+        dispatchAction,
+        waitForClosedPanelExits,
+        server: createSessionServer(sessionId, deps),
+      };
+    }
+
+    it("waits for a panel this session closed, after the close released its creation record", async () => {
+      const { store, server, dispatchAction, waitForClosedPanelExits } = waitHarness("s-wait");
+      store.resourceOwnership.record("s-wait", [{ kind: "terminal", id: "terminal-1" }]);
+      await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+      expect(store.resourceOwnership.owns("s-wait", "terminal", "terminal-1")).toBe(false);
+
+      const result = await callTool(server, {
+        name: "terminal.waitForExit",
+        arguments: { terminalIds: ["terminal-1", "terminal-1"], timeoutMs: 5_000 },
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toEqual(WAIT_RESULT);
+      // The incarnation main knew when it closed, once however often named.
+      expect(waitForClosedPanelExits).toHaveBeenCalledExactlyOnceWith(
+        [{ terminalId: "terminal-1", launchGeneration: 7 }],
+        expect.objectContaining({ timeoutMs: 5_000, endGrace: false })
+      );
+      // The close reached the renderer; the wait never did.
+      expect(dispatchAction).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses the whole wait when one panel was never closed by this session", async () => {
+      const { store, server, waitForClosedPanelExits } = waitHarness("s-mixed");
+      store.resourceOwnership.record("s-mixed", [
+        { kind: "terminal", id: "terminal-1" },
+        { kind: "terminal", id: "terminal-2" },
+      ]);
+      await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      const result = await callTool(server, {
+        name: "terminal.waitForExit",
+        arguments: { terminalIds: ["terminal-1", "terminal-2"], endGrace: true },
+      });
+
+      expect(toolErrorPayload(result).code).toBe("RESOURCE_NOT_OWNED");
+      expect(errorText(result)).toContain("terminal-2");
+      expect(waitForClosedPanelExits).not.toHaveBeenCalled();
+    });
+
+    it("grants nothing for a close that closed nothing", async () => {
+      const { store, server, waitForClosedPanelExits } = waitHarness("s-noop-wait", {
+        dispatchAction: vi.fn(async () => ({
+          result: { ok: true as const, result: { closedIds: [] } },
+        })),
+      });
+      store.resourceOwnership.record("s-noop-wait", [{ kind: "terminal", id: "terminal-1" }]);
+      await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      const result = await callTool(server, {
+        name: "terminal.waitForExit",
+        arguments: { terminalIds: ["terminal-1"] },
+      });
+
+      expect(toolErrorPayload(result).code).toBe("RESOURCE_NOT_OWNED");
+      expect(waitForClosedPanelExits).not.toHaveBeenCalled();
+    });
+
+    it("never waits on another session's close", async () => {
+      const { store, server, deps, waitForClosedPanelExits } = waitHarness("s-closer");
+      store.resourceOwnership.record("s-closer", [{ kind: "terminal", id: "terminal-1" }]);
+      await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+      seedLiveSession(store, "s-other", "core");
+      store.sessionOriginMap.set("s-other", "external");
+      const other = createSessionServer("s-other", deps);
+
+      const result = await callTool(other, {
+        name: "terminal.waitForExit",
+        arguments: { terminalIds: ["terminal-1"] },
+      });
+
+      expect(toolErrorPayload(result).code).toBe("RESOURCE_NOT_OWNED");
+      expect(waitForClosedPanelExits).not.toHaveBeenCalled();
+    });
+
+    it("holds ending the grace to the drive rule, but still lets the caller wait", async () => {
+      const refuseWrite = vi.fn(() => ({
+        code: "PROJECT_NOT_DRIVEN",
+        message: "Someone else drives this project.",
+      }));
+      const { store, server, waitForClosedPanelExits } = waitHarness("s-driven", { refuseWrite });
+      store.resourceOwnership.noteClosed("s-driven", [
+        { terminalId: "terminal-1", launchGeneration: 7 },
+      ]);
+
+      const refused = await callTool(server, {
+        name: "terminal.waitForExit",
+        arguments: { terminalIds: ["terminal-1"], endGrace: true },
+      });
+      expect(toolErrorPayload(refused).code).toBe("PROJECT_NOT_DRIVEN");
+      expect(waitForClosedPanelExits).not.toHaveBeenCalled();
+
+      const waited = await callTool(server, {
+        name: "terminal.waitForExit",
+        arguments: { terminalIds: ["terminal-1"] },
+      });
+      expect(waited.isError).toBeFalsy();
+      expect(waitForClosedPanelExits).toHaveBeenCalledOnce();
+    });
+
+    it("rejects arguments past the bounds before checking anything", async () => {
+      const { server, waitForClosedPanelExits } = waitHarness("s-bounds");
+
+      const result = await callTool(server, {
+        name: "terminal.waitForExit",
+        arguments: { terminalIds: ["terminal-1"], timeoutMs: 600_000 },
+      });
+
+      expect(toolErrorPayload(result).code).toBe("VALIDATION_ERROR");
+      expect(waitForClosedPanelExits).not.toHaveBeenCalled();
+    });
+  });
+
   describe("terminal.closeOwned", () => {
     it("closes a terminal the session created and delegates to the real terminal.close", async () => {
       const { store, server, dispatchAction } = harness("s-close", {

@@ -34,6 +34,7 @@
  * them in its own main process — the batches (`*Many`, expanded there into
  * single calls this list already carries), `terminal.notifyWhenIdle`,
  * `mcp.surface`, `help.displayImage`, `skills.*`, `project.runCommand`,
+ * `terminal.waitForExit` (the exits and closes it reads are the host's),
  * `assistant.list`, `assistant.start` and `agent.readQuota` (a Shell's
  * assistant reaches the host's own assistants through them while it drives
  * the project), `host.list` (a host can be a Shell to hosts of its own), the
@@ -122,6 +123,7 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "terminal.sendKeysOwned",
   "terminal.setClientMetadata",
   "terminal.startHeld",
+  "terminal.waitForExit",
   "terminal.waitUntilIdle",
   "terminal.waitUntilIdleBatch",
   "terminal.watch",

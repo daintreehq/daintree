@@ -29,6 +29,10 @@ import {
   TerminalCloseManyArgsSchema,
   TerminalSendCommandManyArgsSchema,
 } from "@shared/types/mcpBatch";
+import {
+  TerminalWaitForExitArgsSchema,
+  TerminalWaitForExitResultSchema,
+} from "@shared/types/terminalExitWait";
 import type { TerminalQueryActionRunId } from "./terminalQueryActions.impl";
 
 /**
@@ -209,6 +213,38 @@ export function registerTerminalQueryActions(
     run: async () => {
       throw new Error(
         "terminal.closeMany must be invoked through the MCP main-process path, not renderer dispatch."
+      );
+    },
+  }));
+
+  // Registered for manifest metadata only: main answers it (#15728). What it
+  // reports are exits main kept after the pty-host let a closed panel go, and
+  // what it checks is the ownership ledger's record of what this session
+  // closed; neither is state a renderer can see.
+  actions.set("terminal.waitForExit", () => ({
+    id: "terminal.waitForExit",
+    title: "Wait for closed terminals to exit",
+    description:
+      "Wait, up to a deadline, for the processes of panels this session closed to exit. Each reports exited with its code, running at the deadline, or unknown. Can end their trash grace early instead of sitting it out. Use it before deleting their worktree.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["exit", "process", "trash", "stopped", "cleanup"],
+    palette: { mode: "hidden" },
+    argsSchema: TerminalWaitForExitArgsSchema,
+    resultSchema: TerminalWaitForExitResultSchema,
+    mcpOutputSchema: true,
+    examples: [
+      {
+        args: { terminalIds: ["term-abc123"], endGrace: true },
+        description: "You closed your panes and their processes must be gone before the delete.",
+      },
+    ],
+    run: async () => {
+      throw new Error(
+        "terminal.waitForExit must be invoked through the MCP main-process path, not renderer dispatch."
       );
     },
   }));

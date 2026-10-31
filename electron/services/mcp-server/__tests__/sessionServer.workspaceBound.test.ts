@@ -485,6 +485,8 @@ describe("workspace-bound external sessions (#11789)", () => {
         },
         // Executed through the injected notify service rather than a named dep.
         "terminal.notifyWhenIdle": { args: { terminalId: "t-1" } },
+        // Answers for panels this session closed, through main's exit wait (#15728).
+        "terminal.waitForExit": { args: { terminalIds: ["t-1"] } },
         // Executed through main's assistant control, for an assistant caller (#13496).
         "assistant.list": { args: {} },
         "assistant.start": { args: {} },

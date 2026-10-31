@@ -578,6 +578,48 @@ export async function dispatchOwnedResource(
 }
 
 /**
+ * Note what a close reported closed, under the owner the call was admitted
+ * with (#15728): the authority `terminal.waitForExit` checks, which outlives
+ * the creation record `terminal.closeOwned` releases. Read from the close's
+ * own result, never its arguments, so an empty `closedIds` notes nothing. A
+ * session that lost its transport mid-close notes nothing either, as with a
+ * creation.
+ */
+export function noteClosedTerminals(
+  call: {
+    readonly sessionId: string;
+    readonly sessionStore: Pick<
+      SessionStore,
+      "resourceOwnership" | "launchGenerationOf" | "hasLiveTransport"
+    >;
+    readonly ownershipOwner: string;
+  },
+  envelope: DispatchEnvelope
+): void {
+  const { sessionId, sessionStore, ownershipOwner } = call;
+  if (!envelope.result.ok) return;
+  const result = envelope.result.result;
+  if (typeof result !== "object" || result === null || Array.isArray(result)) return;
+  const closedIds = (result as { closedIds?: unknown }).closedIds;
+  if (!Array.isArray(closedIds) || closedIds.length === 0) return;
+  if (
+    !sessionStore.resourceOwnership.isPrincipalOwner(ownershipOwner) &&
+    !sessionStore.hasLiveTransport(sessionId)
+  ) {
+    return;
+  }
+  sessionStore.resourceOwnership.noteClosed(
+    ownershipOwner,
+    closedIds
+      .filter((id): id is string => typeof id === "string" && id.length > 0)
+      .map((terminalId) => ({
+        terminalId,
+        launchGeneration: sessionStore.launchGenerationOf(terminalId) ?? undefined,
+      }))
+  );
+}
+
+/**
  * Fold a completed dispatch into the session's ownership ledger (#11909):
  * record what it created, and release what it cleaned up.
  *

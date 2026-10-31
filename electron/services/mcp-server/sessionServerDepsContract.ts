@@ -220,6 +220,16 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     terminalId: string
   ) => Promise<import("../../../shared/types/panelClose.js").ClosedPanelProcess>;
   /**
+   * Wait, bounded, for the processes of panels the caller closed to exit
+   * (#15728), optionally ending their trash grace first. The caller has
+   * already checked each target against what it closed. Absent,
+   * `terminal.waitForExit` refuses: nothing here can observe an exit.
+   */
+  waitForClosedPanelExits?: (
+    targets: readonly import("./closedPanelExits.js").ClosedPanelExitTarget[],
+    options: import("./closedPanelExits.js").ClosedPanelExitWaitOptions
+  ) => Promise<import("../../../shared/types/terminalExitWait.js").TerminalWaitForExitResult>;
+  /**
    * Every terminal record the pty-host holds, trashed ones included, read
    * before `worktree.deleteOwned` runs (#15729). Rejects when the host or any
    * of its shards cannot answer. Absent, every owned worktree delete is

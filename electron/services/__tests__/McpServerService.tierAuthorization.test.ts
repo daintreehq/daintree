@@ -1089,6 +1089,11 @@ describe("McpServerService", () => {
         description: "Close several terminals",
       }),
       createManifestEntry({
+        id: "terminal.waitForExit" as ActionId,
+        title: "Wait for Closed Terminals to Exit",
+        description: "Wait for the processes of terminals this MCP session closed to exit",
+      }),
+      createManifestEntry({
         id: "terminal.readLastMessageOwned" as ActionId,
         title: "Read Owned Agent's Last Message",
         description: "Read the last reply an agent this MCP session created wrote",

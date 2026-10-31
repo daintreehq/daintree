@@ -57,6 +57,7 @@ const MAIN_PROCESS_TOOLS = [
   "project.runCheck",
   "project.runCommand",
   "terminal.readLastMessageOwned",
+  "terminal.waitForExit",
   "terminal.notifyWhenIdle",
   "assistant.list",
   "assistant.start",

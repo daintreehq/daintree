@@ -920,7 +920,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // down from full, so the default assistant reads a whole issue thread,
   // several agents' PRs in one call, and which check failed. In-app only, so
   // the external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 160_850;
+  // 160_850 → 162_140 for #15728, measured at 162_132 B: `terminal.waitForExit`
+  // joins core beside the closes, so a caller waits, bounded, for its closed
+  // panes' processes to exit (and can end their trash grace early) instead of
+  // polling a status that forgets them when the trash lets them go. In-app
+  // only, so the external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 162_140;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

@@ -558,7 +558,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // forge reads, so the default assistant can read a whole issue thread, check
   // several agents' PRs in one call and see which check failed. Their prose is
   // unchanged. In-app only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 23_750;
+  // 23_750 → 23_970 for `terminal.waitForExit` (#15728), measured at 23_961 B
+  // (+250): a caller that closed its panes waits, bounded, for their processes
+  // to exit before deleting the worktree. The prose has to carry the three
+  // outcomes and that the grace can be ended early. In-app only, off the
+  // external surface.
+  const MAX_COHORT_TOTAL_BYTES = 23_970;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

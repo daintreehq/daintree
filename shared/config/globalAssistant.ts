@@ -99,6 +99,7 @@ export const GLOBAL_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "terminal.interruptOwned",
   "terminal.closeOwned",
   "terminal.closeMany",
+  "terminal.waitForExit",
   "terminal.restartOnPresetOwned",
   "terminal.revealOwned",
   "terminal.placeOwned",

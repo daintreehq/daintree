@@ -6382,6 +6382,34 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
+    "description": "Wait, up to a deadline, for the processes of panels this session closed to exit. Each reports exited with its code, running at the deadline, or unknown. Can end their trash grace early instead of sitting it out. Use it before deleting their worktree.",
+    "examples": [
+      {
+        "args": {
+          "endGrace": true,
+          "terminalIds": [
+            "term-abc123",
+          ],
+        },
+        "description": "You closed your panes and their processes must be gone before the delete.",
+      },
+    ],
+    "id": "terminal.waitForExit",
+    "keywords": [
+      "exit",
+      "process",
+      "trash",
+      "stopped",
+      "cleanup",
+    ],
+    "kind": "command",
+    "requiresArgs": true,
+    "title": "Wait for closed terminals to exit",
+  },
+  {
+    "category": "terminal",
+    "danger": "safe",
+    "dangerRationale": undefined,
     "description": "Block until the agent in one terminal stops working. For several, use the batched wait; to poll without blocking, a status snapshot. A timeout is normal and means still working. A closed terminal also reads as idle, so check \`trackingState\`.",
     "examples": undefined,
     "id": "terminal.waitUntilIdle",

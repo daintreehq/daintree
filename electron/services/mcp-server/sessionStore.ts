@@ -25,8 +25,9 @@ import { ToolListRouteWatch } from "./toolListRouteWatch.js";
 export interface SessionStoreOptions {
   /**
    * The launch generation main tracks for a terminal, stamped on each creation
-   * {@link SessionStore.workerCreations} notes. Optional so bare test fixtures
-   * construct without one; their creations then name no run.
+   * {@link SessionStore.workerCreations} notes and each close the ownership
+   * ledger keeps (#15728). Optional so bare test fixtures construct without
+   * one; their creations then name no run.
    */
   launchGenerationOf?: (terminalId: string) => number | null;
   /**
@@ -186,6 +187,8 @@ export class SessionStore {
    * history the ownership ledger forgets on revocation. Authorizes nothing.
    */
   readonly workerCreations: WorkerCreationHistory;
+  /** The incarnation main tracks under a terminal id; null when it knows none. */
+  readonly launchGenerationOf: (terminalId: string) => number | null;
 
   // Wall-clock timestamps recording when each session's idle timer was armed.
   // Used by recomputeIdleTimers() to calculate awake elapsed time across
@@ -250,6 +253,7 @@ export class SessionStore {
     this.onTierDecayedFn = options.onTierDecayed ?? (() => {});
     this.grantCache = new GrantCache({ emit: options.emitGrantLifecycle });
     this.workerCreations = new WorkerCreationHistory(options.launchGenerationOf);
+    this.launchGenerationOf = options.launchGenerationOf ?? (() => null);
   }
 
   clearDedupState(sessionId: string): void {
