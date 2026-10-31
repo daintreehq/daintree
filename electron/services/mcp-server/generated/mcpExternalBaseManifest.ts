@@ -260,7 +260,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         model: {
           description:
-            "Omit for the CLI's default; set only when the user names a model. No preset needed.",
+            "Omit for the CLI's default; set only when the user names a model. No preset needed. Mistral Vibe takes one only headless: interactive false, with a prompt.",
           type: "string",
         },
         presetId: {

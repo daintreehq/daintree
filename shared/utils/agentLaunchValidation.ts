@@ -8,6 +8,8 @@
  * the wrong dependency direction for action registration (#11547).
  */
 
+import { canSelectAgentModel, getEffectiveAgentConfig } from "../config/agentRegistry.js";
+
 /**
  * Sanitize an assistant-supplied string for use as a panel title or an echoed
  * error fragment. Strips ASCII control characters (an LLM could emit newlines,
@@ -68,4 +70,38 @@ export function unknownAgentIdMessage(agentId: string): string {
     `Unknown agent ID '${safeId}'. Call agent.listAvailable for registered agent IDs, ` +
     `then retry, or use terminal.new to open a plain terminal.`
   );
+}
+
+/** Whether verbatim launch flags pass `--model`, before any `--` ends the options. */
+function passesModelFlag(flags: readonly string[] | undefined): boolean {
+  for (const flag of flags ?? []) {
+    if (flag === "--") return false;
+    if (flag === "--model" || flag.startsWith("--model=")) return true;
+  }
+  return false;
+}
+
+/**
+ * Why a launch can't take the model it asks for, in `model` or in its verbatim
+ * flags, or `undefined` when it can (#15569). Mistral Vibe's `--model` applies
+ * only to a new headless run: its interactive sessions ignore it (3.0.4) or
+ * refuse it as unknown (earlier releases), so the pane would run another model
+ * than the one asked for, or not start. Refused rather than dropped, so the
+ * caller doesn't take the launch as running that model.
+ */
+export function launchModelRefusal(
+  agentId: string,
+  launch: {
+    model?: string;
+    interactive?: boolean;
+    prompt?: string;
+    agentLaunchFlags?: readonly string[];
+  }
+): string | undefined {
+  if (!launch.model && !passesModelFlag(launch.agentLaunchFlags)) return undefined;
+  if (canSelectAgentModel(agentId, { interactive: launch.interactive, initialPrompt: launch.prompt })) {
+    return undefined;
+  }
+  const name = getEffectiveAgentConfig(agentId)?.name ?? agentId;
+  return `${name} applies a model only to a new headless run (interactive false, with a prompt) on versions that support it, and an interactive session ignores or rejects it. Launch headless, or without a model.`;
 }

@@ -26,6 +26,7 @@ import {
 import {
   agentClipboardDirectory,
   dropRetiredAgentModel,
+  dropUnselectedAgentModel,
   supportsCrossDirectoryResume,
 } from "@shared/types/agentSettings";
 import { notifyRetiredModelDropped } from "@/services/terminal/retiredModelNotice";
@@ -536,12 +537,19 @@ export const createRestartActions = (
       logWarn("[TerminalStore] Terminal no longer exists or was trashed", { id });
       return;
     }
-    // A pane saved with a retired model fails on every start (#15652). Each
-    // command below (fresh, resume, the saved one as a fallback) and the state
-    // the restart persists read these cleaned fields, so none can replay it.
-    const { launch: currentTerminal, droppedModelIds: droppedFromSaved } = dropRetiredAgentModel(
+    // A pane saved with a retired model fails on every start (#15652), and a
+    // restart never selects a model for an agent that takes one only on a new
+    // headless run (#15569). Each command below (fresh, resume, the saved one
+    // as a fallback) and the state the restart persists read these cleaned
+    // fields, so none can replay it.
+    const { launch: withoutRetired, droppedModelIds: droppedFromSaved } = dropRetiredAgentModel(
       _currentTerminalRaw.launchAgentId,
       _currentTerminalRaw
+    );
+    const currentTerminal = dropUnselectedAgentModel(
+      _currentTerminalRaw.launchAgentId,
+      withoutRetired,
+      { replay: true }
     );
     const droppedModelIds = new Set(droppedFromSaved);
 
@@ -1685,11 +1693,15 @@ async function respawnAgentOnPreset(
     return { success: false, error: "panel is not a PTY panel" };
   }
   // The new preset's launch is built from these fields, so a retired model
-  // saved on the pane doesn't follow it onto the new preset (#15652).
-  const { launch: terminal, droppedModelIds: droppedFromSaved } = dropRetiredAgentModel(
+  // saved on the pane doesn't follow it onto the new preset (#15652), nor
+  // does a model the agent takes only on a new headless run (#15569).
+  const { launch: withoutRetired, droppedModelIds: droppedFromSaved } = dropRetiredAgentModel(
     livePanel.launchAgentId,
     livePanel
   );
+  const terminal = dropUnselectedAgentModel(livePanel.launchAgentId, withoutRetired, {
+    replay: true,
+  });
   if (terminal.isRestarting) {
     return { success: false, error: "already restarting" };
   }
@@ -2043,7 +2055,7 @@ async function respawnAgentOnPreset(
         ...(switchedTitle &&
         t.title === switchedTitle.title &&
         t.titleMode === switchedTitle.titleMode
-          ? { title: terminal.title, titleMode: terminal.titleMode }
+          ? { title: livePanel.title, titleMode: livePanel.titleMode }
           : {}),
       };
       if (toolsError !== null && isPtyPanel(rolledBack)) {

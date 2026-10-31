@@ -4,6 +4,7 @@ import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js
 import {
   buildResumeCommand,
   dropRetiredAgentModel,
+  dropUnselectedAgentModel,
   stripAssignedSessionIdArgs,
   supportsSessionIdAssignment,
 } from "../../../shared/types/agentSettings.js";
@@ -109,7 +110,13 @@ export async function restartTerminalWithoutView(
       command = resume;
       resumedSessionId = sessionId;
     } else if (command) {
-      command = stripAssignedSessionIdArgs(command, agentId);
+      // A start-over is a replay, which never selects a model for an agent
+      // that takes one only on a new headless run (#15569).
+      command = dropUnselectedAgentModel(
+        agentId,
+        { command: stripAssignedSessionIdArgs(command, agentId) },
+        { replay: true }
+      ).command;
     }
   }
   // The first prompt stays with the run it was handed to (#14592), as a view's

@@ -64,11 +64,16 @@ export const config: AgentConfig = {
       "Requires Python >= 3.12 (the curl installer bootstraps uv-managed Python automatically)",
     ],
   },
+  // Vibe's `--model` takes an alias from the user's config.toml, and these are
+  // the aliases its default config ships. A models.dev provider id isn't one.
   models: [
     { id: "devstral-2", name: "Devstral 2", shortLabel: "Devstral" },
     { id: "devstral-small", name: "Devstral Small", shortLabel: "Small" },
     { id: "local", name: "Local (llama.cpp)", shortLabel: "Local" },
   ],
+  curatedModels: true,
+  // `--model` arrived in 3.0.4 for headless runs only (`--prompt`, new session).
+  modelSelection: "new-headless-session",
   capabilities: {
     scrollback: 10000,
     launchMcp: { format: "vibe-mcp-servers-env" },

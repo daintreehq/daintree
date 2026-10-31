@@ -1,5 +1,7 @@
 import {
   AGENT_REGISTRY,
+  canSelectAgentModel,
+  getAgentDisplayTitle,
   getEffectiveAgentConfig,
   isRetiredAgentModel,
 } from "../config/agentRegistry.js";
@@ -853,8 +855,15 @@ export function generateAgentCommand(
     }
   }
 
-  // Add --model flag if a specific model was selected for this launch
-  if (options?.modelId) {
+  // Add --model flag if a specific model was selected for this launch, and
+  // this launch's shape is one the CLI honours it on (#15569)
+  if (
+    options?.modelId &&
+    canSelectAgentModel(agentId, {
+      interactive: options.interactive,
+      initialPrompt: options.initialPrompt,
+    })
+  ) {
     parts.push(
       "--model",
       /^[A-Za-z0-9_.:/-]+$/.test(options.modelId) ? options.modelId : quoteAgentArg(options.modelId)
@@ -1083,8 +1092,9 @@ export function buildAgentLaunchFlags(
   );
   if (screenModeFlag) flags.push(screenModeFlag);
 
-  // Model flag for per-panel model selection
-  if (options?.modelId) {
+  // Model flag for per-panel model selection. These flags only ever replay a
+  // restart or resume, so an agent whose flag is headless-only keeps none.
+  if (options?.modelId && canSelectAgentModel(agentId)) {
     flags.push("--model", options.modelId);
   }
 
@@ -1143,6 +1153,7 @@ export function buildResumeCommand(
   const agentConfig = getEffectiveAgentConfig(agentId);
   const resume = agentConfig?.resume;
   if (!agentConfig || !resume) return undefined;
+  launchFlags = replayableLaunchFlags(launchFlags, agentId);
 
   const parts = [baseCommand ?? agentConfig.command];
 
@@ -1238,6 +1249,7 @@ export function buildResumeLatestCommand(
         ? resume.args()
         : undefined;
   if (!fallbackArgs || fallbackArgs.length === 0) return undefined;
+  launchFlags = replayableLaunchFlags(launchFlags, agentId);
 
   const parts = [baseCommand ?? agentConfig.command];
 
@@ -1494,14 +1506,14 @@ export function stripConversationSelectorFlags(
 const MODEL_FLAG = "--model";
 
 /**
- * Drops each `--model <id>` / `--model=<id>` naming a retired model from a run
- * of argument words. `unquote` reads a command's shell-quoted words for the id.
- * Returns undefined when nothing was dropped. Stops at `--`: what follows it is
- * positional, never a flag.
+ * Drops each `--model <id>` / `--model=<id>` whose id `shouldDrop` picks from a
+ * run of argument words. `unquote` reads a command's shell-quoted words for the
+ * id. Returns undefined when nothing was dropped. Stops at `--`: what follows
+ * it is positional, never a flag.
  */
-function withoutRetiredModelArgs(
+function withoutModelArgs(
   words: readonly string[],
-  agentId: string,
+  shouldDrop: (modelId: string) => boolean,
   unquote: (word: string) => string,
   dropped: Set<string>
 ): string[] | undefined {
@@ -1515,7 +1527,7 @@ function withoutRetiredModelArgs(
     }
     if (word === MODEL_FLAG && i + 1 < words.length) {
       const modelId = unquote(words[i + 1]!);
-      if (isRetiredAgentModel(agentId, modelId)) {
+      if (shouldDrop(modelId)) {
         dropped.add(modelId);
         changed = true;
         i++;
@@ -1523,7 +1535,7 @@ function withoutRetiredModelArgs(
       }
     } else if (word.startsWith(`${MODEL_FLAG}=`)) {
       const modelId = unquote(word.slice(MODEL_FLAG.length + 1));
-      if (isRetiredAgentModel(agentId, modelId)) {
+      if (shouldDrop(modelId)) {
         dropped.add(modelId);
         changed = true;
         continue;
@@ -1568,19 +1580,19 @@ export function dropRetiredAgentModel<T extends SavedAgentModelLaunch>(
     dropped.add(launch.agentModelId!);
     next.agentModelId = undefined;
   }
-  const identity = (word: string) => word;
+  const retired = (modelId: string) => isRetiredAgentModel(agentId, modelId);
   if (launch.agentLaunchFlags) {
-    const flags = withoutRetiredModelArgs(launch.agentLaunchFlags, agentId, identity, dropped);
+    const flags = withoutModelArgs(launch.agentLaunchFlags, retired, identityWord, dropped);
     if (flags) next.agentLaunchFlags = flags;
   }
   if (launch.callerLaunchFlags) {
-    const flags = withoutRetiredModelArgs(launch.callerLaunchFlags, agentId, identity, dropped);
+    const flags = withoutModelArgs(launch.callerLaunchFlags, retired, identityWord, dropped);
     if (flags) next.callerLaunchFlags = flags.length > 0 ? flags : undefined;
   }
   if (launch.command) {
-    const words = withoutRetiredModelArgs(
+    const words = withoutModelArgs(
       splitShellWords(launch.command),
-      agentId,
+      retired,
       unquoteShellWord,
       dropped
     );
@@ -1588,6 +1600,93 @@ export function dropRetiredAgentModel<T extends SavedAgentModelLaunch>(
   }
   if (dropped.size === 0) return { launch, droppedModelIds: [] };
   return { launch: next, droppedModelIds: [...dropped] };
+}
+
+const identityWord = (word: string) => word;
+const anyModel = () => true;
+
+/**
+ * Persisted flags as a replay may pass them on: without a `--model` for an
+ * agent that takes one only on a new headless run (#15569), which a restart or
+ * resume never is. Saved panes from before that rule still carry one.
+ */
+function replayableLaunchFlags(
+  flags: readonly string[] | undefined,
+  agentId: string
+): string[] | undefined {
+  if (!flags) return undefined;
+  if (canSelectAgentModel(agentId)) return [...flags];
+  return withoutModelArgs(flags, anyModel, identityWord, new Set()) ?? [...flags];
+}
+
+/**
+ * Takes a model choice the launch doesn't make out of a saved launch, for an
+ * agent whose `--model` only a new headless run takes
+ * (`AgentConfig.modelSelection`, #15569). Its replayed flags never keep one,
+ * since a restart or resume is never such a run. `agentModelId` stays only
+ * while `command` passes it as `--model`, so a duplicate or recipe rebuilt as
+ * an interactive launch stops claiming the model its source ran headless
+ * with, and a title that is just the one generated for that model goes back
+ * to the agent's name.
+ *
+ * `replay` is for a launch that is itself a replay (a restart): the model
+ * comes out of `command` too. Otherwise the command is left as it is, because
+ * a fresh headless launch arrives the same way as a replayed one.
+ *
+ * Returns the same `launch` object when nothing changed.
+ */
+export function dropUnselectedAgentModel<
+  T extends SavedAgentModelLaunch & { title?: string; titleMode?: string },
+>(agentId: string | undefined, launch: T, options: { replay?: boolean } = {}): T {
+  if (!agentId || canSelectAgentModel(agentId)) return launch;
+  const ignored = new Set<string>();
+  const next: T = { ...launch };
+  let changed = false;
+  if (launch.agentLaunchFlags) {
+    const flags = withoutModelArgs(launch.agentLaunchFlags, anyModel, identityWord, ignored);
+    if (flags) {
+      next.agentLaunchFlags = flags;
+      changed = true;
+    }
+  }
+  if (launch.callerLaunchFlags) {
+    const flags = withoutModelArgs(launch.callerLaunchFlags, anyModel, identityWord, ignored);
+    if (flags) {
+      next.callerLaunchFlags = flags.length > 0 ? flags : undefined;
+      changed = true;
+    }
+  }
+  if (options.replay && launch.command) {
+    const words = withoutModelArgs(
+      splitShellWords(launch.command),
+      anyModel,
+      unquoteShellWord,
+      ignored
+    );
+    if (words) {
+      next.command = words.join(" ");
+      changed = true;
+    }
+  }
+  const modelId = launch.agentModelId;
+  const selected =
+    modelId !== undefined &&
+    next.command !== undefined &&
+    withoutModelArgs(
+      splitShellWords(next.command),
+      (id) => id === modelId,
+      unquoteShellWord,
+      ignored
+    ) !== undefined;
+  if (modelId !== undefined && !selected) {
+    next.agentModelId = undefined;
+    changed = true;
+    const generated = launch.titleMode === undefined || launch.titleMode === "default";
+    if (generated && launch.title === getAgentDisplayTitle(agentId, modelId)) {
+      next.title = getAgentDisplayTitle(agentId);
+    }
+  }
+  return changed ? next : launch;
 }
 
 const ASSIGNABLE_SESSION_ID_PATTERN =
@@ -1704,7 +1803,7 @@ export function buildLaunchCommandFromFlags(
   launchFlags: readonly string[],
   options?: BuildLaunchCommandFromFlagsOptions
 ): string {
-  const flags: string[] = [...launchFlags];
+  const flags: string[] = [...(replayableLaunchFlags(launchFlags, agentId) ?? [])];
 
   if (
     agentId === "gemini" &&
