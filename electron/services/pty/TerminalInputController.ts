@@ -566,7 +566,10 @@ export class TerminalInputController {
       return;
     }
 
-    if (carriesImages && !this.isStillOwnedBy(generation, owner)) {
+    // The pty and generation outlive an agent quitting into its shell or being
+    // relaunched, so the checks above miss both; the Enter would then submit
+    // to a recipient that never received the body (#15553).
+    if (!this.isStillOwnedBy(generation, owner)) {
       return;
     }
 
@@ -639,10 +642,10 @@ export class TerminalInputController {
   }
 
   /**
-   * Whether a paced image submission may keep writing: the pty is still there,
-   * no shutdown or newer generation has taken the input, and the agent it was
-   * addressed to still owns the terminal. An agent that exited into its shell
-   * mid-sequence must not receive the rest of the pastes, let alone the Enter.
+   * Whether a submission may keep writing: the pty is still there, no shutdown
+   * or newer generation has taken the input, and the agent it was addressed to
+   * still owns the terminal. An agent that exited into its shell mid-sequence
+   * must not receive the rest of the pastes, let alone the Enter.
    */
   private isStillOwnedBy(generation: number, owner: AgentOwner): boolean {
     const terminal = this.host.terminalInfo;

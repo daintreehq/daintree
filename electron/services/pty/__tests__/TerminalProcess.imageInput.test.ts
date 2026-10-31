@@ -238,6 +238,22 @@ describe("TerminalProcess.submit with image paths (#12792)", () => {
     expect(writes()).toEqual([paste(shot)]);
   });
 
+  it("never submits once the agent exits after the last paste, during the Enter delay", async () => {
+    const terminal = createAgentTerminal("claude");
+
+    terminal.submit(`${shot}`, "tok-1", undefined, undefined, [shot]);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(writes()).toEqual([paste(shot)]);
+
+    (
+      terminal as unknown as { terminalInfo: { detectedAgentId: string | undefined } }
+    ).terminalInfo.detectedAgentId = undefined;
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(writes()).toEqual([paste(shot)]);
+    expect(terminal.getSubmission("tok-1")?.phase).toBe("cancelled");
+  });
+
   it("never submits the text fallback once the agent exits during the stat", async () => {
     const terminal = createAgentTerminal("claude");
     const stuck = "/Volumes/dead/shot.png";
