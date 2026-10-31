@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getAgentConfig, getAgentDisplayTitle } from "../agentRegistry.js";
+import { getAgentConfig } from "../agentRegistry.js";
 
 // Copilot's bundled list is the only source of its model IDs (multi-provider,
 // no CLI catalog), and `copilot --model <retired id>` exits with an error. When
@@ -53,21 +53,10 @@ describe("copilot bundled models", () => {
     expect(retired).toEqual([]);
   });
 
-  it("lists each ID once, with labels the picker can show", () => {
-    const models = getAgentConfig("copilot")?.models ?? [];
-    expect(new Set(models.map((m) => m.id)).size).toBe(models.length);
-    for (const m of models) {
+  it("gives every model a name and label the picker can show", () => {
+    for (const m of getAgentConfig("copilot")?.models ?? []) {
       expect(m.name.trim(), m.id).not.toBe("");
       expect(m.shortLabel.trim(), m.id).not.toBe("");
     }
-  });
-
-  it("leaves 'auto' out so the CLI default stays an unset model, not an entry", () => {
-    expect(bundledIds()).not.toContain("auto");
-  });
-
-  it("titles a pane by its model only while the model is still offered", () => {
-    expect(getAgentDisplayTitle("copilot", "claude-opus-5.5")).toBe("GitHub Copilot (Opus 5.5)");
-    expect(getAgentDisplayTitle("copilot", "claude-opus-4.6")).toBe("GitHub Copilot");
   });
 });

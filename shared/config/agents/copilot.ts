@@ -41,9 +41,9 @@ export const config: AgentConfig = {
   // as GitHub retires models, and `--model` errors on a retired one, so keep
   // this in step with the "Supported models" table of the Copilot CLI reference
   // (docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference).
-  // Omitting `--model` (or passing `auto`) is the CLI default and is not an
-  // entry. Claude Sonnet 4.6 stays out although annual-plan subscribers keep
-  // it: the CLI reference does not list it.
+  // Omitting `--model` is the CLI default and is not an entry. Claude Sonnet
+  // 4.6 stays out although annual-plan subscribers keep it: the CLI reference
+  // does not list it.
   models: [
     { id: "claude-sonnet-5.5", name: "Claude Sonnet 5.5", shortLabel: "Sonnet 5.5" },
     { id: "claude-opus-5.5", name: "Claude Opus 5.5", shortLabel: "Opus 5.5" },

@@ -233,12 +233,15 @@ describe("AgentModelCatalogService", () => {
   it("serves Copilot's bundled list untouched, since models.dev can't speak for a multi-provider CLI", async () => {
     const service = new AgentModelCatalogService({
       cachePath,
-      fetchImpl: mockFetch(makeCatalog()),
+      fetchImpl: mockFetch({
+        ...makeCatalog(),
+        copilot: { models: { "copilot-remote-only": chatModel("Copilot Remote Only", 128_000) } },
+      }),
     });
 
     const result = await service.getResolvedModels("copilot");
 
-    expect(result.models.map((m) => m.id)).toEqual(bundledIdsFor("copilot"));
+    expect(result.models).toEqual(getEffectiveAgentConfig("copilot")!.models);
     expect(result.source).toBe("bundled");
   });
 
