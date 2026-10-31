@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, useId } from "react";
+import { useState, useCallback, useRef, useEffect, useEffectEvent, useId } from "react";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { Callout } from "@/components/ui/Callout";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
@@ -135,6 +135,12 @@ interface CommitPanelProps {
    * to, which the branch name alone doesn't reveal in a fork workflow.
    */
   pushDestination: GitPushDestination | null;
+  /**
+   * The push-range read resolved a different destination than
+   * `pushDestination`, so the staging status is behind the branch's config.
+   * The parent re-reads it; the new destination then gets its own range read.
+   */
+  onPushDestinationChanged?: () => void;
   worktreePath: string;
   /** Current branch name from the staging status; surfaced in the push confirm dialog. */
   currentBranch?: string | null;
@@ -177,6 +183,7 @@ export function CommitPanel({
   hasConflicts,
   hasRemote,
   pushDestination,
+  onPushDestinationChanged,
   worktreePath,
   currentBranch,
   commitMessage,
@@ -214,7 +221,7 @@ export function CommitPanel({
   // and a click inside that window published commits the confirm never listed.
   const [outgoing, setOutgoing] = useState<
     | { key: string; status: "ready"; preview: GitPushCommitPreview }
-    | { key: string; status: "error" }
+    | { key: string; status: "error"; changedTo?: GitPushDestination }
     | null
   >(null);
   // Bumped by every opening and every Retry, so no answer outlives the request
@@ -234,6 +241,7 @@ export function CommitPanel({
           outgoingAttempt,
         ])
       : null;
+  const reportDestinationChanged = useEffectEvent(() => onPushDestinationChanged?.());
   useEffect(() => {
     if (outgoingKey === null || !currentBranch) return;
     let cancelled = false;
@@ -246,20 +254,24 @@ export function CommitPanel({
         if (cancelled) return;
         // Main resolves the destination again for the read. A range measured
         // against a different one than the confirm names describes another push.
-        const sameDestination =
-          preview.destination.remote === destinationRemote &&
-          preview.destination.branch === destinationBranch;
-        setOutgoing(
-          sameDestination
-            ? { key: outgoingKey, status: "ready", preview }
-            : { key: outgoingKey, status: "error" }
-        );
+        if (
+          preview.destination.remote !== destinationRemote ||
+          preview.destination.branch !== destinationBranch
+        ) {
+          setOutgoing({ key: outgoingKey, status: "error", changedTo: preview.destination });
+          reportDestinationChanged();
+          return;
+        }
+        setOutgoing({ key: outgoingKey, status: "ready", preview });
       })
       .catch(() => {
         if (!cancelled) setOutgoing({ key: outgoingKey, status: "error" });
       });
     return () => {
       cancelled = true;
+      // Dropped, not just ignored: a destination that changes and changes back
+      // would otherwise match this answer's key again before its re-read lands.
+      setOutgoing(null);
     };
   }, [outgoingKey, worktreePath, currentBranch, destinationRemote, destinationBranch]);
 
@@ -979,13 +991,23 @@ export function CommitPanel({
               action={retryOutgoingButton}
               data-testid="commit-panel-push-confirm-unpushed-error"
             >
-              <p>
-                Couldn&apos;t list the earlier commits this push includes
-                {unpushedCount !== null && unpushedCount > 0
-                  ? ` (${pluralize(unpushedCount, "commit")} not on the remote)`
-                  : ""}
-                .
-              </p>
+              {outgoingResult.changedTo ? (
+                <p>
+                  Git now resolves this push to{" "}
+                  <span className="font-mono text-text-primary">
+                    {outgoingResult.changedTo.remote}/{outgoingResult.changedTo.branch}
+                  </span>
+                  , not {destinationLabel}.
+                </p>
+              ) : (
+                <p>
+                  Couldn&apos;t list the earlier commits this push includes
+                  {unpushedCount !== null && unpushedCount > 0
+                    ? ` (${pluralize(unpushedCount, "commit")} not on the remote)`
+                    : ""}
+                  .
+                </p>
+              )}
             </Callout>
           ) : (
             showOutgoingChecking && (
