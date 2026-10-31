@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
 import type { SpawnContext } from "../terminalSpawn.js";
@@ -545,5 +545,101 @@ describe("TerminalProcess.submit", () => {
     expect(stream.indexOf(sentinel)).toBe(0);
 
     vi.useRealTimers();
+  });
+});
+
+// #15553. The body goes to one recipient, and its Enter must not go to another:
+// an agent that exited into its shell, or a fresh session of the same agent,
+// never asked for it.
+describe("TerminalProcess.submit owner check before the Enter", () => {
+  type OwnerFields = {
+    detectedAgentId: string | undefined;
+    agentIncarnation: number;
+    lastOutputTime: number;
+  };
+  const info = (terminal: TerminalProcess) =>
+    (terminal as unknown as { terminalInfo: OwnerFields }).terminalInfo;
+  const writes = () => ptyWriteMock.mock.calls.map((call) => call[0]);
+
+  function createAgent(agentId: string): TerminalProcess {
+    const terminal = createTerminal({ kind: "terminal", launchAgentId: agentId });
+    info(terminal).detectedAgentId = agentId;
+    return terminal;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    ptyWriteMock = vi.fn<(data: string) => void>();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("drops the Enter when the agent demotes to its shell during the submit delay", async () => {
+    const terminal = createAgent("claude");
+
+    terminal.submit("explain this\n", "tok-1");
+    expect(writes()).toEqual(["explain this"]);
+
+    await vi.advanceTimersByTimeAsync(100);
+    info(terminal).detectedAgentId = undefined;
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(writes()).toEqual(["explain this"]);
+    expect(terminal.getSubmission("tok-1")?.phase).toBe("cancelled");
+  });
+
+  it("drops the Enter when the same agent is relaunched during the submit delay", async () => {
+    const terminal = createAgent("claude");
+
+    terminal.submit("explain this\n", "tok-1");
+    await vi.advanceTimersByTimeAsync(100);
+    info(terminal).agentIncarnation += 1;
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(writes()).toEqual(["explain this"]);
+    expect(terminal.getSubmission("tok-1")?.phase).toBe("cancelled");
+  });
+
+  it("drops the Enter when an agent without bracketed paste demotes during the output-settle wait", async () => {
+    const terminal = createAgent("gemini");
+
+    terminal.submit("explain this\n", "tok-1");
+    expect(writes()).toEqual(["explain this"]);
+
+    // The agent keeps printing past the plain submit delay, so only the
+    // output-settle wait can still be holding the Enter back.
+    for (let elapsed = 0; elapsed < 1000; elapsed += 100) {
+      info(terminal).lastOutputTime = Date.now();
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    expect(writes()).toEqual(["explain this"]);
+
+    info(terminal).detectedAgentId = undefined;
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(writes()).toEqual(["explain this"]);
+    expect(terminal.getSubmission("tok-1")?.phase).toBe("cancelled");
+  });
+
+  it("still submits to a terminal that was a plain shell throughout", async () => {
+    const terminal = createTerminal();
+
+    terminal.submit("ls -la\n", "tok-1");
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(writes()).toEqual(["ls -la", "\r"]);
+    expect(terminal.getSubmission("tok-1")?.phase).toBe("pty_written");
+  });
+
+  it("still submits to an agent that kept the terminal throughout", async () => {
+    const terminal = createAgent("claude");
+
+    terminal.submit("explain this\n", "tok-1");
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(writes()).toEqual(["explain this", "\r"]);
+    expect(terminal.getSubmission("tok-1")?.phase).toBe("pty_written");
   });
 });
