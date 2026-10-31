@@ -22,6 +22,8 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+const LOCAL_BRANCH_REF_PREFIX = "refs/heads/";
+
 export type HeadFileReadResult =
   | { ok: true; content: Buffer; version?: string }
   | { ok: true; unchanged: true; version: string }
@@ -915,10 +917,38 @@ export class GitService {
     }, "repairWorktrees");
   }
 
+  /**
+   * Names only, and only under `refs/heads/`: with packed refs git seeks
+   * straight to that prefix, so the cost follows the local branches instead of
+   * every remote-tracking ref and tip commit that `listBranches()` reads
+   * (#15663). The candidate name is never passed to git.
+   */
+  private async listLocalBranchNames(): Promise<Set<string>> {
+    try {
+      const git = await this.getGit();
+      const raw = await git.raw(["for-each-ref", "--format=%(refname)", LOCAL_BRANCH_REF_PREFIX]);
+      const names = new Set<string>();
+      for (const line of raw.split("\n")) {
+        // Only a CR comes off: git allows Unicode whitespace (NBSP) in refnames.
+        const ref = line.endsWith("\r") ? line.slice(0, -1) : line;
+        if (ref.startsWith(LOCAL_BRANCH_REF_PREFIX)) {
+          names.add(ref.slice(LOCAL_BRANCH_REF_PREFIX.length));
+        }
+      }
+      return names;
+    } catch (error) {
+      logError("Failed to list local branch names", {
+        error: formatErrorMessage(error, "unknown error"),
+      });
+      throw toGitOperationError(error, { cwd: this.rootPath, op: "list-branches" });
+    }
+  }
+
   async findAvailableBranchName(baseName: string): Promise<string> {
-    const branches = await this.listBranches();
-    // Only check local branches for conflicts (remote branches don't prevent local creation)
-    const localBranchNames = new Set(branches.filter((b) => !b.remote).map((b) => b.name));
+    // Only local branches conflict: a remote-only branch of the same name doesn't
+    // prevent local creation. Advisory: `git worktree add -b` still rejects a
+    // branch created after this check.
+    const localBranchNames = await this.listLocalBranchNames();
 
     if (!localBranchNames.has(baseName)) {
       return baseName;
