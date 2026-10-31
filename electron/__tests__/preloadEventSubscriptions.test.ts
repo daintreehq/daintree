@@ -72,6 +72,7 @@ let projectPresentation: ProjectPresentationBridge;
 let app: AppBridge;
 let terminalConfig: TerminalConfigBridge;
 let agentSettings: { onChanged: (cb: (settings: unknown) => void) => () => void };
+let keybinding: { onOverridesChanged: (cb: (overrides: unknown) => void) => () => void };
 
 beforeAll(async () => {
   const fakeWindow = {
@@ -108,6 +109,7 @@ beforeAll(async () => {
         projectPresentation?: ProjectPresentationBridge;
         terminalConfig?: TerminalConfigBridge;
         agentSettings?: typeof agentSettings;
+        keybinding?: typeof keybinding;
         app?: AppBridge;
       }
     | undefined;
@@ -118,6 +120,7 @@ beforeAll(async () => {
   app = api!.app!;
   terminalConfig = api!.terminalConfig!;
   agentSettings = api!.agentSettings!;
+  keybinding = api!.keybinding!;
 });
 
 afterAll(() => {
@@ -148,10 +151,11 @@ describe("preload event subscriptions", () => {
     for (const channel of channels) expect(ipcRenderer.listenerCount(channel)).toBe(0);
   });
 
-  it("hands on each saved agent settings and grid change until disposed (#14700)", () => {
+  it("hands on each saved agent settings, grid and shortcut change until disposed (#14700, #15579)", () => {
     const pushes: Array<[string, (cb: (payload: unknown) => void) => () => void]> = [
       ["agent-settings:changed", agentSettings.onChanged],
       ["app:panel-grid-config-changed", app.onPanelGridConfigChanged],
+      ["keybinding:overrides-changed", keybinding.onOverridesChanged],
     ];
     for (const [channel, subscribe] of pushes) {
       const received: unknown[] = [];

@@ -26,6 +26,16 @@ const builtInActionIdSet: ReadonlySet<string> = new Set([
   ...KEY_ACTION_VALUES,
 ]);
 
+function sameOverrides(a: Map<string, string[]>, b: Map<string, string[]>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [actionId, combos] of a) {
+    const other = b.get(actionId);
+    if (!other || other.length !== combos.length) return false;
+    if (combos.some((combo, i) => combo !== other[i])) return false;
+  }
+  return true;
+}
+
 class KeybindingService {
   private bindings: Map<string, RegisteredKeybindingConfig[]> = new Map();
   private overrides: Map<string, string[]> = new Map();
@@ -38,6 +48,11 @@ class KeybindingService {
   private whenContext: WhenClauseContext = {};
   private whenContextProvider: ((event: KeyboardEvent) => WhenClauseContext) | null = null;
   private shortcutCaptures = 0;
+  // Saved changes heard from Main (#15579). A read or a write that set out
+  // before the latest one is older than it.
+  private overridePushes = 0;
+  // Set once a push or a read lands. The boot payload was read before either.
+  private overridesSeeded = false;
 
   constructor() {
     DEFAULT_KEYBINDINGS.forEach((binding) => {
@@ -52,11 +67,11 @@ class KeybindingService {
 
   /**
    * Replace the in-memory overrides with an already-fetched payload — same
-   * validation as `loadOverrides()` minus the IPC round-trip. Used by the
-   * hydration bootstrap to seed overrides from the batched `app:boot` payload.
+   * validation as `loadOverrides()` minus the IPC round-trip and its
+   * freshness check.
    */
   applyOverrides(overrides: Record<string, string[]> | undefined): void {
-    this.overrides.clear();
+    const next = new Map<string, string[]>();
     if (overrides && typeof overrides === "object") {
       for (const [actionId, combos] of Object.entries(overrides)) {
         if (!Array.isArray(combos)) continue;
@@ -66,16 +81,39 @@ class KeybindingService {
           );
           continue;
         }
-        this.overrides.set(actionId, combos as string[]);
+        next.set(actionId, combos as string[]);
       }
+    }
+    const changed = !sameOverrides(this.overrides, next);
+    this.overrides = next;
+    // A chord started under the old map may finish on a combo it no longer has.
+    if (changed) {
+      this.clearChordTimeout();
+      this.pendingChord = null;
     }
     this.notifyListeners();
   }
 
+  /** The `app:boot` payload, which is older than any push or read this view has taken. */
+  applyBootOverrides(overrides: Record<string, string[]> | undefined): void {
+    if (this.overridesSeeded) return;
+    this.applyOverrides(overrides);
+  }
+
+  /** The whole map as Main saved it, after a change in any view on this machine. */
+  receiveOverridesPush(overrides: Record<string, string[]> | undefined): void {
+    this.overridePushes += 1;
+    this.overridesSeeded = true;
+    this.applyOverrides(overrides);
+  }
+
   async loadOverrides(): Promise<void> {
     if (typeof window !== "undefined" && window.electron?.keybinding) {
+      const pushes = this.overridePushes;
       try {
         const overrides = await window.electron.keybinding.getOverrides();
+        if (pushes !== this.overridePushes) return;
+        this.overridesSeeded = true;
         this.applyOverrides(overrides);
       } catch (error) {
         // Mirrors useUserAgentRegistryStore.initialize() — non-fatal degradation.
@@ -93,12 +131,18 @@ class KeybindingService {
     }
   }
 
+  // Main pushes the saved map to every view, this one included. Once a push
+  // has landed during a write, this view holds Main's word: laying the write
+  // on top could undo a later one from another view, and this write's own push
+  // is already here or on its way.
   async setOverride(actionId: string, combo: string[]): Promise<void> {
     // A pending chord captured under the old binding may now reference a stale
     // combo. Drop it before the rebind so the next keypress starts fresh.
     this.clearPendingChord();
     if (typeof window !== "undefined" && window.electron?.keybinding) {
+      const pushes = this.overridePushes;
       await window.electron.keybinding.setOverride(actionId, combo);
+      if (pushes !== this.overridePushes) return;
       this.overrides.set(actionId, combo);
       this.notifyListeners();
     }
@@ -107,7 +151,9 @@ class KeybindingService {
   async removeOverride(actionId: string): Promise<void> {
     this.clearPendingChord();
     if (typeof window !== "undefined" && window.electron?.keybinding) {
+      const pushes = this.overridePushes;
       await window.electron.keybinding.removeOverride(actionId);
+      if (pushes !== this.overridePushes) return;
       this.overrides.delete(actionId);
       this.notifyListeners();
     }
@@ -116,7 +162,9 @@ class KeybindingService {
   async resetAllOverrides(): Promise<void> {
     this.clearPendingChord();
     if (typeof window !== "undefined" && window.electron?.keybinding) {
+      const pushes = this.overridePushes;
       await window.electron.keybinding.resetAll();
+      if (pushes !== this.overridePushes) return;
       this.overrides.clear();
       this.notifyListeners();
     }

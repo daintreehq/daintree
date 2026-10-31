@@ -1536,6 +1536,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     exportProfile(): Promise<boolean>;
     /** Import overrides from a file via open dialog; returns import result */
     importProfile(): Promise<KeybindingImportResult>;
+    /** This machine's saved overrides, the whole map, after any view changes them (#15579). */
+    onOverridesChanged(callback: (overrides: Record<string, string[]>) => void): () => void;
   };
   worktreeConfig: {
     /** Get worktree path pattern configuration */

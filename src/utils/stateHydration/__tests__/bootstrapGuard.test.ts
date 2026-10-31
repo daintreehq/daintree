@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const loadOverridesMock = vi.hoisted(() => vi.fn());
-const applyOverridesMock = vi.hoisted(() => vi.fn());
+const applyBootOverridesMock = vi.hoisted(() => vi.fn());
 const initializeMock = vi.hoisted(() => vi.fn());
 const seedRegistryMock = vi.hoisted(() => vi.fn());
 const projectSetStateMock = vi.hoisted(() => vi.fn());
@@ -11,7 +11,7 @@ const getSafeBootPromiseMock = vi.hoisted(() => vi.fn());
 vi.mock("@/services/KeybindingService", () => ({
   keybindingService: {
     loadOverrides: () => loadOverridesMock(),
-    applyOverrides: (overrides: unknown) => applyOverridesMock(overrides),
+    applyBootOverrides: (overrides: unknown) => applyBootOverridesMock(overrides),
   },
 }));
 
@@ -35,7 +35,7 @@ const { ensureHydrationBootstrap, __resetBootstrapForTests } = await import("../
 
 beforeEach(() => {
   loadOverridesMock.mockReset();
-  applyOverridesMock.mockReset();
+  applyBootOverridesMock.mockReset();
   initializeMock.mockReset();
   seedRegistryMock.mockReset();
   projectSetStateMock.mockReset();
@@ -99,8 +99,8 @@ describe("ensureHydrationBootstrap", () => {
 
       await ensureHydrationBootstrap();
 
-      expect(applyOverridesMock).toHaveBeenCalledTimes(1);
-      expect(applyOverridesMock).toHaveBeenCalledWith(overrides);
+      expect(applyBootOverridesMock).toHaveBeenCalledTimes(1);
+      expect(applyBootOverridesMock).toHaveBeenCalledWith(overrides);
       expect(seedRegistryMock).toHaveBeenCalledTimes(1);
       expect(seedRegistryMock).toHaveBeenCalledWith(registry);
       expect(loadOverridesMock).not.toHaveBeenCalled();
@@ -174,7 +174,7 @@ describe("ensureHydrationBootstrap", () => {
 
       await ensureHydrationBootstrap();
 
-      expect(applyOverridesMock).toHaveBeenCalledTimes(1);
+      expect(applyBootOverridesMock).toHaveBeenCalledTimes(1);
       expect(initializeMock).toHaveBeenCalledTimes(1);
       expect(seedRegistryMock).not.toHaveBeenCalled();
       expect(projectSetStateMock).not.toHaveBeenCalled();
@@ -185,7 +185,7 @@ describe("ensureHydrationBootstrap", () => {
 
       expect(loadOverridesMock).toHaveBeenCalledTimes(1);
       expect(initializeMock).toHaveBeenCalledTimes(1);
-      expect(applyOverridesMock).not.toHaveBeenCalled();
+      expect(applyBootOverridesMock).not.toHaveBeenCalled();
       expect(seedRegistryMock).not.toHaveBeenCalled();
       expect(projectSetStateMock).not.toHaveBeenCalled();
     });

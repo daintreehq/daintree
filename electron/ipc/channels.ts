@@ -516,6 +516,7 @@ export const CHANNELS = {
   KEYBINDING_RESET_ALL: "keybinding:reset-all",
   KEYBINDING_EXPORT_PROFILE: "keybinding:export-profile",
   KEYBINDING_IMPORT_PROFILE: "keybinding:import-profile",
+  KEYBINDING_OVERRIDES_CHANGED: "keybinding:overrides-changed",
 
   CONFIG_BUNDLE_EXPORT: "config-bundle:export",
   CONFIG_BUNDLE_PREVIEW_IMPORT: "config-bundle:preview-import",

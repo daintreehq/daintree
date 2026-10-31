@@ -2379,6 +2379,9 @@ function buildElectronApi(): ElectronAPI {
       exportProfile: () => _unwrappingInvoke(CHANNELS.KEYBINDING_EXPORT_PROFILE),
 
       importProfile: () => _unwrappingInvoke(CHANNELS.KEYBINDING_IMPORT_PROFILE),
+
+      onOverridesChanged: (callback: (overrides: Record<string, string[]>) => void) =>
+        _typedOn(CHANNELS.KEYBINDING_OVERRIDES_CHANGED, callback),
     },
 
     // Worktree Config API

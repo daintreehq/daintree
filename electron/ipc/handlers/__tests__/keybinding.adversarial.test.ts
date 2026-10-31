@@ -29,6 +29,8 @@ const menuMock = vi.hoisted(() => ({
   createApplicationMenu: vi.fn(),
 }));
 
+const broadcastMock = vi.hoisted(() => vi.fn());
+
 vi.mock("electron", () => ({
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
   dialog: dialogMock,
@@ -46,6 +48,10 @@ vi.mock("node:fs", () => ({
 vi.mock("../../../store.js", () => ({ store: storeMock }));
 vi.mock("../../../utils/keybindingProfileIO.js", () => profileIoMock);
 vi.mock("../../../window/webContentsRegistry.js", () => windowRegistryMock);
+vi.mock("../../utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils.js")>()),
+  broadcastToRenderer: broadcastMock,
+}));
 
 import { ipcMain } from "electron";
 import { registerKeybindingHandlers } from "../keybinding.js";
@@ -233,6 +239,7 @@ describe("keybinding handlers adversarial", () => {
     expect(result).toMatchObject({ ok: false, errors: ["Cancelled"] });
     expect(fsMock.readFile).not.toHaveBeenCalled();
     expect(storeMock.set).not.toHaveBeenCalled();
+    expect(broadcastMock).not.toHaveBeenCalled();
   });
 
   it("import readFile error rejects and does not mutate store", async () => {
@@ -293,6 +300,7 @@ describe("keybinding handlers adversarial", () => {
     const result = await handler(fakeEvent());
 
     expect(storeMock.set).not.toHaveBeenCalled();
+    expect(broadcastMock).not.toHaveBeenCalled();
     expect(result).toMatchObject({ ok: false, errors: ["schema invalid"] });
   });
 });
@@ -358,5 +366,90 @@ describe("keybinding handlers — menu rebuild after mutations", () => {
     await getHandler(CHANNELS.KEYBINDING_RESET_ALL)(fakeEvent());
 
     expect(menuMock.createApplicationMenu).not.toHaveBeenCalled();
+  });
+});
+
+describe("keybinding handlers — every view hears a saved change (#15579)", () => {
+  let cleanup: (() => void) | null = null;
+
+  const pushes = () =>
+    broadcastMock.mock.calls
+      .filter(([channel]) => channel === CHANNELS.KEYBINDING_OVERRIDES_CHANGED)
+      .map(([, overrides]) => overrides);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    storeMock.get.mockReturnValue({ "action.kept": ["Cmd+E"], "action.bad": ["", ""] });
+    cleanup = registerKeybindingHandlers({} as never);
+  });
+
+  afterEach(() => {
+    cleanup?.();
+    cleanup = null;
+  });
+
+  it("pushes the whole saved map after a set, a clear, a remove and a reset", async () => {
+    await getHandler(CHANNELS.KEYBINDING_SET_OVERRIDE)(fakeEvent(), {
+      actionId: "action.new",
+      combo: ["Cmd+N"],
+    });
+    await getHandler(CHANNELS.KEYBINDING_SET_OVERRIDE)(fakeEvent(), {
+      actionId: "action.cleared",
+      combo: [],
+    });
+    await getHandler(CHANNELS.KEYBINDING_REMOVE_OVERRIDE)(fakeEvent(), "action.kept");
+    await getHandler(CHANNELS.KEYBINDING_RESET_ALL)(fakeEvent());
+
+    expect(pushes()).toEqual([
+      { "action.kept": ["Cmd+E"], "action.new": ["Cmd+N"] },
+      { "action.kept": ["Cmd+E"], "action.cleared": [] },
+      {},
+      {},
+    ]);
+    // Each push carries what was saved, so no view hears a map the store lacks.
+    expect(pushes()).toEqual(storeMock.set.mock.calls.map(([, saved]) => saved));
+  });
+
+  it("pushes the merged map after an import", async () => {
+    dialogMock.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: ["/tmp/x.json"] });
+    profileIoMock.importProfile.mockReturnValue({
+      ok: true,
+      overrides: { "action.imported": ["Cmd+I"] },
+      applied: 1,
+      skipped: 0,
+      errors: [],
+    });
+
+    await getHandler(CHANNELS.KEYBINDING_IMPORT_PROFILE)(fakeEvent());
+
+    expect(pushes()).toEqual([{ "action.kept": ["Cmd+E"], "action.imported": ["Cmd+I"] }]);
+  });
+
+  it("pushes before the menu rebuild, so pushes leave in the order writes land", async () => {
+    cleanup?.();
+    vi.mocked(ipcMain.handle).mockClear();
+    const win = { isDestroyed: () => false } as unknown as Electron.BrowserWindow;
+    cleanup = registerKeybindingHandlers({ mainWindow: win } as never);
+
+    const write = getHandler(CHANNELS.KEYBINDING_RESET_ALL)(fakeEvent());
+
+    expect(pushes()).toEqual([{}]);
+    expect(menuMock.createApplicationMenu).not.toHaveBeenCalled();
+    await write;
+    expect(menuMock.createApplicationMenu).toHaveBeenCalledWith(win, undefined);
+  });
+
+  it("pushes nothing for a rejected write", async () => {
+    await expect(
+      getHandler(CHANNELS.KEYBINDING_SET_OVERRIDE)(fakeEvent(), {
+        actionId: "action.new",
+        combo: [""],
+      })
+    ).rejects.toThrow();
+    await expect(
+      getHandler(CHANNELS.KEYBINDING_REMOVE_OVERRIDE)(fakeEvent(), "")
+    ).rejects.toThrow();
+
+    expect(pushes()).toEqual([]);
   });
 });

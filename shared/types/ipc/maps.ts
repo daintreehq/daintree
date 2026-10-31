@@ -2247,6 +2247,9 @@ export interface IpcEventMap {
   // This machine's saved grid layout changed (#14700)
   "app:panel-grid-config-changed": import("../config.js").PanelGridConfig;
 
+  // This machine's saved keybinding overrides, the whole map (#15579)
+  "keybinding:overrides-changed": Record<string, string[]>;
+
   // A saved terminal-config change, one owner's fields each (#14699)
   "terminal-config:device-changed": Partial<import("./config.js").TerminalConfig>;
   "terminal-config:host-changed": Partial<import("./config.js").TerminalConfig>;
