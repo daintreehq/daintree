@@ -626,7 +626,7 @@ export class GitStatusPass {
       if (this.isLive(claim)) {
         this.host.lastGitStatusCompletedAt = Date.now();
         if (checkSucceeded && gitDir) {
-          await this.statPrecheck.recordFullPass(gitDir);
+          await this.statPrecheck.recordFullPass(gitDir, () => this.isLive(claim));
         } else {
           this.statPrecheck.dropBaseline();
         }

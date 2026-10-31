@@ -260,6 +260,8 @@ describe("GitStatusPass", () => {
     mockInvalidateGitStatusCache.mockReset();
     mockGetGitDir.mockReset().mockResolvedValue(null);
     mockGetRepoOperationStateSync.mockReset().mockReturnValue(undefined);
+    vi.mocked(categorizeWorktree).mockReset().mockResolvedValue("stable");
+    vi.mocked(readFile).mockReset().mockRejectedValue(new Error("ENOENT"));
   });
 
   it("calculateStateHash is a deterministic, order-insensitive numeric digest sensitive to content", () => {
@@ -732,7 +734,13 @@ describe("GitStatusPass", () => {
     const dirty = (file: string) =>
       makeChanges({
         changes: [
-          { path: `/test/worktree/${file}`, status: "modified", insertions: 1, deletions: 0 },
+          {
+            path: `/test/worktree/${file}`,
+            status: "modified",
+            insertions: 1,
+            deletions: 0,
+            mtimeMs: Date.now() - 60_000,
+          },
         ],
         changedFileCount: 1,
       });
@@ -765,6 +773,7 @@ describe("GitStatusPass", () => {
       expect(made.host.summary).toBeUndefined();
       expect(made.host.mood).toBe("stable");
       expect(made.host.lastGitStatusCompletedAt).toBe(0);
+      expect(made.pass.lastActivityTimestamp).toBeNull();
       expect(made.watcherController.setUpstreamRef).not.toHaveBeenCalled();
       expect(made.watcherController.flushPendingIfReady).not.toHaveBeenCalled();
       expect(made.pollingStrategy.recordStateChange).not.toHaveBeenCalled();
@@ -802,16 +811,21 @@ describe("GitStatusPass", () => {
       const made = setUp();
       const note = deferred<NoteRead>();
       vi.mocked(made.noteReader.read).mockReturnValueOnce(note.promise);
+      const compute = vi.spyOn(BaseDivergence.prototype, "compute");
+      try {
+        const running = made.pass.run(true);
+        await vi.waitFor(() => expect(made.noteReader.read).toHaveBeenCalled());
 
-      const running = made.pass.run(true);
-      await vi.waitFor(() => expect(made.noteReader.read).toHaveBeenCalled());
+        stopHost(made);
+        note.resolve({ content: "late", timestamp: 1 });
+        await running;
 
-      stopHost(made);
-      note.resolve({ content: "late", timestamp: 1 });
-      await running;
-
-      expectNothingPublished(made);
-      expect(made.pass.aiNote).toBeUndefined();
+        expectNothingPublished(made);
+        expect(made.pass.aiNote).toBeUndefined();
+        expect(compute).not.toHaveBeenCalled();
+      } finally {
+        compute.mockRestore();
+      }
     });
 
     it("drops a pass stopped during base divergence", async () => {
@@ -831,8 +845,8 @@ describe("GitStatusPass", () => {
           behindCount: 0,
           matchesUpstream: false,
           baseCompareRef: "origin/main",
-          upstreamRef: "origin/feature/x",
-          upstreamHeadSha: "abc",
+          upstreamRef: null,
+          upstreamHeadSha: null,
         } as Divergence);
         await running;
 
@@ -846,7 +860,7 @@ describe("GitStatusPass", () => {
     it("drops a pass stopped during categorisation", async () => {
       const made = setUp();
       const mood = deferred<"active">();
-      vi.mocked(categorizeWorktree).mockClear().mockReturnValueOnce(mood.promise);
+      vi.mocked(categorizeWorktree).mockReturnValueOnce(mood.promise);
 
       const running = made.pass.run(true);
       await vi.waitFor(() => expect(categorizeWorktree).toHaveBeenCalled());
@@ -905,6 +919,8 @@ describe("GitStatusPass", () => {
 
       // The poll watchdog gives up on it.
       made.pass.abandon();
+      expect(made.dropBaseline).toHaveBeenCalledTimes(1);
+      expect(made.host.isUpdating).toBe(false);
       const fresh = made.pass.run(true);
       await vi.waitFor(() => expect(made.noteReader.read).toHaveBeenCalledTimes(2));
       made.dropBaseline.mockClear();
@@ -927,6 +943,137 @@ describe("GitStatusPass", () => {
       expect(made.pass.aiNote).toBe("fresh");
       expect(made.host.isUpdating).toBe(false);
       expect(made.recordFullPass).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses to start on a stopped monitor", async () => {
+      const made = setUp();
+      stopHost(made);
+
+      await made.pass.run(true);
+
+      expect(mockGetGitDir).not.toHaveBeenCalled();
+      expect(made.host.isUpdating).toBe(false);
+    });
+
+    it("refuses to start under an aborted lifecycle while still marked running", async () => {
+      const made = setUp();
+      made.controller.abort();
+
+      await made.pass.run(true);
+
+      expect(mockGetGitDir).not.toHaveBeenCalled();
+      expect(made.host.isUpdating).toBe(false);
+    });
+
+    it("leaves repo state alone when stopped while the git dir resolves", async () => {
+      const made = setUp();
+      made.host.repoState = "REBASING";
+      const gitDir = deferred<string | null>();
+      mockGetGitDir.mockReturnValueOnce(gitDir.promise);
+
+      const running = made.pass.run(true);
+      await vi.waitFor(() => expect(mockGetGitDir).toHaveBeenCalled());
+
+      stopHost(made);
+      gitDir.resolve(null);
+      await running;
+
+      expect(made.host.repoState).toBe("REBASING");
+      expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+      expect(made.watcherController.flushPendingIfReady).not.toHaveBeenCalled();
+      expect(made.host.isUpdating).toBe(false);
+    });
+
+    it("records nothing for a stat skip that lands after the stop", async () => {
+      const made = setUp();
+      made.host.hasInitialStatus = true;
+      made.host.worktreeChanges = dirty("a.ts");
+      const skip = deferred<boolean>();
+      const shouldSkip = vi
+        .spyOn(made.statPrecheck, "shouldSkip")
+        .mockReturnValueOnce(skip.promise);
+
+      const running = made.pass.run(false);
+      await vi.waitFor(() => expect(shouldSkip).toHaveBeenCalled());
+
+      stopHost(made);
+      skip.resolve(true);
+      await running;
+
+      expect(made.pollingStrategy.recordNoChange).not.toHaveBeenCalled();
+      expect(made.host.lastGitStatusCompletedAt).toBe(0);
+      expect(made.watcherController.flushPendingIfReady).not.toHaveBeenCalled();
+      expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+    });
+
+    it("holds the slot until the baseline lands", async () => {
+      const made = setUp();
+      const recording = deferred<void>();
+      made.recordFullPass.mockReturnValueOnce(recording.promise);
+
+      const first = made.pass.run(true);
+      await vi.waitFor(() => expect(made.recordFullPass).toHaveBeenCalledTimes(1));
+      expect(made.host.isUpdating).toBe(true);
+
+      await made.pass.run(true);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+      expect(made.watcherController.flushPendingIfReady).not.toHaveBeenCalled();
+
+      recording.resolve();
+      await first;
+
+      expect(made.host.isUpdating).toBe(false);
+      expect(made.watcherController.flushPendingIfReady).toHaveBeenCalledTimes(1);
+    });
+
+    it("swallows an abandoned pass's failure without touching the newer pass", async () => {
+      const made = setUp();
+      let rejectStale!: (error: unknown) => void;
+      const freshNote = deferred<NoteRead>();
+      mockGetWorktreeChangesWithStats.mockReturnValueOnce(
+        new Promise((_res, rej) => (rejectStale = rej))
+      );
+      vi.mocked(made.noteReader.read).mockReturnValueOnce(freshNote.promise);
+
+      const stale = made.pass.run(true);
+      await vi.waitFor(() => expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1));
+      made.pass.abandon();
+      const fresh = made.pass.run(true);
+      await vi.waitFor(() => expect(made.noteReader.read).toHaveBeenCalledTimes(1));
+      made.dropBaseline.mockClear();
+
+      rejectStale(new Error("fatal: bad object"));
+      await expect(stale).resolves.toBeUndefined();
+
+      expect(made.host.mood).toBe("stable");
+      expect(made.host.emitUpdate).not.toHaveBeenCalled();
+      expect(made.watcherController.markPending).not.toHaveBeenCalled();
+      expect(made.dropBaseline).not.toHaveBeenCalled();
+      expect(made.host.isUpdating).toBe(true);
+
+      freshNote.resolve({ content: "fresh", timestamp: 2 });
+      await fresh;
+      expect(made.host.emitUpdate).toHaveBeenCalledTimes(1);
+    });
+
+    it("ignores an abandon signal that fires after its pass finished", async () => {
+      const made = setUp();
+      const done = new AbortController();
+      await made.pass.run(true, done.signal);
+
+      const freshNote = deferred<NoteRead>();
+      vi.mocked(made.noteReader.read).mockReturnValueOnce(freshNote.promise);
+      const fresh = made.pass.run(true);
+      await vi.waitFor(() => expect(made.noteReader.read).toHaveBeenCalledTimes(2));
+      made.dropBaseline.mockClear();
+
+      done.abort();
+
+      expect(made.host.isUpdating).toBe(true);
+      expect(made.dropBaseline).not.toHaveBeenCalled();
+      freshNote.resolve({ content: "fresh", timestamp: 2 });
+      await fresh;
+      expect(made.pass.aiNote).toBe("fresh");
     });
   });
 });
