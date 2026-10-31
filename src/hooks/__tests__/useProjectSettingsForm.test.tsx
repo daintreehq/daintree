@@ -5,6 +5,7 @@ import type { ProjectSettings } from "@/types";
 
 const {
   mockSettings,
+  mockStoredSettings,
   mockSaveSettings,
   mockUpdateProject,
   mockEnableInRepoSettings,
@@ -14,6 +15,8 @@ const {
   mockRefresh,
 } = vi.hoisted(() => ({
   mockSettings: { value: null as ProjectSettings | null },
+  // What main holds; null means it matches the cache.
+  mockStoredSettings: { value: null as ProjectSettings | null },
   mockSaveSettings: vi.fn().mockResolvedValue(undefined),
   mockRefresh: vi.fn().mockResolvedValue(undefined),
   mockUpdateProject: vi.fn().mockResolvedValue(undefined),
@@ -41,6 +44,12 @@ vi.mock("@/hooks/useProjectSettings", () => ({
     error: null,
     refresh: mockRefresh,
   }),
+}));
+
+vi.mock("@/clients", () => ({
+  projectClient: {
+    getSettings: vi.fn(async () => mockStoredSettings.value ?? mockSettings.value),
+  },
 }));
 
 vi.mock("@/store/projectStore", () => ({
@@ -88,6 +97,8 @@ const baseSettings: ProjectSettings = {
 
 function resetMocks() {
   mockSettings.value = null;
+  mockStoredSettings.value = null;
+  mockRefresh.mockResolvedValue(undefined);
   mockIsLoading.value = false;
   mockProjects.value = [
     { id: "proj-1", name: "Test Project", emoji: "🌲", color: undefined, path: "/test" },
@@ -192,7 +203,7 @@ describe("useProjectSettingsForm", () => {
     expect(result.current.projectIsInitialized).toBe(true);
 
     act(() => {
-      result.current.setProjectName("Renamed Project");
+      result.current.setDevServerCommand("npm start");
     });
 
     expect(mockSaveSettings).not.toHaveBeenCalled();
@@ -240,7 +251,7 @@ describe("useProjectSettingsForm", () => {
     });
 
     act(() => {
-      result.current.setProjectName("Flushed Name");
+      result.current.setDevServerCommand("npm run flushed");
     });
 
     expect(mockSaveSettings).not.toHaveBeenCalled();
@@ -309,7 +320,7 @@ describe("useProjectSettingsForm", () => {
     vi.useRealTimers();
   });
 
-  it("a later form save carries the preference the cache holds, not the one it opened with", async () => {
+  it("a later form save carries the preference main stores, not the one it opened with", async () => {
     vi.useFakeTimers();
     const { result, rerender } = renderHook(
       ({ isOpen }: { isOpen: boolean; tick: number }) =>
@@ -324,10 +335,10 @@ describe("useProjectSettingsForm", () => {
     });
     expect(result.current.projectIsInitialized).toBe(true);
 
-    // Another tab saved a new editor and wrote through to the cache. The form
-    // spreads the cache on every save, so it must pick up the new value —
-    // this is what patchCachedProjectSettings exists to make true (#12326).
-    mockSettings.value = { ...baseSettings, preferredEditor: { id: "zed" } };
+    // Another tab saved a new editor. The form writes only what it edited over
+    // the settings as stored, so the new value survives whether or not the
+    // cache heard about it (#12326, #15573).
+    mockStoredSettings.value = { ...baseSettings, preferredEditor: { id: "zed" } };
     rerender({ isOpen: true, tick: 3 });
 
     vi.clearAllMocks();
@@ -373,6 +384,8 @@ describe("useProjectSettingsForm", () => {
       emoji: "🌲",
       color: undefined,
     });
+    // The name lives on the project, not in its settings.
+    expect(mockSaveSettings).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
 
@@ -442,6 +455,56 @@ describe("useProjectSettingsForm", () => {
     expect(result.current.projectIsLoading).toBe(true);
     expect(result.current.projectIsInitialized).toBe(false);
     expect(mockSaveSettings).not.toHaveBeenCalled();
+  });
+
+  it("seeds from the read made on open, not the settings cached before it", async () => {
+    let finishRefresh!: () => void;
+    mockRefresh.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (finishRefresh = resolve))
+    );
+    mockSettings.value = { ...baseSettings, devServerCommand: "cached before open" };
+    const { result, rerender } = renderHook(
+      ({ isOpen, projectId }: FormProps) => useProjectSettingsForm({ projectId, isOpen }),
+      { initialProps: { isOpen: false, tick: 0, projectId: "proj-1" } }
+    );
+    rerender({ isOpen: true, tick: 1, projectId: "proj-1" });
+    await act(async () => {});
+
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+    expect(result.current.projectIsInitialized).toBe(false);
+
+    mockSettings.value = baseSettings;
+    await act(async () => finishRefresh());
+
+    await waitFor(() => {
+      expect(result.current.projectIsInitialized).toBe(true);
+    });
+    expect(result.current.devServerCommand).toBe("npm run dev");
+  });
+
+  it("ignores the open read of a session that already closed", async () => {
+    const finishRefresh: Array<() => void> = [];
+    const deferred = () => new Promise<void>((resolve) => finishRefresh.push(resolve));
+    mockRefresh.mockImplementationOnce(deferred).mockImplementationOnce(deferred);
+    mockSettings.value = baseSettings;
+    const { result, rerender } = renderHook(
+      ({ isOpen, projectId }: FormProps) => useProjectSettingsForm({ projectId, isOpen }),
+      { initialProps: { isOpen: false, tick: 0, projectId: "proj-1" } }
+    );
+    rerender({ isOpen: true, tick: 1, projectId: "proj-1" });
+    await act(async () => {});
+    rerender({ isOpen: false, tick: 2, projectId: "proj-1" });
+    rerender({ isOpen: true, tick: 3, projectId: "proj-1" });
+    await act(async () => {});
+    expect(finishRefresh).toHaveLength(2);
+
+    await act(async () => finishRefresh[0]!());
+    expect(result.current.projectIsInitialized).toBe(false);
+
+    await act(async () => finishRefresh[1]!());
+    await waitFor(() => {
+      expect(result.current.projectIsInitialized).toBe(true);
+    });
   });
 
   it("initializes correctly when settings are already loaded at dialog open", async () => {
