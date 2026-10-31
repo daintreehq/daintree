@@ -22,7 +22,9 @@ import {
 import { tokenizePluginSource } from "@/services/plugin/tailwind/candidateTokenizer";
 import { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "@shared/types/plugin";
 
-const { builds } = vi.hoisted(() => ({ builds: [] as Array<{ candidates: string[]; css: string }> }));
+const { builds } = vi.hoisted(() => ({
+  builds: [] as Array<{ candidates: string[]; css: string }>,
+}));
 
 // Calls through to the real compiler and only records each build, so a test can
 // tell a batch that generated nothing from one that never reached the compiler.
@@ -31,9 +33,7 @@ vi.mock("@/services/plugin/tailwind/pluginTailwindAdapter", async (importOrigina
     await importOriginal<typeof import("@/services/plugin/tailwind/pluginTailwindAdapter")>();
   return {
     ...actual,
-    createPluginCssCompiler: async (
-      ...args: Parameters<typeof actual.createPluginCssCompiler>
-    ) => {
+    createPluginCssCompiler: async (...args: Parameters<typeof actual.createPluginCssCompiler>) => {
       const compiler = await actual.createPluginCssCompiler(...args);
       return {
         build(candidates: string[]) {
@@ -302,7 +302,9 @@ describe("pluginStyleRuntime — batches that change nothing", () => {
     root.innerHTML = `<span class="p-4 gap-2"></span>`;
     await afterObserver();
 
-    expect(failures).toEqual([{ phase: "rebuild", error: "simulated sheet failure", candidates: 1 }]);
+    expect(failures).toEqual([
+      { phase: "rebuild", error: "simulated sheet failure", candidates: 1 },
+    ]);
     expect(installedCss()).toContain(".p-4");
     expect(installedCss()).not.toContain(".gap-2");
 
@@ -362,7 +364,9 @@ describe("pluginStyleRuntime — a kit view session", () => {
         { className: "flex flex-col gap-2 p-2" },
         createElement(kit.Callout, { severity: "info" }, "Cmd+S saves"),
         createElement(kit.Button, { size: "sm", onClick: () => setWarned(true) }, "Show warning"),
-        warned ? createElement(kit.Callout, { severity: "warning", className: "mt-3" }, "Unsaved") : null,
+        warned
+          ? createElement(kit.Callout, { severity: "warning", className: "mt-3" }, "Unsaved")
+          : null,
         createElement(kit.CodeEditor, {
           defaultValue: '{\n  "name": "demo",\n  "items": [1, 2, 3]\n}\n',
           language: "json",
@@ -379,8 +383,8 @@ describe("pluginStyleRuntime — a kit view session", () => {
       const reactRoot = createRoot(wrapper);
       await act(async () => reactRoot.render(createElement(View)));
       // The editor loads on first use; its classes arrive once it has.
-      for (let tries = 0; tries < 50 && !wrapper.querySelector(".cm-content"); tries++) {
-        await act(() => new Promise((resolve) => setTimeout(resolve, 10)));
+      for (let tries = 0; tries < 200 && !wrapper.querySelector(".cm-content"); tries++) {
+        await act(() => new Promise((resolve) => setTimeout(resolve, 25)));
       }
       expect(wrapper.querySelector(".cm-content")).not.toBeNull();
       return {
@@ -425,7 +429,8 @@ describe("pluginStyleRuntime — a kit view session", () => {
     expect(unchanged.length).toBeGreaterThan(0);
     expect(writes.installed.length).toBeGreaterThan(0);
     expect(writes.identical).toBe(0);
-  });
+    // A cold worker imports the kit chunk and CodeMirror inside this test.
+  }, 60_000);
 });
 
 describe("pluginStyleRuntime — lifecycle", () => {
