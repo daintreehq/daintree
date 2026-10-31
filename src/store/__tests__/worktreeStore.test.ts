@@ -1809,7 +1809,7 @@ describe("worktreeStore", () => {
     it("makes no active-worktree or MRU save while another screen drives the project", async () => {
       setLeaseInputBlock({ kind: "driven-elsewhere", driverName: "laptop", projectId: "proj-1" });
       useWorktreeSelectionStore.getState().setActiveWorktree(id("wt"));
-      persistMruList([id("mru")]);
+      void persistMruList([id("mru")]);
       await drain();
       expect(appSetStateMock).not.toHaveBeenCalled();
       expect(logErrorWithContextMock).not.toHaveBeenCalled();
@@ -1820,7 +1820,7 @@ describe("worktreeStore", () => {
         appError("DRIVEN_ELSEWHERE", "app:set-state changes proj-1, which another window drives")
       );
       useWorktreeSelectionStore.getState().setActiveWorktree(id("wt"));
-      persistMruList([id("mru")]);
+      void persistMruList([id("mru")]);
       await drain();
       expect(appSetStateMock).toHaveBeenCalledTimes(2);
       expect(logErrorWithContextMock).not.toHaveBeenCalled();
@@ -1838,7 +1838,7 @@ describe("worktreeStore", () => {
       // The first write went out as the link dropped; the second waits for it.
       setHostInputBlock(null);
       useWorktreeSelectionStore.getState().setActiveWorktree(first);
-      persistMruList(list);
+      void persistMruList(list);
       await drain();
       setHostInputBlock({ kind: "disconnected", hostName: "e2e-host" });
       useWorktreeSelectionStore.getState().setActiveWorktree(second);
@@ -1857,11 +1857,39 @@ describe("worktreeStore", () => {
       expect(mruWrites()).toEqual([list, list]);
     });
 
+    it("resolves once the MRU write settles, and a repeat of the pending list waits on that write (#15651)", async () => {
+      let release!: () => void;
+      appSetStateMock.mockImplementationOnce(() => new Promise<void>((r) => (release = r)));
+      const list = [id("mru")];
+      let firstSettled = false;
+      let repeatSettled = false;
+      void persistMruList(list).then(() => (firstSettled = true));
+      void persistMruList([...list]).then(() => (repeatSettled = true));
+      await drain();
+      expect(mruWrites()).toEqual([list]);
+      expect(firstSettled).toBe(false);
+      expect(repeatSettled).toBe(false);
+
+      release();
+      await drain();
+      expect(firstSettled).toBe(true);
+      expect(repeatSettled).toBe(true);
+    });
+
+    it("resolves rather than rejects when the MRU write fails", async () => {
+      appSetStateMock.mockRejectedValueOnce(new Error("EACCES"));
+      await expect(persistMruList([id("mru")])).resolves.toBeUndefined();
+      expect(logErrorWithContextMock).toHaveBeenCalledWith(
+        expect.any(Error),
+        expect.objectContaining({ operation: "persist_mru_list" })
+      );
+    });
+
     it("drops a save held through a reconnect when someone else took the project over", async () => {
       const wt = id("wt");
       setHostInputBlock({ kind: "disconnected", hostName: "e2e-host" });
       useWorktreeSelectionStore.getState().setActiveWorktree(wt);
-      persistMruList([id("mru")]);
+      void persistMruList([id("mru")]);
       await drain();
       // The lease refresh after reconnecting learns of the takeover.
       setHostOwnedWriteFlushBarrier(async () =>

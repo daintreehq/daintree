@@ -514,7 +514,7 @@ export function FileBrowserPane({
       // The 500ms persistence debounce usually completes while the hidden
       // renderer stays alive, but flush anyway: on app quit there is no later
       // tick, and the capture above must make this save, not the next one.
-      flushPanelPersistence();
+      void flushPanelPersistence();
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {

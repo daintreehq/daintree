@@ -664,6 +664,20 @@ export class PanelPersistence {
     this.debouncedSaveTabGroups.flush();
   }
 
+  /**
+   * {@link flush}, resolving once every layout write it started, or found
+   * already queued for any project, has settled. Never rejects. `flush()`
+   * followed by {@link whenIdle} can't promise that: the debounced save only
+   * claims its write slot a microtask after the flush.
+   */
+  async flushAndSettle(): Promise<void> {
+    await Promise.all([this.debouncedSave.flush(), this.debouncedSaveTabGroups.flush()]);
+    await Promise.all([
+      ...this.terminalWriteTailByProject.values(),
+      ...this.tabGroupWriteTailByProject.values(),
+    ]);
+  }
+
   setProjectIdGetter(getter: () => string | null | undefined): void {
     this.options.getProjectId = () => getter() ?? null;
   }
