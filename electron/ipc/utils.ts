@@ -6,10 +6,13 @@ import {
   getAllAppWebContents,
   getProjectForWebContents,
   getRegisteredProjectViews,
+  getShownAppWebContents,
   getWebContentsForProject,
   hasRegisteredProjectViews,
   isCachedViewWebContents,
 } from "../window/webContentsRegistry.js";
+import { getWindowRegistry } from "../window/windowRef.js";
+import { isViewHydrated } from "../window/viewHydration.js";
 import type { IpcInvokeMap, IpcEventMap } from "../types/index.js";
 import type { IpcContext } from "./types.js";
 import { ValidationError } from "./validationError.js";
@@ -688,10 +691,11 @@ export function broadcastSlicedToProjectRenderers<T>(
  *   batches via LOGS_GET_ALL) — pushing them is wasted work in a cached
  *   renderer, and one that is frozen queues them unbounded in its task queue.
  * - Visibility-scoped effects whose audience is *defined* as the non-cached
- *   renderers at emission time (e.g. SOUND_TRIGGER — every view owns an
- *   AudioContext, so a global broadcast plays one copy per open project and
- *   un-freezes cached renderers). Dropping one must leave no stale state, no
- *   pending cleanup, and no missed user-significant information.
+ *   renderers at emission time. Dropping one must leave no stale state, no
+ *   pending cleanup, and no missed user-significant information. An effect the
+ *   machine should produce once, not once per window, wants
+ *   {@link sendToOneVisibleRenderer} instead: every window's shown view is
+ *   non-cached.
  *
  * If you cannot prove all three, use broadcastToRenderer. "Ephemeral" is not
  * the test: sound:cancel is a one-shot with nothing to replay, yet it must
@@ -715,6 +719,89 @@ export function broadcastToVisibleRenderers(channel: string, ...args: unknown[])
     }
   }
   broadcastToRemoteEndpoints(null, channel, args);
+}
+
+const singleTargetByChannel = new Map<string, number>();
+
+function isSingleTargetEligible(wc: WebContents, channel: string, args: unknown[]): boolean {
+  return (
+    !wc.isDestroyed() &&
+    !wc.isCrashed() &&
+    !isCachedViewWebContents(wc.id) &&
+    !isWithheldFromView(wc.id, channel, args)
+  );
+}
+
+/** Rank per window: 0 for the window focused right now, then focus history. */
+function windowFocusRanks(): Map<number, number> {
+  const ranks = new Map<number, number>();
+  const order = getWindowRegistry()?.focusOrder() ?? [];
+  order.forEach((ctx, index) => {
+    const win = ctx.browserWindow;
+    if (win.isDestroyed()) return;
+    ranks.set(win.id, win.isFocused() ? 0 : index + 1);
+  });
+  return ranks;
+}
+
+function singleTargetCandidates(channel: string, args: unknown[]): WebContents[] {
+  let pool = getShownAppWebContents().filter((wc) => isSingleTargetEligible(wc, channel, args));
+  // No window has a registered shown view (early boot, or a window that never
+  // registered one): any uncached renderer, still only one of them.
+  if (pool.length === 0) {
+    pool = getAllAppWebContents().filter((wc) => isSingleTargetEligible(wc, channel, args));
+  }
+  if (pool.length <= 1) return pool;
+
+  const sticky = singleTargetByChannel.get(channel);
+  const focusRanks = windowFocusRanks();
+  const keyOf = (wc: WebContents): [number, number, number] => {
+    const win = getWindowForWebContents(wc);
+    return [
+      isViewHydrated(wc.id) ? 0 : 1,
+      wc.id === sticky ? 0 : 1,
+      (win && focusRanks.get(win.id)) ?? Number.MAX_SAFE_INTEGER,
+    ];
+  };
+  const keyed = pool.map((wc) => ({ wc, key: keyOf(wc) }));
+  keyed.sort((a, b) => a.key[0] - b.key[0] || a.key[1] - b.key[1] || a.key[2] - b.key[2]);
+  return keyed.map((entry) => entry.wc);
+}
+
+/**
+ * Sends to exactly one local renderer, then to every remote endpoint, for an
+ * effect this machine should produce once rather than once per window
+ * (#15682). SOUND_TRIGGER is the case: every app view owns an AudioContext,
+ * so even a visible-only broadcast played one copy per open window and kept
+ * every window's context awake through a pulse train.
+ *
+ * Choice, in order: a view whose current document has hydrated (its listeners
+ * are mounted) over one still booting; the renderer that took this channel
+ * last, so focus moving between windows doesn't wake a second context; the
+ * window focused right now; then focus history. Unfocused and minimised
+ * windows still qualify, because another app being in front is the normal
+ * case for an attention sound. Cached, crashed and withheld views never do.
+ * The target is revalidated on every send, so a closed window simply loses
+ * its turn, and a send that throws falls through to the next candidate.
+ *
+ * Remote endpoints are other machines and each still gets its copy. Returns
+ * whether a local renderer took the push.
+ */
+export function sendToOneVisibleRenderer(channel: string, ...args: unknown[]): boolean {
+  let delivered = false;
+  for (const wc of singleTargetCandidates(channel, args)) {
+    try {
+      wc.send(channel, ...args);
+    } catch {
+      continue;
+    }
+    singleTargetByChannel.set(channel, wc.id);
+    delivered = true;
+    break;
+  }
+  if (!delivered) singleTargetByChannel.delete(channel);
+  broadcastToRemoteEndpoints(null, channel, args);
+  return delivered;
 }
 
 /**
