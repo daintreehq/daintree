@@ -387,7 +387,9 @@ describe("HybridInputBar's draft boundaries for an attachment on its way (#15599
     const thumbnail = deferred<{ thumbnailDataUrl: string }>();
     thumbnailFromPath.mockReturnValue(thumbnail.promise);
     const { view, settle, attach, heldBack } = await mount();
-    const palette = renderHook(() => usePromptHistoryPalette({ terminalId: "term-1" }));
+    const palette = renderHook(() =>
+      usePromptHistoryPalette({ terminalId: "term-1", projectId: undefined })
+    );
     await attach();
 
     await act(async () => {
