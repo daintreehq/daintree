@@ -30,6 +30,7 @@ import type {
 } from "../../shared/types/ipc/mcpServer.js";
 import { SessionStore } from "./mcp-server/sessionStore.js";
 import { readClosedPanelProcess } from "./mcp-server/closedPanelProcesses.js";
+import { readPtyTerminalProcesses } from "./mcp-server/worktreeProcessGuard.js";
 import {
   helpOwnershipPrincipal,
   principalOwnerKey,
@@ -493,6 +494,7 @@ export class McpServerService {
           const client = getPtyClient();
           return client ? client.getTerminalAsync(id, undefined, { strict: true }) : null;
         }),
+      readTerminalProcesses: () => readPtyTerminalProcesses(getPtyClient()),
       isAgentPaneInWorkspace: (terminalId, workspaceId) =>
         isAgentPaneInWorkspace(getPtyClient(), terminalId, workspaceId),
       terminalNotify: this.terminalNotify,

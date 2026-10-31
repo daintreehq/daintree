@@ -78,6 +78,10 @@ import { viewlessStatusArgsAreAnswerable } from "./terminalStatus.js";
 import { viewlessActionDanger } from "../viewless/viewlessActionCatalog.js";
 import { parseLastMessageReadArgs } from "./lastMessageArgs.js";
 import { withClosedPanelProcesses } from "./closedPanelProcesses.js";
+import {
+  WORKTREE_DELETE_OWNED_TOOL,
+  refuseWorktreeDeleteWhileRunning,
+} from "./worktreeProcessGuard.js";
 import { LAST_MESSAGE_TEXT_MAX_BYTES } from "../../../shared/types/agentLastMessage.js";
 import type { OwnedResourceRecord } from "./resourceOwnership.js";
 import type { TerminalAdoptionRecord } from "./terminalAdoption.js";
@@ -1506,6 +1510,47 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             createdRecord === undefined && !readsByPinnedView
               ? sessionStore.terminalAdoption.get(ownershipOwner, resourceId)
               : undefined;
+        }
+
+        // An owned worktree delete waits for every process in the worktree to
+        // exit (#15729): `worktree.delete` closes nothing without
+        // `closeTerminals`, which this tool never sends, and git removes the
+        // directory from under whatever still runs there — a pane this
+        // session just closed that is still in its trash grace, or a terminal
+        // it never owned. Asked of the pty-host after ownership is settled, so
+        // an unowned id is still refused uniformly and never learns what runs
+        // in it, and before any question reaches the user. The delete's own D2
+        // dialog opens inside the delegated dispatch, so a terminal started
+        // while that dialog is up is not seen here. Only an owned delete
+        // awaits anything here: every other call keeps the tick ordering it
+        // had, which a reply wait set up above is sensitive to.
+        //
+        // Creation is read from the launch history, keyed by the run main
+        // tracks under the id, because a close releases the ledger record
+        // while the trashed process runs on — and a ledger record outlives a
+        // respawn the person made under the same id, so it never speaks for a
+        // run whose generation is known.
+        if (actionId === WORKTREE_DELETE_OWNED_TOOL && ownedResourceId !== undefined) {
+          const refusal = await refuseWorktreeDeleteWhileRunning(
+            ownedResourceId,
+            deps.readTerminalProcesses,
+            (terminalId, launchGeneration) => {
+              const ledgerRecord = ownedRecordFor("terminal", terminalId) !== undefined;
+              const createdByThisSession =
+                launchGeneration === undefined
+                  ? ledgerRecord
+                  : sessionStore.workerCreations.get(terminalId, launchGeneration)?.owner ===
+                    ownershipOwner;
+              return {
+                createdByThisSession,
+                closableByThisSession: createdByThisSession && ledgerRecord,
+              };
+            }
+          );
+          if (refusal !== undefined) {
+            outcome = { kind: "result", value: { ok: false, error: refusal } };
+            return buildToolError(refusal);
+          }
         }
 
         // The ask for a pane call above its tier (#12692). Placed after the

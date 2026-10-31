@@ -143,6 +143,31 @@ describe("createSessionServerDeps", () => {
     expect(sessionDeps.readClosedPanelProcess).toBe(readClosedPanelProcess);
   });
 
+  // #15729: an owned worktree delete refuses outright without it.
+  it("hands a local and a relayed session the terminal process reader", () => {
+    const deps = fakeSource();
+    const readTerminalProcesses = vi.fn();
+    (deps as { readTerminalProcesses?: unknown }).readTerminalProcesses = readTerminalProcesses;
+
+    for (const capture of [
+      {},
+      {
+        relay: {
+          linkSessionId: "link-1",
+          senderId: "shell-1",
+          helpSessionId: "help-1",
+          shellName: "Shell",
+        },
+      },
+    ]) {
+      const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
+        sessionId: "s",
+        ...capture,
+      });
+      expect(sessionDeps.readTerminalProcesses).toBe(readTerminalProcesses);
+    }
+  });
+
   // #14552: the target narrows discovery for the global Assistant only if the flag reaches the session.
   it.each([
     ["the global Assistant's", { global: true as const }, true],

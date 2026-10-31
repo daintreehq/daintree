@@ -201,13 +201,16 @@ export function registerWorktreeCreateActions(
   // to close every terminal in the worktree — `closeTerminals` is a blunt
   // boolean over all of them, so it cannot be narrowed to the owned ones. A
   // caller cleaning up after itself closes its own panels through
-  // `terminal.closeOwned` first, then deletes a clean worktree.
+  // `terminal.closeOwned` first, then deletes a clean worktree. Main refuses
+  // the delete while the pty-host still has a running process in the
+  // worktree, the caller's trashed panes and other people's terminals alike
+  // (#15729), so leaving one open is a refusal rather than a pulled directory.
   actions.set("worktree.deleteOwned", () =>
     defineAction({
       id: "worktree.deleteOwned",
       title: "Delete owned worktree",
       description:
-        "Delete a worktree this session created, removing its directory after the user confirms. Anything else is refused. It never forces past uncommitted or untracked changes, deletes the branch, or closes terminals it does not own; commit or close those first.",
+        "Delete a worktree this session created, and its directory, after the user confirms. Refuses any other, or while a terminal process runs in it, closed panes included. Never forces past uncommitted or untracked changes, deletes the branch, or closes terminals.",
       category: "worktree",
       kind: "command",
       danger: "confirm",

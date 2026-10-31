@@ -220,6 +220,15 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     terminalId: string
   ) => Promise<import("../../../shared/types/panelClose.js").ClosedPanelProcess>;
   /**
+   * Every terminal record the pty-host holds, trashed ones included, read
+   * before `worktree.deleteOwned` runs (#15729). Rejects when the host or any
+   * of its shards cannot answer. Absent, every owned worktree delete is
+   * refused: no reader is no evidence that nothing runs there.
+   */
+  readTerminalProcesses?: () => Promise<
+    readonly import("./worktreeProcessGuard.js").TerminalProcessRecord[]
+  >;
+  /**
    * Whether a terminal belongs to the workspace of this session's pinned view,
    * re-resolved on every call (#12883). What admits Daintree's own assistant to
    * `terminal.readLastMessageOwned` for a pane it did not create: it already

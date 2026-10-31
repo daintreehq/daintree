@@ -13,9 +13,10 @@ import type { SessionServerDeps } from "../sessionServer.js";
 import type { McpSessionOrigin } from "../../../../shared/types/ipc/mcpServer.js";
 import { SessionStore as RealSessionStore } from "../sessionStore.js";
 import { relayOwnershipPrincipal } from "../resourceOwnership.js";
+import type { TerminalProcessRecord, WorktreeLiveTerminal } from "../worktreeProcessGuard.js";
 import type { AgentLastMessageResult } from "../../../../shared/types/agentLastMessage.js";
 import { encodeMessageCursor } from "../../claude/ClaudeMessageCursor.js";
-import { SESSION_GONE, CONFIRMATION_REQUIRED_CODE } from "../shared.js";
+import { SESSION_GONE, CONFIRMATION_REQUIRED_CODE, type DispatchEnvelope } from "../shared.js";
 import { RendererBridgeUnavailableError } from "../rendererBridge.js";
 import {
   toolErrorPayload,
@@ -1914,6 +1915,265 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(result.isError).toBe(true);
       expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
       expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    // #15729: `worktree.delete` closes nothing without `closeTerminals`, so
+    // git would pull the directory from under whatever still runs there.
+    describe("with processes still running in the worktree", () => {
+      const WORKTREE = "/wt/task";
+
+      /**
+       * A session whose host reports `census.processes`. Main stamps each
+       * launch with `generation.current`, as its spawn tracking would.
+       */
+      function processHarness(sessionId: string, options: { reader?: boolean } = {}) {
+        const generation = { current: 1 };
+        const store = new RealSessionStore(() => {}, {
+          launchGenerationOf: () => generation.current,
+        });
+        liveStores.push(store);
+        seedLiveSession(store, sessionId, "external");
+        store.sessionOriginMap.set(sessionId, "external");
+        const census: { processes: TerminalProcessRecord[] } = { processes: [] };
+        const readTerminalProcesses = vi.fn(async () => census.processes);
+        const dispatchAction = vi.fn(
+          async (actionId: string, args: unknown): Promise<DispatchEnvelope> => {
+            if (actionId === "terminal.new") {
+              return { result: { ok: true, result: { terminalId: "terminal-1" } } };
+            }
+            if (actionId === "terminal.close") {
+              const terminalId = (args as { terminalId: string }).terminalId;
+              return { result: { ok: true, result: { closedIds: [terminalId] } } };
+            }
+            return { result: { ok: true, result: null } };
+          }
+        );
+        const deps = fakeDeps({
+          sessionStore: store,
+          dispatchAction,
+          requestManifest: vi.fn().mockResolvedValue(ownedManifest()),
+          getCachedManifest: vi.fn(() => ownedManifest()),
+          readTerminalProcesses: options.reader === false ? undefined : readTerminalProcesses,
+        });
+        store.resourceOwnership.record(sessionId, [{ kind: "worktree", id: WORKTREE }]);
+        return {
+          store,
+          census,
+          generation,
+          dispatchAction,
+          readTerminalProcesses,
+          server: createSessionServer(sessionId, deps),
+        };
+      }
+
+      const deleteCall = { name: "worktree.deleteOwned", arguments: { worktreeId: WORKTREE } };
+
+      function deleteDispatched(dispatchAction: ReturnType<typeof vi.fn>): boolean {
+        return dispatchAction.mock.calls.some(([actionId]) => actionId === "worktree.delete");
+      }
+
+      type Refusal = {
+        code: string;
+        message: string;
+        details: { terminals: WorktreeLiveTerminal[] };
+      };
+      const refusalOf = (result: { content: unknown }) =>
+        toolErrorPayload(result) as unknown as Refusal;
+
+      async function launch(server: ReturnType<typeof createSessionServer>) {
+        await callTool(server, { name: "terminal.new", arguments: {} });
+      }
+
+      /** Launch a terminal through this session and close it again, as a caller cleaning up would. */
+      async function launchAndClose(server: ReturnType<typeof createSessionServer>) {
+        await launch(server);
+        await callTool(server, {
+          name: "terminal.closeOwned",
+          arguments: { terminalId: "terminal-1" },
+        });
+      }
+
+      const ownPane = (overrides: Partial<TerminalProcessRecord> = {}): TerminalProcessRecord => ({
+        id: "terminal-1",
+        worktreeId: WORKTREE,
+        cwd: WORKTREE,
+        isExited: false,
+        launchGeneration: 1,
+        ...overrides,
+      });
+      const trashedOwnPane = () => ownPane({ isTrashed: true, trashExpiresAt: 1_700_000_020_000 });
+
+      it("refuses while a pane this session closed is still in its trash grace", async () => {
+        const { store, census, dispatchAction, server } = processHarness("s-grace");
+        await launchAndClose(server);
+        // The close released the pane's record; the process runs on regardless.
+        expect(store.resourceOwnership.owns("s-grace", "terminal", "terminal-1")).toBe(false);
+        census.processes = [trashedOwnPane()];
+
+        const result = await callTool(server, deleteCall);
+
+        expect(result.isError).toBe(true);
+        const error = refusalOf(result);
+        expect(error.code).toBe("DISABLED");
+        expect(error.details.terminals).toEqual([
+          {
+            terminalId: "terminal-1",
+            createdByThisSession: true,
+            closableByThisSession: false,
+            trashed: true,
+            trashExpiresAt: 1_700_000_020_000,
+          },
+        ]);
+        expect(error.message).toContain("Wait for this session's closed terminals to exit.");
+        expect(deleteDispatched(dispatchAction)).toBe(false);
+        expect(store.resourceOwnership.owns("s-grace", "worktree", WORKTREE)).toBe(true);
+      });
+
+      it("deletes once that pane's process has exited", async () => {
+        const { store, census, dispatchAction, server } = processHarness("s-exited");
+        await launchAndClose(server);
+        census.processes = [trashedOwnPane()];
+        expect((await callTool(server, deleteCall)).isError).toBe(true);
+        expect(deleteDispatched(dispatchAction)).toBe(false);
+
+        census.processes = [{ ...trashedOwnPane(), isExited: true }];
+        const result = await callTool(server, deleteCall);
+
+        expect(result.isError).toBeUndefined();
+        expect(dispatchAction).toHaveBeenCalledWith(
+          "worktree.delete",
+          { worktreeId: WORKTREE },
+          false
+        );
+        expect(store.resourceOwnership.owns("s-exited", "worktree", WORKTREE)).toBe(false);
+      });
+
+      it("refuses while a terminal this session does not own runs there, and leaves it alone", async () => {
+        const { store, census, dispatchAction, server } = processHarness("s-foreign");
+        // The person's own shell, attributed elsewhere but started inside the worktree.
+        census.processes = [
+          { id: "user-shell", worktreeId: "/wt/main", cwd: `${WORKTREE}/src`, isExited: false },
+        ];
+
+        const result = await callTool(server, deleteCall);
+
+        expect(result.isError).toBe(true);
+        const error = refusalOf(result);
+        expect(error.code).toBe("DISABLED");
+        expect(error.details.terminals).toEqual([
+          {
+            terminalId: "user-shell",
+            createdByThisSession: false,
+            closableByThisSession: false,
+            trashed: false,
+            trashExpiresAt: null,
+          },
+        ]);
+        expect(error.message).toContain("not its to stop");
+        expect(dispatchAction).not.toHaveBeenCalled();
+        expect(store.resourceOwnership.owns("s-foreign", "worktree", WORKTREE)).toBe(true);
+      });
+
+      it("deletes when nothing runs in the worktree", async () => {
+        const { census, dispatchAction, server } = processHarness("s-none");
+        census.processes = [
+          { id: "elsewhere", worktreeId: "/wt/task-other", cwd: "/wt/task-other" },
+          { id: "finished", worktreeId: WORKTREE, isExited: true },
+        ];
+
+        const result = await callTool(server, deleteCall);
+
+        expect(result.isError).toBeUndefined();
+        expect(dispatchAction).toHaveBeenCalledWith(
+          "worktree.delete",
+          { worktreeId: WORKTREE },
+          false
+        );
+      });
+
+      it("tells a caller to close a pane of its own that is still open", async () => {
+        const { census, dispatchAction, server } = processHarness("s-open");
+        await launch(server);
+        census.processes = [ownPane()];
+
+        const error = refusalOf(await callTool(server, deleteCall));
+
+        expect(error.details.terminals).toEqual([
+          expect.objectContaining({ createdByThisSession: true, closableByThisSession: true }),
+        ]);
+        expect(error.message).toContain("'terminal.closeOwned'");
+        expect(deleteDispatched(dispatchAction)).toBe(false);
+      });
+
+      it("does not offer a close for a pane the person restored after this session closed it", async () => {
+        const { census, server } = processHarness("s-restored");
+        await launchAndClose(server);
+        // Same run, out of the trash again: the close already spent this session's hold.
+        census.processes = [ownPane({ isTrashed: false })];
+
+        const error = refusalOf(await callTool(server, deleteCall));
+
+        expect(error.details.terminals).toEqual([
+          expect.objectContaining({ createdByThisSession: true, closableByThisSession: false }),
+        ]);
+        expect(error.message).not.toContain("terminal.closeOwned");
+        expect(error.message).toContain("not its to stop");
+      });
+
+      it("does not claim a run the person respawned under this session's terminal id", async () => {
+        const { store, census, generation, server } = processHarness("s-respawned");
+        await launch(server);
+        // The ledger still holds the id, but the run under it is a later one.
+        generation.current = 2;
+        census.processes = [ownPane({ launchGeneration: 2 })];
+        expect(store.resourceOwnership.owns("s-respawned", "terminal", "terminal-1")).toBe(true);
+
+        const error = refusalOf(await callTool(server, deleteCall));
+
+        expect(error.details.terminals).toEqual([
+          expect.objectContaining({ createdByThisSession: false, closableByThisSession: false }),
+        ]);
+        expect(error.message).not.toContain("terminal.closeOwned");
+      });
+
+      it("refuses, deleting nothing, when the host cannot say what runs there", async () => {
+        const { readTerminalProcesses, dispatchAction, server } = processHarness("s-unread");
+        readTerminalProcesses.mockRejectedValue(new Error("shard timed out"));
+
+        const result = await callTool(server, deleteCall);
+
+        expect(result.isError).toBe(true);
+        expect(toolErrorPayload(result)).toMatchObject({
+          code: "EXECUTION_ERROR",
+          retriable: true,
+          details: { reason: "terminal-processes-unreadable" },
+        });
+        expect(dispatchAction).not.toHaveBeenCalled();
+      });
+
+      it("refuses, deleting nothing, when no reader is wired", async () => {
+        const { dispatchAction, server } = processHarness("s-noreader", { reader: false });
+
+        const result = await callTool(server, deleteCall);
+
+        expect(toolErrorPayload(result)).toMatchObject({
+          code: "EXECUTION_ERROR",
+          details: { reason: "terminal-processes-unreadable" },
+        });
+        expect(dispatchAction).not.toHaveBeenCalled();
+      });
+
+      it("never asks the host about a worktree the session does not own", async () => {
+        const { readTerminalProcesses, server } = processHarness("s-probe");
+
+        const result = await callTool(server, {
+          name: "worktree.deleteOwned",
+          arguments: { worktreeId: "/wt/someone-elses" },
+        });
+
+        expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+        expect(readTerminalProcesses).not.toHaveBeenCalled();
+      });
     });
 
     it("keeps authority when the delegated delete fails", async () => {

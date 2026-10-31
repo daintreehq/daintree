@@ -105,6 +105,7 @@ describe("mapTerminalInfo", () => {
     const ctx = createCtx({
       ptyManager: {
         isInTrash,
+        getTrashExpiresAt: vi.fn(() => undefined),
         getActivityTier: vi.fn(() => "active" as const),
         hasPendingSubmission: vi.fn(() => false),
         analysisObservedSince: vi.fn(() => 1_000),
@@ -116,6 +117,28 @@ describe("mapTerminalInfo", () => {
 
     expect(result.isTrashed).toBe(true);
     expect(isInTrash).toHaveBeenCalledWith("term-1");
+  });
+
+  it("reads a trashed terminal's grace expiry off the registry for the bulk queries", () => {
+    // Only `get-terminal` hands in a record augmented with the expiry; the
+    // bulk families pass the raw record, which never carries it (#15729).
+    const getTrashExpiresAt = vi.fn((id: string) => (id === "term-1" ? 42_000 : undefined));
+    const ptyManager = {
+      isInTrash: vi.fn((id: string) => id === "term-1"),
+      getTrashExpiresAt,
+      getActivityTier: vi.fn(() => "active" as const),
+      hasPendingSubmission: vi.fn(() => false),
+      analysisObservedSince: vi.fn(() => 1_000),
+    } as unknown as HostContext["ptyManager"];
+    const ctx = createCtx({ ptyManager });
+
+    expect(mapTerminalInfo(makeTerminal({ id: "term-1" }), ctx).trashExpiresAt).toBe(42_000);
+    expect(mapTerminalInfo(makeTerminal({ id: "term-2" }), ctx).trashExpiresAt).toBeUndefined();
+    expect(getTrashExpiresAt).not.toHaveBeenCalledWith("term-2");
+    // An augmented record's own expiry stands.
+    expect(
+      mapTerminalInfo(makeTerminal({ id: "term-1", trashExpiresAt: 7_000 }), ctx).trashExpiresAt
+    ).toBe(7_000);
   });
 
   it("ignores a stale isTrashed flag on the raw terminal record", () => {

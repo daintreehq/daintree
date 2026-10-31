@@ -129,6 +129,9 @@ export function fakeDeps(overrides?: Partial<SessionServerDeps>): SessionServerD
       .fn()
       .mockResolvedValue({ status: "unavailable", reason: "no-message" }),
     isTerminalIdInUse: vi.fn(() => false),
+    // A host with nothing running, so an owned worktree delete reaches its
+    // dispatch unless a test says otherwise (#15729).
+    readTerminalProcesses: vi.fn().mockResolvedValue([]),
     appendAuditRecord: vi.fn(),
     getCachedManifest: vi.fn(() => null),
     ...overrides,
