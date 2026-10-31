@@ -150,6 +150,7 @@ export function findCrossHostContextTargets(
  * The agents on other hosts whose text in this send still names one of the
  * draft's image chips. The image was saved on this machine, so its path means
  * nothing over there, and sent as text it can't become an attachment either.
+ * Any mention counts, a path glued to a word included: refusing keeps the draft.
  */
 export function findCrossHostImageTargets(
   draft: string,
@@ -161,7 +162,7 @@ export function findCrossHostImageTargets(
   return targetIds.filter(
     (id) =>
       isHostQualifiedTargetId(id) &&
-      findImagePathsInText(perTargetOverrides?.[id] ?? draft, imagePaths).length > 0
+      imagePaths.some((path) => (perTargetOverrides?.[id] ?? draft).includes(path))
   );
 }
 
@@ -240,12 +241,26 @@ function resolveSubmissions(
       terminalId,
       payload: override ?? baseResolved,
       authored,
-      // Read from what the user wrote, not the expanded payload: a diff that
-      // happens to mention the path doesn't make it an attachment. In the
-      // order that text names them, since an edit may reorder the chips.
-      imagePaths: findImagePathsInText(authored, imagePaths),
+      imagePaths: imagesNamedBy(authored, override, imagePaths),
     };
   });
+}
+
+/**
+ * The chips a target's text still names, in the order a submit of it attaches
+ * them. Read from what the user wrote, not the expanded payload: a diff that
+ * happens to mention a path doesn't make it an attachment. The draft names
+ * them in the editor's order, which is what a single-pane send passes; a
+ * target's own edit may name them in another, and the pty-host looks for each
+ * path only after the one before it.
+ */
+function imagesNamedBy(
+  authored: string,
+  override: string | undefined,
+  imagePaths: readonly string[]
+): string[] {
+  const named = imagePaths.filter((path) => authored.includes(path));
+  return override === undefined ? named : findImagePathsInText(override, named);
 }
 
 /**

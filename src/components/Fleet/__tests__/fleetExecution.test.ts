@@ -900,6 +900,29 @@ describe("executeFleetBroadcast — image chips (#15600)", () => {
     ]);
   });
 
+  it("gives a pane sent the draft the chips in the editor's order, as one pane's send would", async () => {
+    // A chip whose name starts with another chip's path, then a space, is
+    // still two chips: the editor knows where each one is.
+    const LONG = "/tmp/shots/one.png extra.png";
+    const draft = `${LONG} ${TWO} ${ONE}`;
+    seedPanels([makeAgent("a")]);
+    await executeFleetBroadcast(draft, ["a"], undefined, undefined, {
+      imagePaths: [LONG, TWO, ONE],
+    });
+
+    expect(imagesBy().get("a")).toEqual([LONG, TWO, ONE]);
+  });
+
+  it("attaches a draft's image whose path a recipe variable sits against", async () => {
+    seedPanels([makeAgent("a")]);
+    await executeFleetBroadcast(`see ${ONE}{{issue_number}}`, ["a"], undefined, undefined, {
+      imagePaths: [ONE],
+    });
+
+    expect(submitWithImagesMock.mock.calls[0]![1]).toBe(`see ${ONE}`);
+    expect(imagesBy().get("a")).toEqual([ONE]);
+  });
+
   it("doesn't attach an image a pane's recipe variables fill in", async () => {
     buildFleetBroadcastRecipeContextMock.mockReturnValue({ worktreePath: TWO });
     seedPanels([makeAgent("a")]);
@@ -993,10 +1016,8 @@ describe("findCrossHostImageTargets", () => {
     expect(findCrossHostImageTargets(`see ${IMAGE}`, [REMOTE], ["/tmp/other.png", IMAGE])).toEqual([
       REMOTE,
     ]);
-    // A path of that host's own that merely ends the same way is not the image.
-    expect(
-      findCrossHostImageTargets(`see ${IMAGE}`, [REMOTE], [IMAGE], { [REMOTE]: `use /srv${IMAGE}` })
-    ).toEqual([]);
+    // Pasted straight after a word, it is still this machine's path.
+    expect(findCrossHostImageTargets(`see at${IMAGE}`, [REMOTE], [IMAGE])).toEqual([REMOTE]);
     expect(
       findCrossHostImageTargets("see it", ["a", REMOTE], [IMAGE], { [REMOTE]: IMAGE })
     ).toEqual([REMOTE]);
