@@ -5,6 +5,7 @@ import type { WorktreeState } from "@/types";
 import type { DeletedWorktree } from "@/store/worktreeStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import { usePanelStore } from "@/store/panelStore";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import { getWorktreeSortDragId } from "@/components/DragDrop/SortableWorktreeCard";
 import { useSidebarWorktreeModel } from "../useSidebarWorktreeModel";
@@ -206,38 +207,88 @@ describe("useSidebarWorktreeModel — main card aggregate counts", () => {
   }
   const run = (runId: string, overrides: Partial<FleetRunRow> = {}): FleetRunRow => ({
     runId,
-    workspaceId: "elsewhere",
+    workspaceId: "p1",
     spawnedAt: 0,
-    cwd: "/elsewhere",
+    cwd: "/repo",
     ...overrides,
   });
 
+  function seedAgentPanel(id: string, worktreeId: string): void {
+    usePanelStore.setState({
+      panelIds: [id],
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test carrier: only the fields the sidebar selectors read
+      panelsById: {
+        [id]: {
+          id,
+          kind: "terminal",
+          title: id,
+          worktreeId,
+          location: "grid",
+          detectedAgentId: "claude",
+          agentState: "working",
+        },
+      } as never,
+      panelIdsByWorktreeId: { [worktreeId]: [id] },
+    });
+  }
+
   afterEach(() => {
-    useFleetSnapshotStore.setState({ snapshot: null });
+    act(() => {
+      useFleetSnapshotStore.setState({ snapshot: null });
+      usePanelStore.setState({ panelIds: [], panelsById: {}, panelIdsByWorktreeId: {} });
+    });
   });
 
-  it("keeps its identity across fleet pushes that move no count", () => {
+  it("moves with each count and keeps its identity across pushes that move none", () => {
     // A fresh object here re-renders the main card through its memoized row.
-    pushFleet([run("x", { agentState: "working" })]);
-    const { result, rerender } = renderModel();
-    const counts = result.current.mainWorktreeAggregateCounts;
-    expect(counts).toEqual({ worktrees: 2, working: 0, waiting: 0, finished: 0 });
+    seedAgentPanel("agent-a", "a");
+    pushFleet([run("agent-a", { agentState: "working" }), run("x", { agentState: "working" })]);
+    const { result } = renderModel();
+    const working = result.current.mainWorktreeAggregateCounts;
+    expect(working).toEqual({ worktrees: 2, working: 1, waiting: 0, finished: 0 });
 
-    pushFleet([run("x", { agentState: "waiting", waitingReason: "approval" })]);
-    pushFleet([run("x", { agentState: "idle" }), run("y", { agentState: "working" })]);
-    expect(result.current.mainWorktreeAggregateCounts).toBe(counts);
+    pushFleet([run("agent-a", { agentState: "working" }), run("x", { agentState: "idle" })]);
+    pushFleet([run("agent-a", { agentState: "working", title: "renamed" })]);
+    expect(result.current.mainWorktreeAggregateCounts).toBe(working);
 
-    rerender({
-      worktrees: [...snapshot(), makeWorktree("c")],
-      activeWorktreeId: null,
-      deletedWorktrees: new Map(),
-      canPruneWorktreeIds: true,
-    });
+    pushFleet([run("agent-a", { agentState: "waiting", waitingReason: "approval" })]);
+    const waiting = result.current.mainWorktreeAggregateCounts;
+    expect(waiting).toEqual({ worktrees: 2, working: 0, waiting: 1, finished: 0 });
+
+    pushFleet([
+      run("agent-a", {
+        agentState: "waiting",
+        waitingReason: "prompt",
+        handBack: { stoppedAt: 1 },
+      }),
+    ]);
     expect(result.current.mainWorktreeAggregateCounts).toEqual({
-      worktrees: 3,
+      worktrees: 2,
+      working: 0,
+      waiting: 0,
+      finished: 1,
+    });
+  });
+
+  it("follows the worktree count and drops out with only the main worktree", () => {
+    pushFleet([]);
+    const { result, rerender } = renderModel();
+    expect(result.current.mainWorktreeAggregateCounts).toEqual({
+      worktrees: 2,
       working: 0,
       waiting: 0,
       finished: 0,
     });
+
+    const props = {
+      activeWorktreeId: null,
+      deletedWorktrees: new Map(),
+      canPruneWorktreeIds: true,
+    };
+    rerender({ ...props, worktrees: [...snapshot(), makeWorktree("c")] });
+    expect(result.current.mainWorktreeAggregateCounts).toMatchObject({ worktrees: 3 });
+
+    rerender({ ...props, worktrees: snapshot().filter((w) => w.isMainWorktree) });
+    expect(result.current.mainWorktreeAggregateCounts).toBeUndefined();
   });
 });

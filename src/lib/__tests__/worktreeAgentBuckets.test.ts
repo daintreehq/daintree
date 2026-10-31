@@ -273,16 +273,22 @@ describe("indexFleetRuns", () => {
     expect(index.get("b")).toBe(runs[1]);
   });
 
-  it("indexes a replacement array afresh", () => {
+  it("keeps each array's index while callers interleave older and newer snapshots", () => {
     const first = [working("a")];
     const next = [asking("a")];
-    expect(indexFleetRuns(next)).not.toBe(indexFleetRuns(first));
+    const firstIndex = indexFleetRuns(first);
+    const nextIndex = indexFleetRuns(next);
+    expect(nextIndex).not.toBe(firstIndex);
+    expect(indexFleetRuns(first)).toBe(firstIndex);
+    expect(indexFleetRuns(next)).toBe(nextIndex);
+    expect(indexFleetRuns(first).get("a")).toBe(first[0]);
     expect(indexFleetRuns(next).get("a")).toBe(next[0]);
   });
 
-  it("reads an absent or empty fleet as no runs", () => {
-    expect(indexFleetRuns(null).size).toBe(0);
-    expect(indexFleetRuns(undefined).size).toBe(0);
-    expect(indexFleetRuns([]).size).toBe(0);
+  it("reads an absent or empty fleet as one shared empty index", () => {
+    const empty = indexFleetRuns(null);
+    expect(empty.size).toBe(0);
+    expect(indexFleetRuns(undefined)).toBe(empty);
+    expect(indexFleetRuns([])).toBe(empty);
   });
 });

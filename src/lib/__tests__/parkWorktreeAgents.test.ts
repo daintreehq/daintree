@@ -109,6 +109,22 @@ describe("countParkTargets", () => {
   it("counts nothing before a snapshot has landed", () => {
     expect(countParkTargets(null, ["a"])).toEqual({ parked: 0, unparked: 0 });
   });
+
+  it("reads degradation per snapshot when a degraded view retains the same runs", () => {
+    // Main keeps the last good runs array on a degraded publish, so the run
+    // index is shared across both and must not carry park eligibility.
+    const healthy = snap([{ runId: "a" }, { runId: "b", park: { parkedAt: 1 } }]);
+    const degraded: FleetSnapshot = { ...healthy, degraded: true };
+    const ids = ["a", "b"];
+
+    expect(countParkTargets(healthy, ids)).toEqual({ parked: 1, unparked: 1 });
+    expect(countParkTargets(degraded, ids)).toEqual({ parked: 1, unparked: 0 });
+    expect(selectParkTargets(degraded, ids, "park")).toEqual([]);
+    expect(countParkTargets(healthy, ids)).toEqual({ parked: 1, unparked: 1 });
+    expect(selectParkTargets(healthy, ids, "park")).toEqual(["a"]);
+    expect(countParkTargets(healthy, ["b"])).toEqual({ parked: 1, unparked: 0 });
+    expect(countParkTargets(healthy, [])).toEqual({ parked: 0, unparked: 0 });
+  });
 });
 
 describe("runBulkPark", () => {
@@ -120,6 +136,37 @@ describe("runBulkPark", () => {
     expect(parkRun).toHaveBeenCalledTimes(1);
     expect(parkRun).toHaveBeenCalledWith("a", {});
     expect(result).toEqual({ succeeded: 1, failed: [], firstError: undefined });
+  });
+
+  it("re-checks the live snapshot after an earlier call lands", async () => {
+    const both = snap([{ runId: "a" }, { runId: "b" }]);
+    setSnapshot(both);
+    parkRun.mockImplementation(async (id: string) => {
+      // The user parks "b" by hand while "a"'s request is in flight.
+      if (id === "a") setSnapshot(snap([{ runId: "a" }, { runId: "b", park: { parkedAt: 2 } }]));
+      return { parkedAt: 1 };
+    });
+
+    await runBulkPark("park", ["a", "b"]);
+
+    expect(parkRun.mock.calls.map(([id]) => id)).toEqual(["a"]);
+  });
+
+  it("re-checks after a pacing wait, including a degraded flip over the same runs", async () => {
+    const ids = Array.from({ length: 21 }, (_, i) => `r${i}`);
+    const healthy = snap(ids.map((runId) => ({ runId })));
+    setSnapshot(healthy);
+    let clock = 1_000;
+    const sleep = vi.fn(async (ms: number) => {
+      clock += ms;
+      setSnapshot({ ...healthy, degraded: true });
+    });
+
+    await runBulkPark("park", ids, { now: () => clock, sleep });
+
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(parkRun).toHaveBeenCalledTimes(20);
+    expect(parkRun).not.toHaveBeenCalledWith("r20", {});
   });
 
   it("keeps going past a failure and reports which runs didn't take", async () => {
