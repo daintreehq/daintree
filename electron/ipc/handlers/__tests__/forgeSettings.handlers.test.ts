@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type {
   ForgeProviderEntry,
   ForgeTokenHealthState,
@@ -38,6 +38,8 @@ const registryMock = vi.hoisted(() => {
     // Credential paths take the role-agnostic lookup; these tests bind a full
     // provider, which both lookups return.
     getForgeProviderBaseImpl: (id: string) => getForgeProviderImpl(id),
+    // Every provider can run unless a test says it comes from an installed plugin.
+    getForgeProviderUnavailableError: vi.fn<(id: string) => string | null>(() => null),
     // Consulted by remote selection (#11408) to decide whether a URL is
     // parseable. Default "yes" keeps these tests about provider resolution.
     listMatchingProviders: vi.fn<(remoteUrl: string) => unknown[]>(() => [{}]),
@@ -219,6 +221,50 @@ describe("registerForgeSettingsHandlers", () => {
       defaultProviderId: "daintree.github.github",
     });
     expect(storeMock.set).toHaveBeenCalledWith("forgeDefaultProviderId", "daintree.github.github");
+  });
+
+  describe("setDefaultProvider with an installed plugin's provider (#15583)", () => {
+    const UNAVAILABLE = 'Forge provider "Gitea" can\'t run: installed plugin';
+
+    beforeEach(() => {
+      registryMock.getForgeProviderUnavailableError.mockImplementation((id: string) =>
+        id === "acme.gitea.gitea" ? UNAVAILABLE : null
+      );
+    });
+
+    afterEach(() => {
+      registryMock.getForgeProviderUnavailableError.mockImplementation(() => null);
+    });
+
+    it("refuses it as a new default without storing or pushing anything", async () => {
+      storeMock._data["forgeDefaultProviderId"] = "daintree.github.github";
+      registerForgeSettingsHandlers();
+      const setDefault = findHandler("forge:set-default-provider");
+
+      expect(() => setDefault(null, "acme.gitea.gitea")).toThrow(UNAVAILABLE);
+      expect(storeMock.set).not.toHaveBeenCalled();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(workspaceClientMock.updateForgeSettingsForAllProjects).not.toHaveBeenCalled();
+    });
+
+    it("still lets a stored one be re-saved or cleared", () => {
+      storeMock._data["forgeDefaultProviderId"] = "acme.gitea.gitea";
+      registerForgeSettingsHandlers();
+      const setDefault = findHandler("forge:set-default-provider");
+
+      expect(setDefault(null, "acme.gitea.gitea")).toEqual({
+        defaultProviderId: "acme.gitea.gitea",
+      });
+      expect(setDefault(null, null)).toEqual({ defaultProviderId: null });
+    });
+
+    it("still accepts a built-in provider", () => {
+      registerForgeSettingsHandlers();
+      const setDefault = findHandler("forge:set-default-provider");
+      expect(setDefault(null, "daintree.github.github")).toEqual({
+        defaultProviderId: "daintree.github.github",
+      });
+    });
   });
 
   it("getSettings treats whitespace-only stored values as null", () => {

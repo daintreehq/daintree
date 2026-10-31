@@ -11,8 +11,11 @@ import {
   getForgeIssueProviderImpl,
   getForgeProviderBaseImpl,
   getForgeProviderImpl,
+  getForgeProviderUnavailableError,
   getRegisteredForgeProviders,
+  INSTALLED_FORGE_PROVIDER_REASON,
   listMatchingProviders,
+  listForgeProviderMatchers,
   onForgeProviderMatchersChanged,
   registerForgeProviderImpl,
   registerForgeProviders,
@@ -447,5 +450,73 @@ describe("forgeProviderRegistry — roles (#13700)", () => {
       ]);
       expect(listMatchingProviders("https://github.com/o/r.git")).toEqual([]);
     });
+  });
+});
+
+describe("forgeProviderRegistry — installed plugins' providers (#15583)", () => {
+  beforeEach(() => {
+    registerForgeProviders("daintree.github", [makeContribution("github", ["github.com"])], {
+      builtin: true,
+    });
+    registerForgeProviders(
+      "acme.gitea",
+      [{ ...makeContribution("gitea", ["gitea.example.com"]), name: "Gitea" }],
+      { builtin: false }
+    );
+  });
+
+  it("lists an installed plugin's provider as unavailable, with the reason", () => {
+    const gitea = getRegisteredForgeProviders().find((p) => p.pluginId === "acme.gitea");
+    expect(gitea?.unavailableReason).toBe(INSTALLED_FORGE_PROVIDER_REASON);
+    expect(INSTALLED_FORGE_PROVIDER_REASON).toMatch(/only as built-in plugins/);
+  });
+
+  it("keeps a built-in provider in the same registry available", () => {
+    const github = getRegisteredForgeProviders().find((p) => p.pluginId === "daintree.github");
+    expect(github).toEqual({
+      pluginId: "daintree.github",
+      contribution: expect.objectContaining({ id: "github" }),
+    });
+    expect(getForgeProviderUnavailableError("daintree.github.github")).toBeNull();
+  });
+
+  it("still routes a hostname only the installed provider matches, carrying the reason", () => {
+    const [match] = listMatchingProviders("https://gitea.example.com/o/r.git");
+    expect(match?.pluginId).toBe("acme.gitea");
+    expect(match?.unavailableReason).toBe(INSTALLED_FORGE_PROVIDER_REASON);
+    expect(listMatchingProviders("https://github.com/o/r.git")[0]?.unavailableReason).toBe(
+      undefined
+    );
+    // Workspace hosts get the same routing table as before.
+    expect(listForgeProviderMatchers().map((m) => m.providerId)).toEqual([
+      "daintree.github.github",
+      "acme.gitea.gitea",
+    ]);
+  });
+
+  it("explains why the provider can't run, by canonical or legacy bare id", () => {
+    const error = getForgeProviderUnavailableError("acme.gitea.gitea");
+    expect(error).toContain('Forge provider "Gitea" can\'t run');
+    expect(error).toContain('installed plugin "acme.gitea"');
+    expect(error).toContain("only as built-in plugins");
+    expect(error).not.toMatch(/Activate it in Settings/);
+    expect(getForgeProviderUnavailableError("gitea")).toBe(error);
+  });
+
+  it("leaves unknown ids to the caller's own missing-provider handling", () => {
+    expect(getForgeProviderUnavailableError("acme.nope.nope")).toBeNull();
+    expect(getForgeProviderUnavailableError("")).toBeNull();
+  });
+
+  it("forgets the classification when the plugin unloads", () => {
+    unregisterForgeProviders("acme.gitea");
+    expect(getForgeProviderUnavailableError("acme.gitea.gitea")).toBeNull();
+  });
+
+  it("treats a registration without a classification as runnable", () => {
+    registerForgeProviders("acme.legacy", [makeContribution("legacy", ["legacy.example"])]);
+    const legacy = getRegisteredForgeProviders().find((p) => p.pluginId === "acme.legacy");
+    expect(legacy).not.toHaveProperty("unavailableReason");
+    expect(getForgeProviderUnavailableError("acme.legacy.legacy")).toBeNull();
   });
 });

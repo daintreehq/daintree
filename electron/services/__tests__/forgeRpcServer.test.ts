@@ -585,3 +585,85 @@ describe("issue branch claims (#13744)", () => {
     expect(result).toMatchObject({ ok: false });
   });
 });
+
+describe("installed plugins' providers (#15583)", () => {
+  const resolveArgs = [
+    {
+      remoteUrl: "https://gitea.example.com/owner/repo.git",
+      forgeProviderOverride: null,
+      globalDefaultProviderId: null,
+    },
+  ];
+
+  beforeEach(() => {
+    pluginServiceMock.activatePluginForForgeProvider.mockClear();
+    registerForgeProviders(
+      "acme.gitea",
+      [{ id: "gitea", name: "Gitea", matches: ["gitea.example.com"] }],
+      { builtin: false }
+    );
+  });
+
+  it("misses a project routed to one without starting the plugin's worker", async () => {
+    const { send, sent } = captureSender();
+
+    await dispatchForgeRpc(
+      { forgeRequestId: "resolve-installed", method: "resolveProvider", args: resolveArgs },
+      send
+    );
+
+    expect(sent[0]).toMatchObject({ ok: true, value: { status: "no-match" } });
+    expect(pluginServiceMock.activatePluginForForgeProvider).not.toHaveBeenCalled();
+  });
+
+  it("fails a direct call with the real reason instead of activating", async () => {
+    const { send, sent } = captureSender();
+
+    await dispatchForgeRpc(
+      {
+        forgeRequestId: "pr-installed",
+        method: "getPR",
+        namespacedId: "acme.gitea.gitea",
+        args: [repo, 1],
+      },
+      send
+    );
+
+    expect(sent[0]).toMatchObject({ ok: false });
+    if (!sent[0].ok) {
+      expect(sent[0].error).toContain("only as built-in plugins");
+      expect(sent[0].error).not.toContain("not registered");
+    }
+    expect(pluginServiceMock.activatePluginForForgeProvider).not.toHaveBeenCalled();
+  });
+
+  it("still activates and resolves a built-in provider registered beside it", async () => {
+    // Built-ins load first, so a built-in matching the same host wins routing.
+    clearForgeProviderRegistry();
+    registerForgeProviders(
+      "daintree.gitea",
+      [{ id: "gitea", name: "Gitea", matches: ["gitea.example.com"] }],
+      { builtin: true }
+    );
+    registerForgeProviders(
+      "acme.gitea",
+      [{ id: "gitea", name: "Gitea", matches: ["gitea.example.com"] }],
+      { builtin: false }
+    );
+    registerForgeProviderImpl("daintree.gitea", "gitea", makeImpl());
+    const { send, sent } = captureSender();
+
+    await dispatchForgeRpc(
+      { forgeRequestId: "resolve-builtin", method: "resolveProvider", args: resolveArgs },
+      send
+    );
+
+    expect(sent[0]).toMatchObject({
+      ok: true,
+      value: { status: "resolved", namespacedId: "daintree.gitea.gitea" },
+    });
+    expect(pluginServiceMock.activatePluginForForgeProvider).toHaveBeenCalledWith(
+      "daintree.gitea.gitea"
+    );
+  });
+});
