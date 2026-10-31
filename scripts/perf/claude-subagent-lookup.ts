@@ -43,8 +43,7 @@ const { deriveProjectSlug, findSubagentsDir } = reader;
 // so the cold reading is a first look. On a tree that predates the location
 // memo there is nothing to clear, and cold reads the same as warm.
 const resetCaches = (reader as Record<string, unknown>).__resetClaudeSubagentCaches as
-  | (() => void)
-  | undefined;
+  (() => void) | undefined;
 
 let fsRequests = 0;
 const requestCounter = createHook({
@@ -96,7 +95,10 @@ async function buildFixture(): Promise<Case[]> {
   // session lives under a directory only the scan can find.
   const fallbackCwd = `/Users/dev/Projects/${"very-long-segment-".repeat(14)}app`;
   const fallbackOnly = sessionId("fa11bac");
-  const hashedDir = path.join(projectsRoot, `${deriveProjectSlug(fallbackCwd).slice(0, 200)}-1x2y3z`);
+  const hashedDir = path.join(
+    projectsRoot,
+    `${deriveProjectSlug(fallbackCwd).slice(0, 200)}-1x2y3z`
+  );
   const fallbackSubagents = path.join(hashedDir, fallbackOnly, "subagents");
   await mkdir(fallbackSubagents, { recursive: true });
   await writeFile(path.join(hashedDir, `${fallbackOnly}.jsonl`), "{}\n");
