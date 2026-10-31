@@ -452,6 +452,32 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
     expect(logWarn).not.toHaveBeenCalledWith("[VoiceSession] Summary rejected", expect.anything());
   });
 
+  it("marks the session whose start reopened a waiting send, and no other (#15704)", async () => {
+    const harness = setupGlobals();
+    const { service, summaries } = await load();
+
+    // The dictation key arms its target before a session, or its timeline, exists.
+    const armed = { ...TARGET };
+    service.noteSendReopened({ target: armed });
+    const first = await startLive(harness, service, armed);
+    await service.stop("Dictation stopped.", { reason: "user" });
+
+    const second = await startLive(harness, service, { ...TARGET });
+    await service.stop("Dictation stopped.", { reason: "user" });
+
+    // A session that began without a press is named by its id.
+    const third = await startLive(harness, service, { ...TARGET });
+    service.noteSendReopened({ sessionId: third });
+    service.noteSendReopened({ sessionId: "session-already-logged" });
+    await service.stop("Dictation stopped.", { reason: "user" });
+
+    expect(summaries()).toMatchObject([
+      { sessionId: first, reopenedSend: true },
+      { sessionId: second, reopenedSend: false },
+      { sessionId: third, reopenedSend: true },
+    ]);
+  });
+
   it("falls back to start() entry without a shortcut press", async () => {
     const harness = setupGlobals();
     const { service, summaries } = await load();

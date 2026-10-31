@@ -643,7 +643,7 @@ export function VoiceRecordingToolbarButton({
           }}
           onSend={() => {
             close();
-            void voiceRecordingService.stopAndSend();
+            void voiceRecordingService.stopAndSend({ asker: "session_panel_send" });
           }}
         />
       )}

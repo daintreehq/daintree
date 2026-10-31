@@ -26,6 +26,11 @@ import {
 } from "@/services/voiceDraftSend";
 import { useDictationRangeStore } from "@/store/dictationRangeStore";
 import { isSpokenSendable } from "@/services/voiceSpokenSend";
+import {
+  logVoiceSendRefused,
+  type VoiceSendAsker,
+  type VoiceSendRefusal,
+} from "@/services/voiceSendDiagnostics";
 import { claimVoiceWaitKeys } from "@/lib/voiceWaitKeys";
 import type { ClaimSendHandBack, SendHandBack } from "./useSendHandBack";
 import type { ComposerSendRoute } from "./useEditorKeymap";
@@ -137,6 +142,8 @@ interface VoiceWaitSubmitOptions {
   stayPut?: boolean;
   /** Taken at the key press that started the wait, and gone with it if the wait is called off. */
   route?: ComposerSendRoute;
+  /** What asked, for the line a refused send leaves; Enter unless the service says otherwise. */
+  asker?: VoiceSendAsker;
 }
 
 // A hand-back that hands nothing back, which also stops the send claiming its own.
@@ -186,10 +193,13 @@ const isLive = (live: WaitAttempt, voiceId: string) =>
 
 type VoiceRecordingState = ReturnType<typeof useVoiceRecordingStore.getState>;
 
+/** The start of a dictation that reopens a waiting send: its armed target, or its session. */
+type ReopeningStart = Parameters<typeof voiceRecordingService.noteSendReopened>[0];
+
 /**
- * Whether this store change starts a dictation in `panelId` that the send
- * taking `sessions` doesn't: the dictation key's press, which arms it before
- * any of its start is awaited, or a session that begins without one. The
+ * The dictation this store change starts in `panelId` that the send taking
+ * `sessions` doesn't, if it does: the dictation key's press, which arms it
+ * before any of its start is awaited, or a session that begins without one. The
  * session of a start already under way at the send's Enter (`startedBefore`)
  * is the next prompt's, as one begun after the send went would be (#14804).
  */
@@ -199,25 +209,28 @@ function startsDictationIn(
   startedBefore: VoiceRecordingState["pendingTarget"],
   state: VoiceRecordingState,
   prev: VoiceRecordingState
-): boolean {
+): ReopeningStart | null {
   if (state.pendingTarget !== prev.pendingTarget && state.pendingTarget?.panelId === panelId) {
-    return true;
+    return { target: state.pendingTarget };
   }
-  if (state.activeTarget?.panelId !== panelId) return false;
-  if (startedBefore !== null && prev.pendingTarget === startedBefore) return false;
+  if (state.activeTarget?.panelId !== panelId) return null;
+  if (startedBefore !== null && prev.pendingTarget === startedBefore) return null;
   const session = state.panelBuffers[panelId]?.dictationSessionId;
-  return (
-    !!session &&
+  if (
+    session &&
     session !== prev.panelBuffers[panelId]?.dictationSessionId &&
     !sessions.has(session)
-  );
+  ) {
+    return { sessionId: session };
+  }
+  return null;
 }
 
-/** Whether a dictation the send doesn't take is under way in `panelId`'s draft. */
-function dictatesPast(live: WaitAttempt, panelId: string): boolean {
-  if (!isVoiceSessionActiveFor(panelId)) return false;
+/** The dictation the send doesn't take that is under way in `panelId`'s draft, if one is. */
+function dictatesPast(live: WaitAttempt, panelId: string): string | null {
+  if (!isVoiceSessionActiveFor(panelId)) return null;
   const session = useVoiceRecordingStore.getState().panelBuffers[panelId]?.dictationSessionId;
-  return !!session && !live.sessions.has(session);
+  return session && !live.sessions.has(session) ? session : null;
 }
 
 /**
@@ -515,13 +528,21 @@ export function useVoiceWaitSubmit({
   const startVoiceWaitSubmit = useCallback(
     (options?: VoiceWaitSubmitOptions) => {
       const store = useTerminalInputStore.getState();
+      const asker = options?.asker ?? "enter";
+      const logRefusal = (reason: VoiceSendRefusal) =>
+        logVoiceSendRefused({ asker, reason, panelId: voiceId });
       if (store.isVoiceSubmitting(voiceId)) {
         // The wait holds Enter, so only the dictation sends again while it
         // waits: the session panel's Send, or "send it". One the send held
         // back, begun from a start already under way at its Enter, reopens it,
         // and this send takes both (#15703).
         const waiting = activeWaitRef.current;
-        if (!waiting || !dictatesPast(waiting, voiceId)) return;
+        const reopener = waiting ? dictatesPast(waiting, voiceId) : null;
+        if (!waiting || !reopener) {
+          logRefusal("already_waiting");
+          return;
+        }
+        voiceRecordingService.noteSendReopened({ sessionId: reopener });
         callOffWait(waiting, voiceId, "reopened", false);
       }
 
@@ -572,14 +593,20 @@ export function useVoiceWaitSubmit({
       // writes after its text for the next send to take whole (#15703). One
       // started elsewhere leaves it alone (#14611).
       live.releaseReopen = useVoiceRecordingStore.subscribe((state, prev) => {
-        if (!live.over && startsDictationIn(voiceId, sessions, startedBefore, state, prev)) {
-          callOffWait(live, voiceId, "reopened", true);
-        }
+        if (live.over) return;
+        const reopener = startsDictationIn(voiceId, sessions, startedBefore, state, prev);
+        if (!reopener) return;
+        voiceRecordingService.noteSendReopened(reopener);
+        callOffWait(live, voiceId, "reopened", true);
       });
 
       void (async () => {
         let sent: boolean | Promise<boolean> = false;
         let tooShort = false;
+        let refusal: VoiceSendRefusal | null = null;
+        // Whether a composer was handed the text; a send that never got that
+        // far failed rather than being held back.
+        let handedOver = false;
         let cleanup: VoiceSendCleanup | undefined;
         try {
           if (isVoiceSessionActiveFor(voiceId)) {
@@ -665,6 +692,7 @@ export function useVoiceWaitSubmit({
           );
           if (options?.spoken && !isSpokenSendable(voiceSend.text)) {
             tooShort = voiceSend.text.trim() !== "";
+            refusal = tooShort ? "draft_too_short" : "draft_empty";
             return;
           }
           // Read with nothing awaited before the send: a cleanup still on its
@@ -675,6 +703,7 @@ export function useVoiceWaitSubmit({
           // is the next prompt's.
           live.releaseReopen();
           if (live.departed) {
+            handedOver = true;
             const departed = live.departed(
               live.handBack,
               voiceSend,
@@ -687,6 +716,7 @@ export function useVoiceWaitSubmit({
             const settled = () => useTerminalInputStore.getState().bumpExternalDraftRevision();
             void Promise.resolve(departed).then(settled, settled);
           } else if (live.seat) {
+            handedOver = true;
             sent =
               live.seat.sendFromEditorRef.current(live.handBack, voiceSend, options?.route) ?? true;
           }
@@ -699,6 +729,19 @@ export function useVoiceWaitSubmit({
           if (!live.over) {
             live.over = true;
             useTerminalInputStore.getState().setVoiceSubmitting(voiceId, false);
+            // A send the composer is still handing over answers later, and
+            // the line is its own whether or not this attempt is still shown.
+            if (typeof sent === "boolean") {
+              const reason = refusal ?? (sent ? null : handedOver ? "send_held" : "send_failed");
+              if (reason) logRefusal(reason);
+            } else {
+              sent.then(
+                (taken) => {
+                  if (!taken) logRefusal("send_held");
+                },
+                () => logRefusal("send_failed")
+              );
+            }
             const at = live.seat;
             if (at) {
               if (at.activeWaitRef.current === live) at.activeWaitRef.current = null;
@@ -740,14 +783,16 @@ export function useVoiceWaitSubmit({
             if (!isDisabledRef.current?.()) onSpokenSendTooShortRef.current?.();
             return;
           }
-          if (isDisabledRef.current?.()) {
-            void voiceRecordingService.stop("Dictation stopped.", { reason: "send" });
-            return;
-          }
           // A spoken "send it" unless the session panel's Send asked, which
           // sends whatever Enter would and leaves the keyboard where it is.
           const spoken = options?.spoken ?? true;
-          startVoiceWaitSubmit({ spoken, stayPut: !spoken });
+          const asker = options?.asker ?? (spoken ? "spoken_send" : "session_panel_send");
+          if (isDisabledRef.current?.()) {
+            logVoiceSendRefused({ asker, reason: "composer_disabled", panelId: voiceId });
+            void voiceRecordingService.stop("Dictation stopped.", { reason: "send" });
+            return;
+          }
+          startVoiceWaitSubmit({ spoken, stayPut: !spoken, asker });
         }
       ),
     [voiceId, voiceProjectId, ownVoice, startVoiceWaitSubmit]
