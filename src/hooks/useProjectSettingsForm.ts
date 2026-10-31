@@ -105,6 +105,10 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   // that differ from it, laid over the settings as they are on disk.
   const lastSavedFieldsRef = useRef<FormOwnedSettings | null>(null);
   const persistChainRef = useRef<Promise<SaveOutcome> | null>(null);
+  // Set by a discard until the form seeds again. A close or save already under
+  // way when the user discarded must not write the abandoned draft, nor bring
+  // its error back.
+  const discardingRef = useRef(false);
   // Retry bumps the attempt so the read made on open runs again.
   const [openReadAttempt, setOpenReadAttempt] = useState(0);
   const [settledOpenRead, setSettledOpenRead] = useState<{
@@ -248,6 +252,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   // Gives up an edit that won't save. The form seeds again from a fresh read, so
   // it holds what main stores and a close after it has nothing left to write.
   const discardUnsavedChanges = () => {
+    discardingRef.current = true;
     debouncedProjectSaveRef.current?.cancel();
     setProjectAutoSaveError(null);
     setProjectIsInitialized(false);
@@ -287,6 +292,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       setSettledOpenRead(null);
       lastSavedSnapshotRef.current = null;
       lastSavedFieldsRef.current = null;
+      discardingRef.current = false;
       return;
     }
 
@@ -435,6 +441,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       },
       null
     );
+    discardingRef.current = false;
     setProjectIsInitialized(true);
   }, [
     projectSettings,
@@ -448,7 +455,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   ]);
 
   const persistDraft = async (force: boolean): Promise<SaveOutcome> => {
-    if (!projectSettings || !currentProject || !projectId) {
+    if (!projectSettings || !currentProject || !projectId || discardingRef.current) {
       return undefined;
     }
 
@@ -484,7 +491,8 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       },
       baseline
     );
-    setProjectAutoSaveError(null);
+    // The error stays up through a retry, so the banner (and the Retry a held
+    // close focused) isn't torn down and rebuilt on every attempt.
     try {
       const trimmedName = projectName.trim() || currentProject.name;
       const identityChanged =
@@ -511,9 +519,11 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       if (currentProjectSnapshot) {
         lastSavedSnapshotRef.current = currentProjectSnapshot;
       }
+      setProjectAutoSaveError(null);
       return undefined;
     } catch (err) {
       logError("Failed to auto-save project settings", err);
+      if (discardingRef.current) return undefined;
       const message = formatErrorMessage(err, "Failed to save settings");
       setProjectAutoSaveError(message);
       return { message };

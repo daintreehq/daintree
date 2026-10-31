@@ -532,7 +532,12 @@ describe("useProjectSettingsForm", () => {
     expect(result.current.projectAutoSaveError).toBe("Disk full");
     expect(mockRefresh).toHaveBeenCalledTimes(1);
 
+    // Another edit arms the autosave, which the discard must not let fire.
+    act(() => {
+      result.current.setDevServerCommand("npm run edited again");
+    });
     mockSaveSettings.mockClear();
+    mockSettings.value = { ...baseSettings, devServerCommand: "npm run stored-elsewhere" };
     act(() => {
       result.current.discardUnsavedChanges();
     });
@@ -543,13 +548,50 @@ describe("useProjectSettingsForm", () => {
 
     expect(mockRefresh).toHaveBeenCalledTimes(2);
     expect(result.current.projectIsInitialized).toBe(true);
-    expect(result.current.devServerCommand).toBe("npm run dev");
+    expect(result.current.devServerCommand).toBe("npm run stored-elsewhere");
+    expect(mockSaveSettings).not.toHaveBeenCalled();
     let outcome: Awaited<ReturnType<typeof result.current.flush>>;
     await act(async () => {
       outcome = await result.current.flush();
     });
     expect(outcome).toBeUndefined();
     expect(mockSaveSettings).not.toHaveBeenCalled();
+  });
+
+  it("a close under way when the edit is discarded neither writes it nor brings its error back", async () => {
+    vi.useFakeTimers();
+    const { result } = await renderSeededForm();
+    let rejectSave!: (err: Error) => void;
+    mockSaveSettings.mockImplementationOnce(
+      () => new Promise<void>((_, reject) => (rejectSave = reject))
+    );
+    act(() => {
+      result.current.setDevServerCommand("npm run edited");
+    });
+    // A close in progress holds the flush it started with.
+    const closingFlush = result.current.flush;
+    let outcome: Awaited<ReturnType<typeof closingFlush>> | "pending" = "pending";
+    let closing!: Promise<void>;
+    act(() => {
+      closing = closingFlush().then((settled) => {
+        outcome = settled;
+      });
+    });
+    await vi.waitFor(() => {
+      expect(mockSaveSettings).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      result.current.discardUnsavedChanges();
+    });
+    await act(async () => {
+      rejectSave(new Error("Disk full"));
+      await closing;
+    });
+
+    expect(outcome).toBeUndefined();
+    expect(result.current.projectAutoSaveError).toBeNull();
+    expect(mockSaveSettings).toHaveBeenCalledTimes(1);
   });
 
   it("stays uninitialized while loading with no settings yet (backs the Doherty loader)", async () => {

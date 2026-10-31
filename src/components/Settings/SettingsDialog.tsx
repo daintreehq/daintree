@@ -1583,6 +1583,7 @@ function ProjectFormTabContent({
           settings={projectForm.projectSettings}
           isOpen={isOpen}
           onFlush={projectForm.saveNow}
+          projectSaveFailed={projectForm.projectAutoSaveError !== null}
           projectLabel={projectLabel}
           globalEnvironmentVariables={globalEnvVars}
         />

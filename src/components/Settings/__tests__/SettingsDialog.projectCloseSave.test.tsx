@@ -103,6 +103,28 @@ function pressEscape() {
   });
 }
 
+function clickCloseButton() {
+  return act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
+  });
+}
+
+// Saving through the page hands its rows to the form, so from here only the form's
+// own close-time save stands between the edit and a close.
+async function failExplicitSave() {
+  fireEvent.change(valueInput(), { target: { value: "b" } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  });
+  await waitFor(() => {
+    expect(variablesSection().textContent).toContain("Read-only file system");
+  });
+}
+
+function variablesPanel() {
+  return document.getElementById("settings-panel-project:variables");
+}
+
 describe("SettingsDialog close when the project save fails", () => {
   it("holds a close-time Variables save on its section, with the page's own error", async () => {
     const onClose = await openOnProjectVariables();
@@ -122,19 +144,14 @@ describe("SettingsDialog close when the project save fails", () => {
     expect(screen.getByText(SAVE_BANNER)).toBeTruthy();
   });
 
-  it("refuses a close after a failed Save and keeps the edit, then closes once a retry saves", async () => {
+  it.each([
+    ["Escape", pressEscape],
+    ["the close button", clickCloseButton],
+  ])("refuses a close by %s after a failed Save, then closes once a retry saves", async (_, close) => {
     const onClose = await openOnProjectVariables();
-    fireEvent.change(valueInput(), { target: { value: "b" } });
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    });
-    await waitFor(() => {
-      expect(variablesSection().textContent).toContain("Read-only file system");
-    });
+    await failExplicitSave();
 
-    // The page's draft is the form's now, so only the form's own close-time save
-    // stands between the edit and a close.
-    await pressEscape();
+    await close();
     await waitFor(() => {
       expect(document.activeElement).toBe(screen.getByRole("button", { name: "Retry" }));
     });
@@ -143,7 +160,7 @@ describe("SettingsDialog close when the project save fails", () => {
     expect(screen.getByText(SAVE_BANNER)).toBeTruthy();
 
     persistence.saveSettings.mockResolvedValue(undefined);
-    await pressEscape();
+    await close();
 
     await waitFor(() => {
       expect(onClose).toHaveBeenCalledTimes(1);
@@ -152,6 +169,74 @@ describe("SettingsDialog close when the project save fails", () => {
       expect.objectContaining({ environmentVariables: { MY_VAR: "b" } })
     );
     expect(screen.queryByText(SAVE_BANNER)).toBeNull();
+  });
+
+  it("lets the banner's Retry save the edit and clear the page's own error", async () => {
+    const onClose = await openOnProjectVariables();
+    await failExplicitSave();
+
+    persistence.saveSettings.mockClear();
+    persistence.saveSettings.mockResolvedValue(undefined);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText(SAVE_BANNER)).toBeNull();
+    });
+    expect(persistence.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ environmentVariables: { MY_VAR: "b" } })
+    );
+    expect(variablesSection().textContent).not.toContain("Read-only file system");
+
+    persistence.saveSettings.mockClear();
+    await pressEscape();
+    await waitFor(() => {
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+    expect(persistence.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it("brings a close from global scope back to the project page, while a hide holds nothing", async () => {
+    const onClose = await openOnProjectVariables();
+    await failExplicitSave();
+
+    await act(async () => {
+      fireEvent.keyDown(document.querySelector("[data-settings-scope-trigger]")!, {
+        key: "Enter",
+      });
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("menuitemradio", { name: /All projects/ }));
+    });
+    await waitFor(() => {
+      expect(variablesPanel()).toBeNull();
+    });
+
+    // A hide still tries the save, but can't keep anything open or move the page.
+    const attempts = persistence.saveSettings.mock.calls.length;
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    try {
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await waitFor(() => {
+        expect(persistence.saveSettings.mock.calls.length).toBeGreaterThan(attempts);
+      });
+    } finally {
+      hidden.mockRestore();
+    }
+    expect(variablesPanel()).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+
+    await pressEscape();
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Retry" }));
+    });
+    expect(variablesPanel()!.classList.contains("hidden")).toBe(false);
+    expect(valueInput().value).toBe("b");
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("closes after the edit is discarded, without writing it", async () => {

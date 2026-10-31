@@ -33,6 +33,8 @@ interface EnvironmentVariablesEditorProps {
   settings: ProjectSettings | null;
   isOpen: boolean;
   onFlush?: OnFlush;
+  /** Whether the project form's last save failed; a later one landing clears this page's error. */
+  projectSaveFailed?: boolean;
   projectLabel: string;
   globalEnvironmentVariables?: Record<string, string>;
 }
@@ -51,6 +53,7 @@ export function EnvironmentVariablesEditor({
   settings,
   isOpen,
   onFlush,
+  projectSaveFailed,
   projectLabel,
   globalEnvironmentVariables,
 }: EnvironmentVariablesEditorProps) {
@@ -74,6 +77,12 @@ export function EnvironmentVariablesEditor({
     setSaveAttempted(false);
     setSaveError(null);
   }, [environmentVariables, isOpen]);
+
+  // After a failed Save the rows are the form's, so the save that finally lands
+  // (the banner's Retry, a close) never passes through this page.
+  useEffect(() => {
+    if (projectSaveFailed === false) setSaveError(null);
+  }, [projectSaveFailed]);
 
   const rowErrors = useMemo(
     () => (saveAttempted ? validateEnvRows(rows) : {}),
