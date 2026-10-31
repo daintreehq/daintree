@@ -29,7 +29,8 @@ export const config: AgentConfig = {
   version: {
     args: ["--version"],
     githubRepo: "openinterpreter/openinterpreter",
-    releaseNotesUrl: "https://github.com/openinterpreter/openinterpreter/releases/tag/rust-v{version}",
+    releaseNotesUrl:
+      "https://github.com/openinterpreter/openinterpreter/releases/tag/rust-v{version}",
   },
   install: {
     docsUrl: "https://www.openinterpreter.com/docs/terminal/install",

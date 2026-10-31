@@ -68,7 +68,9 @@ describe("migration042 — Open Interpreter's retired bypass flag", () => {
   });
 
   it("is a no-op when replayed", () => {
-    const first = run({ agentSettings: { agents: { interpreter: { dangerousArgs: "--auto_run" } } } });
+    const first = run({
+      agentSettings: { agents: { interpreter: { dangerousArgs: "--auto_run" } } },
+    });
     const second = run(first.data);
     expect(second.store.set).not.toHaveBeenCalled();
     expect(second.data).toEqual(first.data);

@@ -755,7 +755,10 @@ describe("Open Interpreter configuration (#15567)", () => {
     // The same line once the interrupt hint is gone.
     ["• Working (12s)"],
   ])("does not treat %j as working", (line) => {
-    const patterns = [...compilePatterns("primaryPatterns"), ...compilePatterns("fallbackPatterns")];
+    const patterns = [
+      ...compilePatterns("primaryPatterns"),
+      ...compilePatterns("fallbackPatterns"),
+    ];
     expect(patterns.some((p) => p.test(line))).toBe(false);
   });
 });

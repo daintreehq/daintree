@@ -2004,10 +2004,7 @@ describe("CliAvailabilityService", () => {
       const norm = (s: string) => s.replace(/\\/g, "/");
       const allProbedPaths = mockedAccess.mock.calls.map((c) => norm(String(c[0])));
       const probedPaths = allProbedPaths.filter(
-        (p) =>
-          !p.includes("mistral") &&
-          !p.includes("/vibe") &&
-          !p.includes("aider")
+        (p) => !p.includes("mistral") && !p.includes("/vibe") && !p.includes("aider")
       );
       expect(probedPaths.some((p) => p.includes(".local/share/uv/tools"))).toBe(false);
       expect(probedPaths.some((p) => p.includes(".local/share/pipx/venvs"))).toBe(false);
