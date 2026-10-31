@@ -309,7 +309,7 @@ export const JOURNEYS: readonly JourneyDefinition[] = [
     coverage: "gap",
     commands: [],
     coverageNote:
-      "PERF-160..163 and PERF-244..246 measure the data and tokenize path, and PERF-246 states outright that it is not first paint. PERF-163 does measure what tokenization costs the main thread, which is the jank half of this question below the renderer. PERF-247 is the closest thing to the renderer half: it mounts the real Review Hub and diff-shelf lists under jsdom, which is React commit cost without a compositor — still not a frame, but no longer blind to the list. PERF-248 does the same for the diff table itself, counting the rows each commit of a 5,000-row hunk mounts and highlights; the frame-level evidence for that change (#15677) came from a one-off Chromium probe, not from a scenario here.",
+      "PERF-160..163 and PERF-244..246 measure the data and tokenize path, and PERF-246 states outright that it is not first paint. PERF-163 does measure what tokenization costs the main thread, which is the jank half of this question below the renderer. PERF-247 is the closest thing to the renderer half: it mounts the real Review Hub and diff-shelf lists under jsdom, which is React commit cost without a compositor — still not a frame, but no longer blind to the list. PERF-248 does the same for the diff table itself, counting the rows each commit of a 5,000-row hunk mounts and highlights; the frame-level evidence for that change (#15677) came from a one-off Chromium probe, not from a scenario here. PERF-419 and PERF-420 measure what building the rendered-Markdown layout's comparison costs the main thread, in-thread against the worker offload (#15679), on opening a long document and on stepping between them; react-markdown's own render and paint are outside them.",
     linkedScenarios: [
       "PERF-160",
       "PERF-161",
@@ -320,8 +320,16 @@ export const JOURNEYS: readonly JourneyDefinition[] = [
       "PERF-246",
       "PERF-247",
       "PERF-248",
+      "PERF-419",
+      "PERF-420",
     ],
-    ownerPaths: ["src/components/Worktree/**", "src/panels/review/**", "src/panels/diff/**"],
+    ownerPaths: [
+      "src/components/Worktree/**",
+      "src/panels/review/**",
+      "src/panels/diff/**",
+      "src/services/MarkdownDiffService.ts",
+      "src/workers/markdownDiff.worker.ts",
+    ],
   },
   {
     id: "JOURNEY-009",

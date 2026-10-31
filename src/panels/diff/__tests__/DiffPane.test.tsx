@@ -1431,7 +1431,6 @@ describe("DiffPane — rendered Markdown layout (#12171)", () => {
 
     const first = await screen.findByTestId("rendered-markdown-mock");
     const firstAttempt = first.getAttribute("data-attempt-key") ?? "";
-    const requestKey = first.getAttribute("data-request-key");
     act(() => renderedProps.current?.onChangeCount?.(3, firstAttempt));
     expect(screen.getByText("1 of 3")).toBeTruthy();
 
@@ -1450,8 +1449,49 @@ describe("DiffPane — rendered Markdown layout (#12171)", () => {
 
     act(() => renderedProps.current?.onChangeCount?.(2, secondAttempt));
     expect(screen.getByText("1 of 2")).toBeTruthy();
-    // One admission slot for the pane, whatever file it shows.
-    expect(second.getAttribute("data-request-key")).toBe(requestKey);
+  });
+
+  it("keeps one comparison slot per pane: stable across files, distinct between panes", async () => {
+    preferences.diffMarkdownRendered = true;
+    useDiffFileSourceMock.mockReturnValue({ source: "# Guide\n", errorCode: null });
+    seedPanel({ filePath: "docs/guide.md", fileStatus: "modified" });
+    const { rerender, unmount } = renderPane();
+    const requestKey = (await screen.findByTestId("rendered-markdown-mock")).getAttribute(
+      "data-request-key"
+    );
+    expect(requestKey).toBeTruthy();
+
+    // Stepping to another file supersedes the last one's comparison only if
+    // both are filed under the same key.
+    seedPanel({ filePath: "docs/other.md", fileStatus: "modified" });
+    rerender(paneElement());
+    const next = await screen.findByTestId("rendered-markdown-mock");
+    expect(next.getAttribute("data-attempt-key")).toContain("docs/other.md");
+    expect(next.getAttribute("data-request-key")).toBe(requestKey);
+    unmount();
+
+    // A second pane must not supersede the first one's comparison.
+    panelsById["diff-2"] = {
+      id: "diff-2",
+      kind: "diff",
+      diffSource: "working-tree",
+      filePath: "docs/guide.md",
+      fileStatus: "modified",
+    };
+    render(
+      <DiffPane
+        id="diff-2"
+        title="pane"
+        isFocused
+        location="dialog"
+        worktreeId={WORKTREE_ID}
+        onFocus={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const other = await screen.findByTestId("rendered-markdown-mock");
+    expect(other.getAttribute("data-request-key")).toBeTruthy();
+    expect(other.getAttribute("data-request-key")).not.toBe(requestKey);
   });
 });
 

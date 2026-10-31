@@ -119,10 +119,20 @@ export const OPEN_FIXTURES: readonly MarkdownDiffFixtureSpec[] = [
   },
 ];
 
-/** The two ~220 KB documents PERF-420 steps between. */
+/**
+ * The two ~220 KB documents PERF-420 steps between, and a third it lands on.
+ * The last selection is a document no earlier selection carried, so an earlier
+ * build delivered in its place cannot pass for it.
+ */
 export const STEP_FIXTURES: readonly MarkdownDiffFixtureSpec[] = [
   { ...OPEN_FIXTURES[3]!, label: "stepA", standsFor: "a ~217 KB document", seed: 4201 },
   { ...OPEN_FIXTURES[3]!, label: "stepB", standsFor: "a second ~217 KB document", seed: 4202 },
+  {
+    ...OPEN_FIXTURES[3]!,
+    label: "stepFinal",
+    standsFor: "the ~217 KB document landed on",
+    seed: 4203,
+  },
 ];
 
 const WORDS = [

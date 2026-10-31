@@ -155,6 +155,10 @@ export const markdownDiffScenarios: PerfScenario[] = [
       "workerRoutingMisses",
       "probeMisses",
     ],
+    // Every document in the issue's table, two of them refused by the block
+    // ceiling. A fixture list that shrank would drop the most expensive inputs
+    // first and flatter both arms.
+    workloadFloors: { workerRequests: 7, refusedRequests: 2 },
     async run(): Promise<ScenarioSample> {
       const fixtures = OPEN_FIXTURES.map(buildMarkdownDiffFixture);
       const { factory, harnesses } = createNodeMarkdownDiffWorkerFactory();
@@ -166,6 +170,8 @@ export const markdownDiffScenarios: PerfScenario[] = [
       let fixtureMissCount = 0;
       let probeMisses = 0;
       let workerTotalMs = 0;
+      let workerRequests = 0;
+      let refusedRequests = 0;
       let inThreadMaxStall = 0;
       let workerMaxStall = 0;
       let largeInThreadMaxStall = 0;
@@ -187,6 +193,8 @@ export const markdownDiffScenarios: PerfScenario[] = [
 
           const inThread = await measureArm(watches, () => buildMarkdownDiff(fixture.input));
           const worker = await measureArm(watches, () => client.build(WORKER_KEY, fixture.input));
+          workerRequests++;
+          if (fixture.spec.expected === "too-large") refusedRequests++;
 
           if (verdictOf(inThread.result) !== fixture.spec.expected) verdictMisses++;
           if (verdictOf(worker.result) !== fixture.spec.expected) verdictMisses++;
@@ -235,6 +243,8 @@ export const markdownDiffScenarios: PerfScenario[] = [
           workerLongestStallMs: workerMaxStall,
           largeInThreadLongestStallMs: largeInThreadMaxStall,
           largeWorkerLongestStallMs: largeWorkerMaxStall,
+          workerRequests,
+          refusedRequests,
           verdictMisses,
           modelMisses,
           fixtureMisses: fixtureMissCount,
@@ -245,20 +255,22 @@ export const markdownDiffScenarios: PerfScenario[] = [
   },
   {
     id: "PERF-420",
-    name: "Rendered Markdown Diff - Stepping Between Two Long Documents",
+    name: "Rendered Markdown Diff - Stepping Between Long Documents",
     description:
-      "A reviewer holding j/k across two ~217 KB documents: eight selections alternating between " +
-      "them, one every 50 ms on an absolute schedule, under one pane's key. The in-thread arm builds " +
-      "each selection when its turn comes, as the render-time useMemo did on every step, so later " +
-      "keystrokes wait behind earlier builds; the worker arm hands each to the unmodified " +
-      "MarkdownDiffClient without waiting, so its admission gate runs the build in flight and the " +
-      "last selection and supersedes the rest. finalSelectionMs is from the last keystroke's " +
-      "scheduled time to its verdict — a service-level completion time, not keystroke-to-paint. " +
-      "durationMs is the worker arm's finalSelectionMs. The final result must deep-equal the engine's " +
-      "for the last document on both arms, no earlier worker request may deliver a verdict after " +
-      "a newer one was issued (and any it delivers before must be its own document's), and the " +
-      "worker arm must be shown to have run on the " +
-      "worker thread. Executed job counts are reported, not graded.",
+      "A reviewer holding j/k across ~217 KB documents: eight selections one every 50 ms on an " +
+      "absolute schedule under one pane's key, alternating between two documents and landing on a " +
+      "third that no earlier selection carried. The in-thread arm builds each selection when its " +
+      "turn comes, as the render-time useMemo did on every step, so later keystrokes wait behind " +
+      "earlier builds; the worker arm hands each to the unmodified MarkdownDiffClient without " +
+      "waiting, so its admission gate runs the build in flight and the last selection and " +
+      "supersedes the rest. finalSelectionMs is from the last keystroke's scheduled time to its " +
+      "verdict — a service-level completion time, not keystroke-to-paint. durationMs is the worker " +
+      "arm's finalSelectionMs. The final result must deep-equal the engine's for the landed-on " +
+      "document on both arms; no earlier worker request may deliver a verdict after a newer one was " +
+      "issued, and any it delivers before must be its own document's; and the landed-on selection " +
+      "must be the last request the worker received, ran and answered. How many builds the worker " +
+      "admitted and executed depends on build time against the 50 ms cadence, so those are " +
+      "reported under machine-dependent names and never graded.",
     tier: "heavy",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 4, ci: 8, nightly: 12 },
@@ -270,14 +282,20 @@ export const markdownDiffScenarios: PerfScenario[] = [
       "workerRoutingMisses",
       "probeMisses",
     ],
+    // Both arms must actually take all eight keystrokes. A shorter burst has no
+    // earlier requests to supersede and passes every other term.
+    workloadFloors: { inThreadRequests: 8, workerRequests: 8 },
     async run(): Promise<ScenarioSample> {
       const SELECTIONS = 8;
       const INTERVAL_MS = 50;
       const fixtures = STEP_FIXTURES.map(buildMarkdownDiffFixture);
       const references = fixtures.map((fixture) => buildMarkdownDiff(fixture.input));
-      const sequence = Array.from({ length: SELECTIONS }, (_, index) => index % fixtures.length);
-      const finalIndex = sequence[SELECTIONS - 1]!;
-      const finalReference = references[finalIndex]!;
+      const finalDocument = fixtures.length - 1;
+      // Alternate between the first two, then land on the last.
+      const documentAt = (step: number) =>
+        step === SELECTIONS - 1 ? finalDocument : step % finalDocument;
+      const finalFixture = fixtures[finalDocument]!;
+      const finalReference = references[finalDocument]!;
 
       const { factory, harnesses } = createNodeMarkdownDiffWorkerFactory();
       const client = new MarkdownDiffClient(factory);
@@ -287,12 +305,19 @@ export const markdownDiffScenarios: PerfScenario[] = [
       let supersededResolutionMisses = 0;
       let probeMisses = 0;
       let workerFinalMs = 0;
+      let inThreadRequests = 0;
+      let workerRequests = 0;
       const metrics: Record<string, number> = {};
 
       fixtures.forEach((fixture, index) => {
         fixtureMissCount += fixtureMisses(fixture, references[index]!);
       });
-      if (isDeepStrictEqual(references[0], references[1])) fixtureMissCount++;
+      // Distinct documents, or a stale build could pass for the landed-on one.
+      for (let a = 0; a < references.length; a++) {
+        for (let b = a + 1; b < references.length; b++) {
+          if (isDeepStrictEqual(references[a], references[b])) fixtureMissCount++;
+        }
+      }
 
       try {
         const warm = await client.build(WORKER_KEY, fixtures[0]!.input);
@@ -305,7 +330,8 @@ export const markdownDiffScenarios: PerfScenario[] = [
           for (let step = 0; step < SELECTIONS; step++) {
             const scheduled = origin + step * INTERVAL_MS;
             await sleepUntil(scheduled);
-            last = buildMarkdownDiff(fixtures[sequence[step]!]!.input);
+            last = buildMarkdownDiff(fixtures[documentAt(step)]!.input);
+            inThreadRequests++;
             if (step === SELECTIONS - 1) inThreadFinalMs = performance.now() - scheduled;
           }
           return last;
@@ -325,9 +351,10 @@ export const markdownDiffScenarios: PerfScenario[] = [
             lastScheduled = origin + step * INTERVAL_MS;
             await sleepUntil(lastScheduled);
             if (step > 0) supersededAt.push(performance.now());
-            last = client.build(WORKER_KEY, fixtures[sequence[step]!]!.input);
+            const document = documentAt(step);
+            last = client.build(WORKER_KEY, fixtures[document]!.input);
+            workerRequests++;
             if (step < SELECTIONS - 1) {
-              const document = sequence[step]!;
               earlier.push(
                 last.then((result) => ({ result, settledAt: performance.now(), document }))
               );
@@ -350,8 +377,10 @@ export const markdownDiffScenarios: PerfScenario[] = [
         probeMisses += inThread.reading.probeMisses + worker.reading.probeMisses;
 
         const routing = await routingMisses(harnesses, null);
-        // The warm-up and at least the final selection must have run there.
-        const routingFloor = routing.executed < 2 ? 1 : 0;
+        // posted == delivered == executed is already graded, so the landed-on
+        // selection being the last post means the worker ran and answered it —
+        // not a fallback that built it here while the worker sat idle.
+        const landedOnWorker = harnesses[0]?.postedInputs.at(-1) === finalFixture.input;
 
         Object.assign(metrics, {
           inThreadFinalSelectionMs: inThreadFinalMs,
@@ -360,11 +389,12 @@ export const markdownDiffScenarios: PerfScenario[] = [
           workerLongestStallMs: worker.reading.longestStallMs,
           inThreadBlockedMs: inThread.reading.blockedMs,
           workerBlockedMs: worker.reading.blockedMs,
-          inThreadExecutedJobs: SELECTIONS,
+          inThreadRequests,
+          workerRequests,
           // Less the warm-up, which is not part of the burst.
-          workerExecutedJobs: routing.executed - 1,
-          workerPosted: routing.posted - 1,
-          workerRoutingMisses: routing.misses + routingFloor,
+          workerBuildsAdmitted: routing.posted - 1,
+          workerBuildsExecuted: routing.executed - 1,
+          workerRoutingMisses: routing.misses + (landedOnWorker ? 0 : 1),
           sourceBytes: Math.min(...fixtures.map((fixture) => fixture.sourceBytes)),
         });
       } finally {

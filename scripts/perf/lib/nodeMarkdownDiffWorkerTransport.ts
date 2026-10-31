@@ -1,6 +1,7 @@
 // Aliased so bare `Worker` in type position stays the DOM interface — the one
 // `MarkdownDiffClient` is written against.
 import { Worker as NodeWorker } from "node:worker_threads";
+import type { ReconstructInput } from "../../../src/components/Worktree/markdownBlockDiff";
 import type {
   MarkdownDiffWorkerRequest,
   MarkdownDiffWorkerResponse,
@@ -31,6 +32,12 @@ export class NodeMarkdownDiffWorkerHarness {
 
   /** Ids that actually crossed `postMessage`, in order. */
   readonly posted: number[] = [];
+  /**
+   * The input each of those posts carried, by reference — the object the caller
+   * handed the client, captured before the structured clone. It is how an
+   * observer tells WHICH selection reached the worker without trusting ids.
+   */
+  readonly postedInputs: ReconstructInput[] = [];
   /** Ids whose response was handed to the client, in order. */
   readonly delivered: number[] = [];
   /** Transport-level breakage. A run that saw any of this measured nothing. */
@@ -74,6 +81,7 @@ export class NodeMarkdownDiffWorkerHarness {
 
   postMessage(message: MarkdownDiffWorkerRequest): void {
     this.posted.push(message.id);
+    this.postedInputs.push(message.input);
     this.thread.postMessage(message);
   }
 

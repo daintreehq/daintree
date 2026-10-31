@@ -441,7 +441,13 @@ export function RenderedMarkdownDiff({
 
   const counted = result !== null;
   useEffect(() => {
-    if (counted) onChangeCount?.(changeCount, attemptKey);
+    if (!counted) return;
+    onChangeCount?.(changeCount, attemptKey);
+    // Withdrawn as soon as it stops describing what is mounted — on unmount, or
+    // as the next comparison starts. The host keys counts by attempt, and a
+    // refresh or a layout switch can remount this view on the very same attempt
+    // while its build is still pending; the old count must not come back with it.
+    return () => onChangeCount?.(0, attemptKey);
   }, [onChangeCount, counted, changeCount, attemptKey]);
 
   // Which folded runs the reader has opened. Keyed by run id rather than index

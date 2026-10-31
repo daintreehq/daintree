@@ -143,6 +143,20 @@ describe("MarkdownDiffClient", () => {
     await expect(second).resolves.toEqual(resultFor("b"));
   });
 
+  it("treats an obsolete job's error as a slot release, not a reason to give up the worker", async () => {
+    const { client, workers } = createClient();
+    void client.build("pane", input("a"));
+    const held = client.build("pane", input("b"));
+
+    workers[0]!.respond({ id: 1, ok: false, error: "engine exploded" });
+
+    expect(workers[0]!.terminated).toBe(false);
+    expect(workers[0]!.posted.map((message) => message.id)).toEqual([1, 2]);
+    workers[0]!.answer(2, resultFor("b"));
+    await expect(held).resolves.toEqual(resultFor("b"));
+    expect(mockBuildMarkdownDiff).not.toHaveBeenCalled();
+  });
+
   it("never posts the requests a burst passed over", async () => {
     const { client, workers } = createClient();
     const first = client.build("pane", input("a"));

@@ -699,4 +699,86 @@ describe("RenderedMarkdownDiff off the main thread", () => {
     expect(onVerdict).not.toHaveBeenCalled();
     consoleError.mockRestore();
   });
+  it("drops a settled document for the skeleton the moment its inputs move on", async () => {
+    const onVerdict = vi.fn();
+    const onChangeCount = vi.fn();
+    const first = longDocument("first");
+    const second = longDocument("second");
+    const props = { onVerdict, onChangeCount };
+
+    const { container, rerender } = renderDiff(first.diff, first.newSource, props);
+    await act(async () => builds[0]!.resolve(engineResult(builds[0])));
+    expect(visibleText(container)).toContain("The first ending was rewritten.");
+
+    rerender(
+      <RenderedMarkdownDiff
+        diff={second.diff}
+        newSource={second.newSource}
+        status="modified"
+        filePath={FILE}
+        rootPath={ROOT}
+        attemptKey="attempt-2"
+        requestKey="pane-1"
+        {...props}
+      />
+    );
+
+    // The first document is settled and still in state, but it is not what the
+    // reader asked for any more.
+    expect(container.querySelector(SKELETON)).not.toBeNull();
+    expect(visibleText(container)).not.toContain("first ending");
+    expect(onVerdict.mock.calls).toEqual([[null, "attempt-1"]]);
+    // Its count is withdrawn, and nothing is reported for the attempt in flight.
+    expect(onChangeCount.mock.calls).toEqual([
+      [1, "attempt-1"],
+      [0, "attempt-1"],
+    ]);
+
+    await act(async () => builds[1]!.resolve(engineResult(builds[1])));
+
+    expect(visibleText(container)).toContain("The second ending was rewritten.");
+    expect(onVerdict.mock.calls.at(-1)).toEqual([null, "attempt-2"]);
+    expect(onChangeCount.mock.calls.at(-1)).toEqual([1, "attempt-2"]);
+  });
+
+  it("withdraws its change count when it unmounts", async () => {
+    const onChangeCount = vi.fn();
+    const { diff, newSource } = longDocument("closing");
+
+    const { unmount } = renderDiff(diff, newSource, { onChangeCount, attemptKey: "attempt-3" });
+    await act(async () => builds[0]!.resolve(engineResult(builds[0])));
+    unmount();
+
+    expect(onChangeCount.mock.calls).toEqual([
+      [1, "attempt-3"],
+      [0, "attempt-3"],
+    ]);
+  });
+
+  it("sends a long deleted document to the worker, measured by its patch", async () => {
+    const lines = Array.from(
+      { length: 400 },
+      (_, i) => `Removed paragraph ${i + 1}, long enough that the patch alone is large.`
+    );
+    const diff = [
+      "diff --git a/docs/guide.md b/docs/guide.md",
+      "deleted file mode 100644",
+      "--- a/docs/guide.md",
+      "+++ /dev/null",
+      `@@ -1,${lines.length} +0,0 @@`,
+      ...lines.map((line) => `-${line}`),
+    ].join("\n");
+    expect(diff.length).toBeGreaterThan(16 * 1024);
+
+    const { container } = renderDiff(diff, undefined, { status: "deleted" });
+
+    expect(builds).toHaveLength(1);
+    expect(builds[0]!.input).toEqual({ diff, newSource: undefined, status: "deleted" });
+    expect(container.querySelector(SKELETON)).not.toBeNull();
+
+    await act(async () => builds[0]!.resolve(engineResult(builds[0])));
+
+    expect(blockKinds(container)).toContain("removed");
+    expect(visibleText(container)).toContain("Removed paragraph 400");
+  });
 });
