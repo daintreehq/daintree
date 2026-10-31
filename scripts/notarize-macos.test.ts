@@ -618,12 +618,14 @@ describe("notarize-macos", () => {
         .mockReturnValueOnce("stapled");
     });
 
+    // The first two rows still print the recorded CDHash, so only the exit
+    // status and spawn-error checks keep them from matching.
     it.each([
+      ["codesign exits non-zero", { ...codesignDisplay(BUNDLE_CDHASH), status: 1 }],
       [
-        "codesign exits non-zero",
-        { status: 1, stdout: "", stderr: "code object is not signed at all" },
+        "codesign reports a spawn error",
+        { ...codesignDisplay(BUNDLE_CDHASH), error: new Error("spawnSync codesign ETIMEDOUT") },
       ],
-      ["codesign cannot spawn", { status: null, error: new Error("spawn codesign ENOENT") }],
       ["no CDHash line", { status: 0, stdout: "", stderr: "Identifier=org.daintree.app\n" }],
     ])("submits fresh without resuming when %s", async (_label, result) => {
       mockSpawnSync.mockReturnValue(result);
@@ -637,6 +639,21 @@ describe("notarize-macos", () => {
       );
       expect(stateWrites().map((w) => w["3"].cdhash)).toEqual([null, null, null]);
     });
+
+    it.each(["accepted", "submitted"])(
+      "submits fresh for a %s entry recorded without an identity when it still can't be read",
+      async (status) => {
+        mockReadFileSync.mockReturnValue(
+          JSON.stringify({ "3": { submissionId: "sub-old", status, cdhash: null } })
+        );
+        mockSpawnSync.mockReturnValue({ status: 1, stdout: "", stderr: "not signed at all" });
+
+        await afterSign(createContext());
+
+        expect(execOrder()[0]).toBe("ditto");
+        expect(mockExecFileSync.mock.calls.flat().join(" ")).not.toContain("sub-old");
+      }
+    );
   });
 
   describe("universal bundle", () => {
@@ -745,12 +762,15 @@ describe("notarize-macos", () => {
     });
 
     it("should not reattach when state has different arch", async () => {
+      mockExistsSync.mockReturnValue(true);
+      // The x64 entry carries the current bundle's identity, so only the arch
+      // key keeps it from being resumed.
       mockReadFileSync.mockReturnValue(
         JSON.stringify({
           "1": {
             submissionId: "sub-x64",
             status: "submitted",
-            cdhash: `x86_64=${X64_CDHASH}`,
+            cdhash: BUNDLE_ID,
             timestamp: "2026-01-01",
           },
         })
