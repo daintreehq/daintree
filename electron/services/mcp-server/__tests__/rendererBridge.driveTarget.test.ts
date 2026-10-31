@@ -1160,6 +1160,29 @@ describe("rendererBridge — terminals the host started while a window shows the
     expect(envelope.result).toEqual({ ok: true, result: { terminals: [parkedRow], panelLimit } });
   });
 
+  it("finds parked and gridded panes alike when the caller asks for every location (#15732)", async () => {
+    noteHostStartedTerminal(WORKSPACE, "parked", { location: "background", worktreeId: "/repo" });
+    noteHostStartedTerminal(WORKSPACE, "host-agent", { worktreeId: "/repo" });
+    noteHostStartedTerminal(WORKSPACE, "elsewhere", { worktreeId: "/other" });
+    viewAnswering({ terminals: [], panelLimit });
+    const parkedRow = { ...hostRow, id: "parked", location: "background" };
+    viewless.runViewlessAction.mockResolvedValue({
+      ok: true,
+      result: { terminals: [parkedRow, hostRow] },
+    });
+
+    const args = { worktreeId: "/repo", location: "all" };
+    const envelope = await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.list", args);
+
+    expect(envelope.result).toEqual({
+      ok: true,
+      result: { terminals: [parkedRow, hostRow], panelLimit },
+    });
+    expect(viewless.runViewlessAction).toHaveBeenCalledWith(
+      expect.objectContaining({ actionId: "terminal.list", args })
+    );
+  });
+
   it("answers status from the pty-host, whole and labelled so, once a named terminal is only there", async () => {
     noteHostStartedTerminal(WORKSPACE, "host-agent", {});
     viewAnswering(
@@ -1316,6 +1339,22 @@ describe("rendererBridge — terminals the host started while a window shows the
     expect(filtered.result).toEqual(fromPty);
     expect(fleet.result).toEqual(fromPty);
     expect(viewless.runViewlessAction).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads a parked launch into a fleet read of every location (#15732)", async () => {
+    noteHostStartedTerminal(WORKSPACE, "parked", { location: "background" });
+    viewAnswering(viewStatus([]));
+    const fromPty = ptyStatus([status("parked", "working")]);
+    viewless.runViewlessAction.mockResolvedValue(fromPty);
+
+    const fleet = await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.getStatus", {});
+    const every = await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.getStatus", {
+      location: "all",
+    });
+
+    expect(fleet.result).toEqual({ ok: true, result: viewStatus([]) });
+    expect(every.result).toEqual(fromPty);
+    expect(viewless.runViewlessAction).toHaveBeenCalledTimes(1);
   });
 
   it.each([

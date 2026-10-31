@@ -22,6 +22,10 @@ import {
   isClientMetadataEligible,
 } from "../../../shared/utils/panelCount.js";
 import { planChoice } from "../../../shared/utils/terminalChoice.js";
+import {
+  matchesTerminalLocationFilter,
+  TERMINAL_LOCATION_FILTERS,
+} from "../../../shared/utils/terminalLocationFilter.js";
 import { assessInterruptCandidate } from "../../../shared/utils/terminalInterrupt.js";
 import { formatNoPanelMessage } from "../../../shared/utils/terminalInOtherProject.js";
 import {
@@ -57,7 +61,7 @@ import {
 const TerminalListArgsSchema = z
   .object({
     worktreeId: z.string().optional(),
-    location: z.enum(["grid", "dock", "trash", "background"]).optional(),
+    location: z.enum(TERMINAL_LOCATION_FILTERS).optional(),
     owned: z.boolean().optional(),
     terminalId: z.string().min(1).optional(),
     includeClientMetadata: z.boolean().optional(),
@@ -271,11 +275,7 @@ export async function runTerminalList(
   const listed = rows
     .filter((row) => (worktreeId ? row.worktreeId === worktreeId : true))
     .filter((row) => (terminalId ? row.panel.id === terminalId : true))
-    .filter((row) =>
-      location
-        ? row.location === location
-        : row.location !== "trash" && row.location !== "background"
-    )
+    .filter((row) => matchesTerminalLocationFilter(row.location, location))
     .map((row) => row.summary);
 
   // The limits a view would apply with none configured: no per-user setting is
@@ -343,7 +343,7 @@ export async function runTerminalGetOutput(
 const FleetStatusArgsSchema = z
   .object({
     worktreeId: z.string().optional(),
-    location: z.enum(["grid", "dock", "trash", "background"]).optional(),
+    location: z.enum(TERMINAL_LOCATION_FILTERS).optional(),
     submissionToken: z.string().min(1).max(128).optional(),
     includeOutput: z
       .union([
@@ -364,8 +364,8 @@ const MAX_STATUS_IDS = 256;
  * `terminal.getStatus` for named terminals, read off the pty-host; or, naming
  * none, for the project's fleet (#13501) as a view picks it: its panels in
  * layout order, filtered by worktree and by location, leaving out the trash
- * and background ones unless that location is asked for, then read the same
- * way. Panel locations come from the saved layout a view would hydrate. A
+ * and background ones unless that location, or every one, is asked for, then
+ * read the same way. Panel locations come from the saved layout a view would hydrate. A
  * fleet the pty-host could not list whole is refused rather than reported
  * short, since a missing terminal would read as one that isn't there.
  */
@@ -400,12 +400,7 @@ export async function runTerminalGetStatus(
   }
   const ids = panels
     .filter((panel) => {
-      const where = panelLocation(panel);
-      if (
-        location !== undefined ? where !== location : where === "trash" || where === "background"
-      ) {
-        return false;
-      }
+      if (!matchesTerminalLocationFilter(panelLocation(panel), location)) return false;
       return (
         worktreeId === undefined ||
         (panel.record?.worktreeId ?? panel.snapshot?.worktreeId) === worktreeId

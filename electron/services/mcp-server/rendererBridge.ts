@@ -47,6 +47,10 @@ import type {
 } from "../../../shared/types/ipc/mcpServer.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { maskTerminalInOtherProject } from "../../../shared/utils/terminalInOtherProject.js";
+import {
+  matchesTerminalLocationFilter,
+  type TerminalLocationFilter,
+} from "../../../shared/utils/terminalLocationFilter.js";
 import type {
   PendingRequest,
   DispatchHold,
@@ -190,9 +194,11 @@ function matchesFilters(terminal: HostStartedTerminal, filters: Record<string, u
   if (typeof filters.worktreeId === "string" && filters.worktreeId !== terminal.worktreeId) {
     return false;
   }
-  return typeof filters.location === "string"
-    ? filters.location === terminal.location
-    : terminal.location !== "background";
+  const location =
+    typeof filters.location === "string"
+      ? (filters.location as TerminalLocationFilter)
+      : undefined;
+  return matchesTerminalLocationFilter(terminal.location, location);
 }
 
 /**

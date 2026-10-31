@@ -35,12 +35,16 @@ import { appendHandbackInstruction, mintHandbackCode } from "@shared/utils/handb
 import { buildTerminalSendCommandReceipt } from "@shared/utils/terminalSendCommandResult";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
+import {
+  matchesTerminalLocationFilter,
+  type TerminalLocationFilter,
+} from "@shared/utils/terminalLocationFilter";
 
 export const terminalQueryActionRuns = {
   "terminal.list": async (args: unknown) => {
     const { worktreeId, location, owned, terminalId, includeClientMetadata } = (args ?? {}) as {
       worktreeId?: string;
-      location?: "grid" | "dock" | "trash" | "background";
+      location?: TerminalLocationFilter;
       owned?: boolean;
       terminalId?: string;
       includeClientMetadata?: boolean;
@@ -79,13 +83,7 @@ export const terminalQueryActionRuns = {
       terminals = terminals.filter((t) => t.id === terminalId);
     }
 
-    // Filter by location if specified
-    if (location) {
-      terminals = terminals.filter((t) => t.location === location);
-    } else {
-      // By default, exclude trashed and backgrounded terminals
-      terminals = terminals.filter((t) => t.location !== "trash" && t.location !== "background");
-    }
+    terminals = terminals.filter((t) => matchesTerminalLocationFilter(t.location, location));
 
     // Return essential metadata only (avoid returning full PTY buffers)
     const result = terminals.map((t) => ({
@@ -187,7 +185,7 @@ export const terminalQueryActionRuns = {
     } = (args ?? {}) as {
       terminalIds?: string[];
       worktreeId?: string;
-      location?: "grid" | "dock" | "trash" | "background";
+      location?: TerminalLocationFilter;
       includeOutput?: boolean | { lines?: number; stripAnsi?: boolean };
       submissionToken?: string;
     };
@@ -234,11 +232,7 @@ export const terminalQueryActionRuns = {
       if (worktreeId) {
         terminals = terminals.filter((t) => t.worktreeId === worktreeId);
       }
-      if (location) {
-        terminals = terminals.filter((t) => t.location === location);
-      } else {
-        terminals = terminals.filter((t) => t.location !== "trash" && t.location !== "background");
-      }
+      terminals = terminals.filter((t) => matchesTerminalLocationFilter(t.location, location));
 
       for (const t of terminals) {
         resolved.push({ id: t.id, terminal: t });
