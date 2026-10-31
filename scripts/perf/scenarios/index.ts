@@ -154,6 +154,7 @@ export const EXPECTED_SCENARIO_IDS: ReadonlySet<string> = new Set([
   "PERF-110",
   "PERF-111",
   "PERF-112",
+  "PERF-113",
   "PERF-130",
   "PERF-131",
   "PERF-132",

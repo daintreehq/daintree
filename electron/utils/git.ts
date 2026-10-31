@@ -29,6 +29,19 @@ function statBounded(path: string): Promise<Stats> {
   return withTimeout(fs.stat(path), FS_OP_TIMEOUT_MS, "stat timed out");
 }
 
+// Admission check for a cached untracked verdict, wider than the cache's
+// (mtime, size) key: a same-size replacement during the read changes the inode
+// or ctime even when it lands within mtime resolution.
+function isSameFileVersion(before: Stats, after: Stats): boolean {
+  return (
+    before.mtimeMs === after.mtimeMs &&
+    before.ctimeMs === after.ctimeMs &&
+    before.size === after.size &&
+    before.ino === after.ino &&
+    before.dev === after.dev
+  );
+}
+
 function realpathBounded(path: string): Promise<string> {
   return withTimeout(fs.realpath(path), FS_OP_TIMEOUT_MS, "realpath timed out");
 }
@@ -1059,9 +1072,11 @@ export async function getWorktreeChangesWithStats(
             return null;
           }
 
-          // Untracked line counts are a pure function of file content, so
-          // their identity deliberately excludes HEAD OID: commits must not
-          // discard them.
+          // Untracked line counts and binary verdicts (`null`) are a pure
+          // function of file content, so their identity deliberately excludes
+          // HEAD OID: commits must not discard them. Remembering the binary
+          // verdict is what keeps an unchanged binary from being read whole on
+          // every pass.
           const cached = diffStatPass.lookupUntracked(filePath, stats.mtimeMs, stats.size);
           if (cached !== undefined) {
             diffStatPass.keepUntracked(filePath, stats.mtimeMs, stats.size, cached);
@@ -1070,25 +1085,32 @@ export async function getWorktreeChangesWithStats(
 
           const buffer = await perFile(() => readFileBounded(filePath));
 
+          let verdict: number | null = null;
           const sampleSize = Math.min(buffer.length, 8192);
-          if (buffer.subarray(0, sampleSize).indexOf(0) !== -1) {
-            return null;
+          if (buffer.subarray(0, sampleSize).indexOf(0) === -1) {
+            // Count newline bytes directly — decoding up to 10MB to a string
+            // would double the allocation for no benefit (0x0A is unambiguous
+            // in UTF-8).
+            verdict = 0;
+            for (let i = 0; i < buffer.length; i++) {
+              if (buffer[i] === 0x0a) verdict++;
+            }
+            if (buffer.length > 0 && buffer[buffer.length - 1] !== 0x0a) {
+              verdict++;
+            }
           }
 
-          // Count newline bytes directly — decoding up to 10MB to a string
-          // would double the allocation for no benefit (0x0A is unambiguous
-          // in UTF-8).
-          let lineCount = 0;
-          for (let i = 0; i < buffer.length; i++) {
-            if (buffer[i] === 0x0a) lineCount++;
+          // A read that raced a writer (or a replacement) still gives this
+          // pass its best answer, but the bytes may not belong to the identity
+          // the first stat saw, so it is kept only when the read returned
+          // exactly that many bytes and the file still stats the same after.
+          if (buffer.length === stats.size) {
+            const after = await perFile(() => statBounded(filePath)).catch(() => undefined);
+            if (after && isSameFileVersion(stats, after)) {
+              diffStatPass.keepUntracked(filePath, stats.mtimeMs, stats.size, verdict);
+            }
           }
-          if (buffer.length > 0 && buffer[buffer.length - 1] !== 0x0a) {
-            lineCount++;
-          }
-
-          diffStatPass.keepUntracked(filePath, stats.mtimeMs, stats.size, lineCount);
-
-          return lineCount;
+          return verdict;
         } catch (_error) {
           return null;
         }

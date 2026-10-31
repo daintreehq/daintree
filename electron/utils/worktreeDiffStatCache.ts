@@ -1,6 +1,6 @@
 /**
  * Per-worktree retention of `git diff --numstat` results and untracked-file
- * line counts across status passes.
+ * line counts (or binary verdicts) across status passes.
  *
  * One workspace host serves every worktree of a project, so a single shared
  * LRU let each worktree's pass evict the entries its siblings needed, and a
@@ -33,10 +33,13 @@ interface TrackedEntry extends TrackedDiffIdentity {
   stat: DiffStatCounts;
 }
 
+/** `null` is a binary verdict: the file has no line count to report. */
+export type UntrackedLineCount = number | null;
+
 interface UntrackedEntry {
   mtimeMs: number;
   size: number;
-  insertions: number;
+  insertions: UntrackedLineCount;
 }
 
 interface Partition {
@@ -93,8 +96,18 @@ let epoch = 0;
 export interface DiffStatPass {
   lookupTracked(absolutePath: string, identity: TrackedDiffIdentity): DiffStatCounts | undefined;
   keepTracked(absolutePath: string, identity: TrackedDiffIdentity, stat: DiffStatCounts): void;
-  lookupUntracked(absolutePath: string, mtimeMs: number, size: number): number | undefined;
-  keepUntracked(absolutePath: string, mtimeMs: number, size: number, insertions: number): void;
+  /** `undefined` is a miss; `null` is a remembered binary verdict. */
+  lookupUntracked(
+    absolutePath: string,
+    mtimeMs: number,
+    size: number
+  ): UntrackedLineCount | undefined;
+  keepUntracked(
+    absolutePath: string,
+    mtimeMs: number,
+    size: number,
+    insertions: UntrackedLineCount
+  ): void;
   /** Replace the worktree's retained entries with what this pass kept. */
   publish(): void;
 }

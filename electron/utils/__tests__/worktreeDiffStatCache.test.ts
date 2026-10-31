@@ -249,6 +249,29 @@ describe("worktreeDiffStatCache", () => {
     });
   });
 
+  it("remembers a binary verdict apart from a miss, under the same identity and cap", () => {
+    __setDiffStatCacheLimitsForTesting({ maxUntrackedPerWorktree: 2 });
+    const pass = beginDiffStatPass("/repo");
+    pass.keepUntracked("/repo/shot.png", 10, 4096, null);
+    pass.keepUntracked("/repo/notes.md", 10, 5, 2);
+    pass.keepUntracked("/repo/late.png", 10, 4096, null);
+    pass.publish();
+
+    const next = beginDiffStatPass("/repo");
+    expect(next.lookupUntracked("/repo/shot.png", 10, 4096)).toBeNull();
+    expect(next.lookupUntracked("/repo/shot.png", 11, 4096)).toBeUndefined();
+    expect(next.lookupUntracked("/repo/shot.png", 10, 4097)).toBeUndefined();
+    expect(next.lookupUntracked("/repo/late.png", 10, 4096)).toBeUndefined();
+    expect(getWorktreeDiffStatCacheStats().untrackedEntries).toBe(2);
+
+    // Carried forward like a count, and dropped when a pass stops keeping it.
+    next.keepUntracked("/repo/shot.png", 10, 4096, null);
+    next.publish();
+    expect(beginDiffStatPass("/repo").lookupUntracked("/repo/shot.png", 10, 4096)).toBeNull();
+    beginDiffStatPass("/repo").publish();
+    expect(beginDiffStatPass("/repo").lookupUntracked("/repo/shot.png", 10, 4096)).toBeUndefined();
+  });
+
   it("accounts bytes back to zero as partitions leave", () => {
     publishTracked("/wt-a", ["/wt-a/f1", "/wt-a/f2"]);
     publishTracked("/wt-b", ["/wt-b/f1"]);

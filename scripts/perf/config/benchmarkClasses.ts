@@ -242,6 +242,14 @@ const FAMILIES: readonly Family[] = [
       "Real forced status passes and real git subprocesses over deterministic worktrees with thousands of stable modified files, sharing one process as a project's worktrees share its workspace host. The status utility is called directly, without a monitor, renderer or IPC. Git child CPU is a replay of the pass's recorded git commands, not the original children's own accounting, and is absent where python3 is unavailable; the longest stall is an event-loop observation gap read against an idle control, an upper bound on the longest synchronous block rather than its exact length; retained cache bytes are an accounting estimate, not heap usage.",
   },
   {
+    label: "untracked binary verdict retention",
+    ids: ["PERF-113"],
+    kind: "mechanism",
+    fidelity: withFidelity({ processTopology: "partial" }),
+    claim:
+      "Real forced status passes and real git subprocesses over a deterministic worktree holding ~54 MB of untracked binaries beside untracked text, with the status utility called directly, without a watcher, monitor, renderer or IPC. Bytes read are what `fs.promises.readFile` returned to the untracked line counter, not physical disk I/O, and the page cache is warm; CPU is this process's own (threadpool reads included, git children excluded); the longest stall is an event-loop observation gap read against an idle control, an upper bound on the longest synchronous block rather than its exact length. How often a real agent's writes force a pass is not modelled.",
+  },
+  {
     label: "terminal reflow and resize",
     ids: ["PERF-110", "PERF-111", "PERF-112"],
     kind: "mechanism",

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { join as pathJoin } from "node:path";
+import { basename, join as pathJoin } from "node:path";
 import { GitError, WorktreeRemovedError } from "../errorTypes.js";
 import { TimeoutError } from "../withTimeout.js";
 import { simpleGitMissingBinaryError } from "../../../shared/testing/simpleGitErrorFixtures.js";
@@ -1015,19 +1015,25 @@ describe("getWorktreeChangesWithStats per-file diff cache", () => {
     expect(diffedPaths()).toEqual(modified);
   });
 
-  it("stats each untracked file once per pass and reuses it for the mtime", async () => {
+  it("stats a cached untracked file once per pass and reuses it for the mtime", async () => {
     const cwd = "/per-file-cache-untracked-stat/" + Math.random();
     setupRevparse(cwd, "head-oid-untracked-stat");
     mockGit.status.mockResolvedValue({ ...emptyStatus, not_added: ["notes/new.md"] });
     (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 4242, size: 12 });
+    const statsOfFile = () =>
+      (fs.stat as ReturnType<typeof vi.fn>).mock.calls.filter(([p]) =>
+        String(p).endsWith(pathJoin("notes", "new.md"))
+      ).length;
 
-    const result = await getWorktreeChangesWithStats(cwd, true);
+    // A miss reads the file and stats it again to check the read was stable.
+    const first = await getWorktreeChangesWithStats(cwd, true);
+    expect(statsOfFile()).toBe(2);
+    expect(first.changes[0]).toMatchObject({ status: "untracked", mtimeMs: 4242 });
 
-    const statsOfFile = (fs.stat as ReturnType<typeof vi.fn>).mock.calls.filter(([p]) =>
-      String(p).endsWith(pathJoin("notes", "new.md"))
-    );
-    expect(statsOfFile).toHaveLength(1);
-    expect(result.changes[0]).toMatchObject({ status: "untracked", mtimeMs: 4242 });
+    (fs.stat as ReturnType<typeof vi.fn>).mockClear();
+    const second = await getWorktreeChangesWithStats(cwd, true);
+    expect(statsOfFile()).toBe(1);
+    expect(second.changes[0]).toMatchObject({ status: "untracked", mtimeMs: 4242 });
   });
 });
 
@@ -1142,7 +1148,12 @@ describe("getWorktreeChangesWithStats binary file handling", () => {
       ...emptyStatus,
       not_added: ["readme.txt"],
     });
-    readFileMock.mockResolvedValue(Buffer.from("line1\nline2\nline3\n"));
+    const content = Buffer.from("line1\nline2\nline3\n");
+    (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({
+      mtimeMs: 1000,
+      size: content.length,
+    });
+    readFileMock.mockResolvedValue(content);
 
     const first = await getWorktreeChangesWithStats(cwd, true);
     expect(first.headOid).toBe("head-oid-before");
@@ -1162,6 +1173,131 @@ describe("getWorktreeChangesWithStats binary file handling", () => {
     const third = await getWorktreeChangesWithStats(cwd, true);
     expect(third.changes[0].insertions).toBe(3);
     expect(readFileMock).not.toHaveBeenCalled();
+  });
+
+  function setupUntracked(cwd: string, files: string[]): void {
+    mockGit.raw.mockImplementation(async (args: string[]) =>
+      args[0] === "rev-parse" ? `head-oid\n${cwd}` : ""
+    );
+    mockGit.status.mockResolvedValue({ ...emptyStatus, not_added: files });
+  }
+
+  function serveFile(content: Buffer, mtimeMs = 1000): void {
+    (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs, size: content.length });
+    readFileMock.mockResolvedValue(content);
+  }
+
+  // A PNG signature, then the NUL padding that marks it binary.
+  const BINARY = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]),
+    Buffer.alloc(58),
+  ]);
+  const insertionsByName = (result: { changes: { path: string; insertions: number | null }[] }) =>
+    Object.fromEntries(result.changes.map((c) => [basename(c.path), c.insertions]));
+
+  it("reads an unchanged untracked binary once, not on every pass", async () => {
+    const cwd = "/binary-untracked-repeat/" + Math.random();
+    setupUntracked(cwd, ["shot.png"]);
+    serveFile(BINARY);
+
+    const first = await getWorktreeChangesWithStats(cwd, true);
+    expect(first.changes[0]).toMatchObject({ status: "untracked", insertions: null });
+    expect(readFileMock).toHaveBeenCalledTimes(1);
+
+    readFileMock.mockClear();
+    for (let pass = 0; pass < 3; pass++) {
+      const again = await getWorktreeChangesWithStats(cwd, true);
+      expect(again.changes[0]).toMatchObject({ insertions: null, deletions: null });
+      expect(again.changedFileCount).toBe(1);
+      expect(again.totalInsertions).toBe(0);
+    }
+    expect(readFileMock).not.toHaveBeenCalled();
+  });
+
+  it("classifies a cached binary again once it is rewritten as text, and back", async () => {
+    const cwd = "/binary-untracked-flip/" + Math.random();
+    setupUntracked(cwd, ["data.out"]);
+    serveFile(BINARY, 1000);
+    expect((await getWorktreeChangesWithStats(cwd, true)).changes[0].insertions).toBeNull();
+
+    serveFile(Buffer.from("a\nb\nc\n"), 2000);
+    expect((await getWorktreeChangesWithStats(cwd, true)).changes[0].insertions).toBe(3);
+
+    serveFile(BINARY, 3000);
+    expect((await getWorktreeChangesWithStats(cwd, true)).changes[0].insertions).toBeNull();
+    expect(readFileMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps no verdict from a read that disagrees with the stat", async () => {
+    const cwd = "/binary-untracked-racy/" + Math.random();
+    setupUntracked(cwd, ["growing.png", "growing.txt"]);
+    // The writer is still going: the read sees more bytes than the stat did.
+    (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 1000, size: 8 });
+    readFileMock.mockImplementation(async (path: string) =>
+      String(path).endsWith(".png") ? BINARY : Buffer.from("a\nb\nc\nd\ne\n")
+    );
+
+    const expected = { "growing.png": null, "growing.txt": 5 };
+    expect(insertionsByName(await getWorktreeChangesWithStats(cwd, true))).toEqual(expected);
+
+    readFileMock.mockClear();
+    expect(insertionsByName(await getWorktreeChangesWithStats(cwd, true))).toEqual(expected);
+    expect(readFileMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps no verdict when the file is replaced at the same size during the read", async () => {
+    const cwd = "/binary-untracked-replaced/" + Math.random();
+    setupUntracked(cwd, ["shot.png"]);
+    const statMock = fs.stat as ReturnType<typeof vi.fn>;
+    const before = { mtimeMs: 1000, ctimeMs: 1000, size: BINARY.length, ino: 7, dev: 1 };
+    statMock.mockResolvedValue(before);
+    readFileMock.mockImplementation(async () => {
+      // An atomic rename lands a new inode within the same mtime tick.
+      statMock.mockResolvedValue({ ...before, ino: 8 });
+      return BINARY;
+    });
+
+    expect((await getWorktreeChangesWithStats(cwd, true)).changes[0].insertions).toBeNull();
+
+    statMock.mockResolvedValue(before);
+    readFileMock.mockReset().mockResolvedValue(BINARY);
+    expect((await getWorktreeChangesWithStats(cwd, true)).changes[0].insertions).toBeNull();
+    expect(readFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers from the read but keeps nothing when the check stat fails", async () => {
+    const cwd = "/binary-untracked-check-fails/" + Math.random();
+    setupUntracked(cwd, ["notes.txt"]);
+    const content = Buffer.from("a\nb\n");
+    const statMock = fs.stat as ReturnType<typeof vi.fn>;
+    statMock.mockResolvedValue({ mtimeMs: 1000, size: content.length });
+    readFileMock.mockImplementation(async () => {
+      statMock.mockRejectedValueOnce(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+      return content;
+    });
+
+    expect((await getWorktreeChangesWithStats(cwd, true)).changes[0].insertions).toBe(2);
+
+    readFileMock.mockReset().mockResolvedValue(content);
+    expect((await getWorktreeChangesWithStats(cwd, true)).changes[0].insertions).toBe(2);
+    expect(readFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps no verdict when the read fails", async () => {
+    const cwd = "/binary-untracked-read-error/" + Math.random();
+    setupUntracked(cwd, ["shot.png"]);
+    serveFile(BINARY);
+    readFileMock.mockRejectedValueOnce(Object.assign(new Error("EBUSY"), { code: "EBUSY" }));
+
+    const first = await getWorktreeChangesWithStats(cwd, true);
+    expect(first.changes[0].insertions).toBeNull();
+
+    // Same identity as the failed pass, so only a fresh read can answer.
+    readFileMock.mockClear();
+    readFileMock.mockResolvedValue(Buffer.from("x\n".repeat(BINARY.length / 2)));
+    const second = await getWorktreeChangesWithStats(cwd, true);
+    expect(second.changes[0].insertions).toBe(BINARY.length / 2);
+    expect(readFileMock).toHaveBeenCalledTimes(1);
   });
 });
 
