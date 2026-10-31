@@ -18,9 +18,9 @@ export interface TerminalProcessRecord {
   launchGeneration?: number;
 }
 
-/** What the calling session is to a running terminal. */
+/** What the calling session is to a running terminal, as far as main has a record of it. */
 export interface TerminalAttribution {
-  /** This session launched the run now under the id. */
+  /** On record as launched by this session: the run now under the id, not an earlier one. */
   createdByThisSession: boolean;
   /** `terminal.closeOwned` would close it for this session. */
   closableByThisSession: boolean;
@@ -38,67 +38,119 @@ export interface WorktreeMatchOptions {
   caseInsensitive: boolean;
   /** A directory's canonical spelling; rejects for one that is gone. */
   realpath: (path: string) => Promise<string>;
+  /**
+   * How long resolving spawn directories through symlinks may take. A stale
+   * network mount can leave a resolution pending indefinitely, and the delete
+   * must not wait on it.
+   */
+  resolveDeadlineMs: number;
 }
 
 const HOST_MATCH_OPTIONS: WorktreeMatchOptions = {
   caseInsensitive: process.platform === "win32",
   realpath: (path) => realpath(path),
+  resolveDeadlineMs: 2_000,
 };
 
-function cwdInside(cwd: string, roots: readonly string[], options: WorktreeMatchOptions): boolean {
+/** What a census of the worktree found, and whether every terminal could be placed. */
+export interface WorktreeCensus {
+  terminals: TerminalProcessRecord[];
+  /** False when resolving some spawn directory ran out of time, so a terminal may be missing. */
+  complete: boolean;
+}
+
+function matches(
+  record: TerminalProcessRecord,
+  cwd: string | undefined,
+  roots: readonly string[],
+  options: WorktreeMatchOptions
+): boolean {
+  if (
+    typeof record.worktreeId === "string" &&
+    roots.includes(pathComparisonKey(record.worktreeId, options))
+  ) {
+    return true;
+  }
+  if (typeof cwd !== "string" || cwd.length === 0) return false;
   const key = pathComparisonKey(cwd, options);
   return roots.some((root) => isPathInside(key, root));
+}
+
+async function withinDeadline<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), ms);
+  });
+  try {
+    return await Promise.race([promise, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
  * Every terminal the pty host holds whose process has not exited and that sits
  * in the worktree: attributed to it, or spawned inside its directory. Both,
  * because a pane moved to another worktree keeps the directory it started in,
- * and a terminal spawned with an explicit cwd may be attributed elsewhere. A
- * spawn directory that only reaches the worktree through a symlink is matched
- * on its canonical spelling.
+ * and a terminal spawned with an explicit cwd may be attributed elsewhere. One
+ * that reaches the worktree only through a symlink, in its own spawn directory
+ * or in the worktree's path, is matched on the canonical spellings, resolved
+ * only for terminals the plain spelling did not already place.
  *
  * Anything short of a reported exit counts as running: a kill still waiting
  * on its exit, and a record that never said. Agent state, panel kind and the
  * assistant overlay are deliberately not consulted; a process is a process.
- * One id reported twice, as two shards can during a move, is named once.
+ * An id reported more than once, as two shards can during a move, is named
+ * once, and any of its records placing it in the worktree is enough.
  */
 export async function liveTerminalsInWorktree(
   records: readonly TerminalProcessRecord[],
   worktreeId: string,
   options: WorktreeMatchOptions
-): Promise<TerminalProcessRecord[]> {
-  const canonicalRoot = await options.realpath(worktreeId).catch(() => worktreeId);
-  const roots = [
-    ...new Set([worktreeId, canonicalRoot].map((path) => pathComparisonKey(path, options))),
-  ];
-  const seen = new Set<string>();
-  const live = records.filter((record) => {
-    if (record.isExited === true || seen.has(record.id)) return false;
-    seen.add(record.id);
+): Promise<WorktreeCensus> {
+  const live = records.filter((record) => record.isExited !== true);
+  const root = pathComparisonKey(worktreeId, options);
+  const placed = new Set(live.filter((record) => matches(record, record.cwd, [root], options)));
+  const unplaced = live.filter((record) => !placed.has(record));
+  let complete = true;
+  if (unplaced.length > 0) {
+    const resolved = await withinDeadline(
+      (async () => {
+        const canonicalRoot = pathComparisonKey(
+          await options.realpath(worktreeId).catch(() => worktreeId),
+          options
+        );
+        const roots = canonicalRoot === root ? [root] : [root, canonicalRoot];
+        return Promise.all(
+          unplaced.map(async (record) => {
+            const cwd = record.cwd;
+            const canonicalCwd =
+              typeof cwd === "string" && cwd.length > 0
+                ? await options.realpath(cwd).catch(() => cwd)
+                : cwd;
+            return matches(record, canonicalCwd, roots, options);
+          })
+        );
+      })(),
+      options.resolveDeadlineMs
+    );
+    if (resolved === undefined) complete = false;
+    else unplaced.forEach((record, index) => resolved[index] && placed.add(record));
+  }
+  const named = new Set<string>();
+  const terminals = live.filter((record) => {
+    if (!placed.has(record) || named.has(record.id)) return false;
+    named.add(record.id);
     return true;
   });
-  const matched = await Promise.all(
-    live.map(async (record) => {
-      if (
-        typeof record.worktreeId === "string" &&
-        roots.includes(pathComparisonKey(record.worktreeId, options))
-      ) {
-        return true;
-      }
-      const cwd = record.cwd;
-      if (typeof cwd !== "string" || cwd.length === 0) return false;
-      if (cwdInside(cwd, roots, options)) return true;
-      const canonicalCwd = await options.realpath(cwd).catch(() => cwd);
-      return canonicalCwd !== cwd && cwdInside(canonicalCwd, roots, options);
-    })
-  );
-  return live.filter((_, index) => matched[index]);
+  return { terminals, complete };
 }
 
 function describeTerminal(terminal: WorktreeLiveTerminal): string {
   const parts = [
-    terminal.createdByThisSession ? "created by this session" : "not created by this session",
+    terminal.createdByThisSession
+      ? "created by this session"
+      : "not recorded as created by this session",
   ];
   if (terminal.trashed) parts.push("closed and still in its trash grace");
   else if (terminal.createdByThisSession && !terminal.closableByThisSession) {
@@ -128,21 +180,24 @@ export async function refuseWorktreeDeleteWhileRunning(
   attribute: (terminalId: string, launchGeneration: number | undefined) => TerminalAttribution,
   options: WorktreeMatchOptions = HOST_MATCH_OPTIONS
 ): Promise<ActionError | undefined> {
+  const unconfirmed: ActionError = {
+    code: "EXECUTION_ERROR",
+    message:
+      `Worktree '${worktreeId}' was not deleted: which terminal processes are running in it ` +
+      `could not be confirmed, so nothing was removed. Try again shortly.`,
+    details: { reason: "terminal-processes-unreadable", worktreeId },
+  };
   let records: readonly TerminalProcessRecord[];
   try {
     if (readTerminalProcesses === undefined) throw new Error("No terminal host reader.");
     records = await readTerminalProcesses();
   } catch {
-    return {
-      code: "EXECUTION_ERROR",
-      message:
-        `Worktree '${worktreeId}' was not deleted: the terminal host could not report which ` +
-        `processes are running in it, so nothing was removed. Try again shortly.`,
-      details: { reason: "terminal-processes-unreadable", worktreeId },
-    };
+    return unconfirmed;
   }
-  const live = await liveTerminalsInWorktree(records, worktreeId, options);
-  if (live.length === 0) return undefined;
+  const { terminals: live, complete } = await liveTerminalsInWorktree(records, worktreeId, options);
+  // A partial census that already found something running still refuses on
+  // what it found; one that found nothing proves nothing.
+  if (live.length === 0) return complete ? undefined : unconfirmed;
   const terminals: WorktreeLiveTerminal[] = live.map((record) => {
     const trashed = record.isTrashed === true;
     const { createdByThisSession, closableByThisSession } = attribute(
@@ -169,7 +224,7 @@ export async function refuseWorktreeDeleteWhileRunning(
         ? "Wait for this session's closed terminals to exit."
         : undefined,
     terminals.some((terminal) => !closable(terminal) && !awaited(terminal))
-      ? "Terminals this session did not create, or no longer controls, are not its to stop."
+      ? "Terminals this session has no record of controlling are not its to stop."
       : undefined,
   ].filter((part): part is string => part !== undefined);
   const count =

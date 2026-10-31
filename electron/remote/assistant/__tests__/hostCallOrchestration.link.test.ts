@@ -927,6 +927,7 @@ describe("cleanup that keeps what it may not remove (#14169)", () => {
     // The Shell's caller gets the host's whole refusal, details included.
     expect(JSON.parse((busy.result as { text: string }).text)).toMatchObject({
       code: "DISABLED",
+      message: expect.stringContaining("'user-shell' (not recorded as created by this session)"),
       retriable: false,
       details: {
         reason: "worktree-has-running-terminals",

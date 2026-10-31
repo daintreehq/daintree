@@ -11,11 +11,21 @@ import {
 
 /** No path resolves: every comparison is lexical. */
 const missing = () => Promise.reject(new Error("ENOENT"));
-const POSIX: WorktreeMatchOptions = { caseInsensitive: false, realpath: missing };
-const WINDOWS: WorktreeMatchOptions = { caseInsensitive: true, realpath: missing };
+const POSIX: WorktreeMatchOptions = {
+  caseInsensitive: false,
+  realpath: missing,
+  resolveDeadlineMs: 1_000,
+};
+const WINDOWS: WorktreeMatchOptions = { ...POSIX, caseInsensitive: true };
+/** A resolver stuck on a dead mount. */
+const HUNG: WorktreeMatchOptions = {
+  ...POSIX,
+  realpath: () => new Promise<string>(() => {}),
+  resolveDeadlineMs: 20,
+};
 
-function ids(records: readonly TerminalProcessRecord[]): string[] {
-  return records.map((record) => record.id);
+function ids(census: { terminals: readonly TerminalProcessRecord[] }): string[] {
+  return census.terminals.map((record) => record.id);
 }
 
 const FOREIGN: TerminalAttribution = { createdByThisSession: false, closableByThisSession: false };
@@ -60,7 +70,7 @@ describe("liveTerminalsInWorktree (#15729)", () => {
     expect(ids(await liveTerminalsInWorktree(records, "C:/repo/wt/task", WINDOWS))).toEqual([
       "shell",
     ]);
-    expect(await liveTerminalsInWorktree(records, "C:/repo/wt/task", POSIX)).toEqual([]);
+    expect(ids(await liveTerminalsInWorktree(records, "C:/repo/wt/task", POSIX))).toEqual([]);
   });
 
   it("follows a spawn directory that reaches the worktree through a symlink", async () => {
@@ -70,7 +80,7 @@ describe("liveTerminalsInWorktree (#15729)", () => {
       "/tmp/other-link": "/real/wt/other",
     };
     const options: WorktreeMatchOptions = {
-      caseInsensitive: false,
+      ...POSIX,
       // As realpath does: a link anywhere along the path resolves.
       realpath: (path) => {
         for (const [link, target] of Object.entries(links)) {
@@ -93,13 +103,54 @@ describe("liveTerminalsInWorktree (#15729)", () => {
     ]);
   });
 
-  it("names an id two shards both report once", async () => {
-    const records: TerminalProcessRecord[] = [
-      { id: "moved", worktreeId: "/wt/task", isExited: false },
-      { id: "moved", worktreeId: "/wt/task", isExited: false },
-    ];
+  it("names an id two shards both report once, placed by any of its records", async () => {
+    const inside: TerminalProcessRecord = { id: "moved", worktreeId: "/wt/task", isExited: false };
+    const outside: TerminalProcessRecord = {
+      id: "moved",
+      worktreeId: "/wt/other",
+      isExited: false,
+    };
+    const exited: TerminalProcessRecord = { ...inside, isExited: true };
 
-    expect(ids(await liveTerminalsInWorktree(records, "/wt/task", POSIX))).toEqual(["moved"]);
+    for (const records of [
+      [inside, { ...inside }],
+      [outside, inside],
+      [inside, outside],
+      [exited, inside],
+    ]) {
+      expect(ids(await liveTerminalsInWorktree(records, "/wt/task", POSIX))).toEqual(["moved"]);
+    }
+  });
+
+  it("resolves nothing when the plain spelling already placed every running terminal", async () => {
+    const realpath = vi.fn(missing);
+
+    await liveTerminalsInWorktree(
+      [
+        { id: "exited", cwd: "/elsewhere", isExited: true },
+        { id: "here", worktreeId: "/wt/task", isExited: false },
+      ],
+      "/wt/task",
+      { ...POSIX, realpath }
+    );
+
+    expect(realpath).not.toHaveBeenCalled();
+  });
+
+  it("calls a census incomplete when resolving a spawn directory runs out of time", async () => {
+    const census = await liveTerminalsInWorktree(
+      [
+        { id: "here", worktreeId: "/wt/task", isExited: false },
+        { id: "on-a-dead-mount", cwd: "/net/stale", isExited: false },
+      ],
+      "/wt/task",
+      HUNG
+    );
+
+    expect(census).toEqual({
+      terminals: [expect.objectContaining({ id: "here" })],
+      complete: false,
+    });
   });
 });
 
@@ -167,7 +218,7 @@ describe("refuseWorktreeDeleteWhileRunning (#15729)", () => {
     ]);
     expect(attribute).toHaveBeenCalledWith("user-shell", undefined);
     expect(refusal?.message).toContain("'mine' (created by this session, closed and still");
-    expect(refusal?.message).toContain("'user-shell' (not created by this session)");
+    expect(refusal?.message).toContain("'user-shell' (not recorded as created by this session)");
     expect(refusal?.message).toContain("Wait for this session's closed terminals to exit.");
     expect(refusal?.message).toContain("not its to stop");
     expect(refusal?.message).not.toContain("terminal.closeOwned");
@@ -201,6 +252,31 @@ describe("refuseWorktreeDeleteWhileRunning (#15729)", () => {
     expect(refusal?.message).not.toContain("terminal.closeOwned");
     expect(refusal?.message).not.toContain("Wait for");
     expect(refusal?.message).toContain("not its to stop");
+  });
+
+  it("refuses on what it found, or as unconfirmed, when a spawn directory cannot be resolved", async () => {
+    const found = await refuseWorktreeDeleteWhileRunning(
+      "/wt/task",
+      async () => [
+        { id: "here", worktreeId: "/wt/task", isExited: false },
+        { id: "on-a-dead-mount", cwd: "/net/stale", isExited: false },
+      ],
+      foreign,
+      HUNG
+    );
+    const nothingFound = await refuseWorktreeDeleteWhileRunning(
+      "/wt/task",
+      async () => [{ id: "on-a-dead-mount", cwd: "/net/stale", isExited: false }],
+      foreign,
+      HUNG
+    );
+
+    expect(found?.code).toBe("DISABLED");
+    expect(found?.message).toContain("'here'");
+    expect(nothingFound).toMatchObject({
+      code: "EXECUTION_ERROR",
+      details: { reason: "terminal-processes-unreadable" },
+    });
   });
 
   it("refuses when the host cannot be read, or when there is no reader at all", async () => {
