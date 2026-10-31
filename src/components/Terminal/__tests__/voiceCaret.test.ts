@@ -7,6 +7,7 @@ import {
   setInterimText,
   setVoiceCaret,
   voiceCaret,
+  voiceCaretField,
   type VoiceCaretAt,
   type VoiceCaretPhase,
 } from "../inputEditorExtensions";
@@ -126,12 +127,24 @@ describe("voiceCaret", () => {
     const view = mount("fix the bug");
     show(view, "live", 7);
     show(view, "held", 312);
+    expect(caret(view)?.dataset.phase).toBe("held");
     expect(textBefore(view)).toBe("fix the");
+    show(view, "held", -1);
+    expect(textBefore(view)).toBe("fix the");
+    show(view, "held", 0);
+    expect(textBefore(view)).toBe("");
+    show(view, "held", 11);
+    expect(textBefore(view)).toBe("fix the bug");
+
     view.dispatch({ changes: { from: 0, to: 11, insert: "" } });
     show(view, "held", 312);
-    view.dispatch({ changes: { from: 0, insert: "next" } });
+    // Measured against the text the same transaction writes.
+    view.dispatch({
+      changes: { from: 0, insert: "next" },
+      effects: setVoiceCaret.of({ phase: "held", at: 2 }),
+    });
     expect(view.state.doc.toString()).toBe("next");
-    expect(textBefore(view)).toBe("next");
+    expect(view.state.field(voiceCaretField)).toEqual({ phase: "held", at: 2 });
   });
 
   it("sits past the dictation's preview while one shows, wherever the preview is", () => {
