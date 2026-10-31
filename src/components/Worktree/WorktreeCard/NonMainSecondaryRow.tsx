@@ -42,6 +42,12 @@ interface NonMainSecondaryRowProps {
    * merge, drift behind upstream or base, and a failed fetch.
    */
   quietGit?: boolean;
+  /**
+   * The sidebar lays the stack out tighter than the grid: the PR shares the
+   * branch's row, and the sync line stays on the card only when it reports a
+   * failure (the rest of it is in Details).
+   */
+  variant?: "sidebar" | "grid";
   badges: {
     onOpenIssue?: () => void;
     onOpenPR?: () => void;
@@ -62,6 +68,7 @@ export function NonMainSecondaryRow({
   isPrOriginated,
   hasPlanFile,
   quietGit = false,
+  variant = "sidebar",
   badges,
 }: NonMainSecondaryRowProps) {
   // The issue badge carries its title wherever it stands in for a headline:
@@ -94,6 +101,7 @@ export function NonMainSecondaryRow({
   // has genuinely drifted still shows the counts — that path mounts on
   // `hasUpstreamDelta` and is unchanged.
   const isDetached = Boolean(worktree.isDetached);
+  const isSidebar = variant === "sidebar";
   // Any status pass or fetch mounts it too: with no counts and no base to
   // show, the badge's own marks (failed, no upstream) are the only
   // thing saying what the numbers are worth, and it returns nothing when there
@@ -141,7 +149,7 @@ export function NonMainSecondaryRow({
         prCiStatus={worktree.linked!.pr!.ciStatus}
         mergeIntent={worktree.linked!.pr!.mergeIntent}
         headMovedWhileArmed={worktree.linked!.pr!.headMovedWhileArmed}
-        isSubordinate={!!worktree.issueNumber}
+        isSubordinate={!isSidebar && !!worktree.issueNumber}
         worktreePath={worktree.path}
         onOpen={badges.onOpenPR}
         isActive={isActive}
@@ -150,8 +158,17 @@ export function NonMainSecondaryRow({
       />
     ) : null;
 
+  // On the sidebar the sync line is ambient: how far a branch has drifted is
+  // worth knowing when deciding to rebase, not every time the eye passes the
+  // card. It lives at the top of Details there, and only a failed fetch or
+  // sign-in (something to act on) keeps it on the card.
+  const upstreamFailed =
+    hasAuthFailedSignIn || Boolean(worktree.fetchAuthFailed || worktree.fetchNetworkFailed);
+  const showSidebarUpstream = isSidebar && showUpstreamBadge && upstreamFailed;
+  const upstreamOutranksPr = showSidebarUpstream && upstreamFirst && prBadge !== null;
+  const sharedRowPr = upstreamOutranksPr ? null : prBadge;
   const upstreamBadge =
-    showUpstreamBadge && (!quietGit || upstreamHasAlarm) ? (
+    showUpstreamBadge && (isSidebar ? upstreamFailed : !quietGit || upstreamHasAlarm) ? (
       <UpstreamSyncBadge
         aheadCount={worktree.aheadCount}
         behindCount={worktree.behindCount}
@@ -188,7 +205,7 @@ export function NonMainSecondaryRow({
     // empty:hidden — the header mounts this row whenever the sync line might
     // have something to say, and the badge decides whether it does; a row
     // whose every child rendered nothing must not leave its margin behind.
-    <div className="flex flex-col gap-0.5 mt-2.5 px-1 empty:hidden">
+    <div className={cn("flex flex-col gap-0.5 px-1 empty:hidden", isSidebar ? "mt-1" : "mt-2.5")}>
       {showSourcePrBadge && (
         <PRBadge
           prNumber={sourcePrNumber!}
@@ -223,11 +240,35 @@ export function NonMainSecondaryRow({
           has it drifted?". The upstream/PR pair still swaps between itself by
           alarm tier — that ordering is about which alarm outranks which, not
           about outranking the branch name. */}
-      {!quietGit && (hasDisplayTitle || hasCustomTitle) && (
-        <BranchLabel label={branchLabel} isActive={isActive} isMuted={isMuted} />
+      {isSidebar ? (
+        <>
+          {/* One identity row: the branch, with its pull request in a trailing
+              slot, so the PR and its CI mark land in the same column on every
+              card instead of on a line of their own. */}
+          {((!quietGit && (hasDisplayTitle || hasCustomTitle)) || sharedRowPr) && (
+            <div className="flex min-w-0 items-center gap-3">
+              {!quietGit && (hasDisplayTitle || hasCustomTitle) && (
+                <div className="min-w-0 flex-1">
+                  <BranchLabel label={branchLabel} isActive={isActive} isMuted={isMuted} />
+                </div>
+              )}
+              {sharedRowPr && <div className="shrink-0">{sharedRowPr}</div>}
+            </div>
+          )}
+          {upstreamBadge}
+          {/* When the failed fetch outranks the PR's state, the alarm order
+              wins over the shared row: branch, then the failure, then the PR. */}
+          {upstreamOutranksPr && prBadge}
+        </>
+      ) : (
+        <>
+          {!quietGit && (hasDisplayTitle || hasCustomTitle) && (
+            <BranchLabel label={branchLabel} isActive={isActive} isMuted={isMuted} />
+          )}
+          {upstreamFirst ? upstreamBadge : prBadge}
+          {upstreamFirst ? prBadge : upstreamBadge}
+        </>
       )}
-      {upstreamFirst ? upstreamBadge : prBadge}
-      {upstreamFirst ? prBadge : upstreamBadge}
       {hasPlanFile && badges.onOpenPlan && (
         <Tooltip>
           <TooltipTrigger asChild>

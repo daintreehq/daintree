@@ -361,6 +361,17 @@ export interface WorktreeTerminalSectionProps {
    * the collapsed group's rail beside them already views on click.
    */
   rowClick?: "arm" | "select";
+  /**
+   * Closed, the trigger sits at the end of the Details row instead of on a row
+   * of its own (sidebar card). Ignored once the section opens.
+   */
+  inline?: boolean;
+  /**
+   * The caller draws the session-state glyphs on its own title row (the live
+   * sidebar card), so the closed trigger leaves them out rather than repeat
+   * them. A caller without such a row keeps them here.
+   */
+  stateGlyphsElsewhere?: boolean;
 }
 
 const FLEET_HINT_DISMISSED_KEY = "daintree:fleet-selection-hint-dismissed";
@@ -375,6 +386,8 @@ export function WorktreeTerminalSection({
   onToggle,
   onTerminalSelect,
   rowClick = "arm",
+  inline = false,
+  stateGlyphsElsewhere = false,
 }: WorktreeTerminalSectionProps) {
   useKeybindingScope("worktreeGrid", isExpanded);
 
@@ -569,45 +582,23 @@ export function WorktreeTerminalSection({
     setMarqueeBox(null);
   }, []);
 
-  /* No sessions. The grid card drops the section — it is a standalone surface
-     and ends cleanly on its own border. The sidebar card cannot: the tray IS
-     its terminator in a full-bleed list, and a list where only some cards
-     carry one separates unevenly, worst at exactly the idle cards that give
-     the eye least to hold on to.
+  /* No sessions. The grid shows a quiet "Start a session" row: its cards sit
+     side by side in rows, and a card with no bottom slot broke the row's
+     baseline, and "no sessions" and "the sessions row did not render" looked
+     the same. The row names the next action rather than the absence.
 
-     So the row stays, but it does not spend itself saying "No sessions". A
-     count of zero is already legible from the empty card above it, and
-     repeated down a thirteen-card sidebar it is thirteen rows of nothing. The
-     empty-state rule here is to name the next action instead of the absence,
-     and the next action on an idle worktree is to start something in it —
-     which is also the one thing this row is positioned to offer. Quiet at
-     rest, so it reads as a footer and not as a call to action. */
+     The sidebar drops it. Repeated down a 25-card list it was a 30px box on
+     every idle card, the largest single share of the list's height, and the
+     separation it used to supply comes from the card plane and its 2px gutter.
+     Starting a session stays one step away in the card's menus. */
   if (!showMetaFooter) {
     // No tray without somewhere for its row to go: see `onStartSession`.
-    //
-    // The grid gets it too. It used to render nothing here, which cost the
-    // overview twice: a card with no sessions had no bottom slot at all, so
-    // its neighbours' bottoms sat 30-50px lower and the row's baseline broke;
-    // and "no sessions" and "the sessions row did not render" looked the same.
-    // The tray answers both, and it names the next action rather than the
-    // absence.
-    if (!onStartSession) return null;
+    if (!onStartSession || isSidebar) return null;
     return (
       <div
         id={terminalsId}
-        className={
-          // The GRID drops the well here. A well is a container, and with no
-          // sessions there is nothing to contain — the same "a well around one
-          // row is a box around nothing" rule the Details section above
-          // already follows. Across 13 cards it was 13 boxes saying the same
-          // sentence.
-          //
-          // The SIDEBAR keeps it, and that is the one place the rule bends:
-          // its cards are full-bleed with no border of their own, so this well
-          // is also what stops two adjacent cards merging into one another. A
-          // grid card has its own border and a 12px gutter and needs no help.
-          isSidebar ? density.well : "mt-1.5"
-        }
+        // No well: with no sessions there is nothing to contain.
+        className="mt-1.5"
       >
         <button
           type="button"
@@ -619,6 +610,33 @@ export function WorktreeTerminalSection({
         >
           <Plus className="h-3 w-3 shrink-0" aria-hidden="true" />
           <span>Start a session</span>
+        </button>
+      </div>
+    );
+  }
+
+  if (inline && !isExpanded) {
+    return (
+      <div id={terminalsId} className="mt-1 shrink-0">
+        <button
+          onClick={onToggle}
+          aria-expanded={false}
+          aria-controls={terminalsPanelId}
+          aria-label={collapsedTriggerLabel}
+          className={cn(
+            "worktree-section-button flex items-center gap-1.5 text-left text-xs text-text-secondary transition-colors",
+            density.rowBox,
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
+          )}
+          id={`${terminalsId}-button`}
+        >
+          <ChevronRight className="h-3 w-3 shrink-0 text-text-secondary" aria-hidden="true" />
+          {SummaryIcon ? (
+            <SummaryIcon className="w-3 h-3" />
+          ) : (
+            <SquareTerminal className="w-3 h-3" />
+          )}
+          <span className="font-mono tabular-nums">{counts.total}</span>
         </button>
       </div>
     );
@@ -754,7 +772,10 @@ export function WorktreeTerminalSection({
             </span>
           </span>
 
-          {visibleTerminalStates.length > 0 && (
+          {/* The live sidebar card draws these on its title row, in the
+              column where a collapsed card draws them too, so the waiting
+              ring sits in the same place on every card in either mode. */}
+          {!stateGlyphsElsewhere && visibleTerminalStates.length > 0 && (
             <CollapsedSessionIndicators
               visibleStates={visibleTerminalStates}
               sessionAriaLabel={terminalSessionAriaLabel}

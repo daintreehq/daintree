@@ -1,4 +1,5 @@
 import type React from "react";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { DiffStat } from "@/components/ui/DiffStat";
 import { prefetchStagingStatus } from "@/components/Worktree/ReviewHub/stagingStatusCache";
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
@@ -17,7 +18,6 @@ import { useForgeAuthorAvatar } from "@/hooks/useForgeAuthorAvatar";
 import { useReviewChangeHint } from "@/hooks/useReviewChangeHint";
 import {
   Activity,
-  AlertTriangle,
   ChevronDown,
   ChevronRight,
   GitCommitHorizontal,
@@ -96,6 +96,8 @@ export interface WorktreeDetailsSectionProps {
    * unless the worktree is conflicted, where it is the way out.
    */
   quietGitDetail?: React.ReactNode;
+  /** The sync line, when the card itself leaves it to Details (sidebar, default profile). */
+  syncDetail?: React.ReactNode;
   isLifecycleRunning?: boolean;
   lifecycleLabel?: string;
 
@@ -131,6 +133,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
     onRetryError,
     onOpenReviewHub,
     quietGitDetail,
+    syncDetail,
     reviewState,
     isLifecycleRunning,
     lifecycleLabel,
@@ -364,6 +367,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
               )}
             >
               {quietGitDetail}
+              {syncDetail}
               <WorktreeDetails
                 variant={variant}
                 worktree={worktree}
@@ -447,18 +451,28 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   ) : lifecycleLabel &&
                     !isLifecycleRunning &&
                     worktree.lifecycleStatus?.state !== "success" ? (
-                    <span
-                      className={
-                        lifecycleState === "needs-approval"
-                          ? "text-status-warning"
-                          : "text-status-error"
-                      }
-                    >
-                      {lifecycleLabel}
+                    // Neutral words, hue on the severity glyph: status hues
+                    // miss 4.5:1 as text on several themes.
+                    <span className="flex items-center gap-1.5 text-text-secondary">
+                      {lifecycleState === "needs-approval" ? (
+                        <SEVERITY_GLYPH.warning
+                          className="w-3 h-3 shrink-0 text-status-warning"
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <SEVERITY_GLYPH.error
+                          className="w-3 h-3 shrink-0 text-status-error"
+                          aria-hidden="true"
+                        />
+                      )}
+                      <span className="truncate">{lifecycleLabel}</span>
                     </span>
                   ) : isConflicted ? (
-                    <span className="flex items-center gap-1.5 text-status-error">
-                      <AlertTriangle className="w-3 h-3 shrink-0" aria-hidden="true" />
+                    <span className="flex items-center gap-1.5 text-text-secondary">
+                      <SEVERITY_GLYPH.error
+                        className="w-3 h-3 shrink-0 text-status-error"
+                        aria-hidden="true"
+                      />
                       <span className="truncate">Conflicts need review</span>
                     </span>
                   ) : hasChanges && worktree.worktreeChanges ? (
@@ -466,10 +480,17 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       <span ref={countRef} className="inline-block">
                         {pluralize(worktree.worktreeChanges.changedFileCount, "file")}
                       </span>
-                      <DiffStat
-                        insertions={worktree.worktreeChanges.insertions}
-                        deletions={worktree.worktreeChanges.deletions}
-                      />
+                      {/* Clipped mid-digit it misreads (+214 became "+2"), so on a
+                          narrow sidebar card it gives way whole and the file
+                          count stands alone; Details lists every file. */}
+                      <span
+                        className={cn("inline-flex", isSidebar && "hidden @xs/card:inline-flex")}
+                      >
+                        <DiffStat
+                          insertions={worktree.worktreeChanges.insertions}
+                          deletions={worktree.worktreeChanges.deletions}
+                        />
+                      </span>
                       {reviewChangeLine && (
                         <span className="truncate text-text-secondary">· {reviewChangeLine}</span>
                       )}
@@ -657,7 +678,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                 )}
               >
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-text-muted truncate">
+                  <span className="min-w-0 text-xs text-text-secondary">
                     Setup didn't finish. Re-run when you're ready.
                   </span>
                   <Button

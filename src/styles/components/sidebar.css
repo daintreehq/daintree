@@ -413,6 +413,20 @@ html[data-dragging="true"]
   background: var(--worktree-filter-bar-bg, transparent);
 }
 
+/* Tab lands on the card's full-card select button, which is `outline-hidden`
+   because it is an invisible overlay; this is where its ring is drawn. On the
+   card's perimeter rather than one edge: the edges already mean something
+   here (the label bar on the left, the active mark on the right), and a ring
+   is the one shape that says "focus" on every card, active or not. Inset so
+   the 2px gutter between cards never cuts it. The keyboard cursor of the
+   list's own arrow-key model keeps its edge mark above. */
+.sidebar-worktree-card[data-variant="sidebar"]:not([data-drop-target="true"]):has(
+    > button:focus-visible
+  ) {
+  outline: 2px solid var(--theme-selection-outline);
+  outline-offset: -2px;
+}
+
 @variant reduce-motion {
   .sidebar-worktree-card,
   .sidebar-worktree-card::after {

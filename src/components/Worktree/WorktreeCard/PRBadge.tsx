@@ -198,11 +198,10 @@ export function PRBadge({
             </span>
           ) : (
             <span
-              className={cn(
-                "font-mono",
-                underlineOnHover && "hover:underline",
-                missingCredential ? "text-text-secondary" : prStateColor
-              )}
+              // The number in the line's own ink; the state glyph beside it
+              // carries open/merged in hue, so a failing run's red mark is
+              // the only colour on the line that argues with it.
+              className={cn("font-mono text-text-secondary", underlineOnHover && "hover:underline")}
             >
               #{prNumber}
             </span>

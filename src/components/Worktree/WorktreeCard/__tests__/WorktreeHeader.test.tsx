@@ -716,9 +716,20 @@ describe("WorktreeHeader collapsed session indicators", () => {
     expect(screen.queryByTestId("collapsed-session-indicators")).toBeNull();
   });
 
-  it("does not render session indicators when not collapsed", () => {
+  it("keeps session indicators on the sidebar title row when expanded", () => {
+    // The waiting ring lands in the same column whether or not the card is open.
     renderHeader({
       isCollapsed: false,
+      sessionTotal: 3,
+      sessionStates: { ...allZeroStates, working: 2, waiting: 1 },
+    });
+    expect(screen.getByTestId("collapsed-session-indicators")).toBeDefined();
+  });
+
+  it("does not render session indicators on an expanded grid card", () => {
+    renderHeader({
+      isCollapsed: false,
+      variant: "grid",
       sessionTotal: 3,
       sessionStates: { ...allZeroStates, working: 2, waiting: 1 },
     });
@@ -896,21 +907,17 @@ describe("WorktreeHeader collapsed alarm pill", () => {
     expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
   });
 
-  it("renders the pill with warning treatment for behindCount > 0", () => {
+  it("does not raise the pill for upstream drift alone", () => {
+    // Drift is ambient: most branches are a few commits behind, and a pill on
+    // each of them buried the one that failed CI.
     renderHeader({
       isCollapsed: true,
       worktree: { ...baseWorktree, behindCount: 3 },
     });
-    const pill = screen.getByTestId("collapsed-alarm-pill");
-    expect(pill.getAttribute("data-alarm-kind")).toBe("behind");
-    expect(pill.className).toContain("text-status-warning");
-    expect(pill.getAttribute("aria-label")).toBe("Behind — Upstream: 3 commits behind");
+    expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
   });
 
-  it("threads the base compare ref into the detail for base-only drift", () => {
-    // The counts only reach the tooltip if every field is actually passed
-    // through — a formatter that works in isolation over a header that hands
-    // it half the worktree is the failure this catches.
+  it("does not raise the pill for base-only drift", () => {
     renderHeader({
       isCollapsed: true,
       worktree: {
@@ -921,9 +928,7 @@ describe("WorktreeHeader collapsed alarm pill", () => {
         baseCompareRef: "upstream/develop",
       },
     });
-    expect(screen.getByTestId("collapsed-alarm-pill").getAttribute("aria-label")).toBe(
-      "Behind — Base (upstream/develop): 4 commits behind"
-    );
+    expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
   });
 
   it("does not duplicate gitStateIndicator for detached HEAD", () => {
@@ -944,9 +949,20 @@ describe("WorktreeHeader collapsed alarm pill", () => {
     expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
   });
 
-  it("does not render when expanded — even with a CI failure", () => {
+  it("renders on an expanded sidebar card too, in the title row's attention column", () => {
     renderHeader({
       isCollapsed: false,
+      worktree: { ...baseWorktree, ...ciFailureLinked(101) },
+    });
+    expect(screen.getByTestId("collapsed-alarm-pill").getAttribute("data-alarm-kind")).toBe(
+      "ci-failed"
+    );
+  });
+
+  it("does not render on an expanded grid card, even with a CI failure", () => {
+    renderHeader({
+      isCollapsed: false,
+      variant: "grid",
       worktree: { ...baseWorktree, ...ciFailureLinked(101) },
     });
     expect(screen.queryByTestId("collapsed-alarm-pill")).toBeNull();
@@ -982,15 +998,20 @@ describe("WorktreeHeader collapsed alarm pill", () => {
     expect(pills[0]!.getAttribute("data-alarm-kind")).toBe("ci-failed");
   });
 
-  it("renders for main worktree rows too (collapsed + behind)", () => {
+  it("renders for main worktree rows too (collapsed + failed sign-in)", () => {
     renderHeader({
       isCollapsed: true,
       isMainWorktree: true,
       isMainOnStandardBranch: true,
-      worktree: { ...baseWorktree, isMainWorktree: true, behindCount: 2 },
+      worktree: {
+        ...baseWorktree,
+        isMainWorktree: true,
+        fetchAuthFailed: true,
+        matchedForgeProviderId: "daintree.github.github",
+      },
     });
     expect(screen.getByTestId("collapsed-alarm-pill").getAttribute("data-alarm-kind")).toBe(
-      "behind"
+      "auth-failed"
     );
   });
 });
@@ -1140,7 +1161,9 @@ describe("WorktreeHeader upstream sync indicator", () => {
   });
 
   it("shows ahead/behind counts and renders the indicator", () => {
+    // The grid keeps the sync line on the card; the sidebar moves it to Details.
     renderHeader({
+      variant: "grid",
       worktree: { ...baseWorktree, aheadCount: 3, behindCount: 1 },
     });
     const indicator = screen.getByTestId("upstream-sync-indicator");
@@ -1193,6 +1216,7 @@ describe("WorktreeHeader upstream sync indicator", () => {
     // A worktree branch created without tracking reports no upstream counts at
     // all; if the mount gate ignored base drift the whole line would vanish.
     renderHeader({
+      variant: "grid",
       worktree: {
         ...baseWorktree,
         aheadCount: undefined,
@@ -1323,7 +1347,7 @@ describe("WorktreeHeader base relationship row", () => {
   };
 
   it("mounts the secondary row for a branch on its base with nothing else to report", () => {
-    renderHeader({ worktree: onBase });
+    renderHeader({ worktree: onBase, variant: "grid" });
     expect(screen.getByTestId("upstream-sync-base").textContent).toContain("develop");
     expect(screen.getByTestId("upstream-sync-unpushed")).not.toBeNull();
   });
@@ -1340,7 +1364,7 @@ describe("WorktreeHeader collapsed alarm keyboard reach", () => {
   // this is the half that proves the header puts something at that id.
 
   it("describes a collapsed row's alarm under the id the card points at", () => {
-    renderHeader({ isCollapsed: true, worktree: { ...baseWorktree, behindCount: 3 } });
+    renderHeader({ isCollapsed: true, worktree: { ...baseWorktree, ...ciFailureLinked(101) } });
     const description = document.getElementById(collapsedAlarmDescriptionId(baseWorktree.id));
     expect(description, "no node at the card's aria-describedby target").not.toBeNull();
     expect(description!.textContent).toBe(
@@ -1359,11 +1383,10 @@ describe("WorktreeHeader collapsed alarm keyboard reach", () => {
     renderHeader({
       isCollapsed: true,
       isKeyboardFocused: true,
-      worktree: { ...baseWorktree, behindCount: 3 },
+      worktree: { ...baseWorktree, ...ciFailureLinked(101) },
     });
     const tip = await screen.findByRole("tooltip");
-    expect(tip.textContent).toContain("Behind");
-    expect(tip.textContent).toContain("Upstream: 3 commits behind");
+    expect(tip.textContent).toContain("CI failed");
   });
 });
 

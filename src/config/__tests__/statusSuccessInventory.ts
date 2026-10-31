@@ -352,16 +352,10 @@ export const STATUS_SUCCESS_INVENTORY = {
     {
       category: "domain",
       signature: "text-status-success",
-      anchor: "↑{aheadCount}",
+      anchor: 'arrow === "↑"',
       expectedOccurrences: 1,
-      rationale: "Ahead-arrow count against the upstream",
-    },
-    {
-      category: "domain",
-      signature: "text-status-success",
-      anchor: "↑{displayedBaseAhead}",
-      expectedOccurrences: 1,
-      rationale: "Ahead-arrow count against the base branch",
+      rationale:
+        "The ahead arrow of a drift count, against the upstream and against the base branch alike; one `Count` helper draws both, with the figure itself in neutral ink",
     },
   ],
   "src/components/Worktree/WorktreeOverviewRow.tsx": [
@@ -510,5 +504,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 55;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 57;
+export const EXPECTED_STATUS_SUCCESS_SITES = 54;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 56;

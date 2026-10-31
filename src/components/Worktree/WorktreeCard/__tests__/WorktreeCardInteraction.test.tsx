@@ -366,7 +366,10 @@ describe("collapsed alarm reaches the select overlay", () => {
     ).not.toBeNull();
     const gates = call![1]!;
     expect(gates).toMatch(/lifecycle:\s*chipState !== null/);
-    expect(gates).toMatch(/alarm:\s*!!effectiveIsCollapsed/);
+    // The sidebar card draws its alarm and attention marks on the title row in
+    // both modes, and the header always mounts both description nodes.
+    expect(gates).toMatch(/alarm:\s*true/);
+    expect(gates).toMatch(/attention:\s*true/);
     expect(gates).toMatch(/external:\s*isExternal/);
   });
 
