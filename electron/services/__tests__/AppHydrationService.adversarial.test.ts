@@ -484,8 +484,11 @@ describe("AppHydrationService adversarial", () => {
 
   it("does not let a prefetch keep the empty payload for a state file still in place (#15613)", async () => {
     const { buildSwitchHydrateResult } = await import("../AppHydrationService.js");
-    const { prefetchHydrateResult, _peekPrefetchCacheForTests, _resetPrefetchHydrateCacheForTests } =
-      await import("../prefetchHydrateCache.js");
+    const {
+      prefetchHydrateResult,
+      _peekPrefetchCacheForTests,
+      _resetPrefetchHydrateCacheForTests,
+    } = await import("../prefetchHydrateCache.js");
     _resetPrefetchHydrateCacheForTests();
     getProjectStateWithRecoveryMock.mockResolvedValueOnce({
       state: undefined,

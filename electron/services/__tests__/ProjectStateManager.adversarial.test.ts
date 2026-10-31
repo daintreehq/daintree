@@ -555,9 +555,9 @@ describe("ProjectStateManager never writes over an unpreserved state file (#1561
       }));
       const calls = utilsMock.resilientAtomicWriteFile.mock.calls;
       expect(calls).toHaveLength(1);
-      expect(JSON.parse(calls[0][1] as string).terminals.map((t: { id: string }) => t.id)).toEqual(
-        ["t1"]
-      );
+      expect(JSON.parse(calls[0][1] as string).terminals.map((t: { id: string }) => t.id)).toEqual([
+        "t1",
+      ]);
       // The session mark stays: the orphan sweep still must not trust this project.
       expect(manager.wasStateUnreadableThisSession(projectId)).toBe(true);
     }

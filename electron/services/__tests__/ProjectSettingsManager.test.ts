@@ -546,7 +546,9 @@ describe("ProjectSettingsManager caching", () => {
         const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
         try {
-          await expect(manager.getProjectSettings(projectId)).rejects.toThrow(/leaving it untouched/);
+          await expect(manager.getProjectSettings(projectId)).rejects.toThrow(
+            /leaving it untouched/
+          );
           await expect(
             manager.saveProjectSettings(projectId, { runCommands: [], devServerCommand: "x" })
           ).rejects.toThrow(/leaving it untouched/);
