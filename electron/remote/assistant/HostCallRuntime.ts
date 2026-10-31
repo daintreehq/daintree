@@ -6,6 +6,10 @@ import {
 import { PROJECT_CHECK_DEFAULT_TIMEOUT_MS } from "../../../shared/types/projectCheck.js";
 import { REPLY_WAIT_DEFAULT_SECONDS } from "../../../shared/types/replyWait.js";
 import {
+  MCP_REMOTE_DISPATCH_TIMEOUT_MS,
+  remoteHoldUntil,
+} from "../../../shared/config/mcpConfirmWindow.js";
+import {
   HOST_LIST_PROJECT_BYTES_MAX,
   type HostCallArgs,
   type HostCallResult,
@@ -86,6 +90,7 @@ import {
   type McpCallAnswer,
   type RelayApproveAnswer,
   type RelayApprovePayload,
+  type RelayApproveTimedPayload,
   type RelayCallRequest,
   type RelayNotice,
   type RelayNoticeStatusAnswer,
@@ -298,6 +303,11 @@ export interface RelayApprovalQuestion {
   args: Record<string, unknown>;
   subject?: string;
   lines: string[];
+  /**
+   * The latest the dialog may hold, on this machine's clock (#15699): inside
+   * the host's own wait for the answer. Absent from a host too old to say.
+   */
+  holdUntil?: number;
 }
 
 /** A relayed call out to a host right now, and the run here that made it. */
@@ -606,10 +616,16 @@ const LOCAL_REFUSAL_DETAILS: Partial<
   },
 };
 
-/** Least a relayed call is given: a dispatch, a confirmation the person may take, and the trip. */
-const RELAY_MIN_RUN_MS = 90_000;
 /** Room past what a tool asks for, for its own dispatch and its answer to come back. */
 const RELAY_RUN_MARGIN_MS = 30_000;
+/**
+ * Least a relayed project call is given (#15699): the host's wait on a whole
+ * confirmation here, from queueing to a full decision window once it is on
+ * screen, then the room past it. The host's own waits end inside it.
+ */
+const RELAY_MIN_RUN_MS = MCP_REMOTE_DISPATCH_TIMEOUT_MS + RELAY_RUN_MARGIN_MS;
+/** Least a throwaway call is given: it never asks anyone, so a dispatch and the trip. */
+const THROWAWAY_MIN_RUN_MS = 90_000;
 /** How much longer than the host's own deadline the Shell waits for the answer. */
 const RELAY_ANSWER_GRACE_MS = 15_000;
 
@@ -618,7 +634,11 @@ const RELAY_ANSWER_GRACE_MS = 15_000;
  * call's own arguments ask for, so a long check or a held reply isn't cut off
  * and reported as lost.
  */
-export function relayRunMs(tool: string, args: Record<string, unknown>): number {
+export function relayRunMs(
+  tool: string,
+  args: Record<string, unknown>,
+  minMs: number = RELAY_MIN_RUN_MS
+): number {
   let wanted = 0;
   const timeoutMs = args.timeoutMs;
   if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0) {
@@ -633,7 +653,7 @@ export function relayRunMs(tool: string, args: Record<string, unknown>): number 
         : REPLY_WAIT_DEFAULT_SECONDS;
     wanted = Math.max(wanted, seconds * 1000);
   }
-  return Math.min(MAX_RELAY_RUN_MS, Math.max(RELAY_MIN_RUN_MS, wanted + RELAY_RUN_MARGIN_MS));
+  return Math.min(MAX_RELAY_RUN_MS, Math.max(minMs, wanted + RELAY_RUN_MARGIN_MS));
 }
 
 function codeOf(error: unknown): string | null {
@@ -1066,7 +1086,12 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * says so. Anything else is `refused`, which approves nothing. The host is
    * the connection's, never the payload's.
    */
-  async receiveApproval(hostId: HostId, payload: RelayApprovePayload): Promise<RelayApproveAnswer> {
+  async receiveApproval(
+    hostId: HostId,
+    payload: RelayApprovePayload | RelayApproveTimedPayload
+  ): Promise<RelayApproveAnswer> {
+    // Before anything awaits: the host's wait started when it asked.
+    const receivedAt = this.now();
     const answer = (decision: RelayApproveAnswer["decision"]): RelayApproveAnswer => ({
       approvalId: payload.approvalId,
       argsHash: payload.argsHash,
@@ -1104,6 +1129,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         args: payload.args,
         ...(payload.subject !== undefined ? { subject: payload.subject } : {}),
         lines: payload.lines,
+        ...("holdBudgetMs" in payload
+          ? { holdUntil: remoteHoldUntil(receivedAt, payload.holdBudgetMs) }
+          : {}),
       });
     } catch (error) {
       logger.warn("Asking about a host's call failed", { error });
@@ -1625,7 +1653,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         return { ...this.outcomeWith("opted_out", CONTROL_OFF_DETAIL), ...unsent };
       }
     }
-    const runMs = relayRunMs(args.tool, parsed.data.args);
+    const runMs = relayRunMs(args.tool, parsed.data.args, THROWAWAY_MIN_RUN_MS);
     const payload: ThrowawayCallPayload = {
       helpSessionId,
       tier: context.tier,

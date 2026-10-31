@@ -13,6 +13,7 @@ import { LOCAL_HOST_ID, parseHostScopedKey } from "../../../shared/types/remoteH
 import { getProjectForWebContents } from "../../window/webContentsRegistry.js";
 import { resolveEffectiveActionDanger } from "../../../shared/utils/effectiveActionDanger.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { remoteHoldUntil } from "../../../shared/config/mcpConfirmWindow.js";
 import {
   NOTIFICATION_CLOSE_METHOD,
   NOTIFICATION_RECONCILE_METHOD,
@@ -79,6 +80,10 @@ const McpDispatchPayloadSchema = z.object({
     })
     .strict()
     .optional(),
+  // How long the host waits for this answer, from when it sent it (#15699).
+  // Grants time, never approval: the view holds its dialog inside it, less
+  // the trip back. Absent from a host too old to say, which waits 30 s.
+  holdBudgetMs: z.number().int().positive().optional(),
 });
 
 type McpDispatchPayload = z.infer<typeof McpDispatchPayloadSchema>;
@@ -241,11 +246,27 @@ function narrowRegistryRead(actionId: string, result: ActionDispatchResult): Act
   return result;
 }
 
+/**
+ * How long this view may hold what a host asked for (#15699): inside the wait
+ * the host named, from when it arrived. A host that didn't say waits about
+ * the plain deadline, so it is held to that.
+ */
+function hostDeadline(
+  holdBudgetMs: number | undefined,
+  receivedAt: number
+): { holdUntil: number } | { fixedDeadline: true } {
+  return holdBudgetMs === undefined
+    ? { fixedDeadline: true }
+    : { holdUntil: remoteHoldUntil(receivedAt, holdBudgetMs) };
+}
+
 async function dispatchAction(
   hostId: string,
   webContentsId: number,
   payload: unknown
 ): Promise<unknown> {
+  // Before anything awaits: the host's clock started when it sent this.
+  const receivedAt = Date.now();
   const parsed = McpDispatchPayloadSchema.safeParse(payload);
   if (!parsed.success) {
     throw new AppError({ code: "VALIDATION", message: "Malformed MCP dispatch from the host" });
@@ -264,6 +285,7 @@ async function dispatchAction(
       },
     };
   }
+  const deadline = hostDeadline(request.holdBudgetMs, receivedAt);
   const service = await loadMcpServerService();
   // Otherwise never pre-confirmed: a confirm-gated action raises this Shell's
   // own dialog, naming the host that asked, exactly as a local MCP client's
@@ -282,14 +304,14 @@ async function dispatchAction(
     // The host times this call, so this view never holds it open past the
     // host's own deadline, which is the one its agent is told about (#14989).
     skipPreference
-      ? { authorization: "skip-preference", fixedDeadline: true }
+      ? { authorization: "skip-preference", ...deadline }
       : request.approvalOnly
         ? {
             approvalOnly: true,
             ...(request.approvalReason ? { approvalReason: request.approvalReason } : {}),
-            fixedDeadline: true,
+            ...deadline,
           }
-        : { fixedDeadline: true },
+        : deadline,
     describeHost(
       hostId,
       request.relayed === true &&
@@ -332,8 +354,9 @@ export async function askHostApprovalInWindow(
       {
         approvalOnly: true,
         hostPreview: { lines: ask.lines, ...(ask.subject ? { subject: ask.subject } : {}) },
-        // The host's own approval window governs a call it runs itself.
-        fixedDeadline: true,
+        // Inside the host's own wait for the answer (#15699), so the dialog
+        // never outlasts it; a host too old to say waits about the plain deadline.
+        ...(ask.holdUntil !== undefined ? { holdUntil: ask.holdUntil } : { fixedDeadline: true }),
       },
       describeHost(ask.hostId, true)
     );

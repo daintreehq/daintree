@@ -64,6 +64,13 @@ export const AssistantLinkMethod = {
    */
   RELAY_APPROVE: "assistant.relay-approve",
   /**
+   * Host → Shell: RELAY_APPROVE, saying how long the host waits for the answer
+   * (#15699), so the Shell's dialog ends inside it. A Shell from before this
+   * answers UNSUPPORTED, and is asked by RELAY_APPROVE; a Shell asked that way
+   * holds its dialog to the plain deadline.
+   */
+  RELAY_APPROVE_TIMED: "assistant.relay-approve-timed",
+  /**
    * Shell → Host: run one throwaway tool for one of the Shell's assistants
    * (#14444), with no project. Its own method, so a host from before this
    * answers UNSUPPORTED rather than failing MCP_CALL's payload check.
@@ -414,6 +421,12 @@ export const RelayApprovePayloadSchema = z
   })
   .strict();
 export type RelayApprovePayload = z.infer<typeof RelayApprovePayloadSchema>;
+
+export const RelayApproveTimedPayloadSchema = RelayApprovePayloadSchema.extend({
+  /** How long the host waits for the answer, from when it asked. */
+  holdBudgetMs: z.number().int().positive(),
+}).strict();
+export type RelayApproveTimedPayload = z.infer<typeof RelayApproveTimedPayloadSchema>;
 
 /**
  * `refused`: the Shell couldn't put it to anyone — the call isn't one of its

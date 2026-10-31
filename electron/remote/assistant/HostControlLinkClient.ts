@@ -8,6 +8,7 @@ import {
   AssistantLinkMethod,
   McpCallAnswerSchema,
   RelayApprovePayloadSchema,
+  RelayApproveTimedPayloadSchema,
   RelayNoticeStatusAnswerSchema,
   RelayNoticesPayloadSchema,
   ThrowawayCallAnswerSchema,
@@ -17,6 +18,7 @@ import {
   type RelayCallRequest,
   type RelayApproveAnswer,
   type RelayApprovePayload,
+  type RelayApproveTimedPayload,
   type RelayNoticeStatusAnswer,
   type RelayNoticeStatusPayload,
   type RelayNoticesPayload,
@@ -52,7 +54,10 @@ export interface HostControlLinkClientDeps {
    */
   approvalReceiver?: () =>
     | {
-        receiveApproval(hostId: HostId, payload: RelayApprovePayload): Promise<RelayApproveAnswer>;
+        receiveApproval(
+          hostId: HostId,
+          payload: RelayApprovePayload | RelayApproveTimedPayload
+        ): Promise<RelayApproveAnswer>;
       }
     | undefined;
   callTimeoutMs?: number;
@@ -151,20 +156,29 @@ export class HostControlLinkClient {
           }
         );
         // A host asking about a call one of this Shell's assistants is making
-        // there; nobody to take it refuses it, which approves nothing.
+        // there; nobody to take it refuses it, which approves nothing. Asked
+        // the timed way, it also says how long it waits (#15699).
+        const answerApproval = (
+          payload: RelayApprovePayload | RelayApproveTimedPayload
+        ): Promise<RelayApproveAnswer> | RelayApproveAnswer => {
+          const receiver = this.disposed ? undefined : this.deps.approvalReceiver?.();
+          return (
+            receiver?.receiveApproval(hostId, payload) ?? {
+              approvalId: payload.approvalId,
+              argsHash: payload.argsHash,
+              decision: "refused",
+            }
+          );
+        };
         session.registerCallHandler(
           AssistantLinkMethod.RELAY_APPROVE,
           RelayApprovePayloadSchema,
-          (payload): Promise<RelayApproveAnswer> | RelayApproveAnswer => {
-            const receiver = this.disposed ? undefined : this.deps.approvalReceiver?.();
-            return (
-              receiver?.receiveApproval(hostId, payload) ?? {
-                approvalId: payload.approvalId,
-                argsHash: payload.argsHash,
-                decision: "refused",
-              }
-            );
-          }
+          answerApproval
+        );
+        session.registerCallHandler(
+          AssistantLinkMethod.RELAY_APPROVE_TIMED,
+          RelayApproveTimedPayloadSchema,
+          answerApproval
         );
         // A new session after one the host couldn't resume: proving the sender
         // again lets the host send what it kept for this Shell, and asking

@@ -84,13 +84,23 @@ import {
   _resetEndpointRegistryForTesting,
   getEndpointRegistry,
 } from "../../../ipc/endpointRegistry.js";
-import type { DispatchEnvelope, PendingRequest } from "../shared.js";
+import {
+  MCP_DISPATCH_TIMEOUT_MS,
+  type DispatchEnvelope,
+  type PendingRequest,
+  type WorkspaceDispatchOptions,
+} from "../shared.js";
 import {
   _resetHostStartedTerminalsForTesting,
   hostStartedTerminals,
   noteHostStartedTerminal,
 } from "../../viewless/hostStartedTerminals.js";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
+import {
+  MCP_CONFIRM_ASK_MAX_MS,
+  MCP_REMOTE_CONFIRM_MARGIN_MS,
+  MCP_REMOTE_DISPATCH_TIMEOUT_MS,
+} from "../../../../shared/config/mcpConfirmWindow.js";
 
 const WORKSPACE = "ws-1";
 
@@ -345,6 +355,114 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
         dispatchedWorkspace: { workspaceId: WORKSPACE },
       });
       expect(viewless.runViewlessAction).not.toHaveBeenCalled();
+    });
+
+    describe("how long it waits on the driving view (#15699)", () => {
+      // A Shell's own call, as `host.call` makes it, into that Shell's own driving view.
+      const relayed = (holdUntil?: number) => ({
+        ...(holdUntil !== undefined ? { holdUntil } : {}),
+        relay: {
+          linkSessionId: "shell-a",
+          readOnly: false,
+          call: { callId: "call-1", helpSessionId: "help-a" },
+        },
+      });
+
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      function answeringEndpoint(): ClientEndpoint {
+        return {
+          ...makeRemoteEndpoint(async () => ({ result: { ok: true, result: null } })),
+          endpointId: "remote:shell-a:view-1",
+          linkSessionId: "shell-a",
+        };
+      }
+
+      function sent(endpoint: ClientEndpoint) {
+        const [, payload, options] = vi.mocked(endpoint.request).mock.calls[0] as [
+          string,
+          { holdBudgetMs?: number },
+          { timeoutMs: number },
+        ];
+        return { budget: payload.holdBudgetMs, timeoutMs: options.timeoutMs };
+      }
+
+      async function dispatch(options: WorkspaceDispatchOptions) {
+        return bridge.dispatchActionForWorkspace(
+          WORKSPACE,
+          "worktree.delete",
+          { worktreeId: "/repo-wt/x" },
+          false,
+          "external",
+          options
+        );
+      }
+
+      it.each([
+        ["a relayed call", relayed()],
+        ["any other caller", {}],
+      ])(
+        "waits out a whole confirmation there for %s, and tells the view how long",
+        async (_label, options) => {
+          const endpoint = answeringEndpoint();
+          setMcpDriveTargetResolver(() => ({ state: "live", endpoint }));
+
+          await dispatch(options);
+
+          const { budget, timeoutMs } = sent(endpoint);
+          expect(budget).toBe(timeoutMs);
+          // The view holds inside the budget less the trip back, which still fits a whole ask.
+          expect(timeoutMs - MCP_REMOTE_CONFIRM_MARGIN_MS).toBeGreaterThanOrEqual(
+            MCP_CONFIRM_ASK_MAX_MS
+          );
+        }
+      );
+
+      it("fits inside the relayed call's own deadline", async () => {
+        vi.useFakeTimers();
+        const endpoint = answeringEndpoint();
+        setMcpDriveTargetResolver(() => ({ state: "live", endpoint }));
+
+        await dispatch(relayed(Date.now() + 100_000));
+
+        expect(sent(endpoint)).toEqual({ budget: 100_000, timeoutMs: 100_000 });
+      });
+
+      it("sends a whole number of milliseconds, so the view can read it", async () => {
+        vi.useFakeTimers();
+        const endpoint = answeringEndpoint();
+        setMcpDriveTargetResolver(() => ({ state: "live", endpoint }));
+
+        await dispatch(relayed(Date.now() + 100_000.75));
+
+        expect(sent(endpoint)).toEqual({ budget: 100_000, timeoutMs: 100_000 });
+      });
+
+      it("keeps the whole confirmation when the call's deadline is further off", async () => {
+        vi.useFakeTimers();
+        const endpoint = answeringEndpoint();
+        setMcpDriveTargetResolver(() => ({ state: "live", endpoint }));
+
+        await dispatch(relayed(Date.now() + 2 * MCP_REMOTE_DISPATCH_TIMEOUT_MS));
+
+        expect(sent(endpoint).timeoutMs).toBe(MCP_REMOTE_DISPATCH_TIMEOUT_MS);
+      });
+
+      it("sends nothing an older Shell's plain hold could outlast", async () => {
+        vi.useFakeTimers();
+        const endpoint = answeringEndpoint();
+        setMcpDriveTargetResolver(() => ({ state: "live", endpoint }));
+        // An older Shell ignores the budget and holds the plain deadline, whatever it is told.
+        const leastSent = MCP_DISPATCH_TIMEOUT_MS + MCP_REMOTE_CONFIRM_MARGIN_MS;
+
+        await expect(dispatch(relayed(Date.now() + leastSent - 1))).rejects.toThrow(/timed out/);
+        expect(endpoint.request).not.toHaveBeenCalled();
+
+        await dispatch(relayed(Date.now() + leastSent));
+        expect(sent(endpoint).timeoutMs).toBe(leastSent);
+      });
     });
 
     it("reports a driver that left mid-request as a lost, retriable route", async () => {

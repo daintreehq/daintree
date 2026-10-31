@@ -701,6 +701,8 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
         actionId: "worktree.delete",
         args: { worktreeId: "/wt/feature" },
         lines: ["No uncommitted changes."],
+        // Asked the timed way, so the dialog ends inside the relay's wait (#15699).
+        holdUntil: expect.any(Number),
       },
     ]);
     expect(decision).toMatchObject({ decision: "approved" });

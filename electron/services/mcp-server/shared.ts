@@ -199,12 +199,19 @@ export interface WorkspaceDispatchOptions {
   /** What pre-authorized a `confirmed` dispatch — see `SessionServerDeps.dispatchAction`. */
   authorization?: McpDispatchAuthorization;
   /**
-   * Another machine is timing this call (#14989): a host's dispatch into the
-   * view this Shell drives it from, or its question about a call it runs
-   * itself. Its view can't hold the call open past the host's own deadline,
-   * which is the one the host's agent is told about.
+   * Another machine is timing this call and didn't say for how long (#14989):
+   * a host too old to say, dispatching into the view this Shell drives it
+   * from. Its view can't hold the call open past the plain deadline, which is
+   * as long as that host waits.
    */
   fixedDeadline?: true;
+  /**
+   * The latest this dispatch may stay open, on this machine's clock (#15699):
+   * what another machine said it waits, less the trip back, or the deadline
+   * of the relayed call it runs for. A confirmation it raises still gets its
+   * phases, but none past this, and neither does any wait on another machine.
+   */
+  holdUntil?: number;
   /**
    * A call one of another machine's assistants made here through its Shell
    * (#13493). Anything but a read runs only in that Shell's own view of the
@@ -1156,10 +1163,12 @@ export interface DispatchHold {
   phase: "dispatched" | import("../../../shared/types/ipc/mcpServer.js").McpDispatchHoldPhase;
   deadlineAt: number;
   /**
-   * False for a call another machine is timing (#13501): its deadline is the
-   * one the agent sees, so this machine never holds the call open past it.
+   * The latest any phase may hold the call (#15699): Infinity for this
+   * machine's own call, and inside the deadline of whoever is timing it
+   * otherwise, so this machine never holds the call open past the one its
+   * caller is told about.
    */
-  extendable: boolean;
+  capAt: number;
   /** Settle the call as timed out: a confirmation timeout while it was asking. */
   expire: () => void;
 }
@@ -1272,8 +1281,18 @@ export interface McpRelayCaller {
    * call with no view is refused.
    */
   requestApproval?: (
-    ask: import("../viewless/index.js").ViewlessApprovalAsk & { callId: string }
+    ask: import("../viewless/index.js").ViewlessApprovalAsk & {
+      callId: string;
+      /** When the call stops waiting on the answer, on this machine's clock (#15699). */
+      holdUntil?: number;
+    }
   ) => Promise<import("../viewless/index.js").ViewlessApprovalDecision>;
+  /**
+   * When one of this session's calls in flight gives up, on this machine's
+   * clock (#15699), so everything it waits on ends first; undefined once it
+   * has settled, or for a call this session isn't running.
+   */
+  callDeadline?: (callId: string) => number | undefined;
 }
 
 const RESOURCE_URI_PATTERN =

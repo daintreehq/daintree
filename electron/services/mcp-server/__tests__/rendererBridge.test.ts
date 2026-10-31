@@ -83,6 +83,8 @@ import {
   MCP_CONFIRM_DECISION_MS,
   MCP_CONFIRM_HOLD_GRACE_MS,
   MCP_CONFIRM_QUEUE_HOLD_MS,
+  MCP_REMOTE_CONFIRM_MARGIN_MS,
+  MCP_REMOTE_DISPATCH_TIMEOUT_MS,
 } from "../../../../shared/config/mcpConfirmWindow.js";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
 
@@ -3163,5 +3165,161 @@ describe("rendererBridge — holding a confirm-gated dispatch open (#14989)", ()
 
     await vi.advanceTimersByTimeAsync(MCP_DISPATCH_TIMEOUT_MS - 10_000);
     expect(call.outcome()).toMatchObject({ confirmationDecision: "timeout" });
+  });
+
+  describe("inside the budget a host gave it (#15699)", () => {
+    // What a Shell holds for a current host: its whole wait, less the trip back.
+    const hostHoldUntil = () =>
+      Date.now() + MCP_REMOTE_DISPATCH_TIMEOUT_MS - MCP_REMOTE_CONFIRM_MARGIN_MS;
+
+    it("gives a host's dispatch the full windows, so an approval a minute after it shows runs", async () => {
+      const call = await startDispatch(811, { holdUntil: hostHoldUntil() });
+      expect(bridge.holdDispatch(811, call.requestId(), "queued")).toEqual({
+        held: true,
+        remainingMs: MCP_CONFIRM_QUEUE_HOLD_MS,
+      });
+
+      // Queued behind another prompt for most of its queue hold, then shown.
+      await vi.advanceTimersByTimeAsync(100_000);
+      expect(bridge.holdDispatch(811, call.requestId(), "shown")).toEqual({
+        held: true,
+        remainingMs: MCP_CONFIRM_DECISION_MS + MCP_CONFIRM_HOLD_GRACE_MS,
+      });
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(call.outcome()).toBeUndefined();
+      expect(bridge.holdDispatch(811, call.requestId(), "approved")).toEqual({
+        held: true,
+        remainingMs: MCP_DISPATCH_TIMEOUT_MS,
+      });
+      call.respond({ ok: true, result: "deleted" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(call.outcome()).toMatchObject({ result: { ok: true, result: "deleted" } });
+    });
+
+    it("answers one never shown as the confirmation timeout, inside the host's wait", async () => {
+      const holdUntil = hostHoldUntil();
+      const call = await startDispatch(812, { holdUntil });
+      bridge.holdDispatch(812, call.requestId(), "queued");
+
+      await vi.advanceTimersByTimeAsync(MCP_CONFIRM_QUEUE_HOLD_MS);
+
+      expect(call.outcome()).toEqual({
+        result: {
+          ok: false,
+          error: {
+            code: "CONFIRMATION_TIMEOUT",
+            message: expect.stringContaining("reached the screen"),
+          },
+        },
+        confirmationDecision: "timeout",
+      });
+      expect(Date.now()).toBeLessThanOrEqual(holdUntil);
+    });
+
+    it("answers one shown at its latest and never answered as the confirmation timeout, inside the host's wait", async () => {
+      const holdUntil = hostHoldUntil();
+      const call = await startDispatch(813, { holdUntil });
+      // Each phase reported as late as it may be: the longest a confirmation holds.
+      await vi.advanceTimersByTimeAsync(MCP_DISPATCH_TIMEOUT_MS - 1);
+      bridge.holdDispatch(813, call.requestId(), "queued");
+      await vi.advanceTimersByTimeAsync(MCP_CONFIRM_QUEUE_HOLD_MS - 1);
+      bridge.holdDispatch(813, call.requestId(), "shown");
+
+      await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS + MCP_CONFIRM_HOLD_GRACE_MS);
+
+      expect(call.outcome()).toEqual({
+        result: {
+          ok: false,
+          error: { code: "CONFIRMATION_TIMEOUT", message: expect.stringContaining("Nothing ran") },
+        },
+        confirmationDecision: "timeout",
+      });
+      expect(Date.now()).toBeLessThanOrEqual(holdUntil);
+    });
+
+    it("never holds a phase past the budget, and refuses an approval after it", async () => {
+      const holdUntil = Date.now() + 100_000;
+      const call = await startDispatch(814, { holdUntil });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(bridge.holdDispatch(814, call.requestId(), "shown")).toEqual({
+        held: true,
+        remainingMs: 90_000,
+      });
+
+      vi.setSystemTime(holdUntil);
+      expect(bridge.holdDispatch(814, call.requestId(), "approved")).toEqual({ held: false });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(call.outcome()).toMatchObject({ confirmationDecision: "timeout" });
+      call.respond({ ok: true, result: "deleted" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(call.outcome()).toMatchObject({ confirmationDecision: "timeout" });
+    });
+
+    it("gives an approval near the budget's end only what is left of it", async () => {
+      const holdUntil = Date.now() + 100_000;
+      const call = await startDispatch(815, { holdUntil });
+      bridge.holdDispatch(815, call.requestId(), "shown");
+      await vi.advanceTimersByTimeAsync(90_000);
+
+      expect(bridge.holdDispatch(815, call.requestId(), "approved")).toEqual({
+        held: true,
+        remainingMs: 10_000,
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(call.outcome()).toBeInstanceOf(Error);
+    });
+
+    it("still ends a dispatch that never asks at the plain deadline", async () => {
+      const call = await startDispatch(816, { holdUntil: hostHoldUntil() });
+
+      await vi.advanceTimersByTimeAsync(MCP_DISPATCH_TIMEOUT_MS - 1);
+      expect(call.outcome()).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(call.outcome()).toBeInstanceOf(Error);
+    });
+
+    it("ends a dispatch that never reports a phase at a budget shorter than the plain deadline", async () => {
+      const call = await startDispatch(819, { holdUntil: Date.now() + 5_000 });
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(call.outcome()).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(call.outcome()).toBeInstanceOf(Error);
+      // Nothing it claims afterwards revives it.
+      expect(bridge.holdDispatch(819, call.requestId(), "approved")).toEqual({ held: false });
+    });
+
+    it("ends at the budget when it is shorter than the plain deadline", async () => {
+      const call = await startDispatch(817, { holdUntil: Date.now() + 5_000 });
+      bridge.holdDispatch(817, call.requestId(), "queued");
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(call.outcome()).toMatchObject({ confirmationDecision: "timeout" });
+    });
+
+    it("sends nothing once the budget has already run out", async () => {
+      const wc = makeWebContents(818);
+      mockWebContentsRegistry.set(818, wc);
+
+      await expect(
+        bridge.dispatchActionForWebContents(
+          818,
+          "worktree.delete",
+          {},
+          false,
+          undefined,
+          "external",
+          {
+            holdUntil: Date.now(),
+          }
+        )
+      ).rejects.toThrow(/timed out/);
+      expect(wc.send).not.toHaveBeenCalledWith(
+        CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST,
+        expect.anything()
+      );
+      expect(pendingDispatches.size).toBe(0);
+    });
   });
 });

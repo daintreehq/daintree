@@ -149,3 +149,53 @@ describe("createMcpRelayExecutor ending a caller (#14024)", () => {
     expect(retired).toEqual([]);
   });
 });
+
+describe("createMcpRelayExecutor timing a call from when it arrived (#15699)", () => {
+  let executor: McpRelayExecutor | undefined;
+
+  afterEach(() => executor?.dispose());
+
+  function harness(admission: Promise<boolean>, clock: { at: number }) {
+    const timeouts: number[] = [];
+    executor = createMcpRelayExecutor({
+      acceptsRemoteControl: () => true,
+      hasProject: () => admission,
+      now: () => clock.at,
+      openSession: async () => ({
+        isOpen: () => true,
+        callTool: async (_tool, _args, options) => {
+          timeouts.push(options.timeoutMs);
+          return ANSWER;
+        },
+        close: () => {},
+      }),
+    });
+    return { executor, timeouts };
+  }
+
+  it("takes the time spent admitting it out of its run", async () => {
+    const clock = { at: 1_000 };
+    const admitted = deferred<boolean>();
+    const { executor, timeouts } = harness(admitted.promise, clock);
+
+    const call = executor.call(SPEC, PAYLOAD);
+    clock.at += 20_000;
+    admitted.resolve(true);
+
+    await expect(call).resolves.toMatchObject({ status: "done" });
+    expect(timeouts).toEqual([PAYLOAD.runMs - 20_000]);
+  });
+
+  it("runs nothing once admitting it used up its time", async () => {
+    const clock = { at: 1_000 };
+    const admitted = deferred<boolean>();
+    const { executor, timeouts } = harness(admitted.promise, clock);
+
+    const call = executor.call(SPEC, PAYLOAD);
+    clock.at += PAYLOAD.runMs;
+    admitted.resolve(true);
+
+    await expect(call).resolves.toMatchObject({ status: "done", result: { isError: true } });
+    expect(timeouts).toEqual([]);
+  });
+});

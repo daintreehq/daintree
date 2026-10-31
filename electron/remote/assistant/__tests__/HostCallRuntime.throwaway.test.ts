@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GLOBAL_ASSISTANT_ID } from "../../../../shared/config/globalAssistant.js";
 import { HostCallResultSchema, type HostCallArgs } from "../../../../shared/types/hostControl.js";
 import { AppError } from "../../../utils/errorTypes.js";
-import { HostCallRuntime, type ObservedHost, type OpenRun } from "../HostCallRuntime.js";
+import {
+  HostCallRuntime,
+  relayRunMs,
+  type ObservedHost,
+  type OpenRun,
+} from "../HostCallRuntime.js";
 import type { ThrowawayCallAnswer, ThrowawayCallPayload } from "../linkMethods.js";
 import { createLocalMcpRelay, LOCAL_RELAY_SENDER_ID } from "../localMcpRelay.js";
 import type { HostThrowawayExecutor } from "../throwawayRelay.js";
@@ -128,6 +133,10 @@ describe("HostCallRuntime host.call to a throwaway target (#14446)", () => {
     });
     expect(payload).not.toHaveProperty("projectId");
     expect(timeoutMs).toBeGreaterThan(payload.runMs);
+    // It never raises a confirmation, so it isn't given the wait for one (#15699),
+    // but keeps room for its own dispatch and the trip.
+    expect(payload.runMs).toBeLessThan(relayRunMs("throwaway.launch", {}));
+    expect(payload.runMs).toBeGreaterThanOrEqual(60_000);
   });
 
   it("resends under a callId, and a newCallId is the caller's own first send", async () => {

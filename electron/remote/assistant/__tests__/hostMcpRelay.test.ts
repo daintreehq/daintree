@@ -180,7 +180,8 @@ describe("installHostMcpRelay", () => {
   });
 
   it("runs the tool in a session opened for the sender, help session, project and tier", async () => {
-    const { links, opened, relay } = harness([["link-1", "sender-a"]]);
+    // A still clock: admitting the call takes none of its run (#15699).
+    const { links, opened, relay } = harness([["link-1", "sender-a"]], { now: () => 1_000 });
     const answer = await links[0]!.call({ tool: "terminal.list", args: { owned: true } });
 
     expect(answer).toEqual({
@@ -839,13 +840,15 @@ describe("installHostMcpRelay approvals (#13501)", () => {
     expect(links[1]!.sent).toEqual([]);
     expect(links[0]!.sent).toEqual([
       {
-        method: AssistantLinkMethod.RELAY_APPROVE,
+        // Asked the timed way first, saying how long it waits (#15699).
+        method: AssistantLinkMethod.RELAY_APPROVE_TIMED,
         payload: expect.objectContaining({
           helpSessionId: "help-1",
           callId: "call-1",
           projectId: "project-1",
           actionId: "worktree.delete",
           args: { worktreeId: "/wt/feature" },
+          holdBudgetMs: expect.any(Number),
         }),
       },
     ]);

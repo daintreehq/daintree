@@ -1769,7 +1769,14 @@ export class HttpLifecycle {
       relayOwnershipPrincipal(spec.caller.senderId, spec.caller.helpSessionId)
     );
     store.sessionWorkspaceMap.set(sessionId, workspaceBinding.workspaceId);
-    store.sessionRelayMap.set(sessionId, { ...spec.caller });
+    // When each call in flight here gives up (#15699), so what it waits on
+    // ends first and nothing it approves runs after its caller was told no.
+    const callDeadlines = new Map<string, { at: number }>();
+    const caller: McpRelayCaller = {
+      ...spec.caller,
+      callDeadline: (callId) => callDeadlines.get(callId)?.at,
+    };
+    store.sessionRelayMap.set(sessionId, caller);
     // Held only here: no bearer this host ever saw digests to it.
     store.bindSessionCredential(
       sessionId,
@@ -1777,7 +1784,7 @@ export class HttpLifecycle {
     );
     const server = createSessionServer(
       sessionId,
-      this.buildSessionServerDeps(sessionId, workspaceBinding, undefined, null, spec.caller)
+      this.buildSessionServerDeps(sessionId, workspaceBinding, undefined, null, caller)
     );
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     store.relaySessions.set(sessionId, { transport: serverTransport, server });
@@ -1797,12 +1804,19 @@ export class HttpLifecycle {
     return {
       sessionId,
       isOpen: () => store.relaySessions.has(sessionId),
-      callTool: async (tool, args, { timeoutMs, callId }) =>
-        (await client.callTool(
-          { name: tool, arguments: args, _meta: { [RELAY_CALL_ID_META_KEY]: callId } },
-          undefined,
-          { timeout: timeoutMs }
-        )) as CallToolResult,
+      callTool: async (tool, args, { timeoutMs, callId }) => {
+        const deadline = { at: Date.now() + timeoutMs };
+        callDeadlines.set(callId, deadline);
+        try {
+          return (await client.callTool(
+            { name: tool, arguments: args, _meta: { [RELAY_CALL_ID_META_KEY]: callId } },
+            undefined,
+            { timeout: timeoutMs }
+          )) as CallToolResult;
+        } finally {
+          if (callDeadlines.get(callId) === deadline) callDeadlines.delete(callId);
+        }
+      },
       close: () => {
         store.revokeSession(sessionId);
         void client.close().catch(() => {});
