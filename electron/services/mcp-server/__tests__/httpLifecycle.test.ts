@@ -171,9 +171,26 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
       clearElevationTimer: vi.fn(),
       revokeSession: vi.fn(() => false),
       registerClientMetadata: vi.fn(),
-      // The rest of the teardown surface. Stubbed rather than omitted because
-      // the uninitialized-session sweep (#12082) walks all of it, and an
-      // absent method there is a TypeError that reads as a lifecycle bug.
+      // The real teardown's walk over this fake's surface, so the binding and
+      // map assertions below observe a retirement. What the real store clears
+      // on each route is proved against a real `SessionStore` in
+      // `sessionRetirement.test.ts`.
+      retireSession(sessionId: string, reason: "session-idle" | "session-ended") {
+        for (const transports of [this.sessions, this.httpSessions]) {
+          const session = transports.get(sessionId);
+          if (session === undefined) continue;
+          clearTimeout(session.idleTimer);
+          transports.delete(sessionId);
+        }
+        this.clearElevationTimer(sessionId);
+        this.sessionTierMap.delete(sessionId);
+        this.grantCache.revokeSession(sessionId, reason);
+        this.clearSessionBinding(sessionId);
+        this.clearFigureCounter(sessionId);
+        this.sessionHelpIdMap.delete(sessionId);
+        this.clearDedupState(sessionId);
+        this.clearClientMetadata(sessionId);
+      },
       clearClientMetadata: vi.fn(),
       clearDedupState: vi.fn(),
       clearFigureCounter: vi.fn(),
@@ -181,7 +198,7 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
       resolveLiveTransportForHelpSession: vi.fn(() => null),
       grantCache: {
         clearDenialCounts: vi.fn(),
-        revokeSession: vi.fn(() => 0),
+        revokeSession: vi.fn<(sessionId: string, reason?: string) => number>(() => 0),
         revokeGrant: vi.fn(() => false),
         issueGrant: vi.fn(),
         issueNativeGrant: vi.fn(),

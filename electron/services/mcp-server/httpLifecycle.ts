@@ -52,7 +52,7 @@ import {
   precomputeApiKeyBearerHash,
   resolveTokenTier,
 } from "./tierAuth.js";
-import { createSessionServer, cleanupResourceSubscriptions } from "./sessionServer.js";
+import { createSessionServer } from "./sessionServer.js";
 import {
   createSessionServerDeps,
   sendToPinnedView,
@@ -733,8 +733,8 @@ export class HttpLifecycle {
    * tier) or the entry was already cleared by an explicit disconnect. Removes
    * the bearer entry once its last session closes so the settings tab reflects
    * only live connections, and pushes a runtime-state change so an open tab
-   * updates. Wired into every per-session teardown path via the
-   * `dropBearerState` callback plus the inline transport-close handlers.
+   * updates. Reached from every teardown route through
+   * `SessionStore.retireSession`'s `dropBearerState` callback.
    */
   detachBearerSession(sessionId: string): void {
     const tokenHash = this.sessionToTokenHash.get(sessionId);
@@ -1356,49 +1356,15 @@ export class HttpLifecycle {
       let heartbeat: ReturnType<typeof setInterval> | undefined;
       transport.onclose = () => {
         clearInterval(heartbeat);
-        const session = this.deps.sessionStore.sessions.get(sessionId);
-        if (session) {
-          clearTimeout(session.idleTimer);
-          this.deps.sessionStore.sessions.delete(sessionId);
-        }
-        this.deps.sessionStore.clearElevationTimer(sessionId);
-        this.deps.sessionStore.sessionTierMap.delete(sessionId);
-        // Revoke before deleting the WebContents pin so the lifecycle
-        // emitter can still find the pinned renderer for the
-        // `grant.revoked` push. The audit record carries the
-        // `session-ended` reason. Without this, grants accumulate
-        // forever in the cache across a long-running session lifecycle.
-        this.deps.sessionStore.grantCache.revokeSession(sessionId, "session-ended");
-        this.deps.sessionStore.clearSessionBinding(sessionId);
-        // Resolve the public help-session id before deleting the map entry.
-        this.deps.sessionStore.clearFigureCounter(sessionId);
-        this.deps.sessionStore.sessionHelpIdMap.delete(sessionId);
-        this.deps.sessionStore.clearDedupState(sessionId);
-        this.deps.sessionStore.clearClientMetadata(sessionId);
-        this.deps.abusePolicy.dropSession(sessionId);
-        this.detachBearerSession(sessionId);
-        cleanupResourceSubscriptions(sessionId, this.deps.sessionStore);
+        this.deps.sessionStore.retireSession(sessionId, "session-ended");
       };
 
       try {
         await server.connect(transport);
       } catch (err) {
-        clearTimeout(idleTimer);
-        this.deps.sessionStore.sessions.delete(sessionId);
-        this.deps.sessionStore.clearElevationTimer(sessionId);
-        this.deps.sessionStore.sessionTierMap.delete(sessionId);
-        // Same pin-before-clear ordering — the connect failure path
-        // mirrors normal close cleanup.
-        this.deps.sessionStore.grantCache.revokeSession(sessionId, "session-ended");
-        this.deps.sessionStore.clearSessionBinding(sessionId);
-        // Resolve the public help-session id before deleting the map entry.
-        this.deps.sessionStore.clearFigureCounter(sessionId);
-        this.deps.sessionStore.sessionHelpIdMap.delete(sessionId);
-        this.deps.sessionStore.clearDedupState(sessionId);
-        this.deps.sessionStore.clearClientMetadata(sessionId);
-        this.deps.abusePolicy.dropSession(sessionId);
-        this.detachBearerSession(sessionId);
+        // Detached first so the close below doesn't retire the session twice.
         transport.onclose = undefined;
+        this.deps.sessionStore.retireSession(sessionId, "session-ended");
         await transport.close().catch(() => {});
         throw err;
       }
@@ -1636,30 +1602,12 @@ export class HttpLifecycle {
       },
     });
 
+    // Every route below retires `newSessionId`: the SDK mints exactly that id
+    // through `sessionIdGenerator`, so it names the session whether or not
+    // `onsessioninitialized` ever fired, and the rows written under it above
+    // go with it either way.
     transport.onclose = () => {
-      // Fall back to `newSessionId` when the transport closes before
-      // `onsessioninitialized` fires — otherwise the entries inserted under
-      // `newSessionId` (tier + pin) leak. Mirrors the catch-block path.
-      const id = transport.sessionId ?? newSessionId;
-      const session = this.deps.sessionStore.httpSessions.get(id);
-      if (session) {
-        clearTimeout(session.idleTimer);
-        this.deps.sessionStore.httpSessions.delete(id);
-      }
-      this.deps.sessionStore.clearElevationTimer(id);
-      this.deps.sessionStore.sessionTierMap.delete(id);
-      // Pin-before-revoke ordering identical to the SSE path above —
-      // see `transport.onclose` in the GET /sse branch.
-      this.deps.sessionStore.grantCache.revokeSession(id, "session-ended");
-      this.deps.sessionStore.clearSessionBinding(id);
-      // Resolve the public help-session id before deleting the map entry.
-      this.deps.sessionStore.clearFigureCounter(id);
-      this.deps.sessionStore.sessionHelpIdMap.delete(id);
-      this.deps.sessionStore.clearDedupState(id);
-      this.deps.sessionStore.clearClientMetadata(id);
-      this.deps.abusePolicy.dropSession(id);
-      this.detachBearerSession(id);
-      cleanupResourceSubscriptions(id, this.deps.sessionStore);
+      this.deps.sessionStore.retireSession(newSessionId, "session-ended");
     };
 
     /**
@@ -1674,18 +1622,7 @@ export class HttpLifecycle {
      * to find.
      */
     const discardUninitializedSession = (): void => {
-      this.deps.sessionStore.clearElevationTimer(newSessionId);
-      this.deps.sessionStore.sessionTierMap.delete(newSessionId);
-      this.deps.sessionStore.grantCache.revokeSession(newSessionId, "session-ended");
-      this.deps.sessionStore.clearSessionBinding(newSessionId);
-      // Resolve the public help-session id before deleting the map entry.
-      this.deps.sessionStore.clearFigureCounter(newSessionId);
-      this.deps.sessionStore.sessionHelpIdMap.delete(newSessionId);
-      this.deps.sessionStore.clearDedupState(newSessionId);
-      this.deps.sessionStore.clearClientMetadata(newSessionId);
-      this.deps.abusePolicy.dropSession(newSessionId);
-      this.detachBearerSession(newSessionId);
-      cleanupResourceSubscriptions(newSessionId, this.deps.sessionStore);
+      this.deps.sessionStore.retireSession(newSessionId, "session-ended");
     };
 
     try {
@@ -1713,28 +1650,7 @@ export class HttpLifecycle {
       }
     } catch (err) {
       console.error("[MCP] Streamable HTTP request failed:", err);
-      const id = transport.sessionId;
-      if (id !== undefined) {
-        const session = this.deps.sessionStore.httpSessions.get(id);
-        if (session) {
-          clearTimeout(session.idleTimer);
-          this.deps.sessionStore.httpSessions.delete(id);
-        }
-        this.deps.sessionStore.clearElevationTimer(id);
-        this.deps.sessionStore.sessionTierMap.delete(id);
-        this.deps.sessionStore.grantCache.revokeSession(id, "session-ended");
-        this.deps.sessionStore.clearSessionBinding(id);
-        // Resolve the public help-session id before deleting the map entry.
-        this.deps.sessionStore.clearFigureCounter(id);
-        this.deps.sessionStore.sessionHelpIdMap.delete(id);
-        this.deps.sessionStore.clearDedupState(id);
-        this.deps.sessionStore.clearClientMetadata(id);
-        this.deps.abusePolicy.dropSession(id);
-        this.detachBearerSession(id);
-        cleanupResourceSubscriptions(id, this.deps.sessionStore);
-      } else {
-        discardUninitializedSession();
-      }
+      this.deps.sessionStore.retireSession(newSessionId, "session-ended");
       await transport.close().catch(() => {});
       if (!res.headersSent) {
         res.writeHead(500, { "Content-Type": "text/plain" });
