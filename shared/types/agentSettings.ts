@@ -277,11 +277,17 @@ const RETIRED_DANGEROUS_ARGS: Readonly<Record<string, readonly string[]>> = {
   interpreter: ["--auto_run"],
 };
 
+// Own keys only: a custom agent's id can name an Object.prototype member
+// ("toString"), which a plain index would hand back as a function.
+function ownEntry<T>(map: Readonly<Record<string, T>>, agentId: string | undefined): T | undefined {
+  return agentId !== undefined && Object.hasOwn(map, agentId) ? map[agentId] : undefined;
+}
+
 /** The written `dangerousArgs`, or the agent's default when unset or retired. */
 function resolveDangerousArgs(written: string | undefined, agentId: string | undefined): string {
   const value = written?.trim() ?? "";
-  if (value && !(agentId && RETIRED_DANGEROUS_ARGS[agentId]?.includes(value))) return value;
-  return (agentId ? DEFAULT_DANGEROUS_ARGS[agentId] : undefined)?.trim() ?? "";
+  if (value && !ownEntry(RETIRED_DANGEROUS_ARGS, agentId)?.includes(value)) return value;
+  return ownEntry(DEFAULT_DANGEROUS_ARGS, agentId)?.trim() ?? "";
 }
 
 export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
@@ -613,8 +619,8 @@ export function reconcileBypassFlags(
   const groups: string[][] = [];
   for (const source of [
     resolved,
-    DEFAULT_DANGEROUS_ARGS[agentId],
-    ...(RETIRED_DANGEROUS_ARGS[agentId] ?? []),
+    ownEntry(DEFAULT_DANGEROUS_ARGS, agentId),
+    ...(ownEntry(RETIRED_DANGEROUS_ARGS, agentId) ?? []),
   ]) {
     for (const group of optionGroups(source?.trim().split(/\s+/).filter(Boolean) ?? [])) {
       if (!groups.some((known) => known.join(" ") === group.join(" "))) groups.push(group);

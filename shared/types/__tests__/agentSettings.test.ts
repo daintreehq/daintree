@@ -1201,6 +1201,21 @@ describe("reconcileBypassFlags", () => {
     expect(reconcileBypassFlags(["--auto_run"], "aider", false)).toEqual(["--auto_run"]);
   });
 
+  it("resolves bypass args for a custom agent whose id names an Object.prototype member", () => {
+    expect(
+      generateAgentFlags({ dangerousArgs: "--approve", dangerousMode: "on" }, "toString")
+    ).toEqual(["--approve"]);
+    expect(reconcileBypassFlags(["--approve", "-v"], "toString", false, "--approve")).toEqual([
+      "-v",
+    ]);
+    expect(reconcileBypassFlags(["-v"], "constructor", true, "--approve")).toEqual([
+      "-v",
+      "--approve",
+    ]);
+    // With nothing written there is no default to inherit from the prototype.
+    expect(generateAgentFlags({ dangerousMode: "on" }, "toString")).toEqual([]);
+  });
+
   it("reads Open Interpreter's retired flag in settings as unset (#15567)", () => {
     // An old config bundle can bring the Python default back after migration 042.
     const current = DEFAULT_DANGEROUS_ARGS.interpreter as string;
