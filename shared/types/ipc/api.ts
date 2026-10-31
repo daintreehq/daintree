@@ -669,6 +669,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * from (#11212).
      */
     isViewCached?(): boolean;
+    /**
+     * Run `callback` on every cached edge, before the `onViewCached`
+     * subscribers. While any is registered, main keeps the view unfrozen and
+     * out of eviction's reach until every promise returned for that edge
+     * settles, or its bounded wait runs out (#15633). A flush already started
+     * keeps that hold after its unsubscribe.
+     */
+    onViewCachedFlush?(callback: () => void | Promise<unknown>): () => void;
   };
   // menu is generated — see GeneratedElectronAPI.
   logs: {

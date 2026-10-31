@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const projectForm = vi.hoisted(() => ({ flush: vi.fn(async () => {}) }));
 vi.mock("@/hooks/useProjectSettingsForm", () => ({
   useProjectSettingsForm: () => ({
     currentProject: null,
     projectIsLoading: false,
-    flush: async () => {},
+    flush: projectForm.flush,
     saveNow: async () => {},
   }),
 }));
@@ -19,6 +20,7 @@ vi.mock("@/clients", async (importOriginal) => ({
 }));
 
 import { SettingsDialog } from "../SettingsDialog";
+import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 
 // jsdom has neither; the dialog preloads tabs at idle and measures its scroll shadows.
 vi.stubGlobal("requestIdleCallback", () => 0);
@@ -33,6 +35,7 @@ vi.stubGlobal(
 );
 
 beforeEach(() => {
+  projectForm.flush.mockClear();
   Object.defineProperty(window, "electron", {
     configurable: true,
     writable: true,
@@ -142,5 +145,99 @@ describe("SettingsDialog close with a draft that didn't save", () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(panel("environment").classList.contains("hidden")).toBe(true);
     expect(window.electron.globalEnv.set).not.toHaveBeenCalled();
+  });
+});
+
+describe("SettingsDialog when main caches its project view (#15633)", () => {
+  // Mirrors preload: a cached edge runs every registered flusher, and main is
+  // answered once they have all settled. The document never goes hidden.
+  let flushers: Set<() => unknown>;
+  const cacheView = () => Promise.allSettled(Array.from(flushers, (flush) => flush()));
+
+  beforeEach(() => {
+    __resetProjectViewCacheStateForTests();
+    flushers = new Set();
+    window.electron = {
+      ...window.electron,
+      app: {
+        ...window.electron.app,
+        isViewCached: () => false,
+        onViewCached: () => () => {},
+        onViewWarmActivated: () => () => {},
+        onViewRevealed: () => () => {},
+        onViewCachedFlush: (callback: () => unknown) => {
+          const flush = () => callback();
+          flushers.add(flush);
+          return () => flushers.delete(flush);
+        },
+      },
+    };
+  });
+
+  afterEach(() => __resetProjectViewCacheStateForTests());
+
+  function deferEnvSave() {
+    let finish!: () => void;
+    vi.mocked(window.electron.globalEnv.set).mockImplementation(
+      () => new Promise<void>((resolve) => (finish = () => resolve()))
+    );
+    return () => finish();
+  }
+
+  it("saves the draft, then the project form, before main is told it can freeze", async () => {
+    const finishEnvSave = deferEnvSave();
+    let finishProjectSave!: () => void;
+    projectForm.flush.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (finishProjectSave = resolve))
+    );
+    const onClose = await openOnEnvironment();
+    fireEvent.change(screen.getByLabelText("Environment variable value"), {
+      target: { value: "2" },
+    });
+
+    let answered = false;
+    await act(async () => {
+      void cacheView().then(() => {
+        answered = true;
+      });
+    });
+
+    expect(document.hidden).toBe(false);
+    expect(window.electron.globalEnv.set).toHaveBeenCalledWith({ GOOD: "2" });
+    expect(projectForm.flush).not.toHaveBeenCalled();
+
+    await act(async () => finishEnvSave());
+    expect(projectForm.flush).toHaveBeenCalledTimes(1);
+    expect(answered).toBe(false);
+
+    await act(async () => finishProjectSave());
+    expect(answered).toBe(true);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("joins a close that is already saving rather than saving again", async () => {
+    const finishEnvSave = deferEnvSave();
+    const onClose = await openOnEnvironment();
+    fireEvent.change(screen.getByLabelText("Environment variable value"), {
+      target: { value: "2" },
+    });
+    await pressEscape();
+    expect(window.electron.globalEnv.set).toHaveBeenCalledTimes(1);
+
+    let answered = false;
+    await act(async () => {
+      void cacheView().then(() => {
+        answered = true;
+      });
+    });
+    // The edge waits on the close's save rather than answering at once.
+    expect(answered).toBe(false);
+
+    await act(async () => finishEnvSave());
+
+    expect(answered).toBe(true);
+    expect(window.electron.globalEnv.set).toHaveBeenCalledTimes(1);
+    expect(projectForm.flush).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 });

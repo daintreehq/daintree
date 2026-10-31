@@ -143,6 +143,12 @@ import {
   _resetDictationViewHoldsForTests,
   holdDictationView,
 } from "../../services/voice/dictationViewHold.js";
+import {
+  CACHED_VIEW_FLUSH_TIMEOUT_MS,
+  _resetCachedViewFlushForTests,
+  recordCachedViewFlushArmed,
+  settleCachedViewFlush,
+} from "../../services/cachedViewFlush.js";
 
 function createMockWindow() {
   return {
@@ -188,6 +194,9 @@ describe("ProjectViewManager — efficiency freeze", () => {
   });
 
   afterEach(() => {
+    // Every manager subscribes to flush settles, and the next test reuses its webContents ids.
+    if (!manager.disposed) manager.dispose();
+    _resetCachedViewFlushForTests();
     vi.useRealTimers();
   });
 
@@ -295,6 +304,97 @@ describe("ProjectViewManager — efficiency freeze", () => {
 
       release();
       manager.refreezeUnprotectedCachedViews();
+      expect(vi.mocked(freezeWebContents)).toHaveBeenCalledWith(initialWc);
+    });
+  });
+
+  describe("a view still flushing unsaved edits on its cached edge (#15633)", () => {
+    afterEach(() => _resetDictationViewHoldsForTests());
+
+    const flushIdSentTo = (wc: ReturnType<typeof createMockWebContents>) =>
+      (
+        wc.send.mock.calls.filter(([channel]) => channel === CHANNELS.APP_VIEW_CACHED).at(-1) as
+          [string, { flushId?: string }?] | undefined
+      )?.[1]?.flushId;
+    const frozeInitial = () =>
+      vi.mocked(freezeWebContents).mock.calls.some(([wc]) => (wc as unknown) === initialWc);
+
+    beforeEach(() => {
+      manager.setEfficiencyFreeze(true);
+      vi.advanceTimersByTime(500);
+      vi.mocked(freezeWebContents).mockClear();
+      // Settings is open in proj-a as the user leaves it.
+      recordCachedViewFlushArmed(initialWc as never, true);
+    });
+
+    it("isn't frozen until its renderer says the flush reached main", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      const flushId = flushIdSentTo(initialWc);
+      expect(typeof flushId).toBe("string");
+      expect(frozeInitial()).toBe(false);
+
+      // A batch pass landing mid-flush leaves it alone too.
+      manager.refreezeUnprotectedCachedViews();
+      expect(frozeInitial()).toBe(false);
+
+      settleCachedViewFlush(initialWc as never, flushId);
+      vi.advanceTimersByTime(0);
+      expect(vi.mocked(freezeWebContents)).toHaveBeenCalledWith(initialWc);
+
+      // Still after the GC deactivation scheduled (lesson #4684).
+      const gcOrder = initialWc.executeJavaScript.mock.invocationCallOrder.at(-1)!;
+      const freezeOrder = vi.mocked(freezeWebContents).mock.invocationCallOrder.at(-1)!;
+      expect(gcOrder).toBeLessThan(freezeOrder);
+    });
+
+    it("is frozen anyway once a renderer that never answers runs out its wait", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+
+      vi.advanceTimersByTime(CACHED_VIEW_FLUSH_TIMEOUT_MS - 1);
+      expect(frozeInitial()).toBe(false);
+      vi.advanceTimersByTime(1);
+      // The settle defers its freeze pass by a turn, which the fake clock only
+      // runs once it moves on.
+      vi.advanceTimersByTime(1);
+      expect(vi.mocked(freezeWebContents)).toHaveBeenCalledWith(initialWc);
+    });
+
+    it("isn't frozen if it became active again before the flush settled", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      const flushId = flushIdSentTo(initialWc);
+      await manager.switchTo("proj-a", "/path/a");
+
+      settleCachedViewFlush(initialWc as never, flushId);
+      vi.advanceTimersByTime(CACHED_VIEW_FLUSH_TIMEOUT_MS);
+
+      expect(frozeInitial()).toBe(false);
+    });
+
+    it("freezes only the view that settled, not every unfrozen cached view", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      const flushId = flushIdSentTo(initialWc);
+      const wcB = manager.getActiveView()!.webContents;
+      // A dictation keeps proj-b unfrozen as the user leaves it; once it lets go,
+      // only the periodic pass would freeze it.
+      const release = holdDictationView(wcB.id);
+      await manager.switchTo("proj-c", "/path/c");
+      release();
+      vi.mocked(freezeWebContents).mockClear();
+
+      settleCachedViewFlush(initialWc as never, flushId);
+      vi.advanceTimersByTime(1);
+
+      const frozen = vi.mocked(freezeWebContents).mock.calls.map(([wc]) => wc as unknown);
+      expect(frozen).toHaveLength(1);
+      expect(frozen[0]).toBe(initialWc);
+    });
+
+    it("is frozen at once, as before, once its renderer has nothing registered", async () => {
+      recordCachedViewFlushArmed(initialWc as never, false);
+
+      await manager.switchTo("proj-b", "/path/b");
+
+      expect(flushIdSentTo(initialWc)).toBeUndefined();
       expect(vi.mocked(freezeWebContents)).toHaveBeenCalledWith(initialWc);
     });
   });

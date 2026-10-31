@@ -23,12 +23,12 @@ import {
   purgeMemoryWebContents,
   readJsHeapUsedBytes,
 } from "../utils/webContentsLifecycle.js";
-import { CHANNELS } from "../ipc/channels.js";
 import { logWarn } from "../utils/logger.js";
 import * as AgentStateCache from "./ProjectViewAgentStateCache.js";
 import { updateViewBounds } from "./ProjectViewFactory.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import { isDictationViewHeld } from "../services/voice/dictationViewHold.js";
+import { isCachedViewFlushPending, sendViewCached } from "../services/cachedViewFlush.js";
 import type { CachedViewPurgeSession, ViewEntry } from "./ProjectViewManagerTypes.js";
 
 // Cached-view memory purge cadence. The delay keeps the likely next-switch
@@ -107,13 +107,11 @@ export function deactivateEntry(
     // Tell the renderer it's being cached so it cancels any in-flight wake/
     // repaint rAFs and reveal backstops scheduled for the view it's leaving —
     // otherwise those fire against a now-occluded/frozen view, or survive to
-    // run stale work on the next reactivation. Sent before any freeze below so
-    // the renderer can still process it.
-    try {
-      current.view.webContents.send(CHANNELS.APP_VIEW_CACHED);
-    } catch {
-      // ignore — a destroyed/closing renderer has nothing to cancel
-    }
+    // run stale work on the next reactivation, and so it flushes unsaved
+    // edits. Sent before any freeze below so the renderer can still process
+    // it; a renderer with flush work registered holds off the freeze until
+    // that work settles (#15633).
+    sendViewCached(current.view.webContents);
     // Close live producer ports BEFORE the view can be frozen. Once hidden,
     // Chromium can freeze the renderer after ~5 min or under memory pressure,
     // and the efficiency freeze below can land immediately; any messages
@@ -182,12 +180,16 @@ export function deactivateEntry(
       // A dictation started here still captures its audio in this renderer,
       // and its cleanup writes into its draft (#14773).
       const dictating = isDictationViewHeld(vc);
+      // A flush the cached edge just started runs sequential IPC a freeze would
+      // cut short; the manager freezes the view once it settles (#15633).
+      const flushing = isCachedViewFlushPending(vc);
       if (
         !mcp.liveBinding &&
         !mcp.dispatchLease &&
         !mcp.unknown &&
         !remoteAssistant &&
-        !dictating
+        !dictating &&
+        !flushing
       ) {
         void freezeWebContents(vc);
       }

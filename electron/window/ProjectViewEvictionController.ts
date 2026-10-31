@@ -19,6 +19,7 @@ import { isSwapPressureConfirmed } from "../services/systemSwapPressure.js";
 import { isKernelPressureCritical } from "../services/systemKernelPressure.js";
 import { isPanelRecoveryHeldReported } from "../services/panelRecoveryQuery.js";
 import { isDictationViewHeld } from "../services/voice/dictationViewHold.js";
+import { isCachedViewFlushPending } from "../services/cachedViewFlush.js";
 import { hasPendingActivation } from "./projectActivationClaims.js";
 import {
   isWorkspaceKeepResident,
@@ -554,6 +555,12 @@ export function evictStaleViews(
   // lease it lapses on its own.
   const dictationHeldProjectIds = new Set<string>();
 
+  // Views still flushing unsaved edits on their cached edge (#15633): the
+  // flush is sequential IPC, so tearing the renderer down between steps drops
+  // the rest. Excluded outright like a dictation, and like one it lapses on its
+  // own within a few seconds.
+  const flushHeldProjectIds = new Set<string>();
+
   // Views whose renderer says it holds work its teardown would lose (#14095):
   // the same answer automatic Sleep asks for (`readPanelRecoveryHold`), pushed
   // by the renderer as it changes so this synchronous pass can read it. A cap
@@ -591,6 +598,10 @@ export function evictStaleViews(
       }
       if (isDictationViewHeld(entry.view.webContents)) {
         dictationHeldProjectIds.add(id);
+        continue;
+      }
+      if (isCachedViewFlushPending(entry.view.webContents)) {
+        flushHeldProjectIds.add(id);
         continue;
       }
       if (!pressurePass && isPanelRecoveryHeldReported(entry.view.webContents)) {
@@ -889,6 +900,7 @@ export function evictStaleViews(
       pinnedAssistantCount > 0 ||
       mcpLeasedProjectIds.size > 0 ||
       dictationHeldProjectIds.size > 0 ||
+      flushHeldProjectIds.size > 0 ||
       recoveryHeldProjectIds.size > 0)
   ) {
     // `overflow` counts views over `baseMax`, the cap before the assistant
@@ -923,6 +935,8 @@ export function evictStaleViews(
       ...(dictationHeldProjectIds.size > 0
         ? { dictationHeldProjectIds: [...dictationHeldProjectIds] }
         : {}),
+      // Present only while a cached-edge flush holds a view (#15633).
+      ...(flushHeldProjectIds.size > 0 ? { flushHeldProjectIds: [...flushHeldProjectIds] } : {}),
       // Present only when a view is waiting on its own unsaved work (#14095).
       ...(recoveryHeldProjectIds.size > 0
         ? { recoveryHeldProjectIds: [...recoveryHeldProjectIds] }

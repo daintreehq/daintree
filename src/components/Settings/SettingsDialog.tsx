@@ -515,7 +515,7 @@ function SettingsDialogInner({
   const flushRegistry = useContext(SettingsFlushContext);
   const flushAllTabs = flushRegistry?.flushAll;
 
-  // Coalesced: a visibility change landing mid-close would otherwise re-issue
+  // Coalesced: a cache or hide landing mid-close would otherwise re-issue
   // every registered tab flusher alongside the one already in flight.
   const flushInFlightRef = useRef<Promise<FailedSettingsFlush[]> | null>(null);
   const flushDialog = () => {
@@ -531,11 +531,12 @@ function SettingsDialogInner({
     });
   };
 
-  // Electron 41 WebContentsView detach (project switch, window close) does not
-  // fire beforeunload — visibilitychange is the reliable signal. Flushing on
-  // hide ensures debounced autosaves and per-tab dirty state persist before
-  // the view is evicted. A hide can't be held open, so a page that couldn't
-  // save is left as it is.
+  // A project switch caches this view without beforeunload or
+  // visibilitychange, so main's cached signal is what triggers this; minimizing
+  // still arrives as a hide. Either way the debounced autosave and each tab's
+  // dirty draft persist before the view can be frozen or evicted, and main
+  // waits for the whole sequence on the cached edge. Unlike a close, neither
+  // keeps Settings open, so a page that couldn't save is left as it is.
   useFlushOnHide(async () => {
     await flushDialog();
   }, isOpen);
@@ -610,8 +611,8 @@ function SettingsDialogInner({
   // draft and error, rather than closing as if it had saved: the user fixes it
   // or uses that page's Discard. The page shown wins over others that failed.
   const flushBeforeClose = async () => {
-    // A hide flush still running took its list of drafts when it started, so one
-    // made since isn't in it: let it finish, then flush again for the close.
+    // A cache or hide flush still running took its list of drafts when it
+    // started, so one made since isn't in it: let it finish, then flush again.
     const lifecycleFlush = flushInFlightRef.current;
     if (lifecycleFlush) await lifecycleFlush;
     const failed = await flushDialog();

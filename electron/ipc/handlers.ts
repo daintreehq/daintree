@@ -70,6 +70,7 @@ import { registerForgeSettingsHandlers } from "./handlers/forgeSettings.js";
 import { registerForgeCredentialImportHandlers } from "./handlers/forgeCredentialImport.js";
 import { registerForgeAuditHandlers } from "./handlers/forgeAudit.js";
 import { initForgeHealthRelay, disposeForgeHealthRelay } from "../services/forgeHealthRelay.js";
+import { installCachedViewFlushListeners } from "../services/cachedViewFlush.js";
 import { registerProjectGroupsHandlers } from "./handlers/projectGroups.js";
 import { registerRunHistoryHandlers } from "./handlers/runHistory.js";
 import { registerCopyTreeHistoryHandlers } from "./handlers/copyTreeHistory.js";
@@ -203,6 +204,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerTerminalLayoutHandlers(deps));
     register(() => registerProjectInRepoSettingsHandlers(deps));
     register(() => registerAppHandlers(deps));
+    register(() => installCachedViewFlushListeners());
     register(() => registerPortalHandlers(deps));
     register(() => registerMenuHandlers(deps));
     register(() => registerSessionRestoreHandlers(deps));

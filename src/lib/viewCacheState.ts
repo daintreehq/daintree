@@ -134,6 +134,21 @@ export function subscribeProjectViewLifecycle(
   };
 }
 
+/**
+ * Run `flush` whenever main caches this view, so unsaved edits persist even
+ * though nothing else tells a cached view it went away. While any flush is
+ * subscribed, main holds off freezing or evicting the view until the promise
+ * `flush` returns settles, within a bounded wait (#15633). Returns an
+ * unsubscribe; a flush already started keeps its hold.
+ *
+ * Runs ahead of {@link subscribeProjectViewLifecycle} listeners, so
+ * {@link isProjectViewCached} may not have flipped yet when it starts.
+ */
+export function subscribeProjectViewCachedFlush(flush: () => void | Promise<unknown>): () => void {
+  if (typeof window === "undefined") return () => {};
+  return window.electron?.app?.onViewCachedFlush?.(flush) ?? (() => {});
+}
+
 function isDocumentHidden(): boolean {
   return typeof document !== "undefined" && document.hidden;
 }

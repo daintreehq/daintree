@@ -65,6 +65,7 @@ import {
   isDictationViewHeld,
   onDictationViewReleased,
 } from "../services/voice/dictationViewHold.js";
+import { isCachedViewFlushPending, onCachedViewFlushSettled } from "../services/cachedViewFlush.js";
 
 // Trailing-edge debounce on freeze entry: the lag-pressure path can flip
 // efficiency on/off without going through the 30 s downgrade hysteresis, so
@@ -535,28 +536,40 @@ export class ProjectViewManager {
     this.remoteMcpBindingLive = opts.remoteMcpBindingLive;
     this.mcpViewActivity = opts.mcpViewActivity;
     this.windowRegistry = opts.windowRegistry;
-    // A view kept over the cap by its unsaved work (#14095) or by a dictation
-    // (#14773) is evictable again once that work is saved or dropped, or the
-    // dictation and its cleanup are done; nothing else would re-run the cap
-    // until the next cold switch or limit change. Deferred so a view is never
-    // torn down inside its own navigation or IPC callback.
-    const reclaimReleased = (webContentsId: number) => {
-      if (this.disposed) return;
-      const ours = [...this.views.values()].some(
+    // A view kept over the cap by its unsaved work (#14095), by a dictation
+    // (#14773) or by its cached-edge flush (#15633) is evictable again once that
+    // work is saved or dropped, or the dictation and its cleanup are done;
+    // nothing else would re-run the cap until the next cold switch or limit
+    // change. Deferred so a view is never torn down inside its own navigation
+    // or IPC callback.
+    const isOurs = (webContentsId: number) =>
+      [...this.views.values()].some(
         (entry) =>
           !entry.view.webContents.isDestroyed() && entry.view.webContents.id === webContentsId
       );
+    const reclaimReleased = (webContentsId: number) => {
+      if (this.disposed || !isOurs(webContentsId)) return;
       // Every window's count, not this one's: the cap is app-wide (#14218).
-      if (!ours || EvictionController.scopeViewCount(this) <= this.maxCachedViews) return;
+      if (EvictionController.scopeViewCount(this) <= this.maxCachedViews) return;
       setImmediate(() => {
         if (!this.disposed) EvictionController.evictStaleViews(this, "lru");
       });
     };
     const offRecovery = onPanelRecoveryHoldReleased(reclaimReleased);
     const offDictation = onDictationViewReleased(reclaimReleased);
+    // The flush also held back the efficiency freeze `deactivateEntry` would
+    // have applied, and nothing else would apply it before the next sampler tick.
+    const offCachedFlush = onCachedViewFlushSettled((webContentsId) => {
+      reclaimReleased(webContentsId);
+      if (this.disposed || !isOurs(webContentsId)) return;
+      setImmediate(() => {
+        if (!this.disposed) this.freezeSettledFlushView(webContentsId);
+      });
+    });
     this.holdReleaseCleanup = () => {
       offRecovery();
       offDictation();
+      offCachedFlush();
     };
     if (opts.cachedProjectViews != null) {
       this.maxCachedViews = opts.cachedProjectViews;
@@ -1538,45 +1551,67 @@ export class ProjectViewManager {
 
   private freezeAllCached(): void {
     for (const [projectId, entry] of this.views) {
-      if (projectId === this.activeProjectId) continue;
-      // The outgoing anti-flash bridge is still attached and on-screen even
-      // though `activeProjectId` already names the incoming project, so it is
-      // as un-freezable as the active view (the eviction guard excludes it for
-      // the same reason). This pass is periodic now, not just the profile
-      // transition, so a sampler tick can land inside any switch: freezing
-      // there suspends the renderer painting the frame the user is looking at,
-      // and it would also beat `deactivateEntry` to the view, freezing before
-      // its requestIdleCallback GC is ever scheduled (lesson #4684).
-      if (projectId === this.getOutgoingBridgeProjectId()) continue;
-      // Never freeze a view whose project has a live agent. A frozen renderer
-      // cannot run JS, so the queued agent:state-changed IPC sits in Mojo and
-      // the background dashboard stays stuck on its pre-freeze state (e.g.
-      // "waiting") until the view is foregrounded. Idle/completed projects
-      // still freeze for the efficiency win.
-      if (hasActiveAgent(this, projectId)) continue;
+      this.freezeCachedViewIfUnprotected(projectId, entry);
+    }
+  }
+
+  private freezeCachedViewIfUnprotected(projectId: string, entry: ViewEntry): void {
+    if (projectId === this.activeProjectId) return;
+    // The outgoing anti-flash bridge is still attached and on-screen even
+    // though `activeProjectId` already names the incoming project, so it is
+    // as un-freezable as the active view (the eviction guard excludes it for
+    // the same reason). This pass is periodic now, not just the profile
+    // transition, so a sampler tick can land inside any switch: freezing
+    // there suspends the renderer painting the frame the user is looking at,
+    // and it would also beat `deactivateEntry` to the view, freezing before
+    // its requestIdleCallback GC is ever scheduled (lesson #4684).
+    if (projectId === this.getOutgoingBridgeProjectId()) return;
+    // Never freeze a view whose project has a live agent. A frozen renderer
+    // cannot run JS, so the queued agent:state-changed IPC sits in Mojo and
+    // the background dashboard stays stuck on its pre-freeze state (e.g.
+    // "waiting") until the view is foregrounded. Idle/completed projects
+    // still freeze for the efficiency win.
+    if (hasActiveAgent(this, projectId)) return;
+    const wc = entry.view.webContents;
+    if (wc.isDestroyed()) return;
+    // A live MCP session binding is the same argument (#11790): the whole
+    // point of binding is to drive this workspace while the user works
+    // elsewhere, so its view is a background one by design, and freezing it
+    // strands every dispatch until the bridge deadline fires. The bridge also
+    // thaws on demand, which covers a session that binds after this pass;
+    // this guard is what stops a later pass from re-freezing underneath a
+    // session that is already using the view.
+    //
+    // Unlike eviction, skipping the freeze needs no bounded lease. It costs
+    // one optimization on one cached view — the renderer's own cached-view
+    // work demotion and the periodic memory purge still apply — rather than
+    // the memory a resident renderer holds, so a quiet binding can hold it
+    // for as long as the session lives.
+    const mcp = this.mcpActivityFor(projectId, wc);
+    if (mcp.liveBinding || mcp.dispatchLease || mcp.unknown) return;
+    // A host's assistant runs its tool calls through this view, often one the
+    // person never shows (a hub started it); frozen, every call would stall.
+    if (this.remoteAssistantLive?.(wc.id) === true) return;
+    // A dictation started here captures its audio in this renderer (#14773).
+    if (isDictationViewHeld(wc)) return;
+    // Its cached-edge flush is still reaching main (#15633).
+    if (isCachedViewFlushPending(wc)) return;
+    void freezeWebContents(wc);
+  }
+
+  /**
+   * Freeze the view a cached-edge flush held back, once it settles (#15633),
+   * unless something else protects it now. Only that view, and only while it
+   * is still cached: a sweep here would also catch a background restore still
+   * loading. A pending entry debounce leaves it to the trailing-edge sweep,
+   * as `refreezeUnprotectedCachedViews` does.
+   */
+  private freezeSettledFlushView(webContentsId: number): void {
+    if (!this.efficiencyFreezeEnabled || this.efficiencyFreezeTimer !== null) return;
+    for (const [projectId, entry] of this.views) {
       const wc = entry.view.webContents;
-      if (wc.isDestroyed()) continue;
-      // A live MCP session binding is the same argument (#11790): the whole
-      // point of binding is to drive this workspace while the user works
-      // elsewhere, so its view is a background one by design, and freezing it
-      // strands every dispatch until the bridge deadline fires. The bridge also
-      // thaws on demand, which covers a session that binds after this pass;
-      // this guard is what stops a later pass from re-freezing underneath a
-      // session that is already using the view.
-      //
-      // Unlike eviction, skipping the freeze needs no bounded lease. It costs
-      // one optimization on one cached view — the renderer's own cached-view
-      // work demotion and the periodic memory purge still apply — rather than
-      // the memory a resident renderer holds, so a quiet binding can hold it
-      // for as long as the session lives.
-      const mcp = this.mcpActivityFor(projectId, wc);
-      if (mcp.liveBinding || mcp.dispatchLease || mcp.unknown) continue;
-      // A host's assistant runs its tool calls through this view, often one the
-      // person never shows (a hub started it); frozen, every call would stall.
-      if (this.remoteAssistantLive?.(wc.id) === true) continue;
-      // A dictation started here captures its audio in this renderer (#14773).
-      if (isDictationViewHeld(wc)) continue;
-      void freezeWebContents(wc);
+      if (entry.state !== "cached" || wc.isDestroyed() || wc.id !== webContentsId) continue;
+      this.freezeCachedViewIfUnprotected(projectId, entry);
     }
   }
 
@@ -1694,6 +1729,8 @@ export class ProjectViewManager {
     // Unsaved work the view says nothing would bring back (#14095): moving the
     // project to another window would destroy it, which a move never means.
     if (isPanelRecoveryHeldReported(wc)) return false;
+    // Its unsaved edits are still being flushed on the cached edge (#15633).
+    if (isCachedViewFlushPending(wc)) return false;
     // A dictation running there, or its cleanup, would end with the view
     // (#14773). Another window asking for the project brings this one forward.
     if (isDictationViewHeld(wc)) return false;
