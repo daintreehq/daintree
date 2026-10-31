@@ -990,6 +990,132 @@ describe("mutations", () => {
     );
   });
 
+  describe("merge pins (#15603)", () => {
+    const HEAD = "a".repeat(40);
+    const isMergeCall = (call: unknown[]) =>
+      requestUrl(call).endsWith("/merge_requests/5/merge") &&
+      (call[1] as RequestInit | undefined)?.method === "PUT";
+
+    it("re-reads the target before merging and pins the head it was given", async () => {
+      fetchMock()
+        .mockResolvedValueOnce(jsonResponse({ iid: 5, state: "opened", target_branch: "main" }))
+        .mockResolvedValueOnce(jsonResponse({ iid: 5, state: "merged", merge_commit_sha: "mc1" }));
+      const result = await gitlabForgeProvider.mergePR(REPO, 5, {
+        expectedHeadSha: HEAD,
+        expectedBaseRef: "main",
+      });
+      const calls = fetchMock().mock.calls;
+      expect(calls).toHaveLength(2);
+      expect(requestUrl(calls[0])).toMatch(/\/merge_requests\/5$/);
+      expect(isMergeCall(calls[1])).toBe(true);
+      expect(requestBody(calls[1]).sha).toBe(HEAD);
+      expect(result).toMatchObject({ prNumber: 5, sha: "mc1", merged: true });
+    });
+
+    it("keeps reporting a queued merge as queued when its pins still hold", async () => {
+      fetchMock()
+        .mockResolvedValueOnce(jsonResponse({ iid: 5, state: "opened", target_branch: "main" }))
+        .mockResolvedValueOnce(jsonResponse({ iid: 5, state: "opened" }));
+      const result = await gitlabForgeProvider.mergePR(REPO, 5, {
+        expectedHeadSha: HEAD,
+        expectedBaseRef: "main",
+      });
+      expect(result.merged).toBe(false);
+      expect(result.message).toMatch(/queued/);
+    });
+
+    it("sends no sha and reads nothing first for an unpinned merge", async () => {
+      fetchMock().mockResolvedValue(jsonResponse({ iid: 5, state: "merged" }));
+      await gitlabForgeProvider.mergePR(REPO, 5, { mergeMethod: "squash" });
+      const calls = fetchMock().mock.calls;
+      expect(calls).toHaveLength(1);
+      expect(isMergeCall(calls[0])).toBe(true);
+      expect(requestBody(calls[0])).not.toHaveProperty("sha");
+    });
+
+    it("pins the head alone without a read when no base was given", async () => {
+      fetchMock().mockResolvedValue(jsonResponse({ iid: 5, state: "merged" }));
+      await gitlabForgeProvider.mergePR(REPO, 5, { expectedHeadSha: HEAD });
+      const calls = fetchMock().mock.calls;
+      expect(calls).toHaveLength(1);
+      expect(requestBody(calls[0]).sha).toBe(HEAD);
+    });
+
+    it("refuses a retargeted MR before anything merges", async () => {
+      fetchMock().mockResolvedValueOnce(
+        jsonResponse({ iid: 5, state: "opened", target_branch: "release" })
+      );
+      await expect(
+        gitlabForgeProvider.mergePR(REPO, 5, { expectedHeadSha: HEAD, expectedBaseRef: "main" })
+      ).rejects.toThrow("Merge request !5 no longer targets main");
+      expect(fetchMock().mock.calls.some(isMergeCall)).toBe(false);
+    });
+
+    it("fails rather than drops a base pin the read can't confirm", async () => {
+      fetchMock().mockResolvedValueOnce(jsonResponse({ iid: 5, state: "opened" }));
+      await expect(
+        gitlabForgeProvider.mergePR(REPO, 5, { expectedBaseRef: "main" })
+      ).rejects.toThrow(/didn't report which branch merge request !5 targets/);
+      expect(fetchMock().mock.calls.some(isMergeCall)).toBe(false);
+    });
+
+    it("names a moved head when GitLab refuses the pinned sha", async () => {
+      fetchMock().mockResolvedValue(
+        jsonResponse({ message: "SHA does not match HEAD of source branch" }, { status: 409 })
+      );
+      await expect(gitlabForgeProvider.mergePR(REPO, 5, { expectedHeadSha: HEAD })).rejects.toThrow(
+        "Merge request !5 has new commits since you reviewed it"
+      );
+    });
+
+    // Only a pinned merge can have its head move under it; an unpinned 409
+    // is something else and keeps GitLab's own words.
+    it("leaves an unpinned 409 as GitLab said it", async () => {
+      fetchMock().mockResolvedValue(jsonResponse({ message: "Merge conflict" }, { status: 409 }));
+      await expect(gitlabForgeProvider.mergePR(REPO, 5)).rejects.toThrow("Merge conflict");
+    });
+
+    it("never reads a 409 on the target re-read as a moved head", async () => {
+      fetchMock().mockResolvedValueOnce(
+        jsonResponse({ message: "Resource lock" }, { status: 409 })
+      );
+      const attempt = gitlabForgeProvider.mergePR(REPO, 5, {
+        expectedHeadSha: HEAD,
+        expectedBaseRef: "main",
+      });
+      await expect(attempt).rejects.toThrow("Resource lock");
+      await expect(attempt).rejects.not.toThrow(/new commits/);
+      expect(fetchMock().mock.calls.some(isMergeCall)).toBe(false);
+    });
+
+    it("explains an instance that requires a pinned head", async () => {
+      fetchMock().mockResolvedValue(
+        jsonResponse({ message: "SHA must be provided when merging" }, { status: 400 })
+      );
+      await expect(gitlabForgeProvider.mergePR(REPO, 5)).rejects.toThrow(
+        /only merges a merge request pinned to its reviewed head commit/
+      );
+    });
+
+    it("leaves an unrelated 400 as GitLab said it", async () => {
+      fetchMock().mockResolvedValue(
+        jsonResponse({ message: "Branch cannot be merged" }, { status: 400 })
+      );
+      await expect(gitlabForgeProvider.mergePR(REPO, 5)).rejects.toThrow("Branch cannot be merged");
+    });
+  });
+
+  // The MR reads carry none of what the host's merge confirm previews, so the
+  // provider says so instead of leaving the Review Hub to retry forever.
+  it("declares that it supplies no merge preview", async () => {
+    fetchMock().mockResolvedValue(
+      jsonResponse({ id: 1, default_branch: "main", visibility: "private", archived: false })
+    );
+    const metadata = await gitlabForgeProvider.getRepoMetadata(REPO);
+    expect(metadata.mergePreviewSupported).toBe(false);
+    expect(metadata.mergeSettings).toBeUndefined();
+  });
+
   it("converts to draft by prefixing the title", async () => {
     fetchMock()
       .mockResolvedValueOnce(jsonResponse({ iid: 6, title: "Feature", state: "opened" }))

@@ -301,6 +301,22 @@ export async function mergePRImpl(
     // parameter; only squash can be chosen per merge.
     throw new Error("Not supported: GitLab configures the merge method per project");
   }
+  // The merge endpoint takes no target branch, so only a read before the write
+  // can pin the base. It stays outside the try below: a 409 on this read is
+  // not a moved head.
+  if (input?.expectedBaseRef) {
+    const current = await fetchMRRaw(repo, prNumber);
+    if (typeof current.target_branch !== "string" || current.target_branch.length === 0) {
+      throw new Error(
+        `GitLab didn't report which branch merge request !${prNumber} targets, so it wasn't merged — try again.`
+      );
+    }
+    if (current.target_branch !== input.expectedBaseRef) {
+      throw new Error(
+        `Merge request !${prNumber} no longer targets ${input.expectedBaseRef} — review where it merges and try again.`
+      );
+    }
+  }
   const squash = input?.mergeMethod === "squash";
   const commitMessage =
     input?.commitTitle || input?.commitMessage
@@ -312,6 +328,9 @@ export async function mergePRImpl(
       method: "PUT",
       path: `${projectPath(repo)}/merge_requests/${prNumber}/merge`,
       body: {
+        // Without `sha` GitLab merges whatever the head is when the request
+        // lands, commits nobody reviewed included.
+        ...(input?.expectedHeadSha ? { sha: input.expectedHeadSha } : {}),
         // An explicit method sends `squash` both ways so the project's
         // squash-by-default option doesn't silently flip the caller's choice.
         // The project's `squash_option` stays authoritative at the extremes
@@ -358,11 +377,27 @@ export async function mergePRImpl(
         : `Merge request !${prNumber} is queued to merge`,
     };
   } catch (err) {
+    if (!(err instanceof GitLabApiError)) throw err;
     // GitLab answers 405/406 for unmergeable states with a terse body;
     // translate them so the confirm-dialog error is actionable.
-    if (err instanceof GitLabApiError && (err.status === 405 || err.status === 406)) {
+    if (err.status === 405 || err.status === 406) {
       throw new Error(
         "GitLab refused the merge — the merge request may be a draft, have conflicts, or failing pipelines",
+        { cause: err }
+      );
+    }
+    // "SHA does not match HEAD of source branch": the pin did its job.
+    if (err.status === 409 && input?.expectedHeadSha) {
+      throw new Error(
+        `Merge request !${prNumber} has new commits since you reviewed it — review the new head and try again.`,
+        { cause: err }
+      );
+    }
+    // Instances that require a commit SHA on the merge API (GitLab 19.2+)
+    // refuse an unpinned merge outright.
+    if (err.status === 400 && /sha must be provided/i.test(err.message)) {
+      throw new Error(
+        `This GitLab instance only merges a merge request pinned to its reviewed head commit, and merge request !${prNumber} was sent without one.`,
         { cause: err }
       );
     }

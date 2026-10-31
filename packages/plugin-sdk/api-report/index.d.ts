@@ -252,6 +252,13 @@ interface RepoMetadata {
     topics?: string[];
     /** How pull requests may merge here, when the provider reports it. */
     mergeSettings?: RepoMergeSettings;
+    /**
+     * `false`: the provider never reports what the host's in-app merge previews
+     * (a PR's merge status, head commit and commits, and these merge settings),
+     * so the host offers no in-app merge and links to the forge instead. Absent
+     * or `true`: a read missing those fields is treated as transient.
+     */
+    mergePreviewSupported?: boolean;
     /** Opaque freshness token the host round-trips; see {@link FetchOptions}. */
     freshnessToken?: string;
     /** `true` when unchanged since `ifNotChangedSince`; see {@link FetchOptions}. */

@@ -408,6 +408,10 @@ export async function getRepoMetadataImpl(repo: RepoRef): Promise<RepoMetadata> 
     description: data.description ?? null,
     license: data.license?.nickname ?? data.license?.name ?? null,
     ...(Array.isArray(data.topics) ? { topics: data.topics } : {}),
+    // The MR reads carry no merge status, head commit or commit list, and the
+    // merge method is project configuration rather than a per-merge choice,
+    // so the host's in-app merge (#13747) has nothing to preview here.
+    mergePreviewSupported: false,
     rawData: data,
   };
 }

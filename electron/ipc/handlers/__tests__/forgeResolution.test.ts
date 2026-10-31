@@ -320,6 +320,20 @@ describe("resolveForCwd", () => {
     expect(result.repoRef.projectPath).toBe("/repo");
   });
 
+  it("carries the resolved contribution's display name for copy that names the forge (#15603)", async () => {
+    registryMock.getForgeProviderImpl.mockReturnValue({
+      parseRemote: vi.fn(() => ({ owner: "owner", repo: "repo", rawData: null })),
+    });
+    resolverMock.resolveForgeProvider.mockReturnValue({
+      entry: giteaEntry,
+      resolvedVia: "hostname",
+    });
+
+    const result = await resolveForCwd("/repo");
+
+    expect(result).toMatchObject({ providerId: "gitea", providerName: "Gitea" });
+  });
+
   it("falls back to getRepositoryRoot for projectPath when no worktree is marked main (#10563)", async () => {
     gitServiceMock.listWorktrees.mockResolvedValue([
       { path: "/elsewhere", branch: "x", bare: false, isMainWorktree: false },
