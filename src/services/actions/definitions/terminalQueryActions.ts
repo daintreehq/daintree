@@ -33,6 +33,7 @@ import {
   TerminalWaitForExitArgsSchema,
   TerminalWaitForExitResultSchema,
 } from "@shared/types/terminalExitWait";
+import { TERMINAL_LOCATION_FILTERS } from "@shared/utils/terminalLocationFilter";
 import type { TerminalQueryActionRunId } from "./terminalQueryActions.impl";
 
 /**
@@ -89,9 +90,9 @@ export function registerTerminalQueryActions(
           .optional()
           .describe("Only this worktree. Omit for every worktree in the project."),
         location: z
-          .enum(["grid", "dock", "trash", "background"])
+          .enum(TERMINAL_LOCATION_FILTERS)
           .optional()
-          .describe("Only this location. Omitted, trash and background are excluded."),
+          .describe("Omit to skip trash and background; `all` includes them."),
         owned: z
           .boolean()
           .optional()
@@ -273,9 +274,9 @@ export function registerTerminalQueryActions(
           ),
         worktreeId: z.string().optional().describe("Filter by worktree."),
         location: z
-          .enum(["grid", "dock", "trash", "background"])
+          .enum(TERMINAL_LOCATION_FILTERS)
           .optional()
-          .describe("Filter by location. Default: all but trash and background."),
+          .describe("Omit to skip trash and background; `all` includes them."),
         submissionToken: z
           .string()
           .min(1)

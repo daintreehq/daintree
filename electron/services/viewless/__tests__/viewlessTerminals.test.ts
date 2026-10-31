@@ -139,6 +139,53 @@ describe("terminal.list with no frontend", () => {
     expect((byId as { result: ListResult }).result.terminals.map((t) => t.id)).toEqual(["t-1"]);
   });
 
+  it("lists every location for all, each row with its own (#15732)", async () => {
+    const pty = makePty({
+      "t-grid": { kind: "terminal", worktreeId: "/repo-wt/a" },
+      "t-bg": { kind: "terminal", worktreeId: "/repo-wt/a" },
+      "t-trash": { kind: "terminal", worktreeId: "/repo-wt/a", isTrashed: true },
+      "t-other": { kind: "terminal", worktreeId: "/repo-wt/b" },
+    });
+    const { deps } = makeDeps(
+      { getPtyReader: () => pty },
+      {
+        state: savedState([
+          { id: "t-grid", kind: "terminal", title: "Grid", location: "grid" },
+          { id: "t-bg", kind: "terminal", title: "Background", location: "background" },
+          {
+            id: "t-dock",
+            kind: "terminal",
+            title: "Dock",
+            location: "dock",
+            worktreeId: "/repo-wt/a",
+          },
+        ]),
+      }
+    );
+
+    const every = await executeViewlessAction(
+      request("terminal.list", { worktreeId: "/repo-wt/a", location: "all" }),
+      deps
+    );
+    const byDefault = await executeViewlessAction(
+      request("terminal.list", { worktreeId: "/repo-wt/a" }),
+      deps
+    );
+
+    expect(
+      (every as { result: ListResult }).result.terminals.map((t) => [t.id, t.location])
+    ).toEqual([
+      ["t-grid", "grid"],
+      ["t-bg", "background"],
+      ["t-dock", "dock"],
+      ["t-trash", "trash"],
+    ]);
+    expect((byDefault as { result: ListResult }).result.terminals.map((t) => t.id)).toEqual([
+      "t-grid",
+      "t-dock",
+    ]);
+  });
+
   it("reads client metadata only off a panel the writer could have written", async () => {
     const pty = makePty({ "t-1": { kind: "terminal" }, "p-1": { kind: "terminal" } });
     const { deps } = makeDeps(
@@ -323,6 +370,47 @@ describe("terminal.getStatus with no frontend", () => {
         )
       ).toEqual([["t-grid"], ["t-trash"]]);
     });
+
+    it("reads every location for all (#15732)", async () => {
+      const { deps, readTerminalStatus } = fleet();
+
+      await executeViewlessAction(request("terminal.getStatus", { location: "all" }), deps);
+
+      expect(readTerminalStatus).toHaveBeenCalledWith(
+        { location: "all", terminalIds: ["t-dock", "t-grid", "t-bg", "t-trash", "t-unsaved"] },
+        PROJECT.id
+      );
+    });
+
+    it("reads only the named terminals when every location is asked for too (#15732)", async () => {
+      const { deps, readTerminalStatus } = fleet();
+
+      const result = await executeViewlessAction(
+        request("terminal.getStatus", { terminalIds: ["t-trash", "t-bg"], location: "all" }),
+        deps
+      );
+
+      expect(readTerminalStatus).toHaveBeenCalledWith(
+        { terminalIds: ["t-trash", "t-bg"], location: "all" },
+        PROJECT.id
+      );
+      expect(
+        (result as { result: { terminals: Array<{ terminalId: string }> } }).result.terminals.map(
+          (t) => t.terminalId
+        )
+      ).toEqual(["t-trash", "t-bg"]);
+    });
+
+    it.each(["terminal.list", "terminal.getStatus"])(
+      "refuses a location %s doesn't know",
+      async (actionId) => {
+        const { deps } = fleet();
+
+        const result = await executeViewlessAction(request(actionId, { location: "bogus" }), deps);
+
+        expect(result).toMatchObject({ ok: false, error: { code: "VALIDATION_ERROR" } });
+      }
+    );
 
     it("answers an empty fleet with no terminals rather than an error", async () => {
       const { deps, readTerminalStatus } = fleet();

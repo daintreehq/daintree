@@ -926,3 +926,111 @@ describe("terminal.list restore metadata (#14017)", () => {
     });
   });
 });
+
+describe("every location in one call (#15732)", () => {
+  function seedEveryLocation(): void {
+    panelStoreMock.getState.mockReturnValue({
+      focusedId: null,
+      panelIds: [
+        "grid-a",
+        "dock-b",
+        "bg-c",
+        "trash-d",
+        "overlay-e",
+        "other-wt",
+        "dialog-g",
+        "ephemeral-f",
+      ],
+      panelsById: {
+        "grid-a": { id: "grid-a", kind: "terminal", location: "grid", worktreeId: "wt-1" },
+        "dock-b": { id: "dock-b", kind: "terminal", location: "dock", worktreeId: "wt-1" },
+        "bg-c": { id: "bg-c", kind: "terminal", location: "background", worktreeId: "wt-1" },
+        "trash-d": { id: "trash-d", kind: "terminal", location: "trash", worktreeId: "wt-1" },
+        "overlay-e": { id: "overlay-e", kind: "file", location: "overlay", worktreeId: "wt-1" },
+        "other-wt": {
+          id: "other-wt",
+          kind: "terminal",
+          location: "background",
+          worktreeId: "wt-2",
+        },
+        // Dialog and non-persisted panels are tooling-internal, so even every
+        // location leaves them out.
+        "dialog-g": { id: "dialog-g", kind: "file", location: "dialog", worktreeId: "wt-1" },
+        "ephemeral-f": {
+          id: "ephemeral-f",
+          kind: "terminal",
+          location: "dock",
+          worktreeId: "wt-1",
+          excludeFromPersistence: true,
+        },
+      },
+    });
+  }
+
+  async function dispatch(id: string, args: unknown): Promise<unknown> {
+    const result = await registerAll().dispatch(id as ActionId, args, { source: "agent" });
+    if (!result.ok) throw new Error(result.error.message);
+    return result.result;
+  }
+
+  it("terminal.list lists a worktree's panes wherever they sit, each with its own location", async () => {
+    seedEveryLocation();
+
+    const { terminals } = (await dispatch("terminal.list", {
+      worktreeId: "wt-1",
+      location: "all",
+    })) as { terminals: TerminalListItem[] };
+
+    expect(terminals.map((t) => [t.id, t.location])).toEqual([
+      ["grid-a", "grid"],
+      ["dock-b", "dock"],
+      ["bg-c", "background"],
+      ["trash-d", "trash"],
+      ["overlay-e", "overlay"],
+    ]);
+  });
+
+  it("terminal.list keeps leaving the trash and the background out by default", async () => {
+    seedEveryLocation();
+
+    const { terminals } = (await dispatch("terminal.list", { worktreeId: "wt-1" })) as {
+      terminals: TerminalListItem[];
+    };
+
+    expect(terminals.map((t) => t.id)).toEqual(["grid-a", "dock-b", "overlay-e"]);
+  });
+
+  it("terminal.getStatus reads the fleet in every location", async () => {
+    seedEveryLocation();
+
+    const { terminals } = (await dispatch("terminal.getStatus", {
+      worktreeId: "wt-1",
+      location: "all",
+    })) as { terminals: Array<{ terminalId: string }> };
+
+    expect(terminals.map((t) => t.terminalId)).toEqual([
+      "grid-a",
+      "dock-b",
+      "bg-c",
+      "trash-d",
+      "overlay-e",
+    ]);
+  });
+
+  it.each(["grid", "all"])(
+    "terminal.getStatus with named terminals still ignores location %s",
+    async (location) => {
+      seedEveryLocation();
+
+      const { terminals } = (await dispatch("terminal.getStatus", {
+        terminalIds: ["bg-c", "trash-d"],
+        location,
+      })) as { terminals: Array<{ terminalId: string; error?: string }> };
+
+      expect(terminals.map((t) => [t.terminalId, t.error])).toEqual([
+        ["bg-c", undefined],
+        ["trash-d", undefined],
+      ]);
+    }
+  );
+});
