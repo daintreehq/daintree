@@ -20,7 +20,7 @@ import {
   undo,
   undoDepth,
 } from "@codemirror/commands";
-import { advanceComposerDraft } from "../composerDraftGeneration";
+import { advanceComposerDraft } from "./composerDraftGeneration";
 import { correctionLandingEffects, outsideWrite, type CorrectionReview } from "./correctionReview";
 
 interface ChipEntryRange {

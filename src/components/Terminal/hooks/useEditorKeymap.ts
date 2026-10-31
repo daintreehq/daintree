@@ -6,7 +6,8 @@ import type { AutocompleteItem } from "../AutocompleteMenu";
 import type { ActiveCompletionContext } from "../hybridInputParsing";
 import { currentContextReferenceProvidersEffects } from "../inputEditorExtensions/contextReferenceChip";
 import { clearComposerHistory } from "../inputEditorExtensions/composerHistory";
-import { advanceComposerDraft } from "../composerDraftGeneration";
+import { advanceComposerDraft } from "../inputEditorExtensions/composerDraftGeneration";
+import { isComposerSendHeld } from "../uploads/pendingUploads";
 import { rescanForgeReferences } from "../inputEditorExtensions/forgeReference";
 import { currentVoiceCaretEffects, setVoiceCaret } from "../inputEditorExtensions/voiceCaret";
 
@@ -37,6 +38,8 @@ interface LatestRefShape {
   onSendKey?: (key: string) => void;
   isVoiceActiveForPanel: boolean;
   isExpanded: boolean;
+  /** Whose attachments still on their way hold an Enter on an empty draft too. */
+  uploadSurface?: string;
   /** ⌘↩ sends as Enter does, by this route (`HybridInputBarProps.modEnterSend`). */
   modEnterSend?: () => ComposerSendRoute;
 }
@@ -154,6 +157,10 @@ export function useEditorKeymap({
           handledEnterRef.current = false;
         }, 0);
 
+        // The image dropped on the empty draft is what this Enter was for.
+        if (latest.uploadSurface !== undefined && isComposerSendHeld(latest.uploadSurface)) {
+          return true;
+        }
         if (route) route.sendEnter();
         else if (latest.onSendKey) latest.onSendKey("enter");
         return true;

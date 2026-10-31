@@ -23,7 +23,7 @@ import {
   outsideDraftWrite,
   readImageChipPaths,
 } from "../inputEditorExtensions";
-import { composerDraftGeneration } from "../composerDraftGeneration";
+import { composerDraftGeneration } from "../inputEditorExtensions/composerDraftGeneration";
 
 const views: EditorView[] = [];
 
@@ -184,8 +184,11 @@ describe("composer history", () => {
     expect(composerDraftGeneration(view)).not.toBe(second);
 
     const bareBefore = composerDraftGeneration(bare);
+    const viewBefore = composerDraftGeneration(view);
     clearComposerHistory(bare);
     expect(composerDraftGeneration(bare)).not.toBe(bareBefore);
+    // Each composer's own: another one's send leaves this draft alone.
+    expect(composerDraftGeneration(view)).toBe(viewBefore);
   });
 });
 

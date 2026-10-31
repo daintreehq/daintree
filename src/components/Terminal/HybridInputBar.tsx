@@ -122,7 +122,7 @@ import {
   type PreparedAttachment,
 } from "./uploads/pendingUploads";
 import { HeldBackAttachmentsBanner } from "./uploads/HeldBackAttachmentsBanner";
-import { advanceComposerDraft } from "./composerDraftGeneration";
+import { advanceComposerDraft } from "./inputEditorExtensions/composerDraftGeneration";
 import { CROSS_HOST_CONTEXT_REFUSAL, tryComposerFleetBroadcast } from "./composerFleetBroadcast";
 import { PendingUploadChips } from "./uploads/PendingUploadChips";
 import { LazyUploadConfirmHost } from "./uploads/LazyUploadConfirmHost";
@@ -338,6 +338,8 @@ interface LatestState {
   ) => string | null;
   isVoiceActiveForPanel: boolean;
   isExpanded: boolean;
+  /** Whose attachments still on their way hold an Enter on an empty draft too. */
+  uploadSurface: string;
   modEnterSend?: () => ComposerSendRoute;
   altChords?: readonly string[];
 }
@@ -670,8 +672,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     useEffect(() => () => void takeHeldBackAttachments(uploadSurface), [uploadSurface]);
     const addHeldBackAttachments = (attachments: readonly PreparedAttachment[]): boolean => {
       const view = editorViewRef.current;
-      if (!view) return false;
-      insertPreparedAttachments(view, attachments, readCwd());
+      if (!view || !insertPreparedAttachments(view, attachments, readCwd())) return false;
       view.focus();
       return true;
     };
@@ -703,7 +704,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const { imagePasteExtension, filePasteExtension, plainPasteKeymap } = usePasteExtensions(
       cwd,
       uploadSurface,
-      thisMachineOff
+      thisMachineOff,
+      editorViewRef
     );
 
     useEffect(() => {
@@ -1008,6 +1010,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         isExpanded,
         modEnterSend,
         altChords,
+        uploadSurface,
       };
     });
 
@@ -1133,6 +1136,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       );
       const view = editorViewRef.current;
       if (!view) return;
+      // A recalled prompt is another draft, even one that reads the same.
+      if (inputState.draftReplacingRevision > appliedBefore) advanceComposerDraft(view);
       const landed = takeLandedCorrection(terminalId, projectId, draft);
       const reviewed = landed !== null && isLatestDictation(voiceId, landed);
       const scratched = takeScratchLanded(terminalId, projectId, draft);

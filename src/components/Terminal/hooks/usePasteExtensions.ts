@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, type RefObject } from "react";
+import type { EditorView } from "@codemirror/view";
 import {
   createImagePasteHandler,
   addImageChip,
@@ -11,14 +12,20 @@ import { materializeTransferSources } from "@/lib/transferSources";
 import { materialize } from "@/services/materialize";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { holdBackAttachments, holdComposerSend, trackUpload } from "../uploads/pendingUploads";
-import { composerDraftGeneration } from "../composerDraftGeneration";
+import { composerDraftGeneration } from "../inputEditorExtensions/composerDraftGeneration";
 
 /**
  * `thisMachineOff`: the composer types to a terminal on another host, where a
  * pasted image or file saved on this machine would be a path to nothing, so
- * neither is taken.
+ * neither is taken. `editorViewRef` is the composer's live editor: a paste
+ * that resolves after it is gone is dropped, as a drop is.
  */
-export function usePasteExtensions(cwd: string, uploadSurface?: string, thisMachineOff = false) {
+export function usePasteExtensions(
+  cwd: string,
+  uploadSurface?: string,
+  thisMachineOff = false,
+  editorViewRef?: RefObject<EditorView | null>
+) {
   // `useEditorFactory` reads these extensions once, while building the initial
   // `EditorState`, under an effect keyed on `terminalId` alone — and no
   // compartment wraps them. A memo that rebuilt the extension when `cwd`
@@ -55,6 +62,7 @@ export function usePasteExtensions(cwd: string, uploadSurface?: string, thisMach
                 )
               : await materialize({ kind: "clipboard-image" });
           const fileName = filePath.split(/[/\\]/).filter(Boolean).pop() || filePath;
+          if (editorViewRef && editorViewRef.current !== view) return;
           // Pasted into a draft that has been sent or replaced since.
           if (composerDraftGeneration(view) !== generation) {
             if (surface !== undefined) {
@@ -101,7 +109,7 @@ export function usePasteExtensions(cwd: string, uploadSurface?: string, thisMach
           release?.();
         }
       }),
-    []
+    [editorViewRef]
   );
 
   const filePasteExtension = useMemo(
@@ -128,6 +136,7 @@ export function usePasteExtensions(cwd: string, uploadSurface?: string, thisMach
             return filePath ? [{ filePath, fileName: file.name, fileSize: file.size }] : [];
           });
           if (pasted.length === 0) return;
+          if (editorViewRef && editorViewRef.current !== view) return;
           if (composerDraftGeneration(view) !== generation) {
             if (surface !== undefined) {
               holdBackAttachments(
@@ -170,7 +179,7 @@ export function usePasteExtensions(cwd: string, uploadSurface?: string, thisMach
           release?.();
         }
       }),
-    []
+    [editorViewRef]
   );
 
   const plainPasteKeymap = useMemo(() => createPlainPasteKeymap(), []);

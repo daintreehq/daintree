@@ -123,8 +123,22 @@ describe("a composer's attachments (#15599)", () => {
     expect(isComposerSendHeld("composer:t1")).toBe(false);
   });
 
+  it("holds the send for an upload alone, with no preparation hold", async () => {
+    let finish!: () => void;
+    const upload = trackUpload(
+      "composer:t1",
+      "shot.png",
+      () => new Promise<void>((resolve) => (finish = resolve))
+    );
+    expect(isComposerSendHeld("composer:t1")).toBe(true);
+    finish();
+    await upload;
+    expect(isComposerSendHeld("composer:t1")).toBe(false);
+  });
+
   it("holds only its own composer", () => {
     holdComposerSend("composer:t1");
+    expect(isComposerSendHeld("composer:t1")).toBe(true);
     expect(isComposerSendHeld("composer:t2")).toBe(false);
     expect(isComposerSendHeld("isolated-composer:t1")).toBe(false);
   });
@@ -137,12 +151,13 @@ describe("a composer's attachments (#15599)", () => {
       fileName: "notes.md",
       fileSize: 3,
     } as const;
-    holdBackAttachments("composer:t1", [shot]);
-    holdBackAttachments("composer:t1", [notes]);
+    const later = { ...notes, filePath: "/tmp/later.md", fileName: "later.md" };
+    holdBackAttachments("composer:t1", [shot, notes]);
+    holdBackAttachments("composer:t1", [later]);
     holdBackAttachments("composer:t1", []);
     expect(getHeldBackAttachments("composer:t2")).toEqual([]);
 
-    expect(takeHeldBackAttachments("composer:t1")).toEqual([shot, notes]);
+    expect(takeHeldBackAttachments("composer:t1")).toEqual([shot, notes, later]);
     expect(getHeldBackAttachments("composer:t1")).toEqual([]);
     expect(takeHeldBackAttachments("composer:t1")).toEqual([]);
   });

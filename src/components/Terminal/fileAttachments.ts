@@ -17,7 +17,7 @@ import {
 import { IMAGE_EXTENSIONS } from "./useTerminalFileTransfer";
 import { formatAtFileTokenForCwd } from "./hybridInputParsing";
 import { addImageChip, addFileDropChip } from "./inputEditorExtensions";
-import { composerDraftGeneration } from "./composerDraftGeneration";
+import { composerDraftGeneration } from "./inputEditorExtensions/composerDraftGeneration";
 
 /**
  * A file headed for the composer, normalized across every provenance (OS drop,
@@ -177,14 +177,14 @@ export async function insertFileAttachments(
 /**
  * Inserts `prepared` at the caret of `view` as chips, in order, in a single
  * transaction: images as their absolute path behind a thumbnail chip, anything
- * else as an `@file` token relative to `cwd`.
+ * else as an `@file` token relative to `cwd`. False when nothing went in.
  */
 export function insertPreparedAttachments(
   view: EditorView,
   prepared: readonly PreparedAttachment[],
   cwd: string
-): void {
-  if (prepared.length === 0) return;
+): boolean {
+  if (prepared.length === 0) return false;
   try {
     const cursor = view.state.selection.main.head;
     const imageEffects: ReturnType<typeof addImageChip.of>[] = [];
@@ -231,7 +231,9 @@ export function insertPreparedAttachments(
       effects: [...imageEffects, ...fileEffects],
       selection: { anchor: cursor + insertText.length },
     });
+    return true;
   } catch {
     // Editor may have been destroyed
+    return false;
   }
 }

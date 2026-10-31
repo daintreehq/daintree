@@ -37,7 +37,8 @@ const {
   isComposerSendHeld,
   _resetPendingUploadsForTests,
 } = await import("../../uploads/pendingUploads");
-const { advanceComposerDraft } = await import("../../composerDraftGeneration");
+const { advanceComposerDraft } =
+  await import("../../inputEditorExtensions/composerDraftGeneration");
 
 const CWD = "/Users/greg/Projects/daintree";
 
@@ -398,6 +399,30 @@ describe("usePasteExtensions: a paste still on its way (#15599)", () => {
       { type: "file", filePath: `${CWD}/a.ts`, fileName: "a.ts", fileSize: 42 },
       { type: "file", filePath: `${CWD}/b.ts`, fileName: "b.ts", fileSize: 42 },
     ]);
+    expect(isComposerSendHeld("composer:t1")).toBe(false);
+  });
+
+  it("drops a paste that resolves after its editor is gone, holding nothing back", async () => {
+    let saved!: () => void;
+    saveImage.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          saved = () =>
+            resolve({ filePath: "/tmp/clip.png", thumbnailDataUrl: "data:image/png;base64,a" });
+        })
+    );
+    const { view, dispatch } = fakeView();
+    const ref: { current: EditorView | null } = { current: view };
+    renderHook(() => usePasteExtensions(CWD, "composer:t1", false, ref));
+
+    const pending = captured.imagePaste?.(view);
+    advanceComposerDraft(view);
+    ref.current = null;
+    saved();
+    await pending;
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(getHeldBackAttachments("composer:t1")).toEqual([]);
     expect(isComposerSendHeld("composer:t1")).toBe(false);
   });
 });
