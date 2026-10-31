@@ -374,6 +374,25 @@ function readGitLocationArg(args: unknown): GitLocationArg {
 }
 
 /**
+ * Whether a git dispatch's location selector can never be valid: a spelling
+ * that is empty or not a string, or two path spellings that contradict each
+ * other. Such a call gets no preview, and must reach the action's own
+ * validation to be rejected for what it is — unlike a well-formed selector
+ * that simply didn't resolve yet, which is the approval-covers-nothing case.
+ */
+function isMalformedGitLocation(args: unknown, context: ActionContext | undefined): boolean {
+  const named = readGitLocationArg(args);
+  if (named.state === "invalid") return true;
+  if (named.state !== "named") return false;
+  try {
+    resolveWorktreeLocation(named.location, context ?? actionService.getContext());
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * The terminal ids a `terminal.killBatch` names, or undefined when the args
  * carry no usable list (#12123).
  *
@@ -1628,7 +1647,7 @@ export function useMcpBridge(): void {
               if (
                 actionId === "git.push" &&
                 approvedPush === undefined &&
-                readGitLocationArg(args).state !== "invalid"
+                !isMalformedGitLocation(args, context)
               ) {
                 window.electron.mcpBridge.sendDispatchActionResponse({
                   requestId,

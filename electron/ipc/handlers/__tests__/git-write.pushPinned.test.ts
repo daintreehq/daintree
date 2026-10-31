@@ -350,9 +350,14 @@ describe("approved push — publishes what was reviewed or nothing", () => {
 
     const shown = await preview(fixture.repo, "topic");
     expect(shown.commits).toEqual([]);
+    let pushed = false;
+    pushHook.before = () => {
+      pushed = true;
+    };
 
     await approvedPush(fixture.repo, "topic", shown);
 
+    expect(pushed).toBe(true);
     expect(remoteTip(fixture.bare, "refs/heads/topic")).toBe(fixture.reviewed);
     expect(upstreamOf(fixture.repo, "topic")).toBe("refs/remotes/origin/topic");
   });

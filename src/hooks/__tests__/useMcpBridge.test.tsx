@@ -2174,9 +2174,47 @@ describe("useMcpBridge", () => {
     });
 
     expect(mocks.buildGitPreview).not.toHaveBeenCalled();
-    const options = mocks.dispatch.mock.calls[0]?.[2] as Record<string, unknown>;
-    expect(options).toMatchObject({ source: "agent", confirmed: true });
-    expect(options.hostApprovedPush).toBeUndefined();
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "git.push",
+      { cwd: "/repo" },
+      expect.objectContaining({ source: "agent", confirmed: true })
+    );
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "git.push",
+      { cwd: "/repo" },
+      expect.not.objectContaining({ hostApprovedPush: expect.anything() })
+    );
+  });
+
+  // Two path spellings that contradict each other can never be valid. They get
+  // no preview, and must reach the action's validation to be told so, rather
+  // than a refusal that asks for a fresh confirmation which can't help.
+  it("lets contradictory path spellings through to validation rather than refusing them", async () => {
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({ id: "git.push", name: "git.push", title: "Push" })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: false, error: { code: "VALIDATION_ERROR" } });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-contradictory",
+      actionId: "git.push",
+      args: { cwd: "/a", worktreePath: "/b" },
+    });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.requestId).toBe("req-contradictory");
+    });
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.buildGitPreview).not.toHaveBeenCalled();
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "git.push",
+      { cwd: "/a", worktreePath: "/b" },
+      expect.objectContaining({ source: "agent" })
+    );
   });
 
   // The whole point of #11538 is that nothing can leave a destructive dispatch

@@ -460,7 +460,10 @@ describe("GitPushConfirmDialog", () => {
       pushRange: { total: 1, rangeBasis: "tracked" as const },
       pushReview: review,
     });
-    mocks.buildPreview.mockResolvedValueOnce(loaded(first, "Before"));
+    // The first read is still in flight when the second request arrives, and
+    // lands LAST: it must not settle the newer request.
+    const firstRead = deferred<ReturnType<typeof loaded>>();
+    mocks.buildPreview.mockReturnValueOnce(firstRead.promise);
     render(<GitPushConfirmDialog />);
 
     let superseded: GitPushConfirmResult | undefined;
@@ -472,7 +475,6 @@ describe("GitPushConfirmDialog", () => {
           superseded = result;
         });
     });
-    expect(screen.getByText("Before")).toBeTruthy();
 
     const reread = deferred<ReturnType<typeof loaded>>();
     mocks.buildPreview.mockReturnValueOnce(reread.promise);
@@ -494,7 +496,11 @@ describe("GitPushConfirmDialog", () => {
     await act(async () => {
       reread.resolve(loaded(second, "After"));
     });
+    await act(async () => {
+      firstRead.resolve(loaded(first, "Before"));
+    });
     expect(screen.getByText("After")).toBeTruthy();
+    expect(screen.queryByText("Before")).toBeNull();
     await act(async () => {
       pushButton().click();
     });

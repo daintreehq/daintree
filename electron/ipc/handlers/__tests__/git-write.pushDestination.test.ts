@@ -1007,6 +1007,14 @@ describe("git:get-staging-status — push and pull destinations", () => {
 
 describe("git push as an operation", () => {
   const FOR_EACH_REF = "refs/heads/topic\u0000origin\u0000refs/remotes/origin/topic";
+  const TIP = "a".repeat(40);
+  /** A review this double's repository satisfies: `topic` at `TIP`, to `origin/topic`. */
+  const REVIEW = {
+    expectedBranch: "topic",
+    expectedHeadOid: TIP,
+    expectedRemote: "origin",
+    expectedRemoteBranch: "topic",
+  };
 
   type ProgressFn = (data: {
     stage: string;
@@ -1040,7 +1048,11 @@ describe("git push as an operation", () => {
         return {
           revparse: vi.fn(async () => "topic\n"),
           raw: vi.fn(async (args: string[]) =>
-            args[0] === "for-each-ref" ? `${FOR_EACH_REF}\n` : ""
+            args[0] === "for-each-ref"
+              ? `${FOR_EACH_REF}\n`
+              : args[0] === "rev-parse"
+                ? `${TIP}\n`
+                : ""
           ),
           getRemotes: vi.fn(async () => [{ name: "origin", refs: { fetch: "", push: "" } }]),
           push: vi.fn(
@@ -1112,6 +1124,33 @@ describe("git push as an operation", () => {
     await first;
     expect(pushCalls).toBe(1);
   });
+
+  it("joins a second caller whose review is identical", async () => {
+    const first = push({ opId: "op-first", ...REVIEW });
+    await pushStarted();
+    const second = push({ opId: "op-join", ...REVIEW });
+    releasePush();
+    await Promise.all([first, second]);
+    expect(pushCalls).toBe(1);
+  });
+
+  for (const [field, value] of [
+    ["expectedBranch", "other"],
+    ["expectedHeadOid", "b".repeat(40)],
+    ["expectedRemote", "fork"],
+    ["expectedRemoteBranch", "elsewhere"],
+  ] as const) {
+    it(`refuses to join a running reviewed push whose review differs in ${field}`, async () => {
+      const first = push({ opId: "op-first", ...REVIEW });
+      await pushStarted();
+      await expect(push({ opId: "op-other", ...REVIEW, [field]: value })).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
+      releasePush();
+      await first;
+      expect(pushCalls).toBe(1);
+    });
+  }
 
   it("refuses a partial review before it could join a running push", async () => {
     const first = push({ opId: "op-first" });
