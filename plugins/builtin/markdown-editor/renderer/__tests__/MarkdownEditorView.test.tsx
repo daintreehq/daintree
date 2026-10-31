@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoreApi, UseBoundStore } from "zustand";
 import { EditorView } from "@codemirror/view";
@@ -250,6 +250,36 @@ describe("MarkdownEditorView (#12323)", () => {
     expect(diff.getAttribute("data-diff")).toContain("+mine");
     // The editor keeps the draft while the comparison is up.
     expect(editorView().state.doc.toString()).toBe("# Plan\n\nBody\n\nmine");
+  });
+
+  it("a disk file grown past the ceiling holds Save and offers only Save draft as (#15608)", async () => {
+    await renderReady();
+    await type("\nmine");
+    main.oversized.add(FILE);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("markdown-editor-save"));
+    });
+    expect(await screen.findByText("File on disk is over 2 MiB")).toBeTruthy();
+    expect((screen.getByTestId("markdown-editor-save") as HTMLButtonElement).disabled).toBe(true);
+    const compare = screen.getByRole("button", { name: "Compare" });
+    const loadDisk = screen.getByRole("button", { name: "Load disk version" });
+    expect(compare.getAttribute("aria-disabled")).toBe("true");
+    expect(loadDisk.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(compare);
+    fireEvent.click(loadDisk);
+    expect(screen.queryByTestId("diff-viewer-mock")).toBeNull();
+    expect(screen.queryByText("Discard changes to 'plan.md'?")).toBeNull();
+    expect(editorView().state.doc.toString()).toBe("# Plan\n\nBody\n\nmine");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save draft as…" }));
+    const path = (await screen.findByTestId("markdown-editor-save-as-path")) as HTMLInputElement;
+    expect(path.value).toBe("/repo/docs/plan-draft.md");
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save file" }));
+    });
+    await waitFor(() =>
+      expect(main.files.get("/repo/docs/plan-draft.md")).toBe("# Plan\n\nBody\n\nmine")
+    );
   });
 
   it("Load disk version asks first, then replaces the buffer with a fresh history", async () => {

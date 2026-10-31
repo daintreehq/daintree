@@ -503,6 +503,171 @@ describe("DocumentController (#12323)", () => {
     });
   });
 
+  describe("a disk file that grows past the ceiling (#15608)", () => {
+    const grow = () => {
+      main.oversized.add(PROPS.filePath);
+      main.push(PUSH_CHANNELS.documentChanged, { identityKey: KEY });
+    };
+
+    it("refuses a clean document as too large, and reloads it once it shrinks", async () => {
+      const controller = await open();
+      grow();
+      await flush(200);
+      expect(controller.record()).toMatchObject({ status: "refused", refusal: "TOO_LARGE" });
+      expect(main.calls.filter((c) => c.channel === CHANNELS.read)).toHaveLength(1);
+      expect(announceMock).toHaveBeenCalledWith("File is now over 2 MiB and can't be edited here");
+
+      main.oversized.delete(PROPS.filePath);
+      main.files.set(PROPS.filePath, "# Smaller\n");
+      main.push(PUSH_CHANNELS.documentChanged, { identityKey: KEY });
+      await flush(200);
+      expect(controller.record()).toMatchObject({
+        status: "ready",
+        refusal: null,
+        base: { text: "# Smaller\n" },
+      });
+    });
+
+    it("keeps a draft and its recovery record behind a conflict with nothing to compare", async () => {
+      const controller = await open();
+      controller.setText("# Plan\n\nmine\n");
+      await flush(1000);
+      main.calls.length = 0;
+      grow();
+      await flush(200);
+      const record = controller.record();
+      expect(record.status).toBe("ready");
+      expect(record.draft?.text).toBe("# Plan\n\nmine\n");
+      expect(record.base?.text).toBe("# Plan\n");
+      expect(record.conflict).toEqual({
+        tooLarge: true,
+        revision: null,
+        text: null,
+        hasBom: false,
+        eol: "\n",
+      });
+      // Nothing was read to build it, and the recovery record stays.
+      expect(main.calls.some((c) => c.channel === CHANNELS.read)).toBe(false);
+      expect(main.calls.some((c) => c.channel === CHANNELS.draftDelete)).toBe(false);
+      expect(main.drafts.get(KEY)?.record.draftText).toBe("# Plan\n\nmine\n");
+      expect(getFileDocumentProjection("panel-1")).toMatchObject({
+        dirty: true,
+        conflict: true,
+        recoveryStored: true,
+      });
+      expect(announceMock).toHaveBeenCalledWith("File on disk is now over 2 MiB, draft kept");
+
+      // A file that keeps growing neither re-announces nor reads.
+      announceMock.mockClear();
+      main.push(PUSH_CHANNELS.documentChanged, { identityKey: KEY });
+      await flush(200);
+      expect(announceMock).not.toHaveBeenCalled();
+      expect(main.calls.some((c) => c.channel === CHANNELS.read)).toBe(false);
+
+      await expect(controller.save()).resolves.toEqual({
+        status: "conflict",
+        reason: "The file on disk is over 2 MiB, the editor's limit",
+      });
+      expect(main.calls.some((c) => c.channel === CHANNELS.save)).toBe(false);
+      await expect(controller.saveAs("/repo/docs/plan-draft.md")).resolves.toMatchObject({
+        status: "saved",
+      });
+      expect(main.files.get("/repo/docs/plan-draft.md")).toBe("# Plan\n\nmine\n");
+    });
+
+    it("a stale save against it holds the draft behind the same conflict", async () => {
+      const controller = await open();
+      controller.setText("# Plan\n\nmine\n");
+      main.oversized.add(PROPS.filePath);
+      await expect(controller.save()).resolves.toEqual({
+        status: "conflict",
+        reason: "The file on disk is over 2 MiB, the editor's limit",
+      });
+      const record = controller.record();
+      expect(record.saving).toBe(false);
+      expect(record.draft?.text).toBe("# Plan\n\nmine\n");
+      expect(record.conflict).toMatchObject({ tooLarge: true, text: null });
+    });
+
+    it("an unedited save against it refuses the clean document as too large", async () => {
+      const controller = await open();
+      main.oversized.add(PROPS.filePath);
+      await expect(controller.save()).resolves.toEqual({
+        status: "refused",
+        reason: "The file on disk is over 2 MiB, the editor's limit",
+      });
+      expect(controller.record()).toMatchObject({
+        status: "refused",
+        refusal: "TOO_LARGE",
+        saving: false,
+      });
+    });
+
+    it("clears once the file shrinks back to the draft's own base", async () => {
+      const controller = await open();
+      controller.setText("# Plan\n\nmine\n");
+      grow();
+      await flush(200);
+      expect(controller.record().conflict?.tooLarge).toBe(true);
+      main.oversized.delete(PROPS.filePath);
+      main.push(PUSH_CHANNELS.documentChanged, { identityKey: KEY });
+      await flush(200);
+      expect(controller.record().conflict).toBeNull();
+      expect(controller.record().draft?.text).toBe("# Plan\n\nmine\n");
+    });
+
+    it("becomes a comparable conflict once the file shrinks to another version", async () => {
+      const controller = await open();
+      controller.setText("# Plan\n\nmine\n");
+      grow();
+      await flush(200);
+      main.oversized.delete(PROPS.filePath);
+      main.files.set(PROPS.filePath, "# Plan\n\nagent\n");
+      main.push(PUSH_CHANNELS.documentChanged, { identityKey: KEY });
+      await flush(200);
+      expect(controller.record().conflict).toEqual({
+        tooLarge: false,
+        revision: sha("# Plan\n\nagent\n"),
+        text: "# Plan\n\nagent\n",
+        hasBom: false,
+        eol: "\n",
+      });
+    });
+
+    it("a file that grows between the revision check and the read is held, not compared", async () => {
+      const controller = await open();
+      controller.setText("# Plan\n\nmine\n");
+      main.files.set(PROPS.filePath, "# Plan\n\nagent\n");
+      main.overrides.set(CHANNELS.read, () => ({ status: "refused", reason: "TOO_LARGE" }));
+      main.push(PUSH_CHANNELS.documentChanged, { identityKey: KEY });
+      await flush(200);
+      expect(controller.record().conflict).toMatchObject({ tooLarge: true, revision: null });
+      expect(controller.record().draft?.text).toBe("# Plan\n\nmine\n");
+    });
+
+    it("typing while a clean reload finds it too large keeps the draft behind the conflict", async () => {
+      const controller = await open();
+      main.files.set(PROPS.filePath, "# Plan\n\nagent\n");
+      let finishRead!: (value: unknown) => void;
+      main.overrides.set(
+        CHANNELS.read,
+        () =>
+          new Promise((resolve) => {
+            finishRead = resolve;
+          })
+      );
+      main.push(PUSH_CHANNELS.documentChanged, { identityKey: KEY });
+      await flush(200);
+      controller.setText("# Plan\n\nmine\n");
+      finishRead({ status: "refused", reason: "TOO_LARGE" });
+      await flush();
+      const record = controller.record();
+      expect(record.status).toBe("ready");
+      expect(record.draft?.text).toBe("# Plan\n\nmine\n");
+      expect(record.conflict).toMatchObject({ tooLarge: true });
+    });
+  });
+
   it("the panel switching to another file releases the binding", async () => {
     const controller = await open();
     controller.setText("# Plan\n\ndraft\n");
