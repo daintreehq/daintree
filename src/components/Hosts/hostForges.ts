@@ -13,4 +13,3 @@ export function describeHostForge(forge: HostForgeObservation, hostName: string)
   if (forge.account) return `Signed in as ${forge.account} on ${hostName}`;
   return `A credential is saved on ${hostName}, and it hasn't reported an account`;
 }
-
