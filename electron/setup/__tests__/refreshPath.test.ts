@@ -833,7 +833,10 @@ describe("refreshPath shell observation (#12371)", () => {
 
   it("observes nothing without a named shell to probe", async () => {
     delete process.env.SHELL;
-    loginShellMock.mockResolvedValue({ PATH: "/usr/bin:/bin", CLAUDE_CONFIG_DIR: "/custom/claude" });
+    loginShellMock.mockResolvedValue({
+      PATH: "/usr/bin:/bin",
+      CLAUDE_CONFIG_DIR: "/custom/claude",
+    });
     const { refreshPath } = await import("../environment.js");
     const { getShellEnvironmentObservation } = await import("../shellEnvironmentObservation.js");
 
@@ -1171,7 +1174,8 @@ describe("refreshPath — login shell lifecycle (#15565)", () => {
       () =>
         new Promise((resolve) =>
           setTimeout(
-            () => resolve({ PATH: "/slow/bin:/usr/bin:/slow/bin", CLAUDE_CONFIG_DIR: "/slow/claude" }),
+            () =>
+              resolve({ PATH: "/slow/bin:/usr/bin:/slow/bin", CLAUDE_CONFIG_DIR: "/slow/claude" }),
             9_500
           )
         )

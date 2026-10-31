@@ -14,17 +14,15 @@ let dir: string;
 
 function standInShell(name: string, body: string): string {
   const file = path.join(dir, name);
-  fs.writeFileSync(file, `#!/bin/sh\necho "$$" >> "${dir}/${name}.starts"\n${body}\n`, { mode: 0o755 });
+  fs.writeFileSync(file, `#!/bin/sh\necho "$$" >> "${dir}/${name}.starts"\n${body}\n`, {
+    mode: 0o755,
+  });
   return file;
 }
 
 function starts(shell: string): number[] {
   try {
-    return fs
-      .readFileSync(`${shell}.starts`, "utf8")
-      .split("\n")
-      .filter(Boolean)
-      .map(Number);
+    return fs.readFileSync(`${shell}.starts`, "utf8").split("\n").filter(Boolean).map(Number);
   } catch {
     return [];
   }

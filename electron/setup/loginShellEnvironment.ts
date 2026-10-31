@@ -17,10 +17,7 @@ import os from "os";
 const DELIMITER = "_SHELL_ENV_DELIMITER_";
 
 // `command` skips any alias or function named `env`.
-const SHELL_ARGS = [
-  "-ilc",
-  `echo -n "${DELIMITER}"; command env; echo -n "${DELIMITER}"; exit`,
-];
+const SHELL_ARGS = ["-ilc", `echo -n "${DELIMITER}"; command env; echo -n "${DELIMITER}"; exit`];
 
 const ENV_OVERRIDES = {
   // Oh My Zsh's auto-update prompt can block the shell.
