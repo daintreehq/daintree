@@ -2097,6 +2097,26 @@ describe("getWorktreeChangesWithStats on a stalled mount (#15645)", () => {
     expect(error).toBeInstanceOf(Error);
     expect(error).not.toBeInstanceOf(WorktreeRemovedError);
     expect((error as Error).message).toMatch(/timed out/);
+    // The message reaches logs that leave the machine.
+    expect((error as Error).message).not.toContain(cwd);
+  });
+
+  it("never reads a timeout as a removal, whatever its message says", async () => {
+    const cwd = "/timeout-message/" + Math.random();
+    mockGit.status.mockResolvedValue(emptyStatus);
+    mockGit.raw.mockImplementation((args: string[]) =>
+      Promise.resolve(args[0] === "rev-parse" ? `${OID}\n${cwd}\n` : "")
+    );
+    statMock().mockResolvedValue({ mtimeMs: 1000, size: 512, dev: 1, ino: 1 });
+    const realpathMock = fs.realpath as unknown as ReturnType<typeof vi.fn>;
+    realpathMock.mockRejectedValueOnce(new TimeoutError("ENOENT: not a git repository"));
+
+    const error = await getWorktreeChangesWithStats(cwd, { forceRefresh: true }).catch(
+      (failure: unknown) => failure
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(WorktreeRemovedError);
   });
 
   it.each([
