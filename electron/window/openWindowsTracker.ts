@@ -188,14 +188,29 @@ export function clearPendingRemoteBackgroundRestores(windowId: number): void {
 /**
  * What a window rebuilt after a probable OOM was showing, keyed by the
  * replacement's window id, until its setup settles (#15564). The replacement
- * binds its workspace only once setup reaches `registerInitialView`, and a save
- * landing before that (its own registration, a focus change) would otherwise
- * persist the window as an empty picker without its background projects.
+ * binds its workspace only once setup reaches `registerInitialView`, and queues
+ * its background projects after its earlier awaits, so a save landing before
+ * then (its own registration, a focus change, a switch the person made
+ * meanwhile) would otherwise persist it as an empty picker, or drop the
+ * backgrounds it has yet to queue.
  */
-const pendingWindowRecreations = new Map<number, OpenWindowRecord>();
+const pendingWindowRecreations = new Map<
+  number,
+  { record: OpenWindowRecord; setupFailed: boolean }
+>();
 
 export function setPendingWindowRecreation(windowId: number, record: OpenWindowRecord): void {
-  pendingWindowRecreations.set(windowId, record);
+  pendingWindowRecreations.set(windowId, { record, setupFailed: false });
+}
+
+/**
+ * The replacement's setup threw. That proves nothing about the workspace, so
+ * the record still describes the window while it shows nothing; once it shows
+ * a workspace the person has moved on, and the record is spent.
+ */
+export function markWindowRecreationSetupFailed(windowId: number): void {
+  const pending = pendingWindowRecreations.get(windowId);
+  if (pending) pending.setupFailed = true;
 }
 
 export function clearPendingWindowRecreation(windowId: number): void {
@@ -315,15 +330,14 @@ function collectWindowRecords(
       else pendingRemoteRestores.delete(ctx.windowId);
     }
 
-    // Spent, like the host intent, once the window shows a workspace of its
-    // own: setup binds the view and queues the backgrounds it carried in one
-    // synchronous step, and a replacement whose setup threw shows something
-    // only once the person has moved on. Decided on what the manager reports,
-    // not on the host intent above, which a host-scoped recreation also sets.
+    // What the manager shows always wins the foreground, and is read before
+    // the host intent above, which a host-scoped recreation also sets. While
+    // setup runs the record's backgrounds stay, since setup queues them only
+    // after its awaits; after a failed setup they go with the rest of it.
     const recreation = pendingWindowRecreations.get(ctx.windowId);
     if (recreation) {
-      if (showing) pendingWindowRecreations.delete(ctx.windowId);
-      else if (projectId === null) projectId = recreation.projectId;
+      if (!showing) projectId ??= recreation.record.projectId;
+      else if (recreation.setupFailed) pendingWindowRecreations.delete(ctx.windowId);
     }
 
     if (projectId !== null) claimed.add(projectId);
@@ -352,7 +366,7 @@ function collectWindowRecords(
     const pending = [
       ...(pendingBackgroundRestores.get(win.windowId) ?? []),
       ...(pendingRemoteBackgroundRestores.get(win.windowId) ?? []),
-      ...(pendingWindowRecreations.get(win.windowId)?.backgroundProjectIds ?? []),
+      ...(pendingWindowRecreations.get(win.windowId)?.record.backgroundProjectIds ?? []),
     ].filter((id) => !claimed.has(id));
     const backgroundProjectIds = capBackgroundProjectIds([...viewIds[index]!, ...pending]);
     for (const id of backgroundProjectIds) claimed.add(id);

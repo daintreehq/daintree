@@ -28,6 +28,7 @@ import {
   enableOpenWindowsSaves,
   freezeAndSnapshotOpenWindows,
   initOpenWindowsTracker,
+  markWindowRecreationSetupFailed,
   onPendingRemoteRestoreChanged,
   removePendingRemoteBackgroundRestores,
   resetOpenWindowsTrackerForTests,
@@ -277,9 +278,28 @@ describe("OOM recreation records (#15564)", () => {
       { projectId: "b", backgroundProjectIds: ["c"] },
     ]);
 
-    // The window shows a workspace of its own (setup bound one and queued
-    // the backgrounds, or the person opened another after a failed setup):
-    // what it shows wins, and the record is spent for good.
+    // The person switched while setup still awaits: what the window shows
+    // wins, and the backgrounds setup has yet to queue stay with it.
+    win.projectId = "x";
+    win.views = [["x", 1]];
+    expect(buildOpenWindowRecords(registry)).toEqual([
+      { projectId: "x", backgroundProjectIds: ["c"] },
+    ]);
+
+    clearPendingWindowRecreation(5);
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: "x" }]);
+  });
+
+  it("spends a failed replacement's record once the person opens something there", () => {
+    const win: FakeWindow = { windowId: 5, projectId: null };
+    const registry = makeRegistry([win]);
+    setPendingWindowRecreation(5, { projectId: "b", backgroundProjectIds: ["c"] });
+    markWindowRecreationSetupFailed(5);
+
+    expect(buildOpenWindowRecords(registry)).toEqual([
+      { projectId: "b", backgroundProjectIds: ["c"] },
+    ]);
+
     win.projectId = "x";
     win.views = [["x", 1]];
     expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: "x" }]);

@@ -19,6 +19,7 @@ import type { OpenWindowRecord } from "../services/persistence/windowManifest.js
 import {
   captureWindowRecord,
   clearPendingWindowRecreation,
+  markWindowRecreationSetupFailed,
   scheduleOpenWindowsSave,
   setPendingWindowRecreation,
 } from "./openWindowsTracker.js";
@@ -90,10 +91,11 @@ export function createWindowRecreation(deps: WindowRecreationDeps): WindowRecrea
             },
           });
           // Setup has bound the workspace (or found it gone) and queued the
-          // background restores, which the manifest now reads for itself. A
-          // setup that threw proves nothing about the workspace, so the
-          // replacement keeps naming it until it closes.
+          // background restores, which the manifest now reads for itself.
           if (replacementId !== undefined) clearPendingWindowRecreation(replacementId);
+        } catch (error) {
+          if (replacementId !== undefined) markWindowRecreationSetupFailed(replacementId);
+          throw error;
         } finally {
           // Nothing else saves until the next focus change or switch.
           scheduleOpenWindowsSave();
