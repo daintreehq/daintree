@@ -830,6 +830,57 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
+    // Without a matching boot pattern, boot only exits through the 15s
+    // POLLING_MAX_BOOT_MS fallback, which is what every Kimi Code launch did
+    // while the registry still carried the Python client's banner.
+    it.each([
+      [
+        "full panel",
+        "\x1b[38;2;30;144;255m│\x1b[39m  \x1b[38;2;30;144;255m▐█▛█▛█▌\x1b[39m  \x1b[1m\x1b[38;2;30;144;255mWelcome to Kimi Code!\x1b[39m\x1b[22m        \x1b[38;2;30;144;255m│\x1b[39m\r\n",
+      ],
+      ["narrow terminal", "\x1b[1mWelcome to Kimi Code!\x1b[22m\r\n"],
+    ])("leaves boot on the Kimi Code welcome panel (%s, #15566)", (_label, banner) => {
+      vi.setSystemTime(10000);
+      const onBootComplete = vi.fn();
+      // No input box on screen yet, so only the banner can end boot.
+      const monitor = new ActivityMonitor("kimi-boot", 1000, vi.fn(), {
+        ...buildActivityMonitorOptions("kimi", {
+          getVisibleLines: () => [""],
+          getCursorLine: () => "",
+        }),
+        onBootComplete,
+      });
+      monitor.startPolling();
+
+      monitor.onData(banner);
+      vi.advanceTimersByTime(100);
+
+      expect(onBootComplete).toHaveBeenCalledTimes(1);
+      expect(onBootComplete.mock.calls[0]![0]).toBeLessThan(10000 + 1000);
+
+      monitor.dispose();
+    });
+
+    it("leaves boot on the Kimi Code input box when the banner was missed (#15566)", () => {
+      vi.setSystemTime(10000);
+      const onBootComplete = vi.fn();
+      const visible = ["", "│ >                                        │"];
+      const monitor = new ActivityMonitor("kimi-boot-prompt", 1000, vi.fn(), {
+        ...buildActivityMonitorOptions("kimi", {
+          getVisibleLines: () => visible,
+          getCursorLine: () => visible[visible.length - 1]!,
+        }),
+        onBootComplete,
+      });
+      monitor.startPolling();
+
+      vi.advanceTimersByTime(1000);
+
+      expect(onBootComplete).toHaveBeenCalledTimes(1);
+
+      monitor.dispose();
+    });
+
     it("wires simpleOutputVolumeRecovery for agent terminals only (#10664)", () => {
       const agentOptions = buildActivityMonitorOptions("claude", {});
       expect(agentOptions.simpleOutputVolumeRecovery?.enabled).toBe(true);

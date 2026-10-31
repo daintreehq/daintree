@@ -494,6 +494,22 @@ export class CliAvailabilityService {
         }
       }
 
+      if (authCheck.configHome) {
+        const { envVar, defaultDir, paths } = authCheck.configHome;
+        const relocated = process.env[envVar];
+        const root = relocated && relocated.trim() !== "" ? relocated : join(home, defaultDir);
+        for (const relPath of paths) {
+          const fullPath = join(root, relPath);
+          checkedPaths.push(fullPath);
+          try {
+            await access(fullPath, constants.R_OK);
+            return true;
+          } catch {
+            // File not found, continue
+          }
+        }
+      }
+
       if (!timedOut) {
         // Debug, not info: the setup wizard re-checks every 3s, and at info
         // this repeats into daintree.log's crash-context tail.

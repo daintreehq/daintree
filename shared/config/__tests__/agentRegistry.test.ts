@@ -534,9 +534,28 @@ describe("kimi detection patterns", () => {
     return (patterns ?? []).map((p: string) => new RegExp(p, "im"));
   }
 
-  it.each(["✨", "💫", "📋", "$"])("matches prompt glyph %s", (glyph) => {
+  it.each([
+    ["an empty input box", "│ >                                        │"],
+    ["a draft in the input box", "│ > fix the failing test                   │"],
+    ["shell mode", "│ ! ls -la                                 │"],
+  ])("matches the boxed editor prompt row for %s", (_label, row) => {
     const patterns = compilePatterns("promptPatterns");
-    expect(patterns.some((p) => p.test(`${glyph} `))).toBe(true);
+    expect(patterns.some((p) => p.test(row))).toBe(true);
+  });
+
+  it.each([
+    // The archived Python client's prompt_toolkit glyphs.
+    ["✨ "],
+    ["💫 "],
+    ["📋 "],
+    ["$ npm test"],
+    // A transcript echo of something already sent is not the prompt.
+    ["❯ fix the failing test"],
+    // The welcome panel shares the box border.
+    ["│  Directory: /Users/test/project          │"],
+  ])("does not treat %j as the prompt", (line) => {
+    const patterns = compilePatterns("promptPatterns");
+    expect(patterns.some((p) => p.test(line))).toBe(false);
   });
 
   it.each(["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"])(

@@ -155,9 +155,13 @@ describe("CliAvailabilityService", () => {
   const envKeysToClear = [
     ...new Set(
       getAgentIds().flatMap((id) => {
-        const envVar = getAgentConfig(id)?.authCheck?.envVar;
-        if (!envVar) return [];
-        return Array.isArray(envVar) ? envVar : [envVar];
+        const authCheck = getAgentConfig(id)?.authCheck;
+        const envVar = authCheck?.envVar;
+        const envVars = !envVar ? [] : Array.isArray(envVar) ? envVar : [envVar];
+        // A relocated config root moves every probed path, so a developer's
+        // own KIMI_CODE_HOME (and the like) must not leak in either.
+        const homeVar = authCheck?.configHome?.envVar;
+        return homeVar ? [...envVars, homeVar] : envVars;
       })
     ),
     // Not an auth env var: alters the probe PATH; cleared for the same isolation.
@@ -1722,7 +1726,7 @@ describe("CliAvailabilityService", () => {
     });
 
     it("does not synthesise PyPI paths when packages.pypi is unset", async () => {
-      // Agents that legitimately declare `packages.pypi` (interpreter, mistral, kimi, aider)
+      // Agents that legitimately declare `packages.pypi` (interpreter, mistral, aider)
       // SHOULD probe uv/pipx layouts; every other built-in does not, and must not
       // produce PyPI-shaped fs.access calls. This guards against accidental
       // probing when an agent has e.g. `npmGlobalPackage` only.
@@ -1737,7 +1741,7 @@ describe("CliAvailabilityService", () => {
       await service.checkAvailability();
 
       // Filter out paths synthesised for agents whose `packages.pypi`
-      // legitimately triggers uv/pipx probing (interpreter, mistral, kimi, aider).
+      // legitimately triggers uv/pipx probing (interpreter, mistral, aider).
       // Remaining probed paths must not include any uv/pipx layouts.
       // Normalize separators so substring checks work regardless of host OS
       // (Windows runners produce backslashed paths post-`path.join`).
@@ -1749,8 +1753,6 @@ describe("CliAvailabilityService", () => {
           !p.includes("/interpreter") &&
           !p.includes("mistral") &&
           !p.includes("/vibe") &&
-          !p.includes("kimi-cli") &&
-          !p.includes("/kimi") &&
           !p.includes("aider")
       );
       expect(probedPaths.some((p) => p.includes(".local/share/uv/tools"))).toBe(false);
