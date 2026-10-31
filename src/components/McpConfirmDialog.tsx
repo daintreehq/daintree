@@ -5,6 +5,7 @@ import { Callout } from "@/components/ui/Callout";
 import {
   AlertTriangle,
   ChevronRight,
+  Clock,
   Plug,
   ShieldAlert,
   Sparkles,
@@ -92,6 +93,18 @@ const PREVIEW_STILL_WORKING_MS = 5_000;
 /** What an expired request says beside its dead button (#14989). */
 const EXPIRED_HINT = "Timed out before an answer, so nothing ran";
 
+/**
+ * What a request brought up in place of one that expired on screen says about
+ * it (#15700). Names it as its own dialog did, and says "previous" because the
+ * two can share a title.
+ */
+function followsExpiredText(expired: NonNullable<PendingMcpConfirm["followsExpired"]>) {
+  const name = expired.subject
+    ? `${expired.actionTitle} '${expired.subject}'`
+    : `'${expired.actionTitle}'`;
+  return `The previous request, ${name}, timed out before an answer, so nothing ran`;
+}
+
 function truncateUserAgent(userAgent: string): string {
   return userAgent.length > MAX_USER_AGENT_DISPLAY
     ? `${userAgent.slice(0, MAX_USER_AGENT_DISPLAY - 1)}…`
@@ -158,6 +171,9 @@ export function McpConfirmDialog() {
       scope?: McpApprovalScope
     ) => {
       if (handledRequestIdRef.current === requestId) return;
+      // An expiry can bring up the next request before this render's handlers
+      // are replaced, and `resolveCurrent` answers whatever is current.
+      if (useMcpConfirmStore.getState().current?.requestId !== requestId) return;
       handledRequestIdRef.current = requestId;
       resolveCurrent(decision, selectedTargetIds, scope);
     },
@@ -295,6 +311,9 @@ export function McpConfirmDialog() {
   // self-reported tool annotations this value is trusted.
   const isDestructive = current.danger === "confirm";
   const expired = current.expired === true;
+  // Brought up without anyone answering anything (#15700): the pointer may be
+  // on its way to the button of the request that just expired.
+  const followsExpired = current.followsExpired;
   const previewState = derivePreviewState(current);
   const hasArgs = current.argsSummary.trim().length > 0;
 
@@ -370,7 +389,8 @@ export function McpConfirmDialog() {
       expired ||
       previewState === "pending" ||
       (selectableTargets !== undefined && selectedCount === 0),
-    confirmCooldownMs: isDestructive && !expired ? CONFIRM_COOLDOWN_MS : undefined,
+    confirmCooldownMs:
+      (isDestructive || followsExpired !== undefined) && !expired ? CONFIRM_COOLDOWN_MS : undefined,
     cooldownKey: current.requestId,
     // A promoted request is a new question: it opens at the top, with focus back
     // on the safe default rather than on the button that answered the last one.
@@ -382,7 +402,10 @@ export function McpConfirmDialog() {
     // Nor may the control that steps away to the requester: a reflexive Enter
     // there would hide the question instead of answering it.
     initialFocus:
-      showAssistantPreference || offersSession || current.requester !== undefined
+      showAssistantPreference ||
+      offersSession ||
+      current.requester !== undefined ||
+      followsExpired !== undefined
         ? ("cancel" as const)
         : undefined,
     // Absent rather than empty when there is nothing to say, so ConfirmDialog's
@@ -399,16 +422,30 @@ export function McpConfirmDialog() {
     ) : undefined,
   };
 
-  // Who → what happens → what's affected → detail → later requests. The
-  // description stays beside the rationale: some actions carry a warning in one
-  // that the other doesn't repeat (forge.dismissReview's merge-safety note).
+  // Who → what happens → what's affected → detail → later requests, after a
+  // note on any request that expired in this one's place, which is why the
+  // dialog changed under the person. The description stays beside the
+  // rationale: some actions carry a warning in one that the other doesn't
+  // repeat (forge.dismissReview's merge-safety note).
   const body = (
     <div className="space-y-4">
       {/* Mounted for the whole request, so the expiry is a change a screen
-          reader announces rather than a live region that arrived already full. */}
+          reader announces rather than a live region that arrived already full.
+          The dialog stays mounted across a promotion, so the same holds for a
+          request brought up in place of one that expired. */}
       <span role="status" className="sr-only">
-        {expired ? EXPIRED_HINT : ""}
+        {expired
+          ? EXPIRED_HINT
+          : followsExpired
+            ? `${followsExpiredText(followsExpired)}. Now asking: ${confirmTitle(current)}`
+            : ""}
       </span>
+
+      {followsExpired && (
+        <Callout severity="neutral" icon={Clock}>
+          {followsExpiredText(followsExpired)}
+        </Callout>
+      )}
 
       <RequesterRow
         current={current}
