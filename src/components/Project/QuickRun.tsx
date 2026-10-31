@@ -623,6 +623,10 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
     highlighted != null && normalizeCommand(highlighted.value) !== normalizedInput;
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Mid-composition every key is the IME's: Enter commits the candidate rather
+    // than running it. 229 covers browsers that report the commit after
+    // `isComposing` has already cleared.
+    if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
     // Down opens a shut list; the other navigation keys only move a list that is
     // showing, so Home and End keep the caret while it is shut. -1 is the field.
     const navigable = !keyBelongsToField(e) && (listOpen || e.key === "ArrowDown");
