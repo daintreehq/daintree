@@ -10,6 +10,7 @@ import { isMac } from "@/lib/platform";
 import { dispatchEscape, hasHandlers } from "@/lib/escapeStack";
 import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
 import { isInPaneDialog } from "@/lib/paneDialog";
+import { hasAppModal } from "@/lib/appModal";
 import { isTerminalReservedKey } from "@/services/terminalReservedKeys";
 import { CLOSE_OWNER_ATTR, requestOwnedClose } from "@/lib/closeRequest";
 import { DICTATION_OWNER_ATTR } from "@/services/canopyReplyDictation";
@@ -190,9 +191,7 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // A page's dialog blocks only its own pane, so it owns Escape only from
       // inside (#15037): elsewhere, Escape does what it would without it.
       const inPaneDialog = isEscape && isInPaneDialog(target);
-      const hasModalDialog =
-        isEscape &&
-        (document.querySelector('[role="dialog"][aria-modal="true"]') !== null || inPaneDialog);
+      const hasModalDialog = isEscape && (hasAppModal() || inPaneDialog);
       const hasDialogBackstop =
         isEscape && document.querySelector(`[${ESCAPE_BACKSTOP_DIALOG_ATTR}]`) !== null;
       // The command HUD's search input is the active typing surface while the

@@ -1,6 +1,7 @@
 import type { PanelInstance } from "@shared/types/panel";
 import { isAgentFleetActionEligible } from "@/store/fleetEligibility";
 import { isInPaneDialog } from "@/lib/paneDialog";
+import { hasAppModal } from "@/lib/appModal";
 
 /**
  * Pure decision logic for the type-anywhere rescue and the off-screen focus
@@ -146,9 +147,7 @@ export function focusOwnsKey(el: Element | null, key: string): boolean {
  * own pane, so it owns the key only when `focus` is inside it (#15037).
  */
 export function hasBlockingOverlay(focus: Element | null = document.activeElement): boolean {
-  return (
-    document.querySelector('[role="dialog"][aria-modal="true"]') !== null || isInPaneDialog(focus)
-  );
+  return hasAppModal() || isInPaneDialog(focus);
 }
 
 /** The panel that owns the currently focused DOM node, if any. */

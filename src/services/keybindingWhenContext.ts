@@ -7,6 +7,7 @@ import { useCanopyStore } from "@/store/canopyStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { getChromeWhenContext } from "@/services/chromeWhenContext";
 import { isInPaneDialog } from "@/lib/paneDialog";
+import { hasAppModal } from "@/lib/appModal";
 
 /**
  * Live `when`-clause context for keybinding resolution — the documented
@@ -55,9 +56,7 @@ export function buildKeybindingWhenContext(event: KeyboardEvent): WhenClauseCont
     textInputFocused: editable && !inTerminal,
     // A page's dialog blocks only its own pane: open as far as the keys typed
     // into it are concerned, and nowhere else (#15037).
-    modalOpen:
-      document.querySelector('[role="dialog"][aria-modal="true"]') !== null ||
-      isInPaneDialog(target),
+    modalOpen: hasAppModal() || isInPaneDialog(target),
     paletteOpen: paletteId !== null,
     paletteId: paletteId ?? "",
     fleetArmed: armedIds.size > 0,
