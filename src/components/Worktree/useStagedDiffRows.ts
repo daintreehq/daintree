@@ -3,6 +3,7 @@ import type { HunkData, HunkTokens } from "react-diff-view";
 import {
   countHunkRows,
   DIFF_ROW_BATCH,
+  shouldStageRows,
   sliceHunksToRowBudget,
   stageTokens,
 } from "./diffRowStaging";
@@ -41,7 +42,7 @@ function freshStage(owner: unknown, flush: number, rows: number): Stage {
   return {
     owner,
     flush,
-    mounted: rows > DIFF_ROW_BATCH ? DIFF_ROW_BATCH : Number.POSITIVE_INFINITY,
+    mounted: shouldStageRows(rows) ? DIFF_ROW_BATCH : Number.POSITIVE_INFINITY,
     tokenHunks: null,
     target: null,
     base: null,
@@ -149,7 +150,7 @@ export function useStagedDiffRows(
 
   // A set within one batch takes its tokens directly, and a stale pass (null)
   // clears at once: stale tokens must never sit on rows they weren't built for.
-  const staged = rows > DIFF_ROW_BATCH && tokens !== null;
+  const staged = shouldStageRows(rows) && tokens !== null;
   const shownTokens = !staged ? tokens : current.tokenHunks === hunks ? current.shown : null;
 
   useEffect(() => {
@@ -160,14 +161,7 @@ export function useStagedDiffRows(
     }
     const tokensDone =
       !staged || (stage.tokenHunks === hunks && stage.target === tokens && stage.shown === tokens);
-    if (stage.mounted >= rows && tokensDone) {
-      // Rows shrank under a finite budget: mark it finished, so a later
-      // expansion of the same view mounts at once instead of being cut short.
-      if (Number.isFinite(stage.mounted)) {
-        setStage({ ...stage, mounted: Number.POSITIVE_INFINITY });
-      }
-      return;
-    }
+    if (stage.mounted >= rows && tokensDone) return;
     const frame = requestAnimationFrame(() => {
       setStage((previous) =>
         previous === stage ? advanceStage(stage, hunks, rows, staged ? tokens : null) : previous

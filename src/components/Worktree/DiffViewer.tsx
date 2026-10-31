@@ -1432,12 +1432,20 @@ function FileDiff({
     }
     const source = native ?? proxy;
     const measure = () => {
+      // Read before writing: a staged mount grows the table, and so fires this
+      // observer, once per batch, and a write ahead of the read would force a
+      // fresh layout each time. The width itself rarely moves, so it is only
+      // written when it did.
+      const overflow = source.scrollWidth > source.clientWidth + 1;
       // Ordered: the proxy's scroll range has to match the content before the
       // offset is mirrored into it, or the write clamps against a stale width.
       if (native) {
-        proxy.style.setProperty("--diff-native-scroll-width", `${native.scrollWidth}px`);
+        const width = `${native.scrollWidth}px`;
+        if (proxy.style.getPropertyValue("--diff-native-scroll-width") !== width) {
+          proxy.style.setProperty("--diff-native-scroll-width", width);
+        }
       }
-      setHasHOverflow(source.scrollWidth > source.clientWidth + 1);
+      setHasHOverflow(overflow);
       if (native) syncNativeHScroll("content");
     };
     measure();

@@ -3,10 +3,19 @@ import type { HunkData, HunkTokens, TokenNode } from "react-diff-view";
 /**
  * Rows committed per staged slice. A slice is one React commit plus the style
  * and layout it triggers, so this bounds the longest frame a giant hunk can
- * cost; at ~3 elements a plain row (~8 highlighted) a few hundred rows stays
- * well inside a frame budget while needing only a dozen frames for 5,000 rows.
+ * cost. Chosen from Chromium measurements of 5,000-row tables (#15677): 200
+ * kept every slice of an added file under the 50 ms long-frame line, where
+ * 400 and 800 let the full-file split view's slices reach 90-115 ms.
  */
-export const DIFF_ROW_BATCH = 400;
+export const DIFF_ROW_BATCH = 200;
+
+/**
+ * Whether a set of this many rows is staged at all. A set within one batch
+ * renders in full on its first commit, exactly as an unstaged table would.
+ */
+export function shouldStageRows(rows: number): boolean {
+  return rows > DIFF_ROW_BATCH;
+}
 
 /** Rows a hunk set renders, counted in changes (the unit a hunk is sliced by). */
 export function countHunkRows(hunks: readonly HunkData[]): number {

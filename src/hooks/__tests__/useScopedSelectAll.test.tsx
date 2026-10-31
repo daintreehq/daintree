@@ -380,3 +380,45 @@ describe("useScopedSelectAll with self scope", () => {
     expect(event.defaultPrevented).toBe(false);
   });
 });
+
+describe("useScopedSelectAll beforeSelect", () => {
+  /** Renders its tail only after `beforeSelect` runs, like a viewer that mounts lazily. */
+  function LazyHarness({ onBefore }: { onBefore: () => void }) {
+    const ref = useRef<HTMLDivElement>(null);
+    useScopedSelectAll(ref, true, "surface", () => {
+      onBefore();
+      const tail = document.createElement("p");
+      tail.textContent = "late rows";
+      ref.current?.appendChild(tail);
+    });
+    return (
+      <div data-testid="pane" data-panel-id="pane-1" tabIndex={-1}>
+        <input data-testid="search" />
+        <div data-testid="body" ref={ref}>
+          <p>early rows</p>
+        </div>
+      </div>
+    );
+  }
+
+  it("runs before the selection, so content it adds is selected too", () => {
+    const onBefore = vi.fn();
+    const { getByTestId } = render(<LazyHarness onBefore={onBefore} />);
+
+    pressSelectAll(getByTestId("pane"));
+
+    expect(onBefore).toHaveBeenCalledTimes(1);
+    expectSelectedWholeOf(getByTestId("body"));
+    expect(selectedText()).toContain("late rows");
+  });
+
+  it("does not run when the chord is left to someone else", () => {
+    const onBefore = vi.fn();
+    const { getByTestId } = render(<LazyHarness onBefore={onBefore} />);
+
+    const event = pressSelectAll(getByTestId("search"));
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(onBefore).not.toHaveBeenCalled();
+  });
+});
