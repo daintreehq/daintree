@@ -29,7 +29,8 @@ const m = vi.hoisted(() => {
   }
   return {
     FakeNotification,
-    endpoints: new Map<number, unknown>(),
+    byHandle: new Map<number, unknown>(),
+    byId: new Map<string, unknown>(),
     isSessionMuted: vi.fn(() => false),
   };
 });
@@ -55,11 +56,16 @@ vi.mock("../../../services/AgentNotificationService.js", () => ({
 vi.mock("../../../services/SoundService.js", () => ({ soundService: { playFile: vi.fn() } }));
 vi.mock("../../../store.js", () => ({ store: { get: () => ({}) } }));
 vi.mock("../../../ipc/endpointRegistry.js", () => ({
-  getEndpointRegistry: () => ({ getByHandle: (handle: number) => m.endpoints.get(handle) }),
+  getEndpointRegistry: () => ({
+    getByHandle: (handle: number) => m.byHandle.get(handle),
+    get: (endpointId: string) => m.byId.get(endpointId),
+  }),
 }));
 
 import { CHANNELS } from "../../../ipc/channels.js";
 import { notificationService } from "../../../services/NotificationService.js";
+import { AppError } from "../../../utils/errorTypes.js";
+import { RemoteViewEndpoint } from "../../host/RemoteViewEndpoint.js";
 import { resetHostNoticeBudget } from "../hostNoticeBudget.js";
 import {
   NOTIFICATION_CLOSE_METHOD,
@@ -71,69 +77,97 @@ import {
   showHostNotification,
 } from "../notifications.js";
 
+const STUDIO = { id: "studio", name: "Studio Mac" };
+
 /**
- * One remote view as the host sees it, answered by this same process's Shell
- * handlers, as `RemoteHostManager.reverseRequest` would on the far end. Host
- * owners are negative handles and Shell views are positive webContents ids,
- * so one NotificationService plays both machines without the two meeting.
+ * One remote view as the host sees it: a real endpoint whose transport is
+ * answered by this same process's Shell handlers, as the Shell's
+ * `RemoteHostManager.reverseRequest` would on the far end. Host owners are
+ * negative handles and Shell views positive webContents ids, so one
+ * NotificationService plays both machines without the two meeting.
  */
-function remoteView(handle: number, webContentsId: number, host = STUDIO) {
-  const closeListeners = new Set<() => void>();
-  let closed = false;
+function remoteView(clientEndpointId: string, webContentsId: number, host = STUDIO) {
   let down = false;
-  const heldCloses: Array<() => void> = [];
-  let holdCloses = false;
+  let holding = false;
+  const held: Array<() => void> = [];
+  let shellAnswers = true;
   const answer = (method: string, payload: unknown): unknown => {
     if (method === NOTIFICATION_SHOW_METHOD) {
-      if (!showHostNotification(webContentsId, payload, host)) throw new Error("VALIDATION");
-      return null;
-    }
-    if (method === NOTIFICATION_CLOSE_METHOD) {
-      if (!closeHostNotifications(payload, host.id)) throw new Error("VALIDATION");
-      return null;
-    }
-    throw Object.assign(new Error("No handler"), { code: "UNSUPPORTED" });
-  };
-  const endpoint = {
-    kind: "remote-view" as const,
-    handle,
-    isClosed: () => closed,
-    onClose(cb: () => void) {
-      closeListeners.add(cb);
-      return { dispose: () => closeListeners.delete(cb) };
-    },
-    request: vi.fn(async (method: string, payload: unknown) => {
-      await Promise.resolve();
-      if (down)
-        throw Object.assign(new Error("Shell is not attached"), { code: "HOST_DISCONNECTED" });
-      if (holdCloses && method === NOTIFICATION_CLOSE_METHOD) {
-        return new Promise((resolve) => heldCloses.push(() => resolve(answer(method, payload))));
+      if (!showHostNotification(webContentsId, payload, host)) {
+        throw new AppError({ code: "VALIDATION", message: "Malformed notification" });
       }
-      return answer(method, payload);
-    }),
+      return null;
+    }
+    if (method === NOTIFICATION_CLOSE_METHOD && shellAnswers) {
+      if (!closeHostNotifications(payload, host.id)) {
+        throw new AppError({ code: "VALIDATION", message: "Malformed close" });
+      }
+      return null;
+    }
+    throw new AppError({ code: "UNSUPPORTED", message: `No handler for ${method}` });
   };
-  m.endpoints.set(handle, endpoint);
+  const endpoint = new RemoteViewEndpoint(
+    {
+      endpointId: `remote:s1:${clientEndpointId}`,
+      clientEndpointId,
+      clientId: "shell",
+      linkSessionId: "s1",
+      projectId: "p1",
+    },
+    {
+      sendEvent: () => {},
+      request: async (_endpoint, method, payload) => {
+        await Promise.resolve();
+        if (down) {
+          throw new AppError({ code: "HOST_DISCONNECTED", message: "Shell is not attached" });
+        }
+        if (holding && method === NOTIFICATION_CLOSE_METHOD) {
+          return new Promise((resolve, reject) =>
+            held.push(() => {
+              try {
+                resolve(answer(method, payload));
+              } catch (error) {
+                reject(error);
+              }
+            })
+          );
+        }
+        return answer(method, payload);
+      },
+    }
+  );
+  const request = vi.spyOn(endpoint, "request");
+  m.byHandle.set(endpoint.handle, endpoint);
+  m.byId.set(endpoint.endpointId, endpoint);
   return {
     endpoint,
+    handle: endpoint.handle,
+    request,
+    closesSent: () =>
+      request.mock.calls
+        .filter(([method]) => method === NOTIFICATION_CLOSE_METHOD)
+        .map(([, payload]) => (payload as { ids: string[] }).ids),
     setDown(value: boolean) {
       down = value;
     },
+    /** A Shell from before closes existed. */
+    refuseCloses() {
+      shellAnswers = false;
+    },
     holdCloses() {
-      holdCloses = true;
+      holding = true;
     },
     releaseCloses() {
-      holdCloses = false;
-      for (const deliver of heldCloses.splice(0)) deliver();
+      holding = false;
+      for (const deliver of held.splice(0)) deliver();
     },
     close() {
-      closed = true;
-      m.endpoints.delete(handle);
-      for (const cb of [...closeListeners]) cb();
+      m.byHandle.delete(endpoint.handle);
+      m.byId.delete(endpoint.endpointId);
+      endpoint.close();
     },
   };
 }
-
-const STUDIO = { id: "studio", name: "Studio Mac" };
 
 async function settle(): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));
@@ -154,14 +188,22 @@ function shellBanners(): string[] {
   return m.FakeNotification.instances.filter((n) => !n.closed).map((n) => n.options.title);
 }
 
+const transportListeners = new Set<(endpointIds: string[], attached: boolean) => void>();
 let uninstall: () => void;
 
 beforeEach(() => {
   m.FakeNotification.instances.length = 0;
-  m.endpoints.clear();
+  m.byHandle.clear();
+  m.byId.clear();
+  transportListeners.clear();
   resetHostNoticeBudget();
   _resetHostBannersForTesting();
-  uninstall = installRemoteNotificationSink();
+  uninstall = installRemoteNotificationSink({
+    onTransportChange: (listener) => {
+      transportListeners.add(listener);
+      return () => transportListeners.delete(listener);
+    },
+  });
 });
 
 afterEach(() => {
@@ -171,9 +213,9 @@ afterEach(() => {
 
 describe("a remote view's banners, host sink to Shell", () => {
   it("takes the Shell's banner down once its panel is dealt with on the host", async () => {
-    remoteView(-3, 12);
-    hostWaiting(-3, "Agent waiting", ["t1"]);
-    hostWaiting(-3, "Other waiting", ["t2"]);
+    const view = remoteView("view-12", 12);
+    hostWaiting(view.handle, "Agent waiting", ["t1"]);
+    hostWaiting(view.handle, "Other waiting", ["t2"]);
     await settle();
     expect(shellBanners()).toEqual(["Studio Mac: Agent waiting", "Studio Mac: Other waiting"]);
 
@@ -183,8 +225,8 @@ describe("a remote view's banners, host sink to Shell", () => {
   });
 
   it("keeps a grouped banner until its last panel is dealt with", async () => {
-    const view = remoteView(-3, 12);
-    hostWaiting(-3, "Agents waiting", ["t1", "t2"]);
+    const view = remoteView("view-12", 12);
+    hostWaiting(view.handle, "Agents waiting", ["t1", "t2"]);
     await settle();
 
     notificationService.closeNotificationsForPanel("t1");
@@ -195,25 +237,22 @@ describe("a remote view's banners, host sink to Shell", () => {
     notificationService.closeNotificationsForPanel("t2");
     await settle();
     expect(shellBanners()).toEqual([]);
-    const closes = view.endpoint.request.mock.calls.filter(
-      ([method]) => method === NOTIFICATION_CLOSE_METHOD
-    );
-    expect(closes).toHaveLength(1);
+    expect(view.closesSent()).toHaveLength(1);
   });
 
   it("shows one banner for a repeated wait on one panel", async () => {
-    remoteView(-3, 12);
-    hostWaiting(-3, "first wait", ["t1"]);
+    const view = remoteView("view-12", 12);
+    hostWaiting(view.handle, "first wait", ["t1"]);
     await settle();
     notificationService.closeNotificationsForPanel("t1");
-    hostWaiting(-3, "second wait", ["t1"]);
+    hostWaiting(view.handle, "second wait", ["t1"]);
     await settle();
     expect(shellBanners()).toEqual(["Studio Mac: second wait"]);
   });
 
-  it("takes down a banner whose close was lost with the link, before the next one shows", async () => {
-    const view = remoteView(-3, 12);
-    hostWaiting(-3, "first wait", ["t1"]);
+  it("closes a banner whose close was lost with the link once the link resumes", async () => {
+    const view = remoteView("view-12", 12);
+    hostWaiting(view.handle, "first wait", ["t1"]);
     await settle();
 
     view.setDown(true);
@@ -222,39 +261,55 @@ describe("a remote view's banners, host sink to Shell", () => {
     expect(shellBanners()).toEqual(["Studio Mac: first wait"]);
 
     view.setDown(false);
-    hostWaiting(-3, "second wait", ["t1"]);
+    for (const listener of transportListeners) listener([view.endpoint.endpointId], false);
+    await settle();
+    expect(shellBanners()).toEqual(["Studio Mac: first wait"]);
+    for (const listener of transportListeners) listener([view.endpoint.endpointId], true);
+    await settle();
+    expect(shellBanners()).toEqual([]);
+  });
+
+  it("closes a banner whose close was lost ahead of the next notification", async () => {
+    const view = remoteView("view-12", 12);
+    hostWaiting(view.handle, "first wait", ["t1"]);
+    await settle();
+
+    view.setDown(true);
+    notificationService.closeNotificationsForPanel("t1");
+    await settle();
+    view.setDown(false);
+    hostWaiting(view.handle, "second wait", ["t1"]);
     await settle();
     expect(shellBanners()).toEqual(["Studio Mac: second wait"]);
   });
 
   it("never lets a close that arrives late take down a newer banner", async () => {
-    const view = remoteView(-3, 12);
-    hostWaiting(-3, "first wait", ["t1"]);
+    const view = remoteView("view-12", 12);
+    hostWaiting(view.handle, "first wait", ["t1"]);
     await settle();
 
     view.holdCloses();
     notificationService.closeNotificationsForPanel("t1");
-    hostWaiting(-3, "second wait", ["t1"]);
+    hostWaiting(view.handle, "second wait", ["t1"]);
     await settle();
+    expect(shellBanners()).toEqual(["Studio Mac: first wait", "Studio Mac: second wait"]);
     view.releaseCloses();
     await settle();
     expect(shellBanners()).toEqual(["Studio Mac: second wait"]);
   });
 
   it("never lets an old close reach the banner a reconnected view shows", async () => {
-    const before = remoteView(-3, 12);
-    hostWaiting(-3, "before the gap", ["t1"]);
+    const before = remoteView("view-12", 12);
+    hostWaiting(before.handle, "before the gap", ["t1"]);
     await settle();
-    const [{ id: oldId }] = before.endpoint.request.mock.calls.map(
-      ([, payload]) => payload as { id: string }
-    );
+    const oldId = (before.request.mock.calls[0]![1] as { id: string }).id;
 
     // A fresh session: the host dropped the old endpoint, and the Shell takes
     // down what nothing can close any more before the view is reopened.
     before.close();
     releaseHostNotifications(STUDIO.id);
-    const after = remoteView(-4, 12);
-    hostWaiting(-4, "after the gap", ["t1"]);
+    const after = remoteView("view-12", 12);
+    hostWaiting(after.handle, "after the gap", ["t1"]);
     await settle();
     expect(shellBanners()).toEqual(["Studio Mac: after the gap"]);
 
@@ -262,38 +317,65 @@ describe("a remote view's banners, host sink to Shell", () => {
     expect(closeHostNotifications({ ids: [oldId] }, STUDIO.id)).toBe(true);
     expect(shellBanners()).toEqual(["Studio Mac: after the gap"]);
 
-    // The host forgot the old owner's banners with its endpoint.
     notificationService.closeNotificationsForPanel("t1");
     await settle();
     expect(shellBanners()).toEqual([]);
-    expect(
-      after.endpoint.request.mock.calls.filter(([method]) => method === NOTIFICATION_CLOSE_METHOD)
-    ).toHaveLength(1);
+    expect(after.closesSent()).toHaveLength(1);
+  });
+
+  it("sends nothing more for a view that went away with a close in flight", async () => {
+    const view = remoteView("view-12", 12);
+    hostWaiting(view.handle, "first", ["t1"]);
+    hostWaiting(view.handle, "second", ["t2"]);
+    await settle();
+
+    view.holdCloses();
+    notificationService.closeNotificationsForPanel("t1");
+    await settle();
+    view.close();
+    await settle();
+    for (const listener of transportListeners) listener([view.endpoint.endpointId], true);
+    notificationService.closeNotificationsForPanel("t2");
+    await settle();
+    expect(view.closesSent()).toHaveLength(1);
+  });
+
+  it("closes every banner on a panel however many were tracked, past one request's share", async () => {
+    const view = remoteView("view-12", 12);
+    // The host tracks them all; the Shell shows its share for the minute.
+    for (let i = 0; i < 65; i++) hostWaiting(view.handle, `wait ${i}`, ["t1"]);
+    await settle();
+    expect(shellBanners()).toHaveLength(6);
+
+    notificationService.closeNotificationsForPanel("t1");
+    await settle();
+    expect(view.closesSent().map((ids) => ids.length)).toEqual([64, 1]);
+    expect(shellBanners()).toEqual([]);
   });
 
   it("replaces a banner under the same key, for the same view only", async () => {
-    remoteView(-3, 12);
-    remoteView(-5, 13);
+    const view = remoteView("view-12", 12);
+    const other = remoteView("view-13", 13);
     const keyed = (owner: number, title: string) =>
       notificationService.showNativeNotification(title, "b", {
         ownerWebContentsId: owner,
         replaceKey: "plugin:build",
       });
-    keyed(-3, "build 1");
-    keyed(-5, "other view's build");
-    keyed(-3, "build 2");
+    keyed(view.handle, "build 1");
+    keyed(other.handle, "other view's build");
+    keyed(view.handle, "build 2");
     await settle();
     expect(shellBanners()).toEqual(["Studio Mac: other view's build", "Studio Mac: build 2"]);
   });
 
   it("sends a banner nothing will close without an identity", async () => {
-    const view = remoteView(-3, 12);
+    const view = remoteView("view-12", 12);
     notificationService.showNativeNotification("Agent finished", "b", {
-      ownerWebContentsId: -3,
+      ownerWebContentsId: view.handle,
       category: "completed",
     });
     await settle();
-    expect(view.endpoint.request).toHaveBeenCalledWith(NOTIFICATION_SHOW_METHOD, {
+    expect(view.request).toHaveBeenCalledWith(NOTIFICATION_SHOW_METHOD, {
       title: "Agent finished",
       body: "b",
       category: "completed",
@@ -301,17 +383,21 @@ describe("a remote view's banners, host sink to Shell", () => {
   });
 
   it("asks an older Shell to close once, and owes it nothing after it refuses", async () => {
-    const view = remoteView(-3, 12);
-    hostWaiting(-3, "first wait", ["t1"]);
+    const view = remoteView("view-12", 12);
+    hostWaiting(view.handle, "first wait", ["t1"]);
     await settle();
-    view.endpoint.request.mockImplementationOnce(async () => {
-      throw Object.assign(new Error("No handler"), { code: "UNSUPPORTED" });
-    });
+    const firstId = (view.request.mock.calls[0]![1] as { id: string }).id;
+    view.refuseCloses();
+
     notificationService.closeNotificationsForPanel("t1");
     await settle();
-    hostWaiting(-3, "second wait", ["t2"]);
+    expect(view.closesSent()).toEqual([[firstId]]);
+
+    for (const listener of transportListeners) listener([view.endpoint.endpointId], true);
+    hostWaiting(view.handle, "second wait", ["t2"]);
     await settle();
-    const lastShow = view.endpoint.request.mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(view.closesSent()).toEqual([[firstId]]);
+    const lastShow = view.request.mock.calls.at(-1)![1] as Record<string, unknown>;
     expect(lastShow.supersedes).toBeUndefined();
   });
 });

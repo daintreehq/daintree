@@ -1440,16 +1440,37 @@ describe("NotificationService remote owners", () => {
     expect(shown[2]!.supersedes).toEqual([shown[0]!.id]);
   });
 
-  it("stops tracking a remote owner's banners once it is forgotten", () => {
+  it("stops tracking a remote owner's banners once it is forgotten, and only that owner's", () => {
     const sink = fakeSink();
     notificationService.setRemoteNotificationSink(sink);
-    notificationService.showNativeNotification("t", "b", {
-      ownerWebContentsId: -4,
-      closeWithPanels: ["t1"],
-    });
+    for (const owner of [-4, -6]) {
+      notificationService.showNativeNotification("t", "b", {
+        ownerWebContentsId: owner,
+        closeWithPanels: ["t1"],
+      });
+    }
+    const kept = (sink.show.mock.calls[1]![0] as { id: string }).id;
     notificationService.forgetRemoteOwner(-4);
     notificationService.closeNotificationsForPanel("t1");
+    expect(sink.close.mock.calls).toEqual([[-6, [kept]]]);
+  });
+
+  it("supersedes its own oldest banner on the same owner past the bound, and keeps the rest closable", () => {
+    const sink = fakeSink();
+    notificationService.setRemoteNotificationSink(sink);
+    for (let i = 0; i < 201; i++) {
+      notificationService.showNativeNotification("t", "b", {
+        ownerWebContentsId: -4,
+        closeWithPanels: [`p${i}`],
+      });
+    }
+    const shown = sink.show.mock.calls.map(([n]) => n as { id: string; supersedes?: string[] });
+    expect(shown[200]!.supersedes).toEqual([shown[0]!.id]);
     expect(sink.close).not.toHaveBeenCalled();
+    notificationService.closeNotificationsForPanel("p0");
+    expect(sink.close).not.toHaveBeenCalled();
+    notificationService.closeNotificationsForPanel("p1");
+    expect(sink.close.mock.calls).toEqual([[-4, [shown[1]!.id]]]);
   });
 
   it("bounds remote banners it keeps closable, closing the oldest on its Shell", () => {
@@ -1462,9 +1483,15 @@ describe("NotificationService remote owners", () => {
       });
     }
     const firstId = (sink.show.mock.calls[0]![0] as { id: string }).id;
-    expect(sink.close).toHaveBeenCalledWith(-6, [firstId]);
+    expect(sink.close.mock.calls).toEqual([[-6, [firstId]]]);
+    expect((sink.show.mock.calls[200]![0] as { supersedes?: string[] }).supersedes).toBeUndefined();
     notificationService.closeNotificationsForPanel("p0");
-    expect(sink.close).toHaveBeenCalledTimes(1);
+    notificationService.closeNotificationsForPanel("p1");
+    const secondId = (sink.show.mock.calls[1]![0] as { id: string }).id;
+    expect(sink.close.mock.calls).toEqual([
+      [-6, [firstId]],
+      [-4, [secondId]],
+    ]);
   });
 
   it("never shows a remote owner's notification here, even with no sink", () => {

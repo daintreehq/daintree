@@ -1,7 +1,11 @@
 import type { IpcDispatcher, RemoteRouter } from "../../ipc/endpoint.js";
 import type { IpcContext } from "../../ipc/types.js";
 import { getIpcDispatcher } from "../../ipc/dispatcher.js";
-import { installNotificationHostRelay, installRemoteNotificationSink } from "./notifications.js";
+import {
+  installNotificationHostRelay,
+  installRemoteNotificationSink,
+  type RemoteTransportFeed,
+} from "./notifications.js";
 import { installRemoteProjectResidency } from "./residency.js";
 import { HYBRID_HOST_LEGS, HYBRID_SPLITS } from "./splits.js";
 import { installHostSendRelay } from "./hostSendRelay.js";
@@ -59,10 +63,12 @@ export function installHybridSplits(
  * notifications decided for a remote view to its Shell, keep each remote
  * view's project resident, and track which remote views are on screen.
  */
-export function admitHybridHostLegs(options: { dispatcher?: Dispatcher } = {}): () => void {
+export function admitHybridHostLegs(
+  options: { dispatcher?: Dispatcher; onTransportChange?: RemoteTransportFeed } = {}
+): () => void {
   const dispatcher = options.dispatcher ?? getIpcDispatcher();
   const disposers = HYBRID_HOST_LEGS.map((channel) => dispatcher.allowHybridOverLink(channel));
-  disposers.push(installRemoteNotificationSink());
+  disposers.push(installRemoteNotificationSink({ onTransportChange: options.onTransportChange }));
   disposers.push(installRemoteProjectResidency());
   disposers.push(installEndpointVisibility());
   return disposeAll(disposers);

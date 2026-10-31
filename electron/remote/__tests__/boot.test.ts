@@ -1121,6 +1121,15 @@ describe("startRemoteHosts", () => {
     const hostMode = getRemoteService("hostMode")!;
     await hostMode.startListening();
     expect(m.admitHybridHostLegs).toHaveBeenCalledTimes(1);
+    // The notification sink hears the same resumes, to send the closes it owes.
+    const legs = (m.admitHybridHostLegs.mock.calls[0] as unknown[])[0] as {
+      onTransportChange: (l: (ids: string[], attached: boolean) => void) => () => void;
+    };
+    const heard = vi.fn();
+    const stopHearing = legs.onTransportChange(heard);
+    for (const l of m.transportListeners) l(["remote:s1:view-11"], true);
+    expect(heard).toHaveBeenCalledWith(["remote:s1:view-11"], true);
+    stopHearing();
     expect(m.mcpResolver.current?.("proj-1")).toEqual({ state: "vacant" });
     for (const l of m.transportListeners) l(["remote:s1:view-11"], false);
     expect(m.lease.noteEndpointTransport).toHaveBeenCalledWith(["remote:s1:view-11"], false);

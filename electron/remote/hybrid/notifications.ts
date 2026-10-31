@@ -69,19 +69,34 @@ const NotificationCloseSchema = z.object({
 });
 
 /**
+ * Most closes one view may be owed while its Shell can't hear them. Past it
+ * the oldest are dropped: a host retires that many of one view's banners only
+ * through an outage far longer than the Shell keeps banners for.
+ */
+const MAX_OWED_PER_VIEW = 256;
+
+/** Endpoint ids whose link dropped (`attached` false) or came back on a resume (true). */
+export type RemoteTransportFeed = (
+  listener: (endpointIds: string[], attached: boolean) => void
+) => () => void;
+
+/**
  * Host side: a notification whose owner is a remote view goes to that view's
  * Shell instead of this machine's screen, and is taken down there once it has
  * been dealt with. A close the Shell may not have heard (the link dropped
- * while it was on its way) rides along with the next request to that view,
- * so a banner that missed its close can't stay up beside the next one.
+ * while it was on its way) is owed to that view, and goes out when its link
+ * resumes or ahead of the next notification, so a banner that missed its
+ * close can't stay up.
  */
-export function installRemoteNotificationSink(): () => void {
-  const owed = new Map<number, string[]>();
+export function installRemoteNotificationSink(
+  options: { onTransportChange?: RemoteTransportFeed } = {}
+): () => void {
+  const owed = new Map<number, Set<string>>();
   const closeWatches = new Map<number, Disposable>();
 
-  const remoteView = (handle: number): ClientEndpoint | null => {
-    const endpoint = getEndpointRegistry().getByHandle(handle);
+  const remoteView = (endpoint: ClientEndpoint | undefined): ClientEndpoint | null => {
     if (!endpoint || endpoint.kind !== "remote-view" || endpoint.isClosed()) return null;
+    const { handle } = endpoint;
     if (!closeWatches.has(handle)) {
       closeWatches.set(
         handle,
@@ -95,26 +110,42 @@ export function installRemoteNotificationSink(): () => void {
     return endpoint;
   };
 
-  const takeOwed = (handle: number, ids: readonly string[]): string[] => {
-    const all = [...new Set([...(owed.get(handle) ?? []), ...ids])];
-    owed.delete(handle);
-    return all.slice(-MAX_IDS_PER_REQUEST);
-  };
-
-  const oweOnFailure = (endpoint: ClientEndpoint, ids: readonly string[]) => (error: unknown) => {
+  const owe = (endpoint: ClientEndpoint, ids: readonly string[]) => (error: unknown) => {
     // A Shell from before closes existed refuses them, and always will; a
     // closed view's Shell takes its banners down itself.
     const code = (error as { code?: unknown } | null)?.code;
-    if (ids.length === 0 || code === "UNSUPPORTED" || code === "VALIDATION") return;
-    if (endpoint.isClosed()) return;
-    owed.set(endpoint.handle, takeOwed(endpoint.handle, ids));
+    if (code === "UNSUPPORTED" || code === "VALIDATION" || endpoint.isClosed()) return;
+    const pending = owed.get(endpoint.handle) ?? new Set<string>();
+    for (const id of ids) pending.add(id);
+    for (const oldest of pending) {
+      if (pending.size <= MAX_OWED_PER_VIEW) break;
+      pending.delete(oldest);
+    }
+    owed.set(endpoint.handle, pending);
   };
 
-  const dispose = notificationService.setRemoteNotificationSink({
+  const sendCloses = (endpoint: ClientEndpoint, ids: readonly string[]): void => {
+    for (let at = 0; at < ids.length; at += MAX_IDS_PER_REQUEST) {
+      const batch = ids.slice(at, at + MAX_IDS_PER_REQUEST);
+      endpoint.request(NOTIFICATION_CLOSE_METHOD, { ids: batch }).catch(owe(endpoint, batch));
+    }
+  };
+
+  const payOwed = (endpoint: ClientEndpoint): void => {
+    const pending = owed.get(endpoint.handle);
+    if (!pending) return;
+    owed.delete(endpoint.handle);
+    sendCloses(endpoint, [...pending]);
+  };
+
+  const disposeSink = notificationService.setRemoteNotificationSink({
     show(notification: RemoteNotification) {
-      const endpoint = remoteView(notification.ownerHandle);
+      const endpoint = remoteView(getEndpointRegistry().getByHandle(notification.ownerHandle));
       if (!endpoint) return;
-      const supersedes = takeOwed(endpoint.handle, notification.supersedes ?? []);
+      payOwed(endpoint);
+      const all = notification.supersedes ?? [];
+      const supersedes = all.slice(0, MAX_IDS_PER_REQUEST);
+      sendCloses(endpoint, all.slice(MAX_IDS_PER_REQUEST));
       const payload = {
         title: notification.title,
         body: notification.body,
@@ -123,19 +154,27 @@ export function installRemoteNotificationSink(): () => void {
         ...(notification.id !== undefined ? { id: notification.id } : {}),
         ...(supersedes.length > 0 ? { supersedes } : {}),
       };
-      endpoint.request(NOTIFICATION_SHOW_METHOD, payload).catch(oweOnFailure(endpoint, supersedes));
+      endpoint.request(NOTIFICATION_SHOW_METHOD, payload).catch(owe(endpoint, supersedes));
     },
     close(ownerHandle: number, ids: readonly string[]) {
-      const endpoint = remoteView(ownerHandle);
+      const endpoint = remoteView(getEndpointRegistry().getByHandle(ownerHandle));
       if (!endpoint) return;
-      const all = takeOwed(endpoint.handle, ids);
-      if (all.length === 0) return;
-      endpoint.request(NOTIFICATION_CLOSE_METHOD, { ids: all }).catch(oweOnFailure(endpoint, all));
+      payOwed(endpoint);
+      sendCloses(endpoint, ids);
     },
   });
 
+  const disposeTransport = options.onTransportChange?.((endpointIds, attached) => {
+    if (!attached || owed.size === 0) return;
+    for (const endpointId of endpointIds) {
+      const endpoint = remoteView(getEndpointRegistry().get(endpointId));
+      if (endpoint) payOwed(endpoint);
+    }
+  });
+
   return () => {
-    dispose();
+    disposeSink();
+    disposeTransport?.();
     for (const watch of closeWatches.values()) watch.dispose();
     closeWatches.clear();
     owed.clear();

@@ -727,7 +727,18 @@ describe("view reverse requests", () => {
   it("takes down a host's banners by the ids it names, scoped to that host", async () => {
     installViewReverseRequests();
     await expect(ask("notification.close", { ids: ["n1"] })).resolves.toBeNull();
-    expect(m.closeHostNotifications).toHaveBeenCalledWith({ ids: ["n1"] }, "studio");
+    await expect(
+      answerReverseRequest({
+        hostId: "other",
+        webContentsId: 11,
+        method: "notification.close",
+        payload: { ids: ["n1"] },
+      })
+    ).resolves.toBeNull();
+    expect(m.closeHostNotifications.mock.calls).toEqual([
+      [{ ids: ["n1"] }, "studio"],
+      [{ ids: ["n1"] }, "other"],
+    ]);
 
     m.closeHostNotifications.mockReturnValueOnce(false);
     await expect(ask("notification.close", { ids: "n1" })).rejects.toMatchObject({
