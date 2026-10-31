@@ -383,14 +383,17 @@ export const systemActionRuns: {
       worktreeId: resolvedWorktreeId,
       ...panelNotificationAddress(terminalId),
     };
-    const result = await copyTreeClient.injectToTerminal(
+    // Refuses a locked pane before generation and stops the run if it is
+    // locked while in flight. Imported lazily: the guard reads panelStore,
+    // whose persistence pulls `projectClient` in at module scope.
+    const { injectContextUnlessLocked } = await import("@/services/contextInjectionGuard");
+    const result = await injectContextUnlessLocked({
       terminalId,
-      resolvedWorktreeId,
+      worktreeId: resolvedWorktreeId,
       options,
-      undefined,
-      resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource),
-      name
-    );
+      source: resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource),
+      name,
+    });
     throwOnCopyTreeFailure(result);
     // "injected … into terminal", not "copied": the bundle streams into a
     // PTY and never reaches the clipboard. Ordered after the failure check.

@@ -141,6 +141,7 @@ export type {
   CopyTreeGenerateAndCopyFilePayload,
   CopyTreeInjectPayload,
   CopyTreeCancelPayload,
+  CopyTreeStopReason,
   CopyTreeGetFileTreePayload,
   CopyTreeTestConfigOptions,
   CopyTreeTestConfigPayload,

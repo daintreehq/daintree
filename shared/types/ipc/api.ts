@@ -126,6 +126,7 @@ import type {
   CopyTreeTestConfigOptions,
   FileTreeNode,
   CopyTreeProgress,
+  CopyTreeStopReason,
 } from "./copyTree.js";
 import type { CopyTreeRunSource } from "./copyTreeHistory.js";
 import type {
@@ -534,7 +535,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       name?: string
     ): Promise<CopyTreeResult>;
     isAvailable(): Promise<boolean>;
-    cancel(injectionId?: string): Promise<void>;
+    cancel(injectionId?: string, reason?: CopyTreeStopReason): Promise<void>;
     getFileTree(
       worktreeId: string,
       dirPath?: string,

@@ -658,9 +658,15 @@ export const CopyTreeInjectPayloadSchema = z.object({
   opId: OperationIdSchema.optional(),
 });
 
-export const CopyTreeCancelPayloadSchema = z.object({
-  injectionId: z.string().min(1).optional(),
-});
+export const CopyTreeCancelPayloadSchema = z
+  .object({
+    injectionId: z.string().min(1).optional(),
+    reason: z.enum(["input-locked"]).optional(),
+  })
+  // A reason names one run's stop; cancel-all is always the user's.
+  .refine((payload) => payload.reason === undefined || payload.injectionId !== undefined, {
+    message: "A stop reason needs an injectionId",
+  });
 
 // Test-config dry runs send `null` for fields the user explicitly cleared in the
 // unsaved settings form (Electron's structured clone drops `undefined` keys, so

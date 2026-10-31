@@ -21,6 +21,11 @@ import {
   SendKeysArgsSchema,
 } from "@shared/utils/terminalKeys";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
+import { isForegroundDispatch } from "./dispatchSource";
+import {
+  INPUT_LOCKED_INJECTION_REFUSAL,
+  isTerminalInputLocked,
+} from "@/services/contextInjectionGuard";
 import { assessTerminalInterrupt } from "@/utils/terminalInterrupt";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
 import { RunGenerationArgSchema } from "@shared/types/assistantControl";
@@ -105,6 +110,13 @@ export function registerTerminalInputActions(
       // *before* the active-worktree no-op so a missing target is never
       // silently swallowed.
       requireExplicitTerminalIdForAgentDispatch("terminal.inject", terminalId, ctx);
+      // The injection runs after this returns, so a caller that reads the
+      // result is told here. A person pressing the key gets the injection's
+      // own error surface instead, which the hook refuses through.
+      const target = terminalId ?? usePanelStore.getState().focusedId;
+      if (target && !isForegroundDispatch(ctx.dispatchSource) && isTerminalInputLocked(target)) {
+        throw new UnactionableTargetError(INPUT_LOCKED_INJECTION_REFUSAL);
+      }
       const activeWorktreeId = callbacks.getActiveWorktreeId();
       if (activeWorktreeId) {
         // `terminalId` is undefined for interactive dispatch → the hook falls

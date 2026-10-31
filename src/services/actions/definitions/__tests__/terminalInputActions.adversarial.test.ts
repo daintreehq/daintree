@@ -46,6 +46,7 @@ vi.mock("@shared/config/panelKindRegistry", () => ({
 }));
 
 import { registerTerminalInputActions } from "../terminalInputActions";
+import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 // The service mock never evaluates the real module, so nothing registers it;
@@ -445,6 +446,65 @@ describe("terminalInputActions adversarial", () => {
 
       // No dispatchSource / a non-agent source: the action forwards an undefined
       // target so the hook falls back to the focused terminal.
+      await run("terminal.inject", undefined, { dispatchSource: "keybinding" });
+
+      expect(callbacks.onInject).toHaveBeenCalledWith("wt-1", undefined);
+    });
+  });
+
+  // `terminal.injectOwned` delegates here, so this is its refusal too.
+  describe("terminal.inject input lock (#15644)", () => {
+    it.each([
+      ["the panel", { isInputLocked: true }, { isInputLocked: false }],
+      ["its instance", { isInputLocked: false }, { isInputLocked: true }],
+    ])(
+      "refuses an agent naming a pane locked on %s, as a refusal it can't retry",
+      async (_label, panel, managed) => {
+        setPanelState({
+          focusedId: "other",
+          panelsById: { "term-9": { ...panel, kind: "terminal" } },
+        });
+        terminalInstanceMock.get.mockImplementation((id: string) =>
+          id === "term-9" ? managed : undefined
+        );
+        const { run, callbacks } = setupActions();
+        vi.mocked(callbacks.getActiveWorktreeId).mockReturnValue("wt-1");
+
+        const attempt = run(
+          "terminal.inject",
+          { terminalId: "term-9" },
+          { dispatchSource: "agent" }
+        );
+
+        await expect(attempt).rejects.toBeInstanceOf(UnactionableTargetError);
+        await expect(attempt).rejects.toThrow(/input is locked/);
+        expect(callbacks.onInject).not.toHaveBeenCalled();
+      }
+    );
+
+    it("still injects for an agent naming an unlocked pane", async () => {
+      setPanelState({
+        focusedId: "other",
+        panelsById: { "term-9": { isInputLocked: false, kind: "terminal" } },
+      });
+      terminalInstanceMock.get.mockReturnValue({ isInputLocked: false });
+      const { run, callbacks } = setupActions();
+      vi.mocked(callbacks.getActiveWorktreeId).mockReturnValue("wt-1");
+
+      await run("terminal.inject", { terminalId: "term-9" }, { dispatchSource: "agent" });
+
+      expect(callbacks.onInject).toHaveBeenCalledWith("wt-1", "term-9");
+    });
+
+    it("hands a key press on a locked focused pane to the injection, which refuses it visibly", async () => {
+      setPanelState({
+        focusedId: "term-9",
+        panelsById: { "term-9": { isInputLocked: true, kind: "terminal" } },
+      });
+      terminalInstanceMock.get.mockReturnValue({ isInputLocked: true });
+      const { run, callbacks } = setupActions();
+      vi.mocked(callbacks.getActiveWorktreeId).mockReturnValue("wt-1");
+
       await run("terminal.inject", undefined, { dispatchSource: "keybinding" });
 
       expect(callbacks.onInject).toHaveBeenCalledWith("wt-1", undefined);

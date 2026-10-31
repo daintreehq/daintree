@@ -158,6 +158,7 @@ import type {
   CopyTreeOptions,
   CopyTreeProgress,
   CopyTreeRunSource,
+  CopyTreeStopReason,
   CopyTreeTestConfigOptions,
   AppState,
   LogEntry,
@@ -1223,8 +1224,8 @@ function buildElectronApi(): ElectronAPI {
 
       isAvailable: () => _unwrappingInvoke(CHANNELS.COPYTREE_AVAILABLE),
 
-      cancel: (injectionId?: string) =>
-        _unwrappingInvoke(CHANNELS.COPYTREE_CANCEL, { injectionId }),
+      cancel: (injectionId?: string, reason?: CopyTreeStopReason) =>
+        _unwrappingInvoke(CHANNELS.COPYTREE_CANCEL, { injectionId, reason }),
 
       getFileTree: (worktreeId: string, dirPath?: string, includeExcluded?: boolean) =>
         _unwrappingInvoke(CHANNELS.COPYTREE_GET_FILE_TREE, {
