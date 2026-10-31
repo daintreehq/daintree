@@ -162,6 +162,38 @@ describe("worktreeDiffStatCache", () => {
     });
   });
 
+  it("does not let an older pass restore entries a newer pass found clean", () => {
+    publishTracked("/repo", ["/repo/a.ts"]);
+    const older = beginDiffStatPass("/repo");
+    older.keepTracked("/repo/a.ts", id(), { insertions: 1, deletions: 0 });
+    beginDiffStatPass("/repo").publish();
+
+    older.publish();
+
+    expect(getWorktreeDiffStatCacheStats().worktrees).toBe(0);
+
+    // The same holds when the worktree had no partition to delete.
+    const olderStill = beginDiffStatPass("/clean");
+    olderStill.keepTracked("/clean/a.ts", id(), { insertions: 1, deletions: 0 });
+    beginDiffStatPass("/clean").publish();
+    olderStill.publish();
+
+    expect(getWorktreeDiffStatCacheStats().worktrees).toBe(0);
+  });
+
+  it("releases a partition by the symlinked path a pass was asked about", () => {
+    const pass = beginDiffStatPass("/private/wt-a", "/link/wt-a");
+    pass.keepTracked("/private/wt-a/f", id(), { insertions: 1, deletions: 0 });
+    pass.publish();
+    publishTracked("/wt-b", ["/wt-b/f"]);
+
+    releaseWorktreeDiffStats("/link/wt-a");
+
+    expect(retainedTracked("/private/wt-a", ["/private/wt-a/f"])).toEqual([]);
+    expect(retainedTracked("/wt-b", ["/wt-b/f"])).toEqual(["/wt-b/f"]);
+    expect(getWorktreeDiffStatCacheStats().worktrees).toBe(1);
+  });
+
   it("keeps a released worktree released when a pass begun before the release completes", () => {
     publishTracked("/wt-a", ["/wt-a/f"]);
     const inFlight = beginDiffStatPass("/wt-a");
@@ -169,6 +201,11 @@ describe("worktreeDiffStatCache", () => {
 
     releaseWorktreeDiffStats("/wt-a");
     inFlight.publish();
+
+    const beforeClear = beginDiffStatPass("/wt-b");
+    beforeClear.keepTracked("/wt-b/f", id(), { insertions: 1, deletions: 0 });
+    clearWorktreeDiffStatCache();
+    beforeClear.publish();
 
     expect(getWorktreeDiffStatCacheStats()).toEqual({
       worktrees: 0,
@@ -190,6 +227,7 @@ describe("worktreeDiffStatCache", () => {
     const next = beginDiffStatPass("/repo");
     expect(next.lookupUntracked("/repo/n1.md", 10, 5)).toBe(3);
     expect(next.lookupUntracked("/repo/n2.md", 10, 6)).toBeUndefined();
+    expect(next.lookupUntracked("/repo/n2.md", 11, 5)).toBeUndefined();
     expect(next.lookupUntracked("/repo/n3.md", 10, 5)).toBeUndefined();
     expect(next.lookupTracked("/repo/a.ts", id())).toBeDefined();
     expect(getWorktreeDiffStatCacheStats()).toMatchObject({

@@ -1135,12 +1135,9 @@ describe("getWorktreeChangesWithStats binary file handling", () => {
   it("reuses the untracked line count across a HEAD change when mtime+size are unchanged", async () => {
     const cwd = "/text-untracked-commit/" + Math.random();
     let headOid = "head-oid-before";
-    mockGit.revparse.mockImplementation((args: string[]) => {
-      if (Array.isArray(args) && args[0] === "HEAD") {
-        return Promise.resolve(`${headOid}\n`);
-      }
-      return Promise.resolve(`${cwd}\n`);
-    });
+    mockGit.raw.mockImplementation(async (args: string[]) =>
+      args[0] === "rev-parse" ? `${headOid}\n${cwd}` : ""
+    );
     mockGit.status.mockResolvedValue({
       ...emptyStatus,
       not_added: ["readme.txt"],
@@ -1148,6 +1145,7 @@ describe("getWorktreeChangesWithStats binary file handling", () => {
     readFileMock.mockResolvedValue(Buffer.from("line1\nline2\nline3\n"));
 
     const first = await getWorktreeChangesWithStats(cwd, true);
+    expect(first.headOid).toBe("head-oid-before");
     expect(first.changes[0].insertions).toBe(3);
 
     headOid = "head-oid-after";
@@ -1155,6 +1153,7 @@ describe("getWorktreeChangesWithStats binary file handling", () => {
 
     const second = await getWorktreeChangesWithStats(cwd, true);
 
+    expect(second.headOid).toBe("head-oid-after");
     expect(second.changes[0].insertions).toBe(3);
     expect(readFileMock).not.toHaveBeenCalled();
 

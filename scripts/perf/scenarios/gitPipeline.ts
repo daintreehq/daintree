@@ -335,6 +335,8 @@ const LARGE_SIBLING_SHAPE: LargeChangesetShape = {
  * larger than itself, and measuring the first would price a cold cache.
  */
 const LARGE_PRIME_ROUNDS = 2;
+/** Idle bystander control taken before each round, as PERF-163 does. */
+const LARGE_IDLE_CONTROL_MS = 150;
 const primedLargeFixtures = new Set<string>();
 let largeEditMarker = 0;
 
@@ -356,7 +358,12 @@ let largeEditMarker = 0;
  *    already-dirty file is edited and passed again. Its counts must change to
  *    the oracle's, and the argv observer must see that path diffed — which is
  *    what lets a zero `numstatFilesDiffed` mean "reused" rather than "the
- *    observer went blind".
+ *    observer went blind". One untimed round in measured order follows, so
+ *    the next measured round sees uninterrupted rounds, not that extra pass.
+ *
+ * `passLongestStallMs` is the longest gap between bystander observations
+ * across the round: an upper bound on its longest synchronous block, read
+ * against `idleLongestStallMs` from the same probe over an idle window first.
  */
 async function runLargeChangesetRound(shape: LargeChangesetShape): Promise<ScenarioSample> {
   const { getWorktreeChangesWithStats, __getPerFileDiffStatCacheStatsForPerf } =
@@ -373,6 +380,13 @@ async function runLargeChangesetRound(shape: LargeChangesetShape): Promise<Scena
 
   const observerMisses = spawnObserverMisses();
   (globalThis as { gc?: () => void }).gc?.();
+  const idleProbe = await armBystanderProbe();
+  try {
+    await sleep(LARGE_IDLE_CONTROL_MS);
+  } finally {
+    idleProbe.stop();
+  }
+  const idle = idleProbe.stop();
   const probe = await armBystanderProbe();
   const stopCapture = captureGitArgv();
   const mark = gitSpawnMark();
@@ -429,6 +443,7 @@ async function runLargeChangesetRound(shape: LargeChangesetShape): Promise<Scena
     edited.deletions === want.deletions &&
     edited.insertions !== before?.insertions;
   const editObserved = editSpawns.some((spawn) => numstatPathspecs(spawn)?.includes(editRel));
+  for (const path of fixture.worktreePaths) await pass(path);
 
   return {
     durationMs,
@@ -445,6 +460,8 @@ async function runLargeChangesetRound(shape: LargeChangesetShape): Promise<Scena
       maxPassDurationMs: Math.max(...passDurations),
       passLongestStallMs: stall.longestStallMs,
       passBlockedMs: stall.blockedMs,
+      idleLongestStallMs: idle.longestStallMs,
+      idleBlockedMs: idle.blockedMs,
       retainedCacheEntryCount: retained.entries,
       retainedCacheBytes: retained.estimatedBytes,
       ...(cpu
@@ -459,7 +476,7 @@ async function runLargeChangesetRound(shape: LargeChangesetShape): Promise<Scena
       editFreshnessMisses: editFresh ? 0 : 1,
       numstatObserverMisses: editObserved ? 0 : 1,
       spawnObserverMisses: observerMisses,
-      probeMisses: stall.probeMisses,
+      probeMisses: stall.probeMisses + idle.probeMisses,
     },
     ...(cpu ? {} : { notes: "git child CPU replay unavailable here (needs python3 on POSIX)" }),
   };

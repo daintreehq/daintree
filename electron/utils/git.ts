@@ -915,7 +915,7 @@ export async function getWorktreeChangesWithStats(
       // a modification into a deletion). With those compared, no TTL is
       // needed: a timed expiry would only re-spawn the diff for an answer that
       // cannot have changed.
-      const diffStatPass = beginDiffStatPass(gitRoot);
+      const diffStatPass = beginDiffStatPass(gitRoot, cwd);
 
       // Deduplicate: a partially-staged file appears in both `modified` and
       // `staged`; double-counting would stat and diff the same path twice.

@@ -1729,9 +1729,12 @@ export class WorkspaceService {
     clearGitDirCache(monitor.path);
     clearGitCommonDirCache(monitor.path);
     invalidateGitStatusCache(monitor.path);
-    // Keyed by the canonical toplevel the last pass resolved; the monitor path
-    // may be a symlinked spelling of it.
-    releaseWorktreeDiffStats(monitor.getWorktreeChanges()?.rootPath ?? monitor.path);
+    // Retained under the canonical toplevel, which the monitor path may be a
+    // symlinked spelling of; releasing by the path a pass was asked about
+    // finds it even before this monitor has stored a snapshot.
+    releaseWorktreeDiffStats(monitor.path);
+    const canonicalRoot = monitor.getWorktreeChanges()?.rootPath;
+    if (canonicalRoot && canonicalRoot !== monitor.path) releaseWorktreeDiffStats(canonicalRoot);
 
     // Drop the in-memory wsl-git opt-in entry (keyed by monitor.id, matching
     // the lookup shape used by `enrichWorktreeWithWsl`) and tell main to

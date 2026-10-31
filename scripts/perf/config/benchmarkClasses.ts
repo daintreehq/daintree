@@ -239,7 +239,7 @@ const FAMILIES: readonly Family[] = [
     kind: "mechanism",
     fidelity: withFidelity({ processTopology: "partial" }),
     claim:
-      "Real forced status passes and real git subprocesses over deterministic worktrees with thousands of stable modified files, sharing one process as a project's worktrees share its workspace host. The status utility is called directly, without a monitor, renderer or IPC. Git child CPU is a replay of the pass's recorded git commands, not the original children's own accounting, and is absent where python3 is unavailable; retained cache bytes are an accounting estimate, not heap usage.",
+      "Real forced status passes and real git subprocesses over deterministic worktrees with thousands of stable modified files, sharing one process as a project's worktrees share its workspace host. The status utility is called directly, without a monitor, renderer or IPC. Git child CPU is a replay of the pass's recorded git commands, not the original children's own accounting, and is absent where python3 is unavailable; the longest stall is an event-loop observation gap read against an idle control, an upper bound on the longest synchronous block rather than its exact length; retained cache bytes are an accounting estimate, not heap usage.",
   },
   {
     label: "terminal reflow and resize",

@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
+import { getSanitizedProcessEnv } from "../../../electron/utils/gitEnv";
 import type { WorktreeChanges } from "../../../shared/types/git";
 import type { CapturedGitSpawn } from "./gitPipelineFixture";
 import { createPerfTempRoot } from "./tempRoots";
@@ -44,7 +45,7 @@ function setupGit(cwd: string, args: string[]): void {
     cwd,
     stdio: ["ignore", "ignore", "pipe"],
     env: {
-      ...process.env,
+      ...getSanitizedProcessEnv(),
       GIT_CONFIG_GLOBAL: "/dev/null",
       GIT_CONFIG_SYSTEM: "/dev/null",
       GIT_AUTHOR_NAME: "perf",
@@ -148,14 +149,16 @@ export interface NumstatCounts {
 /**
  * A fresh, uncached `git diff --numstat` for the worktree (or just `paths`),
  * parsed independently of the product's parser. Runs through execFileSync so
- * it never lands in a spawn tally, and with the developer's own environment,
- * as the product's spawns are.
+ * it never lands in a spawn tally, and with the same sanitized environment the
+ * product's spawns get, so an inherited GIT_INDEX_FILE or GIT_DIR cannot point
+ * the oracle at a different repository state than the pass read.
  */
 export function oracleNumstat(worktreePath: string, paths?: string[]): Map<string, NumstatCounts> {
   const args = ["diff", "--no-ext-diff", "--no-renames", "--numstat", "-z", "HEAD"];
   if (paths) args.push("--", ...paths);
   const out = execFileSync("git", args, {
     cwd: worktreePath,
+    env: getSanitizedProcessEnv(),
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],
@@ -208,7 +211,8 @@ export function oracleMisses(
 
 // Replays each start with its recorded argv, cwd and environment and reports
 // RUSAGE_CHILDREN across them: only waited-for children are counted, so the
-// interpreter's own startup is excluded.
+// interpreter's own startup is excluded. A replayed command that fails exits
+// the driver non-zero with git's stderr: a failure path's CPU is not the pass's.
 const REPLAY_SCRIPT = `
 import json, resource, subprocess, sys
 spawns = json.load(sys.stdin)
@@ -217,8 +221,11 @@ for s in spawns:
     env = None
     if s.get("envPairs") is not None:
         env = dict(p.split("=", 1) for p in s["envPairs"] if "=" in p)
-    subprocess.run(s["args"], executable=s["file"], cwd=s.get("cwd"), env=env,
-                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    done = subprocess.run(s["args"], executable=s["file"], cwd=s.get("cwd"), env=env,
+                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    if done.returncode != 0:
+        sys.stderr.write("replayed %s exited %d: %s" % (s["args"][1:4], done.returncode, done.stderr.decode(errors="replace")))
+        sys.exit(1)
 after = resource.getrusage(resource.RUSAGE_CHILDREN)
 print(json.dumps({"userMs": (after.ru_utime - before.ru_utime) * 1000,
                   "systemMs": (after.ru_stime - before.ru_stime) * 1000}))
@@ -254,6 +261,7 @@ export function replayGitCpu(
     input: JSON.stringify(spawns),
     encoding: "utf8",
     maxBuffer: 1024 * 1024,
+    stdio: ["pipe", "pipe", "pipe"],
   });
   const parsed = JSON.parse(out.trim()) as { userMs: number; systemMs: number };
   return parsed;
