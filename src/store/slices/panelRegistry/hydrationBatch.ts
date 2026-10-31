@@ -1,4 +1,5 @@
 import type { HydrationBatchToken } from "./types";
+import { resetPanelSlotReservations } from "./panelSlotReservations";
 
 /**
  * Singleton batch state shared by hydration (#5196) and spawn (#9165). During a
@@ -53,6 +54,17 @@ export function takeDeferredPersist(): boolean {
  */
 export function isHydrationBatchActive(): boolean {
   return activeBatch !== null;
+}
+
+const NO_PENDING_IDS: readonly string[] = [];
+
+/**
+ * Ids committed to `panelsById` that the active batch is still holding back
+ * from `panelIds`. They are real panels, so the panel-limit count reads them
+ * too (#15607).
+ */
+export function getPendingBatchIds(): readonly string[] {
+  return activeBatch?.pendingIds ?? NO_PENDING_IDS;
 }
 
 /** Record a new panel id for append to `panelIds` at flush time. Dedup-safe. */
@@ -134,4 +146,5 @@ export function consumeActiveSpawnBatch(): string[] | null {
 export function resetBatchState(): void {
   activeBatch = null;
   persistDeferred = false;
+  resetPanelSlotReservations();
 }

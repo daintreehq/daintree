@@ -6,6 +6,10 @@ import { spawnPanelsFromRecipe } from "../panelSpawning";
 import type { RecipeTerminal } from "@shared/types";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
 import { PANEL_LIMIT_DECLINED_REASON } from "@/services/actions/definitions/panelLimitError";
+import {
+  getPanelSlotReservations,
+  resetPanelSlotReservations,
+} from "@/store/slices/panelRegistry/panelSlotReservations";
 
 const mockAddPanel = vi.fn();
 const mockAgentSettingsGet = vi.fn();
@@ -629,6 +633,78 @@ describe("spawnPanelsFromRecipe", () => {
         expect(panelId).toBeNull();
         expect(error).toMatchObject({ message: PANEL_LIMIT_DECLINED_REASON });
       }
+    });
+  });
+
+  describe("panel-limit slots (#15607)", () => {
+    const initial = usePanelLimitStore.getState();
+
+    afterEach(() => {
+      usePanelLimitStore.setState(initial, true);
+      resetPanelSlotReservations();
+      mockFlushSpawnBatch.mockReset();
+    });
+
+    it("claims each slot under the id it passes to addPanel and holds it through the flush", async () => {
+      const heldDuringAdd: boolean[] = [];
+      mockAddPanel.mockImplementation(async (options: { requestedId?: string }) => {
+        heldDuringAdd.push(getPanelSlotReservations().claimedIds.has(options.requestedId ?? ""));
+        return options.requestedId ?? null;
+      });
+      let claimedAtFlush = 0;
+      mockFlushSpawnBatch.mockImplementation(() => {
+        claimedAtFlush = getPanelSlotReservations().claimedIds.size;
+      });
+
+      await spawnPanelsFromRecipe({
+        terminals: [makeTerminal(), makeDevPreview(), makeAgent()],
+        worktreeId: "wt-1",
+        cwd: "/path/to/wt",
+      });
+
+      expect(heldDuringAdd).toEqual([true, true, true]);
+      expect(claimedAtFlush).toBe(3);
+      expect(getPanelSlotReservations()).toEqual({ unclaimed: 0, claimedIds: new Set() });
+    });
+
+    it("gives its slots back when a callback for a refused panel throws", async () => {
+      usePanelLimitStore.setState({ hardLimit: 1, warningsDisabled: true });
+
+      await expect(
+        spawnPanelsFromRecipe({
+          terminals: [makeTerminal(), makeTerminal()],
+          worktreeId: "wt-1",
+          cwd: "/path/to/wt",
+          onPanelSpawned: (_index, panelId) => {
+            if (panelId === null) throw new Error("callback failed");
+          },
+        })
+      ).rejects.toThrow("callback failed");
+
+      expect(getPanelSlotReservations()).toEqual({ unclaimed: 0, claimedIds: new Set() });
+    });
+
+    it("gives its slots back when it is cancelled while the confirm is open", async () => {
+      const controller = new AbortController();
+      usePanelLimitStore.setState({
+        confirmationLimit: 1,
+        hardLimit: 32,
+        warningsDisabled: false,
+        requestConfirmation: vi.fn(async () => {
+          controller.abort();
+          return true;
+        }),
+      });
+
+      await spawnPanelsFromRecipe({
+        terminals: [makeTerminal(), makeTerminal()],
+        worktreeId: "wt-1",
+        cwd: "/path/to/wt",
+        signal: controller.signal,
+      });
+
+      expect(mockAddPanel).not.toHaveBeenCalled();
+      expect(getPanelSlotReservations()).toEqual({ unclaimed: 0, claimedIds: new Set() });
     });
   });
 });

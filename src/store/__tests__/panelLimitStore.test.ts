@@ -11,6 +11,11 @@ import {
   DEFAULT_HARD_LIMIT,
 } from "../panelLimitStore";
 import { _resetPersistedStoreRegistryForTests } from "../persistence/persistedStoreRegistry";
+import { countPanelLimitUsage } from "../slices/panelRegistry/panelCount";
+import {
+  getPanelSlotReservations,
+  resetPanelSlotReservations,
+} from "../slices/panelRegistry/panelSlotReservations";
 
 const DEFAULT_LIMITS = {
   softWarningLimit: DEFAULT_SOFT_WARNING_LIMIT,
@@ -118,7 +123,19 @@ describe("preflightSpawnBatchLimit", () => {
   // tests guard that the batch gate survives.
   const originalRequestConfirmation = usePanelLimitStore.getState().requestConfirmation;
 
+  /** Run the gate and hand its slots straight back: these cases read the decision. */
+  async function decide(currentCount: number, requestedCount: number) {
+    const { grant, ...decision } = await preflightSpawnBatchLimit(
+      () => currentCount,
+      requestedCount
+    );
+    expect(grant?.allowed ?? 0).toBe(decision.allowed);
+    grant?.release();
+    return decision;
+  }
+
   afterEach(() => {
+    resetPanelSlotReservations();
     usePanelLimitStore.setState({
       softWarningLimit: DEFAULT_SOFT_WARNING_LIMIT,
       confirmationLimit: DEFAULT_CONFIRMATION_LIMIT,
@@ -131,7 +148,7 @@ describe("preflightSpawnBatchLimit", () => {
   it("returns 0 allowed when no requested panels", async () => {
     const confirm = vi.fn().mockResolvedValue(true);
     usePanelLimitStore.setState({ requestConfirmation: confirm });
-    expect(await preflightSpawnBatchLimit(0, 0)).toEqual({ allowed: 0, declined: false });
+    expect(await decide(0, 0)).toEqual({ allowed: 0, declined: false });
     expect(confirm).not.toHaveBeenCalled();
   });
 
@@ -144,7 +161,7 @@ describe("preflightSpawnBatchLimit", () => {
       requestConfirmation: confirm,
     });
     // 10 + 5 = 15, below the 20 confirm threshold.
-    expect(await preflightSpawnBatchLimit(10, 5)).toEqual({ allowed: 5, declined: false });
+    expect(await decide(10, 5)).toEqual({ allowed: 5, declined: false });
     expect(confirm).not.toHaveBeenCalled();
   });
 
@@ -157,7 +174,7 @@ describe("preflightSpawnBatchLimit", () => {
       requestConfirmation: confirm,
     });
     // 18 + 5 = 23, crosses the 20 confirm threshold.
-    expect(await preflightSpawnBatchLimit(18, 5)).toEqual({ allowed: 5, declined: false });
+    expect(await decide(18, 5)).toEqual({ allowed: 5, declined: false });
     expect(confirm).toHaveBeenCalledWith({
       currentCount: 18,
       requestedCount: 5,
@@ -176,7 +193,7 @@ describe("preflightSpawnBatchLimit", () => {
       requestConfirmation: confirm,
     });
     // A decline is the user's answer, not the limit refusing — callers report it differently.
-    expect(await preflightSpawnBatchLimit(18, 5)).toEqual({ allowed: 0, declined: true });
+    expect(await decide(18, 5)).toEqual({ allowed: 0, declined: true });
     expect(confirm).toHaveBeenCalledTimes(1);
   });
 
@@ -188,7 +205,7 @@ describe("preflightSpawnBatchLimit", () => {
       warningsDisabled: true,
       requestConfirmation: confirm,
     });
-    expect(await preflightSpawnBatchLimit(18, 5)).toEqual({ allowed: 5, declined: false });
+    expect(await decide(18, 5)).toEqual({ allowed: 5, declined: false });
     expect(confirm).not.toHaveBeenCalled();
   });
 
@@ -201,7 +218,7 @@ describe("preflightSpawnBatchLimit", () => {
       requestConfirmation: confirm,
     });
     // 30 open, 10 requested, only 2 slots before the hard limit of 32.
-    expect(await preflightSpawnBatchLimit(30, 10)).toEqual({ allowed: 2, declined: false });
+    expect(await decide(30, 10)).toEqual({ allowed: 2, declined: false });
     // The confirm is told the batch was trimmed, so it can say so.
     expect(confirm).toHaveBeenCalledWith(
       expect.objectContaining({ currentCount: 30, requestedCount: 10, allowedCount: 2 })
@@ -217,7 +234,7 @@ describe("preflightSpawnBatchLimit", () => {
       requestConfirmation: confirm,
     });
     // 18 + 2 = 20 == confirmationLimit; the gate is strictly `> confirmationLimit`.
-    expect(await preflightSpawnBatchLimit(18, 2)).toEqual({ allowed: 2, declined: false });
+    expect(await decide(18, 2)).toEqual({ allowed: 2, declined: false });
     expect(confirm).not.toHaveBeenCalled();
   });
 
@@ -230,8 +247,76 @@ describe("preflightSpawnBatchLimit", () => {
       requestConfirmation: confirm,
     });
     // Already at the hard limit: no slots, short-circuits before any confirm.
-    expect(await preflightSpawnBatchLimit(32, 4)).toEqual({ allowed: 0, declined: false });
+    expect(await decide(32, 4)).toEqual({ allowed: 0, declined: false });
     expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("reserves what it grants before returning, so an overlapping gate can't have it too (#15607)", async () => {
+    usePanelLimitStore.setState({ confirmationLimit: 20, hardLimit: 12, warningsDisabled: false });
+    // Nine panels open; the live count adds whatever is reserved.
+    const readUsage = () => 9 + countPanelLimitUsage({ panelsById: {}, panelIds: [] });
+
+    const first = preflightSpawnBatchLimit(readUsage, 3);
+    const second = preflightSpawnBatchLimit(readUsage, 3);
+    const [granted, refused] = await Promise.all([first, second]);
+
+    expect(granted.allowed).toBe(3);
+    expect(refused).toEqual({ allowed: 0, declined: false, grant: null });
+
+    granted.grant?.release();
+    const afterRelease = await preflightSpawnBatchLimit(readUsage, 3);
+    expect(afterRelease.allowed).toBe(3);
+    afterRelease.grant?.release();
+  });
+
+  it("holds nothing while the confirm is open, then keeps only what is still free", async () => {
+    let answer!: (confirmed: boolean) => void;
+    const confirm = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          answer = resolve;
+        })
+    );
+    usePanelLimitStore.setState({
+      confirmationLimit: 20,
+      hardLimit: 24,
+      warningsDisabled: false,
+      requestConfirmation: confirm,
+    });
+    let open = 18;
+    const pending = preflightSpawnBatchLimit(() => open, 4);
+
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ allowedCount: 4 }));
+    expect(getPanelSlotReservations().unclaimed).toBe(0);
+    // Another add takes four slots while the user reads the dialog.
+    open = 22;
+    answer(true);
+
+    const result = await pending;
+    expect(result.allowed).toBe(2);
+    expect(getPanelSlotReservations().unclaimed).toBe(2);
+    result.grant?.release();
+    expect(getPanelSlotReservations().unclaimed).toBe(0);
+  });
+
+  it("opens nothing when the confirm is accepted after the last slot went", async () => {
+    let open = 18;
+    usePanelLimitStore.setState({
+      confirmationLimit: 20,
+      hardLimit: 24,
+      warningsDisabled: false,
+      requestConfirmation: vi.fn(async () => {
+        open = 24;
+        return true;
+      }),
+    });
+
+    expect(await preflightSpawnBatchLimit(() => open, 4)).toEqual({
+      allowed: 0,
+      declined: false,
+      grant: null,
+    });
+    expect(getPanelSlotReservations().unclaimed).toBe(0);
   });
 });
 

@@ -36,7 +36,7 @@ import type { HydrationBatchToken } from "./types";
 import { removeFromWorktreeIndex, transferBetweenWorktreeIndex } from "./worktreeIndex";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
-import { countPanelsTowardLimit } from "./panelCount";
+import { countPanelLimitUsage } from "./panelCount";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
 import { notify } from "@/lib/notify";
 import { cancelDriveLeaseHold, clearPanelDriveLeaseMark } from "@/store/driveLeaseWaitStore";
@@ -739,8 +739,9 @@ export const createCorePanelActions = (
       // The dialog panel was never counted, so promoting it admits a genuinely
       // new panel — the same hard ceiling `addPanel` enforces applies. Only the
       // hard tier blocks: the confirm band is reserved for batch spawns
-      // (#10547), and a single promotion is one click to undo.
-      if (hardLimit > 0 && countPanelsTowardLimit(state.panelsById, state.panelIds) >= hardLimit) {
+      // (#10547), and a single promotion is one click to undo. Judged on the
+      // live count, so it can't take a slot a spawn in flight was granted (#15607).
+      if (hardLimit > 0 && countPanelLimitUsage(state) >= hardLimit) {
         atLimit = true;
         return state;
       }
