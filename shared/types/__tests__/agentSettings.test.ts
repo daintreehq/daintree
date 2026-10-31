@@ -354,6 +354,11 @@ describe("buildAgentLaunchFlags", () => {
     const flags = buildAgentLaunchFlags({}, "claude");
     expect(flags).not.toContain("--model");
   });
+
+  it("never persists --model for Mistral Vibe, whose restart and resume reject or ignore it (#15569)", () => {
+    const flags = buildAgentLaunchFlags({}, "mistral", { modelId: "devstral-small" });
+    expect(flags).toEqual(["--trust"]);
+  });
 });
 
 describe("generateAgentCommand copilot prompt injection", () => {
@@ -616,6 +621,29 @@ describe("generateAgentCommand with modelId", () => {
     const modelIdx = cmd.indexOf("--model");
     const promptIdx = cmd.indexOf("Fix the bug");
     expect(modelIdx).toBeLessThan(promptIdx);
+  });
+
+  describe("Mistral Vibe (#15569)", () => {
+    forcePosixPlatform();
+
+    it("leaves --model off an interactive launch, which Vibe ignores or rejects", () => {
+      const bare = generateAgentCommand("vibe", {}, "mistral", { modelId: "devstral-small" });
+      const seeded = generateAgentCommand("vibe", {}, "mistral", {
+        modelId: "devstral-small",
+        initialPrompt: "Fix the bug",
+      });
+      expect(bare).toBe("vibe --trust");
+      expect(seeded).toBe("vibe --trust 'Fix the bug'");
+    });
+
+    it("passes --model to a headless launch, ahead of --prompt", () => {
+      const cmd = generateAgentCommand("vibe", {}, "mistral", {
+        modelId: "devstral-small",
+        initialPrompt: "Fix the bug",
+        interactive: false,
+      });
+      expect(cmd).toBe("vibe --trust --model devstral-small --prompt 'Fix the bug'");
+    });
   });
 });
 
