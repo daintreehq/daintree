@@ -16,6 +16,7 @@ vi.mock("@/lib/notify", () => ({ notify }));
 
 import {
   bulkParkAgents,
+  countParkTargets,
   resetBulkParkPacing,
   runBulkPark,
   selectParkTargets,
@@ -81,6 +82,32 @@ describe("selectParkTargets", () => {
 
   it("selects nothing before a snapshot has landed", () => {
     expect(selectParkTargets(null, ["a"], "park")).toEqual([]);
+  });
+});
+
+describe("countParkTargets", () => {
+  it("counts the same sets selectParkTargets selects", () => {
+    const snapshot = snap([
+      { runId: "a" },
+      { runId: "b", park: { parkedAt: 1 } },
+      { runId: "c", park: { parkedAt: 2 } },
+      { runId: "other" },
+    ]);
+    const ids = ["a", "b", "c", "shell"];
+    expect(countParkTargets(snapshot, ids)).toEqual({
+      parked: selectParkTargets(snapshot, ids, "unpark").length,
+      unparked: selectParkTargets(snapshot, ids, "park").length,
+    });
+    expect(countParkTargets(snapshot, ids)).toEqual({ parked: 2, unparked: 1 });
+  });
+
+  it("counts no park targets over a degraded snapshot but keeps the unpark count", () => {
+    const degraded = snap([{ runId: "a" }, { runId: "b", park: { parkedAt: 1 } }], true);
+    expect(countParkTargets(degraded, ["a", "b"])).toEqual({ parked: 1, unparked: 0 });
+  });
+
+  it("counts nothing before a snapshot has landed", () => {
+    expect(countParkTargets(null, ["a"])).toEqual({ parked: 0, unparked: 0 });
   });
 });
 

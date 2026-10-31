@@ -264,3 +264,25 @@ describe("deriveWorktreeAgentBuckets with plugin panel rows (#13821)", () => {
     ).toMatchObject({ working: true, finished: false, cleanup: false });
   });
 });
+
+describe("indexFleetRuns", () => {
+  it("builds one index per runs array, so every surface in a view shares it", () => {
+    const runs = [working("a"), atPrompt("b")];
+    const index = indexFleetRuns(runs);
+    expect(indexFleetRuns(runs)).toBe(index);
+    expect(index.get("b")).toBe(runs[1]);
+  });
+
+  it("indexes a replacement array afresh", () => {
+    const first = [working("a")];
+    const next = [asking("a")];
+    expect(indexFleetRuns(next)).not.toBe(indexFleetRuns(first));
+    expect(indexFleetRuns(next).get("a")).toBe(next[0]);
+  });
+
+  it("reads an absent or empty fleet as no runs", () => {
+    expect(indexFleetRuns(null).size).toBe(0);
+    expect(indexFleetRuns(undefined).size).toBe(0);
+    expect(indexFleetRuns([]).size).toBe(0);
+  });
+});

@@ -1,7 +1,13 @@
 import { useMemo } from "react";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
-import { indexFleetRuns } from "@/lib/worktreeAgentBuckets";
+import {
+  decodeWorktreeAgentBuckets,
+  deriveWorktreeAgentBuckets,
+  encodeWorktreeAgentBuckets,
+  indexFleetRuns,
+  type WorktreeAgentBuckets,
+} from "@/lib/worktreeAgentBuckets";
 import type { PluginWorktreeAttention } from "@/lib/pluginPanelAttention";
 import {
   readPluginWorktreeAttention,
@@ -15,15 +21,40 @@ export interface WorktreeAgentBucketInputs {
 }
 
 /**
- * The fleet facts `deriveWorktreeAgentBuckets` joins against. The snapshot only
- * changes on real state transitions (main suppresses unchanged broadcasts), so
- * re-indexing on each one is cheap.
+ * The fleet facts `deriveWorktreeAgentBuckets` joins against, for surfaces that
+ * derive buckets for many worktrees at once. It re-renders on every fleet push,
+ * so a surface that shows one worktree reads `useWorktreeAgentBuckets` instead.
  */
 export function useWorktreeAgentBucketInputs(): WorktreeAgentBucketInputs {
   const runs = useFleetSnapshotStore((s) => s.snapshot?.runs ?? null);
-  const runsById = useMemo(() => indexFleetRuns(runs), [runs]);
+  const runsById = indexFleetRuns(runs);
   const pluginByWorktreeId = usePluginWorktreeAttention();
   return useMemo(() => ({ runsById, pluginByWorktreeId }), [runsById, pluginByWorktreeId]);
+}
+
+/**
+ * One worktree's buckets, re-rendering only when they change. The fleet
+ * selector returns the encoded bits, so a push that moves only other
+ * worktrees' runs leaves the caller alone; plugin attention, which changes
+ * apart from the fleet, still reaches it through its own subscription.
+ */
+export function useWorktreeAgentBuckets(
+  agentPanelIds: readonly string[],
+  mergedForCleanup: boolean,
+  worktreeId: string
+): WorktreeAgentBuckets {
+  const plugin = usePluginWorktreeAttention().get(worktreeId);
+  const bits = useFleetSnapshotStore((s) =>
+    encodeWorktreeAgentBuckets(
+      deriveWorktreeAgentBuckets(
+        agentPanelIds,
+        indexFleetRuns(s.snapshot?.runs),
+        mergedForCleanup,
+        plugin
+      )
+    )
+  );
+  return useMemo(() => decodeWorktreeAgentBuckets(bits), [bits]);
 }
 
 /** The same inputs, read once, for paths outside React (keyboard cycling). */

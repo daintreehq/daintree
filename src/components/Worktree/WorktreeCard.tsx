@@ -92,10 +92,15 @@ import { useWorktreeDevServerSession } from "@/hooks/app/useWorktreeDevServerSes
 import { computeChipState } from "./utils/computeChipState";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { isTerminalVisible } from "@/lib/terminalVisibility";
-import { deriveWorktreeAgentBuckets, isWorktreeMergedForCleanup } from "@/lib/worktreeAgentBuckets";
-import { useWorktreeAgentBucketInputs } from "@/hooks/useWorktreeAgentBucketInputs";
+import { isWorktreeMergedForCleanup } from "@/lib/worktreeAgentBuckets";
+import { useWorktreeAgentBuckets } from "@/hooks/useWorktreeAgentBucketInputs";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
-import { bulkParkAgents, selectParkTargets, type BulkParkVerb } from "@/lib/parkWorktreeAgents";
+import {
+  bulkParkAgents,
+  countParkTargets,
+  selectParkTargets,
+  type BulkParkVerb,
+} from "@/lib/parkWorktreeAgents";
 import { devServerMenuState } from "./utils/devServerMenuState";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { CHIP_LABELS, WorktreeStatusTick } from "./WorktreeCard/WorktreeStatusTick";
@@ -358,10 +363,7 @@ export function WorktreeCard({
   // Parking reads the fleet snapshot, not the panels: only a run the snapshot
   // carries can be parked, and a plain shell never appears there.
   const parking = useFleetSnapshotStore(
-    useShallow((state) => ({
-      parked: selectParkTargets(state.snapshot, worktreeTerminalIds, "unpark").length,
-      unparked: selectParkTargets(state.snapshot, worktreeTerminalIds, "park").length,
-    }))
+    useShallow((state) => countParkTargets(state.snapshot, worktreeTerminalIds))
   );
   const handleBulkPark = (verb: BulkParkVerb) => {
     const targets = selectParkTargets(
@@ -809,18 +811,15 @@ export function WorktreeCard({
   // cycling: a backgrounded agent is not counted there, so it must not mark
   // the card either. Every terminal here already belongs to this (existing)
   // worktree, so the orphan check has nothing to do.
-  const { runsById, pluginByWorktreeId } = useWorktreeAgentBucketInputs();
   const isInTrash = usePanelStore((state) => state.isInTrash);
-  const chipState = computeChipState(
-    deriveWorktreeAgentBuckets(
-      worktreeTerminals
-        .filter((t) => isAgentTerminal(t) && isTerminalVisible(t, isInTrash, NO_WORKTREE_IDS))
-        .map((t) => t.id),
-      runsById,
-      isWorktreeMergedForCleanup(worktree),
-      pluginByWorktreeId.get(worktree.id)
-    )
+  const agentBuckets = useWorktreeAgentBuckets(
+    worktreeTerminals
+      .filter((t) => isAgentTerminal(t) && isTerminalVisible(t, isInTrash, NO_WORKTREE_IDS))
+      .map((t) => t.id),
+    isWorktreeMergedForCleanup(worktree),
+    worktree.id
   );
+  const chipState = computeChipState(agentBuckets);
 
   // The active card used to opt out of being a drop target entirely — every
   // panel drag originated from the active worktree, so it could only ever be a
