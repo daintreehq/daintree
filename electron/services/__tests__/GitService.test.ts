@@ -1080,6 +1080,57 @@ describe("GitService.readFileInIndex", () => {
     expect(beforeRead).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["a tab", "odd\tname.png", STAGED_OID, "100644"],
+    ["a newline", "odd\nname.png", STAGED_OID, "100644"],
+    ["a trailing space", "name.png ", STAGED_OID, "100644"],
+    ["a sha256 id", "img.png", "a".repeat(64), "100644"],
+    ["a symlink's own blob", "link.png", STAGED_OID, "120000"],
+  ])("reads the exact entry for a path with %s", async (_label, treePath, oid, mode) => {
+    mockIndex(lsFilesRecord(treePath, 0, oid, mode));
+    binaryCatFileMock.mockResolvedValue(Buffer.from("data"));
+    const service = new GitService(tempDir);
+
+    await expect(service.readFileInIndex(treePath, 1024)).resolves.toEqual({
+      ok: true,
+      content: Buffer.from("data"),
+      version: oid,
+    });
+    expect(binaryCatFileMock).toHaveBeenCalledWith(["blob", oid]);
+  });
+
+  it("reads a staged blob whose id moved on, calling beforeRead first", async () => {
+    mockIndex(lsFilesRecord("img.png"));
+    const order: string[] = [];
+    binaryCatFileMock.mockImplementation(async () => {
+      order.push("read");
+      return Buffer.from("image-data");
+    });
+    const service = new GitService(tempDir);
+
+    const result = await service.readFileInIndex("img.png", 1024, {
+      knownVersion: "e".repeat(40),
+      beforeRead: () => order.push("beforeRead"),
+    });
+
+    expect(result).toEqual({ ok: true, content: Buffer.from("image-data"), version: STAGED_OID });
+    expect(order).toEqual(["beforeRead", "read"]);
+  });
+
+  it("reads nothing when beforeRead refuses", async () => {
+    mockIndex(lsFilesRecord("img.png"));
+    const service = new GitService(tempDir);
+
+    await expect(
+      service.readFileInIndex("img.png", 1024, {
+        beforeRead: () => {
+          throw new Error("rate limited");
+        },
+      })
+    ).rejects.toThrow("rate limited");
+    expect(binaryCatFileMock).not.toHaveBeenCalled();
+  });
+
   it("surfaces unparseable listings as git operation errors instead of NOT_FOUND", async () => {
     mockIndex("garbage\0");
     const service = new GitService(tempDir);

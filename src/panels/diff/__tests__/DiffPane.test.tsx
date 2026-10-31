@@ -556,21 +556,42 @@ describe("DiffPane — content-aware toolbar", () => {
     expect(sideFor("unstaged:logo.png")).toBe("unstaged");
   });
 
-  it("names no side for a plain working-tree image, and the panel's own for a sided panel", () => {
+  it("names no side for a plain working-tree image, even beside sided entries", () => {
     isImageDiffCandidateMock.mockReturnValue(true);
     seedPanel({ filePath: "logo.png", fileStatus: "modified", changeSet: [entry("logo.png")] });
     renderPane();
     expect(screen.getByTestId("image-diff-mock").getAttribute("data-side")).toBe("none");
 
+    // The open file isn't in the set, so no entry's side is its own.
     cleanup();
-    seedPanel({ filePath: "logo.png", fileStatus: "modified", diffSource: "staged" });
+    seedPanel({
+      filePath: "logo.png",
+      fileStatus: "modified",
+      changeSet: [{ ...entry("other.png"), side: "staged" }],
+    });
     renderPane();
-    expect(screen.getByTestId("image-diff-mock").getAttribute("data-side")).toBe("staged");
+    expect(screen.getByTestId("image-diff-mock").getAttribute("data-side")).toBe("none");
   });
 
+  it.each(["staged", "unstaged"] as const)(
+    "keeps a %s panel's own side over its entry's",
+    (diffSource) => {
+      isImageDiffCandidateMock.mockReturnValue(true);
+      const entrySide = diffSource === "staged" ? "unstaged" : "staged";
+      seedPanel({
+        filePath: "logo.png",
+        fileStatus: "modified",
+        diffSource,
+        changeSet: [{ ...entry("logo.png"), side: entrySide }],
+      });
+      renderPane();
+      expect(screen.getByTestId("image-diff-mock").getAttribute("data-side")).toBe(diffSource);
+    }
+  );
+
   it("keeps them for a base-branch image, which the text viewer still handles", () => {
-    // ImageDiffViewer compares the working tree against HEAD, so it has nothing
-    // to show for a base-branch comparison — those stay on DiffViewer whatever
+    // ImageDiffViewer compares local versions (HEAD, the index, the working
+    // tree), so it has nothing to show for a base-branch comparison — those stay on DiffViewer whatever
     // the extension. Gating the toolbar on candidacy alone would strip the
     // controls off a body that is still the text viewer.
     isImageDiffCandidateMock.mockReturnValue(true);

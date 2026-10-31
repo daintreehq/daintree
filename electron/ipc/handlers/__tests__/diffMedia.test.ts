@@ -473,6 +473,52 @@ describe("diffMedia readFileVersions", () => {
       expect(result.working).toEqual({ ok: true, unchanged: true, version: known.working });
     });
 
+    it("revalidates the unstaged disk slot against its own known version", async () => {
+      const INDEX_OID = "e".repeat(40);
+      readFileInIndexMock.mockImplementation(
+        async (_path: string, _max: number, options: { knownVersion?: string }) =>
+          options.knownVersion === INDEX_OID
+            ? { ok: true, unchanged: true, version: INDEX_OID }
+            : { ok: true, content: INDEX_BUFFER, version: INDEX_OID }
+      );
+      const first = await invoke({ cwd: REPO_ROOT, filePath: "img.png", side: "unstaged" });
+      if (!first.working.ok || first.working.version === undefined) {
+        throw new Error("expected a disk version");
+      }
+      fileHandleMock.read.mockClear();
+
+      const known = { head: INDEX_OID, working: first.working.version };
+      const second = await invoke({ cwd: REPO_ROOT, filePath: "img.png", side: "unstaged", known });
+
+      expect(second.head).toEqual({ ok: true, unchanged: true, version: INDEX_OID });
+      expect(second.working).toEqual({ ok: true, unchanged: true, version: known.working });
+      expect(fileHandleMock.read).not.toHaveBeenCalled();
+    });
+
+    it("refuses a changed index blob once the byte budget is spent, without reading it", async () => {
+      const known = await freshVersions();
+      for (let i = 0; i < 9; i++) await invoke({ cwd: REPO_ROOT, filePath: "img.png" });
+      const indexReads = vi.fn();
+      readFileInIndexMock.mockImplementation(
+        async (_path: string, _max: number, options: { beforeRead?: () => void }) => {
+          options.beforeRead?.();
+          indexReads();
+          return { ok: true, content: INDEX_BUFFER, version: "e".repeat(40) };
+        }
+      );
+
+      // HEAD still matches, so the index is the only slot that needs bytes.
+      await expect(
+        invoke({
+          cwd: REPO_ROOT,
+          filePath: "img.png",
+          side: "staged",
+          known: { head: known.head, working: "d".repeat(40) },
+        })
+      ).rejects.toMatchObject({ code: "RATE_LIMITED" });
+      expect(indexReads).not.toHaveBeenCalled();
+    });
+
     it("caps unchanged revalidations with their own budget", async () => {
       const known = await freshVersions();
       for (let i = 0; i < 60; i++) {

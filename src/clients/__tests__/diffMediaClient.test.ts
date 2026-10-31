@@ -140,6 +140,11 @@ describe("diffMediaClient.readFileVersions caching", () => {
       side: "staged",
       known: { head: "head", working: "index" },
     });
+
+    // HEAD against disk is a third comparison, held apart from both.
+    mockRead.mockResolvedValueOnce({ head: loaded("h", "head"), working: loaded("w", "w1") });
+    await client.diffMediaClient.readFileVersions(payload);
+    expect(mockRead).toHaveBeenLastCalledWith(payload);
   });
 
   it("rejects an unchanged reply for a version it doesn't hold", async () => {

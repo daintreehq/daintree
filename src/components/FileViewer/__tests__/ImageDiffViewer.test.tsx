@@ -579,8 +579,10 @@ describe("ImageDiffViewer sides of a partially staged file (#15610)", () => {
     expect(divider.getAttribute("aria-valuetext")).toBe("Index only");
 
     fireEvent.click(screen.getByRole("radio", { name: "Onion skin" }));
+    expect(screen.getByAltText("Index version of logo.png").style.opacity).toBe("0.5");
     const opacity = screen.getByRole("slider", { name: "Index opacity" });
     expect(opacity.getAttribute("aria-valuetext")).toBe("Index at 50% over HEAD");
+    expect(opacity.closest("label")?.textContent).toMatch(/^Index opacity/);
     expect(screen.getByText("Index")).toBeDefined();
     expect(screen.queryByText("Working tree")).toBeNull();
   });
@@ -608,10 +610,12 @@ describe("ImageDiffViewer sides of a partially staged file (#15610)", () => {
   });
 
   it("says a staged deletion has no index version, and an unstaged one keeps the index's", async () => {
-    mockReadFileVersions.mockResolvedValue({
+    const deletion = (): DiffMediaFileVersions => ({
       head: { ok: true, dataUrl: HEAD_URL, byteSize: 4 },
       working: { ok: false, error: "NOT_FOUND" },
-    } satisfies DiffMediaFileVersions);
+    });
+    const next = createDeferred<DiffMediaFileVersions>();
+    mockReadFileVersions.mockResolvedValueOnce(deletion()).mockReturnValueOnce(next.promise);
     const { rerender } = render(
       <ImageDiffViewer relPath="gone.png" worktreePath="/repo" status="deleted" side="staged" />
     );
@@ -622,6 +626,13 @@ describe("ImageDiffViewer sides of a partially staged file (#15610)", () => {
     rerender(
       <ImageDiffViewer relPath="gone.png" worktreePath="/repo" status="deleted" side="unstaged" />
     );
+    // The staged frame holds, caption and all, until the unstaged one lands.
+    expect(screen.getByAltText("HEAD version of gone.png")).toBeDefined();
+    expect(screen.getByText("Deleted — no index version")).toBeDefined();
+
+    await act(async () => {
+      next.resolve(deletion());
+    });
     await screen.findByAltText("Index version of gone.png");
     expect(screen.getByText("Deleted — no working version")).toBeDefined();
     expect(mockReadFileVersions).toHaveBeenLastCalledWith({
@@ -650,10 +661,12 @@ describe("ImageDiffViewer sides of a partially staged file (#15610)", () => {
       side: "unstaged",
     });
     // Still the staged bytes on screen, so still the staged names.
-    expect(screen.getByAltText("HEAD version of logo.png").getAttribute("src")).toBe(A_HEAD_URL);
+    const heldHead = screen.getByAltText("HEAD version of logo.png");
+    expect(heldHead.getAttribute("src")).toBe(A_HEAD_URL);
     expect(screen.getByAltText("Index version of logo.png").getAttribute("src")).toBe(
       A_WORKING_URL
     );
+    expect(heldHead.closest('[aria-busy="true"]')).not.toBeNull();
 
     await act(async () => {
       next.resolve(bothOkWith(B_HEAD_URL, B_WORKING_URL));
@@ -665,6 +678,28 @@ describe("ImageDiffViewer sides of a partially staged file (#15610)", () => {
       B_WORKING_URL
     );
     expect(screen.queryByAltText("HEAD version of logo.png")).toBeNull();
+    expect(document.querySelector("[aria-busy]")).toBeNull();
+  });
+
+  it("drops one side's read failure when the row switches to the other side", async () => {
+    const next = createDeferred<DiffMediaFileVersions>();
+    mockReadFileVersions
+      .mockRejectedValueOnce(new Error("transport down"))
+      .mockReturnValueOnce(next.promise);
+    const { rerender } = render(
+      <ImageDiffViewer relPath="logo.png" worktreePath="/repo" status="modified" side="staged" />
+    );
+    expect(await screen.findByText("Couldn't load image versions")).toBeDefined();
+
+    rerender(
+      <ImageDiffViewer relPath="logo.png" worktreePath="/repo" status="modified" side="unstaged" />
+    );
+    expect(screen.queryByText("Couldn't load image versions")).toBeNull();
+
+    await act(async () => {
+      next.resolve(bothOk());
+    });
+    expect(await screen.findByAltText("Index version of logo.png")).toBeDefined();
   });
 
   it("names the index at either end of the swipe divider for the side that holds it", () => {
@@ -674,7 +709,9 @@ describe("ImageDiffViewer sides of a partially staged file (#15610)", () => {
     expect(swipeValueText(40, comparedVersions("unstaged"))).toBe(
       "Index 40% on the left, working tree 60% on the right"
     );
-    expect(swipeValueText(40, comparedVersions())).toBe(swipeValueText(40));
+    expect(swipeValueText(40, comparedVersions("staged"))).toBe(
+      "HEAD 40% on the left, index 60% on the right"
+    );
   });
 });
 
