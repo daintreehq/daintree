@@ -623,6 +623,32 @@ describe("TerminalProcess.submit owner check before the Enter", () => {
     expect(terminal.getSubmission("tok-1")?.phase).toBe("cancelled");
   });
 
+  it("drops the Enter when a different agent takes the terminal during the submit delay", async () => {
+    const terminal = createAgent("claude");
+
+    terminal.submit("explain this\n", "tok-1");
+    await vi.advanceTimersByTimeAsync(100);
+    info(terminal).detectedAgentId = "codex";
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(writes()).toEqual(["explain this"]);
+    expect(terminal.getSubmission("tok-1")?.phase).toBe("cancelled");
+  });
+
+  // Strict on purpose: detection that only now confirms an agent cannot tell
+  // whether the shell or the agent read the body, so the Enter is not sent.
+  it("drops the Enter when an agent is detected in a plain shell during the submit delay", async () => {
+    const terminal = createTerminal();
+
+    terminal.submit("explain this\n", "tok-1");
+    await vi.advanceTimersByTimeAsync(100);
+    info(terminal).detectedAgentId = "claude";
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(writes()).toEqual(["explain this"]);
+    expect(terminal.getSubmission("tok-1")?.phase).toBe("cancelled");
+  });
+
   it("still submits to a terminal that was a plain shell throughout", async () => {
     const terminal = createTerminal();
 
