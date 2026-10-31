@@ -52,9 +52,7 @@ function listOf(name: string, fallback: number[]): number[] {
 const DELAYS = listOf("DELAYS", [0, 5, 20]);
 const DEPTHS = listOf("DEPTHS", [1, 2]);
 const RUNS = Number(process.env[`${ENV}_RUNS`] ?? 3);
-const RATE_MBPS = process.env[`${ENV}_RATE_MBPS`]
-  ? Number(process.env[`${ENV}_RATE_MBPS`])
-  : null;
+const RATE_MBPS = process.env[`${ENV}_RATE_MBPS`] ? Number(process.env[`${ENV}_RATE_MBPS`]) : null;
 
 const FIXTURES = [
   { name: "image.png", scheme: "daintree-file" as const, size: 25 * MiB },
@@ -145,7 +143,11 @@ async function measure(
   try {
     service.attach(host, endpoint);
     const transport = new ClientFileTransport({ pullDepth: depth });
-    transport.noteEndpointOpened("bench", { session: client, webContentsId: 7, endpointId: "view-7" });
+    transport.noteEndpointOpened("bench", {
+      session: client,
+      webContentsId: 7,
+      endpointId: "view-7",
+    });
     const capabilities = new ViewFileCapabilities(() => () => {});
     const cap = capabilities.capabilityFor(7);
     const proxy = createHostFileProxy(transport, {
@@ -311,7 +313,11 @@ describe.runIf(BENCH)("remote preview transport bench", () => {
       if (out) {
         await fs.writeFile(
           out,
-          JSON.stringify({ rateMbps: RATE_MBPS, runs: RUNS, node: process.version, samples }, null, 2)
+          JSON.stringify(
+            { rateMbps: RATE_MBPS, runs: RUNS, node: process.version, samples },
+            null,
+            2
+          )
         );
       }
     },

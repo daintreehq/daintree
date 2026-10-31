@@ -128,7 +128,9 @@ export async function openSessionPair(
   clientOptions: Extra = {},
   conditions?: LinkConditions
 ): Promise<{ host: LinkSession; client: LinkSession }> {
-  const { a, b } = conditions ? await conditionedSocketPair(dir, conditions) : await socketPair(dir);
+  const { a, b } = conditions
+    ? await conditionedSocketPair(dir, conditions)
+    : await socketPair(dir);
   const host = new LinkSession(a, {
     pingIntervalMs: 0,
     idleTimeoutMs: 0,

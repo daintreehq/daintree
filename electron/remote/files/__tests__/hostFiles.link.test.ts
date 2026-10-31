@@ -563,17 +563,20 @@ describe("previews pulled ahead", () => {
     ["exactly one slice", MiB],
     ["exactly three slices", 3 * MiB],
     ["a slice and a bit", MiB + 1],
-  ])("delivers exactly the file's bytes for %s, whatever order slices finish in", async (_label, size) => {
-    const ctx = await pipelined({ conditions: { oneWayDelayMs: 5 } });
-    const { file, bytes } = await write("exact.mp4", size);
-    const response = await ctx.proxy(
-      "daintree-media",
-      new Request(url("daintree-media", file, project))
-    );
-    expect(Number(response.headers.get("content-length"))).toBe(size);
-    expect(sha256(new Uint8Array(await response.arrayBuffer()))).toBe(sha256(bytes));
-    await waitFor(() => ctx.service.openStreams === 0);
-  });
+  ])(
+    "delivers exactly the file's bytes for %s, whatever order slices finish in",
+    async (_label, size) => {
+      const ctx = await pipelined({ conditions: { oneWayDelayMs: 5 } });
+      const { file, bytes } = await write("exact.mp4", size);
+      const response = await ctx.proxy(
+        "daintree-media",
+        new Request(url("daintree-media", file, project))
+      );
+      expect(Number(response.headers.get("content-length"))).toBe(size);
+      expect(sha256(new Uint8Array(await response.arrayBuffer()))).toBe(sha256(bytes));
+      await waitFor(() => ctx.service.openStreams === 0);
+    }
+  );
 
   it("answers a range with exactly its bytes when the range spans slices", async () => {
     const ctx = await pipelined({ conditions: { oneWayDelayMs: 5 } });
@@ -679,9 +682,7 @@ describe("previews pulled ahead", () => {
       "daintree-media",
       new Request(url("daintree-media", file, project))
     );
-    expect((await answered.mock.results[0]!.value) as FileResponse).not.toHaveProperty(
-      "pullDepth"
-    );
+    expect((await answered.mock.results[0]!.value) as FileResponse).not.toHaveProperty("pullDepth");
     expect(sha256(new Uint8Array(await response.arrayBuffer()))).toBe(sha256(bytes));
     expect(ctx.stats.maxSends).toBe(1);
     expect(ctx.service.openStreams).toBe(0);

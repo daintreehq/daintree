@@ -403,9 +403,7 @@ class PreviewBody implements HostFileBody {
   /** The host closed the stream (revoked, idle, failed): drop everything, ask nothing. */
   closedByHost(): void {
     if (this.finished) return;
-    this.stop(
-      new AppError({ code: "CANCELLED", message: "The host closed the preview stream" })
-    );
+    this.stop(new AppError({ code: "CANCELLED", message: "The host closed the preview stream" }));
   }
 
   /** The slice the reader is waiting on: it takes the next free slot, in turn. */
@@ -660,8 +658,7 @@ export class ClientFileTransport {
       depth,
       expectedBytes: options.expectedBytes,
       gate: this.gate(hostId),
-      pullSlice: (pinned, sequence, onBegin) =>
-        this.pullSlice(pinned, streamId, sequence, onBegin),
+      pullSlice: (pinned, sequence, onBegin) => this.pullSlice(pinned, streamId, sequence, onBegin),
       cancelRemote: () => {
         if (session?.isOpen) {
           void session.call(FileLinkMethod.CANCEL, { streamId }).catch(() => {});
