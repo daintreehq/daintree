@@ -59,7 +59,11 @@ export function useAttachFiles(
  * The attach menu's host leg in a remote window: Daintree's picker over the
  * host, whose choices are host paths already, so nothing is transferred.
  */
-export function useAttachFromHost(editorViewRef: RefObject<EditorView | null>, cwd: string) {
+export function useAttachFromHost(
+  editorViewRef: RefObject<EditorView | null>,
+  cwd: string,
+  uploadSurface?: string
+) {
   const inFlightRef = useRef(false);
 
   return useCallback(async () => {
@@ -82,12 +86,15 @@ export function useAttachFromHost(editorViewRef: RefObject<EditorView | null>, c
         editorViewRef,
         view,
         paths.map((filePath) => ({ ...fileAttachmentEntryFromPath(filePath, "host"), hostId })),
-        cwd
+        cwd,
+        // Nothing is uploaded, but each image's thumbnail still comes back
+        // from the host before it is in the draft.
+        uploadSurface === undefined ? {} : { uploadSurface }
       );
     } catch (error) {
       logError("[HybridInputBar] Host attachment picker failed", error);
     } finally {
       inFlightRef.current = false;
     }
-  }, [editorViewRef, cwd]);
+  }, [editorViewRef, cwd, uploadSurface]);
 }

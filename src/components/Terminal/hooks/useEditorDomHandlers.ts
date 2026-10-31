@@ -5,6 +5,7 @@ import { hasFileDrag } from "@/lib/fileDragPayload";
 import { hasAgentContextDrag } from "@/lib/agentContextDragPayload";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { agentAltChordKey, isEnterLikeLineBreakInputEvent } from "../hybridInputEvents";
+import { isComposerSendHeld } from "../uploads/pendingUploads";
 
 interface LatestRefShape {
   disabled: boolean;
@@ -21,6 +22,8 @@ interface LatestRefShape {
   isExpanded: boolean;
   /** The agent's own Option/Alt chords (`capabilities.altChords`), sent to it rather than typed. */
   altChords?: readonly string[];
+  /** Whose attachments still on their way hold an Enter on an empty draft too. */
+  uploadSurface?: string;
 }
 
 interface UseEditorDomHandlersParams {
@@ -115,7 +118,9 @@ export function useEditorDomHandlers({
           // While dictating, the words can still be on their way into an empty
           // doc; the send finishes the dictation, as the keymap's Enter does.
           if (text.trim().length === 0 && !latest.isVoiceActiveForPanel) {
-            if (latest.onSendKey) latest.onSendKey("enter");
+            const held =
+              latest.uploadSurface !== undefined && isComposerSendHeld(latest.uploadSurface);
+            if (!held && latest.onSendKey) latest.onSendKey("enter");
             return true;
           }
           sendFromEditorRef.current();

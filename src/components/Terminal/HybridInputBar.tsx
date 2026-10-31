@@ -109,12 +109,20 @@ import { useEditorCompartments } from "./hooks/useEditorCompartments";
 import { useAutocompleteItems } from "./hooks/useAutocompleteItems";
 import { useDragDrop } from "./hooks/useDragDrop";
 import { useAttachFiles, useAttachFromHost } from "./hooks/useAttachFiles";
-import { fileAttachmentEntryFromSource, insertFileAttachments } from "./fileAttachments";
+import {
+  fileAttachmentEntryFromSource,
+  insertFileAttachments,
+  insertPreparedAttachments,
+} from "./fileAttachments";
 import {
   composerUploadSurface,
-  hasPendingUploads,
+  isComposerSendHeld,
   isolatedComposerUploadSurface,
+  takeHeldBackAttachments,
+  type PreparedAttachment,
 } from "./uploads/pendingUploads";
+import { HeldBackAttachmentsBanner } from "./uploads/HeldBackAttachmentsBanner";
+import { advanceComposerDraft } from "./inputEditorExtensions/composerDraftGeneration";
 import { CROSS_HOST_CONTEXT_REFUSAL, tryComposerFleetBroadcast } from "./composerFleetBroadcast";
 import { PendingUploadChips } from "./uploads/PendingUploadChips";
 import { LazyUploadConfirmHost } from "./uploads/LazyUploadConfirmHost";
@@ -330,6 +338,8 @@ interface LatestState {
   ) => string | null;
   isVoiceActiveForPanel: boolean;
   isExpanded: boolean;
+  /** Whose attachments still on their way hold an Enter on an empty draft too. */
+  uploadSurface: string;
   modEnterSend?: () => ComposerSendRoute;
   altChords?: readonly string[];
 }
@@ -657,7 +667,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       [resetDragState]
     );
     const handleAttachFiles = useAttachFiles(editorViewRef, cwd, uploadSurface);
-    const handleAttachFromHost = useAttachFromHost(editorViewRef, cwd);
+    const handleAttachFromHost = useAttachFromHost(editorViewRef, cwd, uploadSurface);
+    // Held back for this composer's draft, so gone with the composer.
+    useEffect(() => () => void takeHeldBackAttachments(uploadSurface), [uploadSurface]);
+    const addHeldBackAttachments = (attachments: readonly PreparedAttachment[]): boolean => {
+      const view = editorViewRef.current;
+      if (!view || !insertPreparedAttachments(view, attachments, readCwd())) return false;
+      view.focus();
+      return true;
+    };
 
     // A drop on this pane's agent terminal lands here when a click on the
     // terminal would focus the bar — in the pane's own composer, never Canopy's
@@ -686,7 +704,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const { imagePasteExtension, filePasteExtension, plainPasteKeymap } = usePasteExtensions(
       cwd,
       uploadSurface,
-      thisMachineOff
+      thisMachineOff,
+      editorViewRef
     );
 
     useEffect(() => {
@@ -991,6 +1010,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         isExpanded,
         modEnterSend,
         altChords,
+        uploadSurface,
       };
     });
 
@@ -1116,6 +1136,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       );
       const view = editorViewRef.current;
       if (!view) return;
+      // A recalled prompt is another draft, even one that reads the same.
+      const replacedAt = inputState.replacedDraftRevisions.get(makeDraftKey(terminalId, projectId));
+      if (replacedAt !== undefined && replacedAt > appliedBefore) advanceComposerDraft(view);
       const landed = takeLandedCorrection(terminalId, projectId, draft);
       const reviewed = landed !== null && isLatestDictation(voiceId, landed);
       const scratched = takeScratchLanded(terminalId, projectId, draft);
@@ -1325,8 +1348,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       route?: ComposerSendRoute,
       departed?: DepartedComposerSend
     ): boolean | Promise<boolean> => {
-      // An upload still on its way would leave its reference out of what is sent.
-      if (hasPendingUploads(uploadSurface)) return false;
+      // An attachment still on its way would be left out of what is sent.
+      if (isComposerSendHeld(uploadSurface)) return false;
       // The send takes the draft as it stands. A dictation correction still on
       // its way must not rewrite it mid-send, or land on the next draft (#14611).
       // One for words a dictated send holds back still lands on them (#14804).
@@ -1733,6 +1756,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         latest.projectId
       );
       if (result !== null) {
+        // A different draft: an attachment still on its way was meant for the
+        // one this replaces.
+        if (view) advanceComposerDraft(view);
         applyEditorValue(result, {
           selection: EditorSelection.create([EditorSelection.cursor(result.length)]),
           focus: true,
@@ -1749,8 +1775,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // The menu takes Enter before the keymap asks whether the composer is
       // disabled, and the fleet would never ask.
       if (!latest || latest.disabled) return;
-      // An upload still on its way would leave its reference out, as on Enter.
-      if (hasPendingUploads(uploadSurface)) return;
+      // An attachment still on its way would be left out, as on Enter.
+      if (isComposerSendHeld(uploadSurface)) return;
       // The editor still reads the partial token: only that leaves the draft.
       const isDraftUnchanged = guardSentDraft(latest.projectId);
       const intercepted = tryComposerFleetBroadcast(isFocusedTerminal, terminalId, text, () => {
@@ -2216,6 +2242,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         style={{ backgroundColor: inputBarColors.background, ...shellVars }}
       >
         {isRemote && <PendingUploadChips surface={uploadSurface} className="mb-1.5" />}
+        <HeldBackAttachmentsBanner
+          surface={uploadSurface}
+          disabled={disabled}
+          onAdd={addHeldBackAttachments}
+          className="mb-1.5"
+        />
         {/* Outside the shell, which is busy for the whole wait: a live region
             inside it would hold its announcements until the send. */}
         {!isExpanded && voiceSubmitAnnouncer}

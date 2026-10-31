@@ -155,6 +155,11 @@ export interface TerminalInputState {
    * where the user is typing) don't advance it.
    */
   caretMovingDraftRevision: number;
+  /**
+   * Per draft key, the latest outside write that put a different draft in
+   * place (a prompt recalled from history) rather than adding to the one there.
+   */
+  replacedDraftRevisions: Map<string, number>;
   lastTypedAgentTarget: LastTypedAgentTarget | null;
   commandHistory: Map<string, string[]>;
   /** The latest sends to each terminal, in send order, repeats and all; never reordered. */
@@ -167,7 +172,11 @@ export interface TerminalInputState {
   setHybridInputAutoFocus: (enabled: boolean) => void;
   getDraftInput: (terminalId: string, projectId?: string) => string;
   setDraftInput: (terminalId: string, value: string, projectId?: string) => void;
-  bumpExternalDraftRevision: (options?: { keepsSelection?: boolean }) => void;
+  bumpExternalDraftRevision: (options?: {
+    keepsSelection?: boolean;
+    /** The draft this write replaced, rather than added to. */
+    replacesDraftOf?: { terminalId: string; projectId?: string };
+  }) => void;
   recordLastTypedAgentTarget: (terminalId: string, workspaceId: string) => void;
   clearDraftInput: (terminalId: string, projectId?: string) => void;
   clearAllDraftInputs: () => void;
@@ -235,6 +244,7 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
   draftInputs: new Map(),
   externalDraftRevision: 0,
   caretMovingDraftRevision: 0,
+  replacedDraftRevisions: new Map(),
   lastTypedAgentTarget: null,
   commandHistory: new Map(),
   sentPrompts: new Map(),
@@ -294,9 +304,17 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
   bumpExternalDraftRevision: (options) =>
     set((state) => {
       const externalDraftRevision = state.externalDraftRevision + 1;
-      return options?.keepsSelection
-        ? { externalDraftRevision }
-        : { externalDraftRevision, caretMovingDraftRevision: externalDraftRevision };
+      const replaced = options?.replacesDraftOf;
+      return {
+        externalDraftRevision,
+        ...(options?.keepsSelection ? {} : { caretMovingDraftRevision: externalDraftRevision }),
+        ...(replaced && {
+          replacedDraftRevisions: new Map(state.replacedDraftRevisions).set(
+            makeDraftKey(replaced.terminalId, replaced.projectId),
+            externalDraftRevision
+          ),
+        }),
+      };
     }),
 
   recordLastTypedAgentTarget: (terminalId, workspaceId) =>

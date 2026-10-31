@@ -3,7 +3,8 @@ import type { MaterializeOptions } from "@shared/types/remoteHosts";
 
 /**
  * Uploads in flight to a remote window's host, per surface (a composer, a
- * terminal, a file browser). A module store rather than a zustand one: it is
+ * terminal, a file browser), and a composer's attachments that are still being
+ * prepared or were held back. A module store rather than a zustand one: it is
  * written from drop and paste handlers, and read by the chips of whichever
  * surface the upload belongs to.
  *
@@ -23,8 +24,16 @@ export interface PendingUpload {
   cancel(): void;
 }
 
+/** An attachment ready to go into a draft: what its chip shows and where it points. */
+export type PreparedAttachment =
+  | { type: "image"; filePath: string; thumbnailDataUrl: string }
+  | { type: "file"; filePath: string; fileName: string; fileSize: number | undefined };
+
 const EMPTY: readonly PendingUpload[] = [];
+const NO_ATTACHMENTS: readonly PreparedAttachment[] = [];
 const bySurface = new Map<string, readonly PendingUpload[]>();
+const sendHolds = new Map<string, number>();
+const heldBack = new Map<string, readonly PreparedAttachment[]>();
 const listeners = new Set<() => void>();
 let nextId = 1;
 
@@ -87,6 +96,54 @@ export function hasPendingUploads(surface: string): boolean {
   return (bySurface.get(surface)?.length ?? 0) > 0;
 }
 
+/**
+ * Holds the composer on `surface` from sending while an attachment for it is
+ * prepared. An upload settling is not the end of that: a thumbnail still has
+ * to come back, from the host in a remote window, before anything is in the
+ * draft. The returned release is safe to call more than once.
+ */
+export function holdComposerSend(surface: string): () => void {
+  sendHolds.set(surface, (sendHolds.get(surface) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const left = (sendHolds.get(surface) ?? 1) - 1;
+    if (left > 0) sendHolds.set(surface, left);
+    else sendHolds.delete(surface);
+  };
+}
+
+/** Whether a send from the composer on `surface` would leave an attachment out. */
+export function isComposerSendHeld(surface: string): boolean {
+  return hasPendingUploads(surface) || sendHolds.has(surface);
+}
+
+/**
+ * Keeps attachments whose draft was sent or replaced before they were ready,
+ * for the composer to offer instead of adding them to whatever draft it shows
+ * now. Later ones join the end, so they still go in the order they came.
+ */
+export function holdBackAttachments(
+  surface: string,
+  attachments: readonly PreparedAttachment[]
+): void {
+  if (attachments.length === 0) return;
+  heldBack.set(surface, [...(heldBack.get(surface) ?? NO_ATTACHMENTS), ...attachments]);
+  emit();
+}
+
+export function getHeldBackAttachments(surface: string): readonly PreparedAttachment[] {
+  return heldBack.get(surface) ?? NO_ATTACHMENTS;
+}
+
+/** Hands back everything held back for `surface` and forgets it. */
+export function takeHeldBackAttachments(surface: string): readonly PreparedAttachment[] {
+  const held = getHeldBackAttachments(surface);
+  if (heldBack.delete(surface)) emit();
+  return held;
+}
+
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
@@ -97,6 +154,14 @@ export function usePendingUploads(surface: string): readonly PendingUpload[] {
     subscribe,
     () => getPendingUploads(surface),
     () => EMPTY
+  );
+}
+
+export function useHeldBackAttachments(surface: string): readonly PreparedAttachment[] {
+  return useSyncExternalStore(
+    subscribe,
+    () => getHeldBackAttachments(surface),
+    () => NO_ATTACHMENTS
   );
 }
 
@@ -111,6 +176,8 @@ export const fileBrowserUploadSurface = (panelId: string) => `file-browser:${pan
 /** @internal Tests only. */
 export function _resetPendingUploadsForTests(): void {
   bySurface.clear();
+  sendHolds.clear();
+  heldBack.clear();
   listeners.clear();
   nextId = 1;
 }

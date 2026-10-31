@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, type RefObject } from "react";
+import type { EditorView } from "@codemirror/view";
 import {
   createImagePasteHandler,
   addImageChip,
@@ -10,14 +11,21 @@ import { formatAtFileTokenForCwd } from "../hybridInputParsing";
 import { materializeTransferSources } from "@/lib/transferSources";
 import { materialize } from "@/services/materialize";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
-import { trackUpload } from "../uploads/pendingUploads";
+import { holdBackAttachments, holdComposerSend, trackUpload } from "../uploads/pendingUploads";
+import { composerDraftGeneration } from "../inputEditorExtensions/composerDraftGeneration";
 
 /**
  * `thisMachineOff`: the composer types to a terminal on another host, where a
  * pasted image or file saved on this machine would be a path to nothing, so
- * neither is taken.
+ * neither is taken. `editorViewRef` is the composer's live editor: a paste
+ * that resolves after it is gone is dropped, as a drop is.
  */
-export function usePasteExtensions(cwd: string, uploadSurface?: string, thisMachineOff = false) {
+export function usePasteExtensions(
+  cwd: string,
+  uploadSurface?: string,
+  thisMachineOff = false,
+  editorViewRef?: RefObject<EditorView | null>
+) {
   // `useEditorFactory` reads these extensions once, while building the initial
   // `EditorState`, under an effect keyed on `terminalId` alone — and no
   // compartment wraps them. A memo that rebuilt the extension when `cwd`
@@ -41,15 +49,31 @@ export function usePasteExtensions(cwd: string, uploadSurface?: string, thisMach
     () =>
       createImagePasteHandler(async (view) => {
         if (offRef.current) return;
+        // Sending waits until the image is in the draft, saved locally or
+        // uploaded to the host.
+        const surface = uploadSurfaceRef.current;
+        const release = surface === undefined ? undefined : holdComposerSend(surface);
+        const generation = composerDraftGeneration(view);
         try {
-          // Tracked in a remote window, so sending waits for the image to reach the host.
-          const surface = uploadSurfaceRef.current;
           const { hostPath: filePath, thumbnail } =
             surface !== undefined && isRemoteWindow()
               ? await trackUpload(surface, "Pasted image", (options) =>
                   materialize({ kind: "clipboard-image" }, options)
                 )
               : await materialize({ kind: "clipboard-image" });
+          const fileName = filePath.split(/[/\\]/).filter(Boolean).pop() || filePath;
+          if (editorViewRef && editorViewRef.current !== view) return;
+          // Pasted into a draft that has been sent or replaced since.
+          if (composerDraftGeneration(view) !== generation) {
+            if (surface !== undefined) {
+              holdBackAttachments(surface, [
+                thumbnail
+                  ? { type: "image", filePath, thumbnailDataUrl: thumbnail }
+                  : { type: "file", filePath, fileName, fileSize: undefined },
+              ]);
+            }
+            return;
+          }
           // The caret is read after the save, never before: typing may have
           // moved it. A view destroyed meanwhile takes the dispatch silently.
           const cursor = view.state.selection.main.head;
@@ -63,7 +87,7 @@ export function usePasteExtensions(cwd: string, uploadSurface?: string, thisMach
                 from: cursor,
                 to: cursor + token.length,
                 filePath,
-                fileName: filePath.split(/[/\\]/).filter(Boolean).pop() || filePath,
+                fileName,
               }),
               selection: { anchor: cursor + token.length + 1 },
             });
@@ -81,9 +105,11 @@ export function usePasteExtensions(cwd: string, uploadSurface?: string, thisMach
           });
         } catch {
           // Empty clipboard, editor destroyed mid-IPC, etc. — nothing to do.
+        } finally {
+          release?.();
         }
       }),
-    []
+    [editorViewRef]
   );
 
   const filePasteExtension = useMemo(
@@ -91,51 +117,69 @@ export function usePasteExtensions(cwd: string, uploadSurface?: string, thisMach
       createFilePasteHandler(async (view, files) => {
         if (offRef.current) return;
         const surface = uploadSurfaceRef.current;
-        const materialized = await materializeTransferSources(
-          files.map((file) => ({ kind: "local", path: file.path })),
-          surface !== undefined && isRemoteWindow()
-            ? (source, run) =>
-                trackUpload(
-                  surface,
-                  files.find((file) => file.path === source.path)?.name ?? source.path,
-                  run
-                )
-            : undefined
-        );
-        // Caret and cwd are read after the await, like the image paste, so
-        // typing or a `cd` in between lands the paste where the user now is.
-        const cursor = view.state.selection.main.head;
-        const effects: ReturnType<typeof addFileDropChip.of>[] = [];
-        let insertText = "";
-        files.forEach((file, index) => {
-          const filePath = materialized[index]?.hostPath;
-          if (!filePath) return;
-          const token = formatAtFileTokenForCwd(filePath, cwdRef.current);
-          const from = cursor + insertText.length;
-          insertText += token + " ";
-          effects.push(
-            addFileDropChip.of({
-              from,
-              to: from + token.length,
-              // Absolute on purpose — see the matching note in `useDragDrop`.
-              filePath,
-              fileName: file.name,
-              fileSize: file.size,
-            })
-          );
-        });
-        if (insertText === "") return;
+        const release = surface === undefined ? undefined : holdComposerSend(surface);
+        const generation = composerDraftGeneration(view);
         try {
-          view.dispatch({
-            changes: { from: cursor, insert: insertText },
-            effects,
-            selection: { anchor: cursor + insertText.length },
+          const materialized = await materializeTransferSources(
+            files.map((file) => ({ kind: "local", path: file.path })),
+            surface !== undefined && isRemoteWindow()
+              ? (source, run) =>
+                  trackUpload(
+                    surface,
+                    files.find((file) => file.path === source.path)?.name ?? source.path,
+                    run
+                  )
+              : undefined
+          );
+          const pasted = files.flatMap((file, index) => {
+            const filePath = materialized[index]?.hostPath;
+            return filePath ? [{ filePath, fileName: file.name, fileSize: file.size }] : [];
           });
-        } catch {
-          // Editor destroyed while the paths resolved — nothing to do.
+          if (pasted.length === 0) return;
+          if (editorViewRef && editorViewRef.current !== view) return;
+          if (composerDraftGeneration(view) !== generation) {
+            if (surface !== undefined) {
+              holdBackAttachments(
+                surface,
+                pasted.map((file) => ({ type: "file" as const, ...file }))
+              );
+            }
+            return;
+          }
+          // Caret and cwd are read after the await, like the image paste, so
+          // typing or a `cd` in between lands the paste where the user now is.
+          const cursor = view.state.selection.main.head;
+          const effects: ReturnType<typeof addFileDropChip.of>[] = [];
+          let insertText = "";
+          for (const { filePath, fileName, fileSize } of pasted) {
+            const token = formatAtFileTokenForCwd(filePath, cwdRef.current);
+            const from = cursor + insertText.length;
+            insertText += token + " ";
+            effects.push(
+              addFileDropChip.of({
+                from,
+                to: from + token.length,
+                // Absolute on purpose — see the matching note in `useDragDrop`.
+                filePath,
+                fileName,
+                fileSize,
+              })
+            );
+          }
+          try {
+            view.dispatch({
+              changes: { from: cursor, insert: insertText },
+              effects,
+              selection: { anchor: cursor + insertText.length },
+            });
+          } catch {
+            // Editor destroyed while the paths resolved — nothing to do.
+          }
+        } finally {
+          release?.();
         }
       }),
-    []
+    [editorViewRef]
   );
 
   const plainPasteKeymap = useMemo(() => createPlainPasteKeymap(), []);
