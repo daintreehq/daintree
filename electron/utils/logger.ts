@@ -1186,3 +1186,16 @@ export function logWarn(message: string, context?: LogContext): void {
 export function logError(message: string, error?: unknown, context?: LogContext): void {
   defaultSharedLogger.error(message, error, context);
 }
+
+/**
+ * Append a record to this machine's `daintree.log` and nowhere else (#15558).
+ *
+ * Every other transport can leave the machine: console lines become Sentry
+ * breadcrumbs, and a host's entries reach Main's console through the parent
+ * port or its piped stdio. Content that must stay local, such as a terminal's
+ * own output, goes through here. There is deliberately no console fallback.
+ */
+export function logLocalOnly(level: LogLevel, message: string): void {
+  if (!shouldLog(defaultSharedLogger.name, level)) return;
+  writeToLogFile(level.toUpperCase(), scrubSecrets(message), "");
+}
