@@ -16,9 +16,10 @@ const MAX_BUNDLED_CRASH_RECORDS = 20;
 const CRASH_RECORD_FILE = /^(crash|renderer-gone)-[\w-]+\.json$/;
 // The default shard writes `pty-host.log`; other shards `pty-host-<suffix>.log`.
 const PTY_HOST_LOG_FILE = /^pty-host(-[\w-]+)?\.log$/;
-// The logger and the PTY host stamp entries with `toISOString()`. A stamp with
-// no zone would parse as local time, so it doesn't count as a date.
-const ENTRY_TIMESTAMP = /^\[(\d{4}-\d{2}-\d{2}T[^\]\s]*(?:Z|[+-]\d{2}:\d{2}))\]/;
+// Both writers open an entry with `[<toISOString()>] [<LEVEL or KIND>]`. The
+// second bracket keeps a stamp inside a message from passing for a header, and
+// a stamp with no zone would parse as local time, so it doesn't count either.
+const ENTRY_HEADER = /^\[(\d{4}-\d{2}-\d{2}T[^\]\s]*(?:Z|[+-]\d{2}:\d{2}))\] \[[A-Z][A-Z0-9_]*\]/;
 // The PTY host draws a rule above each fatal block's dated header.
 const BLOCK_RULE = /^=+\r?\n?$/;
 
@@ -47,7 +48,7 @@ interface CrashRecord {
   content: string;
 }
 
-interface BundleSources {
+export interface BundleSources {
   logs: Array<{ name: string; entries: LogEntry[] }>;
   crashes: CrashRecord[];
 }
@@ -59,7 +60,7 @@ interface SelectedMember {
 }
 
 function entryTimestamp(line: string): number | null {
-  const match = ENTRY_TIMESTAMP.exec(line);
+  const match = ENTRY_HEADER.exec(line);
   if (!match) return null;
   const ms = Date.parse(match[1]);
   return Number.isFinite(ms) ? ms : null;
@@ -158,7 +159,7 @@ async function readCrashRecords(crashesDir: string): Promise<CrashRecord[]> {
  * active and rotated app logs, the PTY host's emergency logs (process start
  * lines and fatal errors, no terminal output), and crash records.
  */
-async function readBundleSources(dirs: BundleDirs): Promise<BundleSources> {
+export async function readBundleSources(dirs: BundleDirs): Promise<BundleSources> {
   const files = [
     { name: "daintree.log", file: dirs.logFile },
     ...Array.from({ length: MAX_ROTATED_LOGS }, (_, i) => ({
@@ -230,16 +231,12 @@ function scrubMember(content: string): string {
   return scrubSecrets(content.split("\n").map(sanitizePath).join("\n"));
 }
 
-/**
- * What the bundle would carry for each window, read once at review time so
- * the dialog can list every file the save will write.
- */
-export async function collectBundleManifests(
-  dirs: BundleDirs,
+/** What the bundle carries for each window, so the dialog can list every file the save writes. */
+export function buildBundleManifests(
+  sources: BundleSources,
   windows: Array<{ id: DiagnosticsTimeWindowId; startMs: number | null }>,
   endMs: number
-): Promise<Partial<Record<DiagnosticsTimeWindowId, DiagnosticsBundleMember[]>>> {
-  const sources = await readBundleSources(dirs);
+): Partial<Record<DiagnosticsTimeWindowId, DiagnosticsBundleMember[]>> {
   const manifests: Partial<Record<DiagnosticsTimeWindowId, DiagnosticsBundleMember[]>> = {};
   for (const { id, startMs } of windows) {
     manifests[id] = selectBundleMembers(sources, { startMs, endMs }).map(
@@ -254,12 +251,11 @@ export async function collectBundleManifests(
 }
 
 /** The files to save beside `diagnostics.json`, scrubbed and then run through the user's rules. */
-export async function collectBundleMembers(
-  dirs: BundleDirs,
+export function buildBundleMembers(
+  sources: BundleSources,
   bounds: BundleBounds,
   replacements: ReplacementRule[]
-): Promise<Array<{ name: string; content: string }>> {
-  const sources = await readBundleSources(dirs);
+): Array<{ name: string; content: string }> {
   return selectBundleMembers(sources, bounds).map(({ name, parts }) => ({
     name,
     content: applyReplacements(scrubMember(parts.join("")), replacements),

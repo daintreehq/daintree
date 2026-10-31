@@ -4,12 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import yauzl from "yauzl";
 import {
-  collectBundleManifests,
-  collectBundleMembers,
+  buildBundleManifests,
+  buildBundleMembers,
   parseLogEntries,
+  readBundleSources,
   writeBundleZip,
+  type BundleBounds,
   type BundleDirs,
 } from "../diagnosticsBundle.js";
+import type { DiagnosticsTimeWindowId } from "../../../shared/types/ipc/system.js";
 
 const COLLECTED_AT = Date.parse("2026-10-31T08:00:00.000Z");
 const WINDOW_START = COLLECTED_AT - 30 * 60 * 1000;
@@ -62,9 +65,19 @@ describe("diagnosticsBundle", () => {
   const writeCrash = (name: string, record: Record<string, unknown>) =>
     fs.writeFile(path.join(dirs.crashesDir!, name), JSON.stringify(record), "utf8");
 
-  async function saveZip(bounds: { startMs: number | null; endMs: number | null }) {
+  async function manifestsFor(
+    windows: Array<{ id: DiagnosticsTimeWindowId; startMs: number | null }>
+  ) {
+    return buildBundleManifests(await readBundleSources(dirs), windows, COLLECTED_AT);
+  }
+
+  async function saveZip(bounds: BundleBounds) {
     const zipPath = path.join(root, "bundle.zip");
-    await writeBundleZip(zipPath, "{}", await collectBundleMembers(dirs, bounds, []));
+    await writeBundleZip(
+      zipPath,
+      "{}",
+      buildBundleMembers(await readBundleSources(dirs), bounds, [])
+    );
     return readZip(zipPath);
   }
 
@@ -78,14 +91,10 @@ describe("diagnosticsBundle", () => {
     );
     await writeLog("daintree.log.1", `[${OLD}] [INFO] ${marker}\n`);
 
-    const manifests = await collectBundleManifests(
-      dirs,
-      [
-        { id: "30m", startMs: WINDOW_START },
-        { id: "full", startMs: null },
-      ],
-      COLLECTED_AT
-    );
+    const manifests = await manifestsFor([
+      { id: "30m", startMs: WINDOW_START },
+      { id: "full", startMs: null },
+    ]);
     const rotated = manifests.full?.find((m) => m.name === "daintree.log.1");
     expect(rotated?.bytes).toBe(Buffer.byteLength(`[${OLD}] [INFO] ${marker}\n`));
     expect(manifests["30m"]?.map((m) => m.name)).toEqual(["daintree.log"]);
@@ -122,11 +131,7 @@ describe("diagnosticsBundle", () => {
     await writeCrash("crash-old-a.json", { timestamp: Date.parse(OLD), errorMessage: "old crash" });
     await writeCrash("renderer-gone-old-b.json", { timestamp: Date.parse(OLD) + 1 });
 
-    const manifests = await collectBundleManifests(
-      dirs,
-      [{ id: "30m", startMs: WINDOW_START }],
-      COLLECTED_AT
-    );
+    const manifests = await manifestsFor([{ id: "30m", startMs: WINDOW_START }]);
     expect(manifests["30m"]).toEqual([
       { name: "daintree.log", bytes: expect.any(Number) },
       { name: "pty-host.log", bytes: expect.any(Number) },
@@ -168,16 +173,36 @@ describe("diagnosticsBundle", () => {
     );
   });
 
-  it("applies the user's rules after the automatic scrubbing", async () => {
-    await writeLog("daintree.log", `[${RECENT}] [INFO] project acme-secret-plan opened\n`);
+  it("scrubs known secrets, then runs the user's rules over the scrubbed text", async () => {
+    const token = `ghp_${"A1b2C3d4E5".repeat(4)}`;
+    await writeLog("daintree.log", `[${RECENT}] [INFO] pushed with ${token} from /Users/alice/x\n`);
 
-    const [member] = await collectBundleMembers(dirs, { startMs: null, endMs: null }, [
-      { find: "acme-secret-plan", replace: "[REDACTED]" },
-    ]);
+    // The rule matches only text the path scrub wrote, so it finds nothing
+    // unless the scrub ran first.
+    const [member] = buildBundleMembers(
+      await readBundleSources(dirs),
+      { startMs: null, endMs: null },
+      [{ find: "/Users/USER", replace: "[HOME]" }]
+    );
     expect(member).toEqual({
       name: "daintree.log",
-      content: `[${RECENT}] [INFO] project [REDACTED] opened\n`,
+      content: `[${RECENT}] [INFO] pushed with [REDACTED] from [HOME]/x\n`,
     });
+  });
+
+  it("keeps entries stamped exactly at either bound and drops those just outside", async () => {
+    const at = (ms: number) => new Date(ms).toISOString();
+    await writeLog(
+      "daintree.log",
+      [WINDOW_START - 1, WINDOW_START, COLLECTED_AT, COLLECTED_AT + 1]
+        .map((ms) => `[${at(ms)}] [INFO] ${ms}\n`)
+        .join("")
+    );
+
+    const zip = await saveZip({ startMs: WINDOW_START, endMs: COLLECTED_AT });
+    expect(zip.get("daintree.log")).toBe(
+      `[${at(WINDOW_START)}] [INFO] ${WINDOW_START}\n[${at(COLLECTED_AT)}] [INFO] ${COLLECTED_AT}\n`
+    );
   });
 });
 
@@ -200,6 +225,18 @@ describe("parseLogEntries", () => {
     expect(entries).toEqual([
       { timestamp: Date.parse(OLD), text: `[${OLD}] [START] pid=1\n` },
       { timestamp: Date.parse(RECENT), text: `====\n[${RECENT}] [FATAL] pid=1\n====\n` },
+    ]);
+  });
+
+  it("leaves a stamp inside a message, with no level after it, in that message", () => {
+    const entries = parseLogEntries(
+      `[${AFTER_REVIEW}] [WARN] child output:\n[${RECENT}] copied from another log\n`
+    );
+    expect(entries).toEqual([
+      {
+        timestamp: Date.parse(AFTER_REVIEW),
+        text: `[${AFTER_REVIEW}] [WARN] child output:\n[${RECENT}] copied from another log\n`,
+      },
     ]);
   });
 

@@ -310,6 +310,22 @@ describe("DiagnosticsReviewDialog", () => {
     expect(fileRows().slice(1)).toEqual(["daintree.log4 KB", "daintree.log.13 MB"]);
   });
 
+  it("sizes diagnostics.json as the UTF-8 bytes of the report it saves, as rules change it", () => {
+    renderDialog({ ...payload, payload: { os: { name: "Zoë’s Mac" } }, sectionKeys: ["os"] });
+    const report = () => screen.getByRole("region", { name: "Report preview" }).textContent ?? "";
+    const utf8Bytes = () => new TextEncoder().encode(report()).length;
+
+    const before = utf8Bytes();
+    expect(before).toBeGreaterThan(report().length);
+    expect(fileRows()[0]).toBe(`diagnostics.json${before} B`);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Find, rule 1" }), {
+      target: { value: "Zoë’s" },
+    });
+    expect(utf8Bytes()).not.toBe(before);
+    expect(fileRows()[0]).toBe(`diagnostics.json${utf8Bytes()} B`);
+  });
+
   it("drops the log files from the list when the Logs section is left out", () => {
     renderDialog(bundlePayload);
     fireEvent.click(screen.getByRole("button", { name: /^Sections/ }));

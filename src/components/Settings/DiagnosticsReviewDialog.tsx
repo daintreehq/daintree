@@ -539,8 +539,9 @@ export function DiagnosticsReviewDialog({
             </p>
           </div>
           <p className="text-xs text-text-secondary">
-            The preview shows diagnostics.json. Log files get the same scrubbing and stop when this
-            review opened; their sizes are before redaction.
+            The preview shows diagnostics.json. Log files have home folder paths, account names and
+            known secret formats scrubbed, and end when this review opened. Their sizes are before
+            redaction.
           </p>
           <ul aria-labelledby={filesHeadingId} className="space-y-1">
             {files.map((file) => (

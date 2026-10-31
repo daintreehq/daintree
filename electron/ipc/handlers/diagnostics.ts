@@ -81,6 +81,34 @@ function optionalDurationMs(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+// The log files a review read, held so its save writes exactly what the dialog
+// listed instead of rereading files that may have rotated or grown since. A
+// cancelled review never tells main it closed, so the hold also expires.
+const REVIEW_SOURCES_TTL_MS = 15 * 60_000;
+let reviewSources: {
+  collectedAtMs: number;
+  sources: DiagnosticsBundleModule.BundleSources;
+} | null = null;
+let reviewSourcesTimer: NodeJS.Timeout | null = null;
+
+function releaseReviewSources(): void {
+  if (reviewSourcesTimer) {
+    clearTimeout(reviewSourcesTimer);
+    reviewSourcesTimer = null;
+  }
+  reviewSources = null;
+}
+
+function holdReviewSources(
+  collectedAtMs: number,
+  sources: DiagnosticsBundleModule.BundleSources
+): void {
+  releaseReviewSources();
+  reviewSources = { collectedAtMs, sources };
+  reviewSourcesTimer = setTimeout(releaseReviewSources, REVIEW_SOURCES_TTL_MS);
+  reviewSourcesTimer.unref?.();
+}
+
 function getBundleDirs(): DiagnosticsBundleModule.BundleDirs {
   let crashesDir: string | null = null;
   try {
@@ -198,7 +226,7 @@ function readSystemMemoryMB(): { systemTotalMB?: number; systemAvailableMB?: num
 }
 
 export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => void {
-  const handlers: Array<() => void> = [releaseEventLoopHistogram];
+  const handlers: Array<() => void> = [releaseEventLoopHistogram, releaseReviewSources];
 
   const handleGetAppMetrics = (): AppMetricsSummary => {
     try {
@@ -447,9 +475,11 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
       versionFirstRun: getVersionFirstRunBoundary(),
       oldestRetainedLogMs: await readOldestRetainedLogMs(getLogDirectory(), getLogFilePath()),
     };
-    const { collectBundleManifests } = await getDiagnosticsBundle();
-    const logMembers = await collectBundleManifests(
-      getBundleDirs(),
+    const { readBundleSources, buildBundleManifests } = await getDiagnosticsBundle();
+    const sources = await readBundleSources(getBundleDirs());
+    holdReviewSources(collectedAtMs, sources);
+    const logMembers = buildBundleManifests(
+      sources,
       getTimeWindowIds(boundaries).map((id) => ({
         id,
         startMs: computeTimeWindowStart(id, boundaries, collectedAtMs),
@@ -488,15 +518,22 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
 
     if (canceled || !filePath) return false;
 
-    const { collectBundleMembers, writeBundleZip } = await getDiagnosticsBundle();
+    const { readBundleSources, buildBundleMembers, writeBundleZip } = await getDiagnosticsBundle();
+    const held =
+      reviewSources !== null && reviewSources.collectedAtMs === savePayload.collectedAtMs
+        ? reviewSources
+        : null;
+    // Without the review's own read (it expired), the files are read again and
+    // the ceiling still keeps out anything dated after the review.
     const members = includeLogs
-      ? await collectBundleMembers(
-          getBundleDirs(),
+      ? buildBundleMembers(
+          held?.sources ?? (await readBundleSources(getBundleDirs())),
           { startMs: timeWindowStartMs, endMs: savePayload.collectedAtMs ?? null },
           savePayload.replacements as ReplacementRule[]
         )
       : [];
     await writeBundleZip(filePath, json, members);
+    if (held && reviewSources === held) releaseReviewSources();
     shell.showItemInFolder(filePath);
     return true;
   };

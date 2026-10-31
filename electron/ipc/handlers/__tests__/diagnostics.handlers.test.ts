@@ -627,33 +627,111 @@ describe("registerDiagnosticsHandlers", () => {
   });
 
   describe("handleCollectDiagnosticsForReview", () => {
-    it("lists the log files each offered window would save, stopping at collection", async () => {
-      const now = Date.now();
-      const recent = `[${new Date(now - 10 * 60 * 1000).toISOString()}] [INFO] recent\n`;
-      const hoursAgo = `[${new Date(now - 2 * 60 * 60 * 1000).toISOString()}] [INFO] earlier\n`;
-      const rotated = `[${new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString()}] [INFO] old\n`;
+    const T0 = Date.parse("2026-10-31T08:00:00.000Z");
+    const line = (ms: number, text: string) => `[${new Date(ms).toISOString()}] [INFO] ${text}\n`;
+    const enoent = () => Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+    const logFiles = (files: Record<string, string>) =>
       readFileMock.mockImplementation((p: string) => {
-        const file = path.basename(p);
-        if (file === "daintree.log") return Promise.resolve(hoursAgo + recent);
-        if (file === "daintree.log.1") return Promise.resolve(rotated);
-        return Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+        const content = files[path.basename(p)];
+        return content === undefined ? enoent() : Promise.resolve(content);
       });
+    const appendedNames = () =>
+      archiverMock().append.mock.calls.map((c: unknown[]) => (c[1] as { name: string }).name);
+    const appendedContent = (name: string) =>
+      archiverMock().append.mock.calls.find(
+        (c: unknown[]) => (c[1] as { name: string }).name === name
+      )?.[0] as string | undefined;
 
-      registerDiagnosticsHandlers(deps);
-      const result = (await getHandlerFn(
+    async function collect(): Promise<DiagnosticsReviewPayload> {
+      return (await getHandlerFn(
         "system:collect-diagnostics-for-review"
       )()) as DiagnosticsReviewPayload;
+    }
 
-      expect(result.collectedAtMs).toBeGreaterThanOrEqual(now);
-      expect(result.logMembers["30m"]).toEqual([
-        { name: "daintree.log", bytes: Buffer.byteLength(recent) },
-      ]);
-      expect(result.logMembers.full).toEqual([
-        { name: "daintree.log", bytes: Buffer.byteLength(hoursAgo + recent) },
-        { name: "daintree.log.1", bytes: Buffer.byteLength(rotated) },
-      ]);
-      // No version change observed, so there is no update window to list.
-      expect(Object.keys(result.logMembers).sort()).toEqual(["30m", "5m", "full", "launch"]);
+    async function save(collectedAtMs: number): Promise<void> {
+      dialogMock.showSaveDialog.mockResolvedValueOnce({
+        filePath: "/tmp/diagnostics.zip",
+        canceled: false,
+      });
+      await getHandlerFn("system:save-diagnostics-bundle")(
+        {},
+        {
+          payload: { metadata: {} },
+          enabledSections: { metadata: true, logs: true },
+          replacements: [],
+          timeWindowStartMs: null,
+          collectedAtMs,
+        }
+      );
+    }
+
+    it("lists the log files each offered window would save, cut where collection began", async () => {
+      const recent = line(T0 - 10 * 60_000, "recent");
+      const earlier = line(T0 - 2 * 60 * 60_000, "earlier");
+      const atCutoff = line(T0, "at the cutoff");
+      const rotated = line(T0 - 2 * 24 * 60 * 60_000, "old");
+      logFiles({
+        "daintree.log": earlier + recent + atCutoff + line(T0 + 30_000, "logged while collecting"),
+        "daintree.log.1": rotated,
+      });
+      // Collection takes a minute; the cutoff is when it began, not when it ended.
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(T0);
+      collectDiagnosticsWithKeysMock.mockImplementationOnce(() => {
+        nowSpy.mockReturnValue(T0 + 60_000);
+        return Promise.resolve({ payload: { metadata: {} }, sectionKeys: ["metadata"] });
+      });
+
+      try {
+        registerDiagnosticsHandlers(deps);
+        const result = await collect();
+
+        expect(result.collectedAtMs).toBe(T0);
+        expect(result.logMembers["30m"]).toEqual([
+          { name: "daintree.log", bytes: Buffer.byteLength(recent + atCutoff) },
+        ]);
+        expect(result.logMembers.full).toEqual([
+          { name: "daintree.log", bytes: Buffer.byteLength(earlier + recent + atCutoff) },
+          { name: "daintree.log.1", bytes: Buffer.byteLength(rotated) },
+        ]);
+        // No version change observed, so there is no update window to list.
+        expect(Object.keys(result.logMembers).sort()).toEqual(["30m", "5m", "full", "launch"]);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it("saves the files the review read, even after they rotate and grow", async () => {
+      const reviewed = line(Date.now() - 60_000, "reviewed");
+      logFiles({ "daintree.log": reviewed });
+      const cleanup = registerDiagnosticsHandlers(deps);
+      const { collectedAtMs } = await collect();
+
+      // Rotation moves the reviewed line to .1, and a batch dated before the
+      // cutoff lands late: neither was in the files the dialog listed.
+      logFiles({
+        "daintree.log": line(collectedAtMs - 1, "flushed after the review read"),
+        "daintree.log.1": reviewed,
+      });
+      await save(collectedAtMs);
+
+      expect(appendedNames()).toEqual(["diagnostics.json", "daintree.log"]);
+      expect(appendedContent("daintree.log")).toBe(reviewed);
+      cleanup();
+    });
+
+    it("rereads the files, still cut at the review, once the held read is released", async () => {
+      logFiles({ "daintree.log": line(Date.now() - 60_000, "reviewed") });
+      const cleanup = registerDiagnosticsHandlers(deps);
+      const { collectedAtMs } = await collect();
+      cleanup();
+
+      const rotated = line(collectedAtMs - 1, "rotated in");
+      logFiles({ "daintree.log.1": rotated + line(collectedAtMs + 1, "after the review") });
+      registerDiagnosticsHandlers(deps);
+      await save(collectedAtMs);
+
+      expect(appendedNames()).toEqual(["diagnostics.json", "daintree.log.1"]);
+      expect(appendedContent("daintree.log.1")).toBe(rotated);
     });
 
     it("carries the version boundary and oldest retained log time", async () => {
@@ -771,7 +849,7 @@ describe("registerDiagnosticsHandlers", () => {
         {
           payload: { metadata: {} },
           enabledSections: { metadata: true, logs },
-          replacements: [{ find: "/Users/alice", replace: "~" }],
+          replacements: [{ find: "acme-plan", replace: "[PROJECT]" }],
           timeWindowStartMs,
         }
       );
@@ -804,6 +882,7 @@ describe("registerDiagnosticsHandlers", () => {
             JSON.stringify({
               timestamp: 7000,
               errorStack: "at /Users/alice/app.js",
+              errorMessage: "acme-plan failed",
               recentActions: [{ actionId: "terminal.sendText", args: { text: "secret prompt" } }],
             })
           );
@@ -902,13 +981,14 @@ describe("registerDiagnosticsHandlers", () => {
       expect(names).toEqual(["crashes/crash-2000-b.json"]);
     });
 
-    it("drops breadcrumb args and applies replacements to crash records", async () => {
+    it("drops breadcrumb args, scrubs paths and applies replacements to crash records", async () => {
       await saveBundle(true, null);
 
       const content = appendedContent("crashes/crash-7000-c.json") ?? "";
       expect(content).toContain("terminal.sendText");
       expect(content).not.toContain("secret prompt");
-      expect(content).not.toContain("/Users/alice");
+      expect(content).toContain("at /Users/USER/app.js");
+      expect(content).toContain("[PROJECT] failed");
       expect(appendedNames()).toContain("crashes/crash-1000-a.json");
     });
 
