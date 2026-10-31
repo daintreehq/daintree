@@ -708,17 +708,39 @@ describe("AgentModelCatalogService", () => {
     it("keeps the previous file when a provider older builds validate is malformed", async () => {
       // An older build rejects the whole file over one bad provider, so writing
       // this response would take away its stale fallback.
-      const seededAt = Date.now() - 2 * 24 * 60 * 60 * 1000;
-      await seedCache(cachePath, { fetchedAt: seededAt, raw: makeCatalog() });
-      const fetchImpl = mockFetch({ ...makeCatalog(), openai: { models: "not-a-record" } });
+      const seed = { fetchedAt: Date.now() - 2 * 24 * 60 * 60 * 1000, raw: makeCatalog() };
+      await seedCache(cachePath, seed);
+      const fresh = makeCatalog();
+      const anthropic = fresh.anthropic as { models: Record<string, unknown> };
+      anthropic.models["claude-wide"] = chatModel("Claude Wide", 3_000_000);
+      const fetchImpl = mockFetch({ ...fresh, openai: { models: "not-a-record" } });
       const service = new AgentModelCatalogService({ cachePath, fetchImpl });
+      // The persist is started synchronously once the fetch lands, so a call is
+      // already visible when the resolver returns.
+      const writeDisk = vi.spyOn(
+        AgentModelCatalogService.prototype as unknown as { writeDisk: () => Promise<void> },
+        "writeDisk"
+      );
 
-      const result = await service.getResolvedModels("claude");
-      await new Promise((r) => setTimeout(r, 250));
+      try {
+        const first = await service.getResolvedModels("claude");
+        const second = await service.getResolvedModels("claude");
 
-      expect(result.source).toBe("merged");
-      expect(fetchImpl).toHaveBeenCalledTimes(1);
-      expect((await readPersistedCache(cachePath)).fetchedAt).toBe(seededAt);
+        // Memory still holds the fresh response: no second fetch, and not the seed's data.
+        expect(first.contextWindow).toBe(3_000_000);
+        expect(second).toEqual(first);
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+        expect(writeDisk).not.toHaveBeenCalled();
+        expect(JSON.parse(await fs.readFile(cachePath, "utf-8"))).toEqual(seed);
+
+        // The same spy sees the write a well-formed response makes.
+        const control = new AgentModelCatalogService({ cachePath, fetchImpl: mockFetch(fresh) });
+        await control.getResolvedModels("claude");
+        expect(writeDisk).toHaveBeenCalledTimes(1);
+        await readPersistedCache(cachePath, (p) => p.fetchedAt !== seed.fetchedAt);
+      } finally {
+        writeDisk.mockRestore();
+      }
     });
 
     it.each([
