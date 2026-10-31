@@ -529,8 +529,11 @@ export function useVoiceWaitSubmit({
     (options?: VoiceWaitSubmitOptions) => {
       const store = useTerminalInputStore.getState();
       const asker = options?.asker ?? "enter";
+      // Read now: a refusal can come back after a newer dictation has begun.
+      const requestSession =
+        useVoiceRecordingStore.getState().panelBuffers[voiceId]?.dictationSessionId ?? null;
       const logRefusal = (reason: VoiceSendRefusal) =>
-        logVoiceSendRefused({ asker, reason, panelId: voiceId });
+        logVoiceSendRefused({ asker, reason, panelId: voiceId, sessionId: requestSession });
       if (store.isVoiceSubmitting(voiceId)) {
         // The wait holds Enter, so only the dictation sends again while it
         // waits: the session panel's Send, or "send it". One the send held
@@ -604,8 +607,11 @@ export function useVoiceWaitSubmit({
         let sent: boolean | Promise<boolean> = false;
         let tooShort = false;
         let refusal: VoiceSendRefusal | null = null;
-        // Whether a composer was handed the text; a send that never got that
-        // far failed rather than being held back.
+        // Past every early return, so the send is the composer's to take; an
+        // attempt called off or abandoned before then is not a refusal.
+        let reachedSend = false;
+        // Whether the composer answered: one that threw failed the send rather
+        // than holding it back.
         let handedOver = false;
         let cleanup: VoiceSendCleanup | undefined;
         try {
@@ -702,23 +708,24 @@ export function useVoiceWaitSubmit({
           // Handed over, the text is the composer's: a dictation from here on
           // is the next prompt's.
           live.releaseReopen();
+          reachedSend = true;
           if (live.departed) {
-            handedOver = true;
             const departed = live.departed(
               live.handBack,
               voiceSend,
               options?.route,
               live.departure
             );
+            handedOver = true;
             sent = departed ?? true;
             // It cleared the store, not an editor: one showing this draft
             // meanwhile takes the store's word for what is left.
             const settled = () => useTerminalInputStore.getState().bumpExternalDraftRevision();
             void Promise.resolve(departed).then(settled, settled);
           } else if (live.seat) {
-            handedOver = true;
             sent =
               live.seat.sendFromEditorRef.current(live.handBack, voiceSend, options?.route) ?? true;
+            handedOver = true;
           }
         } finally {
           live.releaseKeys();
@@ -732,7 +739,8 @@ export function useVoiceWaitSubmit({
             // A send the composer is still handing over answers later, and
             // the line is its own whether or not this attempt is still shown.
             if (typeof sent === "boolean") {
-              const reason = refusal ?? (sent ? null : handedOver ? "send_held" : "send_failed");
+              const reason =
+                refusal ?? (sent || !reachedSend ? null : handedOver ? "send_held" : "send_failed");
               if (reason) logRefusal(reason);
             } else {
               sent.then(

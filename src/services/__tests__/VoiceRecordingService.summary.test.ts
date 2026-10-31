@@ -462,7 +462,9 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
     const first = await startLive(harness, service, armed);
     await service.stop("Dictation stopped.", { reason: "user" });
 
-    const second = await startLive(harness, service, { ...TARGET });
+    // The same object starts again, as a microphone switch or a locked dictation
+    // does: the note went with the start it was made for.
+    const second = await startLive(harness, service, armed);
     await service.stop("Dictation stopped.", { reason: "user" });
 
     // A session that began without a press is named by its id.

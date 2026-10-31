@@ -743,20 +743,20 @@ describe("VoiceRecordingService — a send request that goes nowhere leaves a li
 
     it("says the dictation had moved to another panel", async () => {
       const { voiceRecordingService } = await setup();
-      (
-        voiceRecordingService as unknown as {
-          handleSpokenSend: (panelId: string, projectId: undefined, sessionId: string) => void;
-        }
-      ).handleSpokenSend("panel-2", undefined, SESSION_ID);
+      // Only a target swapped between the completion and the send could reach it.
+      Reflect.apply(Reflect.get(voiceRecordingService, "handleSpokenSend"), voiceRecordingService, [
+        "panel-2",
+        undefined,
+        SESSION_ID,
+      ]);
 
       expect(await refusals()).toEqual([spoken("target_changed", "panel-2")]);
     });
 
     it("says its session was already discarded, only when it carried a send", async () => {
       const { voiceRecordingService } = await setup();
-      const discarded = (voiceRecordingService as unknown as { discardedSessionIds: Set<string> })
-        .discardedSessionIds;
-      discarded.add(SESSION_ID);
+      Reflect.get(voiceRecordingService, "discardedSessionIds").add(SESSION_ID);
+      Reflect.get(voiceRecordingService, "discardedSessionPanels").set(SESSION_ID, PANEL_ID);
       voiceRecordingService.onSpokenSend(PANEL_ID, undefined, vi.fn());
 
       complete("fix the login bug", "item-a");
@@ -779,16 +779,22 @@ describe("VoiceRecordingService — a send request that goes nowhere leaves a li
     });
 
     it("carries no words from the draft or the utterance", async () => {
-      const { voiceRecordingService } = await setup();
-      draftState.draft = "rotate the staging credentials";
-      voiceRecordingService.onSpokenSend(PANEL_ID, undefined, vi.fn());
+      const { voiceRecordingService, stop } = await setup();
+      const handler = vi.fn();
+      voiceRecordingService.onSpokenSend(PANEL_ID, undefined, handler);
 
-      complete("deploy to production", "item-a", true);
-      draftState.draft = "";
-      complete("deploy to production", "item-b", true);
+      // Lands two words in the draft, too short to send by voice.
+      complete("deploy staging", "item-a", true);
+      // Then with no composer to send from, three more.
+      Reflect.get(voiceRecordingService, "spokenSendHandlers").clear();
+      complete("rotate production credentials", "item-b", true);
 
-      const lines = JSON.stringify(await refusals());
-      expect(lines).not.toMatch(/credentials|production|staging/);
+      const lines = await refusals();
+      expect(draftState.draft).toMatch(/deploy staging.*rotate production credentials/);
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(stop).toHaveBeenCalledTimes(2);
+      expect(lines).toEqual([spoken("draft_too_short"), spoken("composer_unavailable")]);
+      expect(JSON.stringify(lines)).not.toMatch(/deploy|staging|rotate|production|credentials/);
     });
   });
 

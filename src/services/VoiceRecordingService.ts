@@ -794,6 +794,10 @@ class VoiceRecordingService {
   // they had already sent is still on its way and has nowhere left to land.
   // Each is let go once main reports it ended, the last thing it sends for it.
   private discardedSessionIds = new Set<string>();
+  // The panel each discarded session was dictating into: Escape clears the
+  // active target at once, and a spoken send still in flight names its panel
+  // from here (#15704).
+  private discardedSessionPanels = new Map<string, string>();
   // Main has nothing left to send for this one, so cancelling it needs no
   // tombstone (and would leave one behind, with no end notice to clear it).
   private lastEndedSessionId: string | null = null;
@@ -1047,7 +1051,7 @@ class VoiceRecordingService {
               logVoiceSendRefused({
                 asker: "spoken_send",
                 reason: "session_discarded",
-                panelId: useVoiceRecordingStore.getState().activeTarget?.panelId ?? null,
+                panelId: this.discardedSessionPanels.get(sessionId) ?? null,
                 sessionId,
               });
             }
@@ -1445,6 +1449,7 @@ class VoiceRecordingService {
         this.timelines.get(sessionId)?.reportEnded(reason, report);
         this.lastEndedSessionId = sessionId;
         this.discardedSessionIds.delete(sessionId);
+        this.discardedSessionPanels.delete(sessionId);
         // Replaced elsewhere before it had anything to drain, typically while
         // its start was still pending. Its start result is stale from here.
         if (reason !== "superseded" || sessionId !== this.sessionId) return;
@@ -1956,6 +1961,7 @@ class VoiceRecordingService {
     const sessionId = this.sessionId;
     if (sessionId && sessionId !== this.lastEndedSessionId) {
       this.discardedSessionIds.add(sessionId);
+      this.discardedSessionPanels.set(sessionId, target.panelId);
     }
     // Nothing of the dictation is kept, so no chunk of it lands or is recorded.
     this.resetChunking();
@@ -2135,7 +2141,9 @@ class VoiceRecordingService {
     // text. Disposed, its timeline takes every mark as a no-op.
     if (target.rewrite) timeline.dispose();
     else this.timelines.set(sessionId, timeline);
-    if (this.reopeningStarts.has(target)) timeline.noteReopenedSend();
+    // Consumed: a target is reused by later starts (a microphone switch, a
+    // locked dictation), and only the one that reopened the wait says so.
+    if (this.reopeningStarts.delete(target)) timeline.noteReopenedSend();
     return timeline;
   }
 
@@ -6285,6 +6293,7 @@ class VoiceRecordingService {
     this.unfollowLearningBaselines();
     this.spokenSendHandlers.clear();
     this.discardedSessionIds.clear();
+    this.discardedSessionPanels.clear();
     for (const unsub of this.unsubscribers) {
       unsub();
     }

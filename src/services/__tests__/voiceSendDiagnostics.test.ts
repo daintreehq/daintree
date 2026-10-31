@@ -68,7 +68,7 @@ describe("logVoiceSendRefused (#15704)", () => {
 
     logVoiceSendRefused(request);
 
-    const context = vi.mocked(logInfo).mock.calls[0]![1] as Record<string, unknown>;
+    const context = vi.mocked(logInfo).mock.calls[0]![1] ?? {};
     expect(Object.keys(context).sort()).toEqual(["asker", "panelId", "reason", "sessionId"]);
     expect(Object.keys(context).filter((name) => /key/i.test(name))).toEqual([]);
     expect(JSON.stringify(context)).not.toContain("credentials");

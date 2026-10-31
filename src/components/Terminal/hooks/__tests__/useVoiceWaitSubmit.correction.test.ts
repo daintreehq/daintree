@@ -210,8 +210,8 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
     options: {
       extensions?: Extension[];
       // A send the composer refuses (an upload still on its way): at once, once
-      // it answers, or by failing.
-      holdSend?: boolean | "later" | "reject";
+      // it answers, by failing, or when the test lets its answer through.
+      holdSend?: boolean | "later" | "reject" | (() => Promise<boolean>);
       duringSend?: () => void;
       isDisabled?: () => boolean;
     } = {}
@@ -233,6 +233,7 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
     // way).
     const sendFromEditor = vi.fn((_handBack?: unknown, voiceSend?: VoiceDraftSend) => {
       options.duringSend?.();
+      if (typeof options.holdSend === "function") return options.holdSend();
       if (options.holdSend === "later") return Promise.resolve(false);
       if (options.holdSend === "reject") return Promise.reject(new Error("upload failed"));
       if (options.holdSend) return false;
@@ -676,8 +677,8 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
 
         expect(noted).toHaveBeenCalledTimes(1);
         const [by] = noted.mock.calls[0]!;
-        expect(by).toEqual({ target: armed });
-        expect((by as { target: object }).target).toBe(armed);
+        // The very object the key armed: that identity is what carries the note to its session.
+        expect("target" in by && by.target).toBe(armed);
         await landFirst(first);
       });
 
@@ -1105,6 +1106,51 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
       expect(refusals()).toEqual([
         { asker: "enter", reason, panelId: PANEL_ID, sessionId: sessionIn() },
       ]);
+    });
+
+    it("names the session the request was made against when the composer answers after a newer dictation began", async () => {
+      correct.mockResolvedValueOnce({ action: "no_change", correctedText: "" });
+      dictate(PANEL_ID, "hello wrld");
+      const answer = deferred<boolean>();
+      const result = renderComposer({ holdSend: () => answer.promise });
+      await act(async () => {
+        result.current.startVoiceWaitSubmit();
+      });
+      const requested = sessionIn();
+      act(() => {
+        dictate(PANEL_ID, "and the next prompt");
+      });
+      expect(sessionIn()).not.toBe(requested);
+      expect(refusals()).toEqual([]);
+
+      await act(async () => {
+        answer.resolve(false);
+      });
+
+      expect(refusals()).toEqual([
+        { asker: "enter", reason: "send_held", panelId: PANEL_ID, sessionId: requested },
+      ]);
+    });
+
+    it("says nothing for an attempt whose wait was cleared from under it", async () => {
+      const pending = deferred<CorrectResult>();
+      correct.mockReturnValueOnce(pending.promise);
+      dictate(PANEL_ID, "hello wrld");
+      const result = renderComposer();
+      await act(async () => {
+        result.current.startVoiceWaitSubmit();
+      });
+
+      // As removing the panel does: the flag goes, the attempt is not told.
+      act(() => {
+        useTerminalInputStore.getState().setVoiceSubmitting(PANEL_ID, false);
+      });
+      await act(async () => {
+        pending.resolve({ action: "replace", correctedText: "Hello world." });
+      });
+
+      expect(sent).toEqual([]);
+      expect(refusals()).toEqual([]);
     });
 
     it("says a disabled composer wouldn't send, though the dictation stops", async () => {
