@@ -58,6 +58,7 @@ import {
   MessageSquarePlus,
   UnfoldVertical,
 } from "lucide-react";
+import { flushSync } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { join } from "@shared/utils/path";
 import { getLanguageForFile } from "@/components/FileViewer/languageUtils";
@@ -76,6 +77,7 @@ import {
   estimateHunksBytes,
 } from "./diffCollapseUtils";
 import { detectMovedLines } from "./diffMovedUtils";
+import { useStagedDiffRows } from "./useStagedDiffRows";
 import { computeSearchRanges, computeTrailingWsRanges } from "./diffTokenRanges";
 import type { SideRanges } from "./diffTokenRanges";
 import { isLanguageFailed } from "./diffRefractor";
@@ -510,7 +512,13 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
   // the sentinel branches below take `rootRef` directly, since an error or
   // "no changes" pane is just as exposed to the fallback as a rendered diff.
   const rootRef = useRef<HTMLDivElement | null>(null);
-  useScopedSelectAll(rootRef);
+  // Rows of a giant hunk mount a batch per frame; selecting all of them
+  // mid-stage would copy only those already mounted, so Select All finishes
+  // every file's stage synchronously first.
+  const [stageFlush, setStageFlush] = useState(0);
+  useScopedSelectAll(rootRef, true, "surface", () => {
+    flushSync(() => setStageFlush((count) => count + 1));
+  });
   // Compose, never replace, and mirror ContentPanel's React 19 handling: a
   // callback ref may return a cleanup, and React then skips the usual `null`
   // call — so that cleanup has to be propagated or the caller's teardown never
@@ -708,6 +716,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
           fullFile={effectiveFullFile}
           onToggleCollapse={onToggleCollapse}
           onTokensRendered={onTokensRendered}
+          stageFlush={stageFlush}
           annotations={annotations}
           language={language}
           renderHunkActions={renderHunkActions}
@@ -903,6 +912,8 @@ interface FileDiffProps {
   onToggleCollapse?: () => void;
   /** Fired after this file's token pass commits */
   onTokensRendered?: () => void;
+  /** Bumped to finish any staged mount at once (Select All needs every row in the DOM) */
+  stageFlush: number;
   annotations?: DiffViewerAnnotations;
   language?: string;
   renderHunkActions?: (hunk: HunkData, index: number, file: DiffViewerHunkFile) => ReactNode;
@@ -913,6 +924,8 @@ interface FileDiffProps {
 }
 
 const EMPTY_NOTES: readonly DiffNote[] = [];
+
+
 const EMPTY_KEYS: string[] = [];
 
 type DiffNoteDraft =
@@ -929,6 +942,7 @@ function FileDiff({
   fullFile,
   onToggleCollapse,
   onTokensRendered,
+  stageFlush,
   annotations,
   language: languageOverride,
   renderHunkActions,
@@ -1220,9 +1234,26 @@ function FileDiff({
     extraRanges
   );
 
+  // Rows and their tokens reach the table a bounded batch per frame once the
+  // set outgrows one batch (see useStagedDiffRows). Everything that describes
+  // the diff (notes, tokens, gutter width, scroll range) still reads the full
+  // visible set; only what the table renders is staged.
+  const stageOwner = useMemo(
+    () => ({ file, fullFile, viewType, isCollapsed }),
+    [file, fullFile, viewType, isCollapsed]
+  );
+  const {
+    mountedHunks,
+    tokens: displayTokens,
+    allRowsMounted,
+    extend: extendStage,
+  } = useStagedDiffRows(visibleHunks, tokens, stageOwner, stageFlush, !isCollapsed);
+
+  // Per committed token change, staged slices included: consumers re-scan
+  // the live DOM, and the last call lands with the pass complete.
   useEffect(() => {
     onTokensRendered?.();
-  }, [tokens, onTokensRendered]);
+  }, [displayTokens, onTokensRendered]);
 
   // Single notification point for the rendered row set changing — manual gap
   // expansion, progressive reveal, the full-file scope, and a source arriving
@@ -1230,12 +1261,12 @@ function FileDiff({
   // forgotten. Collapse/expand is separate: it changes visibility, not rows,
   // and notifies from its own handler. The first commit is the initial render
   // rather than a transition, so the ref starts already-notified.
-  const lastNotifiedHunksRef = useRef(visibleHunks);
+  const lastNotifiedHunksRef = useRef(mountedHunks);
   useEffect(() => {
-    if (lastNotifiedHunksRef.current === visibleHunks) return;
-    lastNotifiedHunksRef.current = visibleHunks;
+    if (lastNotifiedHunksRef.current === mountedHunks) return;
+    lastNotifiedHunksRef.current = mountedHunks;
     onToggleCollapse?.();
-  }, [visibleHunks, onToggleCollapse]);
+  }, [mountedHunks, onToggleCollapse]);
 
   // Gutter columns get an explicit width sized to the widest line number plus
   // the +/- marker, published as a CSS var that also positions the second
@@ -1536,6 +1567,8 @@ function FileDiff({
 
   const handleShowMoreHunks = () => {
     setVisibleHunkCount((count) => count + SHOW_MORE_HUNKS_STEP);
+    // Revealed hunks join the stage behind the rows already mounted.
+    extendStage();
   };
 
   const fileStyle: CSSProperties & Record<"--diff-gutter-width" | "--diff-max-line", string> = {
@@ -1545,7 +1578,7 @@ function FileDiff({
   };
 
   const oldTotalLines = oldSource?.length ?? null;
-  const allHunksVisible = hiddenHunkCount === 0;
+  const allHunksVisible = hiddenHunkCount === 0 && allRowsMounted;
   const lastVisibleHunk = visibleHunks[visibleHunks.length - 1];
   const trailingGapStart = lastVisibleHunk
     ? lastVisibleHunk.oldStart + lastVisibleHunk.oldLines
@@ -1555,12 +1588,16 @@ function FileDiff({
       ? Math.max(0, oldTotalLines - trailingGapStart + 1)
       : 0;
 
-  const renderHunkRows = (rendered: HunkData[]): ReactElement[] => {
+  // `mounted` is the staged prefix of `visibleHunks`: its last hunk may be cut
+  // short, so headers (and the copy button and host actions in them) always
+  // take the whole hunk from `visibleHunks` at the same index.
+  const renderHunkRows = (mounted: HunkData[]): ReactElement[] => {
     const rows: ReactElement[] = [];
-    for (let i = 0; i < rendered.length; i++) {
-      const hunk = rendered[i];
-      if (!hunk) continue;
-      const previous = (i === 0 ? null : rendered[i - 1]) ?? null;
+    for (let i = 0; i < mounted.length; i++) {
+      const hunk = visibleHunks[i];
+      const mountedHunk = mounted[i];
+      if (!hunk || !mountedHunk) continue;
+      const previous = (i === 0 ? null : visibleHunks[i - 1]) ?? null;
       const hiddenCount = Math.max(0, getCollapsedLinesCountBetween(previous, hunk));
       const gapStart = previous ? previous.oldStart + previous.oldLines : 1;
       rows.push(
@@ -1578,7 +1615,7 @@ function FileDiff({
           />
         </Decoration>
       );
-      rows.push(<Hunk key={`${hunk.oldStart}-${hunk.newStart}`} hunk={hunk} />);
+      rows.push(<Hunk key={`${hunk.oldStart}-${hunk.newStart}`} hunk={mountedHunk} />);
     }
     if (trailingHiddenCount > 0 && trailingGapStart !== null && oldTotalLines !== null) {
       rows.push(
@@ -1632,8 +1669,8 @@ function FileDiff({
       <Diff
         viewType={viewType}
         diffType={diffType}
-        hunks={visibleHunks}
-        tokens={tokens ?? undefined}
+        hunks={mountedHunks}
+        tokens={displayTokens ?? undefined}
         renderGutter={renderGutter}
         renderToken={renderTokenWithInvisibles}
         generateLineClassName={generateLineClassName}
@@ -1644,7 +1681,7 @@ function FileDiff({
       >
         {renderHunkRows}
       </Diff>
-      {hiddenHunkCount > 0 && (
+      {hiddenHunkCount > 0 && allRowsMounted && (
         <button
           type="button"
           onClick={handleShowMoreHunks}
