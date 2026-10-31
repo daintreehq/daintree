@@ -25,6 +25,7 @@ import {
 } from "../driveTarget.js";
 import type { ClientEndpoint } from "../../../ipc/endpoint.js";
 import { WorkspaceBindingError } from "../rendererBridge.js";
+import { MCP_REMOTE_CONFIRM_MARGIN_MS } from "../../../../shared/config/mcpConfirmWindow.js";
 
 function entry(id: string, kind: "query" | "command", readOnlyHint?: boolean): ActionManifestEntry {
   return {
@@ -193,7 +194,7 @@ describe("HttpLifecycle.openRelaySession (#13493)", () => {
     expect(store.getOrigin(id)).toBe("external");
     expect(store.isRendererOwnedOrigin(id)).toBe(false);
     expect(store.sessionWorkspaceMap.get(id)).toBe("project-1");
-    expect(store.getRelayCaller(id)).toEqual(CALLER);
+    expect(store.getRelayCaller(id)).toEqual({ ...CALLER, callDeadline: expect.any(Function) });
     expect(store.sessionHelpIdMap.has(id)).toBe(false);
     expect(store.resourceOwnership.ownerOf(id)).toContain(
       relayOwnershipPrincipal(CALLER.senderId, CALLER.helpSessionId)
@@ -402,8 +403,68 @@ describe("HttpLifecycle.openRelaySession (#13493)", () => {
       args: { agentId: "claude" },
       lines: ["preview"],
       callId: "c7",
+      holdUntil: expect.any(Number),
     });
     session.close();
+  });
+
+  describe("inside each call's own deadline (#15699)", () => {
+    const NOW = 1_700_000_000_000;
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("holds what the call waits on inside it, with room for the answer, and forgets it once settled", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(NOW);
+      const requestApproval = vi.fn().mockResolvedValue({ decision: "rejected" });
+      const { lc, store, dispatchActionForWorkspace } = await startedLifecycle();
+      let sessionId = "";
+      let deadlineDuringCall: number | undefined;
+      dispatchActionForWorkspace.mockImplementation(async (...args: unknown[]) => {
+        deadlineDuringCall = store.getRelayCaller(sessionId)?.callDeadline?.("c8");
+        const options = args[5] as {
+          relay?: { requestApproval?: (ask: unknown) => Promise<unknown> };
+        };
+        await options.relay?.requestApproval?.({
+          actionId: "agent.launch",
+          args: { agentId: "claude" },
+          lines: [],
+        });
+        return { result: { ok: true, result: {} } };
+      });
+      const session = (await lc.openRelaySession({
+        tier: "full",
+        workspaceId: "project-1",
+        caller: { ...CALLER, requestApproval },
+      }))!;
+      sessionId = session.sessionId;
+
+      await session.callTool("agent.launch", { agentId: "claude" }, {
+        timeoutMs: 200_000,
+        callId: "c8",
+      });
+
+      const holdUntil = NOW + 200_000 - MCP_REMOTE_CONFIRM_MARGIN_MS;
+      expect(deadlineDuringCall).toBe(NOW + 200_000);
+      expect(dispatchActionForWorkspace.mock.calls[0]?.[5]).toMatchObject({ holdUntil });
+      expect(requestApproval).toHaveBeenCalledWith(expect.objectContaining({ holdUntil }));
+      expect(store.getRelayCaller(sessionId)?.callDeadline?.("c8")).toBeUndefined();
+      session.close();
+    });
+
+    it("knows no deadline for a call the session isn't running", async () => {
+      const { lc, store } = await startedLifecycle();
+      const session = (await lc.openRelaySession({
+        tier: "full",
+        workspaceId: "project-1",
+        caller: CALLER,
+      }))!;
+
+      expect(store.getRelayCaller(session.sessionId)?.callDeadline?.("nobody")).toBeUndefined();
+      session.close();
+    });
   });
 
   describe("a check main runs itself (#13501)", () => {

@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { canonicalArgsHash } from "../../../services/mcp-server/sessionDedup.js";
 import { askShellApproval, type RelayApprovalAsk } from "../relayApprovals.js";
 import { AssistantLinkMethod, RelayApprovePayloadSchema } from "../linkMethods.js";
+import {
+  MCP_CONFIRM_ASK_MAX_MS,
+  MCP_DISPATCH_TIMEOUT_MS,
+} from "../../../../shared/config/mcpConfirmWindow.js";
 
 const ASK: RelayApprovalAsk = {
   helpSessionId: "help-1",
@@ -37,7 +41,8 @@ describe("askShellApproval (#13501)", () => {
       windowMs: 40_000,
     });
 
-    expect(decision).toEqual({ decision: "approved", deadline: 41_000 });
+    // Covered for the run an approval buys, from when it came (#15699).
+    expect(decision).toEqual({ decision: "approved", deadline: 1_000 + MCP_DISPATCH_TIMEOUT_MS });
     const [method, payload] = link.call.mock.calls[0]!;
     expect(method).toBe(AssistantLinkMethod.RELAY_APPROVE);
     expect(RelayApprovePayloadSchema.parse(payload)).toEqual({
@@ -65,7 +70,7 @@ describe("askShellApproval (#13501)", () => {
       askShellApproval(linkAnswering(skipped), ASK, { now: () => clock, windowMs: 40_000 })
     ).resolves.toEqual({
       decision: "approved",
-      deadline: 41_000,
+      deadline: 1_000 + MCP_DISPATCH_TIMEOUT_MS,
       authorization: "skip-preference",
     });
 
@@ -137,6 +142,72 @@ describe("askShellApproval (#13501)", () => {
     };
     expect(await askShellApproval(unsupported, ASK)).toEqual({ decision: "unavailable" });
     expect(await askShellApproval(null, ASK)).toEqual({ decision: "unavailable" });
+  });
+
+  describe("how long it waits (#15699)", () => {
+    const approving = (onAsk: () => void) =>
+      linkAnswering((payload) => {
+        onAsk();
+        return { approvalId: payload.approvalId, argsHash: payload.argsHash, decision: "approved" };
+      });
+
+    it("waits out a whole confirmation at the Shell, so an answer minutes later still runs", async () => {
+      let clock = 0;
+      const link = approving(() => {
+        clock = 200_000;
+      });
+
+      const decision = await askShellApproval(link, ASK, { now: () => clock });
+
+      expect(decision).toEqual({ decision: "approved", deadline: 200_000 + MCP_DISPATCH_TIMEOUT_MS });
+      const [, , options] = link.call.mock.calls[0] as unknown as [
+        string,
+        unknown,
+        { timeoutMs: number },
+      ];
+      expect(options.timeoutMs).toBeGreaterThan(MCP_CONFIRM_ASK_MAX_MS);
+    });
+
+    it("ends inside the call's own wait, and covers nothing past it", async () => {
+      let clock = 0;
+      const link = approving(() => {
+        clock = 95_000;
+      });
+
+      const decision = await askShellApproval(link, { ...ASK, holdUntil: 100_000 }, {
+        now: () => clock,
+      });
+
+      expect(decision).toEqual({ decision: "approved", deadline: 100_000 });
+      const [, payload, options] = link.call.mock.calls[0] as unknown as [
+        string,
+        Record<string, unknown>,
+        { timeoutMs: number },
+      ];
+      expect(options.timeoutMs).toBe(100_000);
+      // The host's own clock never crosses the link.
+      expect(payload).not.toHaveProperty("holdUntil");
+    });
+
+    it("refuses an approval that comes after the call stopped waiting", async () => {
+      let clock = 0;
+      const link = approving(() => {
+        clock = 100_001;
+      });
+
+      await expect(
+        askShellApproval(link, { ...ASK, holdUntil: 100_000 }, { now: () => clock })
+      ).resolves.toEqual({ decision: "timeout" });
+    });
+
+    it("asks nothing once the call has stopped waiting", async () => {
+      const link = approving(() => {});
+
+      await expect(
+        askShellApproval(link, { ...ASK, holdUntil: 1_000 }, { now: () => 1_000 })
+      ).resolves.toEqual({ decision: "timeout" });
+      expect(link.call).not.toHaveBeenCalled();
+    });
   });
 
   it("reads a lost answer as nobody having answered in time", async () => {

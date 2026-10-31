@@ -45,6 +45,15 @@ vi.mock("../../hybrid/notifications.js", () => ({
 
 import { toHostScopedKey } from "../../../../shared/types/remoteHosts.js";
 import {
+  MCP_CONFIRM_DECISION_MS,
+  MCP_CONFIRM_HOLD_GRACE_MS,
+  MCP_CONFIRM_QUEUE_HOLD_MS,
+  MCP_DISPATCH_TIMEOUT_MS,
+  MCP_REMOTE_CONFIRM_MARGIN_MS,
+  MCP_REMOTE_DISPATCH_TIMEOUT_MS,
+} from "../../../../shared/config/mcpConfirmWindow.js";
+import { RELAY_APPROVAL_WINDOW_MS } from "../../assistant/relayApprovals.js";
+import {
   _resetReverseRequestMethodsForTesting,
   answerReverseRequest,
   registerReverseRequestMethod,
@@ -394,6 +403,79 @@ describe("view reverse requests", () => {
       ).rejects.toMatchObject({ code: "VALIDATION" });
       expect(m.dispatchActionForHost).not.toHaveBeenCalled();
     });
+  });
+
+  describe("how long a host waits (#15699)", () => {
+    const NOW = 1_700_000_000_000;
+    const deleteCall = {
+      actionId: "worktree.delete",
+      args: { worktreeId: "/srv/wt" },
+      confirmed: false,
+      sessionOrigin: "external",
+    };
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(NOW);
+      installViewReverseRequests();
+      m.dispatchActionForHost.mockResolvedValue({ result: { ok: true, result: null } });
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("holds the view inside the wait the host names, less the trip back", async () => {
+      await ask("mcp:dispatch-action", { ...deleteCall, holdBudgetMs: 200_000 });
+
+      expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({
+        holdUntil: NOW + 200_000 - MCP_REMOTE_CONFIRM_MARGIN_MS,
+      });
+    });
+
+    it("never holds longer than a whole confirmation, whatever a host names", async () => {
+      await ask("mcp:dispatch-action", {
+        ...deleteCall,
+        holdBudgetMs: 10 * MCP_REMOTE_DISPATCH_TIMEOUT_MS,
+      });
+
+      const { holdUntil } = m.dispatchActionForHost.mock.calls[0]?.[6] as { holdUntil: number };
+      expect(holdUntil - NOW).toBeLessThanOrEqual(
+        MCP_REMOTE_DISPATCH_TIMEOUT_MS - MCP_REMOTE_CONFIRM_MARGIN_MS
+      );
+    });
+
+    it("keeps the budget through a skip and an approval-only request", async () => {
+      await ask("mcp:dispatch-action", {
+        ...deleteCall,
+        confirmed: true,
+        sessionOrigin: "help",
+        authorization: "skip-preference",
+        holdBudgetMs: 200_000,
+      });
+      await ask("mcp:dispatch-action", {
+        ...deleteCall,
+        approvalOnly: true,
+        holdBudgetMs: 200_000,
+      });
+
+      const holdUntil = NOW + 200_000 - MCP_REMOTE_CONFIRM_MARGIN_MS;
+      expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({
+        authorization: "skip-preference",
+        holdUntil,
+      });
+      expect(m.dispatchActionForHost.mock.calls[1]?.[6]).toEqual({ approvalOnly: true, holdUntil });
+    });
+
+    it.each([0, -1, 1.5, "300000", Number.POSITIVE_INFINITY])(
+      "refuses a malformed budget (%s)",
+      async (holdBudgetMs) => {
+        await expect(
+          ask("mcp:dispatch-action", { ...deleteCall, holdBudgetMs })
+        ).rejects.toMatchObject({ code: "VALIDATION" });
+        expect(m.dispatchActionForHost).not.toHaveBeenCalled();
+      }
+    );
   });
 
   it("still raises an approval-only request's dialog under Never ask", async () => {
@@ -798,11 +880,31 @@ describe("askHostApprovalInWindow (#13501)", () => {
       {
         approvalOnly: true,
         hostPreview: { lines: ["No uncommitted changes."], subject: "feature/thing" },
-        // The host's own approval window governs a call it runs itself (#14989).
-        fixedDeadline: true,
+        holdUntil: expect.any(Number),
       },
       { userAgent: 'Your assistant, through host "Studio Mac"', token4LastChars: "" }
     );
+  });
+
+  it("gives the dialog a whole confirmation, and ends it inside the host's wait (#15699)", async () => {
+    m.dispatchActionForHost.mockResolvedValue({
+      result: { ok: true, result: null },
+      confirmationDecision: "approved",
+    });
+
+    const before = Date.now();
+    await askHostApprovalInWindow(7, QUESTION);
+    const after = Date.now();
+
+    const { holdUntil } = m.dispatchActionForHost.mock.calls[0]?.[6] as { holdUntil: number };
+    // The longest an approval-only prompt holds: its first deadline, the queue, the window.
+    expect(holdUntil - after).toBeGreaterThanOrEqual(
+      MCP_DISPATCH_TIMEOUT_MS +
+        MCP_CONFIRM_QUEUE_HOLD_MS +
+        MCP_CONFIRM_DECISION_MS +
+        MCP_CONFIRM_HOLD_GRACE_MS
+    );
+    expect(holdUntil - before).toBeLessThan(RELAY_APPROVAL_WINDOW_MS);
   });
 
   it("names this machine's own assistant working in another of its projects, not a host (#14024)", async () => {

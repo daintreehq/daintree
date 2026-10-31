@@ -8,6 +8,10 @@ import {
   type OpenRun,
 } from "../HostCallRuntime.js";
 import { MAX_RELAY_ARGS_BYTES, MAX_RELAY_RUN_MS, type McpCallAnswer } from "../linkMethods.js";
+import {
+  MCP_REMOTE_CONFIRM_MARGIN_MS,
+  MCP_REMOTE_DISPATCH_TIMEOUT_MS,
+} from "../../../../shared/config/mcpConfirmWindow.js";
 
 const RUN_A: OpenRun = {
   projectId: "proj-1",
@@ -317,6 +321,24 @@ describe("relayRunMs", () => {
   it("gives a call at least the time a dispatch and a confirmation take", () => {
     expect(relayRunMs("terminal.list", {})).toBe(relayRunMs("terminal.list", { timeoutMs: 1 }));
     expect(relayRunMs("terminal.list", {})).toBeGreaterThanOrEqual(60_000);
+  });
+
+  it("outlasts the host's whole wait on a confirmation here, with room for the answer (#15699)", () => {
+    // The host's MCP call runs for runMs; its wait on this Shell's dialog ends inside that.
+    expect(relayRunMs("worktree.delete", {}) - MCP_REMOTE_CONFIRM_MARGIN_MS).toBeGreaterThan(
+      MCP_REMOTE_DISPATCH_TIMEOUT_MS
+    );
+    // A short wait the call asks for doesn't shorten it.
+    expect(relayRunMs("worktree.delete", { timeoutMs: 5_000 })).toBe(
+      relayRunMs("worktree.delete", {})
+    );
+  });
+
+  it("leaves a call that never asks anyone its own floor", () => {
+    expect(relayRunMs("throwaway.launch", {}, 90_000)).toBeLessThan(
+      relayRunMs("throwaway.launch", {})
+    );
+    expect(relayRunMs("throwaway.launch", { timeoutMs: 600_000 }, 90_000)).toBeGreaterThan(600_000);
   });
 
   it("runs past the longest wait the call's own arguments ask for", () => {
