@@ -37,6 +37,25 @@ const CatalogSchema = z.record(z.string(), ProviderSchema);
 
 type ParsedCatalog = z.infer<typeof CatalogSchema>;
 
+/** Agents whose models never come from models.dev: Codex answers through its own CLI. */
+const MODELS_DEV_SKIPPED_AGENTS: ReadonlySet<string> = new Set(["codex"]);
+
+/**
+ * Every mapped provider is persisted, including ones this build never reads:
+ * the cache file is shared across app versions, and older builds still resolve
+ * Codex from `openai`.
+ */
+const PERSISTED_PROVIDER_KEYS: readonly string[] = Object.keys(PROVIDER_TO_AGENT_ID);
+
+/**
+ * The providers this build resolves from, and so the only ones it validates or
+ * keeps in memory. models.dev lists hundreds of providers, and holding all of
+ * them cost Main megabytes of heap for the whole session.
+ */
+const ACTIVE_PROVIDER_KEYS: readonly string[] = PERSISTED_PROVIDER_KEYS.filter(
+  (key) => !MODELS_DEV_SKIPPED_AGENTS.has(PROVIDER_TO_AGENT_ID[key]!)
+);
+
 interface AgentResolved {
   models: AgentModelConfig[];
   contextWindow: number | null;
@@ -49,11 +68,23 @@ interface CodexResolved extends AgentResolved {
 interface DiskPayload {
   fetchedAt: number;
   raw: unknown;
+  /**
+   * The provider keys this file was cut down to, whether or not models.dev
+   * listed them. Absent in files written before the cut, which hold the whole
+   * catalog.
+   */
+  providers?: unknown;
 }
 
 interface CachedCatalog {
   data: ParsedCatalog;
   fetchedAt: number;
+  /**
+   * False when the source file was cut down without a provider this build
+   * reads, so a newer build mapping a new provider isn't held to an older
+   * build's cut for a day.
+   */
+  complete: boolean;
 }
 
 interface CatalogDeps {
@@ -122,7 +153,7 @@ export class AgentModelCatalogService {
     // network could only delay a launch waiting on its upgrade pointers.
     const isCodex = agentId === "codex";
     let catalog: ParsedCatalog | null = null;
-    if (!isCodex) {
+    if (!MODELS_DEV_SKIPPED_AGENTS.has(agentId)) {
       try {
         catalog = await this.getCatalog();
       } catch (err) {
@@ -288,9 +319,12 @@ export class AgentModelCatalogService {
     return { models, contextWindow };
   }
 
-  /** Returns parsed catalog or null when all sources fail. */
+  /**
+   * Returns the providers this build resolves from, validated, or null when all
+   * sources fail.
+   */
   async getCatalog(): Promise<ParsedCatalog | null> {
-    if (this.memCache && Date.now() - this.memCache.fetchedAt < TTL_MS) {
+    if (this.memCache && isFresh(this.memCache)) {
       return this.memCache.data;
     }
 
@@ -311,7 +345,7 @@ export class AgentModelCatalogService {
     // Network failed — fall back to disk if we never warmed memCache yet.
     const disk = await this.readDisk();
     if (disk) {
-      this.memCache = { data: disk.data, fetchedAt: disk.fetchedAt };
+      this.memCache = disk;
       return disk.data;
     }
 
@@ -320,16 +354,20 @@ export class AgentModelCatalogService {
 
   private async refreshCatalog(): Promise<ParsedCatalog | null> {
     const disk = await this.readDisk();
-    if (disk && Date.now() - disk.fetchedAt < TTL_MS) {
-      this.memCache = { data: disk.data, fetchedAt: disk.fetchedAt };
+    if (disk && isFresh(disk)) {
+      this.memCache = disk;
       return disk.data;
     }
 
     const fetched = await this.fetchRemote();
     if (fetched) {
-      this.memCache = { data: fetched.parsed, fetchedAt: fetched.fetchedAt };
+      this.memCache = { data: fetched.parsed, fetchedAt: fetched.fetchedAt, complete: true };
       // Best-effort persist; never block the resolver on a write failure.
-      void this.writeDisk(fetched.fetchedAt, fetched.raw).catch((err) => {
+      void this.writeDisk({
+        fetchedAt: fetched.fetchedAt,
+        raw: fetched.persisted,
+        providers: PERSISTED_PROVIDER_KEYS,
+      }).catch((err) => {
         console.warn("[AgentModelCatalogService] disk write failed", err);
       });
       return fetched.parsed;
@@ -338,7 +376,7 @@ export class AgentModelCatalogService {
     // Network failed but we have stale disk data — surface it so callers
     // get something usable; the next call will retry the network.
     if (disk) {
-      this.memCache = { data: disk.data, fetchedAt: disk.fetchedAt };
+      this.memCache = disk;
       return disk.data;
     }
 
@@ -347,7 +385,8 @@ export class AgentModelCatalogService {
 
   private async fetchRemote(): Promise<{
     parsed: ParsedCatalog;
-    raw: unknown;
+    /** The mapped providers out of the response, for the disk cache. */
+    persisted: Record<string, unknown>;
     fetchedAt: number;
   } | null> {
     const fetchImpl = this.deps.fetchImpl ?? (await getElectronNetFetch());
@@ -366,28 +405,38 @@ export class AgentModelCatalogService {
         return null;
       }
       const raw = await res.json();
-      const parsed = CatalogSchema.safeParse(raw);
+      const parsed = parseActiveProviders(raw);
       if (!parsed.success) {
-        console.warn("[AgentModelCatalogService] catalog schema rejected", parsed.error.message);
+        console.warn("[AgentModelCatalogService] catalog schema rejected", parsed.error);
         return null;
       }
-      return { parsed: parsed.data, raw, fetchedAt: Date.now() };
+      // Only the picked providers outlive this call; the full response is
+      // garbage as soon as it returns.
+      return {
+        parsed: parsed.data,
+        persisted: pickProviders(raw, PERSISTED_PROVIDER_KEYS) ?? {},
+        fetchedAt: Date.now(),
+      };
     } catch (err) {
       console.warn("[AgentModelCatalogService] catalog fetch failed", err);
       return null;
     }
   }
 
-  private async readDisk(): Promise<{ data: ParsedCatalog; fetchedAt: number } | null> {
+  private async readDisk(): Promise<CachedCatalog | null> {
     const cachePath = await this.resolveCachePath();
     if (!cachePath) return null;
     try {
       const text = await fs.readFile(cachePath, "utf-8");
       const payload = JSON.parse(text) as Partial<DiskPayload>;
       if (typeof payload.fetchedAt !== "number") return null;
-      const parsed = CatalogSchema.safeParse(payload.raw);
+      const parsed = parseActiveProviders(payload.raw);
       if (!parsed.success) return null;
-      return { data: parsed.data, fetchedAt: payload.fetchedAt };
+      return {
+        data: parsed.data,
+        fetchedAt: payload.fetchedAt,
+        complete: coversActiveProviders(payload.providers),
+      };
     } catch (err: unknown) {
       if (isNodeError(err) && err.code === "ENOENT") return null;
       console.warn("[AgentModelCatalogService] disk read failed", err);
@@ -395,12 +444,11 @@ export class AgentModelCatalogService {
     }
   }
 
-  private async writeDisk(fetchedAt: number, raw: unknown): Promise<void> {
+  private async writeDisk(payload: DiskPayload): Promise<void> {
     const cachePath = await this.resolveCachePath();
     if (!cachePath) return;
     const dir = path.dirname(cachePath);
     await fs.mkdir(dir, { recursive: true });
-    const payload: DiskPayload = { fetchedAt, raw };
     await fs.writeFile(cachePath, JSON.stringify(payload), "utf-8");
   }
 
@@ -553,6 +601,49 @@ export class AgentModelCatalogService {
       upgrades: Object.fromEntries(upgrades),
     };
   }
+}
+
+function isFresh(cache: CachedCatalog): boolean {
+  return cache.complete && Date.now() - cache.fetchedAt < TTL_MS;
+}
+
+/**
+ * Copies just `keys` out of a models.dev payload, or null when the payload
+ * isn't an object at all. Providers models.dev doesn't list are left out.
+ */
+function pickProviders(raw: unknown, keys: readonly string[]): Record<string, unknown> | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const picked: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (Object.hasOwn(raw, key)) picked[key] = (raw as Record<string, unknown>)[key];
+  }
+  return picked;
+}
+
+/**
+ * Validates only the providers this build reads, so a malformed provider it
+ * never reads can't reject the catalog, and the rest are never copied.
+ */
+function parseActiveProviders(
+  raw: unknown
+): { success: true; data: ParsedCatalog } | { success: false; error: string } {
+  const picked = pickProviders(raw, ACTIVE_PROVIDER_KEYS);
+  if (!picked) return { success: false, error: "catalog is not an object" };
+  const parsed = CatalogSchema.safeParse(picked);
+  return parsed.success
+    ? { success: true, data: parsed.data }
+    : { success: false, error: parsed.error.message };
+}
+
+/**
+ * Whether a cache file still holds every provider this build reads. A file
+ * with no marker predates the cut and holds the whole catalog; a malformed
+ * marker proves nothing, so it counts as incomplete.
+ */
+function coversActiveProviders(providers: unknown): boolean {
+  if (providers === undefined) return true;
+  if (!Array.isArray(providers)) return false;
+  return ACTIVE_PROVIDER_KEYS.every((key) => providers.includes(key));
 }
 
 function upgradeTarget(upgrade: unknown): string | null {
