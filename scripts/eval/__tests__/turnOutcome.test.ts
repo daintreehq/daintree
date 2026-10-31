@@ -1,5 +1,7 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import ts from "typescript";
 import { describe, it, expect, vi } from "vitest";
 import {
   TURN_OUTCOME_CLASS_ORDER,
@@ -32,6 +34,34 @@ function makeRecord(overrides: Partial<AssistantTurnRecord> = {}): AssistantTurn
     ...overrides,
   };
 }
+
+// scripts/eval is in no typecheck project, so the union is read from source.
+function readTurnOutcomeUnion(): string[] {
+  const file = path.resolve(__dirname, "../../../shared/types/ipc/mcpServer.ts");
+  const source = ts.createSourceFile(file, fs.readFileSync(file, "utf8"), ts.ScriptTarget.Latest);
+  let members: string[] | null = null;
+  source.forEachChild((node) => {
+    if (!ts.isTypeAliasDeclaration(node) || node.name.text !== "TurnOutcomeClass") return;
+    if (!ts.isUnionTypeNode(node.type)) throw new Error("TurnOutcomeClass is no longer a union");
+    members = node.type.types.map((member) => {
+      if (!ts.isLiteralTypeNode(member) || !ts.isStringLiteral(member.literal)) {
+        throw new Error(`TurnOutcomeClass member is not a string literal: ${member.getText(source)}`);
+      }
+      return member.literal.text;
+    });
+  });
+  if (!members) throw new Error("TurnOutcomeClass not found in shared/types/ipc/mcpServer.ts");
+  return members;
+}
+
+describe("TURN_OUTCOME_CLASS_ORDER", () => {
+  it("covers every TurnOutcomeClass member exactly once", () => {
+    const union = readTurnOutcomeUnion();
+    expect(union.length).toBeGreaterThan(0);
+    expect(new Set(TURN_OUTCOME_CLASS_ORDER).size).toBe(TURN_OUTCOME_CLASS_ORDER.length);
+    expect([...TURN_OUTCOME_CLASS_ORDER].sort()).toEqual([...union].sort());
+  });
+});
 
 // ---------------------------------------------------------------------------
 // resolveStorePath
@@ -115,7 +145,21 @@ describe("loadRecords", () => {
     const raw = [{ id: "1", timestamp: 1000, outcome: "invalid-class" }];
     const { records, warnings } = loadRecords(raw);
     expect(records).toHaveLength(0);
-    expect(warnings.length).toBeGreaterThan(0);
+    expect(warnings).toEqual([expect.stringContaining('unknown outcome "invalid-class"')]);
+  });
+
+  it("loads reasoning-loop records and counts them in the distribution and sample", () => {
+    const raw = [
+      { id: "1", timestamp: 1000, outcome: "reasoning-loop" },
+      { id: "2", timestamp: 2000, outcome: "answered" },
+    ];
+    const { records, warnings } = loadRecords(raw);
+    expect(warnings).toEqual([]);
+    expect(records.map((r) => r.id)).toEqual(["1", "2"]);
+    expect(computeClassDistribution(records).counts["reasoning-loop"]).toBe(1);
+    const sample = stratifiedSample(records, 10);
+    expect(sample.metadata.classCountsBefore["reasoning-loop"]).toBe(1);
+    expect(sample.metadata.absentClasses).not.toContain("reasoning-loop");
   });
 
   it("rejects non-string id", () => {
@@ -381,6 +425,12 @@ describe("loadCalibration", () => {
     expect(warnings).toHaveLength(2);
   });
 
+  it("accepts a reasoning-loop label", () => {
+    const { labels, warnings } = loadCalibration([{ recordId: "r1", expected: "reasoning-loop" }]);
+    expect(warnings).toEqual([]);
+    expect(labels).toEqual([{ recordId: "r1", expected: "reasoning-loop" }]);
+  });
+
   it("rejects non-array", () => {
     const { labels, warnings } = loadCalibration("not-array");
     expect(labels).toHaveLength(0);
@@ -435,7 +485,9 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["--baseline-hours", "0"])).toThrow(">= 1");
   });
 
-  it("throws when store-path missing", () => {
-    expect(() => parseArgs([])).toThrow("--store-path");
+  it("leaves storePath unset when the flag is absent so the default profile applies", () => {
+    const opts = parseArgs([]);
+    expect(opts.help).toBe(false);
+    expect(opts.storePath).toBeUndefined();
   });
 });

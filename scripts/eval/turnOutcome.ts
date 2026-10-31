@@ -369,6 +369,7 @@ async function classifyBatch(
 - mcp-not-ready: the MCP server was not ready at provision time
 - agent-stuck: the watchdog fired a waiting→idle timeout — the agent went silent
 - tool-error: the most recent tool dispatch resolved with an error
+- reasoning-loop: the agent called the same tool with the same arguments at least 3 times within the turn
 - hibernate-resume-stale: an attempted resume produced no prior conversation
 - unknown: insufficient information to classify
 

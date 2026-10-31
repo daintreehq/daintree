@@ -11,6 +11,7 @@ export const TURN_OUTCOME_CLASS_ORDER: readonly TurnOutcomeClass[] = [
   "mcp-not-ready",
   "agent-stuck",
   "tool-error",
+  "reasoning-loop",
   "hibernate-resume-stale",
   "unknown",
 ] as const;
@@ -570,12 +571,6 @@ export function parseArgs(argv: string[]): EvalOptions {
   const dryRun = args.get("dry-run") === "true";
   const storePath = args.get("store-path");
   const calibrationPath = args.get("calibration-path");
-
-  if (!storePath) {
-    throw new Error(
-      "--store-path is required. To read the default Daintree config location, pass --store-path with the platform path."
-    );
-  }
 
   return {
     storePath,
