@@ -720,6 +720,35 @@ describe("quoted launch arguments (#15637)", () => {
     );
   });
 
+  it("keeps an empty quoted argument and an apostrophe inside double quotes", () => {
+    const cmd = generateAgentCommand("claude", {}, "claude", {
+      recipeArgs: `--prefix "" --name "O'Brien"`,
+    });
+    expect(cmd).toBe("claude --prefix '' --name 'O'\\''Brien'");
+  });
+
+  it("keeps a quoted Windows path whole with its backslashes for PowerShell", () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    const cmd = generateAgentCommand(
+      "claude",
+      { customFlags: `--add-dir "C:\\Users\\me\\My Project"` },
+      "claude",
+      { recipeArgs: `--config 'C:\\Program Files\\cfg.json'` }
+    );
+    expect(cmd).toBe(
+      "claude --config 'C:\\Program Files\\cfg.json' --add-dir 'C:\\Users\\me\\My Project'"
+    );
+  });
+
+  it("recognises a quoted clipboard directory in custom flags as already shared", () => {
+    const dir = "/tmp/my clipboard";
+    const flags = generateAgentFlags({ customFlags: `--include-directories "${dir}"` }, "gemini", {
+      clipboardDirectory: dir,
+    });
+    expect(flags.filter((flag) => flag === "--include-directories")).toHaveLength(1);
+    expect(flags).toContain(dir);
+  });
+
   it("leaves unquoted arguments exactly as the whitespace split did", () => {
     expect(
       generateAgentCommand("claude", { customFlags: "  --verbose   --debug " }, "claude", {
