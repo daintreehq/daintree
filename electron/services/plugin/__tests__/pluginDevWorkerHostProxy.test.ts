@@ -2368,7 +2368,9 @@ describe("PluginDevWorkerHostProxy invocation id", () => {
     });
     await flush();
 
-    const notifies = sent.filter((m) => m.type === "host-notify" && m.method.startsWith("process."));
+    const notifies = sent.filter(
+      (m) => m.type === "host-notify" && m.method.startsWith("process.")
+    );
     expect(notifies.map((m) => [m.method, m.params.data ?? null, m.invocationId ?? null])).toEqual([
       ["process.write", "background", null],
       ["process.write", "ls\r", "i7"],
