@@ -180,7 +180,8 @@ describe("installHostMcpRelay", () => {
   });
 
   it("runs the tool in a session opened for the sender, help session, project and tier", async () => {
-    const { links, opened, relay } = harness([["link-1", "sender-a"]]);
+    // A still clock: admitting the call takes none of its run (#15699).
+    const { links, opened, relay } = harness([["link-1", "sender-a"]], { now: () => 1_000 });
     const answer = await links[0]!.call({ tool: "terminal.list", args: { owned: true } });
 
     expect(answer).toEqual({
