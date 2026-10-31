@@ -44,6 +44,14 @@ vi.mock("@/services/agentToolbarPinsSync", () => ({
   initAgentToolbarPinsSync: agentToolbarPinsSync.init,
 }));
 
+const keybindingOverridesSync = vi.hoisted(() => {
+  const dispose = vi.fn();
+  return { dispose, init: vi.fn(() => dispose) };
+});
+vi.mock("@/services/keybindingOverridesSync", () => ({
+  initKeybindingOverridesSync: keybindingOverridesSync.init,
+}));
+
 vi.mock("@/services/TerminalInstanceService", () => {
   const terminalInstanceService = {
     cleanup: vi.fn(),
@@ -2357,6 +2365,22 @@ describe("rendererStoreOrchestrator", () => {
 
       destroyStoreOrchestrator();
       expect(agentToolbarPinsSync.dispose).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("this machine's keyboard shortcuts (#15579)", () => {
+    it("keeps the shortcuts in sync for the orchestrator's life, once per init", () => {
+      destroyStoreOrchestrator();
+      keybindingOverridesSync.init.mockClear();
+      keybindingOverridesSync.dispose.mockClear();
+
+      initStoreOrchestrator();
+      initStoreOrchestrator();
+      expect(keybindingOverridesSync.init).toHaveBeenCalledTimes(1);
+      expect(keybindingOverridesSync.dispose).not.toHaveBeenCalled();
+
+      destroyStoreOrchestrator();
+      expect(keybindingOverridesSync.dispose).toHaveBeenCalledTimes(1);
     });
   });
 });

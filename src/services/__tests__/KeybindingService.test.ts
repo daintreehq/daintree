@@ -1713,13 +1713,27 @@ describe("KeybindingService", () => {
     }
 
     function mockElectronGetOverridesRejection(reason: unknown) {
+      // Writes still answer with the saved map, as Main does.
+      let saved: Record<string, string[]> = {};
+      let revision = 0;
+      const answer = () => Promise.resolve({ revision: ++revision, overrides: { ...saved } });
       vi.stubGlobal("window", {
         electron: {
           keybinding: {
             getOverrides: vi.fn().mockRejectedValue(reason),
-            setOverride: vi.fn().mockResolvedValue(undefined),
-            removeOverride: vi.fn().mockResolvedValue(undefined),
-            resetAll: vi.fn().mockResolvedValue(undefined),
+            setOverride: vi.fn((actionId: string, combo: string[]) => {
+              saved = { ...saved, [actionId]: combo };
+              return answer();
+            }),
+            removeOverride: vi.fn((actionId: string) => {
+              saved = { ...saved };
+              delete saved[actionId];
+              return answer();
+            }),
+            resetAll: vi.fn(() => {
+              saved = {};
+              return answer();
+            }),
           },
         },
       });
@@ -2031,7 +2045,13 @@ describe("KeybindingService", () => {
     it("rejects a plugin binding that collides with a user-overridden combo", async () => {
       const prevWindow = (globalThis as { window?: unknown }).window;
       (globalThis as { window?: unknown }).window = {
-        electron: { keybinding: { setOverride: vi.fn().mockResolvedValue(undefined) } },
+        electron: {
+          keybinding: {
+            setOverride: vi.fn((actionId: string, combo: string[]) =>
+              Promise.resolve({ revision: 1, overrides: { [actionId]: combo } })
+            ),
+          },
+        },
       };
       try {
         const service = new KeybindingService();

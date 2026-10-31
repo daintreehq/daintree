@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { KeybindingOverridesSnapshot } from "@shared/types/ipc/api";
 
 const lifecycle = vi.hoisted(() => {
   const listeners = new Set<(phase: string) => void>();
@@ -23,47 +24,51 @@ import { initKeybindingOverridesSync } from "../keybindingOverridesSync";
 type Overrides = Record<string, string[]>;
 
 /**
- * Main as the keybinding handlers run it: one saved map for the machine, and
- * every write pushed to every subscribed view before its reply. `hold` keeps a
- * call's reply back so a test can land other traffic first.
+ * Main as the keybinding handlers run it: one saved map for the machine, each
+ * save numbered and pushed to every subscribed view, and each write answered
+ * with its save. `hold` keeps the next reply back and `deferPushes` keeps
+ * pushes back, so a test can order replies and pushes either way round, as
+ * the two travel separately in Electron.
  */
-function createMain(initial: Overrides = {}) {
-  let saved: Overrides = { ...initial };
-  const listeners = new Set<(overrides: Overrides) => void>();
-  const held: Array<() => void> = [];
+function createMain() {
+  let saved: Overrides = {};
+  let revision = 0;
+  const listeners = new Set<(snapshot: KeybindingOverridesSnapshot) => void>();
+  const heldReplies: Array<() => void> = [];
+  const heldPushes: Array<{ revision: number; deliver: () => void }> = [];
   let holdNext = false;
+  let deferring = false;
 
-  const save = (next: Overrides) => {
+  const save = (next: Overrides): KeybindingOverridesSnapshot => {
     saved = next;
-    for (const listener of Array.from(listeners)) listener({ ...next });
+    revision += 1;
+    const snapshot = { revision, overrides: next };
+    for (const listener of Array.from(listeners)) {
+      const pushed = { revision, overrides: { ...next } };
+      const deliver = () => listener(pushed);
+      if (deferring) heldPushes.push({ revision, deliver });
+      else deliver();
+    }
+    return snapshot;
   };
   const reply = <T>(value: T): Promise<T> => {
     if (!holdNext) return Promise.resolve(value);
     holdNext = false;
-    return new Promise((resolve) => held.push(() => resolve(value)));
+    return new Promise((resolve) => heldReplies.push(() => resolve(value)));
   };
 
   const bridge = {
     getOverrides: vi.fn(() => reply({ ...saved })),
-    setOverride: vi.fn((actionId: string, combo: string[]) => {
-      save({ ...saved, [actionId]: combo });
-      return reply(undefined);
-    }),
+    setOverride: vi.fn((actionId: string, combo: string[]) =>
+      reply(save({ ...saved, [actionId]: combo }))
+    ),
     removeOverride: vi.fn((actionId: string) => {
       const next = { ...saved };
       delete next[actionId];
-      save(next);
-      return reply(undefined);
+      return reply(save(next));
     }),
-    resetAll: vi.fn(() => {
-      save({});
-      return reply(undefined);
-    }),
-    importProfile: vi.fn((imported: Overrides) => {
-      save({ ...saved, ...imported });
-      return reply({ ok: true, overrides: imported, applied: 1, skipped: 0, errors: [] });
-    }),
-    onOverridesChanged: vi.fn((listener: (overrides: Overrides) => void) => {
+    resetAll: vi.fn(() => reply(save({}))),
+    onOverridesChanged: vi.fn((listener: (snapshot: KeybindingOverridesSnapshot) => void) => {
       listeners.add(listener);
       return () => {
         listeners.delete(listener);
@@ -73,44 +78,48 @@ function createMain(initial: Overrides = {}) {
 
   return {
     bridge,
-    /** Holds back the reply of the next call made through the bridge. */
     hold: () => {
       holdNext = true;
     },
-    release: () => held.shift()?.(),
-    /** A change saved by a view this test doesn't model. */
-    saveElsewhere: save,
-    /** A change saved while this view's listener couldn't hear it. */
+    release: () => heldReplies.shift()?.(),
+    deferPushes: () => {
+      deferring = true;
+    },
+    /** Delivers the held pushes up to `upTo`; with no bound, all of them, and stops holding. */
+    deliverPushes: (upTo = Infinity) => {
+      if (upTo === Infinity) deferring = false;
+      const due = heldPushes.filter((push) => push.revision <= upTo);
+      heldPushes.splice(0, heldPushes.length, ...heldPushes.filter((push) => push.revision > upTo));
+      due.forEach((push) => push.deliver());
+    },
+    /** A save made by a view this test doesn't model, pushed to every view. */
+    saveElsewhere: (next: Overrides) => {
+      save(next);
+    },
+    /** A save this view's listener never heard. */
     saveUnheard: (next: Overrides) => {
       saved = next;
+      revision += 1;
     },
     listenerCount: () => listeners.size,
   };
 }
 
-function setPlatform(platform: string) {
-  Object.defineProperty(globalThis, "navigator", {
-    value: { platform },
-    configurable: true,
-    writable: true,
-  });
-}
-
-function keydown(init: Partial<KeyboardEvent>): KeyboardEvent {
-  return {
-    key: "",
-    code: "",
-    ctrlKey: false,
-    metaKey: false,
-    shiftKey: false,
-    altKey: false,
-    ...init,
-  } as KeyboardEvent;
+function keydown(init: KeyboardEventInit): KeyboardEvent {
+  return new KeyboardEvent("keydown", init);
 }
 
 const cmdW = () => keydown({ key: "w", code: "KeyW", metaKey: true });
 const cmdK = () => keydown({ key: "k", code: "KeyK", metaKey: true });
 const cmdShiftJ = () => keydown({ key: "j", code: "KeyJ", metaKey: true, shiftKey: true });
+
+const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+const originalElectron = Object.getOwnPropertyDescriptor(window, "electron");
+
+function restore(target: object, key: string, descriptor: PropertyDescriptor | undefined) {
+  if (descriptor) Object.defineProperty(target, key, descriptor);
+  else Reflect.deleteProperty(target, key);
+}
 
 describe("keybinding overrides sync across views (#15579)", () => {
   let main: ReturnType<typeof createMain>;
@@ -122,9 +131,14 @@ describe("keybinding overrides sync across views (#15579)", () => {
     disposers.push(initKeybindingOverridesSync(service));
     return service;
   };
+  const disconnectAll = () => disposers.splice(0).forEach((dispose) => dispose());
 
   beforeEach(() => {
-    setPlatform("MacIntel");
+    Object.defineProperty(globalThis, "navigator", {
+      value: { platform: "MacIntel" },
+      configurable: true,
+      writable: true,
+    });
     vi.spyOn(console, "warn").mockImplementation(() => {});
     main = createMain();
     Object.defineProperty(window, "electron", {
@@ -137,17 +151,21 @@ describe("keybinding overrides sync across views (#15579)", () => {
   });
 
   afterEach(() => {
-    disposers.splice(0).forEach((dispose) => dispose());
+    disconnectAll();
     vi.restoreAllMocks();
+    restore(globalThis, "navigator", originalNavigator);
+    restore(window, "electron", originalElectron);
   });
 
-  it("gives every view a shortcut one view assigned", async () => {
+  it("gives every view a shortcut one view assigned, and tells its subscribers", async () => {
+    const seen: Array<string | undefined> = [];
+    other.subscribe(() => seen.push(other.getEffectiveCombo("terminal.close")));
     expect(other.findMatchingAction(cmdShiftJ())?.actionId).not.toBe("terminal.close");
 
     await writer.setOverride("terminal.close", ["Cmd+Shift+J"]);
 
-    expect(other.getEffectiveCombo("terminal.close")).toBe("Cmd+Shift+J");
     expect(other.findMatchingAction(cmdShiftJ())?.actionId).toBe("terminal.close");
+    expect(seen).toEqual(["Cmd+Shift+J"]);
   });
 
   it("stops a shortcut one view cleared from running in another", async () => {
@@ -178,19 +196,18 @@ describe("keybinding overrides sync across views (#15579)", () => {
     expect(other.findMatchingAction(cmdW())?.actionId).toBe("terminal.close");
   });
 
-  it("gives every view the merged map after a profile import", async () => {
+  it("takes the merged map an import saved without reading it again", async () => {
     await writer.setOverride("nav.quickSwitcher", ["Cmd+Shift+P"]);
     main.bridge.getOverrides.mockClear();
 
-    await main.bridge.importProfile({ "terminal.close": ["Cmd+Shift+J"] });
-    await writer.loadOverrides();
+    // The import handler saves the existing map merged with the profile's.
+    main.saveElsewhere({ "nav.quickSwitcher": ["Cmd+Shift+P"], "terminal.close": ["Cmd+Shift+J"] });
 
     for (const view of [writer, other]) {
       expect(view.getEffectiveCombo("terminal.close")).toBe("Cmd+Shift+J");
       expect(view.getEffectiveCombo("nav.quickSwitcher")).toBe("Cmd+Shift+P");
     }
-    // The other view took the push; only the importing view read again.
-    expect(main.bridge.getOverrides).toHaveBeenCalledTimes(1);
+    expect(main.bridge.getOverrides).not.toHaveBeenCalled();
   });
 
   it("keeps a pushed map when a read that set out before it answers late", async () => {
@@ -204,8 +221,84 @@ describe("keybinding overrides sync across views (#15579)", () => {
     expect(other.getEffectiveCombo("terminal.close")).toBe("Cmd+Shift+J");
   });
 
+  it("takes a read that set out after the latest push", async () => {
+    main.saveElsewhere({ "terminal.close": ["Cmd+Shift+J"] });
+    main.saveUnheard({ "terminal.close": ["Cmd+Shift+K"] });
+
+    await other.loadOverrides();
+
+    expect(other.getEffectiveCombo("terminal.close")).toBe("Cmd+Shift+K");
+  });
+
+  it.each([
+    ["set", (view: KeybindingService) => view.setOverride("terminal.close", ["Cmd+Shift+L"])],
+    ["remove", (view: KeybindingService) => view.removeOverride("terminal.close")],
+    ["reset all", (view: KeybindingService) => view.resetAllOverrides()],
+  ])(
+    "doesn't let a %s reply that comes last undo another view's later save",
+    async (_kind, write) => {
+      await writer.setOverride("terminal.close", ["Cmd+Shift+J"]);
+
+      main.hold();
+      const pending = write(writer);
+      // Another view's save lands in Main after this write, before its reply.
+      main.saveElsewhere({ "terminal.close": ["Cmd+Shift+K"] });
+      main.release();
+      await pending;
+
+      for (const view of [writer, other]) {
+        expect(view.getEffectiveCombo("terminal.close")).toBe("Cmd+Shift+K");
+      }
+    }
+  );
+
+  it.each([
+    [
+      "set",
+      (view: KeybindingService) => view.setOverride("terminal.close", ["Cmd+Shift+L"]),
+      "Cmd+Shift+L",
+    ],
+    ["remove", (view: KeybindingService) => view.removeOverride("terminal.close"), "Cmd+W"],
+    ["reset all", (view: KeybindingService) => view.resetAllOverrides(), "Cmd+W"],
+  ])(
+    "shows a %s as soon as it resolves, when its reply beats its own push",
+    async (_kind, write, expected) => {
+      await writer.setOverride("terminal.close", ["Cmd+Shift+J"]);
+      main.deferPushes();
+      main.saveElsewhere({ "terminal.close": ["Cmd+Shift+K"], "nav.quickSwitcher": [] });
+      const pending = write(writer);
+      // Another view's earlier save reaches this one while the write travels;
+      // the write's own push is still on its way when the reply lands.
+      main.deliverPushes(2);
+      await pending;
+
+      expect(writer.getEffectiveCombo("terminal.close")).toBe(expected);
+      main.deliverPushes();
+      expect(writer.getEffectiveCombo("terminal.close")).toBe(expected);
+      expect(other.getEffectiveCombo("terminal.close")).toBe(expected);
+    }
+  );
+
+  it("applies a write's own save in a view that isn't listening for pushes", async () => {
+    disconnectAll();
+
+    await writer.setOverride("terminal.close", ["Cmd+Shift+J"]);
+    expect(writer.getEffectiveCombo("terminal.close")).toBe("Cmd+Shift+J");
+    await writer.removeOverride("terminal.close");
+    expect(writer.hasOverride("terminal.close")).toBe(false);
+  });
+
   it("ignores the boot payload once a push has landed", () => {
     main.saveElsewhere({ "terminal.close": ["Cmd+Shift+J"] });
+
+    other.applyBootOverrides({});
+
+    expect(other.getEffectiveCombo("terminal.close")).toBe("Cmd+Shift+J");
+  });
+
+  it("ignores the boot payload once a read has landed", async () => {
+    main.saveUnheard({ "terminal.close": ["Cmd+Shift+J"] });
+    await other.loadOverrides();
 
     other.applyBootOverrides({});
 
@@ -218,30 +311,36 @@ describe("keybinding overrides sync across views (#15579)", () => {
     expect(other.getEffectiveCombo("terminal.close")).toBe("Cmd+Shift+J");
   });
 
-  it("doesn't undo another view's later write when this view's reply comes last", async () => {
-    await writer.setOverride("terminal.close", ["Cmd+Shift+J"]);
+  it("drops a pending chord when the map changes, and keeps it when a push changes nothing", () => {
+    main.saveElsewhere({ "terminal.close": ["Cmd+Shift+J"], "nav.quickSwitcher": ["F1", "F2"] });
+    const startChord = () => {
+      other.clearPendingChord();
+      other.resolveKeybinding(cmdK());
+      expect(other.getPendingChord()).not.toBeNull();
+    };
 
-    main.hold();
-    const removal = writer.removeOverride("terminal.close");
-    // Another view's write lands in Main after the removal, before its reply.
-    main.saveElsewhere({ "terminal.close": ["Cmd+Shift+K"] });
-    main.release();
-    await removal;
+    startChord();
+    main.saveElsewhere({ "terminal.close": ["Cmd+Shift+J"], "nav.quickSwitcher": ["F1", "F2"] });
+    expect(other.getPendingChord()).not.toBeNull();
 
-    for (const view of [writer, other]) {
-      expect(view.getEffectiveCombo("terminal.close")).toBe("Cmd+Shift+K");
+    const changes: Overrides[] = [
+      { "terminal.close": ["Cmd+Shift+K"], "nav.quickSwitcher": ["F1", "F2"] },
+      { "terminal.close": ["Cmd+Shift+K"], "nav.quickSwitcher": ["F1"] },
+      { "terminal.close": ["Cmd+Shift+K"], "nav.focusRegion.next": ["F1"] },
+      { "terminal.close": ["Cmd+Shift+K"] },
+    ];
+    for (const change of changes) {
+      startChord();
+      main.saveElsewhere(change);
+      expect(other.getPendingChord()).toBeNull();
     }
   });
 
-  it("drops a pending chord when the map changes, and keeps it when a push changes nothing", () => {
-    other.resolveKeybinding(cmdK());
-    expect(other.getPendingChord()).not.toBeNull();
+  it("drops a pushed override for an action this view doesn't know", () => {
+    main.saveElsewhere({ "terminal.close": ["Cmd+Shift+J"], "not.a.real.action": ["Cmd+J"] });
 
-    main.saveElsewhere({});
-    expect(other.getPendingChord()).not.toBeNull();
-
-    main.saveElsewhere({ "terminal.close": [] });
-    expect(other.getPendingChord()).toBeNull();
+    expect(other.getEffectiveCombo("terminal.close")).toBe("Cmd+Shift+J");
+    expect(other.getOverride("not.a.real.action")).toBeUndefined();
   });
 
   it("reads the map again when a cached view comes back", async () => {
@@ -253,8 +352,18 @@ describe("keybinding overrides sync across views (#15579)", () => {
     await vi.waitFor(() => expect(other.getEffectiveCombo("terminal.close")).toBe("Cmd+Shift+J"));
   });
 
+  it("reads the map when a service is attached again after a dispose", async () => {
+    expect(main.bridge.getOverrides).not.toHaveBeenCalled();
+    disconnectAll();
+    main.saveElsewhere({ "terminal.close": ["Cmd+Shift+J"] });
+
+    connect(other);
+
+    await vi.waitFor(() => expect(other.getEffectiveCombo("terminal.close")).toBe("Cmd+Shift+J"));
+  });
+
   it("stops listening once disposed", () => {
-    disposers.splice(0).forEach((dispose) => dispose());
+    disconnectAll();
     expect(main.listenerCount()).toBe(0);
     expect(lifecycle.count()).toBe(0);
 
@@ -263,7 +372,7 @@ describe("keybinding overrides sync across views (#15579)", () => {
   });
 
   it("does nothing on a bridge without the push", () => {
-    disposers.splice(0).forEach((dispose) => dispose());
+    disconnectAll();
     Object.defineProperty(window, "electron", {
       value: { keybinding: { getOverrides: vi.fn() } },
       configurable: true,

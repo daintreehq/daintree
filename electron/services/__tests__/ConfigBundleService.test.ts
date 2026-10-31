@@ -102,11 +102,18 @@ vi.mock("../UserAgentRegistryService.js", () => ({
   },
 }));
 
+const saveKeybindingOverridesMock = vi.hoisted(() =>
+  vi.fn((overrides: Record<string, string[]>) => {
+    mockStore.set("keybindingOverrides.overrides", overrides);
+    return { revision: 1, overrides };
+  })
+);
 vi.mock("../keybindingOverridesStore.js", () => ({
   getValidatedOverrides: () => {
     const raw = mockStore.get("keybindingOverrides.overrides");
     return raw && typeof raw === "object" ? raw : {};
   },
+  saveKeybindingOverrides: saveKeybindingOverridesMock,
 }));
 
 vi.mock("../getSoundService.js", () => ({
@@ -311,6 +318,23 @@ describe("ConfigBundleService.apply", () => {
     expect(mockStore.get("worktreeConfig.pathPattern")).toBe(
       "{parent-dir}/{repo-name}-worktrees/{branch-slug}"
     );
+  });
+
+  it("hands every view the shortcuts an import saved, and the ones its rollback put back (#15579)", async () => {
+    mockStore.set("keybindingOverrides.overrides", { "app.settings": ["Cmd+,"] });
+    mockProjectStore.addGlobalRecipe.mockRejectedValue(new Error("recipes.json is read-only"));
+    const { service } = makeService();
+
+    const report = await service.apply({
+      keybindingOverrides: { "terminal.new": ["Cmd+Shift+T"] },
+      globalRecipes: [{ id: "r1", name: "Fleet", terminals: [] }],
+    });
+
+    expect(report.outcome).toBe("rolled-back");
+    expect(saveKeybindingOverridesMock.mock.calls.map(([overrides]) => overrides)).toEqual([
+      { "app.settings": ["Cmd+,"], "terminal.new": ["Cmd+Shift+T"] },
+      { "app.settings": ["Cmd+,"] },
+    ]);
   });
 
   it("rebuilds the menu only when keybindings actually changed", async () => {

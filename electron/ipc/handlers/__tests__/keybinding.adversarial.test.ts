@@ -371,58 +371,82 @@ describe("keybinding handlers — menu rebuild after mutations", () => {
 
 describe("keybinding handlers — every view hears a saved change (#15579)", () => {
   let cleanup: (() => void) | null = null;
+  let saved: unknown;
+  // What the store held at the moment each push went out.
+  let savedAtPush: unknown[];
 
   const pushes = () =>
     broadcastMock.mock.calls
       .filter(([channel]) => channel === CHANNELS.KEYBINDING_OVERRIDES_CHANGED)
-      .map(([, overrides]) => overrides);
+      .map(([, snapshot]) => snapshot as { revision: number; overrides: Record<string, string[]> });
 
   beforeEach(() => {
     vi.clearAllMocks();
-    storeMock.get.mockReturnValue({ "action.kept": ["Cmd+E"], "action.bad": ["", ""] });
+    saved = { "action.kept": ["Cmd+E"], "action.bad": ["", ""] };
+    savedAtPush = [];
+    storeMock.get.mockImplementation(() => saved);
+    storeMock.set.mockImplementation((_key, value) => {
+      saved = value;
+    });
+    broadcastMock.mockImplementation(() => savedAtPush.push(saved));
     cleanup = registerKeybindingHandlers({} as never);
   });
 
   afterEach(() => {
     cleanup?.();
     cleanup = null;
+    storeMock.set.mockReset();
+    broadcastMock.mockReset();
   });
 
-  it("pushes the whole saved map after a set, a clear, a remove and a reset", async () => {
-    await getHandler(CHANNELS.KEYBINDING_SET_OVERRIDE)(fakeEvent(), {
-      actionId: "action.new",
-      combo: ["Cmd+N"],
-    });
-    await getHandler(CHANNELS.KEYBINDING_SET_OVERRIDE)(fakeEvent(), {
-      actionId: "action.cleared",
-      combo: [],
-    });
-    await getHandler(CHANNELS.KEYBINDING_REMOVE_OVERRIDE)(fakeEvent(), "action.kept");
-    await getHandler(CHANNELS.KEYBINDING_RESET_ALL)(fakeEvent());
+  it("answers each write with its save and pushes the same save to every view", async () => {
+    const replies = [
+      await getHandler(CHANNELS.KEYBINDING_SET_OVERRIDE)(fakeEvent(), {
+        actionId: "action.new",
+        combo: ["Cmd+N"],
+      }),
+      await getHandler(CHANNELS.KEYBINDING_SET_OVERRIDE)(fakeEvent(), {
+        actionId: "action.cleared",
+        combo: [],
+      }),
+      await getHandler(CHANNELS.KEYBINDING_REMOVE_OVERRIDE)(fakeEvent(), "action.kept"),
+      await getHandler(CHANNELS.KEYBINDING_RESET_ALL)(fakeEvent()),
+    ];
 
-    expect(pushes()).toEqual([
+    expect(pushes().map((push) => push.overrides)).toEqual([
       { "action.kept": ["Cmd+E"], "action.new": ["Cmd+N"] },
-      { "action.kept": ["Cmd+E"], "action.cleared": [] },
-      {},
+      { "action.kept": ["Cmd+E"], "action.new": ["Cmd+N"], "action.cleared": [] },
+      { "action.new": ["Cmd+N"], "action.cleared": [] },
       {},
     ]);
-    // Each push carries what was saved, so no view hears a map the store lacks.
-    expect(pushes()).toEqual(storeMock.set.mock.calls.map(([, saved]) => saved));
+    expect(replies).toEqual(pushes());
+    const revisions = pushes().map((push) => push.revision);
+    expect(revisions).toEqual([...revisions].sort((a, b) => a - b));
+    expect(new Set(revisions).size).toBe(revisions.length);
+    // Each push went out once its map was in the store, never before.
+    expect(savedAtPush).toEqual(pushes().map((push) => push.overrides));
   });
 
-  it("pushes the merged map after an import", async () => {
+  it("pushes the merged map after an import, the profile winning on overlap", async () => {
+    saved = { "action.kept": ["Cmd+E"], "action.shared": ["Cmd+S"] };
     dialogMock.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: ["/tmp/x.json"] });
     profileIoMock.importProfile.mockReturnValue({
       ok: true,
-      overrides: { "action.imported": ["Cmd+I"] },
-      applied: 1,
+      overrides: { "action.imported": ["Cmd+I"], "action.shared": ["Cmd+Shift+S"] },
+      applied: 2,
       skipped: 0,
       errors: [],
     });
 
     await getHandler(CHANNELS.KEYBINDING_IMPORT_PROFILE)(fakeEvent());
 
-    expect(pushes()).toEqual([{ "action.kept": ["Cmd+E"], "action.imported": ["Cmd+I"] }]);
+    expect(pushes().map((push) => push.overrides)).toEqual([
+      {
+        "action.kept": ["Cmd+E"],
+        "action.shared": ["Cmd+Shift+S"],
+        "action.imported": ["Cmd+I"],
+      },
+    ]);
   });
 
   it("pushes before the menu rebuild, so pushes leave in the order writes land", async () => {
@@ -433,7 +457,7 @@ describe("keybinding handlers — every view hears a saved change (#15579)", () 
 
     const write = getHandler(CHANNELS.KEYBINDING_RESET_ALL)(fakeEvent());
 
-    expect(pushes()).toEqual([{}]);
+    expect(pushes().map((push) => push.overrides)).toEqual([{}]);
     expect(menuMock.createApplicationMenu).not.toHaveBeenCalled();
     await write;
     expect(menuMock.createApplicationMenu).toHaveBeenCalledWith(win, undefined);

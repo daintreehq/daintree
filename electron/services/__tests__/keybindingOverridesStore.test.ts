@@ -1,10 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const storeGetMock = vi.hoisted(() => vi.fn<(key: string) => unknown>());
+const storeSetMock = vi.hoisted(() => vi.fn<(key: string, value: unknown) => void>());
+const broadcastMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../store.js", () => ({ store: { get: storeGetMock } }));
+vi.mock("../../store.js", () => ({ store: { get: storeGetMock, set: storeSetMock } }));
+vi.mock("../../ipc/utils.js", () => ({ broadcastToRenderer: broadcastMock }));
 
-const { getValidatedOverrides } = await import("../keybindingOverridesStore.js");
+const { getValidatedOverrides, saveKeybindingOverrides } =
+  await import("../keybindingOverridesStore.js");
+const { CHANNELS } = await import("../../ipc/channels.js");
 
 function seedOverrides(overrides: unknown) {
   storeGetMock.mockReturnValue(overrides);
@@ -94,5 +99,33 @@ describe("getValidatedOverrides", () => {
 
       expect(getValidatedOverrides()).not.toHaveProperty("worktree.openFileBrowserPanel");
     });
+  });
+});
+
+describe("saveKeybindingOverrides (#15579)", () => {
+  it("saves the map and pushes what a read would now return, numbered after the last save", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    let saved: unknown = {};
+    storeGetMock.mockImplementation(() => saved);
+    storeSetMock.mockImplementation((_key, value) => {
+      saved = value;
+    });
+
+    const first = saveKeybindingOverrides({ "terminal.new": ["Cmd+T"] });
+    const second = saveKeybindingOverrides({
+      "worktree.openFileBrowser": ["Cmd+Shift+B"],
+      "terminal.rename": [" "],
+    });
+
+    expect(storeSetMock).toHaveBeenLastCalledWith("keybindingOverrides.overrides", {
+      "worktree.openFileBrowser": ["Cmd+Shift+B"],
+      "terminal.rename": [" "],
+    });
+    expect(second.overrides).toEqual(getValidatedOverrides());
+    expect(second.revision).toBeGreaterThan(first.revision);
+    expect(broadcastMock.mock.calls).toEqual([
+      [CHANNELS.KEYBINDING_OVERRIDES_CHANGED, first],
+      [CHANNELS.KEYBINDING_OVERRIDES_CHANGED, second],
+    ]);
   });
 });

@@ -30,9 +30,22 @@ beforeAll(async () => {
   await primeRadix();
   const win = window as unknown as ElectronWindow;
   previousElectron = win.electron;
-  // setOverride only commits once the bridge accepts it.
+  // A write commits once Main answers with the map it saved.
+  let saved: Record<string, string[]> = {};
+  let revision = 0;
+  const answer = () => ({ revision: ++revision, overrides: { ...saved } });
   win.electron = {
-    keybinding: { setOverride: async () => {}, removeOverride: async () => {} },
+    keybinding: {
+      setOverride: async (actionId: string, combo: string[]) => {
+        saved = { ...saved, [actionId]: combo };
+        return answer();
+      },
+      removeOverride: async (actionId: string) => {
+        saved = { ...saved };
+        delete saved[actionId];
+        return answer();
+      },
+    },
   };
 });
 

@@ -33,6 +33,7 @@ import type { KeyAction } from "../keymap.js";
 import type { TerminalExitContext } from "../terminal.js";
 import type {
   KeybindingImportResult,
+  KeybindingOverridesSnapshot,
   MicPermissionStatus,
   NotificationSettings,
   VoiceCleanupFailure,
@@ -1060,15 +1061,15 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "keybinding:set-override": {
     args: [payload: { actionId: KeyAction; combo: string[] }];
-    result: void;
+    result: KeybindingOverridesSnapshot;
   };
   "keybinding:remove-override": {
     args: [actionId: KeyAction];
-    result: void;
+    result: KeybindingOverridesSnapshot;
   };
   "keybinding:reset-all": {
     args: [];
-    result: void;
+    result: KeybindingOverridesSnapshot;
   };
   "keybinding:export-profile": {
     args: [];
@@ -2248,7 +2249,7 @@ export interface IpcEventMap {
   "app:panel-grid-config-changed": import("../config.js").PanelGridConfig;
 
   // This machine's saved keybinding overrides, the whole map (#15579)
-  "keybinding:overrides-changed": Record<string, string[]>;
+  "keybinding:overrides-changed": KeybindingOverridesSnapshot;
 
   // A saved terminal-config change, one owner's fields each (#14699)
   "terminal-config:device-changed": Partial<import("./config.js").TerminalConfig>;

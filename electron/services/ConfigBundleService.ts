@@ -6,7 +6,7 @@ import {
   UserAgentRegistryService,
   loadSanitizedUserAgentRegistry,
 } from "./UserAgentRegistryService.js";
-import { getValidatedOverrides } from "./keybindingOverridesStore.js";
+import { getValidatedOverrides, saveKeybindingOverrides } from "./keybindingOverridesStore.js";
 import { getAllowedSoundFiles } from "./getSoundService.js";
 import { appCustomSchemesWriteSchema } from "../schemas/customSchemes.js";
 import { sanitizeNotificationSettingsPatch } from "../utils/notificationSettingsPatch.js";
@@ -1082,7 +1082,7 @@ export class ConfigBundleService {
         }
 
         if (pending.length > 0) {
-          store.set("keybindingOverrides.overrides", merged);
+          saveKeybindingOverrides(merged);
           await this.deps.rebuildMenu();
         }
 
@@ -1104,12 +1104,14 @@ export class ConfigBundleService {
       undo: storedMapUndo(
         () => store.get("keybindingOverrides.overrides"),
         async (overrides) => {
-          store.set("keybindingOverrides.overrides", overrides as Record<string, string[]>);
+          saveKeybindingOverrides(overrides as Record<string, string[]>);
           await this.deps.rebuildMenu();
         }
       ),
+      // A failed import's rollback reaches every view like any other save;
+      // nothing else tells them about it (#15579).
       restore: async (snapshot) => {
-        store.set("keybindingOverrides.overrides", (snapshot ?? {}) as Record<string, string[]>);
+        saveKeybindingOverrides((snapshot ?? {}) as Record<string, string[]>);
         await this.deps.rebuildMenu();
       },
     };
