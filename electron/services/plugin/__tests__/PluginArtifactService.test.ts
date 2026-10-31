@@ -4,7 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 // Every provider host resolves to a public address; nothing touches the network.
 vi.mock("node:dns/promises", () => ({
@@ -342,11 +342,12 @@ describe("download", () => {
   });
 
   it("holds a stalled DNS check to the header wait without stacking lookups on retry", async () => {
+    const backoff = vi.fn(() => 1);
     const quick = new PluginArtifactService({
       store,
       netFetch: netFetch as never,
       sweepIntervalMs: 0,
-      backoffMs: () => 1,
+      backoffMs: backoff,
       idleMs: 30,
     });
     let release: (answer: Array<{ address: string; family: number }>) => void = () => {};
@@ -354,6 +355,12 @@ describe("download", () => {
     vi.mocked(dns.lookup).mockImplementationOnce(
       () => new Promise((resolve) => (release = resolve as typeof release)) as never
     );
+    // Outside the body, so a regression that hangs the download still frees
+    // the lookup the rest of the file would otherwise join.
+    onTestFinished(async () => {
+      release([{ address: "93.184.216.34", family: 4 }]);
+      await new Promise((resolve) => setImmediate(resolve));
+    });
     try {
       await expect(
         quick.download({
@@ -365,12 +372,13 @@ describe("download", () => {
           attempts: 2,
         })
       ).rejects.toMatchObject({ code: "ARTIFACT_TRANSFER_FAILED" });
-      // The retry waited on the lookup still running, rather than starting another.
+      // A second attempt ran, and waited on the lookup still running rather
+      // than starting another.
+      expect(backoff).toHaveBeenCalledTimes(1);
+      expect(backoff).toHaveBeenCalledWith(1);
       expect(vi.mocked(dns.lookup).mock.calls.length - lookupsBefore).toBe(1);
       expect(netFetch).not.toHaveBeenCalled();
     } finally {
-      release([{ address: "93.184.216.34", family: 4 }]);
-      await new Promise((resolve) => setImmediate(resolve));
       await quick.dispose();
     }
   });

@@ -1,4 +1,4 @@
-import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach, onTestFinished } from "vitest";
 import path from "path";
 import { Readable } from "node:stream";
 
@@ -3391,19 +3391,22 @@ describe("createPluginProtocolHandler", () => {
         () => new Promise((resolve) => (release = resolve as typeof release)) as never
       );
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      try {
-        const netFetch = vi.fn(async () => new Response("abc", { status: 200 }));
-        const pending = tourAudioHandler(netFetch)(
-          makeRequest("plugin://pi-abc/__dtv-2/__dta/welcome/publish")
-        );
-        await vi.advanceTimersByTimeAsync(15_000);
-        expect((await pending).status).toBe(502);
-        expect(netFetch).not.toHaveBeenCalled();
-      } finally {
+      // Outside the body, so a regression that hangs the request still frees
+      // the lookup and the real timers.
+      onTestFinished(async () => {
         vi.useRealTimers();
         release([{ address: "93.184.216.34", family: 4 }]);
         await new Promise((resolve) => setImmediate(resolve));
-      }
+      });
+      const netFetch = vi.fn(async () => new Response("abc", { status: 200 }));
+
+      const pending = tourAudioHandler(netFetch)(
+        makeRequest("plugin://pi-abc/__dtv-2/__dta/welcome/publish")
+      );
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect((await pending).status).toBe(502);
+      expect(netFetch).not.toHaveBeenCalled();
     });
 
     it("refuses an answer that isn't audio", async () => {
