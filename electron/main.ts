@@ -30,10 +30,10 @@ import { getCompileCacheMeta } from "./utils/hostPerformance.js";
 import { startPerformanceTraceIfEnabled } from "./utils/performanceTrace.js";
 import { enforceIpcSenderValidation, setupPermissionLockdown } from "./setup/security.js";
 import { startSessionCacheTracking } from "./services/sessionCacheCleaner.js";
+import { setupHtmlPreviewSession } from "./setup/htmlPreviewSession.js";
 import {
   registerAppProtocol,
   registerDaintreeFileProtocol,
-  registerDaintreeHtmlProtocol,
   registerDaintreeMediaProtocol,
   registerDaintreePdfProtocol,
   registerDeepLinkProtocolClient,
@@ -1130,7 +1130,7 @@ if (!gotTheLock) {
       registerDeepLinkProtocolClient();
       registerAppProtocol(distPath, { allowDisplayCapture: isDemoMode });
       registerDaintreeFileProtocol();
-      registerDaintreeHtmlProtocol();
+      await setupHtmlPreviewSession();
       registerDaintreePdfProtocol();
       registerDaintreeMediaProtocol();
       // Register `plugin://` with a placeholder resolver that 404s every

@@ -43,6 +43,12 @@ vi.mock("electron", () => ({
   },
 }));
 
+// Stands in for the preview session's identity; only contents carrying it are previews.
+const PREVIEW_SESSION = vi.hoisted(() => ({ webRequest: { onBeforeRequest: vi.fn() } }));
+vi.mock("../htmlPreviewSession.js", () => ({
+  isHtmlPreviewContents: (contents: { session?: unknown }) => contents.session === PREVIEW_SESSION,
+}));
+
 // The tour-audio route re-resolves every hop's hostname; keep that off the network.
 vi.mock("node:dns/promises", () => ({
   default: { lookup: vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]) },
@@ -165,6 +171,7 @@ import {
   setupWebviewCSP,
 } from "../protocols.js";
 import { mintHtmlPreviewToken, _resetHtmlPreviewTokensForTests } from "../htmlPreviewTokens.js";
+import { createDaintreeHtmlProtocolHandler } from "../protocols/html.js";
 import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
 import { setRemoteWebviewSrcGate } from "../../window/webviewSrcGate.js";
 
@@ -1227,6 +1234,27 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       expect(localOnBeforeRequest).not.toHaveBeenCalled();
     });
 
+    it("leaves HTML preview guests to their own lockdown, in remote and local views alike (#15793)", () => {
+      for (const embedderId of [REMOTE_EMBEDDER, LOCAL_EMBEDDER]) {
+        const preview = createMockWebContents("webview");
+        Object.assign(preview, { hostWebContents: { id: embedderId }, session: PREVIEW_SESSION });
+        simulateWebContentsCreated(preview);
+        // No external popup routing and no localhost-only rule, which would
+        // refuse the page's own relative links.
+        expect(preview.setWindowOpenHandler).not.toHaveBeenCalled();
+        expect(getEventHandlers(preview, "will-navigate")).toHaveLength(0);
+        expect(getEventHandlers(preview, "will-redirect")).toHaveLength(0);
+      }
+
+      // The remote guard's listener would replace the preview session's own
+      // request filter and resolve hostnames for it.
+      const embedder = createMockWebContents("window");
+      embedder.id = REMOTE_EMBEDDER;
+      simulateWebContentsCreated(embedder);
+      getEventHandlers(embedder, "did-attach-webview")[0]!({}, { session: PREVIEW_SESSION });
+      expect(PREVIEW_SESSION.webRequest.onBeforeRequest).not.toHaveBeenCalled();
+    });
+
     it("leaves guests in a local view on today's rules", () => {
       const preview = guest(LOCAL_EMBEDDER);
       expect(blocks(preview, "will-navigate", "http://localhost:3000/")).toBe(false);
@@ -1256,48 +1284,6 @@ describe("setupWebviewCSP — partition CSP wiring", () => {
     // Browser sessions are per-project and created lazily; setup no longer opens a
     // singleton persist:browser session for identity comparison (#9965).
     expect(partitions).not.toContain("persist:browser");
-  });
-
-  it("passes daintree-html:// preview responses through without overwriting their CSP (#11191)", async () => {
-    const { session } = await import("electron");
-    const { mergeCspHeaders } = await import("../../utils/webviewCsp.js");
-    const fromPartition = vi.mocked(session.fromPartition);
-    vi.mocked(mergeCspHeaders).mockClear();
-
-    let captured:
-      | ((details: unknown, callback: (r: { responseHeaders?: unknown }) => void) => void)
-      | undefined;
-    fromPartition.mockImplementation((partition: string) => {
-      const onHeadersReceived = vi.fn(
-        (
-          _filter: unknown,
-          listener: (details: unknown, callback: (r: { responseHeaders?: unknown }) => void) => void
-        ) => {
-          if (partition === "persist:daintree") captured = listener;
-        }
-      );
-      return { webRequest: { onHeadersReceived } } as unknown as Electron.Session;
-    });
-
-    setupWebviewCSP();
-    expect(captured).toBeDefined();
-
-    // A daintree-html preview iframe already carries its own token-scoped CSP;
-    // the app overlay must NOT replace it (that would break the sandboxed page's
-    // scripts and re-expose connect-src daintree-file:).
-    const previewHeaders = {
-      "Content-Security-Policy": ["sandbox allow-scripts; default-src 'none'"],
-    };
-    let previewResult: { responseHeaders?: unknown } | undefined;
-    captured!({ url: "daintree-html://tok/index.html", responseHeaders: previewHeaders }, (r) => {
-      previewResult = r;
-    });
-    expect(previewResult?.responseHeaders).toBe(previewHeaders);
-    expect(vi.mocked(mergeCspHeaders)).not.toHaveBeenCalled();
-
-    // A normal app response still gets the app CSP overlay applied.
-    captured!({ url: "app://daintree/index.html", responseHeaders: {} }, () => {});
-    expect(vi.mocked(mergeCspHeaders)).toHaveBeenCalledTimes(1);
   });
 
   it("passes daintree-pdf:// responses through without stamping a CSP on them (#11427)", async () => {
@@ -1583,7 +1569,7 @@ describe("protocol registration", () => {
     // in app.whenReady() before any per-project session is created.
     const schemes = handle.mock.calls.map((c) => c[0] as string);
     expect(new Set(schemes)).toEqual(
-      new Set(["app", "daintree-file", "daintree-html", "daintree-pdf", "daintree-media"])
+      new Set(["app", "daintree-file", "daintree-pdf", "daintree-media"])
     );
     // Each exactly once: a duplicate handle() for one scheme throws in Electron.
     expect(schemes).toHaveLength(new Set(schemes).size);
@@ -3731,12 +3717,7 @@ describe("createDaintreeHtmlProtocolHandler — sandboxed HTML preview (#11191)"
   let token: string;
 
   async function captureHandler(): Promise<ProtocolHandler> {
-    const handle = vi.fn();
-    const mockSession = { protocol: { handle } } as unknown as Electron.Session;
-    registerProtocolsForSession(mockSession, "/tmp/dist");
-    const call = handle.mock.calls.find((c) => c[0] === "daintree-html");
-    if (!call) throw new Error("handler for daintree-html not registered");
-    return call[1] as ProtocolHandler;
+    return createDaintreeHtmlProtocolHandler() as ProtocolHandler;
   }
 
   function makeRequest(authority: string, relPath: string): GlobalRequest {
@@ -3781,8 +3762,6 @@ describe("createDaintreeHtmlProtocolHandler — sandboxed HTML preview (#11191)"
     expect(csp).toContain("sandbox allow-scripts");
     expect(csp).toContain("connect-src 'none'");
     expect(csp).toContain("default-src 'none'");
-    // WebRTC isn't governed by connect-src, so it's blocked explicitly.
-    expect(csp).toContain("webrtc 'block'");
     // Egress-limiting response headers.
     expect(response.headers.get("Referrer-Policy")).toBe("no-referrer");
     expect(response.headers.get("X-DNS-Prefetch-Control")).toBe("off");
@@ -4347,7 +4326,6 @@ describe("applyDaintreeAppCspToSession — preview response pass-through", () =>
 
   it.each([
     ["daintree-pdf://load?path=%2Frepo%2Fa.pdf"],
-    ["daintree-html://tok/index.html"],
     ["chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/index.html"],
   ])("passes %s through untouched", async (url) => {
     const { listener, mergeCspHeaders } = await captureListener();

@@ -23,11 +23,7 @@ import { looksLikeOAuthUrl } from "../../services/OAuthLoopbackService.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { claimPageDictationKey } from "../../services/voice/pageDictationKey.js";
 import { getDistPath } from "./app.js";
-
-/** True for any `daintree-html://…` request URL (the sandboxed preview scheme). */
-function isDaintreeHtmlPreviewUrl(url: string | undefined): boolean {
-  return typeof url === "string" && url.startsWith("daintree-html://");
-}
+import { isHtmlPreviewContents } from "../htmlPreviewSession.js";
 
 /** True for any `daintree-pdf://…` request URL (the inline PDF preview scheme). */
 function isDaintreePdfPreviewUrl(url: string | undefined): boolean {
@@ -46,10 +42,8 @@ function isPdfViewerExtensionUrl(url: string | undefined): boolean {
 /**
  * Responses whose headers must survive the session-wide CSP overlay untouched.
  * Each needs the pass-through for its own reason:
- *   daintree-html:// carries a token-scoped CSP and a COEP that the overlay
- *     would replace with the trusted app policy.
- *   daintree-pdf:// carries NEITHER, and must not acquire either: a `sandbox`
- *     CSP blocks PDFium outright (ERR_BLOCKED_BY_CLIENT), and a COEP header
+ *   daintree-pdf:// carries no CSP and no COEP, and must not acquire either:
+ *     a `sandbox` CSP blocks PDFium outright (ERR_BLOCKED_BY_CLIENT), and a COEP header
  *     makes the PDF document an embedder whose own internal viewer frame is
  *     then blocked (ERR_BLOCKED_BY_RESPONSE).
  *   The PDF viewer extension ships its own manifest CSP. Stamping the app
@@ -59,9 +53,7 @@ function isPdfViewerExtensionUrl(url: string | undefined): boolean {
  * All verified against Electron 42 / Chromium 148 on a persist: partition.
  */
 function shouldPreservePreviewResponseHeaders(url: string | undefined): boolean {
-  return (
-    isDaintreeHtmlPreviewUrl(url) || isDaintreePdfPreviewUrl(url) || isPdfViewerExtensionUrl(url)
-  );
+  return isDaintreePdfPreviewUrl(url) || isPdfViewerExtensionUrl(url);
 }
 
 // Read the production import-map hash sidecar emitted by the Vite build
@@ -166,14 +158,13 @@ export function setupWebviewCSP(): void {
     ses.webRequest.onHeadersReceived(
       { urls: ["<all_urls>"], types: ["mainFrame", "subFrame", "script"] },
       (details, callback) => {
-        // Preview documents own their response headers. protocol.handle
+        // PDF preview documents own their response headers. protocol.handle
         // responses DO flow through onHeadersReceived (Electron 42 /
-        // Chromium 148), so without this bypass mergeCspHeaders would replace
-        // a daintree-html:// page's token-scoped CSP with the trusted app CSP
-        // — breaking its scripts AND re-exposing connect-src daintree-file: —
-        // and would stamp that same policy onto a daintree-pdf:// document and
-        // onto PDFium's own viewer frame, which then can't boot. Pass all of
-        // them through untouched.
+        // Chromium 148), so without this bypass mergeCspHeaders would stamp
+        // the trusted app CSP onto a daintree-pdf:// document and onto
+        // PDFium's own viewer frame, which then can't boot. Pass them through
+        // untouched. HTML previews never reach this session: they load in
+        // their own (htmlPreviewSession.ts), which has no overlay.
         if (shouldPreservePreviewResponseHeaders(details.url)) {
           callback({ responseHeaders: details.responseHeaders });
           return;
@@ -259,12 +250,18 @@ export function setupWebviewCSP(): void {
 
     // A guest in a remote-bound view reaches this machine's localhost only
     // through its host's forwards, for every request and not just navigations.
+    // HTML preview guests are excluded: they have no network to forward, and
+    // this guard's listener would replace the preview session's own request
+    // filter and resolve hostnames on the guest's behalf.
     contents.on("did-attach-webview", (_event, guest) => {
+      if (isHtmlPreviewContents(guest)) return;
       guardRemoteGuestRequests(contents.id, guest);
     });
 
-    // Route target="_blank" links and window.open() from webview guests to the system browser
-    if (contents.getType() === "webview") {
+    // Route target="_blank" links and window.open() from webview guests to the system browser.
+    // HTML preview guests are locked down by htmlPreviewSession instead: this
+    // wiring would open their links externally and refuse their relative links.
+    if (contents.getType() === "webview" && !isHtmlPreviewContents(contents)) {
       const embedder = contents.hostWebContents;
       if (embedder) guardRemoteGuestRequests(embedder.id, contents);
 

@@ -3,6 +3,7 @@ import { FileCode, FileWarning } from "lucide-react";
 import { FileUnavailableState } from "@/components/FileViewer/FileUnavailableState";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { HTML_PREVIEW_PARTITION } from "@shared/utils/partitionUtils";
 
 export interface HtmlViewerProps {
   /**
@@ -31,14 +32,18 @@ export interface HtmlViewerProps {
 }
 
 /**
- * Rendered view of an HTML file (#11191): the page in a sandboxed iframe. The
- * document is served by the `daintree-html://` protocol with its own
- * token-scoped CSP; `sandbox="allow-scripts"` WITHOUT `allow-same-origin` gives
- * it an opaque origin, so its scripts run but it cannot reach the app, the
- * bridge, storage, or the network. Source mode stays on CodeViewer (owned by
- * whichever surface hosts this — FilePane, the file browser's viewer), so this
- * component is rendered-only — a thin, non-lazy iframe wrapper with no heavy
- * deps.
+ * Rendered view of an HTML file (#11191): the page in its own `<webview>`
+ * guest, not a frame of the app. The document is served by the
+ * `daintree-html://` protocol with its own token-scoped CSP, whose `sandbox
+ * allow-scripts` gives it an opaque origin: its scripts run, but with no
+ * preload it has no bridge, and its session shares no storage with the app.
+ * Its network egress is closed by main, not by this element: the
+ * {@link HTML_PREVIEW_PARTITION} session refuses every TCP connection through
+ * its proxy, and each guest gets a WebRTC policy that allows no UDP — which
+ * Chromium can only apply per WebContents, so an iframe in the app could never
+ * have it (#15793). Source mode stays on CodeViewer (owned by whichever surface
+ * hosts this — FilePane, the file browser's viewer), so this component is
+ * rendered-only — a thin, non-lazy wrapper with no heavy deps.
  */
 export function HtmlViewer({
   previewUrl,
@@ -74,17 +79,15 @@ export function HtmlViewer({
   }
 
   return (
-    <iframe
+    <webview
       // Remount on file switch so a stale document never lingers while the new
       // one loads; the nonce query handles same-file reloads.
       key={previewUrl}
       src={src}
+      // Main attaches a daintree-html:// src only in this partition, and this
+      // partition only with that src.
+      partition={HTML_PREVIEW_PARTITION}
       title={title}
-      // No allow-same-origin: the frame gets an opaque origin and cannot touch
-      // the parent DOM, window.electron, storage, or (with connect-src 'none')
-      // the network. allow-scripts lets the page's own scripts run.
-      sandbox="allow-scripts"
-      referrerPolicy="no-referrer"
       className={cn("h-full w-full border-0 bg-white", className)}
       data-testid="html-preview-frame"
     />
