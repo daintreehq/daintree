@@ -4,6 +4,11 @@
  * saved output.
  */
 
+import type {
+  DiagnosticsReviewPayload,
+  DiagnosticsTimeWindowId,
+} from "../types/ipc/system.js";
+
 export interface ReplacementRule {
   /**
    * Match mode. `"literal"` (the back-compat default when omitted) does a plain
@@ -147,6 +152,64 @@ export function filterLogEntriesByTime(
     return true;
   });
   return { ...payload, logs: { ...(logs as Record<string, unknown>), recentEntries: kept } };
+}
+
+type TimeWindowBoundaries = Pick<
+  DiagnosticsReviewPayload,
+  "appLaunchTimestamp" | "versionFirstRun" | "oldestRetainedLogMs"
+>;
+
+/**
+ * The windows the review offers, in menu order. The update window only exists
+ * once a version change has been observed: without one there's no honest
+ * boundary to offer.
+ */
+export function getTimeWindowIds(
+  boundaries: Pick<TimeWindowBoundaries, "versionFirstRun">
+): DiagnosticsTimeWindowId[] {
+  return boundaries.versionFirstRun
+    ? ["5m", "30m", "launch", "update", "full"]
+    : ["5m", "30m", "launch", "full"];
+}
+
+/** True when rotation already dropped logs written after the version boundary. */
+export function updateBoundaryPredatesRetainedLogs(boundaries: TimeWindowBoundaries): boolean {
+  const boundary = boundaries.versionFirstRun;
+  return (
+    boundary !== null &&
+    boundaries.oldestRetainedLogMs !== null &&
+    boundary.firstRunAtMs < boundaries.oldestRetainedLogMs
+  );
+}
+
+/**
+ * Resolve a window to an absolute ms cutoff (`null` = full history). Main
+ * resolves every window when it lists the bundle's log files and the dialog
+ * resolves the chosen one for the preview and the save, both against the same
+ * `now` (the review's `collectedAtMs`), so all three agree.
+ */
+export function computeTimeWindowStart(
+  id: DiagnosticsTimeWindowId,
+  boundaries: TimeWindowBoundaries,
+  now: number
+): number | null {
+  switch (id) {
+    case "5m":
+      return now - 5 * 60 * 1000;
+    case "30m":
+      return now - 30 * 60 * 1000;
+    case "launch":
+      return boundaries.appLaunchTimestamp;
+    case "update":
+      // Once rotation has cut into the version's logs, everything retained is
+      // the best available answer — the same report as full history.
+      if (!boundaries.versionFirstRun || updateBoundaryPredatesRetainedLogs(boundaries)) {
+        return null;
+      }
+      return boundaries.versionFirstRun.firstRunAtMs;
+    case "full":
+      return null;
+  }
 }
 
 /** Section metadata for the review dialog. */

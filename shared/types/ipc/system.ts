@@ -357,6 +357,22 @@ export interface DiagnosticsInfo {
   systemAvailableMB?: number;
 }
 
+/** The review dialog's "Logs from" choices. */
+export type DiagnosticsTimeWindowId = "5m" | "30m" | "launch" | "update" | "full";
+
+/** A file the bundle saves beside `diagnostics.json`. */
+export interface DiagnosticsBundleMember {
+  /** Path inside the ZIP. */
+  name: string;
+  /** Uncompressed UTF-8 size before redaction. */
+  bytes: number;
+  /**
+   * Set on the newest fatal crash record when it predates the window: it ships
+   * whatever window is chosen (#13527).
+   */
+  outsideWindow?: boolean;
+}
+
 /** Payload returned by the review collection IPC. */
 export interface DiagnosticsReviewPayload {
   /** Raw diagnostic data (keyed by section). */
@@ -383,6 +399,17 @@ export interface DiagnosticsReviewPayload {
    * from after the version boundary.
    */
   oldestRetainedLogMs: number | null;
+  /**
+   * Epoch (ms) the review was collected. Relative windows resolve against it,
+   * and the saved log files stop at it, so lines written while the dialog is
+   * open are left out.
+   */
+  collectedAtMs: number;
+  /**
+   * The log files the bundle saves for each offered window, when the Logs
+   * section is included. Windows not offered are absent.
+   */
+  logMembers: Partial<Record<DiagnosticsTimeWindowId, DiagnosticsBundleMember[]>>;
 }
 
 export interface VersionFirstRunBoundary {
@@ -404,6 +431,11 @@ export interface DiagnosticsBundleSavePayload {
    * full history (no time bound).
    */
   timeWindowStartMs?: number | null;
+  /**
+   * `collectedAtMs` of the review being saved. Log lines and crash records
+   * dated after it are left out. Omitted means no upper bound.
+   */
+  collectedAtMs?: number | null;
 }
 
 /**

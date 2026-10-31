@@ -19,51 +19,42 @@ import {
   filterSections,
   filterLogEntriesByTime,
   applyReplacementsCounted,
+  computeTimeWindowStart,
+  getTimeWindowIds,
+  updateBoundaryPredatesRetainedLogs,
   type ReplacementRule,
   type PrebuiltRedactionId,
 } from "@shared/utils/diagnosticsTransform";
-import type { DiagnosticsReviewPayload } from "@shared/types/ipc/system";
+import type {
+  DiagnosticsBundleMember,
+  DiagnosticsReviewPayload,
+  DiagnosticsTimeWindowId,
+} from "@shared/types/ipc/system";
 import { safeStringify } from "@/lib/safeStringify";
 import type { DiagnosticsReviewScope } from "@/store/diagnosticsReviewStore";
 import { pluralize } from "@/lib/pluralize";
+import { formatBytes } from "@/lib/formatBytes";
 
-type TimeWindowId = "5m" | "30m" | "launch" | "update" | "full";
+const TIME_WINDOW_LABELS = {
+  "5m": "Last 5 minutes",
+  "30m": "Last 30 minutes",
+  launch: "Since application launch",
+  full: "Full log history",
+} as const;
 
-const LAUNCH_OPTIONS: { id: TimeWindowId; label: string }[] = [
-  { id: "5m", label: "Last 5 minutes" },
-  { id: "30m", label: "Last 30 minutes" },
-  { id: "launch", label: "Since application launch" },
-];
-
-const FULL_OPTION: { id: TimeWindowId; label: string } = { id: "full", label: "Full log history" };
-
-/**
- * The update option only appears once a version change has been observed —
- * without one there's no honest boundary to offer.
- */
 function getTimeWindowOptions(
   payload: DiagnosticsReviewPayload
-): { id: TimeWindowId; label: string }[] {
-  const boundary = payload.versionFirstRun;
-  if (!boundary) return [...LAUNCH_OPTIONS, FULL_OPTION];
-  return [
-    ...LAUNCH_OPTIONS,
-    { id: "update", label: `Since updating to ${boundary.version}` },
-    FULL_OPTION,
-  ];
+): { id: DiagnosticsTimeWindowId; label: string }[] {
+  return getTimeWindowIds(payload).map((id) => ({
+    id,
+    label:
+      id === "update"
+        ? `Since updating to ${payload.versionFirstRun?.version}`
+        : TIME_WINDOW_LABELS[id],
+  }));
 }
 
-/** True when rotation already dropped logs written after the version boundary. */
-function updateBoundaryPredatesRetainedLogs(payload: DiagnosticsReviewPayload): boolean {
-  const boundary = payload.versionFirstRun;
-  return (
-    boundary !== null &&
-    payload.oldestRetainedLogMs !== null &&
-    boundary.firstRunAtMs < payload.oldestRetainedLogMs
-  );
-}
-
-const DEFAULT_TIME_WINDOW: TimeWindowId = "30m";
+const DEFAULT_TIME_WINDOW: DiagnosticsTimeWindowId = "30m";
 
 const DISCLOSURE_CLASS =
   "inline-flex items-center gap-1.5 text-sm font-medium text-text-primary rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2";
@@ -111,36 +102,14 @@ function MarkedReport({
   return <>{parts}</>;
 }
 
-function isTimeWindowId(value: string, options: { id: TimeWindowId }[]): value is TimeWindowId {
+function isTimeWindowId(
+  value: string,
+  options: { id: DiagnosticsTimeWindowId }[]
+): value is DiagnosticsTimeWindowId {
   return options.some((o) => o.id === value);
 }
 
-/**
- * Resolve a time-window option to an absolute ms cutoff (`null` = full history).
- * `now` is captured once when the dialog opens so the preview and the saved
- * bundle share an identical cutoff even if the user reviews for a while.
- */
-function computeTimeWindowStart(
-  id: TimeWindowId,
-  payload: DiagnosticsReviewPayload,
-  now: number
-): number | null {
-  switch (id) {
-    case "5m":
-      return now - 5 * 60 * 1000;
-    case "30m":
-      return now - 30 * 60 * 1000;
-    case "launch":
-      return payload.appLaunchTimestamp;
-    case "update":
-      // Once rotation has cut into the version's logs, everything retained is
-      // the best available answer — the same report as full history.
-      if (!payload.versionFirstRun || updateBoundaryPredatesRetainedLogs(payload)) return null;
-      return payload.versionFirstRun.firstRunAtMs;
-    case "full":
-      return null;
-  }
-}
+const utf8 = new TextEncoder();
 
 interface DiagnosticsReviewDialogProps {
   isOpen: boolean;
@@ -173,7 +142,7 @@ export function DiagnosticsReviewDialog({
     { find: "", replace: "[REDACTED]" },
   ]);
   const [prebuiltIds, setPrebuiltIds] = useState<Set<PrebuiltRedactionId>>(new Set());
-  const [timeWindow, setTimeWindow] = useState<TimeWindowId>(DEFAULT_TIME_WINDOW);
+  const [timeWindow, setTimeWindow] = useState<DiagnosticsTimeWindowId>(DEFAULT_TIME_WINDOW);
   const [showSections, setShowSections] = useState(false);
   const timeWindowId = useId();
   const timeWindowHintId = useId();
@@ -181,6 +150,7 @@ export function DiagnosticsReviewDialog({
   const ruleIdPrefix = useId();
   const sectionsToggleId = useId();
   const sectionsPanelId = useId();
+  const filesHeadingId = useId();
   const previewHeadingId = useId();
   const previewMetaId = useId();
   const previewRegionRef = useRef<HTMLDivElement>(null);
@@ -188,14 +158,9 @@ export function DiagnosticsReviewDialog({
   // Set by Add rule so the new row's Find field takes focus once it mounts,
   // instead of leaving the keyboard user on Add rule, above every older rule.
   const focusNewRuleRef = useRef(false);
-  // Reference "now" captured at open so the relative windows resolve to a
-  // stable cutoff shared by the preview and the save call. Held as state (not a
-  // ref) so the render-time reads below don't trip the React Compiler.
-  const [openedAt, setOpenedAt] = useState(() => Date.now());
 
   useEffect(() => {
     if (isOpen && reviewPayload) {
-      setOpenedAt(Date.now());
       const scopedSections = initialScope?.sections;
       const initial: Record<string, boolean> = {};
       // Distinguish "no scope" (sectionKeys undefined → all enabled) from
@@ -247,14 +212,17 @@ export function DiagnosticsReviewDialog({
 
   // The stringified report does not depend on the rules, so typing in a rule
   // re-runs only the replacement pass below.
+  // Relative windows resolve against the moment the review was collected, the
+  // same "now" main used to list the log files, so the preview, the file list
+  // and the saved bundle share one cutoff however long the review takes.
   const reportJson = useMemo(() => {
     if (!reviewPayload) return "";
-    const startMs = computeTimeWindowStart(timeWindow, reviewPayload, openedAt);
+    const startMs = computeTimeWindowStart(timeWindow, reviewPayload, reviewPayload.collectedAtMs);
     return safeStringify(
       filterLogEntriesByTime(filterSections(reviewPayload.payload, enabledSections), startMs),
       2
     );
-  }, [reviewPayload, enabledSections, timeWindow, openedAt]);
+  }, [reviewPayload, enabledSections, timeWindow]);
 
   const preview = useMemo(() => {
     const matchCounts = new Map<PrebuiltRedactionId | number, number>();
@@ -321,7 +289,7 @@ export function DiagnosticsReviewDialog({
 
   const handleSave = () => {
     if (!reviewPayload) return;
-    const startMs = computeTimeWindowStart(timeWindow, reviewPayload, openedAt);
+    const startMs = computeTimeWindowStart(timeWindow, reviewPayload, reviewPayload.collectedAtMs);
     onSave(enabledSections, effectiveReplacements, startMs);
   };
 
@@ -348,6 +316,13 @@ export function DiagnosticsReviewDialog({
     timeWindow === "update" && updateBoundaryPredatesRetainedLogs(reviewPayload);
   const replacementCount = preview.ranges.length;
   const previewLines = preview.text.split("\n").length;
+  // The saved diagnostics.json is exactly the preview text; the log files are
+  // the ones main listed for this window, saved only with the Logs section.
+  const files: DiagnosticsBundleMember[] = [
+    { name: "diagnostics.json", bytes: utf8.encode(preview.text).length },
+    ...(enabledSections.logs !== false ? (reviewPayload.logMembers[timeWindow] ?? []) : []),
+  ];
+  const filesBytes = files.reduce((sum, file) => sum + file.bytes, 0);
 
   return (
     <AppDialog
@@ -409,8 +384,8 @@ export function DiagnosticsReviewDialog({
           <fieldset className="min-w-0 space-y-2">
             <legend className={GROUP_HEADING_CLASS}>Redact</legend>
             <p className="text-xs text-text-secondary">
-              These match patterns, so they can miss things. Check the preview before you share the
-              report.
+              These match patterns, so they can miss things. They run over every file in the report;
+              the counts cover only the preview.
             </p>
             <div className="space-y-1.5">
               {PREBUILT_REDACTIONS.map((preset) => {
@@ -553,6 +528,34 @@ export function DiagnosticsReviewDialog({
             </div>
           </div>
         </fieldset>
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <h3 id={filesHeadingId} className={GROUP_HEADING_CLASS}>
+              Files in the report
+            </h3>
+            <p className="text-xs text-text-secondary tabular-nums">
+              {pluralize(files.length, "file")} · {formatBytes(filesBytes)}
+            </p>
+          </div>
+          <p className="text-xs text-text-secondary">
+            The preview shows diagnostics.json. Log files get the same scrubbing and stop when this
+            review opened; their sizes are before redaction.
+          </p>
+          <ul aria-labelledby={filesHeadingId} className="space-y-1">
+            {files.map((file) => (
+              <li key={file.name} className="flex items-baseline gap-3 text-xs">
+                <span className="min-w-0 truncate font-mono text-text-primary">{file.name}</span>
+                {file.outsideWindow && (
+                  <span className="shrink-0 text-text-secondary">Not limited by Logs from</span>
+                )}
+                <span className="ml-auto shrink-0 text-text-secondary tabular-nums">
+                  {formatBytes(file.bytes)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
 
         <div className="space-y-2">
           <div className="flex items-center justify-between gap-3">
