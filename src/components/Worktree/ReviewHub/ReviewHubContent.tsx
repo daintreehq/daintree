@@ -2264,6 +2264,7 @@ export function ReviewHubContent({
               hasConflicts={hasConflicts}
               hasRemote={status.hasRemote}
               pushDestination={status.pushDestination}
+              onPushDestinationChanged={() => debouncedBgRefreshRef.current?.()}
               worktreePath={worktreePath}
               currentBranch={status.currentBranch}
               commitMessage={commitMessage}
