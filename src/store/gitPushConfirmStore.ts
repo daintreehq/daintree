@@ -23,8 +23,7 @@ import type { GitPushReview } from "@shared/types/git";
  * Always `null` when declined.
  */
 export type GitPushConfirmResult =
-  | { confirmed: true; review: GitPushReview }
-  | { confirmed: false; review: null };
+  { confirmed: true; review: GitPushReview } | { confirmed: false; review: null };
 
 const DECLINED: GitPushConfirmResult = { confirmed: false, review: null };
 

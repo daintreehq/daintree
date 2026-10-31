@@ -152,7 +152,6 @@ function confirmManifestEntry(overrides: Partial<ActionManifestEntry> = {}): Act
   };
 }
 
-
 /** What the default git preview fixture shows: `main` at one commit, to `origin/main`. */
 const MAIN_PUSH_REVIEW = {
   branch: "main",

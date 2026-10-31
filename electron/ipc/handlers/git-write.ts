@@ -269,7 +269,10 @@ function singleBranchPushArgs(
  * non-fast-forward rejection. `^{commit}` so no ref spelled like the OID can
  * stand in for it.
  */
-function reviewedCommitPushArgs(headOid: string, destination: ResolvedGitPushDestination): string[] {
+function reviewedCommitPushArgs(
+  headOid: string,
+  destination: ResolvedGitPushDestination
+): string[] {
   return [
     "--no-follow-tags",
     "--recurse-submodules=no",

@@ -1391,13 +1391,20 @@ export function useMcpBridge(): void {
               const previewPending = hasAsyncPreview;
               if (hasAsyncPreview && previewTarget !== undefined) {
                 void buildMcpConfirmPreview(previewTarget)
-                  .then(({ lines, typedNameTarget, approvedRecipeRun: offered, approvedPush: shown }) => {
-                    if (disposed) return;
-                    approvedTypedNameTarget = typedNameTarget;
-                    approvedRecipeRun = offered;
-                    approvedPush = shown;
-                    useMcpConfirmStore.getState().setPreview(requestId, lines, typedNameTarget);
-                  })
+                  .then(
+                    ({
+                      lines,
+                      typedNameTarget,
+                      approvedRecipeRun: offered,
+                      approvedPush: shown,
+                    }) => {
+                      if (disposed) return;
+                      approvedTypedNameTarget = typedNameTarget;
+                      approvedRecipeRun = offered;
+                      approvedPush = shown;
+                      useMcpConfirmStore.getState().setPreview(requestId, lines, typedNameTarget);
+                    }
+                  )
                   // The builder already fails soft, but a rejection escaping it
                   // would leave previewPending stuck true and the modal
                   // unapprovable — the exact stall class #11538 removes. Clear
