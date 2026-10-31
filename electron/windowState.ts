@@ -274,11 +274,20 @@ function saveWindowStates(key: string | null | undefined, bounds: WindowStateBou
 }
 
 /**
+ * Each tracked window's way of letting go of keys a prune dropped. A window
+ * still holding one (a deleted scratch on screen, a picker waiting for a
+ * removed host) would otherwise write it straight back with its next save.
+ */
+const keyRetirers = new Set<(retired: (key: string) => boolean) => void>();
+
+/**
  * Drop the saved window states whose keys match, through the same capped
  * writer as the save path, never writing `undefined` (electron-store v11
- * rejects it). `__legacy__` is never dropped. No-op when nothing matches.
+ * rejects it). `__legacy__` is never dropped. Open windows let go of matching
+ * keys whether or not any were saved yet.
  */
 function pruneWindowStates(matches: (key: string) => boolean): void {
+  for (const retire of keyRetirers) retire(matches);
   const windowStates: WindowStatesMap | undefined = windowStatesStore.get("windowStates");
   if (!windowStates) return;
   const pruned = Object.keys(windowStates).filter((key) => key !== LEGACY_KEY && matches(key));
@@ -363,15 +372,16 @@ function keepRestoredBounds(
 export interface WindowStateTracking {
   /**
    * The key of the workspace the window is showing now (a local project's
-   * folder, or a scratch's or a host's project's id), or null when it shows
-   * none (the picker). Bounds are saved under it because it is the workspace
-   * the open-window manifest reopens the window on. The process-global current
+   * folder, or a scratch's or a host's project's id), or of the host's project
+   * a restored picker is waiting for, or null when it shows none (the picker).
+   * Bounds are saved under it because it is the workspace the open-window
+   * manifest reopens the window on. The process-global current
    * project is no stand-in: it names whichever window switched last (#11101),
    * so with two windows open every move of one was saved over the other's
    * bounds.
    */
   getShownBoundsKey: (win: BrowserWindow) => string | null;
-  /** Subscribe to windows changing what they show. Returns the unsubscribe. */
+  /** Subscribe to windows changing what they show or wait for. Returns the unsubscribe. */
   onShownProjectChange?: (listener: () => void) => () => void;
   /**
    * The bounds of the app's other open windows. A window that cannot go back to
@@ -383,7 +393,8 @@ export interface WindowStateTracking {
 const stopTrackingOnClose = new WeakMap<BrowserWindow, () => void>();
 
 /**
- * Stop following the window's project switches. Called from the window's own
+ * Stop following the window's project switches and the prunes of its keys.
+ * Called from the window's own
  * "closed" handler: a listener of its own was the eleventh on every app window,
  * and an unpackaged build exits on Node's MaxListenersExceededWarning.
  */
@@ -518,6 +529,8 @@ export function createWindowWithState(
   // shows one, then the one it shows. A switch saves them again under the
   // workspace switched to, so the window the manifest reopens on it comes back here.
   let boundsKey: string | null = initialKey ?? null;
+  // The key saves fall back to before the window shows anything.
+  let openedOnKey: string | null = initialKey ?? null;
   let hasShownProject = false;
   const readShownKey = (): string | null => {
     const shown = tracking?.getShownBoundsKey(win) ?? null;
@@ -528,8 +541,13 @@ export function createWindowWithState(
     if (!tracking) return initialKey ?? getCurrentProjectPath();
     // Before the window shows any workspace, it is still the window for the one
     // it opened on. Once it has shown one, showing none saves nothing per workspace.
-    return readShownKey() ?? (hasShownProject ? null : (initialKey ?? null));
+    return readShownKey() ?? (hasShownProject ? null : openedOnKey);
   };
+  const retireKeys = (retired: (key: string) => boolean) => {
+    if (boundsKey !== null && retired(boundsKey)) boundsKey = null;
+    if (openedOnKey !== null && retired(openedOnKey)) openedOnKey = null;
+  };
+  keyRetirers.add(retireKeys);
 
   // At fractional display scaling on Windows, a window with a hidden title bar
   // reports bounds a few pixels larger than it was created or set with (1000x700
@@ -572,8 +590,9 @@ export function createWindowWithState(
     saveState();
   });
 
+  let unsubscribe: (() => void) | undefined;
   if (tracking?.onShownProjectChange) {
-    const unsubscribe = tracking.onShownProjectChange(() => {
+    unsubscribe = tracking.onShownProjectChange(() => {
       if (win.isDestroyed()) return;
       const shown = readShownKey();
       // Nothing shown yet is a window still coming up, not one that left its project.
@@ -587,8 +606,11 @@ export function createWindowWithState(
       boundsKey = shown;
       if (shown) debouncedSaveState();
     });
-    stopTrackingOnClose.set(win, unsubscribe);
   }
+  stopTrackingOnClose.set(win, () => {
+    unsubscribe?.();
+    keyRetirers.delete(retireKeys);
+  });
 
   return win;
 }

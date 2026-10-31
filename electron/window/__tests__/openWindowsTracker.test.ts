@@ -21,10 +21,12 @@ import {
   addPendingRemoteBackgroundRestores,
   buildOpenWindowRecords,
   clearPendingBackgroundRestores,
+  clearPendingRemoteRestore,
   clearPendingRemoteRestoresForHost,
   enableOpenWindowsSaves,
   freezeAndSnapshotOpenWindows,
   initOpenWindowsTracker,
+  onPendingRemoteRestoreChanged,
   removePendingRemoteBackgroundRestores,
   resetOpenWindowsTrackerForTests,
   resumeOpenWindowsSaves,
@@ -157,6 +159,27 @@ describe("buildOpenWindowRecords", () => {
       { projectId: null },
       { projectId: `studio-2:${"a".repeat(64)}` },
     ]);
+  });
+
+  it("tells listeners when a window starts or stops waiting for a host's project", () => {
+    const listener = vi.fn();
+    const unsubscribe = onPendingRemoteRestoreChanged(listener);
+
+    setPendingRemoteRestore(1, `studio:${"a".repeat(64)}`);
+    setPendingRemoteRestore(2, `studio-2:${"a".repeat(64)}`);
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    clearPendingRemoteRestore(1);
+    clearPendingRemoteRestore(1);
+    clearPendingRemoteRestoresForHost("studio");
+    expect(listener).toHaveBeenCalledTimes(3);
+
+    clearPendingRemoteRestoresForHost("studio-2");
+    expect(listener).toHaveBeenCalledTimes(4);
+
+    unsubscribe();
+    setPendingRemoteRestore(1, `studio:${"a".repeat(64)}`);
+    expect(listener).toHaveBeenCalledTimes(4);
   });
 
   it("keeps a window whose manager throws, as a picker window", () => {

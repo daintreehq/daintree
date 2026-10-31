@@ -989,6 +989,24 @@ describe("createWindowWithState", () => {
       expect(state["__legacy__"]).toBeDefined();
     });
 
+    it("counts scratch and host keys toward the same cap as folders", () => {
+      const getState = makeStateful();
+      for (let i = 0; i < 20; i++) saveForPath(`/proj/${i}`);
+      for (let i = 0; i < 20; i++) {
+        saveForPath(folderlessBoundsKey(`build-box:${i.toString(16).padStart(64, "0")}`)!);
+      }
+      for (let i = 0; i < 15; i++) {
+        saveForPath(
+          folderlessBoundsKey(`3f2b8c1e-4d5a-4b6c-8d7e-${i.toString(16).padStart(12, "0")}`)!
+        );
+      }
+
+      const state = getState();
+      expect(Object.keys(state).filter((k) => k !== "__legacy__")).toHaveLength(50);
+      expect(state["/proj/4"]).toBeUndefined();
+      expect(state["/proj/5"]).toBeDefined();
+    });
+
     it("re-touching a path moves it to most-recent and shields it from eviction", () => {
       const getState = makeStateful();
       for (let i = 0; i < 50; i++) saveForPath(`/keep/${i}`);

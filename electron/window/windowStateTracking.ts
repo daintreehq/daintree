@@ -5,7 +5,7 @@ import {
 } from "../services/persistence/readLastProjectId.js";
 import { isScratchWorkspaceId } from "../../shared/utils/workspaceIds.js";
 import { folderlessBoundsKey } from "./windowBoundsKeys.js";
-import { getPendingRemoteRestore } from "./openWindowsTracker.js";
+import { getPendingRemoteRestore, onPendingRemoteRestoreChanged } from "./openWindowsTracker.js";
 import { onProjectPresenceChanged } from "./projectPresenceChanges.js";
 import { getWindowRegistry } from "./windowRef.js";
 
@@ -49,7 +49,16 @@ export const appWindowStateTracking: WindowStateTracking = {
       getPendingRemoteRestore(ctx.windowId);
     return workspaceId ? resolveBoundsKey(null, workspaceId) : null;
   },
-  onShownProjectChange: onProjectPresenceChanged,
+  onShownProjectChange: (listener) => {
+    const offPresence = onProjectPresenceChanged(listener);
+    // Seen as soon as the restore is noted, a host window's key is one it
+    // showed: given up later, it stops saving under the host's project.
+    const offPending = onPendingRemoteRestoreChanged(listener);
+    return () => {
+      offPresence();
+      offPending();
+    };
+  },
   getOccupiedBounds: () =>
     (getWindowRegistry()?.all() ?? []).flatMap(({ browserWindow }) =>
       browserWindow.isDestroyed() ? [] : [browserWindow.getNormalBounds()]

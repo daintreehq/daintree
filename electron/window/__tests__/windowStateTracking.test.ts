@@ -7,12 +7,25 @@ const db = vi.hoisted(() => ({
 vi.mock("../../services/persistence/readLastProjectId.js", () => db);
 
 const getPendingRemoteRestore = vi.hoisted(() => vi.fn<(windowId: number) => string | null>());
-vi.mock("../openWindowsTracker.js", () => ({ getPendingRemoteRestore }));
+const pendingListeners = vi.hoisted(() => new Set<() => void>());
+vi.mock("../openWindowsTracker.js", () => ({
+  getPendingRemoteRestore,
+  onPendingRemoteRestoreChanged: (listener: () => void) => {
+    pendingListeners.add(listener);
+    return () => pendingListeners.delete(listener);
+  },
+}));
 
 const registry = vi.hoisted(() => ({ current: null as unknown }));
 vi.mock("../windowRef.js", () => ({ getWindowRegistry: () => registry.current }));
 
-vi.mock("../projectPresenceChanges.js", () => ({ onProjectPresenceChanged: vi.fn() }));
+const presenceListeners = vi.hoisted(() => new Set<() => void>());
+vi.mock("../projectPresenceChanges.js", () => ({
+  onProjectPresenceChanged: (listener: () => void) => {
+    presenceListeners.add(listener);
+    return () => presenceListeners.delete(listener);
+  },
+}));
 
 import { appWindowStateTracking, resolveBoundsKey } from "../windowStateTracking.js";
 
@@ -163,6 +176,17 @@ describe("appWindowStateTracking", () => {
     deletedScratches.add(SCRATCH);
 
     expect(shownKey(win)).toBeNull();
+  });
+
+  it("hears a window start or stop waiting for a host's project, as well as switches", () => {
+    const listener = vi.fn();
+    const unsubscribe = appWindowStateTracking.onShownProjectChange!(listener);
+
+    for (const notify of [...presenceListeners, ...pendingListeners]) notify();
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    unsubscribe();
+    expect(presenceListeners.size + pendingListeners.size).toBe(0);
   });
 
   it("reports where the other open windows sit, skipping destroyed ones", () => {
