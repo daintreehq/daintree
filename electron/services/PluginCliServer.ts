@@ -67,13 +67,18 @@ const DevParamsSchema = z.object({
   pluginId: z.string().min(1),
 });
 
+// `sessionId` is optional: a CLI older than #15616 sends only the plugin id.
+const DevSessionParamsSchema = DevParamsSchema.extend({
+  sessionId: z.string().min(1).optional(),
+});
+
 export interface PluginCliServerHandlers {
   install: (params: { path?: string; url?: string }) => Promise<unknown>;
   uninstall: (params: { pluginId: string; deleteSettings?: boolean }) => Promise<void>;
   /** Load + activate a dev plugin the CLI symlinked into the plugins root. */
-  devStart: (params: { pluginId: string }) => Promise<void>;
+  devStart: (params: { pluginId: string; sessionId?: string }) => Promise<void>;
   /** Unload a dev plugin when the CLI's `dev` session stops. */
-  devStop: (params: { pluginId: string }) => Promise<void>;
+  devStop: (params: { pluginId: string; sessionId?: string }) => Promise<void>;
   /**
    * The dev plugin's perf snapshot (`PluginPerfSnapshot`), or `null` when it is
    * not loaded. Polled by `daintree-plugin dev` to show measurements against
@@ -175,12 +180,12 @@ export function createPluginCliServer(config: PluginCliServerConfig): PluginCliS
         return { status: "ok" };
       }
       case "plugin.dev.start": {
-        const p = DevParamsSchema.parse(params ?? {});
+        const p = DevSessionParamsSchema.parse(params ?? {});
         await handlers.devStart(p);
         return { status: "ok" };
       }
       case "plugin.dev.stop": {
-        const p = DevParamsSchema.parse(params ?? {});
+        const p = DevSessionParamsSchema.parse(params ?? {});
         await handlers.devStop(p);
         return { status: "ok" };
       }
@@ -382,8 +387,8 @@ export async function startPluginCliServer(): Promise<void> {
         return Promise.reject(new Error("install requires exactly one of 'path' or 'url'"));
       },
       uninstall: ({ pluginId, deleteSettings }) => handleUninstall(pluginId, deleteSettings),
-      devStart: ({ pluginId }) => pluginService.loadDevPlugin(pluginId),
-      devStop: ({ pluginId }) => pluginService.stopDevSession(pluginId),
+      devStart: ({ pluginId, sessionId }) => pluginService.loadDevPlugin(pluginId, sessionId),
+      devStop: ({ pluginId, sessionId }) => pluginService.stopDevSession(pluginId, sessionId),
       devMetrics: async ({ pluginId }) => {
         pluginService.metrics.leaseSampling();
         return pluginService.metrics.getSnapshot(pluginId);

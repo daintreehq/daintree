@@ -1785,6 +1785,203 @@ describe("dev sessions — full-artifact reconcile (#12277)", () => {
     service.dispose();
   });
 
+  describe("overlapping CLI sessions (#15616)", () => {
+    function isLoaded(service: PluginService): boolean {
+      return service.listPlugins().some((p) => p.manifest.name === DEV_ID);
+    }
+
+    /** The artifact watcher's live state for the dev plugin, if it has one. */
+    function watcherOf(service: PluginService): { realDir: string } | undefined {
+      return (
+        service as unknown as {
+          devArtifactWatcherRegistry: { states: Map<string, { realDir: string }> } | null;
+        }
+      ).devArtifactWatcherRegistry?.states.get(DEV_ID);
+    }
+
+    it("ignores a stop from a session another one has since started", async () => {
+      await writeDevPlugin();
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      await service.loadDevPlugin(DEV_ID, "older");
+      await service.loadDevPlugin(DEV_ID, "newer");
+      const newerWatcher = watcherOf(service);
+      expect(newerWatcher).toBeDefined();
+
+      await service.stopDevSession(DEV_ID, "older");
+      expect(devStatus(service)).toBeDefined();
+      expect(isLoaded(service)).toBe(true);
+      // Still hot-reloading: the stale stop left the newer session's watcher be.
+      expect(watcherOf(service)).toBe(newerWatcher);
+
+      await service.stopDevSession(DEV_ID, "newer");
+      expect(devStatus(service)).toBeUndefined();
+      expect(isLoaded(service)).toBe(false);
+
+      service.dispose();
+    });
+
+    it("holds the older session's stop until the newer start lands, then ignores it", async () => {
+      await writeDevPlugin();
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      await service.loadDevPlugin(DEV_ID, "older");
+
+      // Pause the newer start mid-load, before it has claimed the session.
+      let releaseLoad!: () => void;
+      const loadGate = new Promise<void>((resolve) => (releaseLoad = resolve));
+      const internals = service as unknown as {
+        loadPlugin: (...args: unknown[]) => Promise<unknown>;
+      };
+      const realLoad = internals.loadPlugin.bind(service);
+      const loadSpy = vi.spyOn(internals, "loadPlugin").mockImplementationOnce(async (...args) => {
+        await loadGate;
+        return realLoad(...args);
+      });
+      const starting = service.loadDevPlugin(DEV_ID, "newer");
+      await vi.waitFor(() => expect(loadSpy).toHaveBeenCalled());
+
+      let stopSettled = false;
+      const stopping = service.stopDevSession(DEV_ID, "older").then(() => {
+        stopSettled = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // Acting now, it would still find "older" as the owner and tear down.
+      expect(stopSettled).toBe(false);
+
+      releaseLoad();
+      await Promise.all([starting, stopping]);
+
+      expect(devStatus(service)).toBeDefined();
+      expect(isLoaded(service)).toBe(true);
+      expect(watcherOf(service)).toBeDefined();
+
+      service.dispose();
+    });
+
+    it("treats an untagged restart as unowned, so any tagged stop ends it", async () => {
+      await writeDevPlugin();
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      await service.loadDevPlugin(DEV_ID, "newer");
+      await service.loadDevPlugin(DEV_ID);
+
+      await service.stopDevSession(DEV_ID, "someone-else");
+
+      expect(devStatus(service)).toBeUndefined();
+      expect(isLoaded(service)).toBe(false);
+
+      service.dispose();
+    });
+
+    it("leaves no session behind when a takeover start fails to load", async () => {
+      await writeDevPlugin();
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      await service.loadDevPlugin(DEV_ID, "older");
+      (
+        service as unknown as { records: { setEnabled(id: string, enabled: boolean): void } }
+      ).records.setEnabled(DEV_ID, false);
+
+      await expect(service.loadDevPlugin(DEV_ID, "newer")).rejects.toThrow(/Couldn't load/);
+
+      expect(devStatus(service)).toBeUndefined();
+      expect(watcherOf(service)).toBeUndefined();
+
+      service.dispose();
+    });
+
+    it("lets an untagged stop from an older CLI end any session, as before", async () => {
+      await writeDevPlugin();
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      await service.loadDevPlugin(DEV_ID, "newer");
+
+      await service.stopDevSession(DEV_ID);
+
+      expect(devStatus(service)).toBeUndefined();
+      expect(isLoaded(service)).toBe(false);
+
+      service.dispose();
+    });
+
+    it("lets a tagged stop end a session no CLI session has claimed", async () => {
+      await writeDevPlugin();
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      // An older CLI's start, or a session adopted from a marker at startup.
+      await service.loadDevPlugin(DEV_ID);
+
+      await service.stopDevSession(DEV_ID, "only-session");
+
+      expect(devStatus(service)).toBeUndefined();
+      expect(isLoaded(service)).toBe(false);
+
+      service.dispose();
+    });
+
+    it("retires the session and its watcher when a start fails after arming it", async () => {
+      await writeDevPlugin();
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      await service.loadDevPlugin(DEV_ID, "older");
+      const internals = service as unknown as {
+        loadPlugin: (...args: unknown[]) => Promise<unknown>;
+        emitRuntimeStatus: (pluginId: string) => void;
+      };
+      // A step past the marker check failing: the session is re-armed, then
+      // the load throws.
+      const realLoad = internals.loadPlugin.bind(service);
+      vi.spyOn(internals, "loadPlugin").mockImplementationOnce(async (...args) => {
+        await realLoad(...args);
+        throw new Error("skills registration failed");
+      });
+      const sessionAtEmit: boolean[] = [];
+      const realEmit = internals.emitRuntimeStatus.bind(service);
+      vi.spyOn(internals, "emitRuntimeStatus").mockImplementation((pluginId) => {
+        if (pluginId === DEV_ID) sessionAtEmit.push(devStatus(service) !== undefined);
+        realEmit(pluginId);
+      });
+
+      await expect(service.loadDevPlugin(DEV_ID, "newer")).rejects.toThrow(/skills/);
+
+      expect(watcherOf(service)).toBeUndefined();
+      expect(devStatus(service)).toBeUndefined();
+      // The last status published says the session is gone.
+      expect(sessionAtEmit.at(-1)).toBe(false);
+
+      service.dispose();
+    });
+
+    it("re-arms the artifact watcher on the directory a takeover links", async () => {
+      async function writeWorktree(name: string): Promise<string> {
+        const dir = path.join(tmpDir, name);
+        await fs.mkdir(path.join(dir, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(dir, "plugin.json"),
+          JSON.stringify({ name: DEV_ID, version: "1.0.0", main: "dist/index.js" })
+        );
+        await fs.writeFile(path.join(dir, "dist", "index.js"), "module.exports = {};");
+        await fs.writeFile(path.join(dir, ".dev-marker"), "");
+        return fs.realpath(dir);
+      }
+      const older = await writeWorktree("worktree-a");
+      const newer = await writeWorktree("worktree-b");
+      const linkPath = path.join(pluginsRoot, DEV_ID);
+      await fs.mkdir(pluginsRoot, { recursive: true });
+      await fs.symlink(older, linkPath);
+
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      const watchedDir = (): string | undefined => watcherOf(service)?.realDir;
+
+      await service.loadDevPlugin(DEV_ID, "older");
+      await vi.waitFor(() => expect(watchedDir()).toBe(older));
+
+      await fs.unlink(linkPath);
+      await fs.symlink(newer, linkPath);
+      await service.loadDevPlugin(DEV_ID, "newer");
+
+      // Still on the older directory, the newer session's rebuilds would never
+      // reach Daintree once the older one's watcher stopped producing events.
+      await vi.waitFor(() => expect(watchedDir()).toBe(newer));
+
+      service.dispose();
+    });
+  });
+
   describe("running agents' credentials", () => {
     const TERMINAL = "term-dev-rebuild";
 

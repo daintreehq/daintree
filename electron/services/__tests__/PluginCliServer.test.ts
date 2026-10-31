@@ -222,6 +222,34 @@ describe("createPluginCliServer", () => {
     expect(handlers.devStop).toHaveBeenCalledWith({ pluginId: "acme.demo" });
   });
 
+  it("forwards the CLI session id with plugin.dev.start and plugin.dev.stop", async () => {
+    const handlers = noopHandlers();
+    server = makeServer(handlers);
+    await server.listen();
+
+    const params = { pluginId: "acme.demo", sessionId: "session-1" };
+    await request({ id: "d4", method: "plugin.dev.start", params });
+    await request({ id: "d5", method: "plugin.dev.stop", params });
+
+    expect(handlers.devStart).toHaveBeenCalledWith(params);
+    expect(handlers.devStop).toHaveBeenCalledWith(params);
+  });
+
+  it("rejects an empty session id rather than treating it as absent", async () => {
+    const handlers = noopHandlers();
+    server = makeServer(handlers);
+    await server.listen();
+
+    const res = await request({
+      id: "d6",
+      method: "plugin.dev.stop",
+      params: { pluginId: "acme.demo", sessionId: "" },
+    });
+
+    expect(res.error).toBeTruthy();
+    expect(handlers.devStop).not.toHaveBeenCalled();
+  });
+
   it("returns an error frame when a dev call is missing pluginId", async () => {
     const handlers = noopHandlers();
     server = makeServer(handlers);

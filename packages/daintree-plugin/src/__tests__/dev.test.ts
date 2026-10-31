@@ -91,9 +91,145 @@ describe("linkDevPlugin", () => {
   });
 
   it("reuses an existing symlink that already points at the plugin dir", async () => {
-    await linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" });
+    await fs.mkdir(pluginsRoot, { recursive: true });
+    await fs.symlink(pluginDir, path.join(pluginsRoot, "acme.demo"));
+    const link = await linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" });
+    expect(link.createdSymlink).toBe(false);
+  });
+
+  it("reuses a link that reaches the plugin dir under another spelling", async () => {
+    const alias = path.join(tmpDir, "alias");
+    await fs.symlink(pluginDir, alias);
+    await fs.mkdir(pluginsRoot, { recursive: true });
+    await fs.symlink(alias, path.join(pluginsRoot, "acme.demo"));
+
+    const link = await linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" });
+
+    expect(link.createdSymlink).toBe(false);
+    expect(await fs.readlink(link.linkPath)).toBe(alias);
+  });
+
+  it("takes back the link and marker it made when it can't read the link back", async () => {
+    const readlink = vi
+      .spyOn(fs, "readlink")
+      .mockRejectedValueOnce(Object.assign(new Error("i/o error"), { code: "EIO" }));
+    try {
+      await expect(
+        linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" })
+      ).rejects.toThrow(/i\/o/);
+    } finally {
+      readlink.mockRestore();
+    }
+    expect(await lstatSafe(path.join(pluginsRoot, "acme.demo"))).toBeNull();
+    expect(await lstatSafe(path.join(pluginDir, ".dev-marker"))).toBeNull();
+  });
+
+  it("gives up, leaving the other link alone, when relinked while it reads the link", async () => {
+    const otherDir = path.join(tmpDir, "other-worktree");
+    await fs.mkdir(otherDir, { recursive: true });
+    const linkPath = path.join(pluginsRoot, "acme.demo");
+    const realReadlink = fs.readlink.bind(fs);
+    const readlink = vi.spyOn(fs, "readlink").mockImplementationOnce(async (target) => {
+      await fs.unlink(linkPath);
+      await fs.symlink(otherDir, linkPath);
+      return realReadlink(target);
+    });
+    try {
+      await expect(
+        linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" })
+      ).rejects.toThrow(/relinked/);
+    } finally {
+      readlink.mockRestore();
+    }
+    expect(path.resolve(pluginsRoot, await fs.readlink(linkPath))).toBe(otherDir);
+    expect(await lstatSafe(path.join(pluginDir, ".dev-marker"))).toBeNull();
+  });
+
+  it("creates no link when it can't write the marker", async () => {
+    // A directory where the marker belongs makes the write fail.
+    await fs.mkdir(path.join(pluginDir, ".dev-marker"));
+    await expect(
+      linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" })
+    ).rejects.toThrow();
+    expect(await lstatSafe(path.join(pluginsRoot, "acme.demo"))).toBeNull();
+  });
+
+  it("stamps the marker with this session, distinct per session", async () => {
+    const first = await linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" });
+    await cleanupDevLink(first);
     const second = await linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" });
-    expect(second.createdSymlink).toBe(false);
+
+    expect(second.sessionId).not.toBe(first.sessionId);
+    const marker = JSON.parse(await fs.readFile(path.join(pluginDir, ".dev-marker"), "utf8"));
+    expect(marker).toEqual({ sessionId: second.sessionId, pid: process.pid });
+  });
+
+  it("refuses a second session in the same directory while the first is alive", async () => {
+    const first = await linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" });
+
+    await expect(linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" })).rejects.toThrow(
+      /already running/
+    );
+
+    const marker = JSON.parse(await fs.readFile(first.markerPath, "utf8"));
+    expect(marker.sessionId).toBe(first.sessionId);
+  });
+
+  it("replaces a marker left by a session whose process has exited", async () => {
+    await fs.writeFile(
+      path.join(pluginDir, ".dev-marker"),
+      JSON.stringify({ sessionId: "crashed", pid: 4242 })
+    );
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+    });
+    try {
+      const link = await linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" });
+      expect(kill).toHaveBeenCalledWith(4242, 0);
+      const marker = JSON.parse(await fs.readFile(link.markerPath, "utf8"));
+      expect(marker.sessionId).toBe(link.sessionId);
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  it("treats a process it may not signal as a live session", async () => {
+    await fs.writeFile(
+      path.join(pluginDir, ".dev-marker"),
+      JSON.stringify({ sessionId: "other-user", pid: 4242 })
+    );
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("not permitted"), { code: "EPERM" });
+    });
+    try {
+      await expect(
+        linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" })
+      ).rejects.toThrow(/already running/);
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  it("replaces the empty marker an older CLI leaves behind", async () => {
+    await fs.writeFile(path.join(pluginDir, ".dev-marker"), "");
+    const link = await linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" });
+    const marker = JSON.parse(await fs.readFile(link.markerPath, "utf8"));
+    expect(marker.sessionId).toBe(link.sessionId);
+  });
+
+  it("writes the marker into the plugin dir even when the link is retargeted", async () => {
+    const otherDir = path.join(tmpDir, "other-worktree");
+    await fs.mkdir(otherDir, { recursive: true });
+    const older = await linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" });
+    const newer = await linkDevPlugin({ pluginDir: otherDir, pluginsRoot, pluginId: "acme.demo" });
+
+    expect(older.markerPath).toBe(path.join(pluginDir, ".dev-marker"));
+    expect(newer.markerPath).toBe(path.join(otherDir, ".dev-marker"));
+    // Each directory keeps its own session's marker; the takeover rewrote neither.
+    const olderMarker = JSON.parse(await fs.readFile(older.markerPath, "utf8"));
+    const newerMarker = JSON.parse(await fs.readFile(newer.markerPath, "utf8"));
+    expect(olderMarker.sessionId).toBe(older.sessionId);
+    expect(newerMarker.sessionId).toBe(newer.sessionId);
   });
 
   it("replaces a symlink pointing somewhere else", async () => {
@@ -114,6 +250,8 @@ describe("linkDevPlugin", () => {
     await expect(linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" })).rejects.toThrow(
       /isn't a symlink/
     );
+    // The marker it stamped first comes back off, so nothing reroutes a later load.
+    expect(await lstatSafe(path.join(pluginDir, ".dev-marker"))).toBeNull();
   });
 });
 
@@ -134,13 +272,89 @@ describe("cleanupDevLink", () => {
     await expect(cleanupDevLink(link)).resolves.toBeUndefined();
   });
 
+  it("leaves a link retargeted by a newer session, and its marker, alone", async () => {
+    const otherDir = path.join(tmpDir, "other-worktree");
+    await fs.mkdir(otherDir, { recursive: true });
+    const older = await linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" });
+    const newer = await linkDevPlugin({ pluginDir: otherDir, pluginsRoot, pluginId: "acme.demo" });
+
+    await cleanupDevLink(older);
+
+    expect(path.resolve(pluginsRoot, await fs.readlink(newer.linkPath))).toBe(otherDir);
+    await expect(fs.access(path.join(otherDir, ".dev-marker"))).resolves.toBeUndefined();
+    // The older session cleans up the marker in its own directory instead.
+    expect(await lstatSafe(path.join(pluginDir, ".dev-marker"))).toBeNull();
+  });
+
   it("leaves a reused (not created) symlink in place", async () => {
-    await linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" });
+    await fs.mkdir(pluginsRoot, { recursive: true });
+    await fs.symlink(pluginDir, path.join(pluginsRoot, "acme.demo"));
     const reused = await linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" });
-    const link: DevLink = { ...reused };
-    await cleanupDevLink(link);
+    await cleanupDevLink(reused);
     // Symlink stays (we didn't create it this round); marker is removed.
     expect(await lstatSafe(reused.linkPath)).not.toBeNull();
+    expect(await lstatSafe(reused.markerPath)).toBeNull();
+  });
+
+  it("releases the marker only after the link is gone", async () => {
+    const link = await linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" });
+    const realUnlink = fs.unlink.bind(fs);
+    let releaseLinkUnlink!: () => void;
+    const linkUnlinkGate = new Promise<void>((resolve) => (releaseLinkUnlink = resolve));
+    const unlink = vi.spyOn(fs, "unlink").mockImplementationOnce(async (target) => {
+      await linkUnlinkGate;
+      return realUnlink(target);
+    });
+    try {
+      const cleaning = cleanupDevLink(link);
+      await vi.waitFor(() => expect(unlink).toHaveBeenCalledWith(link.linkPath));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // The marker reserves the directory: dropped before the link is gone, a
+      // session starting here could reuse the link and then lose it.
+      await expect(fs.access(link.markerPath)).resolves.toBeUndefined();
+
+      releaseLinkUnlink();
+      await cleaning;
+      expect(await lstatSafe(link.markerPath)).toBeNull();
+    } finally {
+      unlink.mockRestore();
+    }
+  });
+
+  it("leaves a link a new directory at a moved plugin dir's path reuses", async () => {
+    const older = await linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" });
+    await fs.rename(pluginDir, path.join(tmpDir, "moved"));
+    await fs.mkdir(pluginDir);
+    const newer = await linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" });
+    expect(newer.createdSymlink).toBe(false);
+
+    await cleanupDevLink(older);
+
+    // Same path, same link text, but no longer the directory the older one served.
+    expect(await lstatSafe(older.linkPath)).not.toBeNull();
+    await expect(fs.access(newer.markerPath)).resolves.toBeUndefined();
+  });
+
+  it("never removes a real directory that replaced its link", async () => {
+    const link = await linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" });
+    await fs.unlink(link.linkPath);
+    await fs.mkdir(link.linkPath);
+    const unlink = vi.spyOn(fs, "unlink");
+    try {
+      await cleanupDevLink(link);
+      expect(unlink).not.toHaveBeenCalledWith(link.linkPath);
+    } finally {
+      unlink.mockRestore();
+    }
+    expect((await fs.lstat(link.linkPath)).isDirectory()).toBe(true);
+  });
+
+  it("leaves a marker another session stamped since", async () => {
+    const link: DevLink = await linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" });
+    const foreign = JSON.stringify({ sessionId: "someone-else", pid: process.pid });
+    await fs.writeFile(link.markerPath, foreign);
+    await cleanupDevLink(link);
+    expect(await fs.readFile(link.markerPath, "utf8")).toBe(foreign);
   });
 });
 
@@ -172,13 +386,58 @@ describe("runDev", () => {
     expect(await lstatSafe(path.join(pluginsRoot, "acme.demo"))).toBeNull();
   });
 
-  it("sends plugin.dev.start before plugin.dev.stop with the plugin id", async () => {
+  it("sends plugin.dev.start before plugin.dev.stop, both for this session", async () => {
+    const atStart: { marker: { sessionId?: string } | null } = { marker: null };
+    vi.mocked(sendCliRequest).mockImplementation(async (method) => {
+      if (method === "plugin.dev.start") {
+        atStart.marker = JSON.parse(await fs.readFile(path.join(pluginDir, ".dev-marker"), "utf8"));
+      }
+      return { status: "ok" };
+    });
     const controller = new AbortController();
     controller.abort();
     await runDev({ dir: pluginDir, pluginsRoot, keepAliveSignal: controller.signal });
+
+    // The session Daintree is told about is the one the marker it loads names.
+    const sessionId = atStart.marker?.sessionId;
+    expect(sessionId).toEqual(expect.any(String));
     const calls = vi.mocked(sendCliRequest).mock.calls;
-    expect(calls[0]).toEqual(["plugin.dev.start", { pluginId: "acme.demo" }]);
-    expect(calls[calls.length - 1]).toEqual(["plugin.dev.stop", { pluginId: "acme.demo" }]);
+    expect(calls[0]).toEqual(["plugin.dev.start", { pluginId: "acme.demo", sessionId }]);
+    expect(calls[calls.length - 1]).toEqual([
+      "plugin.dev.stop",
+      { pluginId: "acme.demo", sessionId },
+    ]);
+  });
+
+  it("still unloads and unlinks when the plugin dir moved away mid-session", async () => {
+    const controller = new AbortController();
+    const done = runDev({ dir: pluginDir, pluginsRoot, keepAliveSignal: controller.signal });
+    await vi.waitFor(() => expect(spawnViteWatchMock).toHaveBeenCalled());
+
+    await fs.rename(pluginDir, path.join(tmpDir, "moved"));
+    controller.abort();
+    await done;
+
+    expect(vi.mocked(sendCliRequest).mock.calls.map((c) => c[0])).toContain("plugin.dev.stop");
+    expect(await lstatSafe(path.join(pluginsRoot, "acme.demo"))).toBeNull();
+  });
+
+  it("still unloads when the plugin dir behind a reused alias link moved away", async () => {
+    const alias = path.join(tmpDir, "alias");
+    await fs.symlink(pluginDir, alias);
+    await fs.mkdir(pluginsRoot, { recursive: true });
+    await fs.symlink(alias, path.join(pluginsRoot, "acme.demo"));
+    const controller = new AbortController();
+    const done = runDev({ dir: pluginDir, pluginsRoot, keepAliveSignal: controller.signal });
+    await vi.waitFor(() => expect(spawnViteWatchMock).toHaveBeenCalled());
+
+    await fs.rename(pluginDir, path.join(tmpDir, "moved"));
+    controller.abort();
+    await done;
+
+    expect(vi.mocked(sendCliRequest).mock.calls.map((c) => c[0])).toContain("plugin.dev.stop");
+    // Reused, not created, so it stays.
+    expect(await lstatSafe(path.join(pluginsRoot, "acme.demo"))).not.toBeNull();
   });
 
   it("never asks for metrics with metrics disabled, and stops polling before unloading", async () => {
@@ -297,6 +556,105 @@ describe("runDev", () => {
       expect(first.kill).toHaveBeenCalled();
       expect(vi.mocked(sendCliRequest).mock.calls.map((c) => c[0])).toContain("plugin.dev.stop");
       expect(await lstatSafe(path.join(pluginsRoot, "acme.demo"))).toBeNull();
+    });
+  });
+
+  describe("overlapping sessions for one plugin id", () => {
+    let otherDir: string;
+
+    beforeEach(async () => {
+      otherDir = path.join(tmpDir, "other-worktree");
+      await fs.mkdir(otherDir, { recursive: true });
+      await fs.copyFile(path.join(pluginDir, "plugin.json"), path.join(otherDir, "plugin.json"));
+    });
+
+    /** Run a session up to its keep-alive wait; `stop()` ends it and awaits teardown. */
+    async function startSession(dir: string): Promise<{ stop: () => Promise<void> }> {
+      const controller = new AbortController();
+      const spawnedBefore = spawnViteWatchMock.mock.calls.length;
+      const done = runDev({ dir, pluginsRoot, keepAliveSignal: controller.signal, metrics: false });
+      done.catch(() => {});
+      await vi.waitFor(() => expect(spawnViteWatchMock.mock.calls.length).toBe(spawnedBefore + 1));
+      return {
+        stop: async () => {
+          controller.abort();
+          await done;
+        },
+      };
+    }
+
+    function methodsSince(index: number): string[] {
+      return vi
+        .mocked(sendCliRequest)
+        .mock.calls.slice(index)
+        .map((c) => c[0]);
+    }
+
+    it("an older session's exit leaves a newer session from another directory running", async () => {
+      const older = await startSession(pluginDir);
+      const newer = await startSession(otherDir);
+      const callsBeforeOlderStop = vi.mocked(sendCliRequest).mock.calls.length;
+
+      await older.stop();
+
+      const linkPath = path.join(pluginsRoot, "acme.demo");
+      expect(path.resolve(pluginsRoot, await fs.readlink(linkPath))).toBe(otherDir);
+      await expect(fs.access(path.join(otherDir, ".dev-marker"))).resolves.toBeUndefined();
+      expect(await lstatSafe(path.join(pluginDir, ".dev-marker"))).toBeNull();
+      // The host session now belongs to the newer directory; nothing may unload it.
+      expect(methodsSince(callsBeforeOlderStop)).not.toContain("plugin.dev.stop");
+
+      const callsBeforeNewerStop = vi.mocked(sendCliRequest).mock.calls.length;
+      await newer.stop();
+      expect(methodsSince(callsBeforeNewerStop)).toContain("plugin.dev.stop");
+      expect(await lstatSafe(linkPath)).toBeNull();
+      expect(await lstatSafe(path.join(otherDir, ".dev-marker"))).toBeNull();
+    });
+
+    it("keeps a link a newer session takes over while the older one waits on Daintree", async () => {
+      const older = await startSession(pluginDir);
+      let newerLink: DevLink | null = null;
+      vi.mocked(sendCliRequest).mockImplementation(async (method) => {
+        if (method === "plugin.dev.stop") {
+          newerLink = await linkDevPlugin({
+            pluginDir: otherDir,
+            pluginsRoot,
+            pluginId: "acme.demo",
+          });
+        }
+        return { status: "ok" };
+      });
+
+      await older.stop();
+
+      expect(newerLink).not.toBeNull();
+      const linkPath = path.join(pluginsRoot, "acme.demo");
+      expect(path.resolve(pluginsRoot, await fs.readlink(linkPath))).toBe(otherDir);
+      await expect(fs.access(path.join(otherDir, ".dev-marker"))).resolves.toBeUndefined();
+    });
+
+    it("refuses a second session in the same directory and leaves the first running", async () => {
+      const first = await startSession(pluginDir);
+      const callsBeforeSecond = vi.mocked(sendCliRequest).mock.calls.length;
+      vi.mocked(runVitePlanBuild).mockClear();
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(
+        runDev({ dir: pluginDir, pluginsRoot, keepAliveSignal: controller.signal, metrics: false })
+      ).rejects.toThrow(/already running/);
+
+      // Refused before building, which would rewrite dist/ under the first.
+      expect(runVitePlanBuild).not.toHaveBeenCalled();
+      expect(methodsSince(callsBeforeSecond)).toEqual([]);
+      const linkPath = path.join(pluginsRoot, "acme.demo");
+      expect(path.resolve(pluginsRoot, await fs.readlink(linkPath))).toBe(pluginDir);
+      await expect(fs.access(path.join(pluginDir, ".dev-marker"))).resolves.toBeUndefined();
+
+      await first.stop();
+      expect(methodsSince(callsBeforeSecond)).toContain("plugin.dev.stop");
+      expect(await lstatSafe(linkPath)).toBeNull();
+      expect(await lstatSafe(path.join(pluginDir, ".dev-marker"))).toBeNull();
     });
   });
 
