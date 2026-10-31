@@ -11,6 +11,8 @@ import {
   useState,
 } from "react";
 import { DiffStat } from "@/components/ui/DiffStat";
+import { cn } from "@/lib/utils";
+import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import type {
   CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
@@ -177,6 +179,23 @@ export interface DiffViewerProps {
   renderHunkActions?: (hunk: HunkData, index: number, file: DiffViewerHunkFile) => ReactNode;
   /** Draws the file header's Open button. Defaults to true. */
   openInEditor?: boolean;
+  /** A control before the path in the file header, such as a host's file-list toggle. */
+  headerLeading?: ReactNode;
+  /** Host controls at the end of the file header, after the file's own stats and actions. */
+  headerActions?: ReactNode;
+  /**
+   * Names for the two sides of the comparison, drawn under the file header so
+   * the reader can tell which column (or which marker, in unified) is which
+   * without looking back at wherever the comparison was chosen.
+   */
+  sideLabels?: DiffViewerSideLabels;
+}
+
+export interface DiffViewerSideLabels {
+  /** The old side: removed lines and the left column. */
+  old: { role: string; name: string };
+  /** The new side: added lines and the right column. */
+  new: { role: string; name: string };
 }
 
 /** The file a hunk handed to `renderHunkActions` belongs to, as the patch names it. */
@@ -480,6 +499,9 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
     language,
     renderHunkActions,
     openInEditor = true,
+    headerLeading,
+    headerActions,
+    sideLabels,
   },
   ref
 ) {
@@ -690,13 +712,18 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
           language={language}
           renderHunkActions={renderHunkActions}
           openInEditor={openInEditor}
+          headerLeading={headerLeading}
+          headerActions={headerActions}
+          sideLabels={sideLabels}
         />
       ))}
     </div>
   );
 });
 
-const EXPAND_STEP = 50;
+// The step most diff viewers settle on: enough to show the rest of a short
+// function, small enough that one click never buries the hunk it opened from.
+const EXPAND_STEP = 20;
 const EXPAND_ALL_MAX = 60;
 const INITIAL_VISIBLE_HUNKS = 30;
 const SHOW_MORE_HUNKS_STEP = 60;
@@ -789,6 +816,75 @@ function HunkHeader({ hunk, gapStart, hiddenCount, onExpand, actions }: HunkHead
   );
 }
 
+/** A file header's path: the directory stepped down, the file name at full strength. */
+export function DiffFilePath({ path }: { path: string }) {
+  const slash = path.lastIndexOf("/");
+  return (
+    <TruncatedTooltip content={path}>
+      <span className="min-w-0 flex-1 truncate text-text-primary">
+        {slash === -1 ? (
+          path
+        ) : (
+          <>
+            <span className="text-text-secondary">{path.slice(0, slash + 1)}</span>
+            <span className="text-text-primary">{path.slice(slash + 1)}</span>
+          </>
+        )}
+      </span>
+    </TruncatedTooltip>
+  );
+}
+
+/** Split renders a modify, rename or copy as two columns; an add or delete has one side. */
+function isTwoColumnDiff(diffType: DiffType): boolean {
+  return diffType === "modify" || diffType === "rename" || diffType === "copy";
+}
+
+/**
+ * The comparison's two sides, named. Over a two-column split each name sits
+ * over its own column (the centered split gives each pane exactly half the
+ * width, gutters included, so an even grid lands on the divider); otherwise
+ * both share one line, keyed to the gutter markers that carry the side in
+ * unified view.
+ */
+function DiffSideLabels({ labels, columns }: { labels: DiffViewerSideLabels; columns: boolean }) {
+  const side = (which: "old" | "new") => {
+    const { role, name } = labels[which];
+    return (
+      <span className="flex min-w-0 items-baseline gap-1.5">
+        <span className="shrink-0 font-mono text-text-secondary" aria-hidden="true">
+          {which === "old" ? "\u2212" : "+"}
+        </span>
+        <span className="shrink-0 text-text-secondary">{role}</span>
+        <TruncatedTooltip content={name}>
+          <span className="min-w-0 truncate font-mono text-text-primary">{name}</span>
+        </TruncatedTooltip>
+      </span>
+    );
+  };
+  return (
+    <div
+      data-testid="diff-side-labels"
+      className={cn(
+        "border-b border-border-default bg-surface-canvas text-2xs",
+        columns ? "grid grid-cols-2" : "flex items-center gap-4 px-3 py-1"
+      )}
+    >
+      {columns ? (
+        <>
+          <div className="min-w-0 px-3 py-1">{side("old")}</div>
+          <div className="min-w-0 border-l border-border-default px-3 py-1">{side("new")}</div>
+        </>
+      ) : (
+        <>
+          {side("old")}
+          {side("new")}
+        </>
+      )}
+    </div>
+  );
+}
+
 interface FileDiffProps {
   file: ReturnType<typeof parseDiff>[0];
   /** Raw unified-diff text for just this file, when sliceable from the input */
@@ -811,6 +907,9 @@ interface FileDiffProps {
   language?: string;
   renderHunkActions?: (hunk: HunkData, index: number, file: DiffViewerHunkFile) => ReactNode;
   openInEditor: boolean;
+  headerLeading?: ReactNode;
+  headerActions?: ReactNode;
+  sideLabels?: DiffViewerSideLabels;
 }
 
 const EMPTY_NOTES: readonly DiffNote[] = [];
@@ -834,6 +933,9 @@ function FileDiff({
   language: languageOverride,
   renderHunkActions,
   openInEditor,
+  headerLeading,
+  headerActions,
+  sideLabels,
 }: FileDiffProps) {
   const relPath = getFilePath(file);
   const language = useMemo(() => {
@@ -1157,10 +1259,7 @@ function FileDiff({
   // two-column tables — add/delete files render a single full-width side
   // ("monotonous" in react-diff-view), and wrap mode has no horizontal
   // overflow at all.
-  const isCenteredSplit =
-    viewType === "split" &&
-    !wrapLines &&
-    (diffType === "modify" || diffType === "rename" || diffType === "copy");
+  const isCenteredSplit = viewType === "split" && !wrapLines && isTwoColumnDiff(diffType);
 
   // Longest rendered line in monospace columns, sizing the shared scrollbar's
   // range (published as --diff-max-line in ch units).
@@ -1405,6 +1504,9 @@ function FileDiff({
     const headers = region.querySelectorAll<HTMLElement>(".diff-hunk-header-inner");
     const header = index === -1 ? headers[headers.length - 1] : headers[index];
     const target = header?.querySelector<HTMLElement>("button") ?? region;
+    // A hand-off, not a move the user made: the expander they pressed is gone,
+    // and its replacement's tooltip must not open over the code they revealed.
+    armTooltipFocusSuppression();
     target.focus({ preventScroll: true });
   }, [visibleHunks]);
 
@@ -1577,77 +1679,81 @@ function FileDiff({
   return (
     <div className="mb-2" style={fileStyle} data-diff-file="">
       {relPath && (
-        <div className="sticky top-0 z-10 flex items-center justify-between px-3 py-1.5 bg-surface-sidebar border-b border-border-default text-xs font-mono">
-          <TruncatedTooltip content={relPath}>
-            <span className="truncate text-text-primary">
-              {relPath.includes("/") ? (
-                <>
-                  <span className="text-text-secondary">
-                    {relPath.slice(0, relPath.lastIndexOf("/") + 1)}
-                  </span>
-                  <span className="text-text-primary">
-                    {relPath.slice(relPath.lastIndexOf("/") + 1)}
-                  </span>
-                </>
-              ) : (
-                relPath
+        <div className="sticky top-0 z-10">
+          <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-surface-sidebar border-b border-border-default text-xs font-mono">
+            {headerLeading != null && headerLeading !== false && (
+              <div className="-ml-1.5 flex shrink-0 items-center">{headerLeading}</div>
+            )}
+            <DiffFilePath path={relPath} />
+            {langLoadFailed && (
+              <span
+                className="text-xs text-text-muted"
+                role="status"
+                data-testid="diff-plain-text-badge"
+              >
+                Plain text
+              </span>
+            )}
+            {!langLoadFailed && isLargeRender && !isCollapsed && (
+              <span className="text-xs text-text-muted" data-testid="diff-highlight-off-badge">
+                {fullFile ? "Highlighting off for large file" : "Highlighting off for large diff"}
+              </span>
+            )}
+            <div className="flex items-center gap-2 shrink-0 text-text-secondary">
+              <DiffStat insertions={additions} deletions={deletions} />
+              {notesEnabled && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      onClick={() => {
+                        rememberDraftOpener();
+                        setNoteDraft({ kind: "file" });
+                      }}
+                      aria-label="Add file note"
+                      data-note-file-add=""
+                      // The copy beside it is a CopyButton; one glyph size per row.
+                      className="shrink-0 [&_svg]:size-3.5"
+                    >
+                      <MessageSquarePlus aria-hidden="true" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Add file note</TooltipContent>
+                </Tooltip>
               )}
-            </span>
-          </TruncatedTooltip>
-          {langLoadFailed && (
-            <span
-              className="text-xs text-text-muted"
-              role="status"
-              data-testid="diff-plain-text-badge"
-            >
-              Plain text
-            </span>
-          )}
-          {!langLoadFailed && isLargeRender && !isCollapsed && (
-            <span className="text-xs text-text-muted" data-testid="diff-highlight-off-badge">
-              {fullFile ? "Highlighting off for large file" : "Highlighting off for large diff"}
-            </span>
-          )}
-          <div className="flex items-center gap-2 shrink-0 text-text-secondary">
-            <DiffStat insertions={additions} deletions={deletions} />
-            {notesEnabled && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    onClick={() => {
-                      rememberDraftOpener();
-                      setNoteDraft({ kind: "file" });
-                    }}
-                    aria-label="Add file note"
-                    data-note-file-add=""
-                    // The copy beside it is a CopyButton; one glyph size per row.
-                    className="shrink-0 [&_svg]:size-3.5"
-                  >
-                    <MessageSquarePlus aria-hidden="true" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Add file note</TooltipContent>
-              </Tooltip>
-            )}
-            {rawText && (
-              <CopyButton text={rawText} aria-label="Copy file diff" tooltipSide="bottom" />
-            )}
-            {absolutePath && openInEditor && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="ghost" size="xs" onClick={handleOpenInEditor}>
-                    <ExternalLink />
-                    Open
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  Open in editor{firstHunkLine ? ` at line ${firstHunkLine}` : ""}
-                </TooltipContent>
-              </Tooltip>
-            )}
+              {rawText && (
+                <CopyButton text={rawText} aria-label="Copy file diff" tooltipSide="bottom" />
+              )}
+              {absolutePath && openInEditor && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="xs" onClick={handleOpenInEditor}>
+                      <ExternalLink />
+                      Open
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    Open in editor{firstHunkLine ? ` at line ${firstHunkLine}` : ""}
+                  </TooltipContent>
+                </Tooltip>
+              )}
+              {/* Last, against the edge: the file's own stat and actions change
+                  width from file to file, and a host's stepper placed before
+                  them would slide out from under the pointer on every step. */}
+              {headerActions != null && headerActions !== false && (
+                <div className="flex items-center gap-2 border-l border-border-default pl-2 font-sans">
+                  {headerActions}
+                </div>
+              )}
+            </div>
           </div>
+          {sideLabels && (
+            <DiffSideLabels
+              labels={sideLabels}
+              columns={viewType === "split" && isTwoColumnDiff(diffType) && !isCollapsed}
+            />
+          )}
         </div>
       )}
       {notesEnabled && (detachedNotes.length > 0 || draftPlacement?.anchor.kind === "file") && (

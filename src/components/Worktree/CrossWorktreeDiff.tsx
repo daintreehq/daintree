@@ -5,10 +5,20 @@ import {
   useState,
   useCallback,
   useMemo,
+  useId,
   type ReactNode,
 } from "react";
 import { DiffStat } from "@/components/ui/DiffStat";
-import { GitCompare, ChevronLeft, ChevronRight, Folder, RefreshCw, WrapText } from "lucide-react";
+import {
+  GitCompare,
+  ChevronLeft,
+  ChevronRight,
+  Folder,
+  PanelLeftClose,
+  PanelLeftOpen,
+  RefreshCw,
+  WrapText,
+} from "lucide-react";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -22,13 +32,21 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import type { GitStatus } from "@shared/types";
 import type { CrossWorktreeDiffResult, CrossWorktreeFile } from "@shared/types/ipc/git";
 import { basename, dirname } from "@shared/utils/path";
-import { DiffViewer } from "./DiffViewer";
+import { DiffFilePath, DiffViewer, type DiffViewerSideLabels } from "./DiffViewer";
 import { WorktreeSelector } from "./WorktreeSelector";
-import { sortWorktreesForComparison, worktreeOptionLabel } from "./crossWorktreeDiffUtils";
+import {
+  WHOLE_FILE_CONTEXT_LINES,
+  committedSourceFromFullDiff,
+  sortWorktreesForComparison,
+  worktreeOptionLabel,
+} from "./crossWorktreeDiffUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import { usePreferencesStore } from "@/store/preferencesStore";
+import { usePreferencesStore, type DiffViewType } from "@/store/preferencesStore";
+import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
+import { useToolbarRoving } from "@/hooks/useToolbarRoving";
+import { diffFontStyle } from "./diffFontSize";
 import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import { DIFF_STATUS_CONFIG, formatDiffDir } from "@/components/FileViewer/diffChangeSet";
 import { isProseFilePath } from "@/components/FileViewer/isProseFile";
@@ -224,12 +242,75 @@ function ChangeSetSummary({ files }: { files: CrossWorktreeFile[] }) {
   );
 }
 
+/**
+ * Below this the canvas renders unified whatever the saved layout says: two
+ * columns of code under ~450px each clip most real lines. The breakpoint is VS
+ * Code's (`diffEditor.renderSideBySideInlineBreakpoint`), and like VS Code the
+ * fallback never overwrites the preference, so split returns with the room.
+ */
+const SPLIT_MIN_WIDTH = 900;
+
+/**
+ * Width of an element, tracked across resizes; null until first measured.
+ * Takes the element itself rather than a ref: the dialog mounts its body only
+ * while open, so a ref read once at mount would never see the canvas.
+ */
+function useElementWidth(element: HTMLElement | null): number | null {
+  const [width, setWidth] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    if (!element) return;
+    const measure = () => {
+      const measured = element.getBoundingClientRect().width;
+      // Zero is a hidden or not-yet-laid-out box, not a narrow one.
+      if (measured > 0) setWidth(Math.round(measured));
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [element]);
+  return width;
+}
+
+/**
+ * The comparison's own controls, carried in the diff's sticky file header
+ * rather than a row of their own: one tab stop with the arrow keys between
+ * them, the APG toolbar pattern the separate row had.
+ */
+function ComparisonControls({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const onKeyDown = useToolbarRoving(ref);
+  return (
+    <div
+      ref={ref}
+      role="toolbar"
+      aria-label="Comparison controls"
+      data-comparison-controls=""
+      onKeyDown={onKeyDown}
+      className="flex items-center gap-1.5"
+    >
+      {children}
+    </div>
+  );
+}
+
+/** What the viewer renders as a message rather than a diff, with no file header. */
+const DIFF_SENTINELS: ReadonlySet<string> = new Set([
+  "",
+  "NO_CHANGES",
+  "BINARY_FILE",
+  "FILE_TOO_LARGE",
+  "ERROR",
+]);
+
 /** Centres a canvas-scale empty state in the diff pane. */
 function CanvasState({ children }: { children: ReactNode }) {
   return <div className="flex h-full w-full items-center justify-center p-6">{children}</div>;
 }
 
 export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossWorktreeDiffProps) {
+  const shelfId = useId();
   const worktreeMap = useWorktreeStore((state) => state.worktrees);
   const worktrees = useMemo(() => sortWorktreesForComparison(worktreeMap.values()), [worktreeMap]);
 
@@ -242,6 +323,8 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
   const [fileDiff, setFileDiff] = useState<string | null>(null);
   const [fileDiffLoading, setFileDiffLoading] = useState(false);
   const [fileDiffError, setFileDiffError] = useState(false);
+  // The compare side's committed text for the open file, read with its diff.
+  const [fileSource, setFileSource] = useState<string | null>(null);
 
   // Request tokens to guard stale async responses
   const compareTokenRef = useRef(0);
@@ -263,6 +346,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
       setResult(null);
       setSelectedFile(null);
       setFileDiff(null);
+      setFileSource(null);
       setFileDiffError(false);
       setError(null);
       setLoading(false);
@@ -292,6 +376,11 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
   const ignoreWhitespace = usePreferencesStore((s) => s.diffIgnoreWhitespace);
   const diffWrapLines = usePreferencesStore((s) => s.diffWrapLines);
   const setDiffWrapLines = usePreferencesStore((s) => s.setDiffWrapLines);
+  const diffViewType = usePreferencesStore((s) => s.diffViewType);
+  const setDiffViewType = usePreferencesStore((s) => s.setDiffViewType);
+  const diffShowFileList = usePreferencesStore((s) => s.diffShowFileList);
+  const setDiffShowFileList = usePreferencesStore((s) => s.setDiffShowFileList);
+  const diffFontSize = usePreferencesStore((s) => s.diffFontSize);
 
   // A refresh keeps the diff on screen until the new one lands and ignores
   // failures, so a background update never swaps what is being read for a
@@ -307,33 +396,60 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
       setSelectedFile(file);
       if (!refresh) {
         setFileDiff(null);
+        setFileSource(null);
         setFileDiffError(false);
         setFileDiffLoading(true);
       }
 
+      // Hidden context comes from the same refs as the patch, asked for in the
+      // same breath: a whole-file diff carries the compare side's committed
+      // text. Only a file present on both sides has gaps to fill, and a failed
+      // read costs the expanders, never the diff.
+      const expandable = file.status === "M" || file.status === "R" || file.status === "C";
+      const sourceRequest = expandable
+        ? window.electron.git
+            .compareWorktrees(
+              leftPath,
+              leftBranch,
+              rightBranch,
+              file.path,
+              undefined,
+              undefined,
+              WHOLE_FILE_CONTEXT_LINES
+            )
+            .then((full) => (typeof full === "string" ? committedSourceFromFullDiff(full) : null))
+            .catch(() => null)
+        : Promise.resolve(null);
+
       try {
-        const diff = await window.electron.git.compareWorktrees(
-          leftPath,
-          leftBranch,
-          rightBranch,
-          file.path,
-          undefined,
-          ignoreWhitespace
-        );
+        const [diff, source] = await Promise.all([
+          window.electron.git.compareWorktrees(
+            leftPath,
+            leftBranch,
+            rightBranch,
+            file.path,
+            undefined,
+            ignoreWhitespace
+          ),
+          sourceRequest,
+        ]);
         if (token !== fileDiffTokenRef.current) return; // stale response
         // Anything but diff text is a failure the user can retry, not a blank pane.
         const ok = typeof diff === "string";
         if (ok) {
           setFileDiff(diff);
+          setFileSource(source);
           setFileDiffError(false);
         } else if (!refresh) {
           setFileDiff(null);
+          setFileSource(null);
           setFileDiffError(true);
         }
       } catch {
         if (token !== fileDiffTokenRef.current) return;
         if (!refresh) {
           setFileDiff(null);
+          setFileSource(null);
           setFileDiffError(true);
         }
       } finally {
@@ -364,6 +480,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
         setResult(null);
         setSelectedFile(null);
         setFileDiff(null);
+        setFileSource(null);
         setFileDiffError(false);
         setFileDiffLoading(false);
       }
@@ -379,6 +496,12 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
         }
         resultKeyRef.current = comparisonKey;
         setResult(res);
+        if (!refresh) {
+          // Land on the first file in the order the shelf draws it, so the
+          // canvas opens on a diff to read rather than a prompt to pick one.
+          const first = groupComparisonFiles(res.files)[0]?.files[0];
+          if (first) void fetchFileDiff(first);
+        }
         if (refresh) {
           const open = selectedFileRef.current;
           const kept = open ? res.files.find((f) => isSameFile(f, open)) : undefined;
@@ -388,6 +511,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
             fileDiffTokenRef.current++;
             setSelectedFile(null);
             setFileDiff(null);
+            setFileSource(null);
             setFileDiffError(false);
             setFileDiffLoading(false);
           }
@@ -434,6 +558,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
     return files.findIndex((f) => isSameFile(f, selectedFile));
   }, [files, selectedFile]);
 
+  const refocusLabelRef = useRef<string | null>(null);
   const navigateFile = useCallback(
     (delta: -1 | 1) => {
       if (!files || files.length === 0) return;
@@ -445,6 +570,13 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
             : undefined
           : files[selectedFileIndex + delta];
       if (!target) return;
+      // Stepping from a header control unmounts it with the diff it sat on;
+      // remember which one so focus can follow it into the next header.
+      const active = document.activeElement;
+      refocusLabelRef.current =
+        active instanceof HTMLElement && active.closest("[data-comparison-controls]")
+          ? active.getAttribute("aria-label")
+          : null;
       void fetchFileDiff(target);
       // The full path: two files can share a basename, and the list tells
       // them apart by directory band, which a screen reader never hears.
@@ -498,8 +630,133 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
   const listReady = !loading && !showListSkeleton;
   const diffReady = !fileDiffLoading && !showDiffSkeleton;
 
+  const [canvasElement, setCanvasElement] = useState<HTMLDivElement | null>(null);
+  const canvasWidth = useElementWidth(canvasElement);
+  const splitFits = canvasWidth === null || canvasWidth >= SPLIT_MIN_WIDTH;
+  const effectiveViewType: DiffViewType =
+    diffViewType === "split" && splitFits ? "split" : "unified";
+
+  // The shelf can only be put away while a file is open: with nothing on the
+  // canvas, the list is the only thing to act on.
+  const hasFiles = listReady && result !== null && result.files.length > 0;
+  const showShelf =
+    (showListSkeleton && diffShowFileList) || (hasFiles && (diffShowFileList || !selectedFile));
+
+  const rightPath = rightWorktree?.path;
+
+  const sideLabels = useMemo<DiffViewerSideLabels | undefined>(
+    () =>
+      leftBranch && rightBranch
+        ? {
+            old: { role: "Base", name: leftBranch },
+            new: { role: "Compare", name: rightBranch },
+          }
+        : undefined,
+    [leftBranch, rightBranch]
+  );
+
   const baseLabel = leftWorktree ? worktreeOptionLabel(leftWorktree) : null;
   const compareLabel = rightWorktree ? worktreeOptionLabel(rightWorktree) : null;
+
+  const fileListToggle = (
+    <FileViewerToolbar.IconButton
+      label="Toggle file list"
+      expanded={diffShowFileList}
+      controls={showShelf ? shelfId : undefined}
+      sidebarToggle
+      onClick={() => setDiffShowFileList(!diffShowFileList)}
+    >
+      {diffShowFileList ? (
+        <PanelLeftClose className={TOOLBAR_ICON_CLASS} />
+      ) : (
+        <PanelLeftOpen className={TOOLBAR_ICON_CLASS} />
+      )}
+    </FileViewerToolbar.IconButton>
+  );
+
+  const comparisonControls = files ? (
+    <ComparisonControls>
+      <SegmentedRadioGroup<DiffViewType>
+        aria-label="Diff layout"
+        options={[
+          { value: "unified", label: "Unified" },
+          {
+            value: "split",
+            label: "Split",
+            disabled: !splitFits,
+            tooltip: splitFits ? undefined : "Needs a wider window",
+          },
+        ]}
+        value={effectiveViewType}
+        onChange={setDiffViewType}
+        density="compact"
+      />
+      {files.length > 1 && (
+        <div role="group" aria-label="File navigation" className="flex items-center gap-1">
+          <FileViewerToolbar.IconButton
+            label="Previous file"
+            tooltip="Previous file ([)"
+            disabled={selectedFileIndex <= 0}
+            onClick={() => navigateFile(-1)}
+          >
+            <ChevronLeft className={TOOLBAR_ICON_CLASS} />
+          </FileViewerToolbar.IconButton>
+          <span
+            data-testid="cross-worktree-file-position"
+            className="text-xs text-text-secondary tabular-nums"
+          >
+            {selectedFileIndex + 1} of {files.length}
+          </span>
+          <FileViewerToolbar.IconButton
+            label="Next file"
+            tooltip="Next file (])"
+            disabled={selectedFileIndex >= files.length - 1}
+            onClick={() => navigateFile(1)}
+          >
+            <ChevronRight className={TOOLBAR_ICON_CLASS} />
+          </FileViewerToolbar.IconButton>
+        </div>
+      )}
+      <FileViewerToolbar.IconButton
+        label="Wrap long lines"
+        pressed={effectiveWrapLines}
+        onClick={() => setDiffWrapLines(!effectiveWrapLines)}
+      >
+        <WrapText className={TOOLBAR_ICON_CLASS} />
+      </FileViewerToolbar.IconButton>
+    </ComparisonControls>
+  ) : null;
+
+  // The diff's own header carries these once it renders. Until then (loading,
+  // a failed read, a binary or oversized file) this row stands in for it, so
+  // the way to another file never disappears with the one that failed.
+  const diffHeaderShown =
+    selectedFile !== null &&
+    diffReady &&
+    !fileDiffError &&
+    fileDiff !== null &&
+    !DIFF_SENTINELS.has(fileDiff);
+
+  // The control a step was taken from is replaced twice: by the stand-in row
+  // while the next file loads, then by the new diff's own header. Each time
+  // focus drops to the body, hand it to the control with the same name.
+  useLayoutEffect(() => {
+    const label = refocusLabelRef.current;
+    if (!label || !canvasElement) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) {
+      // Moved on by the user, or already landed in the diff's own header.
+      if (!active.closest("[data-comparison-controls]") || diffHeaderShown) {
+        refocusLabelRef.current = null;
+      }
+      return;
+    }
+    const target = Array.from(
+      canvasElement.querySelectorAll<HTMLElement>("[data-comparison-controls] [aria-label]")
+    ).find((element) => element.getAttribute("aria-label") === label);
+    target?.focus({ preventScroll: true });
+    if (diffHeaderShown) refocusLabelRef.current = null;
+  }, [canvasElement, diffHeaderShown, selectedFile, fileDiff]);
 
   let canvas: ReactNode = null;
   if (!leftId || !rightId) {
@@ -605,90 +862,59 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
       </div>
 
       <div className="flex flex-1 min-h-0">
-        <div
-          className="flex w-60 shrink-0 flex-col border-r border-border-default bg-surface-sidebar"
-          data-testid="cross-worktree-file-shelf"
-        >
-          {listReady && result && result.files.length > 0 && (
-            <div className="shrink-0 border-b border-border-default px-3.5 py-2">
-              <ChangeSetSummary files={result.files} />
-            </div>
-          )}
+        {showShelf && (
           <div
-            ref={listRef}
-            onKeyDown={roving.onKeyDown}
-            className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-1.5"
+            id={shelfId}
+            className="flex w-60 shrink-0 flex-col border-r border-border-default bg-surface-sidebar"
+            data-testid="cross-worktree-file-shelf"
           >
-            {showListSkeleton && (
-              <Skeleton label="Comparing files" className="flex flex-col gap-1 py-1">
-                {Array.from({ length: 8 }).map((_, i) => (
-                  <div key={i} className="flex items-center gap-2 px-1.5 py-1">
-                    <SkeletonBone className="w-3 h-3 shrink-0" />
-                    <SkeletonBone className={cn("h-3", i % 2 === 0 ? "w-32" : "w-24")} />
-                  </div>
-                ))}
-              </Skeleton>
+            {listReady && result && result.files.length > 0 && (
+              <div className="shrink-0 border-b border-border-default px-3.5 py-2">
+                <ChangeSetSummary files={result.files} />
+              </div>
             )}
-            {listReady &&
-              groups?.map((group) => (
-                <FileGroupSection
-                  key={group.dir || "(root)"}
-                  group={group}
-                  selectedFile={selectedFile}
-                  onOpen={(file) => void fetchFileDiff(file)}
-                  roving={roving}
-                />
-              ))}
+            <div
+              ref={listRef}
+              onKeyDown={roving.onKeyDown}
+              className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-1.5"
+            >
+              {showListSkeleton && (
+                <Skeleton label="Comparing files" className="flex flex-col gap-1 py-1">
+                  {Array.from({ length: 8 }).map((_, i) => (
+                    <div key={i} className="flex items-center gap-2 px-1.5 py-1">
+                      <SkeletonBone className="w-3 h-3 shrink-0" />
+                      <SkeletonBone className={cn("h-3", i % 2 === 0 ? "w-32" : "w-24")} />
+                    </div>
+                  ))}
+                </Skeleton>
+              )}
+              {listReady &&
+                groups?.map((group) => (
+                  <FileGroupSection
+                    key={group.dir || "(root)"}
+                    group={group}
+                    selectedFile={selectedFile}
+                    onOpen={(file) => void fetchFileDiff(file)}
+                    roving={roving}
+                  />
+                ))}
+            </div>
           </div>
-        </div>
+        )}
 
-        <div className="flex-1 min-w-0 flex flex-col overflow-hidden bg-surface-canvas">
-          {/* One row for every selected file, not just multi-file comparisons:
-              wrap applies to a single-file diff exactly as much, and gating the
-              whole row on the file count is what left this surface with no
-              reachable toggle at all (#12170). Only stepping is count-gated. */}
-          {selectedFile && files && (
-            <FileViewerToolbar.Root label="Comparison controls">
-              <FileViewerToolbar.Actions>
-                {files.length > 1 && (
-                  <div
-                    role="group"
-                    aria-label="File navigation"
-                    className="flex items-center gap-1"
-                  >
-                    <FileViewerToolbar.IconButton
-                      label="Previous file"
-                      tooltip="Previous file ([)"
-                      disabled={selectedFileIndex <= 0}
-                      onClick={() => navigateFile(-1)}
-                    >
-                      <ChevronLeft className={TOOLBAR_ICON_CLASS} />
-                    </FileViewerToolbar.IconButton>
-                    <span
-                      data-testid="cross-worktree-file-position"
-                      className="text-xs text-text-secondary tabular-nums"
-                    >
-                      {selectedFileIndex + 1} of {files.length}
-                    </span>
-                    <FileViewerToolbar.IconButton
-                      label="Next file"
-                      tooltip="Next file (])"
-                      disabled={selectedFileIndex >= files.length - 1}
-                      onClick={() => navigateFile(1)}
-                    >
-                      <ChevronRight className={TOOLBAR_ICON_CLASS} />
-                    </FileViewerToolbar.IconButton>
-                  </div>
-                )}
-                <FileViewerToolbar.IconButton
-                  label="Wrap long lines"
-                  pressed={effectiveWrapLines}
-                  onClick={() => setDiffWrapLines(!effectiveWrapLines)}
-                >
-                  <WrapText className={TOOLBAR_ICON_CLASS} />
-                </FileViewerToolbar.IconButton>
-              </FileViewerToolbar.Actions>
-            </FileViewerToolbar.Root>
+        <div
+          ref={setCanvasElement}
+          className="flex-1 min-w-0 flex flex-col overflow-hidden bg-surface-canvas"
+          style={diffFontStyle(diffFontSize)}
+        >
+          {selectedFile && !diffHeaderShown && (
+            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border-default bg-surface-sidebar px-3 py-1.5 font-mono text-xs">
+              <div className="-ml-1.5 flex shrink-0 items-center">{fileListToggle}</div>
+              <DiffFilePath path={selectedFile.path} />
+              <div className="flex shrink-0 items-center gap-2 font-sans text-text-secondary">
+                {comparisonControls}
+              </div>
+            </div>
           )}
           <div className="flex-1 overflow-auto diff-scroll-root">
             {canvas && <CanvasState>{canvas}</CanvasState>}
@@ -700,18 +926,19 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                 </Skeleton>
               </div>
             )}
-            {selectedFile && diffReady && !fileDiffError && fileDiff !== null && (
-              // Split view is required here — the inline cross-worktree split-pane
-              // layout depends on it, so this is not driven by the persisted
-              // diffViewType preference. rootPath is the RIGHT worktree's checkout:
-              // the new side of the A..B comparison, i.e. the file the user is
-              // inspecting.
+            {selectedFile && diffReady && !fileDiffError && fileDiff !== null && files && (
+              // rootPath is the compare worktree's checkout: the new side of the
+              // base..compare comparison, i.e. the file the user is inspecting.
               <DiffViewer
                 diff={fileDiff}
-                viewType="split"
-                rootPath={rightWorktree?.path}
+                viewType={effectiveViewType}
+                rootPath={rightPath}
+                source={fileSource}
                 wrapLines={effectiveWrapLines}
                 onRetry={() => void fetchFileDiff(selectedFile)}
+                sideLabels={sideLabels}
+                headerLeading={fileListToggle}
+                headerActions={comparisonControls}
               />
             )}
           </div>

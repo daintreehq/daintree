@@ -659,7 +659,8 @@ export class GitService {
     branch2: string,
     filePath?: string,
     useMergeBase?: boolean,
-    ignoreWhitespace?: boolean
+    ignoreWhitespace?: boolean,
+    contextLines?: number
   ): Promise<CrossWorktreeDiffResult | string> {
     // Validate before the equality fast-path so an invalid argv-shaped name
     // is rejected unconditionally — not silently accepted when both inputs
@@ -701,6 +702,7 @@ export class GitService {
             // submodule's own files (#12309).
             "--submodule=short",
             ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
+            ...(contextLines !== undefined ? [`--unified=${contextLines}`] : []),
             "--end-of-options",
             range,
             "--",

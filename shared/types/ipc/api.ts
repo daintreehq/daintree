@@ -1269,7 +1269,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       branch2: string,
       filePath?: string,
       useMergeBase?: boolean,
-      ignoreWhitespace?: boolean
+      ignoreWhitespace?: boolean,
+      contextLines?: number
     ): Promise<import("./git.js").CrossWorktreeDiffResult | string>;
     getUsername(cwd: string): Promise<string | null>;
     getWorkingDiff(cwd: string, type: "unstaged" | "staged" | "head"): Promise<string>;

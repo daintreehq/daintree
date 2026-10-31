@@ -75,6 +75,40 @@ function write(root: string, rel: string, content: string): void {
 }
 
 /**
+ * A long module whose changes sit far apart, so the hunk headers carry both
+ * kinds of gap: one too long to expand in a single step, one short enough to.
+ */
+function pricingSource(changed: boolean): string {
+  const lines: string[] = ['import { format } from "../utils/money";', ""];
+  for (let i = 1; i <= 60; i++) {
+    lines.push(`export function rule${i}(subtotal: number): number {`);
+    if (changed && (i === 4 || i === 33 || i === 41)) {
+      lines.push(`  // Rounded to the nearest cent before the rule applies (rule ${i}).`);
+      lines.push(`  const rounded = Math.round(subtotal * 100) / 100;`);
+      lines.push(`  return rounded > ${i * 10} ? rounded * 0.9${i % 10} : rounded;`);
+    } else {
+      lines.push(`  return subtotal > ${i * 10} ? subtotal * 0.9${i % 10} : subtotal;`);
+    }
+    lines.push("}");
+    lines.push("");
+  }
+  if (changed) {
+    lines.push("export function describeDiscount(rule: number, subtotal: number): string {");
+    lines.push(
+      "  return `Rule ${rule} took ${format(subtotal)} down to ${format(applyRule(rule, subtotal))}`;"
+    );
+    lines.push("}");
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
+/** Enough feature modules to make the list a change set rather than a handful. */
+const FEATURE_MODULES = ["account", "catalog", "search", "wishlist", "reviews"].flatMap((area) =>
+  ["api", "store", "view", "hooks"].map((part) => `src/features/${area}/${area}-${part}.ts`)
+);
+
+/**
  * `main` plus three worktrees: one with a committed change set that exercises
  * every file-row variant, one sitting on main's exact commit (the "no
  * differences" state), and one with a hostile branch name for the selectors.
@@ -122,6 +156,10 @@ function createFixtureRepo(): { dir: string; wtRoot: string; cleanup: () => void
   );
   write(dir, "src/legacy/paypal-button.ts", "export const PAYPAL_ENABLED = true;\n");
   write(dir, "src/utils/money.ts", "export const format = (n: number) => `$${n}`;\n");
+  write(dir, "src/checkout/pricing.ts", pricingSource(false));
+  FEATURE_MODULES.slice(0, 12).forEach((rel, i) =>
+    write(dir, rel, `export const ${path.basename(rel, ".ts").replace(/-/g, "_")} = ${i};\n`)
+  );
   git("add -A", dir);
   git('commit -m "initial commit"', dir);
 
@@ -203,6 +241,14 @@ function createFixtureRepo(): { dir: string; wtRoot: string; cleanup: () => void
       "",
     ].join("\n")
   );
+  write(feature, "src/checkout/pricing.ts", pricingSource(true));
+  FEATURE_MODULES.forEach((rel, i) =>
+    write(
+      feature,
+      rel,
+      `export const ${path.basename(rel, ".ts").replace(/-/g, "_")} = ${i + 100};\nexport const VERSION = 2;\n`
+    )
+  );
   rmSync(path.join(feature, "src/legacy/paypal-button.ts"));
   git("mv src/utils/money.ts src/utils/currency.ts", feature);
   write(
@@ -250,6 +296,27 @@ async function snap(page: Page, slug: string, whole = false): Promise<void> {
     await panel(page).screenshot({ path: file, type: "png" });
   }
   written.push(path.basename(file));
+}
+
+async function setWindowSize(app: AppContext["app"], width: number, height: number) {
+  await app.evaluate(
+    ({ BrowserWindow }, size) => {
+      const win = BrowserWindow.getAllWindows()[0];
+      if (win) win.setSize(size.width, size.height);
+    },
+    { width, height }
+  );
+}
+
+/** Scrolls the diff canvas to a fraction of its height, the mid-read position. */
+async function scrollDiff(page: Page, fraction: number): Promise<void> {
+  await dialog(page)
+    .locator(".diff-scroll-root")
+    .first()
+    .evaluate((el, f) => {
+      el.scrollTop = Math.round((el.scrollHeight - el.clientHeight) * f);
+    }, fraction);
+  await settle(page, 600);
 }
 
 const ONLY = (process.env.DAINTREE_SHOT_ONLY ?? "").split(",").filter(Boolean);
@@ -309,16 +376,11 @@ async function closeDialog(page: Page): Promise<void> {
 
 /** Picks the compare side by the branch its option names. */
 async function pickCompare(page: Page, branch: string): Promise<void> {
-  const selects = dialog(page).locator("select");
-  const target = selects.nth(1);
-  const value = await target.evaluate((el, b) => {
-    const opt = Array.from((el as HTMLSelectElement).options).find((o) =>
-      o.textContent?.includes(b)
-    );
-    return opt?.value ?? "";
-  }, branch);
-  if (!value) throw new Error(`no compare option for ${branch}`);
-  await target.selectOption(value);
+  // The pickers are Radix selects: open the Compare trigger, click the option.
+  await dialog(page).getByRole("combobox", { name: "Compare" }).click();
+  const option = page.getByRole("option").filter({ hasText: branch }).first();
+  await option.waitFor({ state: "visible", timeout: 5000 });
+  await option.click();
   await settle(page, 1500);
 }
 
@@ -435,7 +497,66 @@ test("cross-worktree compare dialog review — every state", async () => {
       await snap(page, "80-focus-row");
     });
 
-    // 9. Forced colors — status letters and counts lean on colour.
+    // 9. A long file with far-apart changes: the hunk headers and their gaps.
+    await step("long-file", 2, async () => {
+      await openDialog(page);
+      await pickCompare(page, WT_FEATURE);
+      await openFile(page, "pricing\\.ts");
+      await snap(page, "a0-long-file");
+      await scrollDiff(page, 0.6);
+      await snap(page, "a1-long-file-mid-read");
+    });
+
+    // 9b. Hidden context revealed from a hunk header, and the shelf put away.
+    await step("context", 2, async () => {
+      await openDialog(page);
+      await pickCompare(page, WT_FEATURE);
+      await openFile(page, "pricing\\.ts");
+      const expander = dialog(page)
+        .locator(".diff-hunk-header-expanders button")
+        .filter({ hasText: /Expand (\d+ lines|down)/ })
+        .first();
+      await expander.waitFor({ state: "visible", timeout: 8000 });
+      await expander.click();
+      await settle(page, 800);
+      await snap(page, "a2-long-file-expanded");
+      await dialog(page).getByRole("button", { name: "Toggle file list" }).click();
+      await settle(page, 600);
+      await snap(page, "a3-shelf-hidden");
+      // The preference persists; put the shelf back for the states after this.
+      await dialog(page).getByRole("button", { name: "Toggle file list" }).click();
+    });
+
+    // 9c. Stepping from the header's Next button with the keyboard: focus has
+    //     to come back to Next in the next file's header.
+    await step("step-focus", 1, async () => {
+      await openDialog(page);
+      await pickCompare(page, WT_FEATURE);
+      await openFile(page, "pricing\\.ts");
+      await dialog(page).getByRole("button", { name: "Next file" }).first().focus();
+      await page.keyboard.press("Enter");
+      await settle(page, 1500);
+      const focused = await page.evaluate(() => document.activeElement?.getAttribute("aria-label"));
+      if (focused !== "Next file") throw new Error(`focus landed on ${focused ?? "nothing"}`);
+      await snap(page, "a4-step-focus");
+    });
+
+    // 10. A narrow window: the shelf's fixed width against a smaller canvas.
+    await step("narrow", 2, async () => {
+      await setWindowSize(ctx!.app, 1100, 760);
+      await settle(page, 800);
+      await openDialog(page);
+      await pickCompare(page, WT_FEATURE);
+      await openFile(page, "pricing\\.ts");
+      await snap(page, "b0-narrow-long-file", true);
+      await openFile(page, "submit\\.ts");
+      await snap(page, "b1-narrow-code-diff", true);
+      await closeDialog(page);
+      await setWindowSize(ctx!.app, 1680, 1050);
+      await settle(page, 800);
+    });
+
+    // 11. Forced colors — status letters and counts lean on colour.
     await step("forced-colors", 1, async () => {
       await page.emulateMedia({ forcedColors: "active" }).catch(() => {});
       await openDialog(page);
