@@ -1829,21 +1829,16 @@ export function readAuditLogsFile(filePath: string): AuditLogsFileRead {
 }
 
 /**
- * Cheap boot check for audit rings no owner reads yet: an array still at a
- * legacy config.json location, or an audit-logs.json on disk. An in-memory
- * config store says nothing about disk, so the import waits for a durable boot.
+ * Cheap boot check for audit rings no owner reads yet: anything still at a
+ * legacy config.json location (a malformed value too, so the import logs it),
+ * or an audit-logs.json on disk. An in-memory config store says nothing about
+ * disk, so the import waits for a durable boot.
  */
 export function hasLegacyAuditRingSources(): boolean {
   if (store.path === "") return false;
   for (const { parentKey, field } of LEGACY_CONFIG_AUDIT_RINGS) {
     const parent: unknown = store.get(parentKey);
-    if (
-      parent !== null &&
-      typeof parent === "object" &&
-      Array.isArray((parent as Record<string, unknown>)[field])
-    ) {
-      return true;
-    }
+    if (parent !== null && typeof parent === "object" && field in parent) return true;
   }
   const sidecarPath = resolveAuditLogsPath();
   return sidecarPath !== null && fs.existsSync(sidecarPath);

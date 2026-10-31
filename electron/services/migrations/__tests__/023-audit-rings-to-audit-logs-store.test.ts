@@ -143,22 +143,28 @@ describe("migration023 — audit rings to audit-logs store", () => {
     warnSpy.mockRestore();
   });
 
-  it("does not duplicate records when retried after a partial failure", () => {
-    // Simulates a prior run that copied the ring to the audit-logs store but
-    // failed before stripping the source key (or config.json was restored
-    // from backup after a later migration failed).
+  it("copies every config.json record on a retry, even when some are already there (#15615)", () => {
+    // A retried chain (config.json restored after a later migration failed)
+    // meets its own earlier copy, plus anything the sidecar gained since. The
+    // boot import keeps one of each, so the migration must not skip any.
+    const newer = { ...pluginRecord, id: "plugin-2", ts: 1500 };
+    const sidecarOnly = { ...pluginRecord, id: "plugin-3", ts: 1800 };
     auditLogsStoreMock.get.mockImplementation((key: string) =>
-      key === "pluginAuditLog" ? [pluginRecord] : []
+      key === "pluginAuditLog" ? [pluginRecord, sidecarOnly] : []
     );
     const data: Record<string, unknown> = {
-      plugins: { auditEnabled: true, auditLog: [pluginRecord] },
+      plugins: { auditEnabled: true, auditLog: [pluginRecord, newer] },
     };
     const store = makeStoreMock(data);
 
     migration023.up(store);
 
-    expect(auditLogsStoreMock.set).not.toHaveBeenCalled();
-    // The source key is still stripped so the retry completes the move.
+    expect(auditLogsStoreMock.set).toHaveBeenCalledWith("pluginAuditLog", [
+      pluginRecord,
+      newer,
+      pluginRecord,
+      sidecarOnly,
+    ]);
     expect("auditLog" in (data.plugins as object)).toBe(false);
   });
 

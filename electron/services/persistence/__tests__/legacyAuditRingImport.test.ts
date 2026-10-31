@@ -35,7 +35,9 @@ vi.mock("../dbWorkerClient.js", () => ({
 }));
 
 // Migrations 022/023 write the sidecar through electron-store; this stands in
-// for it with the same file at the same path, so the importer reads what they wrote.
+// for it with the same file at the same path, so the importer reads what they
+// wrote. The config store is inert: the importer takes it as a dependency, and
+// the production owners only read their flags from it.
 vi.mock("../../../store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../store.js")>();
   const nodeFs = await import("node:fs");
@@ -51,6 +53,7 @@ vi.mock("../../../store.js", async (importOriginal) => {
   };
   return {
     ...actual,
+    store: { path: "/fake/config.json", get: () => undefined, set: () => {} },
     auditLogsStore: {
       get path() {
         return harness.sidecarPath;
@@ -67,10 +70,15 @@ import { migration022 } from "../../migrations/022-audit-logs-store.js";
 import { migration023 } from "../../migrations/023-audit-rings-to-audit-logs-store.js";
 import { AuditService } from "../../mcp-server/auditLog.js";
 import { TurnOutcomeService } from "../../mcp-server/turnOutcomeLog.js";
-import { PluginActionAuditService } from "../../PluginActionAuditService.js";
-import { ForgeAuditService } from "../../forge/auditLog.js";
-import { RunHistoryLog } from "../../runHistory/runHistoryLog.js";
-import { PluginMcpAuditService } from "../../plugin-mcp/PluginMcpAuditService.js";
+import { getPluginActionAuditService } from "../../PluginActionAuditService.js";
+import { forgeAuditService } from "../../forge/forgeAuditService.js";
+import { runHistoryLog } from "../../runHistory/runHistoryService.js";
+import { getPluginMcpAuditService } from "../../plugin-mcp/instances.js";
+import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "../../../../shared/types/ipc/forge.js";
+import { MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../../../../shared/types/ipc/mcpServer.js";
+import { PLUGIN_AUDIT_DEFAULT_MAX_RECORDS } from "../../../../shared/types/ipc/pluginAudit.js";
+import { PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../../../../shared/types/ipc/pluginMcpAudit.js";
+import { RUN_HISTORY_DEFAULT_MAX_RECORDS } from "../../../../shared/types/ipc/runHistory.js";
 import { AuditRingStore, type AuditRingName } from "../auditRingStore.js";
 import {
   importLegacyAuditRings,
@@ -140,6 +148,31 @@ const fixtures = {
 } satisfies Record<AuditRingName, (id: string, t: number) => Rec>;
 
 const RINGS = Object.keys(fixtures) as AuditRingName[];
+
+// The caps the owners' production adapters pass to writeAll.
+const CAPS: Record<AuditRingName, number> = {
+  mcpAuditLog: MCP_AUDIT_DEFAULT_MAX_RECORDS,
+  mcpTurnOutcomeLog: MCP_AUDIT_DEFAULT_MAX_RECORDS,
+  pluginAuditLog: PLUGIN_AUDIT_DEFAULT_MAX_RECORDS,
+  forgeAuditLog: FORGE_AUDIT_DEFAULT_MAX_RECORDS,
+  runHistoryRecords: RUN_HISTORY_DEFAULT_MAX_RECORDS,
+  pluginMcpAuditLog: PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS,
+};
+
+// Where each ring sits in a v0.18 config.json.
+const CONFIG_HOME: Record<AuditRingName, [string, string]> = {
+  mcpAuditLog: ["mcpServer", "auditLog"],
+  mcpTurnOutcomeLog: ["mcpServer", "turnOutcomeLog"],
+  pluginAuditLog: ["plugins", "auditLog"],
+  forgeAuditLog: ["forgeAudit", "auditLog"],
+  runHistoryRecords: ["runHistory", "records"],
+  pluginMcpAuditLog: ["pluginMcpAudit", "auditLog"],
+};
+
+function configWith(ring: AuditRingName, records: Rec[]): Record<string, unknown> {
+  const [parentKey, field] = CONFIG_HOME[ring];
+  return { [parentKey]: { [field]: records } };
+}
 
 // v0.18.x config.json: every ring still nested in its settings slice.
 function preV019Config(): Record<string, unknown> {
@@ -214,7 +247,11 @@ function ids(ring: AuditRingName): string[] {
   return new AuditRingStore().readAll<Rec>(ring).map((record) => record.id);
 }
 
-function insertRow(ring: AuditRingName, record: Rec, recordId: string | null = record.id): void {
+function insertRow(
+  ring: AuditRingName,
+  record: Record<string, unknown>,
+  recordId: string | null = typeof record.id === "string" ? record.id : null
+): void {
   harness
     .db!.prepare(
       "INSERT INTO audit_rings (ring, record_id, record, created_at) VALUES (?, ?, ?, ?)"
@@ -261,18 +298,11 @@ describe("importLegacyAuditRings — pre-v0.19 upgrade", () => {
       expect(ids(ring), ring).toEqual([`${ring}-old`, `${ring}-new`]);
     }
 
-    // The owners read through the same adapters production wires up, and
-    // present newest first.
-    const ringStore = new AuditRingStore();
-    const adapter = (ring: AuditRingName) => ({
-      read: () => ringStore.readAll(ring),
-      write: () => {},
-    });
-    const noConfig = () => ({});
+    // The production owners, through their own adapters, newest first.
     const newestFirst = (ring: AuditRingName) => [`${ring}-new`, `${ring}-old`];
     const byId = (records: { id: string }[]) => records.map((record) => record.id);
-
-    expect(byId(new AuditService(() => {}, noConfig, adapter("mcpAuditLog")).getRecords())).toEqual(
+    const noConfig = () => ({});
+    expect(byId(new AuditService(() => {}, noConfig).getRecords())).toEqual(
       newestFirst("mcpAuditLog")
     );
     expect(
@@ -282,22 +312,29 @@ describe("importLegacyAuditRings — pre-v0.19 upgrade", () => {
           readConfig: noConfig,
           getSessionIdForTerminal: () => null,
           getRecentAuditRecords: () => [],
-          logStore: adapter("mcpTurnOutcomeLog"),
         }).getRecords()
       )
     ).toEqual(newestFirst("mcpTurnOutcomeLog"));
-    expect(
-      byId(new PluginActionAuditService(() => {}, noConfig, adapter("pluginAuditLog")).getRecords())
-    ).toEqual(newestFirst("pluginAuditLog"));
-    expect(
-      byId(new ForgeAuditService(() => {}, noConfig, adapter("forgeAuditLog")).getRecords())
-    ).toEqual(newestFirst("forgeAuditLog"));
-    expect(
-      byId(new RunHistoryLog(() => {}, adapter("runHistoryRecords").read).getRecords())
-    ).toEqual(newestFirst("runHistoryRecords"));
-    expect(
-      byId(new PluginMcpAuditService(() => {}, noConfig, adapter("pluginMcpAuditLog")).getRecords())
-    ).toEqual(newestFirst("pluginMcpAuditLog"));
+    expect(byId(getPluginActionAuditService().getRecords())).toEqual(newestFirst("pluginAuditLog"));
+    expect(byId(forgeAuditService.getRecords())).toEqual(newestFirst("forgeAuditLog"));
+    expect(byId(runHistoryLog.getRecords())).toEqual(newestFirst("runHistoryRecords"));
+    expect(byId(getPluginMcpAuditService().getRecords())).toEqual(newestFirst("pluginMcpAuditLog"));
+
+    // An owner's first write replaces the ring with what it hydrated, so the
+    // imported history must survive it.
+    const appended = runHistoryLog.append({
+      kind: "recipe",
+      recipeName: "Deploy",
+      totalTerminals: 0,
+      spawned: [],
+      failed: [],
+    });
+    runHistoryLog.flushNow();
+    expect(ids("runHistoryRecords")).toEqual([
+      "runHistoryRecords-old",
+      "runHistoryRecords-new",
+      appended.id,
+    ]);
 
     // Sources retired: config.json keeps its flags, the sidecar is archived.
     expect(config.data.mcpServer).toEqual({
@@ -368,7 +405,7 @@ describe("importLegacyAuditRings — merge", () => {
   it("dedupes records without an id by their content", () => {
     const ring = "pluginAuditLog";
     const noId = { ts: 1, pluginId: "acme", actionId: "acme.legacy" };
-    insertRow(ring, noId as Rec, null);
+    insertRow(ring, noId);
     const config = makeConfig({
       plugins: { auditLog: [noId, { ...noId, ts: 2 }, { ...noId, ts: 2 }] },
     });
@@ -379,28 +416,31 @@ describe("importLegacyAuditRings — merge", () => {
     expect(records.map((record) => record.ts)).toEqual([2, 1]);
   });
 
-  it("trims to each owner's cap, giving up the oldest legacy records first", () => {
-    const ring = "runHistoryRecords";
-    const make = fixtures[ring];
-    for (let i = 0; i < 98; i++) insertRow(ring, make(`e${i}`, 10_000 + i));
-    const config = makeConfig({
-      runHistory: { records: [make("l1", 1), make("l2", 2), make("l3", 3), make("l4", 4)] },
-    });
+  it.each(RINGS)(
+    "trims %s to its owner's cap, giving up the oldest legacy records first",
+    (ring) => {
+      const make = fixtures[ring];
+      const cap = CAPS[ring];
+      for (let i = 0; i < cap - 2; i++) insertRow(ring, make(`e${i}`, 10_000 + i));
+      const config = makeConfig(
+        configWith(ring, [make("l1", 1), make("l2", 2), make("l3", 3), make("l4", 4)])
+      );
 
-    importLegacyAuditRings(deps(config));
+      importLegacyAuditRings(deps(config));
 
-    const result = ids(ring);
-    expect(result).toHaveLength(100);
-    expect(result.slice(0, 3)).toEqual(["l3", "l4", "e0"]);
-    expect(result.at(-1)).toBe("e97");
-  });
+      const result = ids(ring);
+      expect(result).toHaveLength(cap);
+      expect(result.slice(0, 3)).toEqual(["l3", "l4", "e0"]);
+      expect(result.at(-1)).toBe(`e${cap - 3}`);
+    }
+  );
 
   it("leaves a full ring untouched", () => {
     const ring = "pluginMcpAuditLog";
     const make = fixtures[ring];
-    for (let i = 0; i < 500; i++) insertRow(ring, make(`e${i}`, 10_000 + i));
+    for (let i = 0; i < CAPS[ring]; i++) insertRow(ring, make(`e${i}`, 10_000 + i));
     const before = ids(ring);
-    const config = makeConfig({ pluginMcpAudit: { auditLog: [make("legacy", 1)] } });
+    const config = makeConfig(configWith(ring, [make("legacy", 1)]));
 
     importLegacyAuditRings(deps(config));
 
@@ -429,6 +469,35 @@ describe("importLegacyAuditRings — retries", () => {
     for (const ring of RINGS) {
       expect(ids(ring), ring).toEqual([`${ring}-old`, `${ring}-new`]);
     }
+  });
+
+  it("keeps every record when a retried migration023 meets an overlapping sidecar", () => {
+    const ring = "pluginAuditLog";
+    const make = fixtures[ring];
+    // config.json restored with a record the sidecar lacks, and vice versa.
+    fs.writeFileSync(harness.sidecarPath, JSON.stringify({ [ring]: [make("a", 1), make("c", 3)] }));
+    const config = makeConfig(configWith(ring, [make("a", 1), make("b", 2)]));
+    runMigrations(config);
+
+    importLegacyAuditRings(deps(config));
+
+    expect(ids(ring)).toEqual(["a", "b", "c"]);
+  });
+
+  it("does not bring back legacy records that fell off the cap, after a clear", () => {
+    const ring = "runHistoryRecords";
+    const make = fixtures[ring];
+    for (let i = 0; i < CAPS[ring]; i++) insertRow(ring, make(`e${i}`, 10_000 + i));
+    const original = configWith(ring, [make("l1", 1), make("l2", 2)]);
+    const config = makeConfig(original);
+    importLegacyAuditRings(deps(config));
+    expect(ids(ring)).not.toContain("l1");
+
+    new AuditRingStore().writeAll(ring, [], CAPS[ring], { sync: true });
+    config.restore(original);
+    importLegacyAuditRings(deps(config));
+
+    expect(ids(ring)).toEqual([]);
   });
 
   it("does not bring back records the user cleared after the import", () => {
@@ -513,6 +582,7 @@ describe("importLegacyAuditRings — unreadable sources", () => {
 
     expect(config.data.runHistory).toEqual({ records: "garbage" });
     expect(openSqlite).not.toHaveBeenCalled();
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("runHistory.records"));
   });
 
   it("keeps every source when the database cannot open", () => {

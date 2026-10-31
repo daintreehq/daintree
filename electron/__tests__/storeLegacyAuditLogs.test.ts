@@ -114,11 +114,11 @@ describe("hasLegacyAuditRingSources", () => {
     expect(mod.hasLegacyAuditRingSources()).toBe(true);
   });
 
-  it("ignores a malformed config.json ring value", () => {
+  it("finds a malformed config.json ring value, so the import can log it", () => {
     fs.writeFileSync(
       path.join(userData, "config.json"),
       JSON.stringify({ _schemaVersion: 41, runHistory: { records: "garbage" } })
     );
-    expect(mod.hasLegacyAuditRingSources()).toBe(false);
+    expect(mod.hasLegacyAuditRingSources()).toBe(true);
   });
 });
