@@ -940,19 +940,21 @@ describe("DatabaseMaintenanceService", () => {
     const CORRUPT_RESULT =
       "*** in database main *** Tree 3 page 37 cell 2: Offset 65535 out of range";
     const RESET_RECOVERY = { kind: "reset-to-fresh" as const, quarantinedPath: "/fake/x.corrupt" };
-    let markerOnDisk: boolean;
+    // Keyed by database path, so a pending verdict written by one service
+    // instance is what the next instance's boot reads — and only at the path it
+    // will actually look for.
+    const markers = new Set<string>();
+    const markerOnDisk = () => markers.has(DB_PATH);
     let liveVerdict: "ok" | "corrupt" | "unknown";
 
     beforeEach(() => {
-      // Back the marker helpers with one flag so a pending verdict written by
-      // one service instance is what the next instance's boot reads.
-      markerOnDisk = false;
-      mockDbModule.isRecoveryPending.mockImplementation(() => markerOnDisk);
-      mockDbModule.markRecoveryPending.mockImplementation(() => {
-        markerOnDisk = true;
+      markers.clear();
+      mockDbModule.isRecoveryPending.mockImplementation((dbPath: string) => markers.has(dbPath));
+      mockDbModule.markRecoveryPending.mockImplementation((dbPath: string) => {
+        markers.add(dbPath);
       });
-      mockDbModule.clearRecoveryPending.mockImplementation(() => {
-        markerOnDisk = false;
+      mockDbModule.clearRecoveryPending.mockImplementation((dbPath: string) => {
+        markers.delete(dbPath);
       });
       // Real SQLite: the cheap clean-exit open reads page 1 only, so page-level
       // corruption passes it and only a full scan catches it.
@@ -980,7 +982,7 @@ describe("DatabaseMaintenanceService", () => {
       await drainMicrotasks();
       await session.dispose();
       expect(mockSqlite.backup).not.toHaveBeenCalled();
-      expect(markerOnDisk).toBe(true);
+      expect(markerOnDisk()).toBe(true);
       mockRunDbWork.mockImplementation((_op: unknown, fallback: () => unknown) =>
         Promise.resolve(fallback())
       );
@@ -1000,11 +1002,12 @@ describe("DatabaseMaintenanceService", () => {
         nextBoot.initialize(true);
         nextBoot.startMaintenance();
 
+        expect(mockDbModule.isRecoveryPending).toHaveBeenCalledWith(DB_PATH);
         expect(mockDbModule.probeDbFile).toHaveBeenCalledWith(DB_PATH);
         expect(mockDbModule.probeDb).not.toHaveBeenCalled();
         expect(mockDbModule.attemptRecovery).toHaveBeenCalledWith(DB_PATH);
         expect(nextBoot.consumeRecovery()).toEqual(outcome);
-        expect(markerOnDisk).toBe(false);
+        expect(markerOnDisk()).toBe(false);
 
         // The recovered database backs up again, straight from the first idle tick.
         vi.advanceTimersByTime(TICK);
@@ -1025,14 +1028,14 @@ describe("DatabaseMaintenanceService", () => {
 
       expect(mockDbModule.attemptRecovery).toHaveBeenCalledTimes(1);
       expect(failedBoot.consumeRecovery()).toBeNull();
-      expect(markerOnDisk).toBe(true);
+      expect(markerOnDisk()).toBe(true);
 
       // The corrupt database is still the live one: nothing may overwrite the backup.
       vi.advanceTimersByTime(TICK);
       await drainMicrotasks();
       await failedBoot.dispose();
       expect(mockSqlite.backup).not.toHaveBeenCalled();
-      expect(markerOnDisk).toBe(true);
+      expect(markerOnDisk()).toBe(true);
 
       mockDbModule.attemptRecovery.mockReturnValue(RESTORED_RECOVERY);
       const retryBoot = new DatabaseMaintenanceService();
@@ -1040,7 +1043,7 @@ describe("DatabaseMaintenanceService", () => {
 
       expect(mockDbModule.attemptRecovery).toHaveBeenCalledTimes(2);
       expect(retryBoot.consumeRecovery()).toEqual(RESTORED_RECOVERY);
-      expect(markerOnDisk).toBe(false);
+      expect(markerOnDisk()).toBe(false);
       await retryBoot.dispose();
     });
 
@@ -1055,7 +1058,7 @@ describe("DatabaseMaintenanceService", () => {
       expect(mockDbModule.probeDbFile).toHaveBeenCalledWith(DB_PATH);
       expect(mockDbModule.attemptRecovery).not.toHaveBeenCalled();
       expect(nextBoot.consumeRecovery()).toBeNull();
-      expect(markerOnDisk).toBe(false);
+      expect(markerOnDisk()).toBe(false);
 
       // The boot already ran the full scan, so the first idle tick backs up directly.
       vi.advanceTimersByTime(TICK);
@@ -1076,25 +1079,30 @@ describe("DatabaseMaintenanceService", () => {
       // An unreadable file is no grounds to quarantine it, nor proof it healed.
       expect(mockDbModule.attemptRecovery).not.toHaveBeenCalled();
       expect(nextBoot.consumeRecovery()).toBeNull();
-      expect(markerOnDisk).toBe(true);
+      expect(markerOnDisk()).toBe(true);
 
       vi.advanceTimersByTime(TICK);
       await drainMicrotasks();
       await nextBoot.dispose();
       expect(mockSqlite.backup).not.toHaveBeenCalled();
-      expect(markerOnDisk).toBe(true);
+      expect(markerOnDisk()).toBe(true);
     });
 
-    it("persists the pending state when an unclean-exit boot cannot recover", () => {
+    it("persists the pending state and suspends backups when an unclean-exit boot cannot recover", async () => {
       mockDbModule.probeDb.mockReturnValue(false);
       mockDbModule.attemptRecovery.mockReturnValue(null);
 
       const service = new DatabaseMaintenanceService();
       service.initialize(false);
+      service.startMaintenance();
 
       // Otherwise a later clean exit would hand the next launch only the cheap probe.
-      expect(markerOnDisk).toBe(true);
-      void service.dispose();
+      expect(markerOnDisk()).toBe(true);
+
+      vi.advanceTimersByTime(TICK);
+      await drainMicrotasks();
+      await service.dispose();
+      expect(mockSqlite.backup).not.toHaveBeenCalled();
     });
 
     it("persists corruption that the in-flight check reports while dispose drains it", async () => {
@@ -1112,11 +1120,15 @@ describe("DatabaseMaintenanceService", () => {
       await disposePromise;
 
       expect(mockSqlite.backup).not.toHaveBeenCalled();
-      expect(markerOnDisk).toBe(true);
+      expect(markerOnDisk()).toBe(true);
     });
 
     it("does not force recovery after suspension caused only by failed backup verification", async () => {
-      mockDbModule.probeDbFile.mockReturnValue("corrupt");
+      // A healthy live database whose every backup candidate comes out corrupt.
+      liveVerdict = "ok";
+      mockDbModule.probeDbFile.mockImplementation((file: string) =>
+        file === DB_PATH ? liveVerdict : "corrupt"
+      );
       vi.mocked(fs.existsSync).mockReturnValue(true);
       quickCheckReturns("ok");
 
@@ -1127,9 +1139,14 @@ describe("DatabaseMaintenanceService", () => {
         vi.advanceTimersByTime(TICK);
         await drainMicrotasks();
       }
+      // Each failed candidate re-ran the live check, which passed every time;
+      // the third failure suspended backups for the rest of the session.
+      expect(quickCheckOps()).toHaveLength(3);
+      expect(mockSqlite.backup).toHaveBeenCalledTimes(3);
       await session.dispose();
+      expect(mockSqlite.backup).toHaveBeenCalledTimes(3);
       expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
-      expect(markerOnDisk).toBe(false);
+      expect(markerOnDisk()).toBe(false);
 
       vi.clearAllMocks();
       const nextBoot = new DatabaseMaintenanceService();
@@ -1141,6 +1158,7 @@ describe("DatabaseMaintenanceService", () => {
     });
 
     it("keeps the cheap probe on a clean-exit boot after a healthy session", async () => {
+      liveVerdict = "ok";
       quickCheckReturns("ok");
       const session = new DatabaseMaintenanceService();
       session.initialize(true);
@@ -1148,7 +1166,7 @@ describe("DatabaseMaintenanceService", () => {
       vi.advanceTimersByTime(TICK);
       await drainMicrotasks();
       await session.dispose();
-      expect(markerOnDisk).toBe(false);
+      expect(markerOnDisk()).toBe(false);
 
       vi.clearAllMocks();
       const nextBoot = new DatabaseMaintenanceService();

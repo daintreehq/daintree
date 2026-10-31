@@ -470,12 +470,12 @@ describe("pending-recovery marker", () => {
 
   const posixIt = process.platform === "win32" ? it.skip : it;
 
-  posixIt("writes the marker owner-only", () => {
+  posixIt("writes the marker owner-only, with no temp file left behind", () => {
     markRecoveryPending(dbPath);
 
-    const marker = fs.readdirSync(tmpDir).find((f) => f.startsWith("daintree.db."));
-    expect(marker).toBeDefined();
-    expect(fs.statSync(path.join(tmpDir, marker!)).mode & 0o777).toBe(0o600);
+    expect(fs.readdirSync(tmpDir)).toEqual(["daintree.db.corruption-pending"]);
+    expect(fs.statSync(dbPath + ".corruption-pending").mode & 0o777).toBe(0o600);
+    expect(isRecoveryPending(dbPath)).toBe(true);
   });
 
   it("survives the quarantine, so a failed or interrupted recovery stays pending", () => {
