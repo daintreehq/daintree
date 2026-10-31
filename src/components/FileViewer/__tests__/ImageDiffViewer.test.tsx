@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiffMediaFileVersions } from "@shared/types";
 import {
   ImageDiffViewer,
+  comparedVersions,
   describeImageFacts,
   isImageDiffCandidate,
   nextSwipePosition,
@@ -519,6 +520,161 @@ describe("ImageDiffViewer", () => {
 
     const workingImg = screen.getByAltText("Working tree version of logo.png");
     expect(workingImg.style.opacity).toBe("0.25");
+  });
+});
+
+describe("ImageDiffViewer sides of a partially staged file (#15610)", () => {
+  beforeEach(() => {
+    mockReadFileVersions.mockReset();
+  });
+
+  it("asks for the staged side and names HEAD and the index", async () => {
+    mockReadFileVersions.mockResolvedValue(bothOk());
+    render(
+      <ImageDiffViewer relPath="logo.png" worktreePath="/repo" status="modified" side="staged" />
+    );
+
+    const headImg = await screen.findByAltText("HEAD version of logo.png");
+    const indexImg = screen.getByAltText("Index version of logo.png");
+    expect(headImg.getAttribute("src")).toBe(HEAD_URL);
+    expect(indexImg.getAttribute("src")).toBe(WORKING_URL);
+    expect(screen.getByText("Index")).toBeDefined();
+    expect(screen.queryByText("Working tree")).toBeNull();
+    expect(mockReadFileVersions).toHaveBeenCalledWith({
+      cwd: "/repo",
+      filePath: "logo.png",
+      side: "staged",
+    });
+  });
+
+  it("asks for the unstaged side and names the index and the working tree", async () => {
+    mockReadFileVersions.mockResolvedValue(bothOk());
+    render(
+      <ImageDiffViewer relPath="logo.png" worktreePath="/repo" status="modified" side="unstaged" />
+    );
+
+    const indexImg = await screen.findByAltText("Index version of logo.png");
+    expect(indexImg.getAttribute("src")).toBe(HEAD_URL);
+    expect(screen.getByAltText("Working tree version of logo.png").getAttribute("src")).toBe(
+      WORKING_URL
+    );
+    expect(screen.queryByText("HEAD")).toBeNull();
+    expect(mockReadFileVersions).toHaveBeenCalledWith({
+      cwd: "/repo",
+      filePath: "logo.png",
+      side: "unstaged",
+    });
+  });
+
+  it("names the index in the overlay modes' chips, alt text and slider values", async () => {
+    mockReadFileVersions.mockResolvedValue(bothOk());
+    render(
+      <ImageDiffViewer relPath="logo.png" worktreePath="/repo" status="modified" side="staged" />
+    );
+
+    fireEvent.click(await screen.findByRole("radio", { name: "Swipe" }));
+    expect(screen.getByAltText("Index version of logo.png")).toBeDefined();
+    const divider = screen.getByRole("slider", { name: "Swipe divider" });
+    fireEvent.keyDown(divider, { key: "Home" });
+    expect(divider.getAttribute("aria-valuetext")).toBe("Index only");
+
+    fireEvent.click(screen.getByRole("radio", { name: "Onion skin" }));
+    const opacity = screen.getByRole("slider", { name: "Index opacity" });
+    expect(opacity.getAttribute("aria-valuetext")).toBe("Index at 50% over HEAD");
+    expect(screen.getByText("Index")).toBeDefined();
+    expect(screen.queryByText("Working tree")).toBeNull();
+  });
+
+  it("measures the unstaged onion layer against the index", async () => {
+    mockReadFileVersions.mockResolvedValue(bothOk());
+    render(
+      <ImageDiffViewer relPath="logo.png" worktreePath="/repo" status="modified" side="unstaged" />
+    );
+
+    fireEvent.click(await screen.findByRole("radio", { name: "Onion skin" }));
+    const opacity = screen.getByRole("slider", { name: "Working tree opacity" });
+    expect(opacity.getAttribute("aria-valuetext")).toBe("Working tree at 50% over index");
+  });
+
+  it("shows a staged-new image as its index version", async () => {
+    mockReadFileVersions.mockResolvedValue({
+      head: { ok: false, error: "NOT_FOUND" },
+      working: { ok: true, dataUrl: WORKING_URL, byteSize: 7 },
+    } satisfies DiffMediaFileVersions);
+    render(<ImageDiffViewer relPath="new.png" worktreePath="/repo" status="added" side="staged" />);
+
+    await screen.findByAltText("Index version of new.png");
+    expect(screen.getByText("Added — no previous version")).toBeDefined();
+  });
+
+  it("says a staged deletion has no index version, and an unstaged one keeps the index's", async () => {
+    mockReadFileVersions.mockResolvedValue({
+      head: { ok: true, dataUrl: HEAD_URL, byteSize: 4 },
+      working: { ok: false, error: "NOT_FOUND" },
+    } satisfies DiffMediaFileVersions);
+    const { rerender } = render(
+      <ImageDiffViewer relPath="gone.png" worktreePath="/repo" status="deleted" side="staged" />
+    );
+
+    await screen.findByAltText("HEAD version of gone.png");
+    expect(screen.getByText("Deleted — no index version")).toBeDefined();
+
+    rerender(
+      <ImageDiffViewer relPath="gone.png" worktreePath="/repo" status="deleted" side="unstaged" />
+    );
+    await screen.findByAltText("Index version of gone.png");
+    expect(screen.getByText("Deleted — no working version")).toBeDefined();
+    expect(mockReadFileVersions).toHaveBeenLastCalledWith({
+      cwd: "/repo",
+      filePath: "gone.png",
+      side: "unstaged",
+    });
+  });
+
+  it("refetches on a side-only switch and keeps the held frame's labels until it lands", async () => {
+    const next = createDeferred<DiffMediaFileVersions>();
+    mockReadFileVersions
+      .mockResolvedValueOnce(bothOkWith(A_HEAD_URL, A_WORKING_URL))
+      .mockReturnValueOnce(next.promise);
+    const { rerender } = render(
+      <ImageDiffViewer relPath="logo.png" worktreePath="/repo" status="modified" side="staged" />
+    );
+    await screen.findByAltText("Index version of logo.png");
+
+    rerender(
+      <ImageDiffViewer relPath="logo.png" worktreePath="/repo" status="modified" side="unstaged" />
+    );
+    expect(mockReadFileVersions).toHaveBeenLastCalledWith({
+      cwd: "/repo",
+      filePath: "logo.png",
+      side: "unstaged",
+    });
+    // Still the staged bytes on screen, so still the staged names.
+    expect(screen.getByAltText("HEAD version of logo.png").getAttribute("src")).toBe(A_HEAD_URL);
+    expect(screen.getByAltText("Index version of logo.png").getAttribute("src")).toBe(
+      A_WORKING_URL
+    );
+
+    await act(async () => {
+      next.resolve(bothOkWith(B_HEAD_URL, B_WORKING_URL));
+    });
+    expect(
+      (await screen.findByAltText("Index version of logo.png")).getAttribute("src")
+    ).toBe(B_HEAD_URL);
+    expect(screen.getByAltText("Working tree version of logo.png").getAttribute("src")).toBe(
+      B_WORKING_URL
+    );
+    expect(screen.queryByAltText("HEAD version of logo.png")).toBeNull();
+  });
+
+  it("names the index at either end of the swipe divider for the side that holds it", () => {
+    expect(swipeValueText(0, comparedVersions("staged"))).toBe("Index only");
+    expect(swipeValueText(100, comparedVersions("staged"))).toBe("HEAD only");
+    expect(swipeValueText(100, comparedVersions("unstaged"))).toBe("Index only");
+    expect(swipeValueText(40, comparedVersions("unstaged"))).toBe(
+      "Index 40% on the left, working tree 60% on the right"
+    );
+    expect(swipeValueText(40, comparedVersions())).toBe(swipeValueText(40));
   });
 });
 

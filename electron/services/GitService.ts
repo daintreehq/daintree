@@ -44,6 +44,24 @@ const OBJECT_ID_RE = /^([0-9a-f]{40}|[0-9a-f]{64})$/i;
 // is `-` for trees.
 const LS_TREE_ENTRY_RE = /^[0-7]+ ([a-z]+) ([0-9a-f]{40}|[0-9a-f]{64}) +(\d+|-)\t(.*)$/s;
 
+// One `ls-files --stage -z` record: `<mode> <oid> <stage>\t<path>`.
+const LS_FILES_STAGE_ENTRY_RE = /^([0-7]+) ([0-9a-f]{40}|[0-9a-f]{64}) ([0-3])\t(.*)$/s;
+
+// A gitlink names a commit in another repository, never a blob in this one.
+const GITLINK_MODE = "160000";
+
+/** The index's merged (stage 0) entry for `treePath`, null when absent; throws on output it can't parse. */
+function findIndexEntry(listing: string, treePath: string): { mode: string; oid: string } | null {
+  for (const record of listing.split("\0")) {
+    if (record === "") continue;
+    const match = LS_FILES_STAGE_ENTRY_RE.exec(record);
+    if (!match) throw new Error("Unexpected ls-files output");
+    if (match[4] !== treePath || match[3] !== "0") continue;
+    return { mode: match[1]!, oid: match[2]!.toLowerCase() };
+  }
+  return null;
+}
+
 /** The listing's entry for `treePath`, null when absent; throws on output it can't parse. */
 function findTreeEntry(
   listing: string,
@@ -520,6 +538,48 @@ export class GitService {
       return { ok: false, reason: "TOO_LARGE" };
     }
     return { ok: true, content, version };
+  }
+
+  /**
+   * Read a file's staged blob: the index's stage-0 entry, read by id exactly
+   * as `readFileAtHead` reads a tree entry, so the same size gate and
+   * known-version skip apply. An unmerged path has no single staged version
+   * and reads as absent.
+   */
+  async readFileInIndex(
+    filePath: string,
+    maxBytes: number,
+    options: HeadFileReadOptions = {}
+  ): Promise<HeadFileReadResult> {
+    const treePath = this.normalizeTreePath(filePath);
+    const git = await this.getGit();
+    const op = "read-file-in-index";
+
+    // `--literal-pathspecs` for the same reason as `ls-tree` above; `--` keeps
+    // a leading-dash path from parsing as an option.
+    let listing: string;
+    try {
+      listing = await git.raw(["--literal-pathspecs", "ls-files", "--stage", "-z", "--", treePath]);
+    } catch (error) {
+      throw toGitOperationError(error, { cwd: this.rootPath, op });
+    }
+
+    let entry: ReturnType<typeof findIndexEntry>;
+    try {
+      entry = findIndexEntry(listing, treePath);
+    } catch (error) {
+      throw toGitOperationError(error, { cwd: this.rootPath, op });
+    }
+    if (!entry || entry.mode === GITLINK_MODE) {
+      return { ok: false, reason: "NOT_FOUND" };
+    }
+    const version = entry.oid;
+    if (version === options.knownVersion) {
+      return { ok: true, unchanged: true, version };
+    }
+
+    const result = await this.readBlobAtSpec(git, entry.oid, maxBytes, op, options.beforeRead);
+    return result.ok ? { ...result, version } : result;
   }
 
   /**

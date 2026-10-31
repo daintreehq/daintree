@@ -1381,6 +1381,11 @@ export function DiffPane({
                   relPath={filePath}
                   worktreePath={worktreePath}
                   status={fileStatus}
+                  side={
+                    effectiveSource === "staged" || effectiveSource === "unstaged"
+                      ? effectiveSource
+                      : undefined
+                  }
                 />
               </div>
             )}

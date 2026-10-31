@@ -9,6 +9,7 @@ const ipcMainMock = vi.hoisted(() => ({
 
 const readFileAtHeadMock = vi.hoisted(() => vi.fn());
 const readPreviousFileVersionMock = vi.hoisted(() => vi.fn());
+const readFileInIndexMock = vi.hoisted(() => vi.fn());
 const getGitServiceMock = vi.hoisted(() => vi.fn());
 
 const fileHandleMock = vi.hoisted(() => ({
@@ -60,6 +61,7 @@ function invoke(payload: DiffMediaReadFileVersionsPayload): Promise<DiffMediaFil
 
 const WORKING_BUFFER = Buffer.from("working-image-bytes");
 const HEAD_BUFFER = Buffer.from("head-image-bytes");
+const INDEX_BUFFER = Buffer.from("index-image-bytes");
 const ROOT = path.parse(process.cwd()).root;
 const REPO_ROOT = path.join(ROOT, "repo");
 const OUTSIDE_FILE = path.join(ROOT, "elsewhere", "img.png");
@@ -96,9 +98,11 @@ describe("diffMedia readFileVersions", () => {
     getGitServiceMock.mockReturnValue({
       readFileAtHead: readFileAtHeadMock,
       readPreviousFileVersion: readPreviousFileVersionMock,
+      readFileInIndex: readFileInIndexMock,
     });
     readFileAtHeadMock.mockResolvedValue({ ok: true, content: HEAD_BUFFER });
     readPreviousFileVersionMock.mockResolvedValue({ ok: false, reason: "NOT_FOUND" });
+    readFileInIndexMock.mockResolvedValue({ ok: true, content: INDEX_BUFFER });
 
     fsMock.realpath.mockImplementation(async (p: string) => p);
     fsMock.stat.mockResolvedValue({ size: WORKING_BUFFER.byteLength, isFile: () => true });
@@ -478,6 +482,97 @@ describe("diffMedia readFileVersions", () => {
       await expect(invoke({ cwd: REPO_ROOT, filePath: "img.png", known })).rejects.toMatchObject({
         code: "RATE_LIMITED",
       });
+    });
+  });
+  describe("comparison sides", () => {
+    const dataUrlOf = (content: Buffer) => `data:image/png;base64,${content.toString("base64")}`;
+
+    it("reads HEAD and the index for the staged side, never opening the file on disk", async () => {
+      const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png", side: "staged" });
+
+      expect(result.head).toMatchObject({ ok: true, dataUrl: dataUrlOf(HEAD_BUFFER) });
+      expect(result.working).toMatchObject({ ok: true, dataUrl: dataUrlOf(INDEX_BUFFER) });
+      expect(fsMock.open).not.toHaveBeenCalled();
+    });
+
+    it("reads the index and the disk for the unstaged side, never reading HEAD", async () => {
+      const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png", side: "unstaged" });
+
+      expect(result.head).toMatchObject({ ok: true, dataUrl: dataUrlOf(INDEX_BUFFER) });
+      expect(result.working).toMatchObject({ ok: true, dataUrl: dataUrlOf(WORKING_BUFFER) });
+      expect(readFileAtHeadMock).not.toHaveBeenCalled();
+    });
+
+    it("checks each known version against the slot it was sent for", async () => {
+      await invoke({
+        cwd: REPO_ROOT,
+        filePath: "img.png",
+        side: "unstaged",
+        known: { head: "index-oid", working: "stat:1" },
+      });
+      expect(readFileInIndexMock).toHaveBeenCalledWith(
+        "img.png",
+        DIFF_MEDIA_MAX_BYTES,
+        expect.objectContaining({ knownVersion: "index-oid" })
+      );
+
+      await invoke({
+        cwd: REPO_ROOT,
+        filePath: "img.png",
+        side: "staged",
+        known: { head: "head-oid", working: "index-oid" },
+      });
+      expect(readFileInIndexMock).toHaveBeenLastCalledWith(
+        "img.png",
+        DIFF_MEDIA_MAX_BYTES,
+        expect.objectContaining({ knownVersion: "index-oid" })
+      );
+      expect(readFileAtHeadMock).toHaveBeenLastCalledWith(
+        "img.png",
+        DIFF_MEDIA_MAX_BYTES,
+        expect.objectContaining({ knownVersion: "head-oid" })
+      );
+    });
+
+    it("maps an index read failure to that slot's ERROR, keeping the other side", async () => {
+      readFileInIndexMock.mockRejectedValue(new Error("git exploded"));
+
+      const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png", side: "staged" });
+
+      expect(result.head).toMatchObject({ ok: true });
+      expect(result.working).toEqual({ ok: false, error: "ERROR" });
+    });
+
+    it("carries an index side's cap and LFS rejection through like HEAD's", async () => {
+      readFileInIndexMock.mockResolvedValueOnce({ ok: false, reason: "TOO_LARGE" });
+      const capped = await invoke({ cwd: REPO_ROOT, filePath: "img.png", side: "unstaged" });
+      expect(capped.head).toEqual({ ok: false, error: "TOO_LARGE" });
+
+      readFileInIndexMock.mockResolvedValueOnce({
+        ok: true,
+        content: Buffer.from("version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 12\n"),
+      });
+      const pointer = await invoke({ cwd: REPO_ROOT, filePath: "img.png", side: "staged" });
+      expect(pointer.working).toEqual({ ok: false, error: "UNSUPPORTED" });
+    });
+
+    it("never substitutes history for a named side when both versions are gone", async () => {
+      mockCommittedDeletion();
+      readFileInIndexMock.mockResolvedValue({ ok: false, reason: "NOT_FOUND" });
+
+      for (const side of ["staged", "unstaged"] as const) {
+        const result = await invoke({ cwd: REPO_ROOT, filePath: "img.png", side });
+        expect(result.head).toEqual({ ok: false, error: "NOT_FOUND" });
+        expect(result.working).toEqual({ ok: false, error: "NOT_FOUND" });
+      }
+      expect(readPreviousFileVersionMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects a side it doesn't know before reading anything", async () => {
+      await expect(
+        getHandler()(fakeEvent(), { cwd: REPO_ROOT, filePath: "img.png", side: "both" })
+      ).rejects.toThrow();
+      expect(getGitServiceMock).not.toHaveBeenCalled();
     });
   });
 });

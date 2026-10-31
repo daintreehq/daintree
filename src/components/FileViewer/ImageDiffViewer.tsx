@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type UIEvent } from "react";
 import { GripVertical, ImageOff } from "lucide-react";
 import type { DiffMediaFileVersions, DiffMediaSide, GitStatus } from "@shared/types";
+import type { GitDiffSide } from "@shared/types/git";
 import { getDiffMediaImageMime } from "@shared/types/ipc/diffMedia";
 import { diffMediaClient } from "@/clients/diffMediaClient";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
@@ -19,6 +20,12 @@ export interface ImageDiffViewerProps {
   /** Worktree root (IPC cwd) */
   worktreePath: string;
   status: GitStatus;
+  /**
+   * The side of the index the row was opened on: `staged` compares HEAD with
+   * the index, `unstaged` the index with the working tree. Absent compares
+   * HEAD with the working tree.
+   */
+  side?: GitDiffSide;
 }
 
 export function isImageDiffCandidate(path: string): boolean {
@@ -62,6 +69,31 @@ type ImageDiffStatusSide = "head" | "working";
 
 type SideDims = Record<ImageDiffStatusSide, ImageDims | null>;
 
+interface VersionName {
+  /** Standalone, as on a chip: "Working tree". */
+  label: string;
+  /** Mid-sentence: "working tree". */
+  inline: string;
+}
+
+const HEAD_VERSION: VersionName = { label: "HEAD", inline: "HEAD" };
+const INDEX_VERSION: VersionName = { label: "Index", inline: "index" };
+const WORKING_VERSION: VersionName = { label: "Working tree", inline: "working tree" };
+
+type ComparedVersions = Record<ImageDiffStatusSide, VersionName>;
+
+/**
+ * What each end of the comparison actually is. The index takes the new end
+ * of a staged comparison and the old end of an unstaged one, so the words on
+ * screen always name the bytes beneath them.
+ */
+export function comparedVersions(side?: GitDiffSide): ComparedVersions {
+  return {
+    head: side === "unstaged" ? INDEX_VERSION : HEAD_VERSION,
+    working: side === "staged" ? INDEX_VERSION : WORKING_VERSION,
+  };
+}
+
 function sideErrorMessage(error: Extract<DiffMediaSide, { ok: false }>["error"]): string {
   switch (error) {
     case "TOO_LARGE":
@@ -76,11 +108,14 @@ function sideErrorMessage(error: Extract<DiffMediaSide, { ok: false }>["error"])
 }
 
 /** Where the swipe divider is, in words — the number alone doesn't say which version shows. */
-export function swipeValueText(position: number): string {
+export function swipeValueText(
+  position: number,
+  versions: ComparedVersions = comparedVersions()
+): string {
   const head = Math.round(position);
-  if (head <= 0) return "Working tree only";
-  if (head >= 100) return "HEAD only";
-  return `HEAD ${head}% on the left, working tree ${100 - head}% on the right`;
+  if (head <= 0) return `${versions.working.label} only`;
+  if (head >= 100) return `${versions.head.label} only`;
+  return `${versions.head.label} ${head}% on the left, ${versions.working.inline} ${100 - head}% on the right`;
 }
 
 /** The slider keyboard contract (APG): arrows step, pages jump further, Home/End hit the ends. */
@@ -112,8 +147,8 @@ function formatSignedBytes(delta: number): string {
 
 /**
  * One side's facts, with the change against the other side spelled out so the
- * reader never has to subtract two captions. Only the working tree carries a
- * baseline — HEAD is what it changed from.
+ * reader never has to subtract two captions. Only the newer side carries a
+ * baseline — the older one is what it changed from.
  */
 export function imageFactParts(
   side: OkSide,
@@ -226,7 +261,7 @@ function FactsLine({ parts, className }: { parts?: string[]; className?: string 
 }
 
 interface CommittedSnapshot {
-  /** Identity of the fetch's *target* (worktree+path+status+nonce) — see makeRequestKey. */
+  /** Identity of the fetch's *target* (worktree+path+status+side+nonce) — see makeRequestKey. */
   requestKey: string;
   /**
    * Monotonic id of the fetch attempt that produced this snapshot. Unlike
@@ -239,6 +274,7 @@ interface CommittedSnapshot {
   versions: DiffMediaFileVersions;
   relPath: string;
   status: GitStatus;
+  side: GitDiffSide | undefined;
   /**
    * Sides whose off-screen decode rejected, seeded into the matching ImagePane
    * so a genuinely broken image shows its per-side fallback instead of a torn
@@ -267,9 +303,10 @@ function makeRequestKey(
   worktreePath: string,
   relPath: string,
   status: GitStatus,
+  side: GitDiffSide | undefined,
   nonce: number
 ): string {
-  return JSON.stringify([worktreePath, relPath, status, nonce]);
+  return JSON.stringify([worktreePath, relPath, status, side ?? null, nonce]);
 }
 
 /**
@@ -348,7 +385,7 @@ interface ImagePaneProps {
   zoom: ZoomControl;
   /** Joins the pane to its siblings' scroll position at actual size. */
   scrollSync?: ScrollSync;
-  /** What the facts line measures a change against (the working tree's HEAD). */
+  /** What the facts line measures a change against (the older side). */
   baseline?: { side: OkSide; dims: ImageDims | null };
   /**
    * Seeded from the off-screen predecode so a side that failed to decode shows
@@ -460,6 +497,7 @@ interface OkSides {
 interface OverlayProps {
   sides: OkSides;
   dims: SideDims;
+  versions: ComparedVersions;
   relPath: string;
   zoom: ZoomControl;
 }
@@ -490,14 +528,14 @@ function useOverlayGeometry(dims: SideDims, zoom: ZoomControl) {
   return { frameRef, stageStyle, layerImg };
 }
 
-function OverlayChips() {
+function OverlayChips({ versions }: { versions: ComparedVersions }) {
   return (
     <>
       <div className="pointer-events-none absolute left-2 top-2 z-20">
-        <SideChip label="HEAD" />
+        <SideChip label={versions.head.label} />
       </div>
       <div className="pointer-events-none absolute right-2 top-2 z-20">
-        <SideChip label="Working tree" />
+        <SideChip label={versions.working.label} />
       </div>
     </>
   );
@@ -533,7 +571,7 @@ function overlayScrollerClass(zoom: ZoomControl): string {
   );
 }
 
-function SwipeCompare({ sides, dims, relPath, zoom }: OverlayProps) {
+function SwipeCompare({ sides, dims, versions, relPath, zoom }: OverlayProps) {
   const stageRef = useRef<HTMLDivElement>(null);
   const handleRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState(50);
@@ -577,16 +615,16 @@ function SwipeCompare({ sides, dims, relPath, zoom }: OverlayProps) {
       >
         <div ref={frameRef} className={overlayScrollerClass(zoom)}>
           <div ref={stageRef} style={stageStyle}>
-            {/* Complementary clips over one shared stage: HEAD only left of the
-              divider, the working tree only right of it. Clipping HEAD alone
-              let working-tree pixels show through wherever HEAD is transparent. */}
+            {/* Complementary clips over one shared stage: the old side only left
+              of the divider, the new side only right of it. Clipping the old
+              side alone let new pixels show through wherever it is transparent. */}
             <div
               className="absolute inset-0"
               style={{ clipPath: `inset(0 ${100 - position}% 0 0)` }}
             >
               <img
                 src={sides.head.dataUrl}
-                alt={`HEAD version of ${relPath}`}
+                alt={`${versions.head.label} version of ${relPath}`}
                 draggable={false}
                 className={head.className}
                 style={head.style}
@@ -595,7 +633,7 @@ function SwipeCompare({ sides, dims, relPath, zoom }: OverlayProps) {
             <div className="absolute inset-0" style={{ clipPath: `inset(0 0 0 ${position}%)` }}>
               <img
                 src={sides.working.dataUrl}
-                alt={`Working tree version of ${relPath}`}
+                alt={`${versions.working.label} version of ${relPath}`}
                 draggable={false}
                 className={working.className}
                 style={working.style}
@@ -624,7 +662,7 @@ function SwipeCompare({ sides, dims, relPath, zoom }: OverlayProps) {
               aria-valuemin={0}
               aria-valuemax={100}
               aria-valuenow={Math.round(position)}
-              aria-valuetext={swipeValueText(position)}
+              aria-valuetext={swipeValueText(position, versions)}
               className="absolute top-1/2 z-10 -ml-[7px] -mt-4 flex h-8 w-[15px] cursor-ew-resize items-center justify-center rounded-sm border border-text-secondary bg-surface-panel-elevated text-text-secondary before:absolute before:inset-y-0 before:-inset-x-[5px] before:content-[''] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
               style={{ left: handleLeft }}
               onKeyDown={(event) => {
@@ -643,14 +681,21 @@ function SwipeCompare({ sides, dims, relPath, zoom }: OverlayProps) {
             </div>
           </div>
         </div>
-        <OverlayChips />
+        <OverlayChips versions={versions} />
       </div>
       <OverlayFacts sides={sides} dims={dims} />
     </div>
   );
 }
 
-function OnionCompare({ sides, dims, relPath, zoom, opacity }: OverlayProps & { opacity: number }) {
+function OnionCompare({
+  sides,
+  dims,
+  versions,
+  relPath,
+  zoom,
+  opacity,
+}: OverlayProps & { opacity: number }) {
   const { frameRef, stageStyle, layerImg } = useOverlayGeometry(dims, zoom);
   const head = layerImg("head");
   const working = layerImg("working");
@@ -659,24 +704,24 @@ function OnionCompare({ sides, dims, relPath, zoom, opacity }: OverlayProps & { 
       <div className={OVERLAY_FRAME_CLASS}>
         <div ref={frameRef} className={overlayScrollerClass(zoom)}>
           <div style={stageStyle}>
-            {/* HEAD as the base layer; the working-tree layer fades in on top. */}
+            {/* The old side as the base layer; the new side fades in on top. */}
             <img
               src={sides.head.dataUrl}
-              alt={`HEAD version of ${relPath}`}
+              alt={`${versions.head.label} version of ${relPath}`}
               draggable={false}
               className={head.className}
               style={head.style}
             />
             <img
               src={sides.working.dataUrl}
-              alt={`Working tree version of ${relPath}`}
+              alt={`${versions.working.label} version of ${relPath}`}
               draggable={false}
               className={working.className}
               style={{ ...working.style, opacity: opacity / 100 }}
             />
           </div>
         </div>
-        <OverlayChips />
+        <OverlayChips versions={versions} />
       </div>
       <OverlayFacts sides={sides} dims={dims} />
     </div>
@@ -693,7 +738,7 @@ function isAggregateReadFailure(result: DiffMediaFileVersions): boolean {
   );
 }
 
-export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffViewerProps) {
+export function ImageDiffViewer({ relPath, worktreePath, status, side }: ImageDiffViewerProps) {
   // The last snapshot fully fetched AND off-screen-decoded. It stays painted
   // while the next file loads, so stepping between images never tears down to a
   // skeleton — the previous frame holds until the new one is ready to paint.
@@ -720,7 +765,7 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
   // unique per attempt (see CommittedSnapshot.attempt).
   const attemptRef = useRef(0);
 
-  const requestKey = makeRequestKey(worktreePath, relPath, status, fetchNonce);
+  const requestKey = makeRequestKey(worktreePath, relPath, status, side, fetchNonce);
 
   // Drop a stale failure the moment the target changes, during render, so
   // returning to a file that previously failed shows a hold/skeleton and the
@@ -737,7 +782,7 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
     let cancelled = false;
     const attempt = (attemptRef.current += 1);
     diffMediaClient
-      .readFileVersions({ cwd: worktreePath, filePath: relPath })
+      .readFileVersions({ cwd: worktreePath, filePath: relPath, ...(side ? { side } : {}) })
       .then(async (result) => {
         if (cancelled) return;
         // A comparison whose two transport reads both failed has nothing to
@@ -774,6 +819,7 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
           versions: result,
           relPath,
           status,
+          side,
           decodeFailures,
           dims,
         });
@@ -784,7 +830,7 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
     return () => {
       cancelled = true;
     };
-  }, [worktreePath, relPath, status, requestKey]);
+  }, [worktreePath, relPath, status, side, requestKey]);
 
   const retry = useCallback(() => setFetchNonce((nonce) => nonce + 1), []);
 
@@ -850,10 +896,15 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
   // which is harmless — it just refetches the file that's already loading.
   const isHolding = view.requestKey !== requestKey;
   const singleSide = deriveSingleSide(view.status);
+  const versions = comparedVersions(view.side);
 
   if (singleSide !== null) {
     const caption =
-      singleSide === "working" ? "Added — no previous version" : "Deleted — no working version";
+      singleSide === "working"
+        ? "Added — no previous version"
+        : view.side === "staged"
+          ? "Deleted — no index version"
+          : "Deleted — no working version";
     const zoomable = view.dims[singleSide] !== null && !view.decodeFailures[singleSide];
     return (
       <div className="flex h-full min-h-0 w-full flex-col" aria-busy={isHolding || undefined}>
@@ -870,7 +921,7 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
         <div className={cn(PANE_ROWS_CLASS, "p-3")}>
           <ImagePane
             key={`${view.attempt}:${singleSide}`}
-            label={singleSide === "working" ? "Working tree" : "HEAD"}
+            label={versions[singleSide].label}
             side={view.versions[singleSide]}
             relPath={view.relPath}
             caption={caption}
@@ -928,14 +979,14 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
           </div>
           {effectiveMode === "onion" ? (
             <label className="flex min-w-0 items-center gap-2 whitespace-nowrap text-2xs text-text-secondary">
-              Working tree opacity
+              {versions.working.label} opacity
               <input
                 type="range"
                 min={0}
                 max={100}
                 value={onionOpacity}
-                aria-label="Working tree opacity"
-                aria-valuetext={`Working tree at ${onionOpacity}% over HEAD`}
+                aria-label={`${versions.working.label} opacity`}
+                aria-valuetext={`${versions.working.label} at ${onionOpacity}% over ${versions.head.inline}`}
                 onChange={(event) => setOnionOpacity(Number(event.currentTarget.value))}
                 className="w-36 min-w-16 shrink cursor-pointer accent-[var(--color-text-primary)]"
               />
@@ -952,7 +1003,7 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
           <div className={cn(PANE_ROWS_CLASS, "grid-cols-2")}>
             <ImagePane
               key={`${view.attempt}:head`}
-              label="HEAD"
+              label={versions.head.label}
               side={headSide}
               relPath={view.relPath}
               dims={view.dims.head}
@@ -964,7 +1015,7 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
             />
             <ImagePane
               key={`${view.attempt}:working`}
-              label="Working tree"
+              label={versions.working.label}
               side={view.versions.working}
               relPath={view.relPath}
               dims={view.dims.working}
@@ -980,6 +1031,7 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
           <SwipeCompare
             sides={okSides}
             dims={view.dims}
+            versions={versions}
             relPath={view.relPath}
             zoom={zoomControl}
           />
@@ -987,6 +1039,7 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
           <OnionCompare
             sides={okSides}
             dims={view.dims}
+            versions={versions}
             relPath={view.relPath}
             zoom={zoomControl}
             opacity={onionOpacity}

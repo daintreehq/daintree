@@ -63,7 +63,9 @@ const { isImageDiffCandidateMock } = vi.hoisted(() => ({
     vi.fn<typeof import("@/components/FileViewer/ImageDiffViewer").isImageDiffCandidate>(),
 }));
 vi.mock("@/components/FileViewer/ImageDiffViewer", () => ({
-  ImageDiffViewer: () => <div data-testid="image-diff-mock" />,
+  ImageDiffViewer: (props: { side?: string }) => (
+    <div data-testid="image-diff-mock" data-side={props.side ?? "none"} />
+  ),
   isImageDiffCandidate: isImageDiffCandidateMock,
 }));
 vi.mock("@/components/ui/EmptyState", () => ({
@@ -535,6 +537,35 @@ describe("DiffPane — content-aware toolbar", () => {
     // Refresh and the path pill act on any file kind, so they stay.
     expect(screen.getByLabelText(/^Copy file path/)).toBeTruthy();
     expect(screen.getByLabelText("Refresh")).toBeTruthy();
+  });
+
+  it("hands each twin of a partially staged image its own side of the index", () => {
+    isImageDiffCandidateMock.mockReturnValue(true);
+    const changeSet: DiffChangeSetEntry[] = [
+      { path: "logo.png", status: "modified", viewedKey: "staged:logo.png", side: "staged" },
+      { path: "logo.png", status: "modified", viewedKey: "unstaged:logo.png", side: "unstaged" },
+    ];
+    const sideFor = (viewedKey: string) => {
+      cleanup();
+      seedPanel({ filePath: "logo.png", fileStatus: "modified", viewedKey, changeSet });
+      renderPane();
+      return screen.getByTestId("image-diff-mock").getAttribute("data-side");
+    };
+
+    expect(sideFor("staged:logo.png")).toBe("staged");
+    expect(sideFor("unstaged:logo.png")).toBe("unstaged");
+  });
+
+  it("names no side for a plain working-tree image, and the panel's own for a sided panel", () => {
+    isImageDiffCandidateMock.mockReturnValue(true);
+    seedPanel({ filePath: "logo.png", fileStatus: "modified", changeSet: [entry("logo.png")] });
+    renderPane();
+    expect(screen.getByTestId("image-diff-mock").getAttribute("data-side")).toBe("none");
+
+    cleanup();
+    seedPanel({ filePath: "logo.png", fileStatus: "modified", diffSource: "staged" });
+    renderPane();
+    expect(screen.getByTestId("image-diff-mock").getAttribute("data-side")).toBe("staged");
   });
 
   it("keeps them for a base-branch image, which the text viewer still handles", () => {

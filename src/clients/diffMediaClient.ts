@@ -5,6 +5,7 @@ import type {
   DiffMediaSide,
   DiffMediaWireSide,
 } from "@shared/types";
+import type { GitDiffSide } from "@shared/types/git";
 
 type VersionedSide = Extract<DiffMediaSide, { ok: true }> & { version: string };
 
@@ -22,8 +23,10 @@ const CACHE_MAX_BYTES = 64 * 1024 * 1024;
 const cache = new Map<string, CacheEntry>();
 let cachedBytes = 0;
 
-function cacheKey(cwd: string, filePath: string): string {
-  return JSON.stringify([cwd, filePath]);
+// Per side: the same path's two slots hold different versions (HEAD, the
+// index or disk) depending on the comparison asked for.
+function cacheKey(cwd: string, filePath: string, side: GitDiffSide | undefined): string {
+  return JSON.stringify([cwd, filePath, side ?? null]);
 }
 
 function sideBytes(side: VersionedSide | undefined): number {
@@ -75,7 +78,7 @@ export const diffMediaClient = {
   readFileVersions: async (
     payload: DiffMediaReadFileVersionsPayload
   ): Promise<DiffMediaFileVersions> => {
-    const key = cacheKey(payload.cwd, payload.filePath);
+    const key = cacheKey(payload.cwd, payload.filePath, payload.side);
     // Captured now, so an eviction while the request is in flight can't strip
     // the bytes an `unchanged` reply points at.
     const held = cache.get(key);

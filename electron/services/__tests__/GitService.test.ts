@@ -948,6 +948,147 @@ describe("GitService.readFileAtHead", () => {
   });
 });
 
+describe("GitService.readFileInIndex", () => {
+  let tempDir: string;
+  const binaryCatFileMock = vi.fn();
+  const STAGED_OID = "c".repeat(40);
+
+  function lsFilesRecord(path: string, stage = 0, oid = STAGED_OID, mode = "100644") {
+    return `${mode} ${oid} ${stage}\t${path}\0`;
+  }
+
+  // The listing answers `ls-files`; the size probe answers `cat-file -s`.
+  function mockIndex(listing: string, size = 10): void {
+    gitClientMock.raw.mockImplementation(async (args: string[]) =>
+      args.includes("ls-files") ? listing : `${size}\n`
+    );
+  }
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-git-index-"));
+    vi.clearAllMocks();
+    createHardenedGitMock.mockImplementation(() => ({
+      ...gitClientMock,
+      binaryCatFile: binaryCatFileMock,
+    }));
+    gitClientMock.raw.mockResolvedValue("");
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("rejects traversal before touching git", async () => {
+    const service = new GitService(tempDir);
+    await expect(service.readFileInIndex("assets/../../outside.png", 1024)).rejects.toThrow(
+      /traversal/i
+    );
+    expect(gitClientMock.raw).not.toHaveBeenCalled();
+  });
+
+  it("lists the path behind -- with literal pathspecs and reads the staged blob by id", async () => {
+    mockIndex(lsFilesRecord("-flag[1].png"));
+    binaryCatFileMock.mockResolvedValue(Buffer.from("staged-bytes"));
+    const service = new GitService(tempDir);
+
+    const result = await service.readFileInIndex("-flag[1].png", 1024);
+
+    expect(gitClientMock.raw).toHaveBeenCalledWith([
+      "--literal-pathspecs",
+      "ls-files",
+      "--stage",
+      "-z",
+      "--",
+      "-flag[1].png",
+    ]);
+    expect(binaryCatFileMock).toHaveBeenCalledWith(["blob", STAGED_OID]);
+    expect(result).toEqual({ ok: true, content: Buffer.from("staged-bytes"), version: STAGED_OID });
+  });
+
+  it("takes the merged entry only, ignoring other paths in the listing", async () => {
+    const other = "d".repeat(40);
+    mockIndex(`${lsFilesRecord("img.png.bak", 0, other)}${lsFilesRecord("img.png")}`);
+    binaryCatFileMock.mockResolvedValue(Buffer.from("data"));
+    const service = new GitService(tempDir);
+
+    const result = await service.readFileInIndex("img.png", 1024);
+
+    expect(result).toMatchObject({ ok: true, version: STAGED_OID });
+    expect(binaryCatFileMock).toHaveBeenCalledWith(["blob", STAGED_OID]);
+  });
+
+  it("has no staged version for an unmerged path, whatever its conflict stages hold", async () => {
+    mockIndex(
+      [1, 2, 3].map((stage) => lsFilesRecord("img.png", stage, String(stage).repeat(40))).join("")
+    );
+    const service = new GitService(tempDir);
+
+    await expect(service.readFileInIndex("img.png", 1024)).resolves.toEqual({
+      ok: false,
+      reason: "NOT_FOUND",
+    });
+    expect(binaryCatFileMock).not.toHaveBeenCalled();
+  });
+
+  it("reports an untracked path as NOT_FOUND", async () => {
+    mockIndex("");
+    const service = new GitService(tempDir);
+
+    await expect(service.readFileInIndex("img.png", 1024)).resolves.toEqual({
+      ok: false,
+      reason: "NOT_FOUND",
+    });
+  });
+
+  it("never reads a gitlink's commit as a blob", async () => {
+    mockIndex(lsFilesRecord("vendor/lib", 0, STAGED_OID, "160000"));
+    const service = new GitService(tempDir);
+
+    await expect(service.readFileInIndex("vendor/lib", 1024)).resolves.toEqual({
+      ok: false,
+      reason: "NOT_FOUND",
+    });
+    expect(binaryCatFileMock).not.toHaveBeenCalled();
+  });
+
+  it("returns unchanged for a known blob id without probing or reading", async () => {
+    mockIndex(lsFilesRecord("img.png"));
+    const beforeRead = vi.fn();
+    const service = new GitService(tempDir);
+
+    const result = await service.readFileInIndex("img.png", 1024, {
+      knownVersion: STAGED_OID,
+      beforeRead,
+    });
+
+    expect(result).toEqual({ ok: true, unchanged: true, version: STAGED_OID });
+    expect(gitClientMock.raw).toHaveBeenCalledTimes(1);
+    expect(binaryCatFileMock).not.toHaveBeenCalled();
+    expect(beforeRead).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized staged blob from its size without reading it", async () => {
+    mockIndex(lsFilesRecord("big.png"), 5 * 1024 * 1024);
+    const beforeRead = vi.fn();
+    const service = new GitService(tempDir);
+
+    await expect(service.readFileInIndex("big.png", 1024, { beforeRead })).resolves.toEqual({
+      ok: false,
+      reason: "TOO_LARGE",
+    });
+    expect(binaryCatFileMock).not.toHaveBeenCalled();
+    expect(beforeRead).not.toHaveBeenCalled();
+  });
+
+  it("surfaces unparseable listings as git operation errors instead of NOT_FOUND", async () => {
+    mockIndex("garbage\0");
+    const service = new GitService(tempDir);
+
+    await expect(service.readFileInIndex("img.png", 1024)).rejects.toThrow(GitOperationError);
+    expect(binaryCatFileMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("GitService.readPreviousFileVersion", () => {
   let tempDir: string;
   const binaryCatFileMock = vi.fn();

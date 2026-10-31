@@ -70,6 +70,7 @@ function bytesOf(side: DiffMediaWireSide): Buffer {
 }
 
 describe("diffMedia readFileVersions against a real repository", () => {
+  let root: string;
   let repo: string;
   let cleanup: () => void;
 
@@ -87,7 +88,9 @@ describe("diffMedia readFileVersions against a real repository", () => {
   beforeEach(() => {
     ipcHandlers.clear();
     _resetRateLimitQueuesForTest();
-    repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "daintree-diff-media-index-")));
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "daintree-diff-media-index-")));
+    repo = path.join(root, "repo");
+    fs.mkdirSync(repo);
     git(repo, ["init", "-q", "-b", "main"]);
     git(repo, ["config", "user.email", "test@example.com"]);
     git(repo, ["config", "user.name", "Test"]);
@@ -99,7 +102,7 @@ describe("diffMedia readFileVersions against a real repository", () => {
   afterEach(() => {
     cleanup();
     gitServiceCache.clear();
-    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
   });
 
   describe("with distinct HEAD, index and working-tree versions", () => {
@@ -187,6 +190,66 @@ describe("diffMedia readFileVersions against a real repository", () => {
     const staged = await invoke({ cwd: repo, filePath: FILE, side: "staged" });
     expect(bytesOf(staged.head)).toEqual(RED);
     expect(staged.working).toEqual({ ok: false, error: "NOT_FOUND" });
+  });
+
+  it("reads the index of a repository with no commits yet", async () => {
+    const fresh = path.join(root, "fresh");
+    fs.mkdirSync(fresh);
+    git(fresh, ["init", "-q", "-b", "main"]);
+    fs.mkdirSync(path.join(fresh, "assets"));
+    fs.writeFileSync(path.join(fresh, FILE), BLUE);
+    git(fresh, ["add", "--", FILE]);
+    fs.writeFileSync(path.join(fresh, FILE), GREEN);
+
+    const staged = await invoke({ cwd: fresh, filePath: FILE, side: "staged" });
+    expect(staged.head).toEqual({ ok: false, error: "NOT_FOUND" });
+    expect(bytesOf(staged.working)).toEqual(BLUE);
+  });
+
+  it("reads each worktree's own index", async () => {
+    write(FILE, RED);
+    commitAll("red");
+    const linked = path.join(root, "linked");
+    git(repo, ["worktree", "add", "-q", "-b", "linked", linked]);
+    fs.writeFileSync(path.join(linked, FILE), BLUE);
+    git(linked, ["add", "--", FILE]);
+    fs.writeFileSync(path.join(linked, FILE), GREEN);
+
+    const inLinked = await invoke({ cwd: linked, filePath: FILE, side: "staged" });
+    expect(bytesOf(inLinked.working)).toEqual(BLUE);
+    const inMain = await invoke({ cwd: repo, filePath: FILE, side: "staged" });
+    expect(bytesOf(inMain.working)).toEqual(RED);
+  });
+
+  it("reads a renamed image at its new path only, as the HEAD side always has", async () => {
+    write("assets/old.png", RED);
+    commitAll("red");
+    git(repo, ["mv", "assets/old.png", FILE]);
+    write(FILE, GREEN);
+
+    const staged = await invoke({ cwd: repo, filePath: FILE, side: "staged" });
+    expect(staged.head).toEqual({ ok: false, error: "NOT_FOUND" });
+    expect(bytesOf(staged.working)).toEqual(RED);
+
+    const unstaged = await invoke({ cwd: repo, filePath: FILE, side: "unstaged" });
+    expect(bytesOf(unstaged.head)).toEqual(RED);
+    expect(bytesOf(unstaged.working)).toEqual(GREEN);
+  });
+
+  it("falls back to history after a committed deletion only when no side is named", async () => {
+    write(FILE, RED);
+    commitAll("red");
+    git(repo, ["rm", "-q", "--", FILE]);
+    git(repo, ["commit", "-qm", "delete"]);
+
+    const plain = await invoke({ cwd: repo, filePath: FILE });
+    expect(bytesOf(plain.head)).toEqual(RED);
+
+    for (const side of ["staged", "unstaged"] as const) {
+      const result = await invoke({ cwd: repo, filePath: FILE, side });
+      expect(result.head).toEqual({ ok: false, error: "NOT_FOUND" });
+      expect(result.working).toEqual({ ok: false, error: "NOT_FOUND" });
+    }
   });
 
   it("caps an oversized index blob like any other side", async () => {
