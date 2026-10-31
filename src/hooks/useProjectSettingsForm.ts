@@ -1,5 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
+import { projectClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useRecipeStore } from "@/store/recipeStore";
@@ -10,8 +11,14 @@ import {
   areSnapshotsEqual,
   type EnvVar,
 } from "@/components/Project/projectSettingsDirty";
-import { validatePathPattern } from "@shared/utils/pathPattern";
-import { formatShellArgs, parseShellArgs } from "@shared/utils/shellArgs";
+import {
+  applyFormEdits,
+  buildTerminalSettings,
+  hasFormEdits,
+  toFormOwnedSettings,
+  type FormOwnedSettings,
+} from "@/components/Project/projectSettingsFormEdits";
+import { formatShellArgs } from "@shared/utils/shellArgs";
 import type { RunCommand, CopyTreeSettings } from "@/types";
 import type {
   DaintreeMcpTier,
@@ -21,7 +28,6 @@ import type {
 import { resolveDaintreeMcpTier } from "@shared/types/project";
 import type { CommandOverride } from "@shared/types/commands";
 import type { NotificationSettings } from "@shared/types/ipc/api";
-import { SCROLLBACK_MIN, SCROLLBACK_MAX } from "@shared/config/scrollback";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 interface UseProjectSettingsFormParams {
@@ -88,8 +94,22 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   const currentProjectSnapshotRef = useRef<ReturnType<typeof createProjectSettingsSnapshot> | null>(
     null
   );
+  // What the form last wrote, as stored values: a save sends only the fields
+  // that differ from it, laid over the settings as they are on disk.
+  const lastSavedFieldsRef = useRef<FormOwnedSettings | null>(null);
+  const persistChainRef = useRef<Promise<void> | null>(null);
+  // Retry bumps the attempt so the read made on open runs again.
+  const [openReadAttempt, setOpenReadAttempt] = useState(0);
+  const [settledOpenRead, setSettledOpenRead] = useState<{
+    projectId: string;
+    attempt: number;
+  } | null>(null);
+  const openReadSettled =
+    !!projectId &&
+    settledOpenRead?.projectId === projectId &&
+    settledOpenRead.attempt === openReadAttempt;
   const prevProjectIdRef = useRef(projectId);
-  const projectPersistRef = useRef<() => Promise<void>>(undefined);
+  const projectPersistRef = useRef<(options?: { force?: boolean }) => Promise<void>>(undefined);
   // Stable debounce instance initialized on mount. Uninitialized ref + mount
   // effect keeps the render pure so the React Compiler can optimize this hook.
   const debouncedProjectSaveRef = useRef<ReturnType<typeof debounce<[]>> | null>(null);
@@ -106,28 +126,17 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   const { recipes, isLoading: recipesLoading } = useRecipeStore();
   const { worktreeMap, worktrees } = useWorktrees();
 
-  const currentTerminalSettings = useMemo((): ProjectTerminalSettings | undefined => {
-    const result: ProjectTerminalSettings = {};
-    if (terminalShell !== undefined && terminalShell.trim()) result.shell = terminalShell.trim();
-    if (terminalShellArgs !== undefined) {
-      const shellArgs = parseShellArgs(terminalShellArgs);
-      if (shellArgs.length > 0) result.shellArgs = shellArgs;
-    }
-    if (terminalDefaultCwd !== undefined && terminalDefaultCwd.trim())
-      result.defaultWorkingDirectory = terminalDefaultCwd.trim();
-    if (terminalScrollback !== undefined && terminalScrollback.trim()) {
-      const num = Number(terminalScrollback);
-      if (Number.isFinite(num) && num >= SCROLLBACK_MIN && num <= SCROLLBACK_MAX) {
-        result.scrollbackLines = Math.trunc(num);
-      } else if (projectSettings?.terminalSettings?.scrollbackLines !== undefined) {
-        // Invalid in-flight input must not silently wipe an existing valid
-        // override — preserve the last saved value until the user types a
-        // valid number or resets the field.
-        result.scrollbackLines = projectSettings.terminalSettings.scrollbackLines;
-      }
-    }
-    return Object.keys(result).length > 0 ? result : undefined;
-  }, [terminalShell, terminalShellArgs, terminalDefaultCwd, terminalScrollback, projectSettings]);
+  const currentTerminalSettings = useMemo(
+    (): ProjectTerminalSettings | undefined =>
+      buildTerminalSettings(
+        terminalShell,
+        terminalShellArgs,
+        terminalDefaultCwd,
+        terminalScrollback,
+        projectSettings?.terminalSettings?.scrollbackLines
+      ),
+    [terminalShell, terminalShellArgs, terminalDefaultCwd, terminalScrollback, projectSettings]
+  );
 
   const currentProjectSnapshot = useMemo(() => {
     if (!currentProject) return null;
@@ -203,6 +212,29 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     prevProjectIdRef.current = projectId;
   }, [projectId, isOpen]);
 
+  // The cached settings are read once per view, and writers outside this form
+  // (the MCP tier banner, a toast's silence action) save to disk alone. Seed
+  // from a read made after the dialog opened, and after any save the last
+  // session left in flight.
+  useEffect(() => {
+    if (!isOpen || !projectId) return;
+    let cancelled = false;
+    void Promise.resolve(persistChainRef.current)
+      .then(() => refreshProjectSettings())
+      // A failed read reports through projectError and leaves the cache as it was.
+      .catch(() => undefined)
+      .then(() => {
+        if (!cancelled) setSettledOpenRead({ projectId, attempt: openReadAttempt });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, projectId, refreshProjectSettings, openReadAttempt]);
+
+  const retryProjectSettingsRead = async () => {
+    setOpenReadAttempt((attempt) => attempt + 1);
+  };
+
   useEffect(() => {
     if (!isOpen) {
       debouncedProjectSaveRef.current?.cancel();
@@ -233,11 +265,16 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       setResourceEnvironments(undefined);
       setActiveResourceEnvironment(undefined);
       setDefaultWorktreeMode(undefined);
+      setSettledOpenRead(null);
       lastSavedSnapshotRef.current = null;
+      lastSavedFieldsRef.current = null;
       return;
     }
 
     if (projectIsLoading || !projectSettings || !currentProject) return;
+    // A failed read leaves only the cache, which may predate what main stores;
+    // the error banner's Retry seeds once a read succeeds.
+    if (!openReadSettled || projectError) return;
     if (projectIsInitialized) return;
 
     const initialRunCommands = projectSettings.runCommands || [];
@@ -282,6 +319,13 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       initialActiveResourceEnvironment = keys.length > 0 ? keys[0] : "default";
     }
     const initialDefaultWorktreeMode = projectSettings.defaultWorktreeMode;
+    const initialTerminalShellArgs = initialTerminalSettings?.shellArgs
+      ? formatShellArgs(initialTerminalSettings.shellArgs)
+      : undefined;
+    const initialTerminalScrollback =
+      initialTerminalSettings?.scrollbackLines !== undefined
+        ? String(initialTerminalSettings.scrollbackLines)
+        : undefined;
 
     setProjectName(currentProject.name);
     setProjectEmoji(currentProject.emoji || "🌲");
@@ -302,17 +346,9 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     setBranchPrefixCustom(initialBranchPrefixCustom);
     setWorktreePathPattern(initialWorktreePathPattern);
     setTerminalShell(initialTerminalSettings?.shell);
-    setTerminalShellArgs(
-      initialTerminalSettings?.shellArgs
-        ? formatShellArgs(initialTerminalSettings.shellArgs)
-        : undefined
-    );
+    setTerminalShellArgs(initialTerminalShellArgs);
     setTerminalDefaultCwd(initialTerminalSettings?.defaultWorkingDirectory);
-    setTerminalScrollback(
-      initialTerminalSettings?.scrollbackLines !== undefined
-        ? String(initialTerminalSettings.scrollbackLines)
-        : undefined
-    );
+    setTerminalScrollback(initialTerminalScrollback);
     setNotificationOverrides(initialNotificationOverrides);
     setForgeRemote(initialForgeRemote);
     setForgeProviderOverride(initialForgeProviderOverride);
@@ -349,56 +385,86 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       initialDaintreeMcpSkipConfirmations,
       initialIssueProviderOverride
     );
+    lastSavedFieldsRef.current = toFormOwnedSettings(
+      {
+        runCommands: initialRunCommands,
+        environmentVariables: initialEnvVars,
+        excludedPaths: initialExcludedPaths,
+        projectIconSvg: initialProjectIconSvg,
+        defaultWorktreeRecipeId: initialDefaultWorktreeRecipeId,
+        devServerCommand: initialDevServerCommand,
+        devServerLoadTimeout: initialDevServerLoadTimeout,
+        turbopackEnabled: initialTurbopackEnabled,
+        daintreeMcpTier: initialDaintreeMcpTier,
+        daintreeMcpSkipConfirmations: initialDaintreeMcpSkipConfirmations,
+        commandOverrides: initialCommandOverrides,
+        copyTreeSettings: initialCopyTreeSettings,
+        branchPrefixMode: initialBranchPrefixMode,
+        branchPrefixCustom: initialBranchPrefixCustom,
+        forgeRemote: initialForgeRemote,
+        forgeProviderOverride: initialForgeProviderOverride,
+        issueProviderOverride: initialIssueProviderOverride,
+        worktreePathPattern: initialWorktreePathPattern,
+        terminalShell: initialTerminalSettings?.shell,
+        terminalShellArgs: initialTerminalShellArgs,
+        terminalDefaultCwd: initialTerminalSettings?.defaultWorkingDirectory,
+        terminalScrollback: initialTerminalScrollback,
+        notificationOverrides: initialNotificationOverrides,
+        resourceEnvironments: initialResourceEnvironments,
+        activeResourceEnvironment: initialActiveResourceEnvironment,
+        defaultWorktreeMode: initialDefaultWorktreeMode,
+      },
+      null
+    );
     setProjectIsInitialized(true);
-  }, [projectSettings, isOpen, projectIsInitialized, currentProject, projectIsLoading, projectId]);
+  }, [
+    projectSettings,
+    isOpen,
+    projectIsInitialized,
+    currentProject,
+    projectIsLoading,
+    projectId,
+    openReadSettled,
+    projectError,
+  ]);
 
-  const projectPersist = async () => {
+  const persistDraft = async (force: boolean) => {
     if (!projectSettings || !currentProject || !projectId) {
       return;
     }
 
-    const sanitizedRunCommands = runCommands
-      .map((cmd) => ({ ...cmd, name: cmd.name.trim(), command: cmd.command.trim() }))
-      .filter((cmd) => cmd.name && cmd.command);
-
-    const envVarRecord: Record<string, string> = {};
-    const seenKeys = new Set<string>();
-    for (const envVar of environmentVariables) {
-      const trimmedKey = envVar.key.trim();
-      if (!trimmedKey || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmedKey) || seenKeys.has(trimmedKey))
-        continue;
-      seenKeys.add(trimmedKey);
-      envVarRecord[trimmedKey] = envVar.value;
-    }
-
-    const sanitizedPaths = excludedPaths.map((p) => p.trim()).filter(Boolean);
-    const sanitizedCopyTreeSettings: CopyTreeSettings = {};
-    if (copyTreeSettings.maxContextSize !== undefined)
-      sanitizedCopyTreeSettings.maxContextSize = copyTreeSettings.maxContextSize;
-    if (copyTreeSettings.maxFileSize !== undefined)
-      sanitizedCopyTreeSettings.maxFileSize = copyTreeSettings.maxFileSize;
-    if (copyTreeSettings.charLimit !== undefined)
-      sanitizedCopyTreeSettings.charLimit = copyTreeSettings.charLimit;
-    if (copyTreeSettings.strategy) sanitizedCopyTreeSettings.strategy = copyTreeSettings.strategy;
-    if (copyTreeSettings.alwaysInclude && copyTreeSettings.alwaysInclude.length > 0) {
-      sanitizedCopyTreeSettings.alwaysInclude = copyTreeSettings.alwaysInclude
-        .map((p) => p.trim())
-        .filter(Boolean);
-      if (sanitizedCopyTreeSettings.alwaysInclude.length === 0)
-        delete sanitizedCopyTreeSettings.alwaysInclude;
-    }
-    if (copyTreeSettings.alwaysExclude && copyTreeSettings.alwaysExclude.length > 0) {
-      sanitizedCopyTreeSettings.alwaysExclude = copyTreeSettings.alwaysExclude
-        .map((p) => p.trim())
-        .filter(Boolean);
-      if (sanitizedCopyTreeSettings.alwaysExclude.length === 0)
-        delete sanitizedCopyTreeSettings.alwaysExclude;
-    }
-    const hasCopyTreeSettings = Object.keys(sanitizedCopyTreeSettings).length > 0;
-
-    const sanitizedBranchPrefixCustom = branchPrefixCustom.trim();
-    const effectivePrefixMode =
-      branchPrefixMode === "custom" && !sanitizedBranchPrefixCustom ? "none" : branchPrefixMode;
+    const baseline = lastSavedFieldsRef.current;
+    const draft = toFormOwnedSettings(
+      {
+        runCommands,
+        environmentVariables,
+        excludedPaths,
+        projectIconSvg,
+        defaultWorktreeRecipeId,
+        devServerCommand,
+        devServerLoadTimeout,
+        turbopackEnabled,
+        daintreeMcpTier,
+        daintreeMcpSkipConfirmations,
+        commandOverrides,
+        copyTreeSettings,
+        branchPrefixMode,
+        branchPrefixCustom,
+        forgeRemote,
+        forgeProviderOverride,
+        issueProviderOverride,
+        worktreePathPattern,
+        terminalShell,
+        terminalShellArgs,
+        terminalDefaultCwd,
+        terminalScrollback,
+        notificationOverrides,
+        resourceEnvironments,
+        activeResourceEnvironment,
+        defaultWorktreeMode,
+      },
+      baseline
+    );
     setProjectAutoSaveError(null);
     try {
       const trimmedName = projectName.trim() || currentProject.name;
@@ -414,49 +480,15 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
         });
       }
 
-      const trimmedWorktreePathPattern = worktreePathPattern.trim();
-      const draftPathPattern = trimmedWorktreePathPattern || undefined;
-      const pathPatternIsValid = !draftPathPattern || validatePathPattern(draftPathPattern).valid;
-      // When the draft pattern is invalid, preserve the previously persisted value
-      // (the field-level error renders inline in AutomationTab) so unrelated field
-      // edits still auto-save.
-      const sanitizedWorktreePathPattern = pathPatternIsValid
-        ? draftPathPattern
-        : projectSettings.worktreePathPattern;
+      // Lay the edits over a fresh read, not the cache: other writers save to
+      // disk without touching the cache, and a field this form never changed
+      // must keep whatever they stored (#15573).
+      if (force || hasFormEdits(baseline, draft)) {
+        const stored = await projectClient.getSettings(projectId);
+        await saveProjectSettings(applyFormEdits(stored, baseline, draft));
+      }
 
-      await saveProjectSettings({
-        ...projectSettings,
-        runCommands: sanitizedRunCommands,
-        environmentVariables: Object.keys(envVarRecord).length > 0 ? envVarRecord : undefined,
-        excludedPaths: sanitizedPaths.length > 0 ? sanitizedPaths : undefined,
-        projectIconSvg,
-        defaultWorktreeRecipeId,
-        devServerCommand: devServerCommand.trim() || undefined,
-        devServerLoadTimeout,
-        turbopackEnabled: turbopackEnabled === true ? undefined : false,
-        daintreeMcpTier: daintreeMcpTier !== "off" ? daintreeMcpTier : undefined,
-        daintreeMcpSkipConfirmations: daintreeMcpSkipConfirmations ? true : undefined,
-        exposeDaintreeMcpToAgents: undefined,
-        commandOverrides: commandOverrides.length > 0 ? commandOverrides : undefined,
-        copyTreeSettings: hasCopyTreeSettings ? sanitizedCopyTreeSettings : undefined,
-        branchPrefixMode: effectivePrefixMode !== "none" ? effectivePrefixMode : undefined,
-        branchPrefixCustom:
-          effectivePrefixMode === "custom" ? sanitizedBranchPrefixCustom : undefined,
-        forgeRemote: forgeRemote || undefined,
-        forgeProviderOverride: forgeProviderOverride ?? undefined,
-        issueProviderOverride: issueProviderOverride ?? undefined,
-        worktreePathPattern: sanitizedWorktreePathPattern,
-        terminalSettings: currentTerminalSettings,
-        notificationOverrides:
-          Object.keys(notificationOverrides).length > 0 ? notificationOverrides : undefined,
-        resourceEnvironment: undefined,
-        resourceEnvironments,
-        activeResourceEnvironment,
-        defaultWorktreeMode,
-        insecureEnvironmentVariables: undefined,
-        unresolvedSecureEnvironmentVariables: undefined,
-      });
-
+      lastSavedFieldsRef.current = draft;
       if (currentProjectSnapshot) {
         lastSavedSnapshotRef.current = currentProjectSnapshot;
       }
@@ -464,6 +496,15 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       logError("Failed to auto-save project settings", err);
       setProjectAutoSaveError(formatErrorMessage(err, "Failed to save settings"));
     }
+  };
+
+  // One save at a time: each diffs against the baseline the previous one left.
+  const projectPersist = (options?: { force?: boolean }) => {
+    const run = Promise.resolve(persistChainRef.current).then(() =>
+      persistDraft(options?.force === true)
+    );
+    persistChainRef.current = run;
+    return run;
   };
 
   // projectPersist is recreated each render; sync it to the ref so the
@@ -488,14 +529,13 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   const saveNow = async () => {
     await debouncedProjectSaveRef.current?.flush();
     if (projectIsInitialized && projectPersistRef.current) {
-      await projectPersistRef.current();
+      await projectPersistRef.current({ force: true });
     }
   };
 
   // Lifecycle save, run on dialog close and on WebContentsView detach. Unlike
-  // saveNow it must not write when the form is clean: projectPersist spreads
-  // the cached settings snapshot, so a no-op write would revert fields saved
-  // out-of-band by other tabs since that snapshot was taken (#12326).
+  // saveNow it must not write when the form is clean: nothing was edited, so
+  // there is nothing for a write to say (#12326).
   const flush = async () => {
     // First drain any pending debounced save — that also settles an in-flight
     // one, so the snapshot comparison below sees its result.
@@ -571,9 +611,11 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     defaultWorktreeMode,
     setDefaultWorktreeMode,
     projectSettings,
-    projectIsLoading,
+    // A revalidation leaves the store's own flag down, so the read made on open
+    // reports here or the dialog never shows it is still loading.
+    projectIsLoading: projectIsLoading || (isOpen && !!projectId && !openReadSettled),
     projectError,
-    refreshProjectSettings,
+    refreshProjectSettings: retryProjectSettingsRead,
     currentProject,
     enableInRepoSettings,
     disableInRepoSettings,
