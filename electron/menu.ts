@@ -47,7 +47,11 @@ import {
   hasOpenApplicationWindow,
   resolveProjectIdForApplicationMenu,
 } from "./projectMenuState.js";
-import { buildOpenWindowMenuItems, isOpenWindowMenuStale } from "./windowMenuState.js";
+import {
+  buildOpenWindowMenuItems,
+  isOpenWindowMenuStale,
+  noteOpenWindowMenuInstalled,
+} from "./windowMenuState.js";
 import { PRODUCT_NAME, PRODUCT_WEBSITE, PRODUCT_COPYRIGHT_ORG } from "./utils/productBranding.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 import { getUserMessage, isAppError } from "./utils/errorTypes.js";
@@ -277,7 +281,7 @@ export function createApplicationMenu(
   // A plugin hidden in this window's project has withdrawn its contributions
   // from the view, so its menu items and Help tours leave the menu too.
   const menuProjectId = menuProjectIdFor(mainWindow);
-  builtHiddenMenuPluginsKey = hiddenMenuPluginsKey(menuProjectId);
+  const menuPluginsKey = hiddenMenuPluginsKey(menuProjectId);
 
   const buildPluginMenuItems = (location: string): Electron.MenuItemConstructorOptions[] => {
     const items: Electron.MenuItemConstructorOptions[] = [];
@@ -883,6 +887,10 @@ export function createApplicationMenu(
 
   const menu = Menu.buildFromTemplate(template);
   Menu.setApplicationMenu(menu);
+  // Only once installed: a build that throws above leaves the old menu in
+  // place, and the staleness checks must keep comparing against that one.
+  builtHiddenMenuPluginsKey = menuPluginsKey;
+  noteOpenWindowMenuInstalled();
 
   wireUpdateMenuState();
 }

@@ -172,7 +172,10 @@ export const menuNamespace = defineIpcNamespace({
         } catch (err) {
           console.error("[MAIN] Failed to bring the application menu up to date:", err);
         }
-        if (win.isDestroyed()) return;
+        // The guards above held before the await; focus or the visible view may
+        // have moved while it was pending.
+        if (win.isDestroyed() || !win.isFocused()) return;
+        if (isCachedViewWebContents(ctx.webContentsId)) return;
 
         const menu = Menu.getApplicationMenu();
         if (!menu) return;

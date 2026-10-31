@@ -11,6 +11,8 @@ const closingWindows = new WeakSet<BrowserWindow>();
 
 /** The windows the installed menu has an item for, in menu order. */
 let builtWindowIds: number[] = [];
+/** What the latest build listed, until that menu is actually installed. */
+let pendingWindowIds: number[] = [];
 
 function listsOpenWindows(): boolean {
   return process.platform !== "darwin";
@@ -41,14 +43,14 @@ function itemIdFor(windowId: number): string {
 
 /**
  * The Window menu's list of open windows, in the order they opened, each named
- * by its window title. Records what it built, so {@link isOpenWindowMenuStale}
- * and {@link refreshOpenWindowMenu} answer for the menu that gets installed.
+ * by its window title. Call {@link noteOpenWindowMenuInstalled} once the menu
+ * holding these items is installed.
  */
 export function buildOpenWindowMenuItems(): Electron.MenuItemConstructorOptions[] {
   if (!listsOpenWindows()) return [];
   const registry = getWindowRegistry();
   const windows = registry ? registry.all().filter(isListed) : [];
-  builtWindowIds = windows.map((ctx) => ctx.windowId);
+  pendingWindowIds = windows.map((ctx) => ctx.windowId);
   if (windows.length === 0) return [];
 
   const primaryId = registry?.getPrimary()?.windowId;
@@ -62,6 +64,15 @@ export function buildOpenWindowMenuItems(): Electron.MenuItemConstructorOptions[
       click: () => focusListedWindow(ctx.windowId),
     })),
   ];
+}
+
+/**
+ * The menu from the latest build is now the application menu. Recorded only
+ * here, so a build that fails before it is installed can't leave the staleness
+ * check believing the menu already lists a window it doesn't.
+ */
+export function noteOpenWindowMenuInstalled(): void {
+  builtWindowIds = pendingWindowIds;
 }
 
 /**

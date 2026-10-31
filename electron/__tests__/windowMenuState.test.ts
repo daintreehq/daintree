@@ -24,6 +24,7 @@ vi.mock("../window/projectOwnership.js", () => ({ revealWindow }));
 import {
   buildOpenWindowMenuItems,
   isOpenWindowMenuStale,
+  noteOpenWindowMenuInstalled,
   noteWindowClosing,
   refreshOpenWindowMenu,
 } from "../windowMenuState.js";
@@ -68,7 +69,7 @@ function useRegistry(windows: FakeWindow[], primary: FakeWindow | null = windows
   return state;
 }
 
-/** Build the list and install it the way Menu.buildFromTemplate would. */
+/** Build the list and install it the way createApplicationMenu does. */
 function buildAndInstall(): Electron.MenuItemConstructorOptions[] {
   const items = buildOpenWindowMenuItems();
   installed.clear();
@@ -80,7 +81,16 @@ function buildAndInstall(): Electron.MenuItemConstructorOptions[] {
       visible: item.visible ?? true,
     });
   }
+  noteOpenWindowMenuInstalled();
   return items;
+}
+
+function closeEvent(defaultPrevented = false): Electron.Event {
+  return { defaultPrevented } as Electron.Event;
+}
+
+function startClosing(win: FakeWindow, event = closeEvent()): void {
+  noteWindowClosing(win as unknown as Electron.BrowserWindow, event);
 }
 
 function windowItems(items: Electron.MenuItemConstructorOptions[]) {
@@ -105,13 +115,16 @@ function clickItem(items: Electron.MenuItemConstructorOptions[], label: string):
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
   setPlatform("win32");
   installed.clear();
+  // Start every test from an installed menu that lists nothing.
+  windowRefMock.getWindowRegistry.mockReturnValue(null);
+  buildAndInstall();
+  vi.clearAllMocks();
+  getApplicationMenu.mockReset();
   getApplicationMenu.mockReturnValue({
     getMenuItemById: (id: string) => installed.get(id) ?? null,
   });
-  windowRefMock.getWindowRegistry.mockReturnValue(null);
 });
 
 afterEach(() => {
@@ -166,10 +179,7 @@ describe("buildOpenWindowMenuItems", () => {
     const closing = makeWindow(3, "closing");
     destroyed.destroyed = true;
     useRegistry([kept, destroyed, closing]);
-    noteWindowClosing(
-      closing as unknown as Electron.BrowserWindow,
-      { defaultPrevented: false } as Electron.Event
-    );
+    startClosing(closing);
 
     expect(windowItems(buildOpenWindowMenuItems()).map((i) => i.label)).toEqual(["kept"]);
   });
@@ -187,7 +197,7 @@ describe("isOpenWindowMenuStale", () => {
     const a = makeWindow(1, "a");
     const b = makeWindow(2, "b");
     const registry = useRegistry([a, b]);
-    buildOpenWindowMenuItems();
+    buildAndInstall();
     expect(isOpenWindowMenuStale()).toBe(false);
 
     a.title = "(1) a";
@@ -196,35 +206,53 @@ describe("isOpenWindowMenuStale", () => {
 
     registry.windows.push(makeWindow(3, "c"));
     expect(isOpenWindowMenuStale()).toBe(true);
-    buildOpenWindowMenuItems();
+    buildAndInstall();
     expect(isOpenWindowMenuStale()).toBe(false);
 
     registry.windows = registry.windows.filter((w) => w !== b);
     expect(isOpenWindowMenuStale()).toBe(true);
   });
 
-  it("is stale as soon as a listed window starts closing", () => {
+  it("is stale when one window closes as another opens", () => {
     const a = makeWindow(1, "a");
-    const b = makeWindow(2, "b");
-    useRegistry([a, b]);
+    const registry = useRegistry([a, makeWindow(2, "b")]);
+    buildAndInstall();
+
+    registry.windows = [a, makeWindow(3, "c")];
+    expect(isOpenWindowMenuStale()).toBe(true);
+
+    buildAndInstall();
+    expect(isOpenWindowMenuStale()).toBe(false);
+  });
+
+  it("stays stale when the rebuilt menu never got installed", () => {
+    const registry = useRegistry([makeWindow(1, "a")]);
+    buildAndInstall();
+    registry.windows.push(makeWindow(2, "b"));
+
+    // Menu.buildFromTemplate threw: the menu listing only "a" is still the one installed.
     buildOpenWindowMenuItems();
 
-    noteWindowClosing(
-      b as unknown as Electron.BrowserWindow,
-      {
-        defaultPrevented: false,
-      } as Electron.Event
-    );
+    expect(isOpenWindowMenuStale()).toBe(true);
+  });
+
+  it("is stale as soon as a listed window starts closing", () => {
+    const b = makeWindow(2, "b");
+    useRegistry([makeWindow(1, "a"), b]);
+    buildAndInstall();
+
+    startClosing(b);
 
     expect(isOpenWindowMenuStale()).toBe(true);
   });
 
   it("is never stale on macOS", () => {
-    setPlatform("darwin");
     const registry = useRegistry([makeWindow(1, "a")]);
-    buildOpenWindowMenuItems();
+    buildAndInstall();
     registry.windows.push(makeWindow(2, "b"));
+    expect(isOpenWindowMenuStale()).toBe(true);
 
+    setPlatform("darwin");
     expect(isOpenWindowMenuStale()).toBe(false);
   });
 });
@@ -272,14 +300,36 @@ describe("refreshOpenWindowMenu", () => {
     consoleError.mockRestore();
   });
 
-  it("does nothing on macOS", () => {
-    setPlatform("darwin");
+  it("leaves a missing application menu alone", () => {
     useRegistry([makeWindow(1, "a")]);
     buildAndInstall();
+    getApplicationMenu.mockReturnValue(null);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    expect(() => refreshOpenWindowMenu()).not.toThrow();
+    expect(consoleError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  it("doesn't look for the menu before one listing windows is installed", () => {
+    useRegistry([makeWindow(1, "a")]);
 
     refreshOpenWindowMenu();
 
     expect(getApplicationMenu).not.toHaveBeenCalled();
+  });
+
+  it("does nothing on macOS", () => {
+    const a = makeWindow(1, "a");
+    useRegistry([a]);
+    buildAndInstall();
+    a.title = "renamed";
+
+    setPlatform("darwin");
+    refreshOpenWindowMenu();
+
+    expect(getApplicationMenu).not.toHaveBeenCalled();
+    expect(visibleLabels()).toEqual(["a"]);
   });
 });
 
@@ -290,15 +340,22 @@ describe("noteWindowClosing", () => {
     useRegistry([a, b], b);
     buildAndInstall();
 
-    noteWindowClosing(
-      b as unknown as Electron.BrowserWindow,
-      {
-        defaultPrevented: false,
-      } as Electron.Event
-    );
+    startClosing(b);
 
     expect(visibleLabels()).toEqual(["a"]);
     expect(checkedLabels()).toEqual([]);
+  });
+
+  it("keeps a window off the list when nothing vetoes its close", async () => {
+    const b = makeWindow(2, "b");
+    useRegistry([makeWindow(1, "a"), b], b);
+    buildAndInstall();
+
+    startClosing(b);
+    await Promise.resolve();
+
+    expect(visibleLabels()).toEqual(["a"]);
+    expect(isOpenWindowMenuStale()).toBe(true);
   });
 
   it("puts a window back when another close listener vetoes the close", async () => {
@@ -308,7 +365,7 @@ describe("noteWindowClosing", () => {
     buildAndInstall();
     const event = { defaultPrevented: false };
 
-    noteWindowClosing(b as unknown as Electron.BrowserWindow, event as Electron.Event);
+    startClosing(b, event as Electron.Event);
     // A listener registered after this one calls preventDefault().
     event.defaultPrevented = true;
     expect(visibleLabels()).toEqual(["a"]);
@@ -353,5 +410,25 @@ describe("choosing a window", () => {
 
     expect(revealWindow).not.toHaveBeenCalled();
     expect(checkedLabels()).toEqual(["a"]);
+  });
+
+  it.each([
+    ["is closing", (win: FakeWindow) => startClosing(win)],
+    [
+      "was destroyed",
+      (win: FakeWindow) => {
+        win.destroyed = true;
+      },
+    ],
+  ])("does not reveal a window that %s while still registered", (_label, leave) => {
+    const a = makeWindow(1, "a");
+    const b = makeWindow(2, "b");
+    useRegistry([a, b], a);
+    const items = buildAndInstall();
+
+    leave(b);
+    clickItem(items, "b");
+
+    expect(revealWindow).not.toHaveBeenCalled();
   });
 });

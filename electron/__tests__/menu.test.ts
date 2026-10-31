@@ -33,6 +33,7 @@ const mockFocusedWebContents = vi.hoisted(() => ({
 
 const mockBrowserWindow = vi.hoisted(() => ({
   isDestroyed: vi.fn(() => false),
+  getTitle: vi.fn(() => "Daintree"),
   id: 1,
 }));
 
@@ -1210,7 +1211,8 @@ describe("update menu lifecycle", () => {
 
       type FakeWindow = ReturnType<typeof fakeWindow>;
 
-      function useWindows(windows: FakeWindow[], primary: FakeWindow = windows[0]!): void {
+      function useWindows(windows: FakeWindow[], primary: FakeWindow = windows[0]!) {
+        const state = { primary };
         const ctxFor = (win: FakeWindow) => ({
           windowId: win.id,
           browserWindow: win,
@@ -1218,12 +1220,13 @@ describe("update menu lifecycle", () => {
         });
         windowRefMock.getWindowRegistry.mockReturnValue({
           all: () => windows.map(ctxFor),
-          getPrimary: () => ctxFor(primary),
+          getPrimary: () => ctxFor(state.primary),
           getByWindowId: (id: number) => {
             const win = windows.find((w) => w.id === id);
             return win ? ctxFor(win) : undefined;
           },
         });
+        return state;
       }
 
       function windowLabels(): unknown[] {
@@ -1299,7 +1302,7 @@ describe("update menu lifecycle", () => {
         Object.defineProperty(process, "platform", { value: "linux", configurable: true });
         const first = fakeWindow(1, "daintree");
         const windows = [first];
-        useWindows(windows);
+        const registry = useWindows(windows);
         const win = mockBrowserWindow as unknown as Electron.BrowserWindow;
         createApplicationMenu(win);
         const builds = vi.mocked(Menu.setApplicationMenu);
@@ -1315,10 +1318,38 @@ describe("update menu lifecycle", () => {
         expect(builds).toHaveBeenCalledTimes(1);
         expect(windowLabels()).toEqual(["(2) daintree", "website"]);
 
+        // Closing the focused window promotes the survivor, which takes the mark.
         windows.shift();
+        registry.primary = windows[0]!;
         rebuildApplicationMenuIfStale(win);
         expect(builds).toHaveBeenCalledTimes(2);
-        expect(windowLabels()).toEqual(["website"]);
+        expect(
+          findSubmenu(capturedTemplate, "Window")
+            .filter((i) => i.type === "checkbox")
+            .map((i) => [i.label, i.checked])
+        ).toEqual([["website", true]]);
+      });
+
+      it("tries again after a rebuild that failed to install", () => {
+        Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+        const windows = [fakeWindow(1, "daintree")];
+        useWindows(windows);
+        const win = mockBrowserWindow as unknown as Electron.BrowserWindow;
+        createApplicationMenu(win);
+        const builds = vi.mocked(Menu.setApplicationMenu);
+        builds.mockClear();
+
+        windows.push(fakeWindow(2, "website"));
+        vi.mocked(Menu.buildFromTemplate).mockImplementationOnce(() => {
+          throw new Error("native menu build failed");
+        });
+        expect(() => rebuildApplicationMenuIfStale(win)).toThrow("native menu build failed");
+        expect(builds).not.toHaveBeenCalled();
+
+        // The installed menu still lists only "daintree", so the next check rebuilds.
+        rebuildApplicationMenuIfStale(win);
+        expect(builds).toHaveBeenCalledTimes(1);
+        expect(windowLabels()).toEqual(["daintree", "website"]);
       });
     });
   });
@@ -1467,7 +1498,7 @@ describe("handleDirectoryOpen window targeting", () => {
   function windowContext(
     windowId: number,
     projectViewManager: unknown,
-    browserWindow: unknown = { id: windowId, isDestroyed: () => false }
+    browserWindow: unknown = { id: windowId, isDestroyed: () => false, getTitle: () => "Daintree" }
   ) {
     return { windowId, browserWindow, services: { projectViewManager } };
   }
@@ -1554,6 +1585,7 @@ describe("handleDirectoryOpen window targeting", () => {
     const ownerWindow = {
       id: 9,
       isDestroyed: () => false,
+      getTitle: () => "Daintree",
       isMinimized: () => false,
       restore: vi.fn(),
       show: vi.fn(),
@@ -1587,6 +1619,7 @@ describe("handleDirectoryOpen window targeting", () => {
     const ownerWindow = {
       id: 9,
       isDestroyed: () => false,
+      getTitle: () => "Daintree",
       isMinimized: () => false,
       restore: vi.fn(),
       show: vi.fn(),
@@ -1620,7 +1653,11 @@ describe("handleDirectoryOpen window targeting", () => {
 
 describe("handleDirectoryOpen at critical memory pressure (#13530)", () => {
   const PROJECT = { id: "project-a", name: "Alpha", path: "/repos/alpha" };
-  const targetWindow = { id: 7, isDestroyed: () => false } as unknown as Electron.BrowserWindow;
+  const targetWindow = {
+    id: 7,
+    isDestroyed: () => false,
+    getTitle: () => "alpha",
+  } as unknown as Electron.BrowserWindow;
 
   function createManager(views: unknown[] = []) {
     return {
@@ -1746,7 +1783,11 @@ describe("handleDirectoryOpen at critical memory pressure (#13530)", () => {
 
 describe("handleDirectoryOpen status timing (#12461)", () => {
   const PROJECT = { id: "project-a", path: "/repos/alpha" };
-  const targetWindow = { id: 7, isDestroyed: () => false } as unknown as Electron.BrowserWindow;
+  const targetWindow = {
+    id: 7,
+    isDestroyed: () => false,
+    getTitle: () => "alpha",
+  } as unknown as Electron.BrowserWindow;
 
   function setup(workspace: { loadProject: () => Promise<unknown> } | null) {
     const send = vi.fn();
@@ -2677,10 +2718,11 @@ describe("plugin menu items in a project that hides the plugin (#13765)", () => 
     );
     // A keybinding override rebuilds through the window its handler was bound
     // to, which shows project-b; the window the user is in shows project-a.
-    const focused = { id: 2, isDestroyed: () => false };
+    const focused = { id: 2, isDestroyed: () => false, getTitle: () => "alpha" };
+    const focusedContext = { windowId: 2, browserWindow: focused, services: {} };
     windowRefMock.getWindowRegistry.mockReturnValue({
-      getPrimary: () => ({ browserWindow: focused, services: {} }),
-      all: () => [],
+      getPrimary: () => focusedContext,
+      all: () => [focusedContext],
     });
     getAppWebContentsMock.mockImplementation((win) =>
       win.id === 2 ? { id: 22 } : mockWebContents
@@ -2795,6 +2837,7 @@ describe("a window on a remote host", () => {
     const ownerWindow = {
       id: 4,
       isDestroyed: () => false,
+      getTitle: () => "Daintree",
       isMinimized: () => false,
       show: vi.fn(),
       focus: vi.fn(),
@@ -2847,16 +2890,15 @@ describe("a window on a remote host", () => {
       getActiveView: () => null,
       switchTo: vi.fn(),
     };
+    const hostContext = {
+      windowId: mockBrowserWindow.id,
+      browserWindow: mockBrowserWindow,
+      services: { projectViewManager: hostManager },
+    };
     windowRefMock.getWindowRegistry.mockReturnValue({
-      getByWindowId: (id: number) =>
-        id === mockBrowserWindow.id ? { services: { projectViewManager: hostManager } } : undefined,
-      all: () => [
-        {
-          windowId: mockBrowserWindow.id,
-          browserWindow: mockBrowserWindow,
-          services: { projectViewManager: hostManager },
-        },
-      ],
+      getByWindowId: (id: number) => (id === mockBrowserWindow.id ? hostContext : undefined),
+      getPrimary: () => hostContext,
+      all: () => [hostContext],
     });
 
     await handleDirectoryOpen(RECENT.path, hostWindow);
@@ -2867,6 +2909,9 @@ describe("a window on a remote host", () => {
     );
     expect(hostManager.switchTo).not.toHaveBeenCalled();
     expect(mockWebContents.send).not.toHaveBeenCalled();
+    // The menu rebuild after the switch ran to the end rather than into the catch.
+    expect(Menu.setApplicationMenu).toHaveBeenCalled();
+    expect(dialog.showMessageBox).not.toHaveBeenCalled();
   });
 
   it("comes back to this machine when a host switch lands while the folder is being added", async () => {

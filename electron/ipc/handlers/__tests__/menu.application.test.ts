@@ -66,7 +66,9 @@ function makeCtx(win: unknown, webContentsId = 7, sender?: unknown) {
 beforeEach(() => {
   vi.clearAllMocks();
   setPlatform("win32");
+  isCachedViewWebContents.mockReset();
   isCachedViewWebContents.mockReturnValue(false);
+  rebuildApplicationMenuIfStale.mockReset();
 });
 
 afterEach(() => {
@@ -169,6 +171,24 @@ describe("menu:show-application", () => {
     expect(rebuilt.popup).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    [
+      "the window lost focus",
+      (win: { isFocused: ReturnType<typeof vi.fn> }) => win.isFocused.mockReturnValue(false),
+    ],
+    ["the view was backgrounded", () => isCachedViewWebContents.mockReturnValue(true)],
+  ])("opens nothing when %s while the menu was being brought up to date", async (_l, move) => {
+    const menu = makeMenu();
+    getApplicationMenu.mockReturnValue(menu);
+    const win = { ...makeWindow(), isFocused: vi.fn(() => true) };
+    rebuildApplicationMenuIfStale.mockImplementation(() => move(win));
+
+    await showApplication(makeCtx(win), { x: 0, y: 0 });
+
+    expect(rebuildApplicationMenuIfStale).toHaveBeenCalledTimes(1);
+    expect(menu.popup).not.toHaveBeenCalled();
+  });
+
   it("still opens the installed menu when bringing it up to date fails", async () => {
     const menu = makeMenu();
     getApplicationMenu.mockReturnValue(menu);
@@ -180,7 +200,10 @@ describe("menu:show-application", () => {
     await showApplication(makeCtx(makeWindow()), { x: 0, y: 0 });
 
     expect(menu.popup).toHaveBeenCalledTimes(1);
-    expect(consoleError).toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining("bring the application menu up to date"),
+      expect.any(Error)
+    );
     consoleError.mockRestore();
   });
 
@@ -261,7 +284,10 @@ describe("menu:show-application", () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
     await expect(showApplication(makeCtx(makeWindow()), { x: 1, y: 1 })).resolves.toBeUndefined();
-    expect(consoleError).toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to open the application menu"),
+      expect.any(Error)
+    );
     consoleError.mockRestore();
   });
 
