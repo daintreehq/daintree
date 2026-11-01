@@ -33,6 +33,13 @@ function isLive(run: ScheduledRun): boolean {
   );
 }
 
+/** How far a run moves its schedule's evaluation point: the occurrences it stands for. */
+function evaluatedThrough(run: ScheduledRun): number | null {
+  const { origin } = run;
+  if (origin.dueAt === null) return null;
+  return origin.coalesced?.through ?? origin.dueAt;
+}
+
 function isUniqueViolation(error: unknown): boolean {
   return (
     error instanceof Error &&
@@ -57,32 +64,63 @@ export class ScheduledRunStore {
     return this.sqlite.transaction(fn)();
   }
 
-  /** @throws {ScheduledRunConflictError} when the occurrence already has a run. */
+  /**
+   * A run for an occurrence also moves its schedule's evaluation point up to
+   * that occurrence, in the same transaction, so neither commits alone.
+   *
+   * @throws {ScheduledRunConflictError} when the occurrence already has a run.
+   */
   insert(run: ScheduledRun): void {
     const record = ScheduledRunSchema.parse(run);
     try {
-      this.sqlite
-        .prepare(
-          `INSERT INTO scheduled_runs
-             (id, project_id, schedule_id, occurrence_key, terminal_id, live, created_at, record)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(
-          record.id,
-          record.projectId,
-          record.scheduleId,
-          record.origin.occurrenceKey,
-          record.terminalId,
-          isLive(record) ? 1 : 0,
-          record.createdAt,
-          JSON.stringify(record)
-        );
+      this.transaction(() => {
+        this.sqlite
+          .prepare(
+            `INSERT INTO scheduled_runs
+               (id, project_id, schedule_id, occurrence_key, terminal_id, live, created_at, record)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .run(
+            record.id,
+            record.projectId,
+            record.scheduleId,
+            record.origin.occurrenceKey,
+            record.terminalId,
+            isLive(record) ? 1 : 0,
+            record.createdAt,
+            JSON.stringify(record)
+          );
+        const evaluated = evaluatedThrough(record);
+        if (evaluated !== null) {
+          this.sqlite
+            .prepare(
+              `INSERT INTO schedule_evaluation_points (schedule_id, project_id, evaluated_through)
+               VALUES (?, ?, ?)
+               ON CONFLICT (schedule_id) DO UPDATE
+               SET evaluated_through = MAX(evaluated_through, excluded.evaluated_through)`
+            )
+            .run(record.scheduleId, record.projectId, evaluated);
+        }
+      });
     } catch (error) {
       if (isUniqueViolation(error) && record.origin.occurrenceKey !== null) {
         throw new ScheduledRunConflictError(record.scheduleId, record.origin.occurrenceKey);
       }
       throw error;
     }
+  }
+
+  /**
+   * The latest occurrence the schedule has a run for, kept after retention
+   * prunes that run: no occurrence at or before it runs again. Null when none
+   * has had one.
+   */
+  evaluationPoint(scheduleId: string): number | null {
+    const value = this.sqlite
+      .prepare("SELECT evaluated_through FROM schedule_evaluation_points WHERE schedule_id = ?")
+      .pluck()
+      .get(scheduleId) as number | undefined;
+    return value ?? null;
   }
 
   /**
@@ -165,13 +203,23 @@ export class ScheduledRunStore {
       .prepare("SELECT DISTINCT project_id FROM scheduled_runs WHERE schedule_id = ?")
       .pluck()
       .all(scheduleId) as string[];
-    this.sqlite.prepare("DELETE FROM scheduled_runs WHERE schedule_id = ?").run(scheduleId);
+    this.transaction(() => {
+      this.sqlite.prepare("DELETE FROM scheduled_runs WHERE schedule_id = ?").run(scheduleId);
+      this.sqlite
+        .prepare("DELETE FROM schedule_evaluation_points WHERE schedule_id = ?")
+        .run(scheduleId);
+    });
     return projectIds;
   }
 
   deleteForProject(projectId: string): number {
-    return this.sqlite.prepare("DELETE FROM scheduled_runs WHERE project_id = ?").run(projectId)
-      .changes;
+    return this.transaction(() => {
+      this.sqlite
+        .prepare("DELETE FROM schedule_evaluation_points WHERE project_id = ?")
+        .run(projectId);
+      return this.sqlite.prepare("DELETE FROM scheduled_runs WHERE project_id = ?").run(projectId)
+        .changes;
+    });
   }
 
   // A row that no longer parses (hand-edited, or written by a newer build) is

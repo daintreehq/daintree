@@ -33,6 +33,11 @@ vi.mock("../../../window/webContentsDestroyed.js", () => ({
 
 import { CHANNELS } from "../../../ipc/channels.js";
 import {
+  _resetViewHydrationForTesting,
+  _viewHydrationWaitersForTesting,
+  markViewHydrated,
+} from "../../../window/viewHydration.js";
+import {
   _resetScheduledRunViewBridgeForTest,
   requestScheduledLaunchInView,
 } from "../scheduledRunViewBridge.js";
@@ -55,10 +60,17 @@ const request: ScheduledLaunchRequest = {
   scheduledRun: { scheduleId: "schedule-1", runId: "run-1" },
 };
 
-function view(id: number) {
-  return { id, send: vi.fn() } as unknown as Electron.WebContents & {
-    send: ReturnType<typeof vi.fn>;
-  };
+/** A view; one whose state has hydrated unless `loading`. */
+function view(id: number, { loading = false } = {}) {
+  const wc = {
+    id,
+    send: vi.fn(),
+    isDestroyed: () => false,
+    on: vi.fn(),
+    once: vi.fn(),
+  } as unknown as Electron.WebContents & { send: ReturnType<typeof vi.fn> };
+  if (!loading) markViewHydrated(wc);
+  return wc;
 }
 
 function answer(senderId: number, payload: unknown): void {
@@ -75,6 +87,7 @@ const thawed = () => vi.advanceTimersByTimeAsync(0);
 
 afterEach(() => {
   _resetScheduledRunViewBridgeForTest();
+  _resetViewHydrationForTesting();
   vi.useRealTimers();
 });
 
@@ -103,6 +116,33 @@ describe("requestScheduledLaunchInView", () => {
 
     await expect(pending).resolves.toEqual(result);
     expect(destroyedCallbacks.has(7)).toBe(false);
+  });
+
+  it("asks a view still loading once its state has hydrated, not before", async () => {
+    const wc = view(9, { loading: true });
+    const pending = requestScheduledLaunchInView(wc, request);
+    await thawed();
+    // Preload buffers nothing: a request sent before the bridge listens is lost.
+    expect(wc.send).not.toHaveBeenCalled();
+
+    markViewHydrated(wc);
+    expect(wc.send).toHaveBeenCalledTimes(1);
+    const { requestId } = wc.send.mock.calls[0][1] as { requestId: string };
+    const result = { ok: true, result: { launched: true, terminalId: "terminal-1" } };
+    answer(9, { requestId, result });
+    await expect(pending).resolves.toEqual(result);
+  });
+
+  it("asks nothing of a view that finishes loading after the request gave up", async () => {
+    const wc = view(9, { loading: true });
+    const pending = requestScheduledLaunchInView(wc, request, 1_000);
+    const settled = expect(pending).rejects.toBeInstanceOf(ScheduledLaunchUnansweredError);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await settled;
+
+    expect(_viewHydrationWaitersForTesting()).toBe(0);
+    markViewHydrated(wc);
+    expect(wc.send).not.toHaveBeenCalled();
   });
 
   it("reads an answer it can't make sense of as a failure", async () => {

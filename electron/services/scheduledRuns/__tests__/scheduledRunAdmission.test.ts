@@ -222,6 +222,25 @@ describe("scheduled run admission", () => {
     expect(admit).not.toHaveBeenCalled();
   });
 
+  it("cancels only the scheduler's launches of a schedule switched off, not Run now's", async () => {
+    const admit = vi.fn();
+    const runNow = reserveScheduledLaunch(reservation(admit));
+    const automatic = reserveScheduledLaunch({
+      ...reservation(admit),
+      runId: "run-2",
+      terminalId: "terminal-2",
+      automatic: true,
+    });
+
+    cancelScheduledLaunches({ scheduleId: "schedule-1", automaticOnly: true });
+    expect(automatic.state()).toEqual({ kind: "cancelled" });
+    expect(automatic.removed()).toBe(true);
+    await expect(automatic.admitted).rejects.toThrow();
+    expect(runNow.state().kind).toBe("pending");
+    expect(runNow.removed()).toBe(false);
+    expect(admit).not.toHaveBeenCalled();
+  });
+
   it("marks a launch removed until its launcher has finished writing its outcome", () => {
     const refusedAtSpawn = reserveScheduledLaunch(
       reservation(() => {

@@ -1,9 +1,12 @@
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it } from "vitest";
+import { vi } from "vitest";
 import {
   isViewHydrated,
   markViewHydrated,
+  whenViewHydrated,
   _resetViewHydrationForTesting,
+  _viewHydrationWaitersForTesting,
 } from "../viewHydration.js";
 
 let nextId = 1;
@@ -32,6 +35,41 @@ describe("viewHydration", () => {
     // The reloaded document reports hydration again on its own.
     markViewHydrated(wc as never);
     expect(isViewHydrated(wc.id)).toBe(true);
+  });
+
+  it("runs what waits on a renderer once it hydrates, or at once if it has", () => {
+    const wc = fakeWebContents();
+    const first = vi.fn();
+    const cancelled = vi.fn();
+    whenViewHydrated(wc as never, first);
+    const cancel = whenViewHydrated(wc as never, cancelled);
+    cancel();
+    expect(first).not.toHaveBeenCalled();
+
+    markViewHydrated(wc as never);
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(cancelled).not.toHaveBeenCalled();
+    expect(_viewHydrationWaitersForTesting()).toBe(0);
+
+    const later = vi.fn();
+    whenViewHydrated(wc as never, later);
+    expect(later).toHaveBeenCalledTimes(1);
+
+    // The reloaded document is waited on afresh.
+    wc.emit("did-navigate");
+    const afterReload = vi.fn();
+    whenViewHydrated(wc as never, afterReload);
+    expect(afterReload).not.toHaveBeenCalled();
+    markViewHydrated(wc as never);
+    expect(afterReload).toHaveBeenCalledTimes(1);
+  });
+
+  it("forgets a cancelled wait", () => {
+    const wc = fakeWebContents();
+    const cancel = whenViewHydrated(wc as never, () => {});
+    expect(_viewHydrationWaitersForTesting()).toBe(1);
+    cancel();
+    expect(_viewHydrationWaitersForTesting()).toBe(0);
   });
 
   it("survives a main-frame navigation that never commits", () => {

@@ -211,6 +211,14 @@ const closeSharedDbMock = vi.hoisted(() => ({
 
 vi.mock("../../services/persistence/db.js", () => closeSharedDbMock);
 
+const scheduledRunSchedulerMock = vi.hoisted(() => ({
+  stopScheduledRunScheduler: vi.fn(() => Promise.resolve()),
+}));
+vi.mock(
+  "../../services/scheduledRuns/scheduledRunSchedulerLive.js",
+  () => scheduledRunSchedulerMock
+);
+
 const vadDrainMock = vi.hoisted(() => ({
   waitForRetiringVadProcesses: vi.fn((_budgetMs: number) => Promise.resolve(0)),
 }));
@@ -1101,6 +1109,26 @@ describe("registerShutdownHandler", () => {
       });
 
       expect(callOrder).toEqual(["dispose", "closeSharedDb"]);
+    });
+
+    it("waits for the scheduled-run scheduler to stop before closeSharedDb", async () => {
+      const callOrder: string[] = [];
+      scheduledRunSchedulerMock.stopScheduledRunScheduler.mockImplementationOnce(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        callOrder.push("scheduler-stop");
+      });
+      closeSharedDbMock.closeSharedDb.mockImplementation(() => {
+        callOrder.push("closeSharedDb");
+      });
+
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      expect(callOrder).toEqual(["scheduler-stop", "closeSharedDb"]);
     });
 
     it("still calls closeSharedDb and exits when dispose fails", async () => {
