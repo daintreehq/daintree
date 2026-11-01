@@ -832,6 +832,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       getIpcDispatcher().setRemoteRouter(next);
     },
     emit: broadcastLocal,
+    listViews: () => getAllAppWebContents().map((wc) => wc.id),
     onFirstUse: hooks.onFirstUse,
     onForget: async (descriptor): Promise<void> => {
       await forgetHostState(descriptor.id, HOST_STATE_CLEANUPS);

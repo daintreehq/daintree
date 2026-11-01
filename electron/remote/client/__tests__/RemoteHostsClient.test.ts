@@ -140,6 +140,8 @@ describe("RemoteHostsClient", () => {
   let installRouter: Mock<(router: RemoteRouter | null) => void>;
   let events: RemoteHostsEvent[];
   let keys: Map<number, string>;
+  /** Every local app view, as the window manager lists them. */
+  let views: number[];
   let client: RemoteHostsClient;
   let router: RemoteRouter;
   let onFirstUse: Mock<() => void>;
@@ -150,6 +152,7 @@ describe("RemoteHostsClient", () => {
     manager = fakeManager();
     bindings = new WindowHostBinding();
     keys = new Map();
+    views = [];
     const senders = {
       projectKeyFor: (id: number) => keys.get(id) ?? null,
       windowIdFor: (id: number) => (id === 5 ? 1 : null),
@@ -177,6 +180,7 @@ describe("RemoteHostsClient", () => {
       windows,
       installRouter,
       emit: (event) => events.push(event),
+      listViews: () => views,
     });
     registry.add({ name: "studio-01", connection: { kind: "ssh", target: "studio.example" } });
     events.length = 0;
@@ -3568,6 +3572,37 @@ describe("RemoteHostsClient", () => {
       manager.emit("studio-01", connected);
       await Promise.resolve();
       expect(resyncs()).toHaveLength(1);
+    });
+
+    it("resyncs a view on the host that hadn't called through before the disconnect", async () => {
+      keys.set(9, "studio-01:proj-1");
+      // A view of this machine's, which the disconnect leaves alone.
+      keys.set(4, "proj-2");
+      views = [4, 9];
+      manager.connect("studio-01");
+      await client.disconnect({ hostId: "studio-01" });
+      events.length = 0;
+
+      manager.connect("studio-01");
+      manager.emit("studio-01", connected);
+      await vi.waitFor(() =>
+        expect(resyncs()).toEqual([
+          { type: "resync-required", hostId: "studio-01", reason: "reconnected" },
+        ])
+      );
+    });
+
+    it("tells no one after a disconnect that cut off no view", async () => {
+      keys.set(4, "proj-2");
+      views = [4];
+      manager.connect("studio-01");
+      await client.disconnect({ hostId: "studio-01" });
+      events.length = 0;
+
+      manager.connect("studio-01");
+      manager.emit("studio-01", connected);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(resyncs()).toHaveLength(0);
     });
 
     it("tells no one when the views have since moved to another host", async () => {

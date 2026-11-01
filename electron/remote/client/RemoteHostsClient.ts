@@ -216,6 +216,12 @@ export interface RemoteHostsClientOptions {
   /** Push to every local renderer. */
   emit: (event: RemoteHostsEvent) => void;
   /**
+   * Every local app view's WebContents id. A disconnect remembers each one on
+   * the host, not just those with an endpoint there: one that hadn't called
+   * through yet is cut off as well, and resyncs only when told to.
+   */
+  listViews?: () => readonly number[];
+  /**
    * Runs once, the first time a host is actually used (connect or switch), so
    * the per-view stream wiring costs nothing for a user who never adds one.
    */
@@ -2030,8 +2036,9 @@ export class RemoteHostsClient {
 
   /** Kept across the connection's discard, so a later connection can resync them. */
   private rememberBoundViews(hostId: HostId): void {
-    const views = this.options.manager.get(hostId)?.boundViews() ?? [];
-    this.detached.remember(hostId, views);
+    const withEndpoints = this.options.manager.get(hostId)?.boundViews() ?? [];
+    const onHost = (this.options.listViews?.() ?? []).filter((id) => this.viewHost(id) === hostId);
+    this.detached.remember(hostId, [...withEndpoints, ...onHost]);
   }
 
   hostName(hostId: HostId): string | null {
