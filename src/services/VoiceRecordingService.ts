@@ -3022,6 +3022,16 @@ class VoiceRecordingService {
       micSilenceGraceMs = Math.max(0, micSilenceGraceMs - (performance.now() - captureAttachedAt));
     }
 
+    // Another screen may have taken control of the draft while it started: a
+    // restart or a retry never waits in pendingTarget for the gate to cancel.
+    const drivenNow = drivenElsewhereFor(target.projectId);
+    if (drivenNow) {
+      abandonCapture(stream);
+      this.cancelArming("lease_lost");
+      this.reportDrivenStart(drivenNow);
+      return;
+    }
+
     const generation = ++this.generation;
     logDebug(`${LOG_PREFIX} Beginning session`, { generation });
     this.pauseStartedAt = 0;
@@ -3291,8 +3301,9 @@ class VoiceRecordingService {
       const correctionEnabled = storeState.correctionEnabled;
       const wasMicLive = storeState.micSignal === "live";
 
+      // The reason, not the announcement: that can name who took control.
       logDebug(`${LOG_PREFIX} stop() called`, {
-        announcement,
+        reason,
         hasSession,
         skipRemoteStop,
         nextStatus,
@@ -4787,6 +4798,8 @@ class VoiceRecordingService {
     const now = this.replanHeldBack(send);
     if (!now) return null;
     const { panelId, projectId } = now;
+    // The draft is another screen's driver's now, and so is what it holds.
+    if (drivenElsewhereFor(projectId)) return null;
     const ranges = useDictationRangeStore.getState();
     if (now.leadingSpace) {
       ranges.yieldLeadingSpace(now.leadingSpace.dictationId, now.leadingSpace.span);
@@ -5798,10 +5811,11 @@ class VoiceRecordingService {
     if (getLeaseInputBlock()?.kind !== "driven-elsewhere") return;
     this.dropDrivenDraftWork();
 
-    // A start waiting behind another session has no session of its own to stop.
-    const { pendingTarget, activeTarget: sessionTarget } = useVoiceRecordingStore.getState();
+    // A start for a driven draft never begins, whether it is arming or waiting
+    // on a session still finishing, even one in its own panel (a restart).
+    const { pendingTarget } = useVoiceRecordingStore.getState();
     const pendingDriven = pendingTarget ? drivenElsewhereFor(pendingTarget.projectId) : null;
-    if (pendingDriven && pendingTarget!.panelId !== sessionTarget?.panelId) {
+    if (pendingDriven) {
       this.cancelArming("lease_lost");
       this.reportDrivenStart(pendingDriven);
     }
@@ -5840,7 +5854,13 @@ class VoiceRecordingService {
     if (this.stopPromise) return;
     void this.stop(
       `Dictation stopped because ${controllerName(driven)} has control of this project.`,
-      { preserveLiveText: true, reason: "lease_lost" }
+      {
+        preserveLiveText: true,
+        reason: "lease_lost",
+        // A start still waiting is for a draft this view drives (a Canopy
+        // reply): it goes ahead once this session has ended.
+        preservePendingStart: useVoiceRecordingStore.getState().pendingTarget !== null,
+      }
     );
   }
 

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VOICE_SESSION_SUMMARY_MESSAGE } from "@shared/utils/voiceLogFields";
 import { VoiceSessionSummarySchema } from "@shared/types/voiceSessionSummary";
 import { VOICE_REPORT_WAIT_MS } from "../voiceSessionTimeline";
+import type { VoiceRecordingTarget } from "@/store/voiceRecordingStore";
 
 // Drives real sessions through the service and reads the one summary line
 // each leaves (#14617).
@@ -329,7 +330,7 @@ async function load() {
 async function startLive(
   harness: Harness,
   service: Awaited<ReturnType<typeof load>>["service"],
-  target = TARGET
+  target: VoiceRecordingTarget = TARGET
 ) {
   await service.toggle(target);
   const sessionId = harness.voiceInput.start.mock.calls.at(-1)![0] as string;
@@ -398,23 +399,86 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
     }
   });
 
-  it("logs a session another screen's takeover ended as lease_lost, counting no words after it", async () => {
-    const harness = setupGlobals();
-    const { service, summaries } = await load();
-    const { setLeaseInputBlock } = await import("@/services/terminal/inputGate");
+  describe("another screen taking control (#15919)", () => {
+    const DRIVEN_TARGET = { ...TARGET, projectId: "project-1" };
+    const takeControl = async () =>
+      (await import("@/services/terminal/inputGate")).setLeaseInputBlock({
+        kind: "driven-elsewhere",
+        driverName: "Studio Mac",
+      });
+    /** Holds main's graceful drain open until `drain.resolve()`. */
+    const holdDrain = (harness: Harness) => {
+      const drain = deferred();
+      harness.voiceInput.stop.mockImplementationOnce(async (id: string) => {
+        await drain.promise;
+        harness.emit("ended", { sessionId: id, reason: "stopped", report: REPORT });
+        return { rawText: null };
+      });
+      return drain;
+    };
 
-    const sessionId = await startLive(harness, service, { ...TARGET, projectId: "project-1" });
-    harness.emit("complete", { sessionId, text: DICTATED, itemId: "item-1" });
-    harness.paintFrames();
-    setLeaseInputBlock({ kind: "driven-elsewhere", driverName: "Studio Mac" });
-    harness.emit("complete", { sessionId, text: "words for nobody", itemId: "item-2" });
-    await vi.waitFor(() => expect(summaries()).toHaveLength(1));
+    it("logs the session as lease_lost, counting none of the words its drain still brought", async () => {
+      const harness = setupGlobals();
+      const { service, summaries } = await load();
 
-    expect(draftState.draft).toBe(DICTATED);
-    expect(summaries()[0]).toMatchObject({
-      sessionId,
-      stopReason: "lease_lost",
-      charsCommitted: DICTATED.length,
+      const sessionId = await startLive(harness, service, DRIVEN_TARGET);
+      harness.emit("complete", { sessionId, text: DICTATED, itemId: "item-1" });
+      harness.paintFrames();
+      const drain = holdDrain(harness);
+      await takeControl();
+      await vi.waitFor(() => expect(harness.voiceInput.stop).toHaveBeenCalledWith(sessionId));
+      harness.emit("complete", { sessionId, text: "words for nobody", itemId: "item-2" });
+      drain.resolve();
+      await vi.waitFor(() => expect(summaries()).toHaveLength(1));
+
+      expect(draftState.draft).toBe(DICTATED);
+      expect(summaries()[0]).toMatchObject({
+        sessionId,
+        stopReason: "lease_lost",
+        backendEnd: "stopped",
+        charsCommitted: DICTATED.length,
+      });
+    });
+
+    it("never begins a restart queued behind the stop", async () => {
+      const harness = setupGlobals();
+      const { service } = await load();
+      const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+
+      await startLive(harness, service, DRIVEN_TARGET);
+      const drain = holdDrain(harness);
+      const stopping = service.stop("Dictation stopped.", { preserveLiveText: true });
+      await vi.waitFor(() => expect(harness.voiceInput.stop).toHaveBeenCalled());
+      const restarting = service.toggle(DRIVEN_TARGET);
+      expect(useVoiceRecordingStore.getState().pendingTarget?.panelId).toBe("panel-1");
+      await takeControl();
+      // Cancelled at once, not left for the drain to hand the mic to.
+      expect(useVoiceRecordingStore.getState().pendingTarget).toBeNull();
+      drain.resolve();
+      await Promise.all([stopping, restarting]);
+
+      expect(harness.voiceInput.start).toHaveBeenCalledTimes(1);
+      expect(useVoiceRecordingStore.getState().status).toBe("idle");
+    });
+
+    it("never begins a start that was on its way when control moved, armed or not", async () => {
+      const harness = setupGlobals();
+      const { service } = await load();
+      const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+
+      await startLive(harness, service, DRIVEN_TARGET);
+      const drain = holdDrain(harness);
+      const stopping = service.stop("Dictation stopped.", { preserveLiveText: true });
+      await vi.waitFor(() => expect(harness.voiceInput.stop).toHaveBeenCalled());
+      // A retry or a restart calls start() itself, with nothing left pending.
+      const starting = service.start(DRIVEN_TARGET);
+      expect(useVoiceRecordingStore.getState().pendingTarget).toBeNull();
+      await takeControl();
+      drain.resolve();
+      await Promise.all([stopping, starting]);
+
+      expect(harness.voiceInput.start).toHaveBeenCalledTimes(1);
+      expect(useVoiceRecordingStore.getState().status).toBe("idle");
     });
   });
 

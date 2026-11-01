@@ -68,6 +68,7 @@ type CompletePayload = {
   itemId?: string;
   heard?: string;
   commandText?: string;
+  send?: boolean;
 };
 type CorrectResult = { action: "no_change" | "replace"; correctedText: string };
 
@@ -616,7 +617,10 @@ describe("VoiceRecordingService — recent dictations (#14637)", () => {
       voiceStore.getState().setCorrectionEnabled(false);
       const draft = () => inputStore.getState().getDraftInput("panel-1", PROJECT);
 
+      const { useDictationRangeStore } = await import("@/store/dictationRangeStore");
+
       voiceStore.getState().beginSession({ panelId: "panel-1", projectId: PROJECT });
+      const sessionId = voiceStore.getState().panelBuffers["panel-1"]!.dictationSessionId!;
       say("words before the takeover");
       callbacks.delta!({ text: "half a", itemId: "item-open" });
       expect(draft()).toBe("words before the takeover");
@@ -626,10 +630,22 @@ describe("VoiceRecordingService — recent dictations (#14637)", () => {
       inputStore.getState().setDraftInput("panel-1", "the driver's draft", PROJECT);
       // Words still draining, a paragraph break, a scratch and a spoken send.
       callbacks.delta!({ text: "half a sentence", itemId: "item-open" });
-      callbacks.complete!({ text: "half a sentence", willCorrect: false, itemId: "item-open" });
+      callbacks.complete!({
+        text: "half a sentence",
+        willCorrect: false,
+        itemId: "item-open",
+        send: true,
+      });
       callbacks.boundary!({ rawText: null });
       say("scratch that");
       callbacks.delta!({ text: "an unfinished", itemId: "item-last" });
+      // Its next words would have taken a place in the driver's draft. Read
+      // before the stop's own release of it can run.
+      expect(
+        useDictationRangeStore
+          .getState()
+          .getAnchor({ sessionId, panelId: "panel-1", projectId: PROJECT })
+      ).toBeNull();
       await vi.waitFor(() => expect(voiceStore.getState().status).toBe("idle"));
       await flush();
 
@@ -645,6 +661,11 @@ describe("VoiceRecordingService — recent dictations (#14637)", () => {
         }),
       ]);
       expect(voiceStore.getState().announcement?.text).toMatch(/Studio Mac has control/);
+      const { logInfo } = await import("@/utils/logger");
+      expect(vi.mocked(logInfo)).toHaveBeenCalledWith(
+        "[VoiceSend] Request refused",
+        expect.objectContaining({ asker: "spoken_send", reason: "composer_disabled" })
+      );
 
       // The driver going away changes the gate, not the stopped session.
       setLeaseInputBlock({ ...DRIVEN, driverAway: true });
@@ -680,21 +701,48 @@ describe("VoiceRecordingService — recent dictations (#14637)", () => {
       expect(cleanups()).toEqual([{ id: kept()[0]!.id, correctedText: "Fix the parser." }]);
     });
 
-    it("refuses to start in a draft another screen drives", async () => {
+    const refusedStart = expect.objectContaining({
+      title: "Dictation didn't start",
+      message: "Studio Mac has control of this project.",
+    });
+
+    it("refuses a dictation key press in a draft another screen drives, before arming", async () => {
       const { service, voiceStore } = await setup();
       const { setLeaseInputBlock } = await gate();
       setLeaseInputBlock({ ...DRIVEN, projectId: PROJECT });
 
-      await service.toggle({ panelId: "panel-1", projectId: PROJECT });
+      await service.toggle({ panelId: "panel-1", panelTitle: "Claude", projectId: PROJECT });
 
       expect(voiceStore.getState().status).toBe("idle");
       expect(voiceStore.getState().activeTarget).toBeNull();
-      expect(notices()).toEqual([
-        expect.objectContaining({
-          title: "Dictation didn't start",
-          message: "Studio Mac has control of this project.",
-        }),
-      ]);
+      // Turned away before it counted as a place dictation went.
+      expect(voiceStore.getState().recentTargets).toEqual([]);
+      expect(notices()).toEqual([refusedStart]);
+    });
+
+    it("refuses a start made directly, as a retry or restart makes it", async () => {
+      const { service, voiceStore } = await setup();
+      const { setLeaseInputBlock } = await gate();
+      setLeaseInputBlock(DRIVEN);
+      voiceStore.getState().setArming({ panelId: "panel-1", projectId: PROJECT });
+
+      await service.start({ panelId: "panel-1", projectId: PROJECT });
+
+      expect(voiceStore.getState().status).toBe("idle");
+      expect(voiceStore.getState().pendingTarget).toBeNull();
+      expect(notices()).toEqual([refusedStart]);
+    });
+
+    it("cancels a start still arming when control moves", async () => {
+      const { voiceStore } = await setup();
+      const { setLeaseInputBlock } = await gate();
+      voiceStore.getState().setArming({ panelId: "panel-1", projectId: PROJECT });
+
+      setLeaseInputBlock(DRIVEN);
+
+      expect(voiceStore.getState().status).toBe("idle");
+      expect(voiceStore.getState().activeTarget).toBeNull();
+      expect(notices()).toEqual([refusedStart]);
     });
 
     it("leaves dictation into another project's draft, or a Canopy reply, running", async () => {
