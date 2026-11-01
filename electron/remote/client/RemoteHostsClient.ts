@@ -506,6 +506,12 @@ export class RemoteHostsClient {
         this.options.emit({ type: "hosts-changed", hosts: this.list() })
       ),
       options.manager.onStateChange((hostId, connection) => {
+        // The connection was discarded, by a person or by the Shell letting an
+        // unused one go: the next starts knowing none of the views still on the
+        // host. A host being removed or re-pointed takes its views with it.
+        if (connection.status === "disconnected" && !this.retiring.has(hostId)) {
+          this.detached.remember(hostId, this.viewsOn(hostId));
+        }
         this.options.emit({ type: "connection-changed", hostId, connection });
         this.detached.onConnectionState(hostId, connection);
         redial.onConnection(hostId, connection);
@@ -2037,8 +2043,12 @@ export class RemoteHostsClient {
   /** Kept across the connection's discard, so a later connection can resync them. */
   private rememberBoundViews(hostId: HostId): void {
     const withEndpoints = this.options.manager.get(hostId)?.boundViews() ?? [];
-    const onHost = (this.options.listViews?.() ?? []).filter((id) => this.viewHost(id) === hostId);
-    this.detached.remember(hostId, [...withEndpoints, ...onHost]);
+    this.detached.remember(hostId, [...withEndpoints, ...this.viewsOn(hostId)]);
+  }
+
+  /** Every local view on the host now, whether or not it has an endpoint there. */
+  private viewsOn(hostId: HostId): number[] {
+    return (this.options.listViews?.() ?? []).filter((id) => this.viewHost(id) === hostId);
   }
 
   hostName(hostId: HostId): string | null {

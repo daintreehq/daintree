@@ -3592,17 +3592,50 @@ describe("RemoteHostsClient", () => {
       );
     });
 
-    it("tells no one after a disconnect that cut off no view", async () => {
-      keys.set(4, "proj-2");
-      views = [4];
+    it("resyncs a window's view with no project yet, which follows the window onto the host", async () => {
+      bindings.set(1, "studio-01");
+      views = [5];
       manager.connect("studio-01");
       await client.disconnect({ hostId: "studio-01" });
       events.length = 0;
 
       manager.connect("studio-01");
       manager.emit("studio-01", connected);
+      await vi.waitFor(() => expect(resyncs()).toHaveLength(1));
+    });
+
+    it("tells no one about a view that came onto the host only after the disconnect", async () => {
+      keys.set(4, "proj-2");
+      views = [4];
+      manager.connect("studio-01");
+      await client.disconnect({ hostId: "studio-01" });
+      manager.emit("studio-01", { status: "disconnected" });
+      events.length = 0;
+
+      // A new view on the host loads what it shows for itself.
+      keys.set(4, "studio-01:proj-2");
+      manager.connect("studio-01");
+      manager.emit("studio-01", connected);
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(resyncs()).toHaveLength(0);
+    });
+
+    it("resyncs the views on a host whose unused connection the Shell let go", async () => {
+      // A cached view of the host whose endpoint was never reopened, so nothing used the link.
+      keys.set(9, "studio-01:proj-1");
+      views = [9];
+      manager.connect("studio-01");
+      await manager.disconnect("studio-01");
+      manager.emit("studio-01", { status: "disconnected" });
+      events.length = 0;
+
+      manager.connect("studio-01");
+      manager.emit("studio-01", connected);
+      await vi.waitFor(() =>
+        expect(resyncs()).toEqual([
+          { type: "resync-required", hostId: "studio-01", reason: "reconnected" },
+        ])
+      );
     });
 
     it("tells no one when the views have since moved to another host", async () => {
@@ -3625,6 +3658,24 @@ describe("RemoteHostsClient", () => {
       manager.readiness = "ready";
       manager.emit("studio-01", connected);
       await vi.waitFor(() => expect(resyncs()).toHaveLength(1));
+    });
+
+    it("keeps none of a forgotten host's views, even from a link that goes after them", async () => {
+      keys.set(9, "studio-01:proj-1");
+      views = [9];
+      manager.connect("studio-01");
+      // The real manager says so once each connection it discards has stopped.
+      const discard = manager.disconnect.getMockImplementation()!;
+      manager.disconnect.mockImplementation(async (hostId: string) => {
+        await discard(hostId);
+        manager.emit(hostId, { status: "disconnected" });
+      });
+      await client.forget({ hostId: "studio-01" });
+      registry.add({ name: "studio-01", connection: { kind: "ssh", target: "studio.example" } });
+      manager.connect("studio-01");
+      manager.emit("studio-01", connected);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(resyncs()).toHaveLength(0);
     });
 
     it("drops the views of a forgotten host", async () => {

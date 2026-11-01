@@ -789,51 +789,6 @@ describe("host-owned saves held through a reconnect", () => {
     stop();
   });
 
-  it("still waits for the rehydrate when main's word lands after the connection, ahead of the lease's answer", async () => {
-    const { electron, emitHost } = installElectron();
-    electron.driveLease.takeOver.mockImplementationOnce(() => new Promise(() => {}));
-    bindView("studio-01");
-    const stop = startHostConnectionSync();
-    await flush();
-    const connected = { status: "connected", rttMs: 5, handshake: HANDSHAKE } as const;
-    emitHost({ type: "connection-changed", hostId: "studio-01", connection: connected });
-    emitHost({
-      type: "connection-changed",
-      hostId: "studio-01",
-      connection: { status: "disconnected" },
-    });
-    const replay = vi.fn();
-    expect(await sendHostOwnedWrite("app-state:activeWorktreeId", vi.fn(), replay)).toBe(
-      "deferred"
-    );
-
-    // Every lease read on the new connection crosses the link, so it answers
-    // only after main's word, which went out with the connection.
-    let answerLeases!: () => void;
-    const leasesAnswered = new Promise<void>((resolve) => (answerLeases = resolve));
-    const lease = electron.driveLease.get.getMockImplementation()!;
-    electron.driveLease.get.mockImplementation(async () => {
-      await leasesAnswered;
-      return lease();
-    });
-    let finishRehydrate!: () => void;
-    rehydrate.mockImplementationOnce(
-      () => new Promise<undefined>((resolve) => (finishRehydrate = () => resolve(undefined)))
-    );
-    emitHost({ type: "connection-changed", hostId: "studio-01", connection: connected });
-    await flush();
-    emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
-    await flush();
-    answerLeases();
-    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
-    await flush();
-    expect(replay).not.toHaveBeenCalled();
-
-    finishRehydrate();
-    await vi.waitFor(() => expect(replay).toHaveBeenCalledTimes(1));
-    stop();
-  });
-
   it("drops a held save when a reconnect's lease read shows someone else took over", async () => {
     const { electron, emitHost } = installElectron();
     bindView("studio-01");
@@ -1054,6 +1009,43 @@ describe("coming back to drive after someone else drove meanwhile (#13921)", () 
 
     await vi.waitFor(() => expect(held.replay).toHaveBeenCalledTimes(1));
     expect(rehydrate).toHaveBeenCalledTimes(1);
+    expect(optionsOf(rehydrate.mock.calls[0]!).authoritative).toBe(false);
+    stop();
+  });
+
+  it("holds its saves for the fresh session's rehydrate when main's word lands in a later turn", async () => {
+    const { electron, emitHost, stop } = await openUnder(mine(), "disconnected");
+    const held = await holdASave();
+
+    // Every lease read on the new connection crosses the link, so none answers
+    // before main's word, which went out with the connection.
+    let answerLeases!: () => void;
+    const leasesAnswered = new Promise<void>((resolve) => (answerLeases = resolve));
+    electron.driveLease.get.mockImplementation(async () => {
+      await leasesAnswered;
+      return mine({ leaseId: 9, endpointId: "me-again" });
+    });
+    electron.driveLease.get.mockClear();
+    let finishRehydrate!: () => void;
+    rehydrate.mockImplementationOnce(
+      () => new Promise<undefined>((resolve) => (finishRehydrate = () => resolve(undefined)))
+    );
+    emitHost({
+      type: "connection-changed",
+      hostId: "studio-01",
+      connection: { status: "connected", rttMs: 5, handshake: HANDSHAKE },
+    });
+    await flush();
+    expect(electron.driveLease.get).toHaveBeenCalled();
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
+    await flush();
+    answerLeases();
+
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
+    await flush();
+    expect(held.replay).not.toHaveBeenCalled();
+    finishRehydrate();
+    await vi.waitFor(() => expect(held.replay).toHaveBeenCalledTimes(1));
     expect(optionsOf(rehydrate.mock.calls[0]!).authoritative).toBe(false);
     stop();
   });
