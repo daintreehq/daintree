@@ -129,6 +129,12 @@ export interface ScheduledRunRecorderDeps {
   readonly onRunStarted?: (payload: DaintreeEventMap["scheduled-run:started"]) => void;
   /** A run settled, once; for other main-side services. */
   readonly onRunEnded?: (payload: DaintreeEventMap["scheduled-run:ended"]) => void;
+  /**
+   * Any run settled, once, with its committed record: every run that ends, and
+   * the skipped and refused runs that neither start nor end. The record holds
+   * agent-written text (a handback summary), so it stays in main.
+   */
+  readonly onRunSettled?: (run: ScheduledRun) => void;
   /** A schedule's history was deleted, and its runs with it will never end. */
   readonly onRunsDeleted?: (payload: DaintreeEventMap["scheduled-runs:deleted"]) => void;
   readonly logWarn?: (message: string, error?: unknown) => void;
@@ -193,6 +199,7 @@ export class ScheduledRunRecorder {
   private readonly onChanged: (change: ScheduledRunsChange) => void;
   private readonly onRunStarted: NonNullable<ScheduledRunRecorderDeps["onRunStarted"]>;
   private readonly onRunEnded: NonNullable<ScheduledRunRecorderDeps["onRunEnded"]>;
+  private readonly onRunSettled: NonNullable<ScheduledRunRecorderDeps["onRunSettled"]>;
   private readonly onRunsDeleted: NonNullable<ScheduledRunRecorderDeps["onRunsDeleted"]>;
   private readonly logWarn: (message: string, error?: unknown) => void;
   /**
@@ -222,6 +229,7 @@ export class ScheduledRunRecorder {
     this.onChanged = deps.onChanged ?? (() => {});
     this.onRunStarted = deps.onRunStarted ?? (() => {});
     this.onRunEnded = deps.onRunEnded ?? (() => {});
+    this.onRunSettled = deps.onRunSettled ?? (() => {});
     this.onRunsDeleted = deps.onRunsDeleted ?? (() => {});
     this.logWarn = deps.logWarn ?? console.warn;
   }
@@ -326,6 +334,7 @@ export class ScheduledRunRecorder {
       this.store.prune(run.scheduleId);
     });
     this.changed([run]);
+    this.notify(() => this.onRunSettled(run));
     return run;
   }
 
@@ -692,6 +701,7 @@ export class ScheduledRunRecorder {
         timestamp: settlement.settledAt,
       })
     );
+    this.notify(() => this.onRunSettled(run));
   }
 
   // Listeners follow a run that is already committed; one that throws can't undo it.

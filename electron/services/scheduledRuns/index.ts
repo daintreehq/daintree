@@ -5,7 +5,9 @@ import { getWebContentsForProject } from "../../window/webContentsRegistry.js";
 import { events } from "../events.js";
 import type { PtyIncarnationExit, PtyIncarnationLost } from "../PtyClient.js";
 import type { SpawnResult } from "../../../shared/types/pty-host.js";
+import type { ScheduledRun } from "../../../shared/types/scheduledRuns.js";
 import type { ScheduledRunRecorder, ScheduledRunsChange } from "./ScheduledRunRecorder.js";
+import { scheduledRunAttention } from "./scheduledRunAttention.js";
 
 /** The parts of `PtyClient` the run history follows. */
 export interface ScheduledRunFactSource {
@@ -67,6 +69,7 @@ export function getScheduledRunRecorder(): Promise<ScheduledRunRecorder | null> 
         events.emit("scheduled-run:started", payload);
       },
       onRunEnded: (payload) => events.emit("scheduled-run:ended", payload),
+      onRunSettled: notifyIfNeeded,
       onRunsDeleted: (payload) => events.emit("scheduled-runs:deleted", payload),
     });
     created.reconcileInterrupted();
@@ -78,6 +81,28 @@ export function getScheduledRunRecorder(): Promise<ScheduledRunRecorder | null> 
     return null;
   });
   return creating;
+}
+
+type ScheduledRunNotifierModule = typeof import("./scheduledRunNotifierLive.js");
+let notifierModule: Promise<ScheduledRunNotifierModule> | null = null;
+
+/**
+ * A run that settled needing a person gets a native notification (#15988).
+ * The delivery is loaded only then, so runs that go fine cost nothing, and
+ * it never holds up or undoes the recorded settlement.
+ */
+function notifyIfNeeded(run: ScheduledRun): void {
+  const attention = scheduledRunAttention(run);
+  if (!attention) return;
+  notifierModule ??= import("./scheduledRunNotifierLive.js").catch((error: unknown) => {
+    notifierModule = null;
+    throw error;
+  });
+  void notifierModule
+    .then(({ notifyScheduledRunAttention }) => notifyScheduledRunAttention(run, attention))
+    .catch((error: unknown) => {
+      console.warn(`[ScheduledRuns] Couldn't notify about run ${run.id}:`, error);
+    });
 }
 
 /**
