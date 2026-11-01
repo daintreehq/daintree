@@ -75,8 +75,7 @@ vi.mock("../../services/PluginService.js", () => ({
 }));
 const handleDaintreeUrlMock = vi.hoisted(() => vi.fn<(url: string) => void>());
 vi.mock("../../setup/deepLinkInstall.js", () => ({
-  extractDaintreeUrl: (argv: string[]) =>
-    argv.find((arg) => arg.startsWith("daintree://")) ?? null,
+  extractDaintreeUrl: (argv: string[]) => argv.find((arg) => arg.startsWith("daintree://")) ?? null,
   handleDaintreeUrl: handleDaintreeUrlMock,
 }));
 // environment.ts registers real `open-file` listeners and calls enableSandbox()

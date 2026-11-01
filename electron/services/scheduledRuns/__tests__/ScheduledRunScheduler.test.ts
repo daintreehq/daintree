@@ -1081,9 +1081,7 @@ describe("ScheduledRunScheduler", () => {
       commit("project-1", [daily()]);
       await scheduler!.idle();
 
-      expect(origins()).toEqual([
-        expect.objectContaining({ trigger: "scheduled", dueAt: at(9) }),
-      ]);
+      expect(origins()).toEqual([expect.objectContaining({ trigger: "scheduled", dueAt: at(9) })]);
     });
 
     it("spends the launch's watch on a pass whose evaluation throws", async () => {
@@ -1117,9 +1115,7 @@ describe("ScheduledRunScheduler", () => {
       await scheduler.start();
       await scheduler.idle();
 
-      expect(origins()).toEqual([
-        expect.objectContaining({ trigger: "catch-up", dueAt: at(9) }),
-      ]);
+      expect(origins()).toEqual([expect.objectContaining({ trigger: "catch-up", dueAt: at(9) })]);
     });
 
     it("calls it late when a wake before the first look is the only event", async () => {
@@ -1130,9 +1126,7 @@ describe("ScheduledRunScheduler", () => {
       await scheduler.start();
       await scheduler.idle();
 
-      expect(origins()).toEqual([
-        expect.objectContaining({ trigger: "catch-up", dueAt: at(9) }),
-      ]);
+      expect(origins()).toEqual([expect.objectContaining({ trigger: "catch-up", dueAt: at(9) })]);
     });
 
     it("calls it late after a sleep or clock change before the first look, with no event", async () => {
@@ -1146,9 +1140,7 @@ describe("ScheduledRunScheduler", () => {
       await scheduler.start();
       await scheduler.idle();
 
-      expect(origins()).toEqual([
-        expect.objectContaining({ trigger: "catch-up", dueAt: at(9) }),
-      ]);
+      expect(origins()).toEqual([expect.objectContaining({ trigger: "catch-up", dueAt: at(9) })]);
     });
 
     it("calls an occurrence late in a project read only after it came due", async () => {
@@ -1173,7 +1165,11 @@ describe("ScheduledRunScheduler", () => {
       commit("project-2", [daily({ id: "schedule-2", projectId: "project-2" })]);
       await scheduler.idle();
       expect(
-        launches.map((launch) => [launch.scheduleId, launch.origin.trigger, launch.origin.coalesced])
+        launches.map((launch) => [
+          launch.scheduleId,
+          launch.origin.trigger,
+          launch.origin.coalesced,
+        ])
       ).toEqual([
         ["schedule-1", "os-launch", null],
         ["schedule-2", "os-launch", { after: at(8), through: at(9, 0, 10) }],
