@@ -34,9 +34,11 @@ import {
   EMOJI_SLOT_CLASS,
   OpenDestinationControl,
   PathCaption,
+  ProjectGroupField,
   type ProjectOpenDestination,
 } from "./projectDialogFields";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
+import { useProjectCreationGroup } from "@/hooks/useProjectCreationGroup";
 
 /**
  * The template picker's value for no template, which stays first and the
@@ -84,6 +86,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
   const templateHintId = useId();
 
   const createProjectFolder = useProjectStore((state) => state.createProjectFolder);
+  const { groups, groupId, setGroupId } = useProjectCreationGroup(isOpen);
 
   useEffect(() => {
     if (!isOpen) {
@@ -232,6 +235,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
       await createProjectFolder(parentPath, folderName.trim(), effectiveEmoji, {
         disposition: destination,
         ...(template ? { template } : {}),
+        ...(groupId ? { groupId } : {}),
       });
       // Close only after the folder is created (but addProjectByPath runs in the background)
       onClose();
@@ -252,6 +256,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
     folderName,
     effectiveEmoji,
     destination,
+    groupId,
     selectedTemplate,
     currentPreview,
     createProjectFolder,
@@ -345,6 +350,13 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
               }
             />
           </FormRow>
+          <ProjectGroupField
+            id="create-folder-group"
+            groups={groups}
+            value={groupId}
+            onChange={setGroupId}
+            disabled={isCreating}
+          />
           {templates.length > 0 && (
             <FormRow
               label="Template"

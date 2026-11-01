@@ -9,7 +9,19 @@ import {
   type SegmentedRadioOption,
 } from "@/components/ui/SegmentedRadioGroup";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { FIELD_SURFACE } from "@/components/Worktree/views/WorktreeFormLayout";
+import {
+  FIELD_CONTROL_SIZE,
+  FIELD_SURFACE,
+  FormRow,
+} from "@/components/Worktree/views/WorktreeFormLayout";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import type { ProjectGroup } from "@shared/types/project";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
 
 /**
@@ -303,5 +315,53 @@ export function OpenDestinationControl({
       aria-label="Open in"
       disabled={disabled}
     />
+  );
+}
+
+/**
+ * The picker's value for no group. Radix refuses an empty-string item value,
+ * and group ids are minted as UUIDs, so the two can't collide.
+ */
+const NO_GROUP = "no-group";
+
+/**
+ * Which project group the new project is filed under, as a form row. Renders
+ * nothing while no groups exist, so the dialogs stay as they were for anyone
+ * who doesn't use groups.
+ */
+export function ProjectGroupField({
+  id,
+  groups,
+  value,
+  onChange,
+  disabled,
+}: {
+  id: string;
+  groups: ProjectGroup[];
+  value: string | null;
+  onChange: (groupId: string | null) => void;
+  disabled?: boolean;
+}) {
+  if (groups.length === 0) return null;
+  return (
+    <FormRow label="Group" htmlFor={id}>
+      <Select
+        value={value ?? NO_GROUP}
+        onValueChange={(next) => onChange(next === NO_GROUP ? null : next)}
+        disabled={disabled}
+      >
+        <SelectTrigger id={id} className={FIELD_CONTROL_SIZE} data-testid="project-group-field">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NO_GROUP}>No group</SelectItem>
+          {groups.map((group) => (
+            <SelectItem key={group.id} value={group.id}>
+              {group.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </FormRow>
   );
 }

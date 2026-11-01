@@ -34,8 +34,10 @@ import {
   EMOJI_SLOT_CLASS,
   OpenDestinationControl,
   PathCaption,
+  ProjectGroupField,
   type ProjectOpenDestination,
 } from "./projectDialogFields";
+import { useProjectCreationGroup } from "@/hooks/useProjectCreationGroup";
 import { join as joinPath } from "@shared/utils/path";
 import { matchProviderForRemoteUrl } from "@shared/utils/forgeHostnames";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
@@ -62,7 +64,7 @@ interface CloneRepoDialogProps {
   onSuccess: (
     clonedPath: string,
     identity: ProjectCreationIdentity | undefined,
-    options: { disposition: ProjectOpenDestination }
+    options: { disposition: ProjectOpenDestination; groupId?: string }
   ) => void;
   onCancel: () => void;
 }
@@ -234,6 +236,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   const hasFinalizedRef = useRef(false);
   // The running clone's operation id, so Stop cancels this clone and no other.
   const cloneOpIdRef = useRef<string | null>(null);
+  const { groups, groupId, setGroupId } = useProjectCreationGroup(isOpen);
 
   const suggestedEmoji = useMemo(() => {
     const trimmed = folderName.trim();
@@ -247,8 +250,9 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
     const trimmedName = folderName.trim();
     onSuccess(clonedPath, trimmedName ? { name: trimmedName, emoji: effectiveEmoji } : undefined, {
       disposition: launchedDestination,
+      ...(groupId ? { groupId } : {}),
     });
-  }, [onSuccess, clonedPath, folderName, effectiveEmoji, launchedDestination]);
+  }, [onSuccess, clonedPath, folderName, effectiveEmoji, launchedDestination, groupId]);
 
   // Reset state when dialog opens/closes
   useEffect(() => {
@@ -884,6 +888,13 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                     }
                   />
                 </FormRow>
+                <ProjectGroupField
+                  id="clone-group"
+                  groups={groups}
+                  value={groupId}
+                  onChange={setGroupId}
+                  disabled={isCloning}
+                />
                 <FormRow label="Open in" selfLabelled>
                   <OpenDestinationControl
                     value={destination}

@@ -17,6 +17,7 @@ const { initGitGuidedMock, onInitGitProgressMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/components/ui/select", () => import("@/components/ui/__tests__/nativeSelectMock"));
+vi.mock("@/store/projectGroupsStore", () => import("@/store/__tests__/projectGroupsStoreMock"));
 
 vi.mock("@/clients", () => ({
   projectClient: {
@@ -80,6 +81,8 @@ vi.mock("@/components/ui/AppDialog", () => {
 });
 
 import { GitInitDialog } from "../GitInitDialog";
+import { useProjectGroupsStore } from "@/store/projectGroupsStore";
+import { makeProjectGroup } from "@/store/__tests__/projectGroupsStoreMock";
 
 // `InlineStatusBanner` — the failure treatment this dialog now shares with the
 // rest of the app — reads `prefers-reduced-motion` on render, and jsdom ships no
@@ -127,6 +130,7 @@ describe("GitInitDialog", () => {
     });
 
     initGitGuidedMock.mockResolvedValue({ outcome: "success", completedSteps: [] });
+    useProjectGroupsStore.setState({ groups: [] });
   });
 
   afterEach(() => {
@@ -645,10 +649,13 @@ describe("GitInitDialog", () => {
 
       await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1), { timeout: 3000 });
       // Emoji is seeded from the folder name, and renaming must not re-derive it.
-      expect(onSuccess).toHaveBeenCalledWith({
-        name: "Renamed",
-        emoji: suggestProjectEmoji("new-repo"),
-      });
+      expect(onSuccess).toHaveBeenCalledWith(
+        {
+          name: "Renamed",
+          emoji: suggestProjectEmoji("new-repo"),
+        },
+        null
+      );
     });
 
     it("re-seeds when a second request swaps the folder while still open", () => {
@@ -672,6 +679,105 @@ describe("GitInitDialog", () => {
 
       expect(nameInput().value).toBe("Second");
       expect(screen.getByRole("button", { name: /choose project emoji/i }).textContent).toBe("📦");
+    });
+  });
+
+  describe("project group", () => {
+    const groupField = () => screen.queryByTestId<HTMLSelectElement>("project-group-field");
+
+    async function finish(): Promise<void> {
+      fireEvent.click(startButton());
+      fireEvent.click(await screen.findByTestId("git-init-open"));
+    }
+
+    it("offers no group row while no groups exist", () => {
+      renderDialog();
+      expect(groupField()).toBeNull();
+    });
+
+    it("defaults to no group and reports none", async () => {
+      useProjectGroupsStore.setState({ groups: [makeProjectGroup("g1", "Daintree")] });
+      const onSuccess = vi.fn();
+      renderDialog({ onSuccess });
+
+      expect(groupField()?.value).toBe("no-group");
+      await finish();
+
+      expect(onSuccess).toHaveBeenCalledWith(expect.any(Object), null);
+    });
+
+    it("reports the group chosen here", async () => {
+      useProjectGroupsStore.setState({
+        groups: [makeProjectGroup("g1", "Daintree"), makeProjectGroup("g2", "Clients", 1)],
+      });
+      const onSuccess = vi.fn();
+      renderDialog({ onSuccess });
+
+      fireEvent.change(groupField()!, { target: { value: "g2" } });
+      await finish();
+
+      expect(onSuccess).toHaveBeenCalledWith(expect.any(Object), "g2");
+    });
+
+    it("starts from the group chosen one dialog earlier, and can clear it", async () => {
+      useProjectGroupsStore.setState({ groups: [makeProjectGroup("g1", "Daintree")] });
+      const onSuccess = vi.fn();
+      render(
+        <GitInitDialog
+          isOpen={true}
+          directoryPath="/tmp/new-repo"
+          initialGroupId="g1"
+          onSuccess={onSuccess}
+          onCancel={vi.fn()}
+        />
+      );
+
+      expect(groupField()?.value).toBe("g1");
+      fireEvent.change(groupField()!, { target: { value: "no-group" } });
+      await finish();
+
+      // An explicit null, not undefined: the store would otherwise restore the
+      // carried group the user just cleared.
+      expect(onSuccess).toHaveBeenCalledWith(expect.any(Object), null);
+    });
+
+    it("reports no group when the chosen group is deleted while the dialog is open", async () => {
+      useProjectGroupsStore.setState({
+        groups: [makeProjectGroup("g1", "Daintree"), makeProjectGroup("g2", "Clients", 1)],
+      });
+      const onSuccess = vi.fn();
+      renderDialog({ onSuccess });
+      fireEvent.change(groupField()!, { target: { value: "g1" } });
+
+      act(() => {
+        useProjectGroupsStore.setState({ groups: [makeProjectGroup("g2", "Clients")] });
+      });
+      expect(groupField()?.value).toBe("no-group");
+      await finish();
+
+      expect(onSuccess).toHaveBeenCalledWith(expect.any(Object), null);
+    });
+
+    it("starts over from the new folder's group when a request swaps the folder while open", () => {
+      useProjectGroupsStore.setState({
+        groups: [makeProjectGroup("g1", "Daintree"), makeProjectGroup("g2", "Clients", 1)],
+      });
+      const props = { onSuccess: vi.fn(), onCancel: vi.fn() };
+      const { rerender } = render(
+        <GitInitDialog isOpen={true} directoryPath="/tmp/first-folder" {...props} />
+      );
+      fireEvent.change(groupField()!, { target: { value: "g1" } });
+
+      rerender(
+        <GitInitDialog
+          isOpen={true}
+          directoryPath="/tmp/second-folder"
+          initialGroupId="g2"
+          {...props}
+        />
+      );
+
+      expect(groupField()?.value).toBe("g2");
     });
   });
 

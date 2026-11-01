@@ -167,8 +167,12 @@ interface ModalHostLayerProps {
   shouldMountGitInitDialog: boolean;
   effectiveGitInitPath: string | null;
   effectiveGitInitIdentity: ProjectCreationIdentity | null;
+  effectiveGitInitGroupId: string | null;
   gitInitDialogStep: NonGitFolderStep;
-  handleGitInitSuccess: (identity?: ProjectCreationIdentity) => Promise<void>;
+  handleGitInitSuccess: (
+    identity?: ProjectCreationIdentity,
+    groupId?: string | null
+  ) => Promise<void>;
   openWithoutGit: () => Promise<void>;
   closeGitInitDialog: () => void;
   createFolderDialogOpen: boolean;
@@ -179,7 +183,7 @@ interface ModalHostLayerProps {
   handleCloneSuccess: (
     clonedPath: string,
     identity?: ProjectCreationIdentity,
-    options?: { disposition?: ProjectOpenDisposition }
+    options?: { disposition?: ProjectOpenDisposition; groupId?: string }
   ) => Promise<void>;
   closeCloneRepoDialog: () => void;
   reEntrySummary: ReEntrySummaryState;
@@ -268,6 +272,7 @@ export function ModalHostLayer({
   shouldMountGitInitDialog,
   effectiveGitInitPath,
   effectiveGitInitIdentity,
+  effectiveGitInitGroupId,
   gitInitDialogStep,
   handleGitInitSuccess,
   openWithoutGit,
@@ -898,6 +903,7 @@ export function ModalHostLayer({
               directoryPath={effectiveGitInitPath}
               initialStep={gitInitDialogStep}
               initialIdentity={effectiveGitInitIdentity}
+              initialGroupId={effectiveGitInitGroupId}
               onOpenWithoutGit={openWithoutGit}
               onInitSuccess={handleGitInitSuccess}
               onCancel={closeGitInitDialog}

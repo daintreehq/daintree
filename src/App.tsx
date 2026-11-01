@@ -207,6 +207,7 @@ function AppInner() {
   const gitInitDialogOpen = useProjectStore((state) => state.gitInitDialogOpen);
   const gitInitDirectoryPath = useProjectStore((state) => state.gitInitDirectoryPath);
   const gitInitIdentity = useProjectStore((state) => state.gitInitIdentity);
+  const gitInitGroupId = useProjectStore((state) => state.gitInitGroupId);
   const closeGitInitDialog = useProjectStore((state) => state.closeGitInitDialog);
   const handleGitInitSuccess = useProjectStore((state) => state.handleGitInitSuccess);
   const gitInitDialogStep = useProjectStore((state) => state.gitInitDialogStep);
@@ -222,25 +223,31 @@ function AppInner() {
   const shouldMountCloneRepoDialog = useKeepMounted(cloneRepoDialogOpen);
   // GitInitDialog mounts on the directory path (its `directoryPath` prop is
   // non-nullable), but closeGitInitDialog() clears `gitInitDialogOpen`,
-  // `gitInitDirectoryPath` and `gitInitIdentity` in one set(). Latch path and
-  // identity as ONE object so the dialog keeps valid props through its exit
-  // animation window (#9917) and the two can never be latched out of step. On
-  // the next open the store sets both before isOpen, so a fresh context wins.
+  // `gitInitDirectoryPath`, `gitInitIdentity` and `gitInitGroupId` in one set().
+  // Latch them as ONE object so the dialog keeps valid props through its exit
+  // animation window (#9917) and they can never be latched out of step. On the
+  // next open the store sets them all before isOpen, so a fresh context wins.
   const shouldMountGitInitDialog = useKeepMounted(gitInitDialogOpen);
   const [latchedGitInit, setLatchedGitInit] = useState<{
     path: string;
     identity: ProjectCreationIdentity | null;
+    groupId: string | null;
   } | null>(null);
   useEffect(() => {
     if (gitInitDirectoryPath) {
-      setLatchedGitInit({ path: gitInitDirectoryPath, identity: gitInitIdentity });
+      setLatchedGitInit({
+        path: gitInitDirectoryPath,
+        identity: gitInitIdentity,
+        groupId: gitInitGroupId,
+      });
     }
-  }, [gitInitDirectoryPath, gitInitIdentity]);
+  }, [gitInitDirectoryPath, gitInitIdentity, gitInitGroupId]);
   const effectiveGitInit = gitInitDirectoryPath
-    ? { path: gitInitDirectoryPath, identity: gitInitIdentity }
+    ? { path: gitInitDirectoryPath, identity: gitInitIdentity, groupId: gitInitGroupId }
     : latchedGitInit;
   const effectiveGitInitPath = effectiveGitInit?.path ?? null;
   const effectiveGitInitIdentity = effectiveGitInit?.identity ?? null;
+  const effectiveGitInitGroupId = effectiveGitInit?.groupId ?? null;
   const { selectWorktree, activeWorktreeId } = useWorktreeSelectionStore(
     useShallow((state) => ({
       selectWorktree: state.selectWorktree,
@@ -670,6 +677,7 @@ function AppInner() {
                 shouldMountGitInitDialog={shouldMountGitInitDialog}
                 effectiveGitInitPath={effectiveGitInitPath}
                 effectiveGitInitIdentity={effectiveGitInitIdentity}
+                effectiveGitInitGroupId={effectiveGitInitGroupId}
                 gitInitDialogStep={gitInitDialogStep}
                 handleGitInitSuccess={handleGitInitSuccess}
                 openWithoutGit={openWithoutGit}
