@@ -668,6 +668,25 @@ describe("DecisionsService deleting local data", () => {
     }
   });
 
+  it("keeps the store closed on a retry while the earlier deletion still can't finish", async () => {
+    const t = setup({ forgetFails: true });
+    try {
+      writeFileSync(t.keyFile, KEYS);
+      await t.service.start(on(RELAY));
+      await t.service.eraseLocalData();
+
+      await expect(t.service.eraseLocalData()).resolves.toEqual({
+        result: "incomplete",
+        erased: true,
+      });
+
+      expect(t.service.getStore()).toBeNull();
+      expect(t.log.filter((step) => step === "open store")).toHaveLength(1);
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it("puts back keys a deletion set aside but never committed before the store opens", async () => {
     const t = setup();
     try {

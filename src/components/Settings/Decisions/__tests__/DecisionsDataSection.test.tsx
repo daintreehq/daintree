@@ -58,6 +58,12 @@ function passphraseFields(): [HTMLInputElement, HTMLInputElement] {
   ];
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => (resolve = res));
+  return { promise, resolve };
+}
+
 describe("DecisionsDataSection", () => {
   beforeEach(() => {
     exportData.mockReset();
@@ -134,6 +140,52 @@ describe("DecisionsDataSection", () => {
     await send();
     await gone("dialog");
     expect(document.getElementById("decisions-data-outcome")).toBeNull();
+  });
+
+  it("forgets a passphrase typed into an export that was cancelled", async () => {
+    renderSection({ state: "not-connected", relayOrigin: ORIGIN });
+
+    fireEvent.click(button("Export…"));
+    const [first, second] = passphraseFields();
+    fireEvent.change(first, { target: { value: PASSPHRASE } });
+    fireEvent.change(second, { target: { value: PASSPHRASE } });
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Cancel" }));
+    await gone("dialog");
+
+    fireEvent.click(button("Export…"));
+    expect(passphraseFields().map((field) => field.value)).toEqual(["", ""]);
+    expect(exportData).not.toHaveBeenCalled();
+  });
+
+  it("holds the export open and every action locked until main answers, sending one request", async () => {
+    const reply = deferred<DecisionsExportResult>();
+    exportData.mockReturnValue(reply.promise);
+    renderSection({ state: "not-connected", relayOrigin: ORIGIN });
+
+    fireEvent.click(button("Export…"));
+    const [first, second] = passphraseFields();
+    fireEvent.change(first, { target: { value: PASSPHRASE } });
+    fireEvent.change(second, { target: { value: PASSPHRASE } });
+    await act(async () => {
+      fireEvent.click(within(dialog()).getByRole("button", { name: "Export history…" }));
+    });
+
+    expect(passphraseFields().map((field) => field.value)).toEqual(["", ""]);
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Cancel" }));
+    fireEvent.keyDown(dialog(), { key: "Escape" });
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    for (const name of ["Delete relay data", "Delete local data"]) {
+      const action = screen
+        .getAllByRole("button", { name, hidden: true })
+        .find((element) => element.closest("[role=dialog]") === null) as HTMLButtonElement;
+      expect(action.disabled).toBe(true);
+    }
+
+    await act(async () => {
+      reply.resolve({ result: "cancelled" });
+    });
+    await gone("dialog");
+    expect(exportData).toHaveBeenCalledOnce();
   });
 
   it("deletes the relay's data only once its address is typed, and says what the relay answered", async () => {

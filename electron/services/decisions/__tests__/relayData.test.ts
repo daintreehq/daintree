@@ -56,6 +56,9 @@ function settingsFor(stored: StoredIdentity): DecisionsSettings {
 function fakeRelay(ownerDeviceId: string) {
   const state = {
     deleted: [] as string[],
+    /** Refuses the request before anything is deleted. */
+    refuse: null as null | (() => Response),
+    /** What it says after deleting. */
     answer: null as null | ((init: RequestInit) => Promise<Response>),
   };
   const fetchImpl = vi.fn<RelayFetch>(async (url, init) => {
@@ -66,6 +69,7 @@ function fakeRelay(ownerDeviceId: string) {
     if (!auth || auth.deviceId !== ownerDeviceId) {
       return json({ code: "not_authenticated", message: "not authenticated" }, 401);
     }
+    if (state.refuse) return state.refuse();
     const body = JSON.parse(String(init.body)) as Record<string, unknown>;
     if (body.protocol_version !== 1 || body.confirm !== "DELETE") {
       return json({ code: "validation_error", message: "bad body" }, 400);
@@ -158,11 +162,12 @@ describe("deleteDecisionsRelayData", () => {
     ] as const;
     for (const { status, code, reason } of cases) {
       relay.fetchImpl.mockClear();
-      relay.state.answer = async () => json({ code, message: code }, status);
+      relay.state.refuse = () => json({ code, message: code }, status);
 
       await expect(run()).resolves.toEqual({ result: "refused", origin: ORIGIN, reason, status });
       expect(relay.fetchImpl).toHaveBeenCalledOnce();
     }
+    expect(relay.state.deleted).toEqual([]);
   });
 
   it("can't confirm a deletion the relay answered with a server error, and doesn't ask again", async () => {
@@ -180,6 +185,9 @@ describe("deleteDecisionsRelayData", () => {
     for (const answer of [
       () => json({}),
       () => json({ ok: true, scope: "everything" }),
+      () => json({ ok: false, scope: "questions" }),
+      () => json({ ok: "true", scope: "questions" }),
+      () => json({ scope: "questions" }),
       () => new Response("<html>hello</html>", { status: 200 }),
     ]) {
       relay.state.answer = async () => answer();

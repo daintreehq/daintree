@@ -69,7 +69,7 @@ async function history(stored: StoredIdentity): Promise<MemoryLocalStore> {
     },
     {
       id: "outbox-1",
-      kind: "publish",
+      kind: "create",
       question_id: question.question_id,
       payload: {},
       attempts: 0,

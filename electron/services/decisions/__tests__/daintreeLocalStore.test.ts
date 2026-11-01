@@ -490,20 +490,38 @@ describe("DaintreeLocalStore", () => {
     expect(sqlite.pragma("synchronous", { simple: true })).toBe(SYNCHRONOUS_NORMAL);
   });
 
-  it("says whether any Decisions row is stored, in any of its tables", async () => {
+  it("says whether any Decisions row is stored, finding a row in each table on its own", async () => {
+    const tables = [
+      "decisions_meta",
+      "decisions_questions",
+      "decisions_outbox",
+      "decisions_inbound_events",
+      "decisions_injection_intents",
+      "decisions_audit",
+    ];
     expect(hasDecisionsData(sqlite)).toBe(false);
     sqlite
       .prepare("INSERT INTO app_state (key, value) VALUES (?, ?)")
       .run("unrelated", JSON.stringify(1));
     expect(hasDecisionsData(sqlite)).toBe(false);
 
-    const store = new DaintreeLocalStore(sqlite);
-    await store.appendAudit({ at: "a", event: "x" });
-    await store.close();
-    expect(hasDecisionsData(sqlite)).toBe(true);
+    for (const only of tables) {
+      const store = new DaintreeLocalStore(sqlite);
+      await store.setMeta("k", "v");
+      await store.commitNewQuestion(row("q1", 1), item("o1", "q1"));
+      await store.putIntent(intent("i1", "q1"));
+      await store.insertEvent(event(1));
+      await store.appendAudit({ at: "a", event: "x" });
+      await store.close();
+      for (const table of tables) {
+        if (table !== only) sqlite.prepare(`DELETE FROM ${table}`).run();
+      }
+      expect(count(sqlite, only), only).toBeGreaterThan(0);
 
-    eraseDecisionsData(sqlite);
-    expect(hasDecisionsData(sqlite)).toBe(false);
+      expect(hasDecisionsData(sqlite), only).toBe(true);
+      eraseDecisionsData(sqlite);
+      expect(hasDecisionsData(sqlite), only).toBe(false);
+    }
   });
 
   it("refuses to erase while disk space is critical", async () => {

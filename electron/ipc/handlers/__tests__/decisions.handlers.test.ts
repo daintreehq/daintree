@@ -473,18 +473,26 @@ describe("decisions IPC", () => {
     );
   });
 
-  it("opens the export's dialog on its own when the window that asked has gone", async () => {
+  it("opens the export's dialog on its own when the window that asked has gone, or there is none", async () => {
     saved.value = { enabled: true };
-    decisionsEntry.exportData.mockImplementationOnce(async (_payload, choose) => {
+    const choosing = async (
+      _payload: ExportDecisionsDataPayload,
+      choose: (fileName: string) => Promise<string | null>
+    ): Promise<DecisionsExportResult> => {
       await choose("decisions-export-2026-11-01.dxz.json");
       return { result: "cancelled" };
-    });
+    };
+    decisionsEntry.exportData.mockImplementationOnce(choosing).mockImplementationOnce(choosing);
 
     await exportData({ senderWindow: { isDestroyed: () => true } }, EXPORT);
     await exportData({ senderWindow: null }, EXPORT);
 
-    expect(dialogMock.showSaveDialog).toHaveBeenCalledOnce();
-    expect(dialogMock.showSaveDialog.mock.calls[0]).toHaveLength(1);
+    expect(dialogMock.showSaveDialog).toHaveBeenCalledTimes(2);
+    for (const call of dialogMock.showSaveDialog.mock.calls) {
+      expect(call).toEqual([
+        expect.objectContaining({ defaultPath: "decisions-export-2026-11-01.dxz.json" }),
+      ]);
+    }
   });
 
   it("deletes relay and local data through Decisions itself once the setting is on", async () => {

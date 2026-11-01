@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const fsFaults = vi.hoisted(() => ({ rename: null as null | ((src: string) => boolean) }));
+// Every rename and directory sync, in order, beside the rows' own steps.
+const fsFaults = vi.hoisted(() => ({
+  rename: null as null | ((src: string) => boolean),
+  syncFails: false,
+  log: [] as string[],
+}));
 
 vi.mock("../../../utils/fs.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../utils/fs.js")>();
@@ -13,7 +18,12 @@ vi.mock("../../../utils/fs.js", async (importOriginal) => {
       if (fsFaults.rename?.(src)) {
         throw Object.assign(new Error("rename refused"), { code: "EACCES" });
       }
-      return actual.resilientRename(src, dest);
+      await actual.resilientRename(src, dest);
+      fsFaults.log.push(`rename ${src.endsWith(".erasing") ? "back" : "aside"}`);
+    },
+    syncParentDirectory: async () => {
+      if (fsFaults.syncFails) throw Object.assign(new Error("fsync failed"), { code: "EIO" });
+      fsFaults.log.push("sync");
     },
   };
 });
@@ -33,6 +43,7 @@ function fakeRows(count = 3) {
   const state = { count, failErase: null as null | Error };
   const rows: DecisionsRows = {
     erase: vi.fn(() => {
+      fsFaults.log.push("erase rows");
       if (state.failErase) throw state.failErase;
       state.count = 0;
     }),
@@ -64,6 +75,8 @@ describe("local Decisions data deletion", () => {
     forgotten = 0;
     forgetFails = false;
     fsFaults.rename = null;
+    fsFaults.syncFails = false;
+    fsFaults.log = [];
   });
 
   afterEach(() => {
@@ -80,6 +93,32 @@ describe("local Decisions data deletion", () => {
     expect(existsSync(keyFile)).toBe(false);
     expect(existsSync(erasingKeyFilePath(keyFile))).toBe(false);
     expect(forgotten).toBe(1);
+  });
+
+  it("makes the keys' move durable before the rows go, and their removal durable after", async () => {
+    writeFileSync(keyFile, KEYS);
+
+    await eraseLocalDecisionsData(deps(fakeRows().rows));
+
+    expect(fsFaults.log).toEqual(["rename aside", "sync", "erase rows", "sync"]);
+  });
+
+  it("puts the keys back, deleting nothing, when their move can't be made durable", async () => {
+    writeFileSync(keyFile, KEYS);
+    fsFaults.syncFails = true;
+    const { rows, state } = fakeRows();
+
+    await expect(eraseLocalDecisionsData(deps(rows))).resolves.toEqual({
+      result: "failed",
+      reason: "keys",
+    });
+    expect(rows.erase).not.toHaveBeenCalled();
+    expect(state.count).toBe(3);
+    expect(readFileSync(keyFile, "utf8")).toBe(KEYS);
+    expect(existsSync(erasingKeyFilePath(keyFile))).toBe(false);
+
+    fsFaults.syncFails = false;
+    await expect(eraseLocalDecisionsData(deps(rows))).resolves.toEqual({ result: "deleted" });
   });
 
   it("deletes the rows and the relay record when there are no keys", async () => {
@@ -178,12 +217,40 @@ describe("local Decisions data deletion", () => {
     expect(existsSync(keyFile)).toBe(false);
   });
 
+  it("stays unfinished, never claiming nothing was deleted, while the relay record still can't be forgotten", async () => {
+    writeFileSync(keyFile, KEYS);
+    const { rows } = fakeRows();
+    forgetFails = true;
+    await eraseLocalDecisionsData(deps(rows));
+
+    await expect(eraseLocalDecisionsData(deps(rows))).resolves.toEqual({
+      result: "incomplete",
+      erased: true,
+    });
+    expect(existsSync(erasingKeyFilePath(keyFile))).toBe(true);
+    expect(existsSync(keyFile)).toBe(false);
+  });
+
+  it("reports deleted when finishing an earlier committed deletion leaves nothing to delete", async () => {
+    writeFileSync(erasingKeyFilePath(keyFile), KEYS);
+    const { rows, state } = fakeRows(0);
+    state.failErase = new Error("database is locked");
+
+    await expect(eraseLocalDecisionsData(deps(rows))).resolves.toEqual({ result: "deleted" });
+
+    expect(rows.erase).not.toHaveBeenCalled();
+    expect(forgotten).toBe(1);
+    expect(existsSync(erasingKeyFilePath(keyFile))).toBe(false);
+  });
+
   describe("finishing a deletion that stopped partway", () => {
     it("does nothing, opening no rows, when no deletion began", async () => {
       writeFileSync(keyFile, KEYS);
       const openRows = vi.fn(async () => fakeRows().rows);
 
-      await finishInterruptedErase({ ...deps(fakeRows().rows), openRows });
+      await expect(finishInterruptedErase({ ...deps(fakeRows().rows), openRows })).resolves.toBe(
+        "none"
+      );
 
       expect(openRows).not.toHaveBeenCalled();
       expect(readFileSync(keyFile, "utf8")).toBe(KEYS);
@@ -193,22 +260,25 @@ describe("local Decisions data deletion", () => {
       writeFileSync(erasingKeyFilePath(keyFile), KEYS);
       const { rows } = fakeRows();
 
-      await finishInterruptedErase(deps(rows));
+      await expect(finishInterruptedErase(deps(rows))).resolves.toBe("restored");
 
       expect(readFileSync(keyFile, "utf8")).toBe(KEYS);
       expect(existsSync(erasingKeyFilePath(keyFile))).toBe(false);
       expect(forgotten).toBe(0);
+      expect(fsFaults.log).toEqual(["rename back"]);
     });
 
     it("forgets the relay and removes the keys when no row is left, since the deletion committed", async () => {
       writeFileSync(erasingKeyFilePath(keyFile), KEYS);
       const { rows } = fakeRows(0);
 
-      await finishInterruptedErase(deps(rows));
+      await expect(finishInterruptedErase(deps(rows))).resolves.toBe("finished");
 
       expect(existsSync(keyFile)).toBe(false);
       expect(existsSync(erasingKeyFilePath(keyFile))).toBe(false);
       expect(forgotten).toBe(1);
+      // The removal is durable before any store can open and write a row.
+      expect(fsFaults.log).toEqual(["sync"]);
     });
 
     it("drops the set-aside keys, keeping the relay record, once new keys have been sealed", async () => {

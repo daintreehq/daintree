@@ -1,5 +1,5 @@
 import { stat } from "node:fs/promises";
-import { resilientRename, resilientUnlink } from "../../utils/fs.js";
+import { resilientRename, resilientUnlink, syncParentDirectory } from "../../utils/fs.js";
 
 /** The Decisions rows in the app database, as a deletion needs them. */
 export interface DecisionsRows {
@@ -53,11 +53,25 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-async function unlinkIfPresent(path: string): Promise<void> {
+/**
+ * Removes the set-aside keys durably, so a crash can't bring them back after
+ * a store has opened and written rows (which would read as a deletion that
+ * never committed, and put them back).
+ */
+async function durableUnlinkIfPresent(path: string): Promise<void> {
   try {
     await resilientUnlink(path);
   } catch (error) {
     if (!isMissing(error)) throw error;
+  }
+  await syncParentDirectory(path);
+}
+
+async function rowsGone(deps: LocalEraseDeps): Promise<boolean> {
+  try {
+    return !(await deps.openRows()).exist();
+  } catch {
+    return false;
   }
 }
 
@@ -70,28 +84,38 @@ function eraseRefusal(error: unknown): "disk-pressure" | "storage" {
 }
 
 /**
+ * What finishing a deletion that stopped partway did: `none` when there was
+ * none (or only keys a later setup superseded), `restored` when it never
+ * committed and the keys went back, `finished` when it had committed and the
+ * keys and the relay record went too.
+ */
+export type EraseRecovery = "none" | "restored" | "finished";
+
+/**
  * Finishes a deletion that stopped partway: quit or a crash mid-way, or a
  * last step that failed. Rows still stored mean their transaction never
  * committed, so nothing was deleted and the keys go back. No rows mean it
  * committed, so the relay record and the keys go too. Keys sealed since (a
  * new setup) mean the set-aside ones were already given up. Run before the
  * store opens, since a row written after the deletion would read as one it
- * never reached.
+ * never reached; a failure here must leave the store closed for that reason.
  */
-export async function finishInterruptedErase(deps: LocalEraseDeps): Promise<void> {
+export async function finishInterruptedErase(deps: LocalEraseDeps): Promise<EraseRecovery> {
   const aside = erasingKeyFilePath(deps.keyFilePath);
-  if (!(await exists(aside))) return;
+  if (!(await exists(aside))) return "none";
   if (await exists(deps.keyFilePath)) {
-    await unlinkIfPresent(aside);
-    return;
+    await durableUnlinkIfPresent(aside);
+    return "none";
   }
   const rows = await deps.openRows();
   if (rows.exist()) {
+    // Not synced: a move back lost to a crash is made again, since the rows are still there.
     await resilientRename(aside, deps.keyFilePath);
-    return;
+    return "restored";
   }
   deps.forgetIdentity();
-  await unlinkIfPresent(aside);
+  await durableUnlinkIfPresent(aside);
+  return "finished";
 }
 
 /**
@@ -100,17 +124,23 @@ export async function finishInterruptedErase(deps: LocalEraseDeps): Promise<void
  * the key store closed, so nothing queued writes a row back or reads the
  * keys meanwhile. Never asks the keychain, and sends nothing anywhere.
  *
- * The keys are moved aside first, then the rows deleted in one transaction:
- * a failure before that commits puts the keys back, so nothing changed. Once
- * it has committed, the relay record and the set-aside keys follow, and a
- * failure there leaves the rest to `finishInterruptedErase`.
+ * The keys are moved aside first, durably, then the rows deleted in one
+ * transaction: a failure before that commits puts the keys back, so nothing
+ * changed. Once it has committed, the relay record and the set-aside keys
+ * follow, and a failure there leaves the rest to `finishInterruptedErase`.
+ * An earlier deletion still unresolved comes first, and while it can't be
+ * resolved the outcome is `incomplete`, so the store stays closed.
  */
 export async function eraseLocalDecisionsData(deps: LocalEraseDeps): Promise<LocalEraseOutcome> {
+  let recovery: EraseRecovery;
   try {
-    await finishInterruptedErase(deps);
+    recovery = await finishInterruptedErase(deps);
   } catch {
-    return { result: "failed", reason: "keys" };
+    // An earlier deletion is still unresolved, so the store stays closed.
+    return { result: "incomplete", erased: await rowsGone(deps) };
   }
+  // An earlier deletion that had committed is now whole: nothing is left to delete.
+  if (recovery === "finished") return { result: "deleted" };
   const aside = erasingKeyFilePath(deps.keyFilePath);
   let setAside = true;
   try {
@@ -119,10 +149,9 @@ export async function eraseLocalDecisionsData(deps: LocalEraseDeps): Promise<Loc
     if (!isMissing(error)) return { result: "failed", reason: "keys" };
     setAside = false;
   }
-  try {
-    (await deps.openRows()).erase();
-  } catch (error) {
-    const reason = eraseRefusal(error);
+  const putBack = async (
+    reason: "disk-pressure" | "storage" | "keys"
+  ): Promise<LocalEraseOutcome> => {
     if (!setAside) return { result: "failed", reason };
     try {
       await resilientRename(aside, deps.keyFilePath);
@@ -130,10 +159,23 @@ export async function eraseLocalDecisionsData(deps: LocalEraseDeps): Promise<Loc
       return { result: "incomplete", erased: false };
     }
     return { result: "failed", reason };
+  };
+  // Durable before the rows go: a crash must never keep their deletion and lose its marker.
+  if (setAside) {
+    try {
+      await syncParentDirectory(aside);
+    } catch {
+      return putBack("keys");
+    }
+  }
+  try {
+    (await deps.openRows()).erase();
+  } catch (error) {
+    return putBack(eraseRefusal(error));
   }
   try {
     deps.forgetIdentity();
-    if (setAside) await unlinkIfPresent(aside);
+    if (setAside) await durableUnlinkIfPresent(aside);
   } catch {
     return { result: "incomplete", erased: true };
   }

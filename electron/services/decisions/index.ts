@@ -27,6 +27,7 @@ import {
   writeDecisionsSettings,
 } from "./decisionsSettings.js";
 import type { DecisionsService } from "./DecisionsService.js";
+import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
 import { buildDecisionsArchive, type DecisionsArchive } from "./dataExport.js";
 import { RelayCheckCancelledError, checkDecisionsRelay } from "./relayCheck.js";
 import { deleteDecisionsRelayData } from "./relayData.js";
@@ -267,8 +268,9 @@ export type ExportDestination = (fileName: string) => Promise<string | null>;
  * encrypted archive, to a file the person picks. The archive is built behind
  * the switch's transitions, from the running lifetime's store and keys; the
  * save dialog waits outside them, so turning off or quitting never waits on
- * it, and an archive whose lifetime ended meanwhile is dropped unwritten.
- * The file is written whole or not at all, readable only by its owner.
+ * it, and an archive whose store has closed meanwhile is dropped unwritten,
+ * so history deleted while the dialog was open is never written out. The
+ * file is written whole or not at all, readable only by its owner.
  */
 export async function exportData(
   payload: ExportDecisionsDataPayload,
@@ -281,17 +283,27 @@ export async function exportData(
     });
   }
   const prepared = await serialize(
-    async (): Promise<{ archive: DecisionsArchive } | { failure: DecisionsExportResult }> => {
+    async (): Promise<
+      | { archive: DecisionsArchive; running: DecisionsService; from: DaintreeLocalStore }
+      | { failure: DecisionsExportResult }
+    > => {
       const { service: running, keys } = await setupKeys();
       const localStore = running.getStore();
       if (!localStore) return { failure: { result: "store-unavailable" } };
-      return buildDecisionsArchive({ store: localStore, keys, passphrase: payload.passphrase });
+      const built = await buildDecisionsArchive({
+        store: localStore,
+        keys,
+        passphrase: payload.passphrase,
+      });
+      return "failure" in built ? built : { ...built, running, from: localStore };
     }
   );
   if ("failure" in prepared) return prepared.failure;
   const { archive } = prepared;
   const path = await chooseDestination(archive.fileName);
-  if (path === null || shutDown || !readDecisionsSettings(store).enabled) {
+  // The store it was read from has closed (turned off, even if on again
+  // since; local data deleted; quit): the history it holds may be gone.
+  if (path === null || shutDown || prepared.running.getStore() !== prepared.from) {
     return { result: "cancelled" };
   }
   try {

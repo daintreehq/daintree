@@ -726,6 +726,27 @@ describe("Decisions entry", () => {
       expect(existsSync(exportTarget())).toBe(false);
     });
 
+    it("drops an archive whose store closed while the dialog was open, even with Decisions on again", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startDecisionsIfEnabled();
+      dataRuns.buildArchive.mockResolvedValue({ archive: ARCHIVE });
+
+      await expect(
+        exportData({ passphrase: PASSPHRASE }, async () => {
+          await setDecisionsEnabled(false);
+          await setDecisionsEnabled(true);
+          return exportTarget();
+        })
+      ).resolves.toEqual({ result: "cancelled" });
+      await expect(
+        exportData({ passphrase: PASSPHRASE }, async () => {
+          await deleteLocalData();
+          return exportTarget();
+        })
+      ).resolves.toEqual({ result: "cancelled" });
+      expect(existsSync(exportTarget())).toBe(false);
+    });
+
     it("hands back what stopped the archive being built, opening no dialog", async () => {
       saved.value = { enabled: true };
       await startDecisionsIfEnabled();
