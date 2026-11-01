@@ -15,6 +15,7 @@ vi.mock("electron", () => ({
   BrowserWindow: { fromWebContents: vi.fn(() => null), getAllWindows: vi.fn(() => []) },
 }));
 
+import type { FileTransferEvent } from "../../../../shared/types/ipc/fileTransfer.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import type { LinkSession } from "../../link/session.js";
 import {
@@ -25,7 +26,9 @@ import {
   type LinkConditions,
 } from "../../link/__tests__/linkTestUtils.js";
 import { ClientFileTransport, type HostFileBody } from "../ClientFileTransport.js";
+import { createHostFileClient } from "../clientInstall.js";
 import { createHostFileProxy } from "../hostFileProxy.js";
+import type { HostPickerBridge } from "../HostPickerBridge.js";
 import { serveOpenedContainedFile } from "../../../setup/protocols.js";
 import { HostFileService, type HostFileEndpoint } from "../HostFileService.js";
 import {
@@ -1039,6 +1042,80 @@ describe("save locally", () => {
       onProgress: () => controller.abort(),
     });
     await expect(pending).rejects.toMatchObject({ code: "CANCELLED" });
+    await expectEventuallyEmpty(downloads);
+  });
+});
+
+describe("a download the link drops", () => {
+  /** The link comes back: a new session, and the view's endpoint on it, for the same Shell. */
+  const relink = async (transport: ClientFileTransport, service: HostFileService) => {
+    const { host, client } = await openSessionPair(socketDir);
+    sessions.push(host, client);
+    service.attach(host, new FakeEndpoint());
+    transport.noteEndpointOpened(HOST, { session: client, webContentsId: 7, endpointId: "view-7" });
+  };
+  const windowDownloads = (
+    transport: ClientFileTransport,
+    sendToView: (webContentsId: number, event: FileTransferEvent) => void,
+    reconnectWaitMs?: number
+  ) =>
+    createHostFileClient({
+      transport,
+      pickers: {} as HostPickerBridge,
+      capabilities: new ViewFileCapabilities(() => () => {}),
+      hostForView: () => HOST,
+      sendToView,
+      downloadsDir: () => downloads,
+      tempDir: () => downloads,
+      reconnectWaitMs,
+    });
+  /** Cuts the link the first time the download reports progress short of its end. */
+  const dropMidTransfer = (cut: () => void) => {
+    let dropped = false;
+    return {
+      dropped: () => dropped,
+      sendToView: (_id: number, event: FileTransferEvent) => {
+        if (dropped || event.type !== "progress" || event.transferredBytes >= event.totalBytes) {
+          return;
+        }
+        dropped = true;
+        cut();
+      },
+    };
+  };
+
+  it("downloads the whole file again once the link is back, from the caller's one request", async () => {
+    const { transport, client: firstLink, service } = await setup();
+    const bytes = crypto.randomBytes(4 * 1024 * 1024 + 5);
+    await fs.writeFile(path.join(project, "big.bin"), bytes);
+    const drop = dropMidTransfer(() => {
+      firstLink.close("network went away");
+      void relink(transport, service);
+    });
+    const result = await windowDownloads(transport, drop.sendToView).download(7, {
+      hostId: HOST,
+      hostPath: path.join(project, "big.bin"),
+      opId: "op-big",
+    });
+    expect(drop.dropped()).toBe(true);
+    expect(result).toEqual({ localPath: path.join(downloads, "big.bin"), bytes: bytes.byteLength });
+    expect(sha256(await fs.readFile(result.localPath))).toBe(sha256(bytes));
+    // The dropped attempt's part file is gone, and nothing was placed twice.
+    await vi.waitFor(async () => expect(await fs.readdir(downloads)).toEqual(["big.bin"]));
+  });
+
+  it("fails as disconnected, leaving nothing behind, when the link doesn't come back in time", async () => {
+    const { transport, client: firstLink } = await setup();
+    await fs.writeFile(path.join(project, "big.bin"), crypto.randomBytes(4 * 1024 * 1024));
+    const drop = dropMidTransfer(() => firstLink.close("network went away"));
+    await expect(
+      windowDownloads(transport, drop.sendToView, 50).download(7, {
+        hostId: HOST,
+        hostPath: path.join(project, "big.bin"),
+        opId: "op-big",
+      })
+    ).rejects.toMatchObject({ code: "HOST_DISCONNECTED" });
+    expect(drop.dropped()).toBe(true);
     await expectEventuallyEmpty(downloads);
   });
 });
