@@ -287,6 +287,27 @@ describe("LinkSession request/response", () => {
       await new Promise((r) => setTimeout(r, 40));
       expect(await requestsReceived(client, b)).toEqual(["notice"]);
     });
+
+    it("still sends an endpoint's close held behind a request that settled unsent (#15881)", async () => {
+      const { client, b } = await stalledClient();
+      const ac = new AbortController();
+      const aborted = client.invoke("e1", "late", [], { signal: ac.signal });
+      client.post({
+        lane: Lane.CONTROL,
+        kind: ControlKind.ENDPOINT_CLOSE,
+        body: { endpointId: "e1" },
+      });
+      await new Promise((r) => setTimeout(r, 20));
+      ac.abort();
+      await aborted;
+      const frames = recordFrames(b);
+      expect(await requestsReceived(client, b)).toEqual([]);
+      expect(
+        frames.some(
+          (f) => f.lane === Lane.CONTROL && frameToMessage(f).kind === ControlKind.ENDPOINT_CLOSE
+        )
+      ).toBe(true);
+    });
   });
 
   it("refuses to send a message the peer would reject, without ending the session", async () => {
