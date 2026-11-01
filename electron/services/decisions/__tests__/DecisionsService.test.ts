@@ -173,6 +173,63 @@ describe("DecisionsService", () => {
     expect(service.getSettings()).toBeNull();
   });
 
+  it("has no key store while off, and makes one only when it is first asked for", async () => {
+    const keyFilePath = vi.fn(() => "/tmp/decisions-test/keys.bin");
+    const service = new DecisionsService({ openStore: async () => fakeStore(), keyFilePath });
+    expect(() => service.getKeyStore()).toThrow(/off/);
+
+    await service.start(on());
+    expect(keyFilePath).not.toHaveBeenCalled();
+
+    const store = service.getKeyStore();
+    await service.start(on({ proxyAllowlisted: true }));
+    expect(service.getKeyStore()).toBe(store);
+    expect(store.filePath).toBe("/tmp/decisions-test/keys.bin");
+    expect(keyFilePath).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the lifetime's key store on stop, and a new lifetime gets its own", async () => {
+    const service = new DecisionsService({
+      openStore: async () => fakeStore(),
+      keyFilePath: () => "/tmp/decisions-test/keys.bin",
+    });
+    await service.start(on());
+    const first = service.getKeyStore();
+
+    await service.stop();
+    expect(() => service.getKeyStore()).toThrow(/off/);
+    await expect(first.load()).rejects.toMatchObject({ kind: "closed" });
+
+    await service.start(on());
+    const second = service.getKeyStore();
+    expect(second).not.toBe(first);
+
+    await service.dispose();
+    expect(() => service.getKeyStore()).toThrow(/off/);
+    await expect(second.load()).rejects.toMatchObject({ kind: "closed" });
+  });
+
+  it("waits for the key store to close before a stop settles", async () => {
+    const service = new DecisionsService({
+      openStore: async () => fakeStore(),
+      keyFilePath: () => "/tmp/decisions-test/keys.bin",
+    });
+    await service.start(on());
+    let finishClosing!: () => void;
+    vi.spyOn(service.getKeyStore(), "close").mockReturnValue(
+      new Promise<void>((resolve) => (finishClosing = resolve))
+    );
+
+    let stopped = false;
+    const stopping = service.stop().then(() => (stopped = true));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(stopped).toBe(false);
+
+    finishClosing();
+    await stopping;
+    expect(stopped).toBe(true);
+  });
+
   it("runs the next transition after one that failed", async () => {
     const service = make();
     const unreadable = {

@@ -7,6 +7,7 @@ import type {
 import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
 import { decisionsLibraries, type DecisionsLibraries } from "./libraries.js";
 import { openDecisionsLocalStore } from "./openLocalStore.js";
+import { decisionsKeyFilePath, SealedKeyStore } from "./keyStore.js";
 
 export type DecisionsStatusListener = (event: DecisionsStatusEvent) => void;
 
@@ -17,6 +18,8 @@ export type DecisionsStoreOpener = (
 
 export interface DecisionsServiceOptions {
   openStore?: DecisionsStoreOpener;
+  /** Where the sealed keys live: `userData/decisions/keys.bin` unless a test says otherwise. */
+  keyFilePath?: () => string;
 }
 
 /**
@@ -38,9 +41,12 @@ export class DecisionsService {
   private readonly openStore: DecisionsStoreOpener;
   private transitions: Promise<void> = Promise.resolve();
   private readonly listeners = new Set<DecisionsStatusListener>();
+  private readonly keyFilePath: () => string;
+  private keyStore: SealedKeyStore | null = null;
 
   constructor(options: DecisionsServiceOptions = {}) {
     this.openStore = options.openStore ?? openDecisionsLocalStore;
+    this.keyFilePath = options.keyFilePath ?? decisionsKeyFilePath;
   }
 
   getStatus(): DecisionsStatus {
@@ -55,6 +61,19 @@ export class DecisionsService {
   /** The running lifetime's store; null while stopped, or while it couldn't be opened. */
   getStore(): DaintreeLocalStore | null {
     return this.store;
+  }
+
+  /**
+   * The sealed key store for this enabled lifetime. It is made on first use,
+   * so starting reads no file and asks no keychain: a keychain prompt waits
+   * for setup, or for something that needs the identity.
+   */
+  getKeyStore(): SealedKeyStore {
+    if (this.disposed || this.settings === null) {
+      throw new Error("Decisions is off, so its keys can't be used");
+    }
+    this.keyStore ??= new SealedKeyStore(this.keyFilePath());
+    return this.keyStore;
   }
 
   /** Called on every change of state, never for a repeat. Listeners outlive a stop, not a dispose. */
@@ -101,14 +120,18 @@ export class DecisionsService {
     });
   }
 
+  /** The stored rows and the key file stay: turning Decisions off keeps them for the next time it is on. */
   private async release(): Promise<void> {
     const store = this.store;
+    const keyStore = this.keyStore;
     this.store = null;
+    this.keyStore = null;
     this.settings = null;
     try {
       // Commits what the lifetime left queued; the rows stay until deleted.
       await store?.close();
     } finally {
+      await keyStore?.close();
       this.setState("off");
     }
   }

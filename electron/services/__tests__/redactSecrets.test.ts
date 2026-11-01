@@ -159,6 +159,58 @@ describe("redactSecrets", () => {
     );
   });
 
+  it("drops a Decisions claim secret as the deploy CLI prints it and as it is passed", () => {
+    const claim = "0a".repeat(32);
+    expect(redactSecrets(`  Worker URL    https://relay.example\n  Claim secret  ${claim}`)).toBe(
+      "  Worker URL    https://relay.example\n  Claim secret  [redacted]"
+    );
+    // A secret the person chose may hold spaces; the deploy line is the whole value.
+    expect(redactSecrets("  Claim secret  a horse with no name\r\nNext")).toBe(
+      "  Claim secret  [redacted]\r\nNext"
+    );
+    expect(redactSecrets(`CLAIM_SECRET=${claim}`)).toBe("CLAIM_SECRET=[redacted]");
+    expect(redactSecrets(`decisions setup --claim-secret ${claim}`)).toBe(
+      "decisions setup --claim-secret [redacted]"
+    );
+  });
+
+  it("drops a recovery passphrase to the end of its line, however it starts", () => {
+    expect(redactSecrets("Recovery passphrase: correct horse battery staple\nnext: value")).toBe(
+      "Recovery passphrase: [redacted]\nnext: value"
+    );
+    expect(redactSecrets("RECOVERY_PASSPHRASE=Correct Horse Battery\r\nnext")).toBe(
+      "RECOVERY_PASSPHRASE=[redacted]\r\nnext"
+    );
+    expect(redactSecrets("Recovery passphrase: none shall pass today")).toBe(
+      "Recovery passphrase: [redacted]"
+    );
+    expect(redactSecrets(`passphrase: ghp_${"x".repeat(36)} horse battery staple`)).toBe(
+      "passphrase: [redacted]"
+    );
+    expect(redactSecrets("passphrase: none")).toBe("passphrase: none");
+  });
+
+  it.each(["cfat_", "cfut_", "cfk_"])("drops a Cloudflare %s token", (prefix) => {
+    expect(redactSecrets(`token ${prefix}${"A".repeat(40)}0123abcd here`)).toBe(
+      "token [redacted] here"
+    );
+  });
+
+  it("keeps a claim secret's file path and the words about it", () => {
+    const text = [
+      "decisions setup --claim-secret-file /home/me/claim.txt",
+      "decisions setup --claim-secret-file=/home/me/claim-secret.txt",
+      "the claim secret has been used and is not needed again",
+      "See claim secret troubleshooting-guide.md for details",
+    ].join("\n");
+    expect(redactSecrets(text)).toBe(text);
+  });
+
+  it("keeps the line after an empty passphrase prompt beyond its first word", () => {
+    const out = redactSecrets("Repeat passphrase:\nSaving key /home/me/.ssh/id_ed25519");
+    expect(out).toContain("key /home/me/.ssh/id_ed25519");
+  });
+
   it("drops the rest of a line whose quote never closes, and nothing past it", () => {
     expect(redactSecrets("password: 'unterminated\nI can't stop now")).toBe(
       "password: [redacted]\nI can't stop now"
