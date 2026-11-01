@@ -4,6 +4,7 @@ import { history, isolateHistory, redo, undo } from "@codemirror/commands";
 import {
   completionBoundary,
   completionBoundaryAt,
+  completionBoundaryField,
 } from "../inputEditorExtensions/completionBoundary";
 
 function editor(doc: string, caret = 0) {
@@ -76,25 +77,25 @@ describe("completionBoundary", () => {
   it("marks nothing for plain words, typing inside a token, or where no word follows", () => {
     const plain = editor("happy");
     plain.type("un");
-    expect(plain.state.field(completionBoundary)).toEqual([]);
+    expect(plain.state.field(completionBoundaryField)).toEqual([]);
 
     const inside = editor("/help /compact", "/help /com".length);
-    inside.type("x");
-    expect(inside.state.field(completionBoundary)).toEqual([]);
+    inside.type("@x");
+    expect(inside.state.field(completionBoundaryField)).toEqual([]);
 
     const atEnd = editor("see ", 4);
     atEnd.type("#148");
-    expect(atEnd.state.field(completionBoundary)).toEqual([]);
+    expect(atEnd.state.field(completionBoundaryField)).toEqual([]);
 
     const beforeSpace = editor("see  now", 4);
     beforeSpace.type("#148");
-    expect(beforeSpace.state.field(completionBoundary)).toEqual([]);
+    expect(beforeSpace.state.field(completionBoundaryField)).toEqual([]);
   });
 
   it("marks nothing for a write that isn't the user's", () => {
     const ed = editor("I found");
     ed.apply({ changes: { from: 0, insert: "/gith" }, selection: { anchor: 5 } });
-    expect(ed.state.field(completionBoundary)).toEqual([]);
+    expect(ed.state.field(completionBoundaryField)).toEqual([]);
   });
 
   it("holds through a space typed at the join and taken out again", () => {
@@ -124,7 +125,7 @@ describe("completionBoundary", () => {
     word.type("/g");
     word.apply({ changes: { from: 2, to: 3 }, userEvent: "delete.forward" });
     expect(word.doc()).toBe("/g found");
-    expect(word.state.field(completionBoundary)).toEqual([]);
+    expect(word.state.field(completionBoundaryField)).toEqual([]);
 
     const token = editor("I found");
     token.type("/g");
@@ -134,7 +135,7 @@ describe("completionBoundary", () => {
       userEvent: "delete.backward",
     });
     expect(token.doc()).toBe("I found");
-    expect(token.state.field(completionBoundary)).toEqual([]);
+    expect(token.state.field(completionBoundaryField)).toEqual([]);
   });
 
   it("stops counting once a deleted space merges the token into the word before it", () => {
@@ -155,6 +156,55 @@ describe("completionBoundary", () => {
     expect(completionBoundaryAt(ed.state, "@sr".length)).toBeUndefined();
   });
 
+  it("ends each token at its own word, the nearest one at or past the caret", () => {
+    const ed = editor("ab cd", 0);
+    ed.type("/x");
+    ed.apply({ selection: { anchor: "/xab ".length } });
+    ed.type("@y");
+    expect(ed.doc()).toBe("/xab @ycd");
+    expect(completionBoundaryAt(ed.state, 1)).toBe(2);
+    expect(completionBoundaryAt(ed.state, 7)).toBe(7);
+    // A join the caret has passed belongs to the query, not the word.
+    expect(completionBoundaryAt(ed.state, 3)).toBeUndefined();
+  });
+
+  it("puts the mark back as it was when typing is undone and redone", () => {
+    const ed = editor("fix it");
+    ed.type("/gith");
+    ed.run(undo);
+    expect(ed.doc()).toBe("fix it");
+    expect(ed.state.field(completionBoundaryField)).toEqual([]);
+    ed.run(redo);
+    expect(ed.doc()).toBe("/githfix it");
+    expect(completionBoundaryAt(ed.state, 5)).toBe(5);
+  });
+
+  it("puts the mark back when deleting the token or the word's first letter is undone", () => {
+    const token = editor("fix it");
+    token.type("/gith");
+    token.apply({
+      changes: { from: 0, to: 5 },
+      selection: { anchor: 0 },
+      userEvent: "delete.selection",
+      annotations: isolateHistory.of("full"),
+    });
+    token.run(undo);
+    expect(token.doc()).toBe("/githfix it");
+    expect(completionBoundaryAt(token.state, 5)).toBe(5);
+
+    const letter = editor("fix it");
+    letter.type("/gith");
+    letter.apply({
+      changes: { from: 5, to: 6 },
+      userEvent: "delete.forward",
+      annotations: isolateHistory.of("full"),
+    });
+    expect(letter.doc()).toBe("/githix it");
+    letter.run(undo);
+    expect(letter.doc()).toBe("/githfix it");
+    expect(completionBoundaryAt(letter.state, 5)).toBe(5);
+  });
+
   it("follows an exact edit elsewhere and drops on a whole-draft replacement", () => {
     const ed = editor("x I found", 2);
     ed.type("/g");
@@ -162,7 +212,7 @@ describe("completionBoundary", () => {
     ed.apply({ changes: { from: 0, insert: "so " } });
     expect(completionBoundaryAt(ed.state, 7)).toBe(7);
     ed.apply({ changes: { from: 0, to: ed.state.doc.length, insert: ed.doc() } });
-    expect(ed.state.field(completionBoundary)).toEqual([]);
+    expect(ed.state.field(completionBoundaryField)).toEqual([]);
   });
 
   it("is back where it was when a completion is undone, a write outside the history between", () => {
