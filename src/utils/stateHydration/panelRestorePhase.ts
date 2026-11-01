@@ -1492,6 +1492,7 @@ export async function restorePanelsPhase(
                   worktreeId: saved.worktreeId,
                   title: saved.title,
                   restoreRecovery: respawnArgs.restoreRecovery?.reason,
+                  restoredExitCode: respawnArgs.restoredExitCode,
                 });
 
                 // A held pane is waiting on the user's choice, so it comes back

@@ -753,7 +753,11 @@ export interface PtyPanelData extends BasePanelData {
   removeOnExit?: boolean;
   /** Timestamp when this terminal was created */
   startedAt?: number;
-  /** Exit code from the last process exit */
+  /**
+   * Exit code from the last process exit. Persisted while the pane shows a
+   * natural exit (#15941), so a reload doesn't bring it back as a live shell;
+   * cleared by a restart.
+   */
   exitCode?: number;
   /**
    * The last exit came from a session-preserving project teardown (sleep,
@@ -1405,7 +1409,11 @@ export interface TerminalInstance {
   excludeFromPersistence?: boolean;
   /** Timestamp when this terminal was created */
   startedAt?: number;
-  /** Exit code from the last process exit */
+  /**
+   * Exit code from the last process exit. Persisted while the pane shows a
+   * natural exit (#15941), so a reload doesn't bring it back as a live shell;
+   * cleared by a restart.
+   */
   exitCode?: number;
   /**
    * The last exit came from a session-preserving project teardown (sleep,

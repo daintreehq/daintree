@@ -246,6 +246,12 @@ export interface AddPanelOptionsBase {
    * seen to exit: someone got there first.
    */
   replacesLostTerminal?: number;
+  /**
+   * PTY-only. Restore of a pane whose process had exited with this code
+   * (#15941): the pane commits exited, as the exit left it, and nothing is
+   * spawned until the user restarts it. Ignored for a reconnect or a hold.
+   */
+  restoredExitCode?: number;
   /** PTY-only. See `PtyPanelData.restoreProvenance`. */
   restoreProvenance?: TerminalRestoreProvenance;
   /** PTY-only. See `PtyPanelData.lastAgentObservation`. */

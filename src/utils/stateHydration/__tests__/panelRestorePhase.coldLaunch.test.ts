@@ -691,3 +691,43 @@ describe("held same-folder Codex panes named by their launch prompts (#15269)", 
     expect(byId.get("parser")?.command).not.toContain("resume");
   });
 });
+
+describe("restore of a pane saved showing its exit (#15941)", () => {
+  it("brings a plain terminal back exited instead of starting it again", async () => {
+    const snapshot = serializePtyPanel({
+      id: "dev",
+      kind: "terminal",
+      title: "Dev server",
+      cwd: "/repo",
+      location: "grid",
+      command: "npm run dev",
+      runtimeStatus: "exited",
+      exitCode: 3,
+    } as PtyPanelData);
+
+    const byId = await restore([
+      { id: "dev", title: "Dev server", kind: "terminal", location: "grid", ...snapshot },
+    ]);
+
+    expect(byId.get("dev")).toMatchObject({ requestedId: "dev", restoredExitCode: 3 });
+  });
+
+  it("starts a terminal saved while it ran, as before", async () => {
+    const snapshot = serializePtyPanel({
+      id: "dev",
+      kind: "terminal",
+      title: "Dev server",
+      cwd: "/repo",
+      location: "grid",
+      command: "npm run dev",
+      runtimeStatus: "running",
+    } as PtyPanelData);
+
+    const byId = await restore([
+      { id: "dev", title: "Dev server", kind: "terminal", location: "grid", ...snapshot },
+    ]);
+
+    expect(byId.get("dev")?.restoredExitCode).toBeUndefined();
+    expect(byId.get("dev")?.command).toBe("npm run dev");
+  });
+});

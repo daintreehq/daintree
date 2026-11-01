@@ -9,6 +9,11 @@ import { isAgentTerminal } from "@/utils/terminalType";
 import { logInfo, logError } from "@/utils/logger";
 import { isTerminalRestarting } from "@/store/restartExitSuppression";
 import { usePanelStore, type PanelGridState } from "@/store/panelStore";
+import { saveNormalized } from "@/store/slices/panelRegistry/persistence";
+import {
+  deferPersistToBatchEnd,
+  isHydrationBatchActive,
+} from "@/store/slices/panelRegistry/hydrationBatch";
 import { useUIStore } from "@/store/uiStore";
 
 /**
@@ -20,6 +25,15 @@ const canopyRestores = new Set<string>();
 /** An overlay (Canopy, a dialog, a palette) holds the keyboard in this view. */
 function overlayHoldsKeyboard(): boolean {
   return useUIStore.getState().overlayStack.length > 0;
+}
+
+function persistExit(): void {
+  if (isHydrationBatchActive()) {
+    deferPersistToBatchEnd();
+    return;
+  }
+  const { panelsById, panelIds } = usePanelStore.getState();
+  saveNormalized(panelsById, panelIds);
 }
 import {
   enqueueFlowStatusUpdate,
@@ -487,6 +501,11 @@ export function setupLifecycleListeners(): DisposableStore {
         });
 
         state.setRuntimeStatus(id, "exited");
+
+        // A kept pane shows this exit from now on, so the layout records it
+        // (#15941): a reload brings the exit back rather than a new process.
+        // A trashed or removed pane saves itself on the way out.
+        if (!sessionPreservingExit) persistExit();
 
         // If already trashed, this is TTL expiry cleanup - permanently remove
         if (terminal.location === "trash") {

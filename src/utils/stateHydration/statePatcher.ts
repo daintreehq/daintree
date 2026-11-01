@@ -232,6 +232,8 @@ export interface SavedTerminalData {
   lastAgentObservation?: unknown;
   launchedByPluginId?: unknown;
   holdOnRestart?: unknown;
+  /** Untrusted on-disk value (#15941), read through {@link sanitizeSavedExitCode}. */
+  exitCode?: unknown;
   /** @deprecated pre-#5459 legacy key; read-only fallback, never written. */
   agentFlavorId?: string;
   /** @deprecated pre-#5459 legacy key; read-only fallback, never written. */
@@ -385,6 +387,11 @@ function pluginHoldArgs(
  * silently seed the post-hydration focus picker with a sentinel that
  * would always win (e.g. `Number.MAX_SAFE_INTEGER` from a buggy writer).
  */
+/** A saved exit code is any integer a process can report; anything else was never one. */
+export function sanitizeSavedExitCode(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) ? value : undefined;
+}
+
 function sanitizeLastActiveAt(value: number | undefined): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return undefined;
@@ -1047,10 +1054,15 @@ export function buildArgsForRespawn(
   const respawnKind = normalizePtyKind(kind);
   const isDevPreview = kind === "dev-preview";
   const location = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
+  // A plain terminal whose process had exited on its own comes back showing
+  // that exit, not running again (#15941). An agent pane keeps its resume path.
+  const restoredExitCode =
+    respawnKind === "terminal" && !isAgentPanel ? sanitizeSavedExitCode(saved.exitCode) : undefined;
 
   const lastSeen = isAgentPanel ? sanitizeAgentObservation(saved.lastAgentObservation) : undefined;
+  // Nothing is rebuilt for a pane restored exited, so it records no disposition.
   const restoreProvenance: TerminalRestoreProvenance | undefined =
-    respawnKind === "terminal"
+    respawnKind === "terminal" && restoredExitCode === undefined
       ? {
           at: options?.restoredAt ?? Date.now(),
           disposition: restoreRecovery ? "held" : resumed ? "resume" : "fresh",
@@ -1128,6 +1140,7 @@ export function buildArgsForRespawn(
       : sanitizeConversationCwd(saved.conversationCwd),
     restoreRecovery,
     restoreProvenance,
+    ...(restoredExitCode !== undefined && { restoredExitCode }),
     // Carried as the pane's own until its new process reports something, so a
     // pane held again, or resumed and closed before reporting, keeps it (#14017).
     lastAgentObservation: lastSeen,

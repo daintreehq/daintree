@@ -2433,6 +2433,67 @@ describe("buildArgsForReconnectedFallback — extensionState", () => {
   });
 });
 
+describe("buildArgsForRespawn — a pane saved showing its exit (#15941)", () => {
+  function respawn(saved: Record<string, unknown>, mintFreshTerminalId = false) {
+    return buildArgsForRespawn(
+      { id: "t1", kind: "terminal", cwd: "/p", location: "grid", ...saved } as SavedTerminalData,
+      "terminal",
+      "/p",
+      { agents: {} },
+      mintFreshTerminalId,
+      undefined
+    );
+  }
+
+  it("restores a plain terminal's exit instead of a new process", () => {
+    const panel = {
+      id: "t1",
+      kind: "terminal",
+      title: "Dev server",
+      cwd: "/p",
+      location: "grid",
+      command: "npm run dev",
+      runtimeStatus: "exited",
+      exitCode: 3,
+    } as PtyPanelData;
+
+    const result = respawn({ title: "Dev server", ...serializePtyPanel(panel) });
+
+    expect(result.restoredExitCode).toBe(3);
+    expect(result.command).toBe("npm run dev");
+    // Nothing is rebuilt, so restore claims no disposition for it.
+    expect(result.restoreProvenance).toBeUndefined();
+  });
+
+  it("keeps a clean exit, since zero is a code", () => {
+    expect(respawn({ exitCode: 0 }).restoredExitCode).toBe(0);
+  });
+
+  it("restores the exit under a fresh id too, since nothing starts either way", () => {
+    const result = respawn({ exitCode: 2 }, true);
+    expect(result.requestedId).toBeUndefined();
+    expect(result.restoredExitCode).toBe(2);
+  });
+
+  it("ignores a saved value that was never an exit code", () => {
+    for (const exitCode of ["3", 1.5, Number.NaN, null, true]) {
+      const result = respawn({ exitCode });
+      expect(result.restoredExitCode).toBeUndefined();
+      expect(result.restoreProvenance?.disposition).toBe("fresh");
+    }
+  });
+
+  it("leaves an agent pane on its resume path", () => {
+    const result = respawn({ launchAgentId: "claude", title: "Claude", exitCode: 1 });
+    expect(result.launchAgentId).toBe("claude");
+    expect(result.restoredExitCode).toBeUndefined();
+  });
+
+  it("starts a terminal with no saved exit as before", () => {
+    expect(respawn({}).restoredExitCode).toBeUndefined();
+  });
+});
+
 describe("buildArgsForRespawn — extensionState", () => {
   it("forwards extensionState from saved data", () => {
     const extState = { config: true };

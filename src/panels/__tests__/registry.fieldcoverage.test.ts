@@ -155,7 +155,9 @@ const PTY_FIELD_CLASSIFICATION = {
   excludeFromPersistence: false,
   removeOnExit: false,
   startedAt: false,
-  exitCode: false,
+  // Written only while the pane shows a natural exit (#15941), so a reload
+  // restores the exit instead of a new process.
+  exitCode: true,
   // Session-preserving teardown mark (#13841) — describes the exit that just
   // happened; the restored pane gets a new process, so nothing to persist.
   sessionPreservingExit: false,
@@ -471,6 +473,8 @@ const terminalFixture: PtySerializeInput = {
   scratchpad: { content: "- check CI", collapsed: true, width: 320 },
   firstPrompt: { text: "Fix the flaky test", via: "launch", at: 1_700_000_000_004 },
   worktreeMoveNotice: { destinationWorktreeId: "wt-feature" },
+  runtimeStatus: "exited",
+  exitCode: 3,
   createdAt: 1_700_000_000_000,
   lastActiveAt: 1_700_000_000_001,
 };
@@ -667,6 +671,7 @@ describe("panel serializer field coverage", () => {
     expect(output).not.toHaveProperty("agentSessionId");
     expect(output).not.toHaveProperty("agentState");
     expect(output).not.toHaveProperty("lastStateChange");
+    expect(output).not.toHaveProperty("exitCode");
   });
 
   it("browser serializer covers every persisted browser field", () => {

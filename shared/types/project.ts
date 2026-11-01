@@ -397,6 +397,12 @@ export interface PanelSnapshot {
   scratchpad?: TerminalScratchpad;
   /** The first prompt Daintree delivered to the run (#14592). Untrusted on read — sanitized at restore. */
   firstPrompt?: TerminalFirstPrompt;
+  /**
+   * The code a pane's process exited with on its own, while the pane still
+   * shows that exit (#15941). Restore brings a pane that would relaunch no
+   * agent back exited instead of starting a new process. Untrusted on read.
+   */
+  exitCode?: number;
   /** Last known agent state for crash recovery display */
   agentState?: AgentState;
   /** Timestamp of last agent state change */
