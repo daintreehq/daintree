@@ -255,20 +255,38 @@ async function renderNow(
     appliedThemeSignature = themeSignature;
   }
   const id = `${idStem}${++renderSequence}`;
-  let parsed = false;
+  let rendered = false;
   try {
-    // Not `suppressErrors`: it folds a failed diagram chunk into the same
-    // `false` as a syntax error, and only one of those deserves caching.
-    await mermaid.parse(source);
-    parsed = true;
     const { svg } = await mermaid.render(id, source);
+    rendered = true;
     const clean = sanitize(purify, svg);
     return clean === null ? UNDISPLAYABLE : { ok: true, svg: clean, templateId: id };
   } catch (error) {
     if (isChunkLoadError(error)) return TRANSIENT;
-    return parsed ? UNDISPLAYABLE : FAILED;
+    if (rendered) return UNDISPLAYABLE;
+    removeStrayRenderNodes(id);
+    return await classifyRenderFailure(mermaid, source);
   } finally {
     removeStrayRenderNodes(id);
+  }
+}
+
+/**
+ * `render` parses before it draws and, with `suppressErrorRendering`, throws
+ * a syntax error and a failed drawing alike. Parsing again tells them apart,
+ * on the failure path only, so a diagram that renders is parsed once.
+ */
+async function classifyRenderFailure(
+  mermaid: Mermaid,
+  source: string
+): Promise<MermaidRenderResult> {
+  try {
+    // Not `suppressErrors`: it folds a failed diagram chunk into the same
+    // `false` as a syntax error, and only one of those deserves caching.
+    await mermaid.parse(source);
+    return UNDISPLAYABLE;
+  } catch (error) {
+    return isChunkLoadError(error) ? TRANSIENT : FAILED;
   }
 }
 

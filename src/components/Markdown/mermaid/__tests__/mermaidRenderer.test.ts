@@ -8,7 +8,21 @@ const mermaidMock = vi.hoisted(() => ({
   render: vi.fn<(id: string, text: string) => Promise<{ svg: string }>>(),
 }));
 
+/**
+ * Mermaid's own stages. Both `parse` and `render` run the parse stage, and
+ * with `suppressErrorRendering` a failure in either stage rejects `render`.
+ */
+const stages = vi.hoisted(() => ({
+  parse: vi.fn<(text: string) => Promise<void>>(),
+  draw: vi.fn<(id: string, text: string) => Promise<{ svg: string }>>(),
+}));
+
 vi.mock("mermaid", () => ({ default: mermaidMock }));
+
+vi.mock("../sanitizeMermaidSvg", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../sanitizeMermaidSvg")>();
+  return { ...actual, sanitizeMermaidSvg: vi.fn(actual.sanitizeMermaidSvg) };
+});
 
 const theme = vi.hoisted(() => ({ signature: "theme-a" }));
 
@@ -26,6 +40,7 @@ vi.mock("../mermaidTheme", async (importOriginal) => {
   };
 });
 
+import { sanitizeMermaidSvg } from "../sanitizeMermaidSvg";
 import {
   _resetMermaidRendererForTests,
   instantiateMermaidSvg,
@@ -36,6 +51,9 @@ import {
 } from "../mermaidRenderer";
 
 const SLOW_RENDER_MS = 1;
+
+const chunkLoadError = (): TypeError =>
+  new TypeError("Failed to fetch dynamically imported module: flowDiagram-abc.js");
 
 function svgFor(id: string, label: string): string {
   return (
@@ -54,10 +72,21 @@ beforeEach(() => {
   _resetMermaidRendererForTests();
   theme.signature = "theme-a";
   mermaidMock.initialize.mockReset();
-  mermaidMock.parse.mockReset().mockResolvedValue({ diagramType: "flowchart-v2" });
-  mermaidMock.render
-    .mockReset()
-    .mockImplementation(async (id, text) => ({ svg: svgFor(id, text) }));
+  stages.parse.mockReset().mockResolvedValue(undefined);
+  stages.draw.mockReset().mockImplementation(async (id, text) => ({ svg: svgFor(id, text) }));
+  mermaidMock.parse.mockReset().mockImplementation(async (text, options) => {
+    try {
+      await stages.parse(text);
+    } catch (error) {
+      if (options?.suppressErrors) return false;
+      throw error;
+    }
+    return { diagramType: "flowchart-v2" };
+  });
+  mermaidMock.render.mockReset().mockImplementation(async (id, text) => {
+    await stages.parse(text);
+    return stages.draw(id, text);
+  });
 });
 
 afterEach(() => {
@@ -66,7 +95,7 @@ afterEach(() => {
 
 describe("requestMermaidRender", () => {
   it("returns sanitized svg for a diagram that parses", async () => {
-    mermaidMock.render.mockImplementation(async (id) => ({
+    stages.draw.mockImplementation(async (id) => ({
       svg: `<svg id="${id}" xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><g onclick="x()"><text>A</text></g></svg>`,
     }));
 
@@ -79,6 +108,14 @@ describe("requestMermaidRender", () => {
     expect(result.svg).not.toContain("onclick");
   });
 
+  it("parses a diagram that renders only once", async () => {
+    expect((await render("graph TD; A-->B")).ok).toBe(true);
+
+    expect(stages.parse).toHaveBeenCalledTimes(1);
+    expect(mermaidMock.render).toHaveBeenCalledTimes(1);
+    expect(mermaidMock.parse).not.toHaveBeenCalled();
+  });
+
   it("initializes strict, text-only labels, and locks every host-owned key against directives", async () => {
     await render("graph TD; A-->B");
 
@@ -87,6 +124,8 @@ describe("requestMermaidRender", () => {
     expect(config.securityLevel).toBe("strict");
     expect(config.htmlLabels).toBe(false);
     expect(config.startOnLoad).toBe(false);
+    // A failed render must throw rather than draw Mermaid's error diagram.
+    expect(config.suppressErrorRendering).toBe(true);
     expect(config.theme).toBe("base");
     expect(config.darkMode).toBe(true);
     expect(config.themeVariables.primaryTextColor).toBe("#070707");
@@ -143,25 +182,54 @@ describe("requestMermaidRender", () => {
     expect(mermaidMock.render).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back when the source does not parse, and caches that verdict", async () => {
-    mermaidMock.parse.mockRejectedValue(new Error("Parse error on line 1"));
+  it.each([
+    ["a syntax error", new Error("Parse error on line 1")],
+    [
+      "an unknown diagram type",
+      Object.assign(new Error("No diagram type detected matching given configuration"), {
+        name: "UnknownDiagramError",
+      }),
+    ],
+  ])("falls back on %s, and caches that verdict", async (_, error) => {
+    stages.parse.mockRejectedValue(error);
 
     const result = await render("not a diagram");
 
     expect(result).toEqual({ ok: false });
-    expect(mermaidMock.render).not.toHaveBeenCalled();
+    expect(stages.draw).not.toHaveBeenCalled();
     expect(peekMermaidRender("not a diagram", "theme-a")).toEqual({ ok: false });
   });
 
-  it("does not cache a diagram chunk that failed to load, so a later attempt can succeed", async () => {
-    mermaidMock.parse.mockRejectedValueOnce(
-      new TypeError("Failed to fetch dynamically imported module: flowDiagram-abc.js")
-    );
+  it.each([
+    [
+      "parsing",
+      () => {
+        stages.parse.mockRejectedValueOnce(chunkLoadError());
+      },
+    ],
+    [
+      "drawing",
+      () => {
+        stages.draw.mockRejectedValueOnce(chunkLoadError());
+      },
+    ],
+    [
+      "the parse that classifies a failed render",
+      () => {
+        stages.draw.mockRejectedValueOnce(new Error("layout failed"));
+        stages.parse.mockResolvedValueOnce(undefined).mockRejectedValueOnce(chunkLoadError());
+      },
+    ],
+  ])(
+    "does not cache a diagram chunk that failed to load during %s, so a later attempt can succeed",
+    async (_, arrange) => {
+      arrange();
 
-    expect(await render("graph TD; A-->B")).toEqual({ ok: false, transient: true });
-    expect(peekMermaidRender("graph TD; A-->B", "theme-a")).toBeUndefined();
-    expect((await render("graph TD; A-->B")).ok).toBe(true);
-  });
+      expect(await render("graph TD; A-->B")).toEqual({ ok: false, transient: true });
+      expect(peekMermaidRender("graph TD; A-->B", "theme-a")).toBeUndefined();
+      expect((await render("graph TD; A-->B")).ok).toBe(true);
+    }
+  );
 
   it.each([
     ["an image shape", 'flowchart TD\n  A@{ img: "https://tracker.example/p.png" }'],
@@ -180,6 +248,7 @@ describe("requestMermaidRender", () => {
     async (_, source) => {
       expect(await render(source)).toEqual({ ok: false });
       expect(mermaidMock.parse).not.toHaveBeenCalled();
+      expect(mermaidMock.render).not.toHaveBeenCalled();
     }
   );
 
@@ -193,7 +262,7 @@ describe("requestMermaidRender", () => {
   });
 
   it("treats a syntax error that quotes the chunk-loader's words as a real failure", async () => {
-    mermaidMock.parse.mockRejectedValue(
+    stages.parse.mockRejectedValue(
       new Error("Parse error: Failed to fetch dynamically imported module")
     );
     expect(await render("flowchart TD\n  A[Failed to fetch dynamically imported module]")).toEqual({
@@ -201,29 +270,52 @@ describe("requestMermaidRender", () => {
     });
   });
 
-  it("falls back and removes mermaid's scratch nodes when render throws", async () => {
-    mermaidMock.render.mockImplementation(async (id) => {
+  it("falls back and removes mermaid's scratch nodes when drawing throws, caching that verdict", async () => {
+    stages.draw.mockImplementation(async (id) => {
       const scratch = document.createElement("div");
       scratch.id = `d${id}`;
       document.body.appendChild(scratch);
       throw new Error("layout failed");
     });
+    let leftoverNodesAtClassify = -1;
+    mermaidMock.parse.mockImplementation(async (text) => {
+      leftoverNodesAtClassify = document.body.children.length;
+      await stages.parse(text);
+      return { diagramType: "flowchart-v2" };
+    });
 
     const result = await render("graph TD; A-->B");
 
     expect(result).toEqual({ ok: false, undisplayable: true });
+    expect(peekMermaidRender("graph TD; A-->B", "theme-a")).toEqual(result);
+    expect(leftoverNodesAtClassify).toBe(0);
     expect(document.body.children).toHaveLength(0);
   });
 
   it("falls back when sanitizing leaves no svg", async () => {
-    mermaidMock.render.mockResolvedValue({ svg: "<div>not svg</div>" });
+    stages.draw.mockResolvedValue({ svg: "<div>not svg</div>" });
     expect(await render("graph TD; A-->B")).toEqual({ ok: false, undisplayable: true });
+    expect(peekMermaidRender("graph TD; A-->B", "theme-a")).toEqual({
+      ok: false,
+      undisplayable: true,
+    });
+  });
+
+  it("falls back without reparsing when the sanitizer throws on a rendered diagram", async () => {
+    vi.mocked(sanitizeMermaidSvg).mockImplementationOnce(() => {
+      throw new Error("sanitizer failed");
+    });
+    stages.parse.mockResolvedValueOnce(undefined).mockRejectedValue(new Error("Parse error"));
+
+    expect(await render("graph TD; A-->B")).toEqual({ ok: false, undisplayable: true });
+    expect(mermaidMock.parse).not.toHaveBeenCalled();
   });
 
   it("never loads mermaid for a source over the size cap", async () => {
     const result = await render("x".repeat(MERMAID_MAX_SOURCE_CHARS + 1));
     expect(result).toEqual({ ok: false });
     expect(mermaidMock.parse).not.toHaveBeenCalled();
+    expect(mermaidMock.render).not.toHaveBeenCalled();
   });
 
   it("caches by source and theme, and exposes the cache synchronously", async () => {
@@ -263,10 +355,19 @@ describe("requestMermaidRender", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("keeps going after one diagram fails", async () => {
-    mermaidMock.render.mockRejectedValueOnce(new Error("boom"));
+  it("keeps going after one diagram fails to draw", async () => {
+    stages.draw.mockRejectedValueOnce(new Error("boom"));
     const [bad, good] = await Promise.all([render("graph TD; bad"), render("graph TD; good")]);
     expect(bad).toEqual({ ok: false, undisplayable: true });
+    expect(good.ok).toBe(true);
+  });
+
+  it("keeps going after one diagram fails to parse", async () => {
+    stages.parse.mockImplementation(async (text) => {
+      if (text.includes("bad")) throw new Error("Parse error on line 1");
+    });
+    const [bad, good] = await Promise.all([render("graph TD; bad"), render("graph TD; good")]);
+    expect(bad).toEqual({ ok: false });
     expect(good.ok).toBe(true);
   });
 });
