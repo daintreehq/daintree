@@ -262,6 +262,19 @@ describe("SessionSnapshotter", () => {
       expect(persistAsyncMock).not.toHaveBeenCalled();
     });
 
+    it("never serializes a relay deploy's screen, on a settle or the debounce (#16023)", async () => {
+      const host = createHost({ id: "daintree-decisions-deploy-1" } as Partial<MutableHost>);
+      const serialize = vi.spyOn(host, "getSerializedStateAsync");
+      const snap = new SessionSnapshotter(host);
+
+      snap.flushEventDriven();
+      snap.schedule();
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(serialize).not.toHaveBeenCalled();
+      expect(persistAsyncMock).not.toHaveBeenCalled();
+    });
+
     it("uses async serialization for the non-banner path", async () => {
       const host = createHost();
       const snap = new SessionSnapshotter(host);

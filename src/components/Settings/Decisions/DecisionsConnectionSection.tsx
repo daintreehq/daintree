@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
@@ -11,6 +11,10 @@ import { describeCompatibility, describeInvalidUrl, describeRelayCheck } from ".
 import { describeConnectResult } from "./relayIdentityCopy";
 import { DecisionsRelaySetup } from "./DecisionsRelaySetup";
 import { DecisionsDisconnectDialog } from "./DecisionsDisconnectDialog";
+import { DecisionsRelayDeploy } from "./DecisionsRelayDeploy";
+import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
+import { landOnSettingsElement } from "@/components/Settings/settingsLanding";
+import { onRelayUrlRequest, takePendingRelayUrlRequest } from "./relayUrlRequest";
 
 function relayHost(origin: string | undefined): string | null {
   if (!origin) return null;
@@ -101,12 +105,14 @@ function describeConnection(status: DecisionsStatus): {
  * unsigned check (#16005), which main makes. Without a relay set up it takes
  * a URL, and once checked, claims it or restores its owner's identity
  * (#16006); with one it checks that relay, by itself once connected, so a
- * version that has moved apart is said, and can disconnect from it.
+ * version that has moved apart is said, and can disconnect from it. With no
+ * relay set up it also offers to deploy one (#16023).
  */
 export function DecisionsConnectionSection({
   status,
   locked = false,
   onChanged,
+  onClose,
 }: {
   status: DecisionsStatus;
   /** The switch is changing, so nothing here should start. */
@@ -116,6 +122,8 @@ export function DecisionsConnectionSection({
    * main's answer when it changed the identity, null when it didn't say.
    */
   onChanged?: (status: DecisionsStatus | null) => void;
+  /** Closes Settings, for a guided deploy the user watches in its pane. */
+  onClose?: SettingsTabClose;
 }) {
   const { label, detail, severity } = describeConnection(status);
   const savedOrigin = status.relayOrigin ?? null;
@@ -125,6 +133,7 @@ export function DecisionsConnectionSection({
   const identity = useRelayIdentity((next) => onChanged?.(next));
   const [draft, setDraft] = useState("");
   const [disconnectOpen, setDisconnectOpen] = useState(false);
+  const urlInput = useRef<HTMLInputElement>(null);
   const busy = locked || identity.pending !== null;
 
   const forget = useEffectEvent(() => {
@@ -135,6 +144,15 @@ export function DecisionsConnectionSection({
   useEffect(() => {
     forget();
   }, [savedOrigin]);
+  // A finished guided deploy asks for the URL field (#16023), which exists only now.
+  const landOnRelayUrl = useEffectEvent(() => {
+    const row = document.getElementById("decisions-relay-url");
+    if (row) landOnSettingsElement(row);
+  });
+  useEffect(() => {
+    if (takePendingRelayUrlRequest()) landOnRelayUrl();
+    return onRelayUrlRequest(() => landOnRelayUrl());
+  }, []);
   // Not while the switch is changing; unlocked, it runs then.
   useEffect(() => {
     if (connected && savedOrigin && !locked) checkSaved(savedOrigin);
@@ -228,6 +246,7 @@ export function DecisionsConnectionSection({
                 }}
               >
                 <Input
+                  ref={urlInput}
                   type="text"
                   inputMode="url"
                   autoComplete="off"
@@ -352,6 +371,13 @@ export function DecisionsConnectionSection({
           />
         )}
       </SettingsGroup>
+      {savedOrigin === null && (
+        <DecisionsRelayDeploy
+          disabled={busy}
+          onClose={onClose}
+          onDeployPageOpened={() => urlInput.current?.focus()}
+        />
+      )}
       {(savedOrigin !== null || keysStored) && (
         <SettingsGroup>
           <SettingsRow

@@ -20,6 +20,8 @@ import {
   readAndDeleteHibernatedMarker,
   getHibernatedMarkerPath,
 } from "../terminalSessionPersistence.js";
+import { DECISIONS_DEPLOY_TERMINAL_PREFIX } from "../../../../shared/config/terminalScreenPersistence.js";
+import { HOST_THROWAWAY_TERMINAL_PREFIX } from "../../../../shared/config/hostThrowaway.js";
 
 const { Terminal } = headless;
 const { SerializeAddon } = serialize;
@@ -107,6 +109,22 @@ describe("terminalSessionPersistence", () => {
     expect(warnSpy.mock.calls[1][0]).toMatch(/term-async/);
 
     warnSpy.mockRestore();
+  });
+
+  it.each([
+    ["a relay deploy", `${DECISIONS_DEPLOY_TERMINAL_PREFIX}1`],
+    ["a throwaway run", `${HOST_THROWAWAY_TERMINAL_PREFIX}1`],
+  ])("never writes %s's screen, by either writer", async (_label, id) => {
+    const screen = { data: "  Claim secret  0123456789abcdef0123456789abcdef", cols: 80, rows: 24 };
+    const sessionDir = path.join(userDataDir, "terminal-sessions");
+
+    persistSessionSnapshotSync(id, screen);
+    await persistSessionSnapshotAsync(id, screen);
+    // Not even the directory: the gate runs before any filesystem work.
+    expect(fs.existsSync(sessionDir)).toBe(false);
+
+    persistSessionSnapshotSync("term-ordinary", screen);
+    expect(fs.readdirSync(sessionDir)).toEqual(["term-ordinary.restore"]);
   });
 
   // chmod is a POSIX no-op on Windows, so the mode-bit assertions only run there.
