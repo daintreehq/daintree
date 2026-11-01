@@ -25,10 +25,10 @@ import {
 } from "lucide-react";
 import {
   DaintreeIcon,
+  DecisionsIcon,
   FolderGit2,
   Plug,
   McpServerIcon,
-  MessageCircleQuestionMark,
   Telescope,
   Workflow,
 } from "@/components/icons";
@@ -2071,7 +2071,7 @@ export const SETTINGS_REGISTRY = [
     group: "Integrations",
     settings: ["decisions.enabled"],
     label: "Decisions",
-    icon: <MessageCircleQuestionMark className="w-4 h-4" />,
+    icon: <DecisionsIcon className="w-4 h-4" size={16} />,
     importKind: "lazy",
     importer: LazyDecisionsSettingsTab.preload,
     LazyComponent: LazyDecisionsSettingsTab,
@@ -2697,7 +2697,7 @@ export const globalTabIcons: Record<GlobalSettingsTab, ReactNode> = {
   hosts: <Server className="w-5 h-5 text-text-secondary" />,
   voice: <Mic className="w-5 h-5 text-text-secondary" />,
   canopy: <Telescope className="w-5 h-5 text-text-secondary" />,
-  decisions: <MessageCircleQuestionMark className="w-5 h-5 text-text-secondary" />,
+  decisions: <DecisionsIcon className="w-5 h-5 text-text-secondary" size={20} />,
   mcp: <McpServerIcon className="w-5 h-5 text-text-secondary" />,
   plugins: <Package className="w-5 h-5 text-text-secondary" />,
   "plugin-actions": <ScrollText className="w-5 h-5 text-text-secondary" />,

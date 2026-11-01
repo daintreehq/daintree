@@ -81,6 +81,7 @@ export { HelmIcon } from "./HelmIcon";
 
 // Cloud & tunnels
 export { CloudflareIcon } from "./CloudflareIcon";
+export { DecisionsIcon } from "./DecisionsIcon";
 export { VercelIcon } from "./VercelIcon";
 export { NetlifyIcon } from "./NetlifyIcon";
 export { SupabaseIcon } from "./SupabaseIcon";
