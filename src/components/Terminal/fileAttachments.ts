@@ -18,6 +18,7 @@ import { IMAGE_EXTENSIONS } from "./useTerminalFileTransfer";
 import { formatAtFileTokenForCwd } from "./hybridInputParsing";
 import { addImageChip, addFileDropChip } from "./inputEditorExtensions";
 import { composerDraftGeneration } from "./inputEditorExtensions/composerDraftGeneration";
+import { userEdit } from "./inputEditorExtensions/userEdit";
 import { referenceSeparatorAt } from "./referenceSeparator";
 
 /**
@@ -222,12 +223,15 @@ export function insertPreparedAttachments(
       }
     }
 
+    const before = view.state.doc;
     view.dispatch({
       changes: { from: cursor, insert: insertText },
       effects: [...imageEffects, ...fileEffects],
       selection: { anchor: cursor + insertText.length },
+      annotations: userEdit.of(true),
     });
-    return true;
+    // Refused at a caret among words still being corrected.
+    return view.state.doc !== before;
   } catch {
     // Editor may have been destroyed
     return false;

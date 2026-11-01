@@ -9,8 +9,8 @@ import {
   useRef,
   useState,
 } from "react";
-import { EditorView } from "@codemirror/view";
-import { EditorSelection, Transaction } from "@codemirror/state";
+import { EditorView, type ViewUpdate } from "@codemirror/view";
+import { EditorSelection, Transaction, type ChangeSet } from "@codemirror/state";
 import { isolateHistory } from "@codemirror/commands";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentState } from "@/types";
@@ -188,6 +188,7 @@ import {
   selectionAfterOutsideWrite,
   readImageChipPaths,
   replayLandedCorrection,
+  userEdit,
 } from "./inputEditorExtensions";
 import {
   isLatestDictation,
@@ -366,6 +367,53 @@ interface HybridInputE2EController {
   getText: () => string;
 }
 
+/** The editor's changes from the draft `before` to the draft `after`. */
+interface EditorEdits {
+  before: string;
+  after: string;
+  changes: ChangeSet;
+}
+
+/**
+ * `edits` carried through `update`: started again from the draft the store
+ * holds while the editor shows it, extended while the editor is ahead of it,
+ * and lost when they no longer join up.
+ */
+function nextEditorEdits(
+  edits: EditorEdits | null,
+  stored: string,
+  update: ViewUpdate,
+  next: string
+): EditorEdits | null {
+  const start = update.startState.doc.toString();
+  if (stored === start) return { before: start, after: next, changes: update.changes };
+  if (edits?.after !== start) return null;
+  return { before: edits.before, after: next, changes: edits.changes.compose(update.changes) };
+}
+
+/**
+ * Spells `edits` out to the range store just ahead of the composer writing
+ * `draft` over `stored`, when they are the changes between the two. A diff of
+ * the drafts places text typed in front of dictated words inside them when it
+ * starts with their first letter (`/f` before `fix`), and the passage would
+ * read as edited, dropping its correction (#15874). Declared at the write, as
+ * every draft write elsewhere clears what was declared before it.
+ */
+function expectEditorEdits(
+  edits: EditorEdits | null,
+  panelId: string,
+  projectId: string | undefined,
+  stored: string,
+  draft: string
+): void {
+  if (!edits || stored === draft || edits.before !== stored || edits.after !== draft) return;
+  const changes: TextChange[] = [];
+  edits.changes.iterChanges((from, to, _fromB, _toB, inserted) => {
+    changes.push({ from, to, insert: inserted.toString() });
+  });
+  useDictationRangeStore.getState().expectDraftChange(panelId, projectId, stored, draft, changes);
+}
+
 type ApplyEditorValue = (
   nextValue: string,
   options?: {
@@ -374,6 +422,8 @@ type ApplyEditorValue = (
     resetHistory?: boolean;
     /** The one edit that turns the current draft into `nextValue`, applied as just that. */
     change?: TextChange;
+    /** The user's own edit (a completion), refused by words still being corrected. */
+    userEdit?: boolean;
   }
 ) => void;
 
@@ -555,6 +605,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // editor to it. A store reading otherwise holds an outside write the editor
     // hasn't shown yet (#15873).
     const syncedDraftRef = useRef<string>(value);
+    // The editor's changes since it last showed what the store holds (#15874).
+    const editsSinceStoredRef = useRef<EditorEdits | null>(null);
     const focusGenerationRef = useRef(0);
     const [activeCompletionContext, setActiveCompletionContext] =
       useState<ActiveCompletionContext | null>(null);
@@ -812,6 +864,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       ) {
         return;
       }
+      expectEditorEdits(
+        editsSinceStoredRef.current,
+        terminalId,
+        projectId,
+        useTerminalInputStore.getState().getDraftInput(terminalId, projectId),
+        value
+      );
       setDraftInput(terminalId, value, projectId);
       syncedDraftRef.current = value;
     }, [terminalId, value, projectId, setDraftInput, followsDriver, isFleetFollower]);
@@ -1138,7 +1197,17 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           : {}),
         ...(shouldChangeSelection ? { selection: options?.selection } : {}),
         scrollIntoView: true,
+        ...(options?.userEdit ? { annotations: userEdit.of(true) } : {}),
       });
+      if (shouldChangeDoc && view.state.doc.toString() === current) {
+        // Refused (#15874): the draft stays as it was, and nothing syncs the
+        // refused value back in.
+        isApplyingExternalValueRef.current = false;
+        lastEmittedValueRef.current = current;
+        setValue(current);
+        if (options?.focus) view.focus();
+        return;
+      }
       if (exact) writeDraftEdit(current, nextValue, exact);
       if (options?.resetHistory) clearComposerHistory(view);
       if (options?.focus) view.focus();
@@ -1179,9 +1248,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           // Written through at once: a send waiting on the rewrite reads the
           // draft store, which would otherwise catch up only on the next render.
           return view
-            ? captureRewriteSelection(view, (doc) =>
-                useTerminalInputStore.getState().setDraftInput(terminalId, doc, projectId)
-              )
+            ? captureRewriteSelection(view, (doc) => {
+                const inputs = useTerminalInputStore.getState();
+                const stored = inputs.getDraftInput(terminalId, projectId);
+                expectEditorEdits(editsSinceStoredRef.current, terminalId, projectId, stored, doc);
+                inputs.setDraftInput(terminalId, doc, projectId);
+              })
             : null;
         },
       });
@@ -1218,6 +1290,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           // Ahead by typing only over the draft this composer left: anything
           // else is an outside write the editor is behind.
           if (shown === stored || stored !== syncedDraftRef.current) return;
+          expectEditorEdits(editsSinceStoredRef.current, terminalId, projectId, stored, shown);
           inputs.setDraftInput(terminalId, shown, projectId);
           syncedDraftRef.current = shown;
         }),
@@ -2174,6 +2247,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         // change the draft the note was about too.
         dropSendRefusal(
           next.trim() !== "" && update.transactions.every((tr) => tr.annotation(dictationWrite))
+        );
+        // Every change the editor makes, a completion included: the composer
+        // writing them later says where they were made.
+        editsSinceStoredRef.current = nextEditorEdits(
+          editsSinceStoredRef.current,
+          useTerminalInputStore.getState().getDraftInput(terminalId, projectId),
+          update,
+          next
         );
         if (next === lastEmittedValueRef.current) return false;
         lastEmittedValueRef.current = next;

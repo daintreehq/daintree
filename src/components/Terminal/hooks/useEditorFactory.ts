@@ -34,6 +34,7 @@ import {
   createCaretTracker,
   completionBoundary,
   pendingAIField,
+  pendingLock,
   voiceRewriteTracker,
   createAutoSize,
   createCustomKeymap,
@@ -200,6 +201,7 @@ export function useEditorFactory({
         createCaretTracker(() => draftKeyRef.current),
         completionBoundary,
         pendingAIField,
+        pendingLock,
         voiceRewriteTracker,
         createCorrectionReview({
           onShown: announceCorrectionShown,

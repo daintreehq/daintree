@@ -10,6 +10,7 @@ import { advanceComposerDraft } from "../inputEditorExtensions/composerDraftGene
 import { isComposerSendHeld } from "../uploads/pendingUploads";
 import { rescanForgeReferences } from "../inputEditorExtensions/forgeReference";
 import { currentVoiceCaretEffects, setVoiceCaret } from "../inputEditorExtensions/voiceCaret";
+import { setPendingAIRanges } from "../inputEditorExtensions/base";
 
 /**
  * Where one send goes in place of the composer's own `submitText` and
@@ -351,8 +352,12 @@ export function useEditorKeymap({
       const latest = latestRef.current;
       if (!latest) return false;
       // A dictation's caret is the session's, not the draft's: a stash popped
-      // after the session ends must not bring it back.
-      const stashed = view.state.update({ effects: setVoiceCaret.of({ phase: null }) }).state;
+      // after the session ends must not bring it back. Nor a pending
+      // correction's words, locked (#15874): the stash takes them from the
+      // draft, so their correction never lands.
+      const stashed = view.state.update({
+        effects: [setVoiceCaret.of({ phase: null }), setPendingAIRanges.of([])],
+      }).state;
       stashEditorState(latest.terminalId, stashed, latest.projectId);
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: "" },

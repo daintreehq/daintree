@@ -1,5 +1,6 @@
 import { EditorView, closeHoverTooltips, keymap, type KeyBinding } from "@codemirror/view";
 import { StateField, StateEffect, Prec, type Extension } from "@codemirror/state";
+import { userEdit } from "./userEdit";
 
 export interface ChipPendingDelete {
   from: number;
@@ -100,6 +101,7 @@ const backspaceBinding: KeyBinding = {
         view.dispatch({
           changes: { from: covered.from, to: covered.to, insert: "" },
           effects: setChipPendingDelete.of(null),
+          annotations: userEdit.of(true),
         });
         return true;
       }
@@ -116,6 +118,7 @@ const backspaceBinding: KeyBinding = {
       view.dispatch({
         changes: { from: chip.from, to: chip.to, insert: "" },
         effects: setChipPendingDelete.of(null),
+        annotations: userEdit.of(true),
       });
       return true;
     }

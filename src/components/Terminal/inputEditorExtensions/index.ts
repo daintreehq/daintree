@@ -18,6 +18,8 @@ export {
   VOICE_CARET_LEVEL_PROPERTY,
 } from "./base";
 export { minimalDocChange } from "@/lib/textRangeMapping";
+export { pendingLock } from "./pendingLock";
+export { userEdit } from "./userEdit";
 export { createCaretTracker } from "./caretTracker";
 export { completionBoundary, completionBoundaryAt } from "./completionBoundary";
 export {
