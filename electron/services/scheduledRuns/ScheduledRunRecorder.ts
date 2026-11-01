@@ -36,7 +36,14 @@ export interface ScheduledRunSpawnFact {
   readonly success: boolean;
   /** The host's start time of the incarnation that spawned. */
   readonly spawnedAt?: number;
+  readonly launchGeneration?: number;
   readonly error?: { readonly message: string };
+}
+
+/** An incarnation died with its pty-host, as `PtyClient` emits `incarnation-lost`. */
+export interface ScheduledRunLostFact {
+  readonly terminalId: string;
+  readonly launchGeneration: number;
 }
 
 /** A PTY exit of one incarnation, as `PtyClient` emits `incarnation-exit`. */
@@ -80,6 +87,13 @@ export interface ScheduledRunRecorderDeps {
   readonly logWarn?: (message: string, error?: unknown) => void;
 }
 
+/** The incarnation a run's terminal was first seen spawning. */
+interface Claim {
+  readonly spawnedAt: number;
+  /** Null when it was first seen exiting, which needs no later loss. */
+  readonly launchGeneration: number | null;
+}
+
 // Signals are positive or null in the record; node-pty reports 0 for none.
 function normalizeSignal(signal: number | null | undefined): number | null {
   return typeof signal === "number" && Number.isInteger(signal) && signal > 0 ? signal : null;
@@ -120,10 +134,10 @@ function exitedProcess(
  * Every write is synchronous and committed before anyone is told of it.
  *
  * Runs are matched to facts by terminal incarnation, `{terminalId, spawnedAt}`.
- * A run takes the first incarnation its reserved terminal spawns. The host
- * spawns an id again only once the terminal it had is gone, so a later
- * incarnation under the id (a restart, or a crashed pty-host's replay) means
- * the run's own ended unseen if its exit hasn't arrived: the run is `lost`.
+ * A run takes the first incarnation its reserved terminal spawns; a restart or
+ * a crashed pty-host's replay under the same id is another incarnation, and
+ * its facts aren't the run's. The run's own still reports its exit, or its
+ * loss with the pty-host that ran it.
  */
 export class ScheduledRunRecorder {
   private readonly store: ScheduledRunStore;
@@ -140,7 +154,7 @@ export class ScheduledRunRecorder {
    * any other terminal are skipped without a read: runs from an earlier
    * lifetime were settled as interrupted before any of these were added.
    */
-  private readonly incarnations = new Map<string, number | null>();
+  private readonly incarnations = new Map<string, Claim | null>();
 
   constructor(deps: ScheduledRunRecorderDeps) {
     this.store = deps.store;
@@ -155,9 +169,17 @@ export class ScheduledRunRecorder {
   /**
    * Records a run about to launch. It is committed before this returns, so the
    * caller spawns only after; a run whose occurrence already has one throws
-   * {@link ScheduledRunConflictError} and must not launch.
+   * {@link ScheduledRunConflictError} and must not launch. The terminal id is
+   * reserved for this run alone: one another run already holds is refused, or
+   * the two would share each other's facts.
    */
   registerLaunch(input: RegisterScheduledLaunchInput): ScheduledRun {
+    if (
+      this.incarnations.has(input.terminalId) ||
+      this.store.findByTerminal(input.terminalId).length > 0
+    ) {
+      throw new Error(`Terminal ${input.terminalId} is already reserved for another run`);
+    }
     const timestamp = this.now();
     const run: ScheduledRun = {
       id: input.id,
@@ -176,7 +198,7 @@ export class ScheduledRunRecorder {
       this.store.insert(run);
       this.store.prune(run.scheduleId);
     });
-    if (!this.incarnations.has(input.terminalId)) this.incarnations.set(input.terminalId, null);
+    this.incarnations.set(input.terminalId, null);
     this.changed([run]);
     this.notify(() =>
       this.onRunStarted({
@@ -233,7 +255,7 @@ export class ScheduledRunRecorder {
     return this.commit(settled, true) ? settled : null;
   }
 
-  /** A spawn of `terminalId` answered. */
+  /** A spawn of `terminalId` answered. Only the first incarnation seen is the run's. */
   handleSpawnResult(terminalId: string, result: ScheduledRunSpawnFact): void {
     if (!this.incarnations.has(terminalId)) return;
     const claimed = this.incarnations.get(terminalId) ?? null;
@@ -253,29 +275,41 @@ export class ScheduledRunRecorder {
       this.logWarn(`[ScheduledRuns] A spawn of terminal ${terminalId} carried no incarnation`);
       return;
     }
-    if (claimed === null) this.incarnations.set(terminalId, spawnedAt);
-    if (claimed === null || claimed === spawnedAt) {
-      // Also retries a binding whose earlier write failed.
-      for (const run of this.store.findByTerminal(terminalId)) {
-        if (run.terminalSpawnedAt !== null || run.process.pty.state !== "not-started") continue;
-        this.commit({
-          ...run,
-          terminalSpawnedAt: spawnedAt,
-          process: { ...run.process, pty: { state: "running", startedAt: spawnedAt } },
-        });
-      }
+    if (claimed === null) {
+      this.incarnations.set(terminalId, {
+        spawnedAt,
+        launchGeneration: result.launchGeneration ?? null,
+      });
+    } else if (claimed.spawnedAt !== spawnedAt) {
       return;
     }
-    // A later incarnation under the run's terminal id.
-    const at = this.now();
+    // Also retries a binding whose earlier write failed.
     for (const run of this.store.findByTerminal(terminalId)) {
+      if (run.terminalSpawnedAt !== null || run.process.pty.state !== "not-started") continue;
+      this.commit({
+        ...run,
+        terminalSpawnedAt: spawnedAt,
+        process: { ...run.process, pty: { state: "running", startedAt: spawnedAt } },
+      });
+    }
+  }
+
+  /**
+   * The run's incarnation died with its pty-host, which is replaying the
+   * terminal as a new one. Its exit will never come: the run is lost.
+   */
+  handleIncarnationLost(fact: ScheduledRunLostFact): void {
+    const claimed = this.incarnations.get(fact.terminalId);
+    if (!claimed || claimed.launchGeneration !== fact.launchGeneration) return;
+    const at = this.now();
+    for (const run of this.store.findByTerminal(fact.terminalId)) {
       if (run.process.pty.state === "exited") continue;
       let next: ScheduledRun = {
         ...run,
-        terminalSpawnedAt: claimed,
+        terminalSpawnedAt: claimed.spawnedAt,
         process: {
           ...run.process,
-          pty: exitedProcess(run.process.pty, at, null, null, claimed),
+          pty: exitedProcess(run.process.pty, at, null, null, claimed.spawnedAt),
         },
       };
       const settles = next.settlement.state === "open" && !this.isShuttingDown();
@@ -293,8 +327,11 @@ export class ScheduledRunRecorder {
     if (typeof spawnedAt !== "number" || !this.incarnations.has(fact.terminalId)) return;
     const claimed = this.incarnations.get(fact.terminalId) ?? null;
     // An exit can arrive before its spawn answer; it is then the first incarnation seen.
-    if (claimed === null) this.incarnations.set(fact.terminalId, spawnedAt);
-    else if (claimed !== spawnedAt) return;
+    if (claimed === null) {
+      this.incarnations.set(fact.terminalId, { spawnedAt, launchGeneration: null });
+    } else if (claimed.spawnedAt !== spawnedAt) {
+      return;
+    }
     const exitedAt = this.now();
     const signal = normalizeSignal(fact.signal);
     const exitCode = fact.exitCode;
@@ -328,7 +365,7 @@ export class ScheduledRunRecorder {
   handleSessionCaptured(fact: ScheduledRunSessionFact): void {
     const { record } = fact;
     const terminal = record.terminal;
-    if (!terminal || this.incarnations.get(terminal.id) !== terminal.spawnedAt) return;
+    if (!terminal || this.incarnations.get(terminal.id)?.spawnedAt !== terminal.spawnedAt) return;
     for (const run of this.store.findByTerminal(terminal.id)) {
       if (run.terminalSpawnedAt !== null && run.terminalSpawnedAt !== terminal.spawnedAt) continue;
       if (!run.resume || run.resume.agentId !== record.agentId) continue;

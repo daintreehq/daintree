@@ -205,6 +205,24 @@ describe("PtyClient lifecycle ledger", () => {
     expect(ledger.recordJournal("t1", 2, "sess-after-crash").accepted).toBe(true);
   });
 
+  it("reports the incarnation a crashed host took with it before replaying the terminal (#15976)", () => {
+    const client = createReadyClient();
+    const lost = vi.fn();
+    client.on("incarnation-lost", lost);
+    client.spawn("t1", baseOptions);
+
+    const restartedChild = createMockChild();
+    shared.forkMock.mockReturnValue(restartedChild);
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(200);
+    expect(lost).not.toHaveBeenCalled();
+    restartedChild.emit("message", { type: "ready" });
+
+    expect(lost).toHaveBeenCalledExactlyOnceWith({ terminalId: "t1", launchGeneration: 1 });
+    expect(spawnMessages(restartedChild)[0]?.options.launchGeneration).toBe(2);
+  });
+
   it("re-injects postSpawnInput on crash respawn so wrapper-less shells resume (#11339)", () => {
     const client = createReadyClient();
     // A command launch on a shell that can't host a startup wrapper (fish,

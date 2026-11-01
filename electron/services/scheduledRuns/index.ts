@@ -3,7 +3,7 @@ import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { getActiveShutdown } from "../../lifecycle/shutdownCoordinator.js";
 import { getWebContentsForProject } from "../../window/webContentsRegistry.js";
 import { events } from "../events.js";
-import type { PtyIncarnationExit } from "../PtyClient.js";
+import type { PtyIncarnationExit, PtyIncarnationLost } from "../PtyClient.js";
 import type { SpawnResult } from "../../../shared/types/pty-host.js";
 import type { ScheduledRunRecorder, ScheduledRunsChange } from "./ScheduledRunRecorder.js";
 
@@ -11,8 +11,10 @@ import type { ScheduledRunRecorder, ScheduledRunsChange } from "./ScheduledRunRe
 export interface ScheduledRunFactSource {
   on(event: "spawn-result", listener: (id: string, result: SpawnResult) => void): unknown;
   on(event: "incarnation-exit", listener: (fact: PtyIncarnationExit) => void): unknown;
+  on(event: "incarnation-lost", listener: (fact: PtyIncarnationLost) => void): unknown;
   off(event: "spawn-result", listener: (id: string, result: SpawnResult) => void): unknown;
   off(event: "incarnation-exit", listener: (fact: PtyIncarnationExit) => void): unknown;
+  off(event: "incarnation-lost", listener: (fact: PtyIncarnationLost) => void): unknown;
 }
 
 let recorder: ScheduledRunRecorder | null = null;
@@ -79,8 +81,10 @@ export function startScheduledRunFacts(source: ScheduledRunFactSource): () => vo
     target.handleSpawnResult(id, result)
   );
   const onExit = follow((target, fact: PtyIncarnationExit) => target.handleExit(fact));
+  const onLost = follow((target, fact: PtyIncarnationLost) => target.handleIncarnationLost(fact));
   source.on("spawn-result", onSpawnResult);
   source.on("incarnation-exit", onExit);
+  source.on("incarnation-lost", onLost);
   const offCaptured = events.on(
     "agent-session:captured",
     follow((target, payload) => target.handleSessionCaptured(payload))
@@ -88,6 +92,7 @@ export function startScheduledRunFacts(source: ScheduledRunFactSource): () => vo
   return () => {
     source.off("spawn-result", onSpawnResult);
     source.off("incarnation-exit", onExit);
+    source.off("incarnation-lost", onLost);
     offCaptured();
   };
 }

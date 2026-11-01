@@ -253,6 +253,16 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       return true;
     }
 
+    // Facts only: the id belongs to the successor, so nothing keyed by it moves.
+    case "superseded-exit":
+      emitter.emit("incarnation-exit", {
+        terminalId: event.id,
+        spawnedAt: event.spawnedAt,
+        exitCode: event.exitCode,
+        signal: event.signal ?? null,
+      });
+      return true;
+
     case "error":
       emitter.emit("error", event.id, event.error);
       return true;

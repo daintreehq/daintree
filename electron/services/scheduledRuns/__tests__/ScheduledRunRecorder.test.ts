@@ -205,18 +205,51 @@ describe("ScheduledRunRecorder", () => {
     expect(run?.resume?.agentSessionId).toBeNull();
   });
 
-  it("is lost when another incarnation spawns under its terminal before its exit arrives", () => {
+  it("records the real exit of an incarnation a restart replaced", () => {
     const recorder = lifetime();
     recorder.registerLaunch(launch());
     recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT });
-    // A restart (or a crashed host's replay) spawns the id again; the host
-    // dropped the first incarnation's exit.
-    now = SPAWNED_AT + 900;
+    // The restart's incarnation spawns before the first one's exit reaches main.
     recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT + 500 });
+    expect(recorder.get("run-1")?.process.pty).toEqual({ state: "running", startedAt: SPAWNED_AT });
+
+    recorder.handleExit({
+      terminalId: "terminal-1",
+      spawnedAt: SPAWNED_AT,
+      exitCode: 0,
+      signal: 1,
+    });
     recorder.handleExit({ terminalId: "terminal-1", spawnedAt: SPAWNED_AT + 500, exitCode: 0 });
 
     const run = recorder.get("run-1");
     expect(run?.terminalSpawnedAt).toBe(SPAWNED_AT);
+    expect(run?.process.pty).toMatchObject({ state: "exited", exitCode: 0, signal: 1 });
+    expect(run?.settlement).toMatchObject({ outcome: "failed" });
+    expect(emitted.filter((e) => e.name === "scheduled-run:ended")).toHaveLength(1);
+  });
+
+  it("is lost when its incarnation dies with the pty-host, and only its own", () => {
+    const recorder = lifetime();
+    recorder.registerLaunch(launch());
+    recorder.handleSpawnResult("terminal-1", {
+      success: true,
+      spawnedAt: SPAWNED_AT,
+      launchGeneration: 3,
+    });
+    recorder.handleIncarnationLost({ terminalId: "terminal-1", launchGeneration: 2 });
+    expect(recorder.get("run-1")?.settlement).toEqual({ state: "open" });
+
+    now = SPAWNED_AT + 900;
+    recorder.handleIncarnationLost({ terminalId: "terminal-1", launchGeneration: 3 });
+    // The replay's spawn and exit are another incarnation's.
+    recorder.handleSpawnResult("terminal-1", {
+      success: true,
+      spawnedAt: SPAWNED_AT + 950,
+      launchGeneration: 4,
+    });
+    recorder.handleExit({ terminalId: "terminal-1", spawnedAt: SPAWNED_AT + 950, exitCode: 0 });
+
+    const run = recorder.get("run-1");
     expect(run?.settlement).toMatchObject({ outcome: "lost", evidence: { kind: "lost" } });
     expect(run?.process.pty).toEqual({
       state: "exited",
@@ -226,7 +259,7 @@ describe("ScheduledRunRecorder", () => {
       signal: null,
     });
     expect(emitted.filter((e) => e.name === "scheduled-run:ended")).toHaveLength(1);
-    // The first incarnation's session can still be captured afterwards.
+    // Its session can still be captured afterwards.
     recorder.handleSessionCaptured(capture("codex-session", SPAWNED_AT));
     expect(recorder.get("run-1")?.resume?.agentSessionId).toBe("codex-session");
   });
@@ -242,26 +275,44 @@ describe("ScheduledRunRecorder", () => {
     update.mockRestore();
     expect(recorder.get("run-1")?.terminalSpawnedAt).toBeNull();
 
-    // The same incarnation's exit binds it once the database takes writes again.
+    // A later incarnation can't take the run, and a refused duplicate spawn
+    // isn't its launch failing.
+    recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT + 500 });
+    recorder.handleExit({ terminalId: "terminal-1", spawnedAt: SPAWNED_AT + 500, exitCode: 0 });
+    recorder.handleSpawnResult("terminal-1", {
+      success: false,
+      error: { message: "Terminal terminal-1 already has a live owner" },
+    });
+    expect(recorder.get("run-1")?.terminalSpawnedAt).toBeNull();
+    expect(recorder.get("run-1")?.settlement).toEqual({ state: "open" });
+
+    // The first incarnation's own exit binds it once the database takes writes again.
     recorder.handleExit({ terminalId: "terminal-1", spawnedAt: SPAWNED_AT, exitCode: 0 });
     expect(recorder.get("run-1")?.terminalSpawnedAt).toBe(SPAWNED_AT);
     expect(recorder.get("run-1")?.settlement).toMatchObject({ outcome: "done" });
   });
 
-  it("doesn't let a later incarnation take a run whose first binding failed", () => {
-    const store = new ScheduledRunStore(sqlite);
-    const recorder = new ScheduledRunRecorder({ store, now: () => now, logWarn: () => {} });
+  it("refuses a terminal id another run already holds", () => {
+    const recorder = lifetime();
     recorder.registerLaunch(launch());
-    vi.spyOn(store, "update").mockImplementationOnce(() => {
-      throw new Error("SQLITE_FULL");
+    recorder.registerSkip({
+      id: "skipped",
+      scheduleId: "schedule-2",
+      projectId: "project-1",
+      origin: { trigger: "run-now", dueAt: null, occurrenceKey: null, coalesced: null },
+      reason: { kind: "overlap", openRunId: "run-1" },
+      terminalId: "terminal-held",
     });
-    recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT });
-    recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT + 500 });
-    recorder.handleExit({ terminalId: "terminal-1", spawnedAt: SPAWNED_AT + 500, exitCode: 0 });
 
-    const run = recorder.get("run-1");
-    expect(run?.terminalSpawnedAt).toBe(SPAWNED_AT);
-    expect(run?.settlement).toMatchObject({ outcome: "lost" });
+    expect(() => recorder.registerLaunch(launch({ id: "run-2" }))).toThrow(/already reserved/);
+    expect(() =>
+      recorder.registerLaunch(launch({ id: "run-3", terminalId: "terminal-held" }))
+    ).toThrow(/already reserved/);
+    // Deleting the run's schedule doesn't free its terminal id for another run:
+    // a late fact from that terminal would be taken for the new run's.
+    recorder.deleteForSchedule("schedule-1");
+    expect(() => recorder.registerLaunch(launch({ id: "run-4" }))).toThrow(/already reserved/);
+    expect(recorder.get("run-2")).toBeNull();
   });
 
   it("records the spawn and exit of a run settled before its spawn answered", () => {
@@ -269,6 +320,7 @@ describe("ScheduledRunRecorder", () => {
     recorder.registerLaunch(launch());
     recorder.settle("run-1", { kind: "cancel" });
     recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT });
+    expect(recorder.get("run-1")?.process.pty).toEqual({ state: "running", startedAt: SPAWNED_AT });
     recorder.handleExit({
       terminalId: "terminal-1",
       spawnedAt: SPAWNED_AT,

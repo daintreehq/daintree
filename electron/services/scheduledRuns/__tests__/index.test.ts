@@ -157,6 +157,20 @@ describe("scheduled-run history wiring", () => {
     expect(run?.resume?.agentSessionId).toBe("codex-session");
   });
 
+  it("settles a run lost when its pty-host dies with its incarnation", async () => {
+    const recorder = (await getScheduledRunRecorder())!;
+    recorder.registerLaunch(launch);
+    source.emit("spawn-result", "terminal-1", {
+      success: true,
+      id: "terminal-1",
+      spawnedAt: 50,
+      launchGeneration: 7,
+    });
+    source.emit("incarnation-lost", { terminalId: "terminal-1", launchGeneration: 7 });
+
+    expect(recorder.get("run-1")?.settlement).toMatchObject({ outcome: "lost" });
+  });
+
   it("stops following facts once stopped", async () => {
     const recorder = (await getScheduledRunRecorder())!;
     recorder.registerLaunch(launch);
@@ -184,6 +198,7 @@ describe("scheduled-run history wiring", () => {
     });
     expect(source.listenerCount("spawn-result")).toBe(0);
     expect(source.listenerCount("incarnation-exit")).toBe(0);
+    expect(source.listenerCount("incarnation-lost")).toBe(0);
     const run = recorder.get("run-1");
     expect(run?.settlement).toEqual({ state: "open" });
     expect(run?.resume?.agentSessionId).toBeNull();

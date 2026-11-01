@@ -719,6 +719,17 @@ export type PtyHostEvent =
       spawnedAt?: number;
       preserveSession?: boolean;
     }
+  // The exit of an incarnation a same-id respawn already replaced in the host
+  // (#15976). The host keeps nothing for it any more, so this is the facts
+  // alone, for main's record of that incarnation, and never a terminal's exit.
+  | {
+      type: "superseded-exit";
+      id: string;
+      exitCode: number;
+      signal?: number;
+      launchGeneration?: number;
+      spawnedAt: number;
+    }
   | { type: "error"; id: string; error: string }
   // Typed submit-lane status (#11875). Deliberately NOT folded into the `error`
   // carrier above: "this prompt is taking a while" is not an error, and the

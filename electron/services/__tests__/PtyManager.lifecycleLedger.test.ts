@@ -279,6 +279,31 @@ describe("PtyManager lifecycle ledger", () => {
     shared.getGitBranch.mockResolvedValue("feature/x");
   });
 
+  it("reports a replaced incarnation's exit by itself, never as the id's exit (#15976)", () => {
+    const manager = new PtyManager();
+    const exits = vi.fn();
+    const superseded = vi.fn();
+    manager.on("exit", exits);
+    manager.on("superseded-exit", superseded);
+
+    manager.spawn("t1", spawnOptions({ launchGeneration: 1 }));
+    manager.kill("t1");
+    // A restart replaces the killed terminal before its process has exited.
+    manager.spawn("t1", spawnOptions({ launchGeneration: 2 }));
+    const [first, second] = shared.created;
+    first!.info.spawnedAt = 1_000;
+    second!.info.spawnedAt = 2_000;
+    first!.callbacks.onExit("t1", 143);
+
+    expect(superseded).toHaveBeenCalledExactlyOnceWith("t1", 143, undefined, 1, 1_000);
+    expect(exits).not.toHaveBeenCalled();
+    expect(manager.getTerminal("t1")?.launchGeneration).toBe(2);
+
+    second!.callbacks.onExit("t1", 0);
+    expect(exits).toHaveBeenCalledExactlyOnceWith("t1", 0, undefined, 2, undefined, 2_000);
+    expect(superseded).toHaveBeenCalledTimes(1);
+  });
+
   it("stamps a resize result with the incarnation that applied it (#11641)", () => {
     const manager = new PtyManager();
     const results: Array<{ id: string; launchGeneration: number | null }> = [];

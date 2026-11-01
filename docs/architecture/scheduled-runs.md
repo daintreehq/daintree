@@ -151,21 +151,23 @@ Skip reasons are `missed` (only for an occurrence, never `run-now`), `overlap` w
 
 ### Facts the history records itself
 
-A run is matched to its terminal by incarnation, `{terminalId, spawnedAt}`, as session records are. It takes the first incarnation its reserved terminal spawns, held in memory as well as on the record, so a write that failed can't let a later incarnation take the run. A restart under the same id, or a pty-host crash replaying the spawn, is another incarnation, and its facts aren't the run's. The host stamps `spawnedAt` on its spawn result and on the exit, and `PtyClient` emits a main-only `incarnation-exit` for every incarnation, including one a same-id respawn superseded, whose public `exit` is dropped.
+A run is matched to its terminal by incarnation, `{terminalId, spawnedAt}`, as session records are. It takes the first incarnation its reserved terminal spawns, held in memory as well as on the record, so a write that failed can't let a later incarnation take the run. A restart under the same id, or a pty-host crash replaying the spawn, is another incarnation, and its facts aren't the run's. A reserved terminal id belongs to one run: registering another run under it is refused.
+
+The host stamps `spawnedAt` on its spawn result and on the exit. `PtyClient` emits a main-only `incarnation-exit` for every incarnation, including one a same-id respawn replaced: main drops that one's public `exit`, and the host, which keeps nothing for a replaced terminal, sends it as a `superseded-exit` carrying the facts alone. When a pty-host dies and its terminals are replayed, `PtyClient` emits `incarnation-lost` with each old generation.
 
 | Fact | Recorded as |
 | --- | --- |
 | The spawn succeeded | `terminalSpawnedAt`, and `process.pty` running |
 | The spawn failed | settled on `launch-error` |
 | The PTY exited | `process.pty` exited with its code and signal; settles an open run on `exit` |
-| Another incarnation spawned under the run's terminal id before the run's exit arrived | `process.pty` exited with no code or signal; settles an open run as `lost` |
+| `incarnation-lost`: the run's incarnation died with its pty-host | `process.pty` exited with no code or signal; settles an open run as `lost` |
 | `agent-session:captured` for the incarnation | `resume.agentSessionId`, when it has none yet; settled or not |
 
-The host spawns an id again only once the terminal it had is gone, and it drops the exit of a terminal a respawn replaced, so a later incarnation's spawn is how the run learns its own ended unseen. An exit can reach the history before its spawn answer does; the run then takes that incarnation from the exit, and the late answer changes nothing. A run settled before its spawn answered (a cancel, say) still records its process. A captured id never replaces one already there, and a capture for another agent or project is ignored. The agent axis (`process.agent`) has no producer yet: today's agent-exit observation is a heuristic, which never settles a run.
+An exit can reach the history before its spawn answer does; the run then takes that incarnation from the exit, and the late answer changes nothing. A run settled before its spawn answered (a cancel, say) still records its process. A captured id never replaces one already there, and a capture for another agent or project is ignored. The agent axis (`process.agent`) has no producer yet: today's agent-exit observation is a heuristic, which never settles a run.
 
 ### Quitting and crashing
 
-A quit kills every terminal, and those exits are the quit's, not the run's: while Daintree is quitting, an exit lands on `process.pty` and the run stays open. At the next startup every run still open is settled as `interrupted`, and a process last seen running is marked exited with no code or signal, at the time the startup found it gone. A crash leaves the same state and reaches the same end. A pty-host crash while Daintree keeps running replays the terminal as a new incarnation, which settles the original run `lost`; whether a run's terminal is replayed at all is the launcher's (#15978) to decide.
+A quit kills every terminal, and those exits are the quit's, not the run's: while Daintree is quitting, an exit lands on `process.pty` and the run stays open. At the next startup every run still open is settled as `interrupted`, and a process last seen running is marked exited with no code or signal, at the time the startup found it gone. A crash leaves the same state and reaches the same end. A pty-host crash while Daintree keeps running loses the run's incarnation, so the run settles `lost`; the replay that follows is another incarnation, and whether a run's terminal is replayed at all is the launcher's (#15978) to decide.
 
 ### Retention and deletion
 

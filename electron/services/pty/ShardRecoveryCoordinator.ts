@@ -117,6 +117,11 @@ export interface ShardRecoveryCoordinatorDeps {
   dropShardSignals: (shardKey: string) => void;
   /** A terminal that died with its shard and is not brought back. */
   terminalLost: (id: string) => void;
+  /**
+   * One incarnation of a terminal died with its shard, and the terminal is
+   * being replayed as a new one (#15976).
+   */
+  incarnationLost?: (id: string, launchGeneration: number) => void;
   logWarn: (message: string) => void;
 }
 
@@ -369,6 +374,7 @@ export class ShardRecoveryCoordinator {
       const previousGeneration = options.launchGeneration ?? ledger.currentGeneration(id);
       if (previousGeneration !== undefined && ledger.currentGeneration(id) !== undefined) {
         ledger.recordClose(id, previousGeneration, "pty-host-crash");
+        this.deps.incarnationLost?.(id, previousGeneration);
       }
       const generation = ledger.recordLaunch(id, ledgerFactsFromSpawnOptions(options));
       this.deps.restartExitSuppression.delete(id);
@@ -495,6 +501,7 @@ export class ShardRecoveryCoordinator {
       const previousGeneration = options.launchGeneration ?? ledger.currentGeneration(id);
       if (previousGeneration !== undefined && ledger.currentGeneration(id) !== undefined) {
         ledger.recordClose(id, previousGeneration, "pty-host-crash");
+        this.deps.incarnationLost?.(id, previousGeneration);
       }
       const generation = ledger.recordLaunch(id, ledgerFactsFromSpawnOptions(options));
       this.deps.restartExitSuppression.delete(id);

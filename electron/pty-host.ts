@@ -1009,6 +1009,20 @@ ptyManager.on(
   }
 );
 
+// A replaced incarnation's exit: no per-id cleanup here, the id is its successor's.
+ptyManager.on(
+  "superseded-exit",
+  (
+    id: string,
+    exitCode: number,
+    signal: number | undefined,
+    launchGeneration: number | undefined,
+    spawnedAt: number
+  ) => {
+    sendEvent({ type: "superseded-exit", id, exitCode, signal, launchGeneration, spawnedAt });
+  }
+);
+
 ptyManager.on("error", (id: string, error: string) => {
   sendEvent({ type: "error", id, error });
 });

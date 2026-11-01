@@ -350,6 +350,45 @@ describe("routeHostEvent", () => {
     expect(recordExit).toHaveBeenLastCalledWith("t1", 0, 2, 9, 200);
   });
 
+  it("hands a host-replaced incarnation's exit to main as its facts alone (#15976)", () => {
+    const { deps, emitter, state, callbacks } = makeDeps();
+    const successor: PtyHostSpawnOptions = { cwd: "/", cols: 80, rows: 24, launchGeneration: 2 };
+    state.pendingSpawns.set("t1", successor);
+    state.pendingKillCount.set("t1", 1);
+    state.terminalPids.set("t1", 999);
+    const onExit = vi.fn();
+    const facts = vi.fn();
+    const recordExit = vi.fn();
+    emitter.on("exit", onExit);
+    emitter.on("incarnation-exit", facts);
+    deps.callbacks.onTerminalExit = recordExit;
+
+    routeHostEvent(
+      {
+        type: "superseded-exit",
+        id: "t1",
+        exitCode: 143,
+        signal: 15,
+        launchGeneration: 1,
+        spawnedAt: 100,
+      },
+      deps
+    );
+
+    expect(facts).toHaveBeenCalledExactlyOnceWith({
+      terminalId: "t1",
+      spawnedAt: 100,
+      exitCode: 143,
+      signal: 15,
+    });
+    expect(onExit).not.toHaveBeenCalled();
+    expect(recordExit).not.toHaveBeenCalled();
+    expect(state.pendingSpawns.get("t1")).toBe(successor);
+    expect(state.pendingKillCount.get("t1")).toBe(1);
+    expect(state.terminalPids.get("t1")).toBe(999);
+    expect(callbacks.trashIdsRemoved).toEqual([]);
+  });
+
   it("removes the pendingKillCount entry once it reaches zero", () => {
     const { deps, state } = makeDeps();
     state.pendingKillCount.set("t1", 1);

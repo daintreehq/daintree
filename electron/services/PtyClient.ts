@@ -235,14 +235,21 @@ interface TerminalInfoResponse {
  */
 /**
  * One PTY incarnation ended, as the host reported it. Unlike the public `exit`,
- * emitted for a same-id respawn's predecessor too; `spawnedAt` names the
- * incarnation (absent only from a host that didn't send it).
+ * emitted for a same-id respawn's predecessor too, whether main or the host
+ * saw it replaced; `spawnedAt` names the incarnation (absent only from a host
+ * that didn't send it).
  */
 export interface PtyIncarnationExit {
   terminalId: string;
   spawnedAt?: number;
   exitCode: number;
   signal: number | null;
+}
+
+/** One incarnation died with its pty-host, and its terminal is being replayed as a new one. */
+export interface PtyIncarnationLost {
+  terminalId: string;
+  launchGeneration: number;
 }
 
 export interface GracefulKillByProjectOutcome {
@@ -611,6 +618,10 @@ export class PtyClient extends EventEmitter {
       trackRetiringHost: (exit) => this.trackRetiringHost(exit),
       dropShardSignals: (shardKey) => this.dropShardSignals(shardKey),
       terminalLost: (id) => this.emit("terminal-lost", id),
+      incarnationLost: (id, launchGeneration) => {
+        const fact: PtyIncarnationLost = { terminalId: id, launchGeneration };
+        this.emit("incarnation-lost", fact);
+      },
       logWarn,
     });
 
