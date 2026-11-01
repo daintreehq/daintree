@@ -31,8 +31,6 @@ export interface ServedDocumentInput {
 
 /** Children (elements under a parent, nodes under the matched element) read before the match gives up. */
 export const SERVED_SIBLING_LIMIT = 1024;
-/** Characters of an element's own text read; an element with more is not compared at all. */
-export const SERVED_TEXT_LIMIT = 4096;
 
 /** Attributes page script rarely rewrites, which tell same-named elements apart. */
 const IDENTITY_ATTRIBUTES = ["id", "href", "src", "name"] as const;
@@ -132,27 +130,30 @@ function follow(steps: readonly Step[], live: Document, served: Document): Eleme
   return node;
 }
 
-/**
- * The element's own text nodes, whitespace collapsed; null past either bound,
- * since a comparison of part of it could pass texts that differ further on.
- */
-function ownText(element: Element): string | null {
-  let text = "";
+/** The element's own text nodes, in order; null past the bound on its children. */
+function ownText(element: Element): string[] | null {
+  const parts: string[] = [];
   let seen = 0;
   for (let child = element.firstChild; child !== null; child = child.nextSibling) {
     seen += 1;
     if (seen > SERVED_SIBLING_LIMIT) return null;
-    if (child.nodeType !== 3) continue;
-    const value = child.nodeValue ?? "";
-    if (text.length + value.length > SERVED_TEXT_LIMIT) return null;
-    text += value;
+    if (child.nodeType === 3) parts.push(child.nodeValue ?? "");
   }
-  return text.replace(/\s+/g, " ").trim();
+  return parts;
 }
 
+const lengthOf = (parts: readonly string[]) => parts.reduce((sum, part) => sum + part.length, 0);
+
+/**
+ * Exactly the same text of its own: both trees come from the same bytes, so
+ * any difference is the page's doing. Lengths first, so the texts are only
+ * ever joined when they are no longer than the served copy.
+ */
 function agrees(live: Element, served: Element): boolean {
-  const text = ownText(live);
-  return text !== null && text === ownText(served);
+  const mine = ownText(live);
+  const theirs = ownText(served);
+  if (mine === null || theirs === null || lengthOf(mine) !== lengthOf(theirs)) return false;
+  return mine.join("") === theirs.join("");
 }
 
 function isInput(value: unknown): value is ServedDocumentInput {

@@ -9,7 +9,7 @@ import {
 } from "../../../../../shared/elementPicker/protocol.js";
 import { SourceCandidateSchema } from "../../../../../shared/elementPicker/source.js";
 import { astroExtractor, createAstroExtractor, describeAstro } from "../astroExtractor.js";
-import { SERVED_SIBLING_LIMIT, SERVED_TEXT_LIMIT } from "../servedDocument.js";
+import { SERVED_SIBLING_LIMIT } from "../servedDocument.js";
 import { ANCESTRY_LIMIT } from "../detectors.js";
 import { createPicker, type PickerHandle } from "../picker.js";
 import { installExtractor, type ElementPickerExtractor } from "../registry.js";
@@ -431,18 +431,19 @@ describe("the Astro extractor once the toolbar has taken the stamps off", () => 
     expect(fields(select(extractor, links()[0]!)).servedDocument).toBe("unmatched");
   });
 
-  it("compares the whole of an element's own text, or refuses past what it reads", () => {
-    const pad = " ".repeat(SERVED_TEXT_LIMIT);
-    const body = SERVED_BODY.replace(">Shop</h1>", `>${pad}A</h1>`);
+  it("compares the whole of an element's own text, however long", () => {
+    const long = "word ".repeat(2000);
+    const body = SERVED_BODY.replace(">Shop</h1>", `>${long}end</h1>`);
     const extractor = createAstroExtractor(servedPage(body));
     document.body.innerHTML = body;
     const title = byId("title");
     title.removeAttribute("data-astro-source-file");
     title.removeAttribute("data-astro-source-loc");
-    // Collapsed, both read as a single letter; only the whole text tells them apart.
-    title.textContent = `${pad}B`;
+    expect(fields(select(extractor, title)).servedDocument).toBe("matched");
+    // Only the last characters differ.
+    title.textContent = `${long}End`;
     expect(fields(select(extractor, title)).servedDocument).toBe("unmatched");
-    title.textContent = `${pad}A`;
+    title.textContent = `${long}end `;
     expect(fields(select(extractor, title)).servedDocument).toBe("unmatched");
   });
 
