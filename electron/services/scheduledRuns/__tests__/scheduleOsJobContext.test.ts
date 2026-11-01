@@ -55,9 +55,10 @@ describe("scheduleOsJobContext", () => {
 describe("readWindowsTimeZone", () => {
   const sydney = () => "Australia/Sydney";
 
+  // An explicit "no override" each time: undefined would read this process's TZ.
   it("takes the runtime's zone, which follows Windows'", () => {
-    expect(readWindowsTimeZone(undefined, sydney)).toBe("Australia/Sydney");
     expect(readWindowsTimeZone("", sydney)).toBe("Australia/Sydney");
+    expect(readWindowsTimeZone("  ", sydney)).toBe("Australia/Sydney");
   });
 
   it("doesn't guess while a TZ in the environment moves the runtime's zone", () => {
@@ -65,7 +66,7 @@ describe("readWindowsTimeZone", () => {
   });
 
   it("is unknown when the runtime names no real zone", () => {
-    expect(readWindowsTimeZone(undefined, () => "Not/AZone")).toBeNull();
+    expect(readWindowsTimeZone("", () => "Not/AZone")).toBeNull();
   });
 });
 
