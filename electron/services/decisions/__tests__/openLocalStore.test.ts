@@ -20,20 +20,26 @@ describe("openDecisionsLocalStore", () => {
   });
 
   it("never opens the app database for a lifetime that ended while it loaded", async () => {
-    expect(await openDecisionsLocalStore(() => true)).toBeNull();
+    let cancelled = false;
+    const opening = openDecisionsLocalStore(() => cancelled);
+    cancelled = true;
 
+    expect(await opening).toBeNull();
     expect(db.getSharedDb).not.toHaveBeenCalled();
     expect(db.getSharedSqlite).not.toHaveBeenCalled();
   });
 
   it("opens the shared database and builds the store over its connection", async () => {
-    const sqlite = { open: true };
+    const sqlite = {
+      prepare: vi.fn(() => ({ get: () => ({ value: "from the shared connection" }) })),
+    };
     db.getSharedSqlite.mockReturnValue(sqlite);
 
     const store = await openDecisionsLocalStore(() => false);
 
     expect(db.getSharedDb).toHaveBeenCalledTimes(1);
     expect(store).toBeInstanceOf(DaintreeLocalStore);
+    expect(await store!.getMeta("k")).toBe("from the shared connection");
   });
 
   it("fails rather than run without a database", async () => {

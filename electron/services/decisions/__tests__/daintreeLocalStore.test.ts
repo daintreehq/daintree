@@ -548,10 +548,9 @@ describe("DaintreeLocalStore ordering and failures", () => {
     });
     sqlite.exec(`CREATE TRIGGER io_probe BEFORE INSERT ON decisions_meta
       WHEN NEW.key = 'broken' BEGIN SELECT refuse_with_io_error(); END`);
-    await store.setMeta("before", "1");
 
     const results = await Promise.allSettled([
-      store.getMeta("before"),
+      store.setMeta("before", "1"),
       store.setMeta("broken", "1"),
       store.getMeta("before"),
       store.setMeta("after", "1"),
@@ -564,8 +563,35 @@ describe("DaintreeLocalStore ordering and failures", () => {
       "rejected",
     ]);
     expect(results[1]).toMatchObject({ reason: { reason: "storage-fault" } });
+    expect(results[2]).toMatchObject({ value: "1" });
+    expect(await store.getMeta("before")).toBe("1");
     expect(await store.getMeta("after")).toBeNull();
     expect(store.isFaulted()).toBe(true);
+  });
+
+  it("stops writing after a batch of reads fails as a whole", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const original = sqlite.transaction.bind(sqlite);
+    let outer = 0;
+    vi.spyOn(sqlite, "transaction").mockImplementation(((fn: (...args: unknown[]) => unknown) => {
+      if (!sqlite.inTransaction && ++outer === 2) {
+        return () => {
+          throw sqliteError("SQLITE_IOERR_READ");
+        };
+      }
+      return original(fn);
+    }) as typeof sqlite.transaction);
+
+    // A full batch of writes, so the read behind them runs in a batch of its own.
+    const writes = Array.from({ length: DECISIONS_STORE_MAX_BATCH }, (_, i) =>
+      store.setMeta(`k${i}`, "v")
+    );
+    const read = store.getMeta("k0");
+
+    await Promise.all(writes);
+    await expect(read).rejects.toMatchObject({ reason: "storage-fault" });
+    expect(store.isFaulted()).toBe(true);
+    await expect(store.setMeta("later", "v")).rejects.toMatchObject({ reason: "storage-fault" });
   });
 
   it("stops writing after a question can't be read, so its event can't be marked processed", async () => {
