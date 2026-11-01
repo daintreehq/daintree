@@ -162,11 +162,7 @@ export interface RestoreDecisionsIdentityPayload {
 
 /** Why the relay refused a claim outright. */
 export type DecisionsClaimRefusal =
-  | "wrong-secret"
-  | "already-claimed"
-  | "not-configured"
-  | "rate-limited"
-  | "rejected";
+  "wrong-secret" | "already-claimed" | "not-configured" | "rate-limited" | "rejected";
 
 /** Why a recovery kit wasn't restored. Nothing was saved for any of them. */
 export type DecisionsKitRefusal =

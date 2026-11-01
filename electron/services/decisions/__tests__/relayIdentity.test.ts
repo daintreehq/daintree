@@ -252,8 +252,7 @@ describe("claimDecisionsRelay", () => {
   it("keeps an earlier attempt's keys when the relay refuses this one", async () => {
     const relay = fakeRelay();
     const memory = memoryKeys();
-    relay.state.intercept["/api/v1/setup/claim"] = () =>
-      networkError("net::ERR_CONNECTION_RESET");
+    relay.state.intercept["/api/v1/setup/claim"] = () => networkError("net::ERR_CONNECTION_RESET");
     await claimDecisionsRelay(
       { url: ORIGIN, claimSecret: SECRET },
       { keys: memory.keys, fetchImpl: relay.fetchImpl }
@@ -366,8 +365,7 @@ describe("claimDecisionsRelay", () => {
   it("removes the keys when the claim never left this computer", async () => {
     const relay = fakeRelay();
     const memory = memoryKeys();
-    relay.state.intercept["/api/v1/setup/claim"] = () =>
-      networkError("net::ERR_NAME_NOT_RESOLVED");
+    relay.state.intercept["/api/v1/setup/claim"] = () => networkError("net::ERR_NAME_NOT_RESOLVED");
 
     const outcome = await claimDecisionsRelay(
       { url: ORIGIN, claimSecret: SECRET },

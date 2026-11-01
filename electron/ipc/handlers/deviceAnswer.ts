@@ -148,7 +148,10 @@ function refuseWhileOff(action: string): void {
 }
 
 function setupCancelled(): AppError {
-  return new AppError({ code: "CANCELLED", message: "Decisions has stopped, so nothing was changed" });
+  return new AppError({
+    code: "CANCELLED",
+    message: "Decisions has stopped, so nothing was changed",
+  });
 }
 
 /**

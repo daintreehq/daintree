@@ -7,7 +7,9 @@ const ORIGIN = "https://decisions.example.workers.dev";
 
 describe("describeConnectResult", () => {
   it("leaves a saved identity to the status, and an unsent address to its field", () => {
-    expect(describeConnectResult({ result: "saved", status: { state: "not-connected" } })).toBeNull();
+    expect(
+      describeConnectResult({ result: "saved", status: { state: "not-connected" } })
+    ).toBeNull();
     expect(
       describeConnectResult({
         result: "relay",

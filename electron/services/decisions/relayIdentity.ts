@@ -422,8 +422,7 @@ export async function restoreDecisionsIdentity(
   if (!("origin" in parsed)) return failed({ result: "relay", check: parsed });
   const { origin } = parsed;
   const { keys } = options;
-  const refuse = (reason: DecisionsKitRefusal) =>
-    failed({ result: "kit-refused", origin, reason });
+  const refuse = (reason: DecisionsKitRefusal) => failed({ result: "kit-refused", origin, reason });
 
   const file = parseKit(payload.kit);
   if (!file) return refuse("not-a-kit");

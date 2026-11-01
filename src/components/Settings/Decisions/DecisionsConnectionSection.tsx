@@ -281,7 +281,11 @@ export function DecisionsConnectionSection({
         {outcomeError && (
           <SettingsRow
             id="decisions-relay-setup-outcome"
-            label={identity.error?.action === "claim" ? "Couldn't claim the relay" : "Couldn't restore the identity"}
+            label={
+              identity.error?.action === "claim"
+                ? "Couldn't claim the relay"
+                : "Couldn't restore the identity"
+            }
             accessory={
               <SeverityMark severity="error" label="Failed" className="h-3.5 w-3.5" decorative />
             }
@@ -293,7 +297,9 @@ export function DecisionsConnectionSection({
         <SettingsGroup>
           <SettingsRow
             id="decisions-disconnect"
-            label={savedOrigin !== null ? "Disconnect this computer" : "Keys from an unfinished setup"}
+            label={
+              savedOrigin !== null ? "Disconnect this computer" : "Keys from an unfinished setup"
+            }
             description={
               savedOrigin !== null
                 ? "Removes this computer's Decisions keys and its record of the relay. The relay and its data stay as they are."

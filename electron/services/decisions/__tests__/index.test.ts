@@ -530,7 +530,10 @@ describe("Decisions entry", () => {
         passphrase: "correct horse battery staple",
       });
 
-      expect(result).toMatchObject({ result: "saved", status: { relayOrigin: CLAIMED.relayOrigin } });
+      expect(result).toMatchObject({
+        result: "saved",
+        status: { relayOrigin: CLAIMED.relayOrigin },
+      });
       expect(saved.value).toMatchObject({
         relayOrigin: CLAIMED.relayOrigin,
         installationId: CLAIMED.installationId,
@@ -554,9 +557,9 @@ describe("Decisions entry", () => {
     it("refuses while off without making a service", async () => {
       saved.value = { enabled: false };
 
-      await expect(claimRelay({ url: "relay.example.com", claimSecret: SECRET })).rejects.toMatchObject(
-        CANCELLED
-      );
+      await expect(
+        claimRelay({ url: "relay.example.com", claimSecret: SECRET })
+      ).rejects.toMatchObject(CANCELLED);
       await expect(disconnectRelay()).rejects.toMatchObject(CANCELLED);
       expect(setupRuns.claim).not.toHaveBeenCalled();
       expect(peekDecisionsService()).toBeNull();

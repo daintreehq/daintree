@@ -172,9 +172,7 @@ function recordIdentity(running: DecisionsService, config: RelayConfig): Decisio
   return saved;
 }
 
-type SetupRun = (
-  options: Pick<RelaySetupOptions, "keys" | "signal">
-) => Promise<RelaySetupOutcome>;
+type SetupRun = (options: Pick<RelaySetupOptions, "keys" | "signal">) => Promise<RelaySetupOutcome>;
 
 function runSetup(run: SetupRun): Promise<DecisionsConnectResult> {
   return serialize(async () => {

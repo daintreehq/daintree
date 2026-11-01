@@ -42,7 +42,8 @@ const SAME: DecisionsRelayCompatibility = {
 };
 
 const checkRelay = vi.fn<(url: string) => Promise<DecisionsRelayCheck>>();
-const claimRelay = vi.fn<(payload: ClaimDecisionsRelayPayload) => Promise<DecisionsConnectResult>>();
+const claimRelay =
+  vi.fn<(payload: ClaimDecisionsRelayPayload) => Promise<DecisionsConnectResult>>();
 const restoreIdentity =
   vi.fn<(payload: RestoreDecisionsIdentityPayload) => Promise<DecisionsConnectResult>>();
 const disconnectRelay = vi.fn<() => Promise<DecisionsStatus>>();
@@ -67,7 +68,11 @@ function renderSection(status: DecisionsStatus, onChanged = vi.fn()) {
 }
 
 async function checkAddress(result: DecisionsRelayCheck["result"], typed = ORIGIN) {
-  checkRelay.mockResolvedValue({ result, origin: ORIGIN, compatibility: SAME } as DecisionsRelayCheck);
+  checkRelay.mockResolvedValue({
+    result,
+    origin: ORIGIN,
+    compatibility: SAME,
+  } as DecisionsRelayCheck);
   const field = screen.getByPlaceholderText(ORIGIN) as HTMLInputElement;
   fireEvent.change(field, { target: { value: typed } });
   await act(async () => {

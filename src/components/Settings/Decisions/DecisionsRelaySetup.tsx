@@ -85,8 +85,7 @@ export function DecisionsRelaySetup({
     setKitError(null);
     file.text().then(
       (text) => setKit({ name: file.name, text }),
-      (failure: unknown) =>
-        setKitError(formatErrorMessage(failure, "That file couldn't be read"))
+      (failure: unknown) => setKitError(formatErrorMessage(failure, "That file couldn't be read"))
     );
   };
 
