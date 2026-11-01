@@ -8,6 +8,7 @@ export interface DecisionsPolicySaveFailure {
 }
 
 export interface UseDecisionsPolicyResult {
+  /** Null until main has answered, and while Decisions is off. */
   policy: DecisionsPolicy | null;
   loadError: string | null;
   /** The allowlist value being saved, so the switch shows what was asked while main acts. */
@@ -17,52 +18,58 @@ export interface UseDecisionsPolicyResult {
   setProxyAllowlisted(allowed: boolean): Promise<void>;
 }
 
+const READ_FAILED = "Decisions' policy couldn't be read.";
+
 /**
- * The policy as main applies it: read on mount, and answered by each change
- * asked here. A read that lands after a newer answer is dropped, so it can't
- * roll the switch back. Promise chains rather than try/finally, which the
- * React Compiler can't lower.
+ * The policy as main applies it, read while `active` (Decisions on): on
+ * mount, again after every status push (main sends one with each policy
+ * change, so another window's change shows here too), and answered by each
+ * change asked here. Whichever answer carries the higher revision wins, so a
+ * read that lands after a newer change can't roll the switch back. Promise
+ * chains rather than try/finally, which the React Compiler can't lower.
  */
-export function useDecisionsPolicy(): UseDecisionsPolicyResult {
+export function useDecisionsPolicy(active: boolean): UseDecisionsPolicyResult {
   const [policy, setPolicy] = useState<DecisionsPolicy | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pending, setPending] = useState<boolean | null>(null);
   const [saveFailure, setSaveFailure] = useState<DecisionsPolicySaveFailure | null>(null);
   const savingRef = useRef(false);
-  const latestRef = useRef(0);
+  const revisionRef = useRef(-1);
 
-  const read = (): Promise<void> => {
-    const ticket = ++latestRef.current;
-    return window.electron.decisions.getPolicy().then(
-      (next) => {
-        if (ticket !== latestRef.current) return;
-        setPolicy(next);
-        setLoadError(null);
-      },
-      (error: unknown) => {
-        if (ticket !== latestRef.current) return;
-        setLoadError(formatErrorMessage(error, "Decisions' policy couldn't be read."));
-      }
-    );
+  /** Shows `next` unless something newer is already shown. */
+  const accept = (next: DecisionsPolicy): void => {
+    if (next.revision < revisionRef.current) return;
+    revisionRef.current = next.revision;
+    setPolicy(next);
+    setLoadError(null);
   };
 
+  const read = (): Promise<void> =>
+    window.electron.decisions.getPolicy().then(accept, (error: unknown) => {
+      setLoadError(formatErrorMessage(error, READ_FAILED));
+    });
+
   useEffect(() => {
-    let active = true;
-    const ticket = ++latestRef.current;
-    window.electron.decisions.getPolicy().then(
-      (next) => {
-        if (active && ticket === latestRef.current) setPolicy(next);
-      },
-      (error: unknown) => {
-        if (active && ticket === latestRef.current) {
-          setLoadError(formatErrorMessage(error, "Decisions' policy couldn't be read."));
-        }
-      }
-    );
-    return () => {
-      active = false;
+    if (!active) return;
+    let live = true;
+    const show = (next: DecisionsPolicy) => {
+      if (!live || next.revision < revisionRef.current) return;
+      revisionRef.current = next.revision;
+      setPolicy(next);
+      setLoadError(null);
     };
-  }, []);
+    const fetchPolicy = () =>
+      window.electron.decisions.getPolicy().then(show, (error: unknown) => {
+        if (live) setLoadError(formatErrorMessage(error, READ_FAILED));
+      });
+    // Subscribed before the read, so a change between the two is never missed.
+    const off = window.electron.events.on("decisions:status-changed", () => void fetchPolicy());
+    void fetchPolicy();
+    return () => {
+      live = false;
+      off();
+    };
+  }, [active]);
 
   const reload = (): Promise<void> => {
     setLoadError(null);
@@ -74,25 +81,25 @@ export function useDecisionsPolicy(): UseDecisionsPolicyResult {
     savingRef.current = true;
     setPending(allowed);
     setSaveFailure(null);
-    const ticket = ++latestRef.current;
     return window.electron.decisions
       .setProxyAllowlisted(allowed)
-      .then(
-        (next) => {
-          if (ticket === latestRef.current) setPolicy(next);
-        },
-        (error: unknown) => {
-          setSaveFailure({ allowed, message: formatErrorMessage(error, "Try again in a moment.") });
-          // Show what main holds now rather than what was asked. Not waited
-          // for: a retry may go first, and then this read is the stale one.
-          void read();
-        }
-      )
+      .then(accept, (error: unknown) => {
+        setSaveFailure({ allowed, message: formatErrorMessage(error, "Try again in a moment.") });
+        // Show what main holds now rather than what was asked.
+        void read();
+      })
       .then(() => {
         savingRef.current = false;
         setPending(null);
       });
   };
 
-  return { policy, loadError, pending, saveFailure, reload, setProxyAllowlisted };
+  return {
+    policy: active ? policy : null,
+    loadError: active ? loadError : null,
+    pending,
+    saveFailure: active ? saveFailure : null,
+    reload,
+    setProxyAllowlisted,
+  };
 }

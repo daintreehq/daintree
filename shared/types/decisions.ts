@@ -122,8 +122,8 @@ export interface DecisionsWorkflowGate {
   allowsText: boolean;
   /**
    * Whether an answer binds to the question's attached images: the question
-   * must carry them, and `get_decision` reports whether the person reviewed
-   * exactly those.
+   * must carry them, and `get_decision` reports whether the person's answer
+   * came from a phone that showed exactly those.
    */
   bindsAttachments: boolean;
 }
@@ -131,13 +131,21 @@ export interface DecisionsWorkflowGate {
 /** The rules questions are asked under on this computer, as main applies them. */
 export interface DecisionsPolicy {
   gates: DecisionsWorkflowGate[];
-  /** Whether a question with no gate may accept a proxy answer, when its agent allows one. */
+  /** Whether a question without a registered gate may accept a proxy answer, when its agent allows one. */
   proxyAllowlisted: boolean;
   /**
-   * How long a question waits for an answer when its agent sets no expiry, in
-   * ms. The client library's own default; Daintree has no way to change it yet.
+   * How long a question with no origin gate waits when its agent sets no
+   * expiry, in ms, or null for no expiry. The client library's own rule,
+   * read from it; Daintree has no way to change it yet.
    */
-  defaultQuestionExpiryMs: number;
+  defaultQuestionExpiryMs: number | null;
+  /** The latest expiry such a question's agent can ask for, in ms after asking; null for no limit. */
+  maxQuestionExpiryMs: number | null;
+  /**
+   * Increases with each change main saves, so a read that lands after a
+   * newer change can't roll it back.
+   */
+  revision: number;
 }
 
 /**

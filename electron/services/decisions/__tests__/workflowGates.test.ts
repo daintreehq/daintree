@@ -32,6 +32,7 @@ import {
   type DeviceKeys,
 } from "@daintreehq/decisions-crypto";
 import {
+  EventData,
   applyAction,
   bytesToBase64Url,
   type ActionKind,
@@ -348,11 +349,17 @@ async function harness(options: { proxyAllowlisted?: boolean } = {}): Promise<Ha
         "decision.proxy.committed",
         "proxy"
       ),
-    expire: (questionId) =>
-      applyEvent("decision.expired", questionId, {
+    expire: async (questionId) => {
+      const row = await store.getQuestion(questionId);
+      if (!row) throw new Error("no such question");
+      const data = {
         expired_at: new Date().toISOString(),
-        target_host_id: "host_ref_12345678",
-      }),
+        target_host_id: await hostRef(row.origin.host_id),
+      };
+      // As the relay sends it: the inbox reads nothing of it, so hold the fixture to the schema instead.
+      expect(EventData.expired.safeParse(data).success).toBe(true);
+      await applyEvent("decision.expired", questionId, data);
+    },
     callTool: async (name, args) => {
       rpcId += 1;
       const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
@@ -415,11 +422,57 @@ describe("trusted workflow gates", () => {
 
   it("hands Settings copies: changing what it read changes no registered gate", () => {
     const policy = createTrustedPolicy({ proxyAllowlisted: false });
-    const read = decisionsPolicyOf({ proxyAllowlisted: false });
-    read.gates[0]!.requirement = "proxy-first";
-    read.gates[0]!.choices.push({ id: "ship-anyway", label: "Ship anyway" });
+    const read = decisionsPolicyOf({ proxyAllowlisted: false }, 0);
+    const gate = read.gates.find((g) => g.id === DESIGN_REVIEW_FINAL_GATE_ID)!;
+    gate.requirement = "proxy-first";
+    gate.choices[0]!.id = "ship-anyway";
+    gate.choices[0]!.label = "Ship anyway";
+    gate.choices.push({ id: "skip", label: "Skip" });
+
+    const expected = [
+      { id: "approve", label: "Approve" },
+      { id: "reject", label: "Reject" },
+    ];
     expect(policy.get(DESIGN_REVIEW_FINAL_GATE_ID)?.minRequirement).toBe("human-required");
-    expect(describeTrustedGates()[0]!.choices.map((c) => c.id)).toEqual(["approve", "reject"]);
+    expect(policy.get(DESIGN_REVIEW_FINAL_GATE_ID)?.choices).toEqual(expected);
+    const again = describeTrustedGates().find((g) => g.id === DESIGN_REVIEW_FINAL_GATE_ID)!;
+    expect(again.requirement).toBe("human-required");
+    expect(again.choices).toEqual(expected);
+    expect(
+      createTrustedPolicy({ proxyAllowlisted: false }).get(DESIGN_REVIEW_FINAL_GATE_ID)?.choices
+    ).toEqual(expected);
+  });
+
+  it("reports the expiry a question really gets, and the latest its agent can ask for", async () => {
+    const h = await harness();
+    const { defaultQuestionExpiryMs, maxQuestionExpiryMs } = decisionsPolicyOf(
+      { proxyAllowlisted: false },
+      0
+    );
+    expect(defaultQuestionExpiryMs).not.toBeNull();
+    expect(maxQuestionExpiryMs).not.toBeNull();
+    expect(maxQuestionExpiryMs!).toBeGreaterThan(defaultQuestionExpiryMs!);
+
+    const lifetime = async (input: Record<string, unknown>) => {
+      const before = Date.now();
+      const { questionId } = await ask(h, input);
+      const after = Date.now();
+      const expiresAt = Date.parse((await h.bridge.getDecision(questionId)).expiresAt!);
+      return { low: expiresAt - after, high: expiresAt - before };
+    };
+    const byDefault = await lifetime({ question: "Tabs?" });
+    expect(defaultQuestionExpiryMs!).toBeGreaterThanOrEqual(byDefault.low);
+    expect(defaultQuestionExpiryMs!).toBeLessThanOrEqual(byDefault.high);
+
+    const tooLong = new Date(Date.now() + 10 * maxQuestionExpiryMs!).toISOString();
+    for (const input of [
+      { question: "Tabs?", expires_at: tooLong },
+      { ...REVIEW_INPUT, expires_at: tooLong },
+    ]) {
+      const capped = await lifetime(input);
+      expect(maxQuestionExpiryMs!).toBeGreaterThanOrEqual(capped.low);
+      expect(maxQuestionExpiryMs!).toBeLessThanOrEqual(capped.high);
+    }
   });
 
   it("keeps a design review human-required whatever level the agent asks for", async () => {

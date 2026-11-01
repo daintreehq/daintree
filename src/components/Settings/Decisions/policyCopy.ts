@@ -1,5 +1,5 @@
 import { pluralize } from "@/lib/pluralize";
-import type { DecisionsWorkflowGate } from "@shared/types/decisions";
+import type { DecisionsPolicy, DecisionsWorkflowGate } from "@shared/types/decisions";
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -30,8 +30,33 @@ export function gateDescription(gate: DecisionsWorkflowGate): string {
   const sentences = [`${who}${what}.`];
   if (gate.bindsAttachments) {
     sentences.push(
-      "The question has to carry screenshots, and the agent learns whether the ones you reviewed are exactly the ones attached."
+      "The question has to carry screenshots, and the agent learns whether your phone showed you exactly the ones attached."
     );
   }
   return sentences.join(" ");
+}
+
+/** How long a question waits, and how long its agent can make it wait, as the library applies it. */
+export function questionExpiryText(
+  policy: Pick<DecisionsPolicy, "defaultQuestionExpiryMs" | "maxQuestionExpiryMs">
+): string {
+  const { defaultQuestionExpiryMs: wait, maxQuestionExpiryMs: max } = policy;
+  const first =
+    wait === null
+      ? "A question waits for your answer until it's answered or cancelled, unless the agent that asked sets an expiry"
+      : `A question waits ${questionWaitText(wait)} for your answer, unless the agent that asked sets another time`;
+  const limit = max === null ? "" : `, at most ${questionWaitText(max)}`;
+  return `${first}${limit}. An expired question authorises nothing, and the agent is told so.`;
+}
+
+/** What the proxy switch allows, given which registered gates still need the person. */
+export function proxyAllowlistText(gates: readonly DecisionsWorkflowGate[]): string {
+  const human = gates.filter((gate) => gate.requirement === "human-required").map((g) => g.id);
+  const gated =
+    human.length === 0
+      ? "A question under a registered gate follows that gate's rule."
+      : human.length === gates.length
+        ? `A question under a registered gate (${human.join(", ")}) still needs your own answer.`
+        : `A question under ${human.join(", ")} still needs your own answer.`;
+  return `Lets a question without a registered workflow gate accept an answer from a decision model, when the agent that asked allows one. ${gated} No decision model is connected yet. Off by default.`;
 }

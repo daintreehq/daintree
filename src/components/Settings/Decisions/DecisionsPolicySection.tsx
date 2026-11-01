@@ -2,17 +2,16 @@ import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
-import { gateDescription } from "./policyCopy";
-import { useDecisionsPolicy } from "./useDecisionsPolicy";
+import { gateDescription, proxyAllowlistText } from "./policyCopy";
+import type { UseDecisionsPolicyResult } from "./useDecisionsPolicy";
 
 /**
  * Policy: who may answer (#16013). The workflow gates are Daintree's and only
- * shown here; the one thing to change is whether a question with no gate may
- * take a proxy answer, off unless the person turns it on.
+ * shown here; the one thing to change is whether a question without a
+ * registered gate may take a proxy answer, off unless the person turns it on.
  */
-export function DecisionsPolicySection() {
-  const { policy, loadError, pending, saveFailure, reload, setProxyAllowlisted } =
-    useDecisionsPolicy();
+export function DecisionsPolicySection({ policy: read }: { policy: UseDecisionsPolicyResult }) {
+  const { policy, loadError, pending, saveFailure, reload, setProxyAllowlisted } = read;
   const allowed = pending ?? policy?.proxyAllowlisted ?? false;
   const locked = policy === null || pending !== null;
 
@@ -46,7 +45,7 @@ export function DecisionsPolicySection() {
         <SettingsSwitchCard
           id="decisions-proxy-allowlist"
           title="Allow proxy answers"
-          subtitle="Lets a question with no workflow gate accept an answer from a decision model, when the agent that asked allows one. Gated questions always need your own answer. Off by default."
+          subtitle={proxyAllowlistText(policy?.gates ?? [])}
           isEnabled={allowed}
           onChange={() => void setProxyAllowlisted(!allowed)}
           disabled={locked}

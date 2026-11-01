@@ -1,5 +1,9 @@
-import { PolicyRegistry, gateAllowsText, type WorkflowGate } from "@daintreehq/decisions-client";
-import { DEFAULTS } from "@daintreehq/decisions-protocol";
+import {
+  PolicyRegistry,
+  gateAllowsText,
+  resolveExpiry,
+  type WorkflowGate,
+} from "@daintreehq/decisions-client";
 import type {
   DecisionsPolicy,
   DecisionsSettings,
@@ -58,13 +62,35 @@ export function describeTrustedGates(): DecisionsWorkflowGate[] {
   }));
 }
 
-/** The policy as Settings reads it, for these settings. */
+/** The latest instant a Date can hold: a request no limit could leave uncut. */
+const LATEST_ISO = new Date(8.64e15).toISOString();
+
+/**
+ * The library's expiry for a question with no origin gate, asked of its own
+ * resolver rather than copied from it, so what Settings says is what the
+ * library does: the expiry an agent gets by asking nothing, and the latest it
+ * can get by asking.
+ */
+function gatelessExpiry(): { defaultMs: number | null; maxMs: number | null } {
+  const byDefault = resolveExpiry(undefined, undefined, 0);
+  const longest = resolveExpiry(LATEST_ISO, undefined, 0);
+  return {
+    defaultMs: byDefault === null ? null : Date.parse(byDefault),
+    maxMs: longest === null || longest === LATEST_ISO ? null : Date.parse(longest),
+  };
+}
+
+/** The policy as Settings reads it, for these settings, at this revision. */
 export function decisionsPolicyOf(
-  settings: Pick<DecisionsSettings, "proxyAllowlisted">
+  settings: Pick<DecisionsSettings, "proxyAllowlisted">,
+  revision: number
 ): DecisionsPolicy {
+  const expiry = gatelessExpiry();
   return {
     gates: describeTrustedGates(),
     proxyAllowlisted: settings.proxyAllowlisted,
-    defaultQuestionExpiryMs: DEFAULTS.questionExpiryMs,
+    defaultQuestionExpiryMs: expiry.defaultMs,
+    maxQuestionExpiryMs: expiry.maxMs,
+    revision,
   };
 }

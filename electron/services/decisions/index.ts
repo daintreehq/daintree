@@ -85,6 +85,8 @@ function forgetOwnerDevices(): void {
   ownerDevices?.dispose();
   ownerDevices = null;
 }
+/** Counts policy changes, so a policy read that lands after a newer change can't roll it back. */
+let policyRevision = 0;
 
 function publishPaneState(projectId: string, state: PaneDecisionState): void {
   broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
@@ -549,7 +551,7 @@ export async function declinePairing(pairingId: string): Promise<DecisionsPairin
 
 /** The rules questions are asked under (#16013): the trusted gates, and the proxy allowlist as saved. */
 export function getDecisionsPolicy(): DecisionsPolicy {
-  return decisionsPolicyOf(readDecisionsSettings(store));
+  return decisionsPolicyOf(readDecisionsSettings(store), policyRevision);
 }
 
 /**
@@ -562,8 +564,12 @@ export function setDecisionsProxyAllowlisted(allowed: boolean): Promise<Decision
     const current = readDecisionsSettings(store);
     if (shutDown || !current.enabled) throw setupRefused();
     const saved = writeDecisionsSettings(store, { ...current, proxyAllowlisted: allowed });
+    policyRevision += 1;
     service?.updateSettings(saved);
-    return decisionsPolicyOf(saved);
+    // The policy has no push of its own: Settings in other windows reads it
+    // again on a status change, so one goes out with every save.
+    publishStatus();
+    return decisionsPolicyOf(saved, policyRevision);
   });
 }
 
@@ -633,4 +639,5 @@ export function _resetDecisionsForTesting(): void {
   transitions = Promise.resolve();
   statusRevision = 0;
   statusPushes = Promise.resolve();
+  policyRevision = 0;
 }

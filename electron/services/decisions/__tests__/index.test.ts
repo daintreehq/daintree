@@ -530,6 +530,40 @@ describe("Decisions entry", () => {
       expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
     });
 
+    it("moves the revision with each save, and tells every window to read it again", async () => {
+      saved.value = { enabled: true };
+      await startDecisionsIfEnabled();
+      const before = getDecisionsPolicy().revision;
+      const pushedAfter = async (revision: number) =>
+        vi.waitFor(() =>
+          expect(pushedStatuses().at(-1)?.revision as number).toBeGreaterThan(revision)
+        );
+
+      let status = (await getDecisionsStatus()).revision ?? 0;
+      const saved1 = await setDecisionsProxyAllowlisted(true);
+      expect(saved1.revision).toBeGreaterThan(before);
+      expect(getDecisionsPolicy()).toEqual(saved1);
+      await pushedAfter(status);
+
+      status = (await getDecisionsStatus()).revision ?? 0;
+      const saved2 = await setDecisionsProxyAllowlisted(false);
+      expect(saved2.revision).toBeGreaterThan(saved1.revision);
+      await pushedAfter(status);
+    });
+
+    it("waits for a switch-on under way, so the starting lifetime can't keep the old allowlist", async () => {
+      saved.value = { enabled: true, consentedAt: 5 };
+      const enabling = setDecisionsEnabled(true);
+      // The switch is saved and the service is still being made when the allowlist changes.
+      await vi.waitFor(() => expect(store.set).toHaveBeenCalled());
+      const allowing = setDecisionsProxyAllowlisted(true);
+      await Promise.all([enabling, allowing]);
+
+      expect(saved.value).toMatchObject({ enabled: true, proxyAllowlisted: true });
+      const running = peekDecisionsService()!.getPolicy()!;
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
+    });
+
     it("refuses to change the allowlist while off, and saves nothing", async () => {
       saved.value = { enabled: false };
       await expect(setDecisionsProxyAllowlisted(true)).rejects.toMatchObject(CANCELLED);

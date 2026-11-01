@@ -2168,7 +2168,7 @@ export const SETTINGS_REGISTRY = [
         section: "Policy",
         title: "Allow proxy answers",
         description:
-          "Whether a question with no workflow gate may accept a decision model's answer",
+          "Whether a question without a registered workflow gate may accept a decision model's answer",
         keywords: ["proxy", "allowlist", "decision model", "automatic", "answer", "policy"],
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },

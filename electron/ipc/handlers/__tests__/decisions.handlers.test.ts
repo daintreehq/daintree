@@ -69,11 +69,15 @@ const decisionsEntry = vi.hoisted(() => ({
     gates: [],
     proxyAllowlisted: false,
     defaultQuestionExpiryMs: 1,
+    maxQuestionExpiryMs: 2,
+    revision: 0,
   })),
   setDecisionsProxyAllowlisted: vi.fn(async (allowed: boolean): Promise<DecisionsPolicy> => ({
     gates: [],
     proxyAllowlisted: allowed,
     defaultQuestionExpiryMs: 1,
+    maxQuestionExpiryMs: 2,
+    revision: 1,
   })),
 }));
 const dialogMock = vi.hoisted(() => ({
