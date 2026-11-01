@@ -4,8 +4,9 @@
  * Boots a real project and walks the page the way a person meets it: off, the
  * consent dialog the first switch-on opens, on through the real IPC, and
  * search. States main can't reach yet (a relay connecting, connected or
- * refused, a failed switch, a status that can't be read) are its own answers
- * to `decisions:get-status` and `decisions:set-enabled`, put in place in main
+ * refused, a failed switch, a status that can't be read, what a relay check
+ * saw) are its own answers to `decisions:get-status`, `decisions:set-enabled`
+ * and `decisions:check-relay` (#16005), put in place in main
  * before the settings dialog is opened again, so the renderer under review
  * reads them through the same seam it always does.
  *
@@ -35,7 +36,7 @@ import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { openAndOnboardProject } from "../helpers/project";
 import { dismissBlockingPalette } from "../helpers/overlays";
 import { setAppTheme } from "../helpers/theme";
-import type { DecisionsStatus } from "../../shared/types/decisions";
+import type { DecisionsRelayCheck, DecisionsStatus } from "../../shared/types/decisions";
 
 const ENABLED = !!process.env.DAINTREE_SHOT_DECISIONS;
 const OUTPUT_DIR = process.env.DESIGN_CAPTURE_DIR
@@ -115,6 +116,14 @@ async function answerStatus(app: ElectronApplication, status: DecisionsStatus): 
     ipcMain.removeHandler("decisions:get-status");
     ipcMain.handle("decisions:get-status", async () => next);
   }, status);
+}
+
+/** What every relay check sees, so no capture reaches the network. */
+async function answerRelayCheck(app: ElectronApplication, check: DecisionsRelayCheck): Promise<void> {
+  await app.evaluate(({ ipcMain }, next) => {
+    ipcMain.removeHandler("decisions:check-relay");
+    ipcMain.handle("decisions:check-relay", async () => next);
+  }, check);
 }
 
 async function failStatus(app: ElectronApplication, message: string): Promise<void> {
@@ -284,7 +293,17 @@ test("Decisions settings page review — every state, per theme", async () => {
         await closeSettings(page);
       });
 
-      // 05-07 — what main reports as the relay connection moves.
+      // 05-07 — what main reports as the relay connection moves. Connected
+      // checks the saved relay by itself; this one is a release behind.
+      await answerRelayCheck(app, {
+        result: "claimed",
+        origin: RELAY,
+        compatibility: {
+          relay: { protocolMin: 1, protocolMax: 1, workerVersion: "0.0.9" },
+          daintree: { protocolMin: 1, protocolMax: 1, workerVersion: "0.1.0" },
+          diverges: true,
+        },
+      });
       const relayStates: [string, DecisionsStatus, string][] = [
         [
           "05-connecting",
@@ -331,6 +350,53 @@ test("Decisions settings page review — every state, per theme", async () => {
         await capturePage(page, "09-load-error", theme, "Couldn't read whether Decisions is on");
         await closeSettings(page);
       });
+
+      // 10-12 — a typed relay URL, checked: ready to claim, a protocol
+      // Daintree doesn't speak, and no answer at all.
+      const checks: [string, DecisionsRelayCheck, string][] = [
+        [
+          "10-check-unclaimed",
+          {
+            result: "unclaimed",
+            origin: RELAY,
+            compatibility: {
+              relay: { protocolMin: 1, protocolMax: 1, workerVersion: "0.1.0" },
+              daintree: { protocolMin: 1, protocolMax: 1, workerVersion: "0.1.0" },
+              diverges: false,
+            },
+          },
+          "is ready to claim",
+        ],
+        [
+          "11-check-incompatible",
+          {
+            result: "incompatible",
+            origin: RELAY,
+            compatibility: {
+              relay: { protocolMin: 2, protocolMax: 3, workerVersion: "0.4.0" },
+              daintree: { protocolMin: 1, protocolMax: 1, workerVersion: "0.1.0" },
+              diverges: true,
+            },
+          },
+          "speaks a protocol Daintree doesn't",
+        ],
+        [
+          "12-check-unreachable",
+          { result: "unreachable", origin: RELAY, endpoint: "health", reason: "dns" },
+          "Couldn't reach",
+        ],
+      ];
+      for (const [state, check, words] of checks) {
+        await step(page, state, async () => {
+          await answerStatus(app, { state: "not-connected", consentedAt: CONSENTED });
+          await answerRelayCheck(app, check);
+          await openDecisions(page);
+          await page.getByPlaceholder("https://decisions.example.workers.dev").fill(RELAY);
+          await page.getByRole("button", { name: "Check", exact: true }).click();
+          await capturePage(page, state, theme, words);
+          await closeSettings(page);
+        });
+      }
     } finally {
       if (ctx) await closeApp(ctx.app).catch(() => {});
       for (const target of [repoRoot, userDataDir]) {

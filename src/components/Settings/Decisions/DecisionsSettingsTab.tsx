@@ -73,7 +73,7 @@ export function DecisionsSettingsTab() {
 
       {on && (
         <>
-          <DecisionsConnectionSection status={status} />
+          <DecisionsConnectionSection status={status} locked={pending !== null} />
           <DecisionsDevicesSection />
           <DecisionsQuestionsSection />
           <DecisionsPolicySection />
