@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { getGitCommonDir } from "../../utils/gitUtils.js";
+import { resolveCommonDirFromFs } from "../../utils/gitUtils.js";
 import type { RemoteLister } from "./matcher.js";
 
 type Remotes = Awaited<ReturnType<RemoteLister>>;
@@ -16,10 +16,13 @@ export type ConfigFingerprint = (repoPath: string) => Promise<string | null>;
 /**
  * The repository's own config file. Git rewrites it by lock-then-rename, so
  * every `git remote` change lands a new inode, whatever the filesystem's
- * timestamp granularity.
+ * timestamp granularity. The common dir is resolved afresh from the folder's
+ * `.git` each time, never through git or a cache: a folder replaced by
+ * another repository is fingerprinted by its new config, and a shape that
+ * can't be proven without git is simply not cached.
  */
 export const repositoryConfigFingerprint: ConfigFingerprint = async (repoPath) => {
-  const commonDir = await getGitCommonDir(repoPath, { logErrors: false });
+  const commonDir = await resolveCommonDirFromFs(repoPath);
   if (!commonDir) return null;
   const stats = await fs.stat(path.resolve(commonDir, "config")).catch(() => null);
   return stats ? `${stats.ino}:${stats.mtimeMs}:${stats.ctimeMs}:${stats.size}` : null;

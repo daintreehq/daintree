@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { RemoteReadCache, repositoryConfigFingerprint } from "../remoteReadCache.js";
 import { git, makeRepo, tempRoot } from "./gitFixtures.js";
 
@@ -48,6 +48,9 @@ describe("RemoteReadCache", () => {
     first.push({ name: "extra", url: "x" });
     const second = await cache.read("/p/a");
     expect(second).toEqual([{ name: "origin", url: "git@example.test:a.git" }]);
+    second[0]!.url = "mutated";
+    second.push({ name: "extra", url: "x" });
+    expect(await cache.read("/p/a")).toEqual([{ name: "origin", url: "git@example.test:a.git" }]);
     expect(calls).toEqual(["/p/a"]);
   });
 
@@ -71,6 +74,49 @@ describe("RemoteReadCache", () => {
     state.clock = 1000;
     await cache.read("/p/a");
     expect(calls).toHaveLength(2);
+  });
+
+  it("measures a reading's age from when its read started, not when it finished", async () => {
+    const { cache, state, calls, answerWith } = harness(1000);
+    const slow = deferred<Remote[]>();
+    answerWith(() => slow.promise);
+    const reading = cache.read("/p/a");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    state.clock = 900;
+    slow.resolve([{ name: "origin", url: "u" }]);
+    await reading;
+    answerWith(async () => [{ name: "origin", url: "u" }]);
+    state.clock = 999;
+    await cache.read("/p/a");
+    expect(calls).toHaveLength(1);
+    state.clock = 1000;
+    await cache.read("/p/a");
+    expect(calls).toHaveLength(2);
+  });
+
+  it("reads again after a config write that landed while git was reading", async () => {
+    const { cache, state, answerWith } = harness();
+    const slow = deferred<Remote[]>();
+    answerWith(() => slow.promise);
+    const reading = cache.read("/p/a");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    state.fingerprint = "f2";
+    slow.resolve([{ name: "origin", url: "old" }]);
+    expect(await reading).toEqual([{ name: "origin", url: "old" }]);
+    answerWith(async () => [{ name: "origin", url: "new" }]);
+    expect(await cache.read("/p/a")).toEqual([{ name: "origin", url: "new" }]);
+  });
+
+  it("drops expired readings, so only recently read repositories are held", async () => {
+    const { cache, state } = harness(1000);
+    await cache.read("/p/a");
+    await cache.read("/p/b");
+    state.clock = 500;
+    await cache.read("/p/fresh");
+    state.clock = 1000;
+    await cache.read("/p/new");
+    const held = (cache as unknown as { entries: Map<string, unknown> }).entries;
+    expect([...held.keys()].sort()).toEqual([path.resolve("/p/fresh"), path.resolve("/p/new")]);
   });
 
   it("shares one read between lookups that overlap it", async () => {
@@ -148,6 +194,46 @@ describe("repositoryConfigFingerprint", () => {
     expect(after).not.toBeNull();
     expect(after).not.toBe(before);
     expect(await repositoryConfigFingerprint(linked)).toBe(after);
+  });
+
+  it("follows a folder replaced by another repository", async () => {
+    const main = makeRepo(root, "replaced-main", "git@example.test:a/b.git");
+    const folder = path.join(root, "replaced");
+    git(main, ["worktree", "add", "-q", folder, "-b", "replaced"]);
+    expect(await repositoryConfigFingerprint(folder)).toBe(
+      await repositoryConfigFingerprint(main)
+    );
+
+    fs.rmSync(folder, { recursive: true, force: true });
+    makeRepo(root, "replaced", "git@example.test:c/d.git");
+    const before = await repositoryConfigFingerprint(folder);
+    git(folder, ["remote", "set-url", "origin", "git@example.test:c/e.git"]);
+    const after = await repositoryConfigFingerprint(folder);
+    expect(after).not.toBe(before);
+    expect(await repositoryConfigFingerprint(main)).not.toBe(after);
+  });
+
+  it("tells a rewrite apart when only the file's inode changed", async () => {
+    const repo = makeRepo(root, "coarse", "git@example.test:a/b.git");
+    const realStat = fs.promises.stat.bind(fs.promises);
+    let inode = 1;
+    const stat = vi.spyOn(fs.promises, "stat").mockImplementation((async (
+      target: fs.PathLike,
+      options?: fs.StatOptions
+    ) => {
+      if (String(target).endsWith(`${path.sep}config`)) {
+        return { ino: inode, mtimeMs: 1, ctimeMs: 1, size: 64 } as fs.Stats;
+      }
+      return realStat(target, options);
+    }) as typeof fs.promises.stat);
+    try {
+      const first = await repositoryConfigFingerprint(repo);
+      expect(await repositoryConfigFingerprint(repo)).toBe(first);
+      inode = 2;
+      expect(await repositoryConfigFingerprint(repo)).not.toBe(first);
+    } finally {
+      stat.mockRestore();
+    }
   });
 
   it("is null outside a repository", async () => {

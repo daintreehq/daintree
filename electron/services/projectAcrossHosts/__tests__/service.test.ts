@@ -1126,5 +1126,9 @@ describe("remote reads across lookups", () => {
 
     await service.describeSource({ projectId: project.id, worktreePath: null, skipBranch: true });
     expect(reads).toEqual([repo, repo]);
+    expect(
+      (await service.match({ remoteUrls: [URL], committedProjectId: null })).map((m) => m.path)
+    ).toEqual([repo]);
+    expect(reads).toEqual([repo, repo, repo]);
   });
 });
