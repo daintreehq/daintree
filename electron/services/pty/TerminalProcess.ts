@@ -36,6 +36,7 @@ import { AgentOutputForwarder } from "./AgentOutputForwarder.js";
 import { TerminalInputController } from "./TerminalInputController.js";
 import { HandbackTracker } from "./HandbackTracker.js";
 import { findHandback, keepFirstObservation, rawHandbackText } from "./HandbackDetector.js";
+import { reportRunHandback } from "./runHandback.js";
 import { PtyDataPipeline } from "./PtyDataPipeline.js";
 import { PreservedSnapshotCapture } from "./PreservedSnapshotCapture.js";
 import { events } from "../events.js";
@@ -431,7 +432,10 @@ export class TerminalProcess {
       this.analysis = this.inThreadAnalysis;
     }
     if (options.handbackCode !== undefined) {
-      this.ensureHandbackTracker().registerDelivered(options.handbackCode);
+      this.ensureHandbackTracker().registerDelivered(
+        options.handbackCode,
+        options.handbackInstruction
+      );
     }
 
     // NOTE: The headless responder is intentionally NOT installed for agent
@@ -1916,6 +1920,9 @@ export class TerminalProcess {
       ...(t.lastStateChange !== undefined ? { lastStateChange: t.lastStateChange } : {}),
       timestamp: now,
     });
+    // A scheduled run settles on the first of these, working or not: the
+    // marker is the agent's own word, and its state is a heuristic (#15982).
+    reportRunHandback(t, hit, now);
   }
 
   /**

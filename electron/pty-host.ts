@@ -1142,6 +1142,20 @@ events.on("agent:handback-observed", (payload) => {
   });
 });
 
+events.on("agent:run-handback-observed", (payload) => {
+  sendEvent({
+    type: "agent-run-handback-observed",
+    terminalId: payload.terminalId,
+    spawnedAt: payload.spawnedAt,
+    code: payload.code,
+    report: payload.report,
+    message: payload.message,
+    truncated: payload.truncated,
+    observedAt: payload.observedAt,
+    timestamp: payload.timestamp,
+  });
+});
+
 events.on("agent:rate-limit-observed", (payload) => {
   sendEvent({
     type: "agent-rate-limit-observed",

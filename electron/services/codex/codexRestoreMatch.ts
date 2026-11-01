@@ -14,7 +14,7 @@
 import { createHash } from "crypto";
 import {
   HANDBACK_CODE_TOKEN,
-  HANDBACK_INSTRUCTION_TEMPLATE,
+  HANDBACK_INSTRUCTION_TEMPLATES,
 } from "../../../shared/types/handback.js";
 
 /**
@@ -53,19 +53,18 @@ function escapeRegExp(text: string): string {
 }
 
 /**
- * A handback launch appends Daintree's instruction after a blank line, which
- * the single-line launch form turns into two spaces. The same code appears in
- * both markers.
+ * A handback launch appends one of Daintree's instructions after a blank line,
+ * which the single-line launch form turns into two spaces. The same code
+ * appears in every marker of an instruction.
  */
-const HANDBACK_SUFFIX = (() => {
-  const [head, ...rest] =
-    HANDBACK_INSTRUCTION_TEMPLATE.split(HANDBACK_CODE_TOKEN).map(escapeRegExp);
+const HANDBACK_SUFFIXES = HANDBACK_INSTRUCTION_TEMPLATES.map((template) => {
+  const [head, ...rest] = template.split(HANDBACK_CODE_TOKEN).map(escapeRegExp);
   const body = rest.reduce(
     (pattern, part, index) => `${pattern}${index === 0 ? "([a-z0-9]{6})" : "\\1"}${part}`,
     head ?? ""
   );
   return new RegExp(`  ${body}$`);
-})();
+});
 
 /**
  * The launch prompts a thread's first message is consistent with: the message
@@ -75,7 +74,9 @@ const HANDBACK_SUFFIX = (() => {
 export function promptHashesForFirstMessage(firstMessage: string): string[] {
   if (firstMessage.length === 0) return [];
   const hashes = [hashPromptText(firstMessage)];
-  const handback = HANDBACK_SUFFIX.exec(firstMessage);
+  const handback = HANDBACK_SUFFIXES.map((suffix) => suffix.exec(firstMessage)).find(
+    (match) => match !== null
+  );
   if (handback) {
     const prompt = firstMessage.slice(0, handback.index).trimEnd();
     if (prompt.length > 0) hashes.push(hashPromptText(prompt));

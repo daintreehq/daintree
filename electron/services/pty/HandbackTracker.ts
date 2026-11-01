@@ -1,3 +1,5 @@
+import type { HandbackInstruction } from "../../../shared/types/handback.js";
+
 /**
  * Handback requests one terminal is holding (#12488): the codes minted for
  * submissions that asked for a handback, and how far each submission got.
@@ -10,6 +12,12 @@
 
 export interface HandbackRequest {
   code: string;
+  /**
+   * Present for a scheduled run's launch prompt (#15982), whose instruction
+   * offers a `needs-you` marker beside `done`. Every other request is looked
+   * for in its `done` form alone, as the agent was asked.
+   */
+  instruction?: Extract<HandbackInstruction, "run">;
   /** Token of the submission that asked, when it carried one (#12337). */
   submissionToken?: string;
   /** Submission order within this terminal, used to retire earlier requests. */
@@ -62,8 +70,13 @@ export class HandbackTracker {
   }
 
   /** A launch prompt: delivered the moment the process is spawned with it. */
-  registerDelivered(code: string): void {
-    this.push({ code, seq: this.takeSeq(), delivered: true });
+  registerDelivered(code: string, instruction?: HandbackInstruction): void {
+    this.push({
+      code,
+      seq: this.takeSeq(),
+      delivered: true,
+      ...(instruction === "run" ? { instruction } : {}),
+    });
   }
 
   /**

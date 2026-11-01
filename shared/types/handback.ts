@@ -56,6 +56,34 @@ export const HANDBACK_CODE_TOKEN = "{code}";
 export const HANDBACK_INSTRUCTION_TEMPLATE = `When you have finished and are handing this work back, end your final message with this line exactly, replacing ${HANDBACK_SUMMARY_PLACEHOLDER} with a one-line plain-text summary (it may be empty): DAINTREE-DONE-${HANDBACK_CODE_TOKEN}: ${HANDBACK_SUMMARY_PLACEHOLDER} END-${HANDBACK_CODE_TOKEN}`;
 
 /**
+ * What a handback marker reports. Only a scheduled run's instruction offers
+ * `needs-you` (#15982); every other request is asked for `done` alone.
+ */
+export type HandbackReport = "done" | "needs-you";
+
+/**
+ * The instruction a handback code was minted with. `run` is a scheduled run's
+ * (#15982), which offers a second marker so the agent can say the user should
+ * look; `handback` is everyone else's.
+ */
+export type HandbackInstruction = "handback" | "run";
+
+/**
+ * The instruction a scheduled run's launch prompt ends with (#15982). Nobody
+ * is watching the run, so the agent says whether it finished or needs the
+ * user. The `done` line comes first and keeps the ordinary marker's shape, so
+ * everything that recognises Daintree's instruction by its first marker still
+ * does; each line keeps the placeholder that marks an echoed instruction.
+ */
+export const HANDBACK_RUN_INSTRUCTION_TEMPLATE = `When you have finished and are handing this work back, end your final message with exactly one of these two lines, replacing ${HANDBACK_SUMMARY_PLACEHOLDER} with a one-line plain-text summary (it may be empty). If the work is done: DAINTREE-DONE-${HANDBACK_CODE_TOKEN}: ${HANDBACK_SUMMARY_PLACEHOLDER} END-${HANDBACK_CODE_TOKEN} If you need the user to look at something or decide before the work can go on: DAINTREE-NEEDS-YOU-${HANDBACK_CODE_TOKEN}: ${HANDBACK_SUMMARY_PLACEHOLDER} END-${HANDBACK_CODE_TOKEN}`;
+
+/** Every instruction Daintree appends, for code that recognises one in a prompt. */
+export const HANDBACK_INSTRUCTION_TEMPLATES: readonly string[] = [
+  HANDBACK_INSTRUCTION_TEMPLATE,
+  HANDBACK_RUN_INSTRUCTION_TEMPLATE,
+];
+
+/**
  * Model-facing description of `lastHandback`, shared by the status and wait
  * output schemas so the copies cannot drift apart.
  */

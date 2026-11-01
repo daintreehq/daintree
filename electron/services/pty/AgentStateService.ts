@@ -22,6 +22,7 @@ import {
   rawHandbackText,
   type HandbackHit,
 } from "./HandbackDetector.js";
+import { reportRunHandback } from "./runHandback.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalCheckResult } from "../../../shared/types/checkResult.js";
 
@@ -425,6 +426,8 @@ export class AgentStateService {
       if (handbackHit) {
         terminal.lastHandback = handbackHit.handback;
         terminal.handbackTracker?.retire(handbackHit.code);
+        // The output check may not have seen this marker first (#15982).
+        reportRunHandback(terminal, handbackHit, timestamp);
       }
       if (newState !== "working") terminal.lastHandbackUnpublished = false;
       if (event.type === "exit" || event.type === "kill") {

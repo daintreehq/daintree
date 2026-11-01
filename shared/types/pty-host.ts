@@ -160,6 +160,13 @@ export interface PtyHostSpawnOptions {
    * to wait on. Absent for every launch that did not ask.
    */
   handbackCode?: string;
+  /**
+   * `run` when `handbackCode` is a scheduled run's launch code (#15982): its
+   * instruction offers a `needs-you` marker beside `done`, and a marker for it
+   * is reported to Main as the run's. Set by Main's spawn handler only for the
+   * spawn that registered the run, never taken from a caller.
+   */
+  handbackInstruction?: import("./handback.js").HandbackInstruction;
 }
 
 /** Per-project terminal-workload memory, deduplicated by PID. */
@@ -828,6 +835,23 @@ export type PtyHostEvent =
       code?: string;
       /** The pane's `lastStateChange` when the marker was seen. */
       lastStateChange?: number;
+      timestamp: number;
+    }
+  | {
+      /**
+       * A scheduled run's launch marker is complete in this pane (#15982),
+       * from whichever check saw it first: the output as it arrived or the
+       * agent's settle. Main-only; `message` is the agent's own text.
+       */
+      type: "agent-run-handback-observed";
+      terminalId: string;
+      /** The incarnation that printed it. */
+      spawnedAt: number;
+      code: string;
+      report: import("./handback.js").HandbackReport;
+      message: string | null;
+      truncated: boolean;
+      observedAt: number;
       timestamp: number;
     }
   | {

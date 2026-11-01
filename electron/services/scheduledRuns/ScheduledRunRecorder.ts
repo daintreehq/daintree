@@ -19,6 +19,11 @@ export interface RegisterScheduledLaunchInput {
   readonly terminalId: string;
   /** Claude's session id is assigned at launch, so it can be here from the start. */
   readonly resume: ScheduledRunResume;
+  /**
+   * The handback code minted for the launch prompt (#15982). The run settles
+   * on a marker for this code alone; null for a launch that asked for none.
+   */
+  readonly handbackCode?: string | null;
 }
 
 export interface RegisterRefusedLaunchInput {
@@ -63,6 +68,17 @@ export interface ScheduledRunExitFact {
   readonly spawnedAt?: number;
   readonly exitCode: number | null;
   readonly signal?: number | null;
+}
+
+/** A run's launch marker printed, as the pty-host reports it (`agent:run-handback-observed`). */
+export interface ScheduledRunHandbackFact {
+  readonly terminalId: string;
+  /** The incarnation that printed it. */
+  readonly spawnedAt: number;
+  readonly code: string;
+  readonly report: "done" | "needs-you";
+  readonly message: string | null;
+  readonly truncated: boolean;
 }
 
 /** The parts of an `agent-session:captured` payload a run's history reads. */
@@ -169,6 +185,12 @@ export class ScheduledRunRecorder {
    * lifetime were settled as interrupted before any of these were added.
    */
   private readonly incarnations = new Map<string, Claim | null>();
+  /**
+   * The handback code each terminal's run launched with, for the life of the
+   * process like the claims above. A marker for any other code (a later
+   * prompt's, sent by hand or by an orchestrator) is never the run's report.
+   */
+  private readonly handbackCodes = new Map<string, string>();
 
   constructor(deps: ScheduledRunRecorderDeps) {
     this.store = deps.store;
@@ -214,6 +236,7 @@ export class ScheduledRunRecorder {
       this.store.prune(run.scheduleId);
     });
     this.incarnations.set(input.terminalId, null);
+    if (input.handbackCode) this.handbackCodes.set(input.terminalId, input.handbackCode);
     this.changed([run]);
     this.notify(() =>
       this.onRunStarted({
@@ -323,6 +346,10 @@ export class ScheduledRunRecorder {
       });
     } else if (claimed.spawnedAt !== spawnedAt) {
       return;
+    } else if (claimed.launchGeneration === null && result.launchGeneration !== undefined) {
+      // A report that beat its spawn answer claimed the incarnation; the
+      // generation it couldn't know is what a later loss is matched by.
+      this.incarnations.set(terminalId, { spawnedAt, launchGeneration: result.launchGeneration });
     }
     // Also retries a binding whose earlier write failed.
     for (const run of this.store.findByTerminal(terminalId)) {
@@ -395,6 +422,51 @@ export class ScheduledRunRecorder {
         );
       }
       this.commit(next, settles);
+    }
+  }
+
+  /**
+   * The run's agent printed the marker its launch prompt asked for (#15982):
+   * `done` or `needs-you`, with its one-line summary. The first such marker
+   * from the run's own incarnation settles it; a later one, a marker for any
+   * other code, and one from a later incarnation under the same id record
+   * nothing. Agent state plays no part: the marker is the fact.
+   */
+  handleHandback(fact: ScheduledRunHandbackFact): void {
+    const { terminalId, spawnedAt } = fact;
+    if (this.handbackCodes.get(terminalId) !== fact.code) return;
+    const claimed = this.incarnations.get(terminalId) ?? null;
+    // A report can arrive before its spawn answer; it is then the first incarnation seen.
+    if (claimed === null) {
+      this.incarnations.set(terminalId, { spawnedAt, launchGeneration: null });
+    } else if (claimed.spawnedAt !== spawnedAt) {
+      return;
+    }
+    const at = this.now();
+    for (const run of this.store.findByTerminal(terminalId)) {
+      if (run.settlement.state !== "open") continue;
+      if (run.terminalSpawnedAt !== null && run.terminalSpawnedAt !== spawnedAt) continue;
+      const bound: ScheduledRun = {
+        ...run,
+        terminalSpawnedAt: spawnedAt,
+        process:
+          run.process.pty.state === "not-started"
+            ? { ...run.process, pty: { state: "running", startedAt: spawnedAt } }
+            : run.process,
+      };
+      this.commit(
+        this.withSettlement(
+          bound,
+          {
+            kind: "handback",
+            report: fact.report,
+            summary: fact.message === null || fact.message === "" ? null : fact.message,
+            truncated: fact.message !== null && fact.truncated,
+          },
+          at
+        ),
+        true
+      );
     }
   }
 

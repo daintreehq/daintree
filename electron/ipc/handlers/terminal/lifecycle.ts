@@ -1256,7 +1256,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // A scheduled run's first spawn registers the run in its history from
       // these very values, or refuses (#15978). Last before the spawn, with
       // no await between, so nothing can start a run that wasn't recorded.
-      admitScheduledSpawn({
+      const scheduledLaunch = admitScheduledSpawn({
         terminalId: id,
         projectId,
         scheduledRun: validatedOptions.scheduledRun,
@@ -1268,6 +1268,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         agentModelId: validatedOptions.agentModelId,
         agentPresetId: validatedOptions.agentPresetId,
         agentSessionId: spawnAgentSessionId,
+        handbackCode: validatedOptions.handbackCode,
       });
       if (pluginToolsLaunchProjectId !== null) {
         recordPluginToolsLaunch(id, pluginToolsLaunchProjectId);
@@ -1316,6 +1317,10 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         originalAgentPresetId:
           validatedOptions.originalAgentPresetId ?? validatedOptions.agentPresetId,
         handbackCode: validatedOptions.handbackCode,
+        // Only the spawn that registered a scheduled run reports for it (#15982).
+        ...(scheduledLaunch && validatedOptions.handbackCode !== undefined
+          ? { handbackInstruction: "run" as const }
+          : {}),
         hasFirstPrompt: validatedOptions.hasFirstPrompt,
         // Executed immediately by PtyClient after the spawn message (FIFO on the
         // same channel), so users don't stare at a blank prompt; the shell stays

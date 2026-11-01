@@ -242,6 +242,12 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "A pane printed the handback marker a submission asked for",
   },
+  "agent:run-handback-observed": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A scheduled run's agent printed the marker its launch asked for",
+  },
   "agent:detected": {
     category: "agent",
     requiresContext: false,
@@ -774,6 +780,25 @@ export type DaintreeEventMap = {
   };
 
   /**
+   * A scheduled run's launch marker printed, complete (#15982): `done` or
+   * `needs-you` with the agent's one-line summary, from the incarnation
+   * `spawnedAt`. Emitted in the pty-host for a run's launch request alone,
+   * from whichever check saw it first, and possibly again for a capture that
+   * changed; the run history keeps the first. Deliberately not buffered for
+   * the event inspector: `message` is terminal text the agent wrote.
+   */
+  "agent:run-handback-observed": {
+    terminalId: string;
+    spawnedAt: number;
+    code: string;
+    report: import("../../shared/types/handback.js").HandbackReport;
+    message: string | null;
+    truncated: boolean;
+    observedAt: number;
+    timestamp: number;
+  };
+
+  /**
    * Emitted when an agent CLI (or a recognised plain process) is detected
    * running in a terminal. `defaultTitle` lets the renderer sync its default
    * title to the live chrome identity in lockstep with the store update.
@@ -1285,6 +1310,7 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "agent-session:captured",
   // `agent-session:observed` is deliberately absent: its payload is nothing
   // but a resume credential, and the buffer feeds the event inspector.
+  // `agent:run-handback-observed` is absent too: it carries the agent's text.
   "agent-session:recorded",
   "scheduled-run:started",
   "scheduled-run:ended",

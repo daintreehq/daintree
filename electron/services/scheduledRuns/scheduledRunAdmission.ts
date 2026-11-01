@@ -31,6 +31,8 @@ export interface ScheduledSpawn {
   readonly agentModelId: string | undefined;
   readonly agentPresetId: string | undefined;
   readonly agentSessionId: string | undefined;
+  /** The handback code minted for its launch prompt, which the run reports back with (#15982). */
+  readonly handbackCode: string | undefined;
 }
 
 export interface ScheduledLaunchReservation {
@@ -40,11 +42,12 @@ export interface ScheduledLaunchReservation {
   readonly terminalId: string;
   readonly agentId: string;
   /**
-   * Registers the run from the spawn's resume snapshot, synchronously: the
+   * Registers the run from the spawn's resume snapshot, and the handback code
+   * its launch prompt carries (null when it carries none), synchronously: the
    * spawn follows with no await between. Throwing refuses the spawn, and the
    * launcher hears it as the admission's rejection.
    */
-  readonly admit: (resume: ScheduledRunResume) => void;
+  readonly admit: (resume: ScheduledRunResume, handbackCode: string | null) => void;
 }
 
 /** Where a reservation stands. */
@@ -173,16 +176,18 @@ export function reserveScheduledLaunch(reservation: ScheduledLaunchReservation):
 /**
  * Called by the spawn handler immediately before it starts the PTY, with no
  * await between. A spawn naming a reserved run registers it here, or throws
- * to refuse the spawn; any other spawn passes untouched.
+ * to refuse the spawn; any other spawn passes untouched. True when this spawn
+ * registered the run: only it is the run's launch, so only its handback code
+ * reports for the run.
  */
-export function admitScheduledSpawn(spawn: ScheduledSpawn): void {
+export function admitScheduledSpawn(spawn: ScheduledSpawn): boolean {
   const ref = spawn.scheduledRun;
-  if (!ref) return;
+  if (!ref) return false;
   if (givenUp.delete(ref.runId)) {
     throw new Error("This scheduled run was given up before its terminal started");
   }
   const entry = pending.get(ref.runId);
-  if (!entry) return;
+  if (!entry) return false;
   const { reservation } = entry;
   pending.delete(ref.runId);
   try {
@@ -199,21 +204,25 @@ export function admitScheduledSpawn(spawn: ScheduledSpawn): void {
     if (spawn.requestedCwd !== undefined && spawn.requestedCwd !== spawn.cwd) {
       throw new Error("The run's working directory is missing.");
     }
-    reservation.admit({
-      agentId: reservation.agentId,
-      agentSessionId: spawn.agentSessionId ?? null,
-      cwd: spawn.cwd,
-      worktreeId: spawn.worktreeId ?? null,
-      agentLaunchFlags: [...(spawn.agentLaunchFlags ?? [])],
-      agentModelId: spawn.agentModelId ?? null,
-      agentPresetId: spawn.agentPresetId ?? null,
-    });
+    reservation.admit(
+      {
+        agentId: reservation.agentId,
+        agentSessionId: spawn.agentSessionId ?? null,
+        cwd: spawn.cwd,
+        worktreeId: spawn.worktreeId ?? null,
+        agentLaunchFlags: [...(spawn.agentLaunchFlags ?? [])],
+        agentModelId: spawn.agentModelId ?? null,
+        agentPresetId: spawn.agentPresetId ?? null,
+      },
+      spawn.handbackCode ?? null
+    );
   } catch (error) {
     const refusal = error instanceof Error ? error : new Error(String(error));
     entry.settle({ kind: "refused", message: refusal.message });
     throw refusal;
   }
   entry.settle({ kind: "registered" });
+  return true;
 }
 
 /**

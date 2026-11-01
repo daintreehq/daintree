@@ -170,7 +170,7 @@ export async function launchScheduledRun<View>(
     projectId,
     terminalId,
     agentId: launch.agentId,
-    admit: (resume) => {
+    admit: (resume, handbackCode) => {
       // A launcher falls back from a preset it can't find, and a launch with
       // no worktree list from a worktree it can't place; a run that would
       // start differently from its schedule doesn't start.
@@ -188,7 +188,15 @@ export async function launchScheduledRun<View>(
         );
       }
       if (deps.isProjectSleeping(projectId)) throw new Error("The project was going to sleep.");
-      recorder.registerLaunch({ id: runId, scheduleId, projectId, origin, terminalId, resume });
+      recorder.registerLaunch({
+        id: runId,
+        scheduleId,
+        projectId,
+        origin,
+        terminalId,
+        resume,
+        handbackCode,
+      });
       try {
         deps.markProjectRunning(projectId);
       } catch (error) {

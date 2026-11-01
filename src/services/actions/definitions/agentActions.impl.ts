@@ -443,7 +443,12 @@ export const agentActionRuns = {
       worktreeId,
       prompt:
         handbackCode !== undefined && prompt !== undefined
-          ? appendHandbackInstruction(prompt, handbackCode)
+          ? appendHandbackInstruction(
+              prompt,
+              handbackCode,
+              // A scheduled run's agent can also say it needs the user (#15982).
+              ctx?.scheduledRun !== undefined ? "run" : "handback"
+            )
           : prompt,
       ...(handbackCode !== undefined ? { handbackCode, promptAsWritten: prompt } : {}),
       systemPromptArgs: systemPromptArgs.args.length > 0 ? systemPromptArgs.args : undefined,
