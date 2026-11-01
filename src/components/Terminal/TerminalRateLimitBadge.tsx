@@ -20,6 +20,7 @@ import {
   HEADER_CHIP_CLASS,
   HEADER_CHIP_FOCUS_CLASS,
   HEADER_CHIP_SURFACE,
+  HEADER_CHIP_TRIGGER_CLASS,
 } from "./terminalHeaderChip";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
@@ -98,10 +99,16 @@ function RateLimitChip({
   );
   const chipContent = (
     <>
-      <TriangleAlert className="w-3 h-3 shrink-0" aria-hidden="true" />
-      {/* Warning ink stays on the glyph; the label needs the primary ramp to
-          hold 4.5:1 on the light themes. Yields first on a narrow header. */}
-      <span className="text-text-primary @max-[420px]/header:sr-only">Rate limit reported</span>
+      {/* A 16px line box around the glyph, so the chip keeps the row's height
+          when a narrow header takes the label out of flow. */}
+      <span className="inline-flex h-4 shrink-0 items-center">
+        <TriangleAlert className="w-3 h-3" aria-hidden="true" />
+      </span>
+      {/* Warning ink stays on the glyph; the label takes the row's secondary
+          ink like every other chip, which holds 4.5:1 where the warning hue
+          would not, and never outweighs an unfocused pane's title. Yields
+          first on a narrow header. */}
+      <span className="text-text-secondary @max-[420px]/header:sr-only">Rate limit reported</span>
     </>
   );
   const tooltipBody = (
@@ -130,7 +137,7 @@ function RateLimitChip({
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  className={chipClass}
+                  className={cn(chipClass, HEADER_CHIP_TRIGGER_CLASS)}
                   aria-haspopup="menu"
                   data-testid="terminal-rate-limit-badge"
                 >
