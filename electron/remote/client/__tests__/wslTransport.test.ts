@@ -135,14 +135,16 @@ describe("WslTransport", () => {
   });
 
   it("starts a Host that isn't listening, once, and connects after", async () => {
-    const ensureRunning = vi.fn(async () => true);
-    const { transport, spawns } = setup([result({ code: 3 }), result({ stdout: discovery() })], {
-      ensureRunning,
-    });
-    const connection = await transport.open(signal());
-    expect(ensureRunning).toHaveBeenCalledTimes(1);
-    expect(spawns).toHaveLength(1);
-    await connection.dispose();
+    for (const options of [undefined, { mayStart: true }]) {
+      const ensureRunning = vi.fn(async () => true);
+      const { transport, spawns } = setup([result({ code: 3 }), result({ stdout: discovery() })], {
+        ensureRunning,
+      });
+      const connection = await transport.open(signal(), options);
+      expect(ensureRunning).toHaveBeenCalledTimes(1);
+      expect(spawns).toHaveLength(1);
+      await connection.dispose();
+    }
   });
 
   it("starts nothing while the dial says the Host may not be started (it said it is restarting)", async () => {

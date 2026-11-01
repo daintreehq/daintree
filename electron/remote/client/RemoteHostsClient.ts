@@ -209,10 +209,16 @@ export interface RemoteHostsClientOptions {
   copyLookupTimeoutMs?: number;
   /**
    * Whether this machine is starting Daintree on the host right now (a
-   * reboot or power cut left it stopped). A wait for the link goes on while
-   * it is, up to {@link STARTING_TIMEOUT_MS}.
+   * reboot or power cut left it stopped): a switch waiting on it says so. A
+   * wait for the link goes on while it is, up to {@link STARTING_TIMEOUT_MS}.
    */
   isStarting?: (hostId: HostId) => boolean;
+  /**
+   * Whether this machine is checking on the host to start Daintree there, or
+   * starting it. A wait for the link goes on through the check too, since it
+   * can end in a start; only the start itself is said as starting.
+   */
+  isAttemptingStart?: (hostId: HostId) => boolean;
   /** A person asked to try the host again: what was last found there no longer stands. */
   onRetry?: (hostId: HostId) => void;
   /** How long forgetting a host waits for each of its windows to come back here. */
@@ -1865,8 +1871,9 @@ export class RemoteHostsClient {
 
   /**
    * Wait for calls to reach the host, and keep waiting past the usual bound
-   * while its Daintree is being started: giving up there reported a host
-   * that was coming up as unreachable, and the switch needed another click.
+   * while its Daintree is being checked on to start it, or started: giving up
+   * there reported a host that was coming up as unreachable, and the switch
+   * needed another click.
    */
   private async whenReady(
     connection: { whenReady(timeoutMs: number): Promise<HostReadiness> },
@@ -1882,7 +1889,10 @@ export class RemoteHostsClient {
     const settled = await Promise.race([first, Promise.resolve(NOT_SETTLED)]);
     if (settled === NOT_SETTLED) onWait?.();
     let readiness = settled === NOT_SETTLED ? await first : settled;
-    while (readiness === "timeout" && this.options.isStarting?.(hostId)) {
+    const attempting = () =>
+      this.options.isAttemptingStart?.(hostId) === true ||
+      this.options.isStarting?.(hostId) === true;
+    while (readiness === "timeout" && attempting()) {
       const left = deadline - Date.now();
       if (left <= 0) break;
       onWait?.();

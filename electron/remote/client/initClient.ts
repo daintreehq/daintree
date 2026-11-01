@@ -822,6 +822,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       await setup.forgetArtifacts(before);
     },
     isStarting: (hostId) => starts.isStarting(hostId),
+    isAttemptingStart: (hostId) => starts.isAttempting(hostId),
     isInstalling: (connection) => setup.isInstallRunning(connection),
     onRetry: (hostId) => recheckStart(hostId),
   });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AppError } from "../../../utils/errorTypes.js";
 import { HostStarts } from "../hostStarts.js";
 import { TransportError } from "../transport.js";
@@ -27,6 +27,56 @@ describe("HostStarts", () => {
       expect(starts.isStarting("studio-01")).toBe(false);
       expect(changes).toEqual([]);
     }
+  });
+
+  it("counts as attempting while only checking on the host, and as starting only from the start", async () => {
+    let check!: () => void;
+    let finish!: () => void;
+    const starts = new HostStarts({
+      setup: {
+        async ensureHostRunning(_connection, _signal, onStart) {
+          await new Promise<void>((resolve) => (check = resolve));
+          onStart?.();
+          await new Promise<void>((resolve) => (finish = resolve));
+          return "started";
+        },
+      },
+      onChange: () => {},
+    });
+    const ensuring = starts.ensureRunning("studio-01", studio, signal());
+    expect(starts.isAttempting("studio-01")).toBe(true);
+    expect(starts.isStarting("studio-01")).toBe(false);
+    check();
+    await vi.waitFor(() => expect(starts.isStarting("studio-01")).toBe(true));
+    expect(starts.isAttempting("studio-01")).toBe(true);
+    finish();
+    await expect(ensuring).resolves.toBe(true);
+    expect(starts.isAttempting("studio-01")).toBe(false);
+    expect(starts.isStarting("studio-01")).toBe(false);
+  });
+
+  it("stays starting until the last of two overlapping starts settles", async () => {
+    const finishes: Array<() => void> = [];
+    const starts = new HostStarts({
+      setup: {
+        async ensureHostRunning(_connection, _signal, onStart) {
+          onStart?.();
+          await new Promise<void>((resolve) => finishes.push(resolve));
+          return "started";
+        },
+      },
+      onChange: () => {},
+    });
+    const first = starts.ensureRunning("studio-01", studio, signal());
+    const second = starts.ensureRunning("studio-01", studio, signal());
+    finishes[0]!();
+    await first;
+    expect(starts.isStarting("studio-01")).toBe(true);
+    expect(starts.isAttempting("studio-01")).toBe(true);
+    finishes[1]!();
+    await second;
+    expect(starts.isStarting("studio-01")).toBe(false);
+    expect(starts.isAttempting("studio-01")).toBe(false);
   });
 
   it("reads as starting from the start command until it settles, however it ends", async () => {

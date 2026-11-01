@@ -80,6 +80,13 @@ export interface HostSetupDeps {
 /** Per-machine cache key: an ssh host keeps the key of its target alone. */
 /** How long a host started for a connection gets to begin listening. */
 const START_LISTEN_TIMEOUT_MS = 60_000;
+/**
+ * How long a full probe's answer that Daintree can't be started on a host
+ * stands. A host left quit is probed now and then rather than on every
+ * redial, and one a crash or a reboot has since left startable is still
+ * started without anyone pressing Retry.
+ */
+const UNSTARTABLE_HOLD_MS = 10 * 60_000;
 
 function targetKey(connection: HostConnection): string {
   let key: string;
@@ -115,12 +122,13 @@ export class HostSetupService {
   private readonly operations: OperationRegistry;
   private readonly targets = new Map<OperationId, HostConnection>();
   /**
-   * Connections a full probe found Daintree can't be started on (not
+   * When a full probe found Daintree can't be started on a connection (not
    * installed, Host mode off, quit on purpose, no way to start it), by
-   * {@link connectionKey}. A failed dial there goes by that answer until
-   * {@link recheckStart} says something changed.
+   * {@link connectionKey}. A failed dial there goes by that answer for
+   * {@link UNSTARTABLE_HOLD_MS}, or until {@link recheckStart} says
+   * something changed.
    */
-  private readonly unstartable = new Set<string>();
+  private readonly unstartable = new Map<string, number>();
   /** Rechecks so far, by connection: a probe under way through one doesn't record what it saw before it. */
   private readonly rechecks = new Map<string, number>();
 
@@ -310,8 +318,8 @@ export class HostSetupService {
    * service, never turns on Host mode or start at login. Consent is what
    * survives a reboot there: a Mac's own Host mode record saying on, a Linux
    * user service that setup installed. Skipped while an install or update for
-   * the host runs (it stops and starts the host itself), and for a host the
-   * last full probe found can't be started, until {@link recheckStart}.
+   * the host runs (it stops and starts the host itself), and for a while for
+   * a host the last full probe found can't be started.
    * `onStart` is called just before the start goes to the host. Throws why it
    * couldn't start (no logged-in session on a Mac, a failed service).
    */
@@ -323,12 +331,19 @@ export class HostSetupService {
     if (this.isInstallRunning(connection) || this.deps.isRetiring?.(connection)) {
       return "not-startable";
     }
+    const now = this.deps.now ?? Date.now;
     const key = connectionKey(connection);
-    if (this.unstartable.has(key)) return "not-startable";
+    const refusedAt = this.unstartable.get(key);
+    if (refusedAt !== undefined) {
+      const since = now() - refusedAt;
+      // A time ahead of the clock (it moved back) says nothing about how long ago.
+      if (since >= 0 && since < UNSTARTABLE_HOLD_MS) return "not-startable";
+      this.unstartable.delete(key);
+    }
     const rechecks = this.rechecks.get(key) ?? 0;
     const unstartable = (): "not-startable" => {
       if (rechecks === (this.rechecks.get(key) ?? 0) && !signal?.aborted) {
-        this.unstartable.add(key);
+        this.unstartable.set(key, now());
       }
       return "not-startable";
     };
@@ -371,7 +386,6 @@ export class HostSetupService {
       });
     }
     const sleep = this.deps.sleep ?? abortableSleep;
-    const now = this.deps.now ?? Date.now;
     const deadline = now() + START_LISTEN_TIMEOUT_MS;
     while (now() < deadline) {
       if (signal?.aborted) return "not-startable";

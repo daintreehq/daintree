@@ -17,13 +17,21 @@ export interface HostStartsDeps {
  * under way there, never while it is only being checked on.
  */
 export class HostStarts {
+  /** Checks and starts in flight, by host: a check can end in a start. */
+  private readonly attempts = new Map<HostId, number>();
   /** Starts in flight, by host. */
   private readonly starting = new Map<HostId, number>();
 
   constructor(private readonly deps: HostStartsDeps) {}
 
+  /** A start is under way on the host. */
   isStarting(hostId: HostId): boolean {
     return (this.starting.get(hostId) ?? 0) > 0;
+  }
+
+  /** The host is being checked on to start it, or started. */
+  isAttempting(hostId: HostId): boolean {
+    return (this.attempts.get(hostId) ?? 0) > 0;
   }
 
   /** Resolves whether the link should be tried again; rejects with why Daintree couldn't start. */
@@ -33,10 +41,11 @@ export class HostStarts {
     signal: AbortSignal
   ): Promise<boolean> {
     let started = false;
+    count(this.attempts, hostId, 1);
     try {
       const outcome = await this.deps.setup.ensureHostRunning(connection, signal, () => {
         started = true;
-        this.starting.set(hostId, (this.starting.get(hostId) ?? 0) + 1);
+        count(this.starting, hostId, 1);
         this.deps.onChange(hostId);
       });
       return outcome !== "not-startable";
@@ -46,12 +55,17 @@ export class HostStarts {
         : formatErrorMessage(error, "Daintree couldn't be started on the host");
       throw new TransportError(reason, reason);
     } finally {
+      count(this.attempts, hostId, -1);
       if (started) {
-        const left = (this.starting.get(hostId) ?? 1) - 1;
-        if (left > 0) this.starting.set(hostId, left);
-        else this.starting.delete(hostId);
+        count(this.starting, hostId, -1);
         this.deps.onChange(hostId);
       }
     }
   }
+}
+
+function count(counts: Map<HostId, number>, hostId: HostId, by: 1 | -1): void {
+  const next = (counts.get(hostId) ?? 0) + by;
+  if (next > 0) counts.set(hostId, next);
+  else counts.delete(hostId);
 }

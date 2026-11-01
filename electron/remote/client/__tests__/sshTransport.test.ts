@@ -790,6 +790,12 @@ describe("SshTransport with an injected ssh", () => {
       );
       expect(ensureRunning).toHaveBeenCalledTimes(1);
       expect(reads.count).toBe(2);
+      // A dial that says the host may be started asks the same way.
+      await expect(
+        transport.open(new AbortController().signal, { mayStart: true })
+      ).rejects.toBeInstanceOf(HostModeOffError);
+      expect(ensureRunning).toHaveBeenCalledTimes(2);
+      expect(reads.count).toBe(4);
     });
 
     it("never asks while the dial says the host may not be started (it said it is restarting)", async () => {
