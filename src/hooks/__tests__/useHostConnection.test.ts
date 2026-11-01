@@ -2695,8 +2695,15 @@ describe("useHostConnection", () => {
     expect(useHostConnectionStore.getState().connection).toMatchObject({ rttMs: 6 });
     expect(renders).toBe(before);
 
+    act(() => useHostConnectionStore.getState().applyConnection({ status: "disconnected" }));
+    expect(useHostConnectionStore.getState().lastSeenAt).not.toBeNull();
+    expect(renders).toBe(before);
+
     act(() => useHostConnectionStore.getState().setHostName("Studio"));
     expect(renders).toBe(before + 1);
     expect(result.current.hostName).toBe("Studio");
+
+    act(() => useHostConnectionStore.getState().bindHost("build-02", null));
+    expect(result.current).toEqual({ hostId: "build-02", hostName: "build-02" });
   });
 });

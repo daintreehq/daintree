@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { StrictMode } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import type {
   HostConnectionState,
@@ -8,6 +9,7 @@ import type {
 } from "@shared/types/remoteHosts";
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
 import type { HostMetricsEvent, HostMetricsSnapshot } from "@shared/types/ipc/hostMetrics";
+import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 import { useHostMetricsStore } from "@/store/hostMetricsStore";
 
 vi.mock("@/lib/remoteHosts", async (importOriginal) => ({
@@ -52,7 +54,8 @@ let emit: ((event: RemoteHostsEvent) => void) | null = null;
 const list = vi.fn<() => Promise<HostListEntry[]>>();
 const isInUse = vi.fn(async () => true);
 const getSnapshots = vi.fn<() => Promise<HostMetricsSnapshot[]>>();
-const metricsListeners = new Set<(event: HostMetricsEvent) => void>();
+// One slot per registration, so a duplicate subscription counts twice.
+const metricsListeners: Array<(event: HostMetricsEvent) => void> = [];
 
 function emitMetrics(event: HostMetricsEvent): void {
   for (const listener of [...metricsListeners]) listener(event);
@@ -64,7 +67,7 @@ beforeEach(() => {
   list.mockReset();
   isInUse.mockReset().mockResolvedValue(true);
   getSnapshots.mockReset().mockResolvedValue([]);
-  metricsListeners.clear();
+  metricsListeners.length = 0;
   emit = null;
   Object.defineProperty(window, "electron", {
     configurable: true,
@@ -83,9 +86,10 @@ beforeEach(() => {
       hostMetrics: {
         getSnapshots,
         onEvent: (cb: (event: HostMetricsEvent) => void) => {
-          metricsListeners.add(cb);
+          metricsListeners.push(cb);
           return () => {
-            metricsListeners.delete(cb);
+            const index = metricsListeners.indexOf(cb);
+            if (index >= 0) metricsListeners.splice(index, 1);
           };
         },
       },
@@ -98,6 +102,7 @@ afterEach(() => {
   _resetHostListForTesting();
   Reflect.deleteProperty(window, "electron");
   Reflect.deleteProperty(document, "hidden");
+  __resetProjectViewCacheStateForTests();
 });
 
 const ids = (hosts: HostListEntry[]) => hosts.map((entry) => entry.descriptor.id);
@@ -149,12 +154,20 @@ const HANDSHAKE = {
   arch: "x64" as const,
 };
 
-function connected(rttMs: number, rttSampledAt: number): HostConnectionState {
-  return { status: "connected", rttMs, rttSampledAt, handshake: { ...HANDSHAKE } };
+function connected(
+  rttMs: number,
+  rttSampledAt: number,
+  extra: { quietSince?: number } = {}
+): HostConnectionState {
+  return { status: "connected", rttMs, rttSampledAt, handshake: { ...HANDSHAKE }, ...extra };
 }
 
 function connectedHost(id: string): HostListEntry {
   return { ...host(id), connection: connected(5, 1) };
+}
+
+function reporting(id: string, sampledAt: number): HostListEntry {
+  return { ...connectedHost(id), summary: summary(id, sampledAt) };
 }
 
 function summary(hostId: string, sampledAt: number): HostMetricsSummary {
@@ -231,7 +244,7 @@ describe("host status and host figures", () => {
     await settle();
     const before = status.count.renders;
 
-    const quiet: HostConnectionState = { ...connected(5, 1), quietSince: 1_000 };
+    const quiet = connected(5, 1, { quietSince: 1_000 });
     act(() => emit?.({ type: "connection-changed", hostId: "studio-01", connection: quiet }));
     expect(status.count.renders).toBe(before + 1);
     expect(status.result.current.hosts[0]?.connection).toMatchObject({ quietSince: 1_000 });
@@ -255,20 +268,20 @@ describe("host status and host figures", () => {
     ]);
     const status = counted(() => useHostList());
     await settle();
-    expect(metricsListeners.size).toBe(0);
+    expect(metricsListeners.length).toBe(0);
     expect(isInUse).not.toHaveBeenCalled();
     expect(getSnapshots).not.toHaveBeenCalled();
     const before = status.count.renders;
 
     const figures = renderHook(() => useHostFigures());
     await settle();
-    expect(metricsListeners.size).toBe(1);
+    expect(metricsListeners.length).toBe(1);
     expect(figures.result.current.hosts[0]?.summary?.sampledAt).toBe(3);
     expect(figures.result.current.localSummary?.sampledAt).toBe(4);
     expect(useHostMetricsStore.getState().history.get("studio-01")).toHaveLength(1);
 
     figures.unmount();
-    expect(metricsListeners.size).toBe(0);
+    expect(metricsListeners.length).toBe(0);
     expect(useHostMetricsStore.getState().history.size).toBe(0);
     expect(getHostListSnapshot().hosts[0]?.summary).toBeNull();
     expect(getHostListSnapshot().localSummary).toBeNull();
@@ -283,7 +296,7 @@ describe("host status and host figures", () => {
     act(() =>
       emit?.({ type: "connection-changed", hostId: "studio-01", connection: connected(9, 2) })
     );
-    expect(metricsListeners.size).toBe(0);
+    expect(metricsListeners.length).toBe(0);
     expect(closed.count.renders).toBe(before);
   });
 
@@ -295,13 +308,13 @@ describe("host status and host figures", () => {
     expect(getSnapshots).toHaveBeenCalledTimes(1);
 
     setHidden(true);
-    expect(metricsListeners.size).toBe(0);
+    expect(metricsListeners.length).toBe(0);
     expect(figures.result.current.hosts[0]?.summary).toBeNull();
 
     getSnapshots.mockResolvedValue([{ hostId: "studio-01", history: [summary("studio-01", 8)] }]);
     setHidden(false);
     await settle();
-    expect(metricsListeners.size).toBe(1);
+    expect(metricsListeners.length).toBe(1);
     expect(getSnapshots).toHaveBeenCalledTimes(2);
     expect(figures.result.current.hosts[0]?.summary?.sampledAt).toBe(8);
   });
@@ -341,5 +354,110 @@ describe("host status and host figures", () => {
     });
     expect(getHostListSnapshot().hosts[0]?.summary).toBeNull();
     expect(useHostMetricsStore.getState().history.size).toBe(0);
+  });
+
+  it("holds no summary a list brings while nothing follows figures, and ignores an equal list", async () => {
+    list.mockResolvedValue([reporting("studio-01", 3)]);
+    const status = counted(() => useHostList());
+    await settle();
+    expect(getHostListSnapshot().hosts[0]?.summary).toBeNull();
+    const before = status.count.renders;
+
+    // Every event is a fresh clone: equal values, new objects.
+    act(() => emit?.({ type: "hosts-changed", hosts: [reporting("studio-01", 4)] }));
+    expect(getHostListSnapshot().hosts[0]?.summary).toBeNull();
+    expect(status.count.renders).toBe(before);
+
+    const figures = renderHook(() => useHostFigures());
+    await settle();
+    act(() => emit?.({ type: "hosts-changed", hosts: [reporting("studio-01", 5)] }));
+    expect(figures.result.current.hosts[0]?.summary?.sampledAt).toBe(5);
+    figures.unmount();
+    act(() => emit?.({ type: "hosts-changed", hosts: [reporting("studio-01", 6)] }));
+    expect(getHostListSnapshot().hosts[0]?.summary).toBeNull();
+    expect(status.count.renders).toBe(before);
+  });
+
+  it("keeps following for a consumer still open when another closes", async () => {
+    list.mockResolvedValue([connectedHost("studio-01")]);
+    const overview = renderHook(() => useHostFigures());
+    const placement = renderHook(() => useHostFigures());
+    await settle();
+    expect(metricsListeners.length).toBe(1);
+    act(() => emitMetrics({ type: "summary", summary: summary("studio-01", 6) }));
+
+    overview.unmount();
+    expect(metricsListeners.length).toBe(1);
+    expect(placement.result.current.hosts[0]?.summary?.sampledAt).toBe(6);
+    expect(useHostMetricsStore.getState().history.get("studio-01")).toHaveLength(1);
+    act(() => emitMetrics({ type: "summary", summary: summary("studio-01", 7) }));
+    expect(placement.result.current.hosts[0]?.summary?.sampledAt).toBe(7);
+
+    placement.unmount();
+    expect(metricsListeners.length).toBe(0);
+    expect(getHostListSnapshot().hosts[0]?.summary).toBeNull();
+  });
+
+  it("listens and seeds once under StrictMode's double effects", async () => {
+    list.mockResolvedValue([connectedHost("studio-01")]);
+    getSnapshots.mockResolvedValue([{ hostId: "studio-01", history: [summary("studio-01", 3)] }]);
+    const figures = renderHook(() => useHostFigures(), { wrapper: StrictMode });
+    await settle();
+    expect(metricsListeners.length).toBe(1);
+    expect(getSnapshots).toHaveBeenCalledTimes(1);
+    expect(figures.result.current.hosts[0]?.summary?.sampledAt).toBe(3);
+  });
+
+  it("reads no summaries while remote hosts aren't in use", async () => {
+    isInUse.mockResolvedValue(false);
+    list.mockResolvedValue([]);
+    renderHook(() => useHostFigures());
+    await settle();
+    expect(isInUse).toHaveBeenCalled();
+    expect(getSnapshots).not.toHaveBeenCalled();
+  });
+
+  it("seeds no current summary for a host whose link is down", async () => {
+    list.mockResolvedValue([host("studio-01")]);
+    getSnapshots.mockResolvedValue([{ hostId: "studio-01", history: [summary("studio-01", 3)] }]);
+    const figures = renderHook(() => useHostFigures());
+    await settle();
+    expect(getSnapshots).toHaveBeenCalledTimes(1);
+    expect(figures.result.current.hosts[0]?.summary).toBeNull();
+  });
+
+  it("stops following while main has the view cached, though the page still reads visible", async () => {
+    const lifecycle: { cached?: () => void; active?: () => void } = {};
+    Object.assign(window.electron, {
+      app: {
+        isViewCached: () => false,
+        onViewCached: (cb: () => void) => {
+          lifecycle.cached = cb;
+          return () => {};
+        },
+        onViewWarmActivated: (cb: () => void) => {
+          lifecycle.active = cb;
+          return () => {};
+        },
+        onViewRevealed: () => () => {},
+      },
+    });
+    __resetProjectViewCacheStateForTests();
+    list.mockResolvedValue([connectedHost("studio-01")]);
+    getSnapshots.mockResolvedValue([{ hostId: "studio-01", history: [summary("studio-01", 3)] }]);
+    const figures = renderHook(() => useHostFigures());
+    await settle();
+    expect(metricsListeners.length).toBe(1);
+
+    act(() => lifecycle.cached?.());
+    expect(document.hidden).toBe(false);
+    expect(metricsListeners.length).toBe(0);
+    expect(figures.result.current.hosts[0]?.summary).toBeNull();
+
+    act(() => lifecycle.active?.());
+    await settle();
+    expect(metricsListeners.length).toBe(1);
+    expect(getSnapshots).toHaveBeenCalledTimes(2);
+    expect(figures.result.current.hosts[0]?.summary?.sampledAt).toBe(3);
   });
 });
