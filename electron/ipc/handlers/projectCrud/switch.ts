@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { CHANNELS } from "../../channels.js";
-import { typedHandleWithContext, broadcastToRenderer, sendToRendererContext } from "../../utils.js";
+import { typedHandleWithContext, broadcastToRenderer } from "../../utils.js";
 import {
   getWindowForWebContents,
   getProjectForWebContents,
@@ -23,7 +23,7 @@ import { AppError, isAppError } from "../../../utils/errorTypes.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import {
   ProjectSwitchService,
-  activateProjectOnHost,
+  noteRemoteSwitchOnHost,
 } from "../../../services/ProjectSwitchService.js";
 import { getProjectHistory } from "../../../services/ProjectHistoryService.js";
 import {
@@ -535,10 +535,15 @@ function captureSwitchOperation(
 
 /**
  * A view on a remote Shell is moving to this project. The Shell swaps its own
- * view and tells it it switched; this machine runs only its half: the
- * repository check, saving the layout the view is leaving, and the shared Host
- * activation (the project's workspace host started or woken and held for the
- * view, its status and MRU recorded). The global current-project pointer and
+ * view once this answers and tells it it switched, so this answers as soon as
+ * the switch is accepted, the way a local switch shows its view while the same
+ * work runs: the repository check refuses before anything moves; saving the
+ * layout the view is leaving and starting the project's workspace host carry
+ * on past the answer. The switch arrives on the endpoint of the view being
+ * left, which stays on its own project: the incoming project is held by the
+ * incoming view's endpoint, which the residency loads it under as that
+ * endpoint opens (and reports the load's outcome to), or which already holds
+ * it for a view the Shell kept cached. The global current-project pointer and
  * the window history describe this machine's own windows, so they are left
  * alone.
  */
@@ -566,25 +571,19 @@ async function activateForRemoteShell(
       () => ctx.endpoint
     );
     trackOutgoingPersist(operation.outgoingProjectId, persistOutgoing);
-    await persistOutgoing;
-  }
-  await awaitPendingOutgoingPersist(project.id);
-  if (deps.worktreeService) {
-    // Forward-fail, as a local switch does (#8400): the Shell has committed to
-    // the project, so a load failure is the view's recovery banner, not a
-    // refused switch. Null clears a banner left by an earlier failure.
-    let worktreeLoadError: string | null = null;
-    try {
-      await activateProjectOnHost(deps.worktreeService, project, ctx.webContentsId);
-    } catch (err) {
-      console.error(`[${action}] Failed to load worktrees for a remote view:`, err);
-      worktreeLoadError = formatErrorMessage(err, "Failed to load worktrees");
-    }
-    sendToRendererContext(ctx, CHANNELS.PROJECT_WORKTREE_LOAD_STATUS, {
-      projectId: project.id,
-      worktreeLoadError,
+    // Nothing awaits it past the answer, so its failure is reported here.
+    persistOutgoing.catch((error: unknown) => {
+      console.error(`[${action}] Failed to save the layout a remote view left:`, error);
     });
   }
+  // Holderless, so a cold host is already spawning while the Shell swaps
+  // views: the incoming endpoint attaches to it, and it reclaims itself if
+  // none ever does.
+  deps.worktreeService?.prewarmProject(project.path);
+  noteRemoteSwitchOnHost(project);
+  // A view cold-starting on this project reads its state file, so a save of
+  // it still running from an earlier switch away lands first.
+  await awaitPendingOutgoingPersist(project.id);
   return { outcome: "switched", project: projectStore.getProjectById(project.id) ?? project };
 }
 

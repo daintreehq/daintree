@@ -199,11 +199,12 @@ interface SwitchOptions {
 }
 
 /**
- * The host activates the project (saves the outgoing layout, starts or wakes
- * its workspace and holds it for the view); this Shell then shows it, in a
- * view keyed to that host, and does what a local switch does for the view it
- * lands on: hands it the focus intent and tells it, and only it, that it was
- * switched to.
+ * The host accepts the switch, answering once its repository check passes
+ * while the outgoing layout's save and the project's workspace start carry
+ * on; this Shell then shows it, in a view keyed to that host, whose own
+ * endpoint holds the project there, and does what a local switch does for the
+ * view it lands on: hands it the focus intent and tells it, and only it, that
+ * it was switched to.
  */
 const projectSwitch: HybridSplit = async ({ hostId, webContentsId, args, remote }) => {
   const result = (await remote()) as ProjectSwitchResult;

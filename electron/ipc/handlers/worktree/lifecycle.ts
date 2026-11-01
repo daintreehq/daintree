@@ -98,7 +98,7 @@ function remoteViewEndpoint(ctx: IpcContext): ClientEndpoint | null {
 
 /**
  * Retry for a view on a remote Shell: reload the endpoint's project here (the
- * same host activation its switch ran, so the view holds the project
+ * same host activation its residency ran, so the view holds the project
  * resident), connect the endpoint to the reloaded workspace host, then ask the
  * view's Shell to post it a fresh relayed port and wait for the renderer's
  * receipt, as the local path does. Any shortfall throws so the banner stays.
