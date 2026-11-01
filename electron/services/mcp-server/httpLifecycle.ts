@@ -34,6 +34,13 @@ import { helpOwnershipPrincipal, relayOwnershipPrincipal } from "./resourceOwner
 import { WorkspaceBindingError } from "./rendererBridge.js";
 import { NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
 import { PLUGIN_MCP_ROUTE_PREFIX, type PluginMcpRouteHandler } from "../pluginAgentMcp/types.js";
+import {
+  assertHeldRoutePath,
+  closeHeldRoute,
+  heldRouteServes,
+  type ListenerHold,
+  type ListenerRoute,
+} from "./listenerHold.js";
 import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import type {
   ActiveBearerRecord,
@@ -211,6 +218,11 @@ interface BearerEntry {
   helpToken?: string;
 }
 
+interface HeldListener {
+  id: string;
+  route: ListenerRoute;
+}
+
 export class HttpLifecycle {
   private httpServer: http.Server | null = null;
   private port: number | null = null;
@@ -271,6 +283,17 @@ export class HttpLifecycle {
   // session without re-parsing the header they no longer hold.
   private readonly sessionToTokenHash = new Map<string, string>();
   private pluginRouteHandler: PluginMcpRouteHandler | null = null;
+  /** Feature routes holding the listener open, by hold id (#15999). */
+  private readonly holds = new Map<string, HeldListener>();
+  /**
+   * The listener is open for holds alone: the control surface isn't served,
+   * and a request for anything but a held route finds nothing there.
+   */
+  private holdsOnly = false;
+  /** The start in flight opens the listener for holds alone. */
+  private startForHolds = false;
+  /** Bumped by every control-surface drain; a handshake that outlives one is retired. */
+  private controlEpoch = 0;
 
   constructor(private readonly deps: HttpLifecycleDeps) {}
 
@@ -278,7 +301,13 @@ export class HttpLifecycle {
     this.pluginRouteHandler = handler;
   }
 
+  /** The control surface is served: the listener is open, and not for holds alone. */
   get isRunning(): boolean {
+    return this.isListening && !this.holdsOnly;
+  }
+
+  /** The listener itself is open, for the control surface or for holds alone. */
+  get isListening(): boolean {
     return this.httpServer !== null && this.httpServer.listening && this.port !== null;
   }
 
@@ -292,8 +321,9 @@ export class HttpLifecycle {
     return this.startPromise !== null;
   }
 
+  /** The control surface's port; a hold reads the listener's from its handle. */
   get currentPort(): number | null {
-    return this.port;
+    return this.holdsOnly ? null : this.port;
   }
 
   get currentApiKey(): string | null {
@@ -893,7 +923,10 @@ export class HttpLifecycle {
     }
 
     if (this.startPromise) {
-      return this.startPromise;
+      if (!this.startForHolds) return this.startPromise;
+      // A listener opening for holds alone: the control surface joins it once open.
+      await this.startPromise.catch(() => {});
+      return this.start(registry);
     }
 
     if (!this.isEnabled()) {
@@ -919,38 +952,26 @@ export class HttpLifecycle {
 
         this.deps.auditService.hydrate();
 
-        const server = http.createServer((req, res) => {
-          this.handleRequest(req, res).catch((err) => {
-            console.error("[MCP] Request handler error:", err);
-            if (!res.headersSent) {
-              res.writeHead(500, { "Content-Type": "text/plain" });
-              res.end("Internal server error");
-            }
-          });
-        });
+        // A listener a hold opened already serves its routes: the control
+        // surface joins it on that port rather than binding a second one.
+        if (!this.isListening) {
+          const server = this.createServer();
+          const configuredPort = this.getConfig().port ?? DEFAULT_PORT;
+          const boundPort = await this.listenWithRetry(server, configuredPort);
 
-        server.keepAliveTimeout = 30_000;
-        server.headersTimeout = 60_000;
+          if (boundPort === null) {
+            throw new Error(
+              `Failed to bind MCP server: ports ${configuredPort}–${configuredPort + MAX_PORT_RETRIES} all in use`
+            );
+          }
 
-        const configuredPort = this.getConfig().port ?? DEFAULT_PORT;
-        const boundPort = await this.listenWithRetry(server, configuredPort);
-
-        if (boundPort === null) {
-          throw new Error(
-            `Failed to bind MCP server: ports ${configuredPort}–${configuredPort + MAX_PORT_RETRIES} all in use`
-          );
+          this.port = boundPort;
+          this.httpServer = server;
+          this.attachServerSupervision(server);
         }
-
-        this.port = boundPort;
-        this.httpServer = server;
+        this.holdsOnly = false;
         this.deps.setupIpcListeners();
-        this.attachServerSupervision(server);
-        if (this.stableTimer) clearTimeout(this.stableTimer);
-        this.stableTimer = setTimeout(() => {
-          this.stableTimer = null;
-          this.restartAttempts = 0;
-        }, RESTART_STABLE_RESET_MS);
-        this.stableTimer.unref?.();
+        this.armStableTimer();
         console.log(
           `[MCP] Server started on http://127.0.0.1:${this.port}/mcp (Streamable HTTP) and /sse (legacy SSE)`
         );
@@ -967,6 +988,137 @@ export class HttpLifecycle {
     return this.startPromise;
   }
 
+  /**
+   * Keep the listener open for a feature's route whether or not the MCP server
+   * is on (#15999). Resolves once the listener is open; a bind that fails
+   * takes the hold back with it. With the server off the listener serves the
+   * held routes and nothing else; on, they sit beside the control surface.
+   */
+  async holdListener(id: string, route: ListenerRoute): Promise<ListenerHold> {
+    assertHeldRoutePath(route.path);
+    if (this.holds.has(id)) throw new Error(`The listener hold "${id}" is already held`);
+    for (const other of this.holds.values()) {
+      if (other.route.path === route.path) {
+        throw new Error(`The listener hold "${other.id}" already serves ${route.path}`);
+      }
+    }
+    const held: HeldListener = { id, route };
+    this.holds.set(id, held);
+    try {
+      await this.ensureListening();
+    } catch (err) {
+      await this.dropHold(held);
+      throw err;
+    }
+    const port = () => (this.holds.get(id) === held && this.isListening ? this.port : null);
+    return {
+      get port() {
+        return port();
+      },
+      release: () => this.dropHold(held),
+    };
+  }
+
+  /** Whether anything needs the listener open: the server on, or a hold. */
+  private listenerWanted(): boolean {
+    return (this.isEnabled() && this.registry !== null) || this.holds.size > 0;
+  }
+
+  /** Open the listener if something wants it: with the control surface when the server is on. */
+  private async ensureListening(): Promise<void> {
+    while (this.stopPromise !== null || this.startPromise !== null) {
+      await (this.stopPromise ?? this.startPromise)?.catch(() => {});
+    }
+    if (this.isListening || !this.listenerWanted()) return;
+    if (this.isEnabled() && this.registry !== null) {
+      await this.start(this.registry);
+    } else {
+      await this.openForHolds();
+    }
+  }
+
+  /** Bind the listener as {@link start} does, for the held routes alone. */
+  private openForHolds(): Promise<void> {
+    this.startForHolds = true;
+    this.startPromise = (async () => {
+      try {
+        const server = this.createServer();
+        const configuredPort = this.getConfig().port ?? DEFAULT_PORT;
+        const boundPort = await this.listenWithRetry(server, configuredPort);
+        if (boundPort === null) {
+          throw new Error(
+            `Failed to bind the MCP listener: ports ${configuredPort}–${configuredPort + MAX_PORT_RETRIES} all in use`
+          );
+        }
+        this.port = boundPort;
+        this.httpServer = server;
+        this.holdsOnly = true;
+        this.attachServerSupervision(server);
+        this.armStableTimer();
+        console.log(
+          `[MCP] Listener open on 127.0.0.1:${boundPort} for held routes; the MCP server is off`
+        );
+      } finally {
+        this.startForHolds = false;
+        this.startPromise = null;
+      }
+    })();
+    return this.startPromise;
+  }
+
+  /** End a hold; the last one to go closes a listener it alone kept open. */
+  private async dropHold(held: HeldListener): Promise<void> {
+    if (this.holds.get(held.id) !== held) return;
+    this.holds.delete(held.id);
+    closeHeldRoute(held.route);
+    if (this.holds.size > 0) return;
+    if (!this.listenerWanted() && this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+    // A stop already under way may have counted this hold before it went.
+    while (this.startPromise !== null || this.stopPromise !== null) {
+      await (this.stopPromise ?? this.startPromise)?.catch(() => {});
+    }
+    if (this.holds.size === 0 && this.holdsOnly) await this.stop();
+  }
+
+  private heldRouteFor(pathname: string): HeldListener | null {
+    for (const held of this.holds.values()) {
+      if (heldRouteServes(held.route.path, pathname)) return held;
+    }
+    return null;
+  }
+
+  private closeHeldRoutes(): void {
+    for (const held of this.holds.values()) closeHeldRoute(held.route);
+  }
+
+  private createServer(): http.Server {
+    const server = http.createServer((req, res) => {
+      this.handleRequest(req, res).catch((err) => {
+        console.error("[MCP] Request handler error:", err);
+        if (!res.headersSent) {
+          res.writeHead(500, { "Content-Type": "text/plain" });
+          res.end("Internal server error");
+        }
+      });
+    });
+
+    server.keepAliveTimeout = 30_000;
+    server.headersTimeout = 60_000;
+    return server;
+  }
+
+  private armStableTimer(): void {
+    if (this.stableTimer) clearTimeout(this.stableTimer);
+    this.stableTimer = setTimeout(() => {
+      this.stableTimer = null;
+      this.restartAttempts = 0;
+    }, RESTART_STABLE_RESET_MS);
+    this.stableTimer.unref?.();
+  }
+
   private attachServerSupervision(server: http.Server): void {
     server.on("error", (err) => {
       console.error("[MCP] HTTP server error after bind:", err);
@@ -978,19 +1130,22 @@ export class HttpLifecycle {
     });
   }
 
-  private handleUnexpectedClose(): void {
+  /**
+   * End everything the control surface holds: sessions, bearers, the bridge's
+   * listeners and requests in flight. The listener itself is left as it is.
+   */
+  private drainControl(reason: string): void {
+    this.controlEpoch++;
     this.deps.auditService.flushNow();
     this.deps.turnOutcomeService.flushNow();
-
-    // Drain sessions
     this.deps.sessionStore.drain();
     this.pluginRouteHandler?.closeAllSessions();
     // Wipe the bearer register so a restart starts from zero live clients —
     // every external client must reconnect, re-registering on handshake.
     this.clearAllBearers();
-    // Mirror the planned-stop path so an unexpected close also wipes
-    // the abuse-policy state. Otherwise denial counters would leak
-    // into the lifetime of any subsequent restart.
+    // The drain wipes session-scoped state (grants, dedup, pins); the
+    // abuse-policy denial Map lives on `deps`, so it is cleared here in
+    // lockstep, or its counters would outlive the sessions they count.
     this.deps.abusePolicy.clear();
 
     for (const cleanup of this.deps.cleanupListeners) {
@@ -1005,16 +1160,22 @@ export class HttpLifecycle {
     for (const [id, pending] of this.deps.pendingManifests) {
       clearTimeout(pending.timer);
       pending.destroyedCleanup?.();
-      pending.reject(new Error("MCP server closed unexpectedly"));
+      pending.reject(new Error(reason));
       this.deps.pendingManifests.delete(id);
     }
     for (const [id, pending] of this.deps.pendingDispatches) {
       clearTimeout(pending.timer);
       pending.destroyedCleanup?.();
-      pending.reject(new Error("MCP server closed unexpectedly"));
+      pending.reject(new Error(reason));
       this.deps.pendingDispatches.delete(id);
     }
     this.deps.clearCachedManifest();
+  }
+
+  private handleUnexpectedClose(): void {
+    const wasRunning = !this.holdsOnly;
+    this.drainControl("MCP server closed unexpectedly");
+    this.closeHeldRoutes();
 
     if (this.stableTimer) {
       clearTimeout(this.stableTimer);
@@ -1023,10 +1184,11 @@ export class HttpLifecycle {
 
     this.httpServer = null;
     this.port = null;
+    this.holdsOnly = false;
     this.lastError = null;
-    this.deps.emitStatusChange();
+    if (wasRunning) this.deps.emitStatusChange();
 
-    if (!this.isEnabled() || !this.registry) return;
+    if (!this.listenerWanted()) return;
     this.scheduleRestart();
   }
 
@@ -1043,10 +1205,10 @@ export class HttpLifecycle {
     const delay = Math.min(baseDelay + jitter, RESTART_MAX_DELAY_MS);
     this.restartTimer = setTimeout(() => {
       this.restartTimer = null;
-      if (!this.isEnabled() || !this.registry) return;
-      void this.start(this.registry).catch((err) => {
+      if (!this.listenerWanted()) return;
+      void this.ensureListening().catch((err) => {
         console.error("[MCP] Auto-restart attempt failed:", err);
-        if (!this.isRunning && this.isEnabled() && this.registry) {
+        if (!this.isListening && this.listenerWanted()) {
           this.scheduleRestart();
         }
       });
@@ -1054,10 +1216,30 @@ export class HttpLifecycle {
     this.restartTimer.unref?.();
   }
 
+  /** Stop serving the control surface. The listener closes too, unless a hold still needs it. */
   async stop(): Promise<void> {
+    return this.halt(false);
+  }
+
+  /** The app is quitting: every hold ends and the listener closes, whatever held it. */
+  async shutdown(): Promise<void> {
+    const held = [...this.holds.values()];
+    this.holds.clear();
+    for (const { route } of held) closeHeldRoute(route);
+    await this.halt(true);
+  }
+
+  /** Close the listener and open it again on the configured port, for what wants it now. */
+  async rebind(): Promise<void> {
+    await this.halt(true);
+    await this.ensureListening();
+  }
+
+  private async halt(closeListener: boolean): Promise<void> {
     if (this.stopPromise) return this.stopPromise;
 
-    if (this.restartTimer) {
+    // A restart the holds are waiting on survives the control surface stopping.
+    if (this.restartTimer && (closeListener || this.holds.size === 0)) {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;
     }
@@ -1078,45 +1260,14 @@ export class HttpLifecycle {
           }
         }
 
-        this.deps.auditService.flushNow();
-        this.deps.turnOutcomeService.flushNow();
-        this.deps.sessionStore.drain();
-        this.pluginRouteHandler?.closeAllSessions();
-        this.clearAllBearers();
-        // The drain wipes session-scoped state (grants, dedup, pins);
-        // the abuse-policy denial Map is owned alongside but lives on
-        // `HttpLifecycle.deps` so we clear it here in lockstep. Without
-        // this, the policy retains denial counters across a stop/start
-        // cycle for sessionIds that will never reappear.
-        this.deps.abusePolicy.clear();
+        const wasRunning = this.isRunning;
+        // A hold keeps the listener open: from here it answers only held routes.
+        const keepListener = !closeListener && this.holds.size > 0 && this.isListening;
+        if (keepListener) this.holdsOnly = true;
+        this.drainControl("MCP server stopped");
 
-        for (const cleanup of this.deps.cleanupListeners) {
-          try {
-            cleanup();
-          } catch {
-            // best-effort
-          }
-        }
-        this.deps.cleanupListeners.length = 0;
-
-        for (const [id, pending] of this.deps.pendingManifests) {
-          clearTimeout(pending.timer);
-          pending.destroyedCleanup?.();
-          pending.reject(new Error("MCP server stopped"));
-          this.deps.pendingManifests.delete(id);
-        }
-        for (const [id, pending] of this.deps.pendingDispatches) {
-          clearTimeout(pending.timer);
-          pending.destroyedCleanup?.();
-          pending.reject(new Error("MCP server stopped"));
-          this.deps.pendingDispatches.delete(id);
-        }
-        this.deps.clearCachedManifest();
-
-        let wasRunning = false;
-        if (this.httpServer) {
+        if (!keepListener && this.httpServer) {
           const server = this.httpServer;
-          wasRunning = server.listening;
           // Graceful drain (#8779): stop accepting new connections, then let
           // in-flight requests finish naturally. `closeIdleConnections()`
           // drops bare keep-alive sockets immediately so they don't hold
@@ -1152,11 +1303,15 @@ export class HttpLifecycle {
           }
           this.httpServer = null;
           this.port = null;
+          this.holdsOnly = false;
+          this.closeHeldRoutes();
         }
 
         this.lastError = null;
 
-        console.log("[MCP] Server stopped");
+        console.log(
+          keepListener ? "[MCP] Server stopped; the listener stays open for its holds" : "[MCP] Server stopped"
+        );
         if (wasRunning) {
           this.deps.emitStatusChange();
         } else {
@@ -1239,6 +1394,22 @@ export class HttpLifecycle {
     }
 
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${this.port}`);
+
+    // A feature's route answers whether or not the server is on (#15999), and
+    // authenticates its own callers; it shares only the checks above.
+    const held = this.heldRouteFor(url.pathname);
+    if (held !== null && this.port !== null) {
+      await held.route.handle(req, res, url, this.port);
+      return;
+    }
+    // Held open for features alone, the listener serves nothing else. The
+    // control surface and plugin routes answer as nothing there would, before
+    // any credential is read, counted or matched to a session.
+    if (this.holdsOnly) {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("Not found");
+      return;
+    }
 
     // Plugin endpoints authenticate their own credentials and nothing else, so
     // they branch off before the orchestration gate: a plugin grant must never
@@ -1625,6 +1796,7 @@ export class HttpLifecycle {
       this.deps.sessionStore.retireSession(newSessionId, "session-ended");
     };
 
+    const controlEpoch = this.controlEpoch;
     try {
       await server.connect(transport);
       await transport.handleRequest(req, res);
@@ -1637,6 +1809,10 @@ export class HttpLifecycle {
         !this.deps.sessionStore.httpSessions.has(newSessionId)
       ) {
         discardUninitializedSession();
+      } else if (controlEpoch !== this.controlEpoch && transport.sessionId !== undefined) {
+        // The server stopped while this handshake was out, filing it after the
+        // drain. A hold kept the listener open, so it would otherwise live on.
+        this.deps.sessionStore.revokeSession(transport.sessionId);
       } else if (
         pin !== null &&
         transport.sessionId !== undefined &&
@@ -2113,7 +2289,7 @@ export class HttpLifecycle {
     const config = this.getConfig();
     return {
       enabled: config.enabled,
-      port: this.port,
+      port: this.currentPort,
       configuredPort: config.port,
       apiKey: this.apiKey ?? "",
     };
@@ -2125,7 +2301,7 @@ export class HttpLifecycle {
    */
   getConfigSnippet(): string {
     return buildMcpClientConfig("claude-code", {
-      port: this.port,
+      port: this.currentPort,
       apiKey: this.apiKey ?? null,
     }).snippet;
   }
