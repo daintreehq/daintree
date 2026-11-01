@@ -20,11 +20,29 @@ describe("DecisionsIcon", () => {
     expect(paints.filter((v) => v !== "currentColor" && v !== "none")).toEqual([]);
   });
 
-  it("keeps the question mark as a hole, not a second colour", () => {
+  it("keeps the question mark as holes cut from the diamond, not a second colour", () => {
     const { container } = render(<DecisionsIcon />);
     const paths = container.querySelectorAll("path");
     expect(paths).toHaveLength(1);
     expect(paths[0]!.getAttribute("fill-rule")).toBe("evenodd");
+    // Diamond outline, question-mark stem and dot: three closed subpaths. Losing the
+    // stem and dot would leave a plain diamond, which is a different mark.
+    expect(paths[0]!.getAttribute("d")!.match(/M/g)).toHaveLength(3);
+  });
+
+  it("sizes the artwork to the 20-unit live area of a 24-unit Lucide box", () => {
+    const { container } = render(<DecisionsIcon />);
+    const [x, y, w, h] = container
+      .querySelector("svg")!
+      .getAttribute("viewBox")!
+      .split(" ")
+      .map(Number);
+    // The artwork's rounded tips span about 9..503 in its own 512 box.
+    const ART = 494;
+    expect(w).toBe(h);
+    expect(x).toBe(y);
+    expect(x! + w! / 2).toBeCloseTo(256, 5);
+    expect((ART / w!) * 24).toBeCloseTo(20, 1);
   });
 
   it("defaults to 16px, takes a size, and is hidden from assistive tech", () => {

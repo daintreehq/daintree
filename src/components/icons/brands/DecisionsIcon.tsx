@@ -15,9 +15,10 @@ export function DecisionsIcon({ className, size = 16, ...props }: DecisionsIconP
     <svg
       width={size}
       height={size}
-      // The artwork runs edge to edge in 0..512; padded so the diamond fills the
-      // 20-unit live area of a 24-unit Lucide box and sits level with its neighbours.
-      viewBox="-24 -24 560 560"
+      // The rounded tips overshoot the corner points, so the artwork spans ~9..503
+      // (494 units). Padded so that fills the 20-unit live area of a 24-unit Lucide
+      // box (494 * 24/20 = 592.8, centred on 256) and sits level with its neighbours.
+      viewBox="-40.4 -40.4 592.8 592.8"
       className={cn(className)}
       aria-hidden="true"
       {...props}
