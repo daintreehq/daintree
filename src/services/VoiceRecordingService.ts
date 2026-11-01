@@ -4518,7 +4518,9 @@ class VoiceRecordingService {
           message: "The request failed or timed out. The selection is unchanged.",
           replaceKey: "voice-rewrite",
           context: { eventKind: "connectivity" },
-          action: this.retryAction(() => this.requestRewrite(job.panelId, job.projectId, selection, instruction)),
+          action: this.retryAction(() =>
+            this.requestRewrite(job.panelId, job.projectId, selection, instruction)
+          ),
         });
         return;
     }
@@ -5769,7 +5771,12 @@ class VoiceRecordingService {
     send: boolean | undefined
   ): void {
     if (send) {
-      logVoiceSendRefused({ asker: "spoken_send", reason: "composer_disabled", panelId, sessionId });
+      logVoiceSendRefused({
+        asker: "spoken_send",
+        reason: "composer_disabled",
+        panelId,
+        sessionId,
+      });
     }
     const spoken = text.trim();
     if (spoken && isScratchCommand(spoken)) {

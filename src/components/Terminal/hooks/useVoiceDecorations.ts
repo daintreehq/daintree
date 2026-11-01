@@ -44,12 +44,13 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
     return id != null && s.draftDetachedSessionId === id;
   });
   // A session taking words into this draft, until it has drained.
-  const dictating = useVoiceRecordingStore(
-    (s) =>
-      s.activeTarget?.panelId === terminalId &&
-      s.activeTarget.rewrite === undefined &&
-      isActiveVoiceSession(s.status)
-  ) && !detached;
+  const dictating =
+    useVoiceRecordingStore(
+      (s) =>
+        s.activeTarget?.panelId === terminalId &&
+        s.activeTarget.rewrite === undefined &&
+        isActiveVoiceSession(s.status)
+    ) && !detached;
   const correctionRanges = useVoiceRecordingStore(
     (s) => s.panelBuffers[terminalId]?.correctionRanges ?? NO_RANGES
   );
