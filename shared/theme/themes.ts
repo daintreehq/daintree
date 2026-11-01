@@ -11,6 +11,7 @@ import {
   ACTIVITY_TEXT_INKS,
   ACTIVITY_TEXT_MIN_CONTRAST,
   DESTRUCTIVE_BUTTON_CONTRAST,
+  contrastRatioFromLuminance,
   DIFF_TEXT_MIN_CONTRAST,
   STATUS_TEXT_CONTRAST,
   STATUS_TEXT_INKS,
@@ -71,9 +72,7 @@ export interface DaintreeTokenOptions {
   statusSurfaceOpacity?: number;
 }
 
-export function createDaintreeTokens(
-  type: "dark" | "light",
-  tokens: Partial<AppColorSchemeTokens> &
+type DaintreeTokenInput = Partial<AppColorSchemeTokens> &
     Pick<
       AppColorSchemeTokens,
       | "surface-canvas"
@@ -119,7 +118,25 @@ export function createDaintreeTokens(
       | "syntax-link"
       | "syntax-quote"
       | "syntax-chip"
-    >,
+    >;
+
+export function createDaintreeTokens(
+  type: "dark" | "light",
+  tokens: DaintreeTokenInput,
+  options?: DaintreeTokenOptions
+): AppColorSchemeTokens {
+  const resolved = createBaseDaintreeTokens(type, tokens, options);
+  followStatusForDiffText(resolved, tokens, type);
+  followStatusForText(resolved, tokens, type);
+  followActivityForText(resolved, tokens, type);
+  followDangerForDestructive(resolved, tokens, type);
+  return resolved;
+}
+
+/** The engine's tokens before the contrast follow-ups lift the derived inks. */
+function createBaseDaintreeTokens(
+  type: "dark" | "light",
+  tokens: DaintreeTokenInput,
   options?: DaintreeTokenOptions
 ): AppColorSchemeTokens {
   const dark = type === "dark";
@@ -437,10 +454,6 @@ export function createDaintreeTokens(
     "destructive-foreground": tokens["text-inverse"],
     ...tokens,
   };
-  followStatusForDiffText(resolved, tokens, type);
-  followStatusForText(resolved, tokens, type);
-  followActivityForText(resolved, tokens, type);
-  followDangerForDestructive(resolved, tokens, type);
   return resolved;
 }
 
@@ -734,12 +747,15 @@ export function deriveStatusTextInks(
   type: "dark" | "light"
 ): Partial<Pick<AppColorSchemeTokens, StatusTextKey>> {
   const inks: Partial<Pick<AppColorSchemeTokens, StatusTextKey>> = {};
+  const rows = resolveDiffTextBackdrops(tokens);
   for (const [source, key] of Object.entries(STATUS_TEXT_INKS) as Array<
     [keyof typeof STATUS_TEXT_INKS, StatusTextKey]
   >) {
     const ink = tokens[source];
     if (typeof ink !== "string") continue;
-    const backdrops = resolveStatusTextBackdrops(ink, tokens).map((backdrop) => backdrop.hex);
+    const backdrops = resolveStatusTextBackdrops(ink, tokens, rows).map(
+      (backdrop) => backdrop.hex
+    );
     inks[key] = liftToContrast(ink, backdrops, STATUS_TEXT_DERIVATION_TARGET, type);
   }
   return inks;
@@ -851,8 +867,13 @@ export function deriveDestructiveAction(
   const c = Math.max(start.c, DESTRUCTIVE_BUTTON_CONTRAST.minChroma);
   const at = (l: number) => oklchToHex({ ...start, c, l: Math.min(1, Math.max(0, l)) });
   const states = (l: number) => [at(l), at(l + hover), at(l + press)] as const;
+  const labelLuminance = relativeLuminance(label);
   const reads = (l: number) =>
-    states(l).every((fill) => contrastRatio(label, fill) >= DESTRUCTIVE_DERIVATION_TARGET);
+    states(l).every(
+      (fill) =>
+        contrastRatioFromLuminance(labelLuminance, relativeLuminance(fill)) >=
+        DESTRUCTIVE_DERIVATION_TARGET
+    );
   // Away from the label: down under a light label, up under a dark one.
   const end = ink.l >= start.l ? 0 : 1;
   let near = start.l;
@@ -899,7 +920,16 @@ function followDangerForDestructive(
 }
 
 function createThemeFromSource(source: BuiltInThemeSource): AppColorScheme {
-  const compiledTokens = compilePaletteToTokens(source.palette);
+  // With overrides, the follow-ups below rewrite every ink the compile's own
+  // contrast pass lifts, so that pass would be thrown away (#15673). A blank
+  // override is the exception: normalisation drops it but the follow-ups still
+  // defer to it, leaving the compile's lift in place.
+  const followsReplaceLifts =
+    source.tokens !== undefined &&
+    !Object.values(source.tokens).some((value) => typeof value === "string" && !value.trim());
+  const compiledTokens = compilePaletteToTokens(source.palette, {
+    contrastFollows: !followsReplaceLifts,
+  });
   const tokens = source.tokens
     ? normalizeAppThemeTokens(source.tokens, compiledTokens)
     : compiledTokens;
@@ -1208,11 +1238,7 @@ function relativeLuminance(hex: string): number {
 }
 
 function contrastRatio(foreground: string, background: string): number {
-  const l1 = relativeLuminance(foreground);
-  const l2 = relativeLuminance(background);
-  const lighter = Math.max(l1, l2);
-  const darker = Math.min(l1, l2);
-  return (lighter + 0.05) / (darker + 0.05);
+  return contrastRatioFromLuminance(relativeLuminance(foreground), relativeLuminance(background));
 }
 
 function pickReadableForeground(background: string, candidates: string[]): string {
@@ -1250,12 +1276,15 @@ export function getAppThemeWarnings(scheme: AppColorScheme): AppThemeValidationW
   return warnings;
 }
 
-function compilePaletteToTokens(palette: ThemePalette): AppColorSchemeTokens {
+function compilePaletteToTokens(
+  palette: ThemePalette,
+  { contrastFollows = true }: { contrastFollows?: boolean } = {}
+): AppColorSchemeTokens {
   const strategy = palette.strategy;
   const shadowStyle = strategy?.shadowStyle ?? (palette.type === "dark" ? "soft" : "light");
   const shadowProfiles = resolveShadowProfiles(shadowStyle);
 
-  return createDaintreeTokens(
+  return (contrastFollows ? createDaintreeTokens : createBaseDaintreeTokens)(
     palette.type,
     {
       "surface-grid": palette.surfaces.grid,
