@@ -32,6 +32,16 @@ const mcp = vi.hoisted(() => ({
   released: [] as Array<[string, string]>,
 }));
 
+/** The app's shared database, as the link client's installer finds it. */
+const sharedDb = vi.hoisted(() => ({
+  sqlite: null as import("better-sqlite3").Database | null,
+}));
+vi.mock("../../../services/persistence/db.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../services/persistence/db.js")>()),
+  getSharedDb: () => {},
+  getSharedSqlite: () => sharedDb.sqlite,
+}));
+
 vi.mock("electron", () => ({
   app: {
     getPath: () => "/fake/userData",
@@ -144,7 +154,19 @@ import { openDb } from "../../../services/persistence/db.js";
 import { getRemoteService, registerRemoteService } from "../../runtime.js";
 import { GLOBAL_ASSISTANT_ID } from "../../../../shared/config/globalAssistant.js";
 import type { HostCallRuntime, ObservedHost } from "../HostCallRuntime.js";
-import { installHostControl, installRetiredSendsNotice } from "../install.js";
+import type { HostControlLinkClient } from "../HostControlLinkClient.js";
+import {
+  assistantsUseHost,
+  installHostControl,
+  installHostControlLinkClient,
+  installRetiredSendsNotice,
+} from "../install.js";
+import type { ThrowawayCallAnswer } from "../linkMethods.js";
+import type { HostDescriptor } from "../../../../shared/types/remoteHosts.js";
+import { TEST_HANDSHAKE } from "../../link/__tests__/linkTestUtils.js";
+import { HostRegistry } from "../../client/HostRegistry.js";
+import { IDLE_RELEASE_MS, RemoteHostManager } from "../../client/RemoteHostManager.js";
+import { TransportError } from "../../client/transport.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsFolder = path.resolve(__dirname, "../../../services/persistence/migrations");
@@ -382,6 +404,157 @@ describe("installHostControl (#13493)", () => {
       expect(listed.ok).toBe(false);
       off();
     });
+  });
+});
+
+describe("assistantsUseHost (#15878)", () => {
+  const TEN_MINUTES = 10 * 60_000;
+  let manager: RemoteHostManager | null = null;
+  const teardown: Array<() => void> = [];
+
+  beforeEach(() => {
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"],
+    });
+  });
+
+  afterEach(async () => {
+    for (const off of teardown.splice(0).reverse()) off();
+    await manager?.disposeAll();
+    manager = null;
+    vi.useRealTimers();
+  });
+
+  /** A Shell whose only link to a host no window shows is its assistant's, with idle release as shipped. */
+  function windowlessHost() {
+    let saved: { hosts: HostDescriptor[] } | undefined;
+    const registry = new HostRegistry({
+      get: () => saved,
+      set: (_key, next) => void (saved = next),
+    });
+    const studio = registry.add({ name: "studio", connection: { kind: "ssh", target: "studio" } });
+    manager = new RemoteHostManager({
+      registry,
+      createTransport: () => ({
+        async open() {
+          throw new TransportError("unreachable", "Connection timed out");
+        },
+      }),
+      handshake: () => TEST_HANDSHAKE,
+      client: { clientId: "c", clientName: "mbp", platform: "darwin" },
+      views: { send: () => true, watch: () => () => {}, resync: () => {} },
+      backoff: { initialMs: 60_000, maxMs: 60_000, jitter: 0 },
+    });
+    const launched: ThrowawayCallAnswer = {
+      status: "done",
+      result: {
+        tool: "throwaway.launch",
+        run: {
+          runId: "run-1",
+          agentId: "claude",
+          startedAt: 1_000,
+          ageMs: 0,
+          timeLimitMs: TEN_MINUTES,
+          expiresAt: 1_000 + TEN_MINUTES,
+          state: "running",
+          endedAt: null,
+          endReason: null,
+        },
+      },
+    };
+    const throwawayRelease = vi.fn(async () => {});
+    const client = {
+      relayCall: vi.fn(),
+      throwawayCall: vi.fn(async () => launched),
+      throwawayRelease,
+    };
+    teardown.push(
+      registerRemoteService("hostControlLinkClient", client as unknown as HostControlLinkClient),
+      installHostControl({
+        observeHosts: () => [host(studio.id, "connected")],
+        isHostControlEnabled: () => true,
+      }),
+      manager.addUseCheck(assistantsUseHost)
+    );
+    runLocally("proj-1", 0, "a");
+    manager.connect(studio.id);
+    const launch = () =>
+      (hostControl.runtime as HostCallRuntime).call(
+        "a",
+        {
+          hostId: studio.id,
+          throwaway: true,
+          tool: "throwaway.launch",
+          args: { agentId: "claude", timeLimitMs: TEN_MINUTES },
+        },
+        { tier: "core" }
+      );
+    return { hostId: studio.id, launch, throwawayRelease };
+  }
+
+  it("is the link client's use check, until it is uninstalled", () => {
+    vi.useRealTimers();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-link-client-"));
+    const sqlite = openDb(path.join(dir, "shell.db"), migrationsFolder).sqlite;
+    sharedDb.sqlite = sqlite;
+    teardown.push(() => {
+      sharedDb.sqlite = null;
+      sqlite.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+    const holding = new Set(["studio"]);
+    teardown.push(
+      registerRemoteService("hostCallRelayClient", {
+        hasCallInFlight: () => false,
+        awaitsNotices: () => false,
+        holdsThrowawayRuns: (hostId: string) => holding.has(hostId),
+      } as never)
+    );
+    let check: ((hostId: string) => boolean) | undefined;
+    const offCheck = vi.fn();
+    const off = installHostControlLinkClient({
+      session: async () => null,
+      onSessionOpened: () => () => {},
+      knownHosts: () => [],
+      onHostsChanged: () => () => {},
+      addUseCheck: (registered) => {
+        check = registered;
+        return offCheck;
+      },
+      hostName: (hostId) => hostId,
+    });
+    expect(check?.("studio")).toBe(true);
+    expect(check?.("other")).toBe(false);
+    holding.clear();
+    expect(check?.("studio")).toBe(false);
+    off();
+    expect(offCheck).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the link to a windowless host while a throwaway run there may still be going", async () => {
+    const h = windowlessHost();
+    await expect(h.launch()).resolves.toMatchObject({ ok: true, value: { outcome: "ok" } });
+    // The assistant ends its turn: nothing calls the host again.
+    await vi.advanceTimersByTimeAsync(TEN_MINUTES - 30_000);
+    expect(manager!.get(h.hostId)).toBeDefined();
+    // Past its limit the run is over, and the link goes once unused for the
+    // usual window, counted from the last sweep that found the run held.
+    await vi.advanceTimersByTimeAsync(IDLE_RELEASE_MS - 30_000);
+    expect(manager!.get(h.hostId)).toBeDefined();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(manager!.get(h.hostId)).toBeUndefined();
+  });
+
+  it("releases the link as usual once the session that launched the run ends", async () => {
+    const h = windowlessHost();
+    await h.launch();
+    await vi.advanceTimersByTimeAsync(60_000);
+    for (const listener of ended) {
+      listener({ projectId: "proj-1", slot: 0, sessionId: "a", reason: "revoked" });
+    }
+    expect(h.throwawayRelease).toHaveBeenCalledWith(h.hostId, { helpSessionId: "a" });
+    await vi.advanceTimersByTimeAsync(IDLE_RELEASE_MS + 30_000);
+    expect(manager!.get(h.hostId)).toBeUndefined();
   });
 });
 

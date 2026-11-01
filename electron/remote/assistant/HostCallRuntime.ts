@@ -31,13 +31,17 @@ import {
   type HostWatchResult,
 } from "../../../shared/types/hostControl.js";
 import {
+  DEFAULT_THROWAWAY_TIME_LIMIT_MS,
   HOST_THROWAWAY_TOOL_SIGNATURES,
   HostThrowawayCallSchema,
+  THROWAWAY_LAUNCH_TOOL,
+  type HostThrowawayCall,
   type HostThrowawayFailure,
   type HostThrowawayRefusal,
 } from "../../../shared/types/hostThrowaway.js";
 import { HostSettingsRequests, type HostSettingsRequestDeps } from "./HostSettingsRequests.js";
 import { HostWatches, type HostWatchListener } from "./HostWatches.js";
+import { ThrowawaySession } from "./throwawaySession.js";
 import {
   AGENT_DIRECTORY_BYTES_MAX,
   AGENT_DIRECTORY_ENTRIES_MAX,
@@ -492,6 +496,35 @@ interface NotedCall {
 
 const NOTHING_NOTED: NotedCall = { ran: () => {}, notRun: () => {} };
 
+/**
+ * What a throwaway answer shows about the session's runs on a host (#15878).
+ * An `unknown` or `conflict` answer, a failed close or send, and a refusal of
+ * a resend show nothing: what may still be going stays held until its time is up.
+ */
+function noteThrowawayAnswer(
+  session: ThrowawaySession,
+  hostId: HostId,
+  call: HostThrowawayCall,
+  callId: string,
+  answer: ThrowawayCallAnswer,
+  holdsLaunch: boolean
+): void {
+  if (call.tool === THROWAWAY_LAUNCH_TOOL) {
+    if (answer.status === "done") session.observe(hostId, answer.result.run, callId);
+    else if (answer.status === "failed" || (answer.status === "refused" && holdsLaunch)) {
+      session.launchFailed(callId);
+    }
+    return;
+  }
+  if (answer.status === "done") session.observe(hostId, answer.result.run);
+  else if (
+    answer.status === "failed" &&
+    (answer.reason === "not-found" || answer.reason === "exited")
+  ) {
+    session.runOver(hostId, call.args.runId);
+  }
+}
+
 function trimMarks(marks: readonly PromptMark[]): PromptMark[] {
   const kept = new Set([
     ...marks.filter((mark) => mark.ran).slice(-MAX_RAN_PROMPTS_PER_TERMINAL),
@@ -855,8 +888,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   private readonly seenNotices = new Map<string, true>();
   /** Recent prompts sent from here to each host terminal, by host and terminal. */
   private readonly prompted = new Map<string, PromptMark[]>();
-  /** The hosts each help session sent a throwaway launch to, to release them when it ends (#14447). */
-  private readonly throwawayHosts = new Map<string, Set<HostId>>();
+  /** Each help session's throwaway runs on hosts, to hold their links and release them when it ends. */
+  private readonly throwawaySessions = new Map<string, ThrowawaySession>();
   private disposed = false;
   /** `host.list`'s waits for a dialed host's first summary, each ended at once by dispose. */
   private readonly sampleWaits = new Set<() => void>();
@@ -916,6 +949,19 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   /** Whether one of this Shell's assistants has a call out to `hostId` right now. */
   hasCallInFlight(hostId: HostId): boolean {
     return (this.callsOut.get(hostId) ?? 0) > 0;
+  }
+
+  /**
+   * Whether a throwaway run one of this Shell's assistants launched may still
+   * be going on `hostId` (#15878). The host ends a Shell's runs once its link
+   * says goodbye, so the link stays until each run is seen over, its session
+   * ends, or its time limit passes. Holding the link never keeps the host awake.
+   */
+  holdsThrowawayRuns(hostId: HostId): boolean {
+    for (const session of this.throwawaySessions.values()) {
+      if (session.holds(hostId)) return true;
+    }
+    return false;
   }
 
   /**
@@ -1366,11 +1412,11 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    */
   endHelpSession(helpSessionId: string): void {
     this.hostWatches.endSession(helpSessionId);
-    const hosts = this.throwawayHosts.get(helpSessionId);
-    this.throwawayHosts.delete(helpSessionId);
+    const session = this.throwawaySessions.get(helpSessionId);
+    this.throwawaySessions.delete(helpSessionId);
     const client = this.deps.client();
-    if (hosts === undefined || !client?.throwawayRelease) return;
-    for (const hostId of hosts) {
+    if (session === undefined || !client?.throwawayRelease) return;
+    for (const hostId of session.hosts) {
       void client.throwawayRelease(hostId, { helpSessionId }).catch((error: unknown) => {
         logger.debug("Couldn't release a host's throwaway runs", { hostId, error });
       });
@@ -1390,7 +1436,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     this.disposed = true;
     for (const end of [...this.sampleWaits]) end();
     this.hostWatches.dispose();
-    this.throwawayHosts.clear();
+    this.throwawaySessions.clear();
     this.callsOut.clear();
     this.callsInFlight.clear();
     this.noticePins.clear();
@@ -1696,6 +1742,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       tier: context.tier,
       run: caller,
     });
+    // Taken now: an answer that lands after the session ended changes a record nothing keeps.
+    const session = local ? null : this.throwawaySession(helpSessionId);
+    let holdsLaunch = false;
     let answer: ThrowawayCallAnswer;
     try {
       if (local) {
@@ -1703,11 +1752,15 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
           ? await local.throwawayCall(payload)
           : { status: "refused", reason: "throwaway-off" };
       } else {
-        // Before it is sent: a launch whose answer is lost may still have launched.
-        if (parsed.data.tool === "throwaway.launch") {
-          const hosts = this.throwawayHosts.get(helpSessionId) ?? new Set<HostId>();
-          hosts.add(args.hostId);
-          this.throwawayHosts.set(helpSessionId, hosts);
+        // Before it is sent: a launch whose answer is lost may still have launched,
+        // and its run may last its whole limit from when the host got to it.
+        if (parsed.data.tool === THROWAWAY_LAUNCH_TOOL) {
+          const limitMs = parsed.data.args.timeLimitMs ?? DEFAULT_THROWAWAY_TIME_LIMIT_MS;
+          holdsLaunch = session!.launching(
+            args.hostId,
+            callId,
+            limitMs + runMs + RELAY_ANSWER_GRACE_MS
+          );
         }
         answer = await this.requireClient().throwawayCall(
           args.hostId,
@@ -1716,10 +1769,15 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         );
       }
     } catch (error) {
-      return this.sendFailure(error, host, callId, resend, NOTHING_NOTED);
+      const noted: NotedCall = holdsLaunch
+        ? { ran: () => {}, notRun: () => session!.launchFailed(callId) }
+        : NOTHING_NOTED;
+      return this.sendFailure(error, host, callId, resend, noted);
     } finally {
       sendDone();
     }
+    if (session)
+      noteThrowawayAnswer(session, args.hostId, parsed.data, callId, answer, holdsLaunch);
     switch (answer.status) {
       case "done":
         return {
@@ -1749,6 +1807,15 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         return { ...this.outcomeWith(code, detail), ...sent };
       }
     }
+  }
+
+  private throwawaySession(helpSessionId: string): ThrowawaySession {
+    let session = this.throwawaySessions.get(helpSessionId);
+    if (session === undefined) {
+      session = new ThrowawaySession(() => this.clock().mono);
+      this.throwawaySessions.set(helpSessionId, session);
+    }
+    return session;
   }
 
   /**
