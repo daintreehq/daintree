@@ -1780,6 +1780,15 @@ const NAMES: readonly AuthoredCase[] = [
     keep: ["Tara"],
     terminalOutput: TERRA_ON_SCREEN,
   },
+  // A person named with nothing to say otherwise keeps the name (#15926).
+  {
+    id: "names-person-unclarified:grok",
+    style: "grok",
+    source: "names",
+    raw: "Ping Ken G about the flaky test, he wrote it. The CI logs are in the thread.",
+    reference: "Ping Ken G about the flaky test, he wrote it. The CI logs are in the thread.",
+    keep: ["Ken G"],
+  },
   {
     id: "names-terabyte:deepgram",
     style: "deepgram",
@@ -2127,6 +2136,48 @@ const DENSE: readonly AuthoredCase[] = [
       "Run the tests, then run them again with the cache cleared, and compare the timings.",
     keep: ["run them again with the cache cleared"],
   },
+  // A misheard name the speaker clarified a sentence later (#15926): the
+  // reported Haiku passage, cut short around it, where the transcriber's full
+  // stop left the mishearing a sentence of its own, and two built beside it,
+  // a person named under "as in" and one under "I meant".
+  {
+    id: "dense-clarified-name:grok",
+    style: "grok",
+    source: "dense",
+    raw: "Actually, in general, this whole episode was quite useful. I like the, yeah, the whole legal stuff. Who sends the buyer was very interesting too. Coppethies. HackerTube was also very, very interesting. And that is Carpathy, as in Andrej Carpathy. I actually don't have much useful stuff to say.",
+    reference:
+      "Actually, in general, this whole episode was quite useful. I like the whole legal stuff. Who sends the buyer was very interesting too. Carpathy's HackerTube was also very, very interesting. I actually don't have much useful stuff to say.",
+    // Spelling him Karpathy from what the model knows is neither asked for nor wrong (#15926).
+    alsoAccept: ["Andrej Carpathy's", "Karpathy's", "Andrej Karpathy's"].map(
+      (name) =>
+        `Actually, in general, this whole episode was quite useful. I like the whole legal stuff. Who sends the buyer was very interesting too. ${name} HackerTube was also very, very interesting. I actually don't have much useful stuff to say.`
+    ),
+    fixes: { "rpathy's HackerTube": "misread" },
+    drops: ["Coppethies", "that is Carpathy", "as in", "yeah"],
+    keep: ["Who sends the buyer", "I actually don't have much useful stuff to say"],
+  },
+  {
+    id: "dense-clarified-person:grok",
+    style: "grok",
+    source: "dense",
+    raw: "Ping Ken G about the flaky test, he wrote it. That's Kenji, as in Kenji Tanaka.",
+    reference: "Ping Kenji about the flaky test, he wrote it.",
+    alsoAccept: ["Ping Kenji Tanaka about the flaky test, he wrote it."],
+    fixes: { "Ping Kenji": "misread" },
+    drops: ["Ken G", "That's Kenji", "as in"],
+    keep: ["he wrote it"],
+  },
+  {
+    id: "dense-clarified-meant:grok",
+    style: "grok",
+    source: "dense",
+    raw: "Thank Ray Chill for the design review, the mockups were spot on. I meant Rachel.",
+    reference: "Thank Rachel for the design review, the mockups were spot on.",
+    alsoAccept: ["Thank Rachel for the design review. The mockups were spot on."],
+    fixes: { "Thank Rachel for": "misread" },
+    drops: ["Ray Chill", "I meant"],
+    keep: ["the mockups were spot on"],
+  },
 ];
 
 // What the dictations that reached the agent still had in them (#14786):
@@ -2305,6 +2356,25 @@ const TICS: readonly AuthoredCase[] = [
 // Words that look like filler or a hedge but carry the meaning here: an
 // answer to the agent, "just" for "only", a guess, a kind, a direction.
 const LOOKALIKE: readonly AuthoredCase[] = [
+  // An "as in" or "that is" that explains words already right, not a clarification (#15926).
+  {
+    id: "lookalike-as-in:grok",
+    style: "grok",
+    source: "lookalike",
+    raw: "For the model catalog, can we cache it, as in keep it in memory, so we don't refetch it on every window? Writing it to disk is overkill.",
+    reference:
+      "For the model catalog, can we cache it, as in keep it in memory, so we don't refetch it on every window? Writing it to disk is overkill.",
+    keep: ["cache it, as in keep it in memory", "Writing it to disk is overkill"],
+  },
+  {
+    id: "lookalike-that-is:grok",
+    style: "grok",
+    source: "lookalike",
+    raw: "Go with the second option, that is, the one that retries on a timeout. Leave the first one in the branch for now.",
+    reference:
+      "Go with the second option, that is, the one that retries on a timeout. Leave the first one in the branch for now.",
+    keep: ["that is, the one that retries on a timeout"],
+  },
   {
     id: "lookalike-yeah-answer:openai",
     style: "openai",
