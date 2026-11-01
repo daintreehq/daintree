@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 import type { HostMetricsSummary } from "@shared/types/remoteHosts";
+import { BlockedCircle, HollowCircle } from "@/components/icons";
 import { AgentCounts } from "../AgentCounts";
 import { makeSummary } from "../Overview/__tests__/fixtures";
 
@@ -42,6 +43,31 @@ describe("AgentCounts", () => {
       drawn: ["2", "2"],
       glyphs: [1, 1],
     });
+  });
+
+  it("wears the blocked glyph only when a run is blocked", () => {
+    const askingGlyph = (attention: { waiting: number; blocked: number }) => {
+      const { container } = render(
+        <AgentCounts
+          summary={makeSummary({
+            agentsObserved: { working: 0, waiting: 2, idle: 0 },
+            agentAttention: { ...attention, idle: 0 },
+          })}
+        />
+      );
+      const glyph = container.firstElementChild!.querySelector(
+        ':scope > span[aria-hidden="true"] > *'
+      )!;
+      return { shape: glyph.innerHTML, tone: glyph.getAttribute("class") };
+    };
+    const shapeOf = (Glyph: typeof BlockedCircle) =>
+      render(<Glyph />).container.firstElementChild!.innerHTML;
+
+    const waiting = askingGlyph({ waiting: 2, blocked: 0 });
+    const blocked = askingGlyph({ waiting: 1, blocked: 1 });
+    expect(waiting.shape).toBe(shapeOf(HollowCircle));
+    expect(blocked.shape).toBe(shapeOf(BlockedCircle));
+    expect(blocked.tone).not.toBe(waiting.tone);
   });
 
   it("says nothing about waiting for a host too old to band its runs", () => {
