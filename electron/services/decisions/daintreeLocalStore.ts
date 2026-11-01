@@ -437,6 +437,26 @@ export class DaintreeLocalStore implements LocalStore {
     );
   }
 
+  /**
+   * Whether any answer waits to be typed, or a typed one to be reported to
+   * the relay. Reads two partial indexes, so it costs next to nothing when
+   * nothing waits.
+   */
+  hasPendingDelivery(): Promise<boolean> {
+    return this.enqueue("read", () => {
+      const waiting = this.st(
+        `SELECT 1 FROM decisions_questions
+         WHERE delivery_status IN ('desktop-received', 'pending-host') AND history_only = 0
+         LIMIT 1`
+      ).get();
+      if (waiting !== undefined) return true;
+      const unreported = this.st(
+        `SELECT 1 FROM decisions_injection_intents WHERE state IN ('intent', 'typed') LIMIT 1`
+      ).get();
+      return unreported !== undefined;
+    });
+  }
+
   countOpenForPane(hostId: string, paneId: string): Promise<number> {
     return this.enqueue("read", () => {
       const r = this.st(

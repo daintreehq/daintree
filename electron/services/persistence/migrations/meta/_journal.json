@@ -169,6 +169,13 @@
       "when": 1793750400000,
       "tag": "0023_scheduled_run_inbox",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1793836800000,
+      "tag": "0024_decisions_pending_delivery",
+      "breakpoints": true
     }
   ]
 }

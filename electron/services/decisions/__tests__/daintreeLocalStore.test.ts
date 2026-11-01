@@ -716,6 +716,47 @@ describe("DaintreeLocalStore ordering and failures", () => {
     ]);
   });
 
+  it("says an answer waits only while one waits to be typed or reported", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    await store.commitNewQuestion(row("q1", 1, { delivery_status: "relay-queued" }), item("o1", "q1"));
+    await store.commitNewQuestion(
+      row("q2", 2, { delivery_status: "desktop-received", history_only: true }),
+      item("o2", "q2")
+    );
+    await store.commitNewQuestion(
+      row("q3", 3, { delivery_status: "needs-attention" }),
+      item("o3", "q3")
+    );
+    expect(await store.hasPendingDelivery()).toBe(false);
+
+    await store.updateQuestion("q1", { delivery_status: "desktop-received" });
+    expect(await store.hasPendingDelivery()).toBe(true);
+    await store.updateQuestion("q1", { delivery_status: "pending-host" });
+    expect(await store.hasPendingDelivery()).toBe(true);
+
+    await store.updateQuestion("q1", { delivery_status: "terminal-delivered" });
+    await store.putIntent(intent("i1", "q1", { state: "typed" }));
+    expect(await store.hasPendingDelivery()).toBe(true);
+    await store.updateIntent("i1", { state: "acked" });
+    expect(await store.hasPendingDelivery()).toBe(false);
+  });
+
+  it("finds a waiting answer through its partial index, never a table scan", () => {
+    const plan = (
+      sqlite
+        .prepare(
+          `EXPLAIN QUERY PLAN SELECT 1 FROM decisions_questions
+           WHERE delivery_status IN ('desktop-received', 'pending-host') AND history_only = 0
+           LIMIT 1`
+        )
+        .all() as { detail: string }[]
+    )
+      .map((step) => step.detail)
+      .join("\n");
+    expect(plan).toContain("decisions_questions_pending_delivery_idx");
+    expect(plan).not.toMatch(/^SCAN decisions_questions$/m);
+  });
+
   it("refuses a new question carrying plaintext content", async () => {
     const store = new DaintreeLocalStore(sqlite);
 
