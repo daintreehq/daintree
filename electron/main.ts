@@ -63,7 +63,11 @@ import { initializeDatabaseForBoot } from "./lifecycle/databaseBoot.js";
 import { registerShutdownHandler } from "./lifecycle/shutdown.js";
 import { setAttachedShellsProvider } from "./lifecycle/attachedShells.js";
 import { getActiveShutdown } from "./lifecycle/shutdownCoordinator.js";
-import { createRemoteHostsLaunch, type RemoteHostsLaunch } from "./lifecycle/remoteHostsLaunch.js";
+import {
+  createRemoteHostsLaunch,
+  hostsStillSetUp,
+  type RemoteHostsLaunch,
+} from "./lifecycle/remoteHostsLaunch.js";
 import {
   setMainWindow,
   getMainWindow,
@@ -1107,10 +1111,11 @@ if (!gotTheLock) {
             return id;
           });
           return {
-            start: async () => {
+            start: async (halted) => {
               try {
                 await remoteHosts.startRemoteHosts({
                   hostMode: hostModeLaunch || hostModeHandedOff || isHostModeEnabled(),
+                  halted,
                 });
               } catch (error) {
                 if (!(error instanceof remoteHosts.HostModeListenError)) throw error;
@@ -1356,12 +1361,10 @@ if (!gotTheLock) {
           onBackgroundWindowFailed,
           isProjectOwned,
           isShuttingDown,
-          onRemoteHostsNeeded: (hostIds) => {
-            // A saved window can name a host removed since: only hosts still set
-            // up here start anything early, so a launch with none starts nothing.
-            const configured = new Set(store.get("remoteHosts")?.hosts.map((host) => host.id));
-            remoteHostsLaunch?.need(hostIds.filter((id) => configured.has(id)));
-          },
+          // With no host set up, nothing starts early: a launch with none does
+          // no remote work before the restore has settled.
+          onRemoteHostsNeeded: (hostIds) =>
+            remoteHostsLaunch?.need(hostsStillSetUp(hostIds, store.get("remoteHosts")?.hosts)),
         });
 
         // Installed before the startup window boots: its renderer resolves the

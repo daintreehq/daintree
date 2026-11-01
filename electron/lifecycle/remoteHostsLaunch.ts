@@ -12,7 +12,11 @@
  */
 
 export interface RemoteHostsRuntime {
-  start(): Promise<void>;
+  /**
+   * `halted` turns true once a quit has begun, before the quit's stop step
+   * runs: a start in flight checks it to go no further.
+   */
+  start(halted: () => boolean): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -33,6 +37,18 @@ export interface RemoteHostsLaunch {
   need(hostIds: readonly string[]): void;
   /** The quit's stop: nothing starts from now on, and whatever started stops. */
   stop(): Promise<void>;
+}
+
+/**
+ * The hosts among `hostIds` still set up here. A saved window can name a host
+ * removed since, and only a host that exists is worth starting early for.
+ */
+export function hostsStillSetUp(
+  hostIds: readonly string[],
+  hosts: readonly { id: string }[] | undefined
+): string[] {
+  const configured = new Set(hosts?.map((host) => host.id));
+  return hostIds.filter((hostId) => configured.has(hostId));
 }
 
 export function createRemoteHostsLaunch(deps: RemoteHostsLaunchDeps): RemoteHostsLaunch {
@@ -60,7 +76,7 @@ export function createRemoteHostsLaunch(deps: RemoteHostsLaunchDeps): RemoteHost
     // Published before the start resolves, so a quit during it still stops
     // whatever the start got as far as.
     runtime = loaded;
-    await loaded.start();
+    await loaded.start(halted);
     if (halted()) return;
     up = true;
     deps.onStarted();

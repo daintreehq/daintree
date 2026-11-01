@@ -1444,6 +1444,23 @@ describe("startRemoteHosts", () => {
     expect(getRemoteService("hostMode")).toBeUndefined();
   });
 
+  it("goes no further once a quit begins mid-start, before the quit's stop reaches it (#15888)", async () => {
+    let quitting = false;
+    m.isWorkspaceClientStarting.mockReturnValueOnce(true);
+    m.ensureWorkspaceClient.mockImplementationOnce(async () => {
+      quitting = true;
+      return {};
+    });
+
+    await startRemoteHosts({ hostMode: true, halted: () => quitting });
+
+    expect(m.ensureWorkspaceClient).toHaveBeenCalledTimes(1);
+    expect(m.initRemoteHostsClient).not.toHaveBeenCalled();
+    expect(m.client.client.connect).not.toHaveBeenCalled();
+    expect(m.server.listen).not.toHaveBeenCalled();
+    expect(getRemoteService("hostMode")).toBeUndefined();
+  });
+
   it("undoes what host setup registered when a later step throws", async () => {
     m.initRemoteHostsHost.mockImplementationOnce(() => {
       throw new Error("session host failed");

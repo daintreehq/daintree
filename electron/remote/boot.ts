@@ -83,6 +83,12 @@ export interface StartRemoteHostsOptions {
   createTransport?: (descriptor: HostDescriptor) => LinkTransport;
   /** Where Host mode listens; the platform's socket path unless given. */
   hostLocation?: HostSocketLocation;
+  /**
+   * The app has begun quitting. A start in flight stops at its next step, as
+   * it does for a stop, rather than run on until the quit's stop step reaches
+   * it; that stop still takes down whatever it got as far as.
+   */
+  halted?: () => boolean;
 }
 
 type Teardown = () => void | Promise<void>;
@@ -401,6 +407,7 @@ export class HostModeListenError extends Error {
 export async function startRemoteHosts(options: StartRemoteHostsOptions): Promise<void> {
   if (started) return;
   started = true;
+  const halted = (): boolean => !started || options.halted?.() === true;
   // The worktree port override needs the broker, which exists only once the
   // workspace client has finished wiring. Both boot paths start it before
   // this runs; wait out one still in flight, but never start one here.
@@ -411,7 +418,7 @@ export async function startRemoteHosts(options: StartRemoteHostsOptions): Promis
       logger.warn("Workspace client failed; remote worktree ports are off", { error });
     }
   }
-  if (!started) return;
+  if (halted()) return;
   // A master a crashed launch left behind still holds its port forwards; this
   // launch would otherwise reuse it. Only the system ssh transport makes masters.
   if (!options.createTransport) {
@@ -420,18 +427,18 @@ export async function startRemoteHosts(options: StartRemoteHostsOptions): Promis
       path.join(app.getPath("userData"), "rh"),
       MASTER_EXIT_TIMEOUT_MS
     );
-    if (!started) return;
+    if (halted()) return;
   }
   // This machine's throwaway runs (#14445), for its own assistants and any
   // Shell's; owned by the host role, so a Shell restarted alone keeps them.
   const { registerHostThrowawayRuns } = await import("../services/throwaway/index.js");
-  if (!started) return;
+  if (halted()) return;
   ownedBy("host").push(registerHostThrowawayRuns());
   startClient(options);
   if (__DAINTREE_REMOTE_HOST_ROLE__ && isRemoteHostSupported()) {
     const { startHostRole } = await import("./hostBoot.js");
     // A stop during the load already drained the ledger: nothing would tear a listener down.
-    if (!started) return;
+    if (halted()) return;
     const host = ownedBy("host");
     const listenError = await startHostRole(options, (teardown) => host.push(teardown));
     if (listenError) throw new HostModeListenError(listenError.error);
