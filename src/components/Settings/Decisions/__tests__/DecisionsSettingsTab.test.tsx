@@ -20,8 +20,12 @@ const setEnabled = vi.fn<(payload: { enabled: boolean }) => Promise<DecisionsSta
 const checkRelay = vi.fn<(url: string) => Promise<DecisionsRelayCheck>>();
 const claimRelay =
   vi.fn<(payload: ClaimDecisionsRelayPayload) => Promise<DecisionsConnectResult>>();
-/** The status push's listener, so a test can push ahead of a reply. */
-let pushStatus: ((status: DecisionsStatus) => void) | null = null;
+/** Every push listener by event name; several sections listen for the status. */
+const pushListeners = new Map<string, Set<(payload: unknown) => void>>();
+/** Pushes a status to everything listening, as main's `decisions:status-changed` does. */
+function pushStatus(status: DecisionsStatus): void {
+  for (const listener of pushListeners.get("decisions:status-changed") ?? []) listener(status);
+}
 const verifyRecoveryKit =
   vi.fn<(payload: VerifyDecisionsRecoveryKitPayload) => Promise<DecisionsKitVerifyResult>>();
 
@@ -55,14 +59,17 @@ describe("DecisionsSettingsTab recovery kit", () => {
           checkRelay,
           claimRelay,
           verifyRecoveryKit,
-          // The Devices section's read, which these tests leave unanswered.
+          // The Devices and Policy sections' reads, which these tests leave unanswered.
           listDevices: () => new Promise(() => {}),
+          getPolicy: () => new Promise(() => {}),
         },
         events: {
-          on: (_name: string, listener: (status: DecisionsStatus) => void) => {
-            pushStatus = listener;
+          on: (name: string, listener: (payload: unknown) => void) => {
+            const listeners = pushListeners.get(name) ?? new Set();
+            listeners.add(listener);
+            pushListeners.set(name, listeners);
             return () => {
-              pushStatus = null;
+              listeners.delete(listener);
             };
           },
         },
@@ -156,7 +163,7 @@ describe("DecisionsSettingsTab recovery kit", () => {
     });
     const saved = { state: "connecting" as const, consentedAt: 1, relayOrigin: ORIGIN };
     // The connection's first push, newer than the answer the claim is about to give.
-    await act(async () => pushStatus!({ ...saved, revision: 3 }));
+    await act(async () => pushStatus({ ...saved, revision: 3 }));
     expect(screen.getByText("Setup isn't finished")).toBeTruthy();
     await act(async () => answer({ result: "saved", status: { ...saved, revision: 2 } }));
 
@@ -167,9 +174,9 @@ describe("DecisionsSettingsTab recovery kit", () => {
     getStatus.mockResolvedValue({ state: "not-connected", consentedAt: 1, revision: 1 });
     await renderTab();
 
-    await act(async () => pushStatus!({ state: "off", relayOrigin: ORIGIN, revision: 2 }));
+    await act(async () => pushStatus({ state: "off", relayOrigin: ORIGIN, revision: 2 }));
     const on = { state: "not-connected" as const, relayOrigin: ORIGIN, keysStored: true as const };
-    await act(async () => pushStatus!({ ...on, revision: 3 }));
+    await act(async () => pushStatus({ ...on, revision: 3 }));
 
     expect(kitPassphraseField()).not.toBeNull();
     expect(document.activeElement).not.toBe(kitPassphraseField());
