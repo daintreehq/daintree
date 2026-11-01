@@ -4,6 +4,7 @@ import {
   RelayClient,
   RelayError,
   type Identity,
+  type KeyStore,
   type RelayConfig,
   type StoredIdentity,
 } from "@daintreehq/decisions-client";
@@ -86,10 +87,17 @@ const NEVER_SENT: ReadonlySet<DecisionsRelayUnreachableReason> = new Set([
   "certificate",
 ]);
 
-interface RelayRequests {
+/** Why a request failed, and whether the relay had begun to answer it. */
+export interface RelayRequestFailure {
+  reason: DecisionsRelayUnreachableReason;
+  /** A response's headers arrived before it failed, so the request reached the relay. */
+  answered: boolean;
+}
+
+export interface RelayRequests {
   fetch: typeof fetch;
-  /** Why the latest request got no answer; null once one answered. */
-  lastFailure(): DecisionsRelayUnreachableReason | null;
+  /** How the latest request failed; null once one answered in full. */
+  lastFailure(): RelayRequestFailure | null;
 }
 
 /**
@@ -99,18 +107,22 @@ interface RelayRequests {
  * failure reaches the library carrying only its reason, never the network
  * error's text, which can name the URL.
  */
-async function relayRequests(origin: string, options: RelaySetupOptions): Promise<RelayRequests> {
+export async function relayRequests(
+  origin: string,
+  options: Pick<RelaySetupOptions, "fetchImpl" | "signal" | "timeoutMs">
+): Promise<RelayRequests> {
   const fetchImpl = options.fetchImpl ?? (await electronNetFetch());
   const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
-  let failure: DecisionsRelayUnreachableReason | null = null;
-  const fail = (reason: DecisionsRelayUnreachableReason): never => {
-    failure = reason;
-    throw new Error(reason);
+  let failure: RelayRequestFailure | null = null;
+  const fail = (reason: DecisionsRelayUnreachableReason | "redirect", answered: boolean): never => {
+    const known = reason === "redirect" ? "network" : reason;
+    failure = { reason: known, answered };
+    throw new Error(known);
   };
   const call = async (input: string | URL | Request, init: RequestInit = {}): Promise<Response> => {
     failure = null;
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    if (URL.parse(url)?.origin !== origin) fail("network");
+    if (URL.parse(url)?.origin !== origin) fail("network", false);
     const deadline = AbortSignal.timeout(timeoutMs);
     const signal = options.signal ? AbortSignal.any([options.signal, deadline]) : deadline;
     let response: Response;
@@ -125,17 +137,31 @@ async function relayRequests(origin: string, options: RelaySetupOptions): Promis
         signal,
       });
     } catch (error) {
-      const reason = requestFailureReason(error, deadline.aborted);
-      return fail(reason === "redirect" ? "network" : reason);
+      return fail(requestFailureReason(error, deadline.aborted), false);
     }
-    let text: string | null;
+    let text: string | null = null;
+    let bodyError: unknown = null;
     try {
       text = await readCapped(response, MAX_ANSWER_BYTES);
     } catch (error) {
-      const reason = requestFailureReason(error, deadline.aborted);
-      return fail(reason === "redirect" ? "network" : reason);
+      bodyError = error;
     }
-    if (text === null) return fail("network");
+    if (text === null) {
+      // A refusal stays a refusal whatever became of its body: the status is
+      // what the library reads it by.
+      if (!response.ok) {
+        return new Response(null, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+        });
+      }
+      // A success whose body didn't arrive: the relay took the request.
+      return fail(
+        bodyError === null ? "network" : requestFailureReason(bodyError, deadline.aborted),
+        true
+      );
+    }
     return new Response(NULL_BODY_STATUSES.has(response.status) ? null : text, {
       status: response.status,
       statusText: response.statusText,
@@ -158,12 +184,13 @@ function failed(failure: DecisionsConnectFailure): RelaySetupOutcome {
   return { failure };
 }
 
-function keyStorageFailure(error: unknown): DecisionsConnectFailure | null {
+function keyStorageFailure(error: unknown, kept = false): DecisionsConnectFailure | null {
   if (error instanceof DecisionsKeyStoreError && KEY_STORAGE_FAILURES.has(error.kind)) {
     return {
       result: "key-storage",
       kind: error.kind as DecisionsKeyStorageFailure,
       reason: error.message,
+      ...(kept ? { kept: true as const } : {}),
     };
   }
   return null;
@@ -280,17 +307,31 @@ export async function claimDecisionsRelay(
   }
 
   const requests = await relayRequests(origin, options);
+  const stagedBefore = staged !== null;
+  let stageSaved = stagedBefore;
+  const store: KeyStore = {
+    load: () => keys.load(),
+    save: async (identity) => {
+      await keys.save(identity);
+      stageSaved = true;
+    },
+    // The library clears a stage once the relay refuses its keys. An earlier
+    // attempt's stage may still be the relay's owner keys whatever the relay
+    // answers now (a clock it won't accept, a proxy in the way), so only the
+    // person removes those.
+    clear: () => (stagedBefore ? Promise.resolve() : keys.clear()),
+  };
   try {
     const { identity } = await claimRelay({
       origin,
       claimSecret: payload.claimSecret,
       label: DEVICE_LABEL,
-      store: keys,
+      store,
       fetch: requests.fetch,
     });
     return { identity: identity.config };
   } catch (error) {
-    return failed(await claimFailure(error, origin, keys, staged !== null, requests));
+    return failed(await claimFailure(error, origin, keys, stagedBefore, stageSaved, requests));
   }
 }
 
@@ -299,9 +340,11 @@ async function claimFailure(
   origin: string,
   keys: SetupKeyStore,
   stagedBefore: boolean,
+  stageSaved: boolean,
   requests: RelayRequests
 ): Promise<DecisionsConnectFailure> {
-  const storage = keyStorageFailure(error);
+  // A stage that saved stays when a later save fails: the claim may have been taken.
+  const storage = keyStorageFailure(error, stageSaved);
   if (storage) return storage;
   /** Removes a stage this attempt made, which the relay can't have taken. */
   const dropNewStage = async (): Promise<boolean> => {
@@ -316,15 +359,16 @@ async function claimFailure(
   if (error instanceof RelayError) {
     const refusal = claimRefusal(error);
     if (refusal === "already-claimed") {
-      // The library only lets this through once the relay refused the
-      // staged keys too, and it removes them itself.
-      return { result: "refused", origin, reason: refusal, kept: false };
+      // The library lets this through only once the relay refused the staged
+      // keys too, and removes them itself unless an earlier attempt made them.
+      return { result: "refused", origin, reason: refusal, kept: stagedBefore };
     }
     if (refusal) return { result: "refused", origin, reason: refusal, kept: await dropNewStage() };
     if (error.code === "network_error") {
-      const reason = requests.lastFailure() ?? "network";
-      const kept = NEVER_SENT.has(reason) ? await dropNewStage() : true;
-      return { result: "unreachable", origin, reason, kept };
+      const failure = requests.lastFailure() ?? { reason: "network", answered: true };
+      const neverSent = NEVER_SENT.has(failure.reason) && !failure.answered;
+      const kept = neverSent ? await dropNewStage() : true;
+      return { result: "unreachable", origin, reason: failure.reason, kept };
     }
     return { result: "unreachable", origin, reason: "server-error", kept: true };
   }
@@ -365,13 +409,44 @@ function parseKit(text: string): RecoveryBundleFile | null {
   return value as unknown as RecoveryBundleFile;
 }
 
-/** The kit's keys sign and verify, and it holds its current epoch's key. */
+/**
+ * The identity's keys are whole: it holds its current epoch's key, its
+ * signing key signs what its public half verifies, and its exchange key
+ * agrees with its public half, deriving the same secret with a throwaway key
+ * from either side.
+ */
 async function keysWork(identity: Identity): Promise<boolean> {
   if (!identity.epochs.has(identity.currentEpoch)) return false;
   try {
     const probe = `daintree-restore:${newId()}`;
     const signature = await signString(identity.keys.signing.privateKey, probe);
-    return await verifyString(identity.keys.signing.publicKey, probe, signature);
+    if (!(await verifyString(identity.keys.signing.publicKey, probe, signature))) return false;
+    const { subtle } = globalThis.crypto;
+    const other = await subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, [
+      "deriveBits",
+    ]);
+    const [mine, theirs] = await Promise.all([
+      subtle.deriveBits(
+        { name: "ECDH", public: other.publicKey },
+        identity.keys.exchange.privateKey,
+        256
+      ),
+      subtle.deriveBits(
+        { name: "ECDH", public: identity.keys.exchange.publicKey },
+        other.privateKey,
+        256
+      ),
+    ]);
+    return Buffer.from(mine).equals(Buffer.from(theirs));
+  } catch {
+    return false;
+  }
+}
+
+/** A sealed identity that imports, with keys that work. */
+async function usable(stored: StoredIdentity): Promise<boolean> {
+  try {
+    return await keysWork(await importIdentity(stored));
   } catch {
     return false;
   }
@@ -389,8 +464,11 @@ function relayRecognises(answer: unknown, identity: Identity): boolean {
         device.device_id === deviceId &&
         device.role === OWNER_ROLE &&
         device.revoked_at === null &&
+        device.cert.device_id === deviceId &&
+        device.cert.role === OWNER_ROLE &&
         device.cert.installation_id === installationId &&
-        device.cert.signing_pub === identity.signingPub
+        device.cert.signing_pub === identity.signingPub &&
+        device.cert.exchange_pub === identity.exchangePub
     )
   );
 }
@@ -411,8 +489,9 @@ function sameIdentity(a: StoredIdentity, b: StoredIdentity): boolean {
  * Everything is proven before anything is saved: the kit opens with the
  * passphrase, holds a confirmed owner identity for the relay that was
  * checked, its keys work, and the relay itself accepts a request signed with
- * them and lists them as its owner. A kit whose identity is already sealed
- * here is taken up without replacing the keys, which may hold newer epochs.
+ * them and lists them as its owner, under the same signing and exchange
+ * keys. A kit whose identity is already sealed here, with keys that work, is
+ * taken up without replacing them, since they may hold newer epochs.
  */
 export async function restoreDecisionsIdentity(
   payload: RestoreDecisionsIdentityPayload,
@@ -458,7 +537,10 @@ export async function restoreDecisionsIdentity(
   if ("failure" in existing) return existing;
   const held = existing.value;
   if (held && !sameIdentity(held, stored)) return failed(conflictWith(held));
-  if (!held) {
+  // The same identity sealed here is kept unless its own keys don't work, in
+  // which case the kit's, proven below, replace them.
+  const adopt = held && (await usable(held)) ? held : null;
+  if (!adopt) {
     const sealing = await prepareSealing(keys, payload.acceptWeakStorage);
     if (sealing) return failed(sealing);
   }
@@ -473,7 +555,7 @@ export async function restoreDecisionsIdentity(
   } catch (error) {
     if (error instanceof RelayError) {
       if (error.code === "network_error") {
-        const reason = requests.lastFailure() ?? "network";
+        const reason = requests.lastFailure()?.reason ?? "network";
         return failed({ result: "unreachable", origin, reason, kept: false });
       }
       if (error.retryable) {
@@ -488,7 +570,7 @@ export async function restoreDecisionsIdentity(
   }
   if (!relayRecognises(devices, identity)) return refuse("not-recognised");
 
-  if (held) return { identity: held.config };
+  if (adopt) return { identity: adopt.config };
   const saved = await keyCall(() => keys.save(stored));
   if ("failure" in saved) return saved;
   return { identity: stored.config };

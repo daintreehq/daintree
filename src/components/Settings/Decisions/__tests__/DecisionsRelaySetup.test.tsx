@@ -67,12 +67,14 @@ function renderSection(status: DecisionsStatus, onChanged = vi.fn()) {
   return { view, onChanged };
 }
 
-async function checkAddress(result: DecisionsRelayCheck["result"], typed = ORIGIN) {
-  checkRelay.mockResolvedValue({
-    result,
-    origin: ORIGIN,
-    compatibility: SAME,
-  } as DecisionsRelayCheck);
+type ClaimState = "unclaimed" | "claimed" | "claim-not-configured";
+
+function relayCheck(result: ClaimState): DecisionsRelayCheck {
+  return { result, origin: ORIGIN, compatibility: SAME };
+}
+
+async function checkAddress(result: ClaimState, typed = ORIGIN) {
+  checkRelay.mockResolvedValue(relayCheck(result));
   const field = screen.getByPlaceholderText(ORIGIN) as HTMLInputElement;
   fireEvent.change(field, { target: { value: typed } });
   await act(async () => {
@@ -85,7 +87,7 @@ function secretField(): HTMLInputElement {
 }
 
 function passphraseField(): HTMLInputElement {
-  return screen.getByLabelText("Recovery kit passphrase") as HTMLInputElement;
+  return document.querySelector('input[aria-label="Recovery kit passphrase"]')!;
 }
 
 async function chooseKit(text: string, name = "decisions-recovery.json") {
@@ -146,7 +148,10 @@ describe("DecisionsConnectionSection claim and restore", () => {
     await act(async () => {
       answer.resolve({ result: "saved", status: { state: "not-connected", relayOrigin: ORIGIN } });
     });
-    expect(onChanged).toHaveBeenCalledOnce();
+    expect(onChanged).toHaveBeenCalledExactlyOnceWith({
+      state: "not-connected",
+      relayOrigin: ORIGIN,
+    });
   });
 
   it("says what a refused claim observed, with the secret gone from the field", async () => {
@@ -166,14 +171,13 @@ describe("DecisionsConnectionSection claim and restore", () => {
     expect(row.textContent).toContain("decisions.example.workers.dev refused the claim secret");
     expect(row.textContent).toMatch(/Nothing was saved\.$/);
     expect(secretField().value).toBe("");
-    expect(onChanged).toHaveBeenCalledOnce();
+    // Main didn't say how the status moved, so the section asks for it again.
+    expect(onChanged).toHaveBeenCalledExactlyOnceWith(null);
   });
 
-  it("restores a claimed relay from a chosen kit and passphrase, clearing both", async () => {
-    restoreIdentity.mockResolvedValue({
-      result: "saved",
-      status: { state: "not-connected", relayOrigin: ORIGIN },
-    });
+  it("restores a claimed relay from a chosen kit and passphrase, clearing both as it starts", async () => {
+    const answer = deferred<DecisionsConnectResult>();
+    restoreIdentity.mockReturnValue(answer.promise);
     renderSection({ state: "not-connected" });
     await checkAddress("claimed");
     expect(document.querySelector("#decisions-claim-secret")).toBeNull();
@@ -192,14 +196,106 @@ describe("DecisionsConnectionSection claim and restore", () => {
     });
     expect(passphraseField().value).toBe("");
     expect(screen.getByText("No kit chosen")).toBeTruthy();
+
+    await act(async () => {
+      answer.reject(new Error("The relay couldn't be reached"));
+    });
+    expect(passphraseField().value).toBe("");
+    expect(screen.getByText("No kit chosen")).toBeTruthy();
+  });
+
+  it("clears the other form's secret too, whichever form is sent", async () => {
+    restoreIdentity.mockResolvedValue({
+      result: "kit-refused",
+      origin: ORIGIN,
+      reason: "not-a-kit",
+    });
+    claimRelay.mockResolvedValue({
+      result: "refused",
+      origin: ORIGIN,
+      reason: "wrong-secret",
+      kept: true,
+    });
+    renderSection({ state: "not-connected", keysStored: true });
+    await checkAddress("claimed");
+
+    fireEvent.change(secretField(), { target: { value: SECRET } });
+    await chooseKit('{"v":1}');
+    fireEvent.change(passphraseField(), { target: { value: PASSPHRASE } });
+    await submit(passphraseField());
+    expect(secretField().value).toBe("");
+
+    fireEvent.change(secretField(), { target: { value: SECRET } });
+    await chooseKit('{"v":1}');
+    fireEvent.change(passphraseField(), { target: { value: PASSPHRASE } });
+    await submit(secretField());
+    expect(passphraseField().value).toBe("");
+    expect(screen.getByText("No kit chosen")).toBeTruthy();
+  });
+
+  it("keeps only the latest kit chosen, and none that a slower read finishes after a send", async () => {
+    const reads = [deferred<string>(), deferred<string>()];
+    const files = ["first.json", "second.json"].map((name, index) => {
+      const file = new File(["{}"], name);
+      Object.defineProperty(file, "text", { value: () => reads[index]!.promise });
+      return file;
+    });
+    restoreIdentity.mockResolvedValue({
+      result: "kit-refused",
+      origin: ORIGIN,
+      reason: "not-a-kit",
+    });
+    renderSection({ state: "not-connected" });
+    await checkAddress("claimed");
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
+
+    await act(async () => {
+      fireEvent.change(input, { target: { files: [files[0]] } });
+    });
+    await act(async () => {
+      fireEvent.change(input, { target: { files: [files[1]] } });
+    });
+    await act(async () => {
+      reads[1]!.resolve('{"second":true}');
+    });
+    fireEvent.change(passphraseField(), { target: { value: PASSPHRASE } });
+    await submit(passphraseField());
+    await act(async () => {
+      reads[0]!.resolve('{"first":true}');
+    });
+
+    expect(restoreIdentity).toHaveBeenCalledExactlyOnceWith({
+      url: ORIGIN,
+      kit: '{"second":true}',
+      passphrase: PASSPHRASE,
+    });
+    expect(screen.getByText("No kit chosen")).toBeTruthy();
+  });
+
+  it("offers what the relay is now when a claim finds it claimed since the check", async () => {
+    claimRelay.mockResolvedValue({ result: "relay", check: relayCheck("claimed") });
+    renderSection({ state: "not-connected" });
+    await checkAddress("unclaimed");
+
+    fireEvent.change(secretField(), { target: { value: SECRET } });
+    await submit(secretField());
+
+    expect(document.querySelector("#decisions-claim-secret")).toBeNull();
+    expect(document.querySelector("#decisions-recovery-kit")).not.toBeNull();
+    expect(document.querySelector("#decisions-relay-check")?.textContent).toContain(
+      "decisions.example.workers.dev is claimed"
+    );
   });
 
   it("refuses a file too large to be a kit without reading it", async () => {
+    const text = vi.spyOn(File.prototype, "text");
     renderSection({ state: "not-connected" });
     await checkAddress("claimed");
 
     await chooseKit("x".repeat(256 * 1024 + 1));
 
+    expect(text).not.toHaveBeenCalled();
+    text.mockRestore();
     expect(screen.getByText("That file is too large to be a recovery kit")).toBeTruthy();
     expect(screen.getByText("No kit chosen")).toBeTruthy();
   });
@@ -209,7 +305,7 @@ describe("DecisionsConnectionSection claim and restore", () => {
     await checkAddress("claimed");
 
     expect(document.querySelector("#decisions-claim-secret")?.textContent).toContain(
-      "Finish this computer's claim"
+      "Finish a claim from this computer"
     );
     expect(document.querySelector("#decisions-recovery-kit")).not.toBeNull();
   });
@@ -265,10 +361,14 @@ describe("DecisionsConnectionSection claim and restore", () => {
     fireEvent.change(secretField(), { target: { value: SECRET } });
     await submit(secretField());
 
-    fireEvent.change(screen.getByPlaceholderText(ORIGIN), { target: { value: "other.example" } });
+    fireEvent.change(secretField(), { target: { value: SECRET } });
 
+    fireEvent.change(screen.getByPlaceholderText(ORIGIN), { target: { value: "other.example" } });
     expect(document.querySelector("#decisions-relay-setup-outcome")).toBeNull();
     expect(document.querySelector("#decisions-claim-secret")).toBeNull();
+
+    await checkAddress("unclaimed", "other.example");
+    expect(secretField().value).toBe("");
   });
 });
 
@@ -300,7 +400,7 @@ describe("DecisionsConnectionSection disconnect", () => {
 
     expect(disconnectRelay).toHaveBeenCalledOnce();
     expect(screen.queryByRole("alertdialog")).toBeNull();
-    expect(onChanged).toHaveBeenCalledOnce();
+    expect(onChanged).toHaveBeenCalledExactlyOnceWith({ state: "not-connected" });
   });
 
   it("keeps the confirm open with the reason when the keys couldn't be removed", async () => {

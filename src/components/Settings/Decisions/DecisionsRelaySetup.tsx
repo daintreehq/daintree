@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SettingsRow } from "@/components/Settings/SettingsGroup";
@@ -47,6 +47,15 @@ export function DecisionsRelaySetup({
   const [passphrase, setPassphrase] = useState("");
   const [acceptWeak, setAcceptWeak] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  /** Bumped by each choice, submit and unmount, so a slower read can't land after them. */
+  const kitRead = useRef(0);
+
+  useEffect(
+    () => () => {
+      kitRead.current += 1;
+    },
+    []
+  );
 
   const busy = disabled || identity.pending !== null;
   const claimed = check.result === "claimed";
@@ -57,18 +66,25 @@ export function DecisionsRelaySetup({
     identity.result.kind === "weak-storage-unconfirmed";
   const weakStorage = acceptWeak ? { acceptWeakStorage: true } : {};
 
+  /** Every secret on the page goes as an attempt starts, whichever form sent it. */
+  const clearSecrets = () => {
+    kitRead.current += 1;
+    setSecret("");
+    setPassphrase("");
+    setKit(null);
+  };
+
   const submitClaim = () => {
     if (busy || secret.length < MIN_SECRET_LENGTH) return;
-    const claimSecret = secret;
-    setSecret("");
-    identity.claim({ url: checkedUrl, claimSecret, ...weakStorage });
+    const payload = { url: checkedUrl, claimSecret: secret, ...weakStorage };
+    clearSecrets();
+    identity.claim(payload);
   };
 
   const submitRestore = () => {
     if (busy || !kit || passphrase === "") return;
     const payload = { url: checkedUrl, kit: kit.text, passphrase, ...weakStorage };
-    setPassphrase("");
-    setKit(null);
+    clearSecrets();
     identity.restore(payload);
   };
 
@@ -77,6 +93,7 @@ export function DecisionsRelaySetup({
     // Cleared, so choosing the same file again still reads it.
     event.target.value = "";
     if (!file) return;
+    const read = ++kitRead.current;
     setKit(null);
     if (file.size > MAX_KIT_BYTES) {
       setKitError("That file is too large to be a recovery kit");
@@ -84,8 +101,14 @@ export function DecisionsRelaySetup({
     }
     setKitError(null);
     file.text().then(
-      (text) => setKit({ name: file.name, text }),
-      (failure: unknown) => setKitError(formatErrorMessage(failure, "That file couldn't be read"))
+      (text) => {
+        if (kitRead.current === read) setKit({ name: file.name, text });
+      },
+      (failure: unknown) => {
+        if (kitRead.current === read) {
+          setKitError(formatErrorMessage(failure, "That file couldn't be read"));
+        }
+      }
     );
   };
 
@@ -94,10 +117,10 @@ export function DecisionsRelaySetup({
       {showClaim && (
         <SettingsRow
           id="decisions-claim-secret"
-          label={claimed ? "Finish this computer's claim" : "Claim secret"}
+          label={claimed ? "Finish a claim from this computer" : "Claim secret"}
           description={
             claimed
-              ? "This computer holds keys from a claim the relay never confirmed. Enter the same claim secret to finish it with them."
+              ? "This computer holds Decisions keys no relay is recorded for. If they're from a claim of this relay that wasn't confirmed, enter the same claim secret to finish it with them."
               : "The CLAIM_SECRET set on the relay's Worker when it was deployed. Daintree sends it to the relay once and keeps no copy."
           }
           layout="stacked"

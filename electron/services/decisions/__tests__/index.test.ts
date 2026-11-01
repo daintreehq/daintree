@@ -573,7 +573,11 @@ describe("Decisions entry", () => {
         origin: RELAY.relayOrigin,
         unfinished: false,
       });
+      await expect(
+        restoreIdentity({ url: "relay.example.com", kit: "{}", passphrase: "correct horse" })
+      ).resolves.toEqual({ result: "conflict", origin: RELAY.relayOrigin, unfinished: false });
       expect(setupRuns.claim).not.toHaveBeenCalled();
+      expect(setupRuns.restore).not.toHaveBeenCalled();
     });
 
     it("disconnects by removing the key file and the relay's ids, keeping the switch and consent", async () => {

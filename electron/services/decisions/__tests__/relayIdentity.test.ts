@@ -2,10 +2,11 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { describe, expect, it, vi } from "vitest";
 import { MemoryKeyStore, claimRelay, type StoredIdentity } from "@daintreehq/decisions-client";
-import { encryptRecoveryBundle } from "@daintreehq/decisions-crypto";
+import { encryptRecoveryBundle, generateEpochKeyBytes } from "@daintreehq/decisions-crypto";
 import {
   MIN_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
+  bytesToBase64Url,
   parseAuthHeader,
 } from "@daintreehq/decisions-protocol";
 
@@ -15,6 +16,7 @@ import { DecisionsKeyStoreError, type KeyStorageCheck } from "../keyStore.js";
 import type { RelayFetch } from "../relayCheck.js";
 import {
   claimDecisionsRelay,
+  relayRequests,
   restoreDecisionsIdentity,
   type SetupKeyStore,
 } from "../relayIdentity.js";
@@ -136,9 +138,12 @@ function fakeRelay(options: { claimConfigured?: boolean } = {}) {
   return { state, fetchImpl, calls };
 }
 
-/** The sealed key store's contract, in memory. */
-function memoryKeys(options: { check?: KeyStorageCheck; loadError?: Error } = {}) {
+/** The sealed key store's contract, in memory. `saveErrors` fail the saves in turn. */
+function memoryKeys(
+  options: { check?: KeyStorageCheck; loadError?: Error; saveErrors?: Array<Error | null> } = {}
+) {
   let value: StoredIdentity | null = null;
+  const saveErrors = [...(options.saveErrors ?? [])];
   const keys = {
     check: vi.fn(async (): Promise<KeyStorageCheck> => options.check ?? { kind: "keychain" }),
     confirmWeakStorage: vi.fn(),
@@ -147,6 +152,8 @@ function memoryKeys(options: { check?: KeyStorageCheck; loadError?: Error } = {}
       return value ? structuredClone(value) : null;
     }),
     save: vi.fn(async (identity: StoredIdentity) => {
+      const error = saveErrors.shift();
+      if (error) throw error;
       value = structuredClone(identity);
     }),
     clear: vi.fn(async () => {
@@ -187,6 +194,57 @@ function kitFor(identity: unknown, passphrase = PASSPHRASE): Promise<string> {
 function networkError(message: string): never {
   throw new TypeError(message);
 }
+
+/** Headers that arrived, and a body that failed after them. */
+function brokenBody(status: number, message: string): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.error(new TypeError(message));
+      },
+    }),
+    { status }
+  );
+}
+
+/** A claim that reaches the relay and loses its answer on the way back. */
+function loseClaimAnswer(relay: ReturnType<typeof fakeRelay>): void {
+  relay.state.intercept["/api/v1/setup/claim"] = async (_url, _init, answer) => {
+    await answer();
+    return networkError("net::ERR_CONNECTION_RESET");
+  };
+}
+
+describe("relayRequests", () => {
+  it("sends nothing outside the checked origin", async () => {
+    const fetchImpl = vi.fn<RelayFetch>();
+    const requests = await relayRequests(ORIGIN, { fetchImpl });
+
+    await expect(requests.fetch(`${OTHER_ORIGIN}/api/v1/devices`)).rejects.toThrow("network");
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(requests.lastFailure()).toEqual({ reason: "network", answered: false });
+  });
+
+  it("says a success whose body failed was answered, so it never reads as unsent", async () => {
+    const requests = await relayRequests(ORIGIN, {
+      fetchImpl: async () => brokenBody(201, "net::ERR_SSL_PROTOCOL_ERROR"),
+    });
+
+    await expect(requests.fetch(`${ORIGIN}/api/v1/setup/claim`)).rejects.toThrow("certificate");
+    expect(requests.lastFailure()).toEqual({ reason: "certificate", answered: true });
+  });
+
+  it("keeps a refusal's status when its body failed", async () => {
+    const requests = await relayRequests(ORIGIN, {
+      fetchImpl: async () => brokenBody(401, "net::ERR_CONNECTION_RESET"),
+    });
+
+    const response = await requests.fetch(`${ORIGIN}/api/v1/setup/claim`);
+    expect(response.status).toBe(401);
+    expect(await response.text()).toBe("");
+    expect(requests.lastFailure()).toBeNull();
+  });
+});
 
 describe("claimDecisionsRelay", () => {
   it("claims an unclaimed relay and seals the owner identity, without the secret", async () => {
@@ -390,6 +448,113 @@ describe("claimDecisionsRelay", () => {
 
     expect(outcome).toEqual({
       failure: { result: "unreachable", origin: ORIGIN, reason: "server-error", kept: true },
+    });
+    expect(memory.stored?.claimed).toBe(false);
+  });
+
+  it("keeps the keys when the claim's success arrives without its body", async () => {
+    const relay = fakeRelay();
+    const memory = memoryKeys();
+    relay.state.intercept["/api/v1/setup/claim"] = async (_url, _init, answer) => {
+      await answer();
+      return brokenBody(201, "net::ERR_SSL_PROTOCOL_ERROR");
+    };
+
+    const outcome = await claimDecisionsRelay(
+      { url: ORIGIN, claimSecret: SECRET },
+      { keys: memory.keys, fetchImpl: relay.fetchImpl }
+    );
+
+    expect(outcome).toEqual({
+      failure: { result: "unreachable", origin: ORIGIN, reason: "certificate", kept: true },
+    });
+    expect(memory.stored?.config.deviceId).toBe(relay.state.owner?.cert.device_id);
+  });
+
+  it("removes the keys of a refusal whose body never arrived", async () => {
+    const relay = fakeRelay();
+    const memory = memoryKeys();
+    relay.state.intercept["/api/v1/setup/claim"] = async () =>
+      brokenBody(401, "net::ERR_CONNECTION_RESET");
+
+    const outcome = await claimDecisionsRelay(
+      { url: ORIGIN, claimSecret: SECRET },
+      { keys: memory.keys, fetchImpl: relay.fetchImpl }
+    );
+
+    expect(outcome).toEqual({
+      failure: { result: "refused", origin: ORIGIN, reason: "rejected", kept: false },
+    });
+    expect(memory.stored).toBeNull();
+  });
+
+  it("never lets the library remove an earlier attempt's keys, even when the relay refuses them", async () => {
+    const relay = fakeRelay();
+    const memory = memoryKeys();
+    loseClaimAnswer(relay);
+    await claimDecisionsRelay(
+      { url: ORIGIN, claimSecret: SECRET },
+      { keys: memory.keys, fetchImpl: relay.fetchImpl }
+    );
+    const staged = memory.stored;
+    delete relay.state.intercept["/api/v1/setup/claim"];
+    // The relay now answers the signed probe for those keys with a refusal.
+    relay.state.intercept["/api/v1/devices"] = async () => relayError("not_authenticated", 401);
+
+    const outcome = await claimDecisionsRelay(
+      { url: ORIGIN, claimSecret: SECRET },
+      { keys: memory.keys, fetchImpl: relay.fetchImpl }
+    );
+
+    expect(outcome).toEqual({
+      failure: { result: "refused", origin: ORIGIN, reason: "already-claimed", kept: true },
+    });
+    expect(memory.keys.clear).not.toHaveBeenCalled();
+    expect(memory.stored).toEqual(staged);
+  });
+
+  it("says the keys stay when sealing the confirmed claim fails", async () => {
+    const relay = fakeRelay();
+    const memory = memoryKeys({
+      saveErrors: [null, new DecisionsKeyStoreError("locked", "The keychain is locked")],
+    });
+
+    const outcome = await claimDecisionsRelay(
+      { url: ORIGIN, claimSecret: SECRET },
+      { keys: memory.keys, fetchImpl: relay.fetchImpl }
+    );
+
+    expect(outcome).toEqual({
+      failure: {
+        result: "key-storage",
+        kind: "locked",
+        reason: "The keychain is locked",
+        kept: true,
+      },
+    });
+    expect(memory.stored?.claimed).toBe(false);
+    expect(memory.keys.clear).not.toHaveBeenCalled();
+  });
+
+  it("keeps the keys of a claim cut off mid-flight by quit", async () => {
+    const relay = fakeRelay();
+    const memory = memoryKeys();
+    const quit = new AbortController();
+    relay.state.intercept["/api/v1/setup/claim"] = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () =>
+          reject(new DOMException("This operation was aborted", "AbortError"))
+        );
+        quit.abort();
+      });
+
+    const outcome = await claimDecisionsRelay(
+      { url: ORIGIN, claimSecret: SECRET },
+      { keys: memory.keys, fetchImpl: relay.fetchImpl, signal: quit.signal }
+    );
+
+    expect(outcome).toEqual({
+      failure: { result: "unreachable", origin: ORIGIN, reason: "network", kept: true },
     });
     expect(memory.stored?.claimed).toBe(false);
   });
@@ -712,7 +877,12 @@ describe("restoreDecisionsIdentity", () => {
     const { relay, identity, kit } = await setup();
     const memory = memoryKeys();
     // Sealed here with a newer epoch than the kit holds.
-    memory.stored = { ...identity, currentEpoch: 2, epochs: [...identity.epochs] };
+    const newer: StoredIdentity = {
+      ...identity,
+      currentEpoch: 2,
+      epochs: [...identity.epochs, { epoch: 2, raw: bytesToBase64Url(generateEpochKeyBytes()) }],
+    };
+    memory.stored = newer;
 
     const outcome = await restoreDecisionsIdentity(
       { url: ORIGIN, kit, passphrase: PASSPHRASE },
@@ -721,7 +891,77 @@ describe("restoreDecisionsIdentity", () => {
 
     expect(outcome).toEqual({ identity: identity.config });
     expect(memory.keys.save).not.toHaveBeenCalled();
-    expect(memory.stored?.currentEpoch).toBe(2);
+    expect(memory.stored).toEqual(newer);
+  });
+
+  it("replaces the same identity sealed here when its own keys don't work", async () => {
+    const { relay, identity, kit } = await setup();
+    const memory = memoryKeys();
+    memory.stored = { ...identity, currentEpoch: 2 };
+
+    const outcome = await restoreDecisionsIdentity(
+      { url: ORIGIN, kit, passphrase: PASSPHRASE },
+      { keys: memory.keys, fetchImpl: relay.fetchImpl }
+    );
+
+    expect(outcome).toEqual({ identity: identity.config });
+    expect(memory.stored).toEqual(identity);
+  });
+
+  it.each([
+    [
+      "lacks its current epoch's key",
+      (identity: StoredIdentity) => ({ ...identity, currentEpoch: 3 }),
+    ],
+    [
+      "holds an exchange key that isn't its public half's",
+      async (identity: StoredIdentity, other: StoredIdentity) => ({
+        ...identity,
+        keys: { ...identity.keys, exchange_private_pkcs8: other.keys.exchange_private_pkcs8 },
+      }),
+    ],
+    [
+      "holds a signing key that isn't its public half's",
+      async (identity: StoredIdentity, other: StoredIdentity) => ({
+        ...identity,
+        keys: { ...identity.keys, signing_private_pkcs8: other.keys.signing_private_pkcs8 },
+      }),
+    ],
+  ])("refuses a kit that %s before asking the relay", async (_name, alter) => {
+    const { relay, identity } = await setup();
+    const other = await claimedElsewhere(fakeRelay());
+    const memory = memoryKeys();
+
+    const outcome = await restoreDecisionsIdentity(
+      { url: ORIGIN, kit: await kitFor(await alter(identity, other)), passphrase: PASSPHRASE },
+      { keys: memory.keys, fetchImpl: relay.fetchImpl }
+    );
+
+    expect(outcome).toEqual({
+      failure: { result: "kit-refused", origin: ORIGIN, reason: "not-a-kit" },
+    });
+    expect(relay.fetchImpl).not.toHaveBeenCalled();
+    expect(memory.keys.save).not.toHaveBeenCalled();
+  });
+
+  it("refuses an identity the relay lists under another exchange key", async () => {
+    const { relay, kit } = await setup();
+    const other = await claimedElsewhere(fakeRelay());
+    relay.state.owner!.cert = {
+      ...relay.state.owner!.cert,
+      exchange_pub: other.keys.exchange_public,
+    };
+    const memory = memoryKeys();
+
+    const outcome = await restoreDecisionsIdentity(
+      { url: ORIGIN, kit, passphrase: PASSPHRASE },
+      { keys: memory.keys, fetchImpl: relay.fetchImpl }
+    );
+
+    expect(outcome).toEqual({
+      failure: { result: "kit-refused", origin: ORIGIN, reason: "not-recognised" },
+    });
+    expect(memory.keys.save).not.toHaveBeenCalled();
   });
 
   it("refuses to replace another identity sealed here", async () => {

@@ -30,11 +30,11 @@ export function DecisionsDisconnectDialog({
       isOpen={isOpen}
       onClose={onCancel}
       variant="destructive"
-      title={host ? `Disconnect from '${host}'?` : "Remove the unfinished setup's keys?"}
+      title={host ? `Disconnect from '${host}'?` : "Remove the Decisions keys on this computer?"}
       description={
         host
-          ? `This removes this computer's Decisions keys for ${host}. Without a recovery kit for this relay, its past questions and answers can't be read again, and no computer can reconnect to it as its owner. The relay and everything on it stay as they are, and paired phones stay paired.`
-          : "This removes the keys of a claim the relay never confirmed. If the relay did receive that claim, only these keys can finish it, and without them it can't be claimed again until it's deployed afresh. Nothing on any relay changes."
+          ? `This removes this computer's Decisions keys for ${host}. To connect it again, this computer needs a recovery kit for the relay; if no kit or other computer holds this identity, the relay's past questions and answers can't be read again and nobody can reconnect to it as its owner. The relay and everything on it stay as they are, and paired phones stay paired.`
+          : "No relay is recorded for these keys. If they're the only copy of a relay's owner keys (a claim that wasn't confirmed, or a setup whose settings didn't save), that relay can't be reconnected to as its owner without a recovery kit, or claimed again until it's deployed afresh. Nothing on any relay changes."
       }
       confirmLabel={host ? "Disconnect relay" : "Remove keys"}
       onConfirm={onConfirm}

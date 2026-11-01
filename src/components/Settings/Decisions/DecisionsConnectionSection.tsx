@@ -60,15 +60,18 @@ export function DecisionsConnectionSection({
   status: DecisionsStatus;
   /** The switch is changing, so nothing here should start. */
   locked?: boolean;
-  /** A claim, restore or disconnect settled, so the status may have moved. */
-  onChanged?: () => void;
+  /**
+   * A claim, restore or disconnect settled, so the status may have moved:
+   * main's answer when it changed the identity, null when it didn't say.
+   */
+  onChanged?: (status: DecisionsStatus | null) => void;
 }) {
   const { label, detail } = describeConnection(status);
   const savedOrigin = status.relayOrigin ?? null;
   const connected = status.state === "connected";
   const keysStored = status.keysStored === true;
   const relay = useRelayCheck();
-  const identity = useRelayIdentity(() => onChanged?.());
+  const identity = useRelayIdentity((next) => onChanged?.(next));
   const [draft, setDraft] = useState("");
   const [disconnectOpen, setDisconnectOpen] = useState(false);
   const busy = locked || identity.pending !== null;
@@ -86,7 +89,8 @@ export function DecisionsConnectionSection({
     if (connected && savedOrigin && !locked) checkSaved(savedOrigin);
   }, [connected, savedOrigin, locked]);
 
-  const check = relay.check;
+  // A setup reruns the check, and what it saw then is newer than the last one shown.
+  const check = identity.result?.result === "relay" ? identity.result.check : relay.check;
   const observation = check ? describeRelayCheck(check) : null;
   const compatibility = check && "compatibility" in check ? check.compatibility : null;
   const versions = compatibility ? describeCompatibility(compatibility) : null;
@@ -97,7 +101,10 @@ export function DecisionsConnectionSection({
       : relay.error
         ? `Couldn't check the relay. ${relay.error}`
         : undefined;
-  const outcome = identity.result ? describeConnectResult(identity.result) : null;
+  const outcome =
+    identity.result && identity.result.result !== "relay"
+      ? describeConnectResult(identity.result)
+      : null;
   const outcomeError =
     identity.error && identity.error.action !== "disconnect"
       ? `${identity.error.action === "claim" ? "Couldn't claim the relay" : "Couldn't restore the identity"}. ${identity.error.message}`
@@ -116,6 +123,7 @@ export function DecisionsConnectionSection({
 
   const submitDraft = () => {
     if (busy || relay.checking || draft.trim() === "") return;
+    identity.reset();
     relay.run(draft);
   };
 
@@ -303,7 +311,7 @@ export function DecisionsConnectionSection({
             description={
               savedOrigin !== null
                 ? "Removes this computer's Decisions keys and its record of the relay. The relay and its data stay as they are."
-                : "This computer holds Decisions keys no relay is recorded for: a claim that didn't finish, or a setup whose settings didn't save. Claim or restore the same relay to use them, or remove them to set up another."
+                : "This computer holds Decisions keys no relay is recorded for, from a claim that wasn't confirmed or a setup whose settings didn't save. Claim or restore the same relay to use them, or remove them to set up another."
             }
             disabled={busy}
             control={({ descriptionId, disabled }) => (

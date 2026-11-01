@@ -12,7 +12,7 @@ import {
 } from "./relayCheckCopy";
 
 const KEPT =
-  "Keys from an earlier claim of this relay stay on this computer, in case that claim reached it.";
+  "The claim's keys stay on this computer, so a later claim of this relay can finish with them.";
 
 const KEY_STORAGE: Record<DecisionsKeyStorageFailure, string> = {
   locked: "The keychain is locked",
@@ -155,6 +155,10 @@ export function describeConnectResult(result: DecisionsConnectResult): RelayObse
           };
     }
     case "key-storage":
-      return { severity: "error", label: KEY_STORAGE[result.kind], detail: result.reason };
+      return {
+        severity: "error",
+        label: KEY_STORAGE[result.kind],
+        detail: result.kept ? `${result.reason}. ${KEPT}` : result.reason,
+      };
   }
 }

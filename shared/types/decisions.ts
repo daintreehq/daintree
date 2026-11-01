@@ -218,7 +218,13 @@ export type DecisionsConnectResult =
     }
   | { result: "kit-refused"; origin: string; reason: DecisionsKitRefusal }
   | { result: "conflict"; origin: string | null; unfinished: boolean }
-  | { result: "key-storage"; kind: DecisionsKeyStorageFailure; reason: string };
+  | {
+      result: "key-storage";
+      kind: DecisionsKeyStorageFailure;
+      reason: string;
+      /** The claim's staged keys saved before this failed, and stay, since the relay may have taken it. */
+      kept?: true;
+    };
 
 /**
  * How far an answer has got on its way into the terminal, as the client

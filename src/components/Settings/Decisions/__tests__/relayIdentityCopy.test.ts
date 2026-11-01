@@ -48,6 +48,27 @@ describe("describeConnectResult", () => {
     expect(kept.detail).toMatch(/stay on this computer/);
   });
 
+  it("follows `kept`, not the reason, for a claim that may have arrived", () => {
+    for (const reason of ["timeout", "dns"] as const) {
+      const kept = describeConnectResult({
+        result: "unreachable",
+        origin: ORIGIN,
+        reason,
+        kept: true,
+      })!;
+      const dropped = describeConnectResult({
+        result: "unreachable",
+        origin: ORIGIN,
+        reason,
+        kept: false,
+      })!;
+      expect(kept.severity).toBe("warning");
+      expect(kept.detail).toMatch(/kept its keys/);
+      expect(dropped.severity).toBe("error");
+      expect(dropped.detail).toMatch(/Nothing was saved\.$/);
+    }
+  });
+
   it("tells a claim that may have arrived from a relay never reached", () => {
     const maybe = describeConnectResult({
       result: "unreachable",
@@ -81,23 +102,40 @@ describe("describeConnectResult", () => {
     expect(observed.detail).toMatch(/^It answered with a server error\./);
   });
 
-  it("names the relay keys are already held for, or says it can't", () => {
+  it("names the relay keys are already held for, or says it can't, unfinished or not", () => {
+    for (const unfinished of [true, false]) {
+      const named = describeConnectResult({ result: "conflict", origin: ORIGIN, unfinished })!;
+      const unnamed = describeConnectResult({ result: "conflict", origin: null, unfinished })!;
+      expect(named.label).toBe(unnamed.label);
+      expect(named.detail).toContain("decisions.example.workers.dev");
+      expect(unnamed.detail).toContain("a relay it can't name");
+    }
     expect(
-      describeConnectResult({ result: "conflict", origin: ORIGIN, unfinished: true })!.detail
-    ).toMatch(/^They are for decisions\.example\.workers\.dev\./);
-    expect(
-      describeConnectResult({ result: "conflict", origin: null, unfinished: false })!.detail
-    ).toMatch(/^It is for a relay it can't name\./);
+      describeConnectResult({ result: "conflict", origin: ORIGIN, unfinished: true })!.label
+    ).not.toBe(
+      describeConnectResult({ result: "conflict", origin: ORIGIN, unfinished: false })!.label
+    );
   });
 
-  it("carries main's own reason for a key storage failure", () => {
-    expect(
-      describeConnectResult({
-        result: "key-storage",
-        kind: "locked",
-        reason: "The keychain gave no key this session",
-      })!.detail
-    ).toBe("The keychain gave no key this session");
+  it("carries main's own reason for a key storage failure, under a label per kind", () => {
+    const labels = (["locked", "unavailable", "timeout", "weak-storage-unconfirmed"] as const).map(
+      (kind) =>
+        describeConnectResult({ result: "key-storage", kind, reason: "The keychain said no" })!
+    );
+    expect(new Set(labels.map((observed) => observed.label)).size).toBe(labels.length);
+    expect(labels.every((observed) => observed.detail === "The keychain said no")).toBe(true);
+  });
+
+  it("says a claim's keys stay when sealing failed after they were staged", () => {
+    const observed = describeConnectResult({
+      result: "key-storage",
+      kind: "locked",
+      reason: "The keychain gave no key this session",
+      kept: true,
+    })!;
+    expect(observed.detail).toMatch(
+      /^The keychain gave no key this session\. The claim's keys stay on this computer/
+    );
   });
 
   it("says a refused kit saved nothing", () => {

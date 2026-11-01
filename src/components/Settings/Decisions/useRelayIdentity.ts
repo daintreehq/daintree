@@ -3,6 +3,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type {
   ClaimDecisionsRelayPayload,
   DecisionsConnectResult,
+  DecisionsStatus,
   RestoreDecisionsIdentityPayload,
 } from "@shared/types/decisions";
 
@@ -27,10 +28,14 @@ export interface UseRelayIdentityResult {
  * Claims, restores and disconnects, asked of main (#16006). A payload is
  * handed to main and not kept here, so a claim secret or passphrase lives
  * only as long as its field. `onSettled` runs after every attempt, whatever
- * it observed, since an unfinished claim's keys can change the status too.
- * Promise chains rather than try/finally, which the React Compiler can't lower.
+ * it observed, with the status main answered when it changed the identity
+ * and null otherwise, since an unfinished claim's keys can move the status
+ * too. Promise chains rather than try/finally, which the React Compiler
+ * can't lower.
  */
-export function useRelayIdentity(onSettled: () => void): UseRelayIdentityResult {
+export function useRelayIdentity(
+  onSettled: (status: DecisionsStatus | null) => void
+): UseRelayIdentityResult {
   const [pending, setPending] = useState<RelayIdentityAction | null>(null);
   const [result, setResult] = useState<DecisionsConnectResult | null>(null);
   const [error, setError] = useState<UseRelayIdentityResult["error"]>(null);
@@ -46,7 +51,7 @@ export function useRelayIdentity(onSettled: () => void): UseRelayIdentityResult 
 
   const run = (
     action: RelayIdentityAction,
-    call: () => Promise<DecisionsConnectResult | null>
+    call: () => Promise<DecisionsConnectResult | DecisionsStatus>
   ): Promise<boolean> => {
     if (busy.current) return Promise.resolve(false);
     busy.current = true;
@@ -54,12 +59,13 @@ export function useRelayIdentity(onSettled: () => void): UseRelayIdentityResult 
     setPending(action);
     setResult(null);
     setError(null);
+    let status: DecisionsStatus | null = null;
     return call()
       .then(
         (next) => {
-          if (generation.current === mine) {
-            setResult(next && next.result !== "saved" ? next : null);
-          }
+          if ("state" in next) status = next;
+          else if (next.result === "saved") status = next.status;
+          else if (generation.current === mine) setResult(next);
           return true;
         },
         (failure: unknown) => {
@@ -72,7 +78,7 @@ export function useRelayIdentity(onSettled: () => void): UseRelayIdentityResult 
       .then((done) => {
         busy.current = false;
         setPending(null);
-        onSettled();
+        onSettled(status);
         return done;
       });
   };
@@ -85,8 +91,7 @@ export function useRelayIdentity(onSettled: () => void): UseRelayIdentityResult 
     void run("restore", () => window.electron.decisions.restoreIdentity(payload));
   };
 
-  const disconnect = () =>
-    run("disconnect", () => window.electron.decisions.disconnectRelay().then(() => null));
+  const disconnect = () => run("disconnect", () => window.electron.decisions.disconnectRelay());
 
   const reset = () => {
     generation.current += 1;
