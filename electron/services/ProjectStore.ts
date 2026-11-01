@@ -204,6 +204,8 @@ export class ProjectStore {
     (workspaceId: string, state: ProjectState | null) => void
   >();
 
+  private registryListeners = new Set<() => void>();
+
   constructor() {
     this.userDataDir = app.getPath("userData");
     this.projectsConfigDir = path.join(this.userDataDir, "projects");
@@ -238,6 +240,29 @@ export class ProjectStore {
     return () => {
       this.statePersistedListeners.delete(listener);
     };
+  }
+
+  /**
+   * Hear every change to which projects are registered here and where: one
+   * added or removed, or one's path, name or git backing changed. Status,
+   * ranking and counts never fire it. Listeners must not throw back into the
+   * write.
+   */
+  onProjectRegistryChanged(listener: () => void): () => void {
+    this.registryListeners.add(listener);
+    return () => {
+      this.registryListeners.delete(listener);
+    };
+  }
+
+  private notifyRegistryListeners(): void {
+    for (const listener of [...this.registryListeners]) {
+      try {
+        listener();
+      } catch (error) {
+        console.error("[ProjectStore] Registry listener failed:", error);
+      }
+    }
   }
 
   private notifyStatePersistedListeners(workspaceId: string, state: ProjectState | null): void {
@@ -708,6 +733,7 @@ export class ProjectStore {
         lastAccessedAt: now,
       })
       .run();
+    this.notifyRegistryListeners();
 
     return project;
   }
@@ -805,6 +831,7 @@ export class ProjectStore {
         gitBacked: false,
       })
       .run();
+    this.notifyRegistryListeners();
 
     return project;
   }
@@ -915,7 +942,8 @@ export class ProjectStore {
     const project = this.getProjectById(projectId);
 
     const db = getSharedDb();
-    db.delete(projectsTable).where(eq(projectsTable.id, projectId)).run();
+    const removed = db.delete(projectsTable).where(eq(projectsTable.id, projectId)).run();
+    if (removed.changes > 0) this.notifyRegistryListeners();
 
     if (project) {
       this.recipeSynchronizer.pruneInRepoRecipeHashes(project.path);
@@ -1007,7 +1035,14 @@ export class ProjectStore {
     if ("groupId" in updates) set.groupId = updates.groupId ?? null;
 
     if (Object.keys(set).length > 0) {
-      db.update(projectsTable).set(set).where(eq(projectsTable.id, projectId)).run();
+      const updated = db
+        .update(projectsTable)
+        .set(set)
+        .where(eq(projectsTable.id, projectId))
+        .run();
+      if (updated.changes > 0 && ("path" in set || "name" in set || "gitBacked" in set)) {
+        this.notifyRegistryListeners();
+      }
     }
 
     const row = db.select().from(projectsTable).where(eq(projectsTable.id, projectId)).get();

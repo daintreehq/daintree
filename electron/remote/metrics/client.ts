@@ -101,6 +101,8 @@ export interface HostMetricsClientOptions {
     processInventory(): Promise<ProcessInventorySnapshot>;
     /** Told when this machine's worktree list may show something else. */
     onWorktreesMaybeChanged?(listener: () => void): () => void;
+    /** Told when which projects are registered on this machine changed. */
+    onProjectsChanged?(listener: () => void): () => void;
   };
   ringSize?: number;
   /** How long a burst of this machine's worktree changes is gathered; the default outside tests. */
@@ -231,6 +233,7 @@ export class HostMetricsClient {
   private stopLocal: (() => void) | null = null;
   private stopLocalWorktrees: (() => void) | null = null;
   private localWorktrees: WorktreeChangeWatch | null = null;
+  private stopLocalProjects: (() => void) | null = null;
   private readonly ringSize: number;
 
   constructor(private readonly options: HostMetricsClientOptions) {
@@ -251,6 +254,8 @@ export class HostMetricsClient {
     this.stopLocal = null;
     this.stopLocalWorktrees?.();
     this.stopLocalWorktrees = null;
+    this.stopLocalProjects?.();
+    this.stopLocalProjects = null;
     this.summaryListeners.clear();
   }
 
@@ -551,6 +556,10 @@ export class HostMetricsClient {
       this.options.emit({ type: "worktrees", hostId });
       return null;
     });
+    session.registerCallHandler(MetricsLinkMethod.PROJECTS_CHANGED, EmptyPayloadSchema, () => {
+      this.options.emit({ type: "projects", hostId });
+      return null;
+    });
   }
 
   /**
@@ -622,6 +631,16 @@ export class HostMetricsClient {
     } else if (hosts.length === 0 && this.stopLocalWorktrees) {
       this.stopLocalWorktrees();
       this.stopLocalWorktrees = null;
+    }
+    // A window showing another host matches its project against this machine too.
+    const followProjects = this.options.local.onProjectsChanged;
+    if (hosts.length > 0 && !this.stopLocalProjects && followProjects) {
+      this.stopLocalProjects = followProjects(() =>
+        this.options.emit({ type: "projects", hostId: LOCAL_HOST_ID })
+      );
+    } else if (hosts.length === 0 && this.stopLocalProjects) {
+      this.stopLocalProjects();
+      this.stopLocalProjects = null;
     }
   }
 }

@@ -1,6 +1,6 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { LOCAL_HOST_ID, type HostId, type HostPlatform } from "@shared/types/remoteHosts";
-import type { HostProjectPresence } from "@shared/types/ipc/hostSwitch";
+import type { HostProjectPresence, HostSwitchLocatePayload } from "@shared/types/ipc/hostSwitch";
 import type { HostProjectSummary } from "@shared/types/ipc/remoteHosts";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { logWarn } from "@/utils/logger";
@@ -309,17 +309,109 @@ export function useHostProjectLists(
 
 const NO_PRESENCE: ReadonlyMap<HostId, HostProjectPresence> = new Map();
 
+type Locate = (payload: HostSwitchLocatePayload) => Promise<HostProjectPresence[]>;
+
+/** Each answer that landed, by host; undefined where the host gave none. */
+type Landed = ReadonlyMap<HostId, HostProjectPresence | undefined>;
+
+/**
+ * One project's lookups against other hosts, each host on its own: a host is
+ * asked when it becomes a target and when it says its projects changed, and
+ * never because another host was. A host already being asked is asked once
+ * more after its answer, never twice at once, and only its newest answer lands.
+ */
+class PresenceLookups {
+  private readonly targets = new Set<HostId>();
+  /** The request each host's answer is awaited from. */
+  private readonly inFlight = new Map<HostId, number>();
+  /** Hosts told to ask again while a request to them was out. */
+  private readonly again = new Set<HostId>();
+  private nextRequest = 1;
+  private disposed = false;
+
+  constructor(
+    private readonly projectId: string,
+    private readonly locate: Locate,
+    private readonly land: (landed: Landed) => void
+  ) {}
+
+  /** Ask the hosts that weren't targets before, and stop following the ones that left. */
+  setTargets(hostIds: readonly HostId[]): void {
+    const next = new Set(hostIds);
+    for (const hostId of [...this.targets]) {
+      if (next.has(hostId)) continue;
+      this.targets.delete(hostId);
+      this.inFlight.delete(hostId);
+      this.again.delete(hostId);
+    }
+    const added = hostIds.filter((hostId) => !this.targets.has(hostId));
+    for (const hostId of added) this.targets.add(hostId);
+    this.ask(added);
+  }
+
+  /** Ask these targets again: now, or once the answer already on its way lands. */
+  ask(hostIds: readonly HostId[]): void {
+    if (this.disposed) return;
+    const now: HostId[] = [];
+    for (const hostId of hostIds) {
+      if (!this.targets.has(hostId)) continue;
+      if (this.inFlight.has(hostId)) this.again.add(hostId);
+      else now.push(hostId);
+    }
+    if (now.length === 0) return;
+    const request = this.nextRequest++;
+    for (const hostId of now) this.inFlight.set(hostId, request);
+    this.locate({
+      fromHostId: getViewHostId() ?? LOCAL_HOST_ID,
+      projectId: this.projectId,
+      toHostIds: now,
+    }).then(
+      (answers) => {
+        const byHost = new Map(answers.map((answer) => [answer.hostId, answer]));
+        this.settle(request, now, (hostId) => byHost.get(hostId));
+      },
+      (error: unknown) => {
+        logWarn("[Hosts] Couldn't ask other hosts for this project", { error });
+        this.settle(request, now, (hostId) => ({ hostId, projects: null }));
+      }
+    );
+  }
+
+  dispose(): void {
+    this.disposed = true;
+  }
+
+  private settle(
+    request: number,
+    hostIds: readonly HostId[],
+    answerOf: (hostId: HostId) => HostProjectPresence | undefined
+  ): void {
+    if (this.disposed) return;
+    const landed = new Map<HostId, HostProjectPresence | undefined>();
+    const again: HostId[] = [];
+    for (const hostId of hostIds) {
+      // Superseded: the host left the targets (and may be back on a newer request).
+      if (this.inFlight.get(hostId) !== request) continue;
+      this.inFlight.delete(hostId);
+      landed.set(hostId, answerOf(hostId));
+      if (this.again.delete(hostId)) again.push(hostId);
+    }
+    if (landed.size > 0) this.land(landed);
+    this.ask(again);
+  }
+}
+
 /**
  * What each other host has of `projectId`, by repository identity (a remote
- * URL shared with it), asked of the Shell when the menu opens. Absent from
- * the map while it is being asked; `projects: null` when the host couldn't
- * be asked. A project that merely shares the name is never counted. A new
- * `revision` asks again, for a caller that heard a host's projects change.
+ * URL shared with it), asked of the Shell. Absent from the map while it is
+ * being asked; `projects: null` when the host couldn't be asked. A project
+ * that merely shares the name is never counted. Each host is asked when it
+ * joins `hostIds` and again when it says its projects changed, and only that
+ * host: agent activity never asks, and a host that joins never re-asks the rest.
  */
 export function useProjectPresence(
   projectId: string,
-  hostIds: readonly HostId[],
-  revision = 0
+  hostIds: readonly HostId[]
 ): ReadonlyMap<HostId, HostProjectPresence> {
   const key = hostIds.join("\n");
   // Answers carry the project they were asked about: one asked about the
@@ -328,31 +420,36 @@ export function useProjectPresence(
     projectId: string;
     presence: ReadonlyMap<HostId, HostProjectPresence>;
   }>(() => ({ projectId, presence: new Map() }));
+  const lookupsRef = useRef<PresenceLookups | null>(null);
+
   useEffect(() => {
-    const ids = key === "" ? [] : key.split("\n");
     const locate = window.electron?.hostSwitch?.locate;
-    if (ids.length === 0 || typeof locate !== "function") return;
-    let cancelled = false;
-    locate({ fromHostId: getViewHostId() ?? LOCAL_HOST_ID, projectId, toHostIds: ids })
-      .then((answers) => {
-        if (cancelled) return;
-        setAnswered({
-          projectId,
-          presence: new Map(answers.map((answer) => [answer.hostId, answer])),
-        });
+    if (typeof locate !== "function") return;
+    const lookups = new PresenceLookups(projectId, locate, (landed) =>
+      setAnswered((previous) => {
+        const presence = new Map(previous.projectId === projectId ? previous.presence : []);
+        for (const [hostId, answer] of landed) {
+          if (answer) presence.set(hostId, answer);
+          else presence.delete(hostId);
+        }
+        return { projectId, presence };
       })
-      .catch((error: unknown) => {
-        logWarn("[Hosts] Couldn't ask other hosts for this project", { error });
-        if (cancelled) return;
-        setAnswered({
-          projectId,
-          presence: new Map(ids.map((hostId) => [hostId, { hostId, projects: null }])),
-        });
-      });
+    );
+    lookupsRef.current = lookups;
+    const off = window.electron?.hostMetrics?.onEvent?.((event) => {
+      if (event.type === "projects") lookups.ask([event.hostId]);
+    });
     return () => {
-      cancelled = true;
+      lookups.dispose();
+      off?.();
+      if (lookupsRef.current === lookups) lookupsRef.current = null;
     };
-  }, [projectId, key, revision]);
+  }, [projectId]);
+
+  useEffect(() => {
+    lookupsRef.current?.setTargets(key === "" ? [] : key.split("\n"));
+  }, [projectId, key]);
+
   return answered.projectId === projectId ? answered.presence : NO_PRESENCE;
 }
 

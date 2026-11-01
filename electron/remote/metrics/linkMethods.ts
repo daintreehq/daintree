@@ -34,6 +34,13 @@ export const MetricsLinkMethod = {
    */
   WORKTREES_CHANGED: "host.worktrees-changed",
   /**
+   * Host → Shell: the projects registered on the host changed (one added,
+   * removed, moved or renamed), so which of them match a Shell's project may
+   * have. Carries nothing. Agent activity never sends it. A Shell from before
+   * it existed refuses the call, which the host ignores.
+   */
+  PROJECTS_CHANGED: "host.projects-changed",
+  /**
    * Shell → Host: what restarting the host would end (terminals by project,
    * running operations, other attached Shells). A host from before it existed
    * answers UNSUPPORTED, and the Shell falls back to the summary's counts.

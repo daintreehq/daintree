@@ -112,6 +112,7 @@ function deps(overrides: Partial<MetricsHostDeps> = {}): MetricsHostDeps & {
     submitFleet: async () => {},
     listWorktrees: async () => [],
     onWorktreesMaybeChanged: () => () => {},
+    onProjectsChanged: () => () => {},
     restartTerminals: async () => ({
       projects: [],
       complete: true,
@@ -395,6 +396,51 @@ describe("installHostMetricsHostWith", () => {
     await waitFor(() => heardA === 2 && heardB === 2);
 
     dispose();
+  });
+
+  it("tells every attached Shell when its projects change, and never for agent activity", async () => {
+    const server = new FakeServer();
+    let projectsChanged: (() => void) | null = null;
+    let worktreesChanged: () => void = () => {};
+    const dispose = installHostMetricsHostWith(
+      server,
+      deps({
+        listWorktrees: async () => [],
+        onWorktreesMaybeChanged: (listener) => {
+          worktreesChanged = listener;
+          return () => (worktreesChanged = () => {});
+        },
+        onProjectsChanged: (listener) => {
+          projectsChanged = listener;
+          return () => (projectsChanged = null);
+        },
+        worktreesChangedDelayMs: 5,
+      })
+    );
+    const a = await pair();
+    const b = await pair();
+    server.attach(a.host, "a");
+    server.attach(b.host, "b");
+    let heardA = 0;
+    let heardB = 0;
+    a.client.registerCallHandler(MetricsLinkMethod.PROJECTS_CHANGED, EmptyPayloadSchema, () => {
+      heardA++;
+      return null;
+    });
+    b.client.registerCallHandler(MetricsLinkMethod.PROJECTS_CHANGED, EmptyPayloadSchema, () => {
+      heardB++;
+      return null;
+    });
+
+    worktreesChanged();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(heardA + heardB).toBe(0);
+
+    projectsChanged!();
+    await waitFor(() => heardA === 1 && heardB === 1);
+
+    dispose();
+    expect(projectsChanged).toBeNull();
   });
 
   it("catches a list change no worktree event announced on the next sample", async () => {

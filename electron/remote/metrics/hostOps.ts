@@ -340,6 +340,15 @@ export function onLocalWorktreesMaybeChanged(listener: () => void): () => void {
   };
 }
 
+/**
+ * Be told whenever which projects this machine has may have changed: one was
+ * added or removed, or moved, renamed or changed its git backing. The only
+ * thing that changes which of them another machine's project matches here.
+ */
+export function onLocalProjectsChanged(listener: () => void): () => void {
+  return projectStore.onProjectRegistryChanged(listener);
+}
+
 /** Every worktree of this host's open projects. */
 export async function listLocalWorktrees(): Promise<HostWorktreeEntry[]> {
   const client = getWorkspaceClientRef();
