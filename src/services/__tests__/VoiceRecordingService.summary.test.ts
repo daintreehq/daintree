@@ -398,6 +398,26 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
     }
   });
 
+  it("logs a session another screen's takeover ended as lease_lost, counting no words after it", async () => {
+    const harness = setupGlobals();
+    const { service, summaries } = await load();
+    const { setLeaseInputBlock } = await import("@/services/terminal/inputGate");
+
+    const sessionId = await startLive(harness, service, { ...TARGET, projectId: "project-1" });
+    harness.emit("complete", { sessionId, text: DICTATED, itemId: "item-1" });
+    harness.paintFrames();
+    setLeaseInputBlock({ kind: "driven-elsewhere", driverName: "Studio Mac" });
+    harness.emit("complete", { sessionId, text: "words for nobody", itemId: "item-2" });
+    await vi.waitFor(() => expect(summaries()).toHaveLength(1));
+
+    expect(draftState.draft).toBe(DICTATED);
+    expect(summaries()[0]).toMatchObject({
+      sessionId,
+      stopReason: "lease_lost",
+      charsCommitted: DICTATED.length,
+    });
+  });
+
   it("drops a report that smuggles text, still logging the session once", async () => {
     const harness = setupGlobals({ reportOnStop: false });
     const { service, summaries } = await load();
