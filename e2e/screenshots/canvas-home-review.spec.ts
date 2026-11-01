@@ -426,6 +426,10 @@ test("canvas home review — every state of the empty grid", async () => {
   // over the screen: background windows (transparent, click-through, never
   // activated) exist only on macOS, and nothing below focuses, shows, raises,
   // maximizes or fullscreens a window.
+  test.info().annotations.push({
+    type: "conditional-skip",
+    description: "canvas-home-review needs macOS background windows",
+  });
   test.skip(process.platform !== "darwin", "canvas-home-review needs macOS background windows");
 
   mkdirSync(OUTPUT_DIR, { recursive: true });
