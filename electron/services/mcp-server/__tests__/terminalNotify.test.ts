@@ -43,6 +43,7 @@ import type {
   TerminalSubmissionPhase,
   TerminalSubmissionRecord,
 } from "../../../../shared/types/terminalSubmission.js";
+import type { TerminalSubmitGuard } from "../../../../shared/types/pty-host.js";
 
 const PROJECT = "project-1";
 const OTHER_PROJECT = "project-2";
@@ -53,7 +54,7 @@ interface Submitted {
   id: string;
   text: string;
   token?: string;
-  guard?: string;
+  guard?: TerminalSubmitGuard;
   promptAsWritten?: string | null;
 }
 
@@ -82,7 +83,7 @@ class FakePtyClient implements TerminalNotifyPtyClient {
     text: string,
     token?: string,
     _handback?: string,
-    guard?: string,
+    guard?: TerminalSubmitGuard,
     _imagePaths?: readonly string[],
     promptAsWritten?: string | null
   ) {

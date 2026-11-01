@@ -18,6 +18,7 @@ import {
   NOTIFY_COALESCE_MS,
   NOTIFY_SETTLE_GRACE_MS,
 } from "../../../../shared/types/terminalNotify.js";
+import type { TerminalSubmitGuard } from "../../../../shared/types/pty-host.js";
 import type { TerminalSubmissionPhase } from "../../../../shared/types/terminalSubmission.js";
 import { parseAnswerNotice, renderDecisionSection } from "../answerNotice.js";
 import { DaintreeTerminalSink, type DecisionSinkPtyClient } from "../daintreeTerminalSink.js";
@@ -47,7 +48,7 @@ interface Submitted {
   id: string;
   text: string;
   token?: string;
-  guard?: string;
+  guard?: TerminalSubmitGuard;
 }
 
 class FakePtyClient implements TerminalNotifyPtyClient, DecisionSinkPtyClient {
@@ -69,7 +70,13 @@ class FakePtyClient implements TerminalNotifyPtyClient, DecisionSinkPtyClient {
     };
   }
 
-  submit(id: string, text: string, token?: string, _handback?: string, guard?: string) {
+  submit(
+    id: string,
+    text: string,
+    token?: string,
+    _handback?: string,
+    guard?: TerminalSubmitGuard
+  ) {
     this.submitted.push({ id, text, token, guard });
   }
 
