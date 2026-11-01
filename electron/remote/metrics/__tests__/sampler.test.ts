@@ -349,10 +349,13 @@ describe("HostMetricsSampler", () => {
       expect(await step(100_000, 0)).toBeNull();
       // Three intervals of one core, 7.5 CPU-seconds busy: half.
       expect(await step(115_000, 7_500_000)).toBe(50);
+      // A millisecond more is too long a gap; the reading still starts the next interval.
+      expect(await step(130_001, 15_000_000)).toBeNull();
+      expect(await step(135_001, 17_500_000)).toBe(50);
       // An hour later, 10% across it: no reading of the load now.
-      expect(await step(115_000 + 3_600_000, 367_500_000)).toBeNull();
+      expect(await step(135_001 + 3_600_000, 377_500_000)).toBeNull();
       // Five seconds on, 4 CPU-seconds since the resumed reading: 80%, never the hour's average.
-      expect(await step(120_000 + 3_600_000, 371_500_000)).toBe(80);
+      expect(await step(140_001 + 3_600_000, 381_500_000)).toBe(80);
     });
 
     it("reads a v1-only host as the machine", async () => {
