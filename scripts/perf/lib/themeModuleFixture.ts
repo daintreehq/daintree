@@ -86,7 +86,9 @@ export interface ThemeModuleEvaluation {
 }
 
 function countMatches(source: string, pattern: RegExp): number {
-  return source.match(new RegExp(pattern.source, `${pattern.flags.replace("g", "")}g`))?.length ?? 0;
+  return (
+    source.match(new RegExp(pattern.source, `${pattern.flags.replace("g", "")}g`))?.length ?? 0
+  );
 }
 
 /**

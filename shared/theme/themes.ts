@@ -73,52 +73,52 @@ export interface DaintreeTokenOptions {
 }
 
 type DaintreeTokenInput = Partial<AppColorSchemeTokens> &
-    Pick<
-      AppColorSchemeTokens,
-      | "surface-canvas"
-      | "surface-sidebar"
-      | "surface-panel"
-      | "surface-panel-elevated"
-      | "surface-grid"
-      | "text-primary"
-      | "text-secondary"
-      | "text-muted"
-      | "text-inverse"
-      | "border-default"
-      | "accent-primary"
-      | "status-success"
-      | "status-warning"
-      | "status-danger"
-      | "status-info"
-      | "activity-active"
-      | "activity-idle"
-      | "activity-working"
-      | "activity-waiting"
-      | "terminal-selection"
-      | "terminal-red"
-      | "terminal-green"
-      | "terminal-yellow"
-      | "terminal-blue"
-      | "terminal-magenta"
-      | "terminal-cyan"
-      | "terminal-bright-red"
-      | "terminal-bright-green"
-      | "terminal-bright-yellow"
-      | "terminal-bright-blue"
-      | "terminal-bright-magenta"
-      | "terminal-bright-cyan"
-      | "terminal-bright-white"
-      | "syntax-comment"
-      | "syntax-punctuation"
-      | "syntax-number"
-      | "syntax-string"
-      | "syntax-operator"
-      | "syntax-keyword"
-      | "syntax-function"
-      | "syntax-link"
-      | "syntax-quote"
-      | "syntax-chip"
-    >;
+  Pick<
+    AppColorSchemeTokens,
+    | "surface-canvas"
+    | "surface-sidebar"
+    | "surface-panel"
+    | "surface-panel-elevated"
+    | "surface-grid"
+    | "text-primary"
+    | "text-secondary"
+    | "text-muted"
+    | "text-inverse"
+    | "border-default"
+    | "accent-primary"
+    | "status-success"
+    | "status-warning"
+    | "status-danger"
+    | "status-info"
+    | "activity-active"
+    | "activity-idle"
+    | "activity-working"
+    | "activity-waiting"
+    | "terminal-selection"
+    | "terminal-red"
+    | "terminal-green"
+    | "terminal-yellow"
+    | "terminal-blue"
+    | "terminal-magenta"
+    | "terminal-cyan"
+    | "terminal-bright-red"
+    | "terminal-bright-green"
+    | "terminal-bright-yellow"
+    | "terminal-bright-blue"
+    | "terminal-bright-magenta"
+    | "terminal-bright-cyan"
+    | "terminal-bright-white"
+    | "syntax-comment"
+    | "syntax-punctuation"
+    | "syntax-number"
+    | "syntax-string"
+    | "syntax-operator"
+    | "syntax-keyword"
+    | "syntax-function"
+    | "syntax-link"
+    | "syntax-quote"
+    | "syntax-chip"
+  >;
 
 export function createDaintreeTokens(
   type: "dark" | "light",
@@ -753,9 +753,7 @@ export function deriveStatusTextInks(
   >) {
     const ink = tokens[source];
     if (typeof ink !== "string") continue;
-    const backdrops = resolveStatusTextBackdrops(ink, tokens, rows).map(
-      (backdrop) => backdrop.hex
-    );
+    const backdrops = resolveStatusTextBackdrops(ink, tokens, rows).map((backdrop) => backdrop.hex);
     inks[key] = liftToContrast(ink, backdrops, STATUS_TEXT_DERIVATION_TARGET, type);
   }
   return inks;
