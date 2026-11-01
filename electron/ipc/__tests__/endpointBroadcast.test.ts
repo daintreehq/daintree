@@ -34,6 +34,7 @@ import {
   broadcastToProjectRenderers,
   getProjectPushTargets,
   broadcastToProjectRenderersExcept,
+  broadcastToRemoteEndpoints,
   broadcastToRenderer,
   broadcastToVisibleRenderers,
   sendToRenderer,
@@ -44,7 +45,7 @@ import {
 } from "../utils.js";
 import { getAppWebContents } from "../../window/webContentsRegistry.js";
 import { getEndpointRegistry, _resetEndpointRegistryForTesting } from "../endpointRegistry.js";
-import type { ClientEndpoint, HostFrame } from "../endpoint.js";
+import type { ClientEndpoint, EndpointGroup, HostFrame } from "../endpoint.js";
 import type { IpcContext } from "../types.js";
 
 function endpoint(
@@ -63,6 +64,14 @@ function endpoint(
     onClose: () => ({ dispose: () => undefined }),
     isClosed: () => false,
   };
+}
+
+function group(): EndpointGroup & { sendToAll: Mock<(frame: HostFrame) => void> } {
+  return { sendToAll: vi.fn<(frame: HostFrame) => void>() };
+}
+
+function grouped(handle: number, projectId: string | null, of: EndpointGroup) {
+  return Object.assign(endpoint(handle, projectId), { group: of });
 }
 
 function localView(id: number) {
@@ -188,6 +197,66 @@ describe("broadcast helpers with remote endpoints", () => {
 
     expect(() => broadcastToRenderer("a:b")).not.toThrow();
     expect(healthy.send).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("broadcast helpers with a link session's grouped endpoints (#15902)", () => {
+  it("push each session once from the global helpers, and ungrouped endpoints one by one", () => {
+    const studio = group();
+    const laptop = group();
+    const a = grouped(-1, "proj-1", studio);
+    const b = grouped(-2, "proj-2", studio);
+    const c = grouped(-3, "proj-1", laptop);
+    const loose = endpoint(-4, "proj-1");
+    for (const ep of [a, b, c, loose]) getEndpointRegistry().add(ep);
+
+    broadcastToRenderer("a:b", 1);
+    broadcastToVisibleRenderers("a:c", 2);
+    typedBroadcast("a:d" as never, { x: 3 } as never);
+    broadcastToRemoteEndpoints("events:push", [{ name: "system:wake", payload: {} }]);
+
+    const expected = [
+      [{ type: "event", channel: "a:b", args: [1] }],
+      [{ type: "event", channel: "a:c", args: [2] }],
+      [{ type: "event", channel: "a:d", args: [{ x: 3 }] }],
+      [{ type: "event", channel: "events:push", args: [{ name: "system:wake", payload: {} }] }],
+    ];
+    expect(studio.sendToAll.mock.calls).toEqual(expected);
+    expect(laptop.sendToAll.mock.calls).toEqual(expected);
+    expect(loose.send.mock.calls).toEqual(expected);
+    for (const ep of [a, b, c]) expect(ep.send).not.toHaveBeenCalled();
+  });
+
+  it("address each grouped endpoint for project-scoped and excluding pushes", () => {
+    hasProjectViewsMock.mockReturnValue(true);
+    const studio = group();
+    const a = grouped(-1, "proj-1", studio);
+    const b = grouped(-2, "proj-1", studio);
+    const c = grouped(-3, "proj-2", studio);
+    for (const ep of [a, b, c]) getEndpointRegistry().add(ep);
+
+    broadcastToProjectRenderers("proj-1", "terminal:data", "one");
+    broadcastToProjectRenderersExcept(null, new Set([-2]), "terminal:data", "all-but-b");
+
+    expect(studio.sendToAll).not.toHaveBeenCalled();
+    expect(a.send.mock.calls.map(([frame]) => frame.args)).toEqual([["one"], ["all-but-b"]]);
+    expect(b.send.mock.calls.map(([frame]) => frame.args)).toEqual([["one"]]);
+    expect(c.send.mock.calls.map(([frame]) => frame.args)).toEqual([["all-but-b"]]);
+  });
+
+  it("keep delivering to other sessions when one session's push throws", () => {
+    const broken = group();
+    broken.sendToAll.mockImplementation(() => {
+      throw new Error("link closing");
+    });
+    const healthy = group();
+    getEndpointRegistry().add(grouped(-1, null, broken));
+    getEndpointRegistry().add(grouped(-2, null, broken));
+    getEndpointRegistry().add(grouped(-3, null, healthy));
+
+    expect(() => broadcastToRenderer("a:b")).not.toThrow();
+    expect(broken.sendToAll).toHaveBeenCalledTimes(1);
+    expect(healthy.sendToAll).toHaveBeenCalledTimes(1);
   });
 });
 

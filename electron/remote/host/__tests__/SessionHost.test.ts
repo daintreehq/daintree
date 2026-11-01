@@ -13,7 +13,7 @@ import { logBuffer } from "../../../services/LogBuffer.js";
 import { wrapSuccess } from "../../../../shared/utils/ipcErrorSerialization.js";
 import type { IpcEnvelope } from "../../../../shared/types/ipc/errors.js";
 import { Lane } from "../../link/frames.js";
-import { ControlKind } from "../../link/messages.js";
+import { ControlKind, EventKind } from "../../link/messages.js";
 import type { EnqueueResult } from "../../link/scheduler.js";
 import type { LinkSession } from "../../link/session.js";
 import type { HostSessionContext, HostSessionExpired } from "../HostServer.js";
@@ -483,6 +483,157 @@ describe("SessionHost", () => {
     expect(handle.link()).toBe(link);
     link.drop();
     expect(handle.link()).toBeNull();
+  });
+});
+
+describe("SessionHost: one push for every view of a session (#15902)", () => {
+  const frame = { type: "event" as const, channel: "worktree:update", args: [{ id: "w" }] };
+  const events = (link: ReturnType<typeof fakeLink>) =>
+    link.posted.filter((m) => m.lane === Lane.EVENTS && m.kind === EventKind.EVENT);
+
+  it("posts one EVENT addressed to the whole session, and none to another session", () => {
+    const one = fakeLink();
+    const two = fakeLink();
+    server.attach("s1", one);
+    server.attach("s2", two, false, "c2");
+    open(one, "view-1", "p1");
+    open(one, "view-2", "p2");
+    open(two, "view-1", "p1");
+    const [a, b] = registry.getRemote().filter((e) => e.clientId === "c1");
+    const other = registry.getRemote().find((e) => e.clientId === "c2")!;
+    expect(a!.group).toBeDefined();
+    expect(b!.group).toBe(a!.group);
+    expect(other.group).not.toBe(a!.group);
+
+    a!.group!.sendToAll(frame);
+
+    expect(events(one)).toEqual([
+      {
+        lane: Lane.EVENTS,
+        kind: EventKind.EVENT,
+        body: { endpointId: null, channel: frame.channel, args: frame.args },
+      },
+    ]);
+    expect(events(two)).toEqual([]);
+  });
+
+  it("keeps the group of a resumed session, so its views still share one push", () => {
+    const first = fakeLink();
+    server.attach("s1", first);
+    open(first, "view-1", "p1");
+    const group = registry.getRemote()[0]!.group;
+    first.drop();
+    const second = fakeLink();
+    server.attach("s1", second, true);
+    open(second, "view-2", "p1");
+
+    expect(registry.getRemote().map((e) => e.group)).toEqual([group, group]);
+    group!.sendToAll(frame);
+    expect(events(second).map((m) => (m.body as { endpointId: unknown }).endpointId)).toEqual([
+      null,
+    ]);
+  });
+
+  it("addresses each endpoint while the Shell holds a view refused at the cap", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p1");
+    open(link, "view-3", "p1");
+    const group = registry.getRemote()[0]!.group!;
+
+    group.sendToAll(frame);
+    // The Shell would hand a session-wide event to view-3 too, which has no endpoint here.
+    expect(events(link).map((m) => (m.body as { endpointId: unknown }).endpointId)).toEqual([
+      "view-1",
+      "view-2",
+    ]);
+
+    link.emit(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, { endpointId: "view-3" });
+    link.posted.length = 0;
+    group.sendToAll(frame);
+    expect(events(link).map((m) => (m.body as { endpointId: unknown }).endpointId)).toEqual([
+      null,
+    ]);
+  });
+
+  it("owes every view of the session a repaint when the event can't be sent", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+    const group = registry.getRemote()[0]!.group!;
+    link.post = vi.fn(() => {
+      throw new Error("frame too large");
+    });
+
+    group.sendToAll(frame);
+
+    expect(link.calls).toEqual([
+      {
+        method: LinkMethod.ENDPOINT_RESYNC,
+        payload: { endpointIds: ["view-1", "view-2"], reason: "overflow" },
+      },
+    ]);
+  });
+
+  it("drops session-wide events while the Shell resyncs, then resumes them", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+    const group = registry.getRemote()[0]!.group!;
+
+    link.postResult = "refused";
+    group.sendToAll(frame);
+    link.postResult = "queued";
+    const posted = link.posted.length;
+    group.sendToAll(frame);
+    expect(link.posted).toHaveLength(posted);
+
+    link.tick();
+    expect(link.calls).toEqual([
+      {
+        method: LinkMethod.ENDPOINT_RESYNC,
+        payload: { endpointIds: ["view-1", "view-2"], reason: "overflow" },
+      },
+    ]);
+    group.sendToAll(frame);
+    expect(link.posted).toHaveLength(posted + 1);
+  });
+
+  it("resyncs the session when session-wide events keep its lane over high water", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+    const group = registry.getRemote()[0]!.group!;
+
+    link.postResult = "over-high-water";
+    link.queued = 5_000;
+    group.sendToAll(frame);
+    vi.advanceTimersByTime(100);
+    link.queued = 0;
+    link.postResult = "queued";
+    link.tick();
+
+    expect(link.calls).toEqual([
+      {
+        method: LinkMethod.ENDPOINT_RESYNC,
+        payload: { endpointIds: ["view-1", "view-2"], reason: "overflow" },
+      },
+    ]);
+  });
+
+  it("posts nothing for a session with no open endpoint", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    const group = registry.getRemote()[0]!.group!;
+    link.emit(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, { endpointId: "view-1" });
+
+    group.sendToAll(frame);
+    expect(events(link)).toEqual([]);
   });
 });
 
