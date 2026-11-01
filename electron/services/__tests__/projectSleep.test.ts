@@ -272,6 +272,35 @@ describe("sleepProject", () => {
       });
     });
 
+    it("asks every window, not just the first", async () => {
+      holdDictationView(CACHED_VIEW_ID);
+      const quietWindow = {
+        getActiveProjectId: () => "elsewhere",
+        win: { id: 2, isDestroyed: () => false },
+        isMcpDispatchProtected: () => false,
+        isDictationHeld: () => false,
+      } as unknown as ProjectViewManager;
+
+      const outcome = await sleepProject(
+        "proj-1",
+        policy(),
+        makeDeps(() => [quietWindow, backgroundWindow()])
+      );
+
+      expect(outcome).toEqual({ status: "skipped", reason: "dictation" });
+    });
+
+    it("stops after the revoke when a dictation started during it", async () => {
+      helpSessionServiceMock.revokeByProjectId.mockImplementationOnce(async () => {
+        holdDictationView(CACHED_VIEW_ID);
+      });
+
+      const outcome = await sleepProject("proj-1", policy(), makeDeps());
+
+      expect(outcome).toEqual({ status: "skipped", reason: "dictation" });
+      expect(teardownMock.gracefulTeardownAndJournalProject).not.toHaveBeenCalled();
+    });
+
     it("keeps the view when a dictation starts there while the kill is in flight", async () => {
       teardownMock.gracefulTeardownAndJournalProject.mockImplementationOnce(async () => {
         holdDictationView(CACHED_VIEW_ID);

@@ -315,13 +315,14 @@ function staleAssistant(projectId: string, terminalId = `t-help-${projectId}`): 
 function makePvm(
   activeId: string | null,
   outgoingId: string | null = null,
-  mcpDispatchFor: ReadonlySet<string> = new Set()
+  mcpDispatchFor: ReadonlySet<string> = new Set(),
+  dictationFor: ReadonlySet<string> = new Set()
 ): ProjectViewManager {
   return {
     getActiveProjectId: () => activeId,
     getOutgoingBridgeProjectId: () => outgoingId,
     isMcpDispatchProtected: (projectId: string) => mcpDispatchFor.has(projectId),
-    isDictationHeld: () => false,
+    isDictationHeld: (projectId: string) => dictationFor.has(projectId),
   } as unknown as ProjectViewManager;
 }
 
@@ -1591,6 +1592,40 @@ describe("IdleBackgroundAutoCloseService", () => {
       expect(evictProjectRendererMock).not.toHaveBeenCalled();
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
       expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
+    });
+  });
+
+  // Destroying the view a dictation started from cancels the session, and its
+  // words go to the draft store, never the PTY, so no idle check sees them.
+  describe("dictation holds (#15920)", () => {
+    it("leaves a project a dictation still needs, and closes it on the sweep after", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      const dictating = new Set(["proj-1"]);
+      const service = makeService();
+      service.setProjectViewManagersProvider(() => [
+        makePvm("other"),
+        makePvm("another", null, new Set(), dictating),
+      ]);
+
+      await runCheck(service);
+
+      expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalled();
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+      expect(evictProjectRendererMock).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+
+      dictating.clear();
+      await runCheck(service);
+
+      expect(evictProjectRendererMock).toHaveBeenCalledWith("proj-1", {
+        protectMcpDispatch: true,
+      });
+      expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith(
+        "proj-1",
+        "closed",
+        expect.anything()
+      );
     });
   });
 
