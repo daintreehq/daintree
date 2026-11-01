@@ -1403,6 +1403,9 @@ export class RemoteHostManager {
       this.options.registry.recordObservation(hostId, { lastSeenAt: this.now() });
     }
     await connection.stop();
+    // Dialled again while this one stopped: the newer connection's own states
+    // are what the host is, and this would land on top of them.
+    if (this.connections.has(hostId)) return;
     this.emit(hostId, { status: "disconnected" });
   }
 
