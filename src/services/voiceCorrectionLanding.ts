@@ -139,22 +139,22 @@ export function outsideWriteChange(
 
 /**
  * Whether the composer was typed into after `landed` was placed in the text it
- * showed (`placedIn`, what it last wrote through). Its passages may have been
- * typed into, so the composer's text stands and the correction is dropped, as
- * an edit to a passage drops it (#15873). A composer that was only behind the
- * draft, typing nothing, still takes the correction.
+ * left in the store (`synced`: what it last wrote there or showed from there).
+ * Its passages may have been typed into, so the composer's text stands and the
+ * correction is dropped, as an edit to a passage drops it (#15873). A composer
+ * that was only behind the draft, typing nothing, still takes the correction.
  */
 export function typedPastCorrection(
   shown: string,
   draft: string,
   landed: LandedCorrection | null,
-  placedIn: string | null
+  synced: string
 ): landed is LandedCorrection {
   const write = landed?.write;
   return (
     write !== undefined &&
     write.after === draft &&
-    write.before === placedIn &&
+    write.before === synced &&
     shown !== write.before &&
     shown !== write.after
   );

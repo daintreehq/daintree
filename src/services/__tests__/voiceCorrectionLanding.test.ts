@@ -86,7 +86,7 @@ describe("typedPastCorrection (#15873)", () => {
     write: { before, after, changes: [{ from: 8, to: 19, insert: "Hello, there." }] },
   };
 
-  it("holds once the composer was typed into after handing its text to the correction", () => {
+  it("holds once the composer was typed into after the correction was placed in its text", () => {
     expect(typedPastCorrection("/review now hello there", after, landed, before)).toBe(true);
   });
 
@@ -95,10 +95,11 @@ describe("typedPastCorrection (#15873)", () => {
     expect(typedPastCorrection(after, after, landed, before)).toBe(false);
   });
 
-  it("leaves a correction placed in text the composer didn't hand it", () => {
-    // Only behind the draft: an outside write it hadn't shown yet.
-    expect(typedPastCorrection("hello there", after, landed, null)).toBe(false);
+  it("leaves a correction placed in an outside write the composer was behind", () => {
     expect(typedPastCorrection("hello there", after, landed, "hello there")).toBe(false);
+    expect(typedPastCorrection("/review now hello there", after, landed, "hello there")).toBe(
+      false
+    );
   });
 
   it("leaves a draft written to again since the correction landed", () => {

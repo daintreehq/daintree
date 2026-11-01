@@ -524,13 +524,39 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     landing.registerComposerDraftWriter("panel-1", undefined, () =>
       inputStore.getState().setDraftInput("panel-1", "/review fix the parsr")
     );
+    const { externalDraftRevision, caretMovingDraftRevision } = inputStore.getState();
 
     first.resolve({ action: "replace", correctedText: "Fix the parser." });
     await flush();
 
     expect(draft("panel-1")).toBe("/review Fix the parser.");
     const landed = landing.takeLandedCorrection("panel-1", undefined, draft("panel-1"));
+    expect(landed?.from).toBe("/review ".length);
     expect(landed?.write?.before).toBe("/review fix the parsr");
+    // The composer is told, and the caret it shows in the typing is left there.
+    expect(inputStore.getState().externalDraftRevision).toBeGreaterThan(externalDraftRevision);
+    expect(inputStore.getState().caretMovingDraftRevision).toBe(caretMovingDraftRevision);
+  });
+
+  it("lands every passage around typing written through between them", async () => {
+    const { service, dictate, say, draft, flush, inputStore } = await setup();
+    correct.mockImplementation(async ({ rawText }) => ({
+      action: "replace",
+      correctedText: rawText.replace("parsr", "parser").replace("lexr", "lexer"),
+    }));
+    const landing = await import("@/services/voiceCorrectionLanding");
+
+    dictate("panel-1", "the parsr");
+    inputStore.getState().setDraftInput("panel-1", draft("panel-1") + "\n");
+    say("the lexr");
+    expect(draft("panel-1")).toBe("the parsr\nthe lexr");
+    landing.registerComposerDraftWriter("panel-1", undefined, () =>
+      inputStore.getState().setDraftInput("panel-1", "the parsr\nnote: the lexr")
+    );
+    await service.stop();
+    await flush();
+
+    expect(draft("panel-1")).toBe("the parser\nnote: the lexer");
   });
 
   it("drops a correction whose passage the composer's typing reached before the store did", async () => {

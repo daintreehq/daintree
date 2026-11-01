@@ -616,7 +616,9 @@ describe("HybridInputBar when a correction lands while a keystroke is on its way
   it("keeps the keystroke when the correction syncs into the editor before the write-back", async () => {
     const view = await mountWithDictation();
 
-    // The keystroke's render waits behind the store's: the sync runs alone first.
+    // Forces the other order: the keystroke's render held behind the store's
+    // (a transition stands in for any lower-priority render), so the sync
+    // commits alone first.
     await act(async () => {
       startTransition(() => type(view, 0, TYPED));
       expect(view.state.doc.toString()).toBe(TYPED + RAW);
@@ -636,6 +638,20 @@ describe("HybridInputBar when a correction lands while a keystroke is on its way
     await undo(view);
     expect(view.state.doc.toString()).toBe(TYPED + RAW);
     expect(draft()).toBe(TYPED + RAW);
+  });
+
+  it("keeps typing whose earlier keystrokes already reached the draft", async () => {
+    const view = await mountWithDictation();
+    await act(async () => type(view, 0, "/re"));
+    expect(draft()).toBe("/re" + RAW);
+
+    await act(async () => {
+      type(view, "/re".length, "view ");
+      replyWithCorrection();
+    });
+
+    expect(draft()).toBe(TYPED + CORRECTED);
+    expect(view.state.doc.toString()).toBe(TYPED + CORRECTED);
   });
 
   it("keeps a keystroke typed after the passage", async () => {
@@ -666,8 +682,8 @@ describe("HybridInputBar when a correction lands while a keystroke is on its way
     expect(view.state.selection.main.head).toBe(TYPED.length + "now ".length);
     expect(reviewing(view)).toBe(false);
     expect(marks(view)).toEqual([]);
-    expect(useVoiceRecordingStore.getState().panelBuffers["term-1"]?.sessionCorrectedText).not.toBe(
-      FIXED
+    expect(useVoiceRecordingStore.getState().panelBuffers["term-1"]?.sessionCorrectedText).toBe(
+      PASSAGE
     );
 
     await act(async () => {});
@@ -688,5 +704,23 @@ describe("HybridInputBar when a correction lands while a keystroke is on its way
 
     expect(draft()).toBe("Intro. " + CORRECTED);
     expect(view.state.doc.toString()).toBe("Intro. " + CORRECTED);
+  });
+
+  it("lands a later correction over an outside write the editor is behind, after typing an earlier one", async () => {
+    const view = await mountWithDictation();
+    await act(async () => replyWithCorrection());
+    await act(async () => type(view, CORRECTED.length, " later"));
+    expect(draft()).toBe(CORRECTED + " later");
+
+    // The raw words put back from outside, and corrected again before the editor shows them.
+    await act(async () => {
+      const inputs = useTerminalInputStore.getState();
+      inputs.setDraftInput("term-1", RAW);
+      inputs.bumpExternalDraftRevision({ keepsSelection: true });
+      replyWithCorrection();
+    });
+
+    expect(draft()).toBe(CORRECTED);
+    expect(view.state.doc.toString()).toBe(CORRECTED);
   });
 });
