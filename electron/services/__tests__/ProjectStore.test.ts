@@ -1727,7 +1727,11 @@ describe("ProjectStore.onProjectRegistryChanged", () => {
     insertRun.run("alpha-run", alphaId);
 
     const deleted = vi.fn();
-    const offDeleted = events.on("scheduled-runs:deleted", deleted);
+    const committedFirst: boolean[] = [];
+    const offDeleted = events.on("scheduled-runs:deleted", (payload) => {
+      committedFirst.push(!sqlite.inTransaction);
+      deleted(payload);
+    });
     await store.removeProject(beta.id);
     offDeleted();
 
@@ -1740,6 +1744,8 @@ describe("ProjectStore.onProjectRegistryChanged", () => {
       scheduleId: null,
       timestamp: expect.any(Number),
     });
+    // A rollback would bring the runs back, so it is announced once committed.
+    expect(committedFirst).toEqual([true]);
   });
 
   it("announces no deleted run history for a project that had none, or kept it", async () => {

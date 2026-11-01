@@ -1,4 +1,13 @@
-import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeEach,
+  afterEach,
+  vi,
+  type Mock,
+  type MockInstance,
+} from "vitest";
 
 const power = vi.hoisted(() => {
   const listeners = new Map<string, Set<() => void>>();
@@ -1207,7 +1216,7 @@ describe("attached remote frontends", () => {
 describe("scheduled runs", () => {
   const HOUR = 60 * 60 * 1000;
   let service: PowerSaveBlockerService;
-  let log: ReturnType<typeof vi.spyOn>;
+  let log: MockInstance<typeof console.log>;
 
   function startRun(runId: string, opts: { scheduleId?: string; projectId?: string } = {}) {
     events.emit("scheduled-run:started", {
@@ -1236,6 +1245,14 @@ describe("scheduled runs", () => {
 
   const startedTypes = () =>
     (powerSaveBlocker.start as Mock).mock.calls.map(([type]) => type as string);
+
+  // The id each start of `type` returned, oldest first.
+  const startedIds = (type: string) => {
+    const start = powerSaveBlocker.start as Mock;
+    return start.mock.calls.flatMap(([called], index) =>
+      called === type ? [start.mock.results[index].value as number] : []
+    );
+  };
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -1282,6 +1299,9 @@ describe("scheduled runs", () => {
     endRun("run-2", { scheduleId: "schedule-2" });
     expect(service.isBlocking()).toBe(false);
     expect(powerSaveBlocker.stop).toHaveBeenCalledTimes(1);
+    const [display] = startedIds("prevent-display-sleep");
+    expect(powerSaveBlocker.stop).toHaveBeenCalledWith(display);
+    expect(powerSaveBlocker.isStarted(display)).toBe(false);
   });
 
   it("ignores a repeated start, and an end for a run it never saw start", () => {
@@ -1315,16 +1335,24 @@ describe("scheduled runs", () => {
     emitStateChanged("term-1", "working");
     startRun("run-1");
     expect(startedTypes()).toEqual(["prevent-app-suspension", "prevent-display-sleep"]);
+    const [display] = startedIds("prevent-display-sleep");
+    const [firstAgents] = startedIds("prevent-app-suspension");
 
     // No registry: the agents' four-hour release stands.
     vi.advanceTimersByTime(4 * HOUR);
     expect(service.getActiveCount()).toBe(0);
     expect(powerSaveBlocker.stop).toHaveBeenCalledTimes(1);
+    expect(powerSaveBlocker.stop).toHaveBeenLastCalledWith(firstAgents);
+    expect(powerSaveBlocker.isStarted(display)).toBe(true);
     expect(service.getState()).toMatchObject({ isBlocking: true, isDisplayBlocking: true });
 
     emitStateChanged("term-1", "working");
+    const [, agents] = startedIds("prevent-app-suspension");
     endRun("run-1");
     expect(powerSaveBlocker.stop).toHaveBeenCalledTimes(2);
+    expect(powerSaveBlocker.stop).toHaveBeenLastCalledWith(display);
+    expect(powerSaveBlocker.isStarted(display)).toBe(false);
+    expect(powerSaveBlocker.isStarted(agents)).toBe(true);
     expect(service.getState()).toMatchObject({ isBlocking: true, isDisplayBlocking: false });
     expect(service.getActiveCount()).toBe(1);
   });
@@ -1413,15 +1441,20 @@ describe("scheduled runs", () => {
   });
 
   it("releases on dispose and stops following runs", () => {
+    emitStateChanged("term-1", "working");
     startRun("run-1");
+    const [display] = startedIds("prevent-display-sleep");
+    const [agents] = startedIds("prevent-app-suspension");
 
     service.dispose();
     expect(service.isBlocking()).toBe(false);
-    expect(powerSaveBlocker.stop).toHaveBeenCalledTimes(1);
+    expect(powerSaveBlocker.stop).toHaveBeenCalledTimes(2);
+    expect(powerSaveBlocker.isStarted(display)).toBe(false);
+    expect(powerSaveBlocker.isStarted(agents)).toBe(false);
     expect(service.getState().scheduledRunIds).toEqual([]);
 
     startRun("run-2");
-    expect(powerSaveBlocker.start).toHaveBeenCalledTimes(1);
+    expect(powerSaveBlocker.start).toHaveBeenCalledTimes(2);
   });
 
   it("reports its holders to diagnostics without building a service", () => {

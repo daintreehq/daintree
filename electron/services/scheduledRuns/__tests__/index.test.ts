@@ -259,4 +259,36 @@ describe("scheduled-run history wiring", () => {
     state.shutdown = { initiator: "app-quit", phase: "cleaning" };
     expect(await getScheduledRunRecorder()).toBeNull();
   });
+
+  it("opens the history and announces starts when keep-awake can't load", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.resetModules();
+    vi.doMock("../../PowerSaveBlockerService.js", () => {
+      throw new Error("keep-awake failed to load");
+    });
+    try {
+      const fresh = await import("../index.js");
+      const { events: freshEvents } = await import("../../events.js");
+      const started = vi.fn();
+      const offStarted = freshEvents.on("scheduled-run:started", started);
+
+      const recorder = await fresh.getScheduledRunRecorder();
+      recorder?.registerLaunch(launch);
+      offStarted();
+      fresh._resetScheduledRunRecorderForTest();
+
+      expect(recorder).not.toBeNull();
+      expect(started).toHaveBeenCalledWith(expect.objectContaining({ runId: "run-1" }));
+      expect(warn).toHaveBeenCalledWith(
+        "[ScheduledRuns] Keep-awake couldn't load:",
+        expect.anything()
+      );
+    } finally {
+      vi.doMock("../../PowerSaveBlockerService.js", () => ({
+        getPowerSaveBlockerService: keepAwake.getService,
+      }));
+      vi.resetModules();
+      warn.mockRestore();
+    }
+  });
 });

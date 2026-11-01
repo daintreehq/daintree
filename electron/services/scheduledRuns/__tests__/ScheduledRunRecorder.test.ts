@@ -573,4 +573,23 @@ describe("ScheduledRunRecorder", () => {
     }
     expect(deleted).toEqual([{ projectId: "project-1", scheduleId: "schedule-1", timestamp: now }]);
   });
+
+  it("still tells the views of a deletion when a deletion listener throws", () => {
+    const viewChanges: ScheduledRunsChange[] = [];
+    const recorder = new ScheduledRunRecorder({
+      store: new ScheduledRunStore(sqlite),
+      now: () => now,
+      onChanged: (change) => viewChanges.push(change),
+      onRunsDeleted: () => {
+        throw new Error("listener failed");
+      },
+      logWarn: () => {},
+    });
+    recorder.registerLaunch(launch());
+    viewChanges.length = 0;
+
+    expect(() => recorder.deleteForSchedule("schedule-1")).not.toThrow();
+    expect(viewChanges).toEqual([{ projectId: "project-1", scheduleIds: ["schedule-1"] }]);
+    expect(recorder.get("run-1")).toBeNull();
+  });
 });
