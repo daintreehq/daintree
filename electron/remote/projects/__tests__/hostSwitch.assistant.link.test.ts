@@ -82,6 +82,7 @@ async function rig(options: { attach?: boolean } = {}): Promise<Rig> {
     boundEndpoints: () => [],
     isDriving: () => false,
     holderEndpointId: () => views.holder,
+    noteSessionChange: () => {},
   };
   const pair = await openSessionPair(socketDir);
   sessions.push(pair.host, pair.client);

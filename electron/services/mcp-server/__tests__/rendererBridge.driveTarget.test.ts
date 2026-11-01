@@ -228,6 +228,8 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
         confirmed: false,
         sessionOrigin: "external",
         context,
+        // In Host mode the lease hears of each change it makes (#15918).
+        checkWrite: expect.any(Function),
       });
       expect(envelope.result).toEqual({ ok: true, result: { terminalId: "t-new" } });
       expect(envelope.dispatchedWorkspace).toEqual({
@@ -789,6 +791,28 @@ describe("rendererBridge — relayed calls (#13493)", () => {
       { checkWrite?: (changed: boolean) => Error | null },
     ];
     expect(request.checkWrite?.(false)).toBeNull();
+  });
+
+  it("tells the lease of each change it runs for a caller on this machine, refusing none (#15918)", async () => {
+    const asked: unknown[] = [];
+    setMcpDriveTargetResolver((projectId, change) => {
+      if (change) asked.push([projectId, change]);
+      return { state: "vacant" };
+    });
+    viewless.runViewlessAction.mockResolvedValue({ ok: true, result: { terminalId: "t-1" } });
+
+    await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.new", {});
+
+    const [request] = viewless.runViewlessAction.mock.calls[0] as [
+      { checkWrite: (changed: boolean) => Error | null },
+    ];
+    expect(asked).toEqual([]);
+    expect(request.checkWrite(false)).toBeNull();
+    expect(request.checkWrite(true)).toBeNull();
+    expect(asked).toEqual([
+      [WORKSPACE, { linkSessionId: null }],
+      [WORKSPACE, { linkSessionId: null }],
+    ]);
   });
 
   it("never sends a change into a window here that only shows the project", async () => {

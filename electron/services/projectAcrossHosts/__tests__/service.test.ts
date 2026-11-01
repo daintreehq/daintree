@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ExecuteCloneOptions } from "../../../ipc/handlers/projectCrud/gitClone.js";
 import { AppError, GitOperationError } from "../../../utils/errorTypes.js";
 import { localPlacementAuthority } from "../service.js";
@@ -319,17 +319,23 @@ describe("opening a project the host already has", () => {
     const existing = path.join(root, "studio-g-wt");
     git(clone, ["worktree", "add", "-q", existing, "feature/host-chip"]);
     const project = host.addProject(clone);
+    const noteChange = vi.fn();
 
-    const opened = await host.service.open({
-      projectId: project.id,
-      path: clone,
-      remoteUrls: [URL],
-      branch,
-      branchRemoteUrl: URL,
-    });
+    const opened = await host.service.open(
+      {
+        projectId: project.id,
+        path: clone,
+        remoteUrls: [URL],
+        branch,
+        branchRemoteUrl: URL,
+      },
+      { assertMayPlace: () => undefined, noteChange }
+    );
     expect(opened.worktreePath).toBe(existing);
     expect(host.createWorktree).not.toHaveBeenCalled();
     expect(host.focusWorktree).toHaveBeenCalledWith(project.id, existing);
+    // Focusing it changes the project's saved active worktree (#15918).
+    expect(noteChange).toHaveBeenCalledWith(project.id);
   });
 
   it("opens the branch in its own worktree when it is on the remote, with no second question", async () => {
@@ -938,16 +944,23 @@ describe("placing a worktree asked for on another host", () => {
       isHostLocal: clientId === "local",
       acquiredAt: 0,
     });
+    const noteSessionChange = vi.fn();
+    const lease = (held: ReturnType<typeof holder> | null) => ({
+      getHolder: () => held,
+      noteSessionChange,
+    });
     expect(() => localPlacementAuthority(null).assertMayPlace("p")).not.toThrow();
-    expect(() =>
-      localPlacementAuthority({ getHolder: () => null }).assertMayPlace("p")
-    ).not.toThrow();
-    expect(() =>
-      localPlacementAuthority({ getHolder: () => holder("local") }).assertMayPlace("p")
-    ).not.toThrow();
-    expect(() =>
-      localPlacementAuthority({ getHolder: () => holder("client-b") }).assertMayPlace("p")
-    ).toThrow(expect.objectContaining({ code: "DRIVEN_ELSEWHERE" }));
+    expect(() => localPlacementAuthority(lease(null)).assertMayPlace("p")).not.toThrow();
+    expect(() => localPlacementAuthority(lease(holder("local"))).assertMayPlace("p")).not.toThrow();
+    // A placement let through is this machine changing the project (#15918).
+    expect(noteSessionChange.mock.calls).toEqual([
+      ["p", null],
+      ["p", null],
+    ]);
+    expect(() => localPlacementAuthority(lease(holder("client-b"))).assertMayPlace("p")).toThrow(
+      expect.objectContaining({ code: "DRIVEN_ELSEWHERE" })
+    );
+    expect(noteSessionChange).toHaveBeenCalledTimes(2);
   });
 
   it("says a recipe the host's copy lacks won't run, and refuses an occupied or escaping path", async () => {

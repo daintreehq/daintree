@@ -83,7 +83,10 @@ export function startMemoryLeakAutoRestart(ptyClient: PtyClient): void {
     pickTarget,
     restartOnHost: async (projectId, terminalId, isCurrent) => {
       const { restartTerminalWithoutViewLive } = await import("./viewless/index.js");
-      return restartTerminalWithoutViewLive(projectId, terminalId, isCurrent);
+      // The host restarting a terminal itself changes a project nobody holds.
+      return restartTerminalWithoutViewLive(projectId, terminalId, isCurrent, () =>
+        getDriveLeaseService().noteSessionChange(projectId, null)
+      );
     },
     now: () => Date.now(),
   });

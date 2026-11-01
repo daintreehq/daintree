@@ -940,6 +940,38 @@ describe("coming back to drive after someone else drove meanwhile (#13921)", () 
     stop();
   });
 
+  it("replays its held drafts when the grace ran out with nobody else there (#15918)", async () => {
+    const { electron, emitHost, stop } = await openUnder(mine());
+    const held = await holdASave("project-drafts:proj-1");
+
+    // Nobody held the project once the grace ran out, so the host grants it
+    // back to this client under a new lease of the same tenure.
+    electron.driveLease.get.mockResolvedValue(mine({ leaseId: 9 }));
+    await bringTheLinkBack(emitHost);
+
+    await vi.waitFor(() => expect(held.replay).toHaveBeenCalledTimes(1));
+    await flush();
+    expect(authoritativeReads()).toHaveLength(0);
+    expect(held.send).not.toHaveBeenCalled();
+    expect(hasDeferredHostOwnedWrite("project-drafts:proj-1")).toBe(false);
+    stop();
+  });
+
+  it("drops its held drafts and reads the host's back when a successor held the project in the gap", async () => {
+    const { electron, emitHost, stop } = await openUnder(mine());
+    const held = await holdASave("project-drafts:proj-1");
+
+    electron.driveLease.get.mockResolvedValue(mine({ leaseId: 9, tenureId: "tenure-b" }));
+    await bringTheLinkBack(emitHost);
+
+    await vi.waitFor(() => expect(authoritativeReads()).toHaveLength(1));
+    await flush();
+    expect(held.replay).not.toHaveBeenCalled();
+    expect(held.send).not.toHaveBeenCalled();
+    expect(hasDeferredHostOwnedWrite("project-drafts:proj-1")).toBe(false);
+    stop();
+  });
+
   it("keeps its own state on a fresh session when the host kept the project for its client", async () => {
     const { electron, emitHost, stop } = await openUnder(mine(), "disconnected");
     const held = await holdASave();

@@ -8,6 +8,7 @@ import { onWithContext } from "../../ipc/utils.js";
 import {
   MCP_DISPATCH_ACTION_METHOD,
   MCP_GET_MANIFEST_METHOD,
+  isMcpHostRoutingEnabled,
   resolveMcpDriveTarget,
 } from "./driveTarget.js";
 import { relayWriteStanding } from "./relayWriteRule.js";
@@ -1477,6 +1478,18 @@ export function createRendererBridge(
   }
 
   /**
+   * A caller on this machine changing a project no view here shows is never
+   * refused for it, but the lease hears of each change, as of a relayed one:
+   * the project's last driver no longer comes back to it as it left it.
+   */
+  function noteHostChange(workspaceId: string): (changed: boolean) => null {
+    return () => {
+      resolveMcpDriveTarget(workspaceId, { linkSessionId: null });
+      return null;
+    };
+  }
+
+  /**
    * The same check for this host's own assistant running with no view
    * (#13511), with no Shell whose view could drive for it: only a project
    * nobody drives is one it may change.
@@ -1672,7 +1685,11 @@ export function createRendererBridge(
     confirmed: boolean,
     sessionOrigin: McpSessionOrigin,
     options: WorkspaceDispatchOptions,
-    checkWrite = options.relay ? relayWriteCheck(workspaceId, options.relay) : undefined
+    checkWrite = options.relay
+      ? relayWriteCheck(workspaceId, options.relay)
+      : isMcpHostRoutingEnabled()
+        ? noteHostChange(workspaceId)
+        : undefined
   ): Promise<DispatchEnvelope> {
     if (options.approvalOnly) throw new WorkspaceBindingError(workspaceId, "not-found");
     if (!hasViewlessImplementation(actionId)) {

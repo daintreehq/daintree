@@ -28,16 +28,19 @@ export function parseReservations(raw: string): Record<string, DriveLeaseReserva
   for (const [projectId, value] of Object.entries(parsed as Record<string, unknown>)) {
     if (count >= MAX_RESERVATIONS) break;
     if (!isField(projectId) || !value || typeof value !== "object") continue;
-    const { clientId, clientName, deviceId, tenureId } = value as Record<string, unknown>;
+    const { clientId, clientName, deviceId, tenureId, vacant } = value as Record<string, unknown>;
     if (!isField(clientId) || !isField(clientName)) continue;
     // One saved before installs were recorded, or with a damaged install or
     // tenure, still holds the project for its client.
     const tenure = isField(tenureId) && tenureId.length <= MAX_TENURE_LENGTH ? tenureId : null;
+    // A project nobody held keeps only its tenure, so without one there is nothing to keep.
+    if (vacant === true && tenure === null) continue;
     out[projectId] = {
       clientId,
       clientName,
       ...(isField(deviceId) ? { deviceId } : {}),
       ...(tenure !== null ? { tenureId: tenure } : {}),
+      ...(vacant === true ? { vacant: true as const } : {}),
     };
     count++;
   }

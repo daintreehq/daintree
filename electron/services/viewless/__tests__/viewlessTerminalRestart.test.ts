@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
 import type { ProjectState, TerminalSnapshot } from "../../../../shared/types/project.js";
 import type { ViewlessTerminalRecord } from "../ViewlessActionExecutor.js";
@@ -49,8 +49,13 @@ describe("restartTerminalWithoutView", () => {
       "sess-123"
     );
 
-    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("restarted");
+    // Told once, before the kill (#15918).
+    const beforeChange = vi.fn(() => expect(invoke).not.toHaveBeenCalled());
+    await expect(
+      restartTerminalWithoutView(PROJECT.id, "t1", deps, () => true, beforeChange)
+    ).resolves.toBe("restarted");
 
+    expect(beforeChange).toHaveBeenCalledTimes(1);
     expect(channels(invoke)).toEqual([CHANNELS.TERMINAL_GRACEFUL_KILL, CHANNELS.TERMINAL_SPAWN]);
     expect(invoke.mock.calls[0]?.[2]).toEqual(["t1", { forRestart: true }]);
     const spawn = spawned(invoke);
@@ -101,8 +106,13 @@ describe("restartTerminalWithoutView", () => {
       "sess-123"
     );
 
-    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("unsupported");
+    const beforeChange = vi.fn();
+    await expect(
+      restartTerminalWithoutView(PROJECT.id, "t1", deps, () => true, beforeChange)
+    ).resolves.toBe("unsupported");
     expect(invoke).not.toHaveBeenCalled();
+    // Nothing changed, so nothing is told (#15918).
+    expect(beforeChange).not.toHaveBeenCalled();
   });
 
   it("leaves a pane holding a Vibe model a restart can't select for a view to restart (#15569)", async () => {

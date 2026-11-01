@@ -94,6 +94,7 @@ const m = vi.hoisted(() => {
   const lease = {
     noteEndpointClient: vi.fn(),
     noteEndpointTransport: vi.fn(),
+    noteSessionChange: vi.fn(),
     getDriveTarget: vi.fn((_projectId: string) => ({ kind: "vacant" }) as unknown),
     onChange: vi.fn((l: (state: unknown) => void) => {
       leaseListeners.add(l);
@@ -103,7 +104,9 @@ const m = vi.hoisted(() => {
   const viewFilter: { current: ((id: number, ch: string, args: unknown[]) => boolean) | null } = {
     current: null,
   };
-  const mcpResolver: { current: ((projectId: string) => unknown) | null } = { current: null };
+  const mcpResolver: {
+    current: ((projectId: string, change?: { linkSessionId: string | null }) => unknown) | null;
+  } = { current: null };
   const remoteViewHooks: { current: unknown } = { current: null };
 
   return {
@@ -308,7 +311,7 @@ vi.mock("../../services/DriveLeaseService.js", () => ({
   createDriveLeaseGate: () => () => null,
 }));
 vi.mock("../../services/mcp-server/driveTarget.js", () => ({
-  setMcpDriveTargetResolver: vi.fn((resolver: (projectId: string) => unknown) => {
+  setMcpDriveTargetResolver: vi.fn((resolver: typeof m.mcpResolver.current) => {
     m.mcpResolver.current = resolver;
     return () => {
       m.mcpResolver.current = null;
@@ -1369,6 +1372,18 @@ describe("startRemoteHosts", () => {
     m.lease.getDriveTarget.mockReturnValueOnce({ kind: "reserved", holder: {} });
     expect(m.mcpResolver.current?.("proj-1")).toEqual({ state: "unavailable", reason: "reserved" });
     expect(m.mcpResolver.current?.("proj-2")).toEqual({ state: "vacant" });
+    expect(m.lease.noteSessionChange).not.toHaveBeenCalled();
+    // Asked for a change the host makes itself while nobody drives, the lease hears of it.
+    expect(m.mcpResolver.current?.("proj-2", { linkSessionId: "s1" })).toEqual({ state: "vacant" });
+    expect(m.lease.noteSessionChange).toHaveBeenCalledWith("proj-2", "s1");
+    expect(m.mcpResolver.current?.("proj-2", { linkSessionId: null })).toEqual({ state: "vacant" });
+    expect(m.lease.noteSessionChange).toHaveBeenLastCalledWith("proj-2", null);
+    // Nothing is changed where someone drives, or holds the project while away.
+    m.lease.getDriveTarget.mockReturnValueOnce({ kind: "live", holder: {}, endpoint });
+    m.mcpResolver.current?.("proj-1", { linkSessionId: null });
+    m.lease.getDriveTarget.mockReturnValueOnce({ kind: "reserved", holder: {} });
+    m.mcpResolver.current?.("proj-1", { linkSessionId: "s1" });
+    expect(m.lease.noteSessionChange).toHaveBeenCalledTimes(2);
 
     await stopRemoteHosts();
     expect(m.mcpResolver.current).toBeNull();
