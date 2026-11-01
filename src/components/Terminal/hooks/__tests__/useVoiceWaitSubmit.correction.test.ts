@@ -1,5 +1,15 @@
 // @vitest-environment jsdom
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -1229,6 +1239,35 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
         "these are the next prompt and the rest"
       );
       expect(draft(PANEL_ID)).toBe("these are the next prompt and the rest");
+    });
+
+    it("leaves a draft another screen took control of to its driver (#15919)", async () => {
+      const PROJECT = "project-1";
+      const projectDraft = () => useTerminalInputStore.getState().getDraftInput(PANEL_ID, PROJECT);
+      const dictateInProject = (text: string) => {
+        useVoiceRecordingStore.getState().beginSession({ panelId: PANEL_ID, projectId: PROJECT });
+        const itemId = `item-${++itemSeq}`;
+        callbacks.delta!({ text, itemId });
+        callbacks.complete!({ text, willCorrect: false, itemId });
+      };
+      dictateInProject("hello wrld");
+      const sessions = voiceRecordingService.sendSessions(PANEL_ID, PROJECT);
+      dictateInProject("these are the next prompt");
+      const send = planVoiceDraftSend(
+        { panelId: PANEL_ID, projectId: PROJECT },
+        projectDraft(),
+        useDictationRangeStore.getState().listDictations(PANEL_ID, PROJECT),
+        sessions
+      );
+      expect(send.text).toBe("hello wrld");
+      const before = projectDraft();
+
+      const { setLeaseInputBlock } = await import("@/services/terminal/inputGate");
+      onTestFinished(() => setLeaseInputBlock(null));
+      setLeaseInputBlock({ kind: "driven-elsewhere", driverName: "Studio Mac" });
+
+      expect(voiceRecordingService.keepHeldBackDictation(send)).toBeNull();
+      expect(projectDraft()).toBe(before);
     });
 
     it("leaves the draft alone once the sent text itself changed", () => {

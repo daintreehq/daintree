@@ -661,11 +661,16 @@ describe("VoiceRecordingService — recent dictations (#14637)", () => {
         }),
       ]);
       expect(voiceStore.getState().announcement?.text).toMatch(/Studio Mac has control/);
-      const { logInfo } = await import("@/utils/logger");
-      expect(vi.mocked(logInfo)).toHaveBeenCalledWith(
+      const logger = await import("@/utils/logger");
+      expect(vi.mocked(logger.logInfo)).toHaveBeenCalledWith(
         "[VoiceSend] Request refused",
         expect.objectContaining({ asker: "spoken_send", reason: "composer_disabled" })
       );
+      // Who took control is shown, never logged.
+      const logged = [logger.logDebug, logger.logInfo, logger.logWarn, logger.logError].flatMap(
+        (log) => vi.mocked(log).mock.calls
+      );
+      expect(JSON.stringify(logged)).not.toContain("Studio Mac");
 
       // The driver going away changes the gate, not the stopped session.
       setLeaseInputBlock({ ...DRIVEN, driverAway: true });

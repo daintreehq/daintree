@@ -3028,6 +3028,8 @@ class VoiceRecordingService {
     if (drivenNow) {
       abandonCapture(stream);
       this.cancelArming("lease_lost");
+      // A restart's rewrite was kept through the stop above for this start.
+      target.rewrite?.selection.release();
       this.reportDrivenStart(drivenNow);
       return;
     }

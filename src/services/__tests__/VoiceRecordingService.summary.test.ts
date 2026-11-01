@@ -480,6 +480,38 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
       expect(harness.voiceInput.start).toHaveBeenCalledTimes(1);
       expect(useVoiceRecordingStore.getState().status).toBe("idle");
     });
+
+    it("gives back the selection of a rewrite start it turned away", async () => {
+      const harness = setupGlobals();
+      const { service } = await load();
+      const release = vi.fn();
+      const rewriteTarget: VoiceRecordingTarget = {
+        ...DRIVEN_TARGET,
+        rewrite: {
+          selection: {
+            text: "the selected text",
+            range: () => ({ from: 0, to: 17 }),
+            onLost: () => {},
+            apply: () => false,
+            release,
+          },
+          instruction: [],
+          cancelled: false,
+        },
+      };
+
+      await startLive(harness, service, DRIVEN_TARGET);
+      const drain = holdDrain(harness);
+      const stopping = service.stop("Dictation stopped.", { preserveLiveText: true });
+      await vi.waitFor(() => expect(harness.voiceInput.stop).toHaveBeenCalled());
+      const starting = service.start(rewriteTarget);
+      await takeControl();
+      drain.resolve();
+      await Promise.all([stopping, starting]);
+
+      expect(harness.voiceInput.start).toHaveBeenCalledTimes(1);
+      expect(release).toHaveBeenCalled();
+    });
   });
 
   it("drops a report that smuggles text, still logging the session once", async () => {
