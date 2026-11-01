@@ -2075,6 +2075,7 @@ export const SETTINGS_REGISTRY = [
     importKind: "lazy",
     importer: LazyDecisionsSettingsTab.preload,
     LazyComponent: LazyDecisionsSettingsTab,
+    needsOnClose: true,
     searchNavDescription:
       "Answer agents' questions from your phone, through a relay in your own Cloudflare account",
     searchNavKeywords: [
@@ -2118,6 +2119,8 @@ export const SETTINGS_REGISTRY = [
           "version",
           "update",
           "claim",
+          "deploy",
+          "wrangler",
         ],
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },

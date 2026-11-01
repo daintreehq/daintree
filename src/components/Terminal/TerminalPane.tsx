@@ -146,6 +146,8 @@ import {
 } from "./TerminalInputBlockBanner";
 import { WorktreeMoveBanner } from "./WorktreeMoveBanner";
 import { CanopyPaneOffer, useCanopyPaneOffer } from "@/components/Canopy/CanopyPaneOffer";
+import { RelayDeployBanner } from "./RelayDeployBanner";
+import { isDecisionsDeployTerminalId } from "@shared/config/terminalScreenPersistence";
 import { VoiceMicNoticeBanner } from "./VoiceMicNoticeBanner";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 
@@ -1363,6 +1365,7 @@ function TerminalPaneComponent({
       : null;
   const canopyOffer = useCanopyPaneOffer(id, askedOn !== null);
   const [blockedBannerDismissed, setBlockedBannerDismissed] = useState(false);
+  const [relayDeployBannerDismissed, setRelayDeployBannerDismissed] = useState(false);
   // Folding and unfolding swap the control the keyboard is on; hand focus to
   // its counterpart once the swap has painted, unless it already moved on.
   const keepBlockedNoticeFocus = (label: string) => {
@@ -1829,6 +1832,10 @@ function TerminalPaneComponent({
               reason={askedOn ?? "question"}
             />
           )}
+        </BannerSlot>
+
+        <BannerSlot visible={isDecisionsDeployTerminalId(id) && !relayDeployBannerDismissed}>
+          <RelayDeployBanner onDismiss={() => setRelayDeployBannerDismissed(true)} />
         </BannerSlot>
       </div>
 

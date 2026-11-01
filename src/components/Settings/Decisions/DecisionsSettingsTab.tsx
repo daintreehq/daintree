@@ -10,13 +10,14 @@ import { DecisionsQuestionsSection } from "./DecisionsQuestionsSection";
 import { DecisionsPolicySection } from "./DecisionsPolicySection";
 import { DecisionsVoiceSection } from "./DecisionsVoiceSection";
 import { DecisionsDataSection } from "./DecisionsDataSection";
+import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
 
 /**
  * Settings → Integrations → Decisions: one switch, consent the first time it
  * turns on, and behind it a section per part of the feature. Each section is
  * its own component so the child issue that fills one doesn't touch the rest.
  */
-export function DecisionsSettingsTab() {
+export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose } = {}) {
   const decisions = useDecisions();
   const { status, pending, saveFailure } = decisions;
   const [consentOpen, setConsentOpen] = useState(false);
@@ -77,6 +78,7 @@ export function DecisionsSettingsTab() {
             status={status}
             locked={pending !== null}
             onChanged={(next) => (next ? decisions.applyStatus(next) : void decisions.reload())}
+            onClose={onClose}
           />
           <DecisionsDevicesSection />
           <DecisionsQuestionsSection />
