@@ -714,6 +714,23 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
     });
   });
 
+  it("keeps a folder request's flags through a Dock click before the start settles", async () => {
+    let settled = false;
+    hasOpenDirConsumerMock.mockReturnValue(false);
+    const { opts, handle, handler } = await register({ isLaunchSettled: () => settled });
+    const activate = appMock.on.mock.calls.find(([event]: string[]) => event === "activate")![1];
+
+    handler({}, ["daintree", "--cli-path=/nowhere/at/all"], "/");
+    activate();
+    settled = true;
+    handle.onLaunchSettled();
+
+    expect(opts.onCreateWindow).toHaveBeenCalledExactlyOnceWith({
+      targeted: true,
+      opensFolder: true,
+    });
+  });
+
   it("does nothing on settle when no second launch arrived", async () => {
     hasOpenDirConsumerMock.mockReturnValue(false);
     const { opts, handle } = await register();

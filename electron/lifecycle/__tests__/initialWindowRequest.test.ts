@@ -75,15 +75,15 @@ describe("createInitialWindowRequest", () => {
   it("lets the first request say whether the launch was targeted", async () => {
     const { request, openLaunchWindows, finish } = setup();
 
-    const first = request.open({ targeted: true, opensFolder: false });
-    const joined = request.open({ targeted: false, opensFolder: true });
+    const first = request.open({ targeted: true, opensFolder: true });
+    const joined = request.open({ targeted: false, opensFolder: false });
     await Promise.resolve();
     finish();
     await Promise.all([first, joined]);
 
     expect(openLaunchWindows).toHaveBeenCalledExactlyOnceWith({
       targeted: true,
-      opensFolder: false,
+      opensFolder: true,
     });
   });
 
