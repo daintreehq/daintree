@@ -272,7 +272,12 @@ describe("restoreClosedTerminals", () => {
 
     await restoreClosedTerminals(snapshots);
 
-    const byId = new Map(addPanelMock.mock.calls.map(([options]) => [options.requestedId, options]));
+    const byId = new Map(
+      addPanelMock.mock.calls.map(([options]) => {
+        const launched = options as { requestedId?: string; scheduledRun?: unknown };
+        return [launched.requestedId, launched] as const;
+      })
+    );
     expect(byId.get("agent")).toMatchObject({ spawnedBy: "schedule", scheduledRun: run });
     expect(byId.get("other")).toMatchObject({ spawnedBy: "palette" });
     expect(byId.get("other")?.scheduledRun).toBeUndefined();
