@@ -103,9 +103,11 @@ export function registerPickerSession(options: PickerSessionOptions) {
     const strip = window.getByRole("toolbar", { name: "Element Picker" });
     await expect(strip).toBeVisible({ timeout: 30_000 });
     await expect(window.locator("webview")).toBeAttached({ timeout });
-    await expect(strip.getByText("Click an element to ask an agent about it")).toBeVisible({
-      timeout,
-    });
+    // The strip's live region says its sentence too, so the visible row's text
+    // alone matches twice; the announced status is the one state to wait on.
+    await expect(
+      strip.getByRole("status").filter({ hasText: "Click an element to ask an agent about it" })
+    ).toBeVisible({ timeout });
   }
 
   return { session, start };
