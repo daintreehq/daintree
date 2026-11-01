@@ -163,6 +163,7 @@ const HostSummarySchema = z.object({
   thermal: z.enum(["nominal", "fair", "serious", "critical"]).nullable(),
   cpuPressure: z.number().finite().nullable(),
   agentsObserved: z.object({ working: count, waiting: count, idle: count }).nullable(),
+  agentAttention: z.object({ waiting: count, blocked: count, idle: count }).optional(),
   projectCount: count.nullable(),
   worktreeCount: count.nullable(),
   driver: DriveLeaseHolderSchema.nullable(),

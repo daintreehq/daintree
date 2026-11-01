@@ -214,8 +214,11 @@ export function describeHostRowStatus(row: HostMenuRow, now: number = Date.now()
   if (!summary) return row.isLocal ? null : `Connected${differs}`;
   const agents: string[] = [];
   const observed = summary.agentsObserved;
+  // Waiting and blocked are the host's own fleet bands, never the raw waits.
+  const attention = observed ? summary.agentAttention : undefined;
   if (observed && observed.working > 0) agents.push(`${observed.working} working`);
-  if (observed && observed.waiting > 0) agents.push(`${observed.waiting} waiting`);
+  if (attention && attention.waiting > 0) agents.push(`${attention.waiting} waiting`);
+  if (attention && attention.blocked > 0) agents.push(`${attention.blocked} blocked`);
   // A failed read is unknown, not zero.
   const projects =
     summary.projectCount === null ? "Projects unknown" : pluralize(summary.projectCount, "project");

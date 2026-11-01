@@ -51,6 +51,20 @@ export const FLEET_BANDS = [
 export type FleetBand = (typeof FLEET_BANDS)[number];
 
 /**
+ * What {@link bandForRun} reads of a run. A fleet row is one; main's
+ * per-project counts build one from the same records, so the switcher and the
+ * fleet can't place a run differently.
+ */
+export type BandableRun = Pick<
+  FleetRunRow,
+  "agentState" | "waitingReason" | "handBack" | "wait" | "canopy" | "quietSince"
+> & {
+  /** Read for presence alone, like the snooze. */
+  park?: unknown;
+  snooze?: unknown;
+};
+
+/**
  * Which band a run belongs to.
  *
  * A stop is a hand-back only when main watched the run do the work before it:
@@ -76,7 +90,7 @@ export type FleetBand = (typeof FLEET_BANDS)[number];
  * are the only ways back above the fold, and all of them are the user's own
  * rules firing.
  */
-export function bandForRun(run: FleetRunRow): FleetBand {
+export function bandForRun(run: BandableRun): FleetBand {
   if (run.park !== undefined) return "parked";
   // Presence alone, deliberately: main strips expired snoozes before the row is
   // built, so this needs no clock. A run carrying both records reads as parked
@@ -120,7 +134,9 @@ export function bandForRun(run: FleetRunRow): FleetBand {
 }
 
 /** The Canopy refinement placing this run now, if any; see `canopyPlacement`. */
-export function runCanopyPlacement(run: FleetRunRow): RunCanopyRefinement | undefined {
+export function runCanopyPlacement(
+  run: Pick<FleetRunRow, "agentState" | "waitingReason" | "canopy" | "quietSince">
+): RunCanopyRefinement | undefined {
   return canopyPlacement(
     run.agentState,
     run.waitingReason,

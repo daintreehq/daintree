@@ -13,7 +13,13 @@ import {
   computeProjectAgentCounts,
   type CountableTerminal,
 } from "../projectAgentCounts.js";
-import type { RunCanopyRefinement } from "../../../shared/types/ipc/fleet.js";
+import type {
+  RunCanopyRefinement,
+  RunHandBackRecord,
+  RunWaitRecord,
+} from "../../../shared/types/ipc/fleet.js";
+import { bandForRun, FLEET_BANDS, type FleetBand } from "../../../shared/utils/fleetBands.js";
+import { isObservedAskWait } from "../../../shared/utils/runHandBack.js";
 
 const agent = (over: Partial<CountableTerminal> = {}): CountableTerminal => ({
   id: "t1",
@@ -22,6 +28,40 @@ const agent = (over: Partial<CountableTerminal> = {}): CountableTerminal => ({
   launchAgentId: "claude",
   ...over,
 });
+
+/** Canopy's reading of a turn that asks the user something they haven't seen. */
+const ASKED: RunCanopyRefinement = {
+  kind: "asked",
+  quote: "Shall I run the migration?",
+  readAt: 1,
+  seen: false,
+};
+
+/**
+ * Counts with Canopy reading the named runs (every run, by default) as unseen
+ * asks: the one thing short of an error that makes a stop count as waiting.
+ */
+const countAsked = (
+  terminals: CountableTerminal[],
+  options: {
+    projectIds?: string[];
+    asked?: readonly string[];
+    snoozes?: ReadonlyMap<string, { snoozedUntil?: number }>;
+    seenUpTo?: number;
+    records?: Readonly<Partial<Record<string, { stoppedAt: number; seenAt?: number }>>>;
+  } = {}
+) =>
+  computeProjectAgentCounts(
+    options.projectIds ?? ["p1"],
+    terminals.map((t) => ({ spawnedAt: 1, ...t })),
+    options.seenUpTo !== undefined ? new Map([["p1", options.seenUpTo]]) : undefined,
+    options.snoozes,
+    undefined,
+    undefined,
+    (id) => options.records?.[id],
+    undefined,
+    (id) => (options.asked === undefined || options.asked.includes(id) ? ASKED : undefined)
+  );
 
 beforeEach(() => {
   availabilityMock.isHelpTerminal.mockReset();
@@ -125,13 +165,13 @@ describe("computeProjectAgentCounts", () => {
   });
 
   it("counts waiting and working agents per project", () => {
-    const counts = computeProjectAgentCounts(
-      ["p1", "p2"],
+    const counts = countAsked(
       [
         agent({ id: "a", agentState: "waiting" }),
         agent({ id: "b", agentState: "working" }),
         agent({ id: "c", projectId: "p2", agentState: "working" }),
-      ]
+      ],
+      { projectIds: ["p1", "p2"] }
     );
 
     expect(counts.get("p1")).toMatchObject({ waiting: 1, active: 1 });
@@ -139,13 +179,10 @@ describe("computeProjectAgentCounts", () => {
   });
 
   it("treats an error wait as a subset of waiting, never an addition", () => {
-    const counts = computeProjectAgentCounts(
-      ["p1"],
-      [
-        agent({ id: "a", agentState: "waiting", waitingReason: "error" }),
-        agent({ id: "b", agentState: "waiting", waitingReason: "prompt" }),
-      ]
-    );
+    const counts = countAsked([
+      agent({ id: "a", agentState: "waiting", waitingReason: "error" }),
+      agent({ id: "b", agentState: "waiting", waitingReason: "prompt" }),
+    ]);
 
     const p1 = counts.get("p1")!;
     expect(p1.waiting).toBe(2);
@@ -154,22 +191,20 @@ describe("computeProjectAgentCounts", () => {
   });
 
   it("takes the earliest wait as the age, ignoring non-waiting agents", () => {
-    const counts = computeProjectAgentCounts(
-      ["p1"],
-      [
-        agent({ id: "a", agentState: "waiting", lastStateChange: 900 }),
-        agent({ id: "b", agentState: "waiting", lastStateChange: 400 }),
-        agent({ id: "c", agentState: "working", lastStateChange: 10 }),
-      ]
-    );
+    const counts = countAsked([
+      agent({ id: "a", agentState: "waiting", lastStateChange: 900 }),
+      agent({ id: "b", agentState: "waiting", lastStateChange: 400 }),
+      agent({ id: "c", agentState: "working", lastStateChange: 10 }),
+    ]);
 
     expect(counts.get("p1")!.oldestWaitingSince).toBe(400);
   });
 
   it("leaves the age absent when no wait recorded a transition", () => {
-    const counts = computeProjectAgentCounts(["p1"], [agent({ agentState: "waiting" })]);
+    const counts = countAsked([agent({ agentState: "waiting" })]);
 
     // Absent rather than 0 — a wait with no known start must not read as epoch.
+    expect(counts.get("p1")!.waiting).toBe(1);
     expect(counts.get("p1")!.oldestWaitingSince).toBeNull();
   });
 
@@ -330,14 +365,14 @@ describe("computeProjectAgentCounts", () => {
     expect(counts.has("other")).toBe(false);
   });
 
-  it("tallies completed agents with oldest/latest completion timestamps", () => {
-    const counts = computeProjectAgentCounts(
-      ["p1"],
+  it("tallies unseen hand-backs with oldest/latest completion timestamps", () => {
+    const counts = countAsked(
       [
         agent({ id: "a", agentState: "completed", lastStateChange: 500 }),
         agent({ id: "b", agentState: "completed", lastStateChange: 900 }),
         agent({ id: "c", agentState: "working", lastStateChange: 950 }),
-      ]
+      ],
+      { asked: [], records: { a: { stoppedAt: 500 }, b: { stoppedAt: 900 } } }
     );
 
     const p1 = counts.get("p1")!;
@@ -348,46 +383,35 @@ describe("computeProjectAgentCounts", () => {
     expect(p1.latestCompletionAt).toBe(900);
   });
 
-  it("splits completions across the acknowledgement watermark", () => {
-    const counts = computeProjectAgentCounts(
-      ["p1"],
-      [
-        agent({ id: "a", agentState: "completed", lastStateChange: 500 }),
-        agent({ id: "b", agentState: "completed", lastStateChange: 900 }),
-      ],
-      new Map([["p1", 600]])
-    );
+  it("never counts a completion main didn't watch as unread, whatever the watermark says", () => {
+    // Finished before main was watching: the fleet bands it idle (#16058). The
+    // watermark is still offered what it could clear, and nothing more.
+    const terminals = [
+      agent({ id: "a", agentState: "completed", lastStateChange: 500 }),
+      agent({ id: "b", agentState: "completed", lastStateChange: 900 }),
+    ];
+    const counts = computeProjectAgentCounts(["p1"], terminals, new Map([["p1", 600]]));
 
     const p1 = counts.get("p1")!;
     expect(p1.completed).toBe(2);
-    // Only the completion after the watermark is unacknowledged.
-    expect(p1.unacknowledgedCompleted).toBe(1);
-    expect(p1.oldestUnacknowledgedCompletionAt).toBe(900);
-    expect(p1.latestUnacknowledgedCompletionAt).toBe(900);
-    // The all-completions timestamp keeps the acknowledged one.
-    expect(p1.latestCompletionAt).toBe(900);
-  });
-
-  it("a watermark at the exact completion time acknowledges it (seen-up-to is inclusive)", () => {
-    const counts = computeProjectAgentCounts(
-      ["p1"],
-      [agent({ id: "a", agentState: "completed", lastStateChange: 900 })],
-      new Map([["p1", 900]])
-    );
-
-    const p1 = counts.get("p1")!;
     expect(p1.unacknowledgedCompleted).toBe(0);
     expect(p1.oldestUnacknowledgedCompletionAt).toBeNull();
+    expect(p1.latestCompletionAt).toBe(900);
+    expect(p1.latestWatermarkUnacknowledgedAt).toBe(900);
+    // Seen-up-to is inclusive.
+    expect(
+      computeProjectAgentCounts(["p1"], terminals, new Map([["p1", 900]])).get("p1")!
+        .latestWatermarkUnacknowledgedAt
+    ).toBeNull();
   });
 
-  it("never expires an unacknowledged completion by age", () => {
-    // A completion from arbitrarily long ago stays unacknowledged until the
-    // watermark passes it — elapsed time is not an acknowledgement.
+  it("never expires an unseen hand-back by age", () => {
+    // A hand-back from arbitrarily long ago stays unseen until the user sees
+    // it — elapsed time is not an acknowledgement.
     const ancient = 1; // epoch + 1ms
-    const counts = computeProjectAgentCounts(
-      ["p1"],
+    const counts = countAsked(
       [agent({ id: "a", agentState: "completed", lastStateChange: ancient })],
-      new Map()
+      { asked: [], records: { a: { stoppedAt: ancient } } }
     );
 
     expect(counts.get("p1")!.unacknowledgedCompleted).toBe(1);
@@ -398,8 +422,6 @@ describe("computeProjectAgentCounts", () => {
     const counts = computeProjectAgentCounts(["p1"], [agent({ id: "a", agentState: "completed" })]);
 
     const p1 = counts.get("p1")!;
-    // Without a timestamp it can never clear a watermark, so surfacing it as
-    // unacknowledged would create a permanent attention row.
     expect(p1.completed).toBe(1);
     expect(p1.unacknowledgedCompleted).toBe(0);
     expect(p1.latestCompletionAt).toBeNull();
@@ -423,12 +445,9 @@ describe("computeProjectAgentCounts — snooze", () => {
   const snoozes = (...ids: string[]) => new Map(ids.map((id) => [id, {}]));
 
   it("withholds a snoozed waiting agent from the attention tallies", () => {
-    const counts = computeProjectAgentCounts(
-      ["p1"],
-      [agent({ id: "t1", agentState: "waiting" })],
-      undefined,
-      snoozes("t1")
-    );
+    const counts = countAsked([agent({ id: "t1", agentState: "waiting" })], {
+      snoozes: snoozes("t1"),
+    });
 
     const p1 = counts.get("p1")!;
     expect(p1.waiting).toBe(0);
@@ -451,11 +470,11 @@ describe("computeProjectAgentCounts — snooze", () => {
   });
 
   it("does not let a snoozed wait contribute an age", () => {
-    const counts = computeProjectAgentCounts(
-      ["p1"],
+    const counts = countAsked(
       [agent({ id: "t1", agentState: "waiting", lastStateChange: 1_000 })],
-      undefined,
-      snoozes("t1")
+      {
+        snoozes: snoozes("t1"),
+      }
     );
 
     expect(counts.get("p1")!.oldestWaitingSince).toBeNull();
@@ -463,14 +482,12 @@ describe("computeProjectAgentCounts — snooze", () => {
 
   it("keeps an unsnoozed sibling's wait fully counted", () => {
     // The headline behaviour: one snoozed agent must not silence another.
-    const counts = computeProjectAgentCounts(
-      ["p1"],
+    const counts = countAsked(
       [
         agent({ id: "t1", agentState: "waiting", lastStateChange: 1_000 }),
         agent({ id: "t2", agentState: "waiting", lastStateChange: 2_000 }),
       ],
-      undefined,
-      snoozes("t1")
+      { snoozes: snoozes("t1") }
     );
 
     const p1 = counts.get("p1")!;
@@ -499,8 +516,7 @@ describe("computeProjectAgentCounts — snooze", () => {
   it("keeps the subset invariants intact across a mixed snoozed/unsnoozed project", () => {
     // blocked <= waiting and unacknowledgedCompleted <= completed have to hold
     // whatever snooze suppresses, or a row renders a count it cannot explain.
-    const counts = computeProjectAgentCounts(
-      ["p1"],
+    const counts = countAsked(
       [
         agent({ id: "t1", agentState: "waiting", waitingReason: "error" }),
         agent({ id: "t2", agentState: "waiting", waitingReason: "error" }),
@@ -508,8 +524,11 @@ describe("computeProjectAgentCounts — snooze", () => {
         agent({ id: "t4", agentState: "completed", lastStateChange: 5_000 }),
         agent({ id: "t5", agentState: "completed", lastStateChange: 6_000 }),
       ],
-      new Map([["p1", 1_000]]),
-      snoozes("t1", "t4")
+      {
+        asked: ["t3"],
+        snoozes: snoozes("t1", "t4"),
+        records: { t4: { stoppedAt: 5_000 }, t5: { stoppedAt: 6_000 } },
+      }
     );
 
     const p1 = counts.get("p1")!;
@@ -524,11 +543,13 @@ describe("computeProjectAgentCounts — snooze", () => {
   });
 
   it("counts a snoozed completed agent as completed but not as unacknowledged", () => {
-    const counts = computeProjectAgentCounts(
-      ["p1"],
+    const counts = countAsked(
       [agent({ id: "t1", agentState: "completed", lastStateChange: 5_000 })],
-      new Map([["p1", 1_000]]),
-      snoozes("t1")
+      {
+        asked: [],
+        snoozes: snoozes("t1"),
+        records: { t1: { stoppedAt: 5_000 } },
+      }
     );
 
     const p1 = counts.get("p1")!;
@@ -582,7 +603,7 @@ describe("computeProjectAgentCounts — snooze", () => {
   it("counts nothing as snoozed when no snooze map is supplied", () => {
     // Callers that don't consume snooze must see the pre-existing behaviour
     // exactly, or the feature would change tallies it was never wired into.
-    const counts = computeProjectAgentCounts(["p1"], [agent({ id: "t1", agentState: "waiting" })]);
+    const counts = countAsked([agent({ id: "t1", agentState: "waiting" })]);
 
     const p1 = counts.get("p1")!;
     expect(p1.waiting).toBe(1);
@@ -916,7 +937,9 @@ describe("computeProjectAgentCounts — hand-backs and parks (#13238)", () => {
     expect(p1.unacknowledgedCompleted).toBe(0);
   });
 
-  it("keeps approval, question and error waits as asks even with a record", () => {
+  it("files approval and question waits no reading placed as unread, and an error as blocked, even with a record", () => {
+    // The record is an earlier stop's; these waits are the patterns' guess, so
+    // news until looked at and never amber (#16055).
     const record = { stoppedAt: 500 };
     const p1 = count(
       [
@@ -927,20 +950,25 @@ describe("computeProjectAgentCounts — hand-backs and parks (#13238)", () => {
       { a: record, b: record, c: record }
     );
 
-    expect(p1).toMatchObject({ waiting: 3, blocked: 1, completed: 0, unacknowledgedCompleted: 0 });
+    expect(p1).toMatchObject({ waiting: 1, blocked: 1, completed: 2, unacknowledgedCompleted: 2 });
   });
 
-  it("still counts a prompt wait main never watched hand back as an ask", () => {
+  it("never counts a prompt wait main never watched hand back as waiting", () => {
+    // A restored or reconnected agent sitting at its prompt has asked nothing.
     const p1 = count([agent({ id: "a", agentState: "waiting", waitingReason: "prompt" })]);
 
-    expect(p1).toMatchObject({ waiting: 1, completed: 0 });
+    expect(p1).toMatchObject({ waiting: 0, completed: 0, unacknowledgedCompleted: 0 });
   });
 
-  it("falls back to the watermark for a completed run with no record", () => {
+  it("offers a completed run with no record to the watermark, never to the unread tally", () => {
     const terminals = [agent({ id: "a", agentState: "completed", lastStateChange: 500 })];
 
-    expect(count(terminals, {}, { seenUpTo: 400 }).unacknowledgedCompleted).toBe(1);
-    expect(count(terminals, {}, { seenUpTo: 500 }).unacknowledgedCompleted).toBe(0);
+    expect(count(terminals, {}, { seenUpTo: 400 })).toMatchObject({
+      completed: 1,
+      unacknowledgedCompleted: 0,
+      latestWatermarkUnacknowledgedAt: 500,
+    });
+    expect(count(terminals, {}, { seenUpTo: 500 }).latestWatermarkUnacknowledgedAt).toBeNull();
   });
 
   it("passes the spawn time through so a dead process's record cannot speak", () => {
@@ -997,7 +1025,7 @@ describe("computeProjectAgentCounts — hand-backs and parks (#13238)", () => {
     );
 
     expect(p1).toMatchObject({
-      unacknowledgedCompleted: 3,
+      unacknowledgedCompleted: 2,
       latestUnacknowledgedCompletionAt: 9_000,
       latestWatermarkUnacknowledgedAt: 4_000,
     });
@@ -1079,7 +1107,6 @@ describe("computeProjectAgentCounts — Canopy refinements (#13239)", () => {
     const terminals = [
       agent({ id: "a", agentState: "waiting", waitingReason: "question", lastStateChange: 900 }),
     ];
-    expect(count(terminals, undefined)).toMatchObject({ waiting: 1, completed: 0 });
     expect(count(terminals, NOT_ASKING)).toMatchObject({
       waiting: 0,
       completed: 1,
@@ -1126,6 +1153,245 @@ describe("computeProjectAgentCounts — Canopy refinements (#13239)", () => {
 
   it("never lets a reading clear an approval Daintree observed", () => {
     const terminals = [agent({ id: "a", agentState: "waiting", waitingReason: "approval" })];
-    expect(count(terminals, NOT_ASKING).waiting).toBe(1);
+    const unread = { waiting: 0, completed: 1, unacknowledgedCompleted: 1 };
+    expect(count(terminals, undefined)).toMatchObject(unread);
+    expect(count(terminals, NOT_ASKING)).toMatchObject(unread);
+  });
+
+  it("stops counting a Canopy-read ask as waiting once the user has seen it", () => {
+    for (const terminal of [
+      agent({ id: "a", agentState: "waiting", waitingReason: "question", lastStateChange: 900 }),
+      agent({ id: "a", agentState: "waiting", waitingReason: "prompt", lastStateChange: 900 }),
+      agent({ id: "a", agentState: "completed", lastStateChange: 900 }),
+    ]) {
+      const asked = { kind: "asked", quote: "Ship it?", readAt: 950, seen: false } as const;
+      expect(count([terminal], asked)).toMatchObject({ waiting: 1, unacknowledgedCompleted: 0 });
+      // Seen, it is still unanswered: idle, never finished or unread.
+      expect(count([terminal], { ...asked, seen: true })).toMatchObject({
+        waiting: 0,
+        completed: 0,
+        unacknowledgedCompleted: 0,
+      });
+    }
+  });
+});
+
+describe("computeProjectAgentCounts — waits no reading placed (#16058)", () => {
+  type Wait = { stoppedAt: number; seenAt?: number };
+  const count = (terminals: CountableTerminal[], waits: Readonly<Partial<Record<string, Wait>>>) =>
+    computeProjectAgentCounts(
+      ["p1"],
+      terminals.map((t) => ({ detectedAgentId: "claude", spawnedAt: 1, ...t })),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      (id) => waits[id]
+    ).get("p1")!;
+
+  it("keeps an approval wait unread until the user has had it in front of them, dated from the wait", () => {
+    const terminals = [
+      agent({ id: "a", agentState: "waiting", waitingReason: "approval", lastStateChange: 900 }),
+    ];
+    expect(count(terminals, { a: { stoppedAt: 800 } })).toMatchObject({
+      waiting: 0,
+      completed: 1,
+      unacknowledgedCompleted: 1,
+      oldestUnacknowledgedCompletionAt: 800,
+      latestCompletionAt: 800,
+    });
+    // Seen, nothing more than an idle run.
+    expect(count(terminals, { a: { stoppedAt: 800, seenAt: 850 } })).toMatchObject({
+      waiting: 0,
+      completed: 0,
+      unacknowledgedCompleted: 0,
+    });
+  });
+
+  it("asks for a wait only while the run shows one, for its own incarnation", () => {
+    const waitFor = vi.fn(() => undefined);
+    computeProjectAgentCounts(
+      ["p1"],
+      [
+        agent({
+          id: "a",
+          detectedAgentId: "claude",
+          agentState: "waiting",
+          waitingReason: "question",
+          spawnedAt: 42,
+        }),
+        agent({
+          id: "b",
+          detectedAgentId: "claude",
+          agentState: "waiting",
+          waitingReason: "prompt",
+        }),
+        agent({ id: "c", detectedAgentId: "claude", agentState: "completed" }),
+        agent({
+          id: "d",
+          detectedAgentId: "claude",
+          agentState: "waiting",
+          waitingReason: "error",
+        }),
+      ],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      waitFor
+    );
+
+    expect(waitFor.mock.calls).toEqual([["a", 42]]);
+  });
+});
+
+describe("computeProjectAgentCounts — agrees with bandForRun (#16058)", () => {
+  type Shelf = "none" | "parked" | "snoozed";
+  interface Fixture {
+    terminal: CountableTerminal;
+    handBack?: RunHandBackRecord;
+    wait?: RunWaitRecord;
+    canopy?: RunCanopyRefinement;
+    shelf: Shelf;
+  }
+
+  const states: Array<Pick<CountableTerminal, "agentState" | "waitingReason">> = [
+    { agentState: "idle" },
+    { agentState: "working" },
+    { agentState: "directing" },
+    { agentState: "completed" },
+    { agentState: "exited" },
+    { agentState: "waiting" },
+    { agentState: "waiting", waitingReason: "prompt" },
+    { agentState: "waiting", waitingReason: "question" },
+    { agentState: "waiting", waitingReason: "approval" },
+    { agentState: "waiting", waitingReason: "error" },
+  ];
+  const handBacks: Array<RunHandBackRecord | undefined> = [
+    undefined,
+    { stoppedAt: 500 },
+    { stoppedAt: 500, seenAt: 600 },
+    { stoppedAt: 500, seenAt: 600, markedUnreadAt: 700 },
+  ];
+  const waits: Array<RunWaitRecord | undefined> = [
+    undefined,
+    { stoppedAt: 800 },
+    { stoppedAt: 800, seenAt: 850 },
+  ];
+  const readings: Array<RunCanopyRefinement | undefined> = [
+    undefined,
+    { kind: "asked", quote: "Ship it?", readAt: 900, seen: false },
+    { kind: "asked", quote: "Ship it?", readAt: 900, seen: true },
+    { kind: "not-asking", quote: "All green.", readAt: 900, seen: false },
+    { kind: "not-asking", quote: "All green.", readAt: 900, seen: true },
+    { kind: "stalled", quote: "Compiling…", readAt: 900, stalledSince: 800 },
+  ];
+  const shelves: Shelf[] = ["none", "parked", "snoozed"];
+
+  const fixtures: Fixture[] = [];
+  for (const state of states)
+    for (const handBack of handBacks)
+      for (const wait of waits)
+        for (const canopy of readings)
+          for (const shelf of shelves)
+            fixtures.push({
+              terminal: agent({
+                id: `t${fixtures.length}`,
+                detectedAgentId: "claude",
+                spawnedAt: 1,
+                lastStateChange: 1_000,
+                ...state,
+              }),
+              handBack,
+              wait,
+              canopy,
+              shelf,
+            });
+
+  /** The row the fleet builds for the same run, as `FleetSnapshotService` decorates it. */
+  const bandOf = (fixture: Fixture): FleetBand => {
+    const { agentState, waitingReason } = fixture.terminal;
+    return bandForRun({
+      agentState,
+      waitingReason,
+      handBack: fixture.handBack,
+      wait:
+        agentState !== undefined && isObservedAskWait(agentState, waitingReason)
+          ? fixture.wait
+          : undefined,
+      canopy: fixture.canopy,
+      park: fixture.shelf === "parked" ? { parkedAt: 1 } : undefined,
+      snooze: fixture.shelf === "snoozed" ? { snoozedAt: 1 } : undefined,
+    });
+  };
+
+  const countOf = (subset: readonly Fixture[]) => {
+    const byId = new Map(subset.map((f) => [f.terminal.id!, f]));
+    return computeProjectAgentCounts(
+      ["p1"],
+      subset.map((f) => f.terminal),
+      undefined,
+      new Map(subset.filter((f) => f.shelf === "snoozed").map((f) => [f.terminal.id!, {}])),
+      undefined,
+      undefined,
+      (id) => byId.get(id)?.handBack,
+      new Map(subset.filter((f) => f.shelf === "parked").map((f) => [f.terminal.id!, {}])),
+      (id) => byId.get(id)?.canopy,
+      (id) => byId.get(id)?.wait
+    ).get("p1")!;
+  };
+
+  const tally = (bands: readonly FleetBand[], band: FleetBand) =>
+    bands.filter((b) => b === band).length;
+
+  it("counts each run as waiting, blocked or unread exactly when the fleet bands it so", () => {
+    const mismatches: string[] = [];
+    for (const fixture of fixtures) {
+      const band = bandOf(fixture);
+      const counts = countOf([fixture]);
+      const got = {
+        needsYou: counts.waiting - counts.blocked,
+        blocked: counts.blocked,
+        review: counts.unacknowledgedCompleted,
+      };
+      const want = {
+        needsYou: band === "needs-you" ? 1 : 0,
+        blocked: band === "blocked" ? 1 : 0,
+        review: band === "review" ? 1 : 0,
+      };
+      if (
+        got.needsYou !== want.needsYou ||
+        got.blocked !== want.blocked ||
+        got.review !== want.review ||
+        counts.unacknowledgedCompleted > counts.completed
+      ) {
+        mismatches.push(`${JSON.stringify({ ...fixture, band })} → ${JSON.stringify(got)}`);
+      }
+    }
+    expect(mismatches).toEqual([]);
+  });
+
+  it("sums a project of every kind of run to the fleet's band tallies", () => {
+    const bands = fixtures.map(bandOf);
+    const counts = countOf(fixtures);
+    expect({
+      needsYou: counts.waiting - counts.blocked,
+      blocked: counts.blocked,
+      review: counts.unacknowledgedCompleted,
+    }).toEqual({
+      needsYou: tally(bands, "needs-you"),
+      blocked: tally(bands, "blocked"),
+      review: tally(bands, "review"),
+    });
+    expect(counts.blocked).toBeLessThanOrEqual(counts.waiting);
+    expect(counts.unacknowledgedCompleted).toBeLessThanOrEqual(counts.completed);
+    // Every band the rule can reach is in the table, so none of this is vacuous.
+    expect(new Set(bands)).toEqual(new Set(FLEET_BANDS));
   });
 });

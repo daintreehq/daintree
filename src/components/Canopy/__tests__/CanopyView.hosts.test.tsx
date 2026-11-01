@@ -111,6 +111,7 @@ function summary(hostId: string, waiting: number, working: number): HostMetricsS
     thermal: null,
     cpuPressure: null,
     agentsObserved: { working, waiting, idle: 0 },
+    agentAttention: { waiting, blocked: 0, idle: 0 },
     projectCount: 1,
     worktreeCount: 1,
     driver: null,

@@ -85,6 +85,10 @@ export class ProjectStatsService {
     // Canopy reading an ask or a false alarm moves the same tallies, and the
     // host has nothing new to say about it.
     this.eventUnsubscribes.push(onCanopyRefinementsChanged(() => this.debouncedCompute()));
+    // So does the user looking at a wait no reading placed: it stops being
+    // unread, and nothing on the host moved.
+    const offWaits = this.runHandBack?.onWaitChanged(() => this.debouncedCompute());
+    if (offWaits) this.eventUnsubscribes.push(offWaits);
   }
 
   updatePollInterval(ms: number): void {
@@ -344,7 +348,8 @@ export class ProjectStatsService {
         // attention. The pull path passes the same two, for the reason above.
         runHandBack ? (id, spawnedAt) => runHandBack.getRecord(id, spawnedAt) : undefined,
         this.runAttention?.getAll(),
-        canopyRefinementFor
+        canopyRefinementFor,
+        runHandBack ? (id, spawnedAt) => runHandBack.getWait(id, spawnedAt) : undefined
       );
 
       const statusMap: ProjectStatusMap = {};

@@ -556,10 +556,8 @@ function classifyWorkspaceActivity(
       // can compare it against the running count in front of it without
       // re-parsing a sentence.
       //
-      // "waiting" is honest again: a turn main watched an agent finish is
-      // counted as finished, not waiting, so what reaches this count is an
-      // approval, a question, or a prompt wait from before main was watching
-      // (#13238, which undoes the softening #13047 needed).
+      // "waiting" is honest: what reaches this count is only an ask a Canopy
+      // reading found and the user hasn't seen, as the fleet bands it (#16058).
       parts.push(agentStatePhrase(unblocked, "waiting"));
       if (blocked > 0) parts.push(`${blocked} ${AGENT_STATE_WORD.blocked}`);
     } else {

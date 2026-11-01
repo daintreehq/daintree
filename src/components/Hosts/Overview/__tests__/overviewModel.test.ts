@@ -202,6 +202,28 @@ describe("describeObservedAgents / describeProjects", () => {
     );
     expect(describeProjects(makeSummary())).toBe("2 open · 5 worktrees");
   });
+
+  it("counts waiting and idle by the host's bands, so a prompt with no reading is idle (#16058)", () => {
+    // One agent at its prompt, one blocked and two a reading found asking.
+    const banded = makeSummary({
+      agentsObserved: { working: 1, waiting: 4, idle: 1 },
+      agentAttention: { waiting: 2, blocked: 1, idle: 2 },
+    });
+    expect(describeObservedAgents(banded)).toBe(
+      "1 working · 2 waiting · 1 blocked · 2 idle (observed)"
+    );
+    // At their prompts with no reading: idle, and no blocked figure to give.
+    const prompts = makeSummary({
+      agentsObserved: { working: 0, waiting: 2, idle: 1 },
+      agentAttention: { waiting: 0, blocked: 0, idle: 3 },
+    });
+    expect(describeObservedAgents(prompts)).toBe("0 working · 0 waiting · 3 idle (observed)");
+    const older = makeSummary({
+      agentsObserved: { working: 1, waiting: 3, idle: 1 },
+      agentAttention: undefined,
+    });
+    expect(describeObservedAgents(older)).toBe("1 working · 1 idle (observed)");
+  });
 });
 
 describe("series", () => {

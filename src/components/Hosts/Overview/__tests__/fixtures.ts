@@ -15,6 +15,7 @@ export function makeSummary(overrides: Partial<HostMetricsSummary> = {}): HostMe
     thermal: "nominal",
     cpuPressure: null,
     agentsObserved: { working: 1, waiting: 2, idle: 3 },
+    agentAttention: { waiting: 2, blocked: 0, idle: 3 },
     projectCount: 2,
     worktreeCount: 5,
     driver: null,
