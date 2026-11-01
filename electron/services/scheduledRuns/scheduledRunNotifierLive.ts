@@ -62,7 +62,9 @@ export async function notifyScheduledRunAttention(
         projectId: run.projectId,
         scheduleId: run.scheduleId,
         runId: run.id,
-        terminalId: attention.kind === "launch-failed" ? null : run.terminalId,
+        // A spawn that failed can leave an error pane carrying the run; the
+        // view decides from its panes, and a refused launch has none.
+        terminalId: run.terminalId,
       }),
   });
 }

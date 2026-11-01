@@ -478,10 +478,15 @@ describe("ScheduledRunRecorder", () => {
   });
 
   describe("settlement listeners (#15988)", () => {
-    function withSettled(seen: unknown[], reader?: Database.Database): ScheduledRunRecorder {
+    function withSettled(
+      seen: unknown[],
+      options: { reader?: Database.Database; store?: ScheduledRunStore } = {}
+    ): ScheduledRunRecorder {
+      const { reader, store = new ScheduledRunStore(sqlite) } = options;
       return new ScheduledRunRecorder({
-        store: new ScheduledRunStore(sqlite),
+        store,
         now: () => now,
+        onRunStarted: (payload) => emitted.push({ name: "scheduled-run:started", payload }),
         onRunEnded: (payload) => emitted.push({ name: "scheduled-run:ended", payload }),
         onRunSettled: (run) =>
           seen.push(reader ? new ScheduledRunStore(reader).get(run.id)?.settlement : run),
@@ -512,6 +517,9 @@ describe("ScheduledRunRecorder", () => {
         },
         reason: { kind: "missed" },
       });
+      // Refused and skipped runs still neither start nor end.
+      expect(emitted).toEqual([]);
+
       recorder.registerLaunch(launch());
       recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT });
       recorder.handleExit({ terminalId: "terminal-1", spawnedAt: SPAWNED_AT, exitCode: 3 });
@@ -524,14 +532,16 @@ describe("ScheduledRunRecorder", () => {
         ["run-skipped", "skip"],
         ["run-1", "exit"],
       ]);
-      // Refused and skipped runs still neither start nor end.
-      expect(emitted.map((e) => e.payload.runId)).toEqual(["run-1"]);
+      expect(emitted.map((e) => [e.name, e.payload.runId])).toEqual([
+        ["scheduled-run:started", "run-1"],
+        ["scheduled-run:ended", "run-1"],
+      ]);
     });
 
-    it("hears a settlement only once it is committed, and none for a write that failed", () => {
+    it("hears a settlement only once it is committed", () => {
       const reader = openDb(dbPath, migrationsFolder).sqlite;
       const seen: unknown[] = [];
-      const recorder = withSettled(seen, reader);
+      const recorder = withSettled(seen, { reader });
       recorder.registerLaunch(launch());
       recorder.settle("run-1", {
         kind: "handback",
@@ -539,13 +549,37 @@ describe("ScheduledRunRecorder", () => {
         summary: "one needs a decision",
         truncated: false,
       });
-      expect(seen).toEqual([expect.objectContaining({ state: "settled", outcome: "needs-you" })]);
-
-      recorder.registerLaunch(launch({ id: "run-2", terminalId: "terminal-2" }));
       reader.close();
-      new ScheduledRunStore(sqlite).deleteForSchedule("schedule-1");
-      expect(recorder.settle("run-2", { kind: "cancel" })).toBeNull();
-      expect(seen).toHaveLength(1);
+      expect(seen).toEqual([expect.objectContaining({ state: "settled", outcome: "needs-you" })]);
+    });
+
+    it("hears nothing for a settlement whose write failed", () => {
+      const store = new ScheduledRunStore(sqlite);
+      const seen: unknown[] = [];
+      const recorder = withSettled(seen, { store });
+      recorder.registerLaunch(launch());
+      const update = vi.spyOn(store, "update").mockImplementationOnce(() => {
+        throw new Error("disk I/O error");
+      });
+
+      expect(recorder.settle("run-1", { kind: "cancel" })).toBeNull();
+      expect(update).toHaveBeenCalledTimes(1);
+      expect(recorder.get("run-1")?.settlement).toEqual({ state: "open" });
+
+      vi.spyOn(store, "insert").mockImplementationOnce(() => {
+        throw new Error("disk I/O error");
+      });
+      expect(() =>
+        recorder.registerRefusedLaunch({
+          id: "run-2",
+          scheduleId: "schedule-1",
+          projectId: "project-1",
+          origin: launch().origin,
+          terminalId: "terminal-2",
+          message: "refused",
+        })
+      ).toThrow(/disk I\/O/);
+      expect(seen).toEqual([]);
     });
 
     it("hears the runs an earlier lifetime left open settle as interrupted", () => {
@@ -559,18 +593,20 @@ describe("ScheduledRunRecorder", () => {
     });
 
     it("keeps the run recorded when a settlement listener throws", () => {
+      const onRunSettled = vi.fn(() => {
+        throw new Error("listener broke");
+      });
       const recorder = new ScheduledRunRecorder({
         store: new ScheduledRunStore(sqlite),
         now: () => now,
-        onRunSettled: () => {
-          throw new Error("listener broke");
-        },
+        onRunSettled,
         logWarn: () => {},
       });
       recorder.registerLaunch(launch());
       expect(recorder.settle("run-1", { kind: "cancel" })?.settlement).toMatchObject({
         outcome: "cancelled",
       });
+      expect(onRunSettled).toHaveBeenCalledTimes(1);
       expect(recorder.get("run-1")?.settlement).toMatchObject({ outcome: "cancelled" });
     });
   });

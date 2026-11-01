@@ -12,6 +12,7 @@ const live = vi.hoisted(() => ({
   schedule: null as unknown,
   scheduleError: null as Error | null,
   onScheduleRead: null as (() => void) | null,
+  scheduleReads: 0,
   show: vi.fn(),
   playFile: vi.fn(),
   open: vi.fn(),
@@ -40,6 +41,7 @@ vi.mock("../../ProjectStore.js", () => ({
     getEffectiveNotificationSettings: () => live.settings,
     schedules: {
       get: async () => {
+        live.scheduleReads++;
         live.onScheduleRead?.();
         if (live.scheduleError) throw live.scheduleError;
         return live.schedule;
@@ -97,6 +99,7 @@ beforeEach(() => {
   live.schedule = schedule;
   live.scheduleError = null;
   live.onScheduleRead = null;
+  live.scheduleReads = 0;
   live.show.mockReset();
   live.playFile.mockReset();
   live.open.mockReset();
@@ -117,7 +120,7 @@ describe("notifyScheduledRunAttention", () => {
     expect(live.playFile).toHaveBeenCalledWith("waiting.wav");
   });
 
-  it("opens the run's terminal on click, and the history alone for a launch that never had one", async () => {
+  it("opens the run's terminal on click, leaving the view to decide whether it has a pane", async () => {
     await notifyScheduledRunAttention(run, { kind: "needs-you" });
     live.show.mock.calls[0][2].onClick();
     expect(live.open).toHaveBeenLastCalledWith({
@@ -127,9 +130,23 @@ describe("notifyScheduledRunAttention", () => {
       terminalId: "terminal-1",
     });
 
-    await notifyScheduledRunAttention(run, { kind: "launch-failed" });
+    // A failed spawn can leave an error pane holding the run, so its id goes too.
+    const failedSpawn: ScheduledRun = {
+      ...run,
+      terminalId: "terminal-7",
+      settlement: {
+        state: "settled",
+        settledAt: 9,
+        outcome: "failed",
+        evidence: { kind: "launch-error", message: "spawn zsh ENOENT" },
+      },
+    };
+    await notifyScheduledRunAttention(failedSpawn, { kind: "launch-failed" });
     live.show.mock.calls[1][2].onClick();
-    expect(live.open).toHaveBeenLastCalledWith(expect.objectContaining({ terminalId: null }));
+    expect(live.open).toHaveBeenLastCalledWith(
+      expect.objectContaining({ terminalId: "terminal-7" })
+    );
+    expect(live.show.mock.calls[1][1]).not.toContain("ENOENT");
   });
 
   it("names the schedule's agent for a refused launch with no resume snapshot", async () => {
@@ -144,24 +161,30 @@ describe("notifyScheduledRunAttention", () => {
     expect(live.show.mock.calls[0][1]).toContain("a scheduled run");
   });
 
-  it.each([
+  const holdBacks: Array<[string, () => void]> = [
     ["notifications are off", () => (live.settings = { ...live.settings, enabled: false })],
     ["it is quiet hours", () => (live.quiet = true)],
     ["the session is muted", () => (live.muted = true)],
     ["Daintree is quitting", () => (live.shutdown = { phase: "running" })],
-  ])("holds the banner and its sound back when %s", async (_name, arrange) => {
-    arrange();
+  ];
+
+  it.each(holdBacks)(
+    "holds the banner and its sound back when %s, without reading the schedule",
+    async (_name, arrange) => {
+      arrange();
+      await notifyScheduledRunAttention(run, { kind: "needs-you" });
+      expect(live.scheduleReads).toBe(0);
+      expect(live.show).not.toHaveBeenCalled();
+      expect(live.playFile).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(holdBacks)("holds it back when %s while the schedule is read", async (_name, arrange) => {
+    live.onScheduleRead = arrange;
     await notifyScheduledRunAttention(run, { kind: "needs-you" });
+    expect(live.scheduleReads).toBe(1);
     expect(live.show).not.toHaveBeenCalled();
     expect(live.playFile).not.toHaveBeenCalled();
-  });
-
-  it("holds it back for a mute set while the schedule was being read", async () => {
-    live.onScheduleRead = () => {
-      live.muted = true;
-    };
-    await notifyScheduledRunAttention(run, { kind: "needs-you" });
-    expect(live.show).not.toHaveBeenCalled();
   });
 
   it("shows the banner without a sound when sounds are off", async () => {

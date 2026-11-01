@@ -1,8 +1,10 @@
 import { schedulesClient } from "@/clients/schedulesClient";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
+import { useSchedulesViewStore } from "@/store/schedulesViewStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { logWarn } from "@/utils/logger";
+import { isPtyPanel } from "@shared/types/panel";
 
 /**
  * Bring a run's terminal forward: out of the trash or the background, into its
@@ -30,7 +32,12 @@ export function revealRunTerminal(terminalId: string): boolean {
 function holdsRunPane(panelId: string | null, runId: string): panelId is string {
   if (!panelId) return false;
   const panel = usePanelStore.getState().panelsById[panelId];
-  return panel !== undefined && panel.location !== "dialog" && panel.scheduledRun?.runId === runId;
+  return (
+    panel !== undefined &&
+    isPtyPanel(panel) &&
+    panel.location !== "dialog" &&
+    panel.scheduledRun?.runId === runId
+  );
 }
 
 export interface ScheduledRunLandingTarget {
@@ -44,14 +51,16 @@ export interface ScheduledRunLandingTarget {
  * run's pane, trashed or backgrounded panes included, whatever its terminal
  * did since, since its output is what the user came for. With no pane left,
  * the schedule's history opens, where the run's outcome and its Resume are;
- * a schedule deleted since opens the list. `isSuperseded` says a newer
- * landing took over while the schedules were read.
+ * a schedule deleted since opens the list. With the Schedules view already
+ * open, the click lands on the schedule's page in it, where the run's Open
+ * brings its pane forward, rather than focusing a pane under the dialog.
+ * `isSuperseded` says a newer landing took over while the schedules were read.
  */
 export async function landOnScheduledRun(
   target: ScheduledRunLandingTarget,
   isSuperseded: () => boolean
 ): Promise<void> {
-  if (holdsRunPane(target.panelId, target.runId)) {
+  if (!useSchedulesViewStore.getState().isOpen && holdsRunPane(target.panelId, target.runId)) {
     revealRunTerminal(target.panelId);
     await actionService.dispatch("panel.focus", { panelId: target.panelId });
     return;

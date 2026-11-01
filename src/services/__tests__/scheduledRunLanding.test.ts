@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 interface FakePanel {
+  kind?: string;
   location: string;
   worktreeId: string | null;
   scheduledRun?: { scheduleId: string; runId: string };
@@ -9,15 +10,36 @@ interface FakePanel {
 const fake = vi.hoisted(() => ({
   panels: {} as Record<string, FakePanel>,
   activeWorktreeId: "wt-main" as string | null,
+  schedulesOpen: false,
   schedules: null as { schedules: Array<{ id: string }> } | null,
   listError: null as Error | null,
-  onList: null as (() => void) | null,
-  dispatch: vi.fn(
-    async (..._args: unknown[]) => ({ ok: true }) as { ok: boolean; error?: unknown }
-  ),
+  list: null as (() => Promise<{ schedules: Array<{ id: string }> } | null>) | null,
   selectWorktree: vi.fn(),
   calls: [] as string[],
 }));
+
+const dispatch = vi.hoisted(() =>
+  vi.fn(
+    async (
+      actionId: string,
+      args?: { panelId?: string; scheduleId?: string },
+      _options?: unknown
+    ): Promise<{ ok: boolean; error?: unknown }> => {
+      const panelId = args?.panelId;
+      const where =
+        actionId === "panel.focus" && panelId
+          ? `:${panelId}@${fake.panels[panelId]?.location}`
+          : "";
+      fake.calls.push(`${actionId}${where}`);
+      return { ok: true };
+    }
+  )
+);
+
+function moveTo(id: string, location: string): void {
+  const panel = fake.panels[id];
+  if (panel) panel.location = location;
+}
 
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: {
@@ -25,11 +47,11 @@ vi.mock("@/store/panelStore", () => ({
       panelsById: fake.panels,
       restoreTerminal: (id: string) => {
         fake.calls.push(`restore:${id}`);
-        fake.panels[id] = { ...fake.panels[id], location: "grid" };
+        moveTo(id, "grid");
       },
       restoreBackgroundTerminal: (id: string) => {
         fake.calls.push(`unbackground:${id}`);
-        fake.panels[id] = { ...fake.panels[id], location: "grid" };
+        moveTo(id, "grid");
       },
       activateTerminal: (id: string) => fake.calls.push(`activate:${id}`),
     }),
@@ -43,16 +65,19 @@ vi.mock("@/store/worktreeStore", () => ({
     }),
   },
 }));
+vi.mock("@/store/schedulesViewStore", () => ({
+  useSchedulesViewStore: { getState: () => ({ isOpen: fake.schedulesOpen }) },
+}));
 vi.mock("@/clients/schedulesClient", () => ({
   schedulesClient: {
     list: async () => {
-      fake.onList?.();
+      if (fake.list) return fake.list();
       if (fake.listError) throw fake.listError;
       return fake.schedules;
     },
   },
 }));
-vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: fake.dispatch } }));
+vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 vi.mock("@/utils/logger", () => ({ logWarn: vi.fn() }));
 
 import { landOnScheduledRun } from "../scheduledRunLanding";
@@ -60,14 +85,16 @@ import { landOnScheduledRun } from "../scheduledRunLanding";
 const runRef = { scheduleId: "schedule-1", runId: "run-1" };
 const target = { runId: "run-1", scheduleId: "schedule-1", panelId: "terminal-1" };
 const notSuperseded = () => false;
+const opened = (args: unknown) => ["schedules.open", args, { source: "user" }];
 
 beforeEach(() => {
   fake.panels = {};
   fake.activeWorktreeId = "wt-main";
+  fake.schedulesOpen = false;
   fake.schedules = { schedules: [{ id: "schedule-1" }] };
   fake.listError = null;
-  fake.onList = null;
-  fake.dispatch.mockClear();
+  fake.list = null;
+  dispatch.mockClear();
   fake.selectWorktree.mockClear();
   fake.calls = [];
 });
@@ -82,12 +109,7 @@ describe("landOnScheduledRun", () => {
     await landOnScheduledRun(target, notSuperseded);
 
     expect(fake.selectWorktree).toHaveBeenCalledWith("wt-feature", { source: "user" });
-    expect(fake.dispatch).toHaveBeenCalledWith("panel.focus", { panelId: "terminal-1" });
-    expect(fake.dispatch).not.toHaveBeenCalledWith(
-      "schedules.open",
-      expect.anything(),
-      expect.anything()
-    );
+    expect(fake.calls).toEqual(["activate:terminal-1", "panel.focus:terminal-1@grid"]);
   });
 
   it("restores a trashed or backgrounded pane before focusing it", async () => {
@@ -103,13 +125,14 @@ describe("landOnScheduledRun", () => {
     expect(fake.calls).toEqual([
       "restore:terminal-1",
       "activate:terminal-1",
+      "panel.focus:terminal-1@grid",
       "unbackground:terminal-2",
       "activate:terminal-2",
+      "panel.focus:terminal-2@grid",
     ]);
-    expect(fake.dispatch.mock.calls.map(([id]) => id)).toEqual(["panel.focus", "panel.focus"]);
   });
 
-  it.each([
+  it.each<[string, Record<string, FakePanel>]>([
     ["the pane is gone", {}],
     [
       "the pane carries another run",
@@ -126,46 +149,54 @@ describe("landOnScheduledRun", () => {
       "the pane is in a dialog",
       { "terminal-1": { location: "dialog", worktreeId: null, scheduledRun: runRef } },
     ],
+    [
+      "the id names a panel that isn't a terminal",
+      {
+        "terminal-1": { kind: "browser", location: "grid", worktreeId: null, scheduledRun: runRef },
+      },
+    ],
   ])("opens the schedule's history when %s", async (_name, panels) => {
-    fake.panels = panels as Record<string, FakePanel>;
+    fake.panels = panels;
     await landOnScheduledRun(target, notSuperseded);
-    expect(fake.dispatch).toHaveBeenCalledWith(
-      "schedules.open",
-      { scheduleId: "schedule-1" },
-      { source: "user" }
-    );
-    expect(fake.dispatch).not.toHaveBeenCalledWith("panel.focus", expect.anything());
+    expect(dispatch.mock.calls).toEqual([opened({ scheduleId: "schedule-1" })]);
+    expect(fake.calls).toEqual(["schedules.open"]);
   });
 
-  it("opens the history for a run that never had a terminal", async () => {
+  it("opens the history for a run with no terminal, whatever panes there are", async () => {
+    fake.panels["terminal-1"] = { location: "grid", worktreeId: null, scheduledRun: runRef };
     await landOnScheduledRun({ ...target, panelId: null }, notSuperseded);
-    expect(fake.dispatch).toHaveBeenCalledWith(
-      "schedules.open",
-      { scheduleId: "schedule-1" },
-      { source: "user" }
-    );
+    expect(dispatch.mock.calls).toEqual([opened({ scheduleId: "schedule-1" })]);
+  });
+
+  it("lands on the schedule's page in a Schedules view already open, not on a pane under it", async () => {
+    fake.panels["terminal-1"] = { location: "grid", worktreeId: null, scheduledRun: runRef };
+    fake.schedulesOpen = true;
+    await landOnScheduledRun(target, notSuperseded);
+    expect(dispatch.mock.calls).toEqual([opened({ scheduleId: "schedule-1" })]);
+    expect(fake.calls).toEqual(["schedules.open"]);
   });
 
   it("opens the list for a schedule deleted since, and the schedule when they can't be read", async () => {
     fake.schedules = { schedules: [{ id: "schedule-2" }] };
     await landOnScheduledRun(target, notSuperseded);
-    expect(fake.dispatch).toHaveBeenLastCalledWith("schedules.open", undefined, { source: "user" });
+    expect(dispatch).toHaveBeenLastCalledWith(...opened(undefined));
 
     fake.listError = new Error("no project bound");
     await landOnScheduledRun(target, notSuperseded);
-    expect(fake.dispatch).toHaveBeenLastCalledWith(
-      "schedules.open",
-      { scheduleId: "schedule-1" },
-      { source: "user" }
-    );
+    expect(dispatch).toHaveBeenLastCalledWith(...opened({ scheduleId: "schedule-1" }));
   });
 
   it("opens nothing once a newer landing took over while the schedules were read", async () => {
+    let answer: () => void = () => {};
+    fake.list = () =>
+      new Promise((resolve) => {
+        answer = () => resolve(fake.schedules);
+      });
     let superseded = false;
-    fake.onList = () => {
-      superseded = true;
-    };
-    await landOnScheduledRun(target, () => superseded);
-    expect(fake.dispatch).not.toHaveBeenCalled();
+    const landing = landOnScheduledRun(target, () => superseded);
+    superseded = true;
+    answer();
+    await landing;
+    expect(dispatch).not.toHaveBeenCalled();
   });
 });

@@ -160,16 +160,14 @@ describe("useFocusOnActivateIntent", () => {
     });
     expect(landOnScheduledRunMock).not.toHaveBeenCalled();
     rerender({ loaded: true });
-    expect(landOnScheduledRunMock).toHaveBeenCalledWith(
-      { runId: "run-1", scheduleId: "schedule-1", panelId: "terminal-1" },
-      expect.any(Function)
-    );
-    const isSuperseded = landOnScheduledRunMock.mock.calls[0][1];
-    expect(isSuperseded()).toBe(false);
+    expect(landOnScheduledRunMock).toHaveBeenCalledTimes(1);
+    const [landed, isSuperseded] = landOnScheduledRunMock.mock.calls[0] ?? [];
+    expect(landed).toEqual({ runId: "run-1", scheduleId: "schedule-1", panelId: "terminal-1" });
+    expect(isSuperseded?.()).toBe(false);
     act(() => {
       lastCallback?.({ intent: "focus-next-waiting" });
     });
-    expect(isSuperseded()).toBe(true);
+    expect(isSuperseded?.()).toBe(true);
   });
 
   it("does NOT dispatch when intent arrives before hydration completes", () => {

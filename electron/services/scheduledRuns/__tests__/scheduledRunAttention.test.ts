@@ -70,7 +70,7 @@ describe("scheduledRunAttention", () => {
     ["a skip for a missed occurrence", { kind: "skip", reason: { kind: "missed" } }, null],
     [
       "a failed precondition",
-      { kind: "skip", reason: { kind: "precondition", exitCode: 1, signal: null } },
+      { kind: "skip", reason: { kind: "precondition", exitCode: 1, signal: null, error: null } },
       null,
     ],
     ["a cancel", { kind: "cancel" }, null],
@@ -89,31 +89,55 @@ describe("scheduledRunAttention", () => {
 });
 
 describe("describeScheduledRunAttention", () => {
-  const names = { scheduleName: "Nightly triage", agentName: "Codex" };
+  const kinds: ScheduledRunAttention[] = [
+    { kind: "launch-failed" },
+    { kind: "exited", process: "pty", exitCode: 2 },
+    { kind: "needs-you" },
+  ];
 
-  it("names the schedule and agent, and an exit's code", () => {
-    expect(describeScheduledRunAttention({ kind: "launch-failed" }, names)).toEqual({
-      title: "Scheduled run couldn't start",
-      body: 'Codex didn\'t launch for "Nightly triage". Its history says why.',
-    });
-    expect(
-      describeScheduledRunAttention({ kind: "exited", process: "pty", exitCode: 2 }, names).body
-    ).toBe('Codex\'s terminal exited with code 2 during "Nightly triage".');
-    expect(
-      describeScheduledRunAttention({ kind: "exited", process: "agent", exitCode: 2 }, names).body
-    ).toBe('Codex exited with code 2 during "Nightly triage".');
-    expect(describeScheduledRunAttention({ kind: "needs-you" }, names)).toEqual({
-      title: "Scheduled run needs you",
-      body: 'Codex handed back "Nightly triage" for you to look at.',
-    });
+  it("gives each reason its own title", () => {
+    const names = { scheduleName: "Nightly triage", agentName: "Codex" };
+    const titles = kinds.map((attention) => describeScheduledRunAttention(attention, names).title);
+    expect(new Set(titles).size).toBe(kinds.length);
+  });
+
+  it.each([
+    ["Nightly triage", "Codex"],
+    ["Weekly deps", "Claude"],
+  ])("names %s and %s in every body", (scheduleName, agentName) => {
+    for (const attention of kinds) {
+      const { title, body } = describeScheduledRunAttention(attention, { scheduleName, agentName });
+      expect(body).toContain(`"${scheduleName}"`);
+      expect(body).toContain(agentName);
+      expect(body).not.toContain(title);
+    }
+  });
+
+  it("says which process exited, with its code", () => {
+    const names = { scheduleName: "Nightly triage", agentName: "Codex" };
+    const pty = describeScheduledRunAttention(
+      { kind: "exited", process: "pty", exitCode: 3 },
+      names
+    ).body;
+    const agent = describeScheduledRunAttention(
+      { kind: "exited", process: "agent", exitCode: 127 },
+      names
+    ).body;
+    expect(pty).toContain("terminal");
+    expect(pty).toContain("code 3");
+    expect(agent).not.toContain("terminal");
+    expect(agent).toContain("code 127");
   });
 
   it("still reads when the schedule's name couldn't be read", () => {
-    expect(
-      describeScheduledRunAttention(
-        { kind: "needs-you" },
-        { scheduleName: null, agentName: "Codex" }
-      ).body
-    ).toBe("Codex handed back a scheduled run for you to look at.");
+    for (const attention of kinds) {
+      const { body } = describeScheduledRunAttention(attention, {
+        scheduleName: null,
+        agentName: "Codex",
+      });
+      expect(body).toContain("a scheduled run");
+      expect(body).not.toContain("null");
+      expect(body).not.toContain('""');
+    }
   });
 });
