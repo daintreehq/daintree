@@ -4,6 +4,7 @@ import { defineAction } from "../defineAction";
 import type { ActionContext } from "@shared/types/actions";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { useSchedulesViewStore } from "@/store/schedulesViewStore";
+import { schedulesClient } from "@/clients/schedulesClient";
 import { ClientAppError } from "@/utils/clientAppError";
 
 // Schedules live on this machine and run agents here, so a window driving a
@@ -72,8 +73,7 @@ export function registerScheduleActions(actions: ActionRegistry): void {
       argsSchema: z.object({
         scheduleId: z.string().min(1).max(200).describe("The schedule to run, from this project."),
       }),
-      run: async ({ scheduleId }: { scheduleId: string }) =>
-        window.electron.schedules.runNow(scheduleId),
+      run: async ({ scheduleId }: { scheduleId: string }) => schedulesClient.runNow(scheduleId),
     })
   );
 }
