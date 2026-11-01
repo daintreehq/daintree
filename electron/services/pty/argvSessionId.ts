@@ -128,8 +128,8 @@ export function readArgvSessionId(
  * intact. A line that starts the agent directly refutes any id it doesn't name
  * itself (`codex "resume <id>"` is a fresh conversation with a prompt). A line
  * that starts it some other way (`env codex …`, an alias, a script) can't be
- * parsed positionally, but one that only ever holds the id inside a larger
- * argument still refutes it. A line that never mentions the id says nothing.
+ * parsed positionally, but one that holds the id inside a larger argument
+ * anywhere still refutes it. A line that never mentions the id says nothing.
  */
 export function typedLineRefutes(
   line: string,
@@ -140,5 +140,5 @@ export function typedLineRefutes(
   const tokens = splitShellLikeCommand(line);
   const start = argumentsStart(tokens, executable);
   if (start !== null) return readSessionIdFromArguments(tokens.slice(start), spec) !== argvId;
-  return !tokens.includes(argvId) && tokens.some((token) => token.includes(argvId));
+  return tokens.some((token) => token !== argvId && token.includes(argvId));
 }

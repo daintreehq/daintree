@@ -99,6 +99,7 @@ describe("typedLineRefutes with Codex's declaration", () => {
   it.each([
     ["a quoted prompt that reads like a resume", `codex "resume ${ID}"`],
     ["a wrapped quoted prompt", `env codex "resume ${ID}"`],
+    ["a wrapped quoted prompt beside a whole-id argument", `env codex -C ${ID} "resume ${ID}"`],
     ["a typed resume of another id", `codex resume ${OTHER}`],
     ["a fresh launch", "codex"],
   ])("refutes argv for %s", (_name, line) => {
