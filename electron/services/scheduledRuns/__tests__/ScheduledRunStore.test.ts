@@ -132,11 +132,24 @@ describe("ScheduledRunStore", () => {
     expect(store.evaluationPoint("schedule-1")).toBe(T0);
   });
 
+  it("writes neither the run nor the evaluation point when the point's write fails", () => {
+    const store = new ScheduledRunStore(sqlite);
+    store.insert(scheduled("first", T0));
+    sqlite.exec(`CREATE TRIGGER refuse_point BEFORE INSERT ON schedule_evaluation_points
+      BEGIN SELECT RAISE(ABORT, 'point write failed'); END`);
+
+    expect(() => store.insert(scheduled("second", T0 + 60_000))).toThrow(/point write failed/);
+    expect(store.get("second")).toBeNull();
+    expect(store.evaluationPoint("schedule-1")).toBe(T0);
+  });
+
   it("leaves the evaluation point where it was when the run's insert fails", () => {
     const store = new ScheduledRunStore(sqlite);
     store.insert(scheduled("first", T0));
 
     expect(() => store.insert(scheduled("again", T0))).toThrow(ScheduledRunConflictError);
+    // A run id already taken, carrying a later occurrence.
+    expect(() => store.insert(scheduled("first", T0 + 120_000))).toThrow();
     expect(() =>
       store.insert({ ...scheduled("invalid", T0 + 60_000), terminalSpawnedAt: T0 })
     ).toThrow();

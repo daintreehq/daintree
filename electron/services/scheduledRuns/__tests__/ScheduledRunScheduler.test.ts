@@ -64,6 +64,7 @@ let launches: ScheduledRunSchedulerLaunch[];
 let launchImpl: (input: ScheduledRunSchedulerLaunch) => Promise<ScheduleRunNowOutcome>;
 let getRecorder: ReturnType<typeof vi.fn<() => Promise<ScheduledRunRecorder | null>>>;
 let scheduler: ScheduledRunScheduler | null;
+let cancelled: string[];
 
 function openRecorder(): ScheduledRunRecorder {
   const opened = new ScheduledRunRecorder({
@@ -129,6 +130,7 @@ function deps(): ScheduledRunSchedulerDeps {
       launchedAt.push(Date.now());
       return launchImpl(input);
     },
+    cancelLaunches: (scheduleId) => cancelled.push(scheduleId),
     newId: () => `skip-${++ids}`,
     isShuttingDown: () => shuttingDown,
     monotonicNow: () => Date.now() - skew,
@@ -147,6 +149,12 @@ async function start(): Promise<ScheduledRunScheduler> {
 /** Time passing while the machine is awake: both clocks and the timers move. */
 async function elapse(ms: number): Promise<void> {
   await vi.advanceTimersByTimeAsync(ms);
+  await scheduler?.idle();
+}
+
+/** Lets a finished launch's callbacks run, and the pass they ask for. */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 10; i++) await Promise.resolve();
   await scheduler?.idle();
 }
 
@@ -192,6 +200,7 @@ beforeEach(() => {
   projects = new Set(["project-1"]);
   shuttingDown = false;
   launches = [];
+  cancelled = [];
   launchImpl = async (input) => registerAtSpawn(input);
   scheduler = null;
 });
@@ -413,7 +422,7 @@ describe("ScheduledRunScheduler", () => {
     expect(launches).toHaveLength(1);
 
     finish(registerAtSpawn(launches[0]!));
-    await scheduler!.idle();
+    await settle();
     expect(launches).toHaveLength(1);
   });
 
@@ -562,6 +571,197 @@ describe("ScheduledRunScheduler", () => {
       ["scheduled", at(9)],
       ["scheduled", at(10)],
     ]);
+  });
+
+  it("doesn't catch up the time a schedule was off over a run it already had", async () => {
+    commit("project-1", [schedule({ updatedAt: at(8) })]);
+    await start();
+    await elapse(30 * MINUTE);
+    expect(recorder.evaluationPoint("schedule-1")).toBe(at(9));
+
+    commit("project-1", [schedule({ enabled: false, updatedAt: at(9, 5) })]);
+    await scheduler!.idle();
+    setClock(at(12, 30));
+    commit("project-1", [schedule({ updatedAt: at(12, 30) })]);
+    await scheduler!.idle();
+    expect(launches).toHaveLength(1);
+
+    await elapse(30 * MINUTE);
+    expect(origins().map((origin) => [origin.trigger, origin.dueAt])).toEqual([
+      ["scheduled", at(9)],
+      ["scheduled", at(13)],
+    ]);
+  });
+
+  it("calls a due time missed when the clock alone shows a short sleep spanned it", async () => {
+    vi.setSystemTime(at(8, 59, 50));
+    commit("project-1", [schedule()]);
+    await start();
+
+    // No power events, woken within the minute: only the clocks disagree.
+    sleepFor(30_000);
+    await elapse(SCHEDULER_TICK_MS);
+    expect(origins()).toEqual([expect.objectContaining({ trigger: "catch-up", dueAt: at(9) })]);
+  });
+
+  it("calls a due time missed on resume even when the clocks agree", async () => {
+    vi.setSystemTime(at(8, 59, 50));
+    commit("project-1", [schedule()]);
+    await start();
+
+    // macOS's monotonic clock runs on through a sleep.
+    vi.setSystemTime(at(9, 0, 10));
+    scheduler!.resume();
+    await scheduler!.idle();
+    expect(origins()).toEqual([expect.objectContaining({ trigger: "catch-up", dueAt: at(9) })]);
+  });
+
+  it("calls a due time missed after a suspend whose resume was never heard", async () => {
+    vi.setSystemTime(at(8, 59, 50));
+    commit("project-1", [schedule()]);
+    await start();
+
+    scheduler!.suspend();
+    await elapse(20_000);
+    expect(origins()).toEqual([expect.objectContaining({ trigger: "catch-up", dueAt: at(9) })]);
+  });
+
+  it("calls the latest of several due times missed even when it's within the minute", async () => {
+    vi.setSystemTime(at(8, 58, 30));
+    commit("project-1", [schedule({ cron: "* * * * *" })]);
+    await start();
+
+    // An event loop held up across 08:59 and 09:00: both clocks moved.
+    vi.setSystemTime(at(9, 0, 10));
+    scheduler!.unlock();
+    await scheduler!.idle();
+    expect(origins()).toEqual([
+      expect.objectContaining({
+        trigger: "catch-up",
+        dueAt: at(9),
+        coalesced: { after: at(8, 58, 30), through: at(9, 0, 10) },
+      }),
+    ]);
+  });
+
+  it("calls a due time that came while the last launch was in flight missed", async () => {
+    let finish: () => void = () => {};
+    vi.setSystemTime(at(8, 58, 50));
+    const skipping = schedule({ cron: "* * * * *" });
+    commit("project-1", [{ ...skipping, policies: { ...skipping.policies, missedRuns: "skip" } }]);
+    launchImpl = (input) =>
+      new Promise((resolve) => {
+        finish = () => resolve(registerAtSpawn(input));
+      });
+    await start();
+    await elapse(10_000);
+    expect(origins()).toEqual([
+      expect.objectContaining({ trigger: "scheduled", dueAt: at(8, 59) }),
+    ]);
+
+    await elapse(65_000);
+    finish();
+    await settle();
+    expect(launches).toHaveLength(1);
+    expect(recorder.listBySchedule("schedule-1")[0]).toMatchObject({
+      origin: { trigger: "catch-up", dueAt: at(9) },
+      settlement: { outcome: "skipped" },
+    });
+  });
+
+  it("keeps the window it found when an edit lands while the first pass is reading", async () => {
+    commit("project-1", [schedule({ updatedAt: at(8) })]);
+    setClock(at(12, 30));
+    let openHistory: () => void = () => {};
+    getRecorder.mockImplementationOnce(
+      () => new Promise((resolve) => (openHistory = () => resolve(recorder)))
+    );
+    scheduler = new ScheduledRunScheduler(deps());
+    await scheduler.start();
+
+    // Renamed while the history opens: the cadence and the switch are unchanged.
+    commit("project-1", [{ ...schedule({ updatedAt: at(12, 30) }), name: "Renamed" }]);
+    openHistory();
+    await scheduler.idle();
+
+    expect(origins()).toEqual([
+      expect.objectContaining({
+        trigger: "catch-up",
+        dueAt: at(12),
+        coalesced: { after: at(8), through: at(12, 30) },
+      }),
+    ]);
+  });
+
+  it("reads a project again a minute after its schedules couldn't be read", async () => {
+    commit("project-1", [schedule({ updatedAt: at(8) })]);
+    const base = deps();
+    let failing = true;
+    scheduler = new ScheduledRunScheduler({
+      ...base,
+      listSchedules: (projectId) =>
+        failing ? Promise.reject(new Error("EMFILE")) : base.listSchedules(projectId),
+    });
+    await scheduler.start();
+    await scheduler.idle();
+    expect(vi.getTimerCount()).toBe(1);
+
+    failing = false;
+    await elapse(30 * MINUTE);
+    expect(origins()).toEqual([expect.objectContaining({ trigger: "scheduled", dueAt: at(9) })]);
+  });
+
+  it("waits a minute before launching again when a launch found nothing to run", async () => {
+    commit("project-1", [schedule({ updatedAt: at(8) })]);
+    launchImpl = async () => ({ status: "not-found" });
+    await start();
+    await elapse(30 * MINUTE);
+    expect(launches).toHaveLength(1);
+
+    await elapse(SCHEDULER_TICK_MS);
+    expect(launches).toHaveLength(1);
+    await elapse(SCHEDULER_TICK_MS + 1_000);
+    expect(launches).toHaveLength(2);
+  });
+
+  it("waits a minute after a launch that threw, or a skip that couldn't be written", async () => {
+    commit("project-1", [schedule({ updatedAt: at(8) })]);
+    launchImpl = async () => {
+      throw new Error("view bridge gone");
+    };
+    await start();
+    await elapse(30 * MINUTE + SCHEDULER_TICK_MS);
+    expect(launches).toHaveLength(1);
+    expect(recorder.evaluationPoint("schedule-1")).toBeNull();
+
+    const skipping = schedule({ updatedAt: at(8) });
+    commit("project-1", [{ ...skipping, policies: { ...skipping.policies, missedRuns: "skip" } }]);
+    const registerSkip = vi.spyOn(recorder, "registerSkip").mockImplementation(() => {
+      throw new Error("SQLITE_BUSY");
+    });
+    await elapse(SCHEDULER_TICK_MS);
+    expect(registerSkip).toHaveBeenCalledTimes(1);
+    await elapse(SCHEDULER_TICK_MS);
+    expect(registerSkip).toHaveBeenCalledTimes(1);
+    registerSkip.mockRestore();
+    await elapse(SCHEDULER_TICK_MS);
+    expect(recorder.listBySchedule("schedule-1")).toEqual([
+      expect.objectContaining({ settlement: expect.objectContaining({ outcome: "skipped" }) }),
+    ]);
+  });
+
+  it("cancels the launch in flight when its schedule is switched off", async () => {
+    commit("project-1", [schedule({ updatedAt: at(8) })]);
+    launchImpl = () => new Promise(() => {});
+    await start();
+    await elapse(30 * MINUTE);
+    expect(launches).toHaveLength(1);
+    expect(cancelled).toEqual([]);
+
+    commit("project-1", [{ ...schedule({ updatedAt: at(8) }), name: "Renamed" }]);
+    expect(cancelled).toEqual([]);
+    commit("project-1", [schedule({ enabled: false, updatedAt: at(9) })]);
+    expect(cancelled).toEqual(["schedule-1"]);
   });
 
   it("stops every timer on dispose and launches nothing after", async () => {

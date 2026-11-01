@@ -42,6 +42,11 @@ export interface ScheduledLaunchReservation {
   readonly terminalId: string;
   readonly agentId: string;
   /**
+   * The scheduler's launch of an occurrence (#15979), which switching the
+   * schedule off cancels; Run now's isn't.
+   */
+  readonly automatic?: boolean;
+  /**
    * Registers the run from the spawn's resume snapshot, and the handback code
    * its launch prompt carries (null when it carries none), synchronously: the
    * spawn follows with no await between. Throwing refuses the spawn, and the
@@ -228,12 +233,19 @@ export function admitScheduledSpawn(spawn: ScheduledSpawn): boolean {
 /**
  * Cancels the launches reserved for a schedule or a project being removed,
  * synchronously with the removal, so none registers a run whose history was
- * just deleted. Their first spawn is refused.
+ * just deleted. Their first spawn is refused. `automaticOnly` cancels just the
+ * scheduler's, as switching a schedule off does: nothing is recorded for
+ * them, and Run now's launches carry on.
  */
-export function cancelScheduledLaunches(match: { projectId?: string; scheduleId?: string }): void {
+export function cancelScheduledLaunches(match: {
+  projectId?: string;
+  scheduleId?: string;
+  automaticOnly?: boolean;
+}): void {
   const matches = (reservation: ScheduledLaunchReservation): boolean =>
     (match.projectId === undefined || reservation.projectId === match.projectId) &&
-    (match.scheduleId === undefined || reservation.scheduleId === match.scheduleId);
+    (match.scheduleId === undefined || reservation.scheduleId === match.scheduleId) &&
+    (match.automaticOnly !== true || reservation.automatic === true);
   for (const launching of removedWhileLaunching.values()) {
     if (matches(launching.reservation)) launching.removed = true;
   }

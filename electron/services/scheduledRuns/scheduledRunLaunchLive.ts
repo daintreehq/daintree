@@ -7,6 +7,7 @@ import {
   isCachedViewWebContents,
 } from "../../window/webContentsRegistry.js";
 import { thawThenSend } from "../../utils/thawThenSend.js";
+import { getActiveShutdown } from "../../lifecycle/shutdownCoordinator.js";
 import { projectStore } from "../ProjectStore.js";
 import type {
   ScheduleRunNowOutcome,
@@ -174,6 +175,7 @@ async function liveDeps(): Promise<ScheduledRunLauncherDeps<Electron.WebContents
     removeRunPane,
     newId: randomUUID,
     onLaunched: armScheduledRunDonePolicy,
+    isShuttingDown: () => getActiveShutdown() !== null,
   };
 }
 

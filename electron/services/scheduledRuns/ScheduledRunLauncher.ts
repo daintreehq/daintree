@@ -95,6 +95,11 @@ export interface ScheduledRunLauncherDeps<View> {
   onLaunched?: (run: ArmedScheduledRun) => void;
   /** How long a replaced run's terminal has to exit once its close was answered. */
   replaceExitTimeoutMs?: number;
+  /**
+   * True once Daintree is quitting: nothing starts, and a refusal the quit
+   * caused records nothing, so the occurrence stays due for the next startup.
+   */
+  isShuttingDown?: () => boolean;
   /** How long a launch that answered to have started waits for its spawn. */
   spawnTimeoutMs?: number;
   /** How long main's own launch, with no view, may take before it's given up. */
@@ -221,6 +226,7 @@ async function launchInScheduleTurn<View>(
   deps: ScheduledRunLauncherDeps<View>
 ): Promise<ScheduledRunLaunchOutcome> {
   const logWarn = deps.logWarn ?? console.warn;
+  const isShuttingDown = deps.isShuttingDown ?? (() => false);
   const { projectId, scheduleId, origin } = input;
   const recorder = await deps.getRecorder();
   if (!recorder) {
@@ -306,7 +312,9 @@ async function launchInScheduleTurn<View>(
     projectId,
     terminalId,
     agentId: launch.agentId,
+    automatic: origin.trigger !== "run-now",
     admit: (resume, handbackCode) => {
+      if (isShuttingDown()) throw new Error("Daintree was quitting.");
       // A launcher falls back from a preset it can't find, and a launch with
       // no worktree list from a worktree it can't place; a run that would
       // start differently from its schedule doesn't start.
@@ -346,8 +354,11 @@ async function launchInScheduleTurn<View>(
       message: string,
       reservedId: string | null = terminalId
     ): ScheduledRunLaunchOutcome => {
-      // A removed schedule or project has no history left to write into.
-      if (reserved.removed() || !deps.getProject(projectId)) return { status: "not-found" };
+      // A removed schedule or project has no history left to write into, and
+      // a switch-off or a quit cancels an occurrence without consuming it.
+      if (reserved.removed() || isShuttingDown() || !deps.getProject(projectId)) {
+        return { status: "not-found" };
+      }
       try {
         recorder.registerRefusedLaunch({
           id: runId,
@@ -375,6 +386,10 @@ async function launchInScheduleTurn<View>(
     if (deps.isProjectSleeping(projectId))
       return refuseBeforeLaunch("The project was going to sleep.");
     if (reserved.state().kind !== "pending") return { status: "not-found" };
+    if (isShuttingDown()) {
+      reserved.withdraw();
+      return { status: "not-found" };
+    }
 
     const { precondition } = schedule.policies;
     if (precondition !== null) {
@@ -399,7 +414,9 @@ async function launchInScheduleTurn<View>(
       if (reserved.state().kind !== "pending") return { status: "not-found" };
       if (skipped !== null) {
         reserved.withdraw();
-        if (reserved.removed() || !deps.getProject(projectId)) return { status: "not-found" };
+        if (reserved.removed() || isShuttingDown() || !deps.getProject(projectId)) {
+          return { status: "not-found" };
+        }
         return recordSkip(skipped, terminalId);
       }
       if (deps.isProjectSleeping(projectId)) {

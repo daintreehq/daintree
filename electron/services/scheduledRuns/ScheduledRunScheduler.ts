@@ -23,7 +23,10 @@ export const SCHEDULER_TICK_MS = 30_000;
 export const ON_TIME_GRACE_MS = 60_000;
 /** Wall time moving this far from monotonic time between looks is a clock change or a sleep. */
 export const CLOCK_DRIFT_MS = 10_000;
-/** How long a schedule waits after a launch or skip the history couldn't record. */
+/**
+ * How long a schedule waits after a launch or skip that recorded nothing, and
+ * a project whose schedules couldn't be read, before they're tried again.
+ */
 export const UNRECORDED_RETRY_MS = 60_000;
 
 /** The parts of the run history the scheduler reads and writes. */
@@ -48,6 +51,8 @@ export interface ScheduledRunSchedulerDeps {
   readonly getRecorder: () => Promise<ScheduledRunSchedulerRecorder | null>;
   /** Launches through `launchScheduledRun`, which registers the run at its spawn. */
   readonly launch: (input: ScheduledRunSchedulerLaunch) => Promise<ScheduleRunNowOutcome>;
+  /** Cancels this scheduler's launches of a schedule that haven't spawned yet. */
+  readonly cancelLaunches: (scheduleId: string) => void;
   readonly newId: () => string;
   readonly isShuttingDown?: () => boolean;
   readonly now?: () => number;
@@ -69,16 +74,18 @@ type Decision =
  *
  * Each schedule is evaluated from its evaluation point, the latest occurrence
  * a run was registered for, which the history moves in the same transaction
- * as that run's row, or from its last edit or switch-on when that's later. An
- * occurrence found while Daintree was watching, within a minute and with none
- * missed before it, launches with trigger `scheduled`. Anything else found in
- * the window (after a quit, a sleep, a clock jump, or a slow launch) is one
- * missed window: a `catch-up` launch standing for all of it, or one skip
- * under `missedRuns: "skip"`.
+ * as that run's row, or from its timing floor when that's later: when it was
+ * switched on or its cadence last changed while Daintree ran, or its last
+ * edit as read at startup. An occurrence found while Daintree was watching,
+ * within a minute and with none missed before it, launches with trigger
+ * `scheduled`. Anything else found in the window (after a quit, a sleep, a
+ * clock jump, or while its last launch was in flight) is one missed window: a
+ * `catch-up` launch standing for all of it, or one skip under
+ * `missedRuns: "skip"`.
  *
- * A schedule has at most one launch in flight. Its occurrence is consumed
- * only when the launcher registers the run, launched or refused, so a quit
- * before then leaves it for the next startup to catch up.
+ * A schedule has at most one launch in flight, which switching it off
+ * cancels. Its occurrence is consumed only when the launcher records the run,
+ * launched or refused, so a quit before then leaves it for the next startup.
  */
 export class ScheduledRunScheduler {
   private readonly deps: ScheduledRunSchedulerDeps;
@@ -92,6 +99,13 @@ export class ScheduledRunScheduler {
   /** Monotonic time before which a schedule isn't tried again. */
   private readonly retryAfter = new Map<string, number>();
   private readonly parsed = new Map<string, ParsedCron | null>();
+  /** Where each schedule's timing starts, before which nothing counts as missed. */
+  private readonly floors = new Map<string, number>();
+  /** Schedules whose next evaluation finds what came due while their launch was in flight. */
+  private readonly unwatched = new Set<string>();
+  /** Projects whose schedules couldn't be read, and when they're read again. */
+  private readonly unread = new Set<string>();
+  private nextReadAt = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private unsubscribe: (() => void) | null = null;
   private started = false;
@@ -100,7 +114,7 @@ export class ScheduledRunScheduler {
    * The next pass finds what came due while nobody watched: at startup, after
    * a suspend, or after the wall clock jumped. Nothing it finds is on time.
    */
-  private recovering = true;
+  private recoverAll = true;
   private passRequested = false;
   private draining: Promise<void> | null = null;
   private lastLook: { readonly wall: number; readonly monotonic: number } | null = null;
@@ -129,25 +143,18 @@ export class ScheduledRunScheduler {
     } catch (error) {
       this.logWarn("[ScheduledRuns] Couldn't list projects for their schedules:", error);
     }
-    await Promise.all(
-      projectIds.map(async (projectId) => {
-        try {
-          this.hold(await this.deps.listSchedules(projectId));
-        } catch (error) {
-          this.logWarn(`[ScheduledRuns] Couldn't read project ${projectId}'s schedules:`, error);
-        }
-      })
-    );
+    this.nextReadAt = this.monotonicNow() + UNRECORDED_RETRY_MS;
+    await this.readProjects(projectIds);
     this.requestPass();
   }
 
   /** What came due while the machine slept is missed, whichever event reports the wake first. */
   suspend(): void {
-    this.recovering = true;
+    this.recoverAll = true;
   }
 
   resume(): void {
-    this.recovering = true;
+    this.recoverAll = true;
     this.requestPass();
   }
 
@@ -178,8 +185,42 @@ export class ScheduledRunScheduler {
   private hold(snapshot: SchedulesSnapshot): boolean {
     const held = this.projects.get(snapshot.projectId);
     if (held && held.revision > snapshot.revision) return false;
+    const previous = new Map(held?.schedules.map((schedule) => [schedule.id, schedule]));
+    for (const schedule of snapshot.schedules) {
+      const before = previous.get(schedule.id);
+      previous.delete(schedule.id);
+      // Synchronously with the commit, so a launch past its read doesn't spawn.
+      if (before?.enabled && !schedule.enabled) this.deps.cancelLaunches(schedule.id);
+      if (before && keepsTiming(before, schedule)) {
+        if (!this.floors.has(schedule.id)) this.floors.set(schedule.id, before.updatedAt);
+        continue;
+      }
+      this.floors.set(schedule.id, schedule.updatedAt);
+      this.unwatched.delete(schedule.id);
+      this.retryAfter.delete(schedule.id);
+    }
+    for (const removed of previous.keys()) {
+      this.floors.delete(removed);
+      this.unwatched.delete(removed);
+      this.retryAfter.delete(removed);
+    }
     this.projects.set(snapshot.projectId, snapshot);
     return true;
+  }
+
+  private async readProjects(projectIds: readonly string[]): Promise<void> {
+    await Promise.all(
+      projectIds.map(async (projectId) => {
+        try {
+          const snapshot = await this.deps.listSchedules(projectId);
+          this.unread.delete(projectId);
+          this.hold(snapshot);
+        } catch (error) {
+          this.unread.add(projectId);
+          this.logWarn(`[ScheduledRuns] Couldn't read project ${projectId}'s schedules:`, error);
+        }
+      })
+    );
   }
 
   private requestPass(): void {
@@ -210,9 +251,17 @@ export class ScheduledRunScheduler {
     this.clearTimer();
     if (this.isShuttingDown()) return;
     this.noteClock();
+    if (this.unread.size > 0 && this.monotonicNow() >= this.nextReadAt) {
+      this.nextReadAt = this.monotonicNow() + UNRECORDED_RETRY_MS;
+      await this.readProjects([...this.unread]);
+      if (this.disposed || this.isShuttingDown()) return;
+    }
     if (!this.hasEnabledSchedule()) {
-      // No timer and no history opened: nothing can come due.
-      this.recovering = false;
+      // No history opened, and no timer unless a project is still to be read:
+      // nothing can come due.
+      this.recoverAll = false;
+      this.unwatched.clear();
+      if (this.unread.size > 0) this.arm(SCHEDULER_TICK_MS);
       return;
     }
     const recorder = await this.deps.getRecorder();
@@ -233,9 +282,11 @@ export class ScheduledRunScheduler {
           if (retryAt > monotonic) continue;
           this.retryAfter.delete(schedule.id);
         }
+        const unwatched = this.unwatched.delete(schedule.id);
+        const recovering = this.recoverAll || unwatched;
         let decision: Decision;
         try {
-          decision = this.decide(schedule, recorder.evaluationPoint(schedule.id), now);
+          decision = this.decide(schedule, recorder.evaluationPoint(schedule.id), now, recovering);
         } catch (error) {
           this.logWarn(`[ScheduledRuns] Couldn't evaluate schedule ${schedule.id}:`, error);
           continue;
@@ -254,18 +305,27 @@ export class ScheduledRunScheduler {
         if (due !== null && (nextDueAt === null || due < nextDueAt)) nextDueAt = due;
       }
     }
-    this.recovering = false;
+    // A schedule skipped here needs none of it: one launching is unwatched
+    // once its launch ends, and one waiting out a retry still has its
+    // unconsumed occurrence in the window, late.
+    this.recoverAll = false;
     this.arm(nextDueAt === null ? SCHEDULER_TICK_MS : nextDueAt - now);
   }
 
   /** What one schedule's window holds at `now`. */
-  private decide(schedule: Schedule, evaluationPoint: number | null, now: number): Decision {
+  private decide(
+    schedule: Schedule,
+    evaluationPoint: number | null,
+    now: number,
+    recovering: boolean
+  ): Decision {
     const cron = this.parse(schedule.cadence.cron);
     if (!cron) return { kind: "wait", nextDueAt: null };
     const { timeZone } = schedule.cadence;
-    // Nothing before an edit or a switch-on counts as missed. A clock set back
-    // past the point waits for it: an occurrence never runs twice.
-    const after = Math.max(evaluationPoint ?? schedule.updatedAt, schedule.updatedAt);
+    // Nothing before its timing floor counts as missed. A clock set back past
+    // the point waits for it: an occurrence never runs twice.
+    const floor = this.floors.get(schedule.id) ?? schedule.updatedAt;
+    const after = Math.max(evaluationPoint ?? floor, floor);
     if (after >= now) return { kind: "wait", nextDueAt: nextCronOccurrence(cron, timeZone, after) };
     const latest = previousCronOccurrence(cron, timeZone, now);
     if (latest === null || latest <= after) {
@@ -273,7 +333,7 @@ export class ScheduledRunScheduler {
     }
     const occurrence = { dueAt: latest, occurrenceKey: occurrenceKeyFor(latest) };
     const onlyOne = nextCronOccurrence(cron, timeZone, after) === latest;
-    if (!this.recovering && onlyOne && now - latest < ON_TIME_GRACE_MS) {
+    if (!recovering && onlyOne && now - latest < ON_TIME_GRACE_MS) {
       return { kind: "launch", origin: { trigger: "scheduled", ...occurrence, coalesced: null } };
     }
     const origin: ScheduledRunOrigin = {
@@ -302,11 +362,14 @@ export class ScheduledRunScheduler {
       .then(
         (outcome) => {
           // A run the history recorded, launched or refused, moved the
-          // evaluation point; one it couldn't record left the occurrence due.
+          // evaluation point. One it couldn't record, and a launch that found
+          // the schedule gone, off or unreadable, left the occurrence due.
           if (outcome.status === "failed" && outcome.runId === null) {
             this.logWarn(
               `[ScheduledRuns] Schedule ${scheduleId}'s run couldn't be recorded: ${outcome.message}`
             );
+            this.deferRetry(scheduleId);
+          } else if (outcome.status === "not-found") {
             this.deferRetry(scheduleId);
           }
         },
@@ -317,6 +380,8 @@ export class ScheduledRunScheduler {
       )
       .finally(() => {
         this.launching.delete(scheduleId);
+        // What came due while it launched was missed.
+        this.unwatched.add(scheduleId);
         this.requestPass();
       });
   }
@@ -365,7 +430,7 @@ export class ScheduledRunScheduler {
     if (!last) return;
     const drift = look.wall - last.wall - (look.monotonic - last.monotonic);
     if (Math.abs(drift) <= CLOCK_DRIFT_MS) return;
-    this.recovering = true;
+    this.recoverAll = true;
     this.logInfo(
       `[ScheduledRuns] The clock moved ${Math.round(drift / 1000)}s; due times recomputed`
     );
@@ -403,4 +468,14 @@ export class ScheduledRunScheduler {
     clearTimeout(this.timer);
     this.timer = null;
   }
+}
+
+/** An edit that leaves a running schedule's cadence alone keeps the window it found. */
+function keepsTiming(before: Schedule, after: Schedule): boolean {
+  return (
+    before.enabled &&
+    after.enabled &&
+    before.cadence.cron === after.cadence.cron &&
+    before.cadence.timeZone === after.cadence.timeZone
+  );
 }

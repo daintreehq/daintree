@@ -1111,9 +1111,10 @@ describe("registerShutdownHandler", () => {
       expect(callOrder).toEqual(["dispose", "closeSharedDb"]);
     });
 
-    it("stops the scheduled-run scheduler before closeSharedDb", async () => {
+    it("waits for the scheduled-run scheduler to stop before closeSharedDb", async () => {
       const callOrder: string[] = [];
       scheduledRunSchedulerMock.stopScheduledRunScheduler.mockImplementationOnce(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
         callOrder.push("scheduler-stop");
       });
       closeSharedDbMock.closeSharedDb.mockImplementation(() => {

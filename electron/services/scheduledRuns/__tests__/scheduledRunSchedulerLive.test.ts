@@ -14,6 +14,11 @@ const mocks = vi.hoisted(() => {
     instances,
     activeShutdown: null as object | null,
     launchScheduledRunLive: vi.fn(async () => ({ status: "not-found" as const })),
+    list: vi.fn(async (projectId: string) => ({ projectId, schedules: [], revision: 3 })),
+    unsubscribe: vi.fn(),
+    subscribe: vi.fn(),
+    recorder: { evaluationPoint: () => null },
+    cancelScheduledLaunches: vi.fn(),
   };
 });
 
@@ -30,11 +35,21 @@ vi.mock("../../ProjectStore.js", () => ({
   projectStore: {
     getAllProjectIdentities: () => [{ id: "project-1", path: "/repo", name: "Repo" }],
     getProjectById: (id: string) => (id === "project-1" ? { id } : null),
-    schedules: { list: vi.fn(), subscribe: vi.fn(() => () => {}) },
+    schedules: {
+      list: (projectId: string) => mocks.list(projectId),
+      subscribe: (listener: unknown) => {
+        mocks.subscribe(listener);
+        return mocks.unsubscribe;
+      },
+    },
   },
 }));
 
-vi.mock("../index.js", () => ({ getScheduledRunRecorder: vi.fn(async () => null) }));
+vi.mock("../index.js", () => ({ getScheduledRunRecorder: async () => mocks.recorder }));
+
+vi.mock("../scheduledRunAdmission.js", () => ({
+  cancelScheduledLaunches: mocks.cancelScheduledLaunches,
+}));
 
 vi.mock("../scheduledRunLaunchLive.js", () => ({
   launchScheduledRunLive: mocks.launchScheduledRunLive,
@@ -82,11 +97,16 @@ describe("scheduledRunSchedulerLive", () => {
     expect(scheduler.start).toHaveBeenCalledTimes(1);
 
     power.emit("suspend");
+    expect(scheduler.suspend).toHaveBeenCalledTimes(1);
+    expect(scheduler.resume).not.toHaveBeenCalled();
+    expect(scheduler.unlock).not.toHaveBeenCalled();
     power.emit("resume");
+    expect(scheduler.resume).toHaveBeenCalledTimes(1);
+    expect(scheduler.unlock).not.toHaveBeenCalled();
     power.emit("unlock-screen");
+    expect(scheduler.unlock).toHaveBeenCalledTimes(1);
     expect(scheduler.suspend).toHaveBeenCalledTimes(1);
     expect(scheduler.resume).toHaveBeenCalledTimes(1);
-    expect(scheduler.unlock).toHaveBeenCalledTimes(1);
   });
 
   it("lists local projects and launches through the scheduled-run launcher", async () => {
@@ -94,6 +114,10 @@ describe("scheduledRunSchedulerLive", () => {
     const deps = mocks.instances[0]!.deps as {
       listProjectIds: () => string[];
       projectExists: (id: string) => boolean;
+      listSchedules: (projectId: string) => Promise<unknown>;
+      subscribeSchedules: (listener: () => void) => () => void;
+      getRecorder: () => Promise<unknown>;
+      cancelLaunches: (scheduleId: string) => void;
       launch: (input: unknown) => Promise<unknown>;
       isShuttingDown: () => boolean;
     };
@@ -101,6 +125,20 @@ describe("scheduledRunSchedulerLive", () => {
     expect(deps.listProjectIds()).toEqual(["project-1"]);
     expect(deps.projectExists("project-1")).toBe(true);
     expect(deps.projectExists("gone")).toBe(false);
+    await expect(deps.listSchedules("project-1")).resolves.toEqual({
+      projectId: "project-1",
+      schedules: [],
+      revision: 3,
+    });
+    const listener = () => {};
+    expect(deps.subscribeSchedules(listener)).toBe(mocks.unsubscribe);
+    expect(mocks.subscribe).toHaveBeenCalledWith(listener);
+    await expect(deps.getRecorder()).resolves.toBe(mocks.recorder);
+    deps.cancelLaunches("schedule-1");
+    expect(mocks.cancelScheduledLaunches).toHaveBeenCalledWith({
+      scheduleId: "schedule-1",
+      automaticOnly: true,
+    });
     const input = {
       projectId: "project-1",
       scheduleId: "schedule-1",

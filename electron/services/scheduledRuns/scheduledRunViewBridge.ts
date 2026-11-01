@@ -2,6 +2,7 @@ import { ipcMain } from "electron";
 import { randomUUID } from "node:crypto";
 import { CHANNELS } from "../../ipc/channels.js";
 import { thawThenSend } from "../../utils/thawThenSend.js";
+import { whenViewInteractive } from "../../window/interactiveViews.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
@@ -76,9 +77,11 @@ function ensureListener(): void {
 
 /**
  * Asks `webContents` to launch the run and resolves with `agent.launch`'s
- * result. Rejects with {@link ScheduledLaunchUnansweredError} when the view
- * closes or doesn't answer in time; that says nothing of whether it launched,
- * which only the run's admission at the spawn can tell.
+ * result. A view still loading is asked once it reports first-interactive, or
+ * the request would be lost before its bridge listens. Rejects with
+ * {@link ScheduledLaunchUnansweredError} when the view closes or doesn't
+ * answer in time; that says nothing of whether it launched, which only the
+ * run's admission at the spawn can tell.
  */
 export function requestScheduledLaunchInView(
   webContents: Electron.WebContents,
@@ -87,17 +90,22 @@ export function requestScheduledLaunchInView(
 ): Promise<ActionDispatchResult> {
   ensureListener();
   const requestId = randomUUID();
+  let stopWaiting = (): void => {};
   return new Promise<ActionDispatchResult>((resolve, reject) => {
     const timer = setTimeout(() => {
       take(requestId)?.reject(
         new ScheduledLaunchUnansweredError("The window showing the project didn't answer in time.")
       );
     }, timeoutMs);
-    const unwatch = onWebContentsDestroyed(webContents, () => {
+    const unwatchDestroyed = onWebContentsDestroyed(webContents, () => {
       take(requestId)?.reject(
         new ScheduledLaunchUnansweredError("The window showing the project closed.")
       );
     });
+    const unwatch = () => {
+      unwatchDestroyed();
+      stopWaiting();
+    };
     pendingLaunches.set(requestId, {
       webContentsId: webContents.id,
       resolve,
@@ -110,20 +118,24 @@ export function requestScheduledLaunchInView(
       args: { ...request.args },
       scheduledRun: request.scheduledRun,
     };
-    // A cached view may be frozen, and a frozen renderer never answers.
+    // A cached view may be frozen, and a frozen renderer never answers, or
+    // finishes loading.
     thawThenSend(
       webContents,
       () => pendingLaunches.has(requestId),
       () => {
-        try {
-          webContents.send(CHANNELS.SCHEDULES_LAUNCH_REQUEST, payload);
-        } catch (error) {
-          take(requestId)?.reject(
-            new ScheduledLaunchUnansweredError(
-              formatErrorMessage(error, "The window couldn't be asked.")
-            )
-          );
-        }
+        stopWaiting = whenViewInteractive(webContents, () => {
+          if (!pendingLaunches.has(requestId) || webContents.isDestroyed()) return;
+          try {
+            webContents.send(CHANNELS.SCHEDULES_LAUNCH_REQUEST, payload);
+          } catch (error) {
+            take(requestId)?.reject(
+              new ScheduledLaunchUnansweredError(
+                formatErrorMessage(error, "The window couldn't be asked.")
+              )
+            );
+          }
+        });
       }
     );
   });

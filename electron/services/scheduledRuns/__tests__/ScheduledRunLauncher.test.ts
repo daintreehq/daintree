@@ -496,6 +496,64 @@ describe("launchScheduledRun", () => {
     expect(recorder.registerLaunch).not.toHaveBeenCalled();
   });
 
+  it("launches and records nothing once Daintree is quitting, so an occurrence stays due", async () => {
+    let quitting = true;
+    deps.isShuttingDown = () => quitting;
+    await expect(run()).resolves.toEqual({ status: "not-found" });
+    expect(deps.launchInView).not.toHaveBeenCalled();
+
+    // The quit begins while the view is asked: the spawn is refused.
+    quitting = false;
+    deps.launchInView = async (_view, request) => {
+      quitting = true;
+      expect(() => spawnFor(request)).toThrow(/quitting/);
+      return launched(request.args.requestedId);
+    };
+    await expect(run()).resolves.toEqual({ status: "not-found" });
+
+    // The quit closes the view before it answers.
+    quitting = false;
+    deps.launchInView = async () => {
+      quitting = true;
+      throw new ScheduledLaunchUnansweredError("The window showing the project closed.");
+    };
+    await expect(run()).resolves.toEqual({ status: "not-found" });
+    expect(recorder.registerLaunch).not.toHaveBeenCalled();
+    expect(recorder.registerRefusedLaunch).not.toHaveBeenCalled();
+  });
+
+  it("lets switching the schedule off cancel a scheduled launch before it spawns", async () => {
+    const dueAt = Date.UTC(2026, 10, 2, 9);
+    const scheduled = {
+      trigger: "scheduled",
+      dueAt,
+      occurrenceKey: new Date(dueAt).toISOString(),
+      coalesced: null,
+    } as const;
+    deps.launchInView = async (_view, request) => {
+      cancelScheduledLaunches({ scheduleId: "schedule-1", automaticOnly: true });
+      expect(() => spawnFor(request)).toThrow(/given up/);
+      return launched(request.args.requestedId);
+    };
+
+    await expect(
+      launchScheduledRun(
+        { projectId: "project-1", scheduleId: "schedule-1", origin: scheduled },
+        deps
+      )
+    ).resolves.toEqual({ status: "not-found" });
+    expect(recorder.registerLaunch).not.toHaveBeenCalled();
+    expect(recorder.registerRefusedLaunch).not.toHaveBeenCalled();
+
+    // Run now's launch isn't the scheduler's: the same cancel leaves it be.
+    deps.launchInView = async (_view, request) => {
+      cancelScheduledLaunches({ scheduleId: "schedule-1", automaticOnly: true });
+      spawnFor(request);
+      return launched(request.args.requestedId);
+    };
+    await expect(run()).resolves.toMatchObject({ status: "started" });
+  });
+
   it("answers not-found for a schedule or project that's gone, recording nothing", async () => {
     deps.getSchedule = async () => null;
     await expect(run()).resolves.toEqual({ status: "not-found" });

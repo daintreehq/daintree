@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { getActiveShutdown } from "../../lifecycle/shutdownCoordinator.js";
 import { projectStore } from "../ProjectStore.js";
 import { getScheduledRunRecorder } from "./index.js";
+import { cancelScheduledLaunches } from "./scheduledRunAdmission.js";
 import { ScheduledRunScheduler } from "./ScheduledRunScheduler.js";
 
 let scheduler: ScheduledRunScheduler | null = null;
@@ -25,6 +26,7 @@ export function startScheduledRunScheduler(): void {
       const { launchScheduledRunLive } = await import("./scheduledRunLaunchLive.js");
       return launchScheduledRunLive(input);
     },
+    cancelLaunches: (scheduleId) => cancelScheduledLaunches({ scheduleId, automaticOnly: true }),
     newId: randomUUID,
     isShuttingDown: () => getActiveShutdown() !== null,
   });
