@@ -1768,6 +1768,16 @@ export class ProjectViewManager {
   }
 
   /**
+   * Whether a dictation still needs this project's view here: its session,
+   * or the cleanup after its stop, ends with the view. Eviction and freezing
+   * already leave such a view alone; an automatic sleep waits too (#15920).
+   */
+  isDictationHeld(projectId: string): boolean {
+    const wc = this.views.get(projectId)?.view.webContents;
+    return wc ? isDictationViewHeld(wc) : false;
+  }
+
+  /**
    * Returns true if a cached view existed for the project and was torn down.
    * `protectMcpDispatch` leaves a view an MCP dispatch is waiting on alone and
    * returns false — automatic callers pass it, an explicit user action doesn't.

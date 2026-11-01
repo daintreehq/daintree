@@ -73,6 +73,11 @@ vi.mock("../panelRecoveryQuery.js", () => panelRecoveryMock);
 import { CHANNELS } from "../../ipc/channels.js";
 import { sleepProject, type SleepProjectOptions } from "../projectSleep.js";
 import { AppError } from "../../utils/errorTypes.js";
+import {
+  _resetDictationViewHoldsForTests,
+  holdDictationView,
+  isDictationViewHeld,
+} from "../voice/dictationViewHold.js";
 import type { ProjectViewManager } from "../../window/ProjectViewManager.js";
 import type { PtyClient } from "../PtyClient.js";
 import type { WorkspaceClient } from "../WorkspaceClient.js";
@@ -101,12 +106,18 @@ function makeDeps(managers: () => ProjectViewManager[] = () => [backgroundWindow
   };
 }
 
+/** The `webContents.id` of proj-1's cached view in the background window. */
+const CACHED_VIEW_ID = 41;
+const cachedView = { id: CACHED_VIEW_ID, isDestroyed: () => false } as Electron.WebContents;
+
 /** A window showing some other project, holding a cached view of proj-1. */
 function backgroundWindow(): ProjectViewManager {
   return {
     getActiveProjectId: () => "other",
     win: { id: 1, isDestroyed: () => false },
     isMcpDispatchProtected: (projectId: string) => leased.has(projectId),
+    isDictationHeld: (projectId: string) =>
+      projectId === PROJECT.id && isDictationViewHeld(cachedView),
   } as unknown as ProjectViewManager;
 }
 
@@ -124,6 +135,7 @@ describe("sleepProject", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     leased = new Set();
+    _resetDictationViewHoldsForTests();
     panelRecoveryMock.readPanelRecoveryHold.mockReset().mockResolvedValue(null);
     killSnapshot.value = { terminals: [], degraded: false };
     workspaceClient = {
@@ -234,6 +246,46 @@ describe("sleepProject", () => {
         terminalsKilled: 1,
       });
       expect(teardownMock.gracefulTeardownAndJournalProject).toHaveBeenCalledTimes(1);
+      expect(hibernationMock.evictProjectRenderer).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+
+    // Destroying the view a dictation started from cancels the session and the
+    // words still on their way, and its cleanup writes into that view's draft.
+    it("waits out a dictation still writing into the project's view, then sleeps (#15920)", async () => {
+      const release = holdDictationView(CACHED_VIEW_ID);
+
+      const held = await sleepProject("proj-1", policy(), makeDeps());
+
+      expect(held).toEqual({ status: "skipped", reason: "dictation" });
+      expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalled();
+      expect(teardownMock.gracefulTeardownAndJournalProject).not.toHaveBeenCalled();
+      expect(hibernationMock.evictProjectRenderer).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+
+      release();
+      const released = await sleepProject("proj-1", policy(), makeDeps());
+
+      expect(released).toMatchObject({ status: "slept", rendererViewsEvicted: 1 });
+      expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed", {
+        autoParkedAt: 1234,
+      });
+    });
+
+    it("keeps the view when a dictation starts there while the kill is in flight", async () => {
+      teardownMock.gracefulTeardownAndJournalProject.mockImplementationOnce(async () => {
+        holdDictationView(CACHED_VIEW_ID);
+        return {
+          confirmed: true,
+          aborted: false,
+          terminalsKilled: 1,
+          sessions: [{ id: "t1", agentSessionId: null }],
+        };
+      });
+
+      const outcome = await sleepProject("proj-1", policy(), makeDeps());
+
+      expect(outcome).toEqual({ status: "skipped", reason: "dictation", terminalsKilled: 1 });
       expect(hibernationMock.evictProjectRenderer).not.toHaveBeenCalled();
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
     });
@@ -405,6 +457,15 @@ describe("sleepProject", () => {
       expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed");
       const [, , , options] = teardownMock.gracefulTeardownAndJournalProject.mock.calls[0]!;
       expect(options.beforeKill).toBeUndefined();
+    });
+
+    it("goes through a dictation hold — the user asked", async () => {
+      holdDictationView(CACHED_VIEW_ID);
+
+      const outcome = await sleepProject("proj-1", { initiator: "user" }, makeDeps());
+
+      expect(outcome.status).toBe("slept");
+      expect(hibernationMock.evictProjectRenderer).toHaveBeenCalledWith("proj-1");
     });
 
     it("tells a window showing the project to drop it", async () => {

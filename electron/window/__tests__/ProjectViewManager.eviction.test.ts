@@ -4756,6 +4756,19 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
     it("reads a project it holds no view for as unprotected", () => {
       const mgr = makeManager(3);
       expect(mgr.isMcpDispatchProtected("proj-z")).toBe(false);
+      expect(mgr.isDictationHeld("proj-z")).toBe(false);
+    });
+
+    it("reports a view a dictation still needs until its hold lifts (#15920)", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      const release = holdDictationView(webContentsIdFor(mgr, "proj-a"));
+
+      expect(mgr.isDictationHeld("proj-a")).toBe(true);
+      expect(mgr.isDictationHeld("proj-b")).toBe(false);
+
+      release();
+      expect(mgr.isDictationHeld("proj-a")).toBe(false);
     });
   });
 
