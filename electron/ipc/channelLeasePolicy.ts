@@ -155,6 +155,7 @@ export const CHANNEL_LEASE_POLICY = {
   "copytree:inject": "driver",
   "copytree:progress": "free",
   "copytree:test-config": "free",
+  "decisions:get-pane-state": "free",
   "dev-preview:all-sessions-changed": "free",
   "dev-preview:ensure": "driver",
   "dev-preview:get-all-sessions": "free",

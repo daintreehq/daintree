@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const saved = vi.hoisted(() => ({ value: undefined as unknown }));
 const loads = vi.hoisted(() => ({ constructed: 0, failNextConstruct: false, failNextOpen: false }));
+const broadcast = vi.hoisted(() => vi.fn());
+
+vi.mock("../../../ipc/utils.js", () => ({ broadcastToProjectRenderers: broadcast }));
 
 vi.mock("../../../store.js", () => ({
   store: {
@@ -16,7 +19,7 @@ vi.mock("../../../store.js", () => ({
 vi.mock("../DecisionsService.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../DecisionsService.js")>();
   class CountedDecisionsService extends actual.DecisionsService {
-    constructor() {
+    constructor(options: ConstructorParameters<typeof actual.DecisionsService>[0] = {}) {
       if (loads.failNextConstruct) {
         loads.failNextConstruct = false;
         throw new Error("construct failed");
@@ -24,6 +27,7 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
       // A store that holds nothing, so starting never reaches the app database;
       // `failNextOpen` makes the next open fail, once.
       super({
+        ...options,
         openStore: async () => {
           if (loads.failNextOpen) {
             loads.failNextOpen = false;
@@ -39,9 +43,12 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
 });
 
 import { store } from "../../../store.js";
+import { CHANNELS } from "../../../ipc/channels.js";
+import { row } from "./questionRows.js";
 import { defaultDecisionsSettings } from "../decisionsSettings.js";
 import {
   _resetDecisionsForTesting,
+  getDecisionsPaneState,
   getDecisionsService,
   getDecisionsStatus,
   peekDecisionsService,
@@ -63,7 +70,57 @@ describe("Decisions entry", () => {
     loads.failNextConstruct = false;
     loads.failNextOpen = false;
     vi.mocked(store.set).mockClear();
+    broadcast.mockClear();
     _resetDecisionsForTesting();
+  });
+
+  it("reads no pane state, and makes no service, before Decisions runs", () => {
+    saved.value = { enabled: true };
+
+    expect(getDecisionsPaneState("pane-a")).toBeNull();
+    expect(peekDecisionsService()).toBeNull();
+  });
+
+  it("pushes a pane's state to its project's views, and reads it back", async () => {
+    saved.value = { enabled: true };
+    await startDecisionsIfEnabled();
+
+    peekDecisionsService()!.observeQuestions([row(1)]);
+
+    const state = getDecisionsPaneState("pane-a");
+    expect(state?.openQuestions.map((q) => q.alias)).toEqual([1]);
+    expect(broadcast).toHaveBeenCalledExactlyOnceWith("project-1", CHANNELS.EVENTS_PUSH, {
+      name: "terminal:decision-state",
+      payload: state,
+    });
+  });
+
+  it("clears a pane's views once when turned off, then reads and pushes nothing", async () => {
+    saved.value = { enabled: true };
+    await startDecisionsIfEnabled();
+    const service = peekDecisionsService()!;
+    service.observeQuestions([row(1)]);
+    broadcast.mockClear();
+
+    await setDecisionsEnabled(false);
+    service.observeQuestions([row(2)]);
+
+    expect(broadcast).toHaveBeenCalledExactlyOnceWith("project-1", CHANNELS.EVENTS_PUSH, {
+      name: "terminal:decision-state",
+      payload: expect.objectContaining({ terminalId: "pane-a", openQuestions: [] }),
+    });
+    expect(getDecisionsPaneState("pane-a")).toBeNull();
+  });
+
+  it("pushes nothing at quit", async () => {
+    saved.value = { enabled: true };
+    await startDecisionsIfEnabled();
+    peekDecisionsService()!.observeQuestions([row(1)]);
+    broadcast.mockClear();
+
+    await stopDecisions();
+
+    expect(broadcast).not.toHaveBeenCalled();
   });
 
   it("makes no service at boot while the setting is off", async () => {

@@ -80,6 +80,8 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
 
   // Sent project-scoped by the MCP terminal-notify service.
   "terminal:notify-state": "external",
+  // Sent project-scoped by the Decisions service, only while it runs.
+  "terminal:decision-state": "external",
 
   // Agent session journaled (relayed from TypedEventBus; emitted by the main
   // close paths and bridged from the pty-host's trash-expiry capture)

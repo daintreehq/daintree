@@ -228,6 +228,7 @@ import type {
 } from "../shared/types/ipc/elementPicker.js";
 import type { TerminalActivityPayload } from "../shared/types/terminal.js";
 import type { PaneNotifyState } from "../shared/types/terminalNotify.js";
+import type { PaneDecisionState } from "../shared/types/decisions.js";
 import type {
   TerminalStatusPayload,
   TerminalSubmitStatusPayload,
@@ -1086,6 +1087,9 @@ function buildElectronApi(): ElectronAPI {
 
       onNotifyState: (callback: (data: PaneNotifyState) => void): (() => void) =>
         _eventBusOn("terminal:notify-state", callback),
+
+      onDecisionState: (callback: (data: PaneDecisionState) => void): (() => void) =>
+        _eventBusOn("terminal:decision-state", callback),
 
       onReliabilityMetric: (
         callback: (data: TerminalReliabilityMetricPayload) => void
