@@ -23,9 +23,10 @@ const decisionsEntry = vi.hoisted(() => ({
   setDecisionsEnabled: vi.fn(async (enabled: boolean): Promise<DecisionsStatus> => ({
     state: enabled ? "not-connected" : "off",
   })),
-  checkRelay: vi.fn(
-    async (): Promise<DecisionsRelayCheck> => ({ result: "invalid-url", reason: "not-https" })
-  ),
+  checkRelay: vi.fn(async (): Promise<DecisionsRelayCheck> => ({
+    result: "invalid-url",
+    reason: "not-https",
+  })),
 }));
 
 vi.mock("electron", () => ({ ipcMain: ipcMainMock }));

@@ -119,7 +119,10 @@ async function answerStatus(app: ElectronApplication, status: DecisionsStatus): 
 }
 
 /** What every relay check sees, so no capture reaches the network. */
-async function answerRelayCheck(app: ElectronApplication, check: DecisionsRelayCheck): Promise<void> {
+async function answerRelayCheck(
+  app: ElectronApplication,
+  check: DecisionsRelayCheck
+): Promise<void> {
   await app.evaluate(({ ipcMain }, next) => {
     ipcMain.removeHandler("decisions:check-relay");
     ipcMain.handle("decisions:check-relay", async () => next);

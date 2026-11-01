@@ -4,9 +4,7 @@ const saved = vi.hoisted(() => ({ value: undefined as unknown }));
 const loads = vi.hoisted(() => ({ constructed: 0, failNextConstruct: false, failNextOpen: false }));
 const broadcast = vi.hoisted(() => vi.fn());
 // The relay check's network: Chromium's, which tests answer by hand.
-const netFetch = vi.hoisted(() =>
-  vi.fn<(url: string, init: RequestInit) => Promise<Response>>()
-);
+const netFetch = vi.hoisted(() => vi.fn<(url: string, init: RequestInit) => Promise<Response>>());
 
 vi.mock("electron", () => ({ net: { fetch: netFetch }, app: {}, safeStorage: {} }));
 

@@ -29,9 +29,9 @@ describe("relay check copy", () => {
   });
 
   it("falls back to the protocol range, then to no side, when versions can't be ordered", () => {
-    expect(
-      describeCompatibility(compare({ workerVersion: "dev", protocolMax: 3 })).label
-    ).toBe("The relay is newer than Daintree");
+    expect(describeCompatibility(compare({ workerVersion: "dev", protocolMax: 3 })).label).toBe(
+      "The relay is newer than Daintree"
+    );
     expect(describeCompatibility(compare({ workerVersion: "dev" })).label).toBe(
       "Relay and Daintree versions differ"
     );

@@ -91,11 +91,7 @@ export type DecisionsRelayEndpoint = "health" | "info";
 
 /** Why a request to the relay got no answer. Never the request's own error text. */
 export type DecisionsRelayUnreachableReason =
-  | "timeout"
-  | "dns"
-  | "refused"
-  | "certificate"
-  | "network";
+  "timeout" | "dns" | "refused" | "certificate" | "network";
 
 /**
  * What main observed checking a relay URL, through its unsigned `/health`

@@ -118,7 +118,9 @@ describe("DecisionsConnectionSection relay check", () => {
 
     await typeAndCheck(ORIGIN);
 
-    expect(screen.getByText("The relay speaks protocols 2–3; Daintree speaks protocol 1")).toBeTruthy();
+    expect(
+      screen.getByText("The relay speaks protocols 2–3; Daintree speaks protocol 1")
+    ).toBeTruthy();
     expect(screen.getByText("The relay is newer than Daintree")).toBeTruthy();
     expect(screen.getByText(/Update Daintree to match it/)).toBeTruthy();
   });
@@ -213,7 +215,9 @@ describe("DecisionsConnectionSection relay check", () => {
     expect(checkRelay).toHaveBeenCalledExactlyOnceWith(ORIGIN);
     expect(screen.getByText("The relay needs an update")).toBeTruthy();
     expect(
-      screen.getByText(/The relay runs 0\.0\.9, protocol 1\. Daintree expects 0\.1\.0, protocol 1\./)
+      screen.getByText(
+        /The relay runs 0\.0\.9, protocol 1\. Daintree expects 0\.1\.0, protocol 1\./
+      )
     ).toBeTruthy();
     expect(checkButton("Check again")).toBeTruthy();
   });

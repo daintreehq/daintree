@@ -128,7 +128,11 @@ describe("checkDecisionsRelay", () => {
 
   it.each([
     ["claimed", info({ claimed: true }), "claimed"],
-    ["claimed, whatever its claim secret", info({ claimed: true, claim_configured: false }), "claimed"],
+    [
+      "claimed, whatever its claim secret",
+      info({ claimed: true, claim_configured: false }),
+      "claimed",
+    ],
     ["unclaimed with a claim secret set", info(), "unclaimed"],
     ["unclaimed with no claim secret", info({ claim_configured: false }), "claim-not-configured"],
   ])("reports a relay %s", async (_label, body, result) => {
@@ -182,7 +186,11 @@ describe("checkDecisionsRelay", () => {
     ["a refused connection", new Error("net::ERR_CONNECTION_REFUSED"), "refused"],
     ["a bad certificate", new Error("net::ERR_CERT_AUTHORITY_INVALID"), "certificate"],
     ["an expired certificate", new Error("net::ERR_CERT_DATE_INVALID"), "certificate"],
-    ["a timeout", namedError("TimeoutError", "The operation was aborted due to timeout"), "timeout"],
+    [
+      "a timeout",
+      namedError("TimeoutError", "The operation was aborted due to timeout"),
+      "timeout",
+    ],
     ["anything else", new Error("net::ERR_INTERNET_DISCONNECTED"), "network"],
   ])("reports %s as unreachable, without its message", async (_label, error, reason) => {
     error.message += ` at ${ORIGIN}/health?token=leak`;
@@ -308,9 +316,12 @@ describe("checkDecisionsRelay", () => {
       "/health": () => json({ ok: true }),
       "/api/v1/info": () => json({ code: "internal_error" }, 500),
     });
-    await expect(
-      checkDecisionsRelay(ORIGIN, { fetchImpl: failing.fetchImpl })
-    ).resolves.toEqual({ result: "http-error", origin: ORIGIN, endpoint: "info", status: 500 });
+    await expect(checkDecisionsRelay(ORIGIN, { fetchImpl: failing.fetchImpl })).resolves.toEqual({
+      result: "http-error",
+      origin: ORIGIN,
+      endpoint: "info",
+      status: 500,
+    });
 
     let call = 0;
     const dropped = vi.fn<RelayFetch>(async () => {
