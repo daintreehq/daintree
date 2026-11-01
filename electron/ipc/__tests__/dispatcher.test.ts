@@ -665,9 +665,11 @@ describe("drive-lease gate", () => {
     const noteUnheldChange = vi.fn();
 
     installGate(new Map(), {}, { keeps: false, noteUnheldChange });
-    await getIpcDispatcher().invokeForEndpoint({ endpoint, client: REMOTE_CLIENT }, DRIVER_CHANNEL, [
-      { rootPath: P1 },
-    ]);
+    await getIpcDispatcher().invokeForEndpoint(
+      { endpoint, client: REMOTE_CLIENT },
+      DRIVER_CHANNEL,
+      [{ rootPath: P1 }]
+    );
     expect(noteUnheldChange).not.toHaveBeenCalled();
 
     installGate(new Map(), {}, { keeps: true, noteUnheldChange });
@@ -685,9 +687,11 @@ describe("drive-lease gate", () => {
       {},
       { keeps: true, noteUnheldChange }
     );
-    await getIpcDispatcher().invokeForEndpoint({ endpoint, client: REMOTE_CLIENT }, DRIVER_CHANNEL, [
-      { rootPath: P1 },
-    ]);
+    await getIpcDispatcher().invokeForEndpoint(
+      { endpoint, client: REMOTE_CLIENT },
+      DRIVER_CHANNEL,
+      [{ rootPath: P1 }]
+    );
     expect(noteUnheldChange).toHaveBeenCalledTimes(2);
     expect(driver).toHaveBeenCalledTimes(3);
   });

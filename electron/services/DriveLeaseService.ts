@@ -871,7 +871,10 @@ export class DriveLeaseService {
       (endpoint) => !standsForTenure(vacated, endpoint)
     );
     if (other) {
-      this.endVacatedTenure(projectId, { byEndpointId: other.endpointId, byClientId: other.clientId });
+      this.endVacatedTenure(projectId, {
+        byEndpointId: other.endpointId,
+        byClientId: other.clientId,
+      });
     }
   }
 
