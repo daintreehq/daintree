@@ -1560,7 +1560,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
     // take terminalIds or a watchId; plugin.reloadPanel a panelId;
     // plugin.backupDatabases a pluginId; plugin.setNotificationsSilenced a
     // pluginId and a flag; agentSettings.set an agentId and settings;
-    // worktree.retireOwned a worktreeId; schedule.runNow a scheduleId). Schemas
+    // worktree.retireOwned a worktreeId; schedules.runNow a scheduleId). Schemas
     // are non-strict, so the union satisfies every denied action.
     const args = {
       terminalId: "t-placeholder",

@@ -17,7 +17,7 @@ A project can run an agent on a schedule (#15973). A due schedule launches its a
 | The Schedules view and the `schedules.open` action | `src/components/Schedules/`, `src/services/actions/definitions/scheduleActions.ts` |
 | Launching a run, routing it to a view or main, refusals | `electron/services/scheduledRuns/ScheduledRunLauncher.ts`, `scheduledRunLaunchLive.ts`, `scheduledRunViewBridge.ts`, `src/hooks/useScheduledRunLaunchBridge.ts` |
 | Registering a run at its terminal's spawn | `electron/services/scheduledRuns/scheduledRunAdmission.ts`, called from `electron/ipc/handlers/terminal/lifecycle.ts` |
-| Run now (`window.electron.schedules.runNow`, `schedule.runNow`) | `electron/ipc/handlers/schedules.ts`, `src/services/actions/definitions/scheduleActions.ts` |
+| Run now (`window.electron.schedules.runNow`, `schedules.runNow`) | `electron/ipc/handlers/schedules.ts`, `src/services/actions/definitions/scheduleActions.ts` |
 
 ## Boundaries
 
@@ -234,7 +234,7 @@ Only Daintree's scheduler can set it, by one of two entries, and neither reads i
 - **The history must be able to record it.** With the run history unavailable nothing launches, and Run now answers `failed` with no run id. A schedule, or a project, that is gone answers `not-found`: removing a project removes its schedules and history.
 - **Sleep and status.** While a run is reserved or open, automatic sleep (idle auto-close, idle shells, memory pressure) holds the project as a `scheduled-run` coordination hold; a user's Sleep still goes through and the run's terminal exits with it. A run that spawns in a project that read `closed` moves it to `background`, so it doesn't read as closed while the run is in it.
 
-Run now is `window.electron.schedules.runNow(scheduleId)`, sender-scoped like the other schedule channels, answering `ScheduleRunNowOutcome`: `started` with the run and terminal ids, `failed` with the reason and the failed run's id, or `not-found`. It runs whether or not the schedule is enabled. The `schedule.runNow` action calls it; it is on no MCP tier, hidden from `tools/list`, and closed to plugins, which may give an agent a task but not launch one with a schedule's preset.
+Run now is `window.electron.schedules.runNow(scheduleId)`, sender-scoped like the other schedule channels, answering `ScheduleRunNowOutcome`: `started` with the run and terminal ids, `failed` with the reason and the failed run's id, or `not-found`. It runs whether or not the schedule is enabled. The `schedules.runNow` action calls it; it is on no MCP tier, hidden from `tools/list`, and closed to plugins, which may give an agent a task but not launch one with a schedule's preset.
 
 ## Keeping the machine awake
 
