@@ -1290,7 +1290,7 @@ describe("computeProjectAgentCounts — agrees with bandForRun (#16058)", () => 
     { kind: "asked", quote: "Ship it?", readAt: 900, seen: true },
     { kind: "not-asking", quote: "All green.", readAt: 900, seen: false },
     { kind: "not-asking", quote: "All green.", readAt: 900, seen: true },
-    { kind: "stalled", quote: "Compiling…", readAt: 900 },
+    { kind: "stalled", quote: "Compiling…", readAt: 900, stalledSince: 800 },
   ];
   const shelves: Shelf[] = ["none", "parked", "snoozed"];
 

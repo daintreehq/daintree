@@ -13,11 +13,12 @@ export function MetricDash({ label, align }: { label: string; align?: "right" })
 
 /**
  * A host's waiting and working agents, waiting first. Waiting is the host's
- * fleet band, so it is only what a Canopy reading found asking; working is what
- * its output heuristics saw. Unknown is a dash, never zero, and a host too old
- * to band its runs says nothing about waiting rather than guess. `quietZero` is
- * for a list that only needs to point at the hosts with something going on: an
- * idle host then draws nothing and still says so to a screen reader.
+ * fleet band, so it is only what a Canopy reading found asking, plus the runs
+ * blocked on an error; working is what its output heuristics saw. Unknown is a
+ * dash, never zero, and a host too old to band its runs says nothing about
+ * waiting rather than guess. `quietZero` is for a list that only needs to point
+ * at the hosts with something going on: an idle host then draws nothing and
+ * still says so to a screen reader.
  */
 export function AgentCounts({
   summary,
@@ -29,11 +30,18 @@ export function AgentCounts({
   const observed = summary.agentsObserved;
   if (!observed) return <MetricDash label="Agent activity unknown" />;
   const { working } = observed;
-  const waiting = summary.agentAttention?.waiting ?? 0;
-  const blocked = summary.agentAttention?.blocked ?? 0;
-  const quiet = working === 0 && waiting === 0 && blocked === 0;
+  const attention = summary.agentAttention;
+  const waiting = attention?.waiting ?? 0;
+  const blocked = attention?.blocked ?? 0;
+  // Every agent asking, in one cell: the column is sized for two counts, and a
+  // block is a wait that needs more, so it takes the glyph as the switcher's
+  // mark does.
+  const asking = waiting + blocked;
+  const quiet = working === 0 && asking === 0;
   const spoken = quiet
-    ? "No agents waiting or working"
+    ? attention
+      ? "No agents waiting or working"
+      : "No agents working"
     : `Agents: ${[
         blocked > 0 && `${blocked} blocked`,
         waiting > 0 && `${waiting} waiting`,
@@ -41,6 +49,7 @@ export function AgentCounts({
       ]
         .filter(Boolean)
         .join(", ")}`;
+  const AskingGlyph = blocked > 0 ? BlockedCircle : HollowCircle;
   return (
     <span className="flex items-center gap-2 text-xs tabular-nums text-text-primary">
       <span className="sr-only">{spoken} (observed)</span>
@@ -52,19 +61,17 @@ export function AgentCounts({
         )
       ) : (
         <>
-          {/* Rare, and the louder fact, so it takes room only when there is one. */}
-          {blocked > 0 && (
-            <span aria-hidden="true" className="flex w-7 items-center gap-1">
-              <BlockedCircle className="h-3 w-3 shrink-0 text-status-danger" />
-              {blocked}
-            </span>
-          )}
           {/* Waiting leads: it's the one asking for something. */}
           <span aria-hidden="true" className="flex w-7 items-center gap-1">
-            {waiting > 0 && (
+            {asking > 0 && (
               <>
-                <HollowCircle className="h-3 w-3 shrink-0 text-state-waiting" />
-                {waiting}
+                <AskingGlyph
+                  className={cn(
+                    "h-3 w-3 shrink-0",
+                    blocked > 0 ? "text-status-danger" : "text-state-waiting"
+                  )}
+                />
+                {asking}
               </>
             )}
           </span>

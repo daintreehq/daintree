@@ -926,6 +926,14 @@ describe("ProjectStatsService scratch workspaces", () => {
     expect(payload[SCRATCH_ID]!.completedAgentCount).toBe(2);
     expect(payload[SCRATCH_ID]!.unacknowledgedCompletedAgentCount).toBe(0);
     expect(svc.getAcknowledgeableCompletionAt(SCRATCH_ID)).toBe(2_000);
+
+    // The scratch's own watermark, not the projects', covers it once stamped.
+    scratchStoreMock.getAllScratches.mockReturnValue([
+      { id: SCRATCH_ID, lastCompletionSeenAt: 2_000 },
+    ]);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    expect(svc.getAcknowledgeableCompletionAt(SCRATCH_ID)).toBeUndefined();
   });
 
   it("drops a deleted scratch's entry on the next compute", async () => {
@@ -1340,9 +1348,13 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
     await vi.runOnlyPendingTimersAsync();
     expect(latest()).toMatchObject({ waitingAgentCount: 0, unacknowledgedCompletedAgentCount: 1 });
 
+    // Nothing on the host moved, so only the wait's own notice can say it was
+    // seen before the next poll: push that poll out of reach.
+    expect(waitListeners.size).toBe(1);
+    svc.updatePollInterval(60 * 60_000);
     wait.seenAt = 250;
     for (const listener of waitListeners) listener();
-    await vi.runOnlyPendingTimersAsync();
+    await vi.advanceTimersByTimeAsync(250);
     expect(latest()).toMatchObject({ waitingAgentCount: 0, unacknowledgedCompletedAgentCount: 0 });
 
     svc.stop();

@@ -163,15 +163,17 @@ describe("observeAgents", () => {
     const terminals = [
       // At its prompt, no reading: observed waiting, asking nothing.
       run("prompt", { agentState: "waiting", waitingReason: "prompt" }),
-      // A question Canopy read as an ask the user hasn't seen.
+      // Questions Canopy read as asks the user hasn't seen.
       run("asked", { agentState: "waiting", waitingReason: "question" }),
+      run("asked-at-prompt", { agentState: "waiting", waitingReason: "prompt" }),
       // The same ask, seen.
       run("seen", { agentState: "waiting", waitingReason: "question" }),
       // An approval the patterns saw, already looked at.
       run("approval", { agentState: "waiting", waitingReason: "approval" }),
       run("error", { agentState: "waiting", waitingReason: "error" }),
-      // Parked while Canopy reads an ask: the park wins.
+      // Parked or snoozed while Canopy reads an ask: the user's decision wins.
       run("parked", { agentState: "waiting", waitingReason: "question" }),
+      run("snoozed", { agentState: "waiting", waitingReason: "question" }),
       run("done", { agentState: "completed" }),
       WORKING,
     ];
@@ -182,21 +184,24 @@ describe("observeAgents", () => {
       shardsFailed: 0,
     });
     setCanopyRefinementSource((id) =>
-      id === "asked" || id === "seen" || id === "parked"
-        ? { kind: "asked", quote: "Ship it?", readAt: 2, seen: id === "seen" }
-        : undefined
+      id === "prompt" || id === "approval" || id === "error" || id === "done"
+        ? undefined
+        : { kind: "asked", quote: "Ship it?", readAt: 2, seen: id === "seen" }
     );
     runs.handBacks = {
       getRecord: () => undefined,
       getWait: (id) => (id === "approval" ? { stoppedAt: 2, seenAt: 3 } : undefined),
     };
-    runs.attention = { getActiveSnoozes: () => new Map(), getAll: () => new Map([["parked", {}]]) };
+    runs.attention = {
+      getActiveSnoozes: () => new Map([["snoozed", {}]]),
+      getAll: () => new Map([["parked", {}]]),
+    };
 
     await expect(observeAgents()).resolves.toEqual({
       working: 1,
-      waiting: 6,
+      waiting: 8,
       idle: 1,
-      attention: { waiting: 1, blocked: 1, idle: 5 },
+      attention: { waiting: 2, blocked: 1, idle: 6 },
     });
   });
 

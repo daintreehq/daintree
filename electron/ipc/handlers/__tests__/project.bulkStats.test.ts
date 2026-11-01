@@ -167,6 +167,7 @@ import {
 } from "../../../window/powerPolicy.js";
 import { getAgentAvailabilityStore } from "../../../services/AgentAvailabilityStore.js";
 import { setCanopyRefinementSource } from "../../../services/canopy/canopyRefinementSource.js";
+import { getRunHandBackService } from "../projectCrud/index.js";
 import {
   ASSISTANT_PROJECTION_PARITY,
   PARITY_ASSISTANT_TERMINAL,
@@ -334,6 +335,43 @@ describe("handleProjectGetBulkStats", () => {
 
     expect(result["proj-a"].activeAgentCount).toBe(2); // working only
     expect(result["proj-a"].waitingAgentCount).toBe(1); // waiting only
+  });
+
+  it("reads a wait's seen mark as the pushed status map does, so a seen approval is not unread", async () => {
+    const ptyClient = makePtyClient({
+      getAllTerminalsAsync: vi.fn().mockResolvedValue([
+        {
+          id: "t1",
+          projectId: "proj-a",
+          kind: "terminal",
+          launchAgentId: "claude",
+          agentState: "waiting",
+          waitingReason: "approval",
+          hasPty: true,
+          cwd: "/tmp",
+          spawnedAt: 7,
+        },
+      ]),
+    });
+    registerProjectCrudHandlers(makeDeps(ptyClient));
+    const handler = getBulkStatsHandler();
+    const getWait = vi.spyOn(getRunHandBackService()!, "getWait");
+    type Entry = { waitingAgentCount: number; unacknowledgedCompletedAgentCount: number };
+
+    getWait.mockReturnValue({ stoppedAt: 8 });
+    const unseen = (await handler(fakeEvent, ["proj-a"])) as Record<string, Entry>;
+    expect(unseen["proj-a"]).toMatchObject({
+      waitingAgentCount: 0,
+      unacknowledgedCompletedAgentCount: 1,
+    });
+
+    getWait.mockReturnValue({ stoppedAt: 8, seenAt: 9 });
+    const seen = (await handler(fakeEvent, ["proj-a"])) as Record<string, Entry>;
+    expect(seen["proj-a"]).toMatchObject({
+      waitingAgentCount: 0,
+      unacknowledgedCompletedAgentCount: 0,
+    });
+    expect(getWait).toHaveBeenCalledWith("t1", 7);
   });
 
   it("filters out trashed, dev-preview, exited, and non-agent terminals", async () => {

@@ -7,26 +7,41 @@ import { makeSummary } from "../Overview/__tests__/fixtures";
 
 afterEach(cleanup);
 
-function spoken(summary: HostMetricsSummary, quietZero = false): string {
+/** What a screen reader hears, and the counts drawn in each column, in order. */
+function draw(summary: HostMetricsSummary, quietZero = false) {
   const { container } = render(<AgentCounts summary={summary} quietZero={quietZero} />);
-  return container.querySelector(".sr-only")?.textContent ?? "";
+  const cell = container.firstElementChild!;
+  const columns = [...cell.querySelectorAll<HTMLElement>(':scope > span[aria-hidden="true"]')];
+  return {
+    spoken: container.querySelector(".sr-only")?.textContent ?? "",
+    drawn: columns.map((column) => column.textContent ?? ""),
+    glyphs: columns.map((column) => column.children.length),
+  };
 }
 
 describe("AgentCounts", () => {
-  it("never says a host's runs at their prompts are waiting (#16058)", () => {
+  it("never draws or says a host's runs at their prompts are waiting (#16058)", () => {
     const summary = makeSummary({
       agentsObserved: { working: 1, waiting: 3, idle: 0 },
       agentAttention: { waiting: 0, blocked: 0, idle: 3 },
     });
-    expect(spoken(summary)).toBe("Agents: 1 working (observed)");
+    expect(draw(summary)).toEqual({
+      spoken: "Agents: 1 working (observed)",
+      drawn: ["", "1"],
+      glyphs: [0, 1],
+    });
   });
 
-  it("says the asks a reading found, and the blocked runs, ahead of the working ones", () => {
+  it("draws every agent asking in the waiting column, and says the blocked ones apart", () => {
     const summary = makeSummary({
       agentsObserved: { working: 2, waiting: 3, idle: 0 },
       agentAttention: { waiting: 1, blocked: 1, idle: 1 },
     });
-    expect(spoken(summary)).toBe("Agents: 1 blocked, 1 waiting, 2 working (observed)");
+    expect(draw(summary)).toEqual({
+      spoken: "Agents: 1 blocked, 1 waiting, 2 working (observed)",
+      drawn: ["2", "2"],
+      glyphs: [1, 1],
+    });
   });
 
   it("says nothing about waiting for a host too old to band its runs", () => {
@@ -34,6 +49,19 @@ describe("AgentCounts", () => {
       agentsObserved: { working: 0, waiting: 2, idle: 0 },
       agentAttention: undefined,
     });
-    expect(spoken(summary, true)).toBe("No agents waiting or working (observed)");
+    expect(draw(summary, true)).toEqual({
+      spoken: "No agents working (observed)",
+      drawn: [],
+      glyphs: [],
+    });
+    expect(
+      draw(
+        makeSummary({
+          agentAttention: { waiting: 0, blocked: 0, idle: 2 },
+          agentsObserved: { working: 0, waiting: 2, idle: 0 },
+        }),
+        true
+      ).spoken
+    ).toBe("No agents waiting or working (observed)");
   });
 });
