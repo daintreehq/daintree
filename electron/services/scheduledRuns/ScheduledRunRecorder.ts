@@ -21,6 +21,17 @@ export interface RegisterScheduledLaunchInput {
   readonly resume: ScheduledRunResume;
 }
 
+export interface RegisterRefusedLaunchInput {
+  readonly id: string;
+  readonly scheduleId: string;
+  readonly projectId: string;
+  readonly origin: ScheduledRunOrigin;
+  /** The terminal id reserved for the launch that never started, if one was. */
+  readonly terminalId?: string | null;
+  /** Why it didn't start, worded for the person reading the history. */
+  readonly message: string;
+}
+
 export interface RegisterScheduledSkipInput {
   readonly id: string;
   readonly scheduleId: string;
@@ -216,10 +227,36 @@ export class ScheduledRunRecorder {
     return run;
   }
 
+  /**
+   * Records a run whose launch was refused before its terminal spawned (a
+   * panel limit, an agent that can't start, a project or worktree that's
+   * gone), settled at once as failed with the reason. Like a skip it neither
+   * starts nor ends, and it has nothing to resume: no launch plan ran.
+   */
+  registerRefusedLaunch(input: RegisterRefusedLaunchInput): ScheduledRun {
+    return this.insertSettled(input, { kind: "launch-error", message: input.message });
+  }
+
   /** Records an occurrence that was skipped, with its reason. It never launches. */
   registerSkip(input: RegisterScheduledSkipInput): ScheduledRun {
+    return this.insertSettled(input, { kind: "skip", reason: input.reason });
+  }
+
+  /** Whether a run of the project is registered and not yet settled. */
+  hasOpenRun(projectId: string): boolean {
+    return this.store
+      .listLive()
+      .some((run) => run.projectId === projectId && run.settlement.state === "open");
+  }
+
+  private insertSettled(
+    input: Pick<
+      RegisterScheduledSkipInput,
+      "id" | "scheduleId" | "projectId" | "origin" | "terminalId"
+    >,
+    evidence: ScheduledRunEvidence
+  ): ScheduledRun {
     const timestamp = this.now();
-    const evidence: ScheduledRunEvidence = { kind: "skip", reason: input.reason };
     const run: ScheduledRun = {
       id: input.id,
       scheduleId: input.scheduleId,

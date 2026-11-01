@@ -43,7 +43,13 @@ export type NavigationDirection = "up" | "down" | "left" | "right";
  * depends on the renderer hook (#11547).
  */
 export interface LaunchDecline {
-  reason: "panel-limit" | "already-launching" | "spawn-failed" | "unavailable" | "presets-loading";
+  reason:
+    | "panel-limit"
+    | "already-launching"
+    | "spawn-failed"
+    | "unavailable"
+    | "presets-loading"
+    | "missing-cli";
   /** The count and limits the refusal was judged on; set only for `panel-limit`. */
   panelLimit: PanelLimitSnapshot | null;
 }

@@ -5,6 +5,7 @@ import type {
   SchedulePolicies,
 } from "../scheduledRuns.js";
 import type { ScheduleIssue } from "../../utils/scheduleValidation.js";
+import type { ScheduledRunRef } from "../scheduledRunRef.js";
 
 /** The sender project's schedules (#15975), as this machine stores them. */
 export interface SchedulesSnapshot {
@@ -65,4 +66,35 @@ export type ScheduleSetEnabledOutcome =
 export interface ScheduleRemoveOutcome {
   status: "removed";
   snapshot: SchedulesSnapshot;
+}
+
+/**
+ * Run now (#15978). `started`: the run is registered in the history and its
+ * terminal is starting; what happens next arrives as the run's own facts.
+ */
+export type ScheduleRunNowOutcome =
+  | { status: "started"; runId: string; terminalId: string }
+  /**
+   * Nothing started. `runId` names the failed run the history recorded with
+   * this reason, or is null when the history couldn't record one.
+   */
+  | { status: "failed"; runId: string | null; message: string }
+  /** The schedule has been deleted. */
+  | { status: "not-found" };
+
+/**
+ * Main asks the view showing a project to launch a scheduled run (#15978). The
+ * view dispatches `agent.launch` with `args` and stamps `scheduledRun` as the
+ * dispatch's provenance, which no argument can set, then answers on
+ * `schedules:launch-response` with {@link ScheduledLaunchViewResponse}.
+ */
+export interface ScheduledLaunchViewRequest {
+  requestId: string;
+  args: Record<string, unknown>;
+  scheduledRun: ScheduledRunRef;
+}
+
+export interface ScheduledLaunchViewResponse {
+  requestId: string;
+  result: import("../actions.js").ActionDispatchResult;
 }

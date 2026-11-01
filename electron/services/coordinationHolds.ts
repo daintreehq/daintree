@@ -7,6 +7,7 @@
  * from the active project or the terminal id.
  */
 export type CoordinationHold =
+  | "scheduled-run"
   | "waiting-run"
   | "unseen-hand-back"
   | "gated-park"
@@ -17,6 +18,12 @@ export type CoordinationHold =
 export interface CoordinationHoldSources {
   /** Owning project of a terminal, or null when it cannot be told. */
   projectOfTerminal: (terminalId: string) => string | null;
+  /**
+   * Whether a scheduled run of the project is still unsettled, or reserved and
+   * about to spawn (#15978). Sleeping would kill the agent a schedule started
+   * and leave the project reading as closed while it ran.
+   */
+  hasUnsettledScheduledRun: (projectId: string) => boolean;
   /** Projects of the fleet runs last observed `waiting`. */
   waitingRunProjectIds: () => readonly string[];
   /** Runs whose hand-back is still unseen. */
@@ -45,6 +52,7 @@ export function findCoordinationHold(
     return owner === projectId;
   };
 
+  if (sources.hasUnsettledScheduledRun(projectId)) return "scheduled-run";
   if (sources.waitingRunProjectIds().includes(projectId)) return "waiting-run";
   if (sources.unseenHandBackRunIds().some(owns)) return "unseen-hand-back";
   if (sources.gatedParks().some((park) => owns(park.runId) || owns(park.gateRunId))) {

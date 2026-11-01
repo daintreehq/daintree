@@ -2,6 +2,7 @@ import type {
   ScheduleCreateInput,
   ScheduleCreateOutcome,
   ScheduleRemoveOutcome,
+  ScheduleRunNowOutcome,
   ScheduleSetEnabledOutcome,
   SchedulesSnapshot,
   ScheduleUpdateOutcome,
@@ -24,6 +25,8 @@ export const schedulesClient = {
   setEnabled: (id: string, enabled: boolean): Promise<ScheduleSetEnabledOutcome> =>
     window.electron.schedules.setEnabled(id, enabled),
   remove: (id: string): Promise<ScheduleRemoveOutcome> => window.electron.schedules.remove(id),
+  /** Launches the schedule's agent now as a tracked run (#15978). */
+  runNow: (id: string): Promise<ScheduleRunNowOutcome> => window.electron.schedules.runNow(id),
   onChanged: (callback: (snapshot: SchedulesSnapshot) => void): (() => void) =>
     window.electron.schedules.onChanged(callback),
   /** The project's recorded runs, newest first (#15976). */

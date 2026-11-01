@@ -31,6 +31,11 @@ vi.mock("../../utils.js", async (importActual) => ({
 }));
 vi.mock("../../../services/ProjectStore.js", () => ({ projectStore: projectStoreMock }));
 vi.mock("../../../window/webContentsRegistry.js", () => viewsMock);
+const launchMock = vi.hoisted(() => vi.fn());
+vi.mock("../../../services/scheduledRuns/scheduledRunLaunchLive.js", () => ({
+  RUN_NOW_ORIGIN: { trigger: "run-now", dueAt: null, occurrenceKey: null, coalesced: null },
+  launchScheduledRunLive: launchMock,
+}));
 
 import { CHANNELS } from "../../channels.js";
 import { registerSchedulesHandlers, schedulesNamespace } from "../schedules.js";
@@ -43,6 +48,7 @@ import type {
   ScheduleCreateInput,
   ScheduleCreateOutcome,
   ScheduleRemoveOutcome,
+  ScheduleRunNowOutcome,
   ScheduleSetEnabledOutcome,
   ScheduleUpdateOutcome,
   ScheduleUpdatePatch,
@@ -70,12 +76,14 @@ type SetEnabledHandler = (
   enabled: boolean
 ) => Promise<ScheduleSetEnabledOutcome>;
 type RemoveHandler = (ctx: IpcContext, scheduleId: string) => Promise<ScheduleRemoveOutcome>;
+type RunNowHandler = (ctx: IpcContext, scheduleId: string) => Promise<ScheduleRunNowOutcome>;
 
 const list = schedulesNamespace.ops.list.handler as unknown as ListHandler;
 const create = schedulesNamespace.ops.create.handler as unknown as CreateHandler;
 const update = schedulesNamespace.ops.update.handler as unknown as UpdateHandler;
 const setEnabled = schedulesNamespace.ops.setEnabled.handler as unknown as SetEnabledHandler;
 const remove = schedulesNamespace.ops.remove.handler as unknown as RemoveHandler;
+const runNow = schedulesNamespace.ops.runNow.handler as unknown as RunNowHandler;
 
 const input: ScheduleCreateInput = {
   name: "Fix tests",
@@ -89,6 +97,7 @@ function ctx(
 ): IpcContext {
   return {
     projectId,
+    webContentsId: 41,
     endpoint: { kind: endpoint },
     client: { kind: "local" },
   } as unknown as IpcContext;
@@ -166,6 +175,38 @@ describe("schedules handlers", () => {
 
       await expect(list(ctx(PROJECT))).rejects.toMatchObject({ code: "NOT_FOUND" });
       await expect(create(ctx(PROJECT), input)).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+  });
+
+  describe("run now (#15978)", () => {
+    it("launches the sender project's schedule as a run the user asked for, in the asking view", async () => {
+      const outcome: ScheduleRunNowOutcome = {
+        status: "started",
+        runId: "run-1",
+        terminalId: "terminal-1",
+      };
+      launchMock.mockResolvedValue(outcome);
+
+      await expect(runNow(ctx(PROJECT), "schedule-1")).resolves.toEqual(outcome);
+      expect(launchMock).toHaveBeenCalledWith({
+        projectId: PROJECT,
+        scheduleId: "schedule-1",
+        origin: { trigger: "run-now", dueAt: null, occurrenceKey: null, coalesced: null },
+        preferredWebContentsId: 41,
+      });
+    });
+
+    it("runs nothing for a view that can't have schedules or a request of the wrong shape", async () => {
+      await expect(runNow(ctx(null), "schedule-1")).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
+      await expect(runNow(ctx(PROJECT, "remote-view"), "schedule-1")).rejects.toMatchObject({
+        code: "UNSUPPORTED",
+      });
+      await expect(
+        runNow(ctx(PROJECT), { id: "schedule-1" } as unknown as string)
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+      expect(launchMock).not.toHaveBeenCalled();
     });
   });
 

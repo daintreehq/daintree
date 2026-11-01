@@ -1,4 +1,6 @@
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
+import type { Project } from "../../../shared/types/project.js";
+import type { ScheduledRunRef } from "../../../shared/types/scheduledRunRef.js";
 import { sanitizeAgentToolbarPins } from "../../../shared/types/ipc/agentToolbarPins.js";
 import { PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS } from "../../../shared/config/pluginBudgets.js";
 import {
@@ -180,6 +182,29 @@ export async function waitForAgentAtPromptLive(
 ): Promise<import("./agentPromptWait.js").AgentPromptWaitResult> {
   const { waitForAgentAtPrompt } = await import("./agentPromptWait.js");
   return waitForAgentAtPrompt(terminalId, options);
+}
+
+/**
+ * Launch a scheduled run's agent in a project no view shows (#15978): the
+ * generic launch, with the run as provenance that only this entry can pass.
+ */
+export async function runScheduledAgentLaunchLive(
+  project: Project,
+  request: {
+    args: object;
+    scheduledRun: ScheduledRunRef;
+  }
+): Promise<ActionDispatchResult> {
+  const [{ runAgentLaunch }, deps] = await Promise.all([
+    import("./viewlessAgents.js"),
+    loadLiveDeps(),
+  ]);
+  return runAgentLaunch(
+    { workspaceId: project.id, actionId: "agent.launch", args: request.args, confirmed: true },
+    project,
+    deps,
+    { scheduledRun: request.scheduledRun }
+  );
 }
 
 /** Restart a terminal of a project no frontend is attached to (#14703); see `restartTerminalWithoutView`. */

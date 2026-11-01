@@ -81,6 +81,15 @@ export function getScheduledRunRecorder(): Promise<ScheduledRunRecorder | null> 
 }
 
 /**
+ * The run history if it's open, without opening it. Null means no run of this
+ * lifetime exists yet, so nothing can be open: a sleep policy reads this
+ * rather than opening the database to find that out.
+ */
+export function peekScheduledRunRecorder(): ScheduledRunRecorder | null {
+  return recorder;
+}
+
+/**
  * Follows the PTY and session facts a run records, for the life of the
  * process. Until the history is opened no run of this lifetime exists, so a
  * fact that arrives before then has no run to land on.

@@ -332,6 +332,10 @@ import { CHANNELS } from "../../../channels.js";
 import { TRASH_TTL_MS } from "../../../../../shared/config/trash.js";
 import { registerTerminalLifecycleHandlers } from "../lifecycle.js";
 import type { HandlerDependencies } from "../../../types.js";
+import {
+  _resetScheduledRunAdmissionForTest,
+  reserveScheduledLaunch,
+} from "../../../../services/scheduledRuns/scheduledRunAdmission.js";
 
 function getSpawnHandler() {
   const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
@@ -980,6 +984,108 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
 
     expect(ptyClient.spawn.mock.calls[0][1].scheduledRun).toEqual(run);
     expect(ptyClient.spawn.mock.calls[1][1].scheduledRun).toBeUndefined();
+  });
+
+  describe("a scheduled run's first spawn (#15978)", () => {
+    afterEach(() => {
+      _resetScheduledRunAdmissionForTest();
+    });
+
+    const scheduledSpawn = (cwd: string) => ({
+      id: "terminal-run-1",
+      projectId: "project-1",
+      cwd,
+      cols: 80,
+      rows: 24,
+      launchAgentId: "claude",
+      worktreeId: "wt-123",
+      agentLaunchFlags: ["--model", "opus"],
+      agentModelId: "opus",
+      agentPresetId: "preset-1",
+      agentSessionId: "0b6e3f9c-0d3e-4a55-8a0e-4b6ad8d6e9a1",
+      scheduledRun: { scheduleId: "schedule-1", runId: "run-1" },
+    });
+
+    it("registers the run from the values it spawns with, before the PTY starts", async () => {
+      registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+      const handler = getSpawnHandler();
+      const os = await import("os");
+      const admit = vi.fn(() => {
+        expect(ptyClient.spawn).not.toHaveBeenCalled();
+      });
+      const reserved = reserveScheduledLaunch({
+        runId: "run-1",
+        scheduleId: "schedule-1",
+        projectId: "project-1",
+        terminalId: "terminal-run-1",
+        agentId: "claude",
+        admit,
+      });
+
+      await handler({} as Electron.IpcMainInvokeEvent, scheduledSpawn(os.homedir()));
+
+      expect(admit).toHaveBeenCalledWith({
+        agentId: "claude",
+        agentSessionId: "0b6e3f9c-0d3e-4a55-8a0e-4b6ad8d6e9a1",
+        cwd: os.homedir(),
+        worktreeId: "wt-123",
+        agentLaunchFlags: ["--model", "opus"],
+        agentModelId: "opus",
+        agentPresetId: "preset-1",
+      });
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+      expect(reserved.state()).toEqual({ kind: "registered" });
+
+      // A restart of the run's pane spawns without registering it again.
+      await handler({} as Electron.IpcMainInvokeEvent, scheduledSpawn(os.homedir()));
+      expect(admit).toHaveBeenCalledTimes(1);
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
+    });
+
+    it("refuses to start a run anywhere but the directory it asked for", async () => {
+      mockRevokePaneConfig.mockResolvedValue(undefined);
+      registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+      const handler = getSpawnHandler();
+      const admit = vi.fn();
+      const reserved = reserveScheduledLaunch({
+        runId: "run-1",
+        scheduleId: "schedule-1",
+        projectId: "project-1",
+        terminalId: "terminal-run-1",
+        agentId: "claude",
+        admit,
+      });
+
+      // The handler would fall back to home from a worktree folder that's gone.
+      await expect(
+        handler({} as Electron.IpcMainInvokeEvent, scheduledSpawn("/nonexistent/path"))
+      ).rejects.toThrow("Failed to spawn terminal: The run's working directory is missing.");
+      expect(admit).not.toHaveBeenCalled();
+      expect(ptyClient.spawn).not.toHaveBeenCalled();
+      expect(reserved.state().kind).toBe("refused");
+    });
+
+    it("fails the spawn when the run's registration refuses it", async () => {
+      mockRevokePaneConfig.mockResolvedValue(undefined);
+      registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+      const handler = getSpawnHandler();
+      const os = await import("os");
+      reserveScheduledLaunch({
+        runId: "run-1",
+        scheduleId: "schedule-1",
+        projectId: "project-1",
+        terminalId: "terminal-run-1",
+        agentId: "claude",
+        admit: () => {
+          throw new Error("The project was going to sleep.");
+        },
+      });
+
+      await expect(
+        handler({} as Electron.IpcMainInvokeEvent, scheduledSpawn(os.homedir()))
+      ).rejects.toThrow("Failed to spawn terminal: The project was going to sleep.");
+      expect(ptyClient.spawn).not.toHaveBeenCalled();
+    });
   });
 
   it("caches the launch command as postSpawnInput for a wrapper-less shell (#11339)", async () => {

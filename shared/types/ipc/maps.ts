@@ -1732,6 +1732,15 @@ export interface IpcEventMap {
   "schedules:changed": import("./schedules.js").SchedulesSnapshot;
 
   /**
+   * Main asks the view showing a project to launch a scheduled run (#15978)
+   * and awaits a renderer `ipcRenderer.send` reply on
+   * `CHANNELS.SCHEDULES_LAUNCH_RESPONSE`, correlated by `requestId`. The
+   * response channel is a renderer→main fire-and-forget send tracked in
+   * `DEAD_CHANNEL_ALLOWLIST` in channelDrift.test.ts.
+   */
+  "schedules:launch-request": import("./schedules.js").ScheduledLaunchViewRequest;
+
+  /**
    * MCP server runtime-state transition. Distinct from
    * `connectivity:service-changed` because the renderer needs the derived
    * `disabled|starting|ready|failed` state plus `lastError`, not just
