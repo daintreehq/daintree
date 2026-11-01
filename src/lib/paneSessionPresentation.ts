@@ -1,13 +1,14 @@
 import type { AgentState, WaitingReason } from "@shared/types/agent";
 import type { FleetBand } from "@/lib/fleetAttention";
-import type { SessionPresentationState } from "@/lib/handBackPresentation";
 
 /**
- * What a pane header's agent glyph draws: the session states, plus `blocked`
- * for an error wait, which takes the header's failure mark rather than the
- * waiting ring. Presentation only, like `unread`.
+ * A session as its glyph draws it, on the pane and everywhere else the run
+ * shows: the observed states, plus `unread` for a hand-back the user hasn't
+ * read and `blocked` for an error wait, which takes the failure mark rather
+ * than the waiting ring. Both are presentation only: `data-agent-state` and
+ * MCP keep reporting what was observed.
  */
-export type PaneSessionPresentationState = SessionPresentationState | "blocked";
+export type SessionPresentationState = AgentState | "unread" | "blocked";
 
 /** What a pane last observed of its own run, as the panel store holds it. */
 export interface PaneObservation {
@@ -49,8 +50,9 @@ export function isNeedsYouPane(
 }
 
 /**
- * The header glyph for a pane, from its display state, its fleet band and what
- * the pane itself last observed.
+ * The glyph for a run, from its display state, its fleet band and what its
+ * pane last observed: the pane header's, and every other surface that draws
+ * the run (dock, tabs, switcher, sidebar, Canopy), so they all agree.
  *
  * The display state keeps every live agent visible by drawing a quiet one as
  * `waiting`, so the band decides what that wait is: an unread Canopy ask is the
@@ -64,7 +66,7 @@ export function resolvePaneSessionPresentation(
   displayState: AgentState | undefined,
   band: FleetBand | undefined,
   observed: PaneObservation = {}
-): PaneSessionPresentationState | undefined {
+): SessionPresentationState | undefined {
   if (displayState !== "waiting") return displayState;
   switch (band) {
     case "needs-you":

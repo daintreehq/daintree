@@ -71,6 +71,8 @@ export interface WorktreeHeaderProps {
   sessionTotal?: number;
   /** Unread hand-backs, counted apart from `sessionStates`. */
   sessionUnread?: number;
+  /** Agents stopped on an error, counted apart from `sessionStates`. */
+  sessionBlocked?: number;
   aggregateCounts?: AggregateCounts;
   environmentIcon?: string;
   isLifecycleRunning?: boolean;
@@ -131,6 +133,7 @@ export function WorktreeHeader({
   sessionStates,
   sessionTotal,
   sessionUnread,
+  sessionBlocked,
   aggregateCounts,
   environmentIcon,
   isLifecycleRunning,
@@ -331,9 +334,9 @@ export function WorktreeHeader({
   const { visibleStates, label: sessionAriaLabel } = useMemo(
     () =>
       sessionStates && sessionTotal
-        ? summarizeSessionStates(sessionStates, sessionTotal, sessionUnread)
+        ? summarizeSessionStates(sessionStates, sessionTotal, sessionUnread, sessionBlocked)
         : { visibleStates: [], label: "" },
-    [sessionStates, sessionTotal, sessionUnread]
+    [sessionStates, sessionTotal, sessionUnread, sessionBlocked]
   );
 
   return (

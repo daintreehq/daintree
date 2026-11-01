@@ -86,17 +86,11 @@ import {
 } from "@/components/Worktree/terminalStateConfig";
 import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
 import { isPtyPanel } from "@shared/types/panel";
-import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
-import { isHandBackWait } from "@/lib/handBackPresentation";
+import { useFleetBandRunIds } from "@/hooks/useRunFleetBand";
+import { NEEDS_YOU_BANDS } from "@/lib/fleetAttention";
+import { sessionPipState } from "@/lib/agentAttentionStates";
 
 type AgentType = BuiltInAgentId;
-
-const ACTIVE_AGENT_STATES: ReadonlySet<AgentState | undefined> = new Set<AgentState | undefined>([
-  "idle",
-  "working",
-  "waiting",
-  "directing",
-]);
 
 interface AgentButtonProps {
   type: AgentType;
@@ -291,8 +285,8 @@ export function AgentButton({
   // bucket so per-terminal ticks in unrelated worktrees do not re-evaluate this
   // selector body. When `activeWorktreeId` is null, fall back to scanning all
   // panel ids (rare, only during project switch hydration). See issue #7451.
-  // A hand-back is no wait, so it never earns the amber pip.
-  const handBackRunIds = useHandBackRunIds();
+  // Only an unread Canopy ask earns the amber pip.
+  const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
   const activeSession = usePanelStore(
     useShallow((state) => {
       const ids = activeWorktreeId ? state.panelIdsByWorktreeId[activeWorktreeId] : state.panelIds;
@@ -305,9 +299,10 @@ export function AgentButton({
         if (getRuntimeOrBootAgentId(p) !== type) continue;
         if (p.location === "trash" || p.location === "background" || p.location === "overlay")
           continue;
-        if (!ACTIVE_AGENT_STATES.has(p.agentState)) continue;
+        const pip = sessionPipState(needsYouRunIds, p);
+        if (pip === undefined) continue;
         if (!firstId) firstId = pid;
-        states.push(isHandBackWait(handBackRunIds, p) ? "completed" : p.agentState);
+        states.push(pip ?? undefined);
       }
       if (!firstId) return null;
       return { id: firstId, attentionState: getAttentionAgentState(states) };

@@ -16,8 +16,7 @@ import {
   SESSION_LABELS,
   summarizeSessionStates,
 } from "../terminalStateConfig";
-import { resolveSessionPresentation } from "@/lib/handBackPresentation";
-import { useRunHandBackState } from "@/hooks/useRunHandBackState";
+import { useRunSessionPresentation } from "@/hooks/useRunSessionPresentation";
 import { useRunParkState } from "@/hooks/useRunParkState";
 import { ParkedCircle } from "@/components/icons";
 import { useRunCanopyPlacement } from "@/hooks/useRunCanopyPlacement";
@@ -122,20 +121,14 @@ function TerminalRow({ term, onClick, onOpen, padY, canArm }: TerminalRowProps) 
   // demotes back to a plain terminal (agent exited or never lived), there
   // is nothing for the sidebar row to track either.
   const agentState = getTerminalAgentDisplayState(chrome, term.agentState);
-  // The glyph alone follows the hand-back: the data attribute keeps the
-  // observed state for E2E selectors.
-  const handBack = useRunHandBackState(term.id);
+  // The glyph alone follows the run's fleet band, as the pane's does: the data
+  // attribute keeps the observed state for E2E selectors.
+  const glyphState = useRunSessionPresentation(term.id, agentState);
   // Parked is the user's own intent, not an observed state, so it rides beside
   // the state glyph rather than replacing it — and leaves the data attribute
   // alone.
   const park = useRunParkState(term.id);
   const canopy = useRunCanopyPlacement(term.id);
-  const glyphState = resolveSessionPresentation(
-    agentState,
-    term.agentState,
-    term.waitingReason,
-    handBack
-  );
   // The primary ("last armed") row is the one keyboard focus returns to when
   // fleet scope exits; it is told apart by a solid outline against the peers'
   // dashed one, both neutral, since a persistent accent here sat beside the
@@ -438,7 +431,8 @@ export function WorktreeTerminalSection({
     const { visibleStates, label, breakdown } = summarizeSessionStates(
       counts.byState,
       counts.total,
-      counts.unread
+      counts.unread,
+      counts.blocked
     );
     // The collapsed trigger names itself once. Left to name-from-content it
     // read "3 active 3 sessions: 2 working, …" — the visible summary, then
@@ -450,7 +444,7 @@ export function WorktreeTerminalSection({
       terminalSessionAriaLabel: label,
       collapsedTriggerLabel: triggerLabel,
     };
-  }, [counts.byState, counts.total, counts.unread]);
+  }, [counts.byState, counts.total, counts.unread, counts.blocked]);
 
   const SummaryIcon = useMemo(() => {
     if (terminals.length === 0) return null;

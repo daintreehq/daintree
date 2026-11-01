@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import type { AgentState, WaitingReason } from "@shared/types/agent";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 import { isAgentTerminal } from "@/utils/terminalType";
-import { isHandBackWait } from "@/lib/handBackPresentation";
 import { isNeedsYouPane } from "@/lib/paneSessionPresentation";
 
 type BlockedState = "waiting" | null;
@@ -122,20 +121,20 @@ export function useDockBlockedState(agentState: AgentState | undefined): Blocked
   return debouncedState;
 }
 
-const NO_HAND_BACKS: ReadonlySet<string> = new Set();
-
-/** A hand-back sits at its prompt without asking for anything, so it is no wait. */
-function isGroupHandBack(panel: AgentStateSource, handBackRunIds: ReadonlySet<string>): boolean {
-  return panel.id !== undefined && isHandBackWait(handBackRunIds, { ...panel, id: panel.id });
-}
-
+/**
+ * The state a docked group's chip edge takes from its members: waiting when
+ * any tab is one the fleet places in `needs-you` and its pane still shows
+ * stopped. A prompt that asks nothing, a hand-back and an error wait don't
+ * edge it.
+ */
 export function getGroupBlockedAgentState(
   panels: ReadonlyArray<AgentStateSource>,
-  handBackRunIds: ReadonlySet<string> = NO_HAND_BACKS
+  needsYouRunIds: ReadonlySet<string>
 ): AgentState | undefined {
   for (const panel of panels) {
-    if (isGroupHandBack(panel, handBackRunIds)) continue;
-    if (getDockDisplayAgentState(panel) === "waiting") return "waiting";
+    if (panel.id !== undefined && isNeedsYouPane(needsYouRunIds, { ...panel, id: panel.id })) {
+      return "waiting";
+    }
   }
   return undefined;
 }

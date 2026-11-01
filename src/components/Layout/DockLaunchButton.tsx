@@ -50,7 +50,8 @@ import { isMac } from "@/lib/platform";
 import { comboToAriaKeyshortcuts, describeChord } from "@/lib/kbdShortcut";
 import { notify } from "@/lib/notify";
 import { deriveAgentAttentionStates } from "@/lib/agentAttentionStates";
-import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
+import { useFleetBandRunIds } from "@/hooks/useRunFleetBand";
+import { NEEDS_YOU_BANDS } from "@/lib/fleetAttention";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 import { isAgentButtonOnToolbar } from "@shared/utils/agentPinned";
 import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
@@ -1313,10 +1314,10 @@ function AgentAttentionProvider({
   activeWorktreeId: string | null;
   children: ReactNode;
 }) {
-  const handBackRunIds = useHandBackRunIds();
+  const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
   const states = usePanelStore(
     useShallow((s) =>
-      deriveAgentAttentionStates(s.panelsById, s.panelIds, activeWorktreeId, handBackRunIds)
+      deriveAgentAttentionStates(s.panelsById, s.panelIds, activeWorktreeId, needsYouRunIds)
     )
   );
   return <AgentAttentionContext.Provider value={states}>{children}</AgentAttentionContext.Provider>;

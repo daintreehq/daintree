@@ -3,14 +3,13 @@ import type { AgentState, AgentStateChangeTrigger } from "@/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
-  PANE_SESSION_ICONS,
-  PANE_SESSION_COLORS,
-  PANE_SESSION_LABELS,
+  SESSION_ICONS,
+  SESSION_COLORS,
   SESSION_LABELS,
 } from "@/components/Worktree/terminalStateConfig";
 import {
   resolvePaneSessionPresentation,
-  type PaneSessionPresentationState,
+  type SessionPresentationState,
 } from "@/lib/paneSessionPresentation";
 import { useRunFleetBand } from "@/hooks/useRunFleetBand";
 import type { ActivityState } from "./TerminalPane";
@@ -50,14 +49,14 @@ export function AgentStateChip({
   agentState,
   ariaLabel,
 }: {
-  agentState: PaneSessionPresentationState;
+  agentState: SessionPresentationState;
   ariaLabel: string;
 }) {
-  const StateIcon = PANE_SESSION_ICONS[agentState];
+  const StateIcon = SESSION_ICONS[agentState];
   if (!StateIcon) return null;
   // Finished is white here rather than the settled grey it wears in lists: the
   // title bar shows one agent, and its ring has no chip around it to carry it.
-  const tone = agentState === "completed" ? "text-text-primary" : PANE_SESSION_COLORS[agentState];
+  const tone = agentState === "completed" ? "text-text-primary" : SESSION_COLORS[agentState];
   return (
     <div
       className={cn(
@@ -165,10 +164,10 @@ export function TerminalAgentIndicator({
     return null;
   }
 
-  if (!shownState || !PANE_SESSION_ICONS[shownState]) return null;
+  if (!shownState || !SESSION_ICONS[shownState]) return null;
 
   const showConfidence = stateChangeConfidence != null && stateChangeConfidence < 1;
-  const stateLabel = PANE_SESSION_LABELS[shownState];
+  const stateLabel = SESSION_LABELS[shownState];
   const observedLabel = SESSION_LABELS[rawAgentState ?? agentState];
   const headline = activity?.headline?.trim() || `Agent ${stateLabel}`;
   const exitStatus = isExited ? describeExitStatus(exitCode) : null;

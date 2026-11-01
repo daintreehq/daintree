@@ -26,7 +26,7 @@ import {
   SESSION_ICONS,
   SESSION_LABELS,
 } from "@/components/Worktree/terminalStateConfig";
-import { useSessionPresentation } from "@/hooks/useRunHandBackState";
+import { useRunSessionPresentation } from "@/hooks/useRunSessionPresentation";
 import { TerminalRefreshTier } from "@/types";
 import {
   peek as peekTerminalService,
@@ -348,15 +348,15 @@ export function DockedTerminalItem({ terminal, sessionTag }: DockedTerminalItemP
   // Indicator stays visible for the lifetime of the agent chrome — idle/missing
   // state coerces to waiting so it never disappears mid-flight.
   const displayAgentState = getTerminalAgentDisplayState(chrome, agentState);
-  // A hand-back draws unread or done, as on the pane's own chip, and is not a
-  // wait: it neither takes the amber ring nor counts as blocked.
-  const shownAgentState = useSessionPresentation(terminal.id, displayAgentState);
-  const isHandBack = shownAgentState !== displayAgentState;
+  // The run's fleet band decides the glyph, as on the pane's own chip: only an
+  // unread Canopy ask is a wait, takes the amber ring and edges the chip.
+  const shownAgentState = useRunSessionPresentation(terminal.id, displayAgentState);
+  const isReinterpreted = shownAgentState !== displayAgentState;
   const isWorking = agentState === "working";
-  const isWaiting = agentState === "waiting" && !isHandBack;
+  const isWaiting = shownAgentState === "waiting";
   const isActive = isWorking || isWaiting;
   const commandText = terminal.activityHeadline || terminal.lastCommand;
-  const blockedState = useDockBlockedState(isHandBack ? undefined : agentState);
+  const blockedState = useDockBlockedState(isWaiting ? "waiting" : undefined);
   // Plain (non-agent) terminals surface their own running/finished affordance —
   // the agent path above returns undefined for them by design.
   const plainActivityState = getDockDisplayActivityState(terminal);
@@ -391,9 +391,10 @@ export function DockedTerminalItem({ terminal, sessionTag }: DockedTerminalItemP
   // The glyph is smoothed (idle/missing shows as waiting); the words are not.
   // Name and tooltip say what was observed, and nothing when nothing was.
   const observedStateLabel = agentState ? getEffectiveStateLabel(agentState) : undefined;
-  // A hand-back is named for what it is drawn as; the observation rides along.
+  // A state the band redrew is named for what it is drawn as; the observation
+  // rides along.
   const stateLabel =
-    isHandBack && shownAgentState ? SESSION_LABELS[shownAgentState] : observedStateLabel;
+    isReinterpreted && shownAgentState ? SESSION_LABELS[shownAgentState] : observedStateLabel;
   const StateIcon = shownAgentState ? SESSION_ICONS[shownAgentState] : null;
   const pluginActive = pluginActivity?.shown === "working" || pluginActivity?.shown === "waiting";
   const isDeprioritized = !isOpen && !pluginActive && isDockAgentStateDeprioritized(agentState);
@@ -523,7 +524,7 @@ export function DockedTerminalItem({ terminal, sessionTag }: DockedTerminalItemP
                     </TooltipTrigger>
                     <TooltipContent side="bottom">
                       {stateLabel
-                        ? isHandBack
+                        ? isReinterpreted
                           ? `Agent ${stateLabel} · Observed: ${observedStateLabel}`
                           : `Agent ${stateLabel}`
                         : "No agent state observed"}
