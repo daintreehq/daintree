@@ -602,6 +602,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./copyTreeHistory.js").CopyTreeHistoryRecord[];
   };
+  "decisions:get-status": {
+    args: [];
+    result: import("../decisions.js").DecisionsStatus;
+  };
   "demo:annotate": {
     args: [payload: import("./demo.js").DemoAnnotatePayload];
     result: import("./demo.js").DemoAnnotateResult;

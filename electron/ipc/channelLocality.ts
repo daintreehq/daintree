@@ -215,6 +215,7 @@ export const CHANNEL_LOCALITY = {
   "crash-recovery:get-pending": "shell",
   "crash-recovery:resolve": "shell",
   "crash-recovery:set-config": "shell",
+  "decisions:get-status": "shell",
   "demo:annotate": "shell",
   "demo:capture-chunk": "shell",
   "demo:capture-stop": "shell",

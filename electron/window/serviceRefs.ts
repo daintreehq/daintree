@@ -19,6 +19,7 @@ import type { agentNotificationService as AgentNotificationServiceType } from ".
 import type { windowsStoreNotifierService as WindowsStoreNotifierServiceType } from "../services/WindowsStoreNotifierService.js";
 import type { mcpServerService as McpServerServiceType } from "../services/McpServerService.js";
 import type { FleetSnapshotService } from "../services/FleetSnapshotService.js";
+import type * as DecisionsModule from "../services/decisions/index.js";
 
 // Guard: process.argv CLI path should only be consumed by the first window
 let processArgvCliHandled = false;
@@ -70,6 +71,12 @@ let windowsStoreNotifierServiceRef: typeof WindowsStoreNotifierServiceType | nul
 // which reads as "no view is protected" — the correct answer when there is no
 // server and therefore no session.
 let mcpServerServiceRef: typeof McpServerServiceType | null = null;
+// Decisions' entry module, loaded at most once and only by a caller that has
+// already read the setting as on, so with Decisions off nothing of it is ever
+// imported. Held here so shutdown can stop a load already under way without
+// importing Decisions itself; sealed at quit so no load starts after that.
+let decisionsModule: Promise<typeof DecisionsModule> | null = null;
+let decisionsModuleSealed = false;
 
 // ── Public getters/setters (consumed by main.ts, menu.ts, shutdown.ts) ──
 export function getPtyClient(): PtyClient | null {
@@ -233,4 +240,34 @@ export function setWindowsStoreNotifierServiceRef(
   v: typeof WindowsStoreNotifierServiceType | null
 ): void {
   windowsStoreNotifierServiceRef = v;
+}
+
+/**
+ * Decisions' entry module, loading it with `load` the first time. Null once
+ * quit has sealed it. A failed load is forgotten, so the next caller retries.
+ */
+export function loadDecisionsModule(
+  load: () => Promise<typeof DecisionsModule>
+): Promise<typeof DecisionsModule> | null {
+  if (decisionsModuleSealed) return null;
+  if (!decisionsModule) {
+    const loading = load();
+    decisionsModule = loading;
+    loading.catch(() => {
+      if (decisionsModule === loading) decisionsModule = null;
+    });
+  }
+  return decisionsModule;
+}
+
+/** Quit: no Decisions load starts after this. Returns the one already under way, if any. */
+export function sealDecisionsModule(): Promise<typeof DecisionsModule> | null {
+  decisionsModuleSealed = true;
+  return decisionsModule;
+}
+
+/** @internal Tests only. */
+export function _resetDecisionsModuleForTesting(): void {
+  decisionsModule = null;
+  decisionsModuleSealed = false;
 }

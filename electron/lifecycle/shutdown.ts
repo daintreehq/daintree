@@ -49,6 +49,7 @@ import {
   setAutoUpdaterServiceRef,
   getWindowsStoreNotifierServiceRef,
   setWindowsStoreNotifierServiceRef,
+  sealDecisionsModule,
 } from "../window/serviceRefs.js";
 import { haltDeferredQueue } from "../window/deferredInitQueue.js";
 import { freezeAndSnapshotOpenWindows } from "../window/openWindowsTracker.js";
@@ -303,6 +304,9 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
   // be resumed). Tasks that start during the dialog run against a fully live
   // app and are torn down by the cleanup chain like any other service.
   haltDeferredQueue();
+  // Sealed in the same synchronous step: a Decisions load that hasn't started
+  // never will, and one already under way is stopped below.
+  const decisionsLoading = sealDecisionsModule();
 
   // Stop the background-project restore queue before the manifest snapshot
   // below (#12320). A project still queued when the quit commits was never
@@ -401,6 +405,23 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
     REMOTE_HOSTS_STOP_BUDGET_MS,
     "device answer stop"
   );
+
+  // Decisions stops before any terminal is captured too. Only something that
+  // loaded it gets stopped: with Decisions off, quitting imports none of it.
+  if (decisionsLoading) {
+    await settleWithin(
+      (async () => {
+        try {
+          const decisions = await decisionsLoading;
+          await decisions.stopDecisions();
+        } catch (err) {
+          console.warn("[MAIN] Decisions stop failed:", err);
+        }
+      })(),
+      REMOTE_HOSTS_STOP_BUDGET_MS,
+      "decisions stop"
+    );
+  }
 
   const ptyClient = deps.getPtyClient();
   const workspaceClient = deps.getWorkspaceClient();
