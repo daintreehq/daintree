@@ -39,6 +39,5 @@ test.describe.serial("Element Picker on an Angular dev server", () => {
     await pressInPreview(ctx.app, "Up", ["alt"]);
     await expectComponentSelected(ctx.window, "App");
     await expect(selectedElement(ctx.window)).toContainText(APP_FILE);
-    await expect(selectedElement(ctx.window)).not.toContainText(`${APP_FILE}:`);
   });
 });

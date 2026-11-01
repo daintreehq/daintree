@@ -6,10 +6,11 @@ import { selectInPreview } from "../helpers/previewDriver";
 
 /**
  * The Element Picker on an Astro site with no UI framework. While its dev
- * toolbar is on, Astro's compiler stamps each element with the file and line
- * that wrote it, but the toolbar's Audit app moves those stamps off the
- * elements as soon as it initialises, so the picker finds none to read
- * (#15913). Picking still works; tracing waits on that fix.
+ * toolbar is on, Astro's compiler stamps each eligible element (not html, head
+ * or script, among others) with the file and line that wrote it, but the
+ * toolbar's Audit app moves those stamps off the elements as soon as it
+ * initialises, so the picker finds none to read (#15913). Picking still works;
+ * tracing waits on that fix.
  */
 const projectDir = registerFixtureProject(() => createSiteProject(ASTRO));
 
