@@ -7,6 +7,7 @@ import fs, { readFileSync } from "fs";
 import { createRequire } from "module";
 import {
   APP_ASAR_ROOT_ENTRIES,
+  AVR_VAD_V5_MODEL,
   MAX_APP_ASAR_BYTES,
   applyPlatformFuses,
   pruneOnnxRuntimeForLinux,
@@ -1076,6 +1077,32 @@ describe("afterPack", () => {
         /onnxruntime-node not found/
       );
     });
+
+    it("verifies the Silero v5 model where avr-vad's entry point reads it (#15671)", async () => {
+      mockExistsSync.mockReturnValue(true);
+
+      await afterPack(createContext("darwin", "/build/mac"));
+
+      expect(mockExistsSync).toHaveBeenCalledWith(path.join(unpackedBase, AVR_VAD_V5_MODEL));
+    });
+
+    // The files allowlist drops the package-root copy, so a release that moved
+    // the model there must not pass on the package directory alone, on any OS.
+    it.each([
+      ["darwin", "/build/mac", unpackedBase],
+      ["win32", "C:/build/win", "C:/build/win/resources/app.asar.unpacked"],
+      ["linux", "/build/linux", "/build/linux/resources/app.asar.unpacked"],
+    ])(
+      "throws on %s when the v5 model is missing even though avr-vad ships",
+      async (platform, appOutDir, unpacked) => {
+        const model = path.join(unpacked, AVR_VAD_V5_MODEL);
+        mockExistsSync.mockImplementation((p) => String(p) !== model);
+
+        await expect(afterPack(createContext(platform, appOutDir))).rejects.toThrow(
+          /Silero v5 model not found/
+        );
+      }
+    );
   });
 });
 

@@ -109,6 +109,20 @@ function baseFiles() {
     // both universal slices, which @electron/universal rejects.
     "!node_modules/mac-phys-footprint/bin",
     "!node_modules/ffmpeg-static/**/*",
+    // avr-vad ships both Silero models twice, and its entry point reads only
+    // the copy beside it, `dist/silero_vad_v5.onnx` (the VAD worker always asks
+    // for "v5"). The package-root copies and the legacy model are never opened
+    // (#15671). afterPack.cjs fails the build if v5 stops being where it reads.
+    "!node_modules/avr-vad/*.onnx",
+    "!node_modules/avr-vad/dist/silero_vad_legacy.onnx",
+    // C/C++ sources, headers and gyp files only feed a native compile, which a
+    // packaged app never runs, and none of these packages' loaders resolves
+    // them: each loads a built `.node` or executable by path. The SQLite
+    // amalgamation alone is ~10MB (#15671). Scoped to the packages whose loaders
+    // were audited, which keeps onnxruntime-node out of it; the glob also
+    // reaches the node-addon-api copies nested under node-pty and
+    // @parcel/watcher. `.cc` is already one of electron-builder's default excludes.
+    "!node_modules/{better-sqlite3,node-pty,@parcel/watcher,win-job-object,posix-pty-reaper,mac-phys-footprint,node-addon-api}/**/*.{c,h,cpp,hpp,hh,gyp,gypi}",
     // Sample plugins are an e2e harness fixture (#9286) — sideloaded only
     // when `DAINTREE_E2E_SIDELOAD_PLUGIN_DIR` is set, which is constant-
     // folded to "" in production builds. Excluding the dir keeps shipped

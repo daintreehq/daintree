@@ -497,7 +497,16 @@ function validatePosixReaperExec(binaryPath) {
  * backstop timer for every user. A presence check (not a load probe) keeps this
  * portable across the cross-arch packaging matrix; the app itself degrades
  * gracefully if the runtime load ever fails.
+ *
+ * The model is checked by exact path because the `files` allowlist drops every
+ * other copy avr-vad ships (#15671), on the assumption that its entry point
+ * reads `${__dirname}/silero_vad_v5.onnx` from `dist/`. An avr-vad release that
+ * moves the model fails the build here instead of shipping a VAD that can
+ * never load.
  */
+const AVR_VAD_V5_MODEL = "node_modules/avr-vad/dist/silero_vad_v5.onnx";
+exports.AVR_VAD_V5_MODEL = AVR_VAD_V5_MODEL;
+
 function validateOnnxRuntime(unpackedPath) {
   for (const mod of ["onnxruntime-node", "avr-vad"]) {
     const modPath = path.join(unpackedPath, "node_modules", mod);
@@ -509,6 +518,17 @@ function validateOnnxRuntime(unpackedPath) {
     }
     console.log(`[afterPack] ${mod} verified: ${modPath}`);
   }
+
+  const modelPath = path.join(unpackedPath, AVR_VAD_V5_MODEL);
+  if (!fs.existsSync(modelPath)) {
+    throw new Error(
+      `[afterPack] CRITICAL: Silero v5 model not found at ${modelPath}. ` +
+        "Voice VAD segmentation (#9177) will fail to load. Check where avr-vad's entry " +
+        "point reads the model, and the avr-vad patterns in the electron-builder files " +
+        "and asarUnpack configuration (#15671)."
+    );
+  }
+  console.log(`[afterPack] avr-vad Silero v5 model verified: ${modelPath}`);
 }
 
 /**
