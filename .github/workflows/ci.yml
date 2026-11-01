@@ -140,6 +140,13 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      # Electron's npm package downloads its binary on first use, not at install,
+      # so the cached tree has none. pluginSdkResolution.electron.test.ts runs
+      # the worker bootstrap under it; fetching it here, with retries, keeps a
+      # CDN blip out of the test result.
+      - name: Provision Electron binary
+        run: node scripts/ci/verify-electron-install.mjs
+
       # Vitest runs a shard's files longest-first using the durations it
       # recorded on the previous run, so the slow files start early instead of
       # setting the tail. Keyed per commit so the timings stay current; the
