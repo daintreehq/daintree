@@ -70,6 +70,25 @@ describe("ScheduleOsJobStatus (#15990)", () => {
     expect(screen.queryByRole("button", { name: "Repair" })).toBeNull();
   });
 
+  it("names what starts Daintree as each platform does", () => {
+    const mac = show(CURRENT, [schedule("a")]);
+    expect(mac.text()).toContain("macOS starts Daintree without a window for 1 schedule here");
+    cleanup();
+
+    const linux: Status = { ...CURRENT, context: { kind: "systemd-timer", systemTimeZone: "UTC" } };
+    expect(show(linux, [schedule("a")]).text()).toContain(
+      "systemd starts Daintree without a window for 1 schedule here"
+    );
+    cleanup();
+
+    const { text } = show(
+      { ...linux, state: "none", unavailable: "This computer doesn't run systemd" },
+      [schedule("a")]
+    );
+    expect(text()).toContain("systemd can't start Daintree for these schedules");
+    expect(text()).toContain("This computer doesn't run systemd");
+  });
+
   it("offers to repair a stale job, with what went wrong", () => {
     const { onRepair, text } = show(
       { ...CURRENT, state: "stale", error: "Couldn't load the macOS job (launchctl exited 5)" },

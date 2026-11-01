@@ -18,8 +18,8 @@ interface ScheduleOsJobStatusProps {
 
 /**
  * Whether the OS job that starts Daintree for this project's schedules, set
- * to run when it isn't running, is installed and current (#15990). Silent
- * while no switched-on schedule here asks for it.
+ * to run when it isn't running, is installed and current (#15990, #15991).
+ * Silent while no switched-on schedule here asks for it.
  */
 export function ScheduleOsJobStatus({
   status,
@@ -34,6 +34,8 @@ export function ScheduleOsJobStatus({
   const names = new Map(schedules.map((s) => [s.id, s.name]));
   const excluded = (status?.excluded ?? []).filter((entry) => names.has(entry.scheduleId));
   const started = optedIn.length - excluded.length;
+  // What starts Daintree, as the platform's own name for it.
+  const starter = status?.context.kind === "systemd-timer" ? "systemd" : "macOS";
   const repairButton = (
     <Button variant="outline" size="sm" onClick={onRepair} loading={repairing}>
       <RefreshCw />
@@ -44,7 +46,7 @@ export function ScheduleOsJobStatus({
   let job: ReactNode = null;
   if (status?.unavailable) {
     job = (
-      <Callout severity="warning" title="macOS can't start Daintree for these schedules">
+      <Callout severity="warning" title={`${starter} can't start Daintree for these schedules`}>
         {status.unavailable}
       </Callout>
     );
@@ -63,7 +65,7 @@ export function ScheduleOsJobStatus({
   } else if (status.state === "current" && started > 0) {
     job = (
       <Callout severity="neutral" size="compact" icon={CalendarClock}>
-        macOS starts Daintree without a window for {pluralize(started, "schedule")} here when it
+        {starter} starts Daintree without a window for {pluralize(started, "schedule")} here when it
         isn&apos;t running.
       </Callout>
     );

@@ -31,9 +31,10 @@ import {
   RUN_WHEN_CLOSED_PATH,
   runWhenClosedIssue,
   type ScheduleOsJobContext,
+  type ScheduleOsJobKind,
 } from "@shared/utils/scheduleOsJob";
 import type { SchedulesSnapshot } from "@shared/types/ipc/schedules";
-import { isMac } from "@/lib/platform";
+import { isLinux, isMac } from "@/lib/platform";
 import { logError } from "@/utils/logger";
 import { useFirstAgentOptions } from "@/components/Worktree/hooks/useFirstAgentOptions";
 import { useScheduleLaunchOptions } from "./useScheduleLaunchOptions";
@@ -217,8 +218,12 @@ interface ScheduleEditorProps {
 }
 
 const MAIN_CHECKOUT_VALUE = "__main__";
-const RUN_WHEN_CLOSED_DESCRIPTION =
-  "macOS starts Daintree without a window when a run is due. One due while the Mac sleeps follows Missed runs when it wakes";
+const RUN_WHEN_CLOSED_DESCRIPTION: Record<ScheduleOsJobKind, string> = {
+  "launch-agent":
+    "macOS starts Daintree without a window when a run is due. One due while the Mac sleeps follows Missed runs when it wakes",
+  "systemd-timer":
+    "systemd starts Daintree without a window when a run is due. One due while the computer sleeps or is off follows Missed runs when it wakes or you next log in",
+};
 const PREVIEW_RUNS = 3;
 /** How long the cadence must sit still before its words or error are read out. */
 const CADENCE_ANNOUNCE_SETTLE_MS = 600;
@@ -355,7 +360,9 @@ export function ScheduleEditor({
   const agentName = getEffectiveAgentConfig(draft.agentId)?.name ?? "This agent";
   // Shown where an OS job exists, and wherever the option is already on so it can be turned off.
   const showRunWhenClosed =
-    draft.runWhenClosed || (osJobContext ? osJobContext.kind !== null : isMac());
+    draft.runWhenClosed || (osJobContext ? osJobContext.kind !== null : isMac() || isLinux());
+  const osJobKind: ScheduleOsJobKind =
+    osJobContext?.kind ?? (isLinux() ? "systemd-timer" : "launch-agent");
 
   const save = async () => {
     setAttempted(true);
@@ -634,7 +641,7 @@ export function ScheduleEditor({
                   description={
                     !draft.runWhenClosed && runWhenClosedRefusal !== null
                       ? runWhenClosedRefusal
-                      : RUN_WHEN_CLOSED_DESCRIPTION
+                      : RUN_WHEN_CLOSED_DESCRIPTION[osJobKind]
                   }
                   checked={draft.runWhenClosed}
                   onChange={(value) => update("runWhenClosed", value)}

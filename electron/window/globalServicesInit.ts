@@ -1202,13 +1202,13 @@ export async function initGlobalServices(
     },
   });
 
-  // Keeps the macOS job that starts Daintree for schedules set to run while it
-  // isn't running (#15990) matching them, and repairs one left by an app that
-  // has moved.
+  // Keeps the OS job that starts Daintree for schedules set to run while it
+  // isn't running (#15990 on macOS, #15991 on Linux) matching them, and
+  // repairs one left by an app that has moved.
   registerDeferredTask({
     name: "schedule-os-job",
     run: async () => {
-      if (process.platform !== "darwin") return;
+      if (process.platform !== "darwin" && process.platform !== "linux") return;
       const { startScheduleOsJob } = await import("../services/scheduledRuns/scheduleOsJobLive.js");
       startScheduleOsJob();
     },
