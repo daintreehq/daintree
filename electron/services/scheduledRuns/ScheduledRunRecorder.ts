@@ -91,6 +91,24 @@ export interface ScheduledRunSessionFact {
   };
 }
 
+/**
+ * A run the overlap policy is closing to put another in its place. Its own
+ * exit or loss still lands on its process, but the settlement that would make
+ * is held back until {@link finish} says whether the replacement went through.
+ */
+export interface ScheduledRunReplacement {
+  /** Resolves once the run's PTY exit, or its loss, is recorded. */
+  readonly gone: Promise<void>;
+  readonly isGone: () => boolean;
+  /**
+   * Ends the hold. With a successor id the run settles as replaced by it;
+   * with null it settles on whatever its own facts said meanwhile, or stays
+   * open when they said nothing. Null when it settled on neither: another
+   * service settled it first, or it's gone from the history.
+   */
+  readonly finish: (replacedByRunId: string | null) => ScheduledRun | null;
+}
+
 export interface ScheduledRunsChange {
   readonly projectId: string;
   readonly scheduleIds: readonly string[];
@@ -191,6 +209,11 @@ export class ScheduledRunRecorder {
    * prompt's, sent by hand or by an orchestrator) is never the run's report.
    */
   private readonly handbackCodes = new Map<string, string>();
+  /** Runs being replaced, with the settlement their own facts made meanwhile. */
+  private readonly replacing = new Map<
+    string,
+    { held: ScheduledRunEvidence | null; gone: boolean; markGone: () => void }
+  >();
 
   constructor(deps: ScheduledRunRecorderDeps) {
     this.store = deps.store;
@@ -319,6 +342,41 @@ export class ScheduledRunRecorder {
     return this.commit(settled, true) ? settled : null;
   }
 
+  /**
+   * Holds back the settlement a run's own exit or loss would make while the
+   * overlap policy closes its terminal to replace it, so the close reads as a
+   * replacement rather than as the run failing. Null when the run isn't open,
+   * or is already being replaced.
+   */
+  beginReplacement(runId: string): ScheduledRunReplacement | null {
+    const run = this.store.get(runId);
+    if (!run || run.settlement.state !== "open" || this.replacing.has(runId)) return null;
+    let markGone!: () => void;
+    const gone = new Promise<void>((resolve) => {
+      markGone = resolve;
+    });
+    const entry: { held: ScheduledRunEvidence | null; gone: boolean; markGone: () => void } = {
+      held: null,
+      gone: false,
+      markGone: () => {
+        entry.gone = true;
+        markGone();
+      },
+    };
+    this.replacing.set(runId, entry);
+    return {
+      gone,
+      isGone: () => entry.gone,
+      finish: (replacedByRunId) => {
+        if (this.replacing.get(runId) !== entry) return null;
+        this.replacing.delete(runId);
+        const evidence: ScheduledRunEvidence | null =
+          replacedByRunId !== null ? { kind: "replace", replacedByRunId } : entry.held;
+        return evidence ? this.settle(runId, evidence) : null;
+      },
+    };
+  }
+
   /** A spawn of `terminalId` answered. Only the first incarnation seen is the run's. */
   handleSpawnResult(terminalId: string, result: ScheduledRunSpawnFact): void {
     if (!this.incarnations.has(terminalId)) return;
@@ -381,8 +439,13 @@ export class ScheduledRunRecorder {
         },
       };
       const settles = next.settlement.state === "open" && !this.isShuttingDown();
-      if (settles) next = this.withSettlement(next, { kind: "lost" }, at);
-      this.commit(next, settles);
+      const replacing = this.replacing.get(run.id);
+      if (settles) {
+        if (replacing) replacing.held = { kind: "lost" };
+        else next = this.withSettlement(next, { kind: "lost" }, at);
+      }
+      this.commit(next, settles && !replacing);
+      replacing?.markGone();
     }
   }
 
@@ -414,14 +477,14 @@ export class ScheduledRunRecorder {
         },
       };
       const settles = next.settlement.state === "open" && !this.isShuttingDown();
+      const replacing = this.replacing.get(run.id);
       if (settles) {
-        next = this.withSettlement(
-          next,
-          { kind: "exit", process: "pty", exitCode, signal },
-          exitedAt
-        );
+        const evidence: ScheduledRunEvidence = { kind: "exit", process: "pty", exitCode, signal };
+        if (replacing) replacing.held = evidence;
+        else next = this.withSettlement(next, evidence, exitedAt);
       }
-      this.commit(next, settles);
+      this.commit(next, settles && !replacing);
+      replacing?.markGone();
     }
   }
 

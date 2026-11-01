@@ -3,6 +3,7 @@ import type {
   ScheduleCadence,
   ScheduleLaunch,
   SchedulePolicies,
+  ScheduledRunSkipReason,
 } from "../scheduledRuns.js";
 import type { ScheduleIssue } from "../../utils/scheduleValidation.js";
 import type { ScheduledRunRef } from "../scheduledRunRef.js";
@@ -69,11 +70,35 @@ export interface ScheduleRemoveOutcome {
 }
 
 /**
+ * What the user agreed to when Run now found the schedule's earlier runs still
+ * open (#15980): the overlap policy the confirmation showed and the runs it
+ * named. Run now goes ahead only while both still hold; a run that opened
+ * since, or a changed policy, asks again.
+ */
+export interface ScheduleRunNowOverlapConfirmation {
+  policy: "skip" | "replace";
+  openRunIds: string[];
+}
+
+export interface ScheduleRunNowOptions {
+  overlap?: ScheduleRunNowOverlapConfirmation;
+}
+
+/**
  * Run now (#15978). `started`: the run is registered in the history and its
  * terminal is starting; what happens next arrives as the run's own facts.
  */
 export type ScheduleRunNowOutcome =
   | { status: "started"; runId: string; terminalId: string }
+  /** Recorded as skipped, with why: its precondition didn't pass. */
+  | { status: "skipped"; runId: string; reason: ScheduledRunSkipReason }
+  /**
+   * Nothing ran and nothing was recorded: earlier runs are still open, and
+   * under this policy Run now needs the user's word first. Asking again with
+   * {@link ScheduleRunNowOptions.overlap} runs alongside them (`skip`) or
+   * replaces them (`replace`).
+   */
+  | { status: "confirm-overlap"; policy: "skip" | "replace"; openRunIds: string[] }
   /**
    * Nothing started. `runId` names the failed run the history recorded with
    * this reason, or is null when the history couldn't record one.
@@ -108,4 +133,14 @@ export interface ScheduledRunFinishRequest {
   runId: string;
   terminalId: string;
   action: "background" | "remove";
+}
+
+/**
+ * A run's terminal main closed to replace it under the overlap policy
+ * (#15980): its process is gone and its session captured. A view showing the
+ * project takes the run's pane out, as `terminalId` holding that run.
+ */
+export interface ScheduledRunClosedPush {
+  runId: string;
+  terminalId: string;
 }

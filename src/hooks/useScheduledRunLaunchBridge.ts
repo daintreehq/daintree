@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { actionService } from "@/services/ActionService";
+import { usePanelStore } from "@/store/panelStore";
 import type { ActionDispatchResult } from "@shared/types/actions";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
@@ -13,6 +14,10 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
  * attestation that the user configured this launch when they saved the
  * schedule. Main registers the run when the terminal spawns, and reads this
  * answer only for why a launch started nothing.
+ *
+ * It also drops the pane of a run main closed to replace it (#15980). Main
+ * already ended the terminal and kept its session, so only the pane goes, and
+ * only one that holds that run.
  */
 export function useScheduledRunLaunchBridge(): void {
   useEffect(() => {
@@ -45,9 +50,16 @@ export function useScheduledRunLaunchBridge(): void {
         }
       })();
     });
+    const cleanupClosed = schedules.onRunClosed?.(({ runId, terminalId }) => {
+      const panels = usePanelStore.getState();
+      const panel = panels.panelsById[terminalId];
+      if (!panel || panel.scheduledRun?.runId !== runId) return;
+      panels.removePanel(terminalId, { backendAlreadyClosed: true });
+    });
     return () => {
       disposed = true;
       cleanup();
+      cleanupClosed?.();
     };
   }, []);
 }

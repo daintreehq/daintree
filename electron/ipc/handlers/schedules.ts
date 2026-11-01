@@ -18,6 +18,7 @@ import type {
   ScheduleCreateInput,
   ScheduleCreateOutcome,
   ScheduleRemoveOutcome,
+  ScheduleRunNowOptions,
   ScheduleRunNowOutcome,
   ScheduleSetEnabledOutcome,
   ScheduleUpdateOutcome,
@@ -39,6 +40,17 @@ import type {
 
 const ScheduleIdShape = z.string().min(1).max(200);
 const UpdatedAtShape = z.number().int().nonnegative();
+
+const RunNowOptionsShape = z
+  .strictObject({
+    overlap: z
+      .strictObject({
+        policy: z.enum(["skip", "replace"]),
+        openRunIds: z.array(z.string().min(1).max(200)).max(100),
+      })
+      .optional(),
+  })
+  .optional();
 
 const PoliciesShape = z.strictObject({
   missedRuns: z.enum(SCHEDULE_MISSED_RUN_POLICIES),
@@ -166,16 +178,24 @@ async function handleSetEnabled(
 /**
  * Launches the schedule's agent now, as a tracked run (#15978), enabled or
  * not: asking is the opt-in. In the asking view when it shows the project.
+ * Its overlap policy and precondition apply (#15980); with earlier runs still
+ * open it asks first, and `options.overlap` is the user's answer.
  */
-async function handleRunNow(ctx: IpcContext, scheduleId: string): Promise<ScheduleRunNowOutcome> {
+async function handleRunNow(
+  ctx: IpcContext,
+  scheduleId: string,
+  options?: ScheduleRunNowOptions
+): Promise<ScheduleRunNowOutcome> {
   const projectId = requireSenderProjectId(ctx);
-  const { launchScheduledRunLive, RUN_NOW_ORIGIN } =
+  const validScheduleId = parsed(ScheduleIdShape, scheduleId, "scheduleId must name a schedule");
+  const overlap = parsed(RunNowOptionsShape, options, "options must be a Run now answer")?.overlap;
+  const { runScheduleNowLive } =
     await import("../../services/scheduledRuns/scheduledRunLaunchLive.js");
-  return launchScheduledRunLive({
+  return runScheduleNowLive({
     projectId,
-    scheduleId: parsed(ScheduleIdShape, scheduleId, "scheduleId must name a schedule"),
-    origin: RUN_NOW_ORIGIN,
+    scheduleId: validScheduleId,
     preferredWebContentsId: ctx.webContentsId,
+    ...(overlap ? { overlapConfirmed: overlap } : {}),
   });
 }
 

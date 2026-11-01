@@ -61,6 +61,7 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "project.sleep",
   "project.restart",
   "project.sleepIdle",
+  "schedules.runNow",
   "recipe.delete",
   "recipe.run",
   "devPreview.restartAndClearCache",
@@ -147,6 +148,7 @@ const BYPASS_WIRED = new Set([
   "project.sleep", // deferred-promise via projectSleepConfirmStore; ProjectSleepConfirmDialog resolves it
   "project.sleepIdle", // same store and dialog
   "project.restart", // same store and dialog
+  "schedules.runNow", // deferred-promise via scheduleRunConfirmStore; ScheduleRunConfirmDialog resolves it
   "terminal.arm", // agent/MCP-only confirm gate (#11346); palette-hidden, user arming goes through the fleet ribbon (not ActionService), so no user-side ConfirmDialog to co-locate
   "recipe.run", // agent-dispatch only; no user-side ConfirmDialog (danger:"confirm" gates MCP only)
   // Agent/MCP-only batch kill (#12123); palette-hidden because it acts only on

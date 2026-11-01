@@ -6,12 +6,22 @@ import {
   getWebContentsForProject,
   isCachedViewWebContents,
 } from "../../window/webContentsRegistry.js";
+import { thawThenSend } from "../../utils/thawThenSend.js";
 import { projectStore } from "../ProjectStore.js";
-import type { ScheduleRunNowOutcome } from "../../../shared/types/ipc/schedules.js";
-import type { ScheduledRunOrigin } from "../../../shared/types/scheduledRuns.js";
+import type {
+  ScheduleRunNowOutcome,
+  ScheduleRunNowOverlapConfirmation,
+  ScheduledRunClosedPush,
+} from "../../../shared/types/ipc/schedules.js";
+import type { ScheduledRun, ScheduledRunOrigin } from "../../../shared/types/scheduledRuns.js";
 import { getScheduledRunRecorder } from "./index.js";
 import { armScheduledRunDonePolicy } from "./scheduledRunDonePolicyLive.js";
-import { launchScheduledRun, type ScheduledRunLauncherDeps } from "./ScheduledRunLauncher.js";
+import {
+  launchScheduledRun,
+  type ScheduledRunLaunchOutcome,
+  type ScheduledRunLauncherDeps,
+} from "./ScheduledRunLauncher.js";
+import { runSchedulePrecondition } from "./scheduledRunPrecondition.js";
 import { requestScheduledLaunchInView } from "./scheduledRunViewBridge.js";
 
 /** A run the user asked for: no occurrence of the cadence stands behind it. */
@@ -48,10 +58,59 @@ function markProjectRunning(projectId: string): void {
   broadcastToRenderer(CHANNELS.PROJECT_UPDATED, updated);
 }
 
+/**
+ * Closes a run's terminal through the same handler a view's graceful kill
+ * reaches: the agent is asked to quit, its session captured and journaled
+ * for resuming, then the PTY killed.
+ */
+async function closeRunTerminal(run: ScheduledRun): Promise<string | null> {
+  if (run.terminalId === null) return null;
+  const { invokeHostChannel } = await import("../viewless/viewlessInvoke.js");
+  return invokeHostChannel<string | null>(run.projectId, CHANNELS.TERMINAL_GRACEFUL_KILL, [
+    run.terminalId,
+  ]);
+}
+
+/**
+ * A view showing the project owns its layout, so each one drops the pane and
+ * its persistence saves that; with none, the saved layout forgets it, or the
+ * next window to open the project would bring the closed run back.
+ */
+async function removeRunPane(run: ScheduledRun): Promise<void> {
+  const { terminalId } = run;
+  if (terminalId === null) return;
+  const views = getWebContentsForProject(run.projectId);
+  if (views.length === 0) {
+    const { forgetViewlessTerminal } = await import("../viewless/projectStateAuthoring.js");
+    await forgetViewlessTerminal(projectStore, run.projectId, terminalId);
+    return;
+  }
+  const push: ScheduledRunClosedPush = { runId: run.id, terminalId };
+  for (const view of views) {
+    // A cached view may be frozen; it drops the pane when thawed.
+    thawThenSend(
+      view,
+      () => !view.isDestroyed(),
+      () => {
+        try {
+          view.send(CHANNELS.SCHEDULES_RUN_CLOSED, push);
+        } catch {
+          // A view closing mid-send has no pane left to drop.
+        }
+      }
+    );
+  }
+}
+
 async function liveDeps(): Promise<ScheduledRunLauncherDeps<Electron.WebContents>> {
-  const [{ isProjectSleepInFlight }, { runScheduledAgentLaunchLive }] = await Promise.all([
+  const [
+    { isProjectSleepInFlight },
+    { runScheduledAgentLaunchLive },
+    { buildProjectCommandEnv, readProjectCommandEnvLayers },
+  ] = await Promise.all([
     import("../projectSleep.js"),
     import("../viewless/index.js"),
+    import("../ProjectCommandService.js"),
   ]);
   return {
     getRecorder: getScheduledRunRecorder,
@@ -67,6 +126,21 @@ async function liveDeps(): Promise<ScheduledRunLauncherDeps<Electron.WebContents
     findView: findProjectView,
     launchInView: (view, request) => requestScheduledLaunchInView(view, request),
     launchWithoutView: (project, request) => runScheduledAgentLaunchLive(project, request),
+    runPrecondition: async ({ projectId, command, cwd, signal }) => {
+      // The variables the user set for terminals, as a project command gets them.
+      const layers = await readProjectCommandEnvLayers(projectId).catch((error: unknown) => {
+        console.warn("[ScheduledRuns] Couldn't read environment variables for a precondition:", error);
+        return null;
+      });
+      return runSchedulePrecondition({
+        command,
+        cwd,
+        env: () => buildProjectCommandEnv(layers),
+        signal,
+      });
+    },
+    closeRunTerminal,
+    removeRunPane,
     newId: randomUUID,
     onLaunched: armScheduledRunDonePolicy,
   };
@@ -78,6 +152,21 @@ export async function launchScheduledRunLive(input: {
   scheduleId: string;
   origin: ScheduledRunOrigin;
   preferredWebContentsId?: number;
-}): Promise<ScheduleRunNowOutcome> {
+}): Promise<ScheduledRunLaunchOutcome> {
   return launchScheduledRun(input, await liveDeps());
+}
+
+/** Run now: the schedule's agent, now, under its overlap policy and precondition. */
+export async function runScheduleNowLive(input: {
+  projectId: string;
+  scheduleId: string;
+  preferredWebContentsId?: number;
+  overlapConfirmed?: ScheduleRunNowOverlapConfirmation;
+}): Promise<ScheduleRunNowOutcome> {
+  const outcome = await launchScheduledRun({ ...input, origin: RUN_NOW_ORIGIN }, await liveDeps());
+  // Run now names no occurrence, so the history never already holds one.
+  if (outcome.status === "already-recorded") {
+    return { status: "failed", runId: outcome.runId, message: "The run was already recorded." };
+  }
+  return outcome;
 }

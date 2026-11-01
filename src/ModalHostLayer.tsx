@@ -25,6 +25,7 @@ import { logError } from "@/utils/logger";
 import { StopProjectConfirmDialog } from "./components/Project/StopProjectConfirmDialog";
 import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
 import { cancelRecipeRunConfirmations } from "@/store/recipeRunConfirmStore";
+import { cancelScheduleRunConfirmations } from "@/store/scheduleRunConfirmStore";
 import { usePilotStore } from "@/store/pilotStore";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useScratchStore } from "@/store/scratchStore";
@@ -63,6 +64,7 @@ import {
   LazyPluginConfirmDialog,
   LazyLayoutApplyConfirmDialog,
   LazyRecipeRunConfirmDialog,
+  LazyScheduleRunConfirmDialog,
   LazyPluginArchiveInstallConfirmDialog,
   LazyPluginMcpConfirmDialog,
   LazyPluginQuickPickDialog,
@@ -855,6 +857,18 @@ export function ModalHostLayer({
         >
           <Suspense fallback={null}>
             <LazyRecipeRunConfirmDialog />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+      {isStateLoaded && (
+        <ErrorBoundary
+          variant="component"
+          componentName="ScheduleRunConfirmDialog"
+          // A Run now waits on this dialog; one that can't render backs it out.
+          onError={() => cancelScheduleRunConfirmations()}
+        >
+          <Suspense fallback={null}>
+            <LazyScheduleRunConfirmDialog />
           </Suspense>
         </ErrorBoundary>
       )}

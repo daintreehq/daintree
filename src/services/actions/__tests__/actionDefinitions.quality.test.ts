@@ -1138,6 +1138,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "project.sleep",
   "project.restart",
   "project.sleepIdle",
+  "schedules.runNow",
   "recipe.delete",
   "recipe.run",
   "devPreview.restartAndClearCache",
@@ -1215,6 +1216,9 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   "project.sleep",
   "project.sleepIdle",
   "project.restart",
+  // Deferred-promise via scheduleRunConfirmStore (#15980); run() awaits the
+  // app-level ScheduleRunConfirmDialog only when earlier runs are still open.
+  "schedules.runNow",
   // The fleet ribbon's own inline confirmation (useFleetPendingActionStore,
   // buildConfirmMessage), not a ConfirmDialog-family component.
   "fleet.kill",
