@@ -5,6 +5,7 @@ import {
   blendOverBackground,
   contrastRatio,
   getThemeContrastWarnings,
+  relativeLuminance,
   resolveDiffTextBackdrops,
 } from "../contrast.js";
 import { hexToOklch, liftToContrast, oklchToHex } from "../oklch.js";
@@ -220,7 +221,96 @@ describe("liftToContrast", () => {
     // No lightness of anything reads 4.5:1 on mid grey from both sides at once.
     expect(liftToContrast("#3a6b45", ["#777777", "#ffffff"], 4.5, "dark")).toBe("#3a6b45");
   });
+
+  it("lands where measuring every candidate as a formatted hex lands", () => {
+    // Inks and backdrops in every form the parsers accept or reject, plus a
+    // seeded spread, so the reuse of luminances can't drift from the search
+    // the built-in themes were tuned against (#15673).
+    let seed = 15673;
+    const randomHex = () => {
+      seed = (seed * 1103515245 + 12345) % 2 ** 31;
+      return `#${seed.toString(16).padStart(6, "0").slice(-6)}`;
+    };
+    const inks = [
+      "#3a6b45",
+      "#5fae6f",
+      "#222222",
+      "#eeeeee",
+      "#3A6B45",
+      "  #3a6b45 ",
+      "#abc",
+      "#abcf",
+      "#3a6b45ff",
+      "#3a6b4580",
+      "oklch(0.5 0.1 140)",
+      ...Array.from({ length: 24 }, randomHex),
+    ];
+    const backdropSets = [
+      [],
+      ["#2a2a2a"],
+      ["#f2efe8"],
+      ["#000000", "#ffffff"],
+      ["#777777", "#ffffff"],
+      ["#1d2125", "#fff", "#2a2a2aff", " #333333"],
+      ["#2a2a2a", "rgba(0, 0, 0, 0.5)"],
+      Array.from({ length: 12 }, randomHex),
+    ];
+    let compared = 0;
+    for (const ink of inks) {
+      for (const backdrops of backdropSets) {
+        for (const minimum of [3, 4.55, 7]) {
+          for (const type of ["dark", "light"] as const) {
+            expect(liftToContrast(ink, backdrops, minimum, type)).toBe(
+              referenceLift(ink, backdrops, minimum, type)
+            );
+            compared += 1;
+          }
+        }
+      }
+    }
+    expect(compared).toBe(inks.length * backdropSets.length * 3 * 2);
+  });
 });
+
+// `liftToContrast` before #15673: each candidate formatted to hex, and both
+// strings of every pair re-read for every ratio.
+function referenceLift(
+  ink: string,
+  backdrops: readonly string[],
+  minimum: number,
+  type: "dark" | "light"
+): string {
+  const opaque = /^#(?:[0-9a-f]{3}f?|[0-9a-f]{6}(?:ff)?)$/i;
+  const start = opaque.test(ink.trim()) ? hexToOklch(ink.trim()) : null;
+  if (!start) return ink;
+  const ratio = (a: string, b: string) => {
+    const la = relativeLuminance(a);
+    const lb = relativeLuminance(b);
+    return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+  };
+  const reads = (hex: string) => backdrops.every((backdrop) => ratio(hex, backdrop) >= minimum);
+  if (reads(ink.trim())) return ink;
+  const at = (l: number) => oklchToHex({ ...start, l });
+  const end = type === "dark" ? 1 : 0;
+  let near = start.l;
+  let far: number | null = null;
+  for (let step = 1; step <= 32; step++) {
+    const l = start.l + ((end - start.l) * step) / 32;
+    if (reads(at(l))) {
+      far = l;
+      break;
+    }
+    near = l;
+  }
+  if (far === null) return ink;
+  let pass = far;
+  for (let step = 0; step < 24; step++) {
+    const mid = (near + pass) / 2;
+    if (reads(at(mid))) pass = mid;
+    else near = mid;
+  }
+  return at(pass);
+}
 
 describe("oklchToHex", () => {
   it("inverts hexToOklch", () => {
