@@ -424,6 +424,27 @@ describe("DecisionsService pane state", () => {
     expect(service.getPaneState("pane-a")).toBeNull();
   });
 
+  it("clears a pane fed while the store is still closing", async () => {
+    let finishClose!: () => void;
+    const store = fakeStore();
+    store.close.mockImplementation(() => new Promise<void>((resolve) => (finishClose = resolve)));
+    const pushes: PaneDecisionState[] = [];
+    const service = new DecisionsService({
+      openStore: async () => store,
+      publishPaneState: (_projectId, state) => pushes.push(state),
+    });
+    await service.start(on());
+
+    const stopping = service.stop();
+    await vi.waitFor(() => expect(store.close).toHaveBeenCalledOnce());
+    service.observeQuestions([row(1)]);
+    finishClose();
+    await stopping;
+
+    expect(pushes.map((state) => state.openQuestions.length)).toEqual([1, 0]);
+    expect(service.getPaneState("pane-a")).toBeNull();
+  });
+
   it("outranks the last lifetime's pushes after it starts again", async () => {
     // A still clock, so only the service's own counter can order the pushes.
     vi.useFakeTimers({ toFake: ["Date"] });

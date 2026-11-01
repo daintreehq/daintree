@@ -147,9 +147,10 @@ export class DecisionsService {
    * for the next time it is on. A stop tells each pane that showed something
    * that it has nothing now, so no view keeps a question that Decisions is no
    * longer tracking; at quit the views are going too, and nothing is pushed.
+   * Panes are let go only once the store has closed, so a feed that lands
+   * while it closes is cleared too.
    */
   private async release(clearViews: boolean): Promise<void> {
-    this.panes.clear(clearViews && this.state !== "off");
     const store = this.store;
     const keyStore = this.keyStore;
     this.store = null;
@@ -159,6 +160,7 @@ export class DecisionsService {
       // Commits what the lifetime left queued; the rows stay until deleted.
       await store?.close();
     } finally {
+      this.panes.clear(clearViews && this.state !== "off");
       await keyStore?.close();
       this.setState("off");
     }
