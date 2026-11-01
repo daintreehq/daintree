@@ -109,7 +109,10 @@ export function RecipeRunnerItem({
                   // default-focused first card must NOT glow accent, or the hero
                   // recipe reads as a focused input on every empty grid.
                   choiceCardVariants(),
-                  "group flex-col items-start gap-1.5 group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
+                  // `contrast-more:` inks the resting frame the way every other
+                  // control on the canvas home is framed in that mode; the
+                  // keyboard cursor's selection-outline still differs from it.
+                  "group flex-col items-start gap-1.5 contrast-more:border-text-secondary group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
                 )}
               >
                 <div className="flex items-center gap-2 w-full">
@@ -122,7 +125,10 @@ export function RecipeRunnerItem({
                   />
                   <span
                     className={cn(
-                      "flex-1 text-sm font-medium truncate",
+                      // Regular weight: the card frame already gives a recipe its
+                      // presence, and at medium the titles out-shouted the agent
+                      // chips above them, which rank higher.
+                      "flex-1 text-sm truncate",
                       recipe.shadowedBy ? "text-text-secondary" : "text-text-primary"
                     )}
                   >
@@ -205,7 +211,9 @@ export function RecipeRunnerItem({
                 // and "Migrate remaining Je…" beside an intact "Project-wide" gave
                 // the classification priority over the thing being classified.
                 choiceCardVariants({ padding: "sm" }),
-                "group w-full flex-wrap items-center gap-x-2 gap-y-0.5 focus-visible:-outline-offset-2 group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
+                // Single-line rows take the palette and search field's radius;
+                // the card family's larger one is for the multi-line grid cards.
+                "rounded-[var(--radius-md)] contrast-more:border-text-secondary group w-full flex-wrap items-center gap-x-2 gap-y-0.5 focus-visible:-outline-offset-2 group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
               )}
             >
               <Play
@@ -217,7 +225,7 @@ export function RecipeRunnerItem({
                   // The row Enter will act on shows its whole name while the filter
                   // owns focus: the tooltip only discloses on hover, and a keyboard
                   // user choosing between two long names needs their endings.
-                  "min-w-0 flex-1 text-sm font-medium truncate group-focus-within/recipes:group-aria-selected:whitespace-normal group-focus-within/recipes:group-aria-selected:break-words",
+                  "min-w-0 flex-1 text-sm truncate group-focus-within/recipes:group-aria-selected:whitespace-normal group-focus-within/recipes:group-aria-selected:break-words",
                   recipe.shadowedBy ? "text-text-secondary" : "text-text-primary"
                 )}
               >

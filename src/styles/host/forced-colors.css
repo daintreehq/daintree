@@ -52,6 +52,13 @@
     color: CanvasText !important;
   }
 
+  /* The canvas home's glyphs are inked the same way (the resume row's history
+     mark, the recipe cards' play and pin, the pulse strip's chevron), and they
+     greyed out the same way. The chevron is the strip's only expand cue. */
+  [data-canvas-home] :is(svg.text-text-primary, svg.text-text-secondary, .search-field-icon) {
+    color: CanvasText !important;
+  }
+
   /* A separator is a 1px background, which forced colours paint as Canvas, so
      a menu's sections ran together. Drawn as a border it survives. */
   [role="menu"] [role="separator"] {

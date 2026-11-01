@@ -1,6 +1,5 @@
 import { Play, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/button";
 import { ChoiceCard } from "@/components/ui/card";
 import type { RunCommand } from "@/types";
@@ -20,17 +19,14 @@ export function RecipeRunnerEmpty({
 }: RecipeRunnerEmptyProps) {
   const hasSuggestions = suggestions.length > 0;
   const createButton = (
-    <Button variant="ghost" onClick={onCreate}>
+    <Button variant="ghost" size="sm" onClick={onCreate}>
       <Plus aria-hidden />
       Create your first recipe…
     </Button>
   );
 
   return (
-    <div
-      data-testid="recipe-runner-empty"
-      className="flex flex-col items-stretch gap-3 py-2 w-full"
-    >
+    <div data-testid="recipe-runner-empty" className="flex flex-col items-stretch gap-3 w-full">
       {hasSuggestions ? (
         <>
           <div className="flex flex-col gap-2">
@@ -70,14 +66,20 @@ export function RecipeRunnerEmpty({
           <div className="flex justify-center">{createButton}</div>
         </>
       ) : (
-        // Sidebar scale on purpose: this sits under the canvas identity and
-        // the launch anchor, and the canvas scale would outweigh both.
-        <EmptyState
-          variant="zero-data"
-          scale="sidebar"
-          title="Launch agents, dev servers, and terminals together with one click"
-          action={createButton}
-        />
+        // Two lines, not an `EmptyState`. Even at sidebar scale that shell
+        // carries a pane's vertical padding, which opened ~80px voids above and
+        // below the invitation, so the band with nothing in it stood taller
+        // than three recipe cards and read like a failed render.
+        // On the column's left rail like the bands around it; the sentence
+        // takes the ghost button's 12px inset so the two lines start together.
+        <div className="flex flex-col items-start gap-1">
+          {/* `text-xs`, the button's own size: the explanation should not
+              out-rank the one control this band exists for. */}
+          <p className="px-3 text-xs text-balance text-text-secondary">
+            Launch agents, dev servers, and terminals together with one click
+          </p>
+          {createButton}
+        </div>
       )}
     </div>
   );

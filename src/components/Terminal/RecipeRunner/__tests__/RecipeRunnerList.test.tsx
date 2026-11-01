@@ -160,7 +160,7 @@ describe("RecipeRunnerList — only the filter owns the launch keys", () => {
       />
     );
     // Enter on Manage must activate Manage, never launch the active recipe.
-    fireEvent.keyDown(screen.getByRole("button", { name: "Manage" }), { key: "Enter" });
+    fireEvent.keyDown(screen.getByRole("button", { name: "Manage recipes" }), { key: "Enter" });
     expect(seen).toEqual([]);
     fireEvent.keyDown(screen.getByRole("combobox", { name: "Filter recipes" }), { key: "Enter" });
     expect(seen).toEqual(["Enter"]);

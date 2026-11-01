@@ -116,39 +116,41 @@ describe("RotatingTip — count-biased selection (#6756)", () => {
   it("biases toward an unused (zero-count) actionId over high-count ones", () => {
     // Math.random=0 always picks the first item in the prioritized subset.
     vi.spyOn(Math, "random").mockReturnValue(0);
-    // Saturate every shortcut except `terminal.inject` so it is the unique
+    // Saturate every shortcut except `action.palette.open` so it is the unique
     // zero-count tip and must be at index 0 of the sorted prioritized subset.
+    // (terminal.inject can't play this role: the canvas home never rotates it.)
     const counts: Record<string, number> = {};
     for (const tip of TIPS) {
-      if (tip.actionId && tip.actionId !== "terminal.inject") {
+      if (tip.actionId && tip.actionId !== "action.palette.open") {
         counts[tip.actionId] = 999;
       }
     }
     const { container } = render(<RotatingTip />);
     setHydrated(counts);
-    expect(container.querySelector("button")?.textContent).toBe(labelFor("terminal.inject"));
+    expect(container.querySelector("button")?.textContent).toBe(labelFor("action.palette.open"));
   });
 
   it("excludes shortcut-dependent tips whose binding has been removed", () => {
-    // terminal.inject is the unique zero-count tip, so it would win the bias —
+    // action.palette.open is the unique zero-count tip, so it would win the bias —
     // but its binding is gone, so it must be filtered from the candidate pool
     // instead of rendering the hardcoded ⌘-glyph fallback.
     vi.spyOn(Math, "random").mockReturnValue(0);
     const realGetDisplayCombo = keybindingService.getDisplayCombo.bind(keybindingService);
     vi.spyOn(keybindingService, "getDisplayCombo").mockImplementation((actionId: string) =>
-      actionId === "terminal.inject" ? "" : realGetDisplayCombo(actionId)
+      actionId === "action.palette.open" ? "" : realGetDisplayCombo(actionId)
     );
     const counts: Record<string, number> = {};
     for (const tip of TIPS) {
       const key = tip.shortcutActionId ?? tip.actionId;
-      if (key && key !== "terminal.inject") {
+      if (key && key !== "action.palette.open") {
         counts[key] = 999;
       }
     }
     const { container } = render(<RotatingTip />);
     setHydrated(counts);
-    expect(container.querySelector("button")?.textContent).not.toBe("Inject Context");
-    expect(container.textContent ?? "").not.toContain("⌘⇧I");
+    expect(container.querySelector("button")?.textContent).not.toBe(
+      labelFor("action.palette.open")
+    );
   });
 
   it("limits selection to the lowest-count subset (high-count tips never win)", () => {

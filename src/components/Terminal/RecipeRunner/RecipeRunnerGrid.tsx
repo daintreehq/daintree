@@ -1,4 +1,3 @@
-import { Plus } from "lucide-react";
 import { useRef, useCallback } from "react";
 import { RecipeRunnerItem } from "./RecipeRunnerItem";
 import type { TerminalRecipe } from "@/types";
@@ -13,18 +12,23 @@ interface RecipeRunnerGridProps {
   onPin: (id: string) => void;
   onUnpin: (id: string) => void;
   onDelete: (id: string) => void;
-  onCreate: () => void;
   setFocusedIndex: (i: number) => void;
 }
 
-function moveFocus(current: number, total: number, key: string): number {
+// Arrow keys follow the grid as it is drawn. Left/Right walk reading order;
+// Up/Down move a whole row, by however many columns the container query has
+// left — Down from the first card in a two-column grid lands on the card
+// under it, not the one beside it. A move off the top or bottom stays put.
+function moveFocus(current: number, total: number, key: string, columns: number): number {
   switch (key) {
-    case "ArrowDown":
     case "ArrowRight":
       return (current + 1) % total;
-    case "ArrowUp":
     case "ArrowLeft":
       return (current - 1 + total) % total;
+    case "ArrowDown":
+      return current + columns < total ? current + columns : current;
+    case "ArrowUp":
+      return current - columns >= 0 ? current - columns : current;
     case "Home":
       return 0;
     case "End":
@@ -32,6 +36,20 @@ function moveFocus(current: number, total: number, key: string): number {
     default:
       return current;
   }
+}
+
+const NAVIGATION_KEYS = new Set(["ArrowRight", "ArrowLeft", "ArrowDown", "ArrowUp", "Home", "End"]);
+
+/** Cards sharing the first card's row: the column count the layout resolved to. */
+function renderedColumns(buttons: Array<HTMLButtonElement | null>): number {
+  const first = buttons[0];
+  if (!first) return 1;
+  let columns = 0;
+  for (const button of buttons) {
+    if (!button || button.offsetTop !== first.offsetTop) break;
+    columns++;
+  }
+  return Math.max(1, columns);
 }
 
 export function RecipeRunnerGrid({
@@ -44,7 +62,6 @@ export function RecipeRunnerGrid({
   onPin,
   onUnpin,
   onDelete,
-  onCreate,
   setFocusedIndex,
 }: RecipeRunnerGridProps) {
   // A lone recipe renders as one full-width hero card — a half-empty two-column
@@ -62,9 +79,14 @@ export function RecipeRunnerGrid({
       ? "grid-cols-1"
       : recipes.length === 2
         ? "grid-cols-2 @max-[26rem]/launcher:grid-cols-1"
-        : "grid-cols-3 @max-[34rem]/launcher:grid-cols-2 @max-[26rem]/launcher:grid-cols-1";
-  const createIndex = recipes.length;
-  const focusableCount = recipes.length + 1;
+        : // At two columns an odd last card spans the row, the same call the
+          // lone-recipe case makes, instead of sitting half-width beside a hole.
+          "grid-cols-3 @max-[34rem]/launcher:grid-cols-2 @max-[34rem]/launcher:[&>:last-child:nth-child(odd)]:col-span-full @max-[26rem]/launcher:grid-cols-1";
+  const focusableCount = recipes.length;
+  // The hook's cursor also counts list mode's Create row, one past the last
+  // recipe. Clamped here, or a cursor left there would give no card the tab
+  // stop and the grid would be unreachable by Tab.
+  const activeIndex = Math.min(focusedIndex, Math.max(0, focusableCount - 1));
   const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const setButtonRef = useCallback(
@@ -76,9 +98,18 @@ export function RecipeRunnerGrid({
 
   const handleOptionKeyDown = (index: number) => (e: React.KeyboardEvent<HTMLButtonElement>) => {
     if (e.altKey || e.ctrlKey || e.metaKey) return;
-    const next = moveFocus(index, focusableCount, e.key);
-    if (next === index) return;
+    if (!NAVIGATION_KEYS.has(e.key)) return;
+    // Claimed even when the cursor cannot move (Down on the bottom row, any
+    // arrow with one recipe): otherwise the key falls through and scrolls the
+    // canvas while focus stays put.
     e.preventDefault();
+    const next = moveFocus(
+      index,
+      focusableCount,
+      e.key,
+      renderedColumns(buttonRefs.current.slice(0, focusableCount))
+    );
+    if (next === index) return;
     setFocusedIndex(next);
     buttonRefs.current[next]?.focus();
   };
@@ -94,11 +125,11 @@ export function RecipeRunnerGrid({
         <RecipeRunnerItem
           key={recipe.id}
           recipe={recipe}
-          isFocused={focusedIndex === i}
+          isFocused={activeIndex === i}
           mode="grid"
           disabled={disabled}
           id={`recipe-option-${recipe.id}`}
-          tabIndex={focusedIndex === i ? 0 : -1}
+          tabIndex={activeIndex === i ? 0 : -1}
           buttonRef={setButtonRef(i)}
           onFocus={() => setFocusedIndex(i)}
           onKeyDown={handleOptionKeyDown(i)}
@@ -110,26 +141,6 @@ export function RecipeRunnerGrid({
           onDelete={onDelete}
         />
       ))}
-      <button
-        id="recipe-option-create"
-        ref={setButtonRef(createIndex)}
-        role="option"
-        aria-selected={focusedIndex === createIndex}
-        type="button"
-        onClick={onCreate}
-        onFocus={() => setFocusedIndex(createIndex)}
-        onKeyDown={handleOptionKeyDown(createIndex)}
-        tabIndex={disabled || focusedIndex === createIndex ? 0 : -1}
-        className="press-scale group col-span-full flex items-center justify-center gap-2 px-3 py-2 mt-1 rounded-[var(--radius-md)] hover:bg-overlay-hover transition-[background-color,border-color] duration-150 ease-out active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 border border-transparent group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
-      >
-        <Plus
-          className="h-3.5 w-3.5 text-text-secondary group-hover:text-text-primary transition-colors shrink-0"
-          aria-hidden
-        />
-        <span className="text-sm text-text-secondary group-hover:text-text-primary transition-colors">
-          Create new recipe…
-        </span>
-      </button>
     </div>
   );
 }

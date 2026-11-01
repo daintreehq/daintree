@@ -45,11 +45,13 @@ export function ResumeSessionLine() {
   };
 
   return (
-    // Hugs its content (centered) rather than stretching to the column width —
-    // a stretched row strands "+N more" at the far edge, visually orphaned
-    // from the session it extends. The width cap now comes from the launcher
-    // column, which owns the single measure every band shares.
-    <div className="flex w-full items-center justify-center gap-1">
+    // Hugs its content rather than stretching to the column width — a stretched
+    // row strands "+N more" at the far edge, visually orphaned from the session
+    // it extends. Left-aligned on the column's edge, like the chip row above
+    // and the pulse strip below: centred, it was the one band in the column
+    // with its own private left edge. The `px-3` inset puts its glyph on the
+    // same line as the chips' and the pulse strip's.
+    <div className="flex w-full min-w-0 items-center justify-start gap-1">
       {/* Persistent and hoverable: this discloses clipped content rather than
           a transient hint, so the app-wide 2.5s auto-dismiss and the
           non-hoverable default would take it away mid-read (WCAG 2.2
@@ -70,16 +72,16 @@ export function ResumeSessionLine() {
             // and risk breaking Label in Name. Below the narrow breakpoint the
             // description is dropped from the row entirely, and the tooltip is
             // then the only place it survives.
-            className="group flex min-w-0 cursor-pointer items-center gap-2.5 rounded-[var(--radius-md)] px-2.5 py-1.5 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+            className="group flex h-8 min-w-0 cursor-pointer items-center gap-2.5 rounded-[var(--radius-md)] px-3 text-left transition-colors hover:bg-overlay-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
           >
             <History className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
             <span className="shrink-0">
               <PanelKindIcon iconId={primary.iconId} color={primary.color} size={15} />
               <span className="sr-only">{primary.agentName} </span>
             </span>
-            <span className="truncate text-sm text-text-secondary group-hover:text-text-primary">
-              {primary.name}
-            </span>
+            {/* The title is what identifies the session, so it is the one thing
+                here in primary ink, and it has first claim on the width. */}
+            <span className="min-w-0 truncate text-sm text-text-primary">{primary.name}</span>
             {primary.description && (
               // Shrinkable (no shrink-0): a long worktree/branch description must
               // truncate inside the column's measure, not push the row past it.
@@ -89,7 +91,14 @@ export function ResumeSessionLine() {
               // title cut mid-word beside a model name cut mid-word, neither of
               // them readable. The title is what identifies the session; the model
               // and location are still on the row this line opens.
-              <span className="min-w-0 truncate text-xs text-text-secondary @max-[31rem]/launcher:hidden">
+              //
+              // Zero basis, growing into what the title leaves. At full width
+              // the two halves used to shrink together, so a wide canvas showed
+              // LESS of the title than a narrow one. Even weighting the shrink
+              // 999:1 still handed the title a sub-pixel loss, and the ellipsis
+              // then ate a whole word. From a zero basis the description can
+              // never take width from the title; the tooltip carries it whole.
+              <span className="min-w-0 flex-[1_1_0%] truncate text-xs text-text-secondary @max-[31rem]/launcher:hidden">
                 {primary.description}
               </span>
             )}
@@ -107,7 +116,7 @@ export function ResumeSessionLine() {
           variant="ghost"
           size="sm"
           onClick={openLauncher}
-          className="shrink-0 px-2"
+          className="h-8 shrink-0 px-2"
           // Opens with the visible string verbatim, `+` included. WCAG 2.2
           // SC 2.5.3 (Label in Name) wants what is on the control to appear in
           // its accessible name, so a speech-input user can say what they read;
