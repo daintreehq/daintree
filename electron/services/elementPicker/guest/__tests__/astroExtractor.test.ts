@@ -9,7 +9,7 @@ import {
 } from "../../../../../shared/elementPicker/protocol.js";
 import { SourceCandidateSchema } from "../../../../../shared/elementPicker/source.js";
 import { astroExtractor, createAstroExtractor, describeAstro } from "../astroExtractor.js";
-import { SERVED_SIBLING_LIMIT } from "../servedDocument.js";
+import { SERVED_SIBLING_LIMIT, SERVED_TEXT_LIMIT } from "../servedDocument.js";
 import { ANCESTRY_LIMIT } from "../detectors.js";
 import { createPicker, type PickerHandle } from "../picker.js";
 import { installExtractor, type ElementPickerExtractor } from "../registry.js";
@@ -431,6 +431,21 @@ describe("the Astro extractor once the toolbar has taken the stamps off", () => 
     expect(fields(select(extractor, links()[0]!)).servedDocument).toBe("unmatched");
   });
 
+  it("compares the whole of an element's own text, or refuses past what it reads", () => {
+    const pad = " ".repeat(SERVED_TEXT_LIMIT);
+    const body = SERVED_BODY.replace(">Shop</h1>", `>${pad}A</h1>`);
+    const extractor = createAstroExtractor(servedPage(body));
+    document.body.innerHTML = body;
+    const title = byId("title");
+    title.removeAttribute("data-astro-source-file");
+    title.removeAttribute("data-astro-source-loc");
+    // Collapsed, both read as a single letter; only the whole text tells them apart.
+    title.textContent = `${pad}B`;
+    expect(fields(select(extractor, title)).servedDocument).toBe("unmatched");
+    title.textContent = `${pad}A`;
+    expect(fields(select(extractor, title)).servedDocument).toBe("unmatched");
+  });
+
   it("gives up on an element with more children than it reads", () => {
     const extractor = createAstroExtractor(servedPage());
     const title = byId("title");
@@ -494,9 +509,13 @@ describe("the Astro extractor once the toolbar has taken the stamps off", () => 
     expect(fields(select(elsewhere, byId("title"))).servedDocument).toBe("unavailable");
     // A client-side navigation moved the page on after the markup was fetched.
     const extractor = createAstroExtractor(servedPage());
-    history.pushState(null, "", "/other");
-    expect(fields(select(extractor, byId("title"))).servedDocument).toBe("unavailable");
-    history.back();
+    const original = location.href;
+    try {
+      history.pushState(null, "", "/other");
+      expect(fields(select(extractor, byId("title"))).servedDocument).toBe("unavailable");
+    } finally {
+      history.replaceState(null, "", original);
+    }
     for (const served of [null, undefined, { url: location.href }, "<h1></h1>"]) {
       const title = select(createAstroExtractor(served), byId("title"));
       expect(title.sourceCandidates).toEqual([]);
@@ -507,9 +526,12 @@ describe("the Astro extractor once the toolbar has taken the stamps off", () => 
   it("ignores either URL's fragment, which never reaches the server", () => {
     const served = servedPage();
     const extractor = createAstroExtractor({ ...served, url: `${served.url}#top` });
-    history.replaceState(null, "", "#reviews");
-    expect(fields(select(extractor, byId("title"))).servedDocument).toBe("matched");
-    history.replaceState(null, "", served.url);
+    try {
+      history.replaceState(null, "", "#reviews");
+      expect(fields(select(extractor, byId("title"))).servedDocument).toBe("matched");
+    } finally {
+      history.replaceState(null, "", served.url);
+    }
   });
 
   it("parses once, on the first selection that needs it, and never on hover", () => {

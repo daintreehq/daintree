@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildServedMarkupSource,
   MAX_SERVED_MARKUP_BYTES,
+  SERVED_MARKUP_TIMEOUT_MS,
   servedMarkupFrom,
 } from "../servedMarkup.js";
 
@@ -23,6 +24,7 @@ const html = (body: BodyInit, type = "text/html; charset=utf-8", status = 200) =
   Promise.resolve(new Response(body, { status, headers: { "content-type": type } }));
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   history.replaceState(null, "", "/");
 });
@@ -40,8 +42,20 @@ describe("the served-markup fetch", () => {
       redirect: "error",
       cache: "no-store",
     });
-    // Abandoned in the guest too once main stops waiting.
-    expect(requests[0]!.init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("abandons the fetch in the guest at the deadline main stops waiting at", async () => {
+    const deadline = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+    const pending = runInGuest(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+        })
+    );
+    expect(timeout).toHaveBeenCalledWith(SERVED_MARKUP_TIMEOUT_MS);
+    deadline.abort(new DOMException("The operation timed out.", "TimeoutError"));
+    expect((await pending).value).toBeNull();
   });
 
   it("decodes the markup as the document itself was decoded", async () => {

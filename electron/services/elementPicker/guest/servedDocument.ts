@@ -12,11 +12,12 @@
  * root, and only where everything on that path still agrees: at every level
  * the same number of elements of its name under its parent and the same
  * identifying attributes (`id`, `href`, `src`, `name`), and at the end the same
- * text of its own. Page script that added, removed, moved or rewrote any of
- * that makes the match fail rather than drift to a neighbour. Elements of
- * other names may come and go — a dev toolbar appended to the body, a style
- * injected into the head, the picker's own overlay — so they do not count.
- * Identical markup moved into an identical place still reads as matching:
+ * text of its own. Page script that added or removed an element of the same
+ * name, or rewrote what is compared, makes the match fail rather than drift
+ * to a neighbour. Elements of other names may come and go — a dev toolbar
+ * appended to the body, a style injected into the head, the picker's own
+ * overlay — so they do not count. Same-named elements that agree on all of it
+ * still read as matching after they swap places, whatever else differs:
  * structure is evidence, not identity.
  */
 
@@ -30,8 +31,8 @@ export interface ServedDocumentInput {
 
 /** Children (elements under a parent, nodes under the matched element) read before the match gives up. */
 export const SERVED_SIBLING_LIMIT = 1024;
-/** Characters of an element's own text compared, once whitespace is collapsed. */
-export const SERVED_TEXT_LIMIT = 1024;
+/** Characters of an element's own text read; an element with more is not compared at all. */
+export const SERVED_TEXT_LIMIT = 4096;
 
 /** Attributes page script rarely rewrites, which tell same-named elements apart. */
 const IDENTITY_ATTRIBUTES = ["id", "href", "src", "name"] as const;
@@ -53,7 +54,7 @@ interface Step {
   namespace: string | null;
   ordinal: number;
   count: number;
-  identity: string;
+  identity: Array<string | null>;
 }
 
 function withoutFragment(url: string): string {
@@ -61,8 +62,12 @@ function withoutFragment(url: string): string {
   return hash === -1 ? url : url.slice(0, hash);
 }
 
-function identityOf(element: Element): string {
-  return JSON.stringify(IDENTITY_ATTRIBUTES.map((name) => element.getAttribute(name)));
+function identityOf(element: Element): Array<string | null> {
+  return IDENTITY_ATTRIBUTES.map((name) => element.getAttribute(name));
+}
+
+function sameIdentity(element: Element, identity: ReadonlyArray<string | null>): boolean {
+  return IDENTITY_ATTRIBUTES.every((name, index) => element.getAttribute(name) === identity[index]);
 }
 
 /** Where `element` sits among its parent's children of its own name, or null past the bound. */
@@ -113,32 +118,36 @@ function follow(steps: readonly Step[], live: Document, served: Document): Eleme
     let match: Element | null = null;
     let count = 0;
     let seen = 0;
-    for (let child = node.firstElementChild; child !== null; child = child.nextElementSibling) {
+    let child: Element | null = node.firstElementChild;
+    for (; child !== null; child = child.nextElementSibling) {
       seen += 1;
       if (seen > SERVED_SIBLING_LIMIT) return null;
       if (child.localName !== step.name || child.namespaceURI !== step.namespace) continue;
       if (count === step.ordinal) match = child;
       count += 1;
     }
-    if (match === null || count !== step.count || identityOf(match) !== step.identity) return null;
+    if (match === null || count !== step.count || !sameIdentity(match, step.identity)) return null;
     node = match;
   }
   return node;
 }
 
-/** The element's own text nodes, whitespace collapsed; null past the bound on its children. */
+/**
+ * The element's own text nodes, whitespace collapsed; null past either bound,
+ * since a comparison of part of it could pass texts that differ further on.
+ */
 function ownText(element: Element): string | null {
-  // Collapsing never lengthens text, so this much raw text always covers the compared prefix.
-  const budget = SERVED_TEXT_LIMIT * 4;
   let text = "";
   let seen = 0;
   for (let child = element.firstChild; child !== null; child = child.nextSibling) {
     seen += 1;
     if (seen > SERVED_SIBLING_LIMIT) return null;
-    if (child.nodeType !== 3 || text.length >= budget) continue;
-    text += (child.nodeValue ?? "").slice(0, budget - text.length);
+    if (child.nodeType !== 3) continue;
+    const value = child.nodeValue ?? "";
+    if (text.length + value.length > SERVED_TEXT_LIMIT) return null;
+    text += value;
   }
-  return text.replace(/\s+/g, " ").trim().slice(0, SERVED_TEXT_LIMIT);
+  return text.replace(/\s+/g, " ").trim();
 }
 
 function agrees(live: Element, served: Element): boolean {
