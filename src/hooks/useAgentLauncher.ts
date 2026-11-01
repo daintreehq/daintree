@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { usePanelStore, type AddPanelOptions } from "@/store/panelStore";
 import { exitProjectHome } from "@/store/storeAccessors";
 import type { PanelLimitSnapshot } from "@/store/panelLimitStore";
-import type { PtyPanelData } from "@shared/types/panel";
+import type { PtyPanelData, ScheduledRunRef } from "@shared/types/panel";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -29,6 +29,7 @@ import type {
   AddPanelFocusPolicy,
 } from "@shared/types";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
+import { launchSpawnProvenance } from "@shared/utils/scheduledRunProvenance";
 import { findEquivalentMissingCliGate } from "@/utils/missingCliGate";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import {
@@ -215,6 +216,12 @@ export interface LaunchAgentOptions {
    * whether the new panel captures keyboard focus.
    */
   spawnedBy?: TerminalSpawnSource;
+  /**
+   * The scheduled run this launch is for (#15977). Makes the pane
+   * `spawnedBy: "schedule"` with the run's ids, whatever `spawnedBy` says.
+   * Only ever `ActionContext.scheduledRun`.
+   */
+  scheduledRun?: ScheduledRunRef;
   /**
    * The plugin whose dispatch launched this agent (#14017), stamped as the
    * pane's `launchedByPluginId`. Only ever `ActionContext.callerPluginId`.
@@ -584,7 +591,10 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               Date.now()
             )
           : undefined;
-        const spawnedBy = launchOptions?.spawnedBy;
+        const provenance = launchSpawnProvenance(
+          launchOptions?.spawnedBy,
+          launchOptions?.scheduledRun
+        );
         const focusPolicy =
           launchOptions?.focusPolicy ?? (isMcpSpawnFocusSuppressed() ? "preserve" : undefined);
 
@@ -610,7 +620,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               activateDockOnCreate: launchOptions?.activateDockOnCreate,
               excludeFromPersistence: launchOptions?.excludeFromPersistence,
               removeOnExit: launchOptions?.removeOnExit,
-              spawnedBy,
+              ...provenance,
               launchedByPluginId: launchOptions?.launchedByPluginId,
               focusPolicy,
               requestedId: launchOptions?.requestedId,
@@ -626,7 +636,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               activateDockOnCreate: launchOptions?.activateDockOnCreate,
               excludeFromPersistence: launchOptions?.excludeFromPersistence,
               removeOnExit: launchOptions?.removeOnExit,
-              spawnedBy,
+              ...provenance,
               focusPolicy,
               requestedId: launchOptions?.requestedId,
             };
@@ -670,7 +680,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               extensionState: plan.env ? { presetEnv: plan.env } : undefined,
               excludeFromPersistence: launchOptions?.excludeFromPersistence,
               removeOnExit: launchOptions?.removeOnExit,
-              spawnedBy,
+              ...provenance,
               focusPolicy,
             };
             // Resolved inside the updater, read after it: the gate may reuse a

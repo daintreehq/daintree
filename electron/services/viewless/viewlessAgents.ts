@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { CHANNELS } from "../../ipc/channels.js";
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
 import type { PanelSnapshot, Project } from "../../../shared/types/project.js";
+import type { ScheduledRunRef } from "../../../shared/types/panel.js";
 import type { ResolvedModelCatalog } from "../../../shared/types/ipc/agentCapabilities.js";
 import { LAUNCH_CONTEXT_AGENT_IDS } from "../../../shared/config/agentLaunchContext.js";
 import {
@@ -51,6 +52,7 @@ import {
   mergeTerminalLaunchEnv,
   spawnSourceForMcpOrigin,
 } from "../../../shared/utils/terminalLaunchOptions.js";
+import { launchSpawnProvenance } from "../../../shared/utils/scheduledRunProvenance.js";
 import type { ViewlessActionRequest, ViewlessDeps } from "./ViewlessActionExecutor.js";
 import { recordViewlessTerminal } from "./projectStateAuthoring.js";
 import { countProjectPanels } from "./viewlessTerminals.js";
@@ -149,6 +151,20 @@ async function readPresetSources(
 }
 
 /**
+ * What main's own caller of {@link runAgentLaunch} adds to a launch, beside the
+ * request: never read from `request.args`, so the generic viewless executor,
+ * which serves MCP, can't set any of it.
+ */
+export interface ViewlessLaunchContext {
+  /**
+   * The scheduled run this launch is for (#15977): the terminal is spawned
+   * `spawnedBy: "schedule"` with the run's ids, on the PTY and in the saved
+   * layout, in place of the source the session's origin would give it.
+   */
+  scheduledRun?: ScheduledRunRef;
+}
+
+/**
  * Start an agent, or a plain shell, in a project with no frontend attached
  * (#13495): the same validation the view's action applies, the same launch
  * plan its launcher builds, spawned through the same handler, and recorded in
@@ -162,7 +178,8 @@ async function readPresetSources(
 export async function runAgentLaunch(
   request: ViewlessActionRequest,
   project: Project,
-  deps: ViewlessDeps
+  deps: ViewlessDeps,
+  launch: ViewlessLaunchContext = {}
 ): Promise<ActionDispatchResult> {
   const parsed = AgentLaunchArgsSchema.safeParse(request.args);
   if (!parsed.success) return validationFailure(request.actionId, parsed.error);
@@ -365,7 +382,10 @@ export async function runAgentLaunch(
   const id = args.requestedId || `terminal-${randomUUID()}`;
   const location =
     args.location === "dock" ? "dock" : args.location === "background" ? "background" : "grid";
-  const spawnedBy = spawnSourceForMcpOrigin(request.sessionOrigin);
+  const provenance = launchSpawnProvenance(
+    spawnSourceForMcpOrigin(request.sessionOrigin),
+    launch.scheduledRun
+  );
   const layers = await deps.getLaunchEnvLayers(project.id).catch((err: unknown) => {
     console.warn("[Viewless] Could not read environment variables for a launch:", err);
     return null;
@@ -421,6 +441,9 @@ export async function runAgentLaunch(
         ...(handbackCode !== undefined ? { handbackCode } : {}),
         ...(firstPrompt !== undefined ? { hasFirstPrompt: true } : {}),
         ...(actionContext !== undefined ? { actionContext } : {}),
+        ...(provenance.scheduledRun !== undefined
+          ? { scheduledRun: provenance.scheduledRun }
+          : {}),
       },
     ]);
   } catch (err) {
@@ -444,7 +467,7 @@ export async function runAgentLaunch(
     agentPresetColor: plan.preset?.color,
     originalPresetId: plan.preset?.id,
     env: plan.env,
-    spawnedBy,
+    ...provenance,
     ...(firstPrompt && { firstPrompt }),
   };
   const snapshot: PanelSnapshot = {

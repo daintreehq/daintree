@@ -1,7 +1,13 @@
 import { stripAssignedSessionIdArgs, type AddPanelOptions } from "@shared/types";
-import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
+import {
+  isPtyPanel,
+  type PanelInstance,
+  type PtyPanelData,
+  type ScheduledRunRef,
+} from "@shared/types/panel";
 import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
 import { splitCallerLaunchFlags } from "@shared/utils/callerLaunchFlags";
+import { readSpawnProvenance } from "@shared/utils/scheduledRunProvenance";
 
 /**
  * Narrow the preset environment out of the panel's untyped extension bag.
@@ -71,6 +77,7 @@ export function buildMissingCliRelaunchOptions(panel: PtyPanelData): AddPanelOpt
     excludeFromPersistence: panel.excludeFromPersistence,
     removeOnExit: panel.removeOnExit,
     spawnedBy: panel.spawnedBy,
+    scheduledRun: panel.scheduledRun,
     focusPolicy: panel.focusPolicy,
   };
 }
@@ -87,7 +94,8 @@ export interface MissingCliContinueArgs {
   env?: Record<string, string>;
   excludeFromPersistence?: boolean;
   removeOnExit?: boolean;
-  spawnedBy?: PtyPanelData["spawnedBy"];
+  /** Never `"schedule"`: an argument can't claim it, so the run rides {@link missingCliContinueScheduledRun}. */
+  spawnedBy?: Exclude<PtyPanelData["spawnedBy"], "schedule">;
   focusPolicy?: PtyPanelData["focusPolicy"];
   /**
    * Only what the caller chose — its standing-instruction pair and its own
@@ -141,9 +149,18 @@ export function buildMissingCliContinueArgs(panel: PtyPanelData): MissingCliCont
     // automated one came back attributed to the user.
     removeOnExit: panel.removeOnExit,
     focusPolicy: panel.focusPolicy,
-    spawnedBy: panel.spawnedBy,
+    spawnedBy: panel.spawnedBy === "schedule" ? undefined : panel.spawnedBy,
     ...(callerChosenFlags.length > 0 ? { agentLaunchFlags: callerChosenFlags } : {}),
   };
+}
+
+/**
+ * The scheduled run a gate stood in for (#15977), for the host to hand
+ * `agent.launch` as a dispatch option beside {@link buildMissingCliContinueArgs}:
+ * the continued launch is still the run's, and no argument can say so.
+ */
+export function missingCliContinueScheduledRun(panel: PtyPanelData): ScheduledRunRef | undefined {
+  return readSpawnProvenance(panel.spawnedBy, panel.scheduledRun).scheduledRun;
 }
 
 /** Key-sorted, undefined-pruned serialization so field order never splits two equal launches. */

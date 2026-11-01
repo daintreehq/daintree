@@ -38,6 +38,7 @@ import {
   resolveKeepDecorations,
 } from "@shared/types";
 import { inferKind as inferKindShared } from "@shared/utils/inferPanelKind";
+import { readSpawnProvenance } from "@shared/utils/scheduledRunProvenance";
 import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
 import {
   appendCallerLaunchFlagsToCommand,
@@ -206,6 +207,8 @@ export interface SavedTerminalData {
    * so it is trusted here the same way `titleMode` is.
    */
   spawnedBy?: TerminalSpawnSource;
+  /** Untrusted on-disk value (#15977), read with `spawnedBy` through `readSpawnProvenance`. */
+  scheduledRun?: unknown;
   /**
    * Caller-resolved launch env captured at launch time (#10922). Preferred over
    * live preset re-resolution on respawn so a restored session replays the same
@@ -478,9 +481,10 @@ export function buildArgsForBackendTerminal(
       saved
     ),
     agentModelId: backendTerminal.agentModelId ?? saved.agentModelId,
-    // Snapshot-only: Main never tracks provenance, so there is no live value
-    // to prefer here the way `agentModelId` does (#12419).
-    spawnedBy: saved.spawnedBy,
+    // Snapshot-only: the renderer never reads provenance back from Main, so
+    // there is no live value to prefer here the way `agentModelId` does
+    // (#12419). The source and its scheduled run come back as a pair (#15977).
+    ...readSpawnProvenance(saved.spawnedBy, saved.scheduledRun),
     everDetectedAgent: backendTerminal.everDetectedAgent,
     agentIncarnation: backendTerminal.agentIncarnation,
     detectedAgentId: backendTerminal.detectedAgentId,
@@ -575,9 +579,10 @@ export function buildArgsForReconnectedFallback(
       saved
     ),
     agentModelId: reconnectedTerminal.agentModelId ?? saved.agentModelId,
-    // Snapshot-only: Main never tracks provenance, so there is no live value
-    // to prefer here the way `agentModelId` does (#12419).
-    spawnedBy: saved.spawnedBy,
+    // Snapshot-only: the renderer never reads provenance back from Main, so
+    // there is no live value to prefer here the way `agentModelId` does
+    // (#12419). The source and its scheduled run come back as a pair (#15977).
+    ...readSpawnProvenance(saved.spawnedBy, saved.scheduledRun),
     everDetectedAgent: reconnectedTerminal.everDetectedAgent,
     agentIncarnation: reconnectedTerminal.agentIncarnation,
     detectedAgentId: reconnectedTerminal.detectedAgentId,
@@ -1136,7 +1141,7 @@ export function buildArgsForRespawn(
       : (reconciledLaunchFlags ?? saved.agentLaunchFlags),
     callerLaunchFlags: isAgentPanel && callerLaunchFlags.length > 0 ? callerLaunchFlags : undefined,
     agentModelId: saved.agentModelId,
-    spawnedBy: saved.spawnedBy,
+    ...readSpawnProvenance(saved.spawnedBy, saved.scheduledRun),
     agentSessionId: respawnSessionId,
     agentPresetId: respawnAgentPresetId,
     agentPresetColor: respawnAgentPresetColor,

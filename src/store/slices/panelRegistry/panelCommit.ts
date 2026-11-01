@@ -17,6 +17,7 @@ import { saveNormalized } from "./persistence";
 import { logDebug } from "@/utils/logger";
 import { collectPanelIdForBatch, isHydrationBatchActive } from "./hydrationBatch";
 import { newerObservation, sanitizeLiveRestoreProvenance } from "@shared/utils/restoreProvenance";
+import type { SpawnProvenance } from "@shared/utils/scheduledRunProvenance";
 import {
   addToWorktreeIndex,
   panelMatchesWorktreeScope,
@@ -33,6 +34,18 @@ export type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
  * reusing one structure's answer in the other would misplace the copy.
  */
 export type RegistryState = ReturnType<PanelRegistryStoreApi["getState"]>;
+
+/**
+ * The source an update keeps, with the scheduled run that came with it: taken
+ * from whichever side has a source, never one half from each (#15977).
+ */
+function keptSpawnProvenance(
+  next: SpawnProvenance,
+  existing: SpawnProvenance | undefined
+): SpawnProvenance {
+  const from = next.spawnedBy !== undefined ? next : existing;
+  return { spawnedBy: from?.spawnedBy, scheduledRun: from?.scheduledRun };
+}
 
 /**
  * Restore target recorded on a panel born parked. A replayed hydration keeps
@@ -312,7 +325,7 @@ export function commitPtyPanel(
               // Stamped once at creation and never re-derivable: an orphan or
               // partial reconnect payload carries none, so keep what we have
               // rather than letting the spread blank it (#12419).
-              spawnedBy: ptyTerminal.spawnedBy ?? existingPty?.spawnedBy,
+              ...keptSpawnProvenance(ptyTerminal, existingPty),
               // Same for the plugin hold and its owner, and for how restore
               // last rebuilt the pane (#14017).
               launchedByPluginId: ptyTerminal.launchedByPluginId ?? existingPty?.launchedByPluginId,
@@ -400,7 +413,7 @@ export function commitPtyPanel(
               // Stamped once at creation and never re-derivable: an orphan or
               // partial reconnect payload carries none, so keep what we have
               // rather than letting the spread blank it (#12419).
-              spawnedBy: ptyTerminal.spawnedBy ?? existingPty2?.spawnedBy,
+              ...keptSpawnProvenance(ptyTerminal, existingPty2),
               // Same for the plugin hold and its owner, and for how restore
               // last rebuilt the pane (#14017).
               launchedByPluginId:

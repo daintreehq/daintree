@@ -3,6 +3,7 @@ import type { BuiltInRuntimeActionId } from "../config/actionIds.js";
 import type { z } from "zod";
 import type { CopyTreeRunSource } from "./ipc/copyTreeHistory.js";
 import type { GitPushReview } from "./git.js";
+import type { ScheduledRunRef } from "./panel.js";
 
 export type ActionSource = "user" | "keybinding" | "menu" | "agent" | "context-menu" | "plugin";
 
@@ -242,6 +243,13 @@ export interface ActionContext {
    * to its own contributions (`layout.apply`, #13780).
    */
   callerPluginId?: string;
+  /**
+   * The scheduled run a launch is for (#15977), stamped by
+   * `ActionService.dispatch` from {@link ActionDispatchOptions.scheduledRun}
+   * over whatever a `contextOverride` carried. Host-only: it is what marks a
+   * terminal `spawnedBy: "schedule"`, which no action argument can claim.
+   */
+  scheduledRun?: ScheduledRunRef;
 }
 
 /**
@@ -658,6 +666,13 @@ export interface ActionDispatchOptions {
    * other source.
    */
   callerPluginId?: string;
+  /**
+   * The scheduled run a launch is for (#15977) — NOT a client- or
+   * plugin-supplied value. Set only by Daintree's own scheduled launch, and by
+   * a pane continuing a launch that already carried one. The MCP and plugin
+   * bridges never set it. See {@link ActionContext.scheduledRun}.
+   */
+  scheduledRun?: ScheduledRunRef;
 }
 
 export interface ActionDispatchPayload {

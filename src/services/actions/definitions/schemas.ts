@@ -36,12 +36,14 @@ export const AgentLaunchLocationSchema = z
   .describe('Default "grid". "background" runs it unmounted until restored.');
 
 /**
- * Mirror of `TerminalSpawnSource` from `shared/types/panel.ts`. Kept in lockstep
- * with that union so action argsSchemas can validate the field. The MCP bridge
- * stamps `"assistant"` or `"mcp"` on spawn-producing dispatches — whichever the
+ * The caller-settable part of `TerminalSpawnSource` from `shared/types/panel.ts`,
+ * which action argsSchemas validate the field against. The MCP bridge stamps
+ * `"assistant"` or `"mcp"` on spawn-producing dispatches — whichever the
  * session's authenticated origin resolves to (#11808) — and overrides whatever
  * the caller sent, so neither value can be claimed. User surfaces stamp their
- * own origin (`"quickrun"`, `"recipe"`, `"agent"`, `"palette"`).
+ * own origin (`"quickrun"`, `"recipe"`, `"agent"`, `"palette"`). `"schedule"` is
+ * left out on purpose: only `ActionContext.scheduledRun` makes a launch a
+ * scheduled run's (#15977), so no argument, from MCP or a plugin, can claim it.
  */
 export const TerminalSpawnSourceSchema = z
   .enum(["quickrun", "recipe", "agent", "palette", "mcp", "assistant"])

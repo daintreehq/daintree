@@ -758,6 +758,9 @@ export class ActionService {
         // Same unconditional stamp: a plugin's identity comes from the host's
         // own bridge closure, never from a context the caller could shape.
         callerPluginId: source === "plugin" ? options?.callerPluginId : undefined,
+        // Same unconditional stamp: it is what makes a launch a scheduled
+        // run's, so a `contextOverride` must not be able to plant one (#15977).
+        scheduledRun: options?.scheduledRun,
       };
       const result = await definition.run(validatedArgs, runContext);
       // Enforce the action's own result contract. Zod objects strip unknown
