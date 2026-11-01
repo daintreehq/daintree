@@ -90,7 +90,8 @@ beforeEach(async () => {
   await mountToolbar();
 });
 
-async function mountToolbar(): Promise<void> {
+/** Renders and commits the first frame, before any of the mount's own loads answer. */
+function renderToolbar(): void {
   const worktreeStore = createWorktreeStore();
   setCurrentViewStore(worktreeStore);
   render(
@@ -100,6 +101,10 @@ async function mountToolbar(): Promise<void> {
       </WorktreeStoreContext.Provider>
     </TooltipProvider>
   );
+}
+
+async function mountToolbar(): Promise<void> {
+  renderToolbar();
   await settle();
 }
 
@@ -225,12 +230,39 @@ describe("Toolbar forge stats in a workspace without a repository (#15931)", () 
     expect(rightRowIds()).toEqual(gitRow.filter((id) => id !== "forge-stats"));
   });
 
-  it("never holds a slot when the view mounts as a scratch, whatever project another window has", async () => {
+  it("never holds a slot in a view that mounts as a scratch, not even on first paint", async () => {
+    cleanup();
+    seedViewWorkspace(SCRATCH.id);
+    useProjectStore.setState({ projects: [], currentProject: null });
+    useScratchStore.setState({ scratches: [SCRATCH], currentScratch: null });
+    renderToolbar();
+
+    expect(forgeSlot()).toBeNull();
+
+    await settle();
+    expect(forgeSlot()).toBeNull();
+  });
+
+  it("keeps the slot out of a scratch view while another window has a project open", async () => {
     cleanup();
     seedViewWorkspace(SCRATCH.id);
     useProjectStore.setState({ projects: [PREVIEW_PROJECT], currentProject: PREVIEW_PROJECT });
     useScratchStore.setState({ scratches: [SCRATCH], currentScratch: null });
     await mountToolbar();
+
+    expect(forgeSlot()).toBeNull();
+  });
+
+  it("drops the slot in a view whose own project is a folder without a repository", async () => {
+    const folder = { ...PREVIEW_PROJECT, id: "project-15931-folder", gitBacked: false };
+    cleanup();
+    seedViewWorkspace(folder.id);
+    await mountToolbar();
+    // Its own row answers before the broadcast pointer names it.
+    act(() => {
+      useProjectStore.setState({ projects: [folder], currentProject: null });
+    });
+    await settle();
 
     expect(forgeSlot()).toBeNull();
   });

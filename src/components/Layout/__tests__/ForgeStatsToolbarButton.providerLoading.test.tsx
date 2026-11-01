@@ -145,6 +145,18 @@ describe("ForgeStatsToolbarButton while the forge provider resolves (#15931)", (
     expect(container.querySelectorAll("button")).toHaveLength(0);
   });
 
+  it("draws nothing without a project, loading or not", () => {
+    expect(
+      render(<ForgeStatsToolbarButton currentProject={null} />).container.childElementCount
+    ).toBe(0);
+    cleanup();
+
+    providerState.loading = false;
+    expect(
+      render(<ForgeStatsToolbarButton currentProject={null} />).container.childElementCount
+    ).toBe(0);
+  });
+
   it("holds exactly the width a forge provider's pill then takes, so the row doesn't move", () => {
     const { container, rerender } = renderButton();
     const heldWidth = controlWidthRem(container);

@@ -425,6 +425,15 @@ export function useToolbarOverflow(
 
     if (leftContainer) observer.observe(leftContainer);
     if (rightContainer) observer.observe(rightContainer);
+    // A button can change width while its row's box stays put: the forge pill
+    // settling from the width it held while loading into commits-only, or a
+    // count gaining a digit. The rows alone would leave the budget measured
+    // against the old width until something else moved.
+    for (const container of [leftContainer, rightContainer]) {
+      container
+        ?.querySelectorAll<HTMLElement>("[data-toolbar-button-id]")
+        .forEach((item) => observer.observe(item));
+    }
 
     return () => {
       observer.disconnect();
