@@ -65,7 +65,7 @@ const OSC = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g;
 const ESC_OTHER = /\u001b[\s\S]?/g;
 // C0 but newline, DEL, C1, zero-width and bidi controls, separators and BOM.
 // eslint-disable-next-line no-control-regex
-const CONTROLS = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f​-‏‪-‮⁠-⁤⁦-⁩﻿]/g;
+const CONTROLS = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
 const DELIMITER_LIKE = /\[\s*(END\s+)?DAINTREE\s+DECISION\s+[A-Z ]+\]/gi;
 const MARKER_LIKE = /\[\s*decision-injection\b[^\]\n]*\]/gi;
 
@@ -78,7 +78,7 @@ const byteLength = (text: string) => encoder.encode(text).length;
  * differently, and the length capped.
  */
 export function sanitizeAnswerText(input: string, maxChars: number): string {
-  let text = input.replace(/\r\n?/g, "\n").replace(/[  ]/g, "\n");
+  let text = input.replace(/\r\n?/g, "\n").replace(/[\u2028\u2029]/g, "\n");
   text = text.replace(OSC, "").replace(CSI, "").replace(ESC_OTHER, "").replace(CONTROLS, "");
   text = text
     .replace(DELIMITER_LIKE, (m) => `(${m.slice(1, -1)})`)
