@@ -6,6 +6,7 @@ import {
   type PanelLocation,
   type TabGroup,
 } from "@shared/types/panel";
+import { hydratedSettingsOf, type HydratedSettings } from "@/store/hostResyncSignal";
 import { getWorktreeIdSet, getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { logWarn } from "@/utils/logger";
 
@@ -46,6 +47,12 @@ export interface HostProjectRehydrateOptions {
    * may predate it) is left alone.
    */
   keepActiveWorktree?: boolean;
+  /**
+   * Handed the settings the hydrate answer carried, as soon as the answer is
+   * known to be this view's and current, so a caller that would otherwise
+   * read them again can take them from here.
+   */
+  onHydrated?: (settings: HydratedSettings) => void;
 }
 
 /**
@@ -77,6 +84,7 @@ export async function rehydrateHostProjectState(
   if (!options.isCurrent()) return;
   const workspaceId = hydrate.workspaceId ?? hydrate.project?.id ?? null;
   if (workspaceId !== projectId) return;
+  options.onHydrated?.(hydratedSettingsOf(hydrate));
 
   const [
     { usePanelStore },

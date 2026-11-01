@@ -25,7 +25,7 @@ import {
   startDriverNavigationReporter,
   type DriverNavigationReporter,
 } from "@/store/hostDriverNavigation";
-import { notifyHostResync } from "@/store/hostResyncSignal";
+import { notifyHostResync, type HydratedSettings } from "@/store/hostResyncSignal";
 import {
   dropDeferredHostOwnedWrites,
   holdHostOwnedWrites,
@@ -180,6 +180,15 @@ async function runResyncPass(projectState: boolean): Promise<void> {
       })
     : Promise.resolve();
   const worktrees = window.electron.worktree.refresh();
+  // A pass that hydrates hands the settings its answer carries to their syncs,
+  // which would otherwise read the same three again over the link.
+  let settleHydrated: (settings: HydratedSettings | null) => void = () => {};
+  const hydrated =
+    projectState && projectId
+      ? new Promise<HydratedSettings | null>((resolve) => {
+          settleHydrated = resolve;
+        })
+      : undefined;
   const steps: Array<[string, () => Promise<unknown>]> = [
     ["worktrees", () => worktrees],
     [
@@ -196,7 +205,7 @@ async function runResyncPass(projectState: boolean): Promise<void> {
     ],
     ["drive lease", () => lease],
     // Dev previews and anything else kept from host events refetch for themselves.
-    ["event-fed state", async () => notifyHostResync()],
+    ["event-fed state", async () => notifyHostResync({ hydrated })],
   ];
   if (projectId) {
     // A dropped event may have been the driver's panels changing. A follow
@@ -216,16 +225,26 @@ async function runResyncPass(projectState: boolean): Promise<void> {
     steps.push([
       "project state",
       async () => {
-        // After the terminals, so the host's saved order also places the ones
-        // just adopted; after the lease, to know whose layout wins.
-        // And after the worktrees, so the saved active worktree can be found.
-        await Promise.allSettled([terminals, lease, worktrees]);
-        // A view that watches reads it back by following the driver, which
-        // this pass sets going once the lease is read; one back over another
-        // driver's state reads it back as authoritative instead.
-        if (!isCurrent() || watches(projectId)) return;
-        if (readBackOwed || readBacksStarted !== readBacks) return;
-        await rehydrateHostProjectState(projectId, { isCurrent, authoritative: false });
+        try {
+          // After the terminals, so the host's saved order also places the
+          // ones just adopted; after the lease, to know whose layout wins.
+          // And after the worktrees, so the saved active worktree can be found.
+          await Promise.allSettled([terminals, lease, worktrees]);
+          // A view that watches reads it back by following the driver, which
+          // this pass sets going once the lease is read; one back over another
+          // driver's state reads it back as authoritative instead.
+          if (!isCurrent() || watches(projectId)) return;
+          if (readBackOwed || readBacksStarted !== readBacks) return;
+          await rehydrateHostProjectState(projectId, {
+            isCurrent,
+            authoritative: false,
+            onHydrated: settleHydrated,
+          });
+        } finally {
+          // No answer of this pass's own (skipped, superseded, or failed): the
+          // settings syncs read for themselves. A no-op once settled.
+          settleHydrated(null);
+        }
       },
     ]);
   }

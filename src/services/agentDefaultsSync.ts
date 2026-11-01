@@ -4,7 +4,7 @@ import { agentDefaultsClient } from "@/clients/agentDefaultsClient";
 import { getSafeBootPromise } from "@/lib/bootPromise";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { logWarn } from "@/utils/logger";
-import { onHostResync } from "@/store/hostResyncSignal";
+import { onHostResync, readSettingOnResync, type HostResync } from "@/store/hostResyncSignal";
 import { useAgentPreferencesStore } from "@/store/agentPreferencesStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useHelpPanelStore, type AssistantAgentAvailability } from "@/store/helpPanelStore";
@@ -85,9 +85,16 @@ export function initAgentDefaultsSync(): () => void {
     useHelpPanelStore.getState().refreshAssistantAvailability(currentAvailability());
   });
 
-  const refetch = async (startedAt: number): Promise<AgentDefaultsSnapshot | undefined> => {
+  const refetch = async (
+    startedAt: number,
+    resync: HostResync = {}
+  ): Promise<AgentDefaultsSnapshot | undefined> => {
     try {
-      const snapshot = await agentDefaultsClient.get();
+      const snapshot = await readSettingOnResync(
+        resync,
+        (settings) => settings.agentDefaults,
+        () => agentDefaultsClient.get()
+      );
       applyIfCurrent(snapshot, startedAt);
       return snapshot;
     } catch (error) {
@@ -99,8 +106,8 @@ export function initAgentDefaultsSync(): () => void {
     }
   };
 
-  const unsubscribeResync = onHostResync(() => {
-    if (!disposed) void refetch(pushSeq);
+  const unsubscribeResync = onHostResync((resync) => {
+    if (!disposed) void refetch(pushSeq, resync);
   });
 
   void (async () => {

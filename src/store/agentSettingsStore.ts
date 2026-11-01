@@ -51,7 +51,12 @@ interface AgentSettingsState {
 
 interface AgentSettingsActions {
   initialize: () => Promise<void>;
-  refresh: () => Promise<void>;
+  /**
+   * Read the saved settings again. `read` stands in for the host read when
+   * the answer comes from elsewhere (a resync's hydrate answer); the read
+   * still counts from when this was called.
+   */
+  refresh: (read?: () => Promise<AgentSettings | undefined>) => Promise<void>;
   /** Take a saved slice another view (or this one) just wrote (#14700). */
   applySaved: (raw: AgentSettings) => void;
   updateAgent: (agentId: string, updates: Partial<AgentSettingsEntry>) => Promise<void>;
@@ -288,7 +293,7 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
     });
   },
 
-  refresh: async () => {
+  refresh: async (read) => {
     const myEpoch = ++normalizeEpoch;
     const heardAtStart = savedChangesHeard;
     set({ error: null });
@@ -297,7 +302,7 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
       // config reloads) — drop the client's value cache so this read and
       // every later get() see post-change data, not a pre-change snapshot.
       agentSettingsClient.invalidate();
-      const raw = (await agentSettingsClient.get()) ?? DEFAULT_AGENT_SETTINGS;
+      const raw = (await (read ?? agentSettingsClient.get)()) ?? DEFAULT_AGENT_SETTINGS;
       if (myEpoch !== normalizeEpoch || heardAtStart !== savedChangesHeard) return;
       set({ settings: takeSaved(normalizeSaved(raw)) });
     } catch (e) {
