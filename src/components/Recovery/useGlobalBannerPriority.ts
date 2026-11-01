@@ -7,7 +7,6 @@ import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
 import { useEffect, useSyncExternalStore } from "react";
 import { pluginDocumentRuntime } from "@/services/plugin/pluginDocumentRuntime";
 import { useGlobalBannerDismissalStore } from "@/store/globalBannerDismissalStore";
-import { useHostConnectionSync } from "@/hooks/useHostConnection";
 import { selectHostBannerVariant, useHostConnectionStore } from "@/store/hostConnectionStore";
 import { useDriveLeaseBanner, useDriveLeaseSync } from "./driveLeaseState";
 import {
@@ -85,7 +84,6 @@ export type GlobalBannerSlot =
 // view's terminals refuse input until the user takes the project back, and the
 // banner is the only place that says why or offers the way out.
 export function useGlobalBannerPriority(): GlobalBannerSlot {
-  useHostConnectionSync();
   useDriveLeaseSync();
   const driveLeaseBanner = useDriveLeaseBanner();
   const hostBanner = useHostConnectionStore(selectHostBannerVariant);

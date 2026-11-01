@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { renderHook } from "@testing-library/react";
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
 import type { DriveLeaseEvent, DriveLeaseView } from "@shared/types/ipc/driveLease";
 import type {
@@ -117,12 +118,14 @@ import {
   runHostOperation,
   startHostConnectionSync,
   takeOverDrive,
+  useHostConnectionSync,
 } from "../useHostConnection";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import { onHostResync } from "@/store/hostResyncSignal";
 import type { resolveUnknownOutcome } from "@/utils/resolveUnknownOutcome";
 import {
   _resetTerminalInputGateForTesting,
+  getLeaseInputBlock,
   getTerminalInputBlock,
 } from "@/services/terminal/inputGate";
 import {
@@ -236,6 +239,13 @@ const optionsOf = (call: unknown[]) =>
 
 async function flush() {
   for (let i = 0; i < 5; i += 1) await Promise.resolve();
+}
+
+/** This view's claim on open has gone through, so it drives over the state it opened with. */
+async function claimed(electron: ReturnType<typeof installElectron>["electron"]) {
+  await vi.waitFor(() => expect(electron.driveLease.takeOver).toHaveBeenCalled());
+  await vi.waitFor(() => expect(getLeaseInputBlock()).toBeNull());
+  await flush();
 }
 
 // Adopting a terminal loads this lazily, and cold it can outlast a vi.waitFor
@@ -364,12 +374,7 @@ describe("host connection sync", () => {
     const offResync = onHostResync(resyncListener);
     bindView("studio-01");
     const stop = startHostConnectionSync();
-    await flush();
-    // Opening the project takes it over, and that pass reads the host's
-    // terminals on its own. Left in flight, the resync below imports the same
-    // mocked modules alongside it and vitest holds the second import for about
-    // a second, past vi.waitFor's timeout. It ends with the authoritative read.
-    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalled());
+    await claimed(electron);
     electron.driveLease.get.mockClear();
 
     emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
@@ -486,13 +491,20 @@ describe("lease and reconnect races", () => {
       ...leaseView(holder({ isHostLocal: false }), false),
       heldByThisClient: true,
     });
+    electron.driveLease.takeOver.mockResolvedValue({
+      ...leaseView(holder({ endpointId: "me" }), true),
+      isHolderEndpoint: true,
+    });
     bindView("studio-01");
     const stop = startHostConnectionSync();
-    await flush();
+    await claimed(electron);
     expect(electron.driveLease.takeOver).toHaveBeenCalledWith({
       projectId: "proj-1",
       ifLeaseId: 2,
     });
+    // The window that drove it may have saved since this one opened.
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
+    expect(optionsOf(rehydrate.mock.calls[0]!).authoritative).toBe(true);
     stop();
   });
 
@@ -853,9 +865,10 @@ describe("coming back to drive after someone else drove meanwhile (#13921)", () 
     installed.electron.driveLease.takeOver.mockResolvedValue(lease);
     bindView("studio-01");
     const stop = startHostConnectionSync();
-    // Opening reads the project back (the claim, or following the driver);
+    // Opening a project it watches reads it back by following the driver;
     // only what follows is under test.
-    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalled());
+    if (lease.drivingHere) await claimed(installed.electron);
+    else await vi.waitFor(() => expect(rehydrate).toHaveBeenCalled());
     await flush();
     rehydrate.mockClear();
     installed.emitHost({
@@ -1178,9 +1191,7 @@ describe("coming back to drive after someone else drove meanwhile (#13921)", () 
     );
     bindView("studio-01");
     const stop = startHostConnectionSync();
-    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalled());
-    await flush();
-    rehydrate.mockClear();
+    await claimed(electron);
     answerWindowHost();
     await vi.waitFor(() => expect(getTerminalInputBlock()?.kind).toBe("disconnected"));
     const held = await holdASave();
@@ -1218,6 +1229,20 @@ describe("coming back to drive after someone else drove meanwhile (#13921)", () 
     expect(hasDeferredHostOwnedWrite("app-state:activeWorktreeId")).toBe(false);
     const send = vi.fn(async () => undefined);
     expect(await sendHostOwnedWrite("app-state:mruList", send, vi.fn())).toBe("sent");
+    stop();
+  });
+
+  it("reads the host's state back for a claim that hands nothing over while a lost link holds its saves", async () => {
+    const { electron, stop } = await openUnder(mine());
+    const held = await holdASave();
+    electron.driveLease.takeOver.mockResolvedValue(mine());
+
+    await takeOverDrive("proj-1", { ifLeaseId: 3, readBack: false });
+
+    await vi.waitFor(() => expect(authoritativeReads()).toHaveLength(1));
+    await flush();
+    expect(held.replay).not.toHaveBeenCalled();
+    expect(hasDeferredHostOwnedWrite("app-state:mruList")).toBe(false);
     stop();
   });
 
@@ -1314,6 +1339,32 @@ describe("coming back to drive after someone else drove meanwhile (#13921)", () 
     expect(meanwhile.replay).not.toHaveBeenCalled();
     expect(hasDeferredHostOwnedWrite("app-state:activeWorktreeId")).toBe(false);
     stop();
+  });
+});
+
+describe("useHostConnectionSync", () => {
+  it("holds the sync only while enabled, and once however often it renders", () => {
+    const { electron } = installElectron();
+    electron.driveLease.get.mockImplementation(() => new Promise(() => {}));
+    bindView("studio-01");
+    const { rerender, unmount } = renderHook(({ enabled }) => useHostConnectionSync(enabled), {
+      initialProps: { enabled: false },
+    });
+    expect(electron.driveLease.onEvent).not.toHaveBeenCalled();
+    expect(getLeaseInputBlock()).toBeNull();
+
+    rerender({ enabled: true });
+    rerender({ enabled: true });
+    expect(electron.driveLease.onEvent).toHaveBeenCalledTimes(1);
+    expect(getLeaseInputBlock()?.kind).toBe("lease-unknown");
+
+    rerender({ enabled: false });
+    expect(getLeaseInputBlock()).toBeNull();
+    rerender({ enabled: true });
+    expect(electron.driveLease.onEvent).toHaveBeenCalledTimes(2);
+
+    unmount();
+    expect(getLeaseInputBlock()).toBeNull();
   });
 });
 
@@ -1704,6 +1755,284 @@ describe("following the driver while watching (#13280)", () => {
   });
 });
 
+describe("re-reading the host only when the project changed hands (#15900)", () => {
+  const followCalls = () => rehydrate.mock.calls.filter((call) => optionsOf(call).follow === true);
+  /**
+   * Whether the follow pass that made `call` still stands. Asking for another
+   * follow overtakes it at once, long before that pass reaches the host.
+   */
+  const stands = (call: unknown[]) => optionsOf(call).isCurrent();
+  const mine = (overrides: Partial<DriveLeaseHolder> = {}): DriveLeaseView => ({
+    ...leaseView(holder({ endpointId: "me", clientId: "shell-a", leaseId: 3, ...overrides }), true),
+    isHolderEndpoint: true,
+  });
+
+  /** A remote view that opens a project another laptop drives, so it watches. */
+  async function watchAnotherLaptop() {
+    const installed = installElectron();
+    installed.electron.driveLease.get.mockResolvedValue(leaseView(holder(), false));
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await vi.waitFor(() => expect(followCalls()).toHaveLength(1));
+    await flush();
+    return { ...installed, stop };
+  }
+
+  it("follows nothing more when the host restates the lease as the driver goes away and comes back", async () => {
+    const { electron, emitLease, stop } = await watchAnotherLaptop();
+    const first = followCalls()[0]!;
+    electron.terminal.getForProject.mockClear();
+
+    emitLease({ type: "changed", state: { ...leaseView(holder(), false), holderAwayMs: 9_000 } });
+    expect(getTerminalInputBlock()).toMatchObject({ kind: "driven-elsewhere", driverAway: true });
+    emitLease({ type: "changed", state: leaseView(holder(), false) });
+    expect(getTerminalInputBlock()).toMatchObject({ kind: "driven-elsewhere", driverAway: false });
+
+    expect(stands(first)).toBe(true);
+    await flush();
+    expect(followCalls()).toHaveLength(1);
+    expect(electron.terminal.getForProject).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("follows again when someone else takes the project over", async () => {
+    const { emitLease, stop } = await watchAnotherLaptop();
+
+    emitLease({
+      type: "changed",
+      state: leaseView(
+        holder({ leaseId: 4, endpointId: "view-12", clientId: "client-3", clientName: "mini" }),
+        false
+      ),
+    });
+
+    await vi.waitFor(() => expect(followCalls()).toHaveLength(2));
+    expect(getTerminalInputBlock()).toMatchObject({ driverName: "mini" });
+    stop();
+  });
+
+  it.each([
+    ["the driver's window is granted the project anew", { leaseId: 4 }],
+    // A Host that restarted counts its leases from 1 again.
+    ["a restarted Host's lease number repeats under another window", { endpointId: "view-12" }],
+  ])("follows again when %s", async (_case, changed) => {
+    const { emitLease, stop } = await watchAnotherLaptop();
+    const first = followCalls()[0]!;
+
+    emitLease({ type: "changed", state: leaseView(holder(changed), false) });
+
+    expect(stands(first)).toBe(false);
+    await vi.waitFor(() => expect(followCalls()).toHaveLength(2));
+    stop();
+  });
+
+  it("reads the driver's layout once a resync's lease read says it still watches", async () => {
+    const { electron, stop } = await watchAnotherLaptop();
+    electron.terminal.getForProject.mockClear();
+
+    await resyncFromHost();
+
+    await vi.waitFor(() => expect(followCalls()).toHaveLength(2));
+    await flush();
+    expect(stands(followCalls()[1]!)).toBe(true);
+    // The resync's own read of the terminals, and the follow pass's.
+    expect(electron.terminal.getForProject).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
+  it("leaves a resync's follow to one the driver's panel change started while its lease read was out", async () => {
+    const { electron, emitLease, stop } = await watchAnotherLaptop();
+    let answerLease!: (view: DriveLeaseView) => void;
+    electron.driveLease.get.mockImplementationOnce(
+      () => new Promise((resolve) => (answerLease = resolve))
+    );
+    electron.terminal.getForProject.mockClear();
+
+    const resync = resyncFromHost();
+    emitLease({ type: "panels-changed", projectId: "proj-1" });
+    await vi.waitFor(() => expect(followCalls()).toHaveLength(2));
+    const meanwhile = followCalls()[1]!;
+    answerLease(leaseView(holder(), false));
+    await resync;
+
+    expect(stands(meanwhile)).toBe(true);
+    expect(followCalls()).toHaveLength(2);
+    expect(electron.terminal.getForProject).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
+  it("follows the driver again after an explicit disconnect and connect, which main can't announce", async () => {
+    const { emitHost, stop } = await watchAnotherLaptop();
+    const connected = { status: "connected", rttMs: 5, handshake: HANDSHAKE } as const;
+
+    emitHost({
+      type: "connection-changed",
+      hostId: "studio-01",
+      connection: { status: "disconnected" },
+    } as RemoteHostsEvent);
+    emitHost({ type: "connection-changed", hostId: "studio-01", connection: connected });
+
+    await vi.waitFor(() => expect(followCalls()).toHaveLength(2));
+    await flush();
+    expect(stands(followCalls()[1]!)).toBe(true);
+    // The fresh session's project state comes from following, never on the resync's own terms.
+    expect(rehydrate.mock.calls.every((call) => optionsOf(call).follow === true)).toBe(true);
+    stop();
+  });
+
+  it("follows once when a refused claim's answer and the host's event name the same driver", async () => {
+    const { electron, emitLease } = installElectron();
+    const winner = leaseView(
+      holder({ leaseId: 3, clientId: "shell-a", clientName: "shell-a" }),
+      false
+    );
+    electron.driveLease.get.mockResolvedValue(leaseView(holder({ isHostLocal: true }), false));
+    electron.driveLease.takeOver.mockResolvedValueOnce(winner);
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await vi.waitFor(() => expect(followCalls()).toHaveLength(1));
+
+    emitLease({ type: "changed", state: winner });
+
+    expect(stands(followCalls()[0]!)).toBe(true);
+    await flush();
+    expect(followCalls()).toHaveLength(1);
+    stop();
+  });
+
+  it("moves to where the driver is when a restatement says so, without reading its panels", async () => {
+    const { emitLease, stop } = await watchAnotherLaptop();
+    const navigation = {
+      activeWorktreeId: "wt-2",
+      focusedPanelId: null,
+      maximize: null,
+      focusMode: false,
+    };
+
+    emitLease({
+      type: "changed",
+      state: { ...leaseView(holder(), false), driverNavigation: navigation },
+    });
+
+    expect(stands(followCalls()[0]!)).toBe(true);
+    await vi.waitFor(() => expect(applyNavigation).toHaveBeenCalledTimes(1));
+    expect(applyNavigation.mock.calls[0]![0]).toEqual(navigation);
+    expect(followCalls()).toHaveLength(1);
+    stop();
+  });
+
+  it("lets a pass under way finish, then moves to where a restatement said the driver is", async () => {
+    const installed = installElectron();
+    installed.electron.driveLease.get.mockResolvedValue(leaseView(holder(), false));
+    let finishRead!: () => void;
+    rehydrate.mockImplementationOnce(
+      () => new Promise<undefined>((resolve) => (finishRead = () => resolve(undefined)))
+    );
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await vi.waitFor(() => expect(followCalls()).toHaveLength(1));
+    const navigation = {
+      activeWorktreeId: "wt-2",
+      focusedPanelId: "t1",
+      maximize: null,
+      focusMode: false,
+    };
+
+    installed.emitLease({
+      type: "changed",
+      state: { ...leaseView(holder(), false), driverNavigation: navigation },
+    });
+    expect(stands(followCalls()[0]!)).toBe(true);
+    await flush();
+    // Not before the panels it may name are adopted.
+    expect(applyNavigation).not.toHaveBeenCalled();
+
+    finishRead();
+    await vi.waitFor(() => expect(applyNavigation).toHaveBeenCalledTimes(1));
+    expect(applyNavigation.mock.calls[0]![0]).toEqual(navigation);
+    expect(followCalls()).toHaveLength(1);
+    expect(installed.electron.terminal.getForProject).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it("reads nothing back after claiming a project nobody held on open", async () => {
+    const { electron } = installElectron();
+    electron.driveLease.takeOver.mockResolvedValue(mine());
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await vi.waitFor(() =>
+      expect(electron.driveLease.takeOver).toHaveBeenCalledWith({
+        projectId: "proj-1",
+        ifLeaseId: null,
+      })
+    );
+    const reporter = reporters.at(-1)!;
+    // It drives at once over the state it booted with, and says where it is;
+    // a read-back would have held that until it was done.
+    await vi.waitFor(() => expect(reporter.reportNow).toHaveBeenCalled());
+
+    expect(getTerminalInputBlock()).toBeNull();
+    expect(rehydrate).not.toHaveBeenCalled();
+    expect(electron.terminal.getForProject).not.toHaveBeenCalled();
+    expect(reporter.mayReport()).toBe(true);
+    stop();
+  });
+
+  it("sends the saves it made before its claim once it drives a project nobody held", async () => {
+    const { electron } = installElectron();
+    let answerLease!: (view: DriveLeaseView) => void;
+    electron.driveLease.get.mockImplementationOnce(
+      () => new Promise((resolve) => (answerLease = resolve))
+    );
+    electron.driveLease.takeOver.mockResolvedValue(mine());
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await flush();
+    expect(getLeaseInputBlock()?.kind).toBe("lease-unknown");
+    const replay = vi.fn();
+    expect(await sendHostOwnedWrite("app-state:activeWorktreeId", vi.fn(), replay)).toBe(
+      "deferred"
+    );
+
+    answerLease(leaseView(null, true));
+
+    await vi.waitFor(() => expect(replay).toHaveBeenCalledTimes(1));
+    expect(hasDeferredHostOwnedWrite("app-state:activeWorktreeId")).toBe(false);
+    expect(rehydrate).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("reads nothing back when the project it opens is already its own", async () => {
+    const { electron } = installElectron();
+    electron.driveLease.get.mockResolvedValue(mine());
+    electron.driveLease.takeOver.mockResolvedValue(mine());
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await vi.waitFor(() => expect(electron.driveLease.takeOver).toHaveBeenCalled());
+    await vi.waitFor(() => expect(reporters.at(-1)!.reportNow).toHaveBeenCalled());
+
+    expect(rehydrate).not.toHaveBeenCalled();
+    expect(electron.terminal.getForProject).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("still reads the host's state back after taking the project from the host's idle screen on open", async () => {
+    const { electron } = installElectron();
+    electron.driveLease.get.mockResolvedValue(leaseView(holder({ isHostLocal: true }), false));
+    electron.driveLease.takeOver.mockResolvedValue(mine({ leaseId: 5 }));
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
+    expect(electron.terminal.getForProject).toHaveBeenCalledWith("proj-1");
+    expect(optionsOf(rehydrate.mock.calls[0]!)).toMatchObject({
+      authoritative: true,
+      follow: true,
+    });
+    stop();
+  });
+});
+
 describe("following the driver's navigation (#13281)", () => {
   const navigation = (activeWorktreeId: string) => ({
     activeWorktreeId,
@@ -1944,7 +2273,7 @@ describe("host restart", () => {
     const host = installElectron();
     bindView("studio-01");
     const stop = startHostConnectionSync();
-    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalled());
+    await claimed(host.electron);
     return { ...host, stop };
   }
 
@@ -1996,7 +2325,8 @@ describe("host restart", () => {
     emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
 
     await vi.waitFor(() => expect(reportLost).toHaveBeenCalledWith("t-agent", expect.any(String)));
-    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(2));
+    // The fresh session's read of the project state; opening read nothing back.
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
     for (let i = 0; i < 5; i += 1) await flush();
     expect(relaunchLost).not.toHaveBeenCalled();
     stop();
