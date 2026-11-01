@@ -1532,6 +1532,9 @@ export const CHANNELS = {
   // The trusted workflow gates, read-only, and the proxy allowlist (#16013).
   DECISIONS_GET_POLICY: "decisions:get-policy",
   DECISIONS_SET_PROXY_ALLOWLISTED: "decisions:set-proxy-allowlisted",
+  // Saving a recovery kit through a save dialog, and verifying a saved one (#16007).
+  DECISIONS_EXPORT_RECOVERY_KIT: "decisions:export-recovery-kit",
+  DECISIONS_VERIFY_RECOVERY_KIT: "decisions:verify-recovery-kit",
 
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",

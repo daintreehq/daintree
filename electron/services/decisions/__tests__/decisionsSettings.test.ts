@@ -24,6 +24,18 @@ const connected: DecisionsSettings = {
   proxyAllowlisted: true,
   consentedAt: 1_761_955_200_000,
   revokedAt: null,
+  recoveryKit: null,
+};
+
+/** `connected`, with a recovery kit verified for its identity. */
+const verified: DecisionsSettings = {
+  ...connected,
+  recoveryKit: {
+    verifiedAt: 1_761_955_300_000,
+    relayOrigin: connected.relayOrigin!,
+    installationId: connected.installationId!,
+    deviceId: connected.deviceId!,
+  },
 };
 
 function memoryStore(initial?: unknown) {
@@ -157,6 +169,61 @@ describe("sanitizeDecisionsSettings", () => {
       const settings = sanitizeDecisionsSettings({ ...connected, consentedAt });
       expect(settings, String(consentedAt)).toEqual({ ...connected, consentedAt: null });
     }
+  });
+
+  it("keeps a recovery kit verification only for the identity the setting records", () => {
+    const recoveryKit = verified.recoveryKit!;
+    expect(sanitizeDecisionsSettings(verified).recoveryKit).toEqual(recoveryKit);
+    // The same relay written with a path still names the same origin.
+    expect(
+      sanitizeDecisionsSettings({
+        ...verified,
+        recoveryKit: { ...recoveryKit, relayOrigin: `${verified.relayOrigin}/` },
+      }).recoveryKit
+    ).toEqual(recoveryKit);
+    for (const other of [
+      { relayOrigin: "https://other.example.workers.dev" },
+      { installationId: "inst_another_one" },
+      { deviceId: "dev-another-one" },
+    ]) {
+      const settings = sanitizeDecisionsSettings({
+        ...verified,
+        recoveryKit: { ...recoveryKit, ...other },
+      });
+      expect(settings, JSON.stringify(other)).toEqual({ ...verified, recoveryKit: null });
+    }
+    // Ids changing under it, as a disconnect or a new claim does, leaves it behind.
+    expect(
+      sanitizeDecisionsSettings({ ...verified, deviceId: "dev-from-a-new-claim" }).recoveryKit
+    ).toBeNull();
+    expect(
+      sanitizeDecisionsSettings({
+        ...verified,
+        relayOrigin: null,
+        installationId: null,
+        deviceId: null,
+      }).recoveryKit
+    ).toBeNull();
+  });
+
+  it("reads a damaged recovery kit record as unverified, never turning Decisions off", () => {
+    const recoveryKit = verified.recoveryKit!;
+    for (const damaged of [
+      "verified",
+      [],
+      { ...recoveryKit, verifiedAt: 0 },
+      { ...recoveryKit, verifiedAt: "1761955300000" },
+      { ...recoveryKit, relayOrigin: "http://decisions.example.workers.dev" },
+      { ...recoveryKit, deviceId: undefined },
+    ]) {
+      const settings = sanitizeDecisionsSettings({ ...verified, recoveryKit: damaged });
+      expect(settings, JSON.stringify(damaged)).toEqual({ ...verified, recoveryKit: null });
+    }
+    const extra = sanitizeDecisionsSettings({
+      ...verified,
+      recoveryKit: { ...recoveryKit, passphrase: "never kept" },
+    });
+    expect(extra.recoveryKit).toEqual(recoveryKit);
   });
 
   it("keeps the switch on while no relay is set up yet", () => {

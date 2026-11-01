@@ -316,6 +316,9 @@ export interface GeneratedElectronAPI {
     exportData(
       ...args: IpcInvokeMap["decisions:export-data"]["args"]
     ): Promise<IpcInvokeMap["decisions:export-data"]["result"]>;
+    exportRecoveryKit(
+      ...args: IpcInvokeMap["decisions:export-recovery-kit"]["args"]
+    ): Promise<IpcInvokeMap["decisions:export-recovery-kit"]["result"]>;
     getPairing(
       ...args: IpcInvokeMap["decisions:get-pairing"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-pairing"]["result"]>;
@@ -343,6 +346,9 @@ export interface GeneratedElectronAPI {
     startPairing(
       ...args: IpcInvokeMap["decisions:start-pairing"]["args"]
     ): Promise<IpcInvokeMap["decisions:start-pairing"]["result"]>;
+    verifyRecoveryKit(
+      ...args: IpcInvokeMap["decisions:verify-recovery-kit"]["args"]
+    ): Promise<IpcInvokeMap["decisions:verify-recovery-kit"]["result"]>;
   };
   deviceAnswer: {
     cancelPairingCode(

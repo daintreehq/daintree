@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
+import { basename, dirname } from "node:path";
 import { store } from "../../store.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { broadcastToProjectRenderers } from "../../ipc/utils.js";
@@ -12,6 +13,8 @@ import {
   type DecisionsConnectResult,
   type DecisionsDevicesResult,
   type DecisionsExportResult,
+  type DecisionsKitExportResult,
+  type DecisionsKitVerifyResult,
   type DecisionsLocalDeleteResult,
   type DecisionsPairingApproveResult,
   type DecisionsPairingDeclineResult,
@@ -25,11 +28,13 @@ import {
   type DecisionsStatus,
   type DeleteDecisionsRelayDataPayload,
   type ExportDecisionsDataPayload,
+  type ExportDecisionsRecoveryKitPayload,
   type PaneDecisionState,
   type RestoreDecisionsIdentityPayload,
+  type VerifyDecisionsRecoveryKitPayload,
 } from "../../../shared/types/decisions.js";
 import { AppError } from "../../utils/errorTypes.js";
-import { resilientAtomicWriteFile } from "../../utils/fs.js";
+import { OWNER_RW_FILE_MODE, resilientAtomicWriteFile } from "../../utils/fs.js";
 import {
   normalizeRelayOrigin,
   readDecisionsSettings,
@@ -51,6 +56,12 @@ import {
   type SetupKeyStore,
 } from "./relayIdentity.js";
 import { decisionsPolicyOf } from "./workflowGates.js";
+import {
+  checkRecoveryKit,
+  makeRecoveryKit,
+  recordedIdentity,
+  type RecordedIdentity,
+} from "./recoveryKit.js";
 
 /**
  * Nothing imports this module until the saved setting reads as on (the boot
@@ -87,6 +98,13 @@ function forgetOwnerDevices(): void {
 }
 /** Counts policy changes, so a policy read that lands after a newer change can't roll it back. */
 let policyRevision = 0;
+/**
+ * Recovery kit exports between making the kit and writing it. The save
+ * dialog is a person's to close, so it is never awaited behind the
+ * transitions: turning off, disconnecting or quitting cancels the export
+ * instead, and whatever the dialog answers later is ignored.
+ */
+const kitExports = new Set<AbortController>();
 
 function publishPaneState(projectId: string, state: PaneDecisionState): void {
   broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
@@ -202,12 +220,16 @@ export async function getDecisionsStatus(): Promise<DecisionsStatus> {
   const observed = service?.getStatus() ?? {
     state: !shutDown && settings.enabled ? ("not-connected" as const) : ("off" as const),
   };
-  const keysStored = observed.state !== "off" && service !== null && (await service.hasKeyFile());
+  const keyFile = observed.state !== "off" && service !== null ? await service.hasKeyFile() : null;
+  // A verification for keys known to be gone protects nothing.
+  const kitVerifiedAt =
+    settings.recoveryKit !== null && keyFile !== false ? settings.recoveryKit.verifiedAt : null;
   return {
     ...observed,
     ...(settings.relayOrigin ? { relayOrigin: settings.relayOrigin } : {}),
     ...(settings.consentedAt !== null ? { consentedAt: settings.consentedAt } : {}),
-    ...(keysStored ? { keysStored: true } : {}),
+    ...(keyFile === true ? { keysStored: true } : {}),
+    ...(kitVerifiedAt !== null ? { recoveryKitVerifiedAt: kitVerifiedAt } : {}),
     revision,
   };
 }
@@ -261,19 +283,35 @@ async function setupKeys(): Promise<{ service: DecisionsService; keys: SetupKeyS
  * Records a sealed identity in the setting: its origin and ids, and a host id
  * minted for this computer if it has none. The keys are saved first, so a
  * setting that fails to save leaves them for the next attempt to take up.
+ * The identity is unverified unless the kit it was restored from holds it
+ * whole; a claim always needs a kit saved and verified to finish (#16007).
  */
-function recordIdentity(running: DecisionsService, config: RelayConfig): DecisionsSettings {
+function recordIdentity(
+  running: DecisionsService,
+  config: RelayConfig,
+  kitVerified: boolean
+): DecisionsSettings {
   const current = readDecisionsSettings(store);
+  const relayOrigin = normalizeRelayOrigin(config.relayOrigin);
   let saved: DecisionsSettings;
   try {
     saved = writeDecisionsSettings(store, {
       ...current,
-      relayOrigin: normalizeRelayOrigin(config.relayOrigin),
+      relayOrigin,
       installationId: config.installationId,
       deviceId: config.deviceId,
       hostId: current.hostId ?? newId(),
       // A new identity: nothing the relay refused before applies to it.
       revokedAt: null,
+      recoveryKit:
+        kitVerified && relayOrigin !== null
+          ? {
+              verifiedAt: Date.now(),
+              relayOrigin,
+              installationId: config.installationId,
+              deviceId: config.deviceId,
+            }
+          : null,
     });
   } catch {
     throw new AppError({
@@ -301,7 +339,8 @@ function runSetup(run: SetupRun): Promise<DecisionsConnectResult> {
     try {
       const outcome = await run({ keys, signal: controller.signal });
       if ("failure" in outcome) return outcome.failure;
-      recordIdentity(running, outcome.identity);
+      if (shutDown) throw setupRefused();
+      recordIdentity(running, outcome.identity, outcome.kitVerified);
       return { result: "saved", status: await getDecisionsStatus() };
     } finally {
       setups.delete(controller);
@@ -338,6 +377,7 @@ function forgetRecordedIdentity(): DecisionsSettings {
     deviceId: null,
     hostId: null,
     revokedAt: null,
+    recoveryKit: null,
   });
 }
 
@@ -348,6 +388,7 @@ function forgetRecordedIdentity(): DecisionsSettings {
  * that can't be removed leave the setting as it was.
  */
 export function disconnectRelay(): Promise<DecisionsStatus> {
+  cancelKitExports();
   return serialize(async () => {
     const { service: running, keys } = await setupKeys();
     forgetOwnerDevices();
@@ -479,6 +520,8 @@ export function deleteRelayData(
  * everything on it stays. The switch and consent stay as they are.
  */
 export function deleteLocalData(): Promise<DecisionsLocalDeleteResult> {
+  // Before the queue, as a disconnect does: a kit of keys being erased is never written.
+  cancelKitExports();
   return serialize(async () => {
     let outcome: LocalEraseOutcome;
     // Its invitations and requests run on the keys this deletes.
@@ -573,6 +616,195 @@ export function setDecisionsProxyAllowlisted(allowed: boolean): Promise<Decision
   });
 }
 
+function cancelKitExports(): void {
+  for (const controller of kitExports) controller.abort();
+  kitExports.clear();
+}
+
+function kitExportCancelled(): AppError {
+  return new AppError({
+    code: "CANCELLED",
+    message: "Decisions was turned off or disconnected, so the recovery kit wasn't saved",
+  });
+}
+
+/**
+ * `start()`'s answer, unless the export is cancelled first: one already
+ * cancelled starts nothing, and a later answer is dropped.
+ */
+function unlessCancelled<T>(start: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(kitExportCancelled());
+  const work = start();
+  work.catch(() => {});
+  return new Promise<T>((resolve, reject) => {
+    const cancel = () => reject(kitExportCancelled());
+    signal.addEventListener("abort", cancel, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", cancel);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", cancel);
+        reject(error);
+      }
+    );
+  });
+}
+
+function sameRecord(a: RecordedIdentity | null, b: RecordedIdentity): boolean {
+  return (
+    a !== null &&
+    a.relayOrigin === b.relayOrigin &&
+    a.installationId === b.installationId &&
+    a.deviceId === b.deviceId
+  );
+}
+
+/** The kit's suggested file name, after the relay it belongs to. */
+function kitFileName(relayOrigin: string): string {
+  const host = new URL(relayOrigin).hostname.replace(/[^A-Za-z0-9.-]+/g, "-");
+  return `decisions-recovery-kit-${host}.json`;
+}
+
+async function sameDirectory(a: string, b: string): Promise<boolean> {
+  try {
+    const [left, right] = await Promise.all([stat(a), stat(b)]);
+    return left.dev === right.dev && left.ino === right.ino;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Writes the kit where the person chose, owner-only, replacing any file
+ * there whole or not at all, then reads it back, so a kit that didn't land
+ * as made is said now rather than found out when it is needed.
+ */
+async function writeKitFile(
+  path: string,
+  text: string,
+  keyFilePath: string,
+  signal: AbortSignal
+): Promise<void> {
+  if (await sameDirectory(dirname(path), dirname(keyFilePath))) {
+    throw new AppError({
+      code: "INVALID_PATH",
+      message:
+        "That folder holds Daintree's own copy of the keys. Save the kit somewhere else, away from this computer if you can.",
+    });
+  }
+  // Quit doesn't wait for the transitions, so it can land during the check above.
+  if (signal.aborted) throw kitExportCancelled();
+  let written: string;
+  try {
+    await resilientAtomicWriteFile(path, text, "utf-8", { mode: OWNER_RW_FILE_MODE });
+    written = await readFile(path, "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    throw new AppError({
+      code: "PERSIST_FAILED",
+      message: `The recovery kit couldn't be saved to ${basename(path)}${code ? ` (${code})` : ""}. Choose another location.`,
+    });
+  }
+  if (written !== text) {
+    throw new AppError({
+      code: "PERSIST_FAILED",
+      message: `${basename(path)} didn't read back as it was saved. Save the kit again, somewhere else if this repeats.`,
+    });
+  }
+}
+
+/**
+ * Saves a recovery kit of this computer's identity (#16007): the kit is made
+ * from the sealed keys behind the switch's transitions, the person picks
+ * where it goes with `choosePath` (null when they cancel), and it is written
+ * behind them again, only if the same identity is still set up. Saving never
+ * finishes setup: the saved file has to be verified. The passphrase is used
+ * to lock the kit and kept nowhere.
+ */
+export async function exportRecoveryKit(
+  payload: ExportDecisionsRecoveryKitPayload,
+  choosePath: (defaultName: string) => Promise<string | null>
+): Promise<DecisionsKitExportResult> {
+  const controller = new AbortController();
+  kitExports.add(controller);
+  try {
+    const made = await serialize(async () => {
+      try {
+        const { keys } = await setupKeys();
+        return await makeRecoveryKit(keys, readDecisionsSettings(store), payload.passphrase);
+      } finally {
+        // The dialog can stay open for minutes; the passphrase has done its
+        // work once the kit is locked, so Decisions holds it no longer. The
+        // IPC call's own arguments last until it returns.
+        payload.passphrase = "";
+      }
+    });
+    if ("failure" in made) return made.failure;
+    const path = await unlessCancelled(
+      () => choosePath(kitFileName(made.recorded.relayOrigin)),
+      controller.signal
+    );
+    if (path === null) return { result: "cancelled" };
+    return await serialize(async () => {
+      const settings = readDecisionsSettings(store);
+      const running = await settledService();
+      if (
+        controller.signal.aborted ||
+        shutDown ||
+        !settings.enabled ||
+        running === null ||
+        !sameRecord(recordedIdentity(settings), made.recorded)
+      ) {
+        throw kitExportCancelled();
+      }
+      await writeKitFile(path, made.text, running.getKeyFilePath(), controller.signal);
+      return { result: "saved" as const, fileName: basename(path) };
+    });
+  } finally {
+    kitExports.delete(controller);
+  }
+}
+
+/**
+ * Checks a saved kit file against this computer's identity (#16007) and, if
+ * it holds it whole, records that it was verified, which finishes setup.
+ * The kit and passphrase go no further than the check.
+ */
+export function verifyRecoveryKit(
+  payload: VerifyDecisionsRecoveryKitPayload
+): Promise<DecisionsKitVerifyResult> {
+  return serialize(async () => {
+    const { service: running, keys } = await setupKeys();
+    const checked = await checkRecoveryKit(
+      keys,
+      readDecisionsSettings(store),
+      payload.kit,
+      payload.passphrase
+    );
+    if ("failure" in checked) return checked.failure;
+    if (shutDown) throw setupRefused();
+    const current = readDecisionsSettings(store);
+    let saved: DecisionsSettings;
+    try {
+      saved = writeDecisionsSettings(store, {
+        ...current,
+        recoveryKit: { verifiedAt: Date.now(), ...checked.verified },
+      });
+    } catch {
+      throw new AppError({
+        code: "PERSIST_FAILED",
+        message: "The kit checked out, but that couldn't be recorded in settings. Verify it again.",
+      });
+    }
+    running.updateSettings(saved);
+    // Other windows' Settings show setup finished too.
+    publishStatus();
+    return { result: "verified", status: await getDecisionsStatus() };
+  });
+}
+
 /** Boot: starts the service only if the saved setting, sanitised, is on. */
 export function startDecisionsIfEnabled(): Promise<void> {
   return serialize(async () => {
@@ -595,6 +827,9 @@ export function setDecisionsEnabled(
   enabled: boolean,
   options: { consent?: boolean } = {}
 ): Promise<DecisionsStatus> {
+  // Before the queue, as a disconnect does: an export whose kit is still being
+  // made would otherwise reach its dialog before this turn comes round.
+  if (!enabled) cancelKitExports();
   return serialize(async () => {
     const current = readDecisionsSettings(store);
     const consentedAt = current.consentedAt ?? (options.consent ? Date.now() : null);
@@ -623,6 +858,7 @@ export async function stopDecisions(): Promise<void> {
   shutDown = true;
   cancelRelayChecks();
   forgetOwnerDevices();
+  cancelKitExports();
   for (const controller of setups) controller.abort();
   await (await settledService())?.dispose();
 }
@@ -631,6 +867,7 @@ export async function stopDecisions(): Promise<void> {
 export function _resetDecisionsForTesting(): void {
   cancelRelayChecks();
   forgetOwnerDevices();
+  cancelKitExports();
   for (const controller of setups) controller.abort();
   setups.clear();
   service = null;

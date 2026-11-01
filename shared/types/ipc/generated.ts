@@ -295,7 +295,7 @@ export interface GeneratedIpcInvokeMap {
   "canopy:read-agent-directory": {
     args: [options?: { projectId?: string | undefined } | undefined];
     result: {
-      coverage: "ok" | "stale" | "unreachable" | "unsupported";
+      coverage: "ok" | "unreachable" | "stale" | "unsupported";
       observedAt: number | null;
       complete: boolean;
       omitted: number;
@@ -634,6 +634,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisions.js").ExportDecisionsDataPayload];
     result: import("../decisions.js").DecisionsExportResult;
   };
+  "decisions:export-recovery-kit": {
+    args: [payload: import("../decisions.js").ExportDecisionsRecoveryKitPayload];
+    result: import("../decisions.js").DecisionsKitExportResult;
+  };
   "decisions:get-pairing": {
     args: [pairingId: string];
     result: import("../decisions.js").DecisionsPairingState;
@@ -669,6 +673,10 @@ export interface GeneratedIpcInvokeMap {
   "decisions:start-pairing": {
     args: [];
     result: import("../decisions.js").DecisionsPairingStartResult;
+  };
+  "decisions:verify-recovery-kit": {
+    args: [payload: import("../decisions.js").VerifyDecisionsRecoveryKitPayload];
+    result: import("../decisions.js").DecisionsKitVerifyResult;
   };
   "demo:annotate": {
     args: [payload: import("./demo.js").DemoAnnotatePayload];

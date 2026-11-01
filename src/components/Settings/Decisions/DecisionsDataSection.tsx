@@ -5,6 +5,7 @@ import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup"
 import { SeverityMark } from "@/lib/statusSeverity";
 import type { DecisionsStatus } from "@shared/types/decisions";
 import { DecisionsDisclosure } from "./DecisionsDisclosure";
+import { DecisionsRecoveryKit } from "./DecisionsRecoveryKit";
 import { DecisionsExportDialog } from "./DecisionsExportDialog";
 import { DecisionsDeleteRelayDialog } from "./DecisionsDeleteRelayDialog";
 import { DecisionsDeleteLocalDialog } from "./DecisionsDeleteLocalDialog";
@@ -30,21 +31,31 @@ function describeOutcome(outcome: DecisionsDataOutcome): RelayObservation | null
 }
 
 /**
- * Data: what's sent and where, the same list the consent dialog showed, then
- * exporting the decision history and deleting the relay's stored content or
- * this computer's Decisions data (#16025). Each action says what main
+ * Data: once a relay is set up, its recovery kit to save and verify at any
+ * time (#16007); what's sent and where, the same list the consent dialog
+ * showed; then exporting the decision history and deleting the relay's
+ * stored content or this computer's Decisions data (#16025). Each action says what main
  * observed it do, on its own row; the deletions sit last, apart.
  */
 export function DecisionsDataSection({
   status,
   locked = false,
   onChanged,
+  onStatus,
+  kitFocusRequest = 0,
+  onKitFocused,
 }: {
   status: DecisionsStatus;
   /** The switch is changing, so nothing here should start. */
   locked?: boolean;
   /** A local deletion settled: main's status when it said, null when it didn't. */
   onChanged?: (status: DecisionsStatus | null) => void;
+  /** Main answered with a newer status: a kit was verified. */
+  onStatus?: (status: DecisionsStatus) => void;
+  /** Bumped when setup asks for the recovery kit. */
+  kitFocusRequest?: number;
+  /** The request was met, so a later mount doesn't take focus again. */
+  onKitFocused?: () => void;
 }) {
   const relayOrigin = status.relayOrigin ?? null;
   const keysStored = status.keysStored === true;
@@ -84,6 +95,15 @@ export function DecisionsDataSection({
                 ? `${observation.label}. ${observation.detail}`
                 : ""}
       </span>
+      {relayOrigin !== null && (
+        <DecisionsRecoveryKit
+          status={status}
+          disabled={busy}
+          onVerified={(next) => onStatus?.(next)}
+          focusRequest={kitFocusRequest}
+          onFocused={() => onKitFocused?.()}
+        />
+      )}
       <SettingsGroup>
         <SettingsRow
           id="decisions-data-sent"

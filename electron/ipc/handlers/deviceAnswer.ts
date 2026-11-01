@@ -22,6 +22,8 @@ import type {
   DecisionsConnectResult,
   DecisionsDevicesResult,
   DecisionsExportResult,
+  DecisionsKitExportResult,
+  DecisionsKitVerifyResult,
   DecisionsLocalDeleteResult,
   DecisionsPairingApproveResult,
   DecisionsPairingDeclineResult,
@@ -33,9 +35,11 @@ import type {
   DecisionsStatus,
   DeleteDecisionsRelayDataPayload,
   ExportDecisionsDataPayload,
+  ExportDecisionsRecoveryKitPayload,
   PaneDecisionState,
   RestoreDecisionsIdentityPayload,
   SetDecisionsEnabledPayload,
+  VerifyDecisionsRecoveryKitPayload,
 } from "../../../shared/types/decisions.js";
 import { AppError } from "../../utils/errorTypes.js";
 
@@ -166,6 +170,19 @@ const approvePairingSchema = z
 const exportDataSchema = z.object({ passphrase: z.string().min(1).max(1024) }).strict();
 
 const deleteRelayDataSchema = z.object({ origin: z.string().max(2048) }).strict();
+
+// The library's own passphrase floor for a kit, counted as it counts it.
+const exportRecoveryKitSchema = z.object({ passphrase: z.string().min(12).max(1024) }).strict();
+
+const verifyRecoveryKitSchema = z
+  .object({
+    kit: z
+      .string()
+      .min(1)
+      .max(256 * 1024),
+    passphrase: z.string().min(1).max(1024),
+  })
+  .strict();
 
 function refuseWhileOff(action: string): void {
   if (!decisionsOn()) {
@@ -389,6 +406,46 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) throw setupCancelled();
         return decisions.setDecisionsProxyAllowlisted(allowed);
+      }
+    ),
+    // Saving and verifying a recovery kit (#16007). The save dialog belongs to
+    // the window that asked; the kit is made and written in main, and the
+    // passphrase goes no further than locking it.
+    exportRecoveryKit: opValidated(
+      CHANNELS.DECISIONS_EXPORT_RECOVERY_KIT,
+      exportRecoveryKitSchema,
+      async (
+        ctx,
+        payload: ExportDecisionsRecoveryKitPayload
+      ): Promise<DecisionsKitExportResult> => {
+        refuseWhileOff("save a recovery kit");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.exportRecoveryKit(payload, async (defaultName) => {
+          const options: Electron.SaveDialogOptions = {
+            title: "Save Decisions recovery kit",
+            defaultPath: defaultName,
+            filters: [{ name: "Decisions recovery kit", extensions: ["json"] }],
+            properties: ["createDirectory", "showOverwriteConfirmation"],
+          };
+          const parent = ctx.senderWindow;
+          const { canceled, filePath } =
+            parent && !parent.isDestroyed()
+              ? await dialog.showSaveDialog(parent, options)
+              : await dialog.showSaveDialog(options);
+          return canceled || !filePath ? null : filePath;
+        });
+      },
+      { withContext: true }
+    ),
+    verifyRecoveryKit: opValidated(
+      CHANNELS.DECISIONS_VERIFY_RECOVERY_KIT,
+      verifyRecoveryKitSchema,
+      async (payload: VerifyDecisionsRecoveryKitPayload): Promise<DecisionsKitVerifyResult> => {
+        refuseWhileOff("verify a recovery kit");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.verifyRecoveryKit(payload);
       }
     ),
   },

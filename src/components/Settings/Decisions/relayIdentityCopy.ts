@@ -14,7 +14,8 @@ import {
 const KEPT =
   "The claim's keys stay on this computer, so a later claim of this relay can finish with them.";
 
-const KEY_STORAGE: Record<DecisionsKeyStorageFailure, string> = {
+/** What a key store refusal means, as a row label. */
+export const KEY_STORAGE: Record<DecisionsKeyStorageFailure, string> = {
   locked: "The keychain is locked",
   unavailable: "Secure storage isn't available",
   timeout: "The keychain didn't answer in time",

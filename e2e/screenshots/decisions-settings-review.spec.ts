@@ -415,21 +415,28 @@ test("Decisions settings page review — every state, per theme", async () => {
           diverges: true,
         },
       });
+      // A verified kit, so these show the connection rather than the unfinished setup.
+      const verified = { recoveryKitVerifiedAt: CONSENTED };
       const relayStates: [string, DecisionsStatus, string][] = [
         [
           "05-connecting",
-          { state: "connecting", relayOrigin: RELAY, consentedAt: CONSENTED },
+          { state: "connecting", relayOrigin: RELAY, consentedAt: CONSENTED, ...verified },
           "Connecting to",
         ],
         [
           "06-connected",
-          { state: "connected", relayOrigin: RELAY, consentedAt: CONSENTED },
+          { state: "connected", relayOrigin: RELAY, consentedAt: CONSENTED, ...verified },
           "Connected to",
         ],
         [
           "07-revoked",
-          { state: "revoked", relayOrigin: RELAY, consentedAt: CONSENTED },
+          { state: "revoked", relayOrigin: RELAY, consentedAt: CONSENTED, ...verified },
           "Refused by",
+        ],
+        [
+          "07b-setup-unfinished",
+          { state: "not-connected", relayOrigin: RELAY, consentedAt: CONSENTED, keysStored: true },
+          "Setup isn't finished",
         ],
       ];
       for (const [state, status, words] of relayStates) {

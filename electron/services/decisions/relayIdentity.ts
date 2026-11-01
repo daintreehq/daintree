@@ -15,7 +15,7 @@ import {
   verifyString,
   type RecoveryBundleFile,
 } from "@daintreehq/decisions-crypto";
-import { DevicesResponse } from "@daintreehq/decisions-protocol";
+import { DevicesResponse, base64UrlToBytes } from "@daintreehq/decisions-protocol";
 import type {
   ClaimDecisionsRelayPayload,
   DecisionsClaimRefusal,
@@ -45,8 +45,13 @@ export type SetupKeyStore = Pick<
 
 export type DecisionsConnectFailure = Exclude<DecisionsConnectResult, { result: "saved" }>;
 
-/** A setup's end: the identity it sealed (or found sealed already), or what stopped it. */
-export type RelaySetupOutcome = { identity: RelayConfig } | { failure: DecisionsConnectFailure };
+/**
+ * A setup's end: the identity it sealed (or found sealed already), and
+ * whether the recovery kit it came from holds that identity whole, or what
+ * stopped it. Only a restore's kit can count; a claim has none yet.
+ */
+export type RelaySetupOutcome =
+  { identity: RelayConfig; kitVerified: boolean } | { failure: DecisionsConnectFailure };
 
 export interface RelaySetupOptions {
   keys: SetupKeyStore;
@@ -205,7 +210,7 @@ function keyStorageFailure(error: unknown, kept = false): DecisionsConnectFailur
 }
 
 /** Runs a key-store call, turning the refusals a person can act on into their observation. */
-async function keyCall<T>(
+export async function keyCall<T>(
   call: () => Promise<T>
 ): Promise<{ value: T } | { failure: DecisionsConnectFailure }> {
   try {
@@ -217,7 +222,7 @@ async function keyCall<T>(
   }
 }
 
-function isOwner(stored: StoredIdentity): boolean {
+export function isOwner(stored: StoredIdentity): boolean {
   return (stored.role ?? OWNER_ROLE) === OWNER_ROLE;
 }
 
@@ -298,7 +303,7 @@ export async function claimDecisionsRelay(
   if (stored && !staged) {
     // Sealed by a setup whose setting didn't save: taken up as it is.
     const same = isOwner(stored) && normalizeRelayOrigin(stored.config.relayOrigin) === origin;
-    return same ? { identity: stored.config } : failed(conflictWith(stored));
+    return same ? { identity: stored.config, kitVerified: false } : failed(conflictWith(stored));
   }
   if (staged && normalizeRelayOrigin(staged.config.relayOrigin) !== origin) {
     return failed(conflictWith(staged));
@@ -337,7 +342,7 @@ export async function claimDecisionsRelay(
       store,
       fetch: requests.fetch,
     });
-    return { identity: identity.config };
+    return { identity: identity.config, kitVerified: false };
   } catch (error) {
     return failed(await claimFailure(error, origin, keys, stagedBefore, stageSaved, requests));
   }
@@ -387,7 +392,7 @@ async function claimFailure(
   throw error;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -418,12 +423,38 @@ function parseKit(text: string): RecoveryBundleFile | null {
 }
 
 /**
+ * A kit file's text opened with its passphrase: the identity it holds, as a
+ * stored identity's shape, without trusting anything else about it yet.
+ */
+export async function openRecoveryKit(
+  text: string,
+  passphrase: string
+): Promise<{ identity: StoredIdentity } | { refusal: "not-a-kit" | "wrong-passphrase" }> {
+  const file = parseKit(text);
+  if (!file) return { refusal: "not-a-kit" };
+  let body: unknown;
+  try {
+    body = await decryptRecoveryBundle(file, passphrase);
+  } catch {
+    return { refusal: "wrong-passphrase" };
+  }
+  if (
+    !isRecord(body) ||
+    body.kind !== "decisions-recovery-kit" ||
+    !isStoredIdentity(body.identity)
+  ) {
+    return { refusal: "not-a-kit" };
+  }
+  return { identity: body.identity };
+}
+
+/**
  * The identity's keys are whole: it holds its current epoch's key, its
  * signing key signs what its public half verifies, and its exchange key
  * agrees with its public half, deriving the same secret with a throwaway key
  * from either side.
  */
-async function keysWork(identity: Identity): Promise<boolean> {
+export async function keysWork(identity: Identity): Promise<boolean> {
   if (!identity.epochs.has(identity.currentEpoch)) return false;
   try {
     const probe = `daintree-restore:${newId()}`;
@@ -452,7 +483,7 @@ async function keysWork(identity: Identity): Promise<boolean> {
 }
 
 /** A sealed identity that imports, with keys that work. */
-async function usable(stored: StoredIdentity): Promise<boolean> {
+export async function usable(stored: StoredIdentity): Promise<boolean> {
   try {
     return await keysWork(await importIdentity(stored));
   } catch {
@@ -481,7 +512,8 @@ function relayRecognises(answer: unknown, identity: Identity): boolean {
   );
 }
 
-function sameIdentity(a: StoredIdentity, b: StoredIdentity): boolean {
+/** `a` is a confirmed owner identity, the same one as `b`: its relay, ids and public keys. */
+export function sameIdentity(a: StoredIdentity, b: StoredIdentity): boolean {
   return (
     a.claimed !== false &&
     isOwner(a) &&
@@ -491,6 +523,36 @@ function sameIdentity(a: StoredIdentity, b: StoredIdentity): boolean {
     a.keys.signing_public === b.keys.signing_public &&
     a.keys.exchange_public === b.keys.exchange_public
   );
+}
+
+/** A stored identity's epoch keys by number, decoded; null when one repeats or doesn't decode. */
+function epochKeys(stored: StoredIdentity): Map<number, Buffer> | null {
+  const keys = new Map<number, Buffer>();
+  for (const { epoch, raw } of stored.epochs) {
+    if (keys.has(epoch)) return null;
+    try {
+      keys.set(epoch, Buffer.from(base64UrlToBytes(raw)));
+    } catch {
+      return null;
+    }
+  }
+  return keys;
+}
+
+/**
+ * `kit` holds `held` whole: the same identity, at the same current epoch,
+ * with every epoch key `held` has, byte for byte. A kit that lacks one can't
+ * read what that epoch encrypted.
+ */
+export function kitCovers(kit: StoredIdentity, held: StoredIdentity): boolean {
+  if (!sameIdentity(kit, held) || kit.currentEpoch !== held.currentEpoch) return false;
+  const kitKeys = epochKeys(kit);
+  const heldKeys = epochKeys(held);
+  if (!kitKeys || !heldKeys) return false;
+  for (const [epoch, key] of heldKeys) {
+    if (!kitKeys.get(epoch)?.equals(key)) return false;
+  }
+  return true;
 }
 
 /**
@@ -513,22 +575,9 @@ export async function restoreDecisionsIdentity(
   const { keys } = options;
   const refuse = (reason: DecisionsKitRefusal) => failed({ result: "kit-refused", origin, reason });
 
-  const file = parseKit(payload.kit);
-  if (!file) return refuse("not-a-kit");
-  let body: unknown;
-  try {
-    body = await decryptRecoveryBundle(file, payload.passphrase);
-  } catch {
-    return refuse("wrong-passphrase");
-  }
-  if (
-    !isRecord(body) ||
-    body.kind !== "decisions-recovery-kit" ||
-    !isStoredIdentity(body.identity)
-  ) {
-    return refuse("not-a-kit");
-  }
-  const stored = body.identity;
+  const opened = await openRecoveryKit(payload.kit, payload.passphrase);
+  if ("refusal" in opened) return refuse(opened.refusal);
+  const stored = opened.identity;
   if (stored.claimed === false) return refuse("unfinished");
   if (!isOwner(stored)) return refuse("not-owner");
   if (normalizeRelayOrigin(stored.config.relayOrigin) !== origin) return refuse("another-relay");
@@ -582,8 +631,10 @@ export async function restoreDecisionsIdentity(
   }
   if (!relayRecognises(devices, identity)) return refuse("not-recognised");
 
-  if (held) return { identity: held.config };
+  // The kit verifies only if it holds the keys kept here: a newer sealed copy
+  // can hold epochs it lacks.
+  if (held) return { identity: held.config, kitVerified: kitCovers(stored, held) };
   const saved = await keyCall(() => keys.save(stored));
   if ("failure" in saved) return saved;
-  return { identity: stored.config };
+  return { identity: stored.config, kitVerified: kitCovers(stored, stored) };
 }

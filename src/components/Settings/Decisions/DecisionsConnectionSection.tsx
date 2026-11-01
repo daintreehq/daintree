@@ -1,5 +1,6 @@
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Callout } from "@/components/ui/Callout";
 import { Input } from "@/components/ui/input";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
@@ -44,6 +45,11 @@ const PROBLEM_DETAIL: Record<NonNullable<DecisionsStatus["problem"]>, string> = 
   "other-relay":
     "This computer's Decisions data came from another relay identity, so Daintree won't sync it with this one",
 };
+
+/** A relay is set up here, but no recovery kit has been verified for it (#16007). */
+export function setupUnfinished(status: DecisionsStatus): boolean {
+  return status.relayOrigin !== undefined && status.recoveryKitVerifiedAt === undefined;
+}
 
 /** What was observed about the relay, in words; never what it implies about agents. */
 function describeConnection(status: DecisionsStatus): {
@@ -113,6 +119,7 @@ export function DecisionsConnectionSection({
   locked = false,
   onChanged,
   onClose,
+  onFinishSetup,
 }: {
   status: DecisionsStatus;
   /** The switch is changing, so nothing here should start. */
@@ -124,8 +131,13 @@ export function DecisionsConnectionSection({
   onChanged?: (status: DecisionsStatus | null) => void;
   /** Closes Settings, for a guided deploy the user watches in its pane. */
   onClose?: SettingsTabClose;
+  /** Takes the person to the recovery kit, which finishes setup. */
+  onFinishSetup?: () => void;
 }) {
   const { label, detail, severity } = describeConnection(status);
+  // A revoked relay, or one that can't be used, says so on its own row: no kit changes that.
+  const unfinished =
+    setupUnfinished(status) && status.state !== "revoked" && status.problem === undefined;
   const savedOrigin = status.relayOrigin ?? null;
   const connected = status.state === "connected";
   const keysStored = status.keysStored === true;
@@ -218,6 +230,21 @@ export function DecisionsConnectionSection({
       <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {announcement}
       </span>
+      {unfinished && (
+        <Callout
+          severity="warning"
+          title="Setup isn't finished"
+          action={
+            <Button variant="outline" size="sm" onClick={() => onFinishSetup?.()}>
+              Save recovery kit
+            </Button>
+          }
+        >
+          Save a recovery kit and verify it to finish. Everything on the relay is encrypted with
+          keys only this computer holds: without a kit or these keys, none of it can be recovered,
+          by anyone.
+        </Callout>
+      )}
       <SettingsGroup>
         <SettingsRow
           id="decisions-connection-status"
