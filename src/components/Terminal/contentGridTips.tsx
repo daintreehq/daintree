@@ -276,7 +276,7 @@ export function RotatingTip() {
       // sections above. The marker class snaps it to rest with the sections
       // around it under reduced motion, so the stagger stays one piece.
       <div className="launcher-section-enter flex flex-col items-center gap-2 motion-safe:animate-in motion-safe:fade-in motion-safe:[--tw-animation-duration:var(--duration-200)]">
-        <p className="text-xs text-pretty text-text-secondary text-center">
+        <p className="text-xs text-balance text-text-secondary text-center">
           Tip: <LiveTipMessage tip={tip} />
         </p>
         {tip.actionId && tip.actionLabel && (

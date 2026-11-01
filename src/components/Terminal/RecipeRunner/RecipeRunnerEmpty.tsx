@@ -75,7 +75,7 @@ export function RecipeRunnerEmpty({
         <div className="flex flex-col items-start gap-1">
           {/* `text-xs`, the button's own size: the explanation should not
               out-rank the one control this band exists for. */}
-          <p className="px-3 text-xs text-pretty text-text-secondary">
+          <p className="px-3 text-xs text-balance text-text-secondary">
             Launch agents, dev servers, and terminals together with one click
           </p>
           {createButton}

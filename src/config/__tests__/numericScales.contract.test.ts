@@ -184,12 +184,6 @@ const EXCEPTIONS: {
     reason: "Same heat-cell geometry as PulseHeatmap, plus its loading skeleton",
   },
   {
-    file: "src/components/Pulse/ProjectPulseStrip.tsx",
-    match: "rounded-[1px]",
-    count: 1,
-    reason: "Same heat-cell family at strip size, where 1px is already most of the cell",
-  },
-  {
     file: "src/components/Terminal/VoiceInputButton.tsx",
     match: "rounded-[1.5px]",
     count: 1,
