@@ -1,13 +1,12 @@
 /**
- * Keyboard shortcuts and command overrides visual-review harness.
+ * Keyboard shortcuts visual-review harness.
  *
- * `settings-pages-review` captures every settings page at rest. These two pages carry
- * most of their design weight in states a rest capture never reaches: a row being
- * rebound, a captured combo that collides with another action, a customised binding,
- * a search with no results, the reset-all confirmation, an expanded command with its
- * defaults or prompt editor, a prompt that fails validation, a disabled command. This
- * harness drives each of them through the shipping UI and the real action dispatch
- * seam (`keybinding.setOverride`), in a dark and a light theme in one launch.
+ * `settings-pages-review` captures every settings page at rest. The keyboard page
+ * carries most of its design weight in states a rest capture never reaches: a row
+ * being rebound, a captured combo that collides with another action, a customised
+ * binding, a search with no results, the reset-all confirmation. This harness drives
+ * each of them through the shipping UI and the real action dispatch seam
+ * (`keybinding.setOverride`), in a dark and a light theme in one launch.
  *
  *   DAINTREE_SHOT_SETTINGS_KEYBOARD=1 DAINTREE_SHOT_DIR=/tmp/out \
  *     npx playwright test --project=screenshots settings-keyboard-review
@@ -40,7 +39,6 @@ const CARD = '[role="dialog"]:has(.settings-sidebar) > div';
 const CLOSE = '[aria-label="Close settings"]';
 const navItem = (tab: string) => `.settings-sidebar [role="tab"][data-tab="${tab}"]`;
 const KEYBOARD_PANEL = "#settings-panel-keyboard";
-const COMMANDS_PANEL = "#settings-panel-project\\:commands";
 
 const PROJECT_NAME = "Helios Dashboard";
 const WIDE = { width: 1680, height: 1050 };
@@ -350,97 +348,7 @@ async function captureKeyboard(page: Page, theme: string): Promise<void> {
   await closeSettings(page);
 }
 
-async function captureCommands(page: Page, theme: string): Promise<void> {
-  const panel = page.locator(COMMANDS_PANEL);
-
-  await step("commands-rest", async () => {
-    await openSettingsAt(page, "project:commands");
-    await expect(panel.getByText("github:create-issue").first()).toBeVisible({ timeout: 20_000 });
-    await settle(page, 400);
-    await shoot(page, "cmd-01-rest", theme);
-  });
-
-  await step("commands-defaults", async () => {
-    await ensureAt(page, "project:commands");
-    await panel
-      .getByRole("button", { name: /Expand|github:create-issue/ })
-      .first()
-      .click();
-    await settle(page, 300);
-    await shoot(page, "cmd-02-expanded-defaults", theme);
-    const field = panel.getByRole("textbox", { name: /labels/i }).first();
-    await field.fill("enhancement,ui");
-    await settle(page, 300);
-    await shoot(page, "cmd-03-default-set", theme);
-  });
-
-  await step("commands-prompt", async () => {
-    await ensureAt(page, "project:commands");
-
-    // Older builds hid the prompt behind an "Override with" choice; click it when present.
-    const promptMode = panel.getByRole("radio", { name: /Custom prompt/ }).first();
-    if (await promptMode.isVisible().catch(() => false)) await promptMode.click();
-    await panel.locator("textarea").first().scrollIntoViewIfNeeded();
-    await settle(page, 300);
-    await shoot(page, "cmd-04-prompt-empty", theme);
-    await panel.locator("textarea").first().fill("Create an issue about {title} with {nope}");
-    await settle(page, 300);
-    await shoot(page, "cmd-05-prompt-invalid", theme);
-    await panel
-      .locator("textarea")
-      .first()
-      .fill("Create an issue titled {title} and tag it {labels}");
-    await settle(page, 300);
-    await shoot(page, "cmd-06-prompt-valid", theme);
-  });
-
-  await step("commands-disabled", async () => {
-    await ensureAt(page, "project:commands");
-    // Collapse whatever the earlier steps expanded: the older "Collapse" icon button,
-    // or the disclosure that names its command and reports aria-expanded.
-    const collapse = panel
-      .getByRole("button", { name: /Collapse/ })
-      .or(panel.locator('button[aria-expanded="true"]'))
-      .first();
-    if (await collapse.isVisible().catch(() => false)) await collapse.click();
-    const toggles = panel.locator(
-      'button[aria-label="Command enabled"], [role="switch"][aria-label*="work-issue"], [role="switch"]'
-    );
-    await toggles.last().click();
-    await settle(page, 300);
-    await shoot(page, "cmd-07-disabled", theme);
-  });
-
-  await step("commands-filters", async () => {
-    await ensureAt(page, "project:commands");
-    await panel
-      .getByRole("radio", { name: /Overridden|Modified/ })
-      .first()
-      .click();
-    await settle(page, 300);
-    await shoot(page, "cmd-08-filter-overridden", theme);
-    await panel.getByRole("radio", { name: "All" }).first().click();
-    await panel.getByRole("textbox", { name: "Search commands" }).fill("zzqx");
-    await settle(page, 300);
-    await shoot(page, "cmd-09-search-empty", theme);
-    await panel.getByRole("textbox", { name: "Search commands" }).fill("");
-  });
-
-  // Put the project back the way the next theme expects to find it.
-  await step("commands-cleanup", async () => {
-    await ensureAt(page, "project:commands");
-    for (let i = 0; i < 4; i++) {
-      const reset = panel.getByRole("button", { name: /^Reset .*default/i }).first();
-      if (!(await reset.isVisible().catch(() => false))) break;
-      await reset.click();
-      await settle(page, 200);
-    }
-  });
-
-  await closeSettings(page);
-}
-
-test("keyboard shortcuts and command overrides — every design-weight state", async () => {
+test("keyboard shortcuts — every design-weight state", async () => {
   test.info().annotations.push({
     type: "conditional-skip",
     description: "DAINTREE_SHOT_SETTINGS_KEYBOARD is required for the keyboard settings capture",
@@ -482,7 +390,6 @@ test("keyboard shortcuts and command overrides — every design-weight state", a
       await dismissBlockingPalette(page);
       await settle(page, 800);
       await captureKeyboard(page, theme);
-      await captureCommands(page, theme);
     }
   } finally {
     if (ctx) await closeApp(ctx.app).catch(() => {});

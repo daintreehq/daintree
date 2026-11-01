@@ -5,7 +5,6 @@ import { buildGlobalEnvPreloadBindings } from "../handlers/globalEnv.preload.js"
 import { buildHelpPreloadBindings } from "../handlers/help.preload.js";
 import { buildAccessibilityPreloadBindings } from "../handlers/accessibility.preload.js";
 import { buildEventInspectorPreloadBindings } from "../handlers/eventInspector.preload.js";
-import { buildCommandsPreloadBindings } from "../handlers/commands.preload.js";
 import { buildPortalPreloadBindings } from "../handlers/portal.preload.js";
 import { buildDevPreviewPreloadBindings } from "../handlers/devPreview.preload.js";
 import { buildPluginPreloadBindings } from "../handlers/plugin.preload.js";
@@ -96,19 +95,6 @@ describe("leaf preload namespace bindings", () => {
 
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("event-inspector:get-filtered", filters);
-    });
-  });
-
-  describe("commands", () => {
-    it("routes list(context) to commands:list with the context forwarded", async () => {
-      const invoke = vi.fn().mockResolvedValue([]);
-      const bindings = buildCommandsPreloadBindings(invoke);
-
-      const ctx = { projectId: "p1" } as const;
-      await bindings.list(ctx);
-
-      expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith("commands:list", ctx);
     });
   });
 

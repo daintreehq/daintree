@@ -20,7 +20,6 @@ import type {
   TerminalFirstPrompt,
 } from "./panel.js";
 import type { PersistedPanelKindRef } from "../config/panelKindRegistry.js";
-import type { CommandOverride } from "./commands.js";
 import type { GitignoreTemplateId } from "../config/gitignoreTemplates.js";
 import type { GitStatus } from "./git.js";
 import type { EditorConfig } from "./editor.js";
@@ -838,8 +837,6 @@ export interface ProjectSettings {
   turbopackEnabled?: boolean;
   /** CopyTree context generation configuration */
   copyTreeSettings?: CopyTreeSettings;
-  /** Command overrides for project-specific customization */
-  commandOverrides?: CommandOverride[];
   /** Git initialization defaults */
   gitInitDefaults?: {
     /** Create an initial commit (default: true) */
@@ -956,7 +953,6 @@ export const PROJECT_SETTINGS_SHAREABILITY = {
   devServerLoadTimeout: "shareable",
   turbopackEnabled: "shareable",
   copyTreeSettings: "shareable",
-  commandOverrides: "local",
   gitInitDefaults: "local",
   preferredEditor: "local",
   preferredImageViewer: "local",
@@ -1032,7 +1028,6 @@ export const PROJECT_SETTINGS_AGENT_EXPOSURE = {
   devServerLoadTimeout: "exposed",
   turbopackEnabled: "exposed",
   copyTreeSettings: "exposed",
-  commandOverrides: "internal",
   gitInitDefaults: "internal",
   preferredEditor: "internal",
   preferredImageViewer: "internal",

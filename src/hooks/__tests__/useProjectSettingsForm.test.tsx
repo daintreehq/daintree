@@ -86,7 +86,6 @@ const baseSettings: ProjectSettings = {
   defaultWorktreeRecipeId: undefined,
   devServerCommand: "npm run dev",
   devServerLoadTimeout: 5000,
-  commandOverrides: [],
   copyTreeSettings: {},
   branchPrefixMode: "username",
   branchPrefixCustom: "gpriday",

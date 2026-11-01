@@ -297,7 +297,6 @@ const PROJECT_TABS: Record<ProjectSettingsTab, TabExpectation> = {
     },
   },
   "project:recipes": {},
-  "project:commands": {},
   "project:notifications": {},
   "project:code-forge": {},
   "project:plugins": {},

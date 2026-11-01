@@ -49,7 +49,6 @@ import { registerCodexHandlers } from "./handlers/codex.js";
 import { registerClaudeHandlers } from "./handlers/claude.js";
 import { registerEventsHandlers } from "./handlers/events.js";
 import { registerDevPreviewHandlers } from "./handlers/devPreview.js";
-import { registerCommandHandlers } from "./handlers/commands.js";
 import { registerAppAgentHandlers } from "./handlers/appAgent.js";
 import { registerAgentCapabilitiesHandlers } from "./handlers/agentCapabilities.js";
 import { registerCliHandlers } from "./handlers/cli.js";
@@ -227,7 +226,6 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerClaudeHandlers());
     register(() => registerEventsHandlers(deps));
     register(() => registerDevPreviewHandlers(deps));
-    register(() => registerCommandHandlers());
     register(() => registerAppAgentHandlers(deps));
     register(() => registerAgentCapabilitiesHandlers());
     register(() => registerCliHandlers());

@@ -42,7 +42,6 @@ const {
     getPluginMcpConsentStore: vi.fn(),
   };
 });
-const registerCommandsMock = vi.hoisted(() => vi.fn());
 // Off by default: only the composed last-window-close test hands registrations
 // and the close on to the real queue.
 const deferredForward = vi.hoisted(() => ({
@@ -369,15 +368,11 @@ vi.mock("../../services/PendingHelpHibernationStore.js", () => ({
   getPendingHelpHibernationStore: vi.fn(() => ({ load: vi.fn(async () => {}) })),
 }));
 
-// globalServicesInit statically imports menu.ts (wireUpdateMenuState) and the
-// commands barrel (registerCommands); both pull electron/service graphs this
-// suite doesn't exercise — mock at the boundary.
+// globalServicesInit statically imports menu.ts (wireUpdateMenuState), which
+// pulls electron/service graphs this suite doesn't exercise — mock at the
+// boundary.
 vi.mock("../../menu.js", () => ({
   wireUpdateMenuState: vi.fn(),
-}));
-
-vi.mock("../../services/commands/index.js", () => ({
-  registerCommands: registerCommandsMock,
 }));
 
 vi.mock("../deferredInitQueue.js", () => ({
@@ -810,7 +805,6 @@ describe("initGlobalServices task ordering", () => {
     pluginActivateStartup.mockClear();
     setPluginDirResolver.mockClear();
     activateOpenFileInstaller.mockClear();
-    registerCommandsMock.mockClear();
     (app.exit as ReturnType<typeof vi.fn>).mockReset();
     migrationCurrentVersion = 1;
     migrationShouldThrow = false;
@@ -875,7 +869,6 @@ describe("initGlobalServices task ordering", () => {
       "auto-updater",
       "windows-store-notifier",
       "ccr-config",
-      "builtin-commands",
       "idle-terminal-notification-service",
       "resource-profile-service",
       "plugin-service",
@@ -908,19 +901,11 @@ describe("initGlobalServices task ordering", () => {
     }
   });
 
-  it("registers builtin-commands as a deferred task that fires registerCommands only when run", async () => {
+  it("registers no built-in commands task (#15759)", async () => {
     const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
     await initGlobalServices(fakeRegistry);
 
-    const run = registeredTaskRuns.get("builtin-commands");
-    expect(run).toBeDefined();
-    // Registration moved out of main-module eval (boot path) into the queue —
-    // the command-chunk imports must not fire before the drain.
-    expect(registerCommandsMock).not.toHaveBeenCalled();
-
-    run!();
-
-    expect(registerCommandsMock).toHaveBeenCalledTimes(1);
+    expect(registeredTaskNames).not.toContain("builtin-commands");
   });
 
   it("feeds raw powerMonitor suspend/resume into the event-loop lag monitor (#12887)", async () => {

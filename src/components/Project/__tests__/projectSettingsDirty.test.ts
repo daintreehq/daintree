@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { createProjectSettingsSnapshot, areSnapshotsEqual } from "../projectSettingsDirty";
-import type { CommandOverride } from "@shared/types/commands";
 
 describe("projectSettingsDirty", () => {
   describe("createProjectSettingsSnapshot", () => {
@@ -26,7 +25,6 @@ describe("projectSettingsDirty", () => {
           { id: "cmd2", name: "", command: "test", icon: undefined },
         ],
         "recipe-123",
-        [{ commandId: "test", disabled: false }],
         {}
       );
 
@@ -68,7 +66,6 @@ describe("projectSettingsDirty", () => {
         ],
         [],
         undefined,
-        [],
         {}
       );
 
@@ -90,7 +87,6 @@ describe("projectSettingsDirty", () => {
         ],
         [],
         undefined,
-        [],
         {}
       );
 
@@ -112,7 +108,6 @@ describe("projectSettingsDirty", () => {
         ],
         [],
         undefined,
-        [],
         {}
       );
 
@@ -129,35 +124,12 @@ describe("projectSettingsDirty", () => {
         [],
         [],
         undefined,
-        [],
         {}
       );
 
       expect(snapshot.excludedPaths).toEqual(["z/**", "a/**", "m/**"]);
     });
 
-    it("should preserve command overrides order", () => {
-      const overrides: CommandOverride[] = [
-        { commandId: "z", disabled: false },
-        { commandId: "a", disabled: true },
-      ];
-
-      const snapshot = createProjectSettingsSnapshot(
-        "Project",
-        "🌲",
-        "",
-        undefined,
-        [],
-        [],
-        [],
-        undefined,
-        overrides,
-        {}
-      );
-
-      expect(snapshot.commandOverrides[0]!.commandId).toBe("z");
-      expect(snapshot.commandOverrides[1]!.commandId).toBe("a");
-    });
   });
 
   describe("areSnapshotsEqual", () => {
@@ -170,7 +142,6 @@ describe("projectSettingsDirty", () => {
       [{ id: "1", key: "KEY", value: "value" }],
       [{ id: "cmd1", name: "Build", command: "npm run build" }],
       "recipe-1",
-      [{ commandId: "test", disabled: false }],
       {}
     );
 
@@ -184,7 +155,6 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "value" }],
         [{ id: "cmd1", name: "Build", command: "npm run build" }],
         "recipe-1",
-        [{ commandId: "test", disabled: false }],
         {}
       );
 
@@ -202,7 +172,6 @@ describe("projectSettingsDirty", () => {
           [],
           [],
           undefined,
-          [],
           {},
           "none",
           "",
@@ -235,7 +204,6 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "value" }],
         [{ id: "cmd1", name: "Build", command: "npm run build" }],
         "recipe-1",
-        [{ commandId: "test", disabled: false }],
         {}
       );
 
@@ -252,7 +220,6 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "value" }],
         [{ id: "cmd1", name: "Build", command: "npm run build" }],
         "recipe-1",
-        [{ commandId: "test", disabled: false }],
         {}
       );
 
@@ -269,7 +236,6 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "value" }],
         [{ id: "cmd1", name: "Build", command: "npm run build" }],
         "recipe-1",
-        [{ commandId: "test", disabled: false }],
         {}
       );
 
@@ -286,7 +252,6 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "value" }],
         [{ id: "cmd1", name: "Build", command: "npm run build" }],
         "recipe-1",
-        [{ commandId: "test", disabled: false }],
         {}
       );
 
@@ -303,7 +268,6 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "value" }],
         [{ id: "cmd1", name: "Build", command: "npm run build" }],
         "recipe-1",
-        [{ commandId: "test", disabled: false }],
         {}
       );
 
@@ -320,7 +284,6 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "different-value" }],
         [{ id: "cmd1", name: "Build", command: "npm run build" }],
         "recipe-1",
-        [{ commandId: "test", disabled: false }],
         {}
       );
 
@@ -337,7 +300,6 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "value" }],
         [{ id: "cmd1", name: "Test", command: "npm test" }],
         "recipe-1",
-        [{ commandId: "test", disabled: false }],
         {}
       );
 
@@ -354,24 +316,6 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "value" }],
         [{ id: "cmd1", name: "Build", command: "npm run build" }],
         "recipe-2",
-        [{ commandId: "test", disabled: false }],
-        {}
-      );
-
-      expect(areSnapshotsEqual(baseSnapshot, snapshot2)).toBe(false);
-    });
-
-    it("should detect changed commandOverrides", () => {
-      const snapshot2 = createProjectSettingsSnapshot(
-        "Project",
-        "🌲",
-        "npm run dev",
-        undefined,
-        ["node_modules/**"],
-        [{ id: "1", key: "KEY", value: "value" }],
-        [{ id: "cmd1", name: "Build", command: "npm run build" }],
-        "recipe-1",
-        [{ commandId: "test", disabled: true }],
         {}
       );
 
@@ -388,7 +332,6 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "value" }],
         [{ id: "cmd1", name: "Build", command: "npm run build" }],
         "recipe-1",
-        [{ commandId: "test", disabled: false }],
         {},
         "none",
         "",
@@ -408,7 +351,6 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "value" }],
         [{ id: "cmd1", name: "Build", command: "npm run build", preferredLocation: "grid" }],
         "recipe-1",
-        [{ commandId: "test", disabled: false }],
         {}
       );
       const snapshotB = createProjectSettingsSnapshot(
@@ -420,7 +362,6 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "value" }],
         [{ id: "cmd1", name: "Build", command: "npm run build", preferredLocation: "dock" }],
         "recipe-1",
-        [{ commandId: "test", disabled: false }],
         {}
       );
 
@@ -437,7 +378,6 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "value" }],
         [{ id: "cmd1", name: "Build", command: "npm run build", preferredAutoRestart: false }],
         "recipe-1",
-        [{ commandId: "test", disabled: false }],
         {}
       );
       const snapshotB = createProjectSettingsSnapshot(
@@ -449,7 +389,6 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "value" }],
         [{ id: "cmd1", name: "Build", command: "npm run build", preferredAutoRestart: true }],
         "recipe-1",
-        [{ commandId: "test", disabled: false }],
         {}
       );
 
@@ -466,7 +405,6 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "value" }],
         [{ id: "cmd1", name: "Build", command: "npm run build" }],
         "recipe-1",
-        [{ commandId: "test", disabled: false }],
         {}
       );
       const snapshotB = createProjectSettingsSnapshot(
@@ -478,7 +416,6 @@ describe("projectSettingsDirty", () => {
         [{ id: "1", key: "KEY", value: "value" }],
         [{ id: "cmd1", name: "Build", command: "npm run build", preferredLocation: undefined }],
         "recipe-1",
-        [{ commandId: "test", disabled: false }],
         {}
       );
 
@@ -495,7 +432,6 @@ describe("projectSettingsDirty", () => {
         [],
         [{ id: "cmd1", name: "Build", command: "npm run build" }],
         undefined,
-        [],
         {}
       );
       const snapshotB = createProjectSettingsSnapshot(
@@ -507,7 +443,6 @@ describe("projectSettingsDirty", () => {
         [],
         [{ id: "cmd1", name: "Build", command: "npm run build", preferredLocation: "dock" }],
         undefined,
-        [],
         {}
       );
 
@@ -532,7 +467,6 @@ describe("projectSettingsDirty", () => {
           },
         ],
         undefined,
-        [],
         {}
       );
 
@@ -550,7 +484,6 @@ describe("projectSettingsDirty", () => {
         [],
         [],
         undefined,
-        [],
         {},
         "none",
         "",
@@ -569,7 +502,6 @@ describe("projectSettingsDirty", () => {
         [],
         [],
         undefined,
-        [],
         {},
         "none",
         "",
@@ -593,7 +525,6 @@ describe("projectSettingsDirty", () => {
         [],
         [],
         undefined,
-        [],
         {},
         "none",
         "",
@@ -613,7 +544,6 @@ describe("projectSettingsDirty", () => {
         [],
         [],
         undefined,
-        [],
         {},
         "none",
         "",
@@ -638,7 +568,6 @@ describe("projectSettingsDirty", () => {
         [],
         [],
         undefined,
-        [],
         {}
       );
       const snapshotB = createProjectSettingsSnapshot(
@@ -650,7 +579,6 @@ describe("projectSettingsDirty", () => {
         [],
         [],
         undefined,
-        [],
         {},
         "none",
         "",
@@ -675,7 +603,6 @@ describe("projectSettingsDirty", () => {
         [],
         [],
         undefined,
-        [],
         {},
         "none",
         "",
@@ -691,7 +618,6 @@ describe("projectSettingsDirty", () => {
         [],
         [],
         undefined,
-        [],
         {},
         "none",
         "",
@@ -712,7 +638,6 @@ describe("projectSettingsDirty", () => {
         [],
         [],
         undefined,
-        [],
         {},
         "none",
         "",
@@ -731,7 +656,6 @@ describe("projectSettingsDirty", () => {
         [],
         [],
         undefined,
-        [],
         {},
         "none",
         "",
@@ -755,7 +679,6 @@ describe("projectSettingsDirty", () => {
         [],
         [],
         undefined,
-        [],
         {},
         "none",
         "",
@@ -779,7 +702,6 @@ describe("projectSettingsDirty", () => {
         [],
         [],
         undefined,
-        [],
         {},
         "none",
         "",
@@ -808,7 +730,6 @@ describe("projectSettingsDirty", () => {
         [],
         [],
         undefined,
-        [],
         {},
         "none",
         "",
@@ -834,7 +755,6 @@ describe("projectSettingsDirty", () => {
         [],
         [],
         undefined,
-        [],
         {},
         "none",
         "",
@@ -865,7 +785,6 @@ describe("projectSettingsDirty", () => {
         [],
         [],
         undefined,
-        [],
         {},
         "none",
         "",
@@ -891,7 +810,6 @@ describe("projectSettingsDirty", () => {
         [],
         [],
         undefined,
-        [],
         {},
         "none",
         "",

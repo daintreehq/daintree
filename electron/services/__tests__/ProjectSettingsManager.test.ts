@@ -16,12 +16,6 @@ vi.mock("../../utils/fs.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../CommandService.js", () => ({
-  commandService: {
-    invalidateOverridesCache: vi.fn(),
-  },
-}));
-
 vi.mock("../ProjectEnvSecureStorage.js", () => ({
   projectEnvSecureStorage: {
     get: vi.fn(() => undefined),

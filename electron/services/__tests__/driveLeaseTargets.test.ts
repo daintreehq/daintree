@@ -160,7 +160,7 @@ describe("resolveLeaseTarget", () => {
       ["agent-session:prepare-bookmark", [{ terminalId: "gone" }]],
       ["copytree:inject", [{ terminalId: "gone", worktreeId: "/repo/a" }]],
       // Optional means it may be left out, not that one named can be untraced.
-      ["commands:execute", [{ commandId: "c", context: { terminalId: "gone" } }]],
+      ["agent-session:clear", [{ worktreeId: "/elsewhere/wt" }]],
     ];
     for (const [channel, args] of elsewhere) {
       expect(
@@ -188,12 +188,7 @@ describe("resolveLeaseTarget", () => {
       )
     ).toEqual({ kind: "projects", projectIds: ["a"] });
     expect(
-      resolveLeaseTarget(
-        target("commands:execute"),
-        [{ commandId: "c", context: {} }],
-        "a",
-        stubResolvers()
-      )
+      resolveLeaseTarget(target("artifact:save-to-file"), [{ content: "x" }], "a", stubResolvers())
     ).toEqual({ kind: "projects", projectIds: ["a"] });
     expect(
       resolveLeaseTarget(

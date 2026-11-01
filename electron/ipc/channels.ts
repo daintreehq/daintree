@@ -635,11 +635,6 @@ export const CHANNELS = {
   ELEMENT_PICKER_EVENT: "element-picker:event",
   ELEMENT_PICKER_SOURCE_CHANGED: "element-picker:source-changed",
 
-  COMMANDS_LIST: "commands:list",
-  COMMANDS_GET: "commands:get",
-  COMMANDS_EXECUTE: "commands:execute",
-  COMMANDS_GET_BUILDER: "commands:get-builder",
-
   APP_AGENT_GET_CONFIG: "app-agent:get-config",
   APP_AGENT_SET_CONFIG: "app-agent:set-config",
   APP_AGENT_HAS_API_KEY: "app-agent:has-api-key",

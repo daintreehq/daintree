@@ -1636,15 +1636,6 @@ function ProjectFormTabContent({
         />
       );
 
-    case "project:commands":
-      return (
-        <LazyComp
-          projectId={projectId}
-          overrides={projectForm.commandOverrides}
-          onChange={projectForm.setCommandOverrides}
-        />
-      );
-
     case "project:notifications":
       return (
         <LazyComp

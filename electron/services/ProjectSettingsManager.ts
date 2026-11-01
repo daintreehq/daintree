@@ -530,47 +530,6 @@ export class ProjectSettingsManager {
       }
     }
 
-    if (settings.commandOverrides !== undefined) {
-      if (!Array.isArray(settings.commandOverrides)) {
-        console.warn(
-          `[ProjectSettingsManager] Coercing non-array commandOverrides to undefined in project ${projectId}`
-        );
-        runtimeSettings = { ...runtimeSettings, commandOverrides: undefined };
-      } else {
-        const validOverrides = settings.commandOverrides.filter((override) => {
-          if (!override || typeof override !== "object") return false;
-          if (typeof override.commandId !== "string") return false;
-          if (
-            override.defaults !== undefined &&
-            (override.defaults === null ||
-              typeof override.defaults !== "object" ||
-              Array.isArray(override.defaults))
-          ) {
-            console.warn(
-              `[ProjectSettingsManager] Dropping invalid commandOverride for ${override.commandId} in project ${projectId}`
-            );
-            return false;
-          }
-          if (override.disabled !== undefined && typeof override.disabled !== "boolean")
-            return false;
-          if (
-            override.prompt !== undefined &&
-            (typeof override.prompt !== "string" || override.prompt.trim() === "")
-          ) {
-            console.warn(
-              `[ProjectSettingsManager] Dropping invalid/empty prompt in commandOverride for ${override.commandId} in project ${projectId}`
-            );
-            return false;
-          }
-          return true;
-        });
-        runtimeSettings = {
-          ...runtimeSettings,
-          commandOverrides: validOverrides.length > 0 ? validOverrides : undefined,
-        };
-      }
-    }
-
     const envelope = encodeEnvelope(runtimeSettings);
     const jsonString = JSON.stringify(envelope, null, 2);
 
@@ -605,11 +564,6 @@ export class ProjectSettingsManager {
     // saved overrides in effect.
     this.notificationOverridesCache.set(projectId, runtimeSettings.notificationOverrides);
     this.noSettingsFileAt.delete(projectId);
-
-    // Invalidate after durable write succeeds. Dynamic import avoids
-    // expanding the static module graph for tests that mock ProjectStore.
-    const { commandService } = await import("./CommandService.js");
-    commandService.invalidateOverridesCache(projectId);
   }
 
   async getProjectNotificationOverrides(

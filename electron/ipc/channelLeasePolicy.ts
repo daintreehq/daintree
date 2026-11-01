@@ -138,10 +138,6 @@ export const CHANNEL_LEASE_POLICY = {
   "codex:refresh-quota": "free",
   "codex:read-subagent-transcript": "free",
   "codex:resolve-resume-latest-session": "free",
-  "commands:execute": "driver",
-  "commands:get": "free",
-  "commands:get-builder": "free",
-  "commands:list": "free",
   "config-bundle:apply-import": "free",
   "config-bundle:export": "free",
   "config-bundle:imported": "free",
@@ -907,12 +903,6 @@ export const CHANNEL_LEASE_TARGETS = {
   "artifact:save-to-file": [{ from: "path", at: [0, "cwd"], optional: "caller", unowned: "allow" }],
   "canopy:rename": TERMINAL_ARG,
   "canopy:trash": TERMINAL_ARG,
-  "commands:execute": [
-    { from: "project", at: [0, "context", "projectId"], optional: "caller" },
-    { from: "terminal", at: [0, "context", "terminalId"], optional: true },
-    { from: "worktree", at: [0, "context", "worktreeId"], optional: true },
-    { from: "path", at: [0, "context", "cwd"], optional: true },
-  ],
   "copytree:inject": [
     { from: "terminal", at: [0, "terminalId"] },
     { from: "worktree", at: [0, "worktreeId"] },
