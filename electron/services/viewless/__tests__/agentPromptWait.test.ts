@@ -123,9 +123,9 @@ describe("waitForAgentAtPrompt", () => {
     const wait = waitForAgentAtPrompt(terminalId, { timeoutMs: 60_000 });
     kill(terminalId);
     await expect(wait).resolves.toMatchObject({ outcome: "closed" });
-    await expect(waitForAgentAtPrompt(terminalId, { timeoutMs: 60_000 })).resolves.toMatchObject(
-      { outcome: "closed" }
-    );
+    await expect(waitForAgentAtPrompt(terminalId, { timeoutMs: 60_000 })).resolves.toMatchObject({
+      outcome: "closed",
+    });
   });
 
   it("times out with the last state it saw", async () => {

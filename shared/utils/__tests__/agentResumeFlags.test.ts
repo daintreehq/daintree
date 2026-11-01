@@ -21,7 +21,10 @@ describe("reconcileResumeLaunchFlagsWith", () => {
 
   it("adds the bypass flag a global switch turns on, even with nothing captured", () => {
     expect(
-      reconcileResumeLaunchFlagsWith({ agentId: "claude" }, settings({ globalSkipPermissions: true }))
+      reconcileResumeLaunchFlagsWith(
+        { agentId: "claude" },
+        settings({ globalSkipPermissions: true })
+      )
     ).toContain(BYPASS);
   });
 
@@ -40,7 +43,10 @@ describe("reconcileResumeLaunchFlagsWith", () => {
 
   it("reconciles with no settings at all", () => {
     expect(
-      reconcileResumeLaunchFlagsWith({ agentId: "claude", agentLaunchFlags: ["--model", "opus"] }, null)
+      reconcileResumeLaunchFlagsWith(
+        { agentId: "claude", agentLaunchFlags: ["--model", "opus"] },
+        null
+      )
     ).toEqual(expect.arrayContaining(["--model", "opus"]));
   });
 });

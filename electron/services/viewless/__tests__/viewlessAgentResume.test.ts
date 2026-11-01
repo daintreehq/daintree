@@ -62,7 +62,9 @@ function resumeDeps(
   made.deps.agents.getSettings = async () => options.settings ?? null;
   const base = made.invoke.getMockImplementation()!;
   made.invoke.mockImplementation(async (projectId, channel, args) =>
-    channel === CHANNELS.AGENT_SESSION_LIST ? (options.sessions ?? []) : base(projectId, channel, args)
+    channel === CHANNELS.AGENT_SESSION_LIST
+      ? (options.sessions ?? [])
+      : base(projectId, channel, args)
   );
   return { ...made, pty };
 }
