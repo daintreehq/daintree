@@ -202,7 +202,10 @@ export interface TerminalNotifyServiceDeps {
       lastStateChange?: number
     ) => void
   ) => () => void;
-  /** Whether the MCP server is on. Read on every decision. */
+  /**
+   * Whether the MCP server is on. Read on every decision; a {@link WakeScope}'s
+   * wakes need their scope live instead.
+   */
   isEnabled: () => boolean;
   /** Push a pane's chrome state to the views of its project. */
   publish: (projectId: string, state: PaneNotifyState) => void;
@@ -356,8 +359,28 @@ export const LANE_WAKE_MAX_PENDING_MS = 10 * 60_000;
 export const LANE_WAKE_RECHECK_MS = 5_000;
 export const MAX_QUEUED_WAKES_PER_PANE = 32;
 
+/**
+ * A feature's own lane wakes, accepted whether or not the MCP server is on
+ * (#15999). Its wakes share their pane's notice line and gate like any other;
+ * releasing it ends those not yet on a line.
+ */
+export interface WakeScope {
+  enqueueWake(pane: OwnPane, projectId: string, wake: LaneWake): void;
+  release(): void;
+}
+
+/** A scope's identity on its wakes: an object no caller can name or forge. */
+interface WakeScopeRecord {
+  readonly id: string;
+  released: boolean;
+}
+
 interface WakeEntry {
   wake: LaneWake;
+  /** Its key in the owner's map: the wake id, namespaced by its scope's when it has one. */
+  key: string;
+  /** Set for a feature's wake, which needs its scope live rather than the server on. */
+  scope?: WakeScopeRecord;
   deadline: number;
   /** The line carrying it, once reserved; it is never typed again after this. */
   token?: string;
@@ -561,6 +584,8 @@ export class TerminalNotifyService {
   private readonly teardownEpochs = new Map<string, number>();
   /** Notices whose history is being replayed into them right now. */
   private readonly replaying = new Set<Notice>();
+  /** Scopes not yet released; empty, turning the server off disposes everything. */
+  private readonly wakeScopes = new Set<WakeScopeRecord>();
   private globalTeardownEpoch = 0;
   private epoch = 0;
   private disposed = false;
@@ -726,6 +751,9 @@ export class TerminalNotifyService {
     });
     let settled = false;
     const release = () => {
+      // The server going off already cleared this launch's count; one taken
+      // since is another launch's.
+      if (this.globalTeardownEpoch > epochBefore) return;
       owner.pendingLaunches = Math.max(0, owner.pendingLaunches - 1);
       const launching = callId === undefined ? 0 : (owner.launchingCalls?.get(callId) ?? 0);
       if (launching > 1) owner.launchingCalls!.set(callId!, launching - 1);
@@ -742,7 +770,10 @@ export class TerminalNotifyService {
           result !== null &&
           (result as Record<string, unknown>).launched === true &&
           (result as Record<string, unknown>).spawnStatus == null;
-        if (owner.disposed || !launched || terminalId === undefined) {
+        // A pane a wake scope kept through the server going off is not
+        // disposed, but the notices it was asking for went then.
+        const torndown = owner.disposed || this.globalTeardownEpoch > epochBefore;
+        if (torndown || !launched || terminalId === undefined) {
           this.maybeDispose(owner);
           if (!owner.disposed) this.publish(owner);
           return;
@@ -915,11 +946,30 @@ export class TerminalNotifyService {
    * lane is enrolled and running as `pane`; every outcome reaches `wake.report`.
    */
   enqueueWake(pane: OwnPane, projectId: string, wake: LaneWake): void {
+    this.queueWake(pane, projectId, wake, undefined);
+  }
+
+  /** A scope for one feature's wakes, which go on with the server off; see {@link WakeScope}. */
+  openWakeScope(): WakeScope {
+    const scope: WakeScopeRecord = { id: randomUUID(), released: false };
+    this.wakeScopes.add(scope);
+    return {
+      enqueueWake: (pane, projectId, wake) => this.queueWake(pane, projectId, wake, scope),
+      release: () => this.releaseScope(scope),
+    };
+  }
+
+  private queueWake(
+    pane: OwnPane,
+    projectId: string,
+    wake: LaneWake,
+    scope: WakeScopeRecord | undefined
+  ): void {
     if (!LANE_WAKE_ID_PATTERN.test(wake.id)) {
       reportWake(wake, { kind: "unavailable", reason: "invalid-id" });
       return;
     }
-    if (this.disposed || !this.deps.isEnabled()) {
+    if (this.disposed || !this.accepts(scope)) {
       reportWake(wake, { kind: "unavailable", reason: "notices-off" });
       return;
     }
@@ -933,20 +983,25 @@ export class TerminalNotifyService {
       reportWake(wake, check);
       return;
     }
+    // Namespaced so a feature's wake never joins, or is joined by, one it didn't queue.
+    const key = scope === undefined ? wake.id : `${scope.id}\u0000${wake.id}`;
     const existing = this.existingOwner(pane);
-    if (existing?.wakes.has(wake.id) === true) return;
+    if (existing?.wakes.has(key) === true) return;
     if ((existing?.wakes.size ?? 0) >= MAX_QUEUED_WAKES_PER_PANE) {
       reportWake(wake, { kind: "unavailable", reason: "capacity" });
       return;
     }
-    this.ensureSubscribed(client);
+    // After `ownerFor`: replacing the only other owner would unsubscribe.
     const owner = this.ownerFor(pane, projectId);
+    this.ensureSubscribed(client);
     const entry: WakeEntry = {
       wake,
+      key,
+      ...(scope !== undefined ? { scope } : {}),
       deadline: this.now() + LANE_WAKE_MAX_PENDING_MS,
       heldReported: false,
     };
-    owner.wakes.set(wake.id, entry);
+    owner.wakes.set(key, entry);
     if (check.kind === "held") this.holdWake(entry, check.reason);
     this.armWakeTimer(owner);
     this.schedule(owner);
@@ -1010,7 +1065,7 @@ export class TerminalNotifyService {
     return calls;
   }
 
-  /** The MCP server was turned off, or the service is shutting down. */
+  /** The service is shutting down: every notice and wake goes, scoped ones too. */
   disposeAll(): void {
     this.globalTeardownEpoch = ++this.epoch;
     for (const owner of [...this.ownersByKey.values()]) this.disposeOwner(owner);
@@ -1020,6 +1075,93 @@ export class TerminalNotifyService {
     this.disposed = true;
     this.disposeAll();
     this.unsubscribe();
+  }
+
+  /**
+   * The MCP server was turned off. With no {@link WakeScope} live this is
+   * {@link disposeAll}. Otherwise every notice, launch and unscoped wake still
+   * goes, and a pane keeps only its scoped wakes, with its line's history, so
+   * nothing but a feature's own line is typed while the server is off.
+   */
+  disposeUnscoped(): void {
+    if (this.wakeScopes.size === 0) {
+      this.disposeAll();
+      return;
+    }
+    // Admissions and launches still in flight read this as their pane torn down.
+    this.globalTeardownEpoch = ++this.epoch;
+    for (const owner of [...this.ownersByKey.values()]) this.keepScopedWakes(owner);
+  }
+
+  private keepScopedWakes(owner: PaneOwner): void {
+    const inHost = owner.inHost;
+    // A line the host still holds can't be split: one carrying anything else
+    // is taken back with all it carries, as turning the server off always did.
+    if (
+      ![...owner.wakes.values()].some(isLiveScoped) ||
+      (inHost !== undefined && this.lineCarriesUnscoped(owner, inHost.token))
+    ) {
+      this.disposeOwner(owner);
+      return;
+    }
+    for (const notice of [...owner.notices.values()]) this.removeNotice(owner, notice);
+    owner.fired = [];
+    owner.droppedCount = 0;
+    owner.pendingLaunches = 0;
+    delete owner.launchingCalls;
+    for (const [key, entry] of owner.wakes) {
+      if (isLiveScoped(entry)) continue;
+      owner.wakes.delete(key);
+      reportWake(entry.wake, { kind: "unavailable", reason: "stopped" });
+    }
+    this.publish(owner);
+  }
+
+  private lineCarriesUnscoped(owner: PaneOwner, token: string): boolean {
+    if (owner.fired.some((entry) => entry.wakeToken === token)) return true;
+    for (const entry of owner.wakes.values()) {
+      if (entry.token === token && !isLiveScoped(entry)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * End a scope. Its wakes not yet on a line go as stopped. With the server
+   * off, a pane its wakes were keeping is stopped whole, its line taken back
+   * if the host still holds it, since nothing else may be typed there.
+   */
+  private releaseScope(scope: WakeScopeRecord): void {
+    if (scope.released) return;
+    scope.released = true;
+    this.wakeScopes.delete(scope);
+    const enabled = this.deps.isEnabled();
+    for (const owner of [...this.ownersByKey.values()]) {
+      let touched = false;
+      for (const [key, entry] of owner.wakes) {
+        if (entry.scope !== scope) continue;
+        touched = true;
+        if (entry.token !== undefined) continue;
+        owner.wakes.delete(key);
+        reportWake(entry.wake, { kind: "unavailable", reason: "stopped" });
+      }
+      if (!touched) continue;
+      if (!enabled && ![...owner.wakes.values()].some(isLiveScoped)) {
+        this.disposeOwner(owner);
+        continue;
+      }
+      this.publish(owner);
+      this.maybeDispose(owner);
+    }
+  }
+
+  /** Whether a wake may be queued now: a scoped one needs its scope, any other the server on. */
+  private accepts(scope: WakeScopeRecord | undefined): boolean {
+    return scope === undefined ? this.deps.isEnabled() : !scope.released;
+  }
+
+  /** Whether anything may be typed into this pane now. */
+  private mayType(owner: PaneOwner): boolean {
+    return this.deps.isEnabled() || [...owner.wakes.values()].some(isLiveScoped);
   }
 
   /**
@@ -1385,6 +1527,11 @@ export class TerminalNotifyService {
     const ready: WakeEntry[] = [];
     for (const [id, entry] of owner.wakes) {
       if (entry.token !== undefined) continue;
+      if (!this.accepts(entry.scope)) {
+        owner.wakes.delete(id);
+        reportWake(entry.wake, { kind: "unavailable", reason: "notices-off" });
+        continue;
+      }
       if (now >= entry.deadline) {
         owner.wakes.delete(id);
         // Ends it: whoever queued it may try again, and nothing else will.
@@ -1392,6 +1539,8 @@ export class TerminalNotifyService {
         continue;
       }
       const check = recheckWake(entry.wake);
+      // Its hook may have ended it already, scope or pane, with its outcome.
+      if (owner.wakes.get(id) !== entry) continue;
       if (check.kind === "unavailable") {
         owner.wakes.delete(id);
         reportWake(entry.wake, check);
@@ -2092,7 +2241,7 @@ export class TerminalNotifyService {
     if (owner.disposed || owner.attempting) return;
     const status = owner.delivery.status;
     if (status === "outstanding" || status === "failed") return;
-    if (!this.deps.isEnabled()) return;
+    if (!this.mayType(owner)) return;
     if (!this.hasUndelivered(owner)) {
       owner.recheckMs = undefined;
       this.setDelivery(owner, { status: "idle" });
@@ -2136,7 +2285,7 @@ export class TerminalNotifyService {
     } finally {
       owner.attempting = false;
     }
-    if (owner.disposed || !this.deps.isEnabled()) return;
+    if (owner.disposed || !this.mayType(owner)) return;
     if (owner.delivery.status === "outstanding" || owner.delivery.status === "failed") return;
     if (!this.hasUndelivered(owner)) {
       owner.recheckMs = undefined;
@@ -2180,8 +2329,16 @@ export class TerminalNotifyService {
     // taking it back returns its notices to this line.
     this.withdraw(owner);
     // The last word on each wake: nothing is awaited between this and the submit.
-    const wakes = this.sweepWakes(owner).filter((entry) => this.reserveWake(owner, entry));
-    const entries = owner.fired.filter((entry) => isDeliverable(entry));
+    const reserved = this.sweepWakes(owner).filter(
+      (entry) => owner.wakes.get(entry.key) === entry && this.reserveWake(owner, entry)
+    );
+    // A wake's own hooks may have stopped the pane or ended a scope meanwhile.
+    if (owner.disposed) return;
+    const wakes = reserved.filter((entry) => owner.wakes.get(entry.key) === entry);
+    // With the server off only a scope's wakes may go; notices wait for nothing.
+    const entries = this.deps.isEnabled()
+      ? owner.fired.filter((entry) => isDeliverable(entry))
+      : [];
     if (entries.length === 0 && wakes.length === 0) {
       // Only wakes, all waiting on the lane: the wake timer comes back for them.
       this.setDelivery(owner, { status: owner.wakes.size > 0 ? "scheduled" : "idle" });
@@ -2380,11 +2537,13 @@ export class TerminalNotifyService {
       reserved = entry.wake.beforeType();
     } catch (err) {
       console.error("[MCP] terminal notify: reserving a lane wake failed:", err);
-      owner.wakes.delete(entry.wake.id);
-      reportWake(entry.wake, { kind: "unavailable", reason: "reserve-failed" });
+      if (owner.wakes.get(entry.key) === entry) {
+        owner.wakes.delete(entry.key);
+        reportWake(entry.wake, { kind: "unavailable", reason: "reserve-failed" });
+      }
       return false;
     }
-    if (!reserved) owner.wakes.delete(entry.wake.id);
+    if (!reserved) owner.wakes.delete(entry.key);
     return reserved;
   }
 
@@ -2492,6 +2651,11 @@ function reportWake(wake: LaneWake, outcome: LaneWakeOutcome): void {
   } catch (err) {
     console.error("[MCP] terminal notify: recording a lane wake outcome failed:", err);
   }
+}
+
+/** A feature's wake whose scope is still live. */
+function isLiveScoped(entry: WakeEntry): boolean {
+  return entry.scope !== undefined && !entry.scope.released;
 }
 
 /** Fired, not held back for a reply wait, and not already on a line. */

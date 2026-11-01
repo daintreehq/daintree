@@ -70,7 +70,9 @@ import {
   paneNotifyKey,
   relayNotifyKey,
   type LaneWake,
+  type OwnPane,
 } from "./mcp-server/terminalNotify.js";
+import type { ListenerRoute } from "./mcp-server/listenerHold.js";
 import { ReplyWaiterService } from "./mcp-server/replyWaiter.js";
 import { createApprovalWake } from "./mcp-server/approvalWake.js";
 import type { AssistantApproval } from "./mcp-server/noticeFormat.js";
@@ -170,6 +172,23 @@ export type { HelpTokenValidator } from "./mcp-server/shared.js";
 export type McpAuthClass = import("./mcp-server/shared.js").McpAuthClass;
 export type McpTier = import("./mcp-server/shared.js").McpTier;
 type HelpAssistantTier = import("../../shared/types/ipc/maps.js").HelpAssistantTier;
+export type { ListenerRoute } from "./mcp-server/listenerHold.js";
+
+/**
+ * A feature's hold on the loopback listener and the terminal wake engine
+ * (#15999), from {@link McpServerService.holdListener}.
+ */
+export interface McpListenerHold {
+  /** The listener's port while it is open for this hold; null otherwise. */
+  readonly port: number | null;
+  /**
+   * Queue a wake on `pane`'s notice line, accepted whether or not the server
+   * is on; outcomes reach `wake.report` as {@link McpServerService.queueLaneWake}'s do.
+   */
+  queueWake(pane: OwnPane, projectId: string, wake: LaneWake): void;
+  /** Idempotent. Ends the hold's queued wakes and, with the server off, closes a listener only it held. */
+  release(): Promise<void>;
+}
 
 export class McpServerService {
   // Mutable reference updated by start(); read by bridge's getActiveProjectWebContents.
@@ -216,6 +235,10 @@ export class McpServerService {
    * instances, cannot leak leases into one another.
    */
   private readonly viewLeases = new WorkspaceViewLeaseRegistry();
+  /** Live holds' wake scopes, ended at shutdown along with everything else. */
+  private readonly heldWakeScopes = new Set<() => void>();
+  /** Bumped by each shutdown, so a hold still opening across one is refused. */
+  private shutdowns = 0;
   private readonly statusListeners = new Set<(running: boolean) => void>();
   private readonly runtimeStateListeners = new Set<(snapshot: McpRuntimeSnapshot) => void>();
 
@@ -613,6 +636,7 @@ export class McpServerService {
     });
   }
 
+  /** The control surface is served. A listener open only for holds is not running. */
   get isRunning(): boolean {
     return this.httpLifecycle.isRunning;
   }
@@ -1051,7 +1075,8 @@ export class McpServerService {
         this.emitRuntimeStateChange();
       }
     } else if (!enabled && (this.isRunning || this.httpLifecycle.isStartInFlight)) {
-      this.terminalNotify.disposeAll();
+      // A feature's scoped wakes, and the listener it holds, outlast the server.
+      this.terminalNotify.disposeUnscoped();
       // `stop()` awaits any in-flight `start()` before closing, so a disable
       // that races a slow start still tears the server down instead of
       // leaving it listening after the user turned it off.
@@ -1059,7 +1084,7 @@ export class McpServerService {
     } else if (wasEnabled !== enabled) {
       if (!enabled) {
         // Lane wakes can be queued while the server isn't listening.
-        this.terminalNotify.disposeAll();
+        this.terminalNotify.disposeUnscoped();
         this.httpLifecycle.setLastError(null);
       }
       this.emitRuntimeStateChange();
@@ -1067,12 +1092,9 @@ export class McpServerService {
   }
 
   async setPort(port: number | null): Promise<void> {
-    const wasEnabled = this.getConfig().enabled;
     this.persistConfig({ port });
-    if (wasEnabled && this.isRunning) {
-      await this.httpLifecycle.stop();
-      if (this._registry) await this.httpLifecycle.start(this._registry);
-    }
+    // Open for the server or only for holds, the listener moves to the new port.
+    if (this.httpLifecycle.isListening) await this.httpLifecycle.rebind();
   }
 
   private rotateInFlight: Promise<string> | null = null;
@@ -1133,12 +1155,45 @@ export class McpServerService {
     return this.isRunning;
   }
 
+  /**
+   * Hold the loopback listener open for a feature's route, and let the feature
+   * queue terminal wakes, whether or not the MCP server is on (#15999). With
+   * the server off, `/mcp`, `/sse` and the plugin routes find nothing there and
+   * no notice is armed or typed: only this route and these wakes go on.
+   */
+  async holdListener(id: string, route: ListenerRoute): Promise<McpListenerHold> {
+    const shutdowns = this.shutdowns;
+    const listener = await this.httpLifecycle.holdListener(id, route);
+    if (this.shutdowns !== shutdowns) {
+      await listener.release();
+      throw new Error(`The listener hold "${id}" ended while it was being opened`);
+    }
+    const wakes = this.terminalNotify.openWakeScope();
+    const endWakes = () => wakes.release();
+    this.heldWakeScopes.add(endWakes);
+    return {
+      get port() {
+        return listener.port;
+      },
+      queueWake: (pane, projectId, wake) => wakes.enqueueWake(pane, projectId, wake),
+      release: async () => {
+        this.heldWakeScopes.delete(endWakes);
+        wakes.release();
+        await listener.release();
+      },
+    };
+  }
+
+  /** The app is quitting: every hold ends with the server. */
   async stop(): Promise<void> {
+    this.shutdowns++;
+    for (const endWakes of [...this.heldWakeScopes]) endWakes();
+    this.heldWakeScopes.clear();
     // Nothing could read the observations a wake would point at.
     this.terminalNotify.disposeAll();
     // Open waits return what they have rather than hang on a server going away.
     this.replyWaiter.dispose();
-    await this.httpLifecycle.stop();
+    await this.httpLifecycle.shutdown();
     // The stop rejects every pending request, so the leases those requests own
     // have no one left to release them. Holding them would pin their views
     // against eviction for renderers that will never answer (#11790).

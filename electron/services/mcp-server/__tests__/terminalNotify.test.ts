@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import type { TerminalHandback } from "../../../../shared/types/handback.js";
 import {
@@ -2617,5 +2617,363 @@ describe("lane wakes (#13333)", () => {
     const w = fakeWake();
     h.service.enqueueWake(PANE, PROJECT, w.wake);
     expect(w.outcomes).toEqual([{ kind: "unavailable", reason: "notices-off" }]);
+  });
+});
+
+describe("wake scopes (#15999)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-25T10:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const flushWake = () => vi.advanceTimersByTimeAsync(NOTIFY_COALESCE_MS + 600);
+
+  /** The server turned off, as `McpServerService.setEnabled(false)` does it. */
+  const turnOff = (h: ReturnType<typeof setup>) => {
+    h.setEnabled(false);
+    h.service.disposeUnscoped();
+  };
+
+  it("types a scope's wake with the server off, and refuses every other kind", async () => {
+    const h = setup({ enabled: false });
+    const scope = h.service.openWakeScope();
+    const scoped = fakeWake("decision-1");
+    scope.enqueueWake(PANE, PROJECT, scoped.wake);
+
+    const unscoped = fakeWake("task-1");
+    h.service.enqueueWake(PANE, PROJECT, unscoped.wake);
+    expect(unscoped.outcomes).toEqual([{ kind: "unavailable", reason: "notices-off" }]);
+    await expect(h.service.whenIdle(PANE, { terminalId: "t-a" })).rejects.toMatchObject({
+      code: NOTIFY_NOT_ELIGIBLE,
+    });
+
+    await flushWake();
+    expect(h.client.submitted).toEqual([
+      expect.objectContaining({ id: OWN, text: RETIRED_LINE, guard: "settled-prompt" }),
+    ]);
+    expect(scoped.outcomes).toEqual([{ kind: "delivered" }]);
+  });
+
+  it("keeps only a scope's wakes on a pane when the server goes off", async () => {
+    const h = setup();
+    const scope = h.service.openWakeScope();
+    // Working, so nothing goes out before the server is turned off.
+    h.client.terminals.set(OWN, working());
+    await h.service.whenIdle(PANE, { terminalId: "t-a" });
+    await h.service.whenIdle(PANE, { terminalId: "t-b" });
+    // One notice has fired and waits for the pane; the other is still armed.
+    h.settle("t-a");
+    await vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS + 10);
+    const unscoped = fakeWake("task-1");
+    h.service.enqueueWake(PANE, PROJECT, unscoped.wake);
+    const scoped = fakeWake("decision-1");
+    scoped.wake.retired = [{ hostName: "studio-02", count: 2 }];
+    scope.enqueueWake(PANE, PROJECT, scoped.wake);
+    expect(h.service.getPaneState(OWN)).toMatchObject({ pendingCount: 1, readyCount: 3 });
+
+    turnOff(h);
+    expect(unscoped.outcomes).toEqual([{ kind: "unavailable", reason: "stopped" }]);
+    expect(scoped.outcomes).toEqual([]);
+    expect(h.service.getPaneState(OWN)).toMatchObject({ pendingCount: 0, readyCount: 1 });
+
+    // Neither notice comes back, after the server is on again either.
+    h.setEnabled(true);
+    h.settle("t-b");
+    h.client.terminals.set(OWN, atPrompt(Date.now() - 60_000));
+    h.settle(OWN);
+    await flushNotice();
+    await flushWake();
+    expect(h.client.submitted.map((s) => s.text)).toEqual([
+      formatRetiredExchangesLine([{ hostName: "studio-02", count: 2 }]),
+    ]);
+    expect(scoped.outcomes).toEqual([{ kind: "delivered" }]);
+  });
+
+  it("types only a scope's wakes once the server is off, whatever is still queued", async () => {
+    const h = setup();
+    const scope = h.service.openWakeScope();
+    h.client.terminals.set(OWN, working());
+    await h.service.whenIdle(PANE, { terminalId: "t-a" });
+    h.settle("t-a");
+    await vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS + 10);
+    const unscoped = fakeWake("task-1");
+    h.service.enqueueWake(PANE, PROJECT, unscoped.wake);
+    const scoped = fakeWake("decision-1");
+    scoped.wake.retired = [{ hostName: "studio-02", count: 2 }];
+    scope.enqueueWake(PANE, PROJECT, scoped.wake);
+
+    // Off with nothing torn down: the gates on the line itself decide.
+    h.setEnabled(false);
+    h.client.terminals.set(OWN, atPrompt(Date.now() - 60_000));
+    h.settle(OWN);
+    await flushWake();
+    expect(h.client.submitted.map((s) => s.text)).toEqual([
+      formatRetiredExchangesLine([{ hostName: "studio-02", count: 2 }]),
+    ]);
+    expect(unscoped.outcomes).toEqual([{ kind: "unavailable", reason: "notices-off" }]);
+    expect(scoped.outcomes).toEqual([{ kind: "delivered" }]);
+  });
+
+  it("disposes everything as before when no scope is live", async () => {
+    const h = setup();
+    h.service.openWakeScope().release();
+    await h.service.whenIdle(PANE, { terminalId: "t-a" });
+    const w = fakeWake();
+    h.service.enqueueWake(PANE, PROJECT, w.wake);
+
+    turnOff(h);
+    expect(w.outcomes).toEqual([{ kind: "unavailable", reason: "stopped" }]);
+    expect(h.service.getPaneState(OWN)).toBeNull();
+    expect(h.listenerCount()).toBe(0);
+  });
+
+  it("stops a pane whole when the scopes open hold nothing on it", async () => {
+    const h = setup();
+    const scope = h.service.openWakeScope();
+    scope.enqueueWake(
+      { key: "pane\u0000principal-2", terminalId: "t-idle" },
+      PROJECT,
+      fakeWake().wake
+    );
+    await h.service.whenIdle(PANE, { terminalId: "t-a" });
+    const w = fakeWake();
+    h.service.enqueueWake(PANE, PROJECT, w.wake);
+
+    turnOff(h);
+    expect(w.outcomes).toEqual([{ kind: "unavailable", reason: "stopped" }]);
+    expect(h.service.getPaneState(OWN)).toBeNull();
+  });
+
+  it("keeps one scope's wake when another scope queued one under the same id", async () => {
+    const h = setup({ enabled: false });
+    h.client.terminals.set(OWN, working());
+    const first = h.service.openWakeScope();
+    const second = h.service.openWakeScope();
+    const a = fakeWake("decision-1");
+    const b = fakeWake("decision-1");
+    b.wake.retired = [{ hostName: "studio-02", count: 2 }];
+    first.enqueueWake(PANE, PROJECT, a.wake);
+    second.enqueueWake(PANE, PROJECT, b.wake);
+
+    first.release();
+    expect(a.outcomes).toEqual([{ kind: "unavailable", reason: "stopped" }]);
+    h.client.terminals.set(OWN, atPrompt(Date.now() - 60_000));
+    h.settle(OWN);
+    await flushWake();
+    expect(h.client.submitted.map((s) => s.text)).toEqual([
+      formatRetiredExchangesLine([{ hostName: "studio-02", count: 2 }]),
+    ]);
+    expect(b.outcomes).toEqual([{ kind: "delivered" }]);
+  });
+
+  it("never joins a scope's wake to an unscoped one with the same id", async () => {
+    const h = setup();
+    const scope = h.service.openWakeScope();
+    const unscoped = fakeWake("task-1");
+    const scoped = fakeWake("task-1");
+    h.service.enqueueWake(PANE, PROJECT, unscoped.wake);
+    scope.enqueueWake(PANE, PROJECT, scoped.wake);
+    expect(h.service.getPaneState(OWN)?.readyCount).toBe(2);
+
+    await flushWake();
+    expect(unscoped.outcomes).toEqual([{ kind: "delivered" }]);
+    expect(scoped.outcomes).toEqual([{ kind: "delivered" }]);
+  });
+
+  it("takes back a line still in the host that carries a notice, scoped wake and all", async () => {
+    const h = setup();
+    const scope = h.service.openWakeScope();
+    await h.service.whenIdle(PANE, { terminalId: "t-a" });
+    h.settle("t-a");
+    await vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS + 10);
+    const scoped = fakeWake("decision-1");
+    scope.enqueueWake(PANE, PROJECT, scoped.wake);
+    await vi.advanceTimersByTimeAsync(NOTIFY_COALESCE_MS + 100);
+    const line = h.client.submitted[0];
+    expect(line.text).toContain("t-a");
+    h.client.records.set(line.token!, { phase: "queued", at: Date.now() });
+
+    turnOff(h);
+    expect(h.client.withdrawn).toEqual([{ id: OWN, token: line.token }]);
+    expect(scoped.outcomes).toEqual([{ kind: "ambiguous", reason: "unconfirmed" }]);
+    expect(h.service.getPaneState(OWN)).toBeNull();
+  });
+
+  it("takes back a line still in the host that carries an unscoped wake beside a scoped one", async () => {
+    const h = setup();
+    const scope = h.service.openWakeScope();
+    const unscoped = fakeWake("task-1");
+    const scoped = fakeWake("decision-1");
+    h.service.enqueueWake(PANE, PROJECT, unscoped.wake);
+    scope.enqueueWake(PANE, PROJECT, scoped.wake);
+    await vi.advanceTimersByTimeAsync(NOTIFY_COALESCE_MS + 100);
+    const token = h.client.submitted[0].token!;
+    h.client.records.set(token, { phase: "queued", at: Date.now() });
+
+    turnOff(h);
+    expect(h.client.withdrawn).toEqual([{ id: OWN, token }]);
+    expect(unscoped.outcomes).toEqual([{ kind: "ambiguous", reason: "unconfirmed" }]);
+    expect(scoped.outcomes).toEqual([{ kind: "ambiguous", reason: "unconfirmed" }]);
+  });
+
+  it("lets a line in the host that carries only scoped wakes finish when the server goes off", async () => {
+    const h = setup();
+    const scope = h.service.openWakeScope();
+    const scoped = fakeWake("decision-1");
+    scope.enqueueWake(PANE, PROJECT, scoped.wake);
+    await vi.advanceTimersByTimeAsync(NOTIFY_COALESCE_MS + 100);
+    const token = h.client.submitted[0].token!;
+    h.client.records.set(token, { phase: "queued", at: Date.now() });
+
+    turnOff(h);
+    expect(h.client.withdrawn).toEqual([]);
+    h.client.records.set(token, { phase: "pty_written", at: Date.now() });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(scoped.outcomes).toEqual([{ kind: "delivered" }]);
+  });
+
+  it("ends a released scope's queued wakes, and with the server off the pane they kept", async () => {
+    const h = setup({ enabled: false });
+    h.client.terminals.set(OWN, working());
+    const scope = h.service.openWakeScope();
+    const scoped = fakeWake("decision-1");
+    scope.enqueueWake(PANE, PROJECT, scoped.wake);
+    expect(h.service.getPaneState(OWN)?.readyCount).toBe(1);
+
+    scope.release();
+    scope.release();
+    expect(scoped.outcomes).toEqual([{ kind: "unavailable", reason: "stopped" }]);
+    expect(h.service.getPaneState(OWN)).toBeNull();
+
+    const late = fakeWake("decision-2");
+    scope.enqueueWake(PANE, PROJECT, late.wake);
+    expect(late.outcomes).toEqual([{ kind: "unavailable", reason: "notices-off" }]);
+  });
+
+  it("arms no notice for a launch that completes after the server went off", async () => {
+    const h = setup();
+    const scope = h.service.openWakeScope();
+    h.client.terminals.set(OWN, working());
+    const pending = await h.service.prepareLaunch(PANE);
+    scope.enqueueWake(PANE, PROJECT, fakeWake("decision-1").wake);
+    expect(h.service.getPaneState(OWN)?.pendingCount).toBe(1);
+
+    turnOff(h);
+    expect(h.service.getPaneState(OWN)?.pendingCount).toBe(0);
+    h.client.terminals.set("t-new", working());
+    pending.complete({ launched: true, terminalId: "t-new", spawnStatus: null });
+    expect(h.service.getPaneState(OWN)?.pendingCount).toBe(0);
+
+    h.settle("t-new");
+    h.client.terminals.set(OWN, atPrompt(Date.now() - 60_000));
+    h.settle(OWN);
+    await flushNotice();
+    await flushWake();
+    expect(h.client.submitted.map((s) => s.text)).toEqual([RETIRED_LINE]);
+  });
+
+  it("keeps a later launch counted when one the disable ended completes", async () => {
+    const h = setup();
+    const scope = h.service.openWakeScope();
+    h.client.terminals.set(OWN, working());
+    const stale = await h.service.prepareLaunch(PANE);
+    const scoped = fakeWake("decision-1");
+    scope.enqueueWake(PANE, PROJECT, scoped.wake);
+    turnOff(h);
+
+    h.setEnabled(true);
+    const fresh = await h.service.prepareLaunch(PANE);
+    expect(h.service.getPaneState(OWN)?.pendingCount).toBe(1);
+    scope.release();
+    stale.cancel();
+    expect(h.service.getPaneState(OWN)?.pendingCount).toBe(1);
+
+    h.client.terminals.set("t-new", working());
+    fresh.complete({ launched: true, terminalId: "t-new", spawnStatus: null });
+    h.settle("t-new");
+    h.client.terminals.set(OWN, atPrompt(Date.now() - 60_000));
+    h.settle(OWN);
+    await flushNotice();
+    await flushWake();
+    expect(h.client.submitted).toHaveLength(1);
+    expect(h.client.submitted[0].text).toContain("t-new");
+  });
+
+  it("types nothing for a wake whose own hook ended its scope", async () => {
+    const h = setup({ enabled: false });
+    const scope = h.service.openWakeScope();
+    const w = fakeWake("decision-1");
+    const reserve = w.wake.beforeType;
+    w.wake.beforeType = () => {
+      scope.release();
+      return reserve();
+    };
+    scope.enqueueWake(PANE, PROJECT, w.wake);
+
+    await flushWake();
+    expect(h.client.submitted).toEqual([]);
+    expect(w.outcomes).toEqual([{ kind: "unavailable", reason: "stopped" }]);
+  });
+
+  it("ends a wake once when its own hooks end its scope, while another scope keeps the pane", async () => {
+    const h = setup({ enabled: false });
+    const keeper = h.service.openWakeScope();
+    const kept = fakeWake("decision-0");
+    kept.wake.retired = [{ hostName: "studio-02", count: 2 }];
+    keeper.enqueueWake(PANE, PROJECT, kept.wake);
+    const recheckScope = h.service.openWakeScope();
+    const rechecked = fakeWake("decision-1");
+    let rechecks = 0;
+    // Ready when queued; at delivery its hook ends the scope and reports it gone too.
+    rechecked.wake.recheck = () => {
+      if (rechecks++ === 0) return { kind: "ready" };
+      recheckScope.release();
+      return { kind: "unavailable", reason: "moved-on" };
+    };
+    const reserveScope = h.service.openWakeScope();
+    const reserved = fakeWake("decision-2");
+    reserved.wake.beforeType = () => {
+      reserveScope.release();
+      return true;
+    };
+    const throwScope = h.service.openWakeScope();
+    const thrown = fakeWake("decision-3");
+    thrown.wake.beforeType = () => {
+      throwScope.release();
+      throw new Error("reservation store gone");
+    };
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    onTestFinished(() => errorSpy.mockRestore());
+    recheckScope.enqueueWake(PANE, PROJECT, rechecked.wake);
+    reserveScope.enqueueWake(PANE, PROJECT, reserved.wake);
+    throwScope.enqueueWake(PANE, PROJECT, thrown.wake);
+
+    await flushWake();
+    expect(h.client.submitted.map((s) => s.text)).toEqual([
+      formatRetiredExchangesLine([{ hostName: "studio-02", count: 2 }]),
+    ]);
+    expect(rechecked.outcomes).toEqual([{ kind: "unavailable", reason: "stopped" }]);
+    expect(reserved.outcomes).toEqual([{ kind: "unavailable", reason: "stopped" }]);
+    expect(thrown.outcomes).toEqual([{ kind: "unavailable", reason: "stopped" }]);
+    expect(kept.outcomes).toEqual([{ kind: "delivered" }]);
+  });
+
+  it("stays subscribed when a wake replaces the pane's only other owner", () => {
+    const h = setup({ enabled: false });
+    h.client.terminals.set(OWN, working());
+    const scope = h.service.openWakeScope();
+    const first = fakeWake("decision-1");
+    const second = fakeWake("decision-2");
+    scope.enqueueWake(PANE, PROJECT, first.wake);
+    scope.enqueueWake({ key: "pane\u0000principal-9", terminalId: OWN }, PROJECT, second.wake);
+    expect(first.outcomes).toEqual([{ kind: "unavailable", reason: "stopped" }]);
+    expect(h.listenerCount()).toBeGreaterThan(0);
+
+    h.client.exit(OWN);
+    expect(second.outcomes).toEqual([{ kind: "unavailable", reason: "stopped" }]);
   });
 });

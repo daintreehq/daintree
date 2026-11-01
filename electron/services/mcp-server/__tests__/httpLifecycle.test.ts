@@ -54,7 +54,12 @@ import {
   _resetEndpointRegistryForTesting,
 } from "../../../ipc/endpointRegistry.js";
 import type { HttpLifecycleDeps } from "../httpLifecycle.js";
-import { MCP_SSE_HEARTBEAT_INTERVAL_MS, minimumPermittingTier } from "../shared.js";
+import {
+  MCP_SSE_HEARTBEAT_INTERVAL_MS,
+  RESTART_BASE_DELAY_MS,
+  RESTART_JITTER_MS,
+  minimumPermittingTier,
+} from "../shared.js";
 import { NATIVE_GRANT_TOOL_IDS } from "../../../../shared/config/mcpGrants.js";
 import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
 import { NATIVE_GRANT_USE_POLICY_OVERRIDES } from "../../../../shared/config/nativeGrantUsePolicies.js";
@@ -354,6 +359,146 @@ describe("HttpLifecycle", () => {
       await expect(lc.start({} as unknown as never)).rejects.toThrow("Failed to bind");
 
       expect(setupIpcListeners).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("listener holds (#15999)", () => {
+    function serveMocks(): MockServer[] {
+      const servers: MockServer[] = [];
+      vi.spyOn(http, "createServer").mockImplementation(((...args: unknown[]) => {
+        const handler = args.find((a) => typeof a === "function") as
+          http.RequestListener | undefined;
+        const s = mockServer();
+        if (handler) s.on("request", handler);
+        servers.push(s);
+        return s;
+      }) as unknown as typeof http.createServer);
+      return servers;
+    }
+
+    function heldRoute() {
+      return { path: "/mcp/feature", handle: vi.fn(async () => {}), close: vi.fn() };
+    }
+
+    function closeUnexpectedly(server: MockServer): void {
+      server.listening = false;
+      server.emit("close");
+    }
+
+    beforeEach(() => {
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+    });
+
+    it("opens the listener for a hold with the server off, without the control surface", async () => {
+      const servers = serveMocks();
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+      lc.isEnabled = () => false;
+
+      const hold = await lc.holdListener("feature", heldRoute());
+      expect(servers).toHaveLength(1);
+      expect(hold.port).toBe(45454);
+      expect(lc.isListening).toBe(true);
+      expect(lc.isRunning).toBe(false);
+      expect(lc.currentPort).toBeNull();
+      expect(deps.setupIpcListeners).not.toHaveBeenCalled();
+      expect(deps.emitStatusChange).not.toHaveBeenCalled();
+    });
+
+    it("reopens a listener only a hold keeps after it closes unexpectedly", async () => {
+      const servers = serveMocks();
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+      lc.isEnabled = () => false;
+      const route = heldRoute();
+      const hold = await lc.holdListener("feature", route);
+
+      closeUnexpectedly(servers[0]);
+      expect(route.close).toHaveBeenCalledTimes(1);
+      expect(lc.isListening).toBe(false);
+      expect(hold.port).toBeNull();
+      // Nothing that reports the server changed: it was never running.
+      expect(deps.emitStatusChange).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(RESTART_BASE_DELAY_MS + RESTART_JITTER_MS);
+      expect(servers).toHaveLength(2);
+      expect(lc.isListening).toBe(true);
+      expect(lc.isRunning).toBe(false);
+      expect(hold.port).toBe(45454);
+
+      await hold.release();
+      expect(servers[1].close).toHaveBeenCalled();
+      expect(lc.isListening).toBe(false);
+    });
+
+    it("drops a pending restart once the last hold goes with the server off", async () => {
+      const servers = serveMocks();
+      const lc = new HttpLifecycle(fakeDeps());
+      lc.isEnabled = () => false;
+      const hold = await lc.holdListener("feature", heldRoute());
+
+      closeUnexpectedly(servers[0]);
+      expect(vi.getTimerCount()).toBe(1);
+      await hold.release();
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(servers).toHaveLength(1);
+      expect(lc.isListening).toBe(false);
+    });
+
+    it("drops a pending restart when shutdown joins a stop the holds survived", async () => {
+      const servers = serveMocks();
+      const lc = new HttpLifecycle(fakeDeps());
+      lc.isEnabled = () => true;
+      await lc.start({} as unknown as never);
+      await lc.holdListener("feature", heldRoute());
+      closeUnexpectedly(servers[0]);
+
+      await Promise.all([lc.stop(), lc.shutdown()]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(servers).toHaveLength(1);
+      expect(lc.isListening).toBe(false);
+    });
+
+    it("refuses a hold that shutdown ended while its listener was opening", async () => {
+      const s = mockServer();
+      let bind: (() => void) | undefined;
+      s.listen.mockImplementation((_port: number, _host: string, cb?: () => void) => {
+        bind = () => {
+          s.listening = true;
+          cb?.();
+        };
+        return s;
+      });
+      vi.spyOn(http, "createServer").mockReturnValue(s);
+      const lc = new HttpLifecycle(fakeDeps());
+      lc.isEnabled = () => false;
+
+      const opening = lc.holdListener("feature", heldRoute());
+      const quit = lc.shutdown();
+      bind!();
+      await expect(opening).rejects.toThrow("ended while it was being opened");
+      await quit;
+      expect(s.close).toHaveBeenCalled();
+      expect(lc.isListening).toBe(false);
+    });
+
+    it("takes the hold back when the listener cannot bind", async () => {
+      const s = mockServer();
+      s.listen.mockImplementation(() => {
+        s.emit("error", Object.assign(new Error("EADDRINUSE"), { code: "EADDRINUSE" }));
+        return s;
+      });
+      vi.spyOn(http, "createServer").mockReturnValue(s);
+      const lc = new HttpLifecycle(fakeDeps());
+      lc.isEnabled = () => false;
+      const route = heldRoute();
+
+      await expect(lc.holdListener("feature", route)).rejects.toThrow("Failed to bind");
+      expect(route.close).toHaveBeenCalledTimes(1);
+      // Taken back, so the same id holds again rather than reading as held.
+      await expect(lc.holdListener("feature", heldRoute())).rejects.toThrow("Failed to bind");
     });
   });
 
