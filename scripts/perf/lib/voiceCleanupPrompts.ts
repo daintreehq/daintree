@@ -1027,6 +1027,19 @@ const HAIKU_CLARIFY_2 = revise(HAIKU_CLARIFY, {
   ],
 });
 
+// Round 3: "never respelled from what you know of the name" stopped Haiku
+// joining "use Effect" into useEffect and Terra writing a spoken path as
+// typed, and Haiku took a spelled-out name ("It's W-R-E-N") for a
+// clarification and dropped it.
+const HAIKU_CLARIFY_3 = revise(HAIKU_CLARIFY_2, {
+  core: [
+    [
+      ' The clarification is then a restatement under the rule above. Write the name as the clarification spells it, never respelled from what you know of the name. An "as in"',
+      ' The clarification is then a restatement under the rule above. A word spelled out letter by letter is not a clarification: the spelling stays, under NAMES AND SPELLINGS. An "as in"',
+    ],
+  ],
+});
+
 // The same for Terra, whose rules have no whole-passage reading: only the
 // clarification, none of Haiku's restatement and restart rules.
 const TERRA_CLARIFY = revise(INTENT_OPENING, {
@@ -1038,6 +1051,15 @@ const TERRA_CLARIFY = revise(INTENT_OPENING, {
     [
       "merge instructions, or add anything. You may repair grammar",
       "merge instructions, or add anything, beyond writing a clarified word once under LATER CLARIFICATIONS. You may repair grammar",
+    ],
+  ],
+});
+
+const TERRA_CLARIFY_2 = revise(TERRA_CLARIFY, {
+  core: [
+    [
+      ' Write the name as the clarification spells it, never respelled from what you know of the name. An "as in"',
+      ' An "as in"',
     ],
   ],
 });
@@ -1244,6 +1266,14 @@ export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
   "terra-clarify": {
     description: "intent-opening with a later clarification settling the misheard word before it",
     instructionsFor: fixed(TERRA_CLARIFY),
+  },
+  "haiku-clarify3": {
+    description: "Haiku: haiku-clarify2 without the respelling ban, a spelled-out name kept",
+    instructionsFor: fixed(HAIKU_CLARIFY_3),
+  },
+  "terra-clarify2": {
+    description: "terra-clarify without the respelling ban",
+    instructionsFor: fixed(TERRA_CLARIFY_2),
   },
   production: {
     description: "the rules production sends each model now",

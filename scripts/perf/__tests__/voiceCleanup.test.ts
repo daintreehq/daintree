@@ -1159,13 +1159,13 @@ describe("prompt variants", () => {
     // keep its measured rules.
     // #15926 let a later clarification settle the misheard word before it.
     expect(production.instructionsFor("gpt-6.1-terra")).toEqual(
-      PROMPT_VARIANTS["terra-clarify"]!.instructionsFor("gpt-6.1-terra")
+      PROMPT_VARIANTS["terra-clarify2"]!.instructionsFor("gpt-6.1-terra")
     );
     expect(production.instructionsFor("gpt-6.1-terra")).not.toEqual(
       PROMPT_VARIANTS["intent-opening"]!.instructionsFor("gpt-6.1-terra")
     );
     expect(production.instructionsFor("claude-haiku-5-5")).toEqual(
-      PROMPT_VARIANTS["haiku-clarify2"]!.instructionsFor("claude-haiku-5-5")
+      PROMPT_VARIANTS["haiku-clarify3"]!.instructionsFor("claude-haiku-5-5")
     );
     expect(production.instructionsFor("claude-haiku-5-5")).not.toEqual(
       PROMPT_VARIANTS["haiku-opening"]!.instructionsFor("claude-haiku-5-5")
