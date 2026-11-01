@@ -1737,3 +1737,49 @@ describe("ProjectStore.onProjectRegistryChanged", () => {
     expect(error).toHaveBeenCalled();
   });
 });
+
+describe("ProjectStore schedules (#15975)", () => {
+  let store: ProjectStore;
+  let repoDir: string;
+  let projectId: string;
+
+  beforeEach(async () => {
+    repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-sched-repo-"));
+    sqlite = new Database(":memory:");
+    sqlite.exec(CREATE_TABLES_SQL);
+    db = drizzle(sqlite, { schema });
+    store = new ProjectStore();
+    projectId = (await store.addProject(repoDir)).id;
+  });
+
+  afterEach(async () => {
+    resetWritesSuppressedForTesting();
+    if (store.getProjectById(projectId)) await store.removeProject(projectId);
+    sqlite.close();
+    fs.rmSync(repoDir, { recursive: true, force: true });
+  });
+
+  function schedulesFile(): string {
+    const stateDir = getProjectStateDir(path.join("/tmp/daintree-reconciliation-test", "projects"), projectId);
+    if (!stateDir) throw new Error("expected a state directory");
+    return path.join(stateDir, "schedules.json");
+  }
+
+  it("removing a project deletes its schedules, tells listeners, and refuses later writes", async () => {
+    const input = { name: "Nightly", launch: { agentId: "claude", prompt: "Go." } };
+    expect((await store.schedules.create(projectId, input)).status).toBe("saved");
+    expect(fs.existsSync(schedulesFile())).toBe(true);
+    const heard = vi.fn();
+    store.schedules.subscribe(heard);
+
+    await store.removeProject(projectId);
+
+    expect(fs.existsSync(schedulesFile())).toBe(false);
+    expect(fs.existsSync(path.dirname(schedulesFile()))).toBe(false);
+    expect(heard).toHaveBeenCalledWith(expect.objectContaining({ projectId, schedules: [] }));
+    await expect(store.schedules.create(projectId, input)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    expect(fs.existsSync(path.dirname(schedulesFile()))).toBe(false);
+  });
+});
