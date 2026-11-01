@@ -559,6 +559,27 @@ describe("bulk transfer", () => {
     }
   });
 
+  it("drops a retried ack the link can't send and still sends the ones behind it", () => {
+    const refused = new Set<number>([BulkKind.TRANSFER_ACK]);
+    const { link, sent } = fakeLink(refused);
+    const post = link.post.bind(link);
+    link.post = (message) => {
+      const unsendable =
+        message.lane === Lane.BULK &&
+        message.kind === BulkKind.TRANSFER_ACK &&
+        message.body.transferId === 2;
+      if (refused.size === 0 && unsendable) throw new Error("frame too large");
+      return post(message);
+    };
+    const transfers = new LinkTransfers(link);
+    transfers.handle(peerBegin(2));
+    transfers.handle(peerBegin(4));
+    refused.clear();
+    expect(() => transfers.onWritable()).not.toThrow();
+    expect(sent(BulkKind.TRANSFER_ACK)).toMatchObject([{ body: { transferId: 4 } }]);
+    transfers.closeAll("test done");
+  });
+
   it("bounds refused credit and aborts as one backlog", async () => {
     const acksUntilBacklog = async (abortWaiting: boolean) => {
       const { link, errors, sent } = fakeLink(

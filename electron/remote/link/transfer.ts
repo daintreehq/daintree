@@ -510,16 +510,7 @@ export class LinkTransfers {
       message.lane === Lane.BULK && message.kind === BulkKind.TRANSFER_ACK
         ? this.ackRetry
         : this.abortRetry;
-    if (retry.length === 0) {
-      let result: EnqueueResult;
-      try {
-        result = this.link.post(message);
-      } catch {
-        // Unsendable (should not happen with fixed reason codes); drop rather than wedge.
-        return;
-      }
-      if (result !== "refused") return;
-    }
+    if (retry.length === 0 && this.tryPost(message) !== "refused") return;
     if (this.ackRetry.length + this.abortRetry.length >= MAX_RETRY_QUEUE) {
       this.link.protocolError("transfer control backlog");
       return;
@@ -536,10 +527,22 @@ export class LinkTransfers {
 
   private flushQueue(retry: LinkMessage[]): boolean {
     while (retry.length > 0) {
-      if (this.link.post(retry[0]!) === "refused") return false;
+      if (this.tryPost(retry[0]!) === "refused") return false;
       retry.shift();
     }
     return true;
+  }
+
+  /**
+   * An unsendable message (a placed path too long for a frame) is dropped
+   * rather than wedging its queue or throwing into the session's write pass.
+   */
+  private tryPost(message: LinkMessage): EnqueueResult | "dropped" {
+    try {
+      return this.link.post(message);
+    } catch {
+      return "dropped";
+    }
   }
 
   private schedulePump(): void {
