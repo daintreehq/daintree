@@ -890,20 +890,23 @@ describe("SessionHost: pushes a Shell would discard by locality (#15901)", () =>
   it.each<[string, HandshakeMismatch]>([
     ["version", { kind: "version", local: "1.2.3", remote: "1.2.4" }],
     ["commit", { kind: "commit", local: "abc", remote: "def" }],
-  ])("keeps sending everything to a Shell on another %s, whose own tables decide", (_, mismatch) => {
-    const link = fakeLink();
-    server.attach("s1", link, false, "c1", mismatch);
-    open(link, "view-1", "p1");
+  ])(
+    "keeps sending everything to a Shell on another %s, whose own tables decide",
+    (_, mismatch) => {
+      const link = fakeLink();
+      server.attach("s1", link, false, "c1", mismatch);
+      open(link, "view-1", "p1");
 
-    broadcast(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, [{ percent: 40 }]);
-    broadcast(CHANNELS.EVENTS_PUSH, [{ name: "made:up", payload: {} }]);
-    broadcast(CHANNELS.TERMINAL_DATA, ["t1", "hi"]);
-    expect(eventFrames(link).map((f) => f.channel)).toEqual([
-      CHANNELS.UPDATE_DOWNLOAD_PROGRESS,
-      CHANNELS.EVENTS_PUSH,
-      CHANNELS.TERMINAL_DATA,
-    ]);
-  });
+      broadcast(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, [{ percent: 40 }]);
+      broadcast(CHANNELS.EVENTS_PUSH, [{ name: "made:up", payload: {} }]);
+      broadcast(CHANNELS.TERMINAL_DATA, ["t1", "hi"]);
+      expect(eventFrames(link).map((f) => f.channel)).toEqual([
+        CHANNELS.UPDATE_DOWNLOAD_PROGRESS,
+        CHANNELS.EVENTS_PUSH,
+        CHANNELS.TERMINAL_DATA,
+      ]);
+    }
+  );
 });
 
 describe("SessionHost: endpoint changes a dropped link lost (#13917)", () => {
