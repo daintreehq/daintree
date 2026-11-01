@@ -195,6 +195,7 @@ describe("scheduled run admission", () => {
     const ofOtherProject = reserveScheduledLaunch({
       ...reservation(admit),
       runId: "run-3",
+      scheduleId: "schedule-3",
       projectId: "project-2",
       terminalId: "terminal-3",
     });
