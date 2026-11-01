@@ -112,6 +112,16 @@ describe("buildHostMenuRows", () => {
     expect(linux[0]!.name).toBe("This machine");
   });
 
+  it("never takes Windows from a remote host's summary, and keeps a Windows Shell's own", () => {
+    const windows = { ...summary("h1"), platform: "win32" as const };
+    const rows = buildHostMenuRows(
+      [entry("h1", "studio-01", CONNECTED, windows, { platform: "darwin" })],
+      { localPlatform: "win32", currentHostId: "local", localSummary: windows }
+    );
+    expect(rows[0]).toMatchObject({ platform: null, summary: windows });
+    expect(rows[1]!.platform).toBe("darwin");
+  });
+
   it("marks the window's own host as current", () => {
     const rows = rowsFor([entry("h1", "studio-01"), entry("h2", "studio-02")], "h2");
     expect(rows.filter((r) => r.isCurrent).map((r) => r.hostId)).toEqual(["h2"]);

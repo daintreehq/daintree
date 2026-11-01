@@ -438,7 +438,8 @@ export const MAX_HOST_SUMMARY_DRIVERS = 32;
 export interface HostMetricsSummary {
   hostId: HostId;
   sampledAt: number;
-  platform: HostPlatform;
+  /** "win32" only on a Windows Shell's own summary of itself: no Host runs there, so none crosses a link. */
+  platform: HostPlatform | "win32";
   /** Busy CPU as a percentage of all cores over the last interval; null when unmeasured. */
   cpuPercent: number | null;
   /**

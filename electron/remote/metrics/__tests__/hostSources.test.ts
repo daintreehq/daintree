@@ -147,6 +147,30 @@ describe("observeAgents", () => {
 });
 
 describe("createHostSampleSources", () => {
+  describe("platform", () => {
+    const realPlatform = process.platform;
+    const stub = (value: NodeJS.Platform) =>
+      Object.defineProperty(process, "platform", { value, configurable: true });
+    afterEach(() => stub(realPlatform));
+
+    it("names the machine it runs on, a Windows one as its own", () => {
+      for (const [os, sampled] of [
+        ["darwin", "darwin"],
+        ["linux", "linux"],
+        ["freebsd", "linux"],
+        ["win32", "win32"],
+      ] as const) {
+        stub(os);
+        expect(createHostSampleSources().platform).toBe(sampled);
+      }
+    });
+
+    it("reads no macOS thermal state on Windows", () => {
+      stub("win32");
+      expect(createHostSampleSources().thermalState()).toBeNull();
+    });
+  });
+
   it("asks for agent CLIs itself when nothing has, so a windowless host lists them next sample", async () => {
     cli.service = {
       getAvailability: vi.fn(() => null),

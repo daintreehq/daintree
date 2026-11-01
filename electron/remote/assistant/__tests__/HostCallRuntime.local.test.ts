@@ -336,6 +336,22 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
       });
     });
 
+    it("gives no load for a Windows Shell's own sample, which the contract has no platform for", async () => {
+      latestSummary = () =>
+        ({
+          sampledAt: 995,
+          platform: "win32",
+          cpuPercent: 25,
+          cpuLogicalCoreCount: 12,
+          cpuLoadAverage1m: null,
+          memoryTotalBytes: 36e9,
+        }) as HostMetricsSummary;
+      const listed = await runtime.list("a");
+      if (!listed.ok) throw new Error("refused");
+      expect(HostListResultSchema.safeParse(listed.value).success).toBe(true);
+      expect(listed.value.hosts[0]?.load).toBeNull();
+    });
+
     it("ages this machine's sample from when it was read, whatever its wall clock did (#14462)", async () => {
       const loop = new SummaryLoop({
         sample: async () =>
