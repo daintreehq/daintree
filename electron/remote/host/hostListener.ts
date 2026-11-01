@@ -273,8 +273,11 @@ async function buildHostListener(
   // A remote view reads only its own project's terminals, images and history.
   teardowns.push(getIpcDispatcher().setScopeGate(createRemoteScopeGate(resolvers)));
   teardowns.push(
-    setMcpDriveTargetResolver((projectId) => {
+    setMcpDriveTargetResolver((projectId, change) => {
       const target = lease.getDriveTarget(projectId);
+      if (target.kind === "vacant" && change) {
+        lease.noteViewlessChange(projectId, change.linkSessionId);
+      }
       if (target.kind === "live") {
         return { state: "live", endpoint: target.endpoint, holderName: target.holder.clientName };
       }

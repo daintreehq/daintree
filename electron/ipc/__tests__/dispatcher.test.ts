@@ -559,7 +559,8 @@ describe("drive-lease gate", () => {
   /** A lease table the tests set directly: projectId → holder. */
   function installGate(
     holders: Map<string, { endpointId: string; clientId: string }>,
-    resolvers: Partial<LeaseTargetResolvers> = {}
+    resolvers: Partial<LeaseTargetResolvers> = {},
+    unheld: { keeps: boolean; noteUnheldChange?: (...args: unknown[]) => void } = { keeps: false }
   ) {
     const holderOf = (projectId: string) => {
       const holder = holders.get(projectId);
@@ -587,6 +588,8 @@ describe("drive-lease gate", () => {
           }
           return out;
         },
+        keepsUnheldTenures: () => unheld.keeps,
+        noteUnheldChange: (standing, projectIds) => unheld.noteUnheldChange?.(standing, projectIds),
       },
       {
         projectsForPath: (p) => (p === P1 ? ["proj-1"] : p === P2 ? ["proj-2"] : []),
@@ -654,6 +657,39 @@ describe("drive-lease gate", () => {
     ).resolves.toEqual(wrapSuccess("ran"));
     expect(driver).toHaveBeenCalledTimes(1);
     expect(free).toHaveBeenCalledTimes(1);
+  });
+
+  it("traces where a call lands while a tenure is kept for a project nobody holds (#15918)", async () => {
+    const driver = handle(DRIVER_CHANNEL);
+    const { endpoint } = makeRemoteEndpoint(-4, "proj-2");
+    const noteUnheldChange = vi.fn();
+
+    installGate(new Map(), {}, { keeps: false, noteUnheldChange });
+    await getIpcDispatcher().invokeForEndpoint({ endpoint, client: REMOTE_CLIENT }, DRIVER_CHANNEL, [
+      { rootPath: P1 },
+    ]);
+    expect(noteUnheldChange).not.toHaveBeenCalled();
+
+    installGate(new Map(), {}, { keeps: true, noteUnheldChange });
+    await expect(
+      getIpcDispatcher().invokeForEndpoint({ endpoint, client: REMOTE_CLIENT }, DRIVER_CHANNEL, [
+        { rootPath: P1 },
+      ])
+    ).resolves.toEqual(wrapSuccess("ran"));
+    // The project the call targets, not the one its caller shows.
+    expect(noteUnheldChange).toHaveBeenLastCalledWith(endpoint, ["proj-1"]);
+
+    // Let through beside a project someone else holds, it is traced the same way.
+    installGate(
+      new Map([["proj-2", { endpointId: "remote:-9", clientId: "client-c" }]]),
+      {},
+      { keeps: true, noteUnheldChange }
+    );
+    await getIpcDispatcher().invokeForEndpoint({ endpoint, client: REMOTE_CLIENT }, DRIVER_CHANNEL, [
+      { rootPath: P1 },
+    ]);
+    expect(noteUnheldChange).toHaveBeenCalledTimes(2);
+    expect(driver).toHaveBeenCalledTimes(3);
   });
 
   it("gates a hybrid channel's host leg over a link", async () => {

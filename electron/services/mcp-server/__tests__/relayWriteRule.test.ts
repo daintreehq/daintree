@@ -29,6 +29,23 @@ describe("relayWriteStanding (#13501)", () => {
     expect(relayWriteStanding("project-1", "link-a")).toEqual({ kind: "vacant" });
   });
 
+  it("asks the lease for a change, naming the link session it came in on (#15918)", () => {
+    const asked: unknown[] = [];
+    setMcpDriveTargetResolver((projectId, change) => {
+      asked.push([projectId, change]);
+      return { state: "vacant" };
+    });
+    relayWriteStanding("project-1", "link-a");
+    relayWriteStanding("project-1", null);
+    relayWriteStanding("project-1", "link-a", true);
+    expect(asked).toEqual([
+      ["project-1", { linkSessionId: "link-a" }],
+      ["project-1", { linkSessionId: null }],
+      // This machine's own assistant, whichever link it reached the project by.
+      ["project-1", { linkSessionId: null }],
+    ]);
+  });
+
   it("sends it through the requesting Shell's own view when that view drives", () => {
     setMcpDriveTargetResolver(() => ({ state: "live", endpoint: view("link-a") }));
     expect(relayWriteStanding("project-1", "link-a")).toEqual({ kind: "own-view" });

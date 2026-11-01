@@ -169,6 +169,23 @@ interface ProjectLease {
 interface VacatedTenure {
   clientId: string;
   tenureId: string;
+  /** Names the holder's link session, for the callers that stand on one. */
+  holderEndpointId: string;
+}
+
+/**
+ * Whether a caller is of the client a kept tenure is for: by its client id,
+ * as a grant carries tenure, or for a Canopy viewer or a paired device, by the
+ * link session the host gave it, as {@link drives} decides.
+ */
+function standsForTenure(vacated: VacatedTenure, standing: DriveStanding): boolean {
+  if (
+    standing.linkSessionId !== undefined &&
+    (isCanopyViewerEndpointId(standing.endpointId) || isDeviceAnswerEndpointId(standing.endpointId))
+  ) {
+    return isSessionEndpoint(standing.linkSessionId, vacated.holderEndpointId);
+  }
+  return standing.clientId === vacated.clientId;
 }
 
 /**
@@ -454,7 +471,9 @@ export class DriveLeaseService {
    * and resizes are gated on this.
    */
   isDriving(projectId: string, endpoint: DriveStanding): boolean {
-    return drives(this.getHolder(projectId), endpoint);
+    const holder = this.getHolder(projectId);
+    if (holder === null) this.noteUnheldStanding(projectId, endpoint);
+    return drives(holder, endpoint);
   }
 
   /**
@@ -465,6 +484,7 @@ export class DriveLeaseService {
    */
   drivingLeaseId(projectId: string, endpoint: DriveStanding): number | null | false {
     const holder = this.getHolder(projectId);
+    if (holder === null) this.noteUnheldStanding(projectId, endpoint);
     if (!drives(holder, endpoint)) return false;
     return holder?.leaseId ?? null;
   }
@@ -833,6 +853,7 @@ export class DriveLeaseService {
       this.vacatedTenures.set(projectId, {
         clientId: lease.holder.clientId,
         tenureId: lease.holder.tenureId,
+        holderEndpointId: lease.holder.endpointId,
       });
     }
     logger.info("Drive lease released", holderContext(projectId, lease.holder));
@@ -847,17 +868,69 @@ export class DriveLeaseService {
     const vacated = this.vacatedTenures.get(projectId);
     if (!vacated) return;
     const other = this.presentFor(projectId).find(
-      (endpoint) => endpoint.clientId !== vacated.clientId
+      (endpoint) => !standsForTenure(vacated, endpoint)
     );
-    if (!other) return;
+    if (other) {
+      this.endVacatedTenure(projectId, { byEndpointId: other.endpointId, byClientId: other.clientId });
+    }
+  }
+
+  /**
+   * A caller asked whether it drives a project nobody holds: it does, so
+   * unless it is of the last holder's client, it ends the tenure kept for
+   * that client. A remote view whose link is down acts on nothing.
+   */
+  private noteUnheldStanding(projectId: string, standing: DriveStanding): void {
+    const vacated = this.vacatedTenures.get(projectId);
+    if (!vacated || this.detached.has(standing.endpointId)) return;
+    if (standsForTenure(vacated, standing)) return;
+    this.endVacatedTenure(projectId, {
+      byEndpointId: standing.endpointId,
+      byClientId: standing.clientId,
+    });
+  }
+
+  private endVacatedTenure(projectId: string, by: Record<string, string | null>): void {
+    const vacated = this.vacatedTenures.get(projectId);
+    if (!vacated) return;
     this.vacatedTenures.delete(projectId);
     logger.info("Drive lease tenure ended while nobody held the project", {
       projectId,
       tenureId: vacated.tenureId,
       clientId: vacated.clientId,
-      byEndpointId: other.endpointId,
-      byClientId: other.clientId,
+      ...by,
     });
+  }
+
+  /** Whether any project nobody holds still keeps a tenure for its last holder. */
+  keepsUnheldTenures(): boolean {
+    return this.vacatedTenures.size > 0;
+  }
+
+  /**
+   * A call the lease gate let through changes these projects (`"every"` when
+   * its target couldn't be traced). On one nobody holds, a caller of any
+   * client but the last holder's ends the tenure kept for that holder.
+   */
+  noteUnheldChange(standing: DriveStanding, projectIds: readonly string[] | "every"): void {
+    if (this.disposed || this.vacatedTenures.size === 0) return;
+    const targets = projectIds === "every" ? [...this.vacatedTenures.keys()] : projectIds;
+    for (const projectId of targets) this.noteUnheldStanding(projectId, standing);
+  }
+
+  /**
+   * The host runs an assistant's change to a project nobody drives itself,
+   * with no view: one relayed on `linkSessionId`, or this machine's own with
+   * none. Made for anyone but the last holder, it ends the tenure kept for it.
+   */
+  noteViewlessChange(projectId: string, linkSessionId: string | null): void {
+    const vacated = this.vacatedTenures.get(projectId);
+    if (!vacated) return;
+    const ownSession =
+      linkSessionId !== null && isSessionEndpoint(linkSessionId, vacated.holderEndpointId);
+    const local = linkSessionId === null && vacated.clientId === LOCAL_CLIENT_ID;
+    if (ownSession || local) return;
+    this.endVacatedTenure(projectId, { byViewlessLinkSessionId: linkSessionId });
   }
 
   private grant(
@@ -1085,14 +1158,33 @@ function logRefusal(
  * call whose target can't be traced is refused rather than let through.
  */
 export function createDriveLeaseGate(
-  lease: Pick<DriveLeaseService, "projectsDrivenElsewhere">,
+  lease: Pick<
+    DriveLeaseService,
+    "projectsDrivenElsewhere" | "keepsUnheldTenures" | "noteUnheldChange"
+  >,
   resolvers: LeaseTargetResolvers
 ): LeaseGate {
   return (channel, caller, args) => {
     const endpoint = caller.kind === "link" ? caller.endpoint : getLocalEndpoint(caller.sender);
+    // A call let through on a project nobody holds may end the tenure kept
+    // for its last holder, so where it lands is traced while any is kept.
+    const admit = (resolution: LeaseTargetResolution): null => {
+      if (lease.keepsUnheldTenures()) {
+        lease.noteUnheldChange(
+          endpoint,
+          resolution.kind === "projects" ? resolution.projectIds : "every"
+        );
+      }
+      return null;
+    };
     const elsewhere = lease.projectsDrivenElsewhere(endpoint);
-    if (elsewhere.size === 0) return null;
     const target = getChannelLeaseTarget(channel);
+    if (elsewhere.size === 0) {
+      if (!lease.keepsUnheldTenures()) return null;
+      if (target === null) return admit({ kind: "every" });
+      const resolution = resolveLeaseTarget(target, args, endpoint.projectId, resolvers);
+      return resolution instanceof Promise ? resolution.then(admit) : admit(resolution);
+    }
     if (target === null) {
       const [projectId, holder] = elsewhere.entries().next().value!;
       return drivenElsewhereError(channel, projectId, holder, endpoint);
@@ -1114,7 +1206,7 @@ export function createDriveLeaseGate(
         const holder = holders.get(projectId);
         if (holder) return drivenElsewhereError(channel, projectId, holder, endpoint);
       }
-      return null;
+      return admit(resolution);
     };
     const resolution = resolveLeaseTarget(target, args, endpoint.projectId, resolvers);
     // A lookup that answers later is judged against the leases as they stand

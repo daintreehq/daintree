@@ -638,6 +638,69 @@ describe("DriveLeaseService", () => {
       expect(service.getHolder("p")?.tenureId).not.toBe(first.tenureId);
     });
 
+    it("starts a new tenure once a call the lease gate let through changed the project", async () => {
+      const { laptop, first } = await vacateAfterDriving();
+      const hostWindow = local(1, "q");
+      registry.add(hostWindow);
+      await settle();
+      expect(service.keepsUnheldTenures()).toBe(true);
+
+      // A window on q saving to p, and the laptop's own client changing p, end nothing.
+      service.noteUnheldChange(hostWindow, ["q"]);
+      service.noteUnheldChange(remote("s1:e2", "c1", "q"), ["p"]);
+      expect(service.keepsUnheldTenures()).toBe(true);
+      service.noteUnheldChange(hostWindow, ["p"]);
+      expect(service.keepsUnheldTenures()).toBe(false);
+
+      service.noteEndpointTransport([laptop.endpointId], true);
+      expect(service.getHolder("p")?.tenureId).not.toBe(first.tenureId);
+    });
+
+    it("ends every kept tenure for a gated call whose target couldn't be traced", async () => {
+      await vacateAfterDriving();
+      service.noteUnheldChange(local(1, "q"), "every");
+      expect(service.keepsUnheldTenures()).toBe(false);
+    });
+
+    it("starts a new tenure once the host ran an assistant's change to the project with no view", async () => {
+      const { laptop, first } = await vacateAfterDriving(remote("remote:s1:e1", "c1"));
+      // Relayed on the laptop's own link session: its own assistant.
+      service.noteViewlessChange("p", "s1");
+      expect(service.keepsUnheldTenures()).toBe(true);
+      // This machine's own assistant.
+      service.noteViewlessChange("p", null);
+      expect(service.keepsUnheldTenures()).toBe(false);
+
+      service.noteEndpointTransport([laptop.endpointId], true);
+      expect(service.getHolder("p")?.tenureId).not.toBe(first.tenureId);
+    });
+
+    it("starts a new tenure once another Shell's assistant changed the project with no view", async () => {
+      await vacateAfterDriving(remote("remote:s1:e1", "c1"));
+      service.noteViewlessChange("p", "s9");
+      expect(service.keepsUnheldTenures()).toBe(false);
+    });
+
+    it("tells a Canopy panel on the holder's own session from one on another", async () => {
+      const { laptop, first } = await vacateAfterDriving(remote("remote:s1:e1", "c1"));
+      const ownPanel = Object.assign(
+        new FakeEndpoint("canopy-viewer:v1", "c1", null, "remote-view"),
+        { linkSessionId: "s1" }
+      );
+      expect(service.isDriving("p", ownPanel)).toBe(true);
+      expect(service.keepsUnheldTenures()).toBe(true);
+
+      // Another Shell's panel claiming the laptop's client id drives too, while nobody holds p.
+      const otherPanel = Object.assign(
+        new FakeEndpoint("canopy-viewer:v2", "c1", null, "remote-view"),
+        { linkSessionId: "s9" }
+      );
+      expect(service.drivingLeaseId("p", otherPanel)).toBeNull();
+
+      service.noteEndpointTransport([laptop.endpointId], true);
+      expect(service.getHolder("p")?.tenureId).not.toBe(first.tenureId);
+    });
+
     it("keeps the tenure through a Host window that only showed another project", async () => {
       const { laptop, first } = await vacateAfterDriving();
       const hostWindow = local(1, "q");
