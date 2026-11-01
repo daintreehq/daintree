@@ -205,10 +205,6 @@ vi.mock("../../ipc/utils.js", async (importOriginal) => {
 import { registerAppStateHandlers } from "../handlers/app/state.js";
 import { noteDatabaseNoticeRendererReady } from "../../services/databaseBackupNotice.js";
 import { CHANNELS } from "../channels.js";
-import {
-  _resetInteractiveViewsForTest,
-  whenViewInteractive,
-} from "../../window/interactiveViews.js";
 import { consumePrefetchedHydrateResult } from "../../services/prefetchHydrateCache.js";
 import {
   captureProjectLayoutSeed,
@@ -225,8 +221,6 @@ function makeInvokeEvent(senderId = 1, senderUrl = "") {
     sender: {
       id: senderId,
       getURL: vi.fn(() => senderUrl),
-      on: vi.fn(),
-      once: vi.fn(),
     },
   } as unknown as Electron.IpcMainInvokeEvent;
 }
@@ -2507,22 +2501,5 @@ describe("app:first-interactive handler", () => {
     cleanup();
 
     expect(noteDatabaseNoticeRendererReady).toHaveBeenCalledExactlyOnceWith(7);
-  });
-
-  it("marks the sender ready for a scheduled run's launch request", async () => {
-    _resetInteractiveViewsForTest();
-    ipcHandlers.clear();
-    const cleanup = registerAppStateHandlers();
-    const handler = ipcHandlers.get(CHANNELS.APP_FIRST_INTERACTIVE);
-    if (!handler) throw new Error("app:first-interactive handler not registered");
-    const event = makeInvokeEvent(8);
-    const asked = vi.fn();
-    whenViewInteractive(event.sender, asked);
-    expect(asked).not.toHaveBeenCalled();
-
-    await handler(event);
-    cleanup();
-
-    expect(asked).toHaveBeenCalledTimes(1);
   });
 });

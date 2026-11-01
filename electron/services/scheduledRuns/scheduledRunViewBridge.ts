@@ -2,7 +2,7 @@ import { ipcMain } from "electron";
 import { randomUUID } from "node:crypto";
 import { CHANNELS } from "../../ipc/channels.js";
 import { thawThenSend } from "../../utils/thawThenSend.js";
-import { whenViewInteractive } from "../../window/interactiveViews.js";
+import { whenViewHydrated } from "../../window/viewHydration.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
@@ -77,8 +77,10 @@ function ensureListener(): void {
 
 /**
  * Asks `webContents` to launch the run and resolves with `agent.launch`'s
- * result. A view still loading is asked once it reports first-interactive, or
- * the request would be lost before its bridge listens. Rejects with
+ * result. A view still loading is asked once it reports its state hydrated
+ * (`session-restore:view-hydrated`), or the request would be lost before its
+ * bridge listens; unlike first-interactive, a view restored in the background
+ * and never painted reports it too. Rejects with
  * {@link ScheduledLaunchUnansweredError} when the view closes or doesn't
  * answer in time; that says nothing of whether it launched, which only the
  * run's admission at the spawn can tell.
@@ -124,7 +126,7 @@ export function requestScheduledLaunchInView(
       webContents,
       () => pendingLaunches.has(requestId),
       () => {
-        stopWaiting = whenViewInteractive(webContents, () => {
+        stopWaiting = whenViewHydrated(webContents, () => {
           if (!pendingLaunches.has(requestId) || webContents.isDestroyed()) return;
           try {
             webContents.send(CHANNELS.SCHEDULES_LAUNCH_REQUEST, payload);

@@ -33,9 +33,10 @@ vi.mock("../../../window/webContentsDestroyed.js", () => ({
 
 import { CHANNELS } from "../../../ipc/channels.js";
 import {
-  _resetInteractiveViewsForTest,
-  markViewInteractive,
-} from "../../../window/interactiveViews.js";
+  _resetViewHydrationForTesting,
+  _viewHydrationWaitersForTesting,
+  markViewHydrated,
+} from "../../../window/viewHydration.js";
 import {
   _resetScheduledRunViewBridgeForTest,
   requestScheduledLaunchInView,
@@ -59,7 +60,7 @@ const request: ScheduledLaunchRequest = {
   scheduledRun: { scheduleId: "schedule-1", runId: "run-1" },
 };
 
-/** A view; one that has reported first-interactive unless `loading`. */
+/** A view; one whose state has hydrated unless `loading`. */
 function view(id: number, { loading = false } = {}) {
   const wc = {
     id,
@@ -68,7 +69,7 @@ function view(id: number, { loading = false } = {}) {
     on: vi.fn(),
     once: vi.fn(),
   } as unknown as Electron.WebContents & { send: ReturnType<typeof vi.fn> };
-  if (!loading) markViewInteractive(wc);
+  if (!loading) markViewHydrated(wc);
   return wc;
 }
 
@@ -86,7 +87,7 @@ const thawed = () => vi.advanceTimersByTimeAsync(0);
 
 afterEach(() => {
   _resetScheduledRunViewBridgeForTest();
-  _resetInteractiveViewsForTest();
+  _resetViewHydrationForTesting();
   vi.useRealTimers();
 });
 
@@ -117,14 +118,14 @@ describe("requestScheduledLaunchInView", () => {
     expect(destroyedCallbacks.has(7)).toBe(false);
   });
 
-  it("asks a view still loading once it reports first-interactive, not before", async () => {
+  it("asks a view still loading once its state has hydrated, not before", async () => {
     const wc = view(9, { loading: true });
     const pending = requestScheduledLaunchInView(wc, request);
     await thawed();
     // Preload buffers nothing: a request sent before the bridge listens is lost.
     expect(wc.send).not.toHaveBeenCalled();
 
-    markViewInteractive(wc);
+    markViewHydrated(wc);
     expect(wc.send).toHaveBeenCalledTimes(1);
     const { requestId } = wc.send.mock.calls[0][1] as { requestId: string };
     const result = { ok: true, result: { launched: true, terminalId: "terminal-1" } };
@@ -139,7 +140,8 @@ describe("requestScheduledLaunchInView", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await settled;
 
-    markViewInteractive(wc);
+    expect(_viewHydrationWaitersForTesting()).toBe(0);
+    markViewHydrated(wc);
     expect(wc.send).not.toHaveBeenCalled();
   });
 

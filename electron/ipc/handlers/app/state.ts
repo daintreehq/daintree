@@ -76,7 +76,6 @@ import { getValidatedOverrides } from "../keybinding.js";
 import { loadSanitizedUserAgentRegistry } from "../../../services/UserAgentRegistryService.js";
 import type { Project } from "../../../types/index.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
-import { markViewInteractive } from "../../../window/interactiveViews.js";
 import type { BootResult, HydrateResult } from "../../../../shared/types/ipc/app.js";
 
 type HostPlatformFields = Required<
@@ -1272,8 +1271,6 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         webContentsId: ctx.webContentsId,
       });
       signalFirstInteractive(ctx.webContentsId);
-      // A scheduled run's launch request waits for this; one sent earlier is lost.
-      if (ctx.event) markViewInteractive(ctx.event.sender);
       // A backup suspension raised while no window could show it waits for this one.
       noteDatabaseNoticeRendererReady(ctx.webContentsId);
       // Close the cold-start timeline for a view this window's manager

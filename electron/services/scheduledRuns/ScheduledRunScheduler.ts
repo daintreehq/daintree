@@ -101,8 +101,19 @@ export class ScheduledRunScheduler {
   private readonly parsed = new Map<string, ParsedCron | null>();
   /** Where each schedule's timing starts, before which nothing counts as missed. */
   private readonly floors = new Map<string, number>();
-  /** Schedules whose next evaluation finds what came due while their launch was in flight. */
+  /**
+   * Schedules whose next evaluation finds what came due while nobody watched
+   * them: while their launch was in flight, their project couldn't be read, or
+   * a retry was waited out.
+   */
   private readonly unwatched = new Set<string>();
+  /**
+   * Each schedule's timing, renewed when it's switched on or its cadence
+   * changes, so a launch from before then can't leave retry or missed state
+   * on the schedule as it is now.
+   */
+  private readonly epochs = new Map<string, number>();
+  private nextEpoch = 0;
   /** Projects whose schedules couldn't be read, and when they're read again. */
   private readonly unread = new Set<string>();
   private nextReadAt = 0;
@@ -196,11 +207,13 @@ export class ScheduledRunScheduler {
         continue;
       }
       this.floors.set(schedule.id, schedule.updatedAt);
+      this.epochs.set(schedule.id, ++this.nextEpoch);
       this.unwatched.delete(schedule.id);
       this.retryAfter.delete(schedule.id);
     }
     for (const removed of previous.keys()) {
       this.floors.delete(removed);
+      this.epochs.delete(removed);
       this.unwatched.delete(removed);
       this.retryAfter.delete(removed);
     }
@@ -213,8 +226,10 @@ export class ScheduledRunScheduler {
       projectIds.map(async (projectId) => {
         try {
           const snapshot = await this.deps.listSchedules(projectId);
-          this.unread.delete(projectId);
-          this.hold(snapshot);
+          const late = this.unread.delete(projectId);
+          if (!this.hold(snapshot) || !late) return;
+          // What came due while the project couldn't be read was missed.
+          for (const schedule of snapshot.schedules) this.unwatched.add(schedule.id);
         } catch (error) {
           this.unread.add(projectId);
           this.logWarn(`[ScheduledRuns] Couldn't read project ${projectId}'s schedules:`, error);
@@ -305,9 +320,8 @@ export class ScheduledRunScheduler {
         if (due !== null && (nextDueAt === null || due < nextDueAt)) nextDueAt = due;
       }
     }
-    // A schedule skipped here needs none of it: one launching is unwatched
-    // once its launch ends, and one waiting out a retry still has its
-    // unconsumed occurrence in the window, late.
+    // A schedule skipped here needs none of it: one launching, or waiting out
+    // a retry, is unwatched when it's next evaluated.
     this.recoverAll = false;
     this.arm(nextDueAt === null ? SCHEDULER_TICK_MS : nextDueAt - now);
   }
@@ -353,6 +367,10 @@ export class ScheduledRunScheduler {
 
   private launch(projectId: string, scheduleId: string, origin: ScheduledRunOrigin): void {
     this.launching.add(scheduleId);
+    const epoch = this.epochs.get(scheduleId);
+    // A launch from before a switch-off, a cadence change or a removal leaves
+    // nothing on the schedule as it is now.
+    const current = () => this.epochs.get(scheduleId) === epoch;
     this.logInfo(
       `[ScheduledRuns] Schedule ${scheduleId} is due: ${origin.trigger} for ${origin.occurrenceKey}`
     );
@@ -368,20 +386,20 @@ export class ScheduledRunScheduler {
             this.logWarn(
               `[ScheduledRuns] Schedule ${scheduleId}'s run couldn't be recorded: ${outcome.message}`
             );
-            this.deferRetry(scheduleId);
+            if (current()) this.deferRetry(scheduleId);
           } else if (outcome.status === "not-found") {
-            this.deferRetry(scheduleId);
+            if (current()) this.deferRetry(scheduleId);
           }
         },
         (error: unknown) => {
           this.logWarn(`[ScheduledRuns] Schedule ${scheduleId}'s launch failed:`, error);
-          this.deferRetry(scheduleId);
+          if (current()) this.deferRetry(scheduleId);
         }
       )
       .finally(() => {
         this.launching.delete(scheduleId);
         // What came due while it launched was missed.
-        this.unwatched.add(scheduleId);
+        if (current()) this.unwatched.add(scheduleId);
         this.requestPass();
       });
   }
@@ -418,8 +436,10 @@ export class ScheduledRunScheduler {
     }
   }
 
+  /** Waits a minute before trying the schedule again, and then never calls it on time. */
   private deferRetry(scheduleId: string): void {
     this.retryAfter.set(scheduleId, this.monotonicNow() + UNRECORDED_RETRY_MS);
+    this.unwatched.add(scheduleId);
   }
 
   /** A wall clock that moved apart from monotonic time since the last look jumped, or slept. */

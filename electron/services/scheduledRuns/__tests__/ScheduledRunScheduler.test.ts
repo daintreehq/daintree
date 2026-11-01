@@ -697,6 +697,34 @@ describe("ScheduledRunScheduler", () => {
     commit("project-1", [schedule({ updatedAt: at(8) })]);
     const base = deps();
     let failing = true;
+    let reads = 0;
+    scheduler = new ScheduledRunScheduler({
+      ...base,
+      listSchedules: (projectId) => {
+        reads += 1;
+        return failing ? Promise.reject(new Error("EMFILE")) : base.listSchedules(projectId);
+      },
+    });
+    await scheduler.start();
+    await scheduler.idle();
+    expect(vi.getTimerCount()).toBe(1);
+    await elapse(SCHEDULER_TICK_MS);
+    expect(reads).toBe(1);
+    await elapse(SCHEDULER_TICK_MS);
+    expect(reads).toBe(2);
+
+    failing = false;
+    await elapse(30 * MINUTE);
+    expect(reads).toBe(3);
+    expect(origins()).toEqual([expect.objectContaining({ trigger: "scheduled", dueAt: at(9) })]);
+  });
+
+  it("calls what came due while a project couldn't be read missed", async () => {
+    vi.setSystemTime(at(8, 59, 10));
+    const skipping = schedule({ updatedAt: at(8, 30) });
+    commit("project-1", [{ ...skipping, policies: { ...skipping.policies, missedRuns: "skip" } }]);
+    const base = deps();
+    let failing = true;
     scheduler = new ScheduledRunScheduler({
       ...base,
       listSchedules: (projectId) =>
@@ -704,11 +732,68 @@ describe("ScheduledRunScheduler", () => {
     });
     await scheduler.start();
     await scheduler.idle();
-    expect(vi.getTimerCount()).toBe(1);
 
+    await elapse(50_000);
     failing = false;
-    await elapse(30 * MINUTE);
-    expect(origins()).toEqual([expect.objectContaining({ trigger: "scheduled", dueAt: at(9) })]);
+    await elapse(10_000);
+    expect(launches).toEqual([]);
+    expect(recorder.listBySchedule("schedule-1")).toEqual([
+      expect.objectContaining({
+        origin: expect.objectContaining({ trigger: "catch-up", dueAt: at(9) }),
+        settlement: expect.objectContaining({ outcome: "skipped" }),
+      }),
+    ]);
+  });
+
+  it("never calls a retried occurrence on time, even with the clock set back to it", async () => {
+    setClock(at(9, 0, 10));
+    const skipping = schedule({ updatedAt: at(8, 30) });
+    commit("project-1", [{ ...skipping, policies: { ...skipping.policies, missedRuns: "skip" } }]);
+    const registerSkip = vi.spyOn(recorder, "registerSkip").mockImplementationOnce(() => {
+      throw new Error("SQLITE_BUSY");
+    });
+    await start();
+    expect(registerSkip).toHaveBeenCalledTimes(1);
+
+    await elapse(10_000);
+    setClock(at(8, 59, 20));
+    await elapse(50_000);
+    expect(launches).toEqual([]);
+    expect(recorder.listBySchedule("schedule-1")).toEqual([
+      expect.objectContaining({ settlement: expect.objectContaining({ outcome: "skipped" }) }),
+    ]);
+  });
+
+  it("leaves nothing of a launch from before a switch-off on the schedule switched back on", async () => {
+    let finish: (outcome: ScheduleRunNowOutcome) => void = () => {};
+    vi.setSystemTime(at(8, 59, 50));
+    const skipping = schedule({ cron: "* * * * *" });
+    commit("project-1", [{ ...skipping, policies: { ...skipping.policies, missedRuns: "skip" } }]);
+    launchImpl = () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      });
+    await start();
+    await elapse(10_000);
+    expect(launches).toHaveLength(1);
+
+    await elapse(10_000);
+    commit("project-1", [{ ...skipping, enabled: false, updatedAt: at(9, 0, 10) }]);
+    await elapse(10_000);
+    commit("project-1", [{ ...skipping, updatedAt: at(9, 0, 20) }]);
+    await elapse(30_000);
+    finish({ status: "not-found" });
+    await settle();
+
+    launchImpl = async (input) => registerAtSpawn(input);
+    await elapse(10_000);
+    expect(origins().map((origin) => [origin.trigger, origin.dueAt])).toEqual([
+      ["scheduled", at(9)],
+      ["scheduled", at(9, 1)],
+    ]);
+    expect(recorder.listBySchedule("schedule-1").map((run) => run.settlement.state)).toEqual([
+      "open",
+    ]);
   });
 
   it("waits a minute before launching again when a launch found nothing to run", async () => {
