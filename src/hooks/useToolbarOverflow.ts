@@ -364,6 +364,13 @@ export function useToolbarOverflow(
           arraysEqual(prev.visibleIds, result.visibleIds) &&
           arraysEqual(prev.overflowIds, result.overflowIds)
         ) {
+          // Same buttons, but decided against new widths at this row width:
+          // anchor here, or a later shrink would read as growth and hold a
+          // set that no longer fits.
+          if (leftItemsResized) {
+            leftPrevWidthRef.current = containerWidth;
+            leftPrevResultRef.current = result;
+          }
           return prev;
         }
         leftPrevWidthRef.current = containerWidth;
@@ -392,6 +399,10 @@ export function useToolbarOverflow(
           arraysEqual(prev.visibleIds, result.visibleIds) &&
           arraysEqual(prev.overflowIds, result.overflowIds)
         ) {
+          if (rightItemsResized) {
+            rightPrevWidthRef.current = containerWidth;
+            rightPrevResultRef.current = result;
+          }
           return prev;
         }
         rightPrevWidthRef.current = containerWidth;

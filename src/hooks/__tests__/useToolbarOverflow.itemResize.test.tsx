@@ -149,4 +149,22 @@ describe("useToolbarOverflow when a button changes width in place", () => {
 
     expect(rightOverflow()).toBe(held);
   });
+
+  it("never holds a set wider than the row after a button grew in place", () => {
+    widths.set("forge-stats", 208);
+    render(<Row />);
+    rowWidth = 281;
+    act(() => resize(rightRow()));
+    // Still the same buttons, now at the wider pill's width.
+    widths.set("forge-stats", 236);
+    act(() => resize(forgePill()));
+
+    rowWidth = 261;
+    act(() => resize(rightRow()));
+
+    const hidden = new Set(rightOverflow().split(" "));
+    const shown = IDS.filter((id) => !hidden.has(id));
+    const footprint = shown.reduce((sum, id) => sum + (widths.get(id) ?? 0), 0);
+    expect(footprint).toBeLessThanOrEqual(rowWidth);
+  });
 });
