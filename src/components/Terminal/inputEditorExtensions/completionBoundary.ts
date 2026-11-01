@@ -82,10 +82,10 @@ export function completionBoundaryAt(state: EditorState, caret: number): number 
   let start = caret - line.from;
   while (start > 0 && isNonSpace(line.text[start - 1]!)) start--;
   const runStart = line.from + start;
-  let nearest: number | undefined;
-  for (const { from, to } of tokens) {
-    if (from !== runStart || to < caret || (nearest !== undefined && to >= nearest)) continue;
-    if (!/\s/.test(state.doc.sliceString(caret, to))) nearest = to;
-  }
-  return nearest;
+  // Text typed ahead of a trigger moves its `from`, so one run start belongs
+  // to one token at most.
+  return tokens.find(
+    ({ from, to }) =>
+      from === runStart && to >= caret && !/\s/.test(state.doc.sliceString(caret, to))
+  )?.to;
 }

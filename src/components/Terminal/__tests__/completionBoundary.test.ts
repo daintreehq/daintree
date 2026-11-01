@@ -156,7 +156,7 @@ describe("completionBoundary", () => {
     expect(completionBoundaryAt(ed.state, "@sr".length)).toBeUndefined();
   });
 
-  it("ends each token at its own word, the nearest one at or past the caret", () => {
+  it("ends each token at its own word", () => {
     const ed = editor("ab cd", 0);
     ed.type("/x");
     ed.apply({ selection: { anchor: "/xab ".length } });
