@@ -122,16 +122,18 @@ function xmlFirings(xml: string, from: number, days: number): number[] {
   const doc = parse(xml);
   const triggers = [...doc.getElementsByTagName("CalendarTrigger")];
   expect(triggers.length).toBeLessThanOrEqual(48);
+  for (const trigger of triggers) {
+    // The schema's sequence for a trigger, then one kind of days.
+    const order = names(trigger);
+    expect(order.slice(0, 2)).toEqual(["Enabled", "StartBoundary"]);
+    expect(order.slice(2, -1)).toEqual(order.length === 4 ? ["Repetition"] : []);
+    expect(order.at(-1)).toMatch(/^ScheduleBy/);
+  }
   const out: number[] = [];
   for (let day = 0; day < days; day++) {
     const start = from + day * DAY_MS;
     const minutes = new Set<number>();
     for (const trigger of triggers) {
-      // The schema's sequence for a trigger, then one kind of days.
-      const order = names(trigger);
-      expect(order.slice(0, 2)).toEqual(["Enabled", "StartBoundary"]);
-      expect(order.slice(2, -1)).toEqual(order.length === 4 ? ["Repetition"] : []);
-      expect(order.at(-1)).toMatch(/^ScheduleBy/);
       if (!startsOn(trigger, new Date(start))) continue;
       const [, hh, mm] = /T(\d\d):(\d\d):00$/.exec(text(trigger, "StartBoundary")[0]!)!;
       const first = Number(hh) * 60 + Number(mm);
@@ -431,27 +433,32 @@ describe("buildScheduleTaskXml", () => {
     expect(doc.getElementsByTagName("Repetition")).toHaveLength(0);
   });
 
+  // A leap year and the next for cadences restricted by their days; six weeks
+  // (every weekday and a month boundary) for ones that repeat through the day.
+  const YEARS = 2 * 366;
+  const WEEKS = 42;
+
   it.each([
-    "0 9 * * *",
-    "*/15 9-17 * * 1-5",
-    "0 * * * *",
-    "*/7 9-17 * * *",
-    "0,30 9,12,15 * * *",
-    "5 0 1,15 * *",
-    "0 9 * 1,6 1",
-    "0 9 1 * 1",
-    "0 0 29 2 *",
-    "15 10 * 3-5 *",
-    "30 8,13,17 * * 0,6",
-  ])("registers XML that Windows starts at exactly the occurrences of %s", (cron) => {
+    ["0 9 * * *", YEARS],
+    ["*/15 9-17 * * 1-5", WEEKS],
+    ["0 * * * *", WEEKS],
+    ["*/7 9-17 * * *", WEEKS],
+    ["0,30 9,12,15 * * *", YEARS],
+    ["5 0 1,15 * *", YEARS],
+    ["0 9 * 1,6 1", YEARS],
+    ["0 9 1 * 1", YEARS],
+    ["0 0 29 2 *", YEARS],
+    ["15 10 * 3-5 *", YEARS],
+    ["30 8,13,17 * * 0,6", YEARS],
+  ])("registers XML that Windows starts at exactly the occurrences of %s", (cron, days) => {
     const xml = buildScheduleTaskXml({
       triggers: scheduleTaskTriggers([{ cron, timeZone: "UTC" }], "UTC"),
       target,
       description: "",
     });
-    // A leap year and the next, from a Monday.
+    // From a Monday, across the end of a month.
     const from = Date.UTC(2027, 11, 27);
-    expect(xmlFirings(xml, from, 2 * 366)).toEqual(cronFirings(cron, from, 2 * 366));
+    expect(xmlFirings(xml, from, days)).toEqual(cronFirings(cron, from, days));
   });
 
   it("writes a trigger two schedules share once", () => {

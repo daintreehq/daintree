@@ -70,30 +70,38 @@ function cronFirings(expression: string, from: number, days: number): number[] {
   return out;
 }
 
+/** Two leap years and the years between: what a cadence restricted by its days needs. */
+const YEARS = 3 * 366 + 2;
+/**
+ * Six weeks: every weekday and a month boundary, all a cadence that repeats
+ * through the day and is only restricted by weekday can vary over, without
+ * simulating a hundred thousand starts.
+ */
+const WEEKS = 42;
+
 describe("taskSchedulerTriggersFor", () => {
   it.each([
-    ["0 9 * * *", 1],
-    ["0 9 * * 1-5", 1],
-    ["0 * * * *", 1],
-    ["*/15 * * * *", 1],
-    ["*/30 9-17 * * 1-5", 1],
-    ["0 9,17 * * *", 1],
-    ["0,30 9,12,15 * * *", 2],
-    ["*/7 9-17 * * *", 9],
-    ["30 8,13,17 * * *", 3],
-    ["5 0 1,15 * *", 1],
-    ["0 9 * 1,6 1", 1],
-    ["0 9 1 * 1", 2],
-    ["0 0 31 * *", 1],
-    ["0 0 29 2 *", 1],
-    ["15 10 * 3-5 *", 1],
-    ["0 9 */2 * *", 1],
-  ])("starts %s at exactly its occurrences with %i trigger(s)", (cron, count) => {
+    ["0 9 * * *", 1, YEARS],
+    ["0 9 * * 1-5", 1, YEARS],
+    ["0 * * * *", 1, WEEKS],
+    ["*/15 * * * *", 1, WEEKS],
+    ["*/30 9-17 * * 1-5", 1, WEEKS],
+    ["0 9,17 * * *", 1, YEARS],
+    ["0,30 9,12,15 * * *", 2, YEARS],
+    ["*/7 9-17 * * *", 9, WEEKS],
+    ["30 8,13,17 * * *", 3, YEARS],
+    ["5 0 1,15 * *", 1, YEARS],
+    ["0 9 * 1,6 1", 1, YEARS],
+    ["0 9 1 * 1", 2, YEARS],
+    ["0 0 31 * *", 1, YEARS],
+    ["0 0 29 2 *", 1, YEARS],
+    ["15 10 * 3-5 *", 1, YEARS],
+    ["0 9 */2 * *", 1, YEARS],
+  ])("starts %s at exactly its occurrences with %i trigger(s)", (cron, count, days) => {
     const list = triggers(cron);
     expect(list).toHaveLength(count);
-    // Two leap years and the years between, from a Monday.
+    // From a Monday, across the end of a month.
     const from = Date.UTC(2027, 11, 27);
-    const days = 3 * 366 + 2;
     expect(taskFirings(list, from, days)).toEqual(cronFirings(cron, from, days));
   });
 
