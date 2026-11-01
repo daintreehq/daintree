@@ -1502,3 +1502,57 @@ describe("remote session wiring", () => {
     await expect(stopped.whenReady(5_000)).resolves.toBe("stopped");
   });
 });
+
+describe("a closing view's last calls (#15881)", () => {
+  const viewAOnHost = () => getEndpointRegistry().getForProject("proj-1")[0];
+
+  /** What reached the host's send handler, and whether its endpoint was still open then. */
+  function recordHostSends() {
+    const received: Array<{ channel: string; endpointOpen: boolean }> = [];
+    const spy = vi
+      .spyOn(getIpcDispatcher(), "sendForEndpoint")
+      .mockImplementation((invocation, channel) => {
+        received.push({ channel, endpointOpen: !invocation.endpoint.isClosed() });
+      });
+    cleanups.push(() => spy.mockRestore());
+    return received;
+  }
+
+  async function openViewA() {
+    await startHarness();
+    await connect();
+    await invoke(HOST_CHANNEL, VIEW_A, {});
+    expect(viewAOnHost()).toBeDefined();
+    return h.manager.get(HOST_ID)!;
+  }
+
+  it("delivers a send queued behind a backpressured socket before the view's close", async () => {
+    const connection = await openViewA();
+    const received = recordHostSends();
+    const socket = h.sockets.at(-1)!;
+    // Held writes past the high-water mark: the session waits for a drain,
+    // and everything posted after stays in its scheduler.
+    socket.cork();
+    connection.send(VIEW_A, "proj-1", "filler", ["x".repeat(socket.writableHighWaterMark)]);
+    await waitFor(() => socket.writableNeedDrain);
+    connection.send(VIEW_A, "proj-1", "commit", [{ panelIds: ["t1"] }]);
+    h.sink.gone(VIEW_A);
+    socket.uncork();
+
+    await waitFor(() => viewAOnHost() === undefined);
+    expect(received).toEqual([
+      { channel: "filler", endpointOpen: true },
+      { channel: "commit", endpointOpen: true },
+    ]);
+  });
+
+  it("delivers a send posted in the same tick as the view's close before it", async () => {
+    const connection = await openViewA();
+    const received = recordHostSends();
+    connection.send(VIEW_A, "proj-1", "commit", [{ panelIds: ["t1"] }]);
+    h.sink.gone(VIEW_A);
+
+    await waitFor(() => viewAOnHost() === undefined);
+    expect(received).toEqual([{ channel: "commit", endpointOpen: true }]);
+  });
+});
