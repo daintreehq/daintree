@@ -4490,6 +4490,10 @@ describe("CanopyService refining attention", () => {
     h.service.markSeen("a", { viewId: 1, place: "pane", looking: false });
     expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: true });
     await vi.waitFor(() => expect(changed).toHaveBeenCalled());
+
+    // A read or unread mark waits for the fleet: it moves the hand-back by run id.
+    expect(h.service.setRead("a", 1, false)).toBeNull();
+    expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: true });
   });
 
   it("says whether the user has read the question wait it cleared, by that turn's read mark", async () => {

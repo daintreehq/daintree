@@ -1015,26 +1015,20 @@ export class CanopyService {
     view?: { viewId: number; place: CanopyLookPlace; looking: boolean }
   ): void {
     if (this.disposed) return;
-    const entry = this.liveEntry(runId);
+    // While the fleet is unknown, the entry already held stands in for the
+    // run, so a look taken then still reads it. Only a look: a read or unread
+    // mark also moves the hand-back by run id, which may be a newer incarnation.
+    const entry =
+      this.deps.getRuns() === null ? (this.entries.get(runId) ?? null) : this.liveEntry(runId);
     if (!entry) return;
     entry.seenAt = this.now();
     if (view) this.noteLook(runId, entry, `${view.viewId}:${view.place}`, view.looking);
     if (this.active) this.scheduleBroadcast();
   }
 
-  /**
-   * The entry for the incarnation of the run the fleet shows now, made if it
-   * has none; null when it shows none. While the fleet is unknown, the entry
-   * already held stands in for it: a look or a mark the user makes then still
-   * lands, and nothing new is made.
-   */
+  /** The entry for the incarnation of the run the fleet shows now, made if it has none; null when it shows none. */
   private liveEntry(runId: string, spawnedAt?: number): RunEntry | null {
-    const runs = this.deps.getRuns();
-    if (runs === null) {
-      const held = this.entries.get(runId);
-      return held && (spawnedAt === undefined || held.spawnedAt === spawnedAt) ? held : null;
-    }
-    const run = runs.find((candidate) => candidate.runId === runId);
+    const run = this.deps.getRuns()?.find((candidate) => candidate.runId === runId);
     if (!run || (spawnedAt !== undefined && run.spawnedAt !== spawnedAt)) return null;
     let entry = this.entries.get(runId);
     if (!entry || entry.spawnedAt !== run.spawnedAt) {
