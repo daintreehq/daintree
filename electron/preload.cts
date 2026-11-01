@@ -2014,6 +2014,9 @@ function buildElectronApi(): ElectronAPI {
       ) => {
         ipcRenderer.send(CHANNELS.SCHEDULES_LAUNCH_RESPONSE, response);
       },
+
+      onFinishRequest: (callback: (request: IpcEventMap["schedules:finish-request"]) => void) =>
+        _typedOn(CHANNELS.SCHEDULES_FINISH_REQUEST, callback),
     },
 
     // Decisions, as main observes it (#16001)

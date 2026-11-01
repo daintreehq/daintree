@@ -1740,6 +1740,9 @@ export interface IpcEventMap {
    */
   "schedules:launch-request": import("./schedules.js").ScheduledLaunchViewRequest;
 
+  // Main asks every local view of a project to move or remove a scheduled run's pane by its done policy (#15982).
+  "schedules:finish-request": import("./schedules.js").ScheduledRunFinishRequest;
+
   /**
    * MCP server runtime-state transition. Distinct from
    * `connectivity:service-changed` because the renderer needs the derived

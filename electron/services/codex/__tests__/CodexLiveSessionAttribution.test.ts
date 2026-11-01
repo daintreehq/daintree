@@ -109,6 +109,14 @@ describe("matchLiveCodexThreads", () => {
         new Set()
       ).size
     ).toBe(0);
+    // A scheduled run's instruction is Daintree's too (#15982).
+    expect(
+      matchLiveCodexThreads(
+        [pane("a", "Fix the tests")],
+        [thread("run", appendHandbackInstruction("Fix the tests", "abc123", "run"))],
+        new Set()
+      ).get("a")
+    ).toBe("run");
   });
 
   it("doesn't read one prompt as the start of a longer sibling's", () => {

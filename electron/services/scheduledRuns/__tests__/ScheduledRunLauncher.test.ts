@@ -54,6 +54,7 @@ function spawnFor(request: ScheduledLaunchRequest, overrides: Record<string, unk
     agentModelId: "opus",
     agentPresetId: request.args.presetId ?? undefined,
     agentSessionId: SESSION_ID,
+    handbackCode: "k7f3qa",
     ...overrides,
   });
 }
@@ -157,6 +158,7 @@ describe("launchScheduledRun", () => {
         agentModelId: "opus",
         agentPresetId: null,
       },
+      handbackCode: "k7f3qa",
     });
     expect(deps.markProjectRunning).toHaveBeenCalledWith("project-1");
     expect(recorder.registerRefusedLaunch).not.toHaveBeenCalled();
@@ -218,6 +220,44 @@ describe("launchScheduledRun", () => {
       message: "The project already has as many panels as it can hold.",
     });
     expect(hasPendingScheduledLaunch("project-1")).toBe(false);
+  });
+
+  it("arms the done policy its launch read once the run started, and only then (#15982)", async () => {
+    const onLaunched = vi.fn();
+    deps.onLaunched = onLaunched;
+    schedule = { ...schedule, policies: { ...schedule.policies, onDone: "close" } };
+    let answer!: () => void;
+    deps.launchInView = vi.fn(async (_view, request) => {
+      spawnFor(request);
+      // An edit made while the run launches applies to later runs.
+      schedule = { ...schedule, policies: { ...schedule.policies, onDone: "keep" } };
+      await new Promise<void>((resolve) => {
+        answer = resolve;
+      });
+      return launched(request.args.requestedId);
+    });
+
+    const started = run();
+    await vi.waitFor(() => expect(recorder.registerLaunch).toHaveBeenCalled());
+    // Registered at the spawn, but the launch hasn't finished committing its pane.
+    expect(onLaunched).not.toHaveBeenCalled();
+    answer();
+    await expect(started).resolves.toMatchObject({ status: "started" });
+    expect(onLaunched).toHaveBeenCalledWith({
+      runId: "id-1",
+      scheduleId: "schedule-1",
+      projectId: "project-1",
+      terminalId: "terminal-id-2",
+      onDone: "close",
+    });
+
+    onLaunched.mockClear();
+    deps.launchInView = async () => ({
+      ok: true,
+      result: { launched: false, terminalId: null, spawnStatus: "panel-limit" },
+    });
+    await expect(run()).resolves.toMatchObject({ status: "failed" });
+    expect(onLaunched).not.toHaveBeenCalled();
   });
 
   it("keeps the launcher's own refusal as the reason", async () => {

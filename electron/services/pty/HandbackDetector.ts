@@ -1,9 +1,14 @@
 import {
   HANDBACK_MESSAGE_MAX_CHARS,
   HANDBACK_SUMMARY_PLACEHOLDER,
+  type HandbackReport,
   type TerminalHandback,
 } from "../../../shared/types/handback.js";
-import { handbackEndMarker, handbackStartMarker } from "../../../shared/utils/handback.js";
+import {
+  handbackEndMarker,
+  handbackNeedsYouMarker,
+  handbackStartMarker,
+} from "../../../shared/utils/handback.js";
 import { stripAnsiCodes } from "../../../shared/utils/artifactParser.js";
 import type { HandbackRequest } from "./HandbackTracker.js";
 import { SEMANTIC_BUFFER_TRUNCATION_MARKER } from "./types.js";
@@ -128,36 +133,69 @@ export function detectHandback(input: string, code: string, rendered = true): Ha
   return scanHandback(input, code, rendered).match;
 }
 
-/** {@link detectHandback}, also saying whether a status-line marker was passed over. */
+interface Opening {
+  at: number;
+  marker: string;
+  report: HandbackReport;
+}
+
+/**
+ * Every opening marker for `code` in `text`, in position order. A scheduled
+ * run's request (#15982) also looks for the `needs-you` form; the two share
+ * the closing marker, and neither can start inside the other.
+ */
+function openingsOf(text: string, code: string, offersNeedsYou: boolean): Opening[] {
+  const forms: Array<Omit<Opening, "at">> = [{ marker: handbackStartMarker(code), report: "done" }];
+  if (offersNeedsYou) forms.push({ marker: handbackNeedsYouMarker(code), report: "needs-you" });
+  const openings: Opening[] = [];
+  for (const form of forms) {
+    for (
+      let at = text.indexOf(form.marker);
+      at !== -1;
+      at = text.indexOf(form.marker, at + form.marker.length)
+    ) {
+      openings.push({ at, ...form });
+    }
+  }
+  return openings.sort((a, b) => a.at - b.at);
+}
+
+/**
+ * {@link detectHandback}, also saying which form the marker took and whether a
+ * status-line marker was passed over.
+ */
 function scanHandback(
   input: string,
   code: string,
-  rendered: boolean
-): { match: HandbackMatch | null; statusLine: boolean } {
-  if (!input) return { match: null, statusLine: false };
+  rendered: boolean,
+  offersNeedsYou = false
+): { match: HandbackMatch | null; report: HandbackReport; statusLine: boolean } {
+  if (!input) return { match: null, report: "done", statusLine: false };
   const text = rendered ? input.replace(HYPHEN_ROW_BREAK_RE, "-") : input;
-  const start = handbackStartMarker(code);
   const end = handbackEndMarker(code);
+  const openings = openingsOf(text, code, offersNeedsYou);
 
   let statusLine = false;
-  const captures: string[] = [];
-  let cursor = text.indexOf(start);
-  while (cursor !== -1) {
-    const bodyStart = cursor + start.length;
+  const captures: Array<{ body: string; report: HandbackReport }> = [];
+  let index = 0;
+  while (index < openings.length) {
+    const open = openings[index]!;
+    const bodyStart = open.at + open.marker.length;
     const closeAt = text.indexOf(end, bodyStart);
     if (closeAt === -1) break;
-    const nextOpen = text.indexOf(start, bodyStart);
-    if (nextOpen !== -1 && nextOpen < closeAt) {
-      // Opened and never closed before the next opening marker.
-      cursor = nextOpen;
+    const next = openings[index + 1];
+    if (next !== undefined && next.at < closeAt) {
+      // Opened and never closed before the next opening marker, of either form.
+      index += 1;
       continue;
     }
-    if (isStatusLineMarker(text, cursor, closeAt + end.length)) statusLine = true;
-    else captures.push(text.slice(bodyStart, closeAt));
-    cursor = text.indexOf(start, closeAt + end.length);
+    const closeEnd = closeAt + end.length;
+    if (isStatusLineMarker(text, open.at, closeEnd)) statusLine = true;
+    else captures.push({ body: text.slice(bodyStart, closeAt), report: open.report });
+    while (index < openings.length && openings[index]!.at < closeEnd) index += 1;
   }
 
-  for (const capture of captures.reverse()) {
+  for (const { body: capture, report } of captures.reverse()) {
     // Bytes the capture never saw — cut by the semantic buffer, or cells a
     // repaint skipped over — could have held the placeholder.
     if (capture.includes(SEMANTIC_BUFFER_TRUNCATION_MARKER)) continue;
@@ -167,9 +205,9 @@ function scanHandback(
     // `>` gutter, while the raw capture keeps a `>` that closes the placeholder
     // at the start of a continuation row, which gutter stripping removes.
     if (isEchoedInstruction(capture) || isEchoedInstruction(message)) continue;
-    return { match: capMessage(message), statusLine };
+    return { match: capMessage(message), report, statusLine };
   }
-  return { match: null, statusLine };
+  return { match: null, report: "done", statusLine };
 }
 
 // Cursor movement: up/down/forward/back, next/previous line, column, row and
@@ -209,6 +247,10 @@ export function rawHandbackText(semanticBuffer: readonly string[]): string {
 export interface HandbackHit {
   handback: TerminalHandback;
   code: string;
+  /** Which marker the agent printed; always `done` for a request that offered no other. */
+  report: HandbackReport;
+  /** The request was a scheduled run's launch prompt (#15982). */
+  run: boolean;
 }
 
 /**
@@ -258,13 +300,16 @@ export function findHandback(
     // Latest request first: it is the one the agent is answering.
     for (const request of [...requests].reverse()) {
       if (!source.rendered && statusLineOnly.has(request.code)) continue;
-      const { match, statusLine } = scanHandback(text, request.code, source.rendered);
+      const run = request.instruction === "run";
+      const { match, report, statusLine } = scanHandback(text, request.code, source.rendered, run);
       if (!match) {
         if (source.rendered && statusLine) statusLineOnly.add(request.code);
         continue;
       }
       return {
         code: request.code,
+        report,
+        run,
         handback: {
           message: match.message,
           observedAt,

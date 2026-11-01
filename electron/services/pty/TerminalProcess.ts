@@ -36,6 +36,7 @@ import { AgentOutputForwarder } from "./AgentOutputForwarder.js";
 import { TerminalInputController } from "./TerminalInputController.js";
 import { HandbackTracker } from "./HandbackTracker.js";
 import { findHandback, keepFirstObservation, rawHandbackText } from "./HandbackDetector.js";
+import { reportRunHandback } from "./runHandback.js";
 import { PtyDataPipeline } from "./PtyDataPipeline.js";
 import { PreservedSnapshotCapture } from "./PreservedSnapshotCapture.js";
 import { events } from "../events.js";
@@ -431,7 +432,10 @@ export class TerminalProcess {
       this.analysis = this.inThreadAnalysis;
     }
     if (options.handbackCode !== undefined) {
-      this.ensureHandbackTracker().registerDelivered(options.handbackCode);
+      this.ensureHandbackTracker().registerDelivered(
+        options.handbackCode,
+        options.handbackInstruction
+      );
     }
 
     // NOTE: The headless responder is intentionally NOT installed for agent
@@ -1904,7 +1908,13 @@ export class TerminalProcess {
     const changed = tracker.noteReported(hit.code, hit.handback.message, hit.handback.truncated);
     // Retired outside `working` even when the capture repeats one already
     // reported, or the code would stay open until the next submission.
-    if (t.agentState !== "working") tracker.retire(hit.code);
+    if (t.agentState !== "working") {
+      tracker.retire(hit.code);
+      // A scheduled run takes the capture that retires its code (#15982): a
+      // marker drafted while the agent still works waits for the settle,
+      // which has the last look, so a close policy never ends a reply.
+      reportRunHandback(t, hit, now);
+    }
     if (!changed) return;
     const handback = keepFirstObservation(t.lastHandback, hit.handback);
     t.lastHandback = handback;

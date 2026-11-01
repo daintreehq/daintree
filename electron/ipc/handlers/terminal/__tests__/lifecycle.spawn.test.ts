@@ -1004,6 +1004,7 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
       agentPresetId: "preset-1",
       agentSessionId: "0b6e3f9c-0d3e-4a55-8a0e-4b6ad8d6e9a1",
       scheduledRun: { scheduleId: "schedule-1", runId: "run-1" },
+      handbackCode: "k7f3qa",
     });
 
     it("registers the run from the values it spawns with, before the PTY starts", async () => {
@@ -1024,22 +1025,32 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
 
       await handler({} as Electron.IpcMainInvokeEvent, scheduledSpawn(os.homedir()));
 
-      expect(admit).toHaveBeenCalledWith({
-        agentId: "claude",
-        agentSessionId: "0b6e3f9c-0d3e-4a55-8a0e-4b6ad8d6e9a1",
-        cwd: os.homedir(),
-        worktreeId: "wt-123",
-        agentLaunchFlags: ["--model", "opus"],
-        agentModelId: "opus",
-        agentPresetId: "preset-1",
-      });
+      expect(admit).toHaveBeenCalledWith(
+        {
+          agentId: "claude",
+          agentSessionId: "0b6e3f9c-0d3e-4a55-8a0e-4b6ad8d6e9a1",
+          cwd: os.homedir(),
+          worktreeId: "wt-123",
+          agentLaunchFlags: ["--model", "opus"],
+          agentModelId: "opus",
+          agentPresetId: "preset-1",
+        },
+        "k7f3qa"
+      );
       expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
       expect(reserved.state()).toEqual({ kind: "registered" });
+      // The launch that registered the run reports for it (#15982).
+      expect(ptyClient.spawn.mock.calls[0]?.[1]).toMatchObject({
+        handbackCode: "k7f3qa",
+        handbackInstruction: "run",
+      });
 
-      // A restart of the run's pane spawns without registering it again.
+      // A restart of the run's pane spawns without registering it again, and
+      // whatever code it carries is no report of the run's.
       await handler({} as Electron.IpcMainInvokeEvent, scheduledSpawn(os.homedir()));
       expect(admit).toHaveBeenCalledTimes(1);
       expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
+      expect(ptyClient.spawn.mock.calls[1]?.[1]).not.toHaveProperty("handbackInstruction");
     });
 
     it("refuses to start a run anywhere but the directory it asked for", async () => {

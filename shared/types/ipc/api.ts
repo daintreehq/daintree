@@ -1162,6 +1162,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (request: import("./schedules.js").ScheduledLaunchViewRequest) => void
     ): () => void;
     sendLaunchResponse(response: import("./schedules.js").ScheduledLaunchViewResponse): void;
+    /** Main asking this view to apply a scheduled run's done policy to its pane (#15982). */
+    onFinishRequest(
+      callback: (request: import("./schedules.js").ScheduledRunFinishRequest) => void
+    ): () => void;
   };
   // ensure / restart / stop / getState etc. come from GeneratedElectronAPI;
   // onStateChanged is a renderer-only subscription.

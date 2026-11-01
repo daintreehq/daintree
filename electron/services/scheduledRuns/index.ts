@@ -118,11 +118,16 @@ export function startScheduledRunFacts(source: ScheduledRunFactSource): () => vo
     "agent-session:captured",
     follow((target, payload) => target.handleSessionCaptured(payload))
   );
+  const offHandback = events.on(
+    "agent:run-handback-observed",
+    follow((target, payload) => target.handleHandback(payload))
+  );
   return () => {
     source.off("spawn-result", onSpawnResult);
     source.off("incarnation-exit", onExit);
     source.off("incarnation-lost", onLost);
     offCaptured();
+    offHandback();
   };
 }
 

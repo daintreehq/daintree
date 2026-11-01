@@ -362,7 +362,12 @@ export async function runAgentLaunch(
       env: args.env,
       prompt:
         handbackCode !== undefined && args.prompt !== undefined
-          ? appendHandbackInstruction(args.prompt, handbackCode)
+          ? appendHandbackInstruction(
+              args.prompt,
+              handbackCode,
+              // A scheduled run's agent can also say it needs the user (#15982).
+              launch.scheduledRun !== undefined ? "run" : "handback"
+            )
           : args.prompt,
       interactive: args.interactive,
       modelId: args.model,

@@ -33,6 +33,23 @@ describe("HandbackTracker", () => {
     expect(codes(tracker)).toEqual(["launch"]);
   });
 
+  it("marks a scheduled run's launch prompt as the run's, and nothing else (#15982)", () => {
+    const tracker = new HandbackTracker(noScreen);
+    tracker.registerDelivered("launch", "run");
+    tracker.noteSubmission("later0")?.();
+    tracker.registerDelivered("plain0", "handback");
+    expect(tracker.deliveredRequests()).toEqual([
+      { code: "later0", seq: 2, delivered: true },
+      { code: "plain0", seq: 3, delivered: true },
+    ]);
+
+    const fresh = new HandbackTracker(noScreen);
+    fresh.registerDelivered("launch", "run");
+    expect(fresh.deliveredRequests()).toEqual([
+      { code: "launch", seq: 1, delivered: true, instruction: "run" },
+    ]);
+  });
+
   it("retires earlier requests when a later submission reaches the pty", () => {
     const tracker = new HandbackTracker(noScreen);
     tracker.registerDelivered("first0");

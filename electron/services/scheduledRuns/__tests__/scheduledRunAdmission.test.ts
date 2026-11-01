@@ -40,6 +40,7 @@ function spawn(overrides: Partial<ScheduledSpawn> = {}): ScheduledSpawn {
     agentModelId: "opus",
     agentPresetId: "preset-1",
     agentSessionId: "0b6e3f9c-0d3e-4a55-8a0e-4b6ad8d6e9a1",
+    handbackCode: "k7f3qa",
     ...overrides,
   };
 }
@@ -50,23 +51,27 @@ describe("scheduled run admission", () => {
     const reserved = reserveScheduledLaunch(reservation(admit));
     expect(hasPendingScheduledLaunch("project-1")).toBe(true);
 
-    admitScheduledSpawn(spawn());
+    expect(admitScheduledSpawn(spawn())).toBe(true);
 
-    expect(admit).toHaveBeenCalledWith({
-      agentId: "claude",
-      agentSessionId: "0b6e3f9c-0d3e-4a55-8a0e-4b6ad8d6e9a1",
-      cwd: "/repo/wt",
-      worktreeId: "/repo/wt",
-      agentLaunchFlags: ["--model", "opus"],
-      agentModelId: "opus",
-      agentPresetId: "preset-1",
-    });
+    expect(admit).toHaveBeenCalledWith(
+      {
+        agentId: "claude",
+        agentSessionId: "0b6e3f9c-0d3e-4a55-8a0e-4b6ad8d6e9a1",
+        cwd: "/repo/wt",
+        worktreeId: "/repo/wt",
+        agentLaunchFlags: ["--model", "opus"],
+        agentModelId: "opus",
+        agentPresetId: "preset-1",
+      },
+      "k7f3qa"
+    );
     await expect(reserved.admitted).resolves.toBeUndefined();
     expect(reserved.state()).toEqual({ kind: "registered" });
     expect(hasPendingScheduledLaunch("project-1")).toBe(false);
 
-    // A restart of the run's pane names the run too, and spawns as any pane does.
-    admitScheduledSpawn(spawn());
+    // A restart of the run's pane names the run too, and spawns as any pane
+    // does: it isn't the run's launch, so its handback code isn't the run's.
+    expect(admitScheduledSpawn(spawn())).toBe(false);
     expect(admit).toHaveBeenCalledTimes(1);
     expect(reserved.giveUp()).toBe(false);
   });
@@ -81,6 +86,7 @@ describe("scheduled run admission", () => {
         agentModelId: undefined,
         agentPresetId: undefined,
         agentSessionId: undefined,
+        handbackCode: undefined,
       })
     );
     expect(admit).toHaveBeenCalledWith(
@@ -90,7 +96,8 @@ describe("scheduled run admission", () => {
         agentModelId: null,
         agentPresetId: null,
         agentSessionId: null,
-      })
+      }),
+      null
     );
   });
 

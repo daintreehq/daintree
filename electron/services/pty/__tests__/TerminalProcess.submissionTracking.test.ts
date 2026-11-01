@@ -416,6 +416,104 @@ describe("TerminalProcess handback requests (#12488)", () => {
     terminal.dispose();
   });
 
+  it("reports a scheduled run's launch marker only once it retires the code (#15982)", async () => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+    const runs: Array<{ code: string; report: string; message: string | null; spawnedAt: number }> =
+      [];
+    const ordinary: Array<string | null> = [];
+    const offRun = events.on("agent:run-handback-observed", (payload) =>
+      runs.push({
+        code: payload.code,
+        report: payload.report,
+        message: payload.message,
+        spawnedAt: payload.spawnedAt,
+      })
+    );
+    const offOrdinary = events.on("agent:handback-observed", (payload) =>
+      ordinary.push(payload.handback.message)
+    );
+    const terminal = createTerminal({
+      launchAgentId: "grok",
+      handbackCode: "k7f3qa",
+      handbackInstruction: "run",
+    });
+    terminal.getInfo().agentState = "working";
+
+    // A drafted marker in a thinking preview is observed, but is no report yet:
+    // a close policy acting on it would end the reply still to come.
+    ptyOnDataCallback!("  draft: DAINTREE-DONE-k7f3qa: Voted A END-k7f3qa\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(ordinary).toEqual(["Voted A"]);
+    expect(runs).toEqual([]);
+
+    terminal.getInfo().agentState = "waiting";
+    ptyOnDataCallback!("  DAINTREE-NEEDS-YOU-k7f3qa: the deploy key expired END-k7f3qa\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(runs).toEqual([
+      {
+        code: "k7f3qa",
+        report: "needs-you",
+        message: "the deploy key expired",
+        spawnedAt: terminal.getInfo().spawnedAt,
+      },
+    ]);
+    // Retired, so the same screen sampled again reports nothing more.
+    ptyOnDataCallback!("\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(runs).toHaveLength(1);
+    offRun();
+    offOrdinary();
+    vi.useRealTimers();
+    terminal.dispose();
+  });
+
+  it("reports a run's marker first seen while working once the agent leaves working", async () => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+    const runs: Array<string | null> = [];
+    const off = events.on("agent:run-handback-observed", (payload) => runs.push(payload.message));
+    const terminal = createTerminal({
+      launchAgentId: "claude",
+      handbackCode: "k7f3qa",
+      handbackInstruction: "run",
+    });
+    terminal.getInfo().agentState = "working";
+
+    ptyOnDataCallback!("DAINTREE-DONE-k7f3qa: triaged all six END-k7f3qa\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(runs).toEqual([]);
+
+    // The same capture, sampled again once the agent reads as stopped.
+    terminal.getInfo().agentState = "waiting";
+    ptyOnDataCallback!("\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(runs).toEqual(["triaged all six"]);
+    off();
+    vi.useRealTimers();
+    terminal.dispose();
+  });
+
+  it("never reports a launch marker as a run's when the launch was no run's", async () => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+    const runs: unknown[] = [];
+    const off = events.on("agent:run-handback-observed", (payload) => runs.push(payload));
+    const terminal = createTerminal({ launchAgentId: "claude", handbackCode: "k7f3qa" });
+    terminal.getInfo().agentState = "waiting";
+
+    ptyOnDataCallback!("DAINTREE-NEEDS-YOU-k7f3qa: stuck END-k7f3qa\r\n");
+    ptyOnDataCallback!("DAINTREE-DONE-k7f3qa: reviewed END-k7f3qa\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(terminal.getInfo().lastHandback?.message).toBe("reviewed");
+    expect(runs).toEqual([]);
+    off();
+    vi.useRealTimers();
+    terminal.dispose();
+  });
+
   it("names the state a marker was printed in by the pane's own last transition (#15726)", async () => {
     vi.useFakeTimers();
     ptyOnDataCallback = null;

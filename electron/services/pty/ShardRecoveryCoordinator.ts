@@ -259,8 +259,8 @@ export class ShardRecoveryCoordinator {
    */
   private disarmStoredHandback(id: string): void {
     const stored = this.deps.pendingSpawns.get(id);
-    if (stored?.handbackCode === undefined) return;
-    const { handbackCode: _delivered, ...rest } = stored;
+    if (stored?.handbackCode === undefined && stored?.handbackInstruction === undefined) return;
+    const { handbackCode: _delivered, handbackInstruction: _instruction, ...rest } = stored;
     this.deps.pendingSpawns.set(id, rest);
   }
 

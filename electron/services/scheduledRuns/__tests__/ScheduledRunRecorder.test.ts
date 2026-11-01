@@ -18,6 +18,7 @@ import { ScheduledRunStore, SCHEDULED_RUN_HISTORY_LIMIT } from "../ScheduledRunS
 import {
   ScheduledRunRecorder,
   type RegisterScheduledLaunchInput,
+  type ScheduledRunHandbackFact,
   type ScheduledRunsChange,
 } from "../ScheduledRunRecorder.js";
 import type { ScheduledRunResume } from "../../../../shared/types/scheduledRuns.js";
@@ -464,9 +465,117 @@ describe("ScheduledRunRecorder", () => {
     expect(recorder.settle("run-1", { kind: "cancel" })?.settlement).toMatchObject({
       outcome: "cancelled",
     });
-    expect(recorder.settle("run-1", { kind: "handback", report: "done" })).toBeNull();
+    expect(
+      recorder.settle("run-1", {
+        kind: "handback",
+        report: "done",
+        summary: null,
+        truncated: false,
+      })
+    ).toBeNull();
     expect(recorder.get("run-1")?.settlement).toMatchObject({ outcome: "cancelled" });
     expect(emitted.filter((e) => e.name === "scheduled-run:ended")).toHaveLength(1);
+  });
+
+  describe("the agent's handback (#15982)", () => {
+    const report = (
+      overrides: Partial<ScheduledRunHandbackFact> = {}
+    ): ScheduledRunHandbackFact => ({
+      terminalId: "terminal-1",
+      spawnedAt: SPAWNED_AT,
+      code: "k7f3qa",
+      report: "done",
+      message: "triaged all six issues",
+      truncated: false,
+      ...overrides,
+    });
+
+    it("settles the run on its launch marker, with the report and summary, once", () => {
+      const recorder = lifetime();
+      recorder.registerLaunch(launch({ handbackCode: "k7f3qa" }));
+      recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT });
+      now = SPAWNED_AT + 5_000;
+
+      recorder.handleHandback(report({ report: "needs-you", message: "two need a decision" }));
+      // A later marker, of either form, never settles it again.
+      now += 1_000;
+      recorder.handleHandback(report({ message: "changed my mind" }));
+
+      expect(recorder.get("run-1")?.settlement).toEqual({
+        state: "settled",
+        settledAt: SPAWNED_AT + 5_000,
+        outcome: "needs-you",
+        evidence: {
+          kind: "handback",
+          report: "needs-you",
+          summary: "two need a decision",
+          truncated: false,
+        },
+      });
+      expect(emitted.filter((e) => e.name === "scheduled-run:ended")).toEqual([
+        expect.objectContaining({ payload: expect.objectContaining({ outcome: "needs-you" }) }),
+      ]);
+      // The terminal goes on: its exit and session still land on the run.
+      recorder.handleExit({ terminalId: "terminal-1", spawnedAt: SPAWNED_AT, exitCode: 0 });
+      recorder.handleSessionCaptured(capture("codex-session", SPAWNED_AT));
+      const run = recorder.get("run-1");
+      expect(run?.settlement).toMatchObject({ outcome: "needs-you" });
+      expect(run?.process.pty).toMatchObject({ state: "exited", exitCode: 0 });
+      expect(run?.resume?.agentSessionId).toBe("codex-session");
+    });
+
+    it("records a bare marker's summary as none, never as cut short", () => {
+      const recorder = lifetime();
+      recorder.registerLaunch(launch({ handbackCode: "k7f3qa" }));
+      recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT });
+
+      recorder.handleHandback(report({ message: null, truncated: true }));
+
+      expect(recorder.get("run-1")?.settlement).toMatchObject({
+        outcome: "done",
+        evidence: { kind: "handback", report: "done", summary: null, truncated: false },
+      });
+    });
+
+    it("takes no other code's marker, nor one from a later incarnation, as the run's", () => {
+      const recorder = lifetime();
+      recorder.registerLaunch(launch({ handbackCode: "k7f3qa" }));
+      recorder.registerLaunch(launch({ id: "run-2", terminalId: "terminal-2" }));
+      recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT });
+      recorder.handleSpawnResult("terminal-2", { success: true, spawnedAt: SPAWNED_AT });
+
+      // A later prompt's code, sent by hand or by an orchestrator.
+      recorder.handleHandback(report({ code: "zzzzzz" }));
+      // A restart under the same id is another incarnation.
+      recorder.handleHandback(report({ spawnedAt: SPAWNED_AT + 1 }));
+      // A run whose launch carried no code settles on no marker at all.
+      recorder.handleHandback(report({ terminalId: "terminal-2" }));
+
+      expect(recorder.get("run-1")?.settlement).toEqual({ state: "open" });
+      expect(recorder.get("run-2")?.settlement).toEqual({ state: "open" });
+      expect(emitted.filter((e) => e.name === "scheduled-run:ended")).toEqual([]);
+    });
+
+    it("takes a report that beat its spawn answer, keeping the generation for a later loss", () => {
+      const recorder = lifetime();
+      recorder.registerLaunch(launch({ handbackCode: "k7f3qa" }));
+
+      recorder.handleHandback(report());
+      recorder.handleSpawnResult("terminal-1", {
+        success: true,
+        spawnedAt: SPAWNED_AT,
+        launchGeneration: 3,
+      });
+
+      const run = recorder.get("run-1");
+      expect(run?.terminalSpawnedAt).toBe(SPAWNED_AT);
+      expect(run?.process.pty).toEqual({ state: "running", startedAt: SPAWNED_AT });
+      expect(run?.settlement).toMatchObject({ outcome: "done" });
+      now = SPAWNED_AT + 900;
+      recorder.handleIncarnationLost({ terminalId: "terminal-1", launchGeneration: 3 });
+      expect(recorder.get("run-1")?.process.pty).toMatchObject({ state: "exited", exitCode: null });
+      expect(recorder.get("run-1")?.settlement).toMatchObject({ outcome: "done" });
+    });
   });
 
   describe("across a quit or crash", () => {
@@ -477,7 +586,7 @@ describe("ScheduledRunRecorder", () => {
       first.registerLaunch(launch({ id: "run-2", terminalId: "terminal-2" }));
       first.registerLaunch(launch({ id: "run-3", terminalId: "terminal-3" }));
       first.handleSpawnResult("terminal-3", { success: true, spawnedAt: SPAWNED_AT });
-      first.settle("run-3", { kind: "handback", report: "done" });
+      first.settle("run-3", { kind: "handback", report: "done", summary: null, truncated: false });
       // A settled run whose agent was last seen running, as a later producer records it.
       const store = new ScheduledRunStore(sqlite);
       const settled = store.get("run-3")!;

@@ -32,6 +32,36 @@ describe("buildHandbackInstruction", () => {
   });
 });
 
+describe("buildHandbackInstruction for a scheduled run (#15982)", () => {
+  const instruction = buildHandbackInstruction("k7f3qa", "run");
+
+  it("offers both reports for the minted code, each with the echo placeholder", () => {
+    expect(instruction).toContain("DAINTREE-DONE-k7f3qa: <summary> END-k7f3qa");
+    expect(instruction).toContain("DAINTREE-NEEDS-YOU-k7f3qa: <summary> END-k7f3qa");
+    expect(instruction).not.toContain(HANDBACK_CODE_TOKEN);
+  });
+
+  it("names the done marker first, as the ordinary instruction does", () => {
+    expect(instruction.indexOf("DAINTREE-DONE-")).toBeLessThan(
+      instruction.indexOf("DAINTREE-NEEDS-YOU-")
+    );
+    expect(instruction.indexOf("DAINTREE-DONE-")).toBe(
+      instruction.indexOf("DAINTREE-") // no other marker comes before it
+    );
+  });
+
+  it("stays on one line, with every marker starting with a letter", () => {
+    expect(instruction).not.toMatch(/[\r\n]/);
+    const markers = instruction.match(/\S*(?:DAINTREE-DONE|DAINTREE-NEEDS-YOU|END)-k7f3qa/g) ?? [];
+    expect(markers).toHaveLength(4);
+    for (const marker of markers) expect(marker).toMatch(/^[A-Za-z]/);
+  });
+
+  it("is only ever the run's: the default instruction offers done alone", () => {
+    expect(buildHandbackInstruction("k7f3qa")).not.toContain("NEEDS-YOU");
+  });
+});
+
 describe("appendHandbackInstruction", () => {
   it("appends the instruction after one blank line, as the last thing", () => {
     expect(appendHandbackInstruction("Fix the bug", "k7f3qa")).toBe(
@@ -57,6 +87,13 @@ describe("withoutHandbackInstruction", () => {
     expect(withoutHandbackInstruction(appendHandbackInstruction(text, "k7f3qa"), "k7f3qa")).toBe(
       text
     );
+  });
+
+  it("gives back the caller's text from a scheduled run's launch prompt too", () => {
+    const text = "Triage the new issues";
+    expect(
+      withoutHandbackInstruction(appendHandbackInstruction(text, "k7f3qa", "run"), "k7f3qa")
+    ).toBe(text);
   });
 
   it("leaves text that doesn't end with this code's instruction as it is", () => {

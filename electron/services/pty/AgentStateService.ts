@@ -22,6 +22,7 @@ import {
   rawHandbackText,
   type HandbackHit,
 } from "./HandbackDetector.js";
+import { reportRunHandback } from "./runHandback.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalCheckResult } from "../../../shared/types/checkResult.js";
 
@@ -425,6 +426,9 @@ export class AgentStateService {
       if (handbackHit) {
         terminal.lastHandback = handbackHit.handback;
         terminal.handbackTracker?.retire(handbackHit.code);
+        // The settle retires the code, so its capture is a scheduled run's
+        // report (#15982), whether or not the output check saw it first.
+        reportRunHandback(terminal, handbackHit, timestamp);
       }
       if (newState !== "working") terminal.lastHandbackUnpublished = false;
       if (event.type === "exit" || event.type === "kill") {

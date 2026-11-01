@@ -252,9 +252,12 @@ describe("PtyClient lifecycle ledger", () => {
 
   it("delivers a launch's handback code once, never on a crash respawn (#12488)", () => {
     const client = createReadyClient();
-    client.spawn("t1", { ...baseOptions, handbackCode: "k7f3qa" });
+    client.spawn("t1", { ...baseOptions, handbackCode: "k7f3qa", handbackInstruction: "run" });
 
-    expect(spawnMessages(mockChild)[0]!.options.handbackCode).toBe("k7f3qa");
+    expect(spawnMessages(mockChild)[0]!.options).toMatchObject({
+      handbackCode: "k7f3qa",
+      handbackInstruction: "run",
+    });
 
     const restartedChild = createMockChild();
     shared.forkMock.mockReturnValue(restartedChild);
@@ -265,8 +268,10 @@ describe("PtyClient lifecycle ledger", () => {
 
     const replayed = spawnMessages(restartedChild);
     expect(replayed).toHaveLength(1);
-    // The request died with its host, so the replayed launch carries none.
+    // The request died with its host, so the replayed launch carries none,
+    // and is no scheduled run's report either (#15982).
     expect(replayed[0]!.options).not.toHaveProperty("handbackCode");
+    expect(replayed[0]!.options).not.toHaveProperty("handbackInstruction");
   });
 
   it("replays wrapper args verbatim on crash respawn — a resume survives (#11339)", () => {

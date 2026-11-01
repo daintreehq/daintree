@@ -1280,6 +1280,45 @@ describe("AgentStateService handback detection (#12488)", () => {
     expect(terminal.lastHandback).toEqual(expected);
   });
 
+  it("reports a scheduled run's launch marker to Main with its incarnation (#15982)", () => {
+    const service = new AgentStateService();
+    const tracker = new HandbackTracker(() => [
+      `> Triage ${buildHandbackInstruction(CODE, "run")}`,
+      `  DAINTREE-NEEDS-YOU-${CODE}: two labels need a call END-${CODE}`,
+    ]);
+    tracker.registerDelivered(CODE, "run");
+    const terminal = createTerminal({ handbackTracker: tracker, spawnedAt: 4_200 });
+    const reports: unknown[] = [];
+    events.on("agent:run-handback-observed", (payload) => reports.push(payload));
+
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+
+    expect(reports).toEqual([
+      {
+        terminalId: "term-1",
+        spawnedAt: 4_200,
+        code: CODE,
+        report: "needs-you",
+        message: "two labels need a call",
+        truncated: false,
+        observedAt: terminal.lastStateChange,
+        timestamp: terminal.lastStateChange,
+      },
+    ]);
+  });
+
+  it("reports no ordinary request's marker as a run's", () => {
+    const service = new AgentStateService();
+    const terminal = askedTerminal([ECHO, `  ${MARKER}`]);
+    const reports: unknown[] = [];
+    events.on("agent:run-handback-observed", (payload) => reports.push(payload));
+
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+
+    expect(terminal.lastHandback?.message).toBe("fixed the race in the retry loop");
+    expect(reports).toEqual([]);
+  });
+
   it("carries the submission token of the request that asked", () => {
     const service = new AgentStateService();
     const tracker = new HandbackTracker(() => [MARKER]);

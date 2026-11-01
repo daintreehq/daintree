@@ -160,6 +160,13 @@ export interface PtyHostSpawnOptions {
    * to wait on. Absent for every launch that did not ask.
    */
   handbackCode?: string;
+  /**
+   * `run` when `handbackCode` is a scheduled run's launch code (#15982): its
+   * instruction offers a `needs-you` marker beside `done`, and a marker for it
+   * is reported to Main as the run's. Set by Main's spawn handler only for the
+   * spawn that registered the run, never taken from a caller.
+   */
+  handbackInstruction?: import("./handback.js").HandbackInstruction;
 }
 
 /** Per-project terminal-workload memory, deduplicated by PID. */
@@ -831,6 +838,23 @@ export type PtyHostEvent =
       timestamp: number;
     }
   | {
+      /**
+       * A scheduled run's launch marker is complete in this pane (#15982),
+       * from whichever check saw it first: the output as it arrived or the
+       * agent's settle. Main-only; `message` is the agent's own text.
+       */
+      type: "agent-run-handback-observed";
+      terminalId: string;
+      /** The incarnation that printed it. */
+      spawnedAt: number;
+      code: string;
+      report: import("./handback.js").HandbackReport;
+      message: string | null;
+      truncated: boolean;
+      observedAt: number;
+      timestamp: number;
+    }
+  | {
       /** A rate-limit banner appeared in this pane (#12797). Never carries its text. */
       type: "agent-rate-limit-observed";
       terminalId: string;
@@ -1139,8 +1163,10 @@ export type EndTrashGraceStatus = "started" | "not-trashed" | "generation-mismat
  * `exit` — the PTY incarnation ending for good — identifies a session the
  * saved pane can own; a demotion leaves a live shell that may host another
  * conversation, and trash expiry belongs to a pane the user already closed.
+ * `kill` is Main closing the terminal itself, for a scheduled run's done
+ * policy (#15982): the pane goes with it.
  */
-export type AgentSessionCaptureBoundary = "exit" | "demotion" | "trash-expiry";
+export type AgentSessionCaptureBoundary = "exit" | "demotion" | "trash-expiry" | "kill";
 
 /**
  * One observed agent run: the PTY launch, then which agent run inside that

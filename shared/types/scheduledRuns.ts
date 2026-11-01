@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { HANDBACK_MESSAGE_MAX_CHARS } from "./handback.js";
 import { parseCron, validateTimeZone } from "../utils/cron.js";
 import { occurrenceKeyFor, outcomeForEvidence } from "../utils/scheduledRuns.js";
 
@@ -135,8 +136,17 @@ export const ScheduledRunSkipReasonSchema = z.discriminatedUnion("kind", [
 
 /** The fact a run settled on. Agent state heuristics are never evidence. */
 export const ScheduledRunEvidenceSchema = z.discriminatedUnion("kind", [
-  /** A marker the agent printed. */
-  z.strictObject({ kind: z.literal("handback"), report: z.enum(["done", "needs-you"]) }),
+  /**
+   * A marker the agent printed for the run's launch prompt, with its one-line
+   * summary as captured (null for none): the agent's own claim, never checked.
+   */
+  z.strictObject({
+    kind: z.literal("handback"),
+    report: z.enum(["done", "needs-you"]),
+    summary: z.string().min(1).max(HANDBACK_MESSAGE_MAX_CHARS).nullable(),
+    /** The summary was cut at the capture's cap. */
+    truncated: z.boolean(),
+  }),
   z.strictObject({
     kind: z.literal("exit"),
     process: z.enum(["agent", "pty"]),

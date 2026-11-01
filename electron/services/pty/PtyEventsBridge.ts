@@ -8,7 +8,10 @@
 
 import { events } from "../events.js";
 import { isHostThrowawayTerminalId } from "../../../shared/config/hostThrowaway.js";
-import { HANDBACK_CODE_PATTERN } from "../../../shared/types/handback.js";
+import {
+  HANDBACK_CODE_PATTERN,
+  HANDBACK_MESSAGE_MAX_CHARS,
+} from "../../../shared/types/handback.js";
 import type { PtyHostEvent, TerminalFlowStatus } from "../../../shared/types/pty-host.js";
 import type { AgentStateChangeTrigger } from "../../types/index.js";
 import type {
@@ -164,6 +167,37 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         timestamp: event.timestamp,
       });
       return true;
+
+    case "agent-run-handback-observed": {
+      // Crossed a process boundary and settles a durable run, so only a
+      // well-formed report is passed on.
+      const { terminalId, spawnedAt, code, report, message, truncated, observedAt } = event;
+      if (
+        typeof spawnedAt !== "number" ||
+        !Number.isFinite(spawnedAt) ||
+        typeof code !== "string" ||
+        !HANDBACK_CODE_PATTERN.test(code) ||
+        (report !== "done" && report !== "needs-you") ||
+        (message !== null &&
+          (typeof message !== "string" || message.length > HANDBACK_MESSAGE_MAX_CHARS)) ||
+        typeof truncated !== "boolean" ||
+        typeof observedAt !== "number" ||
+        !Number.isFinite(observedAt)
+      ) {
+        return true;
+      }
+      events.emit("agent:run-handback-observed", {
+        terminalId,
+        spawnedAt,
+        code,
+        report,
+        message,
+        truncated,
+        observedAt,
+        timestamp: event.timestamp,
+      });
+      return true;
+    }
 
     case "agent-rate-limit-observed":
       events.emit("agent:rate-limit-observed", {

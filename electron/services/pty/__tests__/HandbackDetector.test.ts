@@ -253,6 +253,91 @@ describe("findHandback", () => {
   });
 });
 
+describe("findHandback for a scheduled run's launch (#15982)", () => {
+  const runRequest = { code: CODE, seq: 1, delivered: true, instruction: "run" as const };
+  const screen = (text: string) => [{ read: () => text, rendered: true }];
+
+  it("reads either report the run's instruction offered, with its summary", () => {
+    const echo = `> Triage the issues ${buildHandbackInstruction(CODE, "run")}`;
+    const needsYou = findHandback(
+      screen(`${echo}\n⏺ DAINTREE-NEEDS-YOU-k7f3qa: two issues need a label call END-k7f3qa`),
+      [runRequest],
+      1
+    );
+    expect(needsYou).toMatchObject({
+      code: CODE,
+      report: "needs-you",
+      run: true,
+      handback: { message: "two issues need a label call", truncated: false },
+    });
+    const done = findHandback(
+      screen(`${echo}\n⏺ DAINTREE-DONE-k7f3qa: triaged all six END-k7f3qa`),
+      [runRequest],
+      1
+    );
+    expect(done).toMatchObject({
+      report: "done",
+      run: true,
+      handback: { message: "triaged all six" },
+    });
+  });
+
+  it("never reads the echoed run instruction as either report", () => {
+    const echo = `> Triage the issues ${buildHandbackInstruction(CODE, "run")}`;
+    expect(findHandback(screen(echo), [runRequest], 1)).toBeUndefined();
+  });
+
+  it("finds no needs-you report for a request that was never offered one", () => {
+    const text = "⏺ DAINTREE-NEEDS-YOU-k7f3qa: stuck END-k7f3qa";
+    expect(
+      findHandback(screen(text), [{ code: CODE, seq: 1, delivered: true }], 1)
+    ).toBeUndefined();
+    expect(findHandback(screen(text), [runRequest], 1)?.report).toBe("needs-you");
+  });
+
+  it("takes the latest complete report of either form", () => {
+    const text = [
+      "  DAINTREE-DONE-k7f3qa: first pass done END-k7f3qa",
+      "  DAINTREE-NEEDS-YOU-k7f3qa: the migration needs a decision END-k7f3qa",
+    ].join("\n");
+    expect(findHandback(screen(text), [runRequest], 1)).toMatchObject({
+      report: "needs-you",
+      handback: { message: "the migration needs a decision" },
+    });
+  });
+
+  it("skips an opening of either form left unclosed before the next one", () => {
+    const text = [
+      "I'll print DAINTREE-NEEDS-YOU-k7f3qa if I get stuck.",
+      "  DAINTREE-DONE-k7f3qa: all green END-k7f3qa",
+    ].join("\n");
+    expect(findHandback(screen(text), [runRequest], 1)).toMatchObject({
+      report: "done",
+      handback: { message: "all green" },
+    });
+  });
+
+  it("finds a needs-you marker the TUI split at a hyphen", () => {
+    const text = [
+      "• Blocked on credentials. DAINTREE-NEEDS-",
+      "  YOU-k7f3qa: no API key END-k7f3qa",
+    ].join("\n");
+    expect(findHandback(screen(text), [runRequest], 1)).toMatchObject({
+      report: "needs-you",
+      handback: { message: "no API key" },
+    });
+  });
+
+  it("leaves an ordinary request's hit marked as no run's", () => {
+    const hit = findHandback(
+      screen("DAINTREE-DONE-k7f3qa: done END-k7f3qa"),
+      [{ code: CODE, seq: 1, delivered: true }],
+      1
+    );
+    expect(hit).toMatchObject({ report: "done", run: false });
+  });
+});
+
 describe("keepFirstObservation (#13128)", () => {
   const held = { message: "draft", observedAt: 1_000, submissionToken: "tok-1", truncated: false };
 

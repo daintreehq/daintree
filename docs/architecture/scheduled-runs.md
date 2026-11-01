@@ -19,6 +19,8 @@ A project can run an agent on a schedule (#15973). A due schedule launches its a
 | Launching a run, routing it to a view or main, refusals | `electron/services/scheduledRuns/ScheduledRunLauncher.ts`, `scheduledRunLaunchLive.ts`, `scheduledRunViewBridge.ts`, `src/hooks/useScheduledRunLaunchBridge.ts` |
 | Registering a run at its terminal's spawn | `electron/services/scheduledRuns/scheduledRunAdmission.ts`, called from `electron/ipc/handlers/terminal/lifecycle.ts` |
 | Run now (`window.electron.schedules.runNow`, `schedules.runNow`) | `electron/ipc/handlers/schedules.ts`, `src/services/actions/definitions/scheduleActions.ts` |
+| The run's handback instruction and its markers | `shared/types/handback.ts`, `shared/utils/handback.ts`, `electron/services/pty/HandbackDetector.ts`, `electron/services/pty/runHandback.ts` |
+| The done policy | `electron/services/scheduledRuns/ScheduledRunDonePolicy.ts`, `scheduledRunDonePolicyLive.ts`, `src/hooks/useScheduledRunFinishBridge.ts` |
 
 ## Boundaries
 
@@ -135,20 +137,20 @@ The three axes keep three events apart: the run settling, the agent or PTY exiti
 
 The outcome follows from the evidence (`outcomeForEvidence`), and the schema refuses a record where it doesn't:
 
-| Evidence                                                              | Outcome              |
-| --------------------------------------------------------------------- | -------------------- |
-| `handback`: a marker the agent printed, `done` or `needs-you`         | `done` / `needs-you` |
-| `exit` of the agent or PTY with code 0 and no signal                  | `done`               |
-| `exit` with a non-zero code or a signal                               | `failed`             |
-| `exit` with no code or signal known                                   | `exited`             |
-| `launch-error`                                                        | `failed`             |
-| `skip`, with its reason                                               | `skipped`            |
-| `cancel`: the user stopped the run                                    | `cancelled`          |
-| `replace`: the overlap policy put `replacedByRunId` in its place      | `replaced`           |
-| `lost`: the PTY host confirmed the terminal is gone with no exit seen | `lost`               |
-| `interrupted`: Daintree quit or crashed while the run was open        | `interrupted`        |
+| Evidence | Outcome |
+| --- | --- |
+| `handback`: the marker the agent printed, `done` or `needs-you`, with its summary | `done` / `needs-you` |
+| `exit` of the agent or PTY with code 0 and no signal | `done` |
+| `exit` with a non-zero code or a signal | `failed` |
+| `exit` with no code or signal known | `exited` |
+| `launch-error` | `failed` |
+| `skip`, with its reason | `skipped` |
+| `cancel`: the user stopped the run | `cancelled` |
+| `replace`: the overlap policy put `replacedByRunId` in its place | `replaced` |
+| `lost`: the PTY host confirmed the terminal is gone with no exit seen | `lost` |
+| `interrupted`: Daintree quit or crashed while the run was open | `interrupted` |
 
-A `needs-you` run is settled: the schedule's attempt is over and its terminal stays for the user. Only `done` applies the done policy. A restart that hasn't yet reconnected to a run's terminal is not `lost`. A run Daintree's quit or crash left open is `interrupted`, settled at the next startup.
+A `needs-you` run is settled: the schedule's attempt is over and its terminal stays for the user. Only the agent's `done` handback applies the done policy, never an exit that reads as `done`. A restart that hasn't yet reconnected to a run's terminal is not `lost`. A run Daintree's quit or crash left open is `interrupted`, settled at the next startup.
 
 Skip reasons are `missed` (only for an occurrence, never `run-now`), `overlap` with the `openRunId` that was still open, and `precondition` with its exit code, signal, or the error that stopped it running (an exit 0 isn't a skip). A skipped run never launches: no pane, neither process started, and no resume snapshot. It may hold a reserved terminal id, since registration can reserve one before the precondition runs.
 
@@ -165,7 +167,7 @@ Skip reasons are `missed` (only for an occurrence, never `run-now`), `overlap` w
 - **`registerLaunch`** records a run about to launch, with its reserved terminal id and its resume snapshot, and commits before it returns, so the launcher spawns only after. Claude's session id is assigned at launch, so it can be in the snapshot from the start. A second run for an occurrence the schedule already has a run for throws `ScheduledRunConflictError` and must not launch; `run-now` runs carry no occurrence.
 - **`registerSkip`** records a skipped occurrence, settled at once with its reason. It never launches.
 - **`registerRefusedLaunch`** records a run whose launch was refused before its terminal spawned, settled at once as failed (`launch-error`) with the reason and no resume snapshot. Like a skip it neither starts nor ends.
-- **`settle`** settles an open run on a fact another service saw: a handback, a launch error, a cancel, a replacement. A settled run is left as it is.
+- **`settle`** settles an open run on a fact another service saw: a launch error, a cancel, a replacement. A settled run is left as it is.
 
 ### Facts the history records itself
 
@@ -180,6 +182,7 @@ The host stamps `spawnedAt` on its spawn result and on the exit. `PtyClient` emi
 | The PTY exited | `process.pty` exited with its code and signal; settles an open run on `exit` |
 | `incarnation-lost`: the run's incarnation died with its pty-host | `process.pty` exited with no code or signal; settles an open run as `lost` |
 | `agent-session:captured` for the incarnation | `resume.agentSessionId`, when it has none yet; settled or not |
+| `agent:run-handback-observed` for the run's launch code and incarnation | settles an open run on `handback`, with its report and summary (see Handing back) |
 
 An exit can reach the history before its spawn answer does; the run then takes that incarnation from the exit, and the late answer changes nothing. A run settled before its spawn answered (a cancel, say) still records its process. A captured id never replaces one already there, and a capture for another agent or project is ignored. The agent axis (`process.agent`) has no producer yet: today's agent-exit observation is a heuristic, which never settles a run.
 
@@ -226,7 +229,7 @@ Only Daintree's scheduler can set it, by one of two entries, and neither reads i
 
 ## Launching a run
 
-`launchScheduledRun` (#15978) launches a schedule's agent as an ordinary agent terminal of its project: the schedule's agent, its preset (`null` is none, never the agent's default), its prompt as written followed by Daintree's handback instruction (`handback: true`), and its worktree (`null` is the main checkout), in the grid without taking focus. The prompt reaches the agent as its launch argument, one argv token like every launch prompt, so its line breaks arrive as spaces; the pane's first-prompt record keeps it as written. Every trigger goes through it: Run now today, the scheduler (#15979) with its own origins.
+`launchScheduledRun` (#15978) launches a schedule's agent as an ordinary agent terminal of its project: the schedule's agent, its preset (`null` is none, never the agent's default), its prompt as written followed by a scheduled run's handback instruction (`handback: true`; see Handing back), and its worktree (`null` is the main checkout), in the grid without taking focus. The prompt reaches the agent as its launch argument, one argv token like every launch prompt, so its line breaks arrive as spaces; the pane's first-prompt record keeps it as written. Every trigger goes through it: Run now today, the scheduler (#15979) with its own origins.
 
 - **Where it launches.** In the local view showing the project, preferring the view that asked: main sends it `schedules:launch-request` and the view dispatches `agent.launch` with the run as host-stamped provenance (`source: "agent"`, `confirmed: true`, so it never becomes the action Repeat Last replays), so the pane appears in that window's grid at once and that view's persistence saves it. A cached view is thawed first, never shown. With no local view, main runs `runAgentLaunch`, which records the pane in the saved layout for the next window that opens the project. A project driven only from another machine's Shell launches in main; that Shell sees the pane when it next reads the project.
 - **Registered at the spawn.** The launcher reserves the run's id and terminal id, then asks for the launch. The terminal spawn handler calls `admitScheduledSpawn` immediately before it starts the PTY, with no await between: the first spawn naming a reserved run registers it from the values the terminal actually starts with (cwd after any fallback, the worktree it kept, flags, model, preset, and Claude's assigned session id), so the resume snapshot is what ran. A later spawn naming the run (a restart, held-pane recovery, a crash replay) finds no reservation and spawns as any pane does, so a crash replay re-runs the launch as it does for every agent pane, as another incarnation that isn't the run's.
@@ -237,6 +240,30 @@ Only Daintree's scheduler can set it, by one of two entries, and neither reads i
 - **Sleep and status.** While a run is reserved or open, automatic sleep (idle auto-close, idle shells, memory pressure) holds the project as a `scheduled-run` coordination hold; a user's Sleep still goes through and the run's terminal exits with it. A run that spawns in a project that read `closed` moves it to `background`, so it doesn't read as closed while the run is in it.
 
 Run now is `window.electron.schedules.runNow(scheduleId)`, sender-scoped like the other schedule channels, answering `ScheduleRunNowOutcome`: `started` with the run and terminal ids, `failed` with the reason and the failed run's id, or `not-found`. It runs whether or not the schedule is enabled. The `schedules.runNow` action calls it; it is on no MCP tier, hidden from `tools/list`, and closed to plugins, which may give an agent a task but not launch one with a schedule's preset.
+
+## Handing back
+
+An interactive agent doesn't exit when it finishes, so the run asks it to say so (#15982). Its launch prompt ends with the run's handback instruction (`HANDBACK_RUN_INSTRUCTION_TEMPLATE`), which offers two lines, each with a one-line summary: `DAINTREE-DONE-<code>: <summary> END-<code>` when the work is done, and `DAINTREE-NEEDS-YOU-<code>: <summary> END-<code>` when the user should look. Every other handback request is offered only the first, and is detected exactly as before.
+
+- **Only the run's launch.** `agent.launch` picks the run's instruction when the dispatch carries `scheduledRun` (a view's) or `runAgentLaunch` is given one (main's), both host-stamped, so no argument asks for it. The code is minted there as for any handback launch. The spawn handler hands `admitScheduledSpawn` the code, and only the spawn that registered the run is started with `handbackInstruction: "run"`, so a restart, held-pane recovery or crash replay under the same id never reports for the run (a replay drops the code and the flag with the host that held them).
+- **Observed, never inferred.** The pty-host reads either marker for that request with the ordinary detector rules (the echoed instruction, a marker still streaming, one on a spinner's status line, one spanning cut bytes all refused) and sends `agent:run-handback-observed` with the code, the report, the summary as captured, and the incarnation's `spawnedAt`. It sends it for the capture that retires the code, the last look every handback request gets: a marker seen in the output while the agent doesn't read as working, or found at the agent's settle out of working. A marker drafted mid-reply (a thinking preview, a status line) is observed as any handback is but is no report until then, so a close policy never ends a reply still printing. Agent state only decides which printed marker is the final one; it never stands in for a marker, and no state settles a run. In view at once, the latest complete marker is the report, since the instruction asks for it to end the message. A marker for a later prompt's code is no report of the run's. The event is main-only and not buffered for the event inspector, because the summary is terminal text.
+- **The first report settles.** The recorder takes a report only for the code the run registered with and only from the run's own incarnation (a report can beat its spawn answer, and then claims the incarnation as an exit can), and settles an open run on `{ kind: "handback", report, summary, truncated }`. Settlement never changes, so a later marker, of either form, records nothing. A run whose agent never reports stays open until its process exits, its terminal is lost, or Daintree quits; nothing settles it from what the agent seems to be doing.
+- **The summary is a claim.** It is what the agent wrote between the markers, rows rejoined and capped at 500 characters (`truncated` when cut), null when empty. Nothing checks it.
+
+### The done policy
+
+A run handed back as `done` applies its schedule's `onDone`, as the launch read it: editing the schedule changes later runs. `needs-you` leaves the terminal where it is, whatever the policy, and so does every other settlement, an exit with code 0 included: only the agent's own report says the work is finished.
+
+| `onDone` | A local view shows the project | No local view |
+| --- | --- | --- |
+| `keep` | Nothing moves | Nothing moves |
+| `background` | Each view moves the run's pane to the background (`backgroundTerminal`), and Main parks it in the saved layout | Main parks it in the saved layout (`backgroundViewlessTerminal`), restoring to where it was |
+| `close` | Main closes the terminal, then each view removes the pane (`removePanel` with the backend already closed) and Main takes it out of the saved layout | Main closes the terminal, then takes the pane out of the saved layout (`forgetViewlessTerminal`) |
+
+- **Closing keeps the session.** Main closes the terminal the way a quit does, with a graceful kill that asks the agent to leave and captures its session id, and emits `agent-session:captured` with boundary `kill`: the journal keeps the session for resuming and the run records it as `resume.agentSessionId`. It never goes through the trash a view's close uses. Main closes only the run's own incarnation: the host's answer must name the run's `spawnedAt` and the launch generation main last minted for the id, checked with no await before the kill is sent, so a restart asked for meanwhile is left alone.
+- **Views own their panes.** Main asks every local view of the project, cached ones thawed first, over `schedules:finish-request`; a view acts only on a pane whose `scheduledRun` is that run, and leaves one the user already took out of the grid and dock. Main writes the saved layout as well, since a view that opened while main was launching the run may hold no pane for it; a view that does saves the same placement from its own store. A project driven only from another machine's Shell is out of scope, as Remote Hosts are.
+- **After the launch.** The policy is armed once the launch has finished, its pane committed and saved, so moving the pane can't race the launch writing it; a run that handed back before then is acted on as it is armed. A run deleted with its schedule or project is forgotten. Nothing moves while Daintree is quitting.
+- The pane axis isn't written yet: with no producer for `open`, recording only the policy's moves would mislead.
 
 ## Keeping the machine awake
 

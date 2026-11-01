@@ -1,5 +1,9 @@
 import type { PanelSnapshot, ProjectState } from "../../../shared/types/project.js";
-import { forgetHostStartedTerminals, noteHostStartedTerminal } from "./hostStartedTerminals.js";
+import {
+  forgetHostStartedTerminals,
+  noteHostStartedTerminal,
+  noteHostStartedTerminalBackgrounded,
+} from "./hostStartedTerminals.js";
 
 /**
  * The slice of `ProjectStore` main-authored state writes need. Injected so the
@@ -73,6 +77,59 @@ function withoutKey<T>(
   return rest;
 }
 
+/** The layout's tab groups without `terminalId`, a group left empty dropped. */
+function withoutGroupMember(
+  tabGroups: ProjectState["tabGroups"],
+  terminalId: string
+): ProjectState["tabGroups"] {
+  return tabGroups
+    ?.map((group) => {
+      const panelIds = group.panelIds.filter((id) => id !== terminalId);
+      return {
+        ...group,
+        panelIds,
+        activeTabId:
+          group.activeTabId === terminalId ? (panelIds[0] ?? group.activeTabId) : group.activeTabId,
+      };
+    })
+    .filter((group) => group.panelIds.length > 0);
+}
+
+/**
+ * Park a terminal no view holds in the background of the saved layout, as a
+ * view's own "move to background" parks it: out of its grid or dock and its
+ * tab group, coming back where it was. A scheduled run's done policy (#15982)
+ * is the only caller. Queued like the writes above; a panel the layout never
+ * held, or one already parked or in the trash, is left alone.
+ */
+export async function backgroundViewlessTerminal(
+  writer: ProjectStateWriter,
+  projectId: string,
+  terminalId: string
+): Promise<void> {
+  noteHostStartedTerminalBackgrounded(projectId, terminalId);
+  await writer.enqueueProjectStateUpdate(projectId, (existing) => {
+    if (!existing || !Array.isArray(existing.terminals)) return null;
+    const restoreLocation = existing.terminals.find(
+      (terminal) => terminal.id === terminalId
+    )?.location;
+    if (restoreLocation !== "grid" && restoreLocation !== "dock") return null;
+    const tabGroups = withoutGroupMember(existing.tabGroups, terminalId);
+    return {
+      ...existing,
+      terminals: existing.terminals.map((terminal): PanelSnapshot =>
+        terminal.id === terminalId
+          ? { ...terminal, location: "background", backgroundRestoreLocation: restoreLocation }
+          : terminal
+      ),
+      ...(tabGroups !== undefined ? { tabGroups } : {}),
+      ...(existing.terminalLayout !== undefined
+        ? { terminalLayout: withoutPanelReferences(existing.terminalLayout, terminalId) }
+        : {}),
+    };
+  });
+}
+
 /**
  * Take a panel a viewless action closed out of the saved layout, the way a
  * view's own save drops a trashed panel: the next frontend to attach should
@@ -91,19 +148,7 @@ export async function forgetViewlessTerminal(
   await writer.enqueueProjectStateUpdate(projectId, (existing) => {
     if (!existing || !Array.isArray(existing.terminals)) return null;
     if (!existing.terminals.some((terminal) => terminal.id === terminalId)) return null;
-    const tabGroups = existing.tabGroups
-      ?.map((group) => {
-        const panelIds = group.panelIds.filter((id) => id !== terminalId);
-        return {
-          ...group,
-          panelIds,
-          activeTabId:
-            group.activeTabId === terminalId
-              ? (panelIds[0] ?? group.activeTabId)
-              : group.activeTabId,
-        };
-      })
-      .filter((group) => group.panelIds.length > 0);
+    const tabGroups = withoutGroupMember(existing.tabGroups, terminalId);
     return {
       ...existing,
       terminals: existing.terminals.filter((terminal) => terminal.id !== terminalId),

@@ -92,8 +92,8 @@ const HANDBACK_MARKER_PREFIX = handbackStartMarker("");
 
 /**
  * Whether a thread's first message is exactly what Daintree launched with: the
- * prompt alone, or the prompt followed by the handback instruction, the only
- * thing Daintree appends. Anything else the message runs on with was typed by
+ * prompt alone, or the prompt followed by a handback instruction (a scheduled
+ * run's included), the only thing Daintree appends. Anything else the message runs on with was typed by
  * someone, so "Fix the tests" never fits a thread that says "Fix the tests and
  * the lint". A prompt cut at its cap leaves the rest of the text unknown, so it
  * only has to be the start.
@@ -107,7 +107,11 @@ function isLaunchedText(preview: string, prompt: string, truncated: boolean): bo
   if (markerAt < 0) return false;
   const start = markerAt + HANDBACK_MARKER_PREFIX.length;
   const code = rest.slice(start, start + HANDBACK_CODE_LENGTH);
-  return isHandbackCode(code) && rest === normalizePromptText(buildHandbackInstruction(code));
+  return (
+    isHandbackCode(code) &&
+    (rest === normalizePromptText(buildHandbackInstruction(code)) ||
+      rest === normalizePromptText(buildHandbackInstruction(code, "run")))
+  );
 }
 
 /**
