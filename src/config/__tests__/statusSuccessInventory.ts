@@ -199,6 +199,14 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Ahead-arrow count against the base branch",
     },
   ],
+  "src/components/Schedules/ScheduleList.tsx": [
+    {
+      category: "outcome",
+      signature: "text-status-success",
+      expectedOccurrences: 1,
+      rationale: 'Recorded "done" outcome of a schedule\'s last run, as its run history settled it',
+    },
+  ],
   "src/components/Settings/VoiceInputSettingsTab.tsx": [
     {
       category: "outcome",

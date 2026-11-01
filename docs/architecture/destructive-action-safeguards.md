@@ -211,6 +211,14 @@ The forge action set now exposes issue write operations to MCP agents (#10653) a
 | Plugin-MCP tool call (`destructiveHint:true`) | (bypass — `PluginMcpConsentService`, classified D2 by `deriveDangerTier`; **denied outright** when plugin lacks a write capability) | yes — `PluginMcpConfirmDialog` (destructive variant) with redacted single-level `argsSummary` preview; raw args never cross IPC | n/a (bypass) | shared-state (plugin-defined; recovery is whatever the side-effect mutated) | one plugin tool call | D2 | Done (#9234) — capability cap is enforced before the prompt: a plugin without `fs:project-write` / `fs:user-data-write` / `git:write` / `shell:exec` cannot reach D2 and the call is denied with `PLUGIN_MCP_CAPABILITY_CAP_EXCEEDED`, no silent downgrade | #9234 |
 | Plugin-MCP `initialize` client capabilities | (bypass — `pluginMcpClientOptions.buildPluginMcpClientOptions`) | n/a — default-deny `{ capabilities: {} }` rejects `sampling` and `elicitation` at protocol level | n/a (bypass) | n/a — the gate prevents the server from initiating sidechannel flows that would bypass the host consent UI | every plugin-MCP session | D0 (the gate itself is silent; misuse would surface as a protocol error) | Done (#9234) — wired by the supervisor (#9233) at every `Client` construction | #9234 |
 
+### Schedules
+
+| Action / call site | Current | UI confirm | Consent in breadcrumb | Reversibility | Blast | Tier | Recommendation | Follow-up |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `schedules.open` | safe | n/a | n/a | reversible | UI | D0 | Leave | — |
+| `ScheduleList.tsx` enabled switch (`window.electron.schedules.setEnabled`) | (bypass) | no — the switch is its own inverse | n/a | local-undo | one schedule | D0 | Leave | — |
+| `ScheduleEditor.tsx` "Delete schedule…" (`window.electron.schedules.remove`) | (bypass) | yes (`ConfirmDialog` "Delete 'name'?" / "Delete schedule") | n/a | local-irreversible | one schedule | D1 | Leave — schedule edits are IPC calls, not actions, and on no MCP tier (#15973), so the confirm lives in the component | — |
+
 ### Portal / browser
 
 | Action / call site | Current | UI confirm | Consent in breadcrumb | Reversibility | Blast | Tier | Recommendation | Follow-up |

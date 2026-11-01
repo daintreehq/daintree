@@ -23,7 +23,7 @@ import {
   Check,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import { BrandSurface, FolderTree, Folders } from "@/components/icons";
+import { BrandSurface, CalendarClock, FolderTree, Folders } from "@/components/icons";
 import { buildPluginToolbarMeta } from "./pluginToolbarMeta";
 import { getToolbarDividerAfterIds, toolbarDividerRun } from "./toolbarButtonGrouping";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
@@ -41,6 +41,7 @@ import {
 import { LAUNCHER_PANEL_ITEMS } from "./launcherPanelItems";
 import { deriveAgentAttentionStates } from "@/lib/agentAttentionStates";
 import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
+import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { DockLaunchButton } from "./DockLaunchButton";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useLauncherData } from "./useLauncherData";
@@ -465,6 +466,7 @@ export function Toolbar({
 
   const {
     handleOpenProjectSettings,
+    handleOpenSchedules,
     handleStopProject,
     handleCloseProject,
     handleSleepProject,
@@ -1913,6 +1915,12 @@ export function Toolbar({
                         <Settings data-menu-icon className="mr-2 h-3.5 w-3.5" />
                         Project settings…
                       </ContextMenuItem>
+                      {!isRemoteWindow() && (
+                        <ContextMenuItem onSelect={handleOpenSchedules}>
+                          <CalendarClock data-menu-icon className="mr-2 h-3.5 w-3.5" />
+                          Schedules…
+                        </ContextMenuItem>
+                      )}
                       <ProjectPluginMenuItems projectId={currentProject.id} />
                       {activeSearchableProject && activeProjectHasProcesses && (
                         <ContextMenuItem
