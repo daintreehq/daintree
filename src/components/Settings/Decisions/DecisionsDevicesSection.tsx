@@ -11,15 +11,23 @@ import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadError
 import { SeverityMark } from "@/lib/statusSeverity";
 import type { DecisionsDevice, DecisionsStatus } from "@shared/types/decisions";
 import { DecisionsPairingDialog } from "./DecisionsPairingDialog";
+import { DecisionsRevokeDeviceDialog } from "./DecisionsRevokeDeviceDialog";
 import { deviceRoleLabel } from "./devicesCopy";
 import { useDecisionsDevices } from "./useDecisionsDevices";
+import { useDecisionsKeyActions } from "./useDecisionsKeyActions";
 
 const SECTION_ID = "decisions-devices";
 const PAIR_BUTTON_ATTR = "data-decisions-pair-phone";
+const ROTATE_BUTTON_ATTR = "data-decisions-rotate-keys";
 
 /** The Pair a phone button on screen now: the empty row's, or the header's once a device is listed. */
 function currentPairButton(): HTMLElement | null {
   return document.querySelector<HTMLElement>(`#${SECTION_ID} [${PAIR_BUTTON_ATTR}]`);
+}
+
+/** Where focus goes after a revocation: the device's row may be gone, the key row stays. */
+function currentRotateButton(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`#${SECTION_ID} [${ROTATE_BUTTON_ATTR}]`);
 }
 
 /** Role, when it was last seen, and whether the relay can notify it: what the relay observed. */
@@ -57,9 +65,11 @@ function DeviceFacts({ device }: { device: DecisionsDevice }) {
 /**
  * Devices (#16009): the phones and Hosts paired with this computer's relay
  * identity, as the relay lists them and their owner-signed certificates
- * verify, and "Pair a phone". The list is read again on Refresh, after a
- * pairing, and when the window regains focus. Revoking (#16010) and enrolled
- * Hosts (#16021) add to the same list.
+ * verify, and "Pair a phone". Each can be revoked after a confirmation, and
+ * the key rotated without revoking anyone (#16010). The list is read again on
+ * Refresh, after a pairing or a key change, when main says the devices
+ * changed, and when the window regains focus. Enrolled Hosts (#16021) add to
+ * the same list.
  */
 export function DecisionsDevicesSection({
   status,
@@ -72,6 +82,16 @@ export function DecisionsDevicesSection({
   const relaySetUp = status.relayOrigin !== undefined;
   const { devices, failure, loading, reload } = useDecisionsDevices(relaySetUp);
   const [pairingOpen, setPairingOpen] = useState(false);
+  const keyActions = useDecisionsKeyActions(reload);
+  const [revokeTarget, setRevokeTarget] = useState<DecisionsDevice | null>(null);
+  const actionsLocked = locked || keyActions.pending !== null;
+
+  const confirmRevoke = () => {
+    if (!revokeTarget) return;
+    void keyActions.revoke(revokeTarget).then((finished) => {
+      if (finished) setRevokeTarget(null);
+    });
+  };
 
   const pairButton = (
     <Button
@@ -161,9 +181,63 @@ export function DecisionsDevicesSection({
                 id={`decisions-device-${device.deviceId}`}
                 label={device.label}
                 description={<DeviceFacts device={device} />}
+                disabled={actionsLocked}
+                control={({ descriptionId, disabled }) => (
+                  <Button
+                    type="button"
+                    variant="ghost-danger"
+                    size="sm"
+                    disabled={disabled}
+                    aria-label={`Revoke ${device.label}`}
+                    aria-describedby={descriptionId}
+                    onClick={() => {
+                      keyActions.clearRevokeError();
+                      setRevokeTarget(device);
+                    }}
+                  >
+                    Revoke
+                  </Button>
+                )}
               />
             ))
           )}
+        </SettingsGroup>
+        <SettingsGroup>
+          <SettingsRow
+            id="decisions-rotate-keys"
+            label="Encryption key"
+            description={
+              <>
+                Questions and answers are sealed with a key each paired device holds. Rotating makes
+                a new one for what&apos;s sent from now on; what a device already has stays readable
+                on it.
+                {keyActions.notice && (
+                  <span
+                    className="mt-1 block text-text-primary"
+                    role={keyActions.notice.problem ? "alert" : "status"}
+                  >
+                    {keyActions.notice.message}
+                  </span>
+                )}
+              </>
+            }
+            // Busy rather than disabled while it rotates, so the button keeps focus.
+            disabled={locked || keyActions.pending === "revoke"}
+            control={({ descriptionId, disabled }) => (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={disabled}
+                loading={keyActions.pending === "rotate"}
+                aria-describedby={descriptionId}
+                onClick={keyActions.rotate}
+                {...{ [ROTATE_BUTTON_ATTR]: "" }}
+              >
+                Rotate keys
+              </Button>
+            )}
+          />
         </SettingsGroup>
       </>
     );
@@ -185,6 +259,16 @@ export function DecisionsDevicesSection({
         }}
         onPaired={reload}
         restoreFocusTo={currentPairButton}
+      />
+      <DecisionsRevokeDeviceDialog
+        device={revokeTarget}
+        revoking={keyActions.pending === "revoke"}
+        error={keyActions.revokeError}
+        onCancel={() => {
+          if (keyActions.pending !== "revoke") setRevokeTarget(null);
+        }}
+        onConfirm={confirmRevoke}
+        restoreFocusTo={currentRotateButton}
       />
     </SettingsSection>
   );

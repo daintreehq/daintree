@@ -17,8 +17,9 @@ export interface UseDecisionsDevicesResult {
 
 /**
  * The devices paired with this computer's relay identity (#16009), read from
- * the relay through main when the section mounts, on `reload`, and when the
- * window regains focus (a phone may have just turned on notifications).
+ * the relay through main when the section mounts, on `reload`, when main says
+ * the devices changed (#16010), and when the window regains focus (a phone
+ * may have just turned on notifications).
  * `enabled` false (no relay set up) reads nothing. Only the last read asked
  * for lands.
  */
@@ -60,6 +61,15 @@ export function useDecisionsDevices(enabled: boolean): UseDecisionsDevicesResult
       current = false;
     };
   }, [enabled, generation]);
+
+  // A device revoked or a key rotated, here, in another window or as the
+  // relay's ledger reports it (#16010): read the list again now.
+  useEffect(() => {
+    if (!enabled) return;
+    return window.electron.events.on("decisions:devices-changed", () => {
+      setGeneration((n) => n + 1);
+    });
+  }, [enabled]);
 
   useEffect(() => {
     if (!enabled) return;

@@ -7,7 +7,11 @@ import {
   type RelayClient,
   type StoredIdentity,
 } from "@daintreehq/decisions-client";
-import { createEpochGrant, generateEpochKeyBytes, verifyDeviceCert } from "@daintreehq/decisions-crypto";
+import {
+  createEpochGrant,
+  generateEpochKeyBytes,
+  verifyDeviceCert,
+} from "@daintreehq/decisions-crypto";
 import type { DeviceInfo, DevicesResponse, EpochGrant } from "@daintreehq/decisions-protocol";
 
 /**
