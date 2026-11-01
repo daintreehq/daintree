@@ -295,6 +295,10 @@ const SHIPPED_DETECTIONS: Array<[string, () => void]> = [
 beforeEach(() => {
   __resetCdpLeasesForTests();
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  // Astro's extractor fetches the page's markup before it installs. Nothing
+  // serves this realm's URL, and a real request would hold the install until
+  // the read's deadline, which these fake timers never reach.
+  vi.stubGlobal("fetch", () => Promise.reject(new TypeError("Failed to fetch")));
   document.body.innerHTML = "";
 });
 
