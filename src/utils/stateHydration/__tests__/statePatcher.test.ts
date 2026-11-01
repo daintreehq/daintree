@@ -1907,6 +1907,9 @@ describe("scheduled run provenance across a restore", () => {
       id: "t1",
       title: "Nightly",
       kind: "terminal",
+      launchAgentId: "claude",
+      command: "claude",
+      agentSessionId: "sess-1",
       cwd: "/p",
       location: "grid",
       cols: 80,
@@ -1918,6 +1921,8 @@ describe("scheduled run provenance across a restore", () => {
 
     const onDisk = JSON.parse(JSON.stringify({ ...snapshot, id: "t1", location: "grid" }));
     const args = build(onDisk);
+    // Premise: the builder brought back an agent pane, not a bare shell.
+    expect(args.launchAgentId).toBe("claude");
     expect(args).toMatchObject({ spawnedBy: "schedule", scheduledRun: RUN });
 
     const restored = {

@@ -93,6 +93,45 @@ describe("restartTerminalWithoutView", () => {
     expect(spawned(invoke).command).toBe("claude --model opus");
   });
 
+  // #15977: the pane is still the scheduled run's, so the host's record keeps
+  // the run whether the restart resumes or starts over.
+  it.each([
+    ["resumed", "sess-123"],
+    ["started over", null],
+  ])("hands a scheduled run's ids to the respawn when %s", async (_label, killAnswer) => {
+    const run = { scheduleId: "schedule-1", runId: "run-1" };
+    const { deps, invoke } = setup(
+      {
+        id: "t1",
+        launchAgentId: "claude",
+        command: "claude",
+        spawnedBy: "schedule",
+        scheduledRun: run,
+      },
+      { agentState: "working", launchAgentId: "claude" },
+      killAnswer
+    );
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("restarted");
+    expect(spawned(invoke).scheduledRun).toEqual(run);
+  });
+
+  it("hands no run to a respawn whose saved pane has only half the pair", async () => {
+    const { deps, invoke } = setup(
+      {
+        id: "t1",
+        launchAgentId: "claude",
+        command: "claude",
+        spawnedBy: "mcp",
+        scheduledRun: { scheduleId: "schedule-1", runId: "run-1" },
+      },
+      { agentState: "working", launchAgentId: "claude" }
+    );
+
+    await restartTerminalWithoutView(PROJECT.id, "t1", deps);
+    expect(spawned(invoke)).not.toHaveProperty("scheduledRun");
+  });
+
   it("leaves a pane saved with a retired model for a view to restart (#15652)", async () => {
     const { deps, invoke } = setup(
       {

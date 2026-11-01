@@ -212,7 +212,8 @@ function emitCapture(
     projectId: terminal.projectId ?? null,
     // Flags and model describe the agent Daintree launched. A different agent
     // the user started by hand in the same pane must not inherit them.
-    // So does the scheduled run: a hand-started agent is not the run's.
+    // So does the scheduled run, which a later hand-started run of the same CLI
+    // (a respawn in this PTY) doesn't take either.
     ...(agentId === terminal.launchAgentId
       ? {
           agentLaunchFlags: terminal.agentLaunchFlags,

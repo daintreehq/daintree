@@ -194,10 +194,10 @@ A terminal launched for a scheduled run carries `spawnedBy: "schedule"` and `sch
 
 | Where | What carries it |
 | --- | --- |
-| Live pane | `PtyPanelData.spawnedBy` and `scheduledRun`, kept by restarts, CLI-gate relaunches and held-pane recovery |
+| Live pane | `PtyPanelData.spawnedBy` and `scheduledRun`, kept by restarts (a view's, and main's with no view), CLI-gate relaunches, held-pane recovery and a worktree-delete rollback |
 | Saved snapshot | `PanelSnapshot.spawnedBy` and `scheduledRun`, written by `serializePtyPanel` and restored by every hydration builder |
 | PTY host | `scheduledRun` on the spawn options and the terminal record, reported back in its terminal info |
-| Session record | `AgentSessionRecord.scheduledRun`, stamped by every capture (agent exit, kill, bookmark, quit, project close, trash expiry, Canopy's host-side end) through `scheduledRunForRecord`. A capture of an agent the user started by hand in the pane doesn't take it. When a run's conversation is resumed in another pane and journaled again, the record keeps the run, as it keeps a bookmark |
+| Session record | `AgentSessionRecord.scheduledRun`, stamped by every capture (agent exit, kill, bookmark, quit, project close, trash expiry, Canopy's host-side end) through `scheduledRunForRecord`. A capture of an agent the user started by hand in the pane doesn't take it, even the same CLI once the run's own has exited (`agentIncarnation` past 0). When a run's conversation is resumed in another pane and journaled again, the record keeps the run, as it keeps a bookmark |
 
 Only Daintree's scheduler can set it, by one of two entries, and neither reads it from action arguments:
 

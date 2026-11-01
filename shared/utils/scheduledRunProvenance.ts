@@ -57,11 +57,16 @@ export function launchSpawnProvenance(
 
 /**
  * The scheduled run a captured session record names, spread into each record
- * built from a terminal: `{}` unless the terminal holds a readable reference.
+ * built from a terminal: `{}` unless the terminal holds a readable reference
+ * and the session is still the launched one. A respawn the detector saw in the
+ * same PTY (`agentIncarnation` past 0) is an agent the user started by hand
+ * after the run's own exited, even the same CLI, and is not the run's.
  */
 export function scheduledRunForRecord(terminal: {
   scheduledRun?: unknown;
+  agentIncarnation?: number;
 }): { scheduledRun: ScheduledRunRef } | Record<string, never> {
+  if ((terminal.agentIncarnation ?? 0) !== 0) return {};
   const ref = readScheduledRunRef(terminal.scheduledRun);
   return ref ? { scheduledRun: ref } : {};
 }

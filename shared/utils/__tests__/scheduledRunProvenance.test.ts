@@ -7,10 +7,12 @@ import {
 } from "../scheduledRunProvenance.js";
 
 const REF = { scheduleId: "schedule-1", runId: "run-1" };
+const OTHER = { scheduleId: "schedule-2", runId: "run-9" };
 
 describe("readScheduledRunRef", () => {
   it("reads both ids and drops anything else", () => {
     expect(readScheduledRunRef({ ...REF, extra: "x" })).toEqual(REF);
+    expect(readScheduledRunRef(OTHER)).toEqual(OTHER);
   });
 
   it.each([
@@ -32,6 +34,7 @@ describe("readSpawnProvenance", () => {
       spawnedBy: "schedule",
       scheduledRun: REF,
     });
+    expect(readSpawnProvenance("schedule", OTHER).scheduledRun).toEqual(OTHER);
   });
 
   it("drops a schedule source whose reference doesn't read", () => {
@@ -56,6 +59,7 @@ describe("readSpawnProvenance", () => {
 describe("launchSpawnProvenance", () => {
   it("makes a launch with a reference a schedule launch, whatever source it named", () => {
     expect(launchSpawnProvenance("mcp", REF)).toEqual({ spawnedBy: "schedule", scheduledRun: REF });
+    expect(launchSpawnProvenance("palette", OTHER).scheduledRun).toEqual(OTHER);
     expect(launchSpawnProvenance(undefined, REF)).toEqual({
       spawnedBy: "schedule",
       scheduledRun: REF,
@@ -75,6 +79,13 @@ describe("launchSpawnProvenance", () => {
 describe("scheduledRunForRecord", () => {
   it("names the terminal's run", () => {
     expect(scheduledRunForRecord({ scheduledRun: REF })).toEqual({ scheduledRun: REF });
+    expect(scheduledRunForRecord({ scheduledRun: OTHER, agentIncarnation: 0 })).toEqual({
+      scheduledRun: OTHER,
+    });
+  });
+
+  it("adds nothing for a later agent the detector saw take over the same PTY", () => {
+    expect(scheduledRunForRecord({ scheduledRun: REF, agentIncarnation: 1 })).toEqual({});
   });
 
   it("adds nothing for a terminal no schedule launched", () => {

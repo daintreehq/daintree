@@ -50,6 +50,7 @@ class MockTerminalProcess {
     lastObservedTitle?: string;
     agentLaunchFlags?: string[];
     agentModelId?: string;
+    scheduledRun?: { scheduleId: string; runId: string };
     spawnedAt: number;
     isExited: boolean;
     wasKilled: boolean;

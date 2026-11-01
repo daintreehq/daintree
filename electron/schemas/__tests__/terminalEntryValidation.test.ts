@@ -247,6 +247,13 @@ describe("Terminal Entry Validation Schemas", () => {
           scheduledRun: run,
         });
         expect(global.success && global.data.scheduledRun).toEqual(run);
+        const brokenGlobal = AppStateTerminalEntrySchema.safeParse({
+          ...base,
+          spawnedBy: "schedule",
+          scheduledRun: { scheduleId: "schedule-1" },
+        });
+        expect(brokenGlobal.success).toBe(true);
+        expect(brokenGlobal.success && brokenGlobal.data.scheduledRun).toBeUndefined();
       });
 
       it("normalizes the spawn source on the legacy global entry schema too", () => {
