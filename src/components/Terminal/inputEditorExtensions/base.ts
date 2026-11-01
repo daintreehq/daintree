@@ -12,6 +12,7 @@ import {
   EASE_OUT_EXPO,
 } from "@/lib/animationUtils";
 import { createTrustedHTML, setTrustedInnerHTML } from "@/lib/trustedTypesPolicy";
+import { userEdit } from "./userEdit";
 
 const MAX_TEXTAREA_HEIGHT_PX = 160;
 const LINE_HEIGHT_PX = 20;
@@ -315,6 +316,12 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         textUnderlineOffset: "3px",
         transition: `text-decoration-color ${UI_ANIMATION_DURATION}ms ease-out`,
       },
+      // Words still being corrected refused an edit (#15874): washed for a
+      // moment in the draft's own ink, the rewrite streaming over them too.
+      ".cm-voice-pending-refused": {
+        backgroundColor: `color-mix(in oklab, ${c.foreground} ${CHIP_STAGED_MIX}%, transparent)`,
+        borderRadius: "var(--radius-xs)",
+      },
       // The pending underline's hue, drawn solid once the correction has
       // landed, and only under what it changed.
       ".cm-voice-corrected": {
@@ -429,6 +436,7 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         ".cm-voice-caret::before": { border: "1px solid CanvasText", width: "1px" },
         ".cm-voice-caret::after": { width: "0", borderLeft: "3px solid Highlight" },
         '.cm-voice-caret[data-phase="held"]::after': { borderLeftColor: "GrayText" },
+        ".cm-voice-pending-refused": { outline: "1px solid CanvasText" },
       },
     },
     { dark: true }
@@ -1022,6 +1030,7 @@ export function createPlainPasteKeymap(): Extension {
             view.dispatch({
               changes: { from, to, insert: text },
               selection: { anchor: from + text.length },
+              annotations: userEdit.of(true),
             });
           });
           return true;
@@ -1061,7 +1070,7 @@ export function createChipRemoveControl(onRemove: () => void): HTMLElement {
 export function removeChipRange(view: EditorView, from: number, to: number): void {
   const doc = view.state.doc.toString();
   const deleteTo = to < doc.length && doc[to] === " " ? to + 1 : to;
-  view.dispatch({ changes: { from, to: deleteTo, insert: "" } });
+  view.dispatch({ changes: { from, to: deleteTo, insert: "" }, annotations: userEdit.of(true) });
   view.focus();
 }
 

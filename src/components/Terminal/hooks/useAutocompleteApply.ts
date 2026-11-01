@@ -20,7 +20,12 @@ interface UseAutocompleteApplyParams {
   /** `change` is the one edit that turns the current draft into `nextValue`. */
   applyEditorValue: (
     nextValue: string,
-    options?: { selection?: EditorSelection; focus?: boolean; change?: TextChange }
+    options?: {
+      selection?: EditorSelection;
+      focus?: boolean;
+      change?: TextChange;
+      userEdit?: boolean;
+    }
   ) => void;
   /** Runs an execute row's completed draft; where it goes is the host's call. */
   onExecute: (text: string) => void;
@@ -100,6 +105,7 @@ function applyAutocompleteItem(
     selection: EditorSelection.create([EditorSelection.cursor(nextCaret)]),
     focus: true,
     change: { from: ctx.start, to: ctx.tokenEnd, insert: token },
+    userEdit: true,
   });
   clear();
 }

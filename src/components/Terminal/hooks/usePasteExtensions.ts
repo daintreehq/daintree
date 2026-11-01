@@ -13,6 +13,7 @@ import { materialize } from "@/services/materialize";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { holdBackAttachments, holdComposerSend, trackUpload } from "../uploads/pendingUploads";
 import { composerDraftGeneration } from "../inputEditorExtensions/composerDraftGeneration";
+import { userEdit } from "../inputEditorExtensions/userEdit";
 import { referenceSeparatorAt } from "../referenceSeparator";
 
 /**
@@ -93,6 +94,7 @@ export function usePasteExtensions(
                 fileName,
               }),
               selection: { anchor: from + token.length + 1 },
+              annotations: userEdit.of(true),
             });
             return;
           }
@@ -105,6 +107,7 @@ export function usePasteExtensions(
               thumbnailUrl: thumbnail,
             }),
             selection: { anchor: from + filePath.length + 1 },
+            annotations: userEdit.of(true),
           });
         } catch {
           // Empty clipboard, editor destroyed mid-IPC, etc. — nothing to do.
@@ -174,6 +177,7 @@ export function usePasteExtensions(
               changes: { from: cursor, insert: insertText },
               effects,
               selection: { anchor: cursor + insertText.length },
+              annotations: userEdit.of(true),
             });
           } catch {
             // Editor destroyed while the paths resolved — nothing to do.

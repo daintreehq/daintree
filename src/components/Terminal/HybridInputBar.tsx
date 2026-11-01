@@ -9,8 +9,8 @@ import {
   useRef,
   useState,
 } from "react";
-import { EditorView } from "@codemirror/view";
-import { EditorSelection, Transaction } from "@codemirror/state";
+import { EditorView, type ViewUpdate } from "@codemirror/view";
+import { EditorSelection, Transaction, type ChangeSet } from "@codemirror/state";
 import { isolateHistory } from "@codemirror/commands";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentState } from "@/types";
@@ -188,6 +188,7 @@ import {
   selectionAfterOutsideWrite,
   readImageChipPaths,
   replayLandedCorrection,
+  userEdit,
 } from "./inputEditorExtensions";
 import {
   isLatestDictation,
@@ -374,6 +375,8 @@ type ApplyEditorValue = (
     resetHistory?: boolean;
     /** The one edit that turns the current draft into `nextValue`, applied as just that. */
     change?: TextChange;
+    /** The user's own edit (a completion), refused by words still being corrected. */
+    userEdit?: boolean;
   }
 ) => void;
 
@@ -1110,6 +1113,38 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       inputStore.setDraftInput(terminalId, after, projectId);
     };
 
+    // Typing reaches the store a render later, through the write-back, as a
+    // whole draft. Its changes go ahead of it, spelled out, so text typed
+    // against dictated words lands where it was typed, never inside them by a
+    // diff of the two drafts (#15874). Keystrokes ahead of one write-back are
+    // composed into one change.
+    const typedSinceSyncRef = useRef<{
+      before: string;
+      after: string;
+      changes: ChangeSet;
+    } | null>(null);
+    const expectTypedChange = (update: ViewUpdate, next: string) => {
+      if (followsDriver || isFleetFollower) return;
+      const stored = useTerminalInputStore.getState().getDraftInput(terminalId, projectId);
+      const start = update.startState.doc.toString();
+      const typed = typedSinceSyncRef.current;
+      const since =
+        typed && typed.after === start && typed.before === stored
+          ? { before: stored, after: next, changes: typed.changes.compose(update.changes) }
+          : stored === start
+            ? { before: start, after: next, changes: update.changes }
+            : null;
+      typedSinceSyncRef.current = since;
+      if (!since) return;
+      const edits: TextChange[] = [];
+      since.changes.iterChanges((from, to, _fromB, _toB, inserted) => {
+        edits.push({ from, to, insert: inserted.toString() });
+      });
+      useDictationRangeStore
+        .getState()
+        .expectDraftChange(terminalId, projectId, since.before, since.after, edits);
+    };
+
     const applyEditorValue: ApplyEditorValue = (nextValue, options) => {
       if (lastEmittedValueRef.current !== nextValue) {
         lastEmittedValueRef.current = nextValue;
@@ -1138,7 +1173,17 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           : {}),
         ...(shouldChangeSelection ? { selection: options?.selection } : {}),
         scrollIntoView: true,
+        ...(options?.userEdit ? { annotations: userEdit.of(true) } : {}),
       });
+      if (shouldChangeDoc && view.state.doc.toString() === current) {
+        // Refused (#15874): the draft stays as it was, and nothing syncs the
+        // refused value back in.
+        isApplyingExternalValueRef.current = false;
+        lastEmittedValueRef.current = current;
+        setValue(current);
+        if (options?.focus) view.focus();
+        return;
+      }
       if (exact) writeDraftEdit(current, nextValue, exact);
       if (options?.resetHistory) clearComposerHistory(view);
       if (options?.focus) view.focus();
@@ -2176,6 +2221,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           next.trim() !== "" && update.transactions.every((tr) => tr.annotation(dictationWrite))
         );
         if (next === lastEmittedValueRef.current) return false;
+        expectTypedChange(update, next);
         lastEmittedValueRef.current = next;
         setValue(next);
         return true;

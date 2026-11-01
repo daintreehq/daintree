@@ -202,6 +202,11 @@ export const VOICE_CORRECTION_MARK_DWELL_MS = 5_000;
  *  signal that the marks are leaving on their own, not being dismissed. */
 export const VOICE_CORRECTION_MARK_FADE_MS = 600;
 
+/** How long words still being corrected stay washed after refusing an edit.
+ *  Long enough to be seen past the keystroke, short enough that a run of
+ *  refused keys reads as one. */
+export const VOICE_PENDING_REFUSAL_MS = 400;
+
 export const UI_TOOLTIP_DELAY_DURATION = 500;
 export const UI_TOOLTIP_SKIP_DELAY_DURATION = DURATION_300;
 
