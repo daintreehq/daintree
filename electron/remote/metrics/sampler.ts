@@ -88,8 +88,12 @@ const MAX_CGROUP_DEPTH = 32;
 const CPU_CLUSTER_PROBES = 3;
 /** Reads of the Linux page size before an unknown answer is taken as final. */
 const PAGE_SIZE_PROBES = 3;
-/** Longer than this between swap readings (a sleep, a stalled loop) and the average says little. */
-const MAX_SWAP_RATE_GAP_MS = 3 * HOST_METRICS_INTERVAL_MS;
+/**
+ * Longer than this between two readings (a sleep, a stalled loop, a pause with
+ * nobody listening) and what's measured across them averages the whole gap,
+ * which says little about the load now.
+ */
+const MAX_READING_GAP_MS = 3 * HOST_METRICS_INTERVAL_MS;
 
 interface CpuClusters {
   performance: number | null;
@@ -162,7 +166,8 @@ async function settle<T>(read: () => Promise<T>, fallback: T): Promise<T> {
  * and drive lease look like. Anything a platform doesn't expose is null.
  */
 export class HostMetricsSampler {
-  private previousCpus: CpuTimes[] | null = null;
+  /** The core times at the last sample, which machine CPU is measured between. */
+  private previousCpus: { at: number; cpus: CpuTimes[] } | null = null;
   /** Cluster sizes are hardware: kept once read, so only an unknown answer is asked again. */
   private clusters: CpuClusters | null = null;
   private clusterProbes = 0;
@@ -184,10 +189,16 @@ export class HostMetricsSampler {
 
   async sample(): Promise<HostMetricsSummary> {
     const s = this.sources;
+    const cpusAt = s.now();
     const cpus = s.cpus();
-    const previousCpus = this.previousCpus;
+    const previous = this.previousCpus;
+    // Core-time shares don't divide by the interval, so only a gap too long (or a clock that went
+    // back, which hides how long) loses the baseline; the fresh reading starts the next one.
+    const elapsedMs = previous ? cpusAt - previous.at : -1;
+    const previousCpus =
+      previous && elapsedMs >= 0 && elapsedMs <= MAX_READING_GAP_MS ? previous.cpus : null;
     const cpuPercent = cpuPercentBetween(previousCpus, cpus);
-    this.previousCpus = cpus;
+    this.previousCpus = { at: cpusAt, cpus };
     const readers: SampleReaders = s.beginSample?.() ?? s;
 
     let budgetTimer: ReturnType<typeof setTimeout> | undefined;
@@ -532,7 +543,10 @@ export class HostMetricsSampler {
     return { dir, memoryLimit, swapLimit, cpuQuota, cpuSet };
   }
 
-  /** Busy share of the cgroup's cores between two `cpu.stat` readings; null until there are two. */
+  /**
+   * Busy share of the cgroup's cores between two `cpu.stat` readings; null
+   * until there are two close enough together.
+   */
   private cgroupCpuPercent(
     dir: string,
     usec: number | null,
@@ -548,7 +562,7 @@ export class HostMetricsSampler {
     if (!previous || previous.dir !== dir || previous.cores !== cores) return null;
     const elapsedUsec = (at - previous.at) * 1000;
     const used = usec - previous.usec;
-    if (elapsedUsec <= 0 || used < 0) return null;
+    if (elapsedUsec <= 0 || elapsedUsec > MAX_READING_GAP_MS * 1000 || used < 0) return null;
     return Math.min(100, Math.max(0, (used / (elapsedUsec * cores)) * 100));
   }
 
@@ -573,7 +587,7 @@ export class HostMetricsSampler {
       return NO_SWAP_RATES;
     }
     const elapsedMs = at - previous.at;
-    if (elapsedMs <= 0 || elapsedMs > MAX_SWAP_RATE_GAP_MS) return NO_SWAP_RATES;
+    if (elapsedMs <= 0 || elapsedMs > MAX_READING_GAP_MS) return NO_SWAP_RATES;
     const rate = (now: number | null, before: number | null): number | null =>
       now === null || before === null || now < before
         ? null

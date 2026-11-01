@@ -325,6 +325,36 @@ describe("HostMetricsSampler", () => {
       expect(await step(8_000, "usage_usec 4500000\n")).toBe(50);
     });
 
+    it("measures the cgroup across up to three intervals and starts over past a long pause (#15890)", async () => {
+      let now = 0;
+      let usage = "";
+      const sampler = new HostMetricsSampler(
+        sources({
+          cpus: () =>
+            Array.from({ length: 8 }, () => ({ user: 1, nice: 0, sys: 0, idle: 1, irq: 0 })),
+          readText: async (path) =>
+            path === `${slice}/cpu.stat`
+              ? usage
+              : path === "/sys/fs/cgroup/system.slice/cpu.max"
+                ? "100000 100000"
+                : (files[path] ?? null),
+          now: () => now,
+        })
+      );
+      const step = async (at: number, usec: number) => {
+        now = at;
+        usage = `usage_usec ${usec}\n`;
+        return (await sampler.sample()).cpuPercent;
+      };
+      expect(await step(100_000, 0)).toBeNull();
+      // Three intervals of one core, 7.5 CPU-seconds busy: half.
+      expect(await step(115_000, 7_500_000)).toBe(50);
+      // An hour later, 10% across it: no reading of the load now.
+      expect(await step(115_000 + 3_600_000, 367_500_000)).toBeNull();
+      // Five seconds on, 4 CPU-seconds since the resumed reading: 80%, never the hour's average.
+      expect(await step(120_000 + 3_600_000, 371_500_000)).toBe(80);
+    });
+
     it("reads a v1-only host as the machine", async () => {
       const summary = await cgroupSampler({
         "/proc/self/cgroup": "4:memory:/docker/abc\n3:cpu:/docker/abc\n",
@@ -588,6 +618,73 @@ describe("HostMetricsSampler", () => {
     }
     // Linux never asks; the Mac asks once per sample until it gives up.
     expect(probed.filter((args) => args.includes("hw.perflevel0.name"))).toHaveLength(2);
+  });
+
+  describe("CPU across a sampling pause (#15890)", () => {
+    const HOUR_MS = 60 * 60 * 1000;
+
+    /** A sampler whose clock and per-core busy/idle times each step sets. */
+    function pausedSampler(platform: HostSampleSources["platform"] = "linux") {
+      let now = 0;
+      let cores: Array<[user: number, idle: number]> = [];
+      const sampler = new HostMetricsSampler(
+        sources({
+          platform,
+          cpus: () => cores.map(([user, idle]) => ({ user, nice: 0, sys: 0, idle, irq: 0 })),
+          run: async (_command, args) =>
+            args.includes("hw.perflevel0.name") ? "Performance\n1\nEfficiency\n1\n" : null,
+          now: () => now,
+        })
+      );
+      return async (at: number, next: Array<[user: number, idle: number]>) => {
+        now = at;
+        cores = next;
+        return sampler.sample();
+      };
+    }
+
+    it("reports the first machine reading after a long pause as unmeasured, then measures from it", async () => {
+      const step = pausedSampler();
+      expect((await step(100_000, [[0, 0]])).cpuPercent).toBeNull();
+      // 10% busy across an hour nobody listened: no reading of the load now.
+      expect((await step(100_000 + HOUR_MS, [[1_000, 9_000]])).cpuPercent).toBeNull();
+      // Five seconds on, 80% busy since the resumed reading, never the hour's average.
+      expect((await step(105_000 + HOUR_MS, [[1_080, 9_020]])).cpuPercent).toBeCloseTo(80);
+    });
+
+    it("measures machine CPU across up to three intervals and no further, nor across a clock that went back", async () => {
+      for (const [gap, expected] of [
+        [15_000, 25],
+        [15_001, null],
+        [-1_000, null],
+      ] as const) {
+        const step = pausedSampler();
+        await step(100_000, [[0, 0]]);
+        const percent = (await step(100_000 + gap, [[25, 75]])).cpuPercent;
+        if (expected === null) expect(percent).toBeNull();
+        else expect(percent).toBeCloseTo(expected);
+      }
+    });
+
+    it("reports Apple Silicon cluster shares after a long pause as unmeasured too", async () => {
+      const step = pausedSampler("darwin");
+      await step(100_000, [
+        [0, 0],
+        [0, 0],
+      ]);
+      expect(
+        await step(100_000 + HOUR_MS, [
+          [100, 900],
+          [500, 500],
+        ])
+      ).toMatchObject({ cpuPercent: null, cpuEfficiencyPercent: null, cpuPerformancePercent: null });
+      const resumed = await step(105_000 + HOUR_MS, [
+        [190, 910],
+        [540, 560],
+      ]);
+      expect(resumed.cpuEfficiencyPercent).toBeCloseTo(90);
+      expect(resumed.cpuPerformancePercent).toBeCloseTo(40);
+    });
   });
 
   describe("sample budget (#15735)", () => {
