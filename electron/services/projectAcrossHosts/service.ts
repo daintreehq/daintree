@@ -233,8 +233,8 @@ export class ProjectAcrossHostsService {
 
   /**
    * Remotes for `identify` and `find`, which every presence check and bare
-   * host switch repeats. Everything that picks a copy to use or acts on a
-   * remote reads it fresh.
+   * host switch repeats. Everything that creates or changes something from
+   * what it reads (a clone, a worktree, a push) reads fresh.
    */
   private readonly lookupRemotes: RemoteReadCache;
 
@@ -634,7 +634,7 @@ export class ProjectAcrossHostsService {
    * clone that is the same repository by its remotes).
    */
   async match(payload: FindProjectMatchPayload): Promise<ProjectMatchCandidate[]> {
-    // The copy a switch or an ensure goes on to use: read fresh, unlike a presence `find`.
+    // A switch or an ensure clones or adds a worktree from this: read fresh, unlike a presence `find`.
     const registered = await this.findRegistered(payload, this.listRemotes);
     if (registered.some((c) => c.matchedBy === "remote-url")) return registered;
     return [...registered, ...(await this.scan({ remoteUrls: payload.remoteUrls }))];

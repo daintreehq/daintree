@@ -157,6 +157,20 @@ describe("RemoteReadCache", () => {
     expect(calls).toHaveLength(4);
   });
 
+  it("reads uncached when the config can't be looked at in time", async () => {
+    const calls: string[] = [];
+    const cache = new RemoteReadCache(
+      async (repoPath) => {
+        calls.push(repoPath);
+        return [{ name: "origin", url: "u" }];
+      },
+      { fingerprint: () => new Promise<string>(() => {}), fingerprintTimeoutMs: 5 }
+    );
+    expect(await cache.read("/p/stalled")).toEqual([{ name: "origin", url: "u" }]);
+    expect(await cache.read("/p/stalled")).toEqual([{ name: "origin", url: "u" }]);
+    expect(calls).toHaveLength(2);
+  });
+
   it("reads every time when the repository's config can't be found", async () => {
     const { cache, state, calls } = harness();
     await cache.read("/p/a");

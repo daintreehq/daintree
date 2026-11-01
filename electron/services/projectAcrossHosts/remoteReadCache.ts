@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveCommonDirFromFs } from "../../utils/gitUtils.js";
+import { withTimeout } from "../../utils/withTimeout.js";
 import type { RemoteLister } from "./matcher.js";
 
 type Remotes = Awaited<ReturnType<RemoteLister>>;
@@ -10,6 +11,8 @@ type Remotes = Awaited<ReturnType<RemoteLister>>;
  * global config and `insteadOf`, included files, worktree config.
  */
 const DEFAULT_MAX_AGE_MS = 30_000;
+/** A stalled mount must not hold a lookup: past this the repository is read as if uncached. */
+const DEFAULT_FINGERPRINT_TIMEOUT_MS = 5_000;
 
 export type ConfigFingerprint = (repoPath: string) => Promise<string | null>;
 
@@ -45,21 +48,32 @@ export class RemoteReadCache {
   private readonly now: () => number;
   private readonly fingerprint: ConfigFingerprint;
   private readonly maxAgeMs: number;
+  private readonly fingerprintTimeoutMs: number;
 
   constructor(
     private readonly listRemotes: RemoteLister,
-    options: { now?: () => number; fingerprint?: ConfigFingerprint; maxAgeMs?: number } = {}
+    options: {
+      now?: () => number;
+      fingerprint?: ConfigFingerprint;
+      maxAgeMs?: number;
+      fingerprintTimeoutMs?: number;
+    } = {}
   ) {
     this.now = options.now ?? (() => Date.now());
     this.fingerprint = options.fingerprint ?? repositoryConfigFingerprint;
     this.maxAgeMs = options.maxAgeMs ?? DEFAULT_MAX_AGE_MS;
+    this.fingerprintTimeoutMs = options.fingerprintTimeoutMs ?? DEFAULT_FINGERPRINT_TIMEOUT_MS;
   }
 
   readonly read: RemoteLister = async (repoPath) => {
     const key = path.resolve(repoPath);
     // Taken before the read: a write while git runs changes the next lookup's
     // fingerprint, so that lookup reads again.
-    const fingerprint = await this.fingerprint(repoPath).catch(() => null);
+    const fingerprint = await withTimeout(
+      this.fingerprint(repoPath),
+      this.fingerprintTimeoutMs,
+      `config fingerprint timed out: ${repoPath}`
+    ).catch(() => null);
     const now = this.now();
     if (fingerprint === null) {
       this.entries.delete(key);
