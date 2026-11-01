@@ -3,6 +3,7 @@ import {
   BridgeError,
   MemoryKeyStore,
   MemoryLocalStore,
+  PolicyRegistry,
   loadIdentity,
   paneIdentityOf,
   type DecisionsBridge,
@@ -81,6 +82,7 @@ describe("QuestionBridge", () => {
   let live: ReturnType<typeof liveBridge> | null;
   let current: boolean;
   let source: QuestionSource;
+  let policy: PolicyRegistry;
   let fetches: number;
 
   beforeEach(async () => {
@@ -89,10 +91,12 @@ describe("QuestionBridge", () => {
     live = null;
     current = true;
     fetches = 0;
+    policy = new PolicyRegistry();
     source = {
       identity: () => identity,
       live: () => live as unknown as DecisionsBridge | null,
       store,
+      policy,
     };
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
       fetches += 1;
@@ -143,6 +147,22 @@ describe("QuestionBridge", () => {
     live = liveBridge();
     await b.getDecision(result.questionId, paneIdentityOf(ORIGIN));
     expect(live.getDecision).toHaveBeenCalledWith(result.questionId, paneIdentityOf(ORIGIN));
+  });
+
+  it("asks under the lifetime's own policy, as the attempts do", async () => {
+    const b = bridge();
+    const strict = await b.registerQuestion({
+      origin: ORIGIN,
+      input: { question: "Proxy?", requested_requirement: "proxy-ok" },
+    });
+    expect(strict.requirement).toBe("human-required");
+    // The allowlist changed in Settings reaches the registry every bridge shares.
+    policy.proxyAllowlisted = true;
+    const allowed = await b.registerQuestion({
+      origin: ORIGIN,
+      input: { question: "Proxy now?", requested_requirement: "proxy-ok" },
+    });
+    expect(allowed.requirement).toBe("proxy-ok");
   });
 
   it("asks under the identity the attempts last held", async () => {

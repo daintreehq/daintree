@@ -40,7 +40,13 @@ export class QuestionBridge extends DecisionsBridge {
   constructor(options: QuestionBridgeOptions) {
     const identity = options.source.identity();
     if (identity === null) throw new Error("The relay connection has ended");
-    super({ identity, store: options.source.store, sink: holdingTerminalSink, pumpIntervalMs: 0 });
+    super({
+      identity,
+      store: options.source.store,
+      policy: options.source.policy,
+      sink: holdingTerminalSink,
+      pumpIntervalMs: 0,
+    });
     this.question = options;
     // Synchronous for a bridge that never started; from here `pump` does nothing.
     void super.stop();

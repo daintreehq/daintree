@@ -93,6 +93,7 @@ import {
 import type { ListenerRoute } from "../../mcp-server/listenerHold.js";
 import type { PaneBearer, PaneTerminalInfo, PaneTerminalReader } from "../paneAccess.js";
 import type { QuestionSource } from "../relayConnection.js";
+import { DESIGN_REVIEW_FINAL_GATE_ID, createTrustedPolicy } from "../workflowGates.js";
 
 const API_KEY = "orchestration-api-key";
 const HELP_TOKEN = "help-session-token";
@@ -253,7 +254,13 @@ describe("/mcp/decisions (#16011)", () => {
 
   /** The route as the Decisions service opens it, over a connection between attempts. */
   async function openRoute(): Promise<number> {
-    const source: QuestionSource = { identity: () => loaded, live: () => null, store };
+    const source: QuestionSource = {
+      identity: () => loaded,
+      live: () => null,
+      store,
+      // The policy a lifetime starts with: the trusted gates, no proxy allowlist.
+      policy: createTrustedPolicy({ proxyAllowlisted: false }),
+    };
     let held: number | null = null;
     questions = openDecisionsMcpRoute(source, {
       bearerFor: (token) =>
@@ -476,12 +483,22 @@ describe("/mcp/decisions (#16011)", () => {
       expect(result.structuredContent.enforced_requirement, requested).toBe("human-required");
     }
     // A gate the agent names that Daintree never registered is no policy at all.
-    const gated = await call(port, token, "ask_human", {
-      question: "Approve the final design?",
-      workflow_gate_id: "design-review/final",
+    const invented = await call(port, token, "ask_human", {
+      question: "Approve it?",
+      workflow_gate_id: "agent-invented/gate",
       requested_requirement: "proxy-ok",
     });
-    expect(gated.structuredContent.enforced_requirement).toBe("human-required");
+    expect(invented.structuredContent.enforced_requirement).toBe("human-required");
+    // A trusted gate applies between attempts too: the final design review binds to its images.
+    const unbound = await call(port, token, "ask_human", {
+      question: "Approve the final design?",
+      workflow_gate_id: DESIGN_REVIEW_FINAL_GATE_ID,
+      options: [
+        { id: "approve", label: "Approve" },
+        { id: "reject", label: "Reject" },
+      ],
+    });
+    expect(unbound.isError).toBe(true);
     // Origin fields among the arguments are dropped, never recorded.
     const forged = await call(port, token, "ask_human", {
       question: "Whose pane is this?",

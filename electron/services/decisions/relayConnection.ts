@@ -55,6 +55,8 @@ export interface QuestionSource {
   live(): DecisionsBridge | null;
   /** The lifetime's store, refused to anyone once the connection has ended. */
   readonly store: LocalStore;
+  /** The lifetime's trusted policy, the one every attempt's bridge asks under. */
+  readonly policy: PolicyRegistry;
 }
 
 export interface RelayConnectionOptions {
@@ -245,6 +247,7 @@ export class RelayConnection {
         return current?.started && !current.retired ? current.bridge : null;
       },
       store: this.store,
+      policy: this.o.policy,
     });
     if (this.ended) return;
     this.watchers.push(

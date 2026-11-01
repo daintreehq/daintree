@@ -937,6 +937,7 @@ describe("Decisions entry", () => {
         identity: () => null,
         live: () => null,
         store: {} as never,
+        policy: {} as never,
       });
       expect(openedRoutes).toHaveLength(1);
       const { sources } = openedRoutes[0]!;
@@ -971,6 +972,7 @@ describe("Decisions entry", () => {
         identity: () => null,
         live: () => null,
         store: {} as never,
+        policy: {} as never,
       });
       let replaced = false;
       void openedRoutes[1]!.after!.then(() => {

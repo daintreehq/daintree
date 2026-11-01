@@ -749,6 +749,7 @@ describe("DecisionsService relay connection", () => {
     identity: () => null,
     live: () => null,
     store: {} as QuestionSource["store"],
+    policy: {} as QuestionSource["policy"],
   };
 
   it("opens agents' questions once the connection's identity is ready, and only for the current one", async () => {
