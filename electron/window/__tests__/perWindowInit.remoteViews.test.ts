@@ -48,12 +48,13 @@ import {
 } from "../../ipc/endpointRegistry.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { setRemoteBoundViewFilter } from "../../ipc/utils.js";
-import type { ClientEndpoint } from "../../ipc/endpoint.js";
+import type { ClientEndpoint, EndpointGroup } from "../../ipc/endpoint.js";
 import type { MainProcessWatchdogClient } from "../../services/MainProcessWatchdogClient.js";
 import type { WindowRegistry } from "../WindowRegistry.js";
 
-function remoteEndpoint(handle: number) {
+function remoteEndpoint(handle: number, group?: EndpointGroup) {
   const endpoint: ClientEndpoint = {
+    ...(group ? { group } : {}),
     endpointId: `remote:${handle}`,
     clientId: "client-b",
     projectId: "proj-1",
@@ -116,6 +117,31 @@ describe("watchdog:disabled push", () => {
 
     expect(remoteBound.send).not.toHaveBeenCalled();
     expect(local.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("crosses each Shell's link once for all of that Shell's views (#15902)", () => {
+    const studio: EndpointGroup = { sendToAll: vi.fn() };
+    const laptop: EndpointGroup = { sendToAll: vi.fn() };
+    const views = [
+      remoteEndpoint(-1, studio),
+      remoteEndpoint(-2, studio),
+      remoteEndpoint(-3, laptop),
+    ];
+    const loose = remoteEndpoint(-4);
+    for (const view of [...views, loose]) getEndpointRegistry().add(view);
+    wireWatchdogDisabledBroadcast(client, undefined);
+
+    fire({ reason: "cap" });
+
+    const frame = {
+      type: "event",
+      channel: CHANNELS.EVENTS_PUSH,
+      args: [{ name: "watchdog:disabled", payload: { reason: "cap" } }],
+    };
+    expect(vi.mocked(studio.sendToAll).mock.calls).toEqual([[frame]]);
+    expect(vi.mocked(laptop.sendToAll).mock.calls).toEqual([[frame]]);
+    expect(vi.mocked(loose.send).mock.calls).toEqual([[frame]]);
+    for (const view of views) expect(view.send).not.toHaveBeenCalled();
   });
 
   it("still reaches remote views on a host with no window registry", () => {

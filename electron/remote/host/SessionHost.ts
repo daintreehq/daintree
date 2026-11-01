@@ -1,6 +1,7 @@
 import os from "node:os";
 import type {
   ClientRef,
+  EndpointGroup,
   EndpointInvocation,
   EndpointRegistry,
   EndpointRequestOptions,
@@ -191,6 +192,13 @@ interface SessionState {
    */
   refusedOnLink: Map<string, { projectId: string | null; openId: string | undefined }>;
   /**
+   * An open was refused at the endpoint cap at some point in this session.
+   * The Shell may still hold that view after `refusedOnLink` forgets it (a new
+   * link clears the map until the Shell repeats its opens), so the session
+   * stops taking session-wide events for good.
+   */
+  refusedAnOpen: boolean;
+  /**
    * What the Shell was last told about each endpoint, per answer, by client
    * endpoint id. An endpoint missing here is owed an answer: cleared when the
    * link drops, so a resumed Shell hears every endpoint again.
@@ -200,6 +208,8 @@ interface SessionState {
   answerRetry: Record<EndpointAnswer, ReturnType<typeof setTimeout> | null>;
   overHighWaterTimer: ReturnType<typeof setTimeout> | null;
   handle: EndpointSessionHandle;
+  /** One push for every endpoint of the session, crossing its link once. */
+  group: EndpointGroup;
   /** When the Shell last used this host through a view; null until it does. */
   lastActiveAt: number | null;
   /** Channels already logged as unsendable here, so one that always fails warns once. */
@@ -453,6 +463,7 @@ export class SessionHost {
         openedOnLink: new Set(),
         createdOnLink: new Set(),
         refusedOnLink: new Map(),
+        refusedAnOpen: false,
         told: {
           assistant: new Map(),
           agents: new Map(),
@@ -462,6 +473,7 @@ export class SessionHost {
         answerRetry: { assistant: null, agents: null, resident: null, mcpBinding: null },
         overHighWaterTimer: null,
         handle: undefined as unknown as EndpointSessionHandle,
+        group: undefined as unknown as EndpointGroup,
         lastActiveAt: null,
         unsendableChannels: new Set(),
       };
@@ -470,6 +482,7 @@ export class SessionHost {
         client: created.client,
         link: () => created.link,
       };
+      created.group = { sendToAll: (frame) => this.broadcastEvent(created, frame) };
       state = created;
       this.states.set(ctx.sessionId, state);
     }
@@ -619,6 +632,7 @@ export class SessionHost {
         maxEndpoints: this.maxEndpoints,
       });
       state.refusedOnLink.set(clientEndpointId, { projectId, openId });
+      state.refusedAnOpen = true;
       const oldest = state.refusedOnLink.keys().next().value;
       if (state.refusedOnLink.size > this.maxEndpoints && oldest !== undefined) {
         state.refusedOnLink.delete(oldest);
@@ -633,6 +647,7 @@ export class SessionHost {
         linkSessionId: state.sessionId,
         projectId,
         openId,
+        group: state.group,
       },
       this.transportFor(state)
     );
@@ -761,9 +776,35 @@ export class SessionHost {
   }
 
   private sendEvent(state: SessionState, endpoint: RemoteViewEndpoint, frame: HostFrame): void {
+    this.postEvent(state, endpoint.clientEndpointId, [endpoint], frame);
+  }
+
+  /**
+   * One EVENT addressed to the whole session, which the Shell hands to every
+   * view it holds for this host. That would include a view whose open was
+   * refused at the endpoint cap, which has no endpoint here and must hear
+   * nothing, so a session that ever refused one addresses each endpoint.
+   */
+  private broadcastEvent(state: SessionState, frame: HostFrame): void {
+    const endpoints = [...state.endpoints.values()].filter((endpoint) => !endpoint.isClosed());
+    if (endpoints.length === 0) return;
+    if (state.refusedAnOpen) {
+      for (const endpoint of endpoints) this.sendEvent(state, endpoint, frame);
+      return;
+    }
+    this.postEvent(state, null, endpoints, frame);
+  }
+
+  /** Posts one EVENT, and on a drop owes a resync to each endpoint it was meant for. */
+  private postEvent(
+    state: SessionState,
+    endpointId: string | null,
+    endpoints: readonly RemoteViewEndpoint[],
+    frame: HostFrame
+  ): void {
     const link = state.link;
     if (!link || !link.isOpen || state.resyncing) {
-      state.stale.add(endpoint.clientEndpointId);
+      for (const endpoint of endpoints) state.stale.add(endpoint.clientEndpointId);
       return;
     }
     let result;
@@ -771,7 +812,7 @@ export class SessionHost {
       result = link.post({
         lane: Lane.EVENTS,
         kind: EventKind.EVENT,
-        body: { endpointId: endpoint.clientEndpointId, channel: frame.channel, args: frame.args },
+        body: { endpointId, channel: frame.channel, args: frame.args },
       });
     } catch (error) {
       // Unencodable or oversized: only this event is lost, but the Shell's view
@@ -779,19 +820,25 @@ export class SessionHost {
       if (!state.unsendableChannels.has(frame.channel)) {
         state.unsendableChannels.add(frame.channel);
         logger.warn("Dropped an event to a remote view; later ones on its channel go unlogged", {
-          ...describeEndpoint(endpoint),
+          ...(endpointId === null
+            ? {
+                sessionId: state.sessionId,
+                clientId: state.client.clientId,
+                endpointCount: endpoints.length,
+              }
+            : describeEndpoint(endpoints[0]!)),
           channel: frame.channel,
           reason: formatErrorMessage(error, "unsendable"),
         });
       }
-      state.stale.add(endpoint.clientEndpointId);
+      for (const endpoint of endpoints) state.stale.add(endpoint.clientEndpointId);
       state.staleReason = "overflow";
       this.maybeFinishResync(state);
       return;
     }
     if (result === "refused") {
       this.startResync(state);
-      state.stale.add(endpoint.clientEndpointId);
+      for (const endpoint of endpoints) state.stale.add(endpoint.clientEndpointId);
     } else if (result === "over-high-water") {
       this.armOverHighWater(state);
     }

@@ -67,6 +67,16 @@ export function isSessionEndpoint(sessionId: string, endpointId: string): boolea
  */
 export type HostFrame = { type: "event"; channel: string; args: unknown[] };
 
+/**
+ * Endpoints that reach their renderers the same way (one remote Shell's link
+ * session), so a push meant for every one of them is sent once and fanned out
+ * on the far side rather than sent once per endpoint.
+ */
+export interface EndpointGroup {
+  /** Push `frame` to every endpoint of the group, as if each had been sent it. */
+  sendToAll(frame: HostFrame): void;
+}
+
 export interface EndpointRequestOptions {
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -124,6 +134,8 @@ export interface ClientEndpoint {
   readonly linkSessionId?: string;
   /** Why a remote view's endpoint closed, once it has; absent for a local view. */
   readonly closeCause?: RemoteEndpointCloseCause | null;
+  /** Shared by every endpoint of a remote view's link session; absent for a local view. */
+  readonly group?: EndpointGroup;
 }
 
 /**

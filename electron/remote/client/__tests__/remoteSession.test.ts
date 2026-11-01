@@ -96,7 +96,7 @@ import { installHostMetricsHostWith } from "../../metrics/hostMetricsHost.js";
 import { MetricsLinkMethod } from "../../metrics/linkMethods.js";
 import { LinkMethod } from "../../host/linkMethods.js";
 import type { LinkSession } from "../../link/session.js";
-import { ControlKind } from "../../link/messages.js";
+import { ControlKind, EventKind } from "../../link/messages.js";
 
 const HOST_CHANNEL = "git:get-file-diff";
 const SHELL_CHANNEL = "window:new";
@@ -108,6 +108,7 @@ const HOST_ID = "studio-01";
 const VIEW_A = 11; // studio-01:proj-1
 const VIEW_B = 12; // studio-01:proj-2
 const VIEW_LOCAL = 13; // proj-1 on this machine
+const VIEW_C = 14; // studio-01:proj-1, a second view of the project
 
 function memoryStore(): RemoteHostsStore {
   let value: { hosts: HostDescriptor[] } | undefined;
@@ -459,6 +460,72 @@ describe("remote session wiring", () => {
       { channel: EVENT_CHANNEL, args: ["term-all", "hi"] },
     ]);
     expect(h.sink.delivered.has(VIEW_LOCAL)).toBe(false);
+  });
+
+  it("sends a global broadcast across the link once for all of a Shell's views (#15902)", async () => {
+    projectKeys.set(VIEW_C, `${HOST_ID}:proj-1`);
+    await startHarness();
+    const hostLinks: LinkSession[] = [];
+    cleanups.push(h.server.onSession((ctx) => hostLinks.push(ctx.session)));
+    await connect();
+    await invoke(HOST_CHANNEL, VIEW_A, {});
+    await invoke(HOST_CHANNEL, VIEW_B, {});
+    await invoke(HOST_CHANNEL, VIEW_C, {});
+    expect(hostLinks).toHaveLength(1);
+    const post = vi.spyOn(hostLinks[0]!, "post");
+
+    broadcastToRenderer(EVENT_CHANNEL, "term-all", "hi");
+
+    for (const view of [VIEW_A, VIEW_B, VIEW_C]) {
+      await waitFor(() => (h.sink.delivered.get(view)?.length ?? 0) === 1);
+      expect(h.sink.delivered.get(view)).toEqual([
+        { channel: EVENT_CHANNEL, args: ["term-all", "hi"] },
+      ]);
+    }
+    const events = post.mock.calls
+      .map(([message]) => message)
+      .filter((message) => message.lane === Lane.EVENTS && message.kind === EventKind.EVENT);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.body).toEqual({
+      endpointId: null,
+      channel: EVENT_CHANNEL,
+      args: ["term-all", "hi"],
+    });
+    expect(h.sink.delivered.has(VIEW_LOCAL)).toBe(false);
+
+    // In order with the events addressed to one view, on the same lane.
+    broadcastToProjectRenderers("proj-1", EVENT_CHANNEL, "before");
+    broadcastToRenderer(EVENT_CHANNEL, "all");
+    broadcastToProjectRenderers("proj-1", EVENT_CHANNEL, "after");
+    const history = (view: number) =>
+      (h.sink.delivered.get(view) ?? []).map((event) => event.args[0]);
+    await waitFor(() => history(VIEW_A).includes("after") && history(VIEW_C).includes("after"));
+    for (const view of [VIEW_A, VIEW_C]) {
+      expect(history(view)).toEqual(["term-all", "before", "all", "after"]);
+    }
+    // proj-2's view hears only the global ones, both ahead of "after" on the lane.
+    expect(history(VIEW_B)).toEqual(["term-all", "all"]);
+  });
+
+  it("keeps a global broadcast from a view the host turned away at its endpoint cap", async () => {
+    projectKeys.set(VIEW_C, `${HOST_ID}:proj-1`);
+    await startHarness({ maxEndpoints: 2 });
+    await connect();
+    await invoke(HOST_CHANNEL, VIEW_A, {});
+    await invoke(HOST_CHANNEL, VIEW_B, {});
+    const refused = await invoke(HOST_CHANNEL, VIEW_C, {});
+    expect(refused).toMatchObject({ ok: false, error: { code: "NOT_FOUND" } });
+
+    broadcastToRenderer(EVENT_CHANNEL, "term-all", "hi");
+    // Behind the broadcast on the same lane, so once it lands the broadcast has had its chance at view C.
+    broadcastToRenderer(EVENT_CHANNEL, "sentinel");
+    const history = (view: number) =>
+      (h.sink.delivered.get(view) ?? []).map((event) => event.args[0]);
+    await waitFor(() => history(VIEW_A).includes("sentinel"));
+    await waitFor(() => history(VIEW_B).includes("sentinel"));
+    expect(history(VIEW_A)).toEqual(["term-all", "sentinel"]);
+    expect(history(VIEW_B)).toEqual(["term-all", "sentinel"]);
+    expect(h.sink.delivered.has(VIEW_C)).toBe(false);
   });
 
   it("resolves HOST_DISCONNECTED immediately while the host is down", async () => {

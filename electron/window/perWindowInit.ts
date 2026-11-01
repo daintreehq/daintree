@@ -1,6 +1,7 @@
 import { BrowserWindow, session, webContents } from "electron";
 import type { HandlerDependencies } from "../ipc/types.js";
 import { sendToRenderer } from "../ipc/handlers.js";
+import { broadcastToRemoteEndpoints } from "../ipc/utils.js";
 import {
   clearPortHolderWebContentsIfCurrent,
   getAppWebContents,
@@ -21,7 +22,6 @@ import { AgentUpdateHandler } from "../services/AgentUpdateHandler.js";
 import { PortalManager } from "../services/PortalManager.js";
 import { EventBuffer } from "../services/EventBuffer.js";
 import { CHANNELS } from "../ipc/channels.js";
-import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
 import { createApplicationMenu, rebuildApplicationMenuIfStale } from "../menu.js";
 import { onPluginToursChanged } from "../services/plugin/PluginTourRegistry.js";
 import { onProjectPresenceChanged } from "./projectPresenceChanges.js";
@@ -69,15 +69,7 @@ export function __resetPerWindowInitForTests(): void {
  * stay as they are; a remote view has no window here to loop over.
  */
 function pushHostEventToRemoteViews(name: string, payload: unknown): void {
-  const registry = getEndpointRegistry();
-  if (!registry.hasRemote()) return;
-  for (const endpoint of registry.getRemote()) {
-    try {
-      endpoint.send({ type: "event", channel: CHANNELS.EVENTS_PUSH, args: [{ name, payload }] });
-    } catch {
-      // A closing link must not break delivery to the remaining endpoints.
-    }
-  }
+  broadcastToRemoteEndpoints(CHANNELS.EVENTS_PUSH, [{ name, payload }]);
 }
 
 /**
