@@ -349,7 +349,10 @@ export function deleteLocalData(): Promise<DecisionsLocalDeleteResult> {
   return serialize(async () => {
     const outcome = await (await runningService()).eraseLocalData();
     if (outcome.result === "failed") return outcome;
-    return { result: outcome.result, status: await getDecisionsStatus() };
+    const status = await getDecisionsStatus();
+    return outcome.result === "deleted"
+      ? { result: "deleted", status }
+      : { result: "incomplete", erased: outcome.erased, status };
   });
 }
 
