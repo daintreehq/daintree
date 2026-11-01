@@ -1,7 +1,6 @@
 import { useCallback, useEffect } from "react";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { useRemoteHostsStore } from "@/store/remoteHostsStore";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 /**
  * This machine's host list, live: loads on mount and follows the host list,
@@ -12,15 +11,10 @@ export function useRemoteHosts() {
   const loaded = useRemoteHostsStore((s) => s.loaded);
   const loadError = useRemoteHostsStore((s) => s.loadError);
 
-  const refresh = useCallback(async () => {
-    try {
-      useRemoteHostsStore.getState().setHosts(await remoteHostsClient.list());
-    } catch (error) {
-      useRemoteHostsStore
-        .getState()
-        .setLoadError(formatErrorMessage(error, "Couldn't load the host list"));
-    }
-  }, []);
+  const refresh = useCallback(
+    () => useRemoteHostsStore.getState().loadHosts(() => remoteHostsClient.list()),
+    []
+  );
 
   useEffect(() => {
     const off = remoteHostsClient.onEvent((event) =>

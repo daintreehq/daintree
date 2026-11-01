@@ -40,6 +40,16 @@ function report(hostId: string, sampledAt: number): HostMetricsSummary {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 beforeEach(() => useRemoteHostsStore.getState().reset());
 
 describe("remoteHostsStore", () => {
@@ -119,6 +129,64 @@ describe("remoteHostsStore", () => {
       connection: { status: "unreachable", lastSeenAt: 5, detail: null },
     });
     expect(useRemoteHostsStore.getState().hosts[0]!.summary).toBeNull();
+  });
+
+  it("takes a read's list, or says why it couldn't", async () => {
+    const store = useRemoteHostsStore.getState();
+    await store.loadHosts(async () => {
+      throw new Error("socket closed");
+    });
+    expect(useRemoteHostsStore.getState()).toMatchObject({
+      hosts: [],
+      loaded: true,
+      loadError: "socket closed",
+    });
+
+    await store.loadHosts(async () => [host]);
+    expect(useRemoteHostsStore.getState()).toMatchObject({
+      hosts: [host],
+      loaded: true,
+      loadError: null,
+    });
+  });
+
+  it("keeps a list that landed while a read was out over that read's older answer", async () => {
+    const early = deferred<HostListEntry[]>();
+    const store = useRemoteHostsStore.getState();
+    const loading = store.loadHosts(() => early.promise);
+    store.applyEvent({ type: "hosts-changed", hosts: [host] });
+    early.resolve([]);
+    await loading;
+    expect(useRemoteHostsStore.getState().hosts).toEqual([host]);
+  });
+
+  it("drops an older read's failure once a newer list landed", async () => {
+    const early = deferred<HostListEntry[]>();
+    const store = useRemoteHostsStore.getState();
+    const loading = store.loadHosts(() => early.promise);
+    store.applyEvent({ type: "hosts-changed", hosts: [host] });
+    early.reject(new Error("socket closed"));
+    await loading;
+    expect(useRemoteHostsStore.getState()).toMatchObject({ hosts: [host], loadError: null });
+  });
+
+  it("lets the newest of two reads win, whichever answers last", async () => {
+    const older = deferred<HostListEntry[]>();
+    const store = useRemoteHostsStore.getState();
+    const first = store.loadHosts(() => older.promise);
+    await store.loadHosts(async () => [host]);
+    older.resolve([]);
+    await first;
+    expect(useRemoteHostsStore.getState().hosts).toEqual([host]);
+  });
+
+  it("drops a read made before a reset", async () => {
+    const early = deferred<HostListEntry[]>();
+    const loading = useRemoteHostsStore.getState().loadHosts(() => early.promise);
+    useRemoteHostsStore.getState().reset();
+    early.resolve([host]);
+    await loading;
+    expect(useRemoteHostsStore.getState()).toMatchObject({ hosts: [], loaded: false });
   });
 
   it("ignores events it has no use for", () => {

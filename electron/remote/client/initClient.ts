@@ -938,6 +938,9 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   const unregister = registerRemoteService("remoteHostsClient", client);
   const unregisterWindowHosts = registerRemoteService("windowHosts", client);
   const unregisterSetup = registerRemoteService("hostSetup", setup);
+  // Views restored before Remote Hosts started read an empty list, and nothing
+  // else tells them the configured hosts until one is dialled or edited.
+  broadcastLocal({ type: "hosts-changed", hosts: client.list() });
   return {
     client,
     onEndpointOpened: (listener) => manager.onEndpointOpened(listener),

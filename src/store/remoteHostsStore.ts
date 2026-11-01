@@ -8,6 +8,7 @@ import type {
   OperationProgress,
 } from "@shared/types/remoteHosts";
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 export interface HostInstallState {
   connection: HostConnection;
@@ -25,6 +26,12 @@ interface RemoteHostsStoreState {
 
   setHosts: (hosts: HostListEntry[]) => void;
   setLoadError: (message: string | null) => void;
+  /**
+   * Reads the whole list with `read`. Its answer, or its failure, is dropped
+   * when a fuller list landed after it was asked for: a read made before
+   * Remote Hosts started can answer empty after the event that listed them.
+   */
+  loadHosts: (read: () => Promise<HostListEntry[]>) => Promise<void>;
   trackInstall: (opId: OperationId, connection: HostConnection) => void;
   applyEvent: (event: RemoteHostsEvent) => void;
   /** A host's latest report, as host metrics pushes it. */
@@ -36,13 +43,31 @@ function initial(): Pick<RemoteHostsStoreState, "hosts" | "loaded" | "loadError"
   return { hosts: [], loaded: false, loadError: null, installs: {} };
 }
 
+/** Bumped by every whole list, from any source, and by a reset; never goes back. */
+let listEpoch = 0;
+
 /** The Settings → Hosts view of this machine's host list. Device-owned, never per project. */
 export const useRemoteHostsStore = create<RemoteHostsStoreState>((set) => ({
   ...initial(),
 
-  setHosts: (hosts) => set({ hosts, loaded: true, loadError: null }),
+  setHosts: (hosts) => {
+    listEpoch += 1;
+    set({ hosts, loaded: true, loadError: null });
+  },
 
   setLoadError: (loadError) => set({ loadError, loaded: true }),
+
+  loadHosts: async (read) => {
+    const askedAt = ++listEpoch;
+    try {
+      const hosts = await read();
+      if (askedAt === listEpoch) set({ hosts, loaded: true, loadError: null });
+    } catch (error) {
+      if (askedAt === listEpoch) {
+        set({ loadError: formatErrorMessage(error, "Couldn't load the host list"), loaded: true });
+      }
+    }
+  },
 
   trackInstall: (opId, connection) =>
     set((state) => ({
@@ -53,6 +78,7 @@ export const useRemoteHostsStore = create<RemoteHostsStoreState>((set) => ({
     set((state) => {
       switch (event.type) {
         case "hosts-changed":
+          listEpoch += 1;
           return { hosts: event.hosts, loaded: true, loadError: null };
         case "connection-changed": {
           const up = event.connection.status === "connected";
@@ -105,5 +131,8 @@ export const useRemoteHostsStore = create<RemoteHostsStoreState>((set) => ({
       };
     }),
 
-  reset: () => set(initial()),
+  reset: () => {
+    listEpoch += 1;
+    set(initial());
+  },
 }));
