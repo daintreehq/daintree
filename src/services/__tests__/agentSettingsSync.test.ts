@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentSettings } from "@shared/types";
+import { DEFAULT_AGENT_SETTINGS, type AgentSettings } from "@shared/types";
 import type { ProjectViewLifecyclePhase } from "@/lib/viewCacheState";
 
 vi.mock("@/utils/logger", () => ({ logWarn: vi.fn(), logError: vi.fn() }));
@@ -85,6 +85,32 @@ describe("initAgentSettingsSync (#14700)", () => {
     lifecycle.emit("active");
 
     expect(store.refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads through a fresh session's hydrate answer, and through the host without one", async () => {
+    dispose = initAgentSettingsSync();
+    const hydrated = (agentSettings: AgentSettings | undefined) => ({
+      hydrated: Promise.resolve({
+        terminalConfig: undefined,
+        agentSettings,
+        agentDefaults: undefined,
+      }),
+    });
+
+    notifyHostResync(hydrated(saved));
+    // A host that never saved any answers none, as its own read would.
+    notifyHostResync(hydrated(undefined));
+    notifyHostResync({ hydrated: Promise.resolve(null) });
+    const reads = store.refresh.mock.calls.map(
+      ([read]) => read as () => Promise<AgentSettings | undefined>
+    );
+
+    await expect(reads[0]!()).resolves.toBe(saved);
+    await expect(reads[1]!()).resolves.toEqual(DEFAULT_AGENT_SETTINGS);
+    expect(bridge.get).not.toHaveBeenCalled();
+    bridge.get.mockResolvedValueOnce(saved);
+    await expect(reads[2]!()).resolves.toBe(saved);
+    expect(bridge.get).toHaveBeenCalledTimes(1);
   });
 
   it("keeps what it had when the host can't be read", async () => {

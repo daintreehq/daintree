@@ -33,7 +33,7 @@ import { initAgentDefaultsSync } from "../agentDefaultsSync";
 import { useAgentPreferencesStore } from "@/store/agentPreferencesStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
-import { notifyHostResync } from "@/store/hostResyncSignal";
+import { notifyHostResync, type HydratedSettings } from "@/store/hostResyncSignal";
 
 function boot(agentDefaults?: AgentDefaultsSnapshot) {
   bootMock.getSafeBootPromise.mockResolvedValue({ ok: true, result: { agentDefaults } });
@@ -244,6 +244,48 @@ describe("initAgentDefaultsSync (#13345)", () => {
 
     expect(useHelpPanelStore.getState().preferredAgentId).toBe("codex");
     expect(useAgentPreferencesStore.getState().defaultAgent).toBe("gemini");
+  });
+
+  it("takes the host's defaults from a fresh session's hydrate answer, and reads an older host's", async () => {
+    boot({ assistantAgentId: "claude" });
+    dispose = initAgentDefaultsSync();
+    await settle();
+    const hydrated = (agentDefaults: AgentDefaultsSnapshot | undefined) => ({
+      hydrated: Promise.resolve({
+        terminalConfig: undefined,
+        agentSettings: undefined,
+        agentDefaults,
+      }),
+    });
+
+    notifyHostResync(hydrated({ assistantAgentId: "codex", defaultAgent: "gemini" }));
+    await settle();
+    expect(clientMock.get).not.toHaveBeenCalled();
+    expect(useAgentPreferencesStore.getState().defaultAgent).toBe("gemini");
+
+    clientMock.get.mockResolvedValue({ assistantAgentId: "codex", defaultAgent: "codex" });
+    notifyHostResync(hydrated(undefined));
+    await settle();
+    expect(clientMock.get).toHaveBeenCalledTimes(1);
+    expect(useAgentPreferencesStore.getState().defaultAgent).toBe("codex");
+  });
+
+  it("drops a hydrate answer that a push overtook while the resync waited", async () => {
+    boot({ assistantAgentId: "claude" });
+    dispose = initAgentDefaultsSync();
+    await settle();
+    let answer: (agentDefaults: AgentDefaultsSnapshot) => void = () => {};
+    const hydrated = new Promise<HydratedSettings>((resolve) => {
+      answer = (agentDefaults) =>
+        resolve({ terminalConfig: undefined, agentSettings: undefined, agentDefaults });
+    });
+
+    notifyHostResync({ hydrated });
+    clientMock.push({ assistantAgentId: "codex", defaultAgent: "codex" });
+    answer({ assistantAgentId: "claude", defaultAgent: "gemini" });
+    await settle();
+
+    expect(useAgentPreferencesStore.getState().defaultAgent).toBe("codex");
   });
 
   it("does nothing without the agent defaults bridge", () => {

@@ -189,6 +189,36 @@ describe("rehydrateHostProjectState", () => {
     expect(drafts.restoreProjectDraftInputs).not.toHaveBeenCalled();
   });
 
+  it("hands over the settings its answer carried, only for this view's current answer", async () => {
+    const settings = {
+      terminalConfig: { scrollbackLines: 5000 },
+      agentSettings: { agents: {} },
+      agentDefaults: { defaultAgent: "codex" },
+    };
+    const onHydrated = vi.fn();
+    hydrate.mockResolvedValue(hostSaved({ workspaceId: "proj-2", ...settings }));
+    await rehydrateHostProjectState("proj-1", {
+      isCurrent: current,
+      authoritative: false,
+      onHydrated,
+    });
+    hydrate.mockResolvedValue(hostSaved(settings));
+    await rehydrateHostProjectState("proj-1", {
+      isCurrent: () => false,
+      authoritative: false,
+      onHydrated,
+    });
+    expect(onHydrated).not.toHaveBeenCalled();
+
+    await rehydrateHostProjectState("proj-1", {
+      isCurrent: current,
+      authoritative: false,
+      onHydrated,
+    });
+    expect(onHydrated).toHaveBeenCalledTimes(1);
+    expect(onHydrated).toHaveBeenCalledWith(settings);
+  });
+
   it("rebases draft persistence on the host's snapshot, so a restored draft that is then sent is deleted on the host", async () => {
     // This view hydrated before the host had any draft for the project.
     draftInputPersistence.primeProject("proj-1", {});
