@@ -29,6 +29,13 @@ interface IssueBadgeProps {
   onOpen?: () => void;
   /** Names the worktree the issue is linked to in the reference's accessible name. */
   worktreeLabel?: string;
+  /**
+   * Where the hover card opens. Sharing a line with a PR reference, a card
+   * opening to the right lands on the PR, so the pointer cannot reach it
+   * without first leaving both; that row opens it above, which stays clear of
+   * the PR whether it sits beside the issue or has wrapped beneath it.
+   */
+  hoverCardSide?: "right" | "top";
 }
 
 export function IssueBadge({
@@ -38,6 +45,7 @@ export function IssueBadge({
   worktreePath,
   onOpen,
   worktreeLabel,
+  hoverCardSide = "right",
 }: IssueBadgeProps) {
   const { data, loading, error, missingCredential, providerId, fetchTooltip, reset } =
     useIssueTooltip(worktreePath, issueNumber, worktreeIssueLinkTarget(provenance ?? {}));
@@ -89,8 +97,10 @@ export function IssueBadge({
           data-no-dnd
           className={cn(
             // A bounded control with its own plate, on the text's own x: the
-            // negative margin cancels the padding the plate is drawn on.
-            "relative -mx-1 flex min-w-0 items-center gap-1 rounded-[var(--radius-sm)] px-1 text-left text-xs cursor-pointer transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary after:absolute after:inset-x-0 after:-inset-y-1 after:content-['']",
+            // negative margin cancels the padding the plate is drawn on. Sized
+            // to its content like the PR beside it, so neither reference claims
+            // the empty card to its right as part of its target.
+            "relative -mx-1 flex w-fit max-w-full min-w-0 items-center gap-1 rounded-[var(--radius-sm)] px-1 text-left text-xs cursor-pointer transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary after:absolute after:inset-x-0 after:-inset-y-1 after:content-['']",
             freshnessClass(freshnessLevel)
           )}
           aria-label={
@@ -108,26 +118,30 @@ export function IssueBadge({
             )}
             aria-hidden="true"
           />
-          <span
-            className={cn(
-              "truncate flex-1 min-w-0",
-              missingCredential ? "text-text-secondary" : "text-text-primary"
-            )}
-          >
-            {issueTitle ||
-              (hideColdNumber ? null : (
-                // The number in the line's own ink; the issue glyph beside it
-                // carries the state in hue, as the PR line does.
-                <span className="font-mono">{issueLabel}</span>
-              ))}
-          </span>
+          {/* The reference in the PR's ink, so an issue and its PR read as one
+              pair of the same kind of thing; the glyph carries the hue. A title,
+              where the issue stands in for a displaced headline, follows the
+              reference rather than replacing it. */}
+          {(issueTitle || !hideColdNumber) && (
+            <span className="shrink-0 font-mono text-text-secondary">{issueLabel}</span>
+          )}
+          {issueTitle && (
+            <span
+              className={cn(
+                "truncate min-w-0",
+                missingCredential ? "text-text-secondary" : "text-text-primary"
+              )}
+            >
+              {issueTitle}
+            </span>
+          )}
           {showPausedGlyph && (
             <CloudOff className="w-3 h-3 shrink-0 text-text-secondary" aria-hidden="true" />
           )}
         </button>
       </TooltipTrigger>
       <TooltipContent
-        side="right"
+        side={hoverCardSide}
         align="start"
         className="p-3"
         {...HOVER_CARD_EVENT_FENCE}

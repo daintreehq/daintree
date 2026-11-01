@@ -131,7 +131,7 @@ export function PRBadge({
           data-no-dnd
           // A bounded control with its own plate, on the text's own x: the
           // negative margin cancels the padding the plate is drawn on.
-          className="relative -mx-1 flex min-w-0 items-center gap-1 rounded-[var(--radius-sm)] px-1 text-left text-xs cursor-pointer transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary after:absolute after:inset-x-0 after:-inset-y-1 after:content-['']"
+          className="relative -mx-1 flex w-fit max-w-full min-w-0 items-center gap-1 rounded-[var(--radius-sm)] px-1 text-left text-xs cursor-pointer transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary after:absolute after:inset-x-0 after:-inset-y-1 after:content-['']"
           aria-label={ariaLabel}
         >
           {isSubordinate && (
@@ -144,25 +144,24 @@ export function PRBadge({
             )}
             aria-hidden="true"
           />
-          {prTitle ? (
+          <span
+            // The number in the line's own ink; the state glyph beside it
+            // carries open/merged in hue, so a failing run's red mark is
+            // the only colour on the line that argues with it.
+            className="shrink-0 font-mono text-text-secondary"
+          >
+            #{prNumber}
+          </span>
+          {prTitle && (
             // The IssueBadge's subordinate title form, so a displaced PR and a
             // displaced issue read as the same kind of line.
             <span
               className={cn(
-                "truncate flex-1 min-w-0",
+                "truncate min-w-0",
                 missingCredential ? "text-text-secondary" : "text-text-primary"
               )}
             >
               {prTitle}
-            </span>
-          ) : (
-            <span
-              // The number in the line's own ink; the state glyph beside it
-              // carries open/merged in hue, so a failing run's red mark is
-              // the only colour on the line that argues with it.
-              className="font-mono text-text-secondary"
-            >
-              #{prNumber}
             </span>
           )}
           {ciVisual && !missingCredential && (
