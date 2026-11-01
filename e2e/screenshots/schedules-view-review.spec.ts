@@ -636,8 +636,9 @@ function sweepHistory(ids: SeededSchedules, now: number) {
 /** Open a terminal pane and return its id, for a run that still has one. */
 async function openShellPane(page: Page): Promise<string> {
   const created = await dispatchAction<{ terminalId?: string }>(page, "terminal.new");
+  if (!created.ok) throw new Error(`terminal.new failed: ${JSON.stringify(created.error)}`);
   const id = created.result?.terminalId;
-  if (!id) throw new Error(`terminal.new gave no terminal: ${JSON.stringify(created.error)}`);
+  if (!id) throw new Error("terminal.new gave no terminal id");
   await page.locator(`[data-panel-id="${id}"]`).waitFor({ state: "visible", timeout: T_LONG });
   return id;
 }
