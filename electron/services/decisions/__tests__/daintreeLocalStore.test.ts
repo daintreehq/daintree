@@ -29,6 +29,7 @@ import {
   DECISIONS_STORE_MAX_BATCH,
   DecisionsStoreUnavailableError,
   eraseDecisionsData,
+  hasDecisionsData,
 } from "../daintreeLocalStore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -470,6 +471,39 @@ describe("DaintreeLocalStore", () => {
       value: "1",
     });
     expect(await new DaintreeLocalStore(sqlite).nextAlias()).toBe(1);
+  });
+
+  it("commits the erase with synchronous FULL and hands the connection back at its own level", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    await store.commitNewQuestion(row("q1", 1), item("o1", "q1"));
+    await store.close();
+    const levels: number[] = [];
+    const original = sqlite.transaction.bind(sqlite);
+    vi.spyOn(sqlite, "transaction").mockImplementation(((fn: (...args: unknown[]) => unknown) => {
+      levels.push(Number(sqlite.pragma("synchronous", { simple: true })));
+      return original(fn);
+    }) as typeof sqlite.transaction);
+
+    eraseDecisionsData(sqlite);
+
+    expect(levels).toEqual([SYNCHRONOUS_FULL]);
+    expect(sqlite.pragma("synchronous", { simple: true })).toBe(SYNCHRONOUS_NORMAL);
+  });
+
+  it("says whether any Decisions row is stored, in any of its tables", async () => {
+    expect(hasDecisionsData(sqlite)).toBe(false);
+    sqlite
+      .prepare("INSERT INTO app_state (key, value) VALUES (?, ?)")
+      .run("unrelated", JSON.stringify(1));
+    expect(hasDecisionsData(sqlite)).toBe(false);
+
+    const store = new DaintreeLocalStore(sqlite);
+    await store.appendAudit({ at: "a", event: "x" });
+    await store.close();
+    expect(hasDecisionsData(sqlite)).toBe(true);
+
+    eraseDecisionsData(sqlite);
+    expect(hasDecisionsData(sqlite)).toBe(false);
   });
 
   it("refuses to erase while disk space is critical", async () => {
