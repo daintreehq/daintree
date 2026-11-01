@@ -1881,6 +1881,80 @@ describe("spawnedBy propagation", () => {
   });
 });
 
+// A scheduled run's pane keeps its schedule and run across a restart (#15977),
+// and only ever as a pair.
+describe("scheduled run provenance across a restore", () => {
+  const RUN = { scheduleId: "schedule-1", runId: "run-1" };
+  const builders = [
+    [
+      "backend match",
+      (saved: SavedSnapshot) =>
+        buildArgsForBackendTerminal({ id: "t1", cwd: "/p", kind: "terminal" }, saved, "/p"),
+    ],
+    [
+      "reconnect fallback",
+      (saved: SavedSnapshot) =>
+        buildArgsForReconnectedFallback({ id: "t1", cwd: "/p" }, saved, "/p"),
+    ],
+    [
+      "respawn",
+      (saved: SavedSnapshot) => buildArgsForRespawn(saved, "terminal", "/p", {}, false, undefined),
+    ],
+  ] as const;
+
+  it.each(builders)("survives save -> disk -> %s -> save", (_label, build) => {
+    const snapshot = serializePtyPanel({
+      id: "t1",
+      title: "Nightly",
+      kind: "terminal",
+      launchAgentId: "claude",
+      command: "claude",
+      agentSessionId: "sess-1",
+      cwd: "/p",
+      location: "grid",
+      cols: 80,
+      rows: 24,
+      spawnedBy: "schedule",
+      scheduledRun: RUN,
+    } as PtyPanelData);
+    expect(snapshot).toMatchObject({ spawnedBy: "schedule", scheduledRun: RUN });
+
+    const onDisk = JSON.parse(JSON.stringify({ ...snapshot, id: "t1", location: "grid" }));
+    const args = build(onDisk);
+    // Premise: the builder brought back an agent pane, not a bare shell.
+    expect(args.launchAgentId).toBe("claude");
+    expect(args).toMatchObject({ spawnedBy: "schedule", scheduledRun: RUN });
+
+    const restored = {
+      id: "t1",
+      title: args.title ?? "Nightly",
+      kind: "terminal",
+      cwd: args.cwd,
+      location: "grid",
+      cols: 80,
+      rows: 24,
+      spawnedBy: args.spawnedBy,
+      scheduledRun: args.scheduledRun,
+    } as PtyPanelData;
+    expect(serializePtyPanel(restored)).toMatchObject({
+      spawnedBy: "schedule",
+      scheduledRun: RUN,
+    });
+  });
+
+  it.each(builders)("drops a half pair from disk on a %s", (_label, build) => {
+    const base = { id: "t1", kind: "terminal" as const, cwd: "/p", location: "grid" };
+
+    const sourceOnly = build({ ...base, spawnedBy: "schedule" });
+    expect(sourceOnly.spawnedBy).toBeUndefined();
+    expect(sourceOnly.scheduledRun).toBeUndefined();
+
+    const strayRun = build({ ...base, spawnedBy: "palette", scheduledRun: RUN });
+    expect(strayRun.spawnedBy).toBe("palette");
+    expect(strayRun.scheduledRun).toBeUndefined();
+  });
+});
+
 // Regression for #5765: the sticky everDetectedAgent flag must survive every
 // reconnect/hydration builder so a reload doesn't drop it and then expose the
 // original trash-on-exit bug.

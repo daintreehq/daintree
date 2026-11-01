@@ -3,6 +3,7 @@ import {
   buildMissingCliContinueArgs,
   buildMissingCliRelaunchOptions,
   findEquivalentMissingCliGate,
+  missingCliContinueScheduledRun,
 } from "@/utils/missingCliGate";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 
@@ -80,6 +81,13 @@ describe("buildMissingCliRelaunchOptions", () => {
     expect(buildMissingCliRelaunchOptions(gate({ launchAgentId: undefined }))).toBeNull();
   });
 
+  it("runs a scheduled run's gate anyway as the same run (#15977)", () => {
+    const run = { scheduleId: "schedule-1", runId: "run-1" };
+    expect(
+      buildMissingCliRelaunchOptions(gate({ spawnedBy: "schedule", scheduledRun: run }))
+    ).toMatchObject({ spawnedBy: "schedule", scheduledRun: run });
+  });
+
   it("normalises any non-dock location to the grid", () => {
     expect(buildMissingCliRelaunchOptions(gate({ location: "trash" }))?.location).toBe("grid");
     expect(buildMissingCliRelaunchOptions(gate({ location: "dock" }))?.location).toBe("dock");
@@ -116,6 +124,19 @@ describe("buildMissingCliContinueArgs", () => {
       spawnedBy: "mcp",
       focusPolicy: "preserve",
     });
+  });
+
+  // #15977: no argument can claim a schedule source, so the continued launch
+  // takes its run as the host's dispatch option instead.
+  it("hands a scheduled run's gate on as the run, never as an argument", () => {
+    const run = { scheduleId: "schedule-1", runId: "run-1" };
+    const scheduled = gate({ spawnedBy: "schedule", scheduledRun: run });
+
+    const args = buildMissingCliContinueArgs(scheduled);
+    expect(args).not.toHaveProperty("scheduledRun");
+    expect(args?.spawnedBy).toBeUndefined();
+    expect(missingCliContinueScheduledRun(scheduled)).toEqual(run);
+    expect(missingCliContinueScheduledRun(gate({ spawnedBy: "mcp" }))).toBeUndefined();
   });
 
   // The whole point of re-dispatching is that the launcher rebuilds these

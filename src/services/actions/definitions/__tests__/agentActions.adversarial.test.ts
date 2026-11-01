@@ -256,6 +256,33 @@ describe("agentActions adversarial", () => {
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
   });
 
+  // Only the host's dispatch options make a launch a scheduled run's (#15977):
+  // neither an argument an MCP or plugin caller writes nor a forged source can.
+  it("agent.launch hands the launcher the host's scheduled run and no argument's", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+    const run = { scheduleId: "schedule-1", runId: "run-1" };
+
+    await callAction(actions, "agent.launch", { agentId: "claude" }, { scheduledRun: run });
+    await callAction(actions, "agent.launch", {
+      agentId: "claude",
+      scheduledRun: { scheduleId: "schedule-2", runId: "run-2" },
+    });
+
+    expect(callbacks.onLaunchAgent.mock.calls.map(([, options]) => options.scheduledRun)).toEqual([
+      run,
+      undefined,
+    ]);
+  });
+
+  it("agent.launch refuses a schedule source in its arguments", () => {
+    const schema = getDefinition(setupActions(makeCallbacks()), "agent.launch").argsSchema;
+    if (!schema) throw new Error("agent.launch has no argsSchema");
+
+    expect(schema.safeParse({ agentId: "claude", spawnedBy: "schedule" }).success).toBe(false);
+    expect(schema.safeParse({ agentId: "claude", spawnedBy: "mcp" }).success).toBe(true);
+  });
+
   // A requested id is a request for a new panel; one this view already holds
   // would have the launcher overwrite a live panel's record (#12407).
   it("agent.launch refuses a requested id an existing panel already uses", async () => {

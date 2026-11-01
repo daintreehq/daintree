@@ -101,6 +101,7 @@ import { notifyWorktreeTerminalAttached } from "@/services/terminal/worktreeReve
 import { actionService } from "@/services/ActionService";
 import {
   buildMissingCliContinueArgs,
+  missingCliContinueScheduledRun,
   buildMissingCliRelaunchOptions,
 } from "@/utils/missingCliGate";
 import { InputTracker } from "@/services/clearCommandDetection";
@@ -555,18 +556,22 @@ function TerminalPaneComponent({
     if (!panel || !isPtyPanel(panel)) return;
     const args = buildMissingCliContinueArgs(panel);
     if (!args) return;
+    const scheduledRun = missingCliContinueScheduledRun(panel);
 
     removePanel(id);
     const scratchpad = panel.scratchpad;
-    void actionService.dispatch("agent.launch", args, { source: "user" }).then((result) => {
-      if (!scratchpad || !result.ok) return;
-      const launched: unknown = result.result;
-      if (typeof launched !== "object" || launched === null || !("terminalId" in launched)) return;
-      const launchedId = launched.terminalId;
-      if (typeof launchedId === "string" && launchedId) {
-        usePanelStore.getState().seedScratchpad(launchedId, scratchpad);
-      }
-    });
+    void actionService
+      .dispatch("agent.launch", args, { source: "user", ...(scheduledRun && { scheduledRun }) })
+      .then((result) => {
+        if (!scratchpad || !result.ok) return;
+        const launched: unknown = result.result;
+        if (typeof launched !== "object" || launched === null || !("terminalId" in launched))
+          return;
+        const launchedId = launched.terminalId;
+        if (typeof launchedId === "string" && launchedId) {
+          usePanelStore.getState().seedScratchpad(launchedId, scratchpad);
+        }
+      });
   };
 
   // Fleet arming store for multi-select gestures. Selection treatment is

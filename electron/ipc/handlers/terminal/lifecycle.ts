@@ -240,6 +240,7 @@ import {
 import { windowsSystemTool } from "../../../utils/windowsExecutable.js";
 import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../../../shared/utils/recipeSanitizer.js";
 import { buildCommandLaunchShell } from "./commandLaunch.js";
+import { scheduledRunForRecord } from "../../../../shared/utils/scheduledRunProvenance.js";
 import { isHostThrowawayWorkspaceId } from "../../../../shared/config/hostThrowaway.js";
 
 // Longest a Windows command launch waits for the default shell's PATH search,
@@ -1290,6 +1291,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         isAssistantTerminal: isHelpLaunch || helpSessionService.isHelpTerminal(id),
         agentLaunchFlags: validatedOptions.agentLaunchFlags,
         agentModelId: validatedOptions.agentModelId,
+        scheduledRun: validatedOptions.scheduledRun,
         agentSessionId: spawnAgentSessionId,
         worktreeId: spawnWorktreeId,
         agentPresetId: validatedOptions.agentPresetId,
@@ -1408,6 +1410,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           agentModelId: info.agentModelId,
           cwd: info.cwd ?? undefined,
           branch,
+          ...scheduledRunForRecord(info),
           // A pane in the trash was the user's close, whatever ended it here.
           ...attributeClose(info, cause),
         },
@@ -1658,6 +1661,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           cwd: info.cwd ?? undefined,
           branch,
           bookmark,
+          ...scheduledRunForRecord(info),
           ...attributeClose(info, "bookmark"),
         },
         { terminalId, generation }

@@ -50,6 +50,7 @@ class MockTerminalProcess {
     lastObservedTitle?: string;
     agentLaunchFlags?: string[];
     agentModelId?: string;
+    scheduledRun?: { scheduleId: string; runId: string };
     spawnedAt: number;
     isExited: boolean;
     wasKilled: boolean;
@@ -604,6 +605,24 @@ describe("PtyManager lifecycle ledger", () => {
             agentModelId: "opus",
           }),
         })
+      );
+    });
+  });
+
+  it("names a scheduled run's ids on a trash-expiry capture (#15977)", async () => {
+    const run = { scheduleId: "schedule-1", runId: "run-1" };
+    const manager = new PtyManager();
+
+    manager.spawn("t1", spawnOptions({ launchAgentId: "claude" }));
+    shared.created[0]!.sessionId = "sess-1";
+    shared.created[0]!.info.scheduledRun = run;
+
+    manager.trash("t1");
+    shared.trashCallbacks.get("t1")!("t1");
+    await vi.waitFor(() => {
+      expect(shared.eventsEmit).toHaveBeenCalledWith(
+        "agent-session:captured",
+        expect.objectContaining({ record: expect.objectContaining({ scheduledRun: run }) })
       );
     });
   });

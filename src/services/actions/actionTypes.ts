@@ -1,6 +1,10 @@
 import type { ActionDefinition, ActionId } from "@shared/types/actions";
 import type { Worktree } from "@shared/types/worktree";
-import type { TerminalSpawnSource, AddPanelFocusPolicy } from "@shared/types/panel";
+import type {
+  TerminalSpawnSource,
+  AddPanelFocusPolicy,
+  ScheduledRunRef,
+} from "@shared/types/panel";
 import type { SettingsNavTarget } from "@/components/Settings";
 import type { AddPanelOptions } from "@/store";
 import type { PanelLimitSnapshot } from "@/store/panelLimitStore";
@@ -81,6 +85,8 @@ export interface ActionCallbacks {
       removeOnExit?: boolean;
       agentLaunchFlags?: string[];
       spawnedBy?: TerminalSpawnSource;
+      /** The scheduled run this launch is for, from `ActionContext.scheduledRun` only (#15977). */
+      scheduledRun?: ScheduledRunRef;
       /** The plugin behind a plugin dispatch, from `ActionContext.callerPluginId` only. */
       launchedByPluginId?: string;
       focusPolicy?: AddPanelFocusPolicy;

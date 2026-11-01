@@ -1,4 +1,5 @@
 import { sanitizeAgentEnv } from "./agentPresets.js";
+import { readSpawnProvenance } from "./scheduledRunProvenance.js";
 import { stripAssignedSessionIdArgs } from "../types/agentSettings.js";
 import type { PtyPanelData } from "../types/panel.js";
 import type { PanelSnapshot } from "../types/project.js";
@@ -29,6 +30,7 @@ export type PtySnapshotSource = Pick<
   | "env"
   | "agentModelId"
   | "spawnedBy"
+  | "scheduledRun"
   | "agentPresetId"
   | "agentPresetColor"
   | "originalPresetId"
@@ -82,7 +84,8 @@ export function serializePtyPanel(t: PtySnapshotSource): Partial<PanelSnapshot> 
       t.callerLaunchFlags?.length && { callerLaunchFlags: t.callerLaunchFlags }),
     ...(env && { env }),
     ...(t.agentModelId && { agentModelId: t.agentModelId }),
-    ...(t.spawnedBy && { spawnedBy: t.spawnedBy }),
+    // Written as a pair or not at all (#15977).
+    ...readSpawnProvenance(t.spawnedBy, t.scheduledRun),
     ...(t.agentPresetId && { agentPresetId: t.agentPresetId }),
     ...(t.agentPresetColor && { agentPresetColor: t.agentPresetColor }),
     ...(t.originalPresetId && { originalPresetId: t.originalPresetId }),

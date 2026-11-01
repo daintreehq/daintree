@@ -1208,6 +1208,8 @@ export const createRestartActions = (
             : restartEnv,
         agentLaunchFlags: isAgent ? nextAgentLaunchFlags : undefined,
         agentModelId: isAgent ? currentTerminal.agentModelId : undefined,
+        // The pane is still the scheduled run's after a restart (#15977).
+        scheduledRun: isAgent ? currentTerminal.scheduledRun : undefined,
         // Without this the pty-host record loses its worktree for the rest of
         // the run's life and the fleet palette files it under "No worktree"
         // while the sidebar still has it right (#12060).
@@ -2024,6 +2026,7 @@ async function respawnAgentOnPreset(
       env: restartEnv,
       agentLaunchFlags: nextLaunchFlags,
       agentModelId: terminal.agentModelId,
+      scheduledRun: terminal.scheduledRun,
       // Carried for the same reason as the restart path: a fallback hop that
       // drops it strands the run in the palette's "No worktree" bucket for
       // the rest of its life (#12060).

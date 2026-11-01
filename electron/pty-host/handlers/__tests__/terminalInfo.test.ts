@@ -96,6 +96,15 @@ describe("mapTerminalInfo", () => {
     expect(mapTerminalInfo(makeTerminal(), ctx).isAssistantTerminal).toBeUndefined();
   });
 
+  it("reports a scheduled run's ids back to main, which stamps them on the session record", () => {
+    // #15977: main's kill, shutdown and project-close captures read the run only
+    // through this mapper.
+    const ctx = createCtx();
+    const run = { scheduleId: "schedule-1", runId: "run-1" };
+    expect(mapTerminalInfo(makeTerminal({ scheduledRun: run }), ctx).scheduledRun).toEqual(run);
+    expect(mapTerminalInfo(makeTerminal(), ctx).scheduledRun).toBeUndefined();
+  });
+
   it("derives isTrashed from ptyManager.isInTrash, not the raw record", () => {
     // Lesson #4753: the in-memory TerminalInfo object never carries a
     // populated `isTrashed` field; trash status lives in PtyManager's

@@ -111,6 +111,7 @@ export function buildRestoreRecoveryLaunchOptions(
     extensionStateVersion: panel.extensionStateVersion,
     pluginId: panel.pluginId,
     spawnedBy: panel.spawnedBy,
+    scheduledRun: panel.scheduledRun,
     // The pane leaves its hold the way the user chose, still the pane restore
     // brought back, with what was last seen before it (#14017).
     restoreProvenance: panel.restoreProvenance && {

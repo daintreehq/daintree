@@ -34,6 +34,17 @@ const TitleModeSchema = z.enum(["default", "custom", "user"]);
  * staying undeclared.
  */
 const SpawnSourceSchema = z.enum(TERMINAL_SPAWN_SOURCES).optional().catch(undefined);
+/** The scheduled run a `schedule`-spawned terminal names (#15977). */
+const ScheduledRunRefSchema = z.object({
+  scheduleId: z.string().min(1),
+  runId: z.string().min(1),
+});
+/**
+ * Tolerant on read for the same reason as `spawnedBy`. Whether it stands depends
+ * on the source beside it, which `readSpawnProvenance` checks where the snapshot
+ * is restored.
+ */
+const SnapshotScheduledRunSchema = ScheduledRunRefSchema.optional().catch(undefined);
 
 // ============================================================================
 // Terminal Entry Validation Schemas
@@ -110,6 +121,7 @@ export const AppStateTerminalEntrySchema = z
     browserConsoleOpen: z.boolean().optional(),
     devPreviewConsoleOpen: z.boolean().optional(),
     spawnedBy: SpawnSourceSchema,
+    scheduledRun: SnapshotScheduledRunSchema,
     pluginId: z.string().optional(),
   })
   .passthrough()
@@ -185,6 +197,7 @@ export const TerminalSnapshotSchema = z
     callerLaunchFlags: z.array(z.string()).optional(),
     agentModelId: z.string().optional(),
     spawnedBy: SpawnSourceSchema,
+    scheduledRun: SnapshotScheduledRunSchema,
     agentPresetId: z.string().optional(),
     agentPresetColor: z.string().optional(),
     originalPresetId: z.string().optional(),
@@ -413,6 +426,9 @@ export const TerminalSpawnOptionsSchema = z.object({
   isEphemeral: z.boolean().optional(),
   agentLaunchFlags: z.array(z.string()).optional(),
   agentModelId: z.string().optional(),
+  // Listed or zod strips it, and a session captured when the agent ends no
+  // longer names its scheduled run (#15977).
+  scheduledRun: ScheduledRunRefSchema.optional(),
   // Session id already known at launch (#11782), recorded on the terminal
   // record at spawn. Must be listed here or zod strips it and the id never
   // reaches the pty-host.

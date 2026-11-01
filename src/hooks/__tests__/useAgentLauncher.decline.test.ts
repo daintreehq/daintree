@@ -283,6 +283,49 @@ describe("useAgentLauncher — the launching plugin (#14017)", () => {
   });
 });
 
+describe("useAgentLauncher — a scheduled run (#15977)", () => {
+  const RUN = { scheduleId: "schedule-1", runId: "run-1" };
+
+  beforeEach(() => {
+    addPanel.mockReset();
+    addPanel.mockResolvedValue("terminal-1");
+    setElectron(true);
+  });
+
+  afterEach(() => {
+    setElectron(false);
+  });
+
+  it("marks the pane with the schedule and its run, over the source it was given", async () => {
+    const { result } = renderHook(() => useAgentLauncher());
+
+    await act(async () => {
+      await result.current.launchAgent("claude", {
+        force: true,
+        spawnedBy: "mcp",
+        scheduledRun: RUN,
+      });
+    });
+
+    expect(addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ spawnedBy: "schedule", scheduledRun: RUN }),
+      expect.anything()
+    );
+  });
+
+  it("never stamps a schedule source that came without its run", async () => {
+    const { result } = renderHook(() => useAgentLauncher());
+
+    await act(async () => {
+      await result.current.launchAgent("claude", { force: true, spawnedBy: "schedule" });
+    });
+
+    const options = addPanel.mock.calls[0]?.[0];
+    expect(options).not.toHaveProperty("spawnedBy");
+    expect(options).not.toHaveProperty("scheduledRun");
+  });
+});
+
 describe("useAgentLauncher — no host agent ceiling (#14810)", () => {
   beforeEach(() => {
     addPanel.mockReset();

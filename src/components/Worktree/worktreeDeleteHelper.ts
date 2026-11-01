@@ -2,6 +2,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import { buildResumeCommand, stripAssignedSessionIdArgs } from "@shared/types";
 import { reconcileResumeLaunchFlags } from "@/services/agentResume";
+import { readSpawnProvenance } from "@shared/utils/scheduledRunProvenance";
 import { logWarn } from "@/utils/logger";
 
 const WORKTREE_DELETE_TERMINAL_CLOSE_TIMEOUT_MS = 10_000;
@@ -49,6 +50,9 @@ export interface WorktreeTerminalRestoreSnapshot {
   scratchpad?: PtyPanelData["scratchpad"];
   /** What the run was first asked (#14592), for the same reason. */
   firstPrompt?: PtyPanelData["firstPrompt"];
+  /** Who started it, and the scheduled run it belongs to (#15977), for the same reason. */
+  spawnedBy?: PtyPanelData["spawnedBy"];
+  scheduledRun?: PtyPanelData["scheduledRun"];
 }
 
 function sleep(ms: number): Promise<void> {
@@ -111,6 +115,7 @@ function snapshotTerminal(panel: PtyPanelData): WorktreeTerminalRestoreSnapshot 
     restoreRecovery: panel.restoreRecovery,
     ...(panel.scratchpad && { scratchpad: panel.scratchpad }),
     ...(panel.firstPrompt && { firstPrompt: panel.firstPrompt }),
+    ...readSpawnProvenance(panel.spawnedBy, panel.scheduledRun),
   };
 }
 
@@ -239,6 +244,8 @@ export async function restoreClosedTerminals(
         restoreRecovery: snap.restoreRecovery,
         ...(snap.scratchpad && { scratchpad: snap.scratchpad }),
         ...(snap.firstPrompt && { firstPrompt: snap.firstPrompt }),
+        spawnedBy: snap.spawnedBy,
+        scheduledRun: snap.scheduledRun,
         bypassLimits: true,
         focusPolicy: "preserve",
       });

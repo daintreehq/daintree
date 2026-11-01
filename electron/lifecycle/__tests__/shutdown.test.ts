@@ -1855,6 +1855,22 @@ describe("registerShutdownHandler", () => {
       // Quitting closed nothing the user had: never a Trash entry.
       expect(record.closedBy).toBe("shutdown");
       expect(record.trash).toBeUndefined();
+      expect(record).not.toHaveProperty("scheduledRun");
+    });
+
+    it("names a scheduled run's ids on the record a quit journals (#15977)", async () => {
+      const run = { scheduleId: "schedule-1", runId: "run-1" };
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
+      const ptyClient = makePtyClient({
+        getAllTerminalsAsync: vi.fn(async () => [{ ...agentTerminal, scheduledRun: run }]),
+        gracefulKillByProject: vi.fn(async () => [{ id: "t1", agentSessionId: "sess-1" }]),
+      });
+      const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
+
+      await beforeQuitCb(makeEvent());
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
+
+      expect(persistAgentSessionMock.mock.calls[0][0]).toMatchObject({ scheduledRun: run });
     });
 
     it("stops the memory-leak auto-restart before any terminal is snapshotted or killed (#14703)", async () => {

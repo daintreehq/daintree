@@ -960,6 +960,28 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
     expect(spawnArgs.worktreeId).toBe("wt-123");
   });
 
+  it("forwards a scheduled run's ids to the pty client for the session record (#15977)", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    const os = await import("os");
+    const run = { scheduleId: "schedule-1", runId: "run-1" };
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      { cwd: os.homedir(), cols: 80, rows: 24, scheduledRun: run } as unknown as Parameters<
+        typeof handler
+      >[1]
+    );
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      { cwd: os.homedir(), cols: 80, rows: 24 } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(ptyClient.spawn.mock.calls[0][1].scheduledRun).toEqual(run);
+    expect(ptyClient.spawn.mock.calls[1][1].scheduledRun).toBeUndefined();
+  });
+
   it("caches the launch command as postSpawnInput for a wrapper-less shell (#11339)", async () => {
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
@@ -2997,6 +3019,18 @@ describe("terminal close handlers - resume journaling", () => {
     expect(record.agentId).toBe("claude");
     expect(record.cwd).toBe("/repo/feature");
     expect(record.branch).toBe("feature/foo");
+    expect(record).not.toHaveProperty("scheduledRun");
+  });
+
+  it("names a scheduled run's ids on the record a kill journals (#15977)", async () => {
+    const run = { scheduleId: "schedule-1", runId: "run-1" };
+    ptyClient.getTerminalAsync.mockResolvedValue({ ...agentInfo, scheduledRun: run });
+    ptyClient.gracefulKill.mockResolvedValue("sess-abc");
+    register();
+
+    await getKillHandler()({}, "term-1");
+
+    expect(persistAgentSessionMock.mock.calls[0][0].scheduledRun).toEqual(run);
   });
 
   it("hard-kills a non-agent terminal without journaling", async () => {

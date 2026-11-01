@@ -114,6 +114,22 @@ describe("serializePtyPanel — spawnedBy", () => {
     expect(snapshot.agentPresetId).toBe("user-abc");
     expect(snapshot.agentModelId).toBe("opus");
   });
+
+  // #15977: the schedule source and its run are written together or not at all.
+  it("writes a scheduled run's source and ids as a pair", () => {
+    const run = { scheduleId: "schedule-1", runId: "run-1" };
+    expect(
+      serializePtyPanel(makePanel({ spawnedBy: "schedule", scheduledRun: run }))
+    ).toMatchObject({ spawnedBy: "schedule", scheduledRun: run });
+
+    const sourceOnly = serializePtyPanel(makePanel({ spawnedBy: "schedule" }));
+    expect("spawnedBy" in sourceOnly).toBe(false);
+    expect("scheduledRun" in sourceOnly).toBe(false);
+
+    const strayRun = serializePtyPanel(makePanel({ spawnedBy: "agent", scheduledRun: run }));
+    expect(strayRun.spawnedBy).toBe("agent");
+    expect("scheduledRun" in strayRun).toBe(false);
+  });
 });
 
 // Launch env persistence (#10922): a terminal launched via a preset/recipe

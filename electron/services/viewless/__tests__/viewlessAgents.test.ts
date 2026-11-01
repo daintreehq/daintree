@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
 import type { AgentSettings } from "../../../../shared/types/agentSettings.js";
 import { executeViewlessAction } from "../ViewlessActionExecutor.js";
+import { runAgentLaunch } from "../viewlessAgents.js";
 import {
   makeDeps,
   makeHosts,
@@ -513,6 +514,47 @@ describe("agent.launch with no frontend", () => {
     expect(result).toMatchObject({ ok: true, result: { launched: true } });
     expect(spawned(invoke)).not.toHaveProperty("launchAgentId");
     expect(spawned(invoke).title).toBe("Terminal");
+  });
+});
+
+describe("a scheduled run's agent launched with no frontend (#15977)", () => {
+  const RUN = { scheduleId: "schedule-1", runId: "run-1" };
+
+  it("marks the PTY and the saved panel with the schedule and its run", async () => {
+    const { deps, invoke, store } = launchDeps();
+
+    const result = await runAgentLaunch(
+      request("agent.launch", { agentId: "claude", prompt: "Nightly triage" }),
+      PROJECT,
+      deps,
+      { scheduledRun: RUN }
+    );
+
+    expect(result).toMatchObject({ ok: true, result: { launched: true } });
+    const payload = spawned(invoke);
+    expect(payload.scheduledRun).toEqual(RUN);
+    const snapshot = store.read()?.terminals.find((terminal) => terminal.id === payload.id);
+    expect(snapshot).toMatchObject({ spawnedBy: "schedule", scheduledRun: RUN });
+  });
+
+  it("never takes the schedule from the arguments, so an MCP caller can't claim it", async () => {
+    const { deps, invoke, store } = launchDeps();
+
+    const result = await executeViewlessAction(
+      request("agent.launch", {
+        agentId: "claude",
+        spawnedBy: "schedule",
+        scheduledRun: RUN,
+      }),
+      deps
+    );
+
+    expect(result).toMatchObject({ ok: true, result: { launched: true } });
+    const payload = spawned(invoke);
+    expect(payload).not.toHaveProperty("scheduledRun");
+    const snapshot = store.read()?.terminals.find((terminal) => terminal.id === payload.id);
+    expect(snapshot?.spawnedBy).toBe("mcp");
+    expect(snapshot).not.toHaveProperty("scheduledRun");
   });
 });
 

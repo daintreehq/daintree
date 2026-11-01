@@ -44,6 +44,7 @@ import { deleteSessionFile } from "./pty/terminalSessionPersistence.js";
 import { ledgerFactsFromSpawnOptions } from "./pty/lifecycleLedger.js";
 import { attributeClose } from "./pty/closeAttribution.js";
 import { AgentTerminalLifecycleLedger } from "../../shared/utils/agentLifecycleLedger.js";
+import { scheduledRunForRecord } from "../../shared/utils/scheduledRunProvenance.js";
 import { events } from "./events.js";
 import { keepWindowsTreeKillHelperWarm } from "../utils/windowsTreeKill.js";
 import {
@@ -1050,6 +1051,7 @@ export class PtyManager extends EventEmitter {
                 agentModelId: info.agentModelId,
                 cwd: info.cwd ?? undefined,
                 branch: branch ?? undefined,
+                ...scheduledRunForRecord(info),
                 ...close,
               },
             });

@@ -77,6 +77,7 @@ import { gracefulShutdown as runGracefulShutdown } from "./TerminalGracefulShutd
 import { handleAgentDetection as runHandleAgentDetection } from "./TerminalAgentDetection.js";
 import { offerAgentRunArgvSession } from "./agentRunArgv.js";
 import { TerminalProcessLifecycle } from "./TerminalProcessLifecycle.js";
+import { readScheduledRunRef } from "../../../shared/utils/scheduledRunProvenance.js";
 import {
   createVisibleContentSnapshot,
   type VisibleContentSnapshot,
@@ -387,6 +388,7 @@ export class TerminalProcess {
       analysisEnabled: hasLaunchHint,
       agentLaunchFlags: options.agentLaunchFlags,
       agentModelId: options.agentModelId,
+      scheduledRun: readScheduledRunRef(options.scheduledRun),
       // Recorded as the record is built, before the PTY can emit a byte
       // (#11782). The id is knowable up front for agents that accept one at
       // launch, and writing it here — rather than at teardown — is what lets it
@@ -999,6 +1001,7 @@ export class TerminalProcess {
       agentSessionId: t.agentSessionId,
       agentLaunchFlags: t.agentLaunchFlags,
       agentModelId: t.agentModelId,
+      scheduledRun: t.scheduledRun,
       spawnArgs: t.spawnArgs,
       exitCode: t.exitCode,
       exitSignal: t.exitSignal,

@@ -36,6 +36,7 @@ vi.mock("../../../utils/gitUtils.js", () => ({
 }));
 
 const SESSION_ID = "0199f8c1-2b4d-7e3a-9f10-5c6d7e8f9a0b";
+const OTHER_SESSION_ID = "0199f8c1-2b4d-7e3a-9f10-5c6d7e8f9a0c";
 
 /** Codex's real hint line, so a pattern change upstream fails these tests. */
 function codexHint(id: string): string {
@@ -586,6 +587,55 @@ describe("passive agent session capture", () => {
       expect(captured[0].record.agentId).toBe("codex");
       expect(captured[0].record.agentLaunchFlags).toBeUndefined();
       expect(captured[0].record.agentModelId).toBeUndefined();
+    });
+
+    // #15977: the record of a scheduled run's agent names the run, read off the
+    // terminal record the spawn options built.
+    it("names the scheduled run the terminal was launched for", async () => {
+      const run = { scheduleId: "schedule-1", runId: "run-1" };
+      const terminal = track(createTerminal({ scheduledRun: { ...run, extra: "dropped" } }));
+      promoteCodex(terminal);
+      mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n`);
+      mockPty(terminal).__emitExit(0);
+
+      await flushCapture();
+      expect(captured[0].record.scheduledRun).toEqual(run);
+    });
+
+    it("omits the scheduled run for an agent Daintree did not launch", async () => {
+      const terminal = track(
+        createTerminal({
+          launchAgentId: "claude",
+          scheduledRun: { scheduleId: "schedule-1", runId: "run-1" },
+        })
+      );
+      promoteCodex(terminal);
+      mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n$ `);
+      demote(terminal);
+
+      await flushCapture();
+      expect(captured[0].record.agentId).toBe("codex");
+      expect(captured[0].record).not.toHaveProperty("scheduledRun");
+    });
+
+    it("omits the scheduled run for a later run of the same CLI the user started by hand", async () => {
+      const run = { scheduleId: "schedule-1", runId: "run-1" };
+      const terminal = track(createTerminal({ scheduledRun: run }));
+      promoteCodex(terminal);
+      mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n$ `);
+      demote(terminal);
+      await flushCapture();
+      // Premise: the scheduled run's own session names it.
+      expect(captured[0].record.scheduledRun).toEqual(run);
+
+      // The detector sees the same CLI take over the surviving shell again.
+      terminal.getInfo().agentIncarnation = 1;
+      promoteCodex(terminal);
+      mockPty(terminal).__emitData(`${codexHint(OTHER_SESSION_ID)}\n$ `);
+      demote(terminal);
+      await flushCapture();
+      expect(captured[1].record.sessionId).toBe(OTHER_SESSION_ID);
+      expect(captured[1].record).not.toHaveProperty("scheduledRun");
     });
 
     it("keeps the user's locked title instead of the observed one", async () => {

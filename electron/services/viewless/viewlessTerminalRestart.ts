@@ -11,6 +11,7 @@ import {
 import { resolveAgentLaunchBaseCommandFor } from "../../../shared/utils/agentLaunchCommand.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { mergeTerminalLaunchEnv } from "../../../shared/utils/terminalLaunchOptions.js";
+import { readSpawnProvenance } from "../../../shared/utils/scheduledRunProvenance.js";
 import type { TerminalFirstPrompt } from "../../../shared/types/panel.js";
 import type { ViewlessDeps } from "./ViewlessActionExecutor.js";
 
@@ -130,6 +131,7 @@ export async function restartTerminalWithoutView(
   const keepsFirstPrompt = startsOver
     ? snapshot.firstPrompt?.via === "launch"
     : (await savedFirstPrompt(deps, projectId, terminalId)) !== undefined;
+  const { scheduledRun } = readSpawnProvenance(snapshot.spawnedBy, snapshot.scheduledRun);
 
   const layers = await deps.getLaunchEnvLayers(projectId).catch(() => null);
   const env = mergeTerminalLaunchEnv(layers?.global, layers?.project, snapshot.env);
@@ -180,6 +182,9 @@ export async function restartTerminalWithoutView(
               agentPresetColor: snapshot.agentPresetColor,
               originalAgentPresetId: snapshot.originalPresetId,
               ...(keepsFirstPrompt ? { hasFirstPrompt: true } : {}),
+              // Still the scheduled run's pane, so its next session names the
+              // run (#15977).
+              ...(scheduledRun !== undefined ? { scheduledRun } : {}),
             }
           : {}),
         ...(actionContext !== undefined ? { actionContext } : {}),

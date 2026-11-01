@@ -28,6 +28,7 @@ import { usePanelLimitStore, buildPanelLimitSnapshot } from "@/store/panelLimitS
 import { notify } from "@/lib/notify";
 import { notifyRetiredModelDropped } from "@/services/terminal/retiredModelNotice";
 import { dropRetiredAgentModel, dropUnselectedAgentModel } from "@shared/types/agentSettings";
+import { readSpawnProvenance } from "@shared/utils/scheduledRunProvenance";
 import { noteVisibleAgentLaunch } from "@/services/systemMemoryLaunchNotice";
 import {
   getDefaultTitle,
@@ -418,7 +419,8 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
       extensionStateVersion: ptyExtensionStateVersion,
       pluginId: ptyPluginId,
       ...(pluginPanelKindId !== undefined && { pluginPanelKindId }),
-      spawnedBy: options.spawnedBy,
+      // Kept as a pair (#15977): a run reference never rides another source.
+      ...readSpawnProvenance(options.spawnedBy, options.scheduledRun),
       focusPolicy: options.focusPolicy,
       excludeFromPersistence: options.excludeFromPersistence,
       removeOnExit: options.removeOnExit,

@@ -21,6 +21,7 @@ const state = vi.hoisted(() => ({
     launchAgentId?: string;
     title?: string;
     worktreeId?: string;
+    scheduledRun?: { scheduleId: string; runId: string };
   } | null,
   screen: "",
   /** How the terminal draws a key it is sent; tests set it to move a list's highlight. */
@@ -1529,6 +1530,9 @@ describe("canopy IPC", () => {
         // A view of the project is open, but it no longer holds the pane.
         state.views = [{ send: vi.fn() }];
         await trashedOnHost();
+        // A scheduled run's pane: its run is named on the record (#15977).
+        const run = { scheduleId: "schedule-1", runId: "sched-run-1" };
+        state.record = { ...state.record!, scheduledRun: run };
         ptyClient.gracefulKill.mockResolvedValueOnce("sess-9");
         const captured: unknown[] = [];
         const off = events.on("agent-session:captured", (payload) => captured.push(payload));
@@ -1543,7 +1547,12 @@ describe("canopy IPC", () => {
         expect(captured[0]).toMatchObject({
           terminalId: "run-1",
           boundary: "trash-expiry",
-          record: { sessionId: "sess-9", agentId: "claude", projectId: "project-2" },
+          record: {
+            sessionId: "sess-9",
+            agentId: "claude",
+            projectId: "project-2",
+            scheduledRun: run,
+          },
         });
         off();
       } finally {

@@ -12,6 +12,7 @@ A project can run an agent on a schedule (#15973). A due schedule launches its a
 | Editing them from a view (`window.electron.schedules`) | `electron/ipc/handlers/schedules.ts`, `shared/types/ipc/schedules.ts` |
 | Run history: the `scheduled_runs` table, registration, recorded facts | `electron/services/scheduledRuns/` |
 | Run history over `window.electron.scheduledRuns` | `electron/ipc/handlers/scheduledRuns.ts` |
+| Schedule provenance on terminals, snapshots and session records | `shared/utils/scheduledRunProvenance.ts` |
 
 ## Boundaries
 
@@ -187,13 +188,31 @@ Deleting a schedule deletes its history with it: `ScheduleStore.remove` calls `d
 
 The IPC surface is read-only: main registers runs and records their facts, so no view can write one.
 
+## Provenance
+
+A terminal launched for a scheduled run carries `spawnedBy: "schedule"` and `scheduledRun: { scheduleId, runId }` (`ScheduledRunRef`, in `shared/types/panel.ts`). The two travel as a pair: `readSpawnProvenance` drops a schedule source whose reference doesn't read, and a reference beside any other source, wherever a terminal is read back. Losing the attribution never costs the pane.
+
+| Where | What carries it |
+| --- | --- |
+| Live pane | `PtyPanelData.spawnedBy` and `scheduledRun`, kept by restarts (a view's, and main's with no view), CLI-gate relaunches, held-pane recovery and a worktree-delete rollback |
+| Saved snapshot | `PanelSnapshot.spawnedBy` and `scheduledRun`, written by `serializePtyPanel` and restored by every hydration builder |
+| PTY host | `scheduledRun` on the spawn options and the terminal record, reported back in its terminal info |
+| Session record | `AgentSessionRecord.scheduledRun`, stamped by every capture (agent exit, kill, bookmark, quit, project close, trash expiry, Canopy's host-side end) through `scheduledRunForRecord`. A capture of an agent the user started by hand in the pane doesn't take it, even the same CLI once the run's own has exited (`agentIncarnation` past 0). When a run's conversation is resumed in another pane and journaled again, the record keeps the run, as it keeps a bookmark |
+
+Only Daintree's scheduler can set it, by one of two entries, and neither reads it from action arguments:
+
+- **A window driving the project**: `ActionService.dispatch("agent.launch", args, { scheduledRun })`. The dispatch option is stamped onto `ActionContext.scheduledRun`, never from a `contextOverride`, and `agent.launch` hands it to the launcher. The MCP and plugin bridges build their own dispatch options and never set it.
+- **Main with no view**: `runAgentLaunch(request, project, deps, { scheduledRun })`. The generic viewless executor, which serves MCP, never passes the fourth argument.
+
+`agent.launch` and the other spawn actions validate `spawnedBy` against `TerminalSpawnSourceSchema`, which leaves `"schedule"` out, so an MCP or plugin caller can't claim it in arguments either. A terminal launched any other way carries no `scheduledRun`. Choosing the route and reaching the view from main belong to the launcher (#15978).
+
 ## Who writes what
 
 | Child | Owns |
 | --- | --- |
 | #15975 | Storing schedules in local per-project data, and their IPC |
 | #15976 | Durable run history: registration before spawn, exit and session capture |
-| #15977 | Schedule provenance on terminals, snapshots and session records |
+| #15977 | Schedule provenance on terminals, snapshots and session records (see Provenance) |
 | #15978 | Launching a schedule's agent as a tracked run (Run now) |
 | #15979 | Firing due schedules across sleep, wake, restarts and clock changes; catch-up windows |
 | #15980 | The overlap policy and the precondition command |

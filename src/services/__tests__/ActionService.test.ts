@@ -1031,6 +1031,29 @@ describe("ActionService", () => {
         );
       });
 
+      // The scheduled run (#15977) is what marks a launch `spawnedBy:
+      // "schedule"`, so only the host's own dispatch options may carry it.
+      it("stamps ctx.scheduledRun from the dispatch options, and never from a contextOverride", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(confirmAction(mockRun));
+        const run = { scheduleId: "schedule-1", runId: "run-1" };
+        const forged = { scheduleId: "schedule-2", runId: "run-2" };
+
+        await service.dispatch("actions.list", undefined, {
+          source: "user",
+          confirmed: true,
+          scheduledRun: run,
+          contextOverride: { scheduledRun: forged },
+        });
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          contextOverride: { scheduledRun: forged },
+        });
+
+        expect(mockRun.mock.calls.map(([, ctx]) => ctx.scheduledRun)).toEqual([run, undefined]);
+      });
+
       it("overwrites a contextOverride that claims per-target approvals nobody gave", async () => {
         const mockRun = vi.fn().mockResolvedValue(undefined);
         service.register(confirmAction(mockRun));

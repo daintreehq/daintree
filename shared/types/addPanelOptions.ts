@@ -19,7 +19,7 @@ import type {
 import type { GitStatus, DiffChangeSetEntry } from "./git.js";
 import type { BrowserHistory } from "./browser.js";
 import type { AgentState, AgentId, WaitingReason } from "./agent.js";
-import type { TerminalSpawnSource, AddPanelFocusPolicy } from "./panel.js";
+import type { TerminalSpawnSource, AddPanelFocusPolicy, ScheduledRunRef } from "./panel.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { ActionContext } from "./actions.js";
 import type { TerminalGeometry } from "./terminal.js";
@@ -94,6 +94,8 @@ export interface AddPanelOptionsBase {
   pluginId?: string;
   /** Origin that spawned this terminal */
   spawnedBy?: TerminalSpawnSource;
+  /** See `PtyPanelData.scheduledRun`. Only a trusted scheduled launch sets it. */
+  scheduledRun?: ScheduledRunRef;
   /**
    * Focus policy for the new panel. `"auto"` (default) suppresses focus change
    * only when the assistant has keyboard focus. `"preserve"` always keeps focus
