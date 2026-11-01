@@ -797,7 +797,7 @@ describe("FleetSnapshotService", () => {
 
   it("withdraws Canopy's refinements from a degraded fleet without waiting for the host", async () => {
     const client = makePtyClient([terminal({ agentState: "completed", lastStateChange: NOW })]);
-    const refinement = { kind: "asked", quote: "Ship it?", readAt: NOW } as const;
+    const refinement = { kind: "asked", quote: "Ship it?", readAt: NOW, seen: false } as const;
     setCanopyRefinementSource(() => refinement);
     const service = new FleetSnapshotService(client as never);
     try {

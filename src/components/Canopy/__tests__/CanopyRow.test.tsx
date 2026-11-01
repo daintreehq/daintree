@@ -700,7 +700,16 @@ describe("CanopyRow", () => {
   });
 
   it("gives the name line the time, never a score or a word the glyph already says", () => {
-    const { container } = renderRow(itemFor("question", {}, { waitingReason: "question" }));
+    const { container } = renderRow(
+      itemFor(
+        "question",
+        {},
+        {
+          waitingReason: "question",
+          canopy: { kind: "asked", quote: "Which branch?", readAt: NOW, seen: false },
+        }
+      )
+    );
     const column = leadingColumn(container);
     expect(container.querySelector("[data-canopy-age]")!.textContent).toContain("1m");
     expect(column.textContent).not.toContain("88");

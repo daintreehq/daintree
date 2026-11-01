@@ -32,7 +32,9 @@ function buckets(
 const working = (id: string) => run(id, { agentState: "working" });
 const atPrompt = (id: string, extra: Partial<FleetRunRow> = {}) =>
   run(id, { agentState: "waiting", waitingReason: "prompt", ...extra });
-const asking = (id: string) => run(id, { agentState: "waiting", waitingReason: "approval" });
+const ASK = { kind: "asked", quote: "Run the migration?", readAt: NOW, seen: false } as const;
+const asking = (id: string) =>
+  run(id, { agentState: "waiting", waitingReason: "approval", canopy: ASK });
 
 describe("deriveWorktreeAgentBuckets", () => {
   it("counts a worktree with one working and one idle-at-prompt agent as Working only", () => {
@@ -75,14 +77,30 @@ describe("deriveWorktreeAgentBuckets", () => {
     });
   });
 
-  it("keeps an approval, question or error wait in Attention after it has been seen", () => {
-    for (const waitingReason of ["approval", "question", "error"] as const) {
-      const r = run("a", {
+  it("keeps an error wait, or an ask Canopy read and nobody has, in Attention whatever the hand-back says", () => {
+    const handBack = { stoppedAt: NOW - 1000, seenAt: NOW };
+    const error = run("a", { agentState: "waiting", waitingReason: "error", handBack });
+    expect(buckets([error]).attention).toBe(true);
+    for (const waitingReason of ["approval", "question"] as const) {
+      const r = run("a", { agentState: "waiting", waitingReason, handBack, canopy: ASK });
+      expect(buckets([r]).attention).toBe(true);
+    }
+  });
+
+  it("reads an approval or question wait no reading placed as unread until looked at, never Attention", () => {
+    for (const waitingReason of ["approval", "question"] as const) {
+      const unseen = run("a", { agentState: "waiting", waitingReason, wait: { stoppedAt: NOW } });
+      expect(buckets([unseen])).toMatchObject({
+        attention: false,
+        finished: true,
+        finishedUnseen: true,
+      });
+      const looked = run("a", {
         agentState: "waiting",
         waitingReason,
-        handBack: { stoppedAt: NOW - 1000, seenAt: NOW },
+        wait: { stoppedAt: NOW - 1000, seenAt: NOW },
       });
-      expect(buckets([r]).attention).toBe(true);
+      expect(buckets([looked])).toEqual(decodeWorktreeAgentBuckets(0));
     }
   });
 
@@ -191,23 +209,31 @@ describe("isWorktreeMergedForCleanup", () => {
 });
 
 describe("deriveWorktreeAgentBuckets with Canopy's readings", () => {
-  const ASKED = { kind: "asked", quote: "Want me to update the tests too?", readAt: NOW } as const;
+  const ASKED = {
+    kind: "asked",
+    quote: "Want me to update the tests too?",
+    readAt: NOW,
+    seen: false,
+  } as const;
 
   it("moves a seen hand-back that asks something out of Finished and into Attention", () => {
     const seen = { handBack: { stoppedAt: NOW - 1000, seenAt: NOW } };
     expect(buckets([atPrompt("a", seen)]).finished).toBe(true);
     const asked = buckets([atPrompt("a", { ...seen, canopy: ASKED })]);
     expect(asked).toMatchObject({ attention: true, finished: false });
+    // Once the user has read the ask it is neither: the run hasn't finished.
+    const read = buckets([atPrompt("a", { ...seen, canopy: { ...ASKED, seen: true } })]);
+    expect(read).toEqual(decodeWorktreeAgentBuckets(0));
   });
 
-  it("clears a question wait the reading shows asks nothing out of Attention", () => {
+  it("files a question wait the reading shows asks nothing as Finished, by the reading's read mark", () => {
     // The record is the stop before, already seen: a question wait never makes one.
     const wait = run("a", {
       agentState: "waiting",
       waitingReason: "question",
       handBack: { stoppedAt: NOW - 60_000, seenAt: NOW - 50_000 },
     });
-    expect(buckets([wait]).attention).toBe(true);
+    expect(buckets([wait]).attention).toBe(false);
     const NOT_ASKING = { kind: "not-asking", quote: "All tests pass.", readAt: NOW } as const;
     const cleared = buckets([{ ...wait, canopy: { ...NOT_ASKING, seen: false } }]);
     expect(cleared).toMatchObject({ attention: false, finished: true, finishedUnseen: true });

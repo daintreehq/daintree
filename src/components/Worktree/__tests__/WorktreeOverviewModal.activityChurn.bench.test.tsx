@@ -200,7 +200,17 @@ describe("WorktreeOverviewModal under activity-headline churn", () => {
       .getState()
       .snapshot!.runs.map((run) =>
         run.runId === panelId(0, 1)
-          ? { ...run, agentState: "waiting" as const, waitingReason: "approval" as const }
+          ? {
+              ...run,
+              agentState: "waiting" as const,
+              waitingReason: "approval" as const,
+              canopy: {
+                kind: "asked" as const,
+                quote: "Run the migration?",
+                readAt: 1,
+                seen: false,
+              },
+            }
           : run
       );
     act(() => {

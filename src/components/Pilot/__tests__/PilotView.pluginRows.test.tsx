@@ -54,12 +54,21 @@ import {
 
 const NOW = 1_830_000_000_000;
 
+/**
+ * A run. Every approval wait here is an agent asking the user something, which
+ * only a Canopy reading says: it carries an unread ask unless a test gives it
+ * a reading of its own.
+ */
 function run(overrides: Partial<FleetSnapshot["runs"][number]> = {}) {
+  const asking = overrides.agentState === "waiting" && overrides.waitingReason === "approval";
   return {
     runId: "t1",
     workspaceId: "p1",
     spawnedAt: NOW - 3_600_000,
     cwd: "/repo/feature-x",
+    ...(asking
+      ? { canopy: { kind: "asked" as const, quote: "Which branch?", readAt: NOW, seen: false } }
+      : {}),
     ...overrides,
   };
 }

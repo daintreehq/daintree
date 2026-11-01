@@ -61,12 +61,21 @@ function advance(ms: number) {
   });
 }
 
+/**
+ * A run. Every question wait here is an agent asking the user something, which
+ * only a Canopy reading says: it carries an unread ask unless a test gives it
+ * a reading of its own.
+ */
 function run(overrides: Partial<FleetSnapshot["runs"][number]> = {}) {
+  const asking = overrides.agentState === "waiting" && overrides.waitingReason === "question";
   return {
     runId: "t1",
     workspaceId: "p1",
     spawnedAt: NOW - 3_600_000,
     cwd: "/repo/feature-x",
+    ...(asking
+      ? { canopy: { kind: "asked" as const, quote: "Which branch?", readAt: NOW, seen: false } }
+      : {}),
     ...overrides,
   };
 }
@@ -232,9 +241,10 @@ describe("PilotView", () => {
 
     // The age arrives as the phrase its band chose, not a bare "2m ago" — a
     // demand's duration is how long it has been left, and that is the half a
-    // screen reader would otherwise have to infer.
+    // screen reader would otherwise have to infer. The reading that made it a
+    // demand is named in its own clause.
     expect(screen.getByTestId("pilot-row").getAttribute("aria-label")).toBe(
-      "Fix auth, Claude, Waiting, waiting for 2m"
+      'Fix auth, Claude, Waiting, Asked: "Which branch?", read by Canopy just now, waiting for 2m'
     );
   });
 

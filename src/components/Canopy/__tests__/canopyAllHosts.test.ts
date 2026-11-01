@@ -236,7 +236,7 @@ describe("mergeHostReadings", () => {
   it("lists runs of a host whose reader is off as observed, without a reader's placement", () => {
     const placed: FleetRunRow = {
       ...run("r1"),
-      canopy: { kind: "asked", quote: "Proceed?", readAt: 1 },
+      canopy: { kind: "asked", quote: "Proceed?", readAt: 1, seen: false },
     };
     const merged = mergeHostReadings([
       { hostId: "a", canopy: canopy({ activated: false }), fleet: fleet([placed]), error: null },

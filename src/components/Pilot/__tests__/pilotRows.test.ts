@@ -15,6 +15,9 @@ import { emptyBandCounts, FLEET_BANDS, type FleetBand } from "@/lib/fleetAttenti
 
 const NOW = 1_700_000_000_000;
 
+/** Canopy's unread reading that the run asks something: the only way into Needs you. */
+const ASK = { kind: "asked", quote: "Which branch?", readAt: NOW, seen: false } as const;
+
 function run(overrides: Partial<FleetRunRow> = {}): FleetRunRow {
   return {
     runId: "t1",
@@ -722,6 +725,7 @@ describe("countPilotBands", () => {
           agentState: "waiting",
           waitingReason: "question",
           since: NOW,
+          canopy: ASK,
         }),
         run({
           runId: "review",
@@ -769,7 +773,13 @@ describe("countPilotBands", () => {
           }),
           run({ runId: "prompt", agentState: "waiting", waitingReason: "prompt", since: NOW }),
           run({ runId: "bare", agentState: "waiting", waitingReason: undefined, since: NOW }),
-          run({ runId: "approval", agentState: "waiting", waitingReason: "approval", since: NOW }),
+          run({
+            runId: "approval",
+            agentState: "waiting",
+            waitingReason: "approval",
+            since: NOW,
+            canopy: ASK,
+          }),
         ],
         ctx()
       )
@@ -802,6 +812,7 @@ describe("countPilotBands", () => {
           waitingReason: "question",
           title: "auth refactor",
           since: NOW,
+          canopy: ASK,
         }),
         run({
           runId: "b",
@@ -809,6 +820,7 @@ describe("countPilotBands", () => {
           waitingReason: "question",
           title: "docs pass",
           since: NOW,
+          canopy: ASK,
         }),
       ],
       ctx()
@@ -1090,7 +1102,13 @@ describe("filterPilotBands", () => {
     const [built] = buildPilotGroups(
       [
         run({ runId: "urgent", agentState: "waiting", waitingReason: "error", since: NOW }),
-        run({ runId: "asking", agentState: "waiting", waitingReason: "question", since: NOW }),
+        run({
+          runId: "asking",
+          agentState: "waiting",
+          waitingReason: "question",
+          since: NOW,
+          canopy: ASK,
+        }),
         run({ runId: "calm", agentState: "working", since: NOW }),
       ],
       ctx()
@@ -1115,6 +1133,7 @@ describe("filterPilotBands", () => {
           waitingReason: "question",
           title: "auth refactor",
           since: NOW,
+          canopy: ASK,
         }),
         run({ runId: "b", agentState: "working", title: "auth rewrite", since: NOW }),
         run({
@@ -1123,6 +1142,7 @@ describe("filterPilotBands", () => {
           waitingReason: "question",
           title: "docs pass",
           since: NOW,
+          canopy: ASK,
         }),
       ],
       ctx()
@@ -1603,6 +1623,7 @@ describe("buildPilotGroups — Canopy attribution", () => {
     kind: "asked",
     quote: "Should I also migrate the tests?",
     readAt: NOW - 2 * 60_000,
+    seen: false,
   } as const;
 
   it("shows the quoted evidence on a row Canopy placed, and on its accessible surface", () => {
@@ -1622,6 +1643,37 @@ describe("buildPilotGroups — Canopy attribution", () => {
       claim: 'Asked: "Should I also migrate the tests?"',
       attribution: "read by Canopy 2m ago",
     });
+  });
+
+  it("keeps the attribution on an ask the user has read, now placed with the idle runs", () => {
+    const [group] = buildPilotGroups(
+      [run({ agentState: "waiting", waitingReason: "approval", canopy: { ...ASKED, seen: true } })],
+      ctx()
+    );
+    const row = group!.rows[0]!;
+    expect(row.band).toBe("idle");
+    expect(row.canopyEvidence).toEqual({
+      claim: 'Asked: "Should I also migrate the tests?"',
+      attribution: "read by Canopy 2m ago",
+    });
+  });
+
+  it("files an ask wait no reading placed as unread, with no attribution, and idle once looked at", () => {
+    const [group] = buildPilotGroups(
+      [
+        run({ runId: "unseen", agentState: "waiting", waitingReason: "approval", wait: { stoppedAt: NOW } }),
+        run({
+          runId: "looked",
+          agentState: "waiting",
+          waitingReason: "question",
+          wait: { stoppedAt: NOW - 60_000, seenAt: NOW },
+        }),
+      ],
+      ctx()
+    );
+    const byId = new Map(group!.rows.map((r) => [r.run.runId, r]));
+    expect(byId.get("unseen")).toMatchObject({ band: "review", canopyEvidence: null });
+    expect(byId.get("looked")).toMatchObject({ band: "idle", canopyEvidence: null });
   });
 
   it("carries no attribution where the free rules placed the row, or the user shelved it", () => {
