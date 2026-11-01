@@ -220,7 +220,11 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
             loads.failNextOpen = false;
             throw new Error("store unavailable");
           }
-          return { close: () => loads.closing ?? Promise.resolve() } as never;
+          return {
+            close: () => loads.closing ?? Promise.resolve(),
+            onCommit: () => () => {},
+            listQuestions: async () => [],
+          } as never;
         },
       });
       loads.constructed += 1;

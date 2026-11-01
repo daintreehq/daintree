@@ -190,6 +190,17 @@ export interface McpListenerHold {
   release(): Promise<void>;
 }
 
+/**
+ * A feature's hold on the terminal wake engine alone (#16017), from
+ * {@link McpServerService.holdWakes}: no listener, no route.
+ */
+export interface McpWakeHold {
+  /** As {@link McpListenerHold.queueWake}. */
+  queueWake(pane: OwnPane, projectId: string, wake: LaneWake): void;
+  /** Idempotent. Ends the hold's queued wakes, each reporting why. */
+  release(): void;
+}
+
 export class McpServerService {
   // Mutable reference updated by start(); read by bridge's getActiveProjectWebContents.
   private _registry: WindowRegistry | null = null;
@@ -1168,18 +1179,33 @@ export class McpServerService {
       await listener.release();
       throw new Error(`The listener hold "${id}" ended while it was being opened`);
     }
-    const wakes = this.terminalNotify.openWakeScope();
-    const endWakes = () => wakes.release();
-    this.heldWakeScopes.add(endWakes);
+    const wakes = this.holdWakes();
     return {
       get port() {
         return listener.port;
       },
-      queueWake: (pane, projectId, wake) => wakes.enqueueWake(pane, projectId, wake),
+      queueWake: wakes.queueWake,
       release: async () => {
-        this.heldWakeScopes.delete(endWakes);
         wakes.release();
         await listener.release();
+      },
+    };
+  }
+
+  /**
+   * Let a feature queue terminal wakes whether or not the MCP server is on,
+   * without opening the listener: Decisions types answers into panes with no
+   * route of its own (#16017). Quitting ends the hold with the server.
+   */
+  holdWakes(): McpWakeHold {
+    const wakes = this.terminalNotify.openWakeScope();
+    const endWakes = () => wakes.release();
+    this.heldWakeScopes.add(endWakes);
+    return {
+      queueWake: (pane, projectId, wake) => wakes.enqueueWake(pane, projectId, wake),
+      release: () => {
+        this.heldWakeScopes.delete(endWakes);
+        wakes.release();
       },
     };
   }

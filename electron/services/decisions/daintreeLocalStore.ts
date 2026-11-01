@@ -377,8 +377,21 @@ export class DaintreeLocalStore implements LocalStore {
   private closed = false;
   private fault: DecisionsStoreUnavailableError | null = null;
   private readonly statements = new Map<string, Database.Statement>();
+  private readonly commitListeners = new Set<() => void>();
 
   constructor(private readonly sqlite: Database.Database) {}
+
+  /**
+   * Calls `listener` after each transaction that committed at least one
+   * write, once per transaction. It runs after the commit and must not throw
+   * back into it; nothing it does can undo what was stored.
+   */
+  onCommit(listener: () => void): () => void {
+    this.commitListeners.add(listener);
+    return () => {
+      this.commitListeners.delete(listener);
+    };
+  }
 
   /** True once a refused write or a storage error has stopped this store writing. */
   isFaulted(): boolean {
@@ -700,8 +713,19 @@ export class DaintreeLocalStore implements LocalStore {
         if (outcome.ok) op.resolve(outcome.value);
         else op.reject(outcome.error);
       });
+      if (ops.some((op, i) => op.kind === "write" && outcomes[i].ok)) this.notifyCommitted();
     } while (drainAll);
     if (this.queue.length > 0) this.scheduled = setImmediate(() => this.flush(false));
+  }
+
+  private notifyCommitted(): void {
+    for (const listener of [...this.commitListeners]) {
+      try {
+        listener();
+      } catch (error) {
+        console.warn("[Decisions] A store commit listener threw:", error);
+      }
+    }
   }
 
   private runBatch(ops: Op[]): Outcome[] {

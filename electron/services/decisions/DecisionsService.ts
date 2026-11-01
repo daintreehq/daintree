@@ -6,6 +6,7 @@ import type {
   DecisionsStatusEvent,
   PaneDecisionState,
 } from "../../../shared/types/decisions.js";
+import type { AnswerDeliveryDeps } from "./answerDelivery.js";
 import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
 import { decisionsLibraries, type DecisionsLibraries } from "./libraries.js";
 import { openDecisionsLocalStore, openDecisionsRows } from "./openLocalStore.js";
@@ -33,8 +34,12 @@ export type DecisionsStatusListener = (event: DecisionsStatusEvent) => void;
 /** What the service runs a relay connection with; tests hand in their own. */
 export interface DecisionsRelayConnection {
   start(): void;
-  stop(): void;
+  /** Resolves, if it returns a promise, once the connection writes nothing more to the store. */
+  stop(): void | Promise<void>;
 }
+
+/** What delivery needs from main, apart from this machine's host id, which the service reads from its settings. */
+export type DecisionsDeliveryDeps = Omit<AnswerDeliveryDeps, "hostId">;
 
 export type DecisionsConnectionFactory = (
   options: RelayConnectionOptions
@@ -93,6 +98,8 @@ export interface DecisionsServiceOptions {
    * is served.
    */
   openQuestions?: (source: QuestionSource, previousClosed: Promise<void>) => DecisionsQuestions;
+  /** Types received answers into the panes that asked (#16017); without it answers stay stored. */
+  delivery?: DecisionsDeliveryDeps;
 }
 
 /**
@@ -119,6 +126,7 @@ export class DecisionsService {
   private readonly panes: PaneDecisionStates;
   private readonly connect: DecisionsConnectionFactory;
   private readonly onRelayRevoked: (relay: RelayBinding) => void;
+  private readonly delivery: DecisionsDeliveryDeps | null;
   private connection: DecisionsRelayConnection | null = null;
   private connectionKey: string | null = null;
   /**
@@ -134,6 +142,9 @@ export class DecisionsService {
   private questionsClosing: Promise<void> = Promise.resolve();
   /** Feeds the panes' state from the lifetime's store, for as long as it is open. */
   private feed: QuestionRowsFeed | null = null;
+  private offCommit: (() => void) | null = null;
+  /** Connections stopped but still settling: the store closes only after them. */
+  private readonly stopping = new Set<Promise<void>>();
   /** The store didn't open for this lifetime; the next start tries it again. */
   private storeFailed = false;
   /**
@@ -158,6 +169,7 @@ export class DecisionsService {
         throw new Error("Nothing saves the Decisions setting here");
       });
     this.openQuestions = options.openQuestions ?? null;
+    this.delivery = options.delivery ?? null;
   }
 
   getStatus(): DecisionsStatus {
@@ -295,7 +307,8 @@ export class DecisionsService {
         }
         this.store = opened;
         this.storeFailed = false;
-        this.feedFrom(opened);
+        // Each pane shows what is stored before anything new arrives.
+        await this.feedFrom(opened);
       }
       this.reconcileConnection();
     });
@@ -317,7 +330,7 @@ export class DecisionsService {
       }
       // The connection goes first: nothing may reach the store or keys once they close.
       this.dropConnection();
-      this.feedFrom(null);
+      void this.feedFrom(null);
       const store = this.store;
       const keyStore = this.keyStore;
       this.store = null;
@@ -334,7 +347,7 @@ export class DecisionsService {
         try {
           this.store = await this.openStore(() => this.disposed);
           this.storeFailed = false;
-          this.feedFrom(this.store);
+          await this.feedFrom(this.store);
         } catch (err) {
           // The next start tries again; the deletion stands either way.
           this.storeFailed = true;
@@ -372,7 +385,9 @@ export class DecisionsService {
   private async release(clearViews: boolean): Promise<void> {
     // The connection goes first: nothing may reach the store or keys once they close.
     this.dropConnection();
-    this.feedFrom(null);
+    // An answer being typed settles before the store stops taking its result.
+    await Promise.all([...this.stopping]);
+    void this.feedFrom(null);
     // The route lets go of the listener before the lifetime ends.
     await this.questionsClosing;
     const store = this.store;
@@ -421,11 +436,15 @@ export class DecisionsService {
     if (!store || !policy) return;
     let connection: DecisionsRelayConnection | null = null;
     const feed = this.feed;
+    const delivery = this.delivery;
     connection = this.connect({
       relay: wanted,
-      store: observeQuestionWrites(store, () => feed?.refresh()),
+      store: observeQuestionWrites(store, () => void feed?.refresh()),
       keys: this.getKeyStore(),
       policy,
+      ...(delivery
+        ? { delivery: { ...delivery, hostId: () => this.settings?.hostId ?? null } }
+        : {}),
       onStatus: (status) => {
         if (this.connection !== connection) return;
         // Stopped for this lifetime: nothing could publish what an agent asks.
@@ -469,7 +488,10 @@ export class DecisionsService {
     this.connection = null;
     this.connectionKey = null;
     this.closeQuestions();
-    connection?.stop();
+    const stopped = connection?.stop();
+    if (!stopped) return;
+    const settling = stopped.catch(() => {}).finally(() => this.stopping.delete(settling));
+    this.stopping.add(settling);
   }
 
   private eraseDeps(): LocalEraseDeps {
@@ -485,18 +507,22 @@ export class DecisionsService {
 
   /**
    * The panes show what `store` holds from now on, read once now and again
-   * after every question write; null feeds them nothing, as while the store
-   * is closed.
+   * after every write it commits; null feeds them nothing, as while the store
+   * is closed. Resolves once the first read has been shown.
    */
-  private feedFrom(store: DaintreeLocalStore | null): void {
+  private feedFrom(store: DaintreeLocalStore | null): Promise<void> {
     this.feed?.stop();
     this.feed = null;
-    if (store === null) return;
-    this.feed = new QuestionRowsFeed(
+    this.offCommit?.();
+    this.offCommit = null;
+    if (store === null) return Promise.resolve();
+    const feed = new QuestionRowsFeed(
       () => store.listQuestions(),
       (rows) => this.observeQuestions(rows)
     );
-    this.feed.refresh();
+    this.feed = feed;
+    this.offCommit = store.onCommit(() => void feed.refresh());
+    return feed.refresh();
   }
 
   /** Refuses agents' questions at once; the listener hold goes when the route has let go. */

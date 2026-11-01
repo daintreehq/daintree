@@ -23,7 +23,11 @@ interface FakeStore {
 }
 
 function fakeStore(): FakeStore & DaintreeLocalStore {
-  return { close: vi.fn(async () => {}) } as unknown as FakeStore & DaintreeLocalStore;
+  return {
+    close: vi.fn(async () => {}),
+    onCommit: () => () => {},
+    listQuestions: async () => [],
+  } as unknown as FakeStore & DaintreeLocalStore;
 }
 
 /** A key file nothing writes, so each start finds no deletion to finish. */
