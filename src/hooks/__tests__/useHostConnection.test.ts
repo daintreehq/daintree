@@ -124,6 +124,7 @@ import {
 } from "../useHostConnection";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import { onHostResync, type HostResync, type HydratedSettings } from "@/store/hostResyncSignal";
+import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 import type { resolveUnknownOutcome } from "@/utils/resolveUnknownOutcome";
 import {
   _resetTerminalInputGateForTesting,
@@ -2802,5 +2803,351 @@ describe("useHostConnection", () => {
     act(() => useHostConnectionStore.getState().bindHost("build-02", "Studio"));
     expect(renders).toBe(before + 2);
     expect(result.current).toEqual({ hostId: "build-02", hostName: "Studio" });
+  });
+});
+
+describe("resyncs owed while the view is cached", () => {
+  /** Main's lifecycle signals to one view, as `ProjectViewManager` sends them. */
+  function viewLifecycle(cachedAtStart = false) {
+    const listeners = {
+      cached: new Set<() => void>(),
+      active: new Set<() => void>(),
+      revealed: new Set<() => void>(),
+    };
+    const on = (set: Set<() => void>) =>
+      vi.fn((callback: () => void) => {
+        set.add(callback);
+        return () => set.delete(callback);
+      });
+    const app = {
+      isViewCached: vi.fn(() => cachedAtStart),
+      onViewCached: on(listeners.cached),
+      onViewWarmActivated: on(listeners.active),
+      onViewRevealed: on(listeners.revealed),
+    };
+    const fire = (set: Set<() => void>) => {
+      for (const callback of [...set]) callback();
+    };
+    return {
+      app,
+      cache: () => fire(listeners.cached),
+      /** A warm switch to the view: re-attached behind the bridge, then revealed. */
+      show: () => fire(listeners.active),
+      reveal: () => fire(listeners.revealed),
+    };
+  }
+
+  async function openView(options: { watching?: boolean; holdClaim?: boolean } = {}) {
+    const host = installElectron();
+    const lifecycle = viewLifecycle();
+    Object.assign(host.electron, { app: lifecycle.app });
+    if (options.watching)
+      host.electron.driveLease.get.mockResolvedValue(leaseView(holder(), false));
+    // Kept out, only the path under test reads state back.
+    if (options.holdClaim) {
+      host.electron.driveLease.takeOver.mockImplementationOnce(() => new Promise(() => {}));
+    }
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    // Opening a project it watches reads it back by following the driver; one
+    // it drives settles once the host says so.
+    if (options.watching) await vi.waitFor(() => expect(rehydrate).toHaveBeenCalled());
+    else if (!options.holdClaim) await vi.waitFor(() => expect(getLeaseInputBlock()).toBeNull());
+    for (let i = 0; i < 5; i += 1) await flush();
+    host.electron.worktree.refresh.mockClear();
+    host.electron.worktreePort.request.mockClear();
+    host.electron.terminal.getForProject.mockClear();
+    host.electron.driveLease.get.mockClear();
+    pluginRefresh.mockClear();
+    rehydrate.mockClear();
+    const resyncListener = vi.fn();
+    const offResync = onHostResync(resyncListener);
+    return {
+      ...host,
+      ...lifecycle,
+      resyncListener,
+      stop: () => {
+        offResync();
+        stop();
+      },
+    };
+  }
+
+  /** What only a view on screen refetches: none of it while the view is cached. */
+  function expectNoFullPass(view: Awaited<ReturnType<typeof openView>>) {
+    expect(view.electron.worktree.refresh).not.toHaveBeenCalled();
+    expect(view.electron.worktreePort.request).not.toHaveBeenCalled();
+    expect(pluginRefresh).not.toHaveBeenCalled();
+    expect(view.resyncListener).not.toHaveBeenCalled();
+    expect(rehydrate).not.toHaveBeenCalled();
+  }
+
+  beforeEach(() => {
+    __resetProjectViewCacheStateForTests();
+  });
+
+  afterEach(() => {
+    __resetProjectViewCacheStateForTests();
+  });
+
+  it("resyncs a view that is on screen at once", async () => {
+    const view = await openView();
+
+    view.emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
+
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    expect(view.electron.worktree.refresh).toHaveBeenCalledTimes(1);
+    expect(view.resyncListener).toHaveBeenCalledTimes(1);
+    view.stop();
+  });
+
+  it("puts a fresh session's full resync off until the view is shown, then runs it once", async () => {
+    const view = await openView();
+    view.cache();
+
+    view.emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
+    view.emitHost({ type: "resync-required", hostId: "studio-01", reason: "overflow" });
+    // Who drives and the terminals' agents stay live while nobody sees the view.
+    await vi.waitFor(() => expect(view.electron.terminal.getForProject).toHaveBeenCalled());
+    await vi.waitFor(() => expect(view.electron.driveLease.get).toHaveBeenCalled());
+    for (let i = 0; i < 5; i += 1) await flush();
+    expectNoFullPass(view);
+
+    view.show();
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    view.reveal();
+    for (let i = 0; i < 5; i += 1) await flush();
+    // One pass for both notices, with the fresh session's project state.
+    expect(view.electron.worktree.refresh).toHaveBeenCalledTimes(1);
+    expect(view.electron.worktreePort.request).toHaveBeenCalledTimes(1);
+    expect(pluginRefresh).toHaveBeenCalledTimes(1);
+    expect(view.resyncListener).toHaveBeenCalledTimes(1);
+    expect(rehydrate).toHaveBeenCalledTimes(1);
+    view.stop();
+  });
+
+  it("stops at what stays live when it is cached again while a pass runs", async () => {
+    const view = await openView();
+    let releaseWorktrees!: () => void;
+    view.electron.worktree.refresh.mockImplementationOnce(
+      () => new Promise<undefined>((resolve) => (releaseWorktrees = () => resolve(undefined)))
+    );
+    view.emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
+    await vi.waitFor(() => expect(view.electron.worktree.refresh).toHaveBeenCalledTimes(1));
+
+    // Queued behind the pass on screen, then main caches the view before it runs.
+    const queued = resyncFromHost({ freshSession: true });
+    view.cache();
+    releaseWorktrees();
+    await queued;
+    expect(view.electron.worktree.refresh).toHaveBeenCalledTimes(1);
+    expect(view.electron.terminal.getForProject).toHaveBeenCalledTimes(2);
+    // The first pass was overtaken before its read-back, so the project state is still owed.
+    expect(rehydrate).not.toHaveBeenCalled();
+
+    view.show();
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    expect(view.electron.worktree.refresh).toHaveBeenCalledTimes(2);
+    view.stop();
+  });
+
+  it("resyncs at once once shown again, before it is revealed", async () => {
+    const view = await openView();
+    view.cache();
+    view.show();
+
+    view.emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
+
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    expect(view.electron.worktree.refresh).toHaveBeenCalledTimes(1);
+    view.stop();
+  });
+
+  it("takes the host's agent states while cached", async () => {
+    const view = await openView();
+    panels["t-1"] = { id: "t-1", kind: "terminal", lastStateChange: 10 };
+    view.electron.terminal.getForProject.mockResolvedValue([
+      { id: "t-1", agentState: "waiting", lastStateChange: 20, waitingReason: "prompt" },
+    ]);
+    view.cache();
+
+    view.emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
+
+    await vi.waitFor(() => expect(setAgentState).toHaveBeenCalledWith("t-1", "waiting"));
+    expect(updateAgentState).toHaveBeenCalledWith(
+      "t-1",
+      "waiting",
+      undefined,
+      20,
+      undefined,
+      undefined,
+      "prompt"
+    );
+    expectNoFullPass(view);
+    view.stop();
+  });
+
+  it("keeps following the driver while cached, without the rest of the pass", async () => {
+    const view = await openView({ watching: true });
+    expect(getTerminalInputBlock()?.kind).toBe("driven-elsewhere");
+    view.cache();
+
+    // The driver's panels change while nobody sees this view, then the link comes back.
+    view.emitLease({ type: "panels-changed", projectId: "proj-1" });
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    view.emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(2), { timeout: 5_000 });
+    for (const call of rehydrate.mock.calls) {
+      expect(optionsOf(call)).toMatchObject({ authoritative: true, follow: true });
+    }
+    expect(view.electron.worktree.refresh).not.toHaveBeenCalled();
+    expect(view.resyncListener).not.toHaveBeenCalled();
+
+    view.show();
+    await vi.waitFor(() => expect(view.electron.worktree.refresh).toHaveBeenCalledTimes(1), {
+      timeout: 5_000,
+    });
+    view.stop();
+  });
+
+  it("lets a held save out only after the pass it put off, without waiting to be shown", async () => {
+    const view = await openView({ holdClaim: true });
+    view.cache();
+    view.emitHost({
+      type: "connection-changed",
+      hostId: "studio-01",
+      connection: { status: "disconnected" },
+    });
+    const send = vi.fn(async () => undefined);
+    const replay = vi.fn();
+    expect(await sendHostOwnedWrite("app-state:activeWorktreeId", send, replay)).toBe("deferred");
+
+    let finishRehydrate!: () => void;
+    rehydrate.mockImplementationOnce(
+      () => new Promise<undefined>((resolve) => (finishRehydrate = () => resolve(undefined)))
+    );
+    view.emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
+    view.emitHost({
+      type: "connection-changed",
+      hostId: "studio-01",
+      connection: { status: "connected", rttMs: 5, handshake: HANDSHAKE },
+    });
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    await flush();
+    expect(replay).not.toHaveBeenCalled();
+
+    finishRehydrate();
+    await vi.waitFor(() => expect(replay).toHaveBeenCalledTimes(1));
+    view.stop();
+  });
+
+  it("brings back what a host restart ended while cached, for a view that drives", async () => {
+    const view = await openView();
+    panels["t-agent"] = {
+      id: "t-agent",
+      kind: "terminal",
+      location: "grid",
+      launchAgentId: "claude",
+      runtimeStatus: "running",
+      restartKey: 2,
+    };
+    view.electron.terminal.getForProject.mockResolvedValue([]);
+    view.electron.terminal.reconnectBulk.mockImplementation(async (ids) =>
+      Object.fromEntries(ids.map((id) => [id, { exists: false }]))
+    );
+    view.cache();
+
+    view.emitHost({ type: "resync-required", hostId: "studio-01", reason: "host-restarted" });
+
+    await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    expect([...relaunchLost.mock.calls[0]![1]]).toEqual([["t-agent", 2]]);
+    expectNoFullPass(view);
+    view.stop();
+  });
+});
+
+describe("one host's views after a fresh session", () => {
+  /**
+   * Each view is its own renderer: a fresh copy of the module graph, sharing
+   * only the link (this file's IPC stubs and mocks) with the others.
+   */
+  async function openRendererView(
+    shared: ReturnType<typeof installElectron>,
+    hostListeners: Set<(event: RemoteHostsEvent) => void>,
+    cached: boolean
+  ) {
+    vi.resetModules();
+    const lifecycle = { active: new Set<() => void>() };
+    const app = {
+      isViewCached: () => cached,
+      onViewCached: () => () => {},
+      onViewWarmActivated: (callback: () => void) => {
+        lifecycle.active.add(callback);
+        return () => lifecycle.active.delete(callback);
+      },
+      onViewRevealed: () => () => {},
+    };
+    Object.assign(shared.electron, { app });
+    const sync = await import("../useHostConnection");
+    const cacheState = await import("@/lib/viewCacheState");
+    const stop = sync.startHostConnectionSync();
+    // This copy's listener is the newest; keep every view's.
+    const listener = shared.electron.remoteHosts.onEvent.mock.lastCall![0];
+    hostListeners.add(listener);
+    return {
+      show: () => {
+        for (const callback of [...lifecycle.active]) callback();
+      },
+      stop: () => {
+        hostListeners.delete(listener);
+        stop();
+        sync._resetHostConnectionSyncForTesting();
+        cacheState.__resetProjectViewCacheStateForTests();
+      },
+    };
+  }
+
+  it("runs one full pass at once for the visible view, and one per cached view as each is shown", async () => {
+    const shared = installElectron();
+    // No view's claim on open reads state back, so only reconnect passes do.
+    shared.electron.driveLease.takeOver.mockImplementation(() => new Promise(() => {}));
+    bindView("studio-01");
+    const hostListeners = new Set<(event: RemoteHostsEvent) => void>();
+    const views: Array<Awaited<ReturnType<typeof openRendererView>>> = [];
+    try {
+      views.push(await openRendererView(shared, hostListeners, false));
+      views.push(await openRendererView(shared, hostListeners, true));
+      views.push(await openRendererView(shared, hostListeners, true));
+      const [, cachedA, cachedB] = views;
+      await flush();
+      const fullPasses = shared.electron.worktree.refresh;
+      fullPasses.mockClear();
+      rehydrate.mockClear();
+
+      // Main tells every reopened view of the host.
+      for (const listener of [...hostListeners]) {
+        listener({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
+      }
+      await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+      // Every view still reads its terminals, the cached ones included.
+      await vi.waitFor(
+        () => expect(shared.electron.terminal.getForProject).toHaveBeenCalledTimes(3),
+        { timeout: 5_000 }
+      );
+      for (let i = 0; i < 5; i += 1) await flush();
+      expect(fullPasses).toHaveBeenCalledTimes(1);
+
+      cachedA!.show();
+      await vi.waitFor(() => expect(fullPasses).toHaveBeenCalledTimes(2), { timeout: 5_000 });
+      await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(2), { timeout: 5_000 });
+
+      cachedB!.show();
+      await vi.waitFor(() => expect(fullPasses).toHaveBeenCalledTimes(3), { timeout: 5_000 });
+      await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(3), { timeout: 5_000 });
+      for (let i = 0; i < 5; i += 1) await flush();
+      expect(fullPasses).toHaveBeenCalledTimes(3);
+    } finally {
+      for (const view of views) view.stop();
+    }
   });
 });
