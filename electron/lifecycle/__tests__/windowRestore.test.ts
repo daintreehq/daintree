@@ -424,6 +424,110 @@ describe("restoreWindowFleet", () => {
     expect(h.persisted()).toBe(true);
   });
 
+  it("names each host the restore needs once the focused window is up, before the rest (#15888)", async () => {
+    const onHost = `studio-01:${"a".repeat(64)}`;
+    const onOtherHost = `studio-02:${"b".repeat(64)}`;
+    let releasePrimary!: (result: CreateWindowResult) => void;
+    const primary = new Promise<CreateWindowResult>((resolve) => (releasePrimary = resolve));
+    const windowsAtHook: number[] = [];
+    const onRemoteHostsNeeded = vi.fn(() => {
+      windowsAtHook.push(h.createWindow.mock.calls.length);
+    });
+    h = harness(
+      {
+        records: [
+          { projectId: "local", backgroundProjectIds: [onHost, "local-bg"] },
+          record(onOtherHost),
+          record(`studio-01:${"c".repeat(64)}`),
+        ],
+        hadManifest: true,
+        onRemoteHostsNeeded,
+      },
+      async (projectId) => (projectId === "local" ? primary : "ok")
+    );
+    const restoring = restoreWindowFleet(h.deps);
+    await vi.waitFor(() => expect(h.createWindow).toHaveBeenCalledTimes(1));
+    expect(onRemoteHostsNeeded).not.toHaveBeenCalled();
+
+    releasePrimary("ok");
+    await restoring;
+    expect(onRemoteHostsNeeded).toHaveBeenCalledTimes(1);
+    expect(onRemoteHostsNeeded).toHaveBeenCalledWith(["studio-01", "studio-02"]);
+    expect(windowsAtHook).toEqual([1]);
+  });
+
+  it("names a host whose only key sat on a duplicate window folded into another", async () => {
+    const onHost = `studio-01:${"a".repeat(64)}`;
+    const onRemoteHostsNeeded = vi.fn();
+    h = harness({
+      records: [record("a"), { projectId: "a", backgroundProjectIds: [onHost] }],
+      hadManifest: true,
+      onRemoteHostsNeeded,
+    });
+    await restoreWindowFleet(h.deps);
+    expect(onRemoteHostsNeeded).toHaveBeenCalledWith(["studio-01"]);
+  });
+
+  it("names the hosts before any window when the focused one is already open", async () => {
+    const windowsAtHook: number[] = [];
+    const onRemoteHostsNeeded = vi.fn(() => {
+      windowsAtHook.push(h.createWindow.mock.calls.length);
+    });
+    h = harness({
+      records: [record("a"), record(`studio-01:${"a".repeat(64)}`)],
+      hadManifest: true,
+      primaryAlreadyOpen: true,
+      onRemoteHostsNeeded,
+    });
+    await restoreWindowFleet(h.deps);
+    expect(onRemoteHostsNeeded).toHaveBeenCalledWith(["studio-01"]);
+    expect(windowsAtHook).toEqual([0]);
+  });
+
+  it("names no host for a restore that has none", async () => {
+    const onRemoteHostsNeeded = vi.fn();
+    h = harness({
+      records: [{ projectId: "a", backgroundProjectIds: ["b"] }, record("c"), record(null)],
+      hadManifest: true,
+      onRemoteHostsNeeded,
+    });
+    await restoreWindowFleet(h.deps);
+    expect(onRemoteHostsNeeded).not.toHaveBeenCalled();
+  });
+
+  it.each(["exit-requested", "not-registered"] as const)(
+    "names no host when the focused window comes back %s",
+    async (result) => {
+      const onRemoteHostsNeeded = vi.fn();
+      h = harness(
+        {
+          records: [record(`studio-01:${"a".repeat(64)}`), record("b")],
+          hadManifest: true,
+          onRemoteHostsNeeded,
+        },
+        async () => result
+      );
+      await restoreWindowFleet(h.deps);
+      expect(onRemoteHostsNeeded).not.toHaveBeenCalled();
+    }
+  );
+
+  it("names no host when the focused window fails to open", async () => {
+    const onRemoteHostsNeeded = vi.fn();
+    h = harness(
+      {
+        records: [record(`studio-01:${"a".repeat(64)}`), record("b")],
+        hadManifest: true,
+        onRemoteHostsNeeded,
+      },
+      async () => {
+        throw new Error("no window");
+      }
+    );
+    await expect(restoreWindowFleet(h.deps)).rejects.toThrow("no window");
+    expect(onRemoteHostsNeeded).not.toHaveBeenCalled();
+  });
+
   it("opens one picker window when every saved project was deleted", async () => {
     h = harness({ records: [], hadManifest: true, fallbackProjectId: "unrelated" });
     await restoreWindowFleet(h.deps);

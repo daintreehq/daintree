@@ -7,6 +7,7 @@
  * fleet stopped restoring until the next relaunch.
  */
 
+import { parseHostScopedKey } from "../../shared/types/remoteHosts.js";
 import {
   isRemoteWorkspaceKey,
   type OpenWindowRecord,
@@ -88,6 +89,12 @@ export interface RestoreWindowFleetDeps {
    * empty manifest opens nothing.
    */
   primaryAlreadyOpen?: boolean;
+  /**
+   * The restore brings back windows or background projects on these hosts.
+   * Called once the focused window is up (global init has settled), before
+   * the rest of the fleet, so their dials don't wait on local windows (#15888).
+   */
+  onRemoteHostsNeeded?: (hostIds: string[]) => void;
 }
 
 /**
@@ -125,6 +132,17 @@ function remoteKeyOf(record: OpenWindowRecord | undefined): string | undefined {
  */
 function localSeedOf(record: OpenWindowRecord): string | undefined {
   return remoteKeyOf(record) ? undefined : (record.projectId ?? undefined);
+}
+
+/** Each host a record names, as its window's workspace or a background project. */
+function hostsNamedBy(records: readonly OpenWindowRecord[]): string[] {
+  const hostIds = new Set<string>();
+  for (const { projectId, backgroundProjectIds } of records) {
+    for (const id of [projectId, ...(backgroundProjectIds ?? [])]) {
+      if (id && isRemoteWorkspaceKey(id)) hostIds.add(parseHostScopedKey(id).hostId);
+    }
+  }
+  return [...hostIds];
 }
 
 /** The create option carrying a host-scoped workspace, or nothing for a local one. */
@@ -241,6 +259,9 @@ export async function restoreWindowFleet(deps: RestoreWindowFleetDeps): Promise<
       });
       if (primaryResult !== "ok") return;
     }
+
+    const hostIds = hostsNamedBy(records);
+    if (hostIds.length > 0) deps.onRemoteHostsNeeded?.(hostIds);
 
     let backgroundClean = true;
     // Background windows come up one at a time, each waiting for the last to
