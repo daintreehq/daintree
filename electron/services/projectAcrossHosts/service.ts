@@ -179,6 +179,8 @@ export interface PlacementAuthority {
    * the saved worktree, in a project another window holds.
    */
   beforeAnyChange?: boolean;
+  /** Told of a change made without placing anything: focusing a worktree the project has. */
+  noteChange?(projectId: string): void;
 }
 
 /**
@@ -193,6 +195,8 @@ export function localPlacementAuthority(
     noteSessionChange(projectId: string, linkSessionId: string | null): void;
   } | null
 ): PlacementAuthority {
+  // Placing or focusing a worktree changes the project's saved active worktree.
+  const noteChange = (projectId: string) => lease?.noteSessionChange(projectId, null);
   return {
     assertMayPlace(projectId) {
       const holder = lease?.getHolder(projectId) ?? null;
@@ -204,9 +208,9 @@ export function localPlacementAuthority(
           context: { projectId },
         });
       }
-      // Placing changes the project's saved active worktree.
-      lease?.noteSessionChange(projectId, null);
+      noteChange(projectId);
     },
+    noteChange,
   };
 }
 
@@ -1124,6 +1128,7 @@ export class ProjectAcrossHostsService {
     requireBranchName(target.remoteBranch, "remote branch");
     const existing = findWorktreeForBranch(await this.worktreePorcelain(project.path), target.name);
     if (existing) {
+      authority?.noteChange?.(project.id);
       await this.deps.focusWorktree(project.id, existing).catch(() => {});
       return { ...base, worktreePath: existing, canCheckOutBranch: false, branchNote: null };
     }

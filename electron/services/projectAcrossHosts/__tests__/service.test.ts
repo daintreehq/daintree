@@ -319,17 +319,23 @@ describe("opening a project the host already has", () => {
     const existing = path.join(root, "studio-g-wt");
     git(clone, ["worktree", "add", "-q", existing, "feature/host-chip"]);
     const project = host.addProject(clone);
+    const noteChange = vi.fn();
 
-    const opened = await host.service.open({
-      projectId: project.id,
-      path: clone,
-      remoteUrls: [URL],
-      branch,
-      branchRemoteUrl: URL,
-    });
+    const opened = await host.service.open(
+      {
+        projectId: project.id,
+        path: clone,
+        remoteUrls: [URL],
+        branch,
+        branchRemoteUrl: URL,
+      },
+      { assertMayPlace: () => undefined, noteChange }
+    );
     expect(opened.worktreePath).toBe(existing);
     expect(host.createWorktree).not.toHaveBeenCalled();
     expect(host.focusWorktree).toHaveBeenCalledWith(project.id, existing);
+    // Focusing it changes the project's saved active worktree (#15918).
+    expect(noteChange).toHaveBeenCalledWith(project.id);
   });
 
   it("opens the branch in its own worktree when it is on the remote, with no second question", async () => {

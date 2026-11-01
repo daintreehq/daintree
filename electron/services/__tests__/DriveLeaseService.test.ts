@@ -734,10 +734,7 @@ describe("DriveLeaseService", () => {
         Object.assign(new FakeEndpoint(endpointId, "c1", null, "remote-view"), { linkSessionId });
       const { laptop, first } = await vacateAfterDriving(remote("remote:s1:e1", "c1"));
 
-      for (const own of [
-        standing("canopy-viewer:v1", "s1"),
-        standing("device-answer:d1", "s1"),
-      ]) {
+      for (const own of [standing("canopy-viewer:v1", "s1"), standing("device-answer:d1", "s1")]) {
         expect(service.isDriving("p", own)).toBe(true);
         expect(service.drivingLeaseId("p", own)).toBeNull();
       }
@@ -1514,6 +1511,20 @@ describe("DriveLeaseService across a restart of this app", () => {
     registry.add(reopened);
     await settle();
     expect(service.getHolder("p")).toMatchObject({ endpointId: "s2:e1", tenureId });
+  });
+
+  it("knows a restored tenure's own client by its session's other views", async () => {
+    service.dispose();
+    const { next } = restarted({ p: { ...greg, tenureId: "kept", vacant: true } });
+    service = next;
+    // The Shell is back on a new session, with a view on another project only.
+    registry.add(remote("remote:s5:e1", "shell-launch-1", "q"));
+    await settle();
+
+    service.noteSessionChange("p", "s5");
+    expect(service.keepsUnheldTenures()).toBe(true);
+    service.noteSessionChange("p", "s6");
+    expect(service.keepsUnheldTenures()).toBe(false);
   });
 
   it("forgets a restored tenure, and its saved entry, once anyone else is on the project", async () => {

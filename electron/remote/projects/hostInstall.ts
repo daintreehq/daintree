@@ -527,6 +527,7 @@ export function attachProjectsHost(
         }
         authority.noteSessionChange(projectId, sessionId);
       },
+      noteChange: (projectId: string) => authority.noteSessionChange(projectId, sessionId),
     };
     // An assistant's branch is never put into a project a window here holds,
     // not even by naming a worktree it already has: checked once the project

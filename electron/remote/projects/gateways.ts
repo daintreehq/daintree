@@ -150,7 +150,10 @@ export class LocalHostGateway implements HostGateway {
   async assistantAccess(): Promise<boolean> {
     return true;
   }
-  checkOut(payload: CheckOutBranchPayload) {
+  async checkOut(payload: CheckOutBranchPayload) {
+    const { peekDriveLeaseService } = await import("../../services/DriveLeaseService.js");
+    // Checking a branch out changes the project's saved active worktree.
+    peekDriveLeaseService()?.noteSessionChange(payload.projectId, null);
     return this.service.checkOut(payload);
   }
   async createBundle(projectId: string) {

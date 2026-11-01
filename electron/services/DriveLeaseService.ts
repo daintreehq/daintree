@@ -960,17 +960,26 @@ export class DriveLeaseService {
   /**
    * A change to a project nobody holds, made for the Shell on
    * `linkSessionId` (this machine with none) by a path no view on the
-   * project stands behind: the host running an assistant's action itself,
-   * or placing a worktree. Made for anyone but the last holder, it ends the
-   * tenure kept for it.
+   * project stands behind: the host running an action itself, or placing a
+   * worktree. Made for anyone but the last holder's client, it ends the
+   * tenure kept for it. That client is known by the holder's own session, or
+   * as a grant knows it, by the client id of the session's other views.
    */
   noteSessionChange(projectId: string, linkSessionId: string | null): void {
     const vacated = this.vacatedTenures.get(projectId);
     if (!vacated) return;
-    const ownSession =
-      linkSessionId !== null && isSessionEndpoint(linkSessionId, vacated.holderEndpointId);
-    const local = linkSessionId === null && vacated.clientId === LOCAL_CLIENT_ID;
-    if (ownSession || local) return;
+    const own =
+      linkSessionId === null
+        ? vacated.clientId === LOCAL_CLIENT_ID
+        : isSessionEndpoint(linkSessionId, vacated.holderEndpointId) ||
+          this.registry
+            .getRemote()
+            .some(
+              (endpoint) =>
+                isSessionEndpoint(linkSessionId, endpoint.endpointId) &&
+                endpoint.clientId === vacated.clientId
+            );
+    if (own) return;
     this.endVacatedTenure(projectId, { byLinkSessionId: linkSessionId });
   }
 

@@ -19,6 +19,7 @@ vi.mock("../../store.js", () => ({ store: { get: vi.fn(() => undefined) } }));
 const leasesMock = vi.hoisted(() => ({
   getDriveTarget: vi.fn(),
   nextHolderEndpoint: vi.fn(() => null),
+  noteSessionChange: vi.fn(),
 }));
 vi.mock("../DriveLeaseService.js", () => ({ getDriveLeaseService: () => leasesMock }));
 
@@ -63,6 +64,33 @@ function deliverVia(endpoint: ReturnType<typeof makeEndpoint>) {
 async function flush(): Promise<void> {
   for (let i = 0; i < 5; i++) await Promise.resolve();
 }
+
+describe("memory-leak auto-restart run by the host itself (#15918)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    serviceMock.active = null;
+    serviceMock.deps = null;
+    startMemoryLeakAutoRestart({
+      on: vi.fn(),
+      off: vi.fn(),
+      setResourceMonitoring: vi.fn(),
+      getTerminalAsync: vi.fn(),
+    } as never);
+  });
+
+  it("tells the lease it changes a project nobody holds, and nothing where a view drives", () => {
+    leasesMock.getDriveTarget.mockReturnValue({ kind: "vacant" });
+    expect(serviceMock.deps!.pickTarget("proj-1")).toEqual({ kind: "host" });
+    expect(leasesMock.noteSessionChange).toHaveBeenCalledWith("proj-1", null);
+
+    leasesMock.getDriveTarget.mockReturnValue({ kind: "reserved", holder: {} });
+    expect(serviceMock.deps!.pickTarget("proj-1")).toEqual({ kind: "wait" });
+    const closed = { ...makeEndpoint("remote-view"), isClosed: vi.fn(() => true) };
+    leasesMock.getDriveTarget.mockReturnValue({ kind: "live", endpoint: closed });
+    expect(serviceMock.deps!.pickTarget("proj-1")).toEqual({ kind: "host" });
+    expect(leasesMock.noteSessionChange).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("memory-leak auto-restart delivery to a view", () => {
   beforeEach(() => {

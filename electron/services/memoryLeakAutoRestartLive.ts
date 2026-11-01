@@ -30,7 +30,11 @@ function pickTarget(projectId: string): MemoryLeakRestartTarget {
   const drive = leases.getDriveTarget(projectId);
   if (drive.kind === "reserved") return { kind: "wait" };
   const endpoint = drive.kind === "live" ? drive.endpoint : leases.nextHolderEndpoint(projectId);
-  if (!endpoint || endpoint.isClosed()) return { kind: "host" };
+  if (!endpoint || endpoint.isClosed()) {
+    // The host restarting a terminal itself changes a project nobody holds.
+    if (drive.kind === "vacant") leases.noteSessionChange(projectId, null);
+    return { kind: "host" };
+  }
   const send = (payload: MemoryLeakRestartRequest) =>
     endpoint.send({
       type: "event",

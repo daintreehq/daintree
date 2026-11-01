@@ -727,7 +727,11 @@ describe("drive-lease gate", () => {
     const handler = handle(DRIVER_CHANNEL);
     const { endpoint } = makeRemoteEndpoint(-4, "proj-2");
     const noteUnheldChange = vi.fn();
-    installGate(new Map(), { projectsForPath: async () => ["proj-1"] }, { keeps: true, noteUnheldChange });
+    installGate(
+      new Map(),
+      { projectsForPath: async () => ["proj-1"] },
+      { keeps: true, noteUnheldChange }
+    );
     await expect(
       getIpcDispatcher().invokeForEndpoint({ endpoint, client: REMOTE_CLIENT }, DRIVER_CHANNEL, [
         { rootPath: P1 },
