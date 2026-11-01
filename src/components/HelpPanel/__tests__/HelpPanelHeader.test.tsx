@@ -122,18 +122,18 @@ describe("HelpPanelHeader", () => {
   it("marks the Project option with background lane activity only while Global is shown", () => {
     const activity = summarizeLaneActivity([
       { label: "Session 1", agentState: "working" },
-      { label: "Session 2", agentState: "waiting" },
+      { label: "Session 2", agentState: "directing" },
       { label: "Session 3", agentState: null },
     ]);
     expect(activity).toEqual({
-      agentState: "waiting",
-      summary: "Session 1 working, Session 2 waiting",
+      agentState: "directing",
+      summary: "Session 1 working, Session 2 directing",
     });
 
     const { getByTestId, rerender } = renderHeader({ scope: "global", projectActivity: activity });
     const project = getByTestId("assistant-scope-project");
     expect(project.getAttribute("aria-label")).toBe(
-      "Project, Session 1 working, Session 2 waiting"
+      "Project, Session 1 working, Session 2 directing"
     );
 
     rerender(
@@ -157,10 +157,12 @@ describe("HelpPanelHeader", () => {
   });
 
   it("marks the Global option with the global run's observed state only while Project is shown", () => {
-    const activity = summarizeLaneActivity([{ label: "Global assistant", agentState: "waiting" }]);
+    const activity = summarizeLaneActivity([
+      { label: "Global assistant", agentState: "directing" },
+    ]);
     const { getByTestId, rerender } = renderHeader({ scope: "project", globalActivity: activity });
     const global = getByTestId("assistant-scope-global");
-    expect(global.getAttribute("aria-label")).toBe("Global, Global assistant waiting");
+    expect(global.getAttribute("aria-label")).toBe("Global, Global assistant directing");
     expect(global.querySelector("svg")).not.toBeNull();
     expect(getByTestId("assistant-scope-project").getAttribute("aria-label")).toBeNull();
 
@@ -187,6 +189,30 @@ describe("HelpPanelHeader", () => {
 
   it("summarizes nothing when no lane reports a state", () => {
     expect(summarizeLaneActivity([{ label: "Session 1", agentState: null }])).toBeNull();
+  });
+
+  // No Canopy reading ever covers an assistant, so a lane at its prompt asks
+  // nothing: it is neither named waiting nor marked on the other scope (#16059).
+  it("never names or marks a lane at its prompt as waiting", () => {
+    expect(
+      summarizeLaneActivity([
+        { label: "Session 1", agentState: "waiting" },
+        { label: "Session 2", agentState: "idle" },
+      ])
+    ).toBeNull();
+    expect(
+      summarizeLaneActivity([
+        { label: "Session 1", agentState: "waiting" },
+        { label: "Session 2", agentState: "working" },
+      ])
+    ).toEqual({ agentState: "working", summary: "Session 2 working" });
+  });
+
+  it("announces nothing for a lane at its prompt", () => {
+    const { getByTestId } = renderHeader({ agentState: "waiting" });
+    const announcer = getByTestId("assistant-header-state-announcer");
+    expect(announcer.textContent).toBe("");
+    expect(announcer.getAttribute("data-agent-state")).toBe("waiting");
   });
 
   it("closes an open overflow menu, not the panel beneath it, on Escape", () => {

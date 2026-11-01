@@ -1,7 +1,7 @@
 import { useCallback, useId, useMemo, useRef } from "react";
 import { LayoutGroup } from "framer-motion";
 import { Plus, RotateCw, SquareTerminal, X } from "lucide-react";
-import { SpinnerCircle, HollowCircle, InteractingCircle } from "@/components/icons";
+import { SpinnerCircle, InteractingCircle } from "@/components/icons";
 import { BrandMark } from "@/components/icons/BrandMark";
 import { getAgentConfig } from "@/config/agents";
 import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
@@ -28,22 +28,34 @@ import type { AgentState } from "@/types";
 import { NewSessionWithAgentLabel } from "./NewSessionWithAgentLabel";
 
 /**
+ * The states a lane's marker draws: work in flight, either the agent's or the
+ * user's own. A stop draws nothing. Amber is only for an ask Canopy read, and
+ * Canopy never reads an assistant (it reads fleet runs, and assistants aren't
+ * any), so a lane sitting at its prompt is not asking for anything and wears no
+ * waiting ring. Idle and exited lanes stay quiet too.
+ */
+type TabMarkerState = "working" | "directing";
+
+function tabMarkerState(agentState: AgentState | null | undefined): TabMarkerState | null {
+  return agentState === "working" || agentState === "directing" ? agentState : null;
+}
+
+/**
  * Per-lane state marker (#12108).
  *
- * Same triad and the same tokens the rest of the app uses for agent state, at the
- * 14px the header used to draw them at — only working, directing and waiting earn a
- * marker; idle and exited stay quiet. This is the whole reason the strip carries
- * state at all: a background session that has gone to `waiting` is otherwise
- * invisible until the user happens to switch to it.
+ * Same glyphs and the same tokens the rest of the app uses for agent state, at the
+ * 14px the header used to draw them at. This is the whole reason the strip carries
+ * state at all: a background session at work is otherwise invisible until the user
+ * happens to switch to it.
  *
  * The size is load-bearing rather than cosmetic. These marks are read peripherally,
- * and at 12px the three silhouettes stopped being separable from each other — a
- * filled ring, a hollow ring and a gapped arc all collapse to "small coloured dot",
- * which leaves hue as the only carrier and fails exactly the reader who most needs a
- * second cue.
+ * and at 12px the silhouettes stopped being separable from each other — a filled
+ * ring and a gapped arc collapse to "small coloured dot", which leaves hue as the
+ * only carrier and fails exactly the reader who most needs a second cue.
  */
 export function TabStateIndicator({ agentState }: { agentState: AgentState | null | undefined }) {
-  if (agentState === "working") {
+  const marker = tabMarkerState(agentState);
+  if (marker === "working") {
     return (
       <SpinnerCircle
         className="w-3.5 h-3.5 shrink-0 text-state-working animate-spin-slow motion-reduce:animate-none"
@@ -51,13 +63,10 @@ export function TabStateIndicator({ agentState }: { agentState: AgentState | nul
       />
     );
   }
-  if (agentState === "directing") {
+  if (marker === "directing") {
     return (
       <InteractingCircle className="w-3.5 h-3.5 shrink-0 text-category-blue" aria-hidden="true" />
     );
-  }
-  if (agentState === "waiting") {
-    return <HollowCircle className="w-3.5 h-3.5 shrink-0 text-state-waiting" aria-hidden="true" />;
   }
   return null;
 }
@@ -224,6 +233,9 @@ function SessionTabChip({
 }: SessionTabChipProps) {
   const closingFromMenuRef = useRef(false);
   const stateId = `${tabId}-state`;
+  // Described with what the marker draws and nothing else, so a lane at its
+  // prompt is never announced as waiting when nothing is asked of the user.
+  const marker = tabMarkerState(agentState);
   const agentName = showAgent && tab.agentId ? agentDisplayName(tab.agentId) : null;
   // The agent joins the name rather than the description: it is what tells two
   // `Session N` tabs apart, which is the job of a name.
@@ -257,7 +269,7 @@ function SessionTabChip({
       // The state reaches assistive tech as a DESCRIPTION, not as part of the name. An
       // explicit label on a tab overrides everything inside it, which would take the
       // marker's meaning away from exactly the reader who cannot see the glyph.
-      aria-describedby={agentState ? stateId : undefined}
+      aria-describedby={marker ? stateId : undefined}
       aria-keyshortcuts="Delete"
       onClick={() => onSelect(tab.slot)}
       onKeyDown={(e) => {
@@ -294,9 +306,9 @@ function SessionTabChip({
           className="-my-1 -mr-1.5"
         />
       )}
-      {agentState && (
+      {marker && (
         <span id={stateId} className="sr-only">
-          {agentState}
+          {marker}
         </span>
       )}
     </div>

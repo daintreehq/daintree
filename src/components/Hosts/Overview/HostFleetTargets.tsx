@@ -60,7 +60,9 @@ function ObservedState({ state }: { state: HostFleetTarget["agentState"] }) {
     <Icon
       className={cn(
         "h-3 w-3 shrink-0",
-        STATE_COLORS[state],
+        // The host's read carries no fleet band, and amber is the band's
+        // needs-you alone: a wait keeps its ring, in the neutral ink.
+        state === "waiting" ? "text-text-secondary" : STATE_COLORS[state],
         state === "working" && "animate-spin-slow motion-reduce:animate-none"
       )}
       aria-hidden="true"

@@ -28,11 +28,15 @@ export const HEADER_ACTION_CLASS = "[&_svg]:size-3.5";
 /** Which assistant the panel shows: this project's lanes, or the installation's one global run. */
 export type AssistantScope = "project" | "global";
 
-/** What the active lane's state is called when it is spoken rather than drawn. */
+/**
+ * What the active lane's state is called when it is spoken rather than drawn:
+ * the states the strip marks, and no others. A lane at its prompt is never
+ * announced as waiting, since only an ask Canopy read is, and Canopy never
+ * reads an assistant.
+ */
 const SPOKEN_STATE: Partial<Record<NonNullable<AgentState>, string>> = {
   working: "Assistant is working",
   directing: "Assistant is directing",
-  waiting: "Assistant is waiting",
 };
 
 /**
@@ -67,15 +71,17 @@ function AssistantStateAnnouncer({ agentState }: { agentState: AgentState | null
 /** The lane most worth a glance while its scope is off screen, and every lane's state in words. */
 export interface ScopeActivity {
   agentState: AgentState;
-  /** "Session 2 waiting, Session 3 working" — what was seen, lane by lane. */
+  /** "Session 2 directing, Session 3 working" — what was seen, lane by lane. */
   summary: string;
 }
 
-/** Most worth a glance first. Idle and exited lanes draw nothing, as in the strip. */
+/**
+ * Most worth a glance first. Only the states the strip marks: a lane at its
+ * prompt, idle or exited draws nothing there, so it isn't named here either.
+ */
 const LANE_STATE_RANK: Partial<Record<NonNullable<AgentState>, number>> = {
-  waiting: 0,
-  directing: 1,
-  working: 2,
+  directing: 0,
+  working: 1,
 };
 
 export function summarizeLaneActivity(

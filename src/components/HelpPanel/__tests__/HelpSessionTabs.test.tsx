@@ -13,7 +13,12 @@ import {
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { primeRadix } from "@/components/ui/radix-loader";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { HelpSessionTabs, helpSessionTabId, type HelpSessionTab } from "../HelpSessionTabs";
+import {
+  HelpSessionTabs,
+  TabStateIndicator,
+  helpSessionTabId,
+  type HelpSessionTab,
+} from "../HelpSessionTabs";
 
 function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
   return rtlRender(ui, { wrapper: InstantTooltips, ...options });
@@ -601,6 +606,37 @@ describe("HelpSessionTabs", () => {
     // this jsdom environment, and a `useId`-derived base contains characters an id
     // selector would have to escape.
     expect(container.querySelector(`[id="${describedBy}"]`)!.textContent).toBe("working");
+  });
+
+  // No Canopy reading ever covers an assistant, so a lane at its prompt asks
+  // nothing: no waiting ring and no "waiting" description, whether it is the
+  // lane on screen or one in the background (#16059).
+  it("marks only work in flight: working and directing, never a stop", () => {
+    for (const state of ["waiting", "idle", "completed", "exited", undefined] as const) {
+      const { container, unmount } = render(<TabStateIndicator agentState={state} />);
+      expect(container.innerHTML).toBe("");
+      unmount();
+    }
+    const working = render(<TabStateIndicator agentState="working" />);
+    expect(working.container.querySelector(".text-state-working")).not.toBeNull();
+    working.unmount();
+    const directing = render(<TabStateIndicator agentState="directing" />);
+    expect(directing.container.querySelector('[class*="text-category-blue"]')).not.toBeNull();
+    directing.unmount();
+  });
+
+  it("draws and says nothing for a lane at its prompt, on screen or not", () => {
+    const { container } = renderStrip({
+      tabs: [
+        { slot: 0, label: "Session 1", agentState: "waiting" },
+        { slot: 1, label: "Session 2", agentState: "waiting" },
+      ],
+    });
+    for (const tab of tabs(container)) {
+      expect(tab.querySelector('[class*="state-waiting"]')).toBeNull();
+      expect(tab.getAttribute("aria-describedby")).toBeNull();
+      expect(tab.textContent).not.toMatch(/waiting/i);
+    }
   });
 
   it("keeps the new-session control present, focusable and explained once every lane is taken", async () => {

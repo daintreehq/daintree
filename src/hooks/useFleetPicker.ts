@@ -48,6 +48,7 @@ export interface PickerTerminal {
   title: string;
   worktreeId: string;
   agentState: PtyPanelData["agentState"];
+  waitingReason?: PtyPanelData["waitingReason"];
 }
 
 export interface PickerWorktreeGroup {
@@ -356,6 +357,7 @@ export function useFleetPicker(options: UseFleetPickerOptions): UseFleetPickerRe
         title: t.title,
         worktreeId: t.worktreeId ?? FALLBACK_GROUP_ID,
         agentState: t.agentState,
+        waitingReason: t.waitingReason,
       });
     }
     return out;

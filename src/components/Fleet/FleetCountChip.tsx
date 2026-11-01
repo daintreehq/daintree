@@ -11,6 +11,8 @@ import type { AgentState } from "@/types";
 import type { WaitingReason } from "@shared/types/agent";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetRunStore } from "@/store/fleetRunStore";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import { fleetBandForRun, type FleetBand } from "@/lib/fleetAttention";
 import { usePanelStore } from "@/store/panelStore";
 import { exitProjectHome } from "@/store/storeAccessors";
 import { isGridPanelLocation, isPtyPanel } from "@shared/types/panel";
@@ -186,6 +188,16 @@ export function FleetCountChip({
         const p = state.panelsById[id];
         out[id] = p && isPtyPanel(p) ? p.waitingReason : undefined;
       }
+      return out;
+    })
+  );
+  // Each armed pane's fleet band, which alone decides whether its badge wears
+  // the waiting hue. Primitive values, so a fleet push that moves no armed
+  // pane's band doesn't re-render the inventory.
+  const bandsByPane = useFleetSnapshotStore(
+    useShallow((state) => {
+      const out: Record<string, FleetBand | undefined> = {};
+      for (const id of armOrder) out[id] = fleetBandForRun(state.snapshot, id);
       return out;
     })
   );
@@ -400,7 +412,12 @@ export function FleetCountChip({
                             Input locked
                           </span>
                         )}
-                        {renderPaneStateBadge(id, agentStatesByPane[id], waitingReasonsByPane[id])}
+                        {renderPaneStateBadge(
+                          id,
+                          agentStatesByPane[id],
+                          waitingReasonsByPane[id],
+                          bandsByPane[id]
+                        )}
                         <Button
                           variant="ghost"
                           size="icon-xs"
