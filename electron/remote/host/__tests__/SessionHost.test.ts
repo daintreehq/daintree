@@ -563,9 +563,7 @@ describe("SessionHost: one push for every view of a session (#15902)", () => {
     open(link, "view-2", "p1");
 
     registry.getRemote()[0]!.group!.sendToAll(frame);
-    expect(events(link).map((m) => (m.body as { endpointId: unknown }).endpointId)).toEqual([
-      null,
-    ]);
+    expect(events(link).map((m) => (m.body as { endpointId: unknown }).endpointId)).toEqual([null]);
   });
 
   it("owes every view of the session a repaint when the event can't be sent", () => {
