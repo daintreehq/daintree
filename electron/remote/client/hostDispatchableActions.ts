@@ -66,6 +66,11 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "agent.listAvailable",
   "agent.listModels",
   "agent.listPresets",
+  // The host's own user presets: agent settings are host channels, so the write
+  // lands where the agent runs, and each one raises this Shell's dialog (#16047).
+  "agent.createPreset",
+  "agent.updatePreset",
+  "agent.deletePreset",
   "agent.readQuota",
   "assistant.list",
   "assistant.start",

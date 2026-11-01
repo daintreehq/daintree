@@ -222,6 +222,16 @@ export interface ActionContext {
    */
   hostApprovedPush?: HostApprovedPush;
   /**
+   * The user-preset write a human approved in the host confirm dialog (#16047),
+   * as the fingerprint of the change it previewed. Set by
+   * `ActionService.dispatch` from
+   * {@link ActionDispatchOptions.hostApprovedPresetWrite} on the same terms as
+   * {@link hostApprovedPush}. The write refuses when its own plan, made after
+   * every await, no longer matches. Absent means no dialog previewed it (a
+   * grant or the skip preference), and it is written as planned.
+   */
+  hostApprovedPresetWrite?: string;
+  /**
    * When main gives up on the agent dispatch running this action, as epoch ms
    * on this machine's clock (#15648). Set by `ActionService.dispatch` from
    * {@link ActionDispatchOptions.dispatchDeadlineAt} on the same terms as
@@ -651,6 +661,13 @@ export interface ActionDispatchOptions {
    * from the preview the approver actually read.
    */
   hostApprovedPush?: HostApprovedPush;
+  /**
+   * Trusted fingerprint of the user-preset write a host confirmation previewed
+   * and a human approved — NOT a client-supplied value. See
+   * {@link ActionContext.hostApprovedPresetWrite}. Set only by the MCP renderer
+   * bridge.
+   */
+  hostApprovedPresetWrite?: string;
   /**
    * Main's deadline for the MCP dispatch this runs — NOT a client-supplied
    * value. See {@link ActionContext.dispatchDeadlineAt}. Set only by the MCP

@@ -574,7 +574,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // seven calls, each a check the caller had to remember and order. The prose
   // names the three refusals and that its own panes are closed and waited for
   // first. In-app only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 24_510;
+  // 24_510 → 25_220 for #16047's three user-preset writes, measured at 25_190 B
+  // (+710). Each has to say the user approves the exact change, that a value
+  // Daintree would drop at launch is refused, and that only the user's own
+  // presets can change; the create adds that it doesn't become the default, the
+  // edit how a patch clears a field. In-app only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 25_220;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1145,6 +1150,9 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "devPreview.reinstallAndRestart",
   "artifact.applyPatch",
   "agentSettings.reset",
+  "agent.createPreset",
+  "agent.updatePreset",
+  "agent.deletePreset",
   "app.importConfig",
   "forge.createPR",
   "forge.closePR",
@@ -1289,6 +1297,12 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // all agents at once is destructive-local with no undo); there is no UI
   // ConfirmDialog because there is no user-facing dispatch path.
   "agentSettings.reset",
+  // The user-preset writes (#16047) are agent/MCP-only and palette-hidden;
+  // Settings edits presets through the store directly, not ActionService. The
+  // confirm is the generic McpConfirmDialog, previewing the exact change.
+  "agent.createPreset",
+  "agent.updatePreset",
+  "agent.deletePreset",
   // ConfirmDialog with diff preview in ArtifactOverlay.tsx; the dispatch lives in
   // useArtifacts.ts (action ID not co-located with the dialog component).
   "artifact.applyPatch",
@@ -1430,6 +1444,13 @@ describe("destructive-action danger metadata", () => {
       // schedules.runNow names the schedule to run.
       scheduleId: "schedule-placeholder",
     };
+    // Strict schemas, which the union above can't satisfy: its extra keys are
+    // themselves a VALIDATION_ERROR, so the confirm gate would never be reached.
+    const STRICT_ARGS: Readonly<Record<string, Record<string, unknown>>> = {
+      "agent.createPreset": { agentId: "claude", name: "placeholder" },
+      "agent.updatePreset": { agentId: "claude", presetId: "preset-placeholder", name: "p" },
+      "agent.deletePreset": { agentId: "claude", presetId: "preset-placeholder" },
+    };
 
     // Some listed actions (e.g. worktree.resource.teardown) gate availability
     // via `isEnabled`, which runs *before* the confirm gate. Without a view
@@ -1502,7 +1523,7 @@ describe("destructive-action danger metadata", () => {
     const failures: string[] = [];
     try {
       for (const id of EXPECTED_CONFIRM_DANGER) {
-        const result = await service.dispatch(id, placeholderArgs, {
+        const result = await service.dispatch(id, STRICT_ARGS[id] ?? placeholderArgs, {
           source: "agent",
           contextOverride,
         });
@@ -1609,6 +1630,9 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "host.ensureProject": { hostId: "h-placeholder" },
       "host.settings": { operation: "read", hostIds: ["h-placeholder"] },
       "host.watch": { operation: "list" },
+      "agent.createPreset": { agentId: "claude", name: "p-placeholder" },
+      "agent.updatePreset": { agentId: "claude", presetId: "p-placeholder", name: "p" },
+      "agent.deletePreset": { agentId: "claude", presetId: "p-placeholder" },
     };
 
     const failures: string[] = [];

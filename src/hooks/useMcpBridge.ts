@@ -83,6 +83,19 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { resolveMcpConfirmRequester } from "@/lib/mcpConfirmRequester";
 import { waitForWorktreeSnapshot } from "@/store/worktreeSnapshotSync";
 import { withReplayedWorktreeDetails } from "@/services/actions/replayedContextWorktree";
+import {
+  agentPresetMutationFingerprint,
+  isAgentPresetMutationAction,
+  planAgentPresetMutation,
+  type AgentPresetMutation,
+  type AgentPresetMutationActionId,
+} from "@/services/actions/definitions/agentPresetMutation";
+import { readPresetWriteSources } from "@/services/actions/definitions/agentPresetSources";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import {
+  agentPresetPreviewSubject,
+  formatAgentPresetPreviewLines,
+} from "@/lib/mcpAgentPresetPreview";
 
 const REJECTION_RESULT: ActionDispatchResult = {
   ok: false,
@@ -207,6 +220,9 @@ const MCP_SPAWN_TAGGED_ACTIONS = new Set([
 ]);
 
 function shouldTagMcpSpawn(actionId: string): boolean {
+  // The preset writes launch nothing, and their strict schemas would refuse the
+  // spawn fields as unknown (#16047).
+  if (isAgentPresetMutationAction(actionId)) return false;
   return actionId.startsWith("agent.") || MCP_SPAWN_TAGGED_ACTIONS.has(actionId);
 }
 
@@ -280,7 +296,14 @@ export type McpConfirmPreviewTarget =
    * (#15270): which conversation it continues is the choice the hold left to
    * the user, and the argument summary never shows the conversation.
    */
-  | { kind: "terminalStartHeld"; terminalId: string; start: StartHeldChoice };
+  | { kind: "terminalStartHeld"; terminalId: string; start: StartHeldChoice }
+  /**
+   * A user-preset write (#16047), planned from the dispatch arguments and the
+   * stored presets. Synchronous like the forge kinds: the arguments are the
+   * change, and the env inside them reaches the argument summary only as
+   * `<object>`. Planned again at `run()`, which writes what that plan says.
+   */
+  | { kind: "agentPreset"; mutation: AgentPresetMutation };
 
 /** Section heading rendered above each kind's preview lines. */
 const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
@@ -296,10 +319,81 @@ const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
   forgeAddIssueComment: "Comment to be posted",
   terminalLaunch: "Terminal to be opened",
   terminalStartHeld: "Held pane to be started",
+  // Replaced per operation below. Present so the map stays exhaustive.
+  agentPreset: "Launch preset",
+};
+
+const AGENT_PRESET_PREVIEW_TITLES: Record<AgentPresetMutation["operation"], string> = {
+  create: "Preset to be created",
+  update: "Changes to this preset",
+  delete: "Preset to be removed",
 };
 
 export function mcpConfirmPreviewTitle(target: McpConfirmPreviewTarget): string {
+  if (target.kind === "agentPreset") return AGENT_PRESET_PREVIEW_TITLES[target.mutation.operation];
   return PREVIEW_TITLES[target.kind];
+}
+
+/**
+ * Stands in for a create's id while it is only being previewed or checked; the
+ * run mints the one that is stored. Fresh each time, so it can't match a real
+ * preset a fallback names and refuse that as the preset naming itself.
+ */
+function previewPresetId(): string {
+  return `user-${crypto.randomUUID()}`;
+}
+
+/**
+ * The preset or its defaults changed between the preview and the approval
+ * (#16047). Main reads `CONFIRMATION_REQUIRED` as "ask again", which is what
+ * the caller should do: a fresh call previews the preset as it now stands.
+ */
+const PRESET_CHANGED_RESULT: ActionDispatchResult = {
+  ok: false,
+  error: {
+    code: "CONFIRMATION_REQUIRED",
+    message:
+      "Preset write refused: the preset or its defaults changed while the confirmation was open, so the approval doesn't cover what would be written. Nothing was written. Call again to raise a fresh confirmation.",
+  },
+};
+
+/** Plan a preset write against this view's stores, for its preview or its refusal. */
+function planPresetWriteHere(
+  actionId: AgentPresetMutationActionId,
+  args: unknown,
+  context: ActionContext | undefined
+) {
+  // Whole-object precedence, as `ActionService` applies a pinned context.
+  const projectId = (context ?? actionService.getContext()).projectId;
+  return planAgentPresetMutation(
+    actionId,
+    args,
+    readPresetWriteSources(projectId),
+    previewPresetId()
+  );
+}
+
+/**
+ * A preset write the run would refuse, refused before anyone is asked (#16047):
+ * a value the launch-time sanitiser would drop, a field the schema doesn't
+ * know, or a preset that isn't the user's own. Approving one would hand the
+ * user a dialog that could only end in an error, and the caller learns what to
+ * fix sooner. Undefined when the write can be put to the user.
+ */
+async function presetWriteRefusal(
+  actionId: AgentPresetMutationActionId,
+  args: unknown,
+  context: ActionContext | undefined
+): Promise<ActionDispatchResult | undefined> {
+  // A load failure leaves the store empty, and the plan refuses that itself.
+  await useAgentSettingsStore
+    .getState()
+    .initialize()
+    .catch(() => {});
+  const plan = planPresetWriteHere(actionId, args, context);
+  return plan.ok
+    ? undefined
+    : { ok: false, error: { code: "VALIDATION_ERROR", message: plan.message } };
 }
 
 /**
@@ -647,6 +741,10 @@ export function resolveMcpConfirmPreviewTarget(
     const target = startHeldArgs(args);
     return target === undefined ? undefined : { kind: "terminalStartHeld", ...target };
   }
+  if (isAgentPresetMutationAction(actionId)) {
+    const plan = planPresetWriteHere(actionId, args, context);
+    return plan.ok ? { kind: "agentPreset", mutation: plan.mutation } : undefined;
+  }
   if (actionId === "worktree.delete") {
     const worktreeId = worktreeIdArg(args);
     return worktreeId === undefined
@@ -754,6 +852,7 @@ export function resolveMcpConfirmSubject(
       const recipe = useRecipeStore.getState().getRecipeById(target.resolvedRecipeId);
       return recipe?.name !== undefined && recipe.name.length > 0 ? recipe.name : undefined;
     }
+    if (target.kind === "agentPreset") return agentPresetPreviewSubject(target.mutation);
     if (target.kind === "terminalStartHeld") {
       const title = readStartHeldPane(target.terminalId)?.title;
       return title !== undefined && title.length > 0
@@ -954,6 +1053,9 @@ export async function buildMcpConfirmPreview(
       lines: formatStartHeldPreviewLines(target.start, readStartHeldPane(target.terminalId)),
     };
   }
+  if (target.kind === "agentPreset") {
+    return { lines: formatAgentPresetPreviewLines(target.mutation) };
+  }
   const operation = target.kind === "gitPush" ? "push" : "pull-rebase";
   try {
     const preview = await buildGitRemoteOperationPreview(target.cwd, operation);
@@ -1113,6 +1215,8 @@ function withPreviewedWorktreeCwd(
   if (target.kind === "terminalLaunch") return args;
   // Names a pane by id and carries no directory to pin.
   if (target.kind === "terminalStartHeld") return args;
+  // Names a preset by id; settings aren't worktree-scoped.
+  if (target.kind === "agentPreset") return args;
   // Named per kind rather than left to a fall-through: every remaining kind
   // happens to carry a path today, and a future one that does not would
   // otherwise silently pin `cwd: undefined` onto a dispatch.
@@ -1304,6 +1408,9 @@ export function useMcpBridge(): void {
         // undefined for a pre-granted dispatch, which previews nothing and so
         // keeps pushing the worktree as it stands.
         let approvedPush: HostApprovedPush | undefined;
+        // The preset half (#16047): the fingerprint of the change the dialog
+        // showed, so the write can refuse a plan that moved after this check.
+        let approvedPresetWrite: string | undefined;
         try {
           let effectiveConfirmed = confirmed;
 
@@ -1379,6 +1486,22 @@ export function useMcpBridge(): void {
                 },
               });
               return;
+            }
+            if (
+              definition &&
+              definition.danger === "confirm" &&
+              approvalOnly !== true &&
+              isAgentPresetMutationAction(actionId)
+            ) {
+              const refusal = await presetWriteRefusal(actionId, args, context);
+              if (disposed) return;
+              if (refusal) {
+                window.electron.mcpBridge.sendDispatchActionResponse({
+                  requestId,
+                  result: refusal,
+                });
+                return;
+              }
             }
             if (definition && (definition.danger === "confirm" || approvalOnly === true)) {
               inFlightConfirms.add(requestId);
@@ -1664,6 +1787,37 @@ export function useMcpBridge(): void {
                 });
                 return;
               }
+
+              // A preset write runs only on the change it was shown (#16047).
+              // `run()` plans again against the store it writes, so a preset
+              // edited, removed or made a default in another view while the
+              // dialog was open would otherwise be written on an approval that
+              // described something else. Keyed on the action, like the push
+              // check: with no preview, the approval covers no change.
+              if (isAgentPresetMutationAction(actionId)) {
+                const shown =
+                  previewTarget?.kind === "agentPreset" ? previewTarget.mutation : undefined;
+                const now = planPresetWriteHere(actionId, args, context);
+                const refusal: ActionDispatchResult | undefined = !now.ok
+                  ? { ok: false, error: { code: "VALIDATION_ERROR", message: now.message } }
+                  : shown === undefined ||
+                      agentPresetMutationFingerprint(now.mutation) !==
+                        agentPresetMutationFingerprint(shown)
+                    ? PRESET_CHANGED_RESULT
+                    : undefined;
+                if (refusal !== undefined) {
+                  window.electron.mcpBridge.sendDispatchActionResponse({
+                    requestId,
+                    result: refusal,
+                    confirmationDecision,
+                  });
+                  return;
+                }
+                // The run still loads its chunk and the settings before it
+                // writes, so it compares its own final plan with this too.
+                if (shown !== undefined)
+                  approvedPresetWrite = agentPresetMutationFingerprint(shown);
+              }
             }
           }
 
@@ -1719,6 +1873,7 @@ export function useMcpBridge(): void {
                 ...(hostApprovedTargets ? { hostApprovedTargets } : {}),
                 ...(approvedRecipeRun ? { hostApprovedRecipeRun: approvedRecipeRun } : {}),
                 ...(approvedPush ? { hostApprovedPush: approvedPush } : {}),
+                ...(approvedPresetWrite ? { hostApprovedPresetWrite: approvedPresetWrite } : {}),
                 // An approval's run budget replaces the deadline main first
                 // sent; a dispatch nobody was asked about keeps that one. An
                 // action that waits on a person gives up at it (#15648).

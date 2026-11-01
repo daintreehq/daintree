@@ -414,6 +414,9 @@ export const BUILT_IN_ACTION_IDS = [
   "agent.listToolbar",
   "agent.listAvailable",
   "agent.listPresets",
+  "agent.createPreset",
+  "agent.updatePreset",
+  "agent.deletePreset",
   "agent.listModels",
   "agentSessionHistory.list",
   "agentSessionHistory.resume",
@@ -717,4 +720,8 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   // Persists custom flags, bypass mode and presets into every later launch of
   // that agent: the configuration a plugin's own agent.launch is refused (#13762).
   "agentSettings.set",
+  // The same configuration one preset at a time (#16047).
+  "agent.createPreset",
+  "agent.updatePreset",
+  "agent.deletePreset",
 ] as const satisfies readonly BuiltInRuntimeActionId[];
