@@ -506,6 +506,24 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
       });
       return answer.then((choice) => choice !== "cancel");
     },
+    reusableRemoteViewPath(windowId, hostId, projectId) {
+      const pvm = getWindowRegistry()?.getByWindowId(windowId)?.services.projectViewManager;
+      const key = toHostScopedKey(hostId, projectId);
+      if (!pvm || !hasReusableProjectView(pvm, key)) return null;
+      return pvm.getAllViews().find((entry) => entry.projectId === key)?.projectPath || null;
+    },
+    shownProjectKey(windowId) {
+      const pvm = getWindowRegistry()?.getByWindowId(windowId)?.services.projectViewManager;
+      return pvm && !pvm.disposed ? pvm.getActiveProjectId() : null;
+    },
+    discardCachedView(windowId, hostId, projectId) {
+      const pvm = getWindowRegistry()?.getByWindowId(windowId)?.services.projectViewManager;
+      if (!pvm || pvm.disposed) return;
+      const key = toHostScopedKey(hostId, projectId);
+      if (pvm.getActiveProjectId() === key || pvm.getOutgoingBridgeProjectId() === key) return;
+      pvm.abandonBackgroundRestore(key);
+      pvm.destroyView(key);
+    },
     revealWindow(windowId) {
       const ctx = getWindowRegistry()?.getByWindowId(windowId);
       if (!ctx || ctx.browserWindow.isDestroyed()) return;
@@ -544,13 +562,13 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
     },
     async replaceWithLocalWindow(windowId) {
       const old = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
-      if (!old || old.isDestroyed()) return;
+      if (!old || old.isDestroyed()) return null;
       if (!windowOpener) throw new Error("No window can be opened yet");
       const opener = windowOpener;
       const bounds = old.getNormalBounds();
       const maximized = old.isMaximized();
       const fullScreen = old.isFullScreen();
-      let replaced = false;
+      let replacement: number | null = null;
       // The old window closes the moment its successor exists, synchronously:
       // nothing (a switch, a quit's window snapshot) can come between the two,
       // and there is never a moment with neither window open.
@@ -568,10 +586,13 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
             });
           }
           old.close();
-          replaced = true;
+          replacement = nextId;
         },
       });
-      if (!replaced && !old.isDestroyed()) throw new Error("The replacement window didn't open");
+      if (replacement === null && !old.isDestroyed()) {
+        throw new Error("The replacement window didn't open");
+      }
+      return replacement;
     },
     appViewId(windowId) {
       const win = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;

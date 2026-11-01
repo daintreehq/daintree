@@ -175,6 +175,13 @@ function notifyEndpointOpened(
 /** How long a host gets to list its projects before the listing counts as failed. */
 export const HOST_PROJECT_LIST_TIMEOUT_MS = 8_000;
 
+/**
+ * How long a host gets to describe a project, or name the one this Shell last
+ * showed there, before the lookup counts as failed: a switch waits on these,
+ * and a wedged host should fail it as soon as it fails a listing.
+ */
+export const HOST_PROJECT_LOOKUP_TIMEOUT_MS = HOST_PROJECT_LIST_TIMEOUT_MS;
+
 export class HostConnection {
   readonly hostId: HostId;
   private readonly link: LinkClient;
@@ -555,7 +562,11 @@ export class HostConnection {
         userMessage: "Couldn't reach this host. Check that it is on and try again.",
       });
     }
-    const answer = await session.call(LinkMethod.DESCRIBE_PROJECT, { projectId });
+    const answer = await session.call(
+      LinkMethod.DESCRIBE_PROJECT,
+      { projectId },
+      { timeoutMs: HOST_PROJECT_LOOKUP_TIMEOUT_MS }
+    );
     if (answer === null) return null;
     const parsed = ProjectDescriptionSchema.safeParse(answer);
     if (!parsed.success) {
@@ -610,7 +621,9 @@ export class HostConnection {
   async lastActiveProject(): Promise<ProjectDescription | null> {
     const session = this.session;
     if (!session || !session.isOpen) return null;
-    const answer = await session.call(LinkMethod.LAST_ACTIVE_PROJECT, null);
+    const answer = await session.call(LinkMethod.LAST_ACTIVE_PROJECT, null, {
+      timeoutMs: HOST_PROJECT_LOOKUP_TIMEOUT_MS,
+    });
     const parsed = ProjectDescriptionSchema.safeParse(answer);
     return parsed.success ? parsed.data : null;
   }

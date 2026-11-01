@@ -83,6 +83,11 @@ export function forgetRemoteWorkspaceTitles(hostId: HostId): void {
   }
 }
 
+/** The project name last remembered for a host-scoped view; null when none was. */
+export function rememberedRemoteProjectName(key: string): string | null {
+  return remoteWorkspaceTitles.get(key)?.projectName ?? null;
+}
+
 /** A host-scoped view's name as its window title shows it; null for any other key. */
 export function remoteWorkspaceName(key: string): string | null {
   const remote = remoteWorkspaceTitles.get(key);
