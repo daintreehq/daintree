@@ -14,6 +14,7 @@ import type { PendingUpdateInstallStage } from "./utils/updateInstallStages.js";
 import type { TerminalConfig } from "../shared/types/ipc/config.js";
 import type { HostDescriptor } from "../shared/types/remoteHosts.js";
 import type { DeviceAnswerSettings } from "../shared/types/ipc/deviceAnswer.js";
+import type { DecisionsSettings } from "../shared/types/decisions.js";
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
 import type { InstalledPluginRecord } from "../shared/types/plugin.js";
 import type { ErrorRecord } from "../shared/types/ipc/errors.js";
@@ -921,6 +922,13 @@ export interface StoreSchema {
    * validated on load.
    */
   deviceAnswer?: DeviceAnswerSettings;
+  /**
+   * Daintree Decisions (#15998): the owner's one switch, the relay this machine
+   * talks to, and its ids there. Never a secret. Additive key with no numbered
+   * migration: absent reads as off, and every read goes through
+   * `sanitizeDecisionsSettings`.
+   */
+  decisions?: DecisionsSettings;
   /** Client-side behaviour while a window is attached to a remote host. */
   remoteHostsPreferences?: { interceptCtrlVImages: boolean };
   /**

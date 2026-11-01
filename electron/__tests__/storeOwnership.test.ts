@@ -2,11 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
   APP_STATE_FIELD_OWNERSHIP,
   AUDIT_LOGS_STORE_OWNERSHIP,
+  DECISIONS_FIELD_OWNERSHIP,
   STORE_KEY_OWNERSHIP,
   TERMINAL_CONFIG_FIELD_OWNERSHIP,
   WINDOW_STATES_STORE_OWNERSHIP,
 } from "../storeOwnership.js";
 import { SETTING_CATALOG } from "../../shared/config/settingOwnership.js";
+import { mergeByOwnership, splitByOwnership } from "../remote/hybrid/fieldOwnership.js";
+import { defaultDecisionsSettings } from "../services/decisions/decisionsSettings.js";
+import type { DecisionsSettings } from "../../shared/types/decisions.js";
 
 type Declarations = Readonly<Record<string, { readonly owner: string }>>;
 
@@ -21,6 +25,7 @@ const config: Readonly<
 const FIELD_TABLES: Record<string, Readonly<Record<string, string>>> = {
   terminalConfig: TERMINAL_CONFIG_FIELD_OWNERSHIP,
   appState: APP_STATE_FIELD_OWNERSHIP,
+  decisions: DECISIONS_FIELD_OWNERSHIP,
 };
 
 describe("store ownership derived from the settings catalog", () => {
@@ -48,6 +53,34 @@ describe("store ownership derived from the settings catalog", () => {
       expect(entry && "fields" in entry, key).toBe(true);
       if (entry && "fields" in entry) expect(table, key).toEqual(declaredOwners(entry.fields));
     }
+  });
+
+  it("routes every Decisions field, the switch and relay included, to this machine and never a host", () => {
+    const fields = Object.keys(defaultDecisionsSettings()) as (keyof DecisionsSettings)[];
+    expect(Object.keys(DECISIONS_FIELD_OWNERSHIP).sort()).toEqual([...fields].sort());
+
+    const owners: DecisionsSettings = {
+      enabled: true,
+      relayOrigin: "https://relay.owner.example",
+      installationId: "owner-installation",
+      deviceId: "owner-desktop-01",
+      hostId: "owner-host-0001",
+      proxyAllowlisted: true,
+    };
+    const hostCopy: DecisionsSettings = {
+      enabled: false,
+      relayOrigin: "https://relay.host.example",
+      installationId: "host-installation",
+      deviceId: "host-device-0001",
+      hostId: "host-host-00001",
+      proxyAllowlisted: false,
+    };
+    expect(mergeByOwnership(owners, hostCopy, DECISIONS_FIELD_OWNERSHIP)).toEqual(owners);
+    expect(splitByOwnership(hostCopy, DECISIONS_FIELD_OWNERSHIP)).toEqual({
+      device: hostCopy,
+      host: {},
+    });
+    expect(STORE_KEY_OWNERSHIP.decisions).toBe("device");
   });
 
   it("keeps the window-states and audit-logs stores' declared owners", () => {
