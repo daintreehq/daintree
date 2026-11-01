@@ -3,8 +3,10 @@ import type { TerminalInfo } from "./types.js";
 import type { TerminalSubmitGuard } from "../../../shared/types/pty-host.js";
 import {
   ASSISTANT_SEND_GATE,
+  EXACT_PROMPT_GATE,
   evaluateWakeGate,
   wakeGateOptionsFor,
+  type WakeGateOptions,
   type WakeGateSnapshot,
 } from "../../../shared/utils/terminalWakeGate.js";
 import type { AnalysisBackend } from "./analysis/AnalysisBackend.js";
@@ -372,8 +374,10 @@ export class TerminalInputController {
 
     const admit =
       guard === "settled-prompt-strict"
-        ? () => this.admitStrict()
-        : guard === "settled-prompt"
+        ? () => this.admitStrict(ASSISTANT_SEND_GATE)
+        : guard === "settled-prompt-exact"
+          ? () => this.admitStrict(EXACT_PROMPT_GATE)
+          : guard === "settled-prompt"
           ? () =>
               !this.isInputLocked &&
               evaluateWakeGate(
@@ -386,9 +390,10 @@ export class TerminalInputController {
 
   /**
    * Only at a prompt settled since the lane last wrote to it, and never
-   * mid-turn. A prose question is still that prompt (#14475).
+   * mid-turn. `gate` says whether a prose question is still that prompt
+   * (#14475): for an assistant's brief it is, for a Decisions answer it isn't.
    */
-  private admitStrict(): boolean {
+  private admitStrict(gate: WakeGateOptions): boolean {
     if (this.isInputLocked) return false;
     const terminal = this.host.terminalInfo;
     if (
@@ -397,7 +402,7 @@ export class TerminalInputController {
     ) {
       return false;
     }
-    return evaluateWakeGate(wakeGateSnapshot(terminal), ASSISTANT_SEND_GATE).kind === "ready";
+    return evaluateWakeGate(wakeGateSnapshot(terminal), gate).kind === "ready";
   }
 
   /**

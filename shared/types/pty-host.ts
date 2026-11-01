@@ -1494,8 +1494,16 @@ export type TerminalSubmitStatusState = "slow" | "stalled" | "settled" | "failed
  * for a CLI that queues input while it works: a brief one assistant sends
  * another (#13496) is refused rather than taken in the middle of a turn. A
  * question the agent asked in prose still counts as its prompt (#14475).
+ *
+ * `settled-prompt-exact` is the strict check without that allowance: only an
+ * agent waiting at its own prompt, settled since the lane last wrote to it,
+ * never mid-turn and never at a question. A Decisions answer waits for
+ * exactly that (#16015).
  */
-export type TerminalSubmitGuard = "settled-prompt" | "settled-prompt-strict";
+export type TerminalSubmitGuard =
+  | "settled-prompt"
+  | "settled-prompt-strict"
+  | "settled-prompt-exact";
 
 /** A submission's text as a run's first-prompt record, before it was written (#15521). */
 export type FirstPromptCandidate = Omit<TerminalFirstPrompt, "via" | "at">;
