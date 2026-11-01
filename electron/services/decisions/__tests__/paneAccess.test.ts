@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PaneIdentity } from "@daintreehq/decisions-client";
+import { NO_WORKTREE } from "../decisionWake.js";
 import {
   createPaneAccess,
   type PaneAccessSources,
@@ -89,6 +90,13 @@ describe("createPaneAccess", () => {
     expect(result?.origin).toMatchObject({ agent_kind: "codex", agent_session_id: null });
   });
 
+  it("takes a pane in no worktree, as a scratch folder's, with no worktree id", async () => {
+    const result = await createPaneAccess(
+      sources(world({ worktreeId: undefined }))
+    ).authenticator.authenticate(TOKEN);
+    expect(result?.origin.worktree_id).toBe(NO_WORKTREE);
+  });
+
   it("refuses tokens that aren't a live pane bearer", async () => {
     const access = createPaneAccess(sources(world()));
     for (const token of ["", "api-key", "help-token", "plugin-grant"]) {
@@ -105,7 +113,6 @@ describe("createPaneAccess", () => {
     ["has no agent incarnation", { agentIncarnation: undefined }],
     ["names no agent", { launchAgentId: undefined }],
     ["has no project", { projectId: undefined }],
-    ["has no worktree", { worktreeId: undefined }],
     ["is in another project than its launch bound", { projectId: "p2" }],
   ])("refuses a pane that %s", async (_label, info) => {
     const access = createPaneAccess(sources(world(info)));

@@ -718,13 +718,18 @@ describe("DecisionsService relay connection", () => {
   });
   /** Routes the service opens for agents' questions, with what became of each. */
   function questionRoutes(events: string[] = []) {
-    const opened: Array<{ source: QuestionSource; closed: number; release: () => void }> = [];
-    const openQuestions = (source: QuestionSource) => {
+    const opened: Array<{
+      source: QuestionSource;
+      previous: Promise<void>;
+      closed: number;
+      release: () => void;
+    }> = [];
+    const openQuestions = (source: QuestionSource, previous: Promise<void>) => {
       let release!: () => void;
       const released = new Promise<void>((resolve) => {
         release = resolve;
       });
-      const record = { source, closed: 0, release };
+      const record = { source, previous, closed: 0, release };
       opened.push(record);
       events.push(`questions opened ${opened.length}`);
       return {
@@ -845,6 +850,28 @@ describe("DecisionsService relay connection", () => {
     await connection!.store.updateQuestion("q_2", { local_status: "open" });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(store.listQuestions).toHaveBeenCalledTimes(2);
+  });
+
+  it("opens a connection's questions only once the route they replace has let go of the listener", async () => {
+    const routes = questionRoutes();
+    const { service, made } = connected(undefined, routes.openQuestions);
+    await service.start(on(RELAY));
+    made[0]!.options.onQuestionsReady!(SOURCE);
+
+    service.updateSettings(on({ ...RELAY, deviceId: "dev_another1" }));
+    made[1]!.options.onQuestionsReady!(SOURCE);
+    expect(routes.opened).toHaveLength(2);
+    let previousSettled = false;
+    void routes.opened[1]!.previous.then(() => {
+      previousSettled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(previousSettled).toBe(false);
+
+    routes.opened[0]!.release();
+    await vi.waitFor(() => expect(previousSettled).toBe(true));
+    routes.opened[1]!.release();
+    await service.stop();
   });
 
   it("serves no questions when it is given no way to open them", async () => {

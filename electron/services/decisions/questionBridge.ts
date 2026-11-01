@@ -60,17 +60,51 @@ export class QuestionBridge extends DecisionsBridge {
 
   override async getDecision(questionId: string, pane?: PaneIdentity): Promise<DecisionView> {
     const live = this.admit(pane);
-    return live ? live.getDecision(questionId, pane) : super.getDecision(questionId, pane);
+    const asker = await this.askerOf(questionId, pane!);
+    return live ? live.getDecision(questionId, asker) : super.getDecision(questionId, asker);
   }
 
   override async cancelQuestion(questionId: string, pane?: PaneIdentity): Promise<void> {
     const live = this.admit(pane);
-    return live ? live.cancelQuestion(questionId, pane) : super.cancelQuestion(questionId, pane);
+    const asker = await this.askerOf(questionId, pane!);
+    if (live === null) return super.cancelQuestion(questionId, asker);
+    // The library checks the question is this pane's before anything is touched.
+    await live.getDecision(questionId, asker);
+    await this.keepCreate(questionId);
+    return live.cancelQuestion(questionId, asker);
   }
 
   override async listPending(pane?: PaneIdentity): Promise<DecisionView[]> {
     const live = this.admit(pane);
     return live ? live.listPending(pane) : super.listPending(pane);
+  }
+
+  /**
+   * `pane` as the question's asker is matched. The library compares the agent
+   * session exactly, but a session learned since the question was asked is
+   * that same run's (as delivery takes it, `decisionWake.ts`), so a question
+   * asked with none is matched with none.
+   */
+  private async askerOf(questionId: string, pane: PaneIdentity): Promise<PaneIdentity> {
+    if (pane.agent_session_id === null) return pane;
+    const row = await this.question.source.store.getQuestion(questionId);
+    return row?.origin.agent_session_id === null ? { ...pane, agent_session_id: null } : pane;
+  }
+
+  /**
+   * A live attempt's flush may already hold this question's create in hand,
+   * and would send it even after the library's cancel drops it as never
+   * published, bringing the question back. So a cancel while an attempt runs
+   * keeps the create, marked as possibly published, and the library queues a
+   * real cancel to follow it.
+   */
+  private async keepCreate(questionId: string): Promise<void> {
+    const store = this.question.source.store;
+    const create = (await store.outboxFor(questionId)).find((item) => item.kind === "create");
+    const payload = create?.payload;
+    if (create === undefined || typeof payload !== "object" || payload === null) return;
+    if ((payload as { maybePublished?: unknown }).maybePublished === true) return;
+    await store.putOutbox({ ...create, payload: { ...payload, maybePublished: true } });
   }
 
   /**

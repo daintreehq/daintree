@@ -200,4 +200,83 @@ describe("QuestionBridge", () => {
     await expect(second).resolves.toMatchObject({ questionId: "q_live" });
     expect(live.registerQuestion).toHaveBeenCalledTimes(2);
   });
+  it("takes a session learned since a question was asked as that run's, and no other session", async () => {
+    const b = bridge();
+    const asked = await b.registerQuestion({ origin: ORIGIN, input: { question: "Before?" } });
+    const learned = { ...paneIdentityOf(ORIGIN), agent_session_id: "session-9" };
+    await expect(b.getDecision(asked.questionId, learned)).resolves.toMatchObject({
+      questionId: asked.questionId,
+    });
+
+    const known = await b.registerQuestion({
+      origin: { ...ORIGIN, agent_session_id: "session-1" },
+      input: { question: "Known?" },
+    });
+    await expect(
+      b.getDecision(known.questionId, { ...paneIdentityOf(ORIGIN), agent_session_id: "session-2" })
+    ).rejects.toMatchObject({ code: "not_found" });
+    await expect(b.cancelQuestion(asked.questionId, learned)).resolves.toBeUndefined();
+    expect((await store.getQuestion(asked.questionId))?.local_status).toBe("cancelled");
+  });
+
+  it("keeps a question's create for a live attempt's flush to send, and has a real cancel follow it", async () => {
+    const b = bridge();
+    const asked = await b.registerQuestion({ origin: ORIGIN, input: { question: "Cancel me?" } });
+    live = liveBridge();
+    const pane = paneIdentityOf(ORIGIN);
+
+    await b.cancelQuestion(asked.questionId, pane);
+
+    const [create] = await store.outboxFor(asked.questionId);
+    expect(create?.kind).toBe("create");
+    expect((create?.payload as { maybePublished?: boolean }).maybePublished).toBe(true);
+    expect(live.cancelQuestion).toHaveBeenCalledWith(asked.questionId, pane);
+  });
+
+  it("touches nothing for a cancel the live attempt finds isn't the pane's", async () => {
+    const b = bridge();
+    const asked = await b.registerQuestion({ origin: ORIGIN, input: { question: "Theirs?" } });
+    live = liveBridge();
+    live.getDecision.mockRejectedValueOnce(new BridgeError("not_found", "unknown question"));
+    const other = { ...paneIdentityOf(ORIGIN), pane_id: "pane-2" };
+
+    await expect(b.cancelQuestion(asked.questionId, other)).rejects.toMatchObject({
+      code: "not_found",
+    });
+    const [create] = await store.outboxFor(asked.questionId);
+    expect((create?.payload as { maybePublished?: boolean }).maybePublished).toBeUndefined();
+    expect(live.cancelQuestion).not.toHaveBeenCalled();
+  });
+
+  it("checks a queued ask's pane when its turn comes, not when it was queued", async () => {
+    const b = bridge();
+    live = liveBridge();
+    let release!: () => void;
+    live.registerQuestion.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () =>
+            resolve({
+              questionId: "q_first",
+              alias: 1,
+              requirement: "human-required",
+              status: "queued",
+              duplicate: false,
+            });
+        })
+    );
+    const first = b.registerQuestion({ origin: ORIGIN, input: { question: "One?" } });
+    const second = b.registerQuestion({ origin: ORIGIN, input: { question: "Two?" } });
+    await vi.waitFor(() => expect(live!.registerQuestion).toHaveBeenCalledTimes(1));
+    current = false;
+    release();
+    await expect(first).resolves.toMatchObject({ questionId: "q_first" });
+    await expect(second).rejects.toMatchObject({ code: "forbidden" });
+    expect(live.registerQuestion).toHaveBeenCalledTimes(1);
+  });
+
+  it("can't be made over a connection that has already ended", () => {
+    identity = null;
+    expect(() => bridge()).toThrow();
+  });
 });

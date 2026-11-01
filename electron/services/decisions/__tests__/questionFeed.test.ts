@@ -27,6 +27,29 @@ describe("observeQuestionWrites", () => {
     expect(onWrite).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["commitNewQuestion", "updateQuestion", "settleIntent"] as const)(
+    "tells once %s has committed, and not before",
+    async (method) => {
+      const store = new MemoryLocalStore();
+      const write = deferred<undefined>();
+      vi.spyOn(store, method).mockImplementation(() => write.promise as never);
+      const onWrite = vi.fn();
+      const observed = observeQuestionWrites(store, onWrite);
+
+      const call = (observed[method] as (...args: unknown[]) => Promise<unknown>)(
+        "a",
+        "b",
+        "c",
+        "d"
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(onWrite).not.toHaveBeenCalled();
+      write.resolve(undefined);
+      await call;
+      expect(onWrite).toHaveBeenCalledTimes(1);
+    }
+  );
+
   it("tells nothing when the write fails", async () => {
     const store = new MemoryLocalStore();
     vi.spyOn(store, "updateQuestion").mockRejectedValue(new Error("disk full"));

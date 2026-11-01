@@ -59,20 +59,26 @@ export class DecisionsMcpRoute {
     });
   }
 
-  /** Takes the listener hold. Rejects if the hold can't be had; a close meanwhile releases it. */
-  open(): Promise<void> {
+  /**
+   * Takes the listener hold once `after` settles (the route this one replaces
+   * letting go of it: there is one hold per id). Rejects if the hold can't be
+   * had; a close meanwhile releases it, or never takes it.
+   */
+  open(after: Promise<void> = Promise.resolve()): Promise<void> {
     if (this.closed) return Promise.resolve();
-    this.opening ??= this.holdListener("decisions", {
-      path: DECISIONS_MCP_PATH,
-      handle: (req, res, _url, port) => {
-        if (this.closed) {
-          notFound(res);
-          return Promise.resolve();
-        }
-        this.port = port;
-        return this.handler(req, res);
-      },
-    }).then(async (hold) => {
+    this.opening ??= after.then(async () => {
+      if (this.closed) return null;
+      const hold = await this.holdListener("decisions", {
+        path: DECISIONS_MCP_PATH,
+        handle: (req, res, _url, port) => {
+          if (this.closed) {
+            notFound(res);
+            return Promise.resolve();
+          }
+          this.port = port;
+          return this.handler(req, res);
+        },
+      });
       if (!this.closed) return hold;
       await hold.release();
       return null;
@@ -97,15 +103,19 @@ export interface DecisionsQuestions {
   close(): Promise<void>;
 }
 
-/** Serves agents' questions over `source` on `/mcp/decisions` until closed. */
+/**
+ * Serves agents' questions over `source` on `/mcp/decisions` until closed,
+ * once `after` (the previous route's close) has settled.
+ */
 export function openDecisionsMcpRoute(
   source: QuestionSource,
-  sources: DecisionsMcpRouteSources
+  sources: DecisionsMcpRouteSources,
+  after?: Promise<void>
 ): DecisionsQuestions {
   const access = createPaneAccess(sources);
   const bridge = new QuestionBridge({ source, isCurrent: access.isCurrent });
   const route = new DecisionsMcpRoute(bridge, access.authenticator, sources.holdListener);
-  route.open().catch((error: unknown) => {
+  route.open(after).catch((error: unknown) => {
     console.warn(
       `[Decisions] /mcp/decisions couldn't hold the MCP listener: ${formatErrorMessage(error, "unknown error")}`
     );

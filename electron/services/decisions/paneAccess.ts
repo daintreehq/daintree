@@ -1,6 +1,6 @@
 import type { PaneAuthenticator, PaneIdentity, QuestionOrigin } from "@daintreehq/decisions-client";
 import type { NotifyTerminalInfo } from "../mcp-server/terminalNotify.js";
-import { incarnationOf, type DecisionGenerationReader } from "./decisionWake.js";
+import { incarnationOf, NO_WORKTREE, type DecisionGenerationReader } from "./decisionWake.js";
 
 /** What a pane bearer was minted for, as the pane config service holds it. */
 export interface PaneBearer {
@@ -106,8 +106,7 @@ function originOf(
   const incarnation = incarnationOf(info);
   const agentKind = info.detectedAgentId ?? info.launchAgentId;
   const projectId = info.projectId;
-  const worktreeId = info.worktreeId;
-  if (incarnation === null || !agentKind || !projectId || !worktreeId) return null;
+  if (incarnation === null || !agentKind || !projectId) return null;
   // A pane's calls belong to the project it was launched in, for its whole life.
   if (bearer.workspaceId !== undefined && bearer.workspaceId !== projectId) return null;
   return {
@@ -119,7 +118,7 @@ function originOf(
     agent_kind: agentKind,
     agent_session_id: info.agentSessionId ?? null,
     project_id: projectId,
-    worktree_id: worktreeId,
+    worktree_id: info.worktreeId ?? NO_WORKTREE,
     // The directory the pane was launched in: local only, never sent.
     worktree_root: info.cwd ?? "",
     // The origin's gate is trusted policy, so it is never the agent's to name.

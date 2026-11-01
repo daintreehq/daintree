@@ -4,6 +4,7 @@ import type { NotifyTerminalInfo } from "../../mcp-server/terminalNotify.js";
 import {
   createDecisionWake,
   identityMismatch,
+  NO_WORKTREE,
   type DecisionIdentitySources,
 } from "../decisionWake.js";
 
@@ -79,6 +80,7 @@ describe("identityMismatch", () => {
     ["another agent session", {}, { agentSessionId: "session-2" }, "session-mismatch"],
     ["a session that is no longer known", {}, { agentSessionId: undefined }, "session-mismatch"],
     ["another worktree", {}, { worktreeId: "wt-2" }, "gone"],
+    ["no worktree, for a question asked in one", {}, { worktreeId: undefined }, "gone"],
     ["an exited terminal", {}, { isExited: true }, "gone"],
     ["a trashed pane", {}, { isTrashed: true }, "gone"],
   ] as const)("reports %s", (_label, source, info, expected) => {
@@ -86,6 +88,13 @@ describe("identityMismatch", () => {
     expect(identityMismatch(value, TARGET, info === undefined ? undefined : record(info))).toBe(
       expected
     );
+  });
+
+  it("matches a pane in no worktree to a question asked in none, and to nothing else", () => {
+    const { value } = sources();
+    const asked = { ...TARGET, worktreeId: NO_WORKTREE };
+    expect(identityMismatch(value, asked, record({ worktreeId: undefined }))).toBeNull();
+    expect(identityMismatch(value, asked, record({ worktreeId: "wt-1" }))).toBe("gone");
   });
 
   it("takes a session learned since the question was asked as that run's", () => {

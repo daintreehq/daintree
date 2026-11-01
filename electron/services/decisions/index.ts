@@ -200,7 +200,8 @@ export function getDecisionsService(): Promise<DecisionsService> {
         publishPaneState,
         onRelayRevoked: recordRevocation,
         forgetIdentity: forgetRecordedIdentity,
-        openQuestions: (source) => openDecisionsMcpRoute(source, sources),
+        openQuestions: (source, previousClosed) =>
+          openDecisionsMcpRoute(source, sources, previousClosed),
       });
       next.onStatusChanged(() => publishStatus());
       service = next;

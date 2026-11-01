@@ -5,6 +5,7 @@ import {
   MemoryKeyStore,
   MemoryLocalStore,
   loadIdentity,
+  type DecisionsBridge,
   type Identity,
   type StoredIdentity,
 } from "@daintreehq/decisions-client";
@@ -82,7 +83,14 @@ vi.mock("../../PluginService.js", () => ({
 }));
 
 import { McpServerService } from "../../McpServerService.js";
-import { DECISIONS_MCP_PATH, openDecisionsMcpRoute, type DecisionsQuestions } from "../mcpRoute.js";
+import {
+  DECISIONS_MCP_PATH,
+  DecisionsMcpRoute,
+  openDecisionsMcpRoute,
+  type DecisionsListenerHold,
+  type DecisionsQuestions,
+} from "../mcpRoute.js";
+import type { ListenerRoute } from "../../mcp-server/listenerHold.js";
 import type { PaneBearer, PaneTerminalInfo, PaneTerminalReader } from "../paneAccess.js";
 import type { QuestionSource } from "../relayConnection.js";
 
@@ -128,6 +136,7 @@ function request(
         res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
       }
     );
+    req.setTimeout(5_000, () => req.destroy(new Error(`${path} didn't answer`)));
     req.on("error", reject);
     req.end(options.body);
   });
@@ -220,6 +229,8 @@ describe("/mcp/decisions (#16011)", () => {
   let store: MemoryLocalStore;
   let loaded: Identity;
   let panes: Map<string, Pane>;
+  /** Bearers revoked while their terminals run on. */
+  let revoked: Set<string>;
   let fetches: number;
   let questions: DecisionsQuestions | null;
 
@@ -246,8 +257,13 @@ describe("/mcp/decisions (#16011)", () => {
     let held: number | null = null;
     questions = openDecisionsMcpRoute(source, {
       bearerFor: (token) =>
-        [...panes.values()].find((candidate) => candidate.token === token)?.bearer ?? null,
-      principalFor: (paneId) => panes.get(paneId)?.bearer.principal ?? null,
+        revoked.has(token)
+          ? null
+          : ([...panes.values()].find((candidate) => candidate.token === token)?.bearer ?? null),
+      principalFor: (paneId) => {
+        const held = panes.get(paneId);
+        return held && !revoked.has(held.token) ? held.bearer.principal : null;
+      },
       hostId: () => HOST_ID,
       getPtyClient: () => ptyClient,
       holdListener: async (id, route) => {
@@ -276,6 +292,7 @@ describe("/mcp/decisions (#16011)", () => {
     await keys.save(identity);
     loaded = await loadIdentity(keys);
     panes = new Map();
+    revoked = new Set();
     questions = null;
     fetches = 0;
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
@@ -398,7 +415,8 @@ describe("/mcp/decisions (#16011)", () => {
     const askedBefore = await call(port, "pane-token-pane-a", "ask_human", {
       question: "Keep it?",
     });
-    panes.delete("pane-a");
+    // Revoked as `revokePaneConfig` does it: the terminal is still there.
+    revoked.add("pane-token-pane-a");
     expect((await rpc(port, "pane-token-pane-a", "tools/list")).status).toBe(401);
     // Its question stays, bound to the run that asked.
     const kept = await store.getQuestion(askedBefore.structuredContent.question_id as string);
@@ -483,7 +501,7 @@ describe("/mcp/decisions (#16011)", () => {
     }
   });
 
-  it("shows and cancels a question only for the exact run that asked it", async () => {
+  it("shows and cancels a question only for the pane that asked it", async () => {
     await boot(false);
     add(pane("pane-a"), pane("pane-b"));
     const port = await openRoute();
@@ -495,32 +513,76 @@ describe("/mcp/decisions (#16011)", () => {
     expect(own.isError).toBeUndefined();
     expect(own.structuredContent).toMatchObject({ question_id: questionId, status: "queued" });
 
+    // Another pane's id reads as an unknown one, and its cancel changes nothing.
     const other = await call(port, "pane-token-pane-b", "get_decision", {
       question_id: questionId,
     });
     const unknown = await call(port, "pane-token-pane-b", "get_decision", {
       question_id: "q_doesnotexist",
     });
-    expect(other.isError).toBe(true);
+    expect(other.structuredContent).toEqual({ error: "not_found" });
     expect(other.structuredContent).toEqual(unknown.structuredContent);
-    expect(
-      (await call(port, "pane-token-pane-b", "cancel_question", { question_id: questionId }))
-        .isError
-    ).toBe(true);
-
-    // The same pane relaunched is another run: a new bearer and generation.
-    panes.set("pane-a", {
-      ...pane("pane-a"),
-      token: "pane-token-pane-a-2",
-      bearer: { paneId: "pane-a", principal: "principal-pane-a-2", workspaceId: "project-1" },
-      generation: 4,
-      info: { ...pane("pane-a").info, launchGeneration: 4 },
+    const refused = await call(port, "pane-token-pane-b", "cancel_question", {
+      question_id: questionId,
     });
-    expect(
-      (await call(port, "pane-token-pane-a-2", "get_decision", { question_id: questionId })).isError
-    ).toBe(true);
-    expect((await rpc(port, "pane-token-pane-a", "tools/list")).status).toBe(401);
+    expect(refused.structuredContent).toEqual({ error: "not_found" });
     expect((await store.getQuestion(questionId))?.local_status).toBe("queued");
+    expect((await store.outboxFor(questionId)).map((item) => item.kind)).toEqual(["create"]);
+
+    // Its own pane cancels it; never published, it is dropped before it is sent.
+    const cancelled = await call(port, "pane-token-pane-a", "cancel_question", {
+      question_id: questionId,
+    });
+    expect(cancelled.isError).toBeUndefined();
+    expect((await store.getQuestion(questionId))?.local_status).toBe("cancelled");
+    expect(await store.outboxFor(questionId)).toEqual([]);
+  });
+
+  it.each([
+    [
+      "a new bearer and principal",
+      { token: "pane-token-pane-a-2", principal: "principal-pane-a-2" },
+    ],
+    ["a new launch generation", { generation: 4 }],
+  ] as const)("keeps a question from the same pane relaunched with %s", async (_label, change) => {
+    await boot(false);
+    add(pane("pane-a"));
+    const port = await openRoute();
+    const asked = await call(port, "pane-token-pane-a", "ask_human", { question: "Mine?" });
+    const questionId = asked.structuredContent.question_id as string;
+
+    const before = pane("pane-a");
+    const generation = "generation" in change ? change.generation : before.generation;
+    const token = "token" in change ? change.token : before.token;
+    panes.set("pane-a", {
+      token,
+      bearer: {
+        ...before.bearer,
+        ...("principal" in change ? { principal: change.principal } : {}),
+      },
+      generation,
+      info: { ...before.info, launchGeneration: generation },
+    });
+
+    const read = await call(port, token, "get_decision", { question_id: questionId });
+    expect(read.structuredContent).toEqual({ error: "not_found" });
+    const cancel = await call(port, token, "cancel_question", { question_id: questionId });
+    expect(cancel.structuredContent).toEqual({ error: "not_found" });
+    expect((await store.getQuestion(questionId))?.local_status).toBe("queued");
+  });
+
+  it("still shows a question to its run once the run's agent session is learned", async () => {
+    await boot(false);
+    add(pane("pane-a", { agentSessionId: undefined }));
+    const port = await openRoute();
+    const asked = await call(port, "pane-token-pane-a", "ask_human", { question: "Learned?" });
+    const questionId = asked.structuredContent.question_id as string;
+    expect((await store.getQuestion(questionId))?.origin.agent_session_id).toBeNull();
+
+    panes.get("pane-a")!.info.agentSessionId = "session-learned";
+    const read = await call(port, "pane-token-pane-a", "get_decision", { question_id: questionId });
+    expect(read.isError).toBeUndefined();
+    expect(read.structuredContent).toMatchObject({ question_id: questionId });
   });
 
   it("holds a pane to 10 open questions even when it asks them all at once, and the next pane to its own", async () => {
@@ -586,5 +648,73 @@ describe("/mcp/decisions (#16011)", () => {
     service = new McpServerService();
     await boot(false);
     await expect(rpc(held, "pane-token-pane-a", "tools/list")).rejects.toThrow();
+  });
+});
+
+describe("DecisionsMcpRoute", () => {
+  const bridge = {} as DecisionsBridge;
+  const authenticator = { authenticate: () => null };
+
+  function answerOf(route: ListenerRoute): Promise<number> {
+    let status = 0;
+    const res = {
+      writeHead: (code: number) => {
+        status = code;
+        return res;
+      },
+      end: () => res,
+    };
+    return route
+      .handle({} as never, res as never, new URL("http://127.0.0.1/mcp/decisions"), 1)
+      .then(() => status);
+  }
+
+  it("refuses at once when closed while its hold is being taken, and lets that hold go once it comes", async () => {
+    let route: ListenerRoute | null = null;
+    let grant!: (hold: DecisionsListenerHold) => void;
+    const release = vi.fn(async () => {});
+    const decisions = new DecisionsMcpRoute(bridge, authenticator, (_id, held) => {
+      route = held;
+      return new Promise((resolve) => {
+        grant = resolve;
+      });
+    });
+
+    const opened = decisions.open();
+    await vi.waitFor(() => expect(route).not.toBeNull());
+    const closing = decisions.close();
+    expect(await answerOf(route!)).toBe(404);
+    grant({ release });
+    await opened;
+    await closing;
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes its hold only once the route it replaces has let go, and none when closed before then", async () => {
+    let letGo!: () => void;
+    const previous = new Promise<void>((resolve) => {
+      letGo = resolve;
+    });
+    const holdListener = vi.fn(async () => ({ release: vi.fn(async () => {}) }));
+    const next = new DecisionsMcpRoute(bridge, authenticator, holdListener);
+    const opened = next.open(previous);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(holdListener).not.toHaveBeenCalled();
+    letGo();
+    await opened;
+    expect(holdListener).toHaveBeenCalledTimes(1);
+
+    let letGoAgain!: () => void;
+    const again = new Promise<void>((resolve) => {
+      letGoAgain = resolve;
+    });
+    const unused = vi.fn(async () => ({ release: vi.fn(async () => {}) }));
+    const closedFirst = new DecisionsMcpRoute(bridge, authenticator, unused);
+    const openedLate = closedFirst.open(again);
+    const closing = closedFirst.close();
+    letGoAgain();
+    await openedLate;
+    await closing;
+    expect(unused).not.toHaveBeenCalled();
   });
 });

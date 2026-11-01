@@ -88,9 +88,11 @@ export interface DecisionsServiceOptions {
   forgetIdentity?: () => DecisionsSettings;
   /**
    * Serves agents' questions over a connection that can take them
-   * (`/mcp/decisions`, #16011). Without it, no route is served.
+   * (`/mcp/decisions`, #16011), once `previousClosed` (the routes closed
+   * before it letting go of the listener) has settled. Without it, no route
+   * is served.
    */
-  openQuestions?: (source: QuestionSource) => DecisionsQuestions;
+  openQuestions?: (source: QuestionSource, previousClosed: Promise<void>) => DecisionsQuestions;
 }
 
 /**
@@ -125,7 +127,7 @@ export class DecisionsService {
    * allowlist reaches the running bridge without a reconnect.
    */
   private policy: PolicyRegistry | null = null;
-  private readonly openQuestions: ((source: QuestionSource) => DecisionsQuestions) | null;
+  private readonly openQuestions: NonNullable<DecisionsServiceOptions["openQuestions"]> | null;
   /** The route agents ask through, while the connection can take questions. */
   private questions: DecisionsQuestions | null = null;
   /** Routes closed and not yet let go of the listener; a stop waits for them. */
@@ -435,7 +437,7 @@ export class DecisionsService {
         if (this.connection !== connection || this.openQuestions === null) return;
         this.closeQuestions();
         try {
-          this.questions = this.openQuestions(source);
+          this.questions = this.openQuestions(source, this.questionsClosing);
         } catch (error) {
           console.warn("[Decisions] /mcp/decisions couldn't be opened:", error);
         }

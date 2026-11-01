@@ -327,6 +327,20 @@ async function connectLive(h: Harness, n = 0): Promise<FakeSocket> {
   return socket;
 }
 
+const QUESTION_ORIGIN = {
+  host_id: "host_a",
+  pane_id: "pane-1",
+  terminal_generation: 1,
+  ownership_principal: "principal-1",
+  agent_incarnation: "0",
+  agent_kind: "claude",
+  agent_session_id: null,
+  project_id: "p1",
+  worktree_id: "wt-1",
+  worktree_root: "/repo",
+  workflow_gate_id: null,
+};
+
 describe("RelayConnection", () => {
   it("connects with a fresh ticket on the relay's own origin, then syncs from the stored cursor", async () => {
     const store = new MemoryLocalStore();
@@ -985,40 +999,91 @@ describe("RelayConnection", () => {
     await expect(ready.store.listQuestions()).rejects.toThrow();
   });
 
-  it("publishes a question asked while no attempt was live once one goes live", async () => {
-    let source: QuestionSource | null = null;
-    const h = await harness({ overrides: { onQuestionsReady: (ready) => (source = ready) } });
-    h.connection.start();
-    await vi.waitFor(() => expect(source).not.toBeNull());
-    const bridge = new QuestionBridge({
-      source: source as unknown as QuestionSource,
-      isCurrent: () => true,
+  it("asks locally while an attempt is still starting, and publishes once it is live", async () => {
+    // The attempt's bridge reconciles what an earlier run left before it runs;
+    // until it has, the question goes to the store alone.
+    let startup!: () => void;
+    const started = new Promise<void>((resolve) => {
+      startup = resolve;
     });
+    let recovering = false;
+    class StartingStore extends MemoryLocalStore {
+      override async openIntents() {
+        recovering = true;
+        await started;
+        return super.openIntents();
+      }
+    }
+    const store = new StartingStore();
+    let source: QuestionSource | null = null;
+    const h = await harness({
+      store,
+      overrides: { onQuestionsReady: (ready) => (source = ready) },
+    });
+    h.connection.start();
+    await vi.waitFor(() => expect(recovering).toBe(true));
+    const ready = source as unknown as QuestionSource;
+    const bridge = new QuestionBridge({ source: ready, isCurrent: () => true });
 
+    expect(ready.live()).toBeNull();
     const asked = await bridge.registerQuestion({
-      origin: {
-        host_id: "host_a",
-        pane_id: "pane-1",
-        terminal_generation: 1,
-        ownership_principal: "principal-1",
-        agent_incarnation: "0",
-        agent_kind: "claude",
-        agent_session_id: null,
-        project_id: "p1",
-        worktree_id: "wt-1",
-        worktree_root: "/repo",
-        workflow_gate_id: null,
-      },
+      origin: QUESTION_ORIGIN,
       input: { question: "Asked offline?" },
     });
+    expect(ready.live()).toBeNull();
     expect(h.relay.questions).toEqual([]);
-    expect((await h.store.getQuestion(asked.questionId))?.local_status).toBe("queued");
+    expect((await store.getQuestion(asked.questionId))?.local_status).toBe("queued");
 
+    startup();
     await connectLive(h);
+    expect(ready.live()).not.toBeNull();
     await vi.waitFor(() => expect(h.relay.questions).toHaveLength(1));
     await vi.waitFor(async () =>
-      expect((await h.store.getQuestion(asked.questionId))?.local_status).toBe("open")
+      expect((await store.getQuestion(asked.questionId))?.local_status).toBe("open")
     );
+    h.connection.stop();
+  });
+
+  it("publishes a live attempt's question only once it and its origin are committed", async () => {
+    let commit!: () => void;
+    const committed = new Promise<void>((resolve) => {
+      commit = resolve;
+    });
+    class SlowStore extends MemoryLocalStore {
+      override async commitNewQuestion(...args: Parameters<MemoryLocalStore["commitNewQuestion"]>) {
+        await committed;
+        return super.commitNewQuestion(...args);
+      }
+    }
+    const store = new SlowStore();
+    const seenAtPublish: unknown[] = [];
+    let source: QuestionSource | null = null;
+    const h = await harness({
+      store,
+      overrides: { onQuestionsReady: (ready) => (source = ready) },
+      wrapFetch: (fetchImpl) => async (url, init) => {
+        if (new URL(url).pathname === "/api/v1/questions") {
+          seenAtPublish.push(...(await store.listQuestions()).map((row) => row.origin));
+        }
+        return fetchImpl(url, init);
+      },
+    });
+    h.connection.start();
+    await connectLive(h);
+    const ready = source as unknown as QuestionSource;
+    expect(ready.live()).not.toBeNull();
+    const bridge = new QuestionBridge({ source: ready, isCurrent: () => true });
+
+    const asking = bridge.registerQuestion({
+      origin: QUESTION_ORIGIN,
+      input: { question: "Live?" },
+    });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(h.relay.questions).toEqual([]);
+    commit();
+    await asking;
+    await vi.waitFor(() => expect(h.relay.questions).toHaveLength(1));
+    expect(seenAtPublish).toEqual([QUESTION_ORIGIN]);
     h.connection.stop();
   });
 
