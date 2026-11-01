@@ -1,8 +1,13 @@
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import buildConfig from "../../electron-builder.config.cjs";
-import { APP_ASAR_ROOT_ENTRIES } from "../afterPack.cjs";
+import { APP_ASAR_ROOT_ENTRIES, AVR_VAD_V5_MODEL } from "../afterPack.cjs";
+
+const require = createRequire(import.meta.url);
 
 const repoFile = (relativePath) =>
   readFile(new URL(`../../${relativePath}`, import.meta.url), "utf8");
@@ -126,6 +131,137 @@ describe("electron-builder config — platform files overrides (#11475)", () => 
         );
       }
     }
+  });
+});
+
+describe("electron-builder config — files inside kept packages (#15671)", () => {
+  // The matcher electron-builder itself applies while copying node_modules,
+  // resolved through electron-builder so it is the copy the build loads. It
+  // keeps only the negations from `files`, prepends `**/*`, and expands a bare
+  // directory pattern to its contents, so restating that here would test a
+  // copy of the rules rather than the rules.
+  const requireFromBuilder = createRequire(require.resolve("electron-builder"));
+  const { getNodeModuleFileMatcher } = requireFromBuilder("app-builder-lib/out/fileMatcher.js");
+  const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
+
+  const PLATFORMS = [
+    { key: "mac", os: "darwin", onnx: "darwin/arm64/libonnxruntime.1.30.0.dylib" },
+    { key: "win", os: "win32", onnx: "win32/x64/onnxruntime.dll" },
+    { key: "linux", os: "linux", onnx: "linux/x64/libonnxruntime.so.1" },
+  ];
+
+  const nodeModuleFilter = (config, platformKey) =>
+    getNodeModuleFileMatcher(
+      repoRoot,
+      path.join(repoRoot, "out"),
+      (pattern) => pattern,
+      config[platformKey],
+      { config, debugLogger: { isEnabled: false } }
+    ).createFilter();
+
+  /**
+   * Whether a node_modules path survives the copy. The copier walks each
+   * package from its root and never descends into a directory the filter
+   * rejects, so every directory between the package and the file has to pass
+   * as well as the file.
+   */
+  const ships = (filter, relativePath) => {
+    const segments = relativePath.split("/");
+    for (let depth = 2; depth <= segments.length; depth++) {
+      const isDirectory = depth < segments.length;
+      const stat = {
+        moduleFullFilePath: segments.slice(0, depth).join("/"),
+        isDirectory: () => isDirectory,
+      };
+      if (!filter(path.join(repoRoot, stat.moduleFullFilePath), stat)) return false;
+    }
+    return true;
+  };
+
+  const DROPPED = [
+    "node_modules/avr-vad/silero_vad_v5.onnx",
+    "node_modules/avr-vad/silero_vad_legacy.onnx",
+    "node_modules/avr-vad/dist/silero_vad_legacy.onnx",
+    "node_modules/better-sqlite3/deps/sqlite3/sqlite3.c",
+    "node_modules/better-sqlite3/deps/sqlite3/sqlite3.h",
+    "node_modules/better-sqlite3/deps/sqlite3/sqlite3ext.h",
+    "node_modules/better-sqlite3/deps/sqlite3.gyp",
+    "node_modules/better-sqlite3/deps/common.gypi",
+    "node_modules/better-sqlite3/src/objects/database.cpp",
+    "node_modules/better-sqlite3/src/objects/database.hpp",
+    "node_modules/node-pty/src/win/conpty.h",
+    "node_modules/node-pty/node_modules/node-addon-api/napi.h",
+    "node_modules/node-pty/node_modules/node-addon-api/nothing.c",
+    "node_modules/@parcel/watcher/src/Backend.hh",
+    "node_modules/@parcel/watcher/node_modules/node-addon-api/napi-inl.h",
+    "node_modules/node-addon-api/napi.h",
+    "node_modules/posix-pty-reaper/src/supervisor.c",
+    "node_modules/win-job-object/binding.gyp",
+  ];
+
+  // What the loaders resolve at runtime, plus the manifests and licenses that
+  // ride with them.
+  const KEPT = [
+    AVR_VAD_V5_MODEL,
+    "node_modules/avr-vad/dist/index.js",
+    "node_modules/avr-vad/package.json",
+    "node_modules/avr-vad/LICENSE.md",
+    "node_modules/better-sqlite3/lib/index.js",
+    "node_modules/better-sqlite3/lib/binding.js",
+    "node_modules/better-sqlite3/package.json",
+    "node_modules/better-sqlite3/LICENSE",
+    "node_modules/node-pty/lib/index.js",
+    "node_modules/node-pty/build/Release/pty.node",
+    "node_modules/node-pty/build/Release/spawn-helper",
+    "node_modules/node-pty/node_modules/node-addon-api/package.json",
+    "node_modules/node-pty/node_modules/node-addon-api/LICENSE.md",
+    "node_modules/@parcel/watcher/index.js",
+    "node_modules/@parcel/watcher/build/Release/watcher.node",
+    "node_modules/posix-pty-reaper/build/Release/daintree_pty_supervisor",
+    "node_modules/win-job-object/index.cjs",
+    "node_modules/win-job-object/build/Release/win_job_object.node",
+    "node_modules/win-job-object/bin/win32-x64-146/win_job_object.node",
+    "node_modules/mac-phys-footprint/build/Release/mac_phys_footprint.node",
+    "node_modules/onnxruntime-node/dist/binding.js",
+  ];
+
+  it("drops the unreachable VAD models and the native build sources on every platform", async () => {
+    const config = await buildConfig();
+    for (const { key } of PLATFORMS) {
+      const filter = nodeModuleFilter(config, key);
+      for (const file of DROPPED) {
+        expect(ships(filter, file), `${key} ships ${file}`).toBe(false);
+      }
+    }
+  });
+
+  it("keeps everything the native loaders resolve at runtime", async () => {
+    const config = await buildConfig();
+    for (const { key, os, onnx } of PLATFORMS) {
+      const filter = nodeModuleFilter(config, key);
+      const platformFiles = [
+        `node_modules/better-sqlite3/prebuilds/${os}-x64.node`,
+        `node_modules/onnxruntime-node/bin/napi-v6/${path.posix.dirname(onnx)}/onnxruntime_binding.node`,
+        `node_modules/onnxruntime-node/bin/napi-v6/${onnx}`,
+      ];
+      for (const file of [...KEPT, ...platformFiles]) {
+        expect(ships(filter, file), `${key} drops ${file}`).toBe(true);
+      }
+    }
+  });
+
+  it("keeps the model the installed avr-vad actually reads", async () => {
+    // The patterns above and the afterPack guard both assume avr-vad's entry
+    // point reads the v5 model from its own directory. An avr-vad upgrade that
+    // moves either one has to fail here before a package ships without VAD.
+    const packageJson = require.resolve("avr-vad/package.json");
+    const entry = require.resolve("avr-vad");
+    const entryDir = path.relative(path.dirname(packageJson), path.dirname(entry));
+    const model = path.posix.join("node_modules/avr-vad", entryDir, "silero_vad_v5.onnx");
+
+    expect(model).toBe(AVR_VAD_V5_MODEL);
+    expect(existsSync(path.join(path.dirname(entry), "silero_vad_v5.onnx"))).toBe(true);
+    expect(await readFile(entry, "utf8")).toContain("${__dirname}/silero_vad_v5.onnx");
   });
 });
 
