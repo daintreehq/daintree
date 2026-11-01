@@ -511,6 +511,36 @@ describe("useVoiceDecorations", () => {
       expect(currentVoiceCaretEffects(view)).toEqual([]);
     });
 
+    it("shows nothing of a session whose draft another screen took control of (#15919)", () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL, DICTATED);
+      const view = mountCaret(DICTATED);
+      const store = () => useVoiceRecordingStore.getState();
+      startDictation();
+      act(() => {
+        store().setMicSignal("live");
+        store().appendDelta(" and the parser", "item-1");
+      });
+      expect(view.state.field(interimWidgetField).text).toContain("and the parser");
+      expect(view.state.field(dictationFollowField).session).toBe("s1");
+      expect(caret(view)).not.toBeNull();
+
+      act(() => store().detachSessionDraft("s1"));
+
+      expect(view.state.field(interimWidgetField).text).toBe("");
+      expect(view.state.field(dictationFollowField).session).toBeNull();
+      expect(caret(view)).toBeNull();
+
+      // Only that session: the next one in the composer shows as usual.
+      act(() => {
+        store().finishSession();
+        store().beginSession({ panelId: PANEL }, "s2");
+        store().setStatus("recording");
+        store().appendDelta(" more words", "item-2");
+      });
+      expect(view.state.field(interimWidgetField).text).toContain("more words");
+      expect(caret(view)).not.toBeNull();
+    });
+
     it("draws none for a session writing to another composer", () => {
       useTerminalInputStore.getState().setDraftInput(PANEL, DICTATED);
       const view = mountCaret(DICTATED);

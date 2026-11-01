@@ -43,6 +43,9 @@ vi.mock("@/store/helpPanelStore", () => {
 
 vi.mock("@/store/macroFocusStore", () => ({ isAssistantFocused: vi.fn(() => false) }));
 
+const notify = vi.hoisted(() => vi.fn((_payload: Record<string, unknown>) => "notice"));
+vi.mock("@/lib/notify", () => ({ notify }));
+
 vi.mock("@/utils/logger", () => ({
   logDebug: vi.fn(),
   logInfo: vi.fn(),
@@ -65,6 +68,7 @@ type CompletePayload = {
   itemId?: string;
   heard?: string;
   commandText?: string;
+  send?: boolean;
 };
 type CorrectResult = { action: "no_change" | "replace"; correctedText: string };
 
@@ -192,6 +196,7 @@ describe("VoiceRecordingService — recent dictations (#14637)", () => {
     panelListeners.length = 0;
     correct.mockReset();
     dictionary = [];
+    notify.mockClear();
     record.mockReset().mockResolvedValue(undefined);
     setCorrectedText.mockReset().mockResolvedValue(undefined);
   });
@@ -594,6 +599,180 @@ describe("VoiceRecordingService — recent dictations (#14637)", () => {
 
     expect(inputStore.getState().getDraftInput("panel-1")).toBe("/review Zustand");
     expect(kept().map((d) => d.rawText)).toEqual(["/review Zustand"]);
+  });
+
+  describe("another screen taking control (#15919)", () => {
+    const PROJECT = "project-1";
+    const DRIVEN = { kind: "driven-elsewhere" as const, driverName: "Studio Mac" };
+    const gate = () => import("@/services/terminal/inputGate");
+    const notices = () => notify.mock.calls.map(([payload]) => payload);
+
+    afterEach(async () => {
+      (await gate())._resetTerminalInputGateForTesting();
+    });
+
+    it("stops writing into the draft, keeps every word for recovery, and says why", async () => {
+      const { voiceStore, inputStore, say, kept, flush } = await setup();
+      const { setLeaseInputBlock } = await gate();
+      voiceStore.getState().setCorrectionEnabled(false);
+      const draft = () => inputStore.getState().getDraftInput("panel-1", PROJECT);
+
+      const { useDictationRangeStore } = await import("@/store/dictationRangeStore");
+
+      voiceStore.getState().beginSession({ panelId: "panel-1", projectId: PROJECT });
+      const sessionId = voiceStore.getState().panelBuffers["panel-1"]!.dictationSessionId!;
+      say("words before the takeover");
+      callbacks.delta!({ text: "half a", itemId: "item-open" });
+      expect(draft()).toBe("words before the takeover");
+
+      setLeaseInputBlock(DRIVEN);
+      // The new driver's drafts replace this view's.
+      inputStore.getState().setDraftInput("panel-1", "the driver's draft", PROJECT);
+      // Words still draining, a paragraph break, a scratch and a spoken send.
+      callbacks.delta!({ text: "half a sentence", itemId: "item-open" });
+      callbacks.complete!({
+        text: "half a sentence",
+        willCorrect: false,
+        itemId: "item-open",
+        send: true,
+      });
+      callbacks.boundary!({ rawText: null });
+      say("scratch that");
+      callbacks.delta!({ text: "an unfinished", itemId: "item-last" });
+      // Its next words would have taken a place in the driver's draft. Read
+      // before the stop's own release of it can run.
+      expect(
+        useDictationRangeStore
+          .getState()
+          .getAnchor({ sessionId, panelId: "panel-1", projectId: PROJECT })
+      ).toBeNull();
+      await vi.waitFor(() => expect(voiceStore.getState().status).toBe("idle"));
+      await flush();
+
+      expect(draft()).toBe("the driver's draft");
+      expect(kept().map((d) => d.rawText)).toEqual([
+        "words before the takeover half a sentence an unfinished",
+      ]);
+      expect(notices()).toEqual([
+        expect.objectContaining({
+          title: "Dictation stopped",
+          message: "Studio Mac has control of this project. What you said is in Recent dictations.",
+          action: expect.objectContaining({ actionId: "voiceInput.openRecentDictations" }),
+        }),
+      ]);
+      expect(voiceStore.getState().announcement?.text).toMatch(/Studio Mac has control/);
+      const logger = await import("@/utils/logger");
+      expect(vi.mocked(logger.logInfo)).toHaveBeenCalledWith(
+        "[VoiceSend] Request refused",
+        expect.objectContaining({ asker: "spoken_send", reason: "composer_disabled" })
+      );
+      // Who took control is shown, never logged.
+      const logged = [logger.logDebug, logger.logInfo, logger.logWarn, logger.logError].flatMap(
+        (log) => vi.mocked(log).mock.calls
+      );
+      expect(JSON.stringify(logged)).not.toContain("Studio Mac");
+
+      // The driver going away changes the gate, not the stopped session.
+      setLeaseInputBlock({ ...DRIVEN, driverAway: true });
+      expect(notices()).toHaveLength(1);
+    });
+
+    it("names the host's own screen when that is what took control", async () => {
+      const { voiceStore, say } = await setup();
+      const { setLeaseInputBlock } = await gate();
+
+      voiceStore.getState().beginSession({ panelId: "panel-1", projectId: PROJECT });
+      say("words");
+      setLeaseInputBlock({ ...DRIVEN, driverName: "Office iMac", driverIsHostScreen: true });
+
+      expect(notices()[0]?.message).toMatch(/^Office iMac's own screen has control/);
+    });
+
+    it("lands no cleanup in a draft the driver took over, and still keeps it for recovery", async () => {
+      const { service, voiceStore, inputStore, say, kept, cleanups, flush } = await setup();
+      const { setLeaseInputBlock } = await gate();
+      const cleanup = deferred<CorrectResult>();
+      correct.mockReturnValueOnce(cleanup.promise);
+
+      voiceStore.getState().beginSession({ panelId: "panel-1", projectId: PROJECT });
+      say("fix the parsr");
+      await service.stop();
+      // The host held these words when the driver took over, so they stay.
+      setLeaseInputBlock(DRIVEN);
+      cleanup.resolve({ action: "replace", correctedText: "Fix the parser." });
+      await flush();
+
+      expect(inputStore.getState().getDraftInput("panel-1", PROJECT)).toBe("fix the parsr");
+      expect(cleanups()).toEqual([{ id: kept()[0]!.id, correctedText: "Fix the parser." }]);
+    });
+
+    const refusedStart = expect.objectContaining({
+      title: "Dictation didn't start",
+      message: "Studio Mac has control of this project.",
+    });
+
+    it("refuses a dictation key press in a draft another screen drives, before arming", async () => {
+      const { service, voiceStore } = await setup();
+      const { setLeaseInputBlock } = await gate();
+      setLeaseInputBlock({ ...DRIVEN, projectId: PROJECT });
+
+      await service.toggle({ panelId: "panel-1", panelTitle: "Claude", projectId: PROJECT });
+
+      expect(voiceStore.getState().status).toBe("idle");
+      expect(voiceStore.getState().activeTarget).toBeNull();
+      // Turned away before it counted as a place dictation went.
+      expect(voiceStore.getState().recentTargets).toEqual([]);
+      expect(notices()).toEqual([refusedStart]);
+    });
+
+    it("refuses a start made directly, as a retry or restart makes it", async () => {
+      const { service, voiceStore } = await setup();
+      const { setLeaseInputBlock } = await gate();
+      setLeaseInputBlock(DRIVEN);
+      voiceStore.getState().setArming({ panelId: "panel-1", projectId: PROJECT });
+
+      await service.start({ panelId: "panel-1", projectId: PROJECT });
+
+      expect(voiceStore.getState().status).toBe("idle");
+      expect(voiceStore.getState().pendingTarget).toBeNull();
+      expect(notices()).toEqual([refusedStart]);
+    });
+
+    it("cancels a start still arming when control moves", async () => {
+      const { voiceStore } = await setup();
+      const { setLeaseInputBlock } = await gate();
+      voiceStore.getState().setArming({ panelId: "panel-1", projectId: PROJECT });
+
+      setLeaseInputBlock(DRIVEN);
+
+      expect(voiceStore.getState().status).toBe("idle");
+      expect(voiceStore.getState().activeTarget).toBeNull();
+      expect(notices()).toEqual([refusedStart]);
+    });
+
+    it("leaves dictation into another project's draft, or a Canopy reply, running", async () => {
+      const { voiceStore, inputStore, say } = await setup();
+      const { setLeaseInputBlock } = await gate();
+
+      voiceStore.getState().beginSession({ panelId: "panel-1", projectId: "project-2" });
+      setLeaseInputBlock({ ...DRIVEN, projectId: PROJECT });
+      say("still mine");
+
+      expect(voiceStore.getState().status).toBe("connecting");
+      expect(inputStore.getState().getDraftInput("panel-1", "project-2")).toBe("still mine");
+
+      voiceStore.getState().beginSession({
+        panelId: "isolated-composer:run-1",
+        surface: "canopy-reply",
+        canopyRow: { runId: "run-1", hostScope: null },
+      });
+      setLeaseInputBlock(DRIVEN);
+      say("a reply");
+
+      expect(voiceStore.getState().status).toBe("connecting");
+      expect(inputStore.getState().getDraftInput("isolated-composer:run-1")).toBe("a reply");
+      expect(notices()).toEqual([]);
+    });
   });
 
   it("keeps no entry for a spoken rewrite instruction", async () => {

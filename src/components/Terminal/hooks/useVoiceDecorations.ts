@@ -37,13 +37,20 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
   const recordingRewrite = useVoiceRecordingStore(
     (s) => s.activeTarget?.panelId === terminalId && s.activeTarget.rewrite !== undefined
   );
+  // Another screen took control of this draft: the session's words go to
+  // Recent dictations, so none of them show here (#15919).
+  const detached = useVoiceRecordingStore((s) => {
+    const id = s.panelBuffers[terminalId]?.dictationSessionId;
+    return id != null && s.draftDetachedSessionId === id;
+  });
   // A session taking words into this draft, until it has drained.
-  const dictating = useVoiceRecordingStore(
-    (s) =>
-      s.activeTarget?.panelId === terminalId &&
-      s.activeTarget.rewrite === undefined &&
-      isActiveVoiceSession(s.status)
-  );
+  const dictating =
+    useVoiceRecordingStore(
+      (s) =>
+        s.activeTarget?.panelId === terminalId &&
+        s.activeTarget.rewrite === undefined &&
+        isActiveVoiceSession(s.status)
+    ) && !detached;
   const correctionRanges = useVoiceRecordingStore(
     (s) => s.panelBuffers[terminalId]?.correctionRanges ?? NO_RANGES
   );
@@ -58,6 +65,8 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
   // How the mic stands for a session writing words into this draft.
   const caretPhase = useVoiceRecordingStore((s): VoiceCaretPhase | null => {
     if (s.activeTarget?.panelId !== terminalId || s.activeTarget.rewrite !== undefined) return null;
+    const id = s.panelBuffers[terminalId]?.dictationSessionId;
+    if (id != null && s.draftDetachedSessionId === id) return null;
     switch (s.status) {
       case "connecting":
       case "recording":
@@ -88,7 +97,7 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
     const inStep = view.state.doc.toString() === draft;
 
     let preview: InterimPreview = { text: "", pos: null };
-    if (transcriptPhase === "interim" && liveText.length > 0 && !recordingRewrite) {
+    if (transcriptPhase === "interim" && liveText.length > 0 && !recordingRewrite && !detached) {
       // While the editor and the store disagree (a keystroke on its way to the
       // store), the preview stays where it was, mapped through the typing.
       if (anchor && inStep) {
@@ -175,6 +184,7 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
     transcriptPhase,
     liveText,
     recordingRewrite,
+    detached,
     dictating,
     caretPhase,
     correctionRanges,
