@@ -210,7 +210,10 @@ describe("DecisionsService", () => {
   });
 
   it("waits for the key store to close before a stop settles", async () => {
-    const service = new DecisionsService({ keyFilePath: () => "/tmp/decisions-test/keys.bin" });
+    const service = new DecisionsService({
+      openStore: async () => fakeStore(),
+      keyFilePath: () => "/tmp/decisions-test/keys.bin",
+    });
     await service.start(on());
     let finishClosing!: () => void;
     vi.spyOn(service.getKeyStore(), "close").mockReturnValue(
