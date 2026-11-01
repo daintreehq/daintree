@@ -1221,6 +1221,12 @@ describe("CanopyCard", () => {
         holdPane({ agentState: "waiting", runtimeStatus: "exited" });
         const gone = renderCard(withRun({ agentState: "waiting", canopy: ask }));
         expect(chip(gone.container)).toBeNull();
+        gone.unmount();
+
+        // An exit on record outranks a stale working state, as on the pane.
+        holdPane({ agentState: "working", runtimeStatus: "exited" });
+        const exitedPane = renderCard(withRun({ agentState: "working" }));
+        expect(chip(exitedPane.container)).toBeNull();
       });
 
       it("keeps the row's own observation for another project's run under the same id", () => {
