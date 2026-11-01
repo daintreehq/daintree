@@ -269,7 +269,21 @@ module.exports = async function () {
       // Mach-O file-set mismatch. afterPack.cjs prunes the foreign arch
       // instead, where the -x64-temp/-arm64-temp output dir distinguishes a
       // merge input from a package that ships.
-      files: [...baseFiles(), "!node_modules/better-sqlite3/prebuilds/{linux,linuxmusl,win32}-*.node"],
+      //
+      // onnxruntime-node ships every OS's runtime too, and a process loads only
+      // bin/napi-v6/<platform>/<arch> (#15670). The other OSes go here rather
+      // than in afterPack because @electron/universal reads every unpacked
+      // entry of both merge inputs: a file afterPack deleted from one aborts
+      // the merge. The versioned dylib is a byte-identical copy of
+      // libonnxruntime.1.dylib (npm keeps no symlinks), and the binding links
+      // only the latter. The exact name is deliberate: on an upgrade the copy
+      // ships again, rather than deleting whatever a new binding links.
+      files: [
+        ...baseFiles(),
+        "!node_modules/better-sqlite3/prebuilds/{linux,linuxmusl,win32}-*.node",
+        "!node_modules/onnxruntime-node/bin/napi-v*/{linux,win32}/**/*",
+        "!node_modules/onnxruntime-node/bin/napi-v*/darwin/*/libonnxruntime.1.30.0.dylib",
+      ],
       x64ArchFiles:
         "Contents/Resources/app.asar.unpacked/node_modules/{node-pty/build/Release/**,better-sqlite3/prebuilds/darwin-*.node,win-job-object/bin/**,posix-pty-reaper/build/Release/**,mac-phys-footprint/build/Release/**,onnxruntime-node/bin/**,@parcel/watcher-darwin-*/watcher.node,@parcel/watcher/bin/darwin-*/watcher.node}",
       forceCodeSigning: true,
@@ -364,9 +378,14 @@ module.exports = async function () {
     },
     win: {
       icon: "build/icon.ico",
-      // Foreign-platform better-sqlite3 prebuilds — see the mac.files note.
-      // The other Windows arch is pruned in afterPack.cjs (#11829).
-      files: [...baseFiles(), "!node_modules/better-sqlite3/prebuilds/{darwin,linux,linuxmusl}-*.node"],
+      // Foreign-platform better-sqlite3 prebuilds and onnxruntime-node runtimes —
+      // see the mac.files note. The other Windows arch is pruned in afterPack.cjs
+      // (#11829, #15670).
+      files: [
+        ...baseFiles(),
+        "!node_modules/better-sqlite3/prebuilds/{darwin,linux,linuxmusl}-*.node",
+        "!node_modules/onnxruntime-node/bin/napi-v*/{darwin,linux}/**/*",
+      ],
       artifactName: "${productName}-${version}-${arch}-setup.${ext}",
       target: [
         { target: "appx", arch: ["x64"] },
@@ -414,10 +433,15 @@ module.exports = async function () {
       // size set from it. Given the PNG itself it installs that one file, and
       // 1024x1024 is not a size hicolor indexes: menus showed a broken icon.
       icon: "build",
-      // Foreign-platform better-sqlite3 prebuilds — see the mac.files note.
-      // Electron only runs on glibc, so the linuxmusl variants go too.
-      // The other glibc arch is pruned in afterPack.cjs (#11829).
-      files: [...baseFiles(), "!node_modules/better-sqlite3/prebuilds/{darwin,win32,linuxmusl}-*.node"],
+      // Foreign-platform better-sqlite3 prebuilds and onnxruntime-node runtimes —
+      // see the mac.files note. Electron only runs on glibc, so the linuxmusl
+      // variants go too. The other glibc arch is pruned in afterPack.cjs
+      // (#11829, #15670).
+      files: [
+        ...baseFiles(),
+        "!node_modules/better-sqlite3/prebuilds/{darwin,win32,linuxmusl}-*.node",
+        "!node_modules/onnxruntime-node/bin/napi-v*/{darwin,win32}/**/*",
+      ],
       executableName: "daintree",
       target: ["AppImage", "deb"],
       category: "Development",

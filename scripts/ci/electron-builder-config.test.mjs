@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -90,18 +90,19 @@ describe("electron-builder config — platform files overrides (#11475)", () => 
     }
   });
 
-  it("limits each platform's own patterns to dropping foreign prebuilds", async () => {
+  it("limits each platform's own patterns to dropping foreign native binaries", async () => {
     const config = await buildConfig();
-    // The only intended per-platform divergence is shedding better-sqlite3's
-    // other-OS prebuilds. Anything else — especially a negation aimed at a
-    // packed root — has to be a deliberate edit here, because afterPack.cjs
-    // only sees the resulting archive and cannot tell why a root vanished.
+    // The only intended per-platform divergence is shedding the other OSes'
+    // better-sqlite3 prebuilds and onnxruntime-node runtimes (#15670). Anything
+    // else — especially a negation aimed at a packed root — has to be a
+    // deliberate edit here, because afterPack.cjs only sees the resulting
+    // archive and cannot tell why a root vanished.
     for (const platform of PLATFORMS) {
       const own = config[platform].files.slice(config.files.length);
       expect(own.length, `${platform}.files adds no patterns of its own`).toBeGreaterThan(0);
       for (const pattern of own) {
         expect(pattern, `${platform}.files pattern "${pattern}"`).toMatch(
-          /^!node_modules\/better-sqlite3\/prebuilds\//
+          /^!node_modules\/(better-sqlite3\/prebuilds|onnxruntime-node\/bin)\//
         );
         // Foreign *platforms* only — never a CPU arch (#11829). A pattern is
         // compiled once per platform, and the two trees the macOS universal
@@ -145,7 +146,7 @@ describe("electron-builder config — files inside kept packages (#15671)", () =
   const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 
   const PLATFORMS = [
-    { key: "mac", os: "darwin", onnx: "darwin/arm64/libonnxruntime.1.30.0.dylib" },
+    { key: "mac", os: "darwin", onnx: "darwin/arm64/libonnxruntime.1.dylib" },
     { key: "win", os: "win32", onnx: "win32/x64/onnxruntime.dll" },
     { key: "linux", os: "linux", onnx: "linux/x64/libonnxruntime.so.1" },
   ];
@@ -268,6 +269,51 @@ describe("electron-builder config — files inside kept packages (#15671)", () =
     expect(model).toBe(AVR_VAD_V5_MODEL);
     expect(existsSync(path.join(path.dirname(entry), "silero_vad_v5.onnx"))).toBe(true);
     expect(await readFile(entry, "utf8")).toContain("${__dirname}/silero_vad_v5.onnx");
+  });
+
+  const onnxRoot = path.dirname(require.resolve("onnxruntime-node/package.json"));
+  const { version: onnxVersion } = require("onnxruntime-node/package.json");
+  const MAC_DARWIN_ARM64 = "bin/napi-v6/darwin/arm64";
+  const MAC_RUNTIME_COPY = `${MAC_DARWIN_ARM64}/libonnxruntime.${onnxVersion}.dylib`;
+
+  /** Every file under the installed onnxruntime-node's bin/, relative to the package. */
+  const installedOnnxBinaries = () =>
+    readdirSync(path.join(onnxRoot, "bin"), { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) =>
+        path.relative(onnxRoot, path.join(entry.parentPath, entry.name)).split(path.sep).join("/")
+      );
+
+  it("ships each platform only its own onnxruntime-node runtimes (#15670)", async () => {
+    // Walks the installed package, so whatever a new onnxruntime-node release
+    // adds is judged too. Every arch of the target OS passes: shedding the
+    // foreign arch is afterPack's job, since no pattern can tell a universal
+    // merge input from a standalone pack.
+    const config = await buildConfig();
+    const binaries = installedOnnxBinaries();
+    expect(binaries).toContain(MAC_RUNTIME_COPY);
+    for (const { key, os } of PLATFORMS) {
+      const filter = nodeModuleFilter(config, key);
+      for (const file of binaries) {
+        const own = file.split("/")[2] === os && file !== MAC_RUNTIME_COPY;
+        expect(ships(filter, `node_modules/onnxruntime-node/${file}`), `${key}: ${file}`).toBe(own);
+      }
+    }
+  });
+
+  it("drops the mac runtime's versioned name only while nothing could load it (#15670)", () => {
+    // The mac exclusion names the installed version exactly, so an upgrade
+    // fails here first and the copy is re-checked rather than assumed: it has
+    // to be byte-identical to the library the binding links, and the binding
+    // must not name it.
+    const read = (file) => readFileSync(path.join(onnxRoot, MAC_DARWIN_ARM64, file));
+    const binding = read("onnxruntime_binding.node");
+
+    expect(read(path.posix.basename(MAC_RUNTIME_COPY)).equals(read("libonnxruntime.1.dylib"))).toBe(
+      true
+    );
+    expect(binding.includes("@rpath/libonnxruntime.1.dylib")).toBe(true);
+    expect(binding.includes(path.posix.basename(MAC_RUNTIME_COPY))).toBe(false);
   });
 });
 
