@@ -386,6 +386,49 @@ vi.mock("../deferredInitQueue.js", () => ({
   resetDeferredQueueForNextWindow: vi.fn(() => deferredForward.resetForNextWindow?.()),
 }));
 
+// Every Decisions module counts its own evaluation, so the boot task can be
+// shown to load none of them while the setting is off.
+const decisionsEvaluated = vi.hoisted(() => ({
+  index: 0,
+  service: 0,
+  settings: 0,
+  libraries: 0,
+  packages: 0,
+  start: vi.fn(async () => {}),
+}));
+vi.mock("../../services/decisions/index.js", () => {
+  decisionsEvaluated.index += 1;
+  return { startDecisionsIfEnabled: decisionsEvaluated.start };
+});
+vi.mock("../../services/decisions/DecisionsService.js", () => {
+  decisionsEvaluated.service += 1;
+  return {};
+});
+vi.mock("../../services/decisions/decisionsSettings.js", () => {
+  decisionsEvaluated.settings += 1;
+  return {};
+});
+vi.mock("../../services/decisions/libraries.js", () => {
+  decisionsEvaluated.libraries += 1;
+  return {};
+});
+vi.mock("@daintreehq/decisions-protocol", () => {
+  decisionsEvaluated.packages += 1;
+  return {};
+});
+vi.mock("@daintreehq/decisions-crypto", () => {
+  decisionsEvaluated.packages += 1;
+  return {};
+});
+vi.mock("@daintreehq/decisions-client", () => {
+  decisionsEvaluated.packages += 1;
+  return {};
+});
+vi.mock("@daintreehq/decisions-model", () => {
+  decisionsEvaluated.packages += 1;
+  return {};
+});
+
 vi.mock("electron", () => ({
   app: { exit: vi.fn(), getPath: vi.fn((name: string) => `/tmp/${name}`) },
   dialog: { showErrorBox: vi.fn() },
@@ -410,6 +453,8 @@ import {
   setStopEventLoopLagMonitor,
   getStopAppMetricsMonitor,
   setStopAppMetricsMonitor,
+  _resetDecisionsModuleForTesting,
+  sealDecisionsModule,
 } from "../serviceRefs.js";
 import type { WindowRegistry } from "../WindowRegistry.js";
 import { app, ipcMain, powerMonitor } from "electron";
@@ -876,6 +921,7 @@ describe("initGlobalServices task ordering", () => {
       "plugin-mcp-audit-warm",
       "mcp-server",
       "device-answer",
+      "decisions",
       "help-session-gc",
       "help-session-pty",
       "session-eviction",
@@ -1819,5 +1865,99 @@ describe("initGlobalServices task ordering", () => {
         queue.__resetDeferredQueueForTests();
       }
     });
+  });
+});
+
+describe("Decisions boot task (#16001)", () => {
+  const evaluatedTotal = () =>
+    decisionsEvaluated.index +
+    decisionsEvaluated.service +
+    decisionsEvaluated.settings +
+    decisionsEvaluated.libraries +
+    decisionsEvaluated.packages;
+
+  /** Live resources by type; unrelated work finishing in between only lowers a count. */
+  const resourceCounts = () => {
+    const counts = new Map<string, number>();
+    for (const type of process.getActiveResourcesInfo()) {
+      counts.set(type, (counts.get(type) ?? 0) + 1);
+    }
+    return counts;
+  };
+
+  async function decisionsTask(saved: unknown): Promise<() => Promise<unknown>> {
+    registeredTaskNames.length = 0;
+    registeredTaskRuns.clear();
+    await initGlobalServices({ all: () => [], size: 0 } as unknown as WindowRegistry);
+    const fallback = vi.mocked(store.get).getMockImplementation()!;
+    vi.mocked(store.get).mockImplementation((key: string) =>
+      key === "decisions" ? saved : fallback(key)
+    );
+    const run = registeredTaskRuns.get("decisions");
+    expect(run).toBeDefined();
+    return async () => run!();
+  }
+
+  let restoreStoreGet: (() => unknown) | undefined;
+  beforeEach(() => {
+    _resetDecisionsModuleForTesting();
+    decisionsEvaluated.start.mockClear();
+    const original = vi.mocked(store.get).getMockImplementation();
+    restoreStoreGet = () => vi.mocked(store.get).mockImplementation(original!);
+  });
+  afterEach(() => {
+    restoreStoreGet?.();
+    _resetDecisionsModuleForTesting();
+  });
+
+  // These run before the positive control below: a module, once evaluated, stays evaluated.
+  it.each([
+    ["absent", undefined],
+    ["off", { enabled: false }],
+    ["a non-boolean switch", { enabled: "true" }],
+  ])(
+    "with the setting %s, imports no Decisions module and leaves nothing running",
+    async (_label, saved) => {
+      const run = await decisionsTask(saved);
+      const readsBefore = vi.mocked(store.get).mock.calls.length;
+      const resourcesBefore = resourceCounts();
+      const powerSubscriptionsBefore = vi.mocked(powerMonitor.on).mock.calls.length;
+      const handlersBefore = vi.mocked(ipcMain.handle).mock.calls.length;
+
+      await run();
+
+      expect(evaluatedTotal()).toBe(0);
+      expect(decisionsEvaluated.start).not.toHaveBeenCalled();
+      const reads = vi
+        .mocked(store.get)
+        .mock.calls.slice(readsBefore)
+        .map(([key]) => key);
+      expect(reads).toEqual(["decisions"]);
+      const grew = [...resourceCounts()].filter(
+        ([type, count]) => count > (resourcesBefore.get(type) ?? 0)
+      );
+      expect(grew).toEqual([]);
+      expect(vi.mocked(powerMonitor.on).mock.calls.length).toBe(powerSubscriptionsBefore);
+      expect(vi.mocked(ipcMain.handle).mock.calls.length).toBe(handlersBefore);
+    }
+  );
+
+  it("loads nothing once quit has sealed the loader, even with the setting on", async () => {
+    const run = await decisionsTask({ enabled: true });
+    sealDecisionsModule();
+
+    await run();
+
+    expect(evaluatedTotal()).toBe(0);
+    expect(decisionsEvaluated.start).not.toHaveBeenCalled();
+  });
+
+  it("loads the entry module and starts Decisions when the setting is on", async () => {
+    const run = await decisionsTask({ enabled: true });
+
+    await run();
+
+    expect(decisionsEvaluated.index).toBe(1);
+    expect(decisionsEvaluated.start).toHaveBeenCalledTimes(1);
   });
 });

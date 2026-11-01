@@ -86,7 +86,10 @@ import { registerWebviewNavigationHandlers } from "./handlers/webviewNavigation.
 import { registerWebviewCaptureHandlers } from "./handlers/webviewCapture.js";
 import { registerRemoteHostsHandlers } from "./handlers/remoteHosts.js";
 import { registerHostModeHandlers } from "./handlers/hostMode.js";
-import { registerDeviceAnswerHandlers } from "./handlers/deviceAnswer.js";
+import {
+  registerDecisionsHandlers,
+  registerDeviceAnswerHandlers,
+} from "./handlers/deviceAnswer.js";
 import { registerDriveLeaseHandlers } from "./handlers/driveLease.js";
 import { registerOperationsHandlers } from "./handlers/operations.js";
 import { registerHostFilesHandlers } from "./handlers/hostFiles.js";
@@ -298,6 +301,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerWorktreeTitlesHandlers());
     register(() => registerReviewMarksHandlers(deps));
     register(() => registerSchedulesHandlers());
+    register(() => registerDecisionsHandlers());
     register(() => registerScratchHandlers(deps));
 
     // Remote Hosts: macOS and Linux only. Windows builds register none of it.

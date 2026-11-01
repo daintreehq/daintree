@@ -642,10 +642,35 @@ describe("scanForbiddenModules", () => {
           "node_modules/@jridgewell/gen-mapping/dist/gen-mapping.mjs",
           "node_modules/@babel/runtime/helpers/esm/extends.js",
           "node_modules/acorn-walk/dist/walk.mjs",
+          // Main loads Decisions on demand, so only its eager list names it.
+          "electron/services/decisions/index.ts",
+          "node_modules/@daintreehq/decisions-client/dist/index.js",
         ],
         ELEMENT_PICKER_FRAMEWORK_PATTERNS
       )
     ).toEqual([]);
+  });
+
+  it("catches Decisions' service and libraries wherever they resolve, and nothing beside them", () => {
+    const found = scanForbiddenModules([
+      "electron/ipc/handlers/deviceAnswer.ts",
+      "electron/services/decisions/index.ts",
+      "electron/services/decisions/decisionsSettings.ts",
+      "node_modules/@daintreehq/decisions-client/dist/index.js",
+      "electron/node_modules/@daintreehq/decisions-protocol/dist/index.js",
+      "node_modules/@daintreehq/decisionsish/index.js",
+      "electron/services/decisionsLog.ts",
+    ]);
+
+    expect(found).toEqual([
+      {
+        file: "electron/node_modules/@daintreehq/decisions-protocol/dist/index.js",
+        label: "Decisions",
+      },
+      { file: "electron/services/decisions/decisionsSettings.ts", label: "Decisions" },
+      { file: "electron/services/decisions/index.ts", label: "Decisions" },
+      { file: "node_modules/@daintreehq/decisions-client/dist/index.js", label: "Decisions" },
+    ]);
   });
 
   it("passes an eager graph that reaches none of them", () => {

@@ -291,6 +291,11 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["copy-tree-history:get-records"]["args"]
     ): Promise<IpcInvokeMap["copy-tree-history:get-records"]["result"]>;
   };
+  decisions: {
+    getStatus(
+      ...args: IpcInvokeMap["decisions:get-status"]["args"]
+    ): Promise<IpcInvokeMap["decisions:get-status"]["result"]>;
+  };
   deviceAnswer: {
     cancelPairingCode(
       ...args: IpcInvokeMap["device-answer:cancel-pairing-code"]["args"]

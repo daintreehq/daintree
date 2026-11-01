@@ -1496,6 +1496,9 @@ export const CHANNELS = {
   SCHEDULES_LAUNCH_REQUEST: "schedules:launch-request",
   SCHEDULES_LAUNCH_RESPONSE: "schedules:launch-response",
 
+  // Decisions, as main observes it (#16001). The owner's machine only.
+  DECISIONS_GET_STATUS: "decisions:get-status",
+
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",
   CONNECTIVITY_SERVICE_CHANGED: "connectivity:service-changed",

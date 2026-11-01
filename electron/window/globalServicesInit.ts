@@ -136,6 +136,7 @@ import {
   setGlobalServicesInitialized,
   getCliAvailabilityServiceRef,
   getGlobalServicesInitialized,
+  loadDecisionsModule,
 } from "./serviceRefs.js";
 
 /**
@@ -1467,6 +1468,23 @@ export async function initGlobalServices(
           await startDeviceAnswerIfEnabled();
         } catch (err) {
           console.warn("[MAIN] Answer from another device failed to start:", err);
+        }
+      },
+    });
+
+    // Decisions: the saved switch is read before anything of Decisions is
+    // imported, so with it off this task loads nothing at all.
+    registerDeferredTask({
+      name: "decisions",
+      run: async () => {
+        if (store.get("decisions")?.enabled !== true) return;
+        try {
+          const decisions = await loadDecisionsModule(
+            () => import("../services/decisions/index.js")
+          );
+          await decisions?.startDecisionsIfEnabled();
+        } catch (err) {
+          console.warn("[MAIN] Decisions failed to start:", err);
         }
       },
     });

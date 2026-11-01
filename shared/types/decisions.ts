@@ -32,3 +32,17 @@ export interface DecisionsSettings {
    */
   proxyAllowlisted: boolean;
 }
+
+/**
+ * Decisions as main last observed it. `off` until the setting is on;
+ * `not-connected` while on with no relay connection; `connecting` and
+ * `connected` follow the relay socket (#16008); `revoked` once the relay has
+ * refused this device for good, after which nothing reconnects.
+ */
+export type DecisionsState = "off" | "not-connected" | "connecting" | "connected" | "revoked";
+
+export interface DecisionsStatus {
+  state: DecisionsState;
+}
+
+export type DecisionsStatusEvent = { type: "status-changed"; status: DecisionsStatus };
