@@ -15,7 +15,7 @@ import { EventData, WS_CLOSE } from "@daintreehq/decisions-protocol";
 import type { DecisionsConnectionProblem } from "../../../shared/types/decisions.js";
 import { AnswerDelivery, type AnswerDeliveryDeps } from "./answerDelivery.js";
 import { normalizeRelayOrigin } from "./decisionsSettings.js";
-import { KeyRotations } from "./keyRotation.js";
+import { KeyRotations, pendingRotationOf } from "./keyRotation.js";
 import type { RelayFetch } from "./relayCheck.js";
 import { relayRequests } from "./relayIdentity.js";
 import {
@@ -464,6 +464,7 @@ export class RelayConnection {
    * holds, and the next attempt tries again.
    */
   private async settleKeys(attempt: Attempt, client: RelayClient): Promise<Identity> {
+    if (!this.mayBePending(client.identity)) return client.identity;
     try {
       const outcome = await this.rotations.settle(client);
       if (outcome.outcome === "unconfirmed") throw outcome.error;
@@ -487,6 +488,17 @@ export class RelayConnection {
   }
 
   /**
+   * Whether a rotation may be pending: the keys this connection holds record
+   * one, or one was staged or seen since. Otherwise the keys aren't read again.
+   */
+  private mayBePending(identity: Identity | null): boolean {
+    return (
+      this.rotations.mayBePending() ||
+      (identity !== null && pendingRotationOf(identity.stored) !== null)
+    );
+  }
+
+  /**
    * The attempt's store, watching the ledger for the relay's device events
    * (#16010). A new `device.key_rotated` or `device.revoked` whose epoch is a
    * pending key's makes that key current before the insert returns, so the
@@ -498,7 +510,7 @@ export class RelayConnection {
       const inserted = await store.insertEvent(event);
       if (!inserted || !DEVICE_EVENTS.has(event.event_type) || attempt.retired) return inserted;
       const epoch = keyEpochOf(event);
-      if (epoch !== null) {
+      if (epoch !== null && this.mayBePending(this.identity)) {
         try {
           await this.rotations.confirm(epoch);
         } catch {

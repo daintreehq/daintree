@@ -196,6 +196,8 @@ function stale(error: unknown): boolean {
 export class KeyRotations {
   private tail: Promise<unknown> = Promise.resolve();
   private closed = false;
+  /** A key this staged, or found staged, hasn't been seen settled yet. */
+  private staged = false;
 
   constructor(private readonly keys: KeyStore) {}
 
@@ -207,6 +209,14 @@ export class KeyRotations {
     });
     this.tail = run.catch(() => {});
     return run;
+  }
+
+  /**
+   * Whether a key this staged, or found staged, may still be pending. Keys
+   * read before that cover the rest: a pending record in them says so too.
+   */
+  mayBePending(): boolean {
+    return this.staged;
   }
 
   /** Refuses new work, and waits for what is running to finish. */
@@ -270,6 +280,7 @@ export class KeyRotations {
       const stored = await this.keys.load();
       if (!stored || stored.claimed === false) return false;
       const pending = pendingRotationOf(stored);
+      if (pending === null) this.staged = false;
       if (pending === null || pending.epoch !== epoch) return false;
       await this.promote(await importIdentity(stored), pending);
       return true;
@@ -286,7 +297,11 @@ export class KeyRotations {
     const identity = await this.loadIdentity();
     client.identity = identity;
     const pending = pendingRotationOf(identity.stored);
-    if (pending === null) return { outcome: "none" };
+    if (pending === null) {
+      this.staged = false;
+      return { outcome: "none" };
+    }
+    this.staged = true;
     return this.send(client, identity, pending);
   }
 
@@ -324,6 +339,7 @@ export class KeyRotations {
       raw,
       { makeCurrent: false }
     );
+    this.staged = true;
     client.identity = staged;
     return this.send(client, staged, pending, { list, grants });
   }
@@ -350,6 +366,7 @@ export class KeyRotations {
         // The relay's key moved some other way: the pending one can't be
         // sent at an epoch the relay won't take. It stays as a past key.
         await this.keys.save(withoutPending(identity.stored));
+        this.staged = false;
         client.identity = await importIdentity(withoutPending(identity.stored));
         return { outcome: "superseded" };
       }
@@ -413,12 +430,14 @@ export class KeyRotations {
   private async promote(identity: Identity, pending: PendingRotation): Promise<Identity> {
     const raw = identity.epochs.get(pending.epoch)?.raw;
     if (!raw) throw new Error("The pending epoch key is missing");
-    return addEpoch(
+    const promoted = await addEpoch(
       this.keys,
       { ...identity, stored: withoutPending(identity.stored) },
       pending.epoch,
       raw,
       { makeCurrent: true }
     );
+    this.staged = false;
+    return promoted;
   }
 }

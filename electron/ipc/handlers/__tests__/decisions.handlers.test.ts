@@ -100,6 +100,8 @@ const decisionsEntry = vi.hoisted(() => ({
       status: { state: "not-connected", recoveryKitVerifiedAt: 1 },
     })
   ),
+  revokeDevice: vi.fn(async (_deviceId: string) => ({ result: "revoked", keyEpoch: 2 })),
+  rotateKeys: vi.fn(async () => ({ result: "rotated", keyEpoch: 2 })),
 }));
 const dialogMock = vi.hoisted(() => ({
   showSaveDialog: vi.fn<(...args: unknown[]) => Promise<{ canceled: boolean; filePath?: string }>>(
@@ -132,6 +134,8 @@ vi.mock("../../../services/decisions/index.js", () => {
     setDecisionsProxyAllowlisted: decisionsEntry.setDecisionsProxyAllowlisted,
     exportRecoveryKit: decisionsEntry.exportRecoveryKit,
     verifyRecoveryKit: decisionsEntry.verifyRecoveryKit,
+    revokeDevice: decisionsEntry.revokeDevice,
+    rotateKeys: decisionsEntry.rotateKeys,
   };
 });
 vi.mock("@daintreehq/decisions-protocol", () => {
@@ -205,6 +209,10 @@ const exportRecoveryKit = decisionsNamespace.ops.exportRecoveryKit.handler as un
 const verifyRecoveryKit = decisionsNamespace.ops.verifyRecoveryKit.handler as unknown as (
   payload: VerifyDecisionsRecoveryKitPayload
 ) => Promise<DecisionsKitVerifyResult>;
+const revokeDevice = decisionsNamespace.ops.revokeDevice.handler as unknown as (
+  deviceId: string
+) => Promise<unknown>;
+const rotateKeys = decisionsNamespace.ops.rotateKeys.handler as unknown as () => Promise<unknown>;
 
 const SECRET = "claim-secret-0123456789abcdef";
 const PASSPHRASE = "correct horse battery staple";
@@ -253,6 +261,8 @@ describe("decisions IPC", () => {
     dialogMock.showSaveDialog.mockClear();
     decisionsEntry.getDecisionsPolicy.mockClear();
     decisionsEntry.setDecisionsProxyAllowlisted.mockClear();
+    decisionsEntry.revokeDevice.mockClear();
+    decisionsEntry.rotateKeys.mockClear();
     vi.mocked(store.set).mockClear();
   });
   afterEach(() => {
@@ -425,6 +435,18 @@ describe("decisions IPC", () => {
       verifyRecoveryKit({ kit: '{"v":1}', passphrase: PASSPHRASE })
     ).rejects.toMatchObject({ code: "CANCELLED" });
     expect(decisionsEntry.evaluated).toBe(0);
+  });
+
+  it("refuses to revoke a device or rotate the keys while off, loading none of Decisions", async () => {
+    for (const value of [undefined, { enabled: false }]) {
+      saved.value = value;
+
+      await expect(revokeDevice("dev_phone_1")).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(rotateKeys()).rejects.toMatchObject({ code: "PERMISSION" });
+    }
+
+    expect(decisionsEntry.evaluated).toBe(0);
+    expect(decisionsEntry.libraries).toBe(0);
   });
 
   it("refuses to claim, restore or disconnect once quit has sealed the loader", async () => {
@@ -653,6 +675,25 @@ describe("decisions IPC", () => {
     expect(schema.safeParse(true).success).toBe(true);
     expect(schema.safeParse(false).success).toBe(true);
     for (const value of [undefined, "true", 1, { proxyAllowlisted: true }, { gates: [] }]) {
+      expect(schema.safeParse(value).success).toBe(false);
+    }
+  });
+
+  it("revokes and rotates through Decisions itself once the setting is on", async () => {
+    saved.value = { enabled: true };
+
+    await expect(revokeDevice("dev_phone_1")).resolves.toEqual({ result: "revoked", keyEpoch: 2 });
+    await expect(rotateKeys()).resolves.toEqual({ result: "rotated", keyEpoch: 2 });
+
+    expect(decisionsEntry.revokeDevice).toHaveBeenCalledExactlyOnceWith("dev_phone_1");
+    expect(decisionsEntry.rotateKeys).toHaveBeenCalledOnce();
+  });
+
+  it("takes only a bounded string as the device to revoke", () => {
+    const schema = decisionsNamespace.ops.revokeDevice.schema as SafeParse;
+
+    expect(schema.safeParse("dev_phone_1").success).toBe(true);
+    for (const value of [undefined, "", 42, { deviceId: "dev_phone_1" }, "x".repeat(129)]) {
       expect(schema.safeParse(value).success).toBe(false);
     }
   });
