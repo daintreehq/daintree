@@ -342,7 +342,10 @@ describe("worktree port over the link", () => {
     h.workspace().post(event("worktree-update"));
     h.workspace().post({ id: "fence", result: null });
     await waitFor(() => t.shellFrames.length === 2);
-    expect(h.renderer().received).toEqual([event("worktree-update"), { id: "fence", result: null }]);
+    expect(h.renderer().received).toEqual([
+      event("worktree-update"),
+      { id: "fence", result: null },
+    ]);
     expect(t.hostHeard).toEqual([]);
   });
 
