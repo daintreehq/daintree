@@ -66,6 +66,12 @@ export interface MetricsHostDeps {
   onWorktreesMaybeChanged(listener: () => void): () => void;
   /** How long a burst of those is gathered; the default outside tests. */
   worktreesChangedDelayMs?: number;
+  /**
+   * Told when which projects are registered here changed (added, removed,
+   * moved, renamed): what a Shell's match of its project against this host
+   * depends on. Agent activity never calls it.
+   */
+  onProjectsChanged(listener: () => void): () => void;
   /** Told when one of this host's agents goes from working to waiting. */
   onAgentWaiting(listener: (payload: WaitingEvent) => void): () => void;
   /**
@@ -241,6 +247,14 @@ export function installHostMetricsHostWith(
     },
   });
   const offWorktrees = deps.onWorktreesMaybeChanged(() => worktrees.poke());
+  const offProjects = deps.onProjectsChanged(() => {
+    for (const ctx of server.sessions) {
+      if (!ctx.session.isOpen) continue;
+      ctx.session.call(MetricsLinkMethod.PROJECTS_CHANGED, null).catch(() => {
+        // A Shell that can't take it now asks again when it next matches a project here.
+      });
+    }
+  });
 
   // Sample only while some Shell is attached; the loop stops itself when the last one leaves.
   let offLoop: (() => void) | null = null;
@@ -299,6 +313,7 @@ export function installHostMetricsHostWith(
     stopLoop();
     offWaiting();
     offWorktrees();
+    offProjects();
     worktrees.dispose();
   };
 }
@@ -372,6 +387,7 @@ export async function installHostMetricsHost(server: MetricsSessionSource): Prom
     listWorktrees: ops.listLocalWorktrees,
     restartTerminals: ops.listLocalRestartTerminals,
     onWorktreesMaybeChanged: ops.onLocalWorktreesMaybeChanged,
+    onProjectsChanged: ops.onLocalProjectsChanged,
     onAgentWaiting(listener) {
       return events.on("agent:state-changed", (payload) => {
         if (payload.state !== "waiting") return;

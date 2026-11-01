@@ -17,6 +17,7 @@ import { waitingPolicy } from "./hostMetricsHost.js";
 import {
   listLocalFleetTargets,
   listLocalWorktrees,
+  onLocalProjectsChanged,
   onLocalWorktreesMaybeChanged,
   submitLocalFleet,
 } from "./hostOps.js";
@@ -149,6 +150,7 @@ export function installHostMetricsClient(options: InstallHostMetricsClientOption
         return readLocalProcessInventory(getPtyClient);
       },
       onWorktreesMaybeChanged: onLocalWorktreesMaybeChanged,
+      onProjectsChanged: onLocalProjectsChanged,
     },
   });
   client.start();

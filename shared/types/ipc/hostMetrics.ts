@@ -47,8 +47,21 @@ export interface HostWorktreesChangedEvent {
   hostId: HostId;
 }
 
+/**
+ * The projects registered on a host changed: one was added, removed, moved or
+ * renamed there. It carries nothing: a view matching its project against that
+ * host asks it again. Agent activity never sends it.
+ */
+export interface HostProjectsChangedEvent {
+  type: "projects";
+  hostId: HostId;
+}
+
 export type HostMetricsEvent =
-  { type: "summary"; summary: HostMetricsSummary } | HostAttentionEvent | HostWorktreesChangedEvent;
+  | { type: "summary"; summary: HostMetricsSummary }
+  | HostAttentionEvent
+  | HostWorktreesChangedEvent
+  | HostProjectsChangedEvent;
 
 /** An agent terminal on some host that a fleet broadcast can target. */
 export interface HostFleetTarget {

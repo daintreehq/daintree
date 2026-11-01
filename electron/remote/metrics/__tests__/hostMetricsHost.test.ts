@@ -112,6 +112,7 @@ function deps(overrides: Partial<MetricsHostDeps> = {}): MetricsHostDeps & {
     submitFleet: async () => {},
     listWorktrees: async () => [],
     onWorktreesMaybeChanged: () => () => {},
+    onProjectsChanged: () => () => {},
     restartTerminals: async () => ({
       projects: [],
       complete: true,
