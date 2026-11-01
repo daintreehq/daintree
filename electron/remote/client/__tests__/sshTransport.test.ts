@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import net from "node:net";
 import path from "node:path";
@@ -1018,6 +1018,295 @@ describe.skipIf(process.platform === "win32")(
   }
 );
 
+describe("reconnecting to a host the transport already knows", () => {
+  const isProbe = (args: string[]) => args.at(-1) === PROBE_COMMAND;
+  const isRead = (args: string[]) => isDiscoveryRead(args.at(-1));
+  const isResolve = (args: string[]) => args[0] === "-G";
+  const isMuxForward = (args: string[]) => args.includes("-O") && args.includes("forward");
+
+  /**
+   * A Mac host whose discovery read returns whatever its HostServer has on
+   * disk (exit 3 once it removed the file), and whose master forwards onto
+   * the real socket. `forwardFails` makes the master refuse the next forwards.
+   */
+  async function knownHost() {
+    const hostLoc = hostSocketLocation({ platform: "darwin", userDataDir: path.join(root, "h") });
+    server = new HostServer({ location: hostLoc, handshake: TEST_HANDSHAKE, hostName: "studio" });
+    await server.listen();
+    const calls: string[][] = [];
+    const proxies: net.Server[] = [];
+    const links: net.Socket[] = [];
+    const state = { forwardFails: 0 };
+    const spawner: SshSpawner = (args) => {
+      calls.push(args);
+      const child = new FakeChild();
+      if (isProbe(args)) child.finish(0, "Darwin\n501\n/Users/g\n");
+      else if (isRead(args)) {
+        if (existsSync(hostLoc.discoveryPath)) {
+          // Named where the client expects it; the forward maps it onto the real one.
+          const info = JSON.parse(readFileSync(hostLoc.discoveryPath, "utf8")) as object;
+          child.finish(0, discoveryReply({ ...info, socketPath: DARWIN_SOCKET }));
+        } else child.finish(3);
+      } else if (isResolve(args)) child.finish(0, "controlpath /cp/cm3-resolved\n");
+      else if (isMuxForward(args)) {
+        if (state.forwardFails > 0) {
+          state.forwardFails--;
+          child.finish(255, "", "Control socket connect(/cp/cm3-resolved): No such file\n");
+        } else {
+          const proxy = fakeForward(args, DARWIN_SOCKET, hostLoc.socketPath);
+          proxy.on("connection", (conn) => links.push(conn));
+          proxies.push(proxy);
+          child.finish(0);
+        }
+      } else child.finish(0);
+      return child;
+    };
+    const relaunch = async () => {
+      await server!.close();
+      server = new HostServer({ location: hostLoc, handshake: TEST_HANDSHAKE, hostName: "studio" });
+      await server.listen();
+    };
+    const closeProxies = () => {
+      for (const proxy of proxies) proxy.close();
+    };
+    return { hostLoc, calls, links, state, spawner, relaunch, closeProxies };
+  }
+
+  const linkClient = (transport: SshTransport) =>
+    new LinkClient({
+      transport,
+      handshake: TEST_HANDSHAKE,
+      client: { clientId: "c1", clientName: "mbp", platform: "darwin" },
+      session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+      backoff: { initialMs: 10, jitter: 0 },
+    });
+
+  it("forwards straight away on the next dial: no probe, no discovery read, no ssh -G", async () => {
+    const host = await knownHost();
+    const clientDir = path.join(root, "c");
+    const transport = new SshTransport({ target: "greg@studio", clientDir, spawn: host.spawner });
+    client = linkClient(transport);
+    client.start();
+    await waitFor(() => client!.getState().status === "connected");
+    expect(host.calls.filter(isProbe)).toHaveLength(1);
+    expect(host.calls.filter(isRead)).toHaveLength(1);
+    expect(host.calls.filter(isResolve)).toHaveLength(1);
+
+    // The link drops (a blip) while ssh and the host stay up.
+    const before = host.calls.length;
+    for (const link of host.links) link.destroy();
+    await waitFor(() => client!.getState().status !== "connected");
+    await waitFor(() => client!.getState().status === "connected");
+    const redial = host.calls.slice(before);
+    expect(redial.filter(isProbe)).toEqual([]);
+    expect(redial.filter(isRead)).toEqual([]);
+    expect(redial.filter(isResolve)).toEqual([]);
+    // Through the master by the path `ssh -G` gave the first time.
+    const forward = redial.find(isMuxForward)!;
+    expect(forward.slice(0, 4)).toEqual([
+      "-F",
+      "/dev/null",
+      "-o",
+      'ControlPath="/cp/cm3-resolved"',
+    ]);
+    expect(transport.route).toBe("forward");
+
+    await client.stop();
+    client = null;
+    host.closeProxies();
+  });
+
+  it("reads the host afresh when the token it remembered is refused, and connects", async () => {
+    const host = await knownHost();
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: host.spawner,
+    });
+    client = linkClient(transport);
+    client.start();
+    await waitFor(() => client!.getState().status === "connected");
+    await client.stop();
+
+    // Daintree on the host relaunched while the link was down: same socket, new token.
+    const oldToken = server!.token;
+    await host.relaunch();
+    expect(server!.token).not.toBe(oldToken);
+    const states: LinkClientState[] = [];
+    client.onStateChange((state) => states.push(state));
+    const before = host.calls.length;
+    client.start();
+    await waitFor(() => client!.getState().status === "connected");
+    const redial = host.calls.slice(before);
+    // The remembered forward first, then the full dial: probe, read, -G, forward.
+    expect(redial.findIndex(isMuxForward)).toBeLessThan(redial.findIndex(isProbe));
+    expect(redial.filter(isProbe)).toHaveLength(1);
+    expect(redial.filter(isRead)).toHaveLength(1);
+    // The refused token never showed as a failure.
+    expect(states.some((state) => state.status === "unreachable")).toBe(false);
+
+    await client.stop();
+    client = null;
+    host.closeProxies();
+  });
+
+  it("reports Host mode off as it always has once nothing listens where it remembered", async () => {
+    const host = await knownHost();
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: host.spawner,
+    });
+    client = linkClient(transport);
+    client.start();
+    await waitFor(() => client!.getState().status === "connected");
+    await client.stop();
+
+    await server!.close();
+    server = null;
+    expect(existsSync(host.hostLoc.discoveryPath)).toBe(false);
+    const before = host.calls.length;
+    client.start();
+    await waitFor(() => client!.getState().status === "unreachable");
+    expect(client.getState()).toMatchObject({ status: "unreachable", hostModeOff: true });
+    expect(host.calls.slice(before).filter(isRead)).toHaveLength(1);
+
+    await client.stop();
+    client = null;
+    host.closeProxies();
+  });
+
+  it("dials afresh when the master it forwarded through is gone, never settling for a dedicated forward", async () => {
+    const host = await knownHost();
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: host.spawner,
+    });
+    const first = await transport.open(new AbortController().signal);
+    first.socket.destroy();
+    await first.dispose();
+
+    host.state.forwardFails = 1;
+    const before = host.calls.length;
+    const second = await transport.open(new AbortController().signal);
+    expect(second.token).toBe(server!.token);
+    const redial = host.calls.slice(before);
+    const kind = (args: string[]) =>
+      isMuxForward(args)
+        ? "forward"
+        : isProbe(args)
+          ? "probe"
+          : isRead(args)
+            ? "read"
+            : isResolve(args)
+              ? "-G"
+              : args.includes("-N")
+                ? "dedicated"
+                : null;
+    // The stream-local check (`-W`) may run on either path; it isn't what this is about.
+    expect(redial.map(kind).filter((k) => k !== null)).toEqual([
+      "forward",
+      "probe",
+      "read",
+      "-G",
+      "forward",
+    ]);
+    second.socket.destroy();
+    await second.dispose();
+    host.closeProxies();
+  });
+
+  it("asks the host for everything again when the dial says fresh", async () => {
+    const host = await knownHost();
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: host.spawner,
+    });
+    const first = await transport.open(new AbortController().signal);
+    expect(first.remembered).toBeUndefined();
+    await first.dispose();
+    const second = await transport.open(new AbortController().signal);
+    expect(second.remembered).toBe(true);
+    await second.dispose();
+
+    const before = host.calls.length;
+    const third = await transport.open(new AbortController().signal, { fresh: true });
+    expect(third.remembered).toBeUndefined();
+    const redial = host.calls.slice(before);
+    expect(redial.filter(isProbe)).toHaveLength(1);
+    expect(redial.filter(isRead)).toHaveLength(1);
+    expect(redial.filter(isResolve)).toHaveLength(1);
+    // The server's answer on socket forwarding is asked again too.
+    expect(redial.filter((args) => args.includes("-W"))).toHaveLength(1);
+    await third.dispose();
+    host.closeProxies();
+  });
+
+  it("dials afresh once the ssh config may point the alias somewhere else", async () => {
+    const host = await knownHost();
+    const config = path.join(root, "ssh_config");
+    writeFileSync(config, "Host studio\n  HostName a.example\n");
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: host.spawner,
+      sshConfigFiles: [config, path.join(root, "no-system-config")],
+    });
+    const first = await transport.open(new AbortController().signal);
+    await first.dispose();
+    const second = await transport.open(new AbortController().signal);
+    expect(second.remembered).toBe(true);
+    await second.dispose();
+
+    // The master still open to a.example would otherwise keep carrying the link.
+    writeFileSync(config, "Host studio\n  HostName b.example.org\n");
+    const before = host.calls.length;
+    const third = await transport.open(new AbortController().signal);
+    expect(third.remembered).toBeUndefined();
+    const redial = host.calls.slice(before);
+    expect(redial.filter(isProbe)).toHaveLength(1);
+    expect(redial.filter(isResolve)).toHaveLength(1);
+    await third.dispose();
+    // What that dial learned holds while the config stays as it is now.
+    const fourth = await transport.open(new AbortController().signal);
+    expect(fourth.remembered).toBe(true);
+    await fourth.dispose();
+    host.closeProxies();
+  });
+
+  it("starts no fresh dial for a remembered one that was cancelled", async () => {
+    const host = await knownHost();
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: (args) => {
+        // The master never answers this forward; the dial is cancelled meanwhile.
+        if (isMuxForward(args) && host.calls.some(isMuxForward)) {
+          host.calls.push(args);
+          setImmediate(() => abort.abort());
+          return new FakeChild();
+        }
+        return host.spawner(args);
+      },
+    });
+    const first = await transport.open(new AbortController().signal);
+    await first.dispose();
+    const abort = new AbortController();
+    const before = host.calls.length;
+    await expect(transport.open(abort.signal)).rejects.toThrow("Connection cancelled");
+    const redial = host.calls.slice(before);
+    expect(redial.filter(isProbe)).toEqual([]);
+    expect(redial.filter(isRead)).toEqual([]);
+    // The forward the master may have taken is cancelled all the same.
+    const forward = redial.find(isMuxForward)!;
+    const cancel = redial.find((args) => args.includes("cancel"));
+    expect(cancel?.at(-3)).toBe(forward.at(-3));
+    host.closeProxies();
+  });
+});
+
 describe("when the ssh server refuses socket forwarding", () => {
   const REFUSED_VIA_MASTER = "Stdio forwarding request failed: Session open refused by peer\n";
 
@@ -1173,8 +1462,10 @@ describe("when the ssh server refuses socket forwarding", () => {
     });
     const first = await transport.open(new AbortController().signal);
     expect(transport.route).toBe("attach-stdio");
+    // The bridge's close is what sends the next dial back to the check.
+    const closed = new Promise((resolve) => first.socket.once("close", resolve));
     first.socket.destroy();
-    await waitFor(() => first.socket.destroyed);
+    await closed;
     const second = await transport.open(new AbortController().signal);
     expect(transport.route).toBe("forward");
     expect(checks).toBe(2);
