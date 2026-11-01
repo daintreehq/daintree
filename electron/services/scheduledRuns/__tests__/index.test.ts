@@ -62,6 +62,8 @@ import type { RegisterScheduledLaunchInput } from "../ScheduledRunRecorder.js";
 import {
   _resetScheduledRunRecorderForTest,
   getScheduledRunRecorder,
+  hasOpenScheduledRun,
+  onScheduledRunClosed,
   startScheduledRunFacts,
   type ScheduledRunFactSource,
 } from "../index.js";
@@ -185,6 +187,62 @@ describe("scheduled-run history wiring", () => {
       scheduleId: "schedule-1",
       timestamp: expect.any(Number),
     });
+  });
+
+  it("reads open runs without opening the history, which has none until it opens", async () => {
+    new ScheduledRunStore(state.sqlite!).insert({
+      ...launch,
+      createdAt: 1,
+      terminalSpawnedAt: null,
+      settlement: { state: "open" },
+      process: { agent: { state: "not-started" }, pty: { state: "not-started" } },
+      pane: { state: "none" },
+    });
+    // An earlier lifetime's run, settled as interrupted once the history opens.
+    expect(hasOpenScheduledRun()).toBe(false);
+
+    const recorder = (await getScheduledRunRecorder())!;
+    expect(hasOpenScheduledRun()).toBe(false);
+    recorder.registerLaunch({ ...launch, id: "run-2", terminalId: "terminal-2" });
+    expect(hasOpenScheduledRun()).toBe(true);
+  });
+
+  it("counts a history it can't read as no open run", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const recorder = (await getScheduledRunRecorder())!;
+    recorder.registerLaunch(launch);
+    state.sqlite!.close();
+
+    expect(hasOpenScheduledRun()).toBe(false);
+    warn.mockRestore();
+    state.sqlite = openDb(path.join(dir, "app.db"), migrationsFolder).sqlite;
+  });
+
+  it("hears every way a run stops being open, until it stops listening", async () => {
+    const closed = vi.fn();
+    const stopListening = onScheduledRunClosed(closed);
+    const recorder = (await getScheduledRunRecorder())!;
+    recorder.registerLaunch(launch);
+    recorder.registerLaunch({
+      ...launch,
+      id: "run-2",
+      scheduleId: "schedule-2",
+      terminalId: "terminal-2",
+    });
+
+    recorder.settle("run-1", { kind: "cancel" });
+    expect(closed).toHaveBeenCalledTimes(1);
+    // A project removed with its history: its runs never end.
+    events.emit("scheduled-runs:deleted", {
+      projectId: "project-1",
+      scheduleId: null,
+      timestamp: 1,
+    });
+    expect(closed).toHaveBeenCalledTimes(2);
+
+    stopListening();
+    recorder.deleteForSchedule("schedule-2");
+    expect(closed).toHaveBeenCalledTimes(2);
   });
 
   it("records the PTY and session facts of a launched run", async () => {
