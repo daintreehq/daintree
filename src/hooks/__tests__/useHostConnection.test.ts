@@ -449,8 +449,18 @@ describe("host connection sync", () => {
   it("adopts the host's agent states only where they are newer", async () => {
     const { electron } = installElectron();
     bindView("studio-01");
-    panels["t-1"] = { id: "t-1", kind: "terminal", lastStateChange: 10 };
-    panels["t-2"] = { id: "t-2", kind: "terminal", lastStateChange: 50 };
+    panels["t-1"] = {
+      id: "t-1",
+      kind: "terminal",
+      lastStateChange: 10,
+      lastAgentObservation: { agentState: "working", at: 10 },
+    };
+    panels["t-2"] = {
+      id: "t-2",
+      kind: "terminal",
+      lastStateChange: 50,
+      lastAgentObservation: { agentState: "waiting", at: 50 },
+    };
     electron.terminal.getForProject.mockResolvedValue([
       { id: "t-1", agentState: "waiting", lastStateChange: 20, waitingReason: "prompt" },
       { id: "t-2", agentState: "working", lastStateChange: 40 },
