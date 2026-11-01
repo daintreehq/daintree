@@ -2687,12 +2687,12 @@ describe("useHostConnection", () => {
     act(() => {
       useHostConnectionStore.getState().applyConnection({
         status: "connected",
-        rttMs: 9,
+        rttMs: 6,
         rttSampledAt: 2,
         handshake: { ...HANDSHAKE },
       });
     });
-    expect(useHostConnectionStore.getState().latencyMs).not.toBe(5);
+    expect(useHostConnectionStore.getState().connection).toMatchObject({ rttMs: 6 });
     expect(renders).toBe(before);
 
     act(() => useHostConnectionStore.getState().setHostName("Studio"));
