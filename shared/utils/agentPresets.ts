@@ -74,8 +74,10 @@ export function sanitizeDisplayTitle(value: unknown): string | undefined {
  *
  * Module-level rather than nested so the identity projection below shares the
  * exact same rules; a second copy would drift the moment either is edited.
+ * Exported so a preset write can refuse whatever this would change rather than
+ * store it and have a read quietly drop it (#16047).
  */
-function sanitizePreset(preset: AgentPreset): AgentPreset | null {
+export function sanitizePreset(preset: AgentPreset): AgentPreset | null {
   // Trim name first so a whitespace-only string is caught by the empty check below
   const trimmedName = preset.name?.trim() ?? "";
   if (!preset.id || !trimmedName) return null;

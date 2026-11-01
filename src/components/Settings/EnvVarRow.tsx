@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SettingsInlineError } from "@/components/Settings/SettingsGroup";
+import { isValidEnvKey } from "@shared/utils/envVars";
 
 /**
  * The editable `NAME = value` row shared by the global Environment page and the
@@ -19,12 +20,7 @@ export interface EnvVarDraft {
   value: string;
 }
 
-const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
-/** A name a POSIX shell can export. */
-export function isValidEnvKey(key: string): boolean {
-  return ENV_KEY_PATTERN.test(key);
-}
+export { isValidEnvKey };
 
 export const ENV_KEY_INVALID_MESSAGE =
   "Start with a letter or underscore, then use only letters, digits and underscores";

@@ -1145,6 +1145,9 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "devPreview.reinstallAndRestart",
   "artifact.applyPatch",
   "agentSettings.reset",
+  "agent.createPreset",
+  "agent.updatePreset",
+  "agent.deletePreset",
   "app.importConfig",
   "forge.createPR",
   "forge.closePR",
@@ -1289,6 +1292,12 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // all agents at once is destructive-local with no undo); there is no UI
   // ConfirmDialog because there is no user-facing dispatch path.
   "agentSettings.reset",
+  // The user-preset writes (#16047) are agent/MCP-only and palette-hidden;
+  // Settings edits presets through the store directly, not ActionService. The
+  // confirm is the generic McpConfirmDialog, previewing the exact change.
+  "agent.createPreset",
+  "agent.updatePreset",
+  "agent.deletePreset",
   // ConfirmDialog with diff preview in ArtifactOverlay.tsx; the dispatch lives in
   // useArtifacts.ts (action ID not co-located with the dialog component).
   "artifact.applyPatch",

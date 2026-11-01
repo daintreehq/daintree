@@ -68,6 +68,9 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "devPreview.reinstallAndRestart",
   "artifact.applyPatch",
   "agentSettings.reset",
+  "agent.createPreset",
+  "agent.updatePreset",
+  "agent.deletePreset",
   "app.importConfig",
   "forge.createPR",
   "forge.closePR",
@@ -162,6 +165,12 @@ const BYPASS_WIRED = new Set([
   "terminal.startHeld",
   "artifact.applyPatch", // ConfirmDialog in ArtifactOverlay.tsx; dispatch in useArtifacts.ts (ID not co-located)
   "agentSettings.reset", // agent/MCP-only; palette-hidden, configured from Settings via client (danger:"confirm" gates agent dispatch only)
+  // User-preset writes (#16047): agent/MCP-only and palette-hidden. Settings edits
+  // presets through the store, not ActionService, so the confirm is the generic
+  // McpConfirmDialog with the exact change previewed, and there is nothing to co-locate.
+  "agent.createPreset",
+  "agent.updatePreset",
+  "agent.deletePreset",
   // Forge PR write actions are agent/MCP-only (issue #10654); danger:"confirm"
   // gates agent dispatch — no user-side ConfirmDialog to co-locate.
   "forge.createPR",

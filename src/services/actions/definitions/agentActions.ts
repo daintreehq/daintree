@@ -26,8 +26,11 @@ import {
 } from "@shared/utils/launchInNewWorktree";
 import { WorktreeCreationSourceSchema } from "./workflowCreationActionArgs";
 import {
+  AgentCreatePresetArgsSchema,
+  AgentDeletePresetArgsSchema,
   AgentListModelsArgsSchema,
   AgentListPresetsArgsSchema,
+  AgentUpdatePresetArgsSchema,
   BookmarkAndCloseArgsSchema,
   BookmarkDeleteArgsSchema,
   BookmarkListArgsSchema,
@@ -135,6 +138,16 @@ const AgentLaunchArgsSchema = z.object({
     .describe(
       "Always pass a short tab title ('Claude: auth refactor') so parallel agents are told apart. Blank uses the default."
     ),
+});
+
+/** Why a preset write asks first, shown in the host's confirm dialog. */
+const PRESET_WRITE_DANGER_RATIONALE =
+  "A preset's env vars and flags apply to every launch that picks it, and can redirect where the agent sends its traffic or relax its permissions.";
+
+/** What a preset write reports: identity only, never env or flags. */
+const PresetWriteResultSchema = z.object({
+  presetId: z.string(),
+  name: z.string(),
 });
 
 /**
@@ -686,6 +699,82 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     mcpOutputSchema: true,
     run: (args: unknown, ctx: ActionContext) =>
       runAgentAction("agent.listPresets", args, ctx, callbacks),
+  }));
+
+  // The user-preset writes (#16047). Confirm tier, so an agent's call raises
+  // the host's dialog with the exact change (`resolveMcpConfirmPreviewTarget`),
+  // or rides the person's own grant or skip preference, never the model's say.
+  // Palette-hidden: Settings edits presets directly, and the palette has no way
+  // to ask for the fields. Closed to plugins, like `agentSettings.set`.
+  actions.set("agent.createPreset", () => ({
+    id: "agent.createPreset",
+    title: "Create launch preset",
+    description:
+      "Save a new user launch preset for an agent: a named set of env vars, flags and modes picked at launch. The user approves the exact preset first; values Daintree would drop at launch are refused. It doesn't become the agent's default. Returns its id.",
+    category: "agent",
+    kind: "command",
+    danger: "confirm",
+    dangerRationale: PRESET_WRITE_DANGER_RATIONALE,
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["preset", "profile", "env", "account", "add"],
+    palette: { mode: "hidden" },
+    argsSchema: AgentCreatePresetArgsSchema,
+    examples: [
+      {
+        args: { agentId: "codex", name: "Work account", env: { CODEX_HOME: "/Users/me/.codex-work" } },
+        description: "A Codex preset that keeps its own login and history",
+      },
+    ],
+    resultSchema: PresetWriteResultSchema,
+    mcpOutputSchema: true,
+    run: (args: unknown, ctx: ActionContext) =>
+      runAgentAction("agent.createPreset", args, ctx, callbacks),
+  }));
+
+  actions.set("agent.updatePreset", () => ({
+    id: "agent.updatePreset",
+    title: "Edit launch preset",
+    description:
+      "Change one of the user's own launch presets in place, after the user approves the exact change. Pass only what changes: envSet and envUnset touch only the named env vars, and null clears a field. Repository, CCR and built-in presets are read-only.",
+    category: "agent",
+    kind: "command",
+    danger: "confirm",
+    dangerRationale: PRESET_WRITE_DANGER_RATIONALE,
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["preset", "profile", "env", "account", "edit", "rename"],
+    palette: { mode: "hidden" },
+    argsSchema: AgentUpdatePresetArgsSchema,
+    resultSchema: PresetWriteResultSchema,
+    mcpOutputSchema: true,
+    run: (args: unknown, ctx: ActionContext) =>
+      runAgentAction("agent.updatePreset", args, ctx, callbacks),
+  }));
+
+  actions.set("agent.deletePreset", () => ({
+    id: "agent.deletePreset",
+    title: "Remove launch preset",
+    description:
+      "Remove one of the user's own launch presets for good, after the user approves it. If it was the agent's default preset, the default is cleared. Repository, CCR and built-in presets are read-only.",
+    category: "agent",
+    kind: "command",
+    danger: "confirm",
+    dangerRationale:
+      "Removes the preset for good. Launches that picked it, as a default included, go back to the agent's own settings.",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["preset", "profile", "remove", "delete"],
+    palette: { mode: "hidden" },
+    argsSchema: AgentDeletePresetArgsSchema,
+    resultSchema: PresetWriteResultSchema.extend({
+      agentDefaultCleared: z
+        .boolean()
+        .describe("It was the agent's default preset, so the agent now has none."),
+    }),
+    mcpOutputSchema: true,
+    run: (args: unknown, ctx: ActionContext) =>
+      runAgentAction("agent.deletePreset", args, ctx, callbacks),
   }));
 
   actions.set("agent.listModels", () => ({

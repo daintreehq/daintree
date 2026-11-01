@@ -38,6 +38,11 @@ import { launchModelRefusal, unknownAgentIdMessage } from "@/utils/agentLaunchVa
 import { isAgentInstalled } from "@shared/utils/agentAvailability";
 import { hasSystemPromptOverride, resolveSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
+import {
+  agentPresetMutationUpdates,
+  planAgentPresetMutation,
+  type AgentPresetMutationActionId,
+} from "./agentPresetMutation";
 import { appendHandbackInstruction, mintHandbackCode } from "@shared/utils/handback";
 import type { ActionContext } from "@shared/types/actions";
 import type { AgentPreset } from "@shared/config/agentRegistry";
@@ -290,6 +295,43 @@ const readAgentPresetSources = async (
       (projectId !== undefined ? projectScoped : scopeKnown),
   };
 };
+/**
+ * Plan and write one user-preset change (#16047) through the store and
+ * `updateAgent` Settings uses, so a preset made from a chat is stored exactly
+ * as one made by hand. Planned again here rather than reusing the preview's
+ * plan: a patch applies to the preset as it stands now, and a preset removed
+ * while the dialog was open is refused rather than written back.
+ */
+async function runPresetWrite(
+  actionId: AgentPresetMutationActionId,
+  args: unknown,
+  ctx: ActionContext
+): Promise<{ presetId: string; name: string; agentDefaultCleared?: boolean }> {
+  const [{ useAgentSettingsStore }, { readPresetWriteSources }] = await Promise.all([
+    import("@/store/agentSettingsStore"),
+    import("./agentPresetSources"),
+  ]);
+  await useAgentSettingsStore.getState().initialize();
+  const plan = planAgentPresetMutation(
+    actionId,
+    args,
+    readPresetWriteSources(ctx.projectId),
+    `user-${crypto.randomUUID()}`
+  );
+  if (!plan.ok) throw new UnactionableTargetError(plan.message);
+  const { mutation } = plan;
+  await useAgentSettingsStore
+    .getState()
+    .updateAgent(mutation.agentId, agentPresetMutationUpdates(mutation));
+  const written = {
+    presetId: mutation.preset.id,
+    name: typeof mutation.preset.name === "string" ? mutation.preset.name : "",
+  };
+  return mutation.operation === "delete"
+    ? { ...written, agentDefaultCleared: mutation.wasAgentDefault }
+    : written;
+}
+
 /** Run for the per-agent shortcut actions (`agent.claude`, `agent.codex`, …). */
 export async function launchAgentShortcut(
   id: string,
@@ -951,6 +993,12 @@ export const agentActionRuns = {
       ),
     };
   },
+  "agent.createPreset": (args: unknown, ctx: ActionContext) =>
+    runPresetWrite("agent.createPreset", args, ctx),
+  "agent.updatePreset": (args: unknown, ctx: ActionContext) =>
+    runPresetWrite("agent.updatePreset", args, ctx),
+  "agent.deletePreset": (args: unknown, ctx: ActionContext) =>
+    runPresetWrite("agent.deletePreset", args, ctx),
   "agent.listModels": async (args: unknown) => {
     const { agentId } = AgentListModelsArgsSchema.parse(args ?? {});
     const registry = await agentCapabilitiesClient.getRegistry();
