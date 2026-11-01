@@ -12,6 +12,7 @@ import { notify } from "@/lib/notify";
 import { reduceAgentDetected, reduceAgentExited } from "./identityReducer";
 import { logIdentityDebugDev, recordIdentityEventDev } from "./identityDiagnostics";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
+import { hostObservedAt } from "@shared/utils/restoreProvenance";
 
 // Per-terminal baseline of `changedFileCount` captured the first time an
 // agent enters "working" in a session. Compared against the count at
@@ -85,7 +86,8 @@ export function setupIdentityListeners(): DisposableStore {
           return;
         }
 
-        if (terminal.lastStateChange && timestamp < terminal.lastStateChange) {
+        const observedAt = hostObservedAt(terminal);
+        if (observedAt !== undefined && timestamp < observedAt) {
           return;
         }
 
@@ -96,7 +98,7 @@ export function setupIdentityListeners(): DisposableStore {
         // terminal id against a fresh record starting at zero, and a panel that
         // refused to follow it down would go on naming a session that no longer
         // exists while the replacement climbed back towards it. Out-of-order
-        // events are already dropped above by `lastStateChange`, so following
+        // events are already dropped above by the host's last observation, so following
         // the host is the safer of the two ways to be wrong: a count that
         // disagrees refuses the delivery, a count that lies permits it.
         const observedIncarnation = data.agentIncarnation;
@@ -119,6 +121,9 @@ export function setupIdentityListeners(): DisposableStore {
         withTerminalService((service) => service.setAgentState(terminalId, state), terminalId);
 
         if (terminal.agentState === "directing" && state === "waiting") {
+          // Directing stays on screen, but the host did report this, and a
+          // resync record older than it must not be taken over it later.
+          usePanelStore.getState().noteAgentObservation(terminalId, state, timestamp);
           return;
         }
 

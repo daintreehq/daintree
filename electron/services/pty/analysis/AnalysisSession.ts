@@ -31,6 +31,7 @@ import {
 } from "../AgentActivityTemperature.js";
 import {
   readCursorLine,
+  readLastNLines,
   readVisibleActivityLines,
   readViewportNonEmptyLines,
   ViewportSnapshotCache,
@@ -278,6 +279,7 @@ export class AnalysisSession {
       {
         ...buildActivityMonitorOptions(spec.agentId, {
           getVisibleLines: (n) => readVisibleActivityLines(this.headlessTerminal ?? undefined, n),
+          getLastTextLines: (n) => readLastNLines(this.headlessTerminal ?? undefined, n),
           getVisibleContentSnapshot: (n) =>
             this.viewportSnapshotCache.read(this.headlessTerminal ?? undefined, n),
           getCursorLine: () => readCursorLine(this.headlessTerminal ?? undefined),

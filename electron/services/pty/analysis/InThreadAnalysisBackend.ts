@@ -350,6 +350,7 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
       {
         ...buildActivityMonitorOptions(opts.agentId, {
           getVisibleLines: (n) => this.getVisibleActivityLines(n),
+          getLastTextLines: (n) => this.getViewportLines(n),
           getVisibleContentSnapshot: (n) => this.getVisibleActivitySnapshot(n),
           getCursorLine: () => this.getCursorLine(),
         }),

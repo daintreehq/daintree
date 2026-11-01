@@ -132,6 +132,10 @@ export interface ActivityMonitorOptions {
   bootCompletePatterns?: RegExp[];
   patternBufferSize?: number;
   getVisibleLines?: (n: number) => string[];
+  // The last n non-empty viewport rows. `getVisibleLines` reads the bottom n
+  // physical rows, which are blank below an inline TUI that hasn't reached the
+  // bottom of a tall pane, so a working pattern is read here when given.
+  getLastTextLines?: (n: number) => string[];
   getVisibleContentSnapshot?: (n: number) => VisibleContentSnapshot | undefined;
   getCursorLine?: () => string | null;
   initialState?: "busy" | "idle";
@@ -236,6 +240,15 @@ export class ActivityMonitor {
   // sustainedSince between sparse frame-close events (one every 80-100ms is
   // typical, vs. the polling cycle's 50ms cadence).
   private readonly structuralRecoveryDebouncer: WorkingSignalDebouncer;
+  // Idle→busy from a working pattern read off the screen (#16062). Its own
+  // debouncer because the polling cycle reports this signal every tick, which
+  // would zero the data path's sustained pattern signal between chunks.
+  private readonly visibleWorkingDebouncer = new WorkingSignalDebouncer(SPINNER_ACTIVE_MS);
+  // When the visible content last changed; 0 until it ever has, so a screen
+  // restored already showing a working line can't read as freshly changed.
+  private lastVisibleChangeAt = 0;
+  private visibleWorkingScannedAt = 0;
+  private visibleWorkingMatch: PatternDetectionResult | undefined;
   private readonly lineRewriteDetector: LineRewriteDetector;
   private readonly completionTimer: CompletionTimer;
   private readonly bootDetector: BootDetector;
@@ -273,6 +286,7 @@ export class ActivityMonitor {
   private patternDetector?: AgentPatternDetector;
   private lastPatternResult?: PatternDetectionResult;
   private readonly getVisibleLines?: (n: number) => string[];
+  private readonly getLastTextLines?: (n: number) => string[];
   private readonly getVisibleContentSnapshot?: (n: number) => VisibleContentSnapshot | undefined;
   private readonly getCursorLine?: () => string | null;
   private pollingInterval?: ReturnType<typeof setInterval>;
@@ -394,6 +408,7 @@ export class ActivityMonitor {
       this.patternDetector = new AgentPatternDetector(options.agentId, options.patternConfig);
     }
     this.getVisibleLines = options?.getVisibleLines;
+    this.getLastTextLines = options?.getLastTextLines;
     this.getVisibleContentSnapshot = options?.getVisibleContentSnapshot;
     this.getCursorLine = options?.getCursorLine;
 
@@ -983,6 +998,47 @@ export class ActivityMonitor {
     this.simpleSnapshotCapturedAt = 0;
     this.simpleSnapshotCapturedByteAt = 0;
     this.simpleSnapshotSettleFrom = Date.now();
+    this.visibleWorkingScannedAt = 0;
+    this.visibleWorkingMatch = undefined;
+  }
+
+  // An idle agent whose screen says it is working (#16062). A differential
+  // renderer repaints a working screen in place — after the first frame, only
+  // the elapsed-time digits, once a second — so the raw-stream pattern tier
+  // never sees the text that matches, and changes that sparse never satisfy
+  // the temperature's sustained-change gate. Only a primary pattern counts
+  // (fallback tiers also match transcript lines), and only while the screen
+  // keeps changing: a working line left frozen on screen, or one beside bytes
+  // that move nothing visible, is not work. The sustain spans the freshness
+  // window, so it takes at least two visible changes, never one repaint.
+  private recoverFromVisibleWorking(now: number): void {
+    const readLines = this.getLastTextLines ?? this.getVisibleLines;
+    if (!this.patternDetector || !readLines) return;
+    const live =
+      this.lastVisibleChangeAt > 0 &&
+      now - this.lastVisibleChangeAt < SPINNER_ACTIVE_MS &&
+      !this.isResizeSuppressed(now) &&
+      !this.isFocusSuppressed(now) &&
+      !this.inputTracker.isRecentUserInput(now);
+    if (!live) {
+      this.visibleWorkingDebouncer.reset();
+      return;
+    }
+    // Rescanned at the snapshot's own cap rather than every tick: a headless
+    // mirror may not have parsed the latest chunk yet, and the next scan will.
+    if (now - this.visibleWorkingScannedAt >= SIMPLE_SNAPSHOT_MIN_INTERVAL_MS) {
+      this.visibleWorkingScannedAt = now;
+      this.visibleWorkingMatch = this.patternDetector.detectFromLines(
+        readLines(AGENT_OUTPUT_ACTIVITY_LINE_COUNT)
+      );
+    }
+    const match = this.visibleWorkingMatch;
+    if (
+      match !== undefined &&
+      this.visibleWorkingDebouncer.shouldTriggerRecovery(now, match.matchTier === "primary")
+    ) {
+      this.becomeBusy({ trigger: "pattern", patternConfidence: match.confidence }, now);
+    }
   }
 
   private noteSimpleOutputSnapshot(
@@ -1004,6 +1060,7 @@ export class ActivityMonitor {
     if (result.changed) {
       this.lastActivityTimestamp = now;
       this.lastDataTimestamp = now;
+      this.lastVisibleChangeAt = now;
     }
 
     if (this.state === "busy" && result.changed) {
@@ -1083,6 +1140,7 @@ export class ActivityMonitor {
     this.workingSignalDebouncer.reset();
     this.cosmeticRecoveryDebouncer.reset();
     this.structuralRecoveryDebouncer.reset();
+    this.visibleWorkingDebouncer.reset();
     this.simpleOutputTemperature.reset();
     this.simpleSnapshotCache = undefined;
     this.simpleSnapshotCacheKey = 0;
@@ -1106,6 +1164,7 @@ export class ActivityMonitor {
     this.lastStatusRewriteAt = 0;
     this.lastWorkingIndicatorTimestamp = 0;
     this.promptStableSince = 0;
+    this.lastVisibleChangeAt = 0;
   }
 
   getLastPatternResult(): PatternDetectionResult | undefined {
@@ -1207,6 +1266,7 @@ export class ActivityMonitor {
     this.waitingWatchdog.reset();
     this.cosmeticRecoveryDebouncer.reset();
     this.structuralRecoveryDebouncer.reset();
+    this.visibleWorkingDebouncer.reset();
     this.completionTimer.reset();
     // Discard the temperature snapshot so its quiet clock restarts from the
     // promotion (same rationale as `notifyFocus`). A stale `quietStartedAt`
@@ -1238,6 +1298,7 @@ export class ActivityMonitor {
     this.workingSignalDebouncer.reset();
     this.cosmeticRecoveryDebouncer.reset();
     this.structuralRecoveryDebouncer.reset();
+    this.visibleWorkingDebouncer.reset();
     // Structural tier keys cell ring buffers by viewport-bottom-relative
     // (rowOffset, col); a resize invalidates that mapping. Reset so the
     // first post-resize frame doesn't compare against pre-resize cells.
@@ -1261,6 +1322,7 @@ export class ActivityMonitor {
     this.workingSignalDebouncer.reset();
     this.cosmeticRecoveryDebouncer.reset();
     this.structuralRecoveryDebouncer.reset();
+    this.visibleWorkingDebouncer.reset();
     // Discard accumulated temperature snapshot so the post-focus redraw gets a
     // fresh baseline. Unlike resize, focus does not invalidate cell ring-buffer
     // history or the high-output window — those stay intact.
@@ -1377,6 +1439,10 @@ export class ActivityMonitor {
         const indicatorActive =
           this.lastStatusRewriteAt > 0 && now - this.lastStatusRewriteAt <= SPINNER_ACTIVE_MS;
         this.noteSimpleOutputSnapshot(snapshot, now, indicatorActive ? "indicator" : "content");
+      }
+
+      if (this.state === "idle") {
+        this.recoverFromVisibleWorking(now);
       }
 
       // Completion detection runs every cycle while busy — mirrors the
@@ -1894,6 +1960,7 @@ export class ActivityMonitor {
     // immediately re-trigger recovery without sustained signal.
     this.cosmeticRecoveryDebouncer.reset();
     this.structuralRecoveryDebouncer.reset();
+    this.visibleWorkingDebouncer.reset();
 
     // Reset completion state for the new work cycle
     this.completionTimer.reset();

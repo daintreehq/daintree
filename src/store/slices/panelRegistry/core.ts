@@ -120,6 +120,7 @@ export const createCorePanelActions = (
   | "updateTitle"
   | "updateLastObservedTitle"
   | "updateAgentState"
+  | "noteAgentObservation"
   | "updateActivity"
   | "updateLastCommand"
   | "updateVisibility"
@@ -463,6 +464,21 @@ export const createCorePanelActions = (
       };
       persist(next.panelsById);
       return next;
+    });
+  },
+
+  noteAgentObservation: (id, agentState, at) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal || !isPtyPanel(terminal) || agentState === "directing") return state;
+      if (terminal.lastAgentObservation?.agentState === agentState) return state;
+      const panelsById = {
+        ...state.panelsById,
+        [id]: { ...terminal, lastAgentObservation: { agentState, at } },
+      };
+      if (isHydrationBatchActive()) deferPersistToBatchEnd();
+      else saveNormalized(panelsById, state.panelIds);
+      return { panelsById };
     });
   },
 
