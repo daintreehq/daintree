@@ -17,8 +17,6 @@ describe("dueScheduleLaunch", () => {
     expect(startsWindowlessForDueSchedules({ platform: "darwin", argv })).toBe(true);
     expect(startsWindowlessForDueSchedules({ platform: "linux", argv })).toBe(true);
     expect(startsWindowlessForDueSchedules({ platform: "win32", argv })).toBe(false);
-    expect(startsWindowlessForDueSchedules({ platform: "darwin", argv: ["daintree"] })).toBe(
-      false
-    );
+    expect(startsWindowlessForDueSchedules({ platform: "darwin", argv: ["daintree"] })).toBe(false);
   });
 });

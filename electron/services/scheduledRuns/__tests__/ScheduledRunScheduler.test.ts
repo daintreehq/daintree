@@ -1012,7 +1012,11 @@ describe("ScheduledRunScheduler", () => {
       await start(at(9));
 
       expect(
-        launches.map((launch) => [launch.scheduleId, launch.origin.trigger, launch.origin.coalesced])
+        launches.map((launch) => [
+          launch.scheduleId,
+          launch.origin.trigger,
+          launch.origin.coalesced,
+        ])
       ).toEqual([
         ["schedule-1", "os-launch", null],
         ["schedule-2", "os-launch", { after: at(5), through: at(9, 0, 10) }],
@@ -1040,9 +1044,7 @@ describe("ScheduledRunScheduler", () => {
       await scheduler.start();
       await scheduler.idle();
 
-      expect(origins()).toEqual([
-        expect.objectContaining({ trigger: "catch-up", dueAt: at(9) }),
-      ]);
+      expect(origins()).toEqual([expect.objectContaining({ trigger: "catch-up", dueAt: at(9) })]);
     });
   });
 
