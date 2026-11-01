@@ -1479,6 +1479,14 @@ export const CHANNELS = {
   REVIEW_MARKS_FILE_SINCE: "review-marks:file-since",
   REVIEW_MARKS_CHANGED: "review-marks:changed",
 
+  // The sender project's schedules (#15975)
+  SCHEDULES_LIST: "schedules:list",
+  SCHEDULES_CREATE: "schedules:create",
+  SCHEDULES_UPDATE: "schedules:update",
+  SCHEDULES_SET_ENABLED: "schedules:set-enabled",
+  SCHEDULES_REMOVE: "schedules:remove",
+  SCHEDULES_CHANGED: "schedules:changed",
+
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",
   CONNECTIVITY_SERVICE_CHANGED: "connectivity:service-changed",

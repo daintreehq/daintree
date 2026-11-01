@@ -108,6 +108,7 @@ import { buildProjectPresentationPreloadBindings } from "./ipc/handlers/projectP
 import { buildProjectThemePreloadBindings } from "./ipc/handlers/projectTheme.preload.js";
 import { buildWorktreeTitlesPreloadBindings } from "./ipc/handlers/worktreeTitles.preload.js";
 import { buildReviewMarksPreloadBindings } from "./ipc/handlers/reviewMarks.preload.js";
+import { buildSchedulesPreloadBindings } from "./ipc/handlers/schedules.preload.js";
 import { buildDiffMediaPreloadBindings } from "./ipc/handlers/diffMedia.preload.js";
 import { buildFileDocumentPreloadBindings } from "./ipc/handlers/fileDocument.preload.js";
 import { buildFileBrowserPreloadBindings } from "./ipc/handlers/fileBrowser.preload.js";
@@ -1994,6 +1995,14 @@ function buildElectronApi(): ElectronAPI {
 
       onChanged: (callback: (snapshot: IpcEventMap["review-marks:changed"]) => void) =>
         _typedOn(CHANNELS.REVIEW_MARKS_CHANGED, callback),
+    },
+
+    // The sender project's schedules (#15975)
+    schedules: {
+      ...buildSchedulesPreloadBindings(_unwrappingInvoke),
+
+      onChanged: (callback: (snapshot: IpcEventMap["schedules:changed"]) => void) =>
+        _typedOn(CHANNELS.SCHEDULES_CHANGED, callback),
     },
 
     // Dev Preview API

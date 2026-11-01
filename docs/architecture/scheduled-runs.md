@@ -7,6 +7,9 @@ A project can run an agent on a schedule (#15973). A due schedule launches its a
 | Schedule and run record schemas | `shared/types/scheduledRuns.ts` |
 | Cron parsing, time-zone checks, next and previous occurrences | `shared/utils/cron.ts` |
 | New-schedule defaults, occurrence keys, outcomes, cadence validation | `shared/utils/scheduledRuns.ts` |
+| Field-level reasons a schedule can't be stored | `shared/utils/scheduleValidation.ts` |
+| A project's stored schedules and their change listeners | `electron/services/ScheduleStore.ts`, `electron/services/schedulesCodec.ts` |
+| Editing them from a view (`window.electron.schedules`) | `electron/ipc/handlers/schedules.ts`, `shared/types/ipc/schedules.ts` |
 
 ## Boundaries
 
@@ -38,6 +41,21 @@ A project can run an agent on a schedule (#15973). A due schedule launches its a
 | `createdAt`, `updatedAt` | Epoch ms | the creation time |
 
 The zone is stored by name rather than as "follow the machine" so that travelling, or changing the system zone, doesn't move a job nobody is watching.
+
+## Storage and editing
+
+A project's schedules live in `schedules.json` in its state directory under userData (`projects/<id>/`, beside `settings.json` and `recipes.json`), as `{ "_schemaVersion": 1, "schedules": [...] }` in creation order. `ScheduleStore` is given that directory's root and project ids, never a repository path, so nothing in a project's `.daintree/` is ever read. `ProjectStore.schedules` owns the one instance.
+
+- **Read whole or not at all.** A file that isn't JSON, has an unknown top-level key, holds a record `ScheduleSchema` refuses, files a record under another project, or repeats an id is moved aside to `schedules.json.corrupted.<time>` and read as no schedules; one from a newer build goes to `schedules.json.future-v<N>`. A record is never dropped on its own: every schedule runs an agent unattended, so losing one silently is as wrong as running one this build can't represent. If the file can't be moved aside, the call fails and nothing writes over it. Quarantined files are swept after 30 days with the project's others.
+- **One turn at a time.** Every read and write for a project takes a turn in a per-project queue, so two edits never build on the same snapshot.
+- **Main mints identity.** A new schedule takes its id (a UUID), project and times from main and its defaults from `createSchedule`. An edit replaces whole parts (`name`, `cadence`, `launch`, `policies`); `id`, `projectId` and `createdAt` never change, and `enabled` changes only through `setEnabled`. Each change stamps `updatedAt` strictly later than the stored one, even if the clock went back.
+- **Edits are checked against the version they were made from.** `update` names the `updatedAt` it edited; a schedule changed since, in any window, is refused as a `conflict` carrying the newer version. Enabling, disabling and deleting state an intent and take no version.
+- **A bad value is an outcome, not an error.** Create and update answer `invalid` with every `ScheduleIssue`: the field's dotted path (`cadence.cron`, `launch.prompt`), the cron field when the expression names one, and the schema's message. Thrown errors are logged, so they carry no prompt or command; a request of the wrong shape is refused with a generic `VALIDATION` error.
+- **Removing a project removes its schedules.** `ProjectStore.removeProject` deletes the project's row, then removes its state directory, schedules included, inside a schedule turn of its own. An edit already past its check finishes first, every turn after refuses because the project isn't registered, and an edit for the same project added straight back waits until the old directory is gone.
+
+`window.electron.schedules` (`list`, `create`, `update`, `setEnabled`, `remove`, `onChanged`) works on the sender's own project, resolved from the view's registration; no op takes a project id. `list` answers null for a view not yet bound to a project. A project on a Remote Host, a view attached over a link, and a scratch are refused: the channels are `shell`, so a remote-bound view is answered on this machine and no link reaches them. They are not actions, so they are on no MCP tier.
+
+Every committed change goes to the store's listeners as a full `SchedulesSnapshot`, in commit order per project. Main code (the scheduler and launcher) reads with `list` and `get` and subscribes with `subscribe`, with no window needed. The IPC registration's listener sends `schedules:changed` to every local view of the project, cached views and the writer included, and to no other window. A snapshot's `revision` rises with each change, so a view keeps the newest of a reply and a push that cross. A file edited by hand is not announced.
 
 ## Cadence
 

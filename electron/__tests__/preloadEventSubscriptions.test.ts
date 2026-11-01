@@ -86,6 +86,7 @@ const runIdleCallbacks = () => {
 let terminal: TerminalBridge;
 let plugin: PluginBridge;
 let projectPresentation: ProjectPresentationBridge;
+let schedules: ProjectPresentationBridge;
 let app: AppBridge;
 let terminalConfig: TerminalConfigBridge;
 let agentSettings: { onChanged: (cb: (settings: unknown) => void) => () => void };
@@ -134,6 +135,7 @@ beforeAll(async () => {
         terminal?: TerminalBridge;
         plugin?: PluginBridge;
         projectPresentation?: ProjectPresentationBridge;
+        schedules?: ProjectPresentationBridge;
         terminalConfig?: TerminalConfigBridge;
         agentSettings?: typeof agentSettings;
         keybinding?: typeof keybinding;
@@ -144,6 +146,7 @@ beforeAll(async () => {
   terminal = api!.terminal!;
   plugin = api!.plugin!;
   projectPresentation = api!.projectPresentation!;
+  schedules = api!.schedules!;
   app = api!.app!;
   terminalConfig = api!.terminalConfig!;
   agentSettings = api!.agentSettings!;
@@ -373,6 +376,18 @@ describe("preload event subscriptions", () => {
     ipcRenderer.emit("project-presentation:changed", {}, { projectId: "p2" });
     expect(received).toEqual([{ projectId: "p1" }]);
     expect(ipcRenderer.listenerCount("project-presentation:changed")).toBe(0);
+  });
+
+  it("delivers each schedules:changed push once and detaches on dispose", () => {
+    const received: unknown[] = [];
+    const dispose = schedules.onChanged((payload) => received.push(payload));
+    ipcRenderer.emit("schedules:changed", {}, { projectId: "p1", schedules: [], revision: 1 });
+    expect(received).toEqual([{ projectId: "p1", schedules: [], revision: 1 }]);
+
+    dispose();
+    ipcRenderer.emit("schedules:changed", {}, { projectId: "p1", schedules: [], revision: 2 });
+    expect(received).toHaveLength(1);
+    expect(ipcRenderer.listenerCount("schedules:changed")).toBe(0);
   });
 
   it("drops Blink's memory cache once a view has stayed cached for a moment", () => {

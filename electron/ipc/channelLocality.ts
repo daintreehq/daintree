@@ -992,6 +992,15 @@ export const CHANNEL_LOCALITY = {
   "run-history:append": "host",
   "run-history:clear": "host",
   "run-history:get-records": "host",
+  // A schedule runs an agent unattended on this machine, and only a local
+  // project has them (#15975): a remote-bound view is answered, and refused,
+  // here, and no link can reach a host's schedules.
+  "schedules:changed": "shell",
+  "schedules:create": "shell",
+  "schedules:list": "shell",
+  "schedules:remove": "shell",
+  "schedules:set-enabled": "shell",
+  "schedules:update": "shell",
   "scratch:create": "host",
   "scratch:get-all": "host",
   "scratch:get-current": "host",

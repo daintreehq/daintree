@@ -42,6 +42,7 @@ import { ProjectSettingsManager } from "./ProjectSettingsManager.js";
 import { ProjectStateManager, type ProjectStateReadResult } from "./ProjectStateManager.js";
 import { invalidatePrefetchCache } from "./prefetchHydrateCache.js";
 import { ProjectFileStore } from "./ProjectFileStore.js";
+import { ScheduleStore } from "./ScheduleStore.js";
 import { ProjectRecipeSynchronizer } from "./ProjectRecipeSynchronizer.js";
 import type {
   CopyTreeHistoryAppendInput,
@@ -198,6 +199,8 @@ export class ProjectStore {
   private settingsManager: ProjectSettingsManager;
   private stateManager: ProjectStateManager;
   private fileStore: ProjectFileStore;
+  /** Each project's schedules (#15975), kept on this machine only. */
+  readonly schedules: ScheduleStore;
   private globalFileStore: GlobalFileStore;
   private identityFiles: ProjectIdentityFiles;
 
@@ -225,6 +228,10 @@ export class ProjectStore {
     this.settingsManager = new ProjectSettingsManager(this.projectsConfigDir, store);
     this.stateManager = new ProjectStateManager(this.projectsConfigDir);
     this.fileStore = new ProjectFileStore(this.projectsConfigDir);
+    this.schedules = new ScheduleStore(
+      this.projectsConfigDir,
+      (projectId) => this.getProjectById(projectId) !== null
+    );
     this.globalFileStore = new GlobalFileStore(this.globalConfigDir);
     this.identityFiles = new ProjectIdentityFiles();
     this.recipeSynchronizer = new ProjectRecipeSynchronizer(this.identityFiles, this.fileStore);
@@ -972,12 +979,15 @@ export class ProjectStore {
       logError(`Failed to remove secure env vars for ${projectId}`, error);
     }
 
-    if (existsSync(stateDir)) {
-      try {
-        await fs.rm(stateDir, { recursive: true, force: true });
-      } catch (error) {
-        logError(`Failed to remove state directory for ${projectId}`, error);
-      }
+    // The directory, schedules and all, goes in a schedule turn after the row:
+    // an edit already past its check finishes first, every later one refuses,
+    // and one for the same project added straight back waits until it's gone.
+    try {
+      await this.schedules.removeProject(projectId, async () => {
+        if (existsSync(stateDir)) await fs.rm(stateDir, { recursive: true, force: true });
+      });
+    } catch (error) {
+      logError(`Failed to remove state directory for ${projectId}`, error);
     }
     this.stateManager.invalidateProjectStateCache(projectId);
 

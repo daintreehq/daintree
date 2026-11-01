@@ -5,6 +5,7 @@ import {
   stateFilePath,
   settingsFilePath,
   recipesFilePath,
+  schedulesFilePath,
   isValidProjectId,
   isValidWorkspaceStateId,
   getProjectStateDir,
@@ -36,6 +37,14 @@ describe("projectStorePaths", () => {
       expect(stateFilePath(BASE, "invalid")).toBeNull();
       expect(settingsFilePath(BASE, "invalid")).toBeNull();
       expect(recipesFilePath(BASE, "invalid")).toBeNull();
+      expect(schedulesFilePath(BASE, "invalid")).toBeNull();
+    });
+
+    it("schedulesFilePath sits in a project's state directory, never a scratch's", () => {
+      expect(schedulesFilePath(BASE, validId)).toBe(path.join(BASE, validId, "schedules.json"));
+      const scratchId = randomUUID();
+      expect(getProjectStateDir(BASE, scratchId)).not.toBeNull();
+      expect(schedulesFilePath(BASE, scratchId)).toBeNull();
     });
   });
 
