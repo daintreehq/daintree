@@ -42,6 +42,7 @@ describe("createInitialWindowRequest", () => {
     finish();
     await Promise.all([first, second]);
     expect(createWindow).not.toHaveBeenCalled();
+    expect(openLaunchWindows).toHaveBeenCalledWith({ targeted: false, opensFolder: false });
   });
 
   it("opens a plain window for every request after the first", async () => {
@@ -74,13 +75,16 @@ describe("createInitialWindowRequest", () => {
   it("lets the first request say whether the launch was targeted", async () => {
     const { request, openLaunchWindows, finish } = setup();
 
-    const first = request.open({ targeted: true });
-    const joined = request.open({ targeted: false });
+    const first = request.open({ targeted: true, opensFolder: false });
+    const joined = request.open({ targeted: false, opensFolder: true });
     await Promise.resolve();
     finish();
     await Promise.all([first, joined]);
 
-    expect(openLaunchWindows).toHaveBeenCalledExactlyOnceWith({ targeted: true });
+    expect(openLaunchWindows).toHaveBeenCalledExactlyOnceWith({
+      targeted: true,
+      opensFolder: false,
+    });
   });
 
   it("opens nothing once Daintree is quitting", async () => {

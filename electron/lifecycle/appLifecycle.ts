@@ -240,6 +240,8 @@ export interface WindowRequest {
    * opens them as a targeted launch would.
    */
   readonly targeted: boolean;
+  /** Of those, one that named a folder: its window starts on the picker. */
+  readonly opensFolder: boolean;
 }
 
 export interface AppLifecycleOptions {
@@ -393,7 +395,7 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
   // A second launch that arrived before the first had anything on screen.
   // `plainRelaunch` is true if any of them was a plain relaunch, `targeted` if
   // any named something to open.
-  let deferredRelaunch: { plainRelaunch: boolean; targeted: boolean } | null = null;
+  let deferredRelaunch: ({ plainRelaunch: boolean } & WindowRequest) | null = null;
 
   const focusWindow = (win: BrowserWindow): void => {
     if (win.isMinimized()) win.restore();
@@ -409,10 +411,10 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
   // closed. A relaunch is the user asking to see the app, so it gets a window.
   // A folder open only needs one when no window has ever set up the routing
   // that would make one for it; queued, it opens in the new window.
-  const openWindowIfNeeded = (plainRelaunch: boolean, targeted: boolean): void => {
+  const openWindowIfNeeded = (plainRelaunch: boolean, request: WindowRequest): void => {
     if (opts.canOpenWindows && !opts.canOpenWindows()) return;
     if (!plainRelaunch && hasOpenDirConsumer()) return;
-    void Promise.resolve(opts.onCreateWindow({ targeted })).catch((err) =>
+    void Promise.resolve(opts.onCreateWindow(request)).catch((err) =>
       console.error("[MAIN] Failed to open a window for a second launch:", err)
     );
   };
@@ -489,8 +491,8 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
     // re-launches (no path argument). A CLI path or folder open raises the
     // window it lands in, so it is excluded.
     const plainRelaunch = dntrPaths.length > 0 || (!cliPath && directoryPaths.length === 0);
-    const targeted =
-      hasCliPathFlag(commandLine) || directoryPaths.length > 0 || dntrPaths.length > 0;
+    const opensFolder = hasCliPathFlag(commandLine) || directoryPaths.length > 0;
+    const targeted = opensFolder || dntrPaths.length > 0;
     if (liveWindow) {
       if (plainRelaunch) focusWindow(liveWindow);
       return;
@@ -504,10 +506,11 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
       deferredRelaunch = {
         plainRelaunch: (deferredRelaunch?.plainRelaunch ?? false) || plainRelaunch,
         targeted: (deferredRelaunch?.targeted ?? false) || targeted,
+        opensFolder: (deferredRelaunch?.opensFolder ?? false) || opensFolder,
       };
       return;
     }
-    openWindowIfNeeded(plainRelaunch, targeted);
+    openWindowIfNeeded(plainRelaunch, { targeted, opensFolder });
   });
 
   // The application menu is process-global but its project gates track the
@@ -568,7 +571,11 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
       opts.keepsRunningWithoutWindows?.() &&
       (!app.isReady() || !(opts.isLaunchSettled?.() ?? true))
     ) {
-      deferredRelaunch = { plainRelaunch: true, targeted: deferredRelaunch?.targeted ?? false };
+      deferredRelaunch = {
+        plainRelaunch: true,
+        targeted: deferredRelaunch?.targeted ?? false,
+        opensFolder: deferredRelaunch?.opensFolder ?? false,
+      };
       return;
     }
     // A Dock click during a slow startup fires `activate` before
@@ -594,7 +601,10 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
         if (pending.plainRelaunch) focusWindow(liveWindow);
         return;
       }
-      openWindowIfNeeded(pending.plainRelaunch, pending.targeted);
+      openWindowIfNeeded(pending.plainRelaunch, {
+        targeted: pending.targeted,
+        opensFolder: pending.opensFolder,
+      });
     },
   };
 }

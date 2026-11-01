@@ -48,6 +48,7 @@ import {
   registerWindowSessionEndHandler,
 } from "./lifecycle/appLifecycle.js";
 import {
+  resolveFirstWindowLaunch,
   resolveLaunchIntent,
   resolveRestoreFallbackProjectId,
   shouldRestoreWindowFleet,
@@ -1502,17 +1503,15 @@ if (!gotTheLock) {
         );
         if (windowsDeferred) {
           initialWindowRequest = createInitialWindowRequest({
-            // Read when asked: a folder queued or a crash state since the start
-            // decides it, and so does a relaunch that named something to open,
-            // which this process's own argv and queues don't carry.
-            openLaunchWindows: ({ targeted }) => {
-              const signals = readLaunchSignals();
-              const intent = resolveLaunchIntent(signals);
-              return openLaunchWindows(
-                targeted && intent === "cold" ? "targeted" : intent,
-                resolveRestoreFallbackProjectId(signals, readLastActiveProjectIdSync()),
-                { savesHeld: true }
+            // Read when asked: a folder queued, a crash state, or what the
+            // request named since the start decides it.
+            openLaunchWindows: (request) => {
+              const { intent, fallbackProjectId } = resolveFirstWindowLaunch(
+                readLaunchSignals(),
+                request,
+                readLastActiveProjectIdSync()
               );
+              return openLaunchWindows(intent, fallbackProjectId, { savesHeld: true });
             },
             createWindow: () => createWindow().then(() => {}),
             isShuttingDown: () => getActiveShutdown() !== null,

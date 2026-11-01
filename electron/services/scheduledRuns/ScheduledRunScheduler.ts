@@ -266,10 +266,12 @@ export class ScheduledRunScheduler {
   private async readProjects(projectIds: readonly string[]): Promise<void> {
     await Promise.all(
       projectIds.map(async (projectId) => {
+        const held = this.projects.get(projectId);
         try {
           this.holdRead(await this.readSchedules(projectId));
         } catch (error) {
-          this.unread.add(projectId);
+          // A change that arrived while the read failed already holds what it would have.
+          if (this.projects.get(projectId) === held) this.unread.add(projectId);
           this.logWarn(`[ScheduledRuns] Couldn't read project ${projectId}'s schedules:`, error);
         }
       })

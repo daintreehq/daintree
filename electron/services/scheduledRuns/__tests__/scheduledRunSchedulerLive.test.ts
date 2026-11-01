@@ -181,7 +181,8 @@ describe("scheduledRunSchedulerLive", () => {
     live.startScheduledRunScheduler();
     const osLaunch = mocks.instances[0]!.deps.osLaunch as { at: number; monotonicAt: number };
     expect(osLaunch.at).toBe(performance.timeOrigin);
-    expect(osLaunch.at + performance.now()).toBeCloseTo(Date.now(), -3);
+    // On the scheduler's monotonic clock (`performance.now()`), the seed reads as now.
+    expect(osLaunch.at + (performance.now() - osLaunch.monotonicAt)).toBeCloseTo(Date.now(), -3);
 
     await live.stopScheduledRunScheduler();
     live.startScheduledRunScheduler();

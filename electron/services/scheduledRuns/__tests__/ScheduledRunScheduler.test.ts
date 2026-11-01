@@ -1209,6 +1209,27 @@ describe("ScheduledRunScheduler", () => {
     ]);
   });
 
+  it("keeps watching a project a change delivered while its read timed out", async () => {
+    setClock(at(8, 59));
+    let first = true;
+    const base = deps();
+    scheduler = new ScheduledRunScheduler({
+      ...base,
+      listSchedules: (projectId) => {
+        if (!first) return base.listSchedules(projectId);
+        first = false;
+        return new Promise(() => {});
+      },
+    });
+    void scheduler.start();
+    await settle();
+    commit("project-1", [schedule({ updatedAt: at(8) })]);
+    await elapse(READ_TIMEOUT_MS);
+
+    await elapse(2 * MINUTE);
+    expect(origins()).toEqual([expect.objectContaining({ trigger: "scheduled", dueAt: at(9) })]);
+  });
+
   it("counts a project whose read never answers as unread, and fires the rest", async () => {
     setClock(at(9, 0, 30));
     projects.add("project-2");

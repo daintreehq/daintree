@@ -97,6 +97,28 @@ export function resolveRestoreFallbackProjectId(
   return lastActiveProjectId ?? undefined;
 }
 
+/**
+ * How a launch that started with no window opens its windows at the first
+ * request to see the app (#15989): as {@link resolveLaunchIntent} reads the
+ * process now, and as targeted when that request named something to open,
+ * which this process's own argv and queues don't carry. Recovery still wins.
+ * A folder request starts on the picker even when the folder didn't resolve,
+ * as it does at launch.
+ */
+export function resolveFirstWindowLaunch(
+  signals: LaunchIntentSignals,
+  request: { readonly targeted: boolean; readonly opensFolder: boolean },
+  lastActiveProjectId: string | null | undefined
+): { intent: LaunchIntent; fallbackProjectId: string | undefined } {
+  const intent = resolveLaunchIntent(signals);
+  return {
+    intent: intent === "cold" && request.targeted ? "targeted" : intent,
+    fallbackProjectId: request.opensFolder
+      ? undefined
+      : resolveRestoreFallbackProjectId(signals, lastActiveProjectId),
+  };
+}
+
 /** Only a plain cold launch rebuilds the whole window set. */
 export function shouldRestoreWindowFleet(intent: LaunchIntent): boolean {
   return intent === "cold";

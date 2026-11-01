@@ -2,13 +2,18 @@
 // (#15989). Kept free of Electron so its ordering is testable on its own; the
 // real steps are wired in main.ts.
 
+/** What the first request named to open (see `WindowRequest` in appLifecycle.ts). */
+export interface FirstWindowRequest {
+  readonly targeted: boolean;
+  readonly opensFolder: boolean;
+}
+
 export interface InitialWindowRequestDeps {
   /**
    * Opens the windows a launch would have opened: the restored fleet, a
-   * folder's window, or recovery. `targeted` is a first request that named
-   * something to open.
+   * folder's window, or recovery, given what the first request named.
    */
-  openLaunchWindows(request: { readonly targeted: boolean }): Promise<void>;
+  openLaunchWindows(request: FirstWindowRequest): Promise<void>;
   /** One plain window, for every request after the first. */
   createWindow(): Promise<void>;
   isShuttingDown(): boolean;
@@ -16,7 +21,7 @@ export interface InitialWindowRequestDeps {
 
 export interface InitialWindowRequest {
   /** Opens the launch's windows the first time, and a plain window after that. */
-  open(request?: { readonly targeted: boolean }): Promise<void>;
+  open(request?: FirstWindowRequest): Promise<void>;
 }
 
 /**
@@ -34,9 +39,9 @@ export function createInitialWindowRequest(deps: InitialWindowRequestDeps): Init
     open(request) {
       if (deps.isShuttingDown()) return Promise.resolve();
       if (opened) return deps.createWindow();
-      const targeted = request?.targeted ?? false;
+      const first = request ?? { targeted: false, opensFolder: false };
       opening ??= Promise.resolve()
-        .then(() => deps.openLaunchWindows({ targeted }))
+        .then(() => deps.openLaunchWindows(first))
         .finally(() => {
           opened = true;
           opening = null;

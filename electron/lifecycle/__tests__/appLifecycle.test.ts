@@ -632,18 +632,21 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
 
     handler({}, ["daintree"], "/");
 
-    expect(opts.onCreateWindow).toHaveBeenCalledExactlyOnceWith({ targeted: false });
+    expect(opts.onCreateWindow).toHaveBeenCalledExactlyOnceWith({
+      targeted: false,
+      opensFolder: false,
+    });
   });
 
-  it("says a relaunch that named something to open was targeted", async () => {
+  it("says a relaunch that named something to open was targeted, and which a folder", async () => {
     hasOpenDirConsumerMock.mockReturnValue(false);
     const { opts, handler } = await register();
 
     handler({}, ["daintree", nodePath.join(cliDir, "plugin.dntr")], "/");
     handler({}, ["daintree", "--cli-path=/nowhere/at/all"], "/");
 
-    expect(opts.onCreateWindow).toHaveBeenNthCalledWith(1, { targeted: true });
-    expect(opts.onCreateWindow).toHaveBeenNthCalledWith(2, { targeted: true });
+    expect(opts.onCreateWindow).toHaveBeenNthCalledWith(1, { targeted: true, opensFolder: false });
+    expect(opts.onCreateWindow).toHaveBeenNthCalledWith(2, { targeted: true, opensFolder: true });
   });
 
   it("treats a destroyed primary window as no window", async () => {
@@ -705,7 +708,10 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
     handle.onLaunchSettled();
 
     // Targeted, though a plain relaunch arrived after it.
-    expect(opts.onCreateWindow).toHaveBeenCalledExactlyOnceWith({ targeted: true });
+    expect(opts.onCreateWindow).toHaveBeenCalledExactlyOnceWith({
+      targeted: true,
+      opensFolder: true,
+    });
   });
 
   it("does nothing on settle when no second launch arrived", async () => {
