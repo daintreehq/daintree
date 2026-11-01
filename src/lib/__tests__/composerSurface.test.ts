@@ -98,11 +98,37 @@ describe("composerSurface", () => {
       expect(wasAssistantUsedAfter(["agent-a"])).toBe(false);
     });
 
+    it("takes a return to the Assistant over the panes used before it", () => {
+      field(assistant).focus();
+      field(pane(document.body, "agent-a")).focus();
+      field(assistant).focus();
+      field(document.body, "toolbar").focus();
+
+      expect(wasAssistantUsedAfter(["agent-a"])).toBe(true);
+    });
+
+    it("counts a pane's own toolbar as the pane", () => {
+      const toolbar = document.createElement("div");
+      toolbar.setAttribute("role", "toolbar");
+      pane(document.body, "agent-a").append(toolbar);
+      const button = document.createElement("button");
+      toolbar.append(button);
+
+      field(assistant).focus();
+      press(button);
+      expect(wasAssistantUsedAfter(["agent-a"])).toBe(false);
+
+      field(assistant).focus();
+      button.focus();
+      expect(wasAssistantUsedAfter(["agent-a"])).toBe(false);
+    });
+
     it("takes the Assistant's own terminal for the Assistant, never a pane", () => {
       field(assistant).focus();
       press(pane(assistant, "assistant-1"));
-      field(pane(assistant, "assistant-1")).focus();
+      expect(wasAssistantUsedAfter(["assistant-1"])).toBe(true);
 
+      field(pane(assistant, "assistant-1")).focus();
       expect(wasAssistantUsedAfter(["assistant-1"])).toBe(true);
     });
 
@@ -122,21 +148,22 @@ describe("composerSurface", () => {
       expect(wasAssistantUsedAfter([])).toBe(true);
     });
 
-    it("forgets a pane that closed", () => {
+    it("forgets a pane that closed, and only that one", () => {
       field(assistant).focus();
       field(pane(document.body, "agent-a")).focus();
+      field(pane(document.body, "agent-b")).focus();
       forgetComposerSurfacePane("agent-a");
 
       expect(wasAssistantUsedAfter(["agent-a"])).toBe(true);
+      expect(wasAssistantUsedAfter(["agent-b"])).toBe(false);
     });
 
-    it("forgets everything when stopped", () => {
+    it("forgets everything and stops listening when stopped", () => {
       field(assistant).focus();
       stop();
-
       expect(wasAssistantUsedAfter([])).toBe(false);
-      stop = trackComposerSurface();
-      field(pane(document.body, "agent-a")).focus();
+
+      field(assistant).focus();
       expect(wasAssistantUsedAfter([])).toBe(false);
     });
   });

@@ -26,6 +26,8 @@ import { initBuiltInPanelKinds } from "@/panels/registry";
 import {
   beginDictationReturn,
   focusDictationComposer,
+  overlayHoldsKeyboard,
+  revealAssistantComposer,
   revealDictationComposer,
 } from "../voiceComposerFocus";
 
@@ -520,5 +522,50 @@ describe("beginDictationReturn (#14791)", () => {
 
     expect(document.activeElement).toBe(terminal);
     expect(requestedPaneSurface("term-1")).toBeNull();
+  });
+});
+
+describe("revealAssistantComposer (#15870)", () => {
+  it("asks the Assistant for its composer as dictation's request, every time", () => {
+    const before = useHelpPanelStore.getState().focusRequest;
+
+    revealAssistantComposer();
+    expect(useHelpPanelStore.getState()).toMatchObject({
+      focusRequest: before + 1,
+      dictationFocusRequest: before + 1,
+    });
+
+    revealAssistantComposer();
+    expect(useHelpPanelStore.getState()).toMatchObject({
+      focusRequest: before + 2,
+      dictationFocusRequest: before + 2,
+    });
+  });
+
+  it("is overtaken by anyone else's request for the Assistant", () => {
+    revealAssistantComposer();
+    useHelpPanelStore.getState().requestFocus();
+
+    const { focusRequest, dictationFocusRequest } = useHelpPanelStore.getState();
+    expect(dictationFocusRequest).toBeNull();
+    expect(focusRequest).toBeGreaterThan(0);
+  });
+
+  it("leaves an open modal alone", () => {
+    const dialog = elsewhere('<div role="dialog" aria-modal="true"><button>OK</button></div>');
+    dialog.querySelector("button")!.focus();
+    const before = useHelpPanelStore.getState().focusRequest;
+
+    expect(overlayHoldsKeyboard()).toBe(true);
+    revealAssistantComposer();
+
+    expect(useHelpPanelStore.getState().focusRequest).toBe(before);
+    expect(document.activeElement).toBe(dialog.querySelector("button"));
+  });
+
+  it("sees no overlay holding the keyboard without one", () => {
+    elsewhere("<div><textarea></textarea></div>").querySelector("textarea")!.focus();
+
+    expect(overlayHoldsKeyboard()).toBe(false);
   });
 });

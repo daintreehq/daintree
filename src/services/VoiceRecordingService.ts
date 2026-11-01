@@ -176,6 +176,7 @@ import { findRewriteComposer, type RewriteSelection } from "@/services/voiceRewr
 import {
   beginDictationReturn,
   focusDictationComposer,
+  overlayHoldsKeyboard,
   revealAssistantComposer,
   revealDictationComposer,
 } from "@/services/voiceComposerFocus";
@@ -5018,8 +5019,13 @@ class VoiceRecordingService {
     // Nothing focused can take it, so the agent on screen the person was just
     // in does (#15550). It comes forward with the keyboard in its composer, as
     // if it had been focused, so they see where the words go (#14770).
+    // A closed Assistant opening would take the keyboard from a modal that
+    // holds it, so it only comes forward without one.
     const { candidates, target } = this.getVisibleFallback();
-    if (assistant && (target ? assistantAhead(candidates.keys()) : candidates.size === 0)) {
+    const assistantFallback = target
+      ? assistantAhead(candidates.keys())
+      : candidates.size === 0 && (this.isAssistantShown() || !overlayHoldsKeyboard());
+    if (assistant && assistantFallback) {
       await this.startInAssistant(assistant);
       return;
     }
@@ -5613,9 +5619,10 @@ class VoiceRecordingService {
 
   /**
    * The Assistant the key may fall back to (#15870): the active lane's
-   * session, already running and showing its composer. Never one still to be
-   * launched, and never while the panel shows the global assistant in place of
-   * the lane, where the words would go somewhere nobody can see.
+   * session, already running and showing a composer that can take the words.
+   * Never one still starting, and never while the panel shows the global
+   * assistant in place of the lane, where the words would go somewhere nobody
+   * can see.
    */
   private getAssistantFallbackTarget(): VoiceRecordingTarget | null {
     const help = useHelpPanelStore.getState();
@@ -5623,8 +5630,10 @@ class VoiceRecordingService {
     const target = this.getAssistantTarget();
     if (!target) return null;
     const panel = usePanelStore.getState().panelsById[target.panelId];
-    if (!panel || !isPtyPanel(panel)) return null;
-    if (panel.spawnStatus === "failed" || panel.spawnStatus === "missing-cli") return null;
+    if (!panel || !isPtyPanel(panel) || panel.isInputLocked === true) return null;
+    // A reconnected terminal carries no status; one still spawning (or held
+    // for memory or a drive lease) isn't running yet.
+    if (panel.spawnStatus !== undefined && panel.spawnStatus !== "ready") return null;
     // The composer as the Assistant renders it, from the lane's agent.
     const hasComposer = shouldShowHybridInputBar({
       hasAgentIdentity: isBuiltInAgentId(selectActiveSlot(help).agentId),

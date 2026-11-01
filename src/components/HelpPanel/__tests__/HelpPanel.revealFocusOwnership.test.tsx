@@ -736,6 +736,33 @@ describe("HelpPanel — reveal focus ownership (#11472)", () => {
       expect(focusMock).toHaveBeenCalledWith("t-1");
     });
 
+    it("keeps a structural re-run of a dictation's request on home", () => {
+      helpPanelState.isOpen = false;
+      const { rerender } = render(<HelpPanel width={380} />);
+      focusForeignEditor();
+      clearFocusSpies();
+
+      helpPanelState.isOpen = true;
+      helpPanelState.focusRequest = 1;
+      helpPanelState.dictationFocusRequest = 1;
+      rerender(<HelpPanel width={380} />);
+      act(() => flushFrame());
+      expect(hybridHandle.focusForDictation).toHaveBeenCalledTimes(1);
+
+      // Still the Assistant's keyboard, on neither typing surface, so a
+      // structural re-run may place it, by home alone.
+      terminalInputState.hybridInputAutoFocus = false;
+      act(() => document.getElementById("daintree-assistant-panel")!.focus());
+      clearFocusSpies();
+      setPanel("t-1", "spawning");
+      rerender(<HelpPanel width={380} />);
+      act(() => flushFrame());
+      act(() => flushFrame());
+
+      expect(hybridHandle.focusForDictation).not.toHaveBeenCalled();
+      expect(focusMock).toHaveBeenCalledWith("t-1");
+    });
+
     it("falls back to xterm when the dictation's composer hasn't mounted", () => {
       helpPanelState.isOpen = false;
       const { rerender } = render(<HelpPanel width={380} />);

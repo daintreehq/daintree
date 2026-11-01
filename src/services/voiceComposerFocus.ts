@@ -47,6 +47,11 @@ export function revealDictationComposer(panelId: string, caret?: () => number | 
   requestPaneFocus(panelId, "hybridInput", { forDictation: true, ...(caret ? { caret } : {}) });
 }
 
+/** An open modal, or a page's dialog over the focused pane, owns the keyboard. */
+export function overlayHoldsKeyboard(): boolean {
+  return hasBlockingOverlay();
+}
+
 /**
  * The dictation key falling back to the Assistant (#15870): its composer
  * takes the keyboard as a grid pane's does for #14770, past a home of the

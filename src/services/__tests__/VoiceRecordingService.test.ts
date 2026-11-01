@@ -18,6 +18,7 @@ const terminalInput = vi.hoisted(() => ({ hybridInputEnabled: true }));
 // is voiceComposerFocus.test.tsx.
 const revealDictationComposer = vi.hoisted(() => vi.fn());
 const revealAssistantComposer = vi.hoisted(() => vi.fn());
+const overlayHoldsKeyboard = vi.hoisted(() => vi.fn(() => false));
 // Whether the person was in the Assistant after a pane, as composerSurface's
 // listeners would have seen it; that suite drives the real ones.
 const assistantRecency = vi.hoisted(() => ({
@@ -31,6 +32,7 @@ const beginDictationReturn = vi.hoisted(() =>
 vi.mock("@/services/voiceComposerFocus", () => ({
   beginDictationReturn,
   focusDictationComposer,
+  overlayHoldsKeyboard,
   revealAssistantComposer,
   revealDictationComposer,
 }));
@@ -193,10 +195,14 @@ vi.mock("@/store/helpPanelStore", () => {
     terminalId: null as string | null,
     agentId: null as string | null,
     globalSelected: false,
+    // Set by a test that runs several lanes, in place of the flat lane above.
+    lanes: null as Record<number, { terminalId: string | null; agentId: string | null }> | null,
+    activeSlot: 0,
   };
-  // #12108: dictation targets the lane on screen. This fixture runs one lane,
-  // so the selector projects the same flat state as that lane.
-  const selectActiveSlot = (s: typeof state) => s;
+  // #12108: dictation targets the lane on screen. This fixture runs one lane
+  // unless `lanes` is set, so the selector projects the flat state as that lane.
+  const selectActiveSlot = (s: typeof state) =>
+    s.lanes ? (s.lanes[s.activeSlot] ?? { terminalId: null, agentId: null }) : s;
   const fns = {
     setOpen: vi.fn((open: boolean) => {
       state.isOpen = open;
@@ -207,7 +213,12 @@ vi.mock("@/store/helpPanelStore", () => {
   return {
     useHelpPanelStore: Object.assign(getState, { getState }),
     selectActiveSlot,
-    selectSlotTerminalIds: (s: typeof state) => (s.terminalId ? [s.terminalId] : []),
+    selectSlotTerminalIds: (s: typeof state) =>
+      s.lanes
+        ? Object.values(s.lanes).flatMap((lane) => (lane.terminalId ? [lane.terminalId] : []))
+        : s.terminalId
+          ? [s.terminalId]
+          : [],
     __state: state,
     __fns: fns,
   };
@@ -2178,6 +2189,8 @@ describe("VoiceRecordingService — the key with no agent focused (#15550)", () 
         terminalId: string | null;
         agentId: string | null;
         globalSelected: boolean;
+        lanes: Record<number, { terminalId: string | null; agentId: string | null }> | null;
+        activeSlot: number;
       };
       __fns: { setOpen: Mock; requestFocus: Mock };
     };
@@ -2197,7 +2210,14 @@ describe("VoiceRecordingService — the key with no agent focused (#15550)", () 
       agentId = "claude",
     }: { open?: boolean; terminalId?: string | null; agentId?: string | null } = {}) {
       const help = (await import("@/store/helpPanelStore")) as unknown as HelpMock;
-      Object.assign(help.__state, { isOpen: open, terminalId, agentId, globalSelected: false });
+      Object.assign(help.__state, {
+        isOpen: open,
+        terminalId,
+        agentId,
+        globalSelected: false,
+        lanes: null,
+        activeSlot: 0,
+      });
       help.__fns.setOpen.mockClear();
       help.__fns.requestFocus.mockClear();
       return help;
@@ -2211,6 +2231,8 @@ describe("VoiceRecordingService — the key with no agent focused (#15550)", () 
 
     beforeEach(() => {
       revealAssistantComposer.mockClear();
+      overlayHoldsKeyboard.mockReset();
+      overlayHoldsKeyboard.mockReturnValue(false);
     });
 
     afterEach(async () => {
@@ -2390,6 +2412,25 @@ describe("VoiceRecordingService — the key with no agent focused (#15550)", () 
       expectAssistantLeftAlone(help);
     });
 
+    it("takes the Assistant used after every agent on screen, the open dock's included", async () => {
+      const arranged = await arrange({
+        panels: [
+          agent("agent-a"),
+          agent("agent-b"),
+          agent("docked", { location: "dock" }),
+          assistantPanel(),
+        ],
+        mru: ["terminal:agent-a", "terminal:docked", "terminal:agent-b"],
+      });
+      arranged.panel.activeDockTerminalId = "docked";
+      await runAssistant();
+      usedAssistantBefore("agent-elsewhere");
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expectStartedInAssistant(arranged);
+    });
+
     it.each([
       ["closed", false, false],
       ["hidden by the focus gesture", true, true],
@@ -2445,7 +2486,11 @@ describe("VoiceRecordingService — the key with no agent focused (#15550)", () 
       ["trashed", [assistantPanel({ location: "trash" })], {}],
       ["whose CLI is missing", [assistantPanel({ spawnStatus: "missing-cli" })], {}],
       ["that failed to spawn", [assistantPanel({ spawnStatus: "failed" })], {}],
+      ["still spawning", [assistantPanel({ spawnStatus: "spawning" })], {}],
+      ["whose input is locked", [assistantPanel({ isInputLocked: true })], {}],
+      ["that isn't a terminal", [assistantPanel({ kind: "browser" })], {}],
       ["with no agent of its own", [assistantPanel()], { agentId: null }],
+      ["running an agent with no composer", [assistantPanel()], { agentId: "not-an-agent" }],
       ["behind the global assistant", [assistantPanel()], { globalSelected: true }],
     ])("never falls back to an Assistant %s", async (_name, panels, lane) => {
       const arranged = await arrange({ panels });
@@ -2456,6 +2501,70 @@ describe("VoiceRecordingService — the key with no agent focused (#15550)", () 
 
       expectUnavailable(arranged);
       expectAssistantLeftAlone(help);
+    });
+
+    it.each([
+      ["spawned", "ready"],
+      ["reconnected, with no spawn status", undefined],
+    ])("starts in an Assistant %s", async (_name, spawnStatus) => {
+      const arranged = await arrange({ panels: [assistantPanel({ spawnStatus })] });
+      await runAssistant();
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expectStartedInAssistant(arranged);
+    });
+
+    it("starts in the active lane's session, not another running one", async () => {
+      const arranged = await arrange({
+        panels: [assistantPanel({ id: "assistant-0" }), assistantPanel()],
+      });
+      const help = await runAssistant();
+      help.__state.lanes = {
+        0: { terminalId: "assistant-0", agentId: "claude" },
+        1: { terminalId: "assistant-1", agentId: "claude" },
+      };
+      help.__state.activeSlot = 1;
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expectStartedInAssistant(arranged);
+    });
+
+    it("never borrows another lane's session when the active one has none", async () => {
+      const arranged = await arrange({ panels: [assistantPanel()] });
+      const help = await runAssistant();
+      help.__state.lanes = {
+        0: { terminalId: "assistant-1", agentId: "claude" },
+        1: { terminalId: null, agentId: null },
+      };
+      help.__state.activeSlot = 1;
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expectUnavailable(arranged);
+      expectAssistantLeftAlone(help);
+    });
+
+    it("never opens the Assistant over a modal that holds the keyboard", async () => {
+      const arranged = await arrange({ panels: [assistantPanel()] });
+      const help = await runAssistant({ open: false });
+      overlayHoldsKeyboard.mockReturnValue(true);
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expectUnavailable(arranged);
+      expectAssistantLeftAlone(help);
+    });
+
+    it("starts in an Assistant already on screen though a modal holds the keyboard", async () => {
+      const arranged = await arrange({ panels: [assistantPanel()] });
+      await runAssistant();
+      overlayHoldsKeyboard.mockReturnValue(true);
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expectStartedInAssistant(arranged);
     });
 
     it("never falls back to an Assistant whose composer is off", async () => {
@@ -2511,6 +2620,23 @@ describe("VoiceRecordingService — the key with no agent focused (#15550)", () 
       await arranged.voiceRecordingService.toggleFocusedPanel();
 
       expect(arranged.stopSpy).toHaveBeenCalledTimes(1);
+      expect(arranged.toggleSpy).not.toHaveBeenCalled();
+      expectAssistantLeftAlone(help);
+    });
+
+    it("stops a session another view owns rather than start in the Assistant", async () => {
+      const arranged = await arrange({ panels: [assistantPanel()] });
+      const help = await runAssistant();
+      const voice = (await import("@/store/voiceRecordingStore")) as unknown as {
+        __state: { sessionElsewhere: unknown };
+      };
+      voice.__state.sessionElsewhere = { sessionId: "elsewhere-1" };
+      const stopLive = vi.mocked(window.electron.voiceInput.stopLive);
+      stopLive.mockResolvedValue(false);
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expect(stopLive).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "elsewhere-1" }));
       expect(arranged.toggleSpy).not.toHaveBeenCalled();
       expectAssistantLeftAlone(help);
     });
