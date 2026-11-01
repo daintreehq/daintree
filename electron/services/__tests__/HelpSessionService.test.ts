@@ -2807,6 +2807,7 @@ describe("HelpSessionService", () => {
       expect(context?.projectPath).toBe("/tmp/project");
       expect([...(context?.serverNamesInUse ?? [])].sort()).toEqual([
         "daintree",
+        "daintree-decisions",
         "daintree-docs",
         "daintree-ledger",
         "daintree-runbooks",
