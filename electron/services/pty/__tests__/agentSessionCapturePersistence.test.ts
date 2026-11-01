@@ -1108,9 +1108,7 @@ describe("captured agent session persistence (#12433)", () => {
       const generation = launch();
       await seed([pane({ agentSessionId: "launched-conversation" })]);
 
-      await expect(acceptObservedAgentSession(observed(generation, 1))).resolves.toBe(
-        "superseded"
-      );
+      await expect(acceptObservedAgentSession(observed(generation, 1))).resolves.toBe("superseded");
       expect((await savedPane())?.agentSessionId).toBe(HAND_ID);
     });
 
@@ -1130,9 +1128,7 @@ describe("captured agent session persistence (#12433)", () => {
       const generation = launch();
       await seed([pane({ agentSessionId: HAND_ID })]);
 
-      await expect(acceptObservedAgentSession(observed(generation, 0))).resolves.toBe(
-        "unchanged"
-      );
+      await expect(acceptObservedAgentSession(observed(generation, 0))).resolves.toBe("unchanged");
       await expect(
         writeBackCapturedSessionId(capture(generation, { record: { sessionId: "after-new" } }))
       ).resolves.toBe("superseded");
@@ -1167,9 +1163,9 @@ describe("captured agent session persistence (#12433)", () => {
       const generation = launch();
       await seed([pane({ agentSessionId: "launched-conversation" })]);
 
-      await expect(
-        writeBackCapturedSessionId(demotion(generation, 1, "farewell"))
-      ).resolves.toBe("ineligible-boundary");
+      await expect(writeBackCapturedSessionId(demotion(generation, 1, "farewell"))).resolves.toBe(
+        "ineligible-boundary"
+      );
       expect((await savedPane())?.agentSessionId).toBe("launched-conversation");
     });
 

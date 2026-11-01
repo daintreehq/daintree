@@ -76,7 +76,10 @@ export interface AgentProcessObservation {
   command: string;
 }
 
-export type AgentProcessObserver = (observation: AgentProcessObservation, spawnedAt: number) => void;
+export type AgentProcessObserver = (
+  observation: AgentProcessObservation,
+  spawnedAt: number
+) => void;
 
 /**
  * One detection pass: the public result plus the tree candidate that actually

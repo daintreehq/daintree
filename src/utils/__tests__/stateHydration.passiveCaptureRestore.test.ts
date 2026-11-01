@@ -377,7 +377,10 @@ describe("passive exit capture → cold restore (#12433)", () => {
       const handResumed = byPane.get("pane-a");
       expect(handResumed?.agentSessionId).toBe(HAND_ID);
       expect(handResumed?.command).toContain(
-        resume.args(HAND_ID).map((arg) => quoteLaunchArgOptional(arg)).join(" ")
+        resume
+          .args(HAND_ID)
+          .map((arg) => quoteLaunchArgOptional(arg))
+          .join(" ")
       );
       // An exact id no longer leaves the pane to the folder's resume-latest
       // election, which its sibling used to win.

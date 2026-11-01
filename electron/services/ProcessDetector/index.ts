@@ -1,10 +1,6 @@
 export { ProcessDetector } from "./ProcessDetector.js";
 export type { DetectionResult } from "./ProcessDetector.js";
-export type {
-  AgentProcessObservation,
-  AgentProcessObserver,
-  DetectionCallback,
-} from "./types.js";
+export type { AgentProcessObservation, AgentProcessObserver, DetectionCallback } from "./types.js";
 export type { CommandIdentity } from "./types.js";
 export type { DetectionState, DetectionEvidenceSource } from "./types.js";
 export {

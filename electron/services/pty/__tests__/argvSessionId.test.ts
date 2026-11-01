@@ -66,8 +66,8 @@ describe("readArgvSessionId with Codex's declaration", () => {
   });
 
   it("reads nothing when the declared pattern does not compile", () => {
-    expect(readArgvSessionId(`codex resume ${ID}`, "codex", { ...SPEC, sessionIdPattern: "(" })).toBe(
-      null
-    );
+    expect(
+      readArgvSessionId(`codex resume ${ID}`, "codex", { ...SPEC, sessionIdPattern: "(" })
+    ).toBe(null);
   });
 });

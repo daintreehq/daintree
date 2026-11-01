@@ -208,7 +208,8 @@ export const config: AgentConfig = {
   // session name, which the CLI also accepts there.
   resumeArgv: {
     subcommand: "resume",
-    sessionIdPattern: "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+    sessionIdPattern:
+      "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
     optionsWithValue: [
       "-c",
       "--config",

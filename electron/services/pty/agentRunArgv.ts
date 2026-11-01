@@ -46,11 +46,19 @@ export function offerAgentRunArgvSession(
   if (!sessionId) return;
 
   try {
-    events.emit("agent-session:observed", { terminalId, agentId: agentType, projectId, sessionId, run });
+    events.emit("agent-session:observed", {
+      terminalId,
+      agentId: agentType,
+      projectId,
+      sessionId,
+      run,
+    });
   } catch (error) {
     logger.warn("Agent run argv session failed to ship", {
       terminalId,
-      error: formatErrorMessage(error, "observed-session emit threw").split(sessionId).join("[session]"),
+      error: formatErrorMessage(error, "observed-session emit threw")
+        .split(sessionId)
+        .join("[session]"),
     });
   }
 }
