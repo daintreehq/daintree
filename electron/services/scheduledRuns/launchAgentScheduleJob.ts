@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { RUN_DUE_SCHEDULES_FLAG } from "../../boot/dueScheduleLaunch.js";
-import type { CommandResult, CommandRunner } from "../../remote/host/hostCommands.js";
-import { nodeStartAtLoginFs, type StartAtLoginFs } from "../../remote/host/startAtLogin.js";
+import { resilientAtomicWriteFile } from "../../utils/fs.js";
+import type { CommandResult, CommandRunner } from "../../utils/runCommand.js";
 import {
   launchdCalendarFor,
   launchdIntervalKey,
@@ -27,6 +28,34 @@ import type { ScheduleOsJobAdapter, ScheduleOsJobObservation } from "./ScheduleO
  * It only ever writes, loads and unloads its own label and file. It is not
  * Host mode's start-at-login agent, which stays as it is.
  */
+
+/** The job's one file, behind a seam so tests never touch ~/Library. */
+export interface ScheduleJobFs {
+  /** Null when there is no file. */
+  readFile(file: string): Promise<string | null>;
+  writeFile(file: string, content: string): Promise<void>;
+  remove(file: string): Promise<void>;
+}
+
+export const nodeScheduleJobFs: ScheduleJobFs = {
+  async readFile(file) {
+    try {
+      return await fs.readFile(file, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  },
+  async writeFile(file, content) {
+    // A new account may have no LaunchAgents folder yet.
+    await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o755 });
+    // launchd refuses a plist anyone else can write.
+    await resilientAtomicWriteFile(file, content, "utf-8", { mode: 0o644 });
+  },
+  async remove(file) {
+    await fs.rm(file, { force: true });
+  },
+};
 
 const OPEN = "/usr/bin/open";
 const LAUNCHCTL = "/bin/launchctl";
@@ -198,10 +227,10 @@ export function createLaunchAgentScheduleJob(deps: {
   target: LaunchAgentTargetResult;
   userDataDir: string;
   run: CommandRunner;
-  fs?: StartAtLoginFs;
+  fs?: ScheduleJobFs;
   delay?: (ms: number) => Promise<void>;
 }): ScheduleOsJobAdapter {
-  const files = deps.fs ?? nodeStartAtLoginFs;
+  const files = deps.fs ?? nodeScheduleJobFs;
   const delay = deps.delay ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const label = scheduleLaunchAgentLabel(deps.userDataDir);
   const file = path.posix.join(deps.homeDir, "Library", "LaunchAgents", `${label}.plist`);

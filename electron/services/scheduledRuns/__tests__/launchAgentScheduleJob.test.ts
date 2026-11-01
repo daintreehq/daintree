@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
+import nodeFs from "node:fs";
+import os from "node:os";
+import nodePath from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { CommandResult } from "../../../remote/host/hostCommands.js";
-import type { StartAtLoginFs } from "../../../remote/host/startAtLogin.js";
+import type { CommandResult } from "../../../utils/runCommand.js";
 import {
   buildScheduleLaunchAgentPlist,
   createLaunchAgentScheduleJob,
@@ -10,6 +12,8 @@ import {
   scheduleLaunchAgentArguments,
   scheduleLaunchAgentLabel,
   type LaunchAgentTargetResult,
+  nodeScheduleJobFs,
+  type ScheduleJobFs,
 } from "../launchAgentScheduleJob.js";
 
 const HOME = "/Users/someone";
@@ -31,7 +35,7 @@ const HOURLY = { cron: "30 * * * *", timeZone: "Europe/London" };
 function memoryFs(initial: Record<string, string> = {}, events: string[] = []) {
   const files = new Map(Object.entries(initial));
   const touched: string[] = [];
-  const fs: StartAtLoginFs = {
+  const fs: ScheduleJobFs = {
     readFile: vi.fn(async (file: string) => {
       touched.push(file);
       return files.get(file) ?? null;
@@ -568,5 +572,29 @@ describe("createLaunchAgentScheduleJob", () => {
       delay: async () => {},
     });
     expect((await adapter.observe([NINE], "Europe/London")).loaded).toBeNull();
+  });
+});
+
+describe("nodeScheduleJobFs", () => {
+  it("makes the folder, writes a file only its owner can change, and reads a missing one as none", async () => {
+    const root = nodeFs.mkdtempSync(nodePath.join(os.tmpdir(), "daintree-launch-agents-"));
+    try {
+      const file = nodePath.join(root, "Library", "LaunchAgents", "job.plist");
+      expect(await nodeScheduleJobFs.readFile(file)).toBeNull();
+
+      await nodeScheduleJobFs.writeFile(file, "one");
+      await nodeScheduleJobFs.writeFile(file, "two");
+      expect(await nodeScheduleJobFs.readFile(file)).toBe("two");
+      if (process.platform !== "win32") {
+        expect(nodeFs.statSync(file).mode & 0o022).toBe(0);
+      }
+      expect(nodeFs.readdirSync(nodePath.dirname(file))).toEqual(["job.plist"]);
+
+      await nodeScheduleJobFs.remove(file);
+      await nodeScheduleJobFs.remove(file);
+      expect(await nodeScheduleJobFs.readFile(file)).toBeNull();
+    } finally {
+      nodeFs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

@@ -1,7 +1,7 @@
 import os from "node:os";
 import { app } from "electron";
 import { getActiveShutdown } from "../../lifecycle/shutdownCoordinator.js";
-import { runCommand } from "../../remote/host/hostCommands.js";
+import { runCommand } from "../../utils/runCommand.js";
 import { projectStore } from "../ProjectStore.js";
 import type { ScheduleOsJobStatus } from "../../../shared/types/ipc/schedules.js";
 import { createLaunchAgentScheduleJob, launchAgentTargetFor } from "./launchAgentScheduleJob.js";
