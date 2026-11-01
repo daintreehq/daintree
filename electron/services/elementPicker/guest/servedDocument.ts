@@ -125,9 +125,7 @@ function ownText(element: Element): string {
 }
 
 function agrees(live: Element, served: Element): boolean {
-  return (
-    live.getAttribute("id") === served.getAttribute("id") && ownText(live) === ownText(served)
-  );
+  return live.getAttribute("id") === served.getAttribute("id") && ownText(live) === ownText(served);
 }
 
 function isInput(value: unknown): value is ServedDocumentInput {

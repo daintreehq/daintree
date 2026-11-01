@@ -577,7 +577,8 @@ describe("CoreGuest", () => {
     const servedReads = (h: ReturnType<typeof harness>) =>
       h.calls.filter((call) => call.params.awaitPromise === true);
     const astroInstall = (h: ReturnType<typeof harness>) =>
-      h.extractorEvaluates()
+      h
+        .extractorEvaluates()
         .map((call) => call.params.expression as string)
         .find((expression) => expression.includes("/* astro */"));
     /** Lets queued work run up to a read that has not answered, without waiting on the queue. */
@@ -598,9 +599,9 @@ describe("CoreGuest", () => {
       ]);
       expect(servedReads(h)[0]!.params.expression).toContain("fetch(url");
       expect(astroInstall(h)).toContain(`served: ${JSON.stringify(SERVED)}`);
-      const react = h.extractorEvaluates().find((call) =>
-        (call.params.expression as string).includes("/* react */")
-      );
+      const react = h
+        .extractorEvaluates()
+        .find((call) => (call.params.expression as string).includes("/* react */"));
       expect(react?.params.expression).not.toContain("served:");
       expect(h.availabilities().at(-1)?.extractors).toEqual({
         astro: "installed",
