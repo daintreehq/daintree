@@ -713,6 +713,11 @@ describe("LinkClient message fragments (#15892)", () => {
         }
         callback();
       },
+      // Ends when the client does, as a host closing its side would.
+      final(callback) {
+        socket.push(null);
+        callback();
+      },
     });
     const transport: LinkTransport = {
       async open() {
