@@ -44,6 +44,8 @@ import type { RelayFetch } from "../relayCheck.js";
 import { openDb } from "../../persistence/db.js";
 import { DaintreeLocalStore } from "../daintreeLocalStore.js";
 import { createTrustedPolicy } from "../workflowGates.js";
+import { QuestionBridge } from "../questionBridge.js";
+import type { QuestionSource } from "../relayConnection.js";
 
 const RELAY: RelayBinding = {
   relayOrigin: "https://decisions.example.workers.dev",
@@ -148,6 +150,8 @@ function fakeRelay() {
   const sockets: FakeSocket[] = [];
   const socketWaiters = new Map<number, (socket: FakeSocket) => void>();
   const tickets: string[] = [];
+  /** Idempotency keys of the questions Daintree published, in order. */
+  const questions: string[] = [];
   let answerTicket: (n: number) => Response = (n) =>
     new Response(
       JSON.stringify({
@@ -163,6 +167,14 @@ function fakeRelay() {
       tickets.push(url);
       return answerTicket(tickets.length);
     }
+    if (pathname === "/api/v1/questions" && init.method === "POST") {
+      const body = JSON.parse(String(init.body)) as { idempotency_key: string };
+      questions.push(body.idempotency_key);
+      return new Response(JSON.stringify({ event_seq: questions.length }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
     return new Response(JSON.stringify({ code: "not_found", message: "no route" }), {
       status: 404,
     });
@@ -176,6 +188,7 @@ function fakeRelay() {
   return {
     sockets,
     tickets,
+    questions,
     fetchImpl,
     webSocket,
     /** The nth socket Daintree opens (0-based), once it does. */
@@ -933,5 +946,87 @@ describe("RelayConnection", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+  it("hands questions a source once the identity loads, before any request, with a bridge only while an attempt runs", async () => {
+    let source: QuestionSource | null = null;
+    let atReady: { tickets: number; live: unknown } | null = null;
+    const h = await harness({
+      overrides: {
+        onQuestionsReady: (ready) => {
+          source = ready;
+          atReady = { tickets: h.relay.tickets.length, live: ready.live() };
+        },
+      },
+    });
+    h.connection.start();
+    await vi.waitFor(() => expect(source).not.toBeNull());
+    const ready = source as unknown as QuestionSource;
+    expect(atReady).toEqual({ tickets: 0, live: null });
+    expect(ready.identity()?.config.deviceId).toBe(RELAY.deviceId);
+
+    const socket = await connectLive(h);
+    const first = ready.live();
+    expect(first).not.toBeNull();
+    expect(first?.state).toBe("running");
+
+    socket.drop(1006);
+    await h.status("reconnecting");
+    expect(ready.live()).toBeNull();
+    expect(ready.identity()).not.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(RECONNECT_BASE_MS);
+    await connectLive(h, 1);
+    expect(ready.live()).not.toBeNull();
+    expect(ready.live()).not.toBe(first);
+
+    h.connection.stop();
+    expect(ready.live()).toBeNull();
+    expect(ready.identity()).toBeNull();
+    await expect(ready.store.listQuestions()).rejects.toThrow();
+  });
+
+  it("publishes a question asked while no attempt was live once one goes live", async () => {
+    let source: QuestionSource | null = null;
+    const h = await harness({ overrides: { onQuestionsReady: (ready) => (source = ready) } });
+    h.connection.start();
+    await vi.waitFor(() => expect(source).not.toBeNull());
+    const bridge = new QuestionBridge({
+      source: source as unknown as QuestionSource,
+      isCurrent: () => true,
+    });
+
+    const asked = await bridge.registerQuestion({
+      origin: {
+        host_id: "host_a",
+        pane_id: "pane-1",
+        terminal_generation: 1,
+        ownership_principal: "principal-1",
+        agent_incarnation: "0",
+        agent_kind: "claude",
+        agent_session_id: null,
+        project_id: "p1",
+        worktree_id: "wt-1",
+        worktree_root: "/repo",
+        workflow_gate_id: null,
+      },
+      input: { question: "Asked offline?" },
+    });
+    expect(h.relay.questions).toEqual([]);
+    expect((await h.store.getQuestion(asked.questionId))?.local_status).toBe("queued");
+
+    await connectLive(h);
+    await vi.waitFor(() => expect(h.relay.questions).toHaveLength(1));
+    await vi.waitFor(async () =>
+      expect((await h.store.getQuestion(asked.questionId))?.local_status).toBe("open")
+    );
+    h.connection.stop();
+  });
+
+  it("gives questions no source when the identity can't be loaded", async () => {
+    const ready = vi.fn();
+    const h = await harness({ stored: null, overrides: { onQuestionsReady: ready } });
+    h.connection.start();
+    await h.status("not-connected");
+    expect(ready).not.toHaveBeenCalled();
   });
 });

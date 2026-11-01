@@ -2,7 +2,11 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { DecisionsService, type DecisionsStoreOpener } from "../DecisionsService.js";
+import {
+  DecisionsService,
+  type DecisionsServiceOptions,
+  type DecisionsStoreOpener,
+} from "../DecisionsService.js";
 import type { DaintreeLocalStore } from "../daintreeLocalStore.js";
 import { defaultDecisionsSettings } from "../decisionsSettings.js";
 import type {
@@ -12,7 +16,7 @@ import type {
 } from "../../../../shared/types/decisions.js";
 import { outstandingRows, row } from "./questionRows.js";
 import type { DecisionsRows } from "../localData.js";
-import type { RelayConnectionOptions } from "../relayConnection.js";
+import type { QuestionSource, RelayConnectionOptions } from "../relayConnection.js";
 
 interface FakeStore {
   close: ReturnType<typeof vi.fn>;
@@ -523,7 +527,10 @@ describe("DecisionsService relay connection", () => {
   };
 
   /** A service whose connections are recorded, never run. */
-  function connected(openStore?: DecisionsStoreOpener) {
+  function connected(
+    openStore?: DecisionsStoreOpener,
+    openQuestions?: DecisionsServiceOptions["openQuestions"]
+  ) {
     const events: string[] = [];
     const made: Array<{ options: RelayConnectionOptions; stopped: boolean }> = [];
     const revoked: unknown[] = [];
@@ -539,6 +546,7 @@ describe("DecisionsService relay connection", () => {
         }),
       keyFilePath: () => "/nonexistent/keys.bin",
       onRelayRevoked: (relay) => revoked.push(relay),
+      ...(openQuestions ? { openQuestions } : {}),
       connect: (options) => {
         const record = { options, stopped: false };
         made.push(record);
@@ -571,7 +579,10 @@ describe("DecisionsService relay connection", () => {
     expect(made).toHaveLength(1);
     expect(events).toEqual(["started 1"]);
     expect(made[0]!.options.relay).toEqual(RELAY);
-    expect(made[0]!.options.store).toBe(service.getStore());
+    // The lifetime's own store, watched for question writes on the way through.
+    const lifetimeStore = service.getStore() as unknown as FakeStore;
+    await made[0]!.options.store.close();
+    expect(lifetimeStore.close).toHaveBeenCalledTimes(1);
     expect(made[0]!.options.keys).toBe(service.getKeyStore());
 
     made[0]!.options.onStatus({ state: "reconnecting", nextAttemptAt: 42 });
@@ -704,6 +715,143 @@ describe("DecisionsService relay connection", () => {
     await expect(service.start(on(RELAY))).rejects.toThrow("database unavailable");
     expect(service.getStatus()).toEqual({ state: "not-connected", problem: "storage" });
     expect(made).toHaveLength(0);
+  });
+  /** Routes the service opens for agents' questions, with what became of each. */
+  function questionRoutes(events: string[] = []) {
+    const opened: Array<{ source: QuestionSource; closed: number; release: () => void }> = [];
+    const openQuestions = (source: QuestionSource) => {
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const record = { source, closed: 0, release };
+      opened.push(record);
+      events.push(`questions opened ${opened.length}`);
+      return {
+        close: () => {
+          record.closed += 1;
+          events.push(`questions closed ${opened.indexOf(record) + 1}`);
+          return released.then(() => {
+            events.push(`questions released ${opened.indexOf(record) + 1}`);
+          });
+        },
+      };
+    };
+    return { opened, openQuestions };
+  }
+
+  const SOURCE: QuestionSource = {
+    identity: () => null,
+    live: () => null,
+    store: {} as QuestionSource["store"],
+  };
+
+  it("opens agents' questions once the connection's identity is ready, and only for the current one", async () => {
+    const routes = questionRoutes();
+    const { service, made } = connected(undefined, routes.openQuestions);
+    await service.start(on(RELAY));
+    expect(routes.opened).toHaveLength(0);
+
+    made[0]!.options.onQuestionsReady!(SOURCE);
+    expect(routes.opened.map((route) => route.source)).toEqual([SOURCE]);
+
+    // A connection the service let go of opens nothing.
+    const first = made[0]!;
+    await service.updateSettings(on({ ...RELAY, deviceId: "dev_another1" }));
+    first.options.onQuestionsReady!(SOURCE);
+    expect(routes.opened).toHaveLength(1);
+    expect(routes.opened[0]!.closed).toBe(1);
+    routes.opened[0]!.release();
+    await service.stop();
+  });
+
+  it("closes the questions when the connection stops for the lifetime, is revoked or let go", async () => {
+    for (const end of [
+      (options: RelayConnectionOptions) =>
+        options.onStatus({ state: "not-connected", problem: "keys" }),
+      (options: RelayConnectionOptions) => options.onStatus({ state: "revoked" }),
+      (options: RelayConnectionOptions) => options.onRevoked(),
+    ]) {
+      const routes = questionRoutes();
+      const { service, made } = connected(undefined, routes.openQuestions);
+      await service.start(on(RELAY));
+      made[0]!.options.onQuestionsReady!(SOURCE);
+
+      made[0]!.options.onStatus({ state: "reconnecting", nextAttemptAt: 1 });
+      expect(routes.opened[0]!.closed).toBe(0);
+      end(made[0]!.options);
+      expect(routes.opened[0]!.closed).toBe(1);
+      routes.opened[0]!.release();
+      await service.stop();
+      expect(routes.opened[0]!.closed).toBe(1);
+    }
+  });
+
+  it("waits for the questions to let go of the listener before the lifetime ends", async () => {
+    const events: string[] = [];
+    const routes = questionRoutes(events);
+    const { service, made } = connected(undefined, routes.openQuestions);
+    await service.start(on(RELAY));
+    made[0]!.options.onQuestionsReady!(SOURCE);
+
+    let stopped = false;
+    const stopping = service.stop().then(() => {
+      stopped = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(stopped).toBe(false);
+    expect(service.getStatus().state).not.toBe("off");
+    routes.opened[0]!.release();
+    await stopping;
+    expect(events.filter((event) => event.startsWith("questions"))).toEqual([
+      "questions opened 1",
+      "questions closed 1",
+      "questions released 1",
+    ]);
+    expect(service.getStatus()).toEqual({ state: "off" });
+  });
+
+  it("feeds the panes every question row at the start and after each question write", async () => {
+    let rows = [row(1)];
+    const pushes: string[] = [];
+    const store = Object.assign(fakeStore(), {
+      listQuestions: vi.fn(async () => rows),
+      updateQuestion: vi.fn(async () => null),
+      getMeta: vi.fn(async () => null),
+    });
+    const service = new DecisionsService({
+      openStore: async () => store,
+      keyFilePath: () => "/nonexistent/keys.bin",
+      publishPaneState: (_projectId, state) =>
+        pushes.push(`${state.terminalId}:${state.openQuestions.length}`),
+      connect: (options) => {
+        connection = options;
+        return { start: () => {}, stop: () => {} };
+      },
+    });
+    let connection: RelayConnectionOptions | null = null;
+    await service.start(on(RELAY));
+    await vi.waitFor(() => expect(pushes).toEqual(["pane-a:1"]));
+
+    rows = [];
+    await connection!.store.getMeta("k");
+    expect(store.listQuestions).toHaveBeenCalledTimes(1);
+    await connection!.store.updateQuestion("q_1", { local_status: "cancelled" });
+    await vi.waitFor(() => expect(pushes).toEqual(["pane-a:1", "pane-a:0"]));
+    expect(store.listQuestions).toHaveBeenCalledTimes(2);
+
+    await service.stop();
+    rows = [row(2)];
+    await connection!.store.updateQuestion("q_2", { local_status: "open" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(store.listQuestions).toHaveBeenCalledTimes(2);
+  });
+
+  it("serves no questions when it is given no way to open them", async () => {
+    const { service, made } = connected();
+    await service.start(on(RELAY));
+    expect(() => made[0]!.options.onQuestionsReady!(SOURCE)).not.toThrow();
+    await service.stop();
   });
 });
 
