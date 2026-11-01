@@ -22,6 +22,13 @@ import {
   switchPassMisses,
   themeResolutionMisses,
 } from "../lib/themeFixture";
+import {
+  evaluateThemeModule,
+  instrumentationMisses,
+  loadBuiltInSchemeSnapshot,
+  loadThemeModuleBundles,
+  themeModuleOutputMisses,
+} from "../lib/themeModuleFixture";
 
 // The theme system: `shared/theme` (contrast.ts, themes.ts, oklch.ts,
 // colorValidator.ts, apca.ts, colorVisionOverrides.ts) plus the two consumers
@@ -43,11 +50,12 @@ import {
 // reference pair, the cube-root identity a neutral grey's OKLab lightness
 // satisfies, and a planted theme whose text sits ~1.01:1 from its own surfaces.
 //
-// Scope limits are stated in full in `lib/themeFixture.ts`. The two that decide
-// how a number reads: the built-in cohort's own resolver runs at module load
-// and is unreachable, so PERF-300 drives the exported resolver over the same
-// palettes; and PERF-304 has no CSSOM, so its counts are real and its duration
-// is a Map walk.
+// Scope limits are stated in full in `lib/themeFixture.ts` and
+// `lib/themeModuleFixture.ts`. The two that decide how a number reads: the
+// built-in cohort's own resolver runs at module load, so PERF-306 prices it by
+// evaluating the module cold in a fresh process while PERF-300 drives the
+// exported resolver custom and plugin themes take over the same palettes; and
+// PERF-304 has no CSSOM, so its counts are real and its duration is a Map walk.
 
 export const themeScenarios: PerfScenario[] = [
   {
@@ -56,9 +64,9 @@ export const themeScenarios: PerfScenario[] = [
     description:
       "Resolve all 15 shipped palettes through the real normalizeAppColorScheme (palette → " +
       "155 semantic tokens, via compilePaletteToTokens/createDaintreeTokens) and project each " +
-      "into CSS custom properties with getAppThemeCssVariables. This is what importing " +
-      "@shared/theme costs at module evaluation, in main and in every project renderer. " +
-      "cssVariableCount is a deterministic cardinality that travels across machines; " +
+      "into CSS custom properties with getAppThemeCssVariables. This is the path every custom, " +
+      "imported and plugin theme takes; the built-ins' own resolution at module evaluation is " +
+      "PERF-306. cssVariableCount is a deterministic cardinality that travels across machines; " +
       "resolveMisses grades each resolution against the palette it came from.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
@@ -293,6 +301,47 @@ export const themeScenarios: PerfScenario[] = [
           subsetWarmMs,
           warmSpeedup: subsetWarmMs > 0 ? subsetColdMs / subsetWarmMs : 0,
           inkMisses: inkSweepMisses(BUILT_IN_APP_SCHEMES, sweep),
+        },
+      };
+    },
+  },
+  {
+    id: "PERF-306",
+    name: "Theme Module - Cold Evaluation",
+    description:
+      "Evaluate the real @shared/theme module cold, in a fresh Node process per reading, the " +
+      "way main and every project renderer evaluate it at boot: parse plus the module body, " +
+      "which derives all 15 built-in schemes and the internal light fallback from their " +
+      "palettes. linearisationCount is the deterministic number of sRGB channel linearisations " +
+      "the evaluation made (three per luminance or OKLab conversion), read from a separately " +
+      "instrumented bundle in its own process so the counter never runs in the timed one. " +
+      "outputMisses grades every derived scheme and the fallback against the engine's " +
+      "recorded output (shared/theme/__tests__/__snapshots__/builtInSchemeOutput.json), " +
+      "countedOutputMisses does the same for the instrumented bundle, and " +
+      "instrumentationMisses proves the counter is wired to the real conversions.",
+    tier: "heavy",
+    modes: ["smoke", "ci", "nightly"],
+    iterations: { smoke: 8, ci: 12, nightly: 20 },
+    warmups: 1,
+    correctness: ["outputMisses", "countedOutputMisses", "instrumentationMisses"],
+    async run() {
+      // Bundling and the snapshot read are fixture setup, built once per process.
+      const bundles = await loadThemeModuleBundles();
+      const recorded = loadBuiltInSchemeSnapshot();
+      const plain = evaluateThemeModule(bundles.plainPath);
+      const counted = evaluateThemeModule(bundles.countedPath);
+
+      return {
+        durationMs: plain.parseMs + plain.executeMs,
+        metrics: {
+          parseMs: plain.parseMs,
+          executeMs: plain.executeMs,
+          linearisationCount: counted.linearisations,
+          bundleBytes: bundles.plainBytes,
+          schemeCount: plain.output.schemes.length + 1,
+          outputMisses: themeModuleOutputMisses(plain.output, recorded),
+          countedOutputMisses: themeModuleOutputMisses(counted.output, recorded),
+          instrumentationMisses: instrumentationMisses(plain, counted),
         },
       };
     },
