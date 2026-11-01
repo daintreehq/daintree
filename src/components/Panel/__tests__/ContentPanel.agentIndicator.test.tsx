@@ -11,6 +11,7 @@ import { render, screen, cleanup } from "@testing-library/react";
 import type { AgentState } from "@shared/types/agent";
 import type { TabInfo } from "../TabButton";
 import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 
 vi.mock("@/components/Terminal/TerminalContextMenu", () => ({
   TerminalContextMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -70,7 +71,31 @@ vi.mock("@/components/ui/tooltip", () => ({
 
 import { ContentPanel } from "../ContentPanel";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  useFleetSnapshotStore.setState({ snapshot: null });
+});
+
+/** The fleet reads an unread Canopy ask on t-1, the one thing the waiting ring draws. */
+function seedUnreadAsk() {
+  useFleetSnapshotStore.setState({
+    snapshot: {
+      runs: [
+        {
+          runId: "t-1",
+          workspaceId: "p1",
+          spawnedAt: 0,
+          cwd: "/repo",
+          agentState: "waiting",
+          canopy: { kind: "asked", quote: "Ship it?", readAt: 0, seen: false },
+        },
+      ],
+      changedAt: 0,
+      degraded: false,
+      lastSuccessfulAt: null,
+    },
+  });
+}
 
 const agentChrome: TerminalChromeDescriptor = {
   ...chrome,
@@ -142,6 +167,7 @@ describe("ContentPanel agent glyph placement", () => {
     expect(box.contains(agentGlyphs()[0]!)).toBe(true);
     expect(screen.getByTestId("panel-header-controls").innerHTML).toBe(controls);
 
+    seedUnreadAsk();
     rerender(panel({ agentId: "claude", agentState: "waiting" }));
     expect(box.contains(agentGlyphs()[0]!)).toBe(true);
 

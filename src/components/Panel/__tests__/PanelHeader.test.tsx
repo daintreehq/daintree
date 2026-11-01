@@ -7,6 +7,9 @@ import type { PanelHeaderProps } from "../PanelHeader";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
 import { NoDndMouseSensor, NoDndTouchSensor } from "@/components/DragDrop/DndProvider";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import type { FleetRunRow } from "@shared/types/ipc/fleet";
+import type { PtyPanelData } from "@shared/types/panel";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getGenericPanelMenuGroups, type GenericPanelMenuInput } from "../genericPanelMenu";
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
@@ -1739,6 +1742,94 @@ describe("PanelHeader", () => {
       expect(activeItem?.className).toContain("font-medium");
       const inactiveItem = items.find((b) => b.textContent?.includes("Tab 2"));
       expect(inactiveItem?.getAttribute("aria-current")).toBeNull();
+    });
+
+    describe("hidden waiting count", () => {
+      const ask = { kind: "asked", quote: "Ship it?", readAt: 0, seen: false } as const;
+
+      function fleet(runs: Array<Partial<FleetRunRow> & { runId: string }>) {
+        useFleetSnapshotStore.setState({
+          snapshot: {
+            runs: runs.map((r) => ({ workspaceId: "p1", spawnedAt: 0, cwd: "/repo", ...r })),
+            changedAt: 0,
+            degraded: false,
+            lastSuccessfulAt: null,
+          },
+        });
+      }
+
+      function panels(states: Record<string, Partial<PtyPanelData>>) {
+        mockStoreState = {
+          ...mockStoreState,
+          panelsById: Object.fromEntries(
+            Object.entries(states).map(([id, p]) => [id, { id, kind: "terminal", ...p }])
+          ),
+          panelIds: Object.keys(states),
+        };
+      }
+
+      const trigger = () => screen.getByTestId("panel-tabs-overflow");
+
+      afterEach(() => useFleetSnapshotStore.setState({ snapshot: null }));
+
+      it("counts only hidden tabs the fleet places in needs-you", () => {
+        mockHiddenTabIds = new Set(["t2", "t3"]);
+        // t2 sits at its prompt with no reading; t3 is a Canopy-read ask.
+        panels({
+          t2: { agentState: "waiting", waitingReason: "prompt" },
+          t3: { agentState: "waiting", waitingReason: "question" },
+        });
+        fleet([
+          { runId: "t2", agentState: "waiting", waitingReason: "prompt" },
+          { runId: "t3", agentState: "waiting", waitingReason: "question", canopy: ask },
+        ]);
+        render(<PanelHeader {...makeProps({ tabs: threeTabs, onTabClick: vi.fn() })} />);
+        expect(trigger().getAttribute("aria-label")).toBe(
+          "Show 2 hidden tabs, 1 waiting for input"
+        );
+      });
+
+      it("counts nothing before the snapshot, for a seen ask, or for an unread wait", () => {
+        mockHiddenTabIds = new Set(["t2", "t3"]);
+        panels({
+          t2: { agentState: "waiting", waitingReason: "question" },
+          t3: { agentState: "waiting", waitingReason: "approval" },
+        });
+        const { rerender } = render(
+          <PanelHeader {...makeProps({ tabs: threeTabs, onTabClick: vi.fn() })} />
+        );
+        expect(trigger().getAttribute("aria-label")).toBe("Show 2 hidden tabs");
+
+        act(() =>
+          fleet([
+            {
+              runId: "t2",
+              agentState: "waiting",
+              waitingReason: "question",
+              canopy: { ...ask, seen: true },
+            },
+            {
+              runId: "t3",
+              agentState: "waiting",
+              waitingReason: "approval",
+              wait: { stoppedAt: 0 },
+            },
+          ])
+        );
+        rerender(<PanelHeader {...makeProps({ tabs: threeTabs, onTabClick: vi.fn() })} />);
+        expect(trigger().getAttribute("aria-label")).toBe("Show 2 hidden tabs");
+      });
+
+      it("drops a hidden ask once its agent is working again, and never counts a cut active tab", () => {
+        mockHiddenTabIds = new Set(["t1", "t2"]);
+        panels({ t1: { agentState: "waiting" }, t2: { agentState: "working" } });
+        fleet([
+          { runId: "t1", agentState: "waiting", canopy: ask },
+          { runId: "t2", agentState: "completed", canopy: ask },
+        ]);
+        render(<PanelHeader {...makeProps({ tabs: threeTabs, onTabClick: vi.fn() })} />);
+        expect(trigger().getAttribute("aria-label")).toBe("Show 2 hidden tabs");
+      });
     });
   });
 

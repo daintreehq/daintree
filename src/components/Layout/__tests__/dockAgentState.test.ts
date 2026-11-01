@@ -48,7 +48,9 @@ describe("dock display agent state", () => {
     ];
 
     expect(getGroupBlockedAgentState(panels)).toBe("waiting");
-    expect(getGroupAmbientAgentState(panels)).toBe("waiting");
+    // A grid group's waiting edge is the fleet band's needs-you alone (#16056),
+    // so an observed wait with no band behind it leaves only the work.
+    expect(getGroupAmbientAgentState(panels, new Set())).toBe("working");
   });
 
   it("does not deprioritize a group with working activity even before agentState catches up", () => {
