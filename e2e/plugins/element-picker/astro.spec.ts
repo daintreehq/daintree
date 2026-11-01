@@ -5,10 +5,12 @@ import { registerFixtureProject, registerPickerSession } from "../helpers/picker
 import { selectInPreview } from "../helpers/previewDriver";
 
 /**
- * The Element Picker on an Astro site with no UI framework. Astro's dev
- * toolbar stamps every element with the file and line that wrote it; reading
- * those stamps waits on #13888, which adds Astro's extractor to the core
- * catalog.
+ * The Element Picker on an Astro site with no UI framework. While its dev
+ * toolbar is on, Astro's compiler stamps each eligible element (not html, head
+ * or script, among others) with the file and line that wrote it, but the
+ * toolbar's Audit app moves those stamps off the elements as soon as it
+ * initialises, so the picker finds none to read (#15913). Picking still works;
+ * tracing waits on that fix.
  */
 const projectDir = registerFixtureProject(() => createSiteProject(ASTRO));
 
@@ -25,7 +27,7 @@ test.describe.serial("Element Picker on an Astro dev server", () => {
     await selectInPreview(session(), "h1", "h1");
   });
 
-  test.fixme("a heading traces to the line of the page that wrote it (#13888)", async () => {
+  test.fixme("a heading traces to the line of the page that wrote it (#15913)", async () => {
     await selectInPreview(session(), "h1", ASTRO_HEADING);
   });
 });
