@@ -50,4 +50,30 @@ export function registerScheduleActions(actions: ActionRegistry): void {
       },
     })
   );
+
+  // An agent running unattended is configured only in Daintree's own UI, so
+  // Run now is on no MCP tier and closed to plugins: a plugin may give an
+  // agent a task, never launch one with a schedule's preset (#15978).
+  actions.set("schedules.runNow", () =>
+    defineAction({
+      id: "schedules.runNow",
+      title: "Run schedule now",
+      description:
+        "Launch a schedule's agent now, with its preset and prompt in its worktree, as a run recorded in the schedule's history. Runs whether or not the schedule is enabled.",
+      category: "project",
+      kind: "command",
+      danger: "safe",
+      denyPluginDispatch: true,
+      mcpVisibility: "hidden",
+      scope: "renderer",
+      keywords: ["schedule", "scheduled", "run", "now", "agent"],
+      // It names one schedule; the Schedules view is where one is picked.
+      palette: { mode: "hidden" },
+      argsSchema: z.object({
+        scheduleId: z.string().min(1).max(200).describe("The schedule to run, from this project."),
+      }),
+      run: async ({ scheduleId }: { scheduleId: string }) =>
+        window.electron.schedules.runNow(scheduleId),
+    })
+  );
 }

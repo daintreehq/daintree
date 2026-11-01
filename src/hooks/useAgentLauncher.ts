@@ -257,7 +257,12 @@ export interface LaunchAgentOptions {
 
 /** Why `launchAgent` resolved to `null` without throwing. */
 export type LaunchDeclineReason =
-  "panel-limit" | "already-launching" | "spawn-failed" | "unavailable" | "presets-loading";
+  | "panel-limit"
+  | "already-launching"
+  | "spawn-failed"
+  | "unavailable"
+  | "presets-loading"
+  | "missing-cli";
 
 export interface LaunchDecline {
   reason: LaunchDeclineReason;
@@ -652,6 +657,12 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           const launchCliDetail =
             cachedLaunchCliDetail ?? (await getCurrentLaunchCliDetail(agentId));
           if (launchCliDetail && !isAgentLaunchable(launchCliDetail.state)) {
+            // A scheduled run fails with the reason, as it does with no window,
+            // rather than leaving a setup pane in a grid nobody may be watching.
+            if (launchOptions?.scheduledRun) {
+              logWarn(`Declined a scheduled launch of ${agentId}: its CLI can't launch`);
+              return decline("missing-cli");
+            }
             const gateId = `terminal-${crypto.randomUUID()}`;
             const gatePanel: PtyPanelData = {
               id: gateId,

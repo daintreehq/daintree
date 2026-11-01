@@ -3817,6 +3817,10 @@ export interface GeneratedIpcInvokeMap {
     args: [scheduleId: string];
     result: import("./schedules.js").ScheduleRemoveOutcome;
   };
+  "schedules:run-now": {
+    args: [scheduleId: string];
+    result: import("./schedules.js").ScheduleRunNowOutcome;
+  };
   "schedules:set-enabled": {
     args: [scheduleId: string, enabled: boolean];
     result: import("./schedules.js").ScheduleSetEnabledOutcome;

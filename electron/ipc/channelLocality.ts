@@ -999,8 +999,11 @@ export const CHANNEL_LOCALITY = {
   // here, and no link can reach a host's schedules.
   "schedules:changed": "shell",
   "schedules:create": "shell",
+  "schedules:launch-request": "shell",
+  "schedules:launch-response": "shell",
   "schedules:list": "shell",
   "schedules:remove": "shell",
+  "schedules:run-now": "shell",
   "schedules:set-enabled": "shell",
   "schedules:update": "shell",
   "scratch:create": "host",

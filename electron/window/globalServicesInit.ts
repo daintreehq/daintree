@@ -86,6 +86,8 @@ import {
   getRunHandBackService,
 } from "../ipc/handlers/projectCrud/index.js";
 import { findCoordinationHold } from "../services/coordinationHolds.js";
+import { peekScheduledRunRecorder } from "../services/scheduledRuns/index.js";
+import { hasPendingScheduledLaunch } from "../services/scheduledRuns/scheduledRunAdmission.js";
 import { registerDeferredTask } from "./deferredInitQueue.js";
 import {
   collectActiveProjectIds,
@@ -1159,6 +1161,8 @@ export async function initGlobalServices(
         const handBacks = getRunHandBackService();
         const attention = getRunAttentionService();
         return findCoordinationHold(projectId, {
+          hasUnsettledScheduledRun: (id) =>
+            hasPendingScheduledLaunch(id) || (peekScheduledRunRecorder()?.hasOpenRun(id) ?? false),
           projectOfTerminal: (id) =>
             ptyClient?.getTerminalProjectId(id) ?? fleetProjects.get(id) ?? ownerOf(id),
           waitingRunProjectIds: () =>

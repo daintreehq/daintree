@@ -241,6 +241,7 @@ import { windowsSystemTool } from "../../../utils/windowsExecutable.js";
 import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../../../shared/utils/recipeSanitizer.js";
 import { buildCommandLaunchShell } from "./commandLaunch.js";
 import { scheduledRunForRecord } from "../../../../shared/utils/scheduledRunProvenance.js";
+import { admitScheduledSpawn } from "../../../services/scheduledRuns/scheduledRunAdmission.js";
 import { isHostThrowawayWorkspaceId } from "../../../../shared/config/hostThrowaway.js";
 
 // Longest a Windows command launch waits for the default shell's PATH search,
@@ -1252,6 +1253,21 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       const postSpawnInput =
         safeCommand.length > 0 && !commandLaunchShell ? `${safeCommand}\r` : undefined;
 
+      // A scheduled run's first spawn registers the run in its history from
+      // these very values, or refuses (#15978). Last before the spawn, with
+      // no await between, so nothing can start a run that wasn't recorded.
+      admitScheduledSpawn({
+        terminalId: id,
+        projectId,
+        scheduledRun: validatedOptions.scheduledRun,
+        launchAgentId,
+        cwd,
+        worktreeId: spawnWorktreeId,
+        agentLaunchFlags: validatedOptions.agentLaunchFlags,
+        agentModelId: validatedOptions.agentModelId,
+        agentPresetId: validatedOptions.agentPresetId,
+        agentSessionId: spawnAgentSessionId,
+      });
       if (pluginToolsLaunchProjectId !== null) {
         recordPluginToolsLaunch(id, pluginToolsLaunchProjectId);
       }

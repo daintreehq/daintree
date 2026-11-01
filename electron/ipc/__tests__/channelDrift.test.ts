@@ -107,6 +107,10 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   // `host.reloadPanel()` request (#12610). Paired with the
   // `plugin:panel-reload-request` event declared in IpcEventMap.
   "plugin:panel-reload-response",
+  // fire-and-forget — renderer→main `ipcRenderer.send` reply carrying the
+  // result of a scheduled run's launch (#15978). Paired with the
+  // `schedules:launch-request` event declared in IpcEventMap.
+  "schedules:launch-response",
   // fire-and-forget — renderer→main `ipcRenderer.send` batches of plugin view
   // cost observations, and the subscribe/unsubscribe edges of the perf snapshot
   // feed (paired with `plugin:perf-snapshots-changed` in IpcEventMap).

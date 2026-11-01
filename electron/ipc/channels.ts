@@ -1491,6 +1491,10 @@ export const CHANNELS = {
   SCHEDULES_SET_ENABLED: "schedules:set-enabled",
   SCHEDULES_REMOVE: "schedules:remove",
   SCHEDULES_CHANGED: "schedules:changed",
+  SCHEDULES_RUN_NOW: "schedules:run-now",
+  // Main asks the view showing a project to launch a scheduled run (#15978)
+  SCHEDULES_LAUNCH_REQUEST: "schedules:launch-request",
+  SCHEDULES_LAUNCH_RESPONSE: "schedules:launch-response",
 
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",

@@ -333,6 +333,7 @@ export const BUILT_IN_ACTION_IDS = [
 
   // -- scheduleActions --
   "schedules.open",
+  "schedules.runNow",
 
   // -- hostActions (registered only where Remote Hosts is supported) --
   "host.switch",

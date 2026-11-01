@@ -18,6 +18,7 @@ import type {
   ScheduleCreateInput,
   ScheduleCreateOutcome,
   ScheduleRemoveOutcome,
+  ScheduleRunNowOutcome,
   ScheduleSetEnabledOutcome,
   ScheduleUpdateOutcome,
   ScheduleUpdatePatch,
@@ -162,6 +163,23 @@ async function handleSetEnabled(
   );
 }
 
+/**
+ * Launches the schedule's agent now, as a tracked run (#15978), enabled or
+ * not: asking is the opt-in. In the asking view when it shows the project.
+ */
+async function handleRunNow(ctx: IpcContext, scheduleId: string): Promise<ScheduleRunNowOutcome> {
+  const projectId = requireSenderProjectId(ctx);
+  const { launchScheduledRunLive, RUN_NOW_ORIGIN } = await import(
+    "../../services/scheduledRuns/scheduledRunLaunchLive.js"
+  );
+  return launchScheduledRunLive({
+    projectId,
+    scheduleId: parsed(ScheduleIdShape, scheduleId, "scheduleId must name a schedule"),
+    origin: RUN_NOW_ORIGIN,
+    preferredWebContentsId: ctx.webContentsId,
+  });
+}
+
 async function handleRemove(ctx: IpcContext, scheduleId: string): Promise<ScheduleRemoveOutcome> {
   const projectId = requireSenderProjectId(ctx);
   return projectStore.schedules.remove(
@@ -198,6 +216,7 @@ export const schedulesNamespace = defineIpcNamespace({
     update: op(SCHEDULES_METHOD_CHANNELS.update, handleUpdate, { withContext: true }),
     setEnabled: op(SCHEDULES_METHOD_CHANNELS.setEnabled, handleSetEnabled, { withContext: true }),
     remove: op(SCHEDULES_METHOD_CHANNELS.remove, handleRemove, { withContext: true }),
+    runNow: op(SCHEDULES_METHOD_CHANNELS.runNow, handleRunNow, { withContext: true }),
   },
 });
 

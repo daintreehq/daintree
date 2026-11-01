@@ -97,6 +97,16 @@ export type SleepProjectOutcome =
 const inFlight = new Map<string, Promise<SleepProjectOutcome>>();
 
 /**
+ * Whether a sleep of the project is running. A scheduled run's launch refuses
+ * then (#15978): the teardown may already be past the checks that would have
+ * waited for it, and would take the new terminal or leave the row `closed`
+ * behind it.
+ */
+export function isProjectSleepInFlight(projectId: string): boolean {
+  return inFlight.has(projectId);
+}
+
+/**
  * Put ONE project to sleep the way quitting puts them all to sleep: a
  * graceful, session-preserving kill of its terminals, each captured
  * `agentSessionId` written back into the saved panel snapshots, a resume

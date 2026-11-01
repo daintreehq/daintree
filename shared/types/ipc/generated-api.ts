@@ -1653,6 +1653,9 @@ export interface GeneratedElectronAPI {
     remove(
       ...args: IpcInvokeMap["schedules:remove"]["args"]
     ): Promise<IpcInvokeMap["schedules:remove"]["result"]>;
+    runNow(
+      ...args: IpcInvokeMap["schedules:run-now"]["args"]
+    ): Promise<IpcInvokeMap["schedules:run-now"]["result"]>;
     setEnabled(
       ...args: IpcInvokeMap["schedules:set-enabled"]["args"]
     ): Promise<IpcInvokeMap["schedules:set-enabled"]["result"]>;
