@@ -467,6 +467,11 @@ export function GeneralTab({
               )}
             />
 
+            <ProjectGroupSettingsRow
+              projectId={currentProject.id}
+              groupId={currentProject.groupId}
+            />
+
             <SettingsRow
               label="Color"
               description="Tints the project's gradient in the sidebar and dashboard"
@@ -621,11 +626,6 @@ export function GeneralTab({
                   )}
                 </>
               )}
-            />
-
-            <ProjectGroupSettingsRow
-              projectId={currentProject.id}
-              groupId={currentProject.groupId}
             />
 
             <SettingsRow

@@ -213,7 +213,7 @@ describe("GeneralTab — DOM anchors for settings deep-links", () => {
     lastOpened: 0,
   } as const;
 
-  it("exposes the project-name anchor for settings deep-links", () => {
+  it("exposes the project-name and project-group anchors for settings deep-links", () => {
     const { container } = render(
       <GeneralTab
         currentProject={baseProject}
@@ -242,6 +242,7 @@ describe("GeneralTab — DOM anchors for settings deep-links", () => {
       />
     );
     expect(container.querySelector("#project-name")).not.toBeNull();
+    expect(container.querySelector("#project-group")).not.toBeNull();
   });
 
   it("exposes the project-dev-server anchor for settings deep-links", () => {

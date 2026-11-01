@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect } from "react";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -8,7 +8,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { SETTINGS_CONTROL_WIDTH, SettingsRow } from "@/components/Settings/SettingsGroup";
+import {
+  SETTINGS_CONTROL_WIDTH,
+  SettingsRow,
+  SettingsRowActions,
+} from "@/components/Settings/SettingsGroup";
 import { useProjectGroupsStore } from "@/store/projectGroupsStore";
 
 /**
@@ -19,15 +23,15 @@ const NO_GROUP = "no-group";
 
 /**
  * Project settings → General's "Group" row (#16036): which switcher group the
- * project is filed under, applied the moment it is picked.
+ * project is filed under, applied the moment it is picked. What it shows comes
+ * from the project itself, which the host pushes back after every move.
  *
  * Always rendered, unlike the creation dialogs' field: someone looking for
- * groups in settings has to find the row before any group exists, and the
- * "New group…" button makes the first one from this project, the same step the
- * switcher's "Move to group" menu offers. A button rather than an entry in the
- * picker, because a picked entry closes the picker and hands focus back to its
- * trigger only after the new dialog has opened, leaving that dialog nothing to
- * return focus to.
+ * groups in settings has to find the row before any group exists, and
+ * "New group…" makes the first one from this project, as the switcher's
+ * "Move to group" menu does. It is a button rather than an entry in the picker
+ * because the picker hands focus back to its trigger only after closing, by
+ * which time the new dialog has opened with nothing to return focus to.
  */
 export function ProjectGroupSettingsRow({
   projectId,
@@ -44,42 +48,29 @@ export function ProjectGroupSettingsRow({
     useProjectGroupsStore.getState().init();
   }, []);
 
-  // The pick shows until its move settles: the project's new group arrives on
-  // the host's push, and without this the picker would flick back to the old
-  // one for the length of the round trip.
-  const [pending, setPending] = useState<{ groupId: string | null } | null>(null);
-  const latestPick = useRef(0);
-
-  const saved = groupId !== undefined && groups.some((g) => g.id === groupId) ? groupId : null;
-  const shown = pending ? pending.groupId : saved;
-
-  const choose = (next: string | null) => {
-    if (next === shown) return;
-    const pick = ++latestPick.current;
-    setPending({ groupId: next });
-    void setProjectGroup(projectId, next).finally(() => {
-      if (latestPick.current === pick) setPending(null);
-    });
-  };
+  const current = groupId !== undefined && groups.some((g) => g.id === groupId) ? groupId : null;
 
   return (
     <SettingsRow
       id="project-group"
       label="Group"
-      description="Where the project switcher lists this project"
+      description="Files this project under a heading in the project switcher"
+      layout="stacked"
       control={({ labelId, descriptionId, disabled }) => (
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        <SettingsRowActions>
           {groups.length > 0 && (
             <Select
-              value={shown ?? NO_GROUP}
-              onValueChange={(next) => choose(next === NO_GROUP ? null : next)}
+              value={current ?? NO_GROUP}
+              onValueChange={(value) => {
+                const next = value === NO_GROUP ? null : value;
+                if (next !== current) void setProjectGroup(projectId, next);
+              }}
               disabled={disabled}
             >
               <SelectTrigger
                 aria-labelledby={labelId}
                 aria-describedby={descriptionId}
                 className={SETTINGS_CONTROL_WIDTH.select}
-                data-testid="project-settings-group"
               >
                 <SelectValue />
               </SelectTrigger>
@@ -102,7 +93,7 @@ export function ProjectGroupSettingsRow({
             <Plus />
             New group…
           </Button>
-        </div>
+        </SettingsRowActions>
       )}
     />
   );

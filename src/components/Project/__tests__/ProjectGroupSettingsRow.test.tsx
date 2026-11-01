@@ -122,34 +122,30 @@ describe("ProjectGroupSettingsRow", () => {
     expect(groupSelect()?.value).toBe("no-group");
   });
 
-  it("holds the pick while the move is in flight, then follows the saved group", async () => {
-    let settle!: () => void;
-    setProjectGroup.mockReturnValue(new Promise<void>((resolve) => (settle = resolve)));
+  it("follows the project when the host files it elsewhere", () => {
     const { setGroupId } = renderRow("g1");
-
     fireEvent.change(groupSelect()!, { target: { value: "g2" } });
-    expect(groupSelect()?.value).toBe("g2");
-
-    // A move that failed leaves the project where it was, and the row says so.
-    await act(async () => settle());
+    // The pick is only a request: until the project comes back moved, the row
+    // still says where it is.
     expect(groupSelect()?.value).toBe("g1");
 
     setGroupId("g2");
     expect(groupSelect()?.value).toBe("g2");
   });
 
-  it("keeps the latest of two quick picks shown when the first settles", async () => {
-    const settles: Array<() => void> = [];
-    setProjectGroup.mockImplementation(
-      () => new Promise<void>((resolve) => settles.push(() => resolve()))
-    );
-    renderRow(undefined);
+  it("follows groups renamed or deleted elsewhere", () => {
+    renderRow("g2");
+    act(() => {
+      useProjectGroupsStore.setState({
+        groups: [makeProjectGroup("g1", "Daintree"), makeProjectGroup("g2", "Client work", 1)],
+      });
+    });
+    expect(groupSelect()?.selectedOptions[0]?.text).toBe("Client work");
 
-    fireEvent.change(groupSelect()!, { target: { value: "g1" } });
-    fireEvent.change(groupSelect()!, { target: { value: "g2" } });
-    await act(async () => settles[0]!());
-
-    expect(groupSelect()?.value).toBe("g2");
+    act(() => {
+      useProjectGroupsStore.setState({ groups: [makeProjectGroup("g1", "Daintree")] });
+    });
+    expect(groupSelect()?.value).toBe("no-group");
   });
 
   it("sends nothing when the project's own group is picked again", () => {

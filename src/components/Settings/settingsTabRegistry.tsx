@@ -2367,7 +2367,7 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
         id: "project-group",
         section: "Project identity",
         title: "Group",
-        description: "Where the project switcher lists this project",
+        description: "Files this project under a heading in the project switcher",
         keywords: ["group", "folder", "organize", "category", "move", "switcher"],
       },
       {
