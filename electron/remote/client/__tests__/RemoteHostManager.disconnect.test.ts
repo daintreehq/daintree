@@ -72,17 +72,23 @@ function setup() {
   return { manager, hostId: host.id, dial, published, redialled };
 }
 
-/** Hold `stop()` past the link closing, as the GOODBYE wait and forward release do. */
-function holdStop(connection: HostConnection): () => void {
+/**
+ * Hold `stop()` past the link closing, as the GOODBYE wait and forward release
+ * do. `closed` settles once the connection itself has stopped and the hold begins.
+ */
+function holdStop(connection: HostConnection): { closed: Promise<void>; finish: () => void } {
   let finish!: () => void;
+  let reached!: () => void;
   const held = new Promise<void>((resolve) => (finish = resolve));
+  const closed = new Promise<void>((resolve) => (reached = resolve));
   const stop = connection.stop.bind(connection);
   vi.spyOn(connection, "stop").mockImplementation(async () => {
     await stop();
+    reached();
     await held;
   });
   pending.push(finish);
-  return finish;
+  return { closed, finish };
 }
 
 function disconnectedCount(states: HostConnectionState[]): number {
@@ -94,13 +100,13 @@ describe("RemoteHostManager disconnect", () => {
     const h = setup();
     const connection = h.manager.connect(h.hostId);
     await expect(connection.whenReady(1_000)).resolves.toBe("host-mode-off");
-    const finishStop = holdStop(connection);
+    const stopping = holdStop(connection);
 
     const disconnected = h.manager.disconnect(h.hostId);
-    await Promise.resolve();
+    await stopping.closed;
     expect(disconnectedCount(h.published)).toBe(0);
 
-    finishStop();
+    stopping.finish();
     await disconnected;
     expect(h.published.at(-1)).toEqual({ status: "disconnected" });
     expect(disconnectedCount(h.published)).toBe(1);
@@ -111,7 +117,7 @@ describe("RemoteHostManager disconnect", () => {
     const h = setup();
     const first = h.manager.connect(h.hostId);
     await expect(first.whenReady(1_000)).resolves.toBe("host-mode-off");
-    const finishStop = holdStop(first);
+    const { finish: finishStop } = holdStop(first);
 
     const disconnected = h.manager.disconnect(h.hostId);
     const second = h.manager.connect(h.hostId);
@@ -135,7 +141,7 @@ describe("RemoteHostManager disconnect", () => {
     const h = setup();
     const first = h.manager.connect(h.hostId);
     await expect(first.whenReady(1_000)).resolves.toBe("host-mode-off");
-    const finishStop = holdStop(first);
+    const { finish: finishStop } = holdStop(first);
 
     const disconnected = h.manager.disconnect(h.hostId);
     h.dial.hang = true;
