@@ -924,6 +924,10 @@ function expectedFiles(): string[] {
 }
 
 test("capture the terminal canvas across states and themes", async () => {
+  test.info().annotations.push({
+    type: "conditional-skip",
+    description: "DAINTREE_SHOT_TERMINAL_CANVAS is required for the terminal canvas capture",
+  });
   test.skip(!ENABLED, "design capture harness — set DAINTREE_SHOT_TERMINAL_CANVAS=1");
   if (!OUTPUT_DIR)
     throw new Error("DESIGN_CAPTURE_DIR must be set to a directory outside the repo");

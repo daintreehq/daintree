@@ -76,15 +76,16 @@ describe("InlineStatusBanner", () => {
     void _rejectsActionsOnError;
   });
 
+  // Only a failure interrupts; milder severities announce politely.
   it.each([
-    ["error", XCircle, "--color-status-error"],
-    ["warning", AlertTriangle, "--color-status-warning"],
-    ["info", Info, "--color-status-info"],
-  ] as const)("renders %s severity using its status token", (severity, icon, token) => {
+    ["error", XCircle, "--color-status-error", "alert"],
+    ["warning", AlertTriangle, "--color-status-warning", "status"],
+    ["info", Info, "--color-status-info", "status"],
+  ] as const)("renders %s severity using its status token", (severity, icon, token, role) => {
     render(
       <InlineStatusBanner icon={icon} title={severity} severity={severity} animated={false} />
     );
-    const region = screen.getByRole("alert");
+    const region = screen.getByRole(role);
     expect(region.style.backgroundColor).toContain(token);
     expect(region.style.borderBottom).toContain(token);
   });
@@ -103,7 +104,7 @@ describe("InlineStatusBanner", () => {
         autoDismissAfter={2000}
       />
     );
-    const region = screen.getByRole("alert");
+    const region = screen.getByRole("status");
     expect(region.style.backgroundColor).toContain("--color-status-success");
     expect(region.style.borderBottom).toContain("--color-status-success");
   });
@@ -198,7 +199,7 @@ describe("InlineStatusBanner", () => {
         actions={[]}
       />
     );
-    const region = screen.getByRole("alert");
+    const region = screen.getByRole("status");
     expect(region.getAttribute("aria-live")).toBe("off");
     expect(region.hasAttribute("aria-atomic")).toBe(false);
   });
@@ -1363,7 +1364,7 @@ describe("InlineStatusBanner as the window title-bar surface", () => {
   }
 
   function root(): HTMLElement {
-    return screen.getByRole("alert");
+    return screen.getByRole("status");
   }
 
   function withNavigator(platform: string, userAgent: string, body: () => void) {
@@ -1495,7 +1496,7 @@ describe("InlineStatusBanner as the window title-bar surface", () => {
       </WindowControlsInsetProvider>
     );
     expect(onSeverityChange).not.toHaveBeenCalled();
-    expect(screen.getByRole("alert").className).not.toContain("app-drag-region");
+    expect(screen.getByRole("status").className).not.toContain("app-drag-region");
   });
 });
 
