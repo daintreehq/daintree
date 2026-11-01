@@ -7,7 +7,7 @@ import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
 import type { TransferBeginMessage, TransferReason } from "../link/messages.js";
 import type { LinkSession } from "../link/session.js";
-import type { TransferSink } from "../link/transfer.js";
+import { DEFAULT_COMMIT_TIMEOUT_MS, type TransferSink } from "../link/transfer.js";
 import { acceptClientBundleTransfer } from "../projects/bundleSinks.js";
 import { copyInto, NEW_FILE_FLAGS } from "./exclusiveCopy.js";
 import {
@@ -37,6 +37,8 @@ export interface ClientFileTransportOptions {
   /** Pulls to keep in flight on one preview body, when the host allows that many. */
   pullDepth?: number;
   downloadTimeoutMs?: number;
+  /** How long a download whose link closed while it was being saved here has to finish saving. */
+  commitTimeoutMs?: number;
 }
 
 export interface HostFileBody {
@@ -534,6 +536,7 @@ export class ClientFileTransport {
   private readonly gates = new Map<HostId, Gate>();
   /** Bodies read with several pulls in flight, by stream, so the host can close them. */
   private readonly bodies = new Map<string, { session: LinkSession; body: PreviewBody }>();
+  private readonly openedListeners = new Set<() => void>();
 
   constructor(private readonly options: ClientFileTransportOptions = {}) {}
 
@@ -550,6 +553,7 @@ export class ClientFileTransport {
     link.session = info.session;
     link.endpoints.set(info.endpointId, info.webContentsId);
     this.acceptTransfers(info.session);
+    for (const listener of [...this.openedListeners]) listener();
   }
 
   noteEndpointClosed(hostId: HostId, info: { endpointId: string }): void {
@@ -557,6 +561,42 @@ export class ClientFileTransport {
     if (!link) return;
     link.endpoints.delete(info.endpointId);
     if (link.endpoints.size === 0) this.hosts.delete(hostId);
+  }
+
+  /** Whether the view has an endpoint on an open link to the host right now. */
+  isReachable(hostId: HostId, webContentsId: number): boolean {
+    const session = this.hosts.get(hostId)?.session;
+    return !!session?.isOpen && this.endpointFor(hostId, webContentsId) !== null;
+  }
+
+  /**
+   * Resolves true once the view is reachable on the host again (a link that
+   * dropped has come back), false after `timeoutMs` or on abort.
+   */
+  whenReachable(
+    hostId: HostId,
+    webContentsId: number,
+    timeoutMs: number,
+    signal?: AbortSignal
+  ): Promise<boolean> {
+    if (this.isReachable(hostId, webContentsId)) return Promise.resolve(true);
+    if (signal?.aborted) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      const finish = (reachable: boolean) => {
+        clearTimeout(timer);
+        this.openedListeners.delete(check);
+        signal?.removeEventListener("abort", onAbort);
+        resolve(reachable);
+      };
+      const check = () => {
+        if (this.isReachable(hostId, webContentsId)) finish(true);
+      };
+      const onAbort = () => finish(false);
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      timer.unref?.();
+      this.openedListeners.add(check);
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
   }
 
   /**
@@ -824,19 +864,19 @@ export class ClientFileTransport {
           }
         },
         async commit() {
-          let saved: BigIntStats;
           try {
-            await handle.sync();
-            saved = await handle.stat({ bigint: true });
-          } finally {
-            await close();
-          }
-          // Tagged before the last look at cancellation, so a cancel while
-          // xattr runs is still honoured.
-          await markDownloaded(partPath);
-          // Cancelled after the last byte: never place it.
-          if (signal?.aborted) throw new Error("cancelled");
-          try {
+            let saved: BigIntStats;
+            try {
+              await handle.sync();
+              saved = await handle.stat({ bigint: true });
+            } finally {
+              await close();
+            }
+            // Tagged before the last look at cancellation, so a cancel while
+            // xattr runs is still honoured.
+            await markDownloaded(partPath);
+            // Cancelled after the last byte: never place it.
+            if (signal?.aborted) throw new Error("cancelled");
             // The checksum covers what arrived, not what landed on disk.
             if (saved.size !== BigInt(written) || written !== begin.size) {
               throw new AppError({
@@ -862,6 +902,8 @@ export class ClientFileTransport {
             settle.resolve({ localPath: placed.path, bytes: written });
           } catch (error) {
             await fs.rm(partPath, { force: true }).catch(() => {});
+            // Settled here so a save that fails after the link dropped is
+            // reported as itself, never as the drop that would retry it.
             settle.reject(error instanceof Error ? error : new Error(String(error)));
             throw error;
           }
@@ -872,14 +914,24 @@ export class ClientFileTransport {
           aborted = true;
           await close();
           await fs.rm(partPath, { force: true }).catch(() => {});
-          settle.reject(signal?.aborted ? transferFailure("cancelled") : transferFailure(reason));
+          settle.reject(
+            signal?.aborted
+              ? transferFailure("cancelled")
+              : session.isOpen
+                ? transferFailure(reason)
+                : disconnected(hostId)
+          );
         },
       };
     };
+    let begun = false;
+    let activeSink: TransferSink | null = null;
     this.sinks.set(destination, async (begin) => {
+      begun = true;
       if (beginTimer) clearTimeout(beginTimer);
       try {
-        return await createSink(begin);
+        activeSink = await createSink(begin);
+        return activeSink;
       } catch (error) {
         // The transfer layer only tells the host; the caller must hear it too.
         settle.reject(
@@ -891,18 +943,39 @@ export class ClientFileTransport {
       }
     });
 
-    const offClose = session.onClose(() => settle.reject(disconnected(hostId)));
+    // Once the host has begun sending, the sink's own commit or abort decides
+    // (the transfer layer ends every sink when its link closes), so a file
+    // already being placed here is never reported as lost and fetched again.
+    const offClose = session.onClose(() => {
+      if (!begun) {
+        settle.reject(disconnected(hostId));
+        return;
+      }
+      // With the link gone, the transfer layer no longer bounds the commit.
+      const timer = setTimeout(() => {
+        settle.reject(transferFailure("timeout"));
+        void Promise.resolve(activeSink?.abort("timeout")).catch(() => {});
+      }, this.options.commitTimeoutMs ?? DEFAULT_COMMIT_TIMEOUT_MS);
+      timer.unref?.();
+      void done.finally(() => clearTimeout(timer)).catch(() => {});
+    });
     const onAbort = () => settle.reject(transferFailure("cancelled"));
     signal?.addEventListener("abort", onAbort, { once: true });
     try {
       const timeoutMs = this.options.downloadTimeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
-      FileDownloadStartSchema.parse(
-        await session.call(
+      let started: unknown;
+      try {
+        started = await session.call(
           FileLinkMethod.DOWNLOAD,
           { endpointId, hostPath, token },
           { timeoutMs, signal }
-        )
-      );
+        );
+      } catch (error) {
+        // The link closed under the call: its answer is lost, and the close decides.
+        if (!session.isOpen && !signal?.aborted) return await done;
+        throw error;
+      }
+      FileDownloadStartSchema.parse(started);
       // The host has started sending; a transfer that never begins must not hang the download.
       if (this.sinks.has(destination)) {
         beginTimer = setTimeout(
