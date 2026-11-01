@@ -115,8 +115,8 @@ describe("occurrenceKeyFor", () => {
 
 describe("outcomeForEvidence", () => {
   const cases: [ScheduledRunEvidence, string][] = [
-    [{ kind: "handback", report: "done" }, "done"],
-    [{ kind: "handback", report: "needs-you" }, "needs-you"],
+    [{ kind: "handback", report: "done", summary: null, truncated: false }, "done"],
+    [{ kind: "handback", report: "needs-you", summary: null, truncated: false }, "needs-you"],
     [{ kind: "exit", process: "agent", exitCode: 0, signal: null }, "done"],
     [{ kind: "exit", process: "pty", exitCode: 2, signal: null }, "failed"],
     [{ kind: "exit", process: "pty", exitCode: 0, signal: 15 }, "failed"],

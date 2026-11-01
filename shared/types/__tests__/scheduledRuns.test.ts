@@ -101,7 +101,7 @@ describe("ScheduledRunSchema", () => {
         state: "settled",
         settledAt: NOW + 60_000,
         outcome: "done",
-        evidence: { kind: "handback", report: "done" },
+        evidence: { kind: "handback", report: "done", summary: "Tidied the parser", truncated: false },
       },
       process: {
         agent: { state: "running", startedAt: NOW + 1_000 },

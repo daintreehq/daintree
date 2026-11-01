@@ -54,6 +54,7 @@ function spawnFor(request: ScheduledLaunchRequest, overrides: Record<string, unk
     agentModelId: "opus",
     agentPresetId: request.args.presetId ?? undefined,
     agentSessionId: SESSION_ID,
+    handbackCode: "k7f3qa",
     ...overrides,
   });
 }
@@ -157,6 +158,7 @@ describe("launchScheduledRun", () => {
         agentModelId: "opus",
         agentPresetId: null,
       },
+      handbackCode: "k7f3qa",
     });
     expect(deps.markProjectRunning).toHaveBeenCalledWith("project-1");
     expect(recorder.registerRefusedLaunch).not.toHaveBeenCalled();

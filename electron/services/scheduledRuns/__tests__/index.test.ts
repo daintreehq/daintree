@@ -208,6 +208,28 @@ describe("scheduled-run history wiring", () => {
     expect(run?.resume?.agentSessionId).toBe("codex-session");
   });
 
+  it("settles a run on its agent's launch marker (#15982)", async () => {
+    const recorder = (await getScheduledRunRecorder())!;
+    recorder.registerLaunch({ ...launch, handbackCode: "k7f3qa" });
+    source.emit("spawn-result", "terminal-1", { success: true, id: "terminal-1", spawnedAt: 50 });
+
+    events.emit("agent:run-handback-observed", {
+      terminalId: "terminal-1",
+      spawnedAt: 50,
+      code: "k7f3qa",
+      report: "needs-you",
+      message: "a label needs a call",
+      truncated: false,
+      observedAt: 60,
+      timestamp: 60,
+    });
+
+    expect(recorder.get("run-1")?.settlement).toMatchObject({
+      outcome: "needs-you",
+      evidence: { kind: "handback", report: "needs-you", summary: "a label needs a call" },
+    });
+  });
+
   it("settles a run lost when its pty-host dies with its incarnation", async () => {
     const recorder = (await getScheduledRunRecorder())!;
     recorder.registerLaunch(launch);
@@ -224,7 +246,7 @@ describe("scheduled-run history wiring", () => {
 
   it("stops following facts once stopped", async () => {
     const recorder = (await getScheduledRunRecorder())!;
-    recorder.registerLaunch(launch);
+    recorder.registerLaunch({ ...launch, handbackCode: "k7f3qa" });
     source.emit("spawn-result", "terminal-1", { success: true, id: "terminal-1", spawnedAt: 50 });
     stop();
     stop = () => {};
@@ -246,6 +268,16 @@ describe("scheduled-run history wiring", () => {
         projectId: "project-1",
         terminal: { id: "terminal-1", spawnedAt: 50 },
       },
+    });
+    events.emit("agent:run-handback-observed", {
+      terminalId: "terminal-1",
+      spawnedAt: 50,
+      code: "k7f3qa",
+      report: "done",
+      message: null,
+      truncated: false,
+      observedAt: 60,
+      timestamp: 60,
     });
     expect(source.listenerCount("spawn-result")).toBe(0);
     expect(source.listenerCount("incarnation-exit")).toBe(0);
