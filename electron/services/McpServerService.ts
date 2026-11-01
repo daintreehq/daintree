@@ -237,6 +237,8 @@ export class McpServerService {
   private readonly viewLeases = new WorkspaceViewLeaseRegistry();
   /** Live holds' wake scopes, ended at shutdown along with everything else. */
   private readonly heldWakeScopes = new Set<() => void>();
+  /** Bumped by each shutdown, so a hold still opening across one is refused. */
+  private shutdowns = 0;
   private readonly statusListeners = new Set<(running: boolean) => void>();
   private readonly runtimeStateListeners = new Set<(snapshot: McpRuntimeSnapshot) => void>();
 
@@ -1160,7 +1162,12 @@ export class McpServerService {
    * no notice is armed or typed: only this route and these wakes go on.
    */
   async holdListener(id: string, route: ListenerRoute): Promise<McpListenerHold> {
+    const shutdowns = this.shutdowns;
     const listener = await this.httpLifecycle.holdListener(id, route);
+    if (this.shutdowns !== shutdowns) {
+      await listener.release();
+      throw new Error(`The listener hold "${id}" ended while it was being opened`);
+    }
     const wakes = this.terminalNotify.openWakeScope();
     const endWakes = () => wakes.release();
     this.heldWakeScopes.add(endWakes);
@@ -1179,6 +1186,7 @@ export class McpServerService {
 
   /** The app is quitting: every hold ends with the server. */
   async stop(): Promise<void> {
+    this.shutdowns++;
     for (const endWakes of [...this.heldWakeScopes]) endWakes();
     this.heldWakeScopes.clear();
     // Nothing could read the observations a wake would point at.

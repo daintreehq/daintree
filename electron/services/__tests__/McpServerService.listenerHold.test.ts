@@ -77,7 +77,12 @@ vi.mock("../PluginService.js", () => ({
 
 import { McpServerService, type ListenerRoute } from "../McpServerService.js";
 import { pluginMcpRoutePath } from "../pluginAgentMcp/types.js";
-import type { LaneWake, LaneWakeOutcome } from "../mcp-server/terminalNotify.js";
+import {
+  paneNotifyKey,
+  type LaneWake,
+  type LaneWakeOutcome,
+} from "../mcp-server/terminalNotify.js";
+import { setPtyClientRef } from "../../window/serviceRefs.js";
 
 const API_KEY = "orchestration-api-key";
 
@@ -104,7 +109,18 @@ const INIT_BODY = JSON.stringify({
 interface Answer {
   status: number;
   body: string;
+  sessionId?: string;
 }
+
+function sessionIdOf(res: http.IncomingMessage): string | undefined {
+  const value = res.headers["mcp-session-id"];
+  return typeof value === "string" ? value : undefined;
+}
+
+const MCP_HEADERS = {
+  "Content-Type": "application/json",
+  Accept: "application/json, text/event-stream",
+};
 
 /** A raw request, so Host and Origin can be set as a browser or a rebinding page would. */
 function request(
@@ -126,12 +142,13 @@ function request(
         let body = "";
         res.setEncoding("utf8");
         // An SSE or streamable answer stays open: the status is what is read.
+        const answer = () => ({ status: res.statusCode ?? 0, body, sessionId: sessionIdOf(res) });
         res.once("data", (chunk: string) => {
           body += chunk;
           res.destroy();
-          resolve({ status: res.statusCode ?? 0, body });
+          resolve(answer());
         });
-        res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+        res.on("end", () => resolve(answer()));
       }
     );
     req.on("error", reject);
@@ -142,12 +159,22 @@ function request(
 function postMcp(port: number, token: string): Promise<Answer> {
   return request(port, "/mcp", {
     method: "POST",
+    headers: { Authorization: `Bearer ${token}`, ...MCP_HEADERS },
+    body: INIT_BODY,
+  });
+}
+
+/** A call on an established session: 404 once the session is gone. */
+function callOnSession(port: number, token: string, sessionId: string): Promise<Answer> {
+  return request(port, "/mcp", {
+    method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      Accept: "application/json, text/event-stream",
+      "mcp-session-id": sessionId,
+      "mcp-protocol-version": "2025-06-18",
+      ...MCP_HEADERS,
     },
-    body: INIT_BODY,
+    body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }),
   });
 }
 
@@ -181,6 +208,15 @@ function recordingWake(id: string): { wake: LaneWake; outcomes: LaneWakeOutcome[
   };
 }
 
+/** A port free right now: bound, read and released. */
+async function freePort(): Promise<number> {
+  const probe = http.createServer();
+  await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+  const port = (probe.address() as { port: number }).port;
+  await new Promise<void>((resolve) => probe.close(() => resolve()));
+  return port;
+}
+
 describe("McpServerService listener holds (#15999)", () => {
   let service: McpServerService;
 
@@ -205,6 +241,7 @@ describe("McpServerService listener holds (#15999)", () => {
   afterEach(async () => {
     // Unconditionally: a listener open only for holds is not `isRunning`.
     await service.stop();
+    setPtyClientRef(null);
     vi.restoreAllMocks();
   });
 
@@ -243,6 +280,7 @@ describe("McpServerService listener holds (#15999)", () => {
         .status
     ).toBe(404);
     expect(pluginHost.activatePlugin).not.toHaveBeenCalled();
+    expect(service.getAuditStats(false).auth401Count).toBe(0);
     // A name that only starts like the held one is not under it.
     expect((await request(port, "/mcp/featurex")).status).toBe(404);
     expect(seen).toHaveLength(2);
@@ -340,7 +378,10 @@ describe("McpServerService listener holds (#15999)", () => {
     await service.setEnabled(true);
     expect(service.isRunning).toBe(true);
     expect(service.currentPort).toBe(port);
-    expect((await postMcp(port, API_KEY)).status).toBe(200);
+    const opened = await postMcp(port, API_KEY);
+    expect(opened.status).toBe(200);
+    // The session it opened is a live one, not one retired as it was filed.
+    expect((await callOnSession(port, API_KEY, opened.sessionId!)).status).toBe(200);
     expect((await request(port, "/mcp/feature")).status).toBe(200);
 
     await hold.release();
@@ -356,11 +397,7 @@ describe("McpServerService listener holds (#15999)", () => {
     const hold = await service.holdListener("feature", route);
     const before = hold.port!;
 
-    // Bind a fixed free port, release it, then point the setting at it.
-    const probe = http.createServer();
-    await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
-    const target = (probe.address() as { port: number }).port;
-    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    const target = await freePort();
 
     await service.setPort(target);
     expect(close).toHaveBeenCalledTimes(1);
@@ -380,12 +417,120 @@ describe("McpServerService listener holds (#15999)", () => {
     expect(close).toHaveBeenCalledTimes(1);
     expect(hold.port).toBeNull();
     await expect(request(port, "/mcp/feature")).rejects.toMatchObject({ code: "ECONNREFUSED" });
-    await expect(hold.release()).resolves.toBeUndefined();
 
     // A wake queued on a hold that shutdown ended is refused, not typed.
     const late = recordingWake("late-1");
     hold.queueWake({ key: "pane\u0000p", terminalId: "t-1" }, "project-1", late.wake);
     expect(late.outcomes).toEqual([{ kind: "unavailable", reason: "notices-off" }]);
+    await expect(hold.release()).resolves.toBeUndefined();
+  });
+
+  it("closes the listener when shutdown follows a disable that kept it", async () => {
+    await boot(true);
+    await service.holdListener("feature", featureRoute().route);
+    const port = service.currentPort!;
+
+    await Promise.all([service.setEnabled(false), service.stop()]);
+    await expect(request(port, "/mcp/feature")).rejects.toMatchObject({ code: "ECONNREFUSED" });
+  });
+
+  it("moves the listener when a port change follows a disable that kept it", async () => {
+    await boot(true);
+    const hold = await service.holdListener("feature", featureRoute().route);
+    const before = service.currentPort!;
+    const target = await freePort();
+
+    await Promise.all([service.setEnabled(false), service.setPort(target)]);
+    expect(hold.port).toBe(target);
+    expect((await request(target, "/mcp/feature")).status).toBe(200);
+    await expect(request(before, "/mcp/feature")).rejects.toMatchObject({ code: "ECONNREFUSED" });
+  });
+
+  it("refuses a hold still opening when shutdown comes", async () => {
+    await boot(false);
+    const opening = service.holdListener("feature", featureRoute().route);
+    const quit = service.stop();
+    await expect(opening).rejects.toThrow("ended while it was being opened");
+    await quit;
+    expect(service.isRunning).toBe(false);
+  });
+
+  it("retires a handshake that finishes after the server went off under a hold", async () => {
+    await boot(true);
+    await service.holdListener("feature", featureRoute().route);
+    const port = service.currentPort!;
+    const store = (
+      service as unknown as {
+        sessionStore: { sessionTierMap: Map<string, unknown>; httpSessions: Map<string, unknown> };
+      }
+    ).sessionStore;
+
+    const req = http.request({
+      host: "127.0.0.1",
+      port,
+      path: "/mcp",
+      method: "POST",
+      agent: false,
+      headers: {
+        Connection: "close",
+        Authorization: `Bearer ${API_KEY}`,
+        "Content-Length": String(Buffer.byteLength(INIT_BODY)),
+        ...MCP_HEADERS,
+      },
+    });
+    const answered = new Promise<Answer>((resolve, reject) => {
+      req.on("response", (res) => {
+        resolve({ status: res.statusCode ?? 0, body: "", sessionId: sessionIdOf(res) });
+        res.resume();
+      });
+      req.on("error", reject);
+    });
+    req.flushHeaders();
+    // The handshake is under way, waiting on its body, when the server goes off.
+    await vi.waitFor(() => expect(store.sessionTierMap.size).toBe(1));
+    await service.setEnabled(false);
+    req.end(INIT_BODY);
+
+    const { status, sessionId } = await answered;
+    expect(status).toBe(200);
+    await vi.waitFor(() => expect(store.httpSessions.size).toBe(0));
+    await service.setEnabled(true);
+    expect((await callOnSession(port, API_KEY, sessionId!)).status).toBe(404);
+  });
+
+  it("keeps a hold's queued wakes and ends the rest when the server is turned off", async () => {
+    // A host that can't read the pane: queued wakes wait, typing nothing.
+    setPtyClientRef({
+      getTerminalAsync: async () => null,
+      getLaunchGeneration: () => null,
+      submit: vi.fn(),
+      withdrawGuardedSubmission: vi.fn(),
+      on: vi.fn(),
+      off: vi.fn(),
+    } as never);
+    await boot(true);
+    const hold = await service.holdListener("feature", featureRoute().route);
+    const scoped = recordingWake("decision-1");
+    hold.queueWake(
+      { key: paneNotifyKey("principal-1"), terminalId: "t-1" },
+      "project-1",
+      scoped.wake
+    );
+    const unscoped = recordingWake("task-1");
+    service.queueLaneWake(
+      { helpSessionId: "help-1", terminalId: "t-2", projectId: "project-1" },
+      unscoped.wake
+    );
+    expect(service.getPaneNotifyState("t-1")?.readyCount).toBe(1);
+    expect(service.getPaneNotifyState("t-2")?.readyCount).toBe(1);
+
+    await service.setEnabled(false);
+    expect(unscoped.outcomes).toEqual([{ kind: "unavailable", reason: "stopped" }]);
+    expect(scoped.outcomes).toEqual([]);
+    expect(service.getPaneNotifyState("t-1")?.readyCount).toBe(1);
+
+    await hold.release();
+    expect(scoped.outcomes).toEqual([{ kind: "unavailable", reason: "stopped" }]);
   });
 
   it("refuses a path no hold may take, and a second hold on an id or path", async () => {

@@ -751,6 +751,9 @@ export class TerminalNotifyService {
     });
     let settled = false;
     const release = () => {
+      // The server going off already cleared this launch's count; one taken
+      // since is another launch's.
+      if (this.globalTeardownEpoch > epochBefore) return;
       owner.pendingLaunches = Math.max(0, owner.pendingLaunches - 1);
       const launching = callId === undefined ? 0 : (owner.launchingCalls?.get(callId) ?? 0);
       if (launching > 1) owner.launchingCalls!.set(callId!, launching - 1);
@@ -988,8 +991,9 @@ export class TerminalNotifyService {
       reportWake(wake, { kind: "unavailable", reason: "capacity" });
       return;
     }
-    this.ensureSubscribed(client);
+    // After `ownerFor`: replacing the only other owner would unsubscribe.
     const owner = this.ownerFor(pane, projectId);
+    this.ensureSubscribed(client);
     const entry: WakeEntry = {
       wake,
       key,
@@ -2323,7 +2327,12 @@ export class TerminalNotifyService {
     // taking it back returns its notices to this line.
     this.withdraw(owner);
     // The last word on each wake: nothing is awaited between this and the submit.
-    const wakes = this.sweepWakes(owner).filter((entry) => this.reserveWake(owner, entry));
+    const reserved = this.sweepWakes(owner).filter(
+      (entry) => owner.wakes.get(entry.key) === entry && this.reserveWake(owner, entry)
+    );
+    // A wake's own hooks may have stopped the pane or ended a scope meanwhile.
+    if (owner.disposed) return;
+    const wakes = reserved.filter((entry) => owner.wakes.get(entry.key) === entry);
     // With the server off only a scope's wakes may go; notices wait for nothing.
     const entries = this.deps.isEnabled()
       ? owner.fired.filter((entry) => isDeliverable(entry))

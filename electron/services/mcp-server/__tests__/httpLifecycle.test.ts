@@ -439,9 +439,34 @@ describe("HttpLifecycle", () => {
       const hold = await lc.holdListener("feature", heldRoute());
 
       closeUnexpectedly(servers[0]);
+      expect(vi.getTimerCount()).toBe(1);
       await hold.release();
+      expect(vi.getTimerCount()).toBe(0);
       await vi.advanceTimersByTimeAsync(60_000);
       expect(servers).toHaveLength(1);
+      expect(lc.isListening).toBe(false);
+    });
+
+    it("refuses a hold that shutdown ended while its listener was opening", async () => {
+      const s = mockServer();
+      let bind: (() => void) | undefined;
+      s.listen.mockImplementation((_port: number, _host: string, cb?: () => void) => {
+        bind = () => {
+          s.listening = true;
+          cb?.();
+        };
+        return s;
+      });
+      vi.spyOn(http, "createServer").mockReturnValue(s);
+      const lc = new HttpLifecycle(fakeDeps());
+      lc.isEnabled = () => false;
+
+      const opening = lc.holdListener("feature", heldRoute());
+      const quit = lc.shutdown();
+      bind!();
+      await expect(opening).rejects.toThrow("ended while it was being opened");
+      await quit;
+      expect(s.close).toHaveBeenCalled();
       expect(lc.isListening).toBe(false);
     });
 

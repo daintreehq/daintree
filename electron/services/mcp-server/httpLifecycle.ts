@@ -1022,6 +1022,10 @@ export class HttpLifecycle {
       await this.dropHold(held);
       throw err;
     }
+    // Shutdown ends every hold, this one too while it was opening.
+    if (this.holds.get(id) !== held) {
+      throw new Error(`The listener hold "${id}" ended while it was being opened`);
+    }
     const port = () => (this.holds.get(id) === held && this.isListening ? this.port : null);
     return {
       get port() {
@@ -1241,7 +1245,15 @@ export class HttpLifecycle {
   }
 
   private async halt(closeListener: boolean): Promise<void> {
-    if (this.stopPromise) return this.stopPromise;
+    if (this.stopPromise) {
+      await this.stopPromise;
+      // The stop joined may have kept the listener, for a hold since gone or
+      // against the close this call asks for: that close is still owed.
+      if (this.isListening && (closeListener || (this.holdsOnly && this.holds.size === 0))) {
+        await this.halt(closeListener);
+      }
+      return;
+    }
 
     // A restart the holds are waiting on survives the control surface stopping.
     if (this.restartTimer && (closeListener || this.holds.size === 0)) {
