@@ -479,6 +479,31 @@ export type AgentResume =
     };
 
 /**
+ * Where a session id sits in an agent's command line, as positional parsing
+ * rather than a pattern over the whole text: only the subcommand's first
+ * positional counts, so an id mentioned anywhere else (a prompt, a `fork`
+ * source) is never read as the conversation that runs. Plain data, so it
+ * survives the structured clone that plugin agent configs go through.
+ *
+ * Every rule fails closed: an option it doesn't know, an id of the wrong
+ * shape or an excluded flag reads as no id at all, never as a guess.
+ */
+export interface AgentResumeArgv {
+  /** The subcommand that resumes, which must be the first positional (`resume`). */
+  subcommand: string;
+  /** Regex the subcommand's first positional must match in full to be an id. */
+  sessionIdPattern: string;
+  /**
+   * Options that consume the argument after them, so their value is not read
+   * as a positional (`-c key=value resume <id>`). The `--option=value` form
+   * needs no entry.
+   */
+  optionsWithValue?: string[];
+  /** Flags that change what the positional means (`--last` makes it a prompt). */
+  excludedFlags?: string[];
+}
+
+/**
  * The plain-data form of {@link AgentResume} a plugin manifest declares (#13687).
  * A `session-id` template carries the literal `{sessionId}` placeholder in one
  * of its args. Kept as data on {@link AgentConfig.resumeTemplate} because the
@@ -911,6 +936,13 @@ export interface AgentConfig {
    * config, leaving the cloneable snapshot untouched.
    */
   resumeTemplate?: AgentResumeTemplate;
+  /**
+   * How a run's own command line names the conversation it resumes, so a run
+   * the user starts by hand in the pane's shell (`codex resume <id>`) is
+   * recorded as exactly as one Daintree launched (#15994). Read off the
+   * process census, never off typed input.
+   */
+  resumeArgv?: AgentResumeArgv;
   /**
    * How this agent's conversation history fares across a project-folder move
    * (#11282, phase 5). Read live by the relocation preview via
