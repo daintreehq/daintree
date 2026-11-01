@@ -1,18 +1,21 @@
 import {
   DecisionsBridge,
   RelayClient,
+  RelayError,
   loadIdentity,
   type Identity,
+  type InboundEvent,
   type KeyStore,
   type LocalStore,
   type PolicyRegistry,
   type SocketState,
   type WebSocketLike,
 } from "@daintreehq/decisions-client";
-import { WS_CLOSE } from "@daintreehq/decisions-protocol";
+import { EventData, WS_CLOSE } from "@daintreehq/decisions-protocol";
 import type { DecisionsConnectionProblem } from "../../../shared/types/decisions.js";
 import { AnswerDelivery, type AnswerDeliveryDeps } from "./answerDelivery.js";
 import { normalizeRelayOrigin } from "./decisionsSettings.js";
+import { KeyRotations } from "./keyRotation.js";
 import type { RelayFetch } from "./relayCheck.js";
 import { relayRequests } from "./relayIdentity.js";
 import {
@@ -79,6 +82,16 @@ export interface RelayConnectionOptions {
   onStatus(status: RelayConnectionStatus): void;
   /** The relay revoked this identity. Called once, after which nothing reconnects. */
   onRevoked(): void;
+  /**
+   * The lifetime's key rotations (#16010), shared with the owner's revoke and
+   * rotate; a connection without one keeps its own.
+   */
+  rotations?: KeyRotations;
+  /**
+   * The relay's devices changed: the ledger brought a new `device.revoked` or
+   * `device.key_rotated`, or a pending rotation was finished on connecting.
+   */
+  onDevicesChanged?(): void;
   webSocket?: (url: string) => WebSocketLike;
   fetchImpl?: RelayFetch;
   /**
@@ -139,6 +152,32 @@ function bindingText(relay: RelayBinding): string {
   return JSON.stringify([relay.relayOrigin, relay.installationId, relay.deviceId]);
 }
 
+const DEVICE_EVENTS = new Set(["device.revoked", "device.key_rotated"]);
+
+/** The epoch the relay says it holds after a device event; null when the event doesn't say. */
+function keyEpochOf(event: InboundEvent): number | null {
+  let wire: unknown;
+  try {
+    wire = JSON.parse(event.json);
+  } catch {
+    return null;
+  }
+  const data = typeof wire === "object" && wire !== null ? (wire as { data?: unknown }).data : null;
+  const parsed =
+    event.event_type === "device.revoked"
+      ? EventData.deviceRevoked.safeParse(data)
+      : EventData.keyRotated.safeParse(data);
+  return parsed.success ? parsed.data.key_epoch : null;
+}
+
+/** No answer, or a failure the relay may have acted on: the attempt retries. */
+function unanswered(error: unknown): boolean {
+  return (
+    error instanceof RelayError &&
+    (error.code === "network_error" || error.retryable || error.status >= 500)
+  );
+}
+
 /**
  * One enabled lifetime's connection to the relay: the library's bridge over
  * the lifetime's store, socket and all, kept up across drops, sleep and
@@ -173,6 +212,7 @@ export class RelayConnection {
   private stopping: Promise<void> = Promise.resolve();
   /** Aborts the lifetime's own requests: delivery's reports to the relay. */
   private readonly lifetime = new AbortController();
+  private readonly rotations: KeyRotations;
 
   constructor(options: RelayConnectionOptions) {
     this.o = options;
@@ -180,6 +220,7 @@ export class RelayConnection {
     this.rand = options.rand ?? Math.random;
     this.keys = retireable(options.keys, () => this.ended);
     this.store = retireable(options.store, () => this.ended);
+    this.rotations = options.rotations ?? new KeyRotations(this.keys);
   }
 
   /** What the connection last observed; null before `start`. */
@@ -236,13 +277,7 @@ export class RelayConnection {
       return;
     }
     if (this.ended) return;
-    const { config } = identity;
-    if (
-      identity.role !== "owner-desktop" ||
-      normalizeRelayOrigin(config.relayOrigin) !== this.o.relay.relayOrigin ||
-      config.installationId !== this.o.relay.installationId ||
-      config.deviceId !== this.o.relay.deviceId
-    ) {
+    if (!this.isBound(identity)) {
       this.halt({ state: "not-connected", problem: "keys" });
       return;
     }
@@ -278,6 +313,17 @@ export class RelayConnection {
       })
     );
     this.begin();
+  }
+
+  /** Whether `identity` is the owner identity this connection is for. */
+  private isBound(identity: Identity): boolean {
+    const { config } = identity;
+    return (
+      identity.role === "owner-desktop" &&
+      normalizeRelayOrigin(config.relayOrigin) === this.o.relay.relayOrigin &&
+      config.installationId === this.o.relay.installationId &&
+      config.deviceId === this.o.relay.deviceId
+    );
   }
 
   /**
@@ -363,14 +409,20 @@ export class RelayConnection {
       });
       if (attempt.retired) return;
       const retired = () => attempt.retired;
+      // The outbox keeps its own retry times, so a request is tried once per pass.
+      const client = new RelayClient({ identity, fetch: requests.fetch, maxRetries: 0 });
+      const settled = await this.settleKeys(attempt, client);
+      if (attempt.retired) return;
       bridge = new DecisionsBridge({
-        identity,
+        identity: settled,
         keyStore: this.bridgeKeys(attempt, retireable(this.keys, retired)),
-        store: socketBridgeStore(retireable(this.store, retired), () => this.delivery?.request()),
+        store: this.watchedStore(
+          attempt,
+          socketBridgeStore(retireable(this.store, retired), () => this.delivery?.request())
+        ),
         sink: holdingTerminalSink,
         policy: this.o.policy,
-        // The outbox keeps its own retry times, so a request is tried once per pass.
-        client: new RelayClient({ identity, fetch: requests.fetch, maxRetries: 0 }),
+        client,
         webSocket: (url) => this.openSocket(attempt, url),
         ...(this.o.pumpIntervalMs !== undefined ? { pumpIntervalMs: this.o.pumpIntervalMs } : {}),
       });
@@ -400,6 +452,69 @@ export class RelayConnection {
       // Retired while it was starting: start carries on past a stop, so stop it again.
       if (attempt.retired && bridge) void bridge.stop().catch(() => {});
     }
+  }
+
+  /**
+   * Finishes a key rotation that a crash or a lost answer left pending
+   * (#16010) before the bridge starts sealing, and returns the keys as they
+   * then stand. The relay took the pending key or it didn't: either it
+   * becomes current, or the same key is sent again. A request the relay may
+   * not have answered fails the attempt, which tries again; any other refusal
+   * leaves the current key in force, which every remaining device still
+   * holds, and the next attempt tries again.
+   */
+  private async settleKeys(attempt: Attempt, client: RelayClient): Promise<Identity> {
+    try {
+      const outcome = await this.rotations.settle(client);
+      if (outcome.outcome === "unconfirmed") throw outcome.error;
+      if (outcome.outcome === "done") {
+        if (!attempt.retired) this.o.onDevicesChanged?.();
+      } else if (outcome.outcome !== "none") {
+        console.warn(`[Decisions] A pending key rotation is still unfinished (${outcome.outcome})`);
+      }
+    } catch (error) {
+      if (unanswered(error)) throw error;
+      if (!attempt.retired) console.warn("[Decisions] A pending key rotation couldn't be checked");
+    }
+    const identity = client.identity;
+    if (attempt.retired) return identity;
+    if (!this.isBound(identity)) {
+      this.halt({ state: "not-connected", problem: "keys" });
+      return identity;
+    }
+    this.identity = identity;
+    return identity;
+  }
+
+  /**
+   * The attempt's store, watching the ledger for the relay's device events
+   * (#16010). A new `device.key_rotated` or `device.revoked` whose epoch is a
+   * pending key's makes that key current before the insert returns, so the
+   * bridge's own reload, which comes when it applies the event, finds it;
+   * then the service hears that the devices changed.
+   */
+  private watchedStore(attempt: Attempt, store: RelayConnectionStore): RelayConnectionStore {
+    const insertEvent = async (event: InboundEvent): Promise<boolean> => {
+      const inserted = await store.insertEvent(event);
+      if (!inserted || !DEVICE_EVENTS.has(event.event_type) || attempt.retired) return inserted;
+      const epoch = keyEpochOf(event);
+      if (epoch !== null) {
+        try {
+          await this.rotations.confirm(epoch);
+        } catch {
+          // Still pending: the next attempt's settle finds the relay holds it.
+          console.warn("[Decisions] A rotated key couldn't be made current yet");
+        }
+      }
+      if (!attempt.retired) this.o.onDevicesChanged?.();
+      return inserted;
+    };
+    return new Proxy(store, {
+      get(object, property, receiver) {
+        if (property === "insertEvent") return insertEvent;
+        return Reflect.get(object, property, receiver) as unknown;
+      },
+    });
   }
 
   /**

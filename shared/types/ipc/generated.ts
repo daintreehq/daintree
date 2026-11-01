@@ -662,6 +662,14 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisions.js").RestoreDecisionsIdentityPayload];
     result: import("../decisions.js").DecisionsConnectResult;
   };
+  "decisions:revoke-device": {
+    args: [deviceId: string];
+    result: import("../decisions.js").DecisionsRevokeDeviceResult;
+  };
+  "decisions:rotate-keys": {
+    args: [];
+    result: import("../decisions.js").DecisionsRotateKeysResult;
+  };
   "decisions:set-enabled": {
     args: [payload: import("../decisions.js").SetDecisionsEnabledPayload];
     result: import("../decisions.js").DecisionsStatus;

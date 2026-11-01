@@ -661,3 +661,43 @@ export type DecisionsPairingApproveResult =
 
 /** Declining: the relay rejects the invitation, so the phone can't use it. */
 export type DecisionsPairingDeclineResult = { result: "declined" } | DecisionsRelayRequestFailure;
+
+/**
+ * A revocation or key rotation that didn't finish (#16010). Unlike
+ * `DecisionsRelayRequestFailure`, the first two may have changed the relay.
+ *
+ * - `unconfirmed`: the request went out and no answer came back. The new key
+ *   is kept, and sent again until the relay holds it: when Daintree next
+ *   connects, or with the next revocation or rotation.
+ * - `unsaved`: the relay took it, but the new key couldn't be saved as
+ *   current on this computer (`reason`). It is saved when Daintree next
+ *   connects.
+ * - `conflict`: the relay kept refusing because its devices or its key
+ *   changed while this ran. Nothing changed.
+ * - `unverified`: a device the relay lists has a certificate that doesn't
+ *   verify against this computer's key, so no key was sealed to it and
+ *   nothing was sent.
+ */
+export type DecisionsKeyRotationProblem =
+  | { result: "unconfirmed"; origin: string }
+  | { result: "unsaved"; reason: string }
+  | { result: "conflict" }
+  | { result: "unverified" };
+
+/**
+ * Revoking a paired device: the relay stops accepting it and holds a new
+ * key, sealed to every device that remains, for what is sent from now on.
+ * `not-found`: the relay lists no such active device (revoked already, or
+ * never paired with this computer).
+ */
+export type DecisionsRevokeDeviceResult =
+  | { result: "revoked"; keyEpoch: number }
+  | { result: "not-found" }
+  | DecisionsKeyRotationProblem
+  | DecisionsRelayRequestFailure;
+
+/** Rotating the key without revoking anyone. */
+export type DecisionsRotateKeysResult =
+  | { result: "rotated"; keyEpoch: number }
+  | DecisionsKeyRotationProblem
+  | DecisionsRelayRequestFailure;

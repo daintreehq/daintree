@@ -233,6 +233,8 @@ export const CHANNEL_LOCALITY = {
   "decisions:get-status": "shell",
   "decisions:list-devices": "shell",
   "decisions:restore-identity": "shell",
+  "decisions:revoke-device": "shell",
+  "decisions:rotate-keys": "shell",
   "decisions:set-enabled": "shell",
   "decisions:set-proxy-allowlisted": "shell",
   "decisions:start-pairing": "shell",
@@ -1414,6 +1416,7 @@ export const EVENT_LOCALITY: Readonly<Record<string, ChannelLocality>> = {
   "terminal:decision-state": "host",
   // The owner machine's switch and relay connection, like its settings.
   "decisions:status-changed": "shell",
+  "decisions:devices-changed": "shell",
   "watchdog:active": "host",
   "watchdog:disabled": "host",
   "window:destroy-hidden-webviews": "shell",

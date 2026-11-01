@@ -1535,6 +1535,10 @@ export const CHANNELS = {
   // Saving a recovery kit through a save dialog, and verifying a saved one (#16007).
   DECISIONS_EXPORT_RECOVERY_KIT: "decisions:export-recovery-kit",
   DECISIONS_VERIFY_RECOVERY_KIT: "decisions:verify-recovery-kit",
+  // Revoking a paired device, and rotating the content key without revoking
+  // anyone (#16010).
+  DECISIONS_REVOKE_DEVICE: "decisions:revoke-device",
+  DECISIONS_ROTATE_KEYS: "decisions:rotate-keys",
 
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",

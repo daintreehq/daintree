@@ -337,6 +337,12 @@ export interface GeneratedElectronAPI {
     restoreIdentity(
       ...args: IpcInvokeMap["decisions:restore-identity"]["args"]
     ): Promise<IpcInvokeMap["decisions:restore-identity"]["result"]>;
+    revokeDevice(
+      ...args: IpcInvokeMap["decisions:revoke-device"]["args"]
+    ): Promise<IpcInvokeMap["decisions:revoke-device"]["result"]>;
+    rotateKeys(
+      ...args: IpcInvokeMap["decisions:rotate-keys"]["args"]
+    ): Promise<IpcInvokeMap["decisions:rotate-keys"]["result"]>;
     setEnabled(
       ...args: IpcInvokeMap["decisions:set-enabled"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-enabled"]["result"]>;

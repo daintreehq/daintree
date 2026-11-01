@@ -20,6 +20,8 @@ export const DECISIONS_METHOD_CHANNELS = {
   setProxyAllowlisted: "decisions:set-proxy-allowlisted",
   exportRecoveryKit: "decisions:export-recovery-kit",
   verifyRecoveryKit: "decisions:verify-recovery-kit",
+  revokeDevice: "decisions:revoke-device",
+  rotateKeys: "decisions:rotate-keys",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof DECISIONS_METHOD_CHANNELS;
