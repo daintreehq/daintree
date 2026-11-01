@@ -1146,8 +1146,10 @@ describe("afterPack", () => {
       ["/build/mac-universal-arm64-temp", Arch.arm64],
       ["/build/mac-universal", Arch.universal],
     ] as const)("removes nothing from the universal tree at %s", async (outDir, arch) => {
+      // Both arches, though 1.30.0 ships only arm64: narrowing the target to
+      // either single arch would then delete the other one and fail here.
       mockExistsSync.mockReturnValue(true);
-      seedOnnxBin(unpackedFor("darwin", outDir), { darwin: ["arm64"] });
+      seedOnnxBin(unpackedFor("darwin", outDir), { darwin: ["x64", "arm64"] });
 
       await afterPack(createContext("darwin", outDir, "Daintree", arch));
 
