@@ -107,7 +107,7 @@ function readSessionIdFromArguments(args: string[], spec: AgentResumeArgv): stri
  * POSIX `ps` joins argv with spaces and keeps no quoting, so a single argument
  * holding spaces (`codex "resume <id>"`, a prompt) reads as several. Callers
  * that know the line typed for the run check it with
- * {@link readTypedSessionId}.
+ * {@link typedLineRefutes}.
  *
  * The command line is a resume credential and may hold other secrets: callers
  * keep it inside the pty-host and never log it.
@@ -124,18 +124,21 @@ export function readArgvSessionId(
 }
 
 /**
- * The same reading over a line typed at the shell, whose quoting still marks
- * where each argument ends. `runsAgent` is false when the line doesn't start
- * the agent's executable directly (an alias, a script, a wrapper), so it says
- * nothing about the argv.
+ * Whether the line typed at the shell refutes `argvId`, read with its quoting
+ * intact. A line that starts the agent directly refutes any id it doesn't name
+ * itself (`codex "resume <id>"` is a fresh conversation with a prompt). A line
+ * that starts it some other way (`env codex …`, an alias, a script) can't be
+ * parsed positionally, but one that only ever holds the id inside a larger
+ * argument still refutes it. A line that never mentions the id says nothing.
  */
-export function readTypedSessionId(
+export function typedLineRefutes(
   line: string,
   executable: string,
-  spec: AgentResumeArgv
-): { runsAgent: false } | { runsAgent: true; sessionId: string | null } {
+  spec: AgentResumeArgv,
+  argvId: string
+): boolean {
   const tokens = splitShellLikeCommand(line);
   const start = argumentsStart(tokens, executable);
-  if (start === null) return { runsAgent: false };
-  return { runsAgent: true, sessionId: readSessionIdFromArguments(tokens.slice(start), spec) };
+  if (start !== null) return readSessionIdFromArguments(tokens.slice(start), spec) !== argvId;
+  return !tokens.includes(argvId) && tokens.some((token) => token.includes(argvId));
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readArgvSessionId, readTypedSessionId } from "../argvSessionId.js";
+import { readArgvSessionId, typedLineRefutes } from "../argvSessionId.js";
 import { getAgentConfig, type AgentResumeArgv } from "../../../../shared/config/agentRegistry.js";
 
 /** Codex's real declaration, so a registry change that breaks a case fails here. */
@@ -76,35 +76,32 @@ describe("readArgvSessionId with Codex's declaration", () => {
   });
 });
 
-describe("readTypedSessionId with Codex's declaration", () => {
-  it("reads the id a typed resume names", () => {
-    expect(readTypedSessionId(`codex resume ${ID}`, "codex", SPEC)).toEqual({
-      runsAgent: true,
-      sessionId: ID,
-    });
-  });
+describe("typedLineRefutes with Codex's declaration", () => {
+  const OTHER = "019a0000-0000-7000-8000-000000000bad";
 
-  it("keeps a quoted prompt whole, so it never reads as a resume", () => {
-    expect(readTypedSessionId(`codex "resume ${ID}"`, "codex", SPEC)).toEqual({
-      runsAgent: true,
-      sessionId: null,
-    });
-  });
+  function refutes(line: string): boolean {
+    return typedLineRefutes(line, "codex", SPEC, ID);
+  }
 
-  it("reads Daintree's own quoted launch line", () => {
-    expect(
-      readTypedSessionId(
-        `codex -c 'developer_instructions=be brief' resume ${ID} -C '.'`,
-        "codex",
-        SPEC
-      )
-    ).toEqual({ runsAgent: true, sessionId: ID });
+  it.each([
+    ["the same typed resume", `codex resume ${ID}`],
+    [
+      "Daintree's own quoted launch line",
+      `codex -c 'developer_instructions=be brief' resume ${ID} -C '.'`,
+    ],
+    ["an alias naming the id whole", `cx resume ${ID}`],
+    ["a wrapper naming the id whole", `env FOO=1 codex resume ${ID}`],
+    ["a script that never mentions it", "./start-codex.sh"],
+  ])("lets argv stand for %s", (_name, line) => {
+    expect(refutes(line)).toBe(false);
   });
 
   it.each([
-    ["an alias", `cx resume ${ID}`],
-    ["a script", "./start-codex.sh"],
-  ])("says nothing about a line that doesn't run the agent directly: %s", (_name, line) => {
-    expect(readTypedSessionId(line, "codex", SPEC)).toEqual({ runsAgent: false });
+    ["a quoted prompt that reads like a resume", `codex "resume ${ID}"`],
+    ["a wrapped quoted prompt", `env codex "resume ${ID}"`],
+    ["a typed resume of another id", `codex resume ${OTHER}`],
+    ["a fresh launch", "codex"],
+  ])("refutes argv for %s", (_name, line) => {
+    expect(refutes(line)).toBe(true);
   });
 });

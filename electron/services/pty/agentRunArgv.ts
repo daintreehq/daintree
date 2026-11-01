@@ -3,7 +3,7 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { createLogger } from "../../utils/logger.js";
 import type { AgentProcessObservation } from "../ProcessDetector.js";
 import { events } from "../events.js";
-import { readArgvSessionId, readTypedSessionId } from "./argvSessionId.js";
+import { readArgvSessionId, typedLineRefutes } from "./argvSessionId.js";
 import type { TerminalInfo } from "./types.js";
 
 const logger = createLogger("pty:AgentRunArgv");
@@ -23,8 +23,8 @@ const logger = createLogger("pty:AgentRunArgv");
  * never supplies an id; it only refuses one. POSIX `ps` drops argument
  * boundaries, so `codex "resume <id>"` — a fresh conversation whose prompt
  * happens to read that way — looks like a resume in argv, and only the typed
- * quoting tells them apart. A line that doesn't run the agent directly (an
- * alias, a script) says nothing either way.
+ * quoting tells them apart. A line that names the id as a whole argument, or
+ * never mentions it (an alias, a script), lets argv stand.
  *
  * Never logs the command line, the typed line or the id.
  */
@@ -43,11 +43,11 @@ export function offerAgentRunArgvSession(
   if (!config?.resumeArgv) return;
 
   const argvId = readArgvSessionId(observation.command, config.command, config.resumeArgv);
-  const typed = typedLine
-    ? readTypedSessionId(typedLine, config.command, config.resumeArgv)
-    : { runsAgent: false as const };
-  const typedDisagrees = typed.runsAgent && typed.sessionId !== argvId;
-  const sessionId = typedDisagrees ? null : argvId;
+  const refuted =
+    argvId !== null &&
+    typedLine !== undefined &&
+    typedLineRefutes(typedLine, config.command, config.resumeArgv, argvId);
+  const sessionId = refuted ? null : argvId;
   const run = { launchGeneration: generation, agentIncarnation: terminal.agentIncarnation };
   logger.info("Agent run argv read", {
     terminalId,
@@ -56,7 +56,7 @@ export function offerAgentRunArgvSession(
     generation,
     incarnation: run.agentIncarnation,
     named: argvId !== null,
-    typedDisagrees,
+    refuted,
   });
   if (!sessionId) return;
 

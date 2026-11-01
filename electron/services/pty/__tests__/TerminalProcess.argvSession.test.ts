@@ -189,22 +189,28 @@ describe("a hand-resumed run read off the census (#15994)", () => {
     ]);
   });
 
-  it("records nothing for a fresh conversation whose quoted prompt reads like a resume", async () => {
-    const census = createCensus();
-    census.show([{ pid: 456, command: "node /opt/homebrew/bin/codex" }]);
-    terminal = createCodexPane(census.cache);
-    census.refresh();
-    quitToShell(terminal);
+  it.each([
+    ["typed directly", `codex "resume ${HAND_ID}"`],
+    ["typed through a wrapper", `env codex "resume ${HAND_ID}"`],
+  ])(
+    "records nothing for a fresh conversation whose quoted prompt reads like a resume, %s",
+    async (_name, typed) => {
+      const census = createCensus();
+      census.show([{ pid: 456, command: "node /opt/homebrew/bin/codex" }]);
+      terminal = createCodexPane(census.cache);
+      census.refresh();
+      quitToShell(terminal);
 
-    terminal.write(`codex "resume ${HAND_ID}"\r`);
-    // POSIX `ps` drops the quotes: the census alone reads a resume.
-    census.show([{ pid: 789, command: `node /opt/homebrew/bin/codex resume ${HAND_ID}` }]);
-    census.refresh();
-    census.refresh();
+      terminal.write(`${typed}\r`);
+      // POSIX `ps` drops the quotes: the census alone reads a resume.
+      census.show([{ pid: 789, command: `node /opt/homebrew/bin/codex resume ${HAND_ID}` }]);
+      census.refresh();
+      census.refresh();
 
-    expect(terminal.getInfo().agentIncarnation).toBe(1);
-    expect(observed).toEqual([]);
-  });
+      expect(terminal.getInfo().agentIncarnation).toBe(1);
+      expect(observed).toEqual([]);
+    }
+  );
 
   it("reads argv on a detector started once a Windows PTY's pid resolves", () => {
     const census = createCensus();
