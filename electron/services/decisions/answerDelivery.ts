@@ -17,6 +17,8 @@ import { RetiredAttemptError, retireable } from "./relayTransport.js";
 /** A hold on the wake engine's queue (#15999), which takes wakes with the MCP server off. */
 export interface DecisionWakeHold {
   queueWake(pane: OwnPane, projectId: string, wake: LaneWake): void;
+  /** Ends the wakes still waiting to be typed; a line already submitted settles before `release`. */
+  cancelQueued(): void;
   release(): void;
 }
 
@@ -111,6 +113,8 @@ export class AnswerDelivery {
   private settled: Promise<void> | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private settleTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The latest time a settled pane wants delivery tried; the timer runs until it has passed. */
+  private settleDeadline = 0;
   private offPanes: (() => void) | null = null;
 
   constructor(options: AnswerDeliveryOptions) {
@@ -166,10 +170,12 @@ export class AnswerDelivery {
   }
 
   /**
-   * Stops for good. Nothing new is typed from now on; an answer already being
-   * typed settles first, for up to `DELIVERY_SETTLE_MS`, so its outcome is
-   * recorded rather than left for the next start to find. Resolves once the
-   * store takes nothing more from this delivery.
+   * Stops for good. Nothing new is typed from now on: answers queued to type
+   * end untyped and are recorded as such. One already submitted settles
+   * first, for up to `DELIVERY_SETTLE_MS`, so the host's record of its write
+   * is still read and its outcome recorded rather than left for the next
+   * start to find. Resolves once the store takes nothing more from this
+   * delivery.
    */
   stop(): Promise<void> {
     if (this.settled) return this.settled;
@@ -180,7 +186,7 @@ export class AnswerDelivery {
     if (this.timer) clearInterval(this.timer);
     if (this.settleTimer) clearTimeout(this.settleTimer);
     this.timer = this.settleTimer = null;
-    this.releaseHold();
+    this.withHold((hold) => hold.cancelQueued());
     const running = this.running;
     this.settled = (async () => {
       if (running) {
@@ -195,18 +201,38 @@ export class AnswerDelivery {
         clearTimeout(timeout);
       }
       this.retired = true;
+      const hold = this.hold;
+      this.hold = null;
+      if (hold) this.withHold(() => hold.release(), hold);
     })();
     return this.settled;
   }
 
+  /**
+   * Tries delivery once the pane that just settled is past the settle grace.
+   * Each settle wants its own look, so the timer runs on to the latest one,
+   * but is never pushed back: panes settling in turn can't starve the first.
+   */
   private requestAfterSettle(): void {
     if (this.stopped) return;
-    if (this.settleTimer) clearTimeout(this.settleTimer);
-    this.settleTimer = setTimeout(() => {
+    this.settleDeadline = Math.max(this.settleDeadline, this.clock() + SETTLED_RECHECK_MS);
+    if (this.settleTimer) return;
+    const fire = () => {
       this.settleTimer = null;
       this.request();
-    }, SETTLED_RECHECK_MS);
+      const remaining = this.settleDeadline - this.clock();
+      if (remaining > 0 && !this.stopped) this.armSettle(fire, remaining);
+    };
+    this.armSettle(fire, SETTLED_RECHECK_MS);
+  }
+
+  private armSettle(fire: () => void, delay: number): void {
+    this.settleTimer = setTimeout(fire, delay);
     this.settleTimer.unref?.();
+  }
+
+  private clock(): number {
+    return this.o.deps.now?.() ?? Date.now();
   }
 
   private async run(): Promise<void> {
@@ -231,8 +257,8 @@ export class AnswerDelivery {
       // Until the pty host can be asked, every run would read as gone and
       // every interrupted injection as uncertain; the next request tries again.
       if (this.o.deps.getPtyClient() === null) return;
-      await this.recover();
-      this.recovered = true;
+      this.recovered = await this.recover();
+      // Questions with an injection still unreconciled wait; the rest go on.
     }
     if (this.stopped) return;
     if (this.store.hasPendingDelivery && !(await this.store.hasPendingDelivery())) return;
@@ -240,31 +266,79 @@ export class AnswerDelivery {
   }
 
   /**
-   * Reconciles injections a crash interrupted, once per lifetime. An intent
-   * still in state `intent` may or may not have been typed: the library looks
-   * for its marker in the run's scrollback, and anything it can't find is
-   * `delivery-uncertain`, never typed again. A `typed` intent was recorded
-   * only on the host's proof of the write and needs no search; only its
-   * report is outstanding, which the first pass sends. The library would
-   * search for it too, and call an answer whose pane has closed since
-   * uncertain, so recovery sees only the untyped ones.
+   * Reconciles injections a crash interrupted, once per lifetime; false when
+   * it has to try again. An intent still in state `intent` may or may not
+   * have been typed: the library looks for its marker in the run's
+   * scrollback, and anything it can't find is `delivery-uncertain`, never
+   * typed again. A `typed` intent was recorded only on the host's proof of
+   * the write and needs no search; only its report is outstanding, which the
+   * first pass sends. The library would search for it too, and call an
+   * answer whose pane has closed since uncertain, so recovery sees only the
+   * untyped ones.
    */
-  private async recover(): Promise<void> {
-    await this.markTypedDelivered();
-    if (this.stopped) return;
+  private async recover(): Promise<boolean> {
+    await this.repairRecorded();
+    if (this.stopped) return false;
+    // A host that didn't answer is not a marker that isn't there.
+    if (!(await this.ptyHostAnswers())) return false;
     const ctx = { ...this.owner.ctx, store: untypedIntentsOnly(this.store) };
     await new DeliveryEngine(ctx, { sink: this.sink }).recover();
+    return true;
+  }
+
+  /** Whether the pty host answers for every pane on this host an untyped intent names. */
+  private async ptyHostAnswers(): Promise<boolean> {
+    const hostId = this.o.deps.hostId();
+    const panes = new Set(
+      (await this.store.openIntents())
+        .filter((intent) => intent.state === "intent" && intent.host_id === hostId)
+        .map((intent) => intent.pane_id)
+    );
+    const client = this.o.deps.getPtyClient();
+    if (panes.size === 0) return true;
+    if (client === null) return false;
+    try {
+      for (const paneId of panes)
+        await client.getTerminalAsync(paneId, undefined, { strict: true });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
-   * The library records an intent as typed before it marks the answer
-   * delivered. A crash between the two leaves an answer that would be typed a
-   * second time; the typed record is the proof it already was.
+   * Puts right what an interruption between two of the library's writes
+   * left, from what was recorded. The library records an intent as typed
+   * before it marks the answer delivered, so a crash between the two leaves
+   * an answer that would be typed a second time; the typed record is the
+   * proof it already was. Its crash recovery does the reverse when it finds a
+   * marker, so an interruption there leaves an intent still untyped on an
+   * answer already marked delivered under it, which the next recovery would
+   * search for again and could call uncertain; that answer's own record says
+   * it was typed.
    */
-  private async markTypedDelivered(): Promise<void> {
+  private async repairRecorded(): Promise<void> {
     const { ctx } = this.owner;
     for (const intent of await this.store.openIntents()) {
       if (this.stopped) return;
+      if (intent.state === "intent") {
+        const row = await this.store.getQuestion(intent.question_id);
+        const recorded = row
+          ? parseAnswers(row.answers_json).some(
+              (entry) =>
+                entry.revision === intent.answer_revision &&
+                entry.delivered &&
+                entry.injection_id === intent.injection_id
+            )
+          : false;
+        if (recorded) {
+          await this.store.updateIntent(intent.injection_id, {
+            state: "typed",
+            updated_at: ctx.now(),
+          });
+        }
+        continue;
+      }
       if (intent.state !== "typed") continue;
       await ctx.lock.run(async () => {
         const row = await this.store.getQuestion(intent.question_id);
@@ -293,9 +367,10 @@ export class AnswerDelivery {
     }
   }
 
-  private async ensureHold(): Promise<DecisionWakeHold | null> {
-    if (this.hold) return this.hold;
-    this.holding ??= (async () => {
+  private ensureHold(): Promise<DecisionWakeHold | null> {
+    if (this.hold) return Promise.resolve(this.hold);
+    if (this.holding) return this.holding;
+    const holding = (async () => {
       try {
         const hold = await this.o.deps.holdWakes();
         if (this.stopped) {
@@ -310,11 +385,14 @@ export class AnswerDelivery {
           error instanceof Error ? error.name : typeof error
         );
         return null;
-      } finally {
-        this.holding = null;
       }
     })();
-    return this.holding;
+    // Cleared once settled, whether it failed at once or later, so the next attempt asks again.
+    this.holding = holding;
+    void holding.finally(() => {
+      if (this.holding === holding) this.holding = null;
+    });
+    return holding;
   }
 
   private queueWake(pane: OwnPane, projectId: string, wake: LaneWake): void {
@@ -327,15 +405,13 @@ export class AnswerDelivery {
     hold.queueWake(pane, projectId, wake);
   }
 
-  private releaseHold(): void {
-    const hold = this.hold;
-    this.hold = null;
+  private withHold(act: (hold: DecisionWakeHold) => void, hold = this.hold): void {
+    if (!hold) return;
     try {
-      // Queued answers end untyped and settle as held; one already typing finishes.
-      hold?.release();
+      act(hold);
     } catch (error) {
       console.warn(
-        "[Decisions] Releasing the terminal wake hold failed:",
+        "[Decisions] The terminal wake hold failed:",
         error instanceof Error ? error.name : typeof error
       );
     }

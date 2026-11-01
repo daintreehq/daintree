@@ -222,11 +222,13 @@ export class DecisionsService {
   /**
    * Stops the relay connection until the next settings change or
    * `resumeConnection`: disconnecting removes the keys it runs on, so it
-   * stops first.
+   * stops first. Resolves once nothing it started can reach the keys or the
+   * store: an answer being typed settles first.
    */
-  suspendConnection(): void {
+  suspendConnection(): Promise<void> {
     this.dropConnection();
     if (this.settings !== null && !this.disposed) this.setStatus({ state: "not-connected" });
+    return this.settledConnections();
   }
 
   /** Connects again after `suspendConnection`, if the settings still want it. */
@@ -386,7 +388,7 @@ export class DecisionsService {
     // The connection goes first: nothing may reach the store or keys once they close.
     this.dropConnection();
     // An answer being typed settles before the store stops taking its result.
-    await Promise.all([...this.stopping]);
+    await this.settledConnections();
     void this.feedFrom(null);
     // The route lets go of the listener before the lifetime ends.
     await this.questionsClosing;
@@ -434,6 +436,15 @@ export class DecisionsService {
     const store = this.store;
     const policy = this.policy;
     if (!store || !policy) return;
+    if (this.stopping.size > 0) {
+      // One connection's delivery at a time: a replacement waits for the one
+      // stopped before it to settle what it was typing, or its recovery would
+      // take that injection for a crashed one.
+      void this.settledConnections().then(() => {
+        if (!this.disposed && this.store === store) this.reconcileConnection();
+      });
+      return;
+    }
     let connection: DecisionsRelayConnection | null = null;
     const feed = this.feed;
     const delivery = this.delivery;
@@ -492,6 +503,11 @@ export class DecisionsService {
     if (!stopped) return;
     const settling = stopped.catch(() => {}).finally(() => this.stopping.delete(settling));
     this.stopping.add(settling);
+  }
+
+  /** Resolves once every connection stopped so far has settled. */
+  private async settledConnections(): Promise<void> {
+    while (this.stopping.size > 0) await Promise.all([...this.stopping]);
   }
 
   private eraseDeps(): LocalEraseDeps {

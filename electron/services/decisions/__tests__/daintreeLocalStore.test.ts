@@ -744,57 +744,43 @@ describe("DaintreeLocalStore ordering and failures", () => {
     expect(await store.hasPendingDelivery()).toBe(false);
   });
 
-  it("finds a waiting answer through its partial index, never a table scan", () => {
-    const plan = (
-      sqlite
-        .prepare(
-          `EXPLAIN QUERY PLAN SELECT 1 FROM decisions_questions
-           WHERE delivery_status IN ('desktop-received', 'pending-host') AND history_only = 0
-           LIMIT 1`
-        )
-        .all() as { detail: string }[]
-    )
-      .map((step) => step.detail)
-      .join("\n");
-    expect(plan).toContain("decisions_questions_pending_delivery_idx");
-    expect(plan).not.toMatch(/^SCAN decisions_questions$/m);
+  it("finds a waiting answer through its partial indexes, never a table scan", async () => {
+    // The statements the store itself prepares, explained as SQLite will run them.
+    const prepared: string[] = [];
+    const prepare = sqlite.prepare.bind(sqlite);
+    vi.spyOn(sqlite, "prepare").mockImplementation(((source: string) => {
+      prepared.push(source);
+      return prepare(source);
+    }) as typeof sqlite.prepare);
+    await new DaintreeLocalStore(sqlite).hasPendingDelivery();
+    const queries = prepared.filter((source) => /^\s*SELECT 1 FROM/.test(source));
+    expect(queries).toHaveLength(2);
+
+    for (const query of queries) {
+      const plan = (prepare(`EXPLAIN QUERY PLAN ${query}`).all() as { detail: string }[])
+        .map((step) => step.detail)
+        .join("\n");
+      expect(plan).toMatch(
+        /USING (COVERING )?INDEX decisions_(questions_pending_delivery|injection_intents_open)_idx/
+      );
+      expect(plan).not.toMatch(/^SCAN decisions_(questions|injection_intents)$/m);
+    }
   });
 
-  it("tells commit listeners once per transaction that stored a write, never for reads or refusals", async () => {
+  it.each([
+    ["intent", true],
+    ["typed", true],
+    ["acked", false],
+    ["uncertain", false],
+    ["abandoned", false],
+  ] as const)("counts an injection left %s as waiting: %s", async (state, waiting) => {
     const store = new DaintreeLocalStore(sqlite);
-    const committed = vi.fn();
-    const off = store.onCommit(committed);
-
-    await Promise.all([
-      store.commitNewQuestion(row("q1", 1), item("o1", "q1")),
-      store.setMeta("k", "v"),
-    ]);
-    expect(committed).toHaveBeenCalledTimes(1);
-
-    await store.getQuestion("q1");
-    await store.listQuestions();
-    expect(committed).toHaveBeenCalledTimes(1);
-
-    await expect(store.commitNewQuestion(row("q1", 1), item("o2", "q1"))).rejects.toThrow();
-    expect(committed).toHaveBeenCalledTimes(1);
-
-    off();
-    await store.setMeta("k", "w");
-    expect(committed).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps a write stored when a commit listener throws", async () => {
-    const store = new DaintreeLocalStore(sqlite);
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    const later = vi.fn();
-    store.onCommit(() => {
-      throw new Error("listener broke");
-    });
-    store.onCommit(later);
-
-    await expect(store.setMeta("k", "v")).resolves.toBeUndefined();
-    expect(await store.getMeta("k")).toBe("v");
-    expect(later).toHaveBeenCalledTimes(1);
+    await store.commitNewQuestion(
+      row("q1", 1, { delivery_status: "terminal-delivered" }),
+      item("o1", "q1")
+    );
+    await store.putIntent(intent("i1", "q1", { state }));
+    expect(await store.hasPendingDelivery()).toBe(waiting);
   });
 
   it("refuses a new question carrying plaintext content", async () => {

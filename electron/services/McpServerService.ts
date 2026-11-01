@@ -197,7 +197,12 @@ export interface McpListenerHold {
 export interface McpWakeHold {
   /** As {@link McpListenerHold.queueWake}. */
   queueWake(pane: OwnPane, projectId: string, wake: LaneWake): void;
-  /** Idempotent. Ends the hold's queued wakes, each reporting why. */
+  /**
+   * Ends the hold's wakes still waiting to be typed, each reporting why, and
+   * takes no more; a line already submitted settles before `release`.
+   */
+  cancelQueued(): void;
+  /** Idempotent. Ends the hold's wakes, each reporting why. */
   release(): void;
 }
 
@@ -1203,6 +1208,7 @@ export class McpServerService {
     this.heldWakeScopes.add(endWakes);
     return {
       queueWake: (pane, projectId, wake) => wakes.enqueueWake(pane, projectId, wake),
+      cancelQueued: () => wakes.cancelQueued(),
       release: () => {
         this.heldWakeScopes.delete(endWakes);
         wakes.release();

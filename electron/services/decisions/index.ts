@@ -452,8 +452,8 @@ export function disconnectRelay(): Promise<DecisionsStatus> {
   return serialize(async () => {
     const { service: running, keys } = await setupKeys();
     forgetOwnerDevices();
-    // The socket runs on these keys, so it closes before they go.
-    running.suspendConnection();
+    // The socket and delivery run on these keys, so they stop before the keys go.
+    await running.suspendConnection();
     try {
       await keys.clear();
     } catch (error) {

@@ -951,47 +951,93 @@ describe("RelayConnection", () => {
     await h.connection.stop();
   });
 
-  it("delivers for the connection's lifetime, while the relay is out of reach, and stops with it", async () => {
+  /** Delivery deps that record their hold and watchers, with a pty host that answers. */
+  function deliveryDeps() {
     const holds = { taken: 0, released: 0 };
     const watched = new Set<() => void>();
-    const h = await harness({
-      overrides: {
-        delivery: {
-          hostId: () => "host_12345678",
-          principalFor: () => null,
-          getPtyClient: () => null,
-          holdWakes: () => {
-            holds.taken += 1;
-            return {
-              queueWake: () => {},
-              release: () => {
-                holds.released += 1;
-              },
-            };
-          },
-          watchPanes: (onPane) => {
-            const entry = () => onPane("appeared");
-            watched.add(entry);
-            return () => watched.delete(entry);
-          },
+    return {
+      holds,
+      watched,
+      deps: {
+        hostId: () => "host_12345678",
+        principalFor: () => null,
+        getPtyClient: () => ({
+          getLiveGeneration: () => null,
+          isLiveGeneration: () => false,
+          getTerminalAsync: async () => null,
+        }),
+        holdWakes: () => {
+          holds.taken += 1;
+          return {
+            queueWake: () => {},
+            cancelQueued: () => {},
+            release: () => {
+              holds.released += 1;
+            },
+          };
         },
-      },
-    });
+        watchPanes: (onPane: (signal: "settled" | "appeared") => void) => {
+          const entry = () => onPane("appeared");
+          watched.add(entry);
+          return () => watched.delete(entry);
+        },
+      } satisfies NonNullable<RelayConnectionOptions["delivery"]>,
+    };
+  }
+
+  it("delivers for the connection's lifetime, while the relay is out of reach, and stops with it", async () => {
+    const { holds, watched, deps } = deliveryDeps();
+    const store = new MemoryLocalStore() as MemoryLocalStore & {
+      hasPendingDelivery: () => Promise<boolean>;
+    };
+    store.hasPendingDelivery = vi.fn(async () => false);
+    const h = await harness({ store, overrides: { delivery: deps } });
     h.relay.answerTicketsWith(
       () => new Response(JSON.stringify({ code: "unavailable", message: "down" }), { status: 503 })
     );
 
     h.connection.start();
     await h.status("reconnecting");
+    await vi.waitFor(() => expect(store.hasPendingDelivery).toHaveBeenCalledTimes(1));
     expect(holds.taken).toBe(1);
     expect(watched.size).toBe(1);
 
-    await vi.advanceTimersByTimeAsync(RECONNECT_CAP_MS);
+    // No socket all the while, and delivery still looks every minute.
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+    expect(h.statuses.some((status) => status.state === "connected")).toBe(false);
+    expect(store.hasPendingDelivery).toHaveBeenCalledTimes(4);
     expect(holds).toEqual({ taken: 1, released: 0 });
 
     await h.connection.stop();
     expect(holds).toEqual({ taken: 1, released: 1 });
     expect(watched.size).toBe(0);
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+    expect(store.hasPendingDelivery).toHaveBeenCalledTimes(4);
+  });
+
+  it("gives every socket attempt delivery's lock and runs its own delivery stopped", async () => {
+    const bridges: DecisionsBridge[] = [];
+    const start = DecisionsBridge.prototype.start;
+    vi.spyOn(DecisionsBridge.prototype, "start").mockImplementation(function (
+      this: DecisionsBridge,
+      ...args: Parameters<DecisionsBridge["start"]>
+    ) {
+      bridges.push(this);
+      return start.apply(this, args);
+    });
+    const h = await harness({ overrides: { delivery: deliveryDeps().deps } });
+
+    h.connection.start();
+    const first = await connectLive(h);
+    first.drop(1006);
+    await h.status("reconnecting");
+    await vi.advanceTimersByTimeAsync(RECONNECT_BASE_MS);
+    await connectLive(h, 1);
+
+    expect(bridges).toHaveLength(2);
+    expect(bridges[0].ctx.lock).toBe(bridges[1].ctx.lock);
+    expect(bridges.every((bridge) => bridge.delivery.stopped)).toBe(true);
+    await h.connection.stop();
   });
 
   it("picks up from the cursor the app database kept, after the app starts again", async () => {

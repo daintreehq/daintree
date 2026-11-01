@@ -547,14 +547,12 @@ export class RelayConnection {
     this.ended = true;
     this.clearRetry();
     for (const off of this.watchers.splice(0)) off();
+    // Reports to the relay stop now: a stalled one must not hold up the local
+    // record of an answer being typed, and each is sent again next lifetime.
+    this.lifetime.abort();
     const delivery = this.delivery;
     this.delivery = null;
-    if (delivery) {
-      // Reports in flight stop only once an answer being typed has settled.
-      this.stopping = delivery.stop().finally(() => this.lifetime.abort());
-    } else {
-      this.lifetime.abort();
-    }
+    if (delivery) this.stopping = delivery.stop();
   }
 
   private clearRetry(): void {

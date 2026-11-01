@@ -607,6 +607,12 @@ describe("McpServerService listener holds (#15999)", () => {
     hold.queueWake(pane, "project-1", scoped.wake);
     expect(scoped.outcomes).toEqual([{ kind: "unavailable", reason: "unreadable" }]);
 
+    // Cancelled: no more wakes are taken, though the hold is still held.
+    hold.cancelQueued();
+    const cancelled = recordingWake("decision-1b");
+    hold.queueWake(pane, "project-1", cancelled.wake);
+    expect(cancelled.outcomes).toEqual([{ kind: "unavailable", reason: "notices-off" }]);
+
     hold.release();
     hold.release();
     const released = recordingWake("decision-2");

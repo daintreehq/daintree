@@ -484,7 +484,18 @@ describe("openDb (integration)", () => {
     const createdTables = [
       ...finalSql.matchAll(/CREATE TABLE (?:IF NOT EXISTS )?`([a-z_]+)`/g),
     ].map((m) => m[1]!);
-    expect(additions.length + createdTables.length).toBeGreaterThan(0);
+    // An index names its table and every column it reads, in its key and its
+    // WHERE, each in backticks.
+    const createdIndexes = [
+      ...finalSql.matchAll(
+        /CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?`([a-z_]+)` ON `([a-z_]+)`([^;]*)/g
+      ),
+    ].map((m) => ({
+      name: m[1]!,
+      table: m[2]!,
+      columns: [...new Set([...m[3]!.matchAll(/`([a-z_]+)`/g)].map((c) => c[1]!))],
+    }));
+    expect(additions.length + createdTables.length + createdIndexes.length).toBeGreaterThan(0);
 
     const Database = (await import("better-sqlite3")).default;
     const seed = new Database(dbPath);
@@ -541,6 +552,12 @@ describe("openDb (integration)", () => {
     for (const { table, column } of removals) {
       seed.exec(`ALTER TABLE ${table} ADD COLUMN ${column} INTEGER`);
     }
+    // Likewise an index needs its table, with the columns it reads, unless
+    // the same migration creates it.
+    for (const { table, columns } of createdIndexes) {
+      if (createdTables.includes(table)) continue;
+      seed.exec(`CREATE TABLE IF NOT EXISTS ${table} (${columns.join(", ")})`);
+    }
     seed.close();
 
     // Those columns must be absent before the upgrade for the test to mean
@@ -558,6 +575,12 @@ describe("openDb (integration)", () => {
       }[]
     ).map((t) => t.name);
     for (const table of createdTables) expect(seededTables).not.toContain(table);
+    const seededIndexes = (
+      preCheck.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as {
+        name: string;
+      }[]
+    ).map((i) => i.name);
+    for (const { name } of createdIndexes) expect(seededIndexes).not.toContain(name);
     // And the dropped ones must be present, or the DROP would prove nothing.
     for (const { table, column } of removals) {
       const seededColumns = (
@@ -583,6 +606,13 @@ describe("openDb (integration)", () => {
         }[]
       ).map((t) => t.name);
       for (const table of createdTables) expect(tables).toContain(table);
+      const indexes = (
+        sqlite.prepare("SELECT name, tbl_name FROM sqlite_master WHERE type = 'index'").all() as {
+          name: string;
+          tbl_name: string;
+        }[]
+      ).map((i) => `${i.tbl_name}.${i.name}`);
+      for (const { name, table } of createdIndexes) expect(indexes).toContain(`${table}.${name}`);
 
       // Obsolete keys are gone and their neighbours are not — a DELETE without
       // a WHERE, or one aimed at the wrong key, fails on the second assertion.

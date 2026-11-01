@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type Database from "better-sqlite3";
+import Database from "better-sqlite3";
 import {
   MemoryKeyStore,
   RelayClient,
@@ -46,7 +46,12 @@ import { MIN_NOTIFY_INTERVAL_MS } from "../../../../shared/types/terminalNotify.
 import { openDb } from "../../persistence/db.js";
 import { DaintreeLocalStore } from "../daintreeLocalStore.js";
 import type { DecisionSinkPtyClient } from "../daintreeTerminalSink.js";
-import { AnswerDelivery, DELIVERY_CHECK_INTERVAL_MS, type PaneSignal } from "../answerDelivery.js";
+import {
+  AnswerDelivery,
+  DELIVERY_CHECK_INTERVAL_MS,
+  DELIVERY_SETTLE_MS,
+  type PaneSignal,
+} from "../answerDelivery.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsFolder = path.resolve(__dirname, "../../persistence/migrations");
@@ -75,21 +80,38 @@ const ORIGIN: QuestionOrigin = {
 class FakePtyClient implements TerminalNotifyPtyClient, DecisionSinkPtyClient {
   terminals = new Map<string, NotifyTerminalInfo>();
   generations = new Map<string, number>();
-  submitted: Array<{ id: string; text: string; at: number }> = [];
+  submitted: Array<{ id: string; text: string; token?: string; at: number }> = [];
   screens = new Map<string, string>();
+  /** A submitted line's phase until a test moves it; written unless held. */
+  holdWrites = false;
+  readonly phases = new Map<string, "queued" | "pty_written">();
+  /** Strict reads that fail before one answers, as a host that is slow to start. */
+  failStrictReads = 0;
 
-  async getTerminalAsync(id: string, submissionToken?: string) {
+  async getTerminalAsync(id: string, submissionToken?: string, options?: { strict?: boolean }) {
+    if (options?.strict === true && this.failStrictReads > 0) {
+      this.failStrictReads -= 1;
+      throw new Error("timed out");
+    }
     const info = this.terminals.get(id);
     if (info === undefined) return null;
     if (submissionToken === undefined) return { ...info };
-    return {
-      ...info,
-      submission: { token: submissionToken, phase: "pty_written" as const, at: Date.now() },
-    };
+    // Only a line this pane was really given has a record.
+    const phase = this.phases.get(submissionToken);
+    const given = this.submitted.some((s) => s.id === id && s.token === submissionToken);
+    if (!given || phase === undefined) return { ...info };
+    return { ...info, submission: { token: submissionToken, phase, at: Date.now() } };
   }
 
-  submit(id: string, text: string) {
-    this.submitted.push({ id, text, at: Date.now() });
+  submit(id: string, text: string, token?: string) {
+    this.submitted.push({ id, text, token, at: Date.now() });
+    if (token !== undefined) this.phases.set(token, this.holdWrites ? "queued" : "pty_written");
+  }
+
+  /** The host writes every held line. */
+  writeHeld() {
+    for (const [token, phase] of this.phases)
+      if (phase === "queued") this.phases.set(token, "pty_written");
   }
 
   withdrawGuardedSubmission() {}
@@ -143,7 +165,10 @@ async function ownerIdentity(): Promise<StoredIdentity> {
 }
 
 let dir: string;
+let dbPath: string;
 let sqlite: Database.Database;
+/** Every delivery a test made, stopped after it whether or not it got that far. */
+const live: AnswerDelivery[] = [];
 let stored: StoredIdentity;
 let identity: Identity;
 
@@ -153,7 +178,8 @@ beforeEach(async () => {
   await keys.save(stored);
   identity = await loadIdentity(keys);
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-decisions-delivery-"));
-  sqlite = openDb(path.join(dir, "app.db"), migrationsFolder).sqlite;
+  dbPath = path.join(dir, "app.db");
+  sqlite = openDb(dbPath, migrationsFolder).sqlite;
   // The store commits on setImmediate, which stays real.
   vi.useFakeTimers({
     toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
@@ -161,7 +187,10 @@ beforeEach(async () => {
   vi.setSystemTime(new Date("2026-11-01T10:00:00Z"));
 });
 
-afterEach(() => {
+afterEach(async () => {
+  const stops = live.splice(0).map((delivery) => delivery.stop());
+  await advance(4_000, 500);
+  await Promise.all(stops);
   vi.useRealTimers();
   vi.restoreAllMocks();
   if (sqlite.open) sqlite.close();
@@ -177,6 +206,13 @@ async function advance(ms: number, step = 100): Promise<void> {
   for (let i = 0; i < 4; i += 1) await new Promise((resolve) => setImmediate(resolve));
 }
 
+/** Stops a delivery, moving the clock while a line it submitted settles. */
+async function stopped(delivery: AnswerDelivery): Promise<void> {
+  const stopping = delivery.stop();
+  await advance(DELIVERY_SETTLE_MS + 500, 250);
+  await stopping;
+}
+
 /** Moves the clock until `done` holds, failing after `maxMs`. */
 async function until(done: () => boolean | Promise<boolean>, maxMs = 30_000): Promise<void> {
   for (let elapsed = 0; elapsed <= maxMs; elapsed += 100) {
@@ -189,9 +225,34 @@ async function until(done: () => boolean | Promise<boolean>, maxMs = 30_000): Pr
 interface Report {
   path: string;
   body: Record<string, unknown>;
+  /** What another connection to the database read as committed when the report was sent. */
+  committed?: { delivery_status: string; intent: string | null };
 }
 
-function setup(options: { store?: DaintreeLocalStore; ptyReady?: boolean } = {}) {
+/** Reads a question's delivery state and an intent's state from a second connection: only what was committed. */
+function readCommitted(questionId: string, injectionId: string) {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const q = db
+      .prepare("SELECT delivery_status FROM decisions_questions WHERE question_id = ?")
+      .get(questionId) as { delivery_status: string } | undefined;
+    const i = db
+      .prepare("SELECT state FROM decisions_injection_intents WHERE injection_id = ?")
+      .get(injectionId) as { state: string } | undefined;
+    return { delivery_status: q?.delivery_status ?? "missing", intent: i?.state ?? null };
+  } finally {
+    db.close();
+  }
+}
+
+function setup(
+  options: {
+    store?: DaintreeLocalStore;
+    ptyReady?: boolean;
+    /** The first hold fails: thrown at once, or rejected later. */
+    failFirstHold?: "sync" | "async";
+  } = {}
+) {
   const store = options.store ?? new DaintreeLocalStore(sqlite);
   const client = new FakePtyClient();
   client.terminals.set(PANE, atPrompt());
@@ -219,7 +280,12 @@ function setup(options: { store?: DaintreeLocalStore; ptyReady?: boolean } = {})
   const fetch = async (input: string | URL | Request, init?: RequestInit) => {
     if (!relay.up) throw new TypeError("fetch failed");
     const url = new URL(typeof input === "string" ? input : input.toString());
-    reports.push({ path: url.pathname, body: JSON.parse(String(init?.body ?? "{}")) });
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    const report: Report = { path: url.pathname, body };
+    if (url.pathname.endsWith("/deliveries/terminal")) {
+      report.committed = readCommitted(String(body.question_id), String(body.injection_id));
+    }
+    reports.push(report);
     return new Response(JSON.stringify({ ok: true }), {
       status: 200,
       headers: { "content-type": "application/json" },
@@ -234,9 +300,14 @@ function setup(options: { store?: DaintreeLocalStore; ptyReady?: boolean } = {})
       getPtyClient: () => (pty.ready ? client : null),
       holdWakes: () => {
         holds.taken += 1;
+        if (holds.taken === 1 && options.failFirstHold === "sync") throw new Error("no hold");
+        if (holds.taken === 1 && options.failFirstHold === "async") {
+          return Promise.reject(new Error("no hold"));
+        }
         const scope = notify.openWakeScope();
         return {
           queueWake: (pane, projectId, wake) => scope.enqueueWake(pane, projectId, wake),
+          cancelQueued: () => scope.cancelQueued(),
           release: () => {
             holds.released += 1;
             scope.release();
@@ -254,6 +325,7 @@ function setup(options: { store?: DaintreeLocalStore; ptyReady?: boolean } = {})
     client: new RelayClient({ identity, fetch, maxRetries: 0 }),
     onKeysUnusable: keysUnusable,
   });
+  live.push(delivery);
   const patch = (fields: Partial<NotifyTerminalInfo>) =>
     client.terminals.set(PANE, { ...client.terminals.get(PANE)!, ...fields });
   const signals_ = (signal: PaneSignal) => [...signals].forEach((onPane) => onPane(signal));
@@ -398,6 +470,7 @@ describe("AnswerDelivery", () => {
 
     h.delivery.start();
     await until(() => h.client.submitted.length === 1);
+    expect(h.client.submitted[0].id).toBe(PANE);
     expect(typedChoices(h.client.submitted[0].text)).toEqual(["approve"]);
 
     await until(async () => (await h.question(Q1))?.delivery_status === "terminal-delivered");
@@ -409,12 +482,17 @@ describe("AnswerDelivery", () => {
       answer_revision: 1,
       injection_id: row.last_injection_id,
     });
+    // Recorded here first: the relay hears of it only once that is committed.
+    expect(h.terminalReports()[0].committed).toEqual({
+      delivery_status: "terminal-delivered",
+      intent: "typed",
+    });
     expect(await h.store.openIntents()).toEqual([]);
 
     // Typed once, however long it waits afterwards.
     await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
     expect(h.client.submitted).toHaveLength(1);
-    await h.delivery.stop();
+    await stopped(h.delivery);
   });
 
   it("waits while the pane is busy, and types the answer once it settles at its prompt", async () => {
@@ -430,7 +508,7 @@ describe("AnswerDelivery", () => {
     h.settles();
     await until(() => h.client.submitted.length === 1, 5_000);
     expect(typedChoices(h.client.submitted[0].text)).toEqual(["approve"]);
-    await h.delivery.stop();
+    await stopped(h.delivery);
   });
 
   it.each([
@@ -470,7 +548,7 @@ describe("AnswerDelivery", () => {
 
       await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
       expect(h.client.submitted).toEqual([]);
-      await h.delivery.stop();
+      await stopped(h.delivery);
     }
   );
 
@@ -482,23 +560,25 @@ describe("AnswerDelivery", () => {
     await answered(h.store, Q1, 1, "first");
     h.delivery.request();
     await until(() => h.client.submitted.length === 1, 10_000);
+    const firstAt = h.client.submitted[0].at;
     // The agent takes the first answer and works on it.
     h.works();
-    await advance(5_000);
+    await advance(500);
     await answered(h.store, Q2, 2, "second");
     h.delivery.request();
-    await advance(1_000);
+    await advance(500);
     expect(h.client.submitted).toHaveLength(1);
 
+    // Back at its prompt well inside the pane's spacing: the second answer waits it out.
     h.settles();
+    await advance(firstAt + MIN_NOTIFY_INTERVAL_MS - 200 - Date.now());
+    expect(h.client.submitted).toHaveLength(1);
     await until(() => h.client.submitted.length === 2, 15_000);
 
     expect(h.client.submitted.map((s) => typedChoices(s.text))).toEqual([["first"], ["second"]]);
-    expect(h.client.submitted[1].at - h.client.submitted[0].at).toBeGreaterThanOrEqual(
-      MIN_NOTIFY_INTERVAL_MS
-    );
+    expect(h.client.submitted[1].at - firstAt).toBeGreaterThanOrEqual(MIN_NOTIFY_INTERVAL_MS);
     await until(async () => (await h.question(Q2))?.delivery_status === "terminal-delivered");
-    await h.delivery.stop();
+    await stopped(h.delivery);
   });
 
   it("joins answers that waited on a busy pane into one paste, in question order", async () => {
@@ -516,7 +596,7 @@ describe("AnswerDelivery", () => {
 
     expect(h.client.submitted).toHaveLength(1);
     expect(typedChoices(h.client.submitted[0].text)).toEqual(["first", "second"]);
-    await h.delivery.stop();
+    await stopped(h.delivery);
   });
 
   it("takes a crashed injection whose marker is on the run's screen as delivered, and never retypes it", async () => {
@@ -532,7 +612,7 @@ describe("AnswerDelivery", () => {
 
     await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
     expect(h.client.submitted).toEqual([]);
-    await h.delivery.stop();
+    await stopped(h.delivery);
   });
 
   it("calls a crashed injection with no marker on screen uncertain, and never types it again", async () => {
@@ -549,7 +629,7 @@ describe("AnswerDelivery", () => {
     h.signal("settled");
     await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
     expect(h.client.submitted).toEqual([]);
-    await h.delivery.stop();
+    await stopped(h.delivery);
   });
 
   it("keeps an answer recorded as typed delivered, though its pane closed before it was reported", async () => {
@@ -569,7 +649,7 @@ describe("AnswerDelivery", () => {
     });
     expect((await h.store.getIntent(CRASHED))?.state).toBe("acked");
     expect(h.client.submitted).toEqual([]);
-    await h.delivery.stop();
+    await stopped(h.delivery);
   });
 
   it("types while the relay is out of reach, and reports once it is back", async () => {
@@ -589,7 +669,7 @@ describe("AnswerDelivery", () => {
     await until(async () => (await h.store.getIntent(injection))?.state === "acked");
     expect(h.terminalReports()).toHaveLength(1);
     expect(h.client.submitted).toHaveLength(1);
-    await h.delivery.stop();
+    await stopped(h.delivery);
   });
 
   it("reads only the pending index each minute while nothing waits", async () => {
@@ -607,7 +687,7 @@ describe("AnswerDelivery", () => {
     // Found by the next minute's read, with nothing else asking.
     await answered(h.store, Q1, 1, "approve");
     await until(() => h.client.submitted.length === 1, DELIVERY_CHECK_INTERVAL_MS + 10_000);
-    await h.delivery.stop();
+    await stopped(h.delivery);
   });
 
   it("reconciles a crash only once the pty host can be asked", async () => {
@@ -626,7 +706,7 @@ describe("AnswerDelivery", () => {
     h.signal("appeared");
     await until(async () => (await h.question(Q1))?.delivery_status === "terminal-delivered");
     expect(h.client.submitted).toEqual([]);
-    await h.delivery.stop();
+    await stopped(h.delivery);
   });
 
   it("settles an answer queued to type when stopped, so the next start types it", async () => {
@@ -636,7 +716,7 @@ describe("AnswerDelivery", () => {
     await until(async () => (await h.store.openIntents()).length === 1, 5_000);
     expect(h.client.submitted).toEqual([]);
 
-    await h.delivery.stop();
+    await stopped(h.delivery);
     expect(h.holds).toEqual({ taken: 1, released: 1 });
     expect(h.watching()).toBe(0);
     expect(await h.store.openIntents()).toEqual([]);
@@ -647,6 +727,120 @@ describe("AnswerDelivery", () => {
     const next = setup({ store: h.store });
     next.delivery.start();
     await until(() => next.client.submitted.length === 1);
-    await next.delivery.stop();
+    await stopped(next.delivery);
+  });
+  it("waits for an answer already submitted to be written before it stops, and records it delivered", async () => {
+    const h = setup();
+    h.client.holdWrites = true;
+    await answered(h.store, Q1, 1, "approve");
+    h.delivery.start();
+    await until(() => h.client.submitted.length === 1, 5_000);
+
+    let stopped = false;
+    const stopping = h.delivery.stop().then(() => {
+      stopped = true;
+    });
+    await advance(1_000);
+    expect(stopped).toBe(false);
+
+    h.client.writeHeld();
+    await until(() => stopped, DELIVERY_SETTLE_MS);
+    await stopping;
+    const row = (await h.question(Q1))!;
+    expect(row.delivery_status).toBe("terminal-delivered");
+    expect((await h.store.getIntent(row.last_injection_id!))?.state).toMatch(/^(typed|acked)$/);
+  });
+
+  it("stops taking writes once a submitted answer outlasts the settle window, leaving it for recovery", async () => {
+    const h = setup();
+    h.client.holdWrites = true;
+    await answered(h.store, Q1, 1, "approve");
+    h.delivery.start();
+    await until(() => h.client.submitted.length === 1, 5_000);
+
+    let stopped = false;
+    void h.delivery.stop().then(() => {
+      stopped = true;
+    });
+    await advance(DELIVERY_SETTLE_MS - 200);
+    expect(stopped).toBe(false);
+    await advance(400);
+    expect(stopped).toBe(true);
+
+    // Neither delivered nor given up on: the next start looks for its marker.
+    await advance(5_000);
+    const intents = await h.store.openIntents();
+    expect(intents.map((i) => i.state)).toEqual(["intent"]);
+    expect((await h.question(Q1))?.delivery_status).toBe("desktop-received");
+  });
+
+  it.each(["sync", "async"] as const)(
+    "asks for the wake hold again after a first hold that failed %s",
+    async (failFirstHold) => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const h = setup({ failFirstHold });
+      await answered(h.store, Q1, 1, "approve");
+      h.delivery.start();
+      await advance(1_000);
+      expect(h.holds.taken).toBe(1);
+      expect(h.client.submitted).toEqual([]);
+
+      h.signal("appeared");
+      await until(() => h.client.submitted.length === 1, 5_000);
+      expect(h.holds.taken).toBe(2);
+    }
+  );
+
+  it("leaves a crashed injection unreconciled while the pty host doesn't answer, then finds its marker", async () => {
+    const h = setup();
+    await answered(h.store, Q1, 1, "approve");
+    await h.store.putIntent(intent(CRASHED, Q1));
+    h.client.screens.set(PANE, `${markerFor(CRASHED)}\r\n`);
+    h.client.failStrictReads = 1;
+
+    h.delivery.start();
+    await advance(5_000);
+    expect((await h.store.getIntent(CRASHED))?.state).toBe("intent");
+    expect((await h.question(Q1))?.delivery_status).toBe("desktop-received");
+
+    h.signal("appeared");
+    await until(async () => (await h.question(Q1))?.delivery_status === "terminal-delivered");
+    expect(h.client.submitted).toEqual([]);
+  });
+
+  it("keeps an answer whose marker an earlier recovery found delivered, though its intent wasn't updated", async () => {
+    const h = setup();
+    await answered(h.store, Q1, 1, "approve");
+    const row = (await h.question(Q1))!;
+    const [entry] = parseAnswers(row.answers_json);
+    await h.store.updateQuestion(Q1, {
+      answers_json: serializeAnswers([{ ...entry, delivered: true, injection_id: CRASHED }]),
+      delivery_status: "terminal-delivered",
+      delivered_revision: 1,
+      last_injection_id: CRASHED,
+    });
+    await h.store.putIntent(intent(CRASHED, Q1));
+    // The marker is gone from the screen now.
+    h.client.screens.set(PANE, "❯ \r\n");
+
+    h.delivery.start();
+    await until(async () => (await h.store.getIntent(CRASHED))?.state === "acked");
+    expect((await h.question(Q1))?.delivery_status).toBe("terminal-delivered");
+    expect(h.client.submitted).toEqual([]);
+  });
+
+  it("tries again after each settled pane's grace, however busy the other panes are", async () => {
+    const h = setup();
+    const pending = vi.spyOn(h.store, "hasPendingDelivery");
+    h.delivery.start();
+    await advance(1_000);
+    const before = pending.mock.calls.length;
+
+    // A settle every second, for ten seconds: the first is looked at on time.
+    for (let i = 0; i < 10; i += 1) {
+      h.signal("settled");
+      await advance(1_000);
+    }
+    expect(pending.mock.calls.length - before).toBeGreaterThanOrEqual(5);
   });
 });

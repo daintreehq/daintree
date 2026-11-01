@@ -801,6 +801,70 @@ describe("DecisionsService relay connection", () => {
     expect(events).toEqual(["started 1", "stopped 1", "started 2"]);
   });
 
+  it("starts a replacement connection only once the one stopped before it has settled", async () => {
+    const events: string[] = [];
+    const settles: Array<() => void> = [];
+    const made: RelayConnectionOptions[] = [];
+    const service = new DecisionsService({
+      openStore: async () => fakeStore(),
+      keyFilePath: () => "/nonexistent/keys.bin",
+      connect: (options) => {
+        made.push(options);
+        const n = made.length;
+        return {
+          start: () => events.push(`started ${n}`),
+          stop: () => {
+            events.push(`stopped ${n}`);
+            return new Promise<void>((resolve) => {
+              settles.push(() => {
+                events.push(`settled ${n}`);
+                resolve();
+              });
+            });
+          },
+        };
+      },
+    });
+    await service.start(on(RELAY));
+
+    // Another identity: a disconnect and a new claim.
+    service.updateSettings(on({ ...RELAY, deviceId: "dev_87654321" }));
+    await Promise.resolve();
+    expect(events).toEqual(["started 1", "stopped 1"]);
+
+    settles[0]!();
+    await vi.waitFor(() =>
+      expect(events).toEqual(["started 1", "stopped 1", "settled 1", "started 2"])
+    );
+    expect(made[1]!.relay.deviceId).toBe("dev_87654321");
+  });
+
+  it("resolves a suspension only once its connection has settled, so the keys can go", async () => {
+    let settle!: () => void;
+    const service = new DecisionsService({
+      openStore: async () => fakeStore(),
+      keyFilePath: () => "/nonexistent/keys.bin",
+      connect: () => ({
+        start: () => {},
+        stop: () =>
+          new Promise<void>((resolve) => {
+            settle = resolve;
+          }),
+      }),
+    });
+    await service.start(on(RELAY));
+
+    let suspended = false;
+    const suspending = service.suspendConnection().then(() => {
+      suspended = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(suspended).toBe(false);
+    settle();
+    await suspending;
+    expect(suspended).toBe(true);
+  });
+
   it("names the store as the problem when it can't open for a relay that's set up", async () => {
     const { service, made } = connected(async () => {
       throw new Error("database unavailable");
