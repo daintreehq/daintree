@@ -13,6 +13,9 @@ export const DECISIONS_METHOD_CHANNELS = {
   getPairing: "decisions:get-pairing",
   approvePairing: "decisions:approve-pairing",
   declinePairing: "decisions:decline-pairing",
+  exportData: "decisions:export-data",
+  deleteRelayData: "decisions:delete-relay-data",
+  deleteLocalData: "decisions:delete-local-data",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof DECISIONS_METHOD_CHANNELS;

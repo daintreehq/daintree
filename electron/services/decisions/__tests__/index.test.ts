@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,6 +19,32 @@ vi.mock("../relayIdentity.js", () => ({
   claimDecisionsRelay: setupRuns.claim,
   restoreDecisionsIdentity: setupRuns.restore,
 }));
+
+// Building an archive and the relay's delete are their own modules'; here only how the entry runs them.
+const dataRuns = vi.hoisted(() => ({ buildArchive: vi.fn(), deleteRelay: vi.fn() }));
+vi.mock("../dataExport.js", () => ({ buildDecisionsArchive: dataRuns.buildArchive }));
+vi.mock("../relayData.js", () => ({ deleteDecisionsRelayData: dataRuns.deleteRelay }));
+// Atomic writes pass through, held while `writeHeld` is set so a test can act mid-write.
+const writes = vi.hoisted(() => ({ held: null as null | Promise<void>, writing: false }));
+vi.mock("../../../utils/fs.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../utils/fs.js")>();
+  return {
+    ...actual,
+    resilientAtomicWriteFile: async (
+      ...args: Parameters<typeof actual.resilientAtomicWriteFile>
+    ) => {
+      writes.writing = true;
+      await writes.held;
+      try {
+        return await actual.resilientAtomicWriteFile(...args);
+      } finally {
+        writes.writing = false;
+      }
+    },
+  };
+});
+// The stored rows, in memory: `failErase` makes the next erase fail, once.
+const storedRows = vi.hoisted(() => ({ count: 0, failErase: false }));
 
 vi.mock("../../../ipc/utils.js", () => ({ broadcastToProjectRenderers: broadcast }));
 
@@ -72,6 +98,16 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
       super({
         ...options,
         keyFilePath: () => keyFile.path,
+        openRows: async () => ({
+          erase: () => {
+            if (storedRows.failErase) {
+              storedRows.failErase = false;
+              throw new Error("database is locked");
+            }
+            storedRows.count = 0;
+          },
+          exist: () => storedRows.count > 0,
+        }),
         connect: (connectionOptions) => {
           const made: (typeof connections)[number] = {
             options: connectionOptions,
@@ -131,7 +167,10 @@ import {
   _resetDecisionsForTesting,
   checkRelay,
   claimRelay,
+  deleteLocalData,
+  deleteRelayData,
   disconnectRelay,
+  exportData,
   getDecisionsPaneState,
   getDecisionsService,
   getDecisionsStatus,
@@ -162,6 +201,12 @@ describe("Decisions entry", () => {
     rmSync(keyFile.path, { force: true });
     setupRuns.claim.mockReset();
     setupRuns.restore.mockReset();
+    dataRuns.buildArchive.mockReset();
+    dataRuns.deleteRelay.mockReset();
+    storedRows.count = 0;
+    storedRows.failErase = false;
+    writes.held = null;
+    rmSync(`${keyFile.path}.erasing`, { force: true });
     saved.value = undefined;
     loads.failNextConstruct = false;
     loads.failNextOpen = false;
@@ -896,6 +941,224 @@ describe("Decisions entry", () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(pushedStatuses()).toEqual([]);
       expect(connections[1]!.stopped).toBe(1);
+    });
+  });
+
+  describe("data (#16025)", () => {
+    const PASSPHRASE = "a long export passphrase";
+    const ARCHIVE = {
+      fileName: "decisions-export-2026-11-01.dxz.json",
+      text: '{"v":1,"kdf":"PBKDF2-SHA256"}',
+      questions: 2,
+      auditEvents: 5,
+    };
+
+    function exportTarget(): string {
+      return join(keyFile.path, "..", ARCHIVE.fileName);
+    }
+
+    it("exports the archive to the file picked, readable by its owner alone", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startDecisionsIfEnabled();
+      dataRuns.buildArchive.mockResolvedValue({ archive: ARCHIVE });
+      const chooser = vi.fn(async () => exportTarget());
+
+      await expect(exportData({ passphrase: PASSPHRASE }, chooser)).resolves.toEqual({
+        result: "saved",
+        path: exportTarget(),
+        questions: 2,
+        auditEvents: 5,
+      });
+
+      expect(chooser).toHaveBeenCalledWith(ARCHIVE.fileName);
+      expect(dataRuns.buildArchive).toHaveBeenCalledWith(
+        expect.objectContaining({ passphrase: PASSPHRASE })
+      );
+      expect(readFileSync(exportTarget(), "utf8")).toBe(ARCHIVE.text);
+      if (process.platform !== "win32") expect(statSync(exportTarget()).mode & 0o777).toBe(0o600);
+      rmSync(exportTarget(), { force: true });
+    });
+
+    it("writes nothing when no file is picked, or Decisions turned off while the dialog was open", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startDecisionsIfEnabled();
+      dataRuns.buildArchive.mockResolvedValue({ archive: ARCHIVE });
+
+      await expect(exportData({ passphrase: PASSPHRASE }, async () => null)).resolves.toEqual({
+        result: "cancelled",
+      });
+      await expect(
+        exportData({ passphrase: PASSPHRASE }, async () => {
+          await setDecisionsEnabled(false);
+          return exportTarget();
+        })
+      ).resolves.toEqual({ result: "cancelled" });
+      expect(existsSync(exportTarget())).toBe(false);
+    });
+
+    it("drops an archive whose store closed while the dialog was open, even with Decisions on again", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startDecisionsIfEnabled();
+      dataRuns.buildArchive.mockResolvedValue({ archive: ARCHIVE });
+
+      await expect(
+        exportData({ passphrase: PASSPHRASE }, async () => {
+          await setDecisionsEnabled(false);
+          await setDecisionsEnabled(true);
+          return exportTarget();
+        })
+      ).resolves.toEqual({ result: "cancelled" });
+      await expect(
+        exportData({ passphrase: PASSPHRASE }, async () => {
+          await deleteLocalData();
+          return exportTarget();
+        })
+      ).resolves.toEqual({ result: "cancelled" });
+      expect(existsSync(exportTarget())).toBe(false);
+    });
+
+    it("holds a local deletion asked for mid-write until the archive is written", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startDecisionsIfEnabled();
+      storedRows.count = 3;
+      dataRuns.buildArchive.mockResolvedValue({ archive: ARCHIVE });
+      let release!: () => void;
+      writes.held = new Promise<void>((resolve) => (release = resolve));
+
+      const exporting = exportData({ passphrase: PASSPHRASE }, async () => exportTarget());
+      await vi.waitFor(() => expect(writes.writing).toBe(true));
+      const deleting = deleteLocalData();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(storedRows.count).toBe(3);
+
+      release();
+      await expect(exporting).resolves.toMatchObject({ result: "saved" });
+      await expect(deleting).resolves.toMatchObject({ result: "deleted" });
+      expect(storedRows.count).toBe(0);
+      rmSync(exportTarget(), { force: true });
+    });
+
+    it("hands back what stopped the archive being built, opening no dialog", async () => {
+      saved.value = { enabled: true };
+      await startDecisionsIfEnabled();
+      dataRuns.buildArchive.mockResolvedValue({ failure: { result: "no-identity" } });
+      const chooser = vi.fn(async () => exportTarget());
+
+      await expect(exportData({ passphrase: PASSPHRASE }, chooser)).resolves.toEqual({
+        result: "no-identity",
+      });
+      expect(chooser).not.toHaveBeenCalled();
+    });
+
+    it("says the history isn't open when the lifetime has no store", async () => {
+      saved.value = { enabled: true };
+      loads.failNextOpen = true;
+      await expect(startDecisionsIfEnabled()).rejects.toThrow("store unavailable");
+
+      await expect(exportData({ passphrase: PASSPHRASE }, async () => null)).resolves.toEqual({
+        result: "store-unavailable",
+      });
+      expect(dataRuns.buildArchive).not.toHaveBeenCalled();
+    });
+
+    it("refuses a passphrase shorter than the archive's encryption takes", async () => {
+      saved.value = { enabled: true };
+
+      await expect(
+        exportData({ passphrase: "short" }, async () => exportTarget())
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+      expect(dataRuns.buildArchive).not.toHaveBeenCalled();
+    });
+
+    it("refuses to export or delete while off, making no service", async () => {
+      saved.value = { enabled: false, ...RELAY };
+
+      await expect(exportData({ passphrase: PASSPHRASE }, async () => null)).rejects.toMatchObject(
+        CANCELLED
+      );
+      await expect(deleteRelayData({ origin: RELAY.relayOrigin })).rejects.toMatchObject(CANCELLED);
+      await expect(deleteLocalData()).rejects.toMatchObject(CANCELLED);
+      expect(peekDecisionsService()).toBeNull();
+    });
+
+    it("deletes the relay's data for the relay confirmed, with the setting as it reads now", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startDecisionsIfEnabled();
+      dataRuns.deleteRelay.mockResolvedValue({ result: "deleted", origin: RELAY.relayOrigin });
+
+      await expect(deleteRelayData({ origin: RELAY.relayOrigin })).resolves.toEqual({
+        result: "deleted",
+        origin: RELAY.relayOrigin,
+      });
+      expect(dataRuns.deleteRelay).toHaveBeenCalledWith(
+        expect.objectContaining({
+          origin: RELAY.relayOrigin,
+          settings: expect.objectContaining({ relayOrigin: RELAY.relayOrigin }),
+          signal: expect.any(AbortSignal),
+        })
+      );
+    });
+
+    it("aborts a relay deletion's request at quit", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startDecisionsIfEnabled();
+      dataRuns.deleteRelay.mockImplementation(
+        (options: { signal: AbortSignal }) =>
+          new Promise((resolve) => {
+            options.signal.addEventListener("abort", () =>
+              resolve({ result: "unconfirmed", origin: RELAY.relayOrigin, reason: "network" })
+            );
+          })
+      );
+
+      const deleting = deleteRelayData({ origin: RELAY.relayOrigin });
+      await vi.waitFor(() => expect(dataRuns.deleteRelay).toHaveBeenCalled());
+      await stopDecisions();
+
+      await expect(deleting).resolves.toMatchObject({ result: "unconfirmed" });
+    });
+
+    it("deletes this computer's rows, keys and relay record, keeping the switch and consent", async () => {
+      saved.value = { enabled: true, consentedAt: 5, proxyAllowlisted: true, ...RELAY };
+      await startDecisionsIfEnabled();
+      writeFileSync(keyFile.path, "sealed");
+      storedRows.count = 3;
+
+      await expect(deleteLocalData()).resolves.toEqual({
+        result: "deleted",
+        status: withRevision({ state: "not-connected", consentedAt: 5 }),
+      });
+
+      expect(storedRows.count).toBe(0);
+      expect(existsSync(keyFile.path)).toBe(false);
+      expect(saved.value).toEqual({
+        ...defaultDecisionsSettings(),
+        enabled: true,
+        consentedAt: 5,
+        proxyAllowlisted: true,
+      });
+      expect(peekDecisionsService()?.getSettings()?.relayOrigin).toBeNull();
+      expect(peekDecisionsService()?.getStore()).not.toBeNull();
+      // Every window hears the relay record go, not only the one that asked.
+      await vi.waitFor(() =>
+        expect(pushedStatuses().at(-1)).toEqual(
+          withRevision({ state: "not-connected", consentedAt: 5 })
+        )
+      );
+    });
+
+    it("leaves everything as it was when the rows can't be deleted", async () => {
+      saved.value = { enabled: true, consentedAt: 5, ...RELAY };
+      await startDecisionsIfEnabled();
+      writeFileSync(keyFile.path, "sealed");
+      storedRows.count = 3;
+      storedRows.failErase = true;
+
+      await expect(deleteLocalData()).resolves.toEqual({ result: "failed", reason: "storage" });
+
+      expect(storedRows.count).toBe(3);
+      expect(readFileSync(keyFile.path, "utf8")).toBe("sealed");
+      expect(saved.value).toMatchObject({ enabled: true, consentedAt: 5, ...RELAY });
     });
   });
 });

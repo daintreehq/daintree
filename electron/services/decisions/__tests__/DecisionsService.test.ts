@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { DecisionsService, type DecisionsStoreOpener } from "../DecisionsService.js";
 import type { DaintreeLocalStore } from "../daintreeLocalStore.js";
@@ -8,6 +11,7 @@ import type {
   PaneDecisionState,
 } from "../../../../shared/types/decisions.js";
 import { outstandingRows, row } from "./questionRows.js";
+import type { DecisionsRows } from "../localData.js";
 import type { RelayConnectionOptions } from "../relayConnection.js";
 
 interface FakeStore {
@@ -18,9 +22,15 @@ function fakeStore(): FakeStore & DaintreeLocalStore {
   return { close: vi.fn(async () => {}) } as unknown as FakeStore & DaintreeLocalStore;
 }
 
+/** A key file nothing writes, so each start finds no deletion to finish. */
+const ABSENT_KEY_FILE = join(tmpdir(), "decisions-service-test-absent", "keys.bin");
+
 /** A service whose store opener hands out fakes, recording each one. */
 function make(openStore?: DecisionsStoreOpener): DecisionsService {
-  return new DecisionsService({ openStore: openStore ?? (async () => fakeStore()) });
+  return new DecisionsService({
+    openStore: openStore ?? (async () => fakeStore()),
+    keyFilePath: () => ABSENT_KEY_FILE,
+  });
 }
 
 function on(overrides: Partial<DecisionsSettings> = {}): DecisionsSettings {
@@ -181,14 +191,15 @@ describe("DecisionsService", () => {
     const service = new DecisionsService({ openStore: async () => fakeStore(), keyFilePath });
     expect(() => service.getKeyStore()).toThrow(/off/);
 
+    // Starting only names the file, to look for a deletion that stopped partway beside it.
     await service.start(on());
-    expect(keyFilePath).not.toHaveBeenCalled();
+    expect(keyFilePath).toHaveBeenCalledTimes(1);
 
     const store = service.getKeyStore();
     await service.start(on({ proxyAllowlisted: true }));
     expect(service.getKeyStore()).toBe(store);
     expect(store.filePath).toBe("/tmp/decisions-test/keys.bin");
-    expect(keyFilePath).toHaveBeenCalledTimes(1);
+    expect(keyFilePath).toHaveBeenCalledTimes(2);
   });
 
   it("closes the lifetime's key store on stop, and a new lifetime gets its own", async () => {
@@ -363,6 +374,7 @@ describe("DecisionsService pane state", () => {
     const pushes: Array<{ projectId: string; state: PaneDecisionState }> = [];
     const service = new DecisionsService({
       openStore: async () => fakeStore(),
+      keyFilePath: () => ABSENT_KEY_FILE,
       publishPaneState: (projectId, state) => pushes.push({ projectId, state }),
     });
     return { pushes, service };
@@ -432,6 +444,7 @@ describe("DecisionsService pane state", () => {
     const pushes: PaneDecisionState[] = [];
     const service = new DecisionsService({
       openStore: async () => store,
+      keyFilePath: () => ABSENT_KEY_FILE,
       publishPaneState: (_projectId, state) => pushes.push(state),
     });
     await service.start(on());
@@ -453,6 +466,7 @@ describe("DecisionsService pane state", () => {
     const pushes: PaneDecisionState[] = [];
     const service = new DecisionsService({
       openStore: async () => store,
+      keyFilePath: () => ABSENT_KEY_FILE,
       publishPaneState: (_projectId, state) => pushes.push(state),
     });
     await service.start(on());
@@ -651,5 +665,259 @@ describe("DecisionsService relay connection", () => {
     await expect(service.start(on(RELAY))).rejects.toThrow("database unavailable");
     expect(service.getStatus()).toEqual({ state: "not-connected", problem: "storage" });
     expect(made).toHaveLength(0);
+  });
+});
+
+describe("DecisionsService deleting local data", () => {
+  const RELAY = {
+    relayOrigin: "https://relay.example.com",
+    installationId: "inst_12345678",
+    deviceId: "dev_12345678",
+    hostId: "host_12345678",
+  };
+  const KEYS = '{"v":1,"protection":"keychain","ciphertext":"sealed"}';
+
+  /**
+   * A service over a key file of its own, rows held in memory, and a setting
+   * that `forgetIdentity` clears; `log` records the order things happened in.
+   */
+  function setup(
+    options: {
+      rows?: number;
+      failErase?: boolean;
+      forgetFails?: boolean;
+      /** Holds the rows from the deletion until it settles. */
+      rowsReady?: Promise<void>;
+    } = {}
+  ) {
+    const dir = mkdtempSync(join(tmpdir(), "decisions-service-erase-"));
+    const keyFile = join(dir, "keys.bin");
+    const log: string[] = [];
+    const rows = { count: options.rows ?? 2 };
+    const pushes: PaneDecisionState[] = [];
+    const stores: Array<FakeStore & DaintreeLocalStore> = [];
+    let forgetFails = options.forgetFails ?? false;
+    const decisionRows: DecisionsRows = {
+      erase: () => {
+        log.push("erase rows");
+        if (options.failErase) throw new Error("database is locked");
+        rows.count = 0;
+      },
+      exist: () => rows.count > 0,
+    };
+    const service = new DecisionsService({
+      keyFilePath: () => keyFile,
+      openStore: async () => {
+        log.push("open store");
+        const store = fakeStore();
+        store.close.mockImplementation(async () => {
+          log.push("close store");
+        });
+        stores.push(store);
+        return store;
+      },
+      openRows: async () => {
+        log.push("open rows");
+        await options.rowsReady;
+        return decisionRows;
+      },
+      forgetIdentity: () => {
+        if (forgetFails) throw new Error("settings unwritable");
+        log.push("forget relay");
+        return on();
+      },
+      publishPaneState: (_projectId, state) => pushes.push(state),
+      // Recorded, never run: no socket opens in these tests.
+      connect: () => ({
+        start: () => log.push("connect"),
+        stop: () => log.push("disconnect"),
+      }),
+    });
+    return {
+      service,
+      dir,
+      keyFile,
+      log,
+      rows,
+      pushes,
+      stores,
+      allowForget: () => {
+        forgetFails = false;
+      },
+      cleanup: () => rmSync(dir, { recursive: true, force: true }),
+    };
+  }
+
+  it("closes the store and keys first, deletes everything, then opens an empty store", async () => {
+    const t = setup();
+    try {
+      writeFileSync(t.keyFile, KEYS);
+      await t.service.start(on(RELAY));
+      const keyStore = t.service.getKeyStore();
+      t.service.observeQuestions([row(1)]);
+      t.log.length = 0;
+
+      await expect(t.service.eraseLocalData()).resolves.toEqual({ result: "deleted" });
+
+      // The connection stops before the store closes, and nothing reconnects once the relay is forgotten.
+      expect(t.log).toEqual([
+        "disconnect",
+        "close store",
+        "open rows",
+        "erase rows",
+        "forget relay",
+        "open store",
+      ]);
+      expect(t.rows.count).toBe(0);
+      expect(existsSync(t.keyFile)).toBe(false);
+      await expect(keyStore.load()).rejects.toMatchObject({ kind: "closed" });
+      expect(t.service.getStore()).toBe(t.stores[1]);
+      expect(t.service.getSettings()?.relayOrigin).toBeNull();
+      expect(t.service.getStatus()).toEqual({ state: "not-connected" });
+      // The pane that showed a question is told it has nothing now.
+      expect(t.pushes.at(-1)).toMatchObject({ terminalId: "pane-a", openQuestions: [] });
+      expect(t.service.getPaneState("pane-a")).toBeNull();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it("changes nothing when the rows can't be deleted, and carries on with a store", async () => {
+    const t = setup({ failErase: true });
+    try {
+      writeFileSync(t.keyFile, KEYS);
+      await t.service.start(on(RELAY));
+      t.service.observeQuestions([row(1)]);
+
+      await expect(t.service.eraseLocalData()).resolves.toEqual({
+        result: "failed",
+        reason: "storage",
+      });
+
+      expect(readFileSync(t.keyFile, "utf8")).toBe(KEYS);
+      expect(t.rows.count).toBe(2);
+      expect(t.service.getSettings()?.relayOrigin).toBe(RELAY.relayOrigin);
+      expect(t.service.getStore()).toBe(t.stores[1]);
+      // Nothing changed, so the relay connection comes back on the same identity.
+      expect(t.log.slice(-2)).toEqual(["open store", "connect"]);
+      expect(t.service.getPaneState("pane-a")).not.toBeNull();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it("holds no store after a deletion that didn't finish, and the next start finishes it first", async () => {
+    const t = setup({ forgetFails: true });
+    try {
+      writeFileSync(t.keyFile, KEYS);
+      await t.service.start(on(RELAY));
+
+      await expect(t.service.eraseLocalData()).resolves.toEqual({
+        result: "incomplete",
+        erased: true,
+      });
+      expect(t.service.getStore()).toBeNull();
+
+      t.allowForget();
+      await t.service.stop();
+      t.log.length = 0;
+      await t.service.start(on(RELAY));
+
+      expect(t.log).toEqual(["open rows", "forget relay", "open store"]);
+      expect(t.service.getStore()).not.toBeNull();
+      expect(existsSync(t.keyFile)).toBe(false);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it("keeps the store closed on a retry while the earlier deletion still can't finish", async () => {
+    const t = setup({ forgetFails: true });
+    try {
+      writeFileSync(t.keyFile, KEYS);
+      await t.service.start(on(RELAY));
+      await t.service.eraseLocalData();
+
+      await expect(t.service.eraseLocalData()).resolves.toEqual({
+        result: "incomplete",
+        erased: true,
+      });
+
+      expect(t.service.getStore()).toBeNull();
+      expect(t.log.filter((step) => step === "open store")).toHaveLength(1);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it("puts back keys a deletion set aside but never committed before the store opens", async () => {
+    const t = setup();
+    try {
+      writeFileSync(`${t.keyFile}.erasing`, KEYS);
+
+      await t.service.start(on(RELAY));
+
+      expect(readFileSync(t.keyFile, "utf8")).toBe(KEYS);
+      // Restored keys connect again once the store has opened.
+      expect(t.log).toEqual(["open rows", "open store", "connect"]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it("refuses while off", async () => {
+    const t = setup();
+    try {
+      await expect(t.service.eraseLocalData()).rejects.toThrow(/off/);
+      expect(t.log).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it("finishes a deletion under way before quit ends the lifetime, and opens no store after", async () => {
+    let rowsReady!: () => void;
+    const t = setup({ rowsReady: new Promise<void>((resolve) => (rowsReady = resolve)) });
+    try {
+      await t.service.start(on(RELAY));
+      t.log.length = 0;
+
+      const erasing = t.service.eraseLocalData();
+      await vi.waitFor(() => expect(t.log).toContain("open rows"));
+      const disposing = t.service.dispose();
+      rowsReady();
+
+      await expect(erasing).resolves.toEqual({ result: "deleted" });
+      await disposing;
+      expect(t.log).toEqual([
+        "disconnect",
+        "close store",
+        "open rows",
+        "erase rows",
+        "forget relay",
+      ]);
+      expect(t.service.getStore()).toBeNull();
+      expect(t.service.getStatus()).toEqual({ state: "off" });
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it("refuses a deletion still waiting its turn when quit begins", async () => {
+    const t = setup();
+    try {
+      await t.service.start(on(RELAY));
+      t.log.length = 0;
+
+      const erasing = t.service.eraseLocalData();
+      const disposing = t.service.dispose();
+
+      await expect(erasing).rejects.toThrow(/off/);
+      await disposing;
+      expect(t.rows.count).toBe(2);
+      expect(t.log).toEqual(["disconnect", "close store"]);
+    } finally {
+      t.cleanup();
+    }
   });
 });

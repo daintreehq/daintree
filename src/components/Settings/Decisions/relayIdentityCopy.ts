@@ -23,6 +23,11 @@ const KEY_STORAGE: Record<DecisionsKeyStorageFailure, string> = {
   "unsupported-format": "The Decisions key file is from another version",
 };
 
+/** Why the keys couldn't be read or sealed, as a label. */
+export function describeKeyStorage(kind: DecisionsKeyStorageFailure): string {
+  return KEY_STORAGE[kind];
+}
+
 function refusal(host: string, reason: DecisionsClaimRefusal): RelayObservation {
   switch (reason) {
     case "wrong-secret":

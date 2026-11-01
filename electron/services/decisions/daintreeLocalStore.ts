@@ -303,18 +303,44 @@ function intentFrom(r: InjectionIntent): InjectionIntent {
   };
 }
 
+/** Runs `fn` with commits made durable at once, putting the connection's own level back after. */
+function withFullSync<T>(sqlite: Database.Database, fn: () => T): T {
+  const previous = Number(sqlite.pragma("synchronous", { simple: true }));
+  sqlite.pragma("synchronous = FULL");
+  try {
+    return fn();
+  } finally {
+    try {
+      sqlite.pragma(`synchronous = ${previous}`);
+    } catch (error) {
+      console.warn("[Decisions] Couldn't restore the database's commit level:", error);
+    }
+  }
+}
+
 /**
  * Deletes everything Decisions has stored, in one transaction, leaving the
  * rest of the app database alone. For the Data → delete action (#16025): run
  * it with the store closed, or calls still queued in it would write rows back.
+ * It commits with `synchronous = FULL`, since a deletion that reports done
+ * must survive a crash straight after.
  */
 export function eraseDecisionsData(sqlite: Database.Database): void {
   if (getWritesSuppressed()) throw new DecisionsStoreUnavailableError("disk-pressure");
-  withDiskRecovery(sqlite, () =>
-    sqlite.transaction(() => {
-      for (const table of DECISIONS_TABLES) sqlite.prepare(`DELETE FROM ${table}`).run();
-      sqlite.prepare("DELETE FROM sqlite_sequence WHERE name = 'decisions_audit'").run();
-    })()
+  withFullSync(sqlite, () =>
+    withDiskRecovery(sqlite, () =>
+      sqlite.transaction(() => {
+        for (const table of DECISIONS_TABLES) sqlite.prepare(`DELETE FROM ${table}`).run();
+        sqlite.prepare("DELETE FROM sqlite_sequence WHERE name = 'decisions_audit'").run();
+      })()
+    )
+  );
+}
+
+/** Whether any Decisions row is stored, in any of the store's tables. */
+export function hasDecisionsData(sqlite: Database.Database): boolean {
+  return DECISIONS_TABLES.some(
+    (table) => sqlite.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get() !== undefined
   );
 }
 
@@ -713,18 +739,7 @@ export class DaintreeLocalStore implements LocalStore {
   }
 
   private withCommitLevel<T>(writes: boolean, fn: () => T): T {
-    if (!writes) return fn();
-    const previous = Number(this.sqlite.pragma("synchronous", { simple: true }));
-    this.sqlite.pragma("synchronous = FULL");
-    try {
-      return fn();
-    } finally {
-      try {
-        this.sqlite.pragma(`synchronous = ${previous}`);
-      } catch (error) {
-        console.warn("[Decisions] Couldn't restore the database's commit level:", error);
-      }
-    }
+    return writes ? withFullSync(this.sqlite, fn) : fn();
   }
 
   /**

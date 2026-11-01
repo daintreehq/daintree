@@ -69,7 +69,7 @@ const MAX_KIT_ITERATIONS = 10_000_000;
 const BASE64URL = /^[A-Za-z0-9_-]+$/;
 const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
-const OWNER_ROLE = "owner-desktop";
+export const OWNER_ROLE = "owner-desktop";
 
 const KEY_STORAGE_FAILURES: ReadonlySet<string> = new Set<DecisionsKeyStorageFailure>([
   "locked",
@@ -81,7 +81,7 @@ const KEY_STORAGE_FAILURES: ReadonlySet<string> = new Set<DecisionsKeyStorageFai
 ]);
 
 /** Requests that never reached the relay: nothing it could have accepted. */
-const NEVER_SENT: ReadonlySet<DecisionsRelayUnreachableReason> = new Set([
+export const NEVER_SENT: ReadonlySet<DecisionsRelayUnreachableReason> = new Set([
   "dns",
   "refused",
   "certificate",

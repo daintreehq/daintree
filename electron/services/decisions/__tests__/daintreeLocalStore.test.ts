@@ -29,6 +29,7 @@ import {
   DECISIONS_STORE_MAX_BATCH,
   DecisionsStoreUnavailableError,
   eraseDecisionsData,
+  hasDecisionsData,
 } from "../daintreeLocalStore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -470,6 +471,57 @@ describe("DaintreeLocalStore", () => {
       value: "1",
     });
     expect(await new DaintreeLocalStore(sqlite).nextAlias()).toBe(1);
+  });
+
+  it("commits the erase with synchronous FULL and hands the connection back at its own level", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    await store.commitNewQuestion(row("q1", 1), item("o1", "q1"));
+    await store.close();
+    const levels: number[] = [];
+    const original = sqlite.transaction.bind(sqlite);
+    vi.spyOn(sqlite, "transaction").mockImplementation(((fn: (...args: unknown[]) => unknown) => {
+      levels.push(Number(sqlite.pragma("synchronous", { simple: true })));
+      return original(fn);
+    }) as typeof sqlite.transaction);
+
+    eraseDecisionsData(sqlite);
+
+    expect(levels).toEqual([SYNCHRONOUS_FULL]);
+    expect(sqlite.pragma("synchronous", { simple: true })).toBe(SYNCHRONOUS_NORMAL);
+  });
+
+  it("says whether any Decisions row is stored, finding a row in each table on its own", async () => {
+    const tables = [
+      "decisions_meta",
+      "decisions_questions",
+      "decisions_outbox",
+      "decisions_inbound_events",
+      "decisions_injection_intents",
+      "decisions_audit",
+    ];
+    expect(hasDecisionsData(sqlite)).toBe(false);
+    sqlite
+      .prepare("INSERT INTO app_state (key, value) VALUES (?, ?)")
+      .run("unrelated", JSON.stringify(1));
+    expect(hasDecisionsData(sqlite)).toBe(false);
+
+    for (const only of tables) {
+      const store = new DaintreeLocalStore(sqlite);
+      await store.setMeta("k", "v");
+      await store.commitNewQuestion(row("q1", 1), item("o1", "q1"));
+      await store.putIntent(intent("i1", "q1"));
+      await store.insertEvent(event(1));
+      await store.appendAudit({ at: "a", event: "x" });
+      await store.close();
+      for (const table of tables) {
+        if (table !== only) sqlite.prepare(`DELETE FROM ${table}`).run();
+      }
+      expect(count(sqlite, only), only).toBeGreaterThan(0);
+
+      expect(hasDecisionsData(sqlite), only).toBe(true);
+      eraseDecisionsData(sqlite);
+      expect(hasDecisionsData(sqlite), only).toBe(false);
+    }
   });
 
   it("refuses to erase while disk space is critical", async () => {

@@ -1524,6 +1524,11 @@ export const CHANNELS = {
   DECISIONS_GET_PAIRING: "decisions:get-pairing",
   DECISIONS_APPROVE_PAIRING: "decisions:approve-pairing",
   DECISIONS_DECLINE_PAIRING: "decisions:decline-pairing",
+  // Exporting the decision history, and deleting the relay's stored content
+  // or this computer's Decisions data (#16025), all in main.
+  DECISIONS_EXPORT_DATA: "decisions:export-data",
+  DECISIONS_DELETE_RELAY_DATA: "decisions:delete-relay-data",
+  DECISIONS_DELETE_LOCAL_DATA: "decisions:delete-local-data",
 
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",

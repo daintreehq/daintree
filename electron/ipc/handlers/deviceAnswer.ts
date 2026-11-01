@@ -1,4 +1,5 @@
 // eager-import-allow: reads the device-answer and Decisions settings to report idle status without loading either optional service
+import { dialog } from "electron";
 import { z } from "zod";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op, opValidated } from "../define.js";
@@ -20,12 +21,17 @@ import type {
   ClaimDecisionsRelayPayload,
   DecisionsConnectResult,
   DecisionsDevicesResult,
+  DecisionsExportResult,
+  DecisionsLocalDeleteResult,
   DecisionsPairingApproveResult,
   DecisionsPairingDeclineResult,
   DecisionsPairingStartResult,
   DecisionsPairingState,
   DecisionsRelayCheck,
+  DecisionsRelayDeleteResult,
   DecisionsStatus,
+  DeleteDecisionsRelayDataPayload,
+  ExportDecisionsDataPayload,
   PaneDecisionState,
   RestoreDecisionsIdentityPayload,
   SetDecisionsEnabledPayload,
@@ -153,6 +159,12 @@ const pairingIdSchema = z.string().min(1).max(128);
 const approvePairingSchema = z
   .object({ pairingId: pairingIdSchema, code: z.string().regex(/^\d{6}$/) })
   .strict();
+
+// The passphrase's shortest length is the library's, checked by Decisions
+// itself, since importing its shared constant here would make it eager.
+const exportDataSchema = z.object({ passphrase: z.string().min(1).max(1024) }).strict();
+
+const deleteRelayDataSchema = z.object({ origin: z.string().max(2048) }).strict();
 
 function refuseWhileOff(action: string): void {
   if (!decisionsOn()) {
@@ -311,6 +323,52 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) throw setupCancelled();
         return decisions.declinePairing(pairingId);
+      }
+    ),
+    // Exporting the decision history, and deleting the relay's stored content
+    // or this computer's Decisions data (#16025). Only while on, behind the
+    // switch's transitions in main. The export's save dialog opens over the
+    // window that asked.
+    exportData: opValidated(
+      CHANNELS.DECISIONS_EXPORT_DATA,
+      exportDataSchema,
+      async (ctx, payload: ExportDecisionsDataPayload): Promise<DecisionsExportResult> => {
+        refuseWhileOff("export its data");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.exportData(payload, async (fileName) => {
+          const options = {
+            title: "Export decision history",
+            defaultPath: fileName,
+            filters: [{ name: "Decisions export", extensions: ["json"] }],
+          };
+          const window = ctx.senderWindow;
+          const chosen =
+            window && !window.isDestroyed()
+              ? await dialog.showSaveDialog(window, options)
+              : await dialog.showSaveDialog(options);
+          return chosen.canceled || !chosen.filePath ? null : chosen.filePath;
+        });
+      },
+      { withContext: true }
+    ),
+    deleteRelayData: opValidated(
+      CHANNELS.DECISIONS_DELETE_RELAY_DATA,
+      deleteRelayDataSchema,
+      async (payload: DeleteDecisionsRelayDataPayload): Promise<DecisionsRelayDeleteResult> => {
+        refuseWhileOff("delete the relay's data");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.deleteRelayData(payload);
+      }
+    ),
+    deleteLocalData: op(
+      CHANNELS.DECISIONS_DELETE_LOCAL_DATA,
+      async (): Promise<DecisionsLocalDeleteResult> => {
+        refuseWhileOff("delete its data");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.deleteLocalData();
       }
     ),
   },

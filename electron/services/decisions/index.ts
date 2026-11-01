@@ -1,35 +1,47 @@
+import { readFile } from "node:fs/promises";
 import { store } from "../../store.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { broadcastToProjectRenderers } from "../../ipc/utils.js";
 import { getAllAppWebContents } from "../../window/webContentsRegistry.js";
 import type { RelayConfig } from "@daintreehq/decisions-client";
 import { newId } from "@daintreehq/decisions-crypto";
-import type {
-  ApproveDecisionsPairingPayload,
-  ClaimDecisionsRelayPayload,
-  DecisionsConnectResult,
-  DecisionsDevicesResult,
-  DecisionsPairingApproveResult,
-  DecisionsPairingDeclineResult,
-  DecisionsPairingStartResult,
-  DecisionsPairingState,
-  DecisionsRelayCheck,
-  DecisionsRelayRequestFailure,
-  DecisionsSettings,
-  DecisionsStatus,
-  PaneDecisionState,
-  RestoreDecisionsIdentityPayload,
+import {
+  DECISIONS_EXPORT_PASSPHRASE_MIN_LENGTH,
+  type ApproveDecisionsPairingPayload,
+  type ClaimDecisionsRelayPayload,
+  type DecisionsConnectResult,
+  type DecisionsDevicesResult,
+  type DecisionsExportResult,
+  type DecisionsLocalDeleteResult,
+  type DecisionsPairingApproveResult,
+  type DecisionsPairingDeclineResult,
+  type DecisionsPairingStartResult,
+  type DecisionsPairingState,
+  type DecisionsRelayCheck,
+  type DecisionsRelayDeleteResult,
+  type DecisionsRelayRequestFailure,
+  type DecisionsSettings,
+  type DecisionsStatus,
+  type DeleteDecisionsRelayDataPayload,
+  type ExportDecisionsDataPayload,
+  type PaneDecisionState,
+  type RestoreDecisionsIdentityPayload,
 } from "../../../shared/types/decisions.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { resilientAtomicWriteFile } from "../../utils/fs.js";
 import {
   normalizeRelayOrigin,
   readDecisionsSettings,
   writeDecisionsSettings,
 } from "./decisionsSettings.js";
 import type { DecisionsService } from "./DecisionsService.js";
+import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
+import { buildDecisionsArchive, type DecisionsArchive } from "./dataExport.js";
 import { OwnerDevices } from "./pairing.js";
 import type { RelayBinding } from "./relayConnection.js";
 import { RelayCheckCancelledError, checkDecisionsRelay } from "./relayCheck.js";
+import { deleteDecisionsRelayData } from "./relayData.js";
+import type { LocalEraseOutcome } from "./localData.js";
 import {
   claimDecisionsRelay,
   restoreDecisionsIdentity,
@@ -154,7 +166,11 @@ export function getDecisionsService(): Promise<DecisionsService> {
     // After quit nothing new is made; one already being made is disposed by the stop.
     if (shutDown) return Promise.reject(new Error("Decisions has stopped for this run"));
     const made = import("./DecisionsService.js").then(({ DecisionsService }) => {
-      const next = new DecisionsService({ publishPaneState, onRelayRevoked: recordRevocation });
+      const next = new DecisionsService({
+        publishPaneState,
+        onRelayRevoked: recordRevocation,
+        forgetIdentity: forgetRecordedIdentity,
+      });
       next.onStatusChanged(() => publishStatus());
       service = next;
       return next;
@@ -221,13 +237,19 @@ function setupRefused(): AppError {
   return new AppError({ code: "CANCELLED", message: "Decisions is off, so nothing was changed" });
 }
 
-/** The running lifetime's key store, starting the lifetime if boot hasn't yet. */
-async function setupKeys(): Promise<{ service: DecisionsService; keys: SetupKeyStore }> {
+/** The running lifetime, starting it if boot hasn't yet. */
+async function runningService(): Promise<DecisionsService> {
   const settings = readDecisionsSettings(store);
   if (shutDown || !settings.enabled) throw setupRefused();
   const running = await getDecisionsService();
   if (running.getSettings() === null) await running.start(settings);
   if (shutDown) throw setupRefused();
+  return running;
+}
+
+/** The running lifetime's key store, starting the lifetime if boot hasn't yet. */
+async function setupKeys(): Promise<{ service: DecisionsService; keys: SetupKeyStore }> {
+  const running = await runningService();
   return { service: running, keys: running.getKeyStore() };
 }
 
@@ -301,6 +323,21 @@ export function restoreIdentity(
 }
 
 /**
+ * Saves the setting without the relay's origin and ids, or a revocation of
+ * that identity, keeping the switch, consent and preferences.
+ */
+function forgetRecordedIdentity(): DecisionsSettings {
+  return writeDecisionsSettings(store, {
+    ...readDecisionsSettings(store),
+    relayOrigin: null,
+    installationId: null,
+    deviceId: null,
+    hostId: null,
+    revokedAt: null,
+  });
+}
+
+/**
  * Removes this computer's Decisions identity: the key file, then the relay's
  * origin and ids in the setting. The switch, consent and stored rows stay,
  * and nothing is sent to the relay, so everything on it is untouched. Keys
@@ -320,21 +357,139 @@ export function disconnectRelay(): Promise<DecisionsStatus> {
       throw error;
     }
     try {
-      const current = readDecisionsSettings(store);
-      const saved = writeDecisionsSettings(store, {
-        ...current,
-        relayOrigin: null,
-        installationId: null,
-        deviceId: null,
-        hostId: null,
-        revokedAt: null,
-      });
-      running.updateSettings(saved);
+      running.updateSettings(forgetRecordedIdentity());
     } finally {
       // The keys are gone even if the setting didn't save.
       publishStatus();
     }
     return getDecisionsStatus();
+  });
+}
+
+async function fileHolds(path: string, text: string): Promise<boolean> {
+  try {
+    return (await readFile(path, "utf8")) === text;
+  } catch {
+    return false;
+  }
+}
+
+/** Picks where an export goes, given the archive's own file name; null when the person cancelled. */
+export type ExportDestination = (fileName: string) => Promise<string | null>;
+
+/**
+ * Exports this computer's decision history (#16025) as the library's
+ * encrypted archive, to a file the person picks. The archive is built behind
+ * the switch's transitions, from the running lifetime's store and keys; the
+ * save dialog waits outside them, so turning off or quitting never waits on
+ * it, and an archive whose store has closed meanwhile is dropped unwritten,
+ * so history deleted while the dialog was open is never written out. The
+ * file is written whole or not at all, readable only by its owner.
+ */
+export async function exportData(
+  payload: ExportDecisionsDataPayload,
+  chooseDestination: ExportDestination
+): Promise<DecisionsExportResult> {
+  if (payload.passphrase.length < DECISIONS_EXPORT_PASSPHRASE_MIN_LENGTH) {
+    throw new AppError({
+      code: "VALIDATION",
+      message: `The passphrase needs at least ${DECISIONS_EXPORT_PASSPHRASE_MIN_LENGTH} characters`,
+    });
+  }
+  const prepared = await serialize(
+    async (): Promise<
+      | { archive: DecisionsArchive; running: DecisionsService; from: DaintreeLocalStore }
+      | { failure: DecisionsExportResult }
+    > => {
+      const { service: running, keys } = await setupKeys();
+      const localStore = running.getStore();
+      if (!localStore) return { failure: { result: "store-unavailable" } };
+      const built = await buildDecisionsArchive({
+        store: localStore,
+        keys,
+        passphrase: payload.passphrase,
+      });
+      return "failure" in built ? built : { ...built, running, from: localStore };
+    }
+  );
+  if ("failure" in prepared) return prepared.failure;
+  const { archive } = prepared;
+  const path = await chooseDestination(archive.fileName);
+  if (path === null) return { result: "cancelled" };
+  // Back behind the transitions, so no deletion runs between the check and the write.
+  return serialize(async (): Promise<DecisionsExportResult> => {
+    // The store it was read from has closed (turned off, even if on again
+    // since; local data deleted; quit): the history it holds may be gone.
+    if (shutDown || prepared.running.getStore() !== prepared.from) return { result: "cancelled" };
+    try {
+      await resilientAtomicWriteFile(path, archive.text, "utf-8", { mode: 0o600 });
+    } catch {
+      // The write can fail after the file is in place (syncing its folder), so
+      // what is there decides what is said.
+      if (!(await fileHolds(path, archive.text))) {
+        throw new AppError({
+          code: "PERSIST_FAILED",
+          message:
+            "The archive couldn't be written there, so nothing was saved. Try another folder.",
+        });
+      }
+    }
+    return {
+      result: "saved",
+      path,
+      questions: archive.questions,
+      auditEvents: archive.auditEvents,
+    };
+  });
+}
+
+/**
+ * Deletes the relay's stored questions, answers and attachments (#16025),
+ * for the relay the person confirmed. Runs behind the switch's transitions
+ * like a setup: turning off waits for its answer, and quitting aborts it.
+ * Nothing on this computer changes.
+ */
+export function deleteRelayData(
+  payload: DeleteDecisionsRelayDataPayload
+): Promise<DecisionsRelayDeleteResult> {
+  return serialize(async () => {
+    const { keys } = await setupKeys();
+    const controller = new AbortController();
+    setups.add(controller);
+    try {
+      return await deleteDecisionsRelayData({
+        origin: payload.origin,
+        settings: readDecisionsSettings(store),
+        keys,
+        signal: controller.signal,
+      });
+    } finally {
+      setups.delete(controller);
+    }
+  });
+}
+
+/**
+ * Deletes this computer's Decisions data (#16025): its stored history, its
+ * keys and its record of the relay. Nothing is sent to the relay, so
+ * everything on it stays. The switch and consent stay as they are.
+ */
+export function deleteLocalData(): Promise<DecisionsLocalDeleteResult> {
+  return serialize(async () => {
+    let outcome: LocalEraseOutcome;
+    // Its invitations and requests run on the keys this deletes.
+    forgetOwnerDevices();
+    try {
+      outcome = await (await runningService()).eraseLocalData();
+    } finally {
+      // The relay record and the keys may have gone, which every window shows.
+      publishStatus();
+    }
+    if (outcome.result === "failed") return outcome;
+    const status = await getDecisionsStatus();
+    return outcome.result === "deleted"
+      ? { result: "deleted", status }
+      : { result: "incomplete", erased: outcome.erased, status };
   });
 }
 

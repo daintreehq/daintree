@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { app, safeStorage } from "electron";
 import type { KeyStore, StoredIdentity } from "@daintreehq/decisions-client";
+import type { DecisionsKeyStorageFailure } from "../../../shared/types/decisions.js";
 import {
   encryptWithKeychain,
   keychainKeyed,
@@ -52,6 +53,29 @@ export class DecisionsKeyStoreError extends Error {
     super(message);
     this.name = "DecisionsKeyStoreError";
   }
+}
+
+const READ_FAILURES: ReadonlySet<DecisionsKeyStoreErrorKind> = new Set([
+  "locked",
+  "unavailable",
+  "timeout",
+  "unreadable",
+  "unsupported-format",
+]);
+
+/**
+ * A refusal to read the keys that a person can act on, by its kind and
+ * message; null for anything else, which callers let through.
+ */
+export function keyReadFailure(error: unknown): {
+  kind: Exclude<DecisionsKeyStorageFailure, "weak-storage-unconfirmed">;
+  reason: string;
+} | null {
+  if (!(error instanceof DecisionsKeyStoreError) || !READ_FAILURES.has(error.kind)) return null;
+  return {
+    kind: error.kind as Exclude<DecisionsKeyStorageFailure, "weak-storage-unconfirmed">,
+    reason: error.message,
+  };
 }
 
 /** What sealing would use right now, for setup to show before it saves anything. */

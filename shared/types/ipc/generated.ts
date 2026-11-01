@@ -618,9 +618,21 @@ export interface GeneratedIpcInvokeMap {
     args: [pairingId: string];
     result: import("../decisions.js").DecisionsPairingDeclineResult;
   };
+  "decisions:delete-local-data": {
+    args: [];
+    result: import("../decisions.js").DecisionsLocalDeleteResult;
+  };
+  "decisions:delete-relay-data": {
+    args: [payload: import("../decisions.js").DeleteDecisionsRelayDataPayload];
+    result: import("../decisions.js").DecisionsRelayDeleteResult;
+  };
   "decisions:disconnect-relay": {
     args: [];
     result: import("../decisions.js").DecisionsStatus;
+  };
+  "decisions:export-data": {
+    args: [payload: import("../decisions.js").ExportDecisionsDataPayload];
+    result: import("../decisions.js").DecisionsExportResult;
   };
   "decisions:get-pairing": {
     args: [pairingId: string];

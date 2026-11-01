@@ -2,8 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ClaimDecisionsRelayPayload,
   DecisionsConnectResult,
+  DecisionsExportResult,
+  DecisionsLocalDeleteResult,
   DecisionsRelayCheck,
+  DecisionsRelayDeleteResult,
   DecisionsStatus,
+  DeleteDecisionsRelayDataPayload,
+  ExportDecisionsDataPayload,
   PaneDecisionState,
   RestoreDecisionsIdentityPayload,
   SetDecisionsEnabledPayload,
@@ -43,9 +48,30 @@ const decisionsEntry = vi.hoisted(() => ({
     })
   ),
   disconnectRelay: vi.fn(async (): Promise<DecisionsStatus> => ({ state: "not-connected" })),
+  exportData: vi.fn(
+    async (
+      _payload: ExportDecisionsDataPayload,
+      _choose: (fileName: string) => Promise<string | null>
+    ): Promise<DecisionsExportResult> => ({ result: "cancelled" })
+  ),
+  deleteRelayData: vi.fn(
+    async (_payload: DeleteDecisionsRelayDataPayload): Promise<DecisionsRelayDeleteResult> => ({
+      result: "deleted",
+      origin: "https://relay.example.com",
+    })
+  ),
+  deleteLocalData: vi.fn(async (): Promise<DecisionsLocalDeleteResult> => ({
+    result: "deleted",
+    status: { state: "not-connected" },
+  })),
+}));
+const dialogMock = vi.hoisted(() => ({
+  showSaveDialog: vi.fn<(...args: unknown[]) => Promise<{ canceled: boolean; filePath?: string }>>(
+    async () => ({ canceled: true })
+  ),
 }));
 
-vi.mock("electron", () => ({ ipcMain: ipcMainMock }));
+vi.mock("electron", () => ({ ipcMain: ipcMainMock, dialog: dialogMock }));
 vi.mock("../../../store.js", () => ({
   store: {
     get: vi.fn((key: string) => (key === "decisions" ? saved.value : undefined)),
@@ -62,6 +88,9 @@ vi.mock("../../../services/decisions/index.js", () => {
     claimRelay: decisionsEntry.claimRelay,
     restoreIdentity: decisionsEntry.restoreIdentity,
     disconnectRelay: decisionsEntry.disconnectRelay,
+    exportData: decisionsEntry.exportData,
+    deleteRelayData: decisionsEntry.deleteRelayData,
+    deleteLocalData: decisionsEntry.deleteLocalData,
   };
 });
 vi.mock("@daintreehq/decisions-protocol", () => {
@@ -111,6 +140,19 @@ const restoreIdentity = decisionsNamespace.ops.restoreIdentity.handler as unknow
 const disconnectRelay = decisionsNamespace.ops.disconnectRelay
   .handler as unknown as () => Promise<DecisionsStatus>;
 
+type ExportHandler = (
+  ctx: { senderWindow: unknown },
+  payload: ExportDecisionsDataPayload
+) => Promise<DecisionsExportResult>;
+const exportData = decisionsNamespace.ops.exportData.handler as unknown as ExportHandler;
+const deleteRelayData = decisionsNamespace.ops.deleteRelayData.handler as unknown as (
+  payload: DeleteDecisionsRelayDataPayload
+) => Promise<DecisionsRelayDeleteResult>;
+const deleteLocalData = decisionsNamespace.ops.deleteLocalData
+  .handler as unknown as () => Promise<DecisionsLocalDeleteResult>;
+const EXPORT: ExportDecisionsDataPayload = { passphrase: "a long export passphrase" };
+const RELAY_ORIGIN = "https://relay.example.com";
+
 const SECRET = "claim-secret-0123456789abcdef";
 const PASSPHRASE = "correct horse battery staple";
 const CLAIM: ClaimDecisionsRelayPayload = { url: "relay.example.com", claimSecret: SECRET };
@@ -130,6 +172,9 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_CLAIM_RELAY,
   CHANNELS.DECISIONS_RESTORE_IDENTITY,
   CHANNELS.DECISIONS_DISCONNECT_RELAY,
+  CHANNELS.DECISIONS_EXPORT_DATA,
+  CHANNELS.DECISIONS_DELETE_RELAY_DATA,
+  CHANNELS.DECISIONS_DELETE_LOCAL_DATA,
 ];
 
 describe("decisions IPC", () => {
@@ -143,6 +188,10 @@ describe("decisions IPC", () => {
     decisionsEntry.claimRelay.mockClear();
     decisionsEntry.restoreIdentity.mockClear();
     decisionsEntry.disconnectRelay.mockClear();
+    decisionsEntry.exportData.mockClear();
+    decisionsEntry.deleteRelayData.mockClear();
+    decisionsEntry.deleteLocalData.mockClear();
+    dialogMock.showSaveDialog.mockClear();
     vi.mocked(store.set).mockClear();
   });
   afterEach(() => {
@@ -286,6 +335,39 @@ describe("decisions IPC", () => {
     expect(decisionsEntry.evaluated).toBe(0);
   });
 
+  it("refuses to export or delete data while off, loading none of Decisions", async () => {
+    for (const value of [undefined, { enabled: false }, { enabled: "true" }]) {
+      saved.value = value;
+
+      await expect(exportData({ senderWindow: null }, EXPORT)).rejects.toMatchObject({
+        code: "PERMISSION",
+      });
+      await expect(deleteRelayData({ origin: RELAY_ORIGIN })).rejects.toMatchObject({
+        code: "PERMISSION",
+      });
+      await expect(deleteLocalData()).rejects.toMatchObject({ code: "PERMISSION" });
+    }
+
+    expect(decisionsEntry.evaluated).toBe(0);
+    expect(decisionsEntry.libraries).toBe(0);
+    expect(dialogMock.showSaveDialog).not.toHaveBeenCalled();
+  });
+
+  it("refuses to export or delete data once quit has sealed the loader", async () => {
+    saved.value = { enabled: true };
+    sealDecisionsModule();
+
+    await expect(exportData({ senderWindow: null }, EXPORT)).rejects.toMatchObject({
+      code: "CANCELLED",
+    });
+    await expect(deleteRelayData({ origin: RELAY_ORIGIN })).rejects.toMatchObject({
+      code: "CANCELLED",
+    });
+    await expect(deleteLocalData()).rejects.toMatchObject({ code: "CANCELLED" });
+
+    expect(decisionsEntry.evaluated).toBe(0);
+  });
+
   it("answers off once quit has sealed the loader, without loading it", async () => {
     saved.value = { enabled: true };
     sealDecisionsModule();
@@ -364,6 +446,91 @@ describe("decisions IPC", () => {
     expect(decisionsEntry.restoreIdentity).toHaveBeenCalledExactlyOnceWith(RESTORE);
     expect(decisionsEntry.disconnectRelay).toHaveBeenCalledOnce();
     expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("exports through Decisions itself, picking the file over the window that asked", async () => {
+    saved.value = { enabled: true };
+    const window = { isDestroyed: () => false };
+    let chosen: Array<string | null> = [];
+    decisionsEntry.exportData.mockImplementationOnce(async (_payload, choose) => {
+      dialogMock.showSaveDialog
+        .mockResolvedValueOnce({ canceled: false, filePath: "/exports/history.dxz.json" })
+        .mockResolvedValueOnce({ canceled: true, filePath: "/exports/ignored.json" });
+      chosen = [
+        await choose("decisions-export-2026-11-01.dxz.json"),
+        await choose("decisions-export-2026-11-01.dxz.json"),
+      ];
+      return { result: "cancelled" };
+    });
+
+    await exportData({ senderWindow: window }, EXPORT);
+
+    expect(decisionsEntry.exportData).toHaveBeenCalledWith(EXPORT, expect.any(Function));
+    expect(chosen).toEqual(["/exports/history.dxz.json", null]);
+    expect(dialogMock.showSaveDialog).toHaveBeenCalledWith(
+      window,
+      expect.objectContaining({ defaultPath: "decisions-export-2026-11-01.dxz.json" })
+    );
+  });
+
+  it("opens the export's dialog on its own when the window that asked has gone, or there is none", async () => {
+    saved.value = { enabled: true };
+    const choosing = async (
+      _payload: ExportDecisionsDataPayload,
+      choose: (fileName: string) => Promise<string | null>
+    ): Promise<DecisionsExportResult> => {
+      await choose("decisions-export-2026-11-01.dxz.json");
+      return { result: "cancelled" };
+    };
+    decisionsEntry.exportData.mockImplementationOnce(choosing).mockImplementationOnce(choosing);
+
+    await exportData({ senderWindow: { isDestroyed: () => true } }, EXPORT);
+    await exportData({ senderWindow: null }, EXPORT);
+
+    expect(dialogMock.showSaveDialog).toHaveBeenCalledTimes(2);
+    for (const call of dialogMock.showSaveDialog.mock.calls) {
+      expect(call).toEqual([
+        expect.objectContaining({ defaultPath: "decisions-export-2026-11-01.dxz.json" }),
+      ]);
+    }
+  });
+
+  it("deletes relay and local data through Decisions itself once the setting is on", async () => {
+    saved.value = { enabled: true };
+
+    await expect(deleteRelayData({ origin: RELAY_ORIGIN })).resolves.toMatchObject({
+      result: "deleted",
+    });
+    await expect(deleteLocalData()).resolves.toMatchObject({ result: "deleted" });
+
+    expect(decisionsEntry.deleteRelayData).toHaveBeenCalledExactlyOnceWith({
+      origin: RELAY_ORIGIN,
+    });
+    expect(decisionsEntry.deleteLocalData).toHaveBeenCalledOnce();
+    expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("takes an export passphrase and a relay to delete from only within their bounds", () => {
+    const exportSchema = decisionsNamespace.ops.exportData.schema as SafeParse;
+    const deleteSchema = decisionsNamespace.ops.deleteRelayData.schema as SafeParse;
+
+    expect(exportSchema.safeParse(EXPORT).success).toBe(true);
+    for (const value of [
+      { passphrase: "" },
+      { passphrase: "x".repeat(1025) },
+      { ...EXPORT, plaintext: true },
+      {},
+    ]) {
+      expect(exportSchema.safeParse(value).success).toBe(false);
+    }
+    expect(deleteSchema.safeParse({ origin: RELAY_ORIGIN }).success).toBe(true);
+    for (const value of [
+      { origin: "x".repeat(2049) },
+      { origin: RELAY_ORIGIN, scope: "everything" },
+      {},
+    ]) {
+      expect(deleteSchema.safeParse(value).success).toBe(false);
+    }
   });
 
   it("takes a claim secret only within the relay's own bounds", () => {
