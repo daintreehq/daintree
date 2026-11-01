@@ -108,6 +108,7 @@ export function TerminalAgentIndicator({
     stateChangeTrigger,
     stateChangeConfidence,
     waitingReason,
+    isRestarting,
     sessionCost,
   } = usePanelStore(
     useShallow((state) => {
@@ -120,6 +121,7 @@ export function TerminalAgentIndicator({
         stateChangeTrigger: pty?.stateChangeTrigger,
         stateChangeConfidence: pty?.stateChangeConfidence,
         waitingReason: pty?.waitingReason,
+        isRestarting: pty?.isRestarting,
         sessionCost: pty?.sessionCost,
       };
     })
@@ -145,7 +147,11 @@ export function TerminalAgentIndicator({
   }
 
   // The glyph follows the run's fleet band; `agentState` stays the observation.
-  const shownState = resolvePaneSessionPresentation(agentState, band, waitingReason);
+  const shownState = resolvePaneSessionPresentation(agentState, band, {
+    agentState: rawAgentState,
+    waitingReason,
+    isRestarting,
+  });
   const isReinterpreted = shownState !== agentState;
 
   // A settled agent only keeps its glyph while a session cost is on record;

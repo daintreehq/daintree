@@ -1770,7 +1770,10 @@ describe("PanelHeader", () => {
 
       const trigger = () => screen.getByTestId("panel-tabs-overflow");
 
-      afterEach(() => useFleetSnapshotStore.setState({ snapshot: null }));
+      afterEach(() => {
+        cleanup();
+        useFleetSnapshotStore.setState({ snapshot: null });
+      });
 
       it("counts only hidden tabs the fleet places in needs-you", () => {
         mockHiddenTabIds = new Set(["t2", "t3"]);
@@ -1818,6 +1821,40 @@ describe("PanelHeader", () => {
         );
         rerender(<PanelHeader {...makeProps({ tabs: threeTabs, onTabClick: vi.fn() })} />);
         expect(trigger().getAttribute("aria-label")).toBe("Show 2 hidden tabs");
+      });
+
+      it("counts each hidden ask, and drops one once it is seen", () => {
+        mockHiddenTabIds = new Set(["t2", "t3"]);
+        panels({
+          t2: { agentState: "waiting", waitingReason: "question" },
+          t3: { agentState: "completed" },
+        });
+        fleet([
+          { runId: "t2", agentState: "waiting", waitingReason: "question", canopy: ask },
+          { runId: "t3", agentState: "completed", canopy: ask },
+        ]);
+        const { rerender } = render(
+          <PanelHeader {...makeProps({ tabs: threeTabs, onTabClick: vi.fn() })} />
+        );
+        expect(trigger().getAttribute("aria-label")).toBe(
+          "Show 2 hidden tabs, 2 waiting for input"
+        );
+
+        act(() =>
+          fleet([
+            {
+              runId: "t2",
+              agentState: "waiting",
+              waitingReason: "question",
+              canopy: { ...ask, seen: true },
+            },
+            { runId: "t3", agentState: "completed", canopy: ask },
+          ])
+        );
+        rerender(<PanelHeader {...makeProps({ tabs: threeTabs, onTabClick: vi.fn() })} />);
+        expect(trigger().getAttribute("aria-label")).toBe(
+          "Show 2 hidden tabs, 1 waiting for input"
+        );
       });
 
       it("drops a hidden ask once its agent is working again, and never counts a cut active tab", () => {

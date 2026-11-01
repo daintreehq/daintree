@@ -492,8 +492,11 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   const ownCanAsk = paneSignals.waitingReason !== "error" && !paneSignals.isRestarting && !isExited;
   const ownAsking =
     ownCanAsk &&
-    resolvePaneSessionPresentation(headerAgentState, ownBand, paneSignals.waitingReason) ===
-      "waiting";
+    resolvePaneSessionPresentation(headerAgentState, ownBand, {
+      agentState: ownAgentState,
+      waitingReason: paneSignals.waitingReason,
+      isRestarting: paneSignals.isRestarting,
+    }) === "waiting";
   // The group only reports waiting for a hidden tab the band says needs you.
   const hiddenTabAsking = ambientAgentState === "waiting";
   const isAskingWait = ownAsking || hiddenTabAsking || pluginActivity?.shown === "waiting";

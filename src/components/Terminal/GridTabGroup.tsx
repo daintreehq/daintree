@@ -15,9 +15,7 @@ import { reorderGroupTabsWithUndo } from "@/services/layout/reorderGroupTabs";
 import { addTabForPanel } from "./useContentGridContext";
 import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
-import { getGroupAmbientAgentState } from "@/components/Layout/useDockBlockedState";
-import { useFleetBandRunIds } from "@/hooks/useRunFleetBand";
-import { NEEDS_YOU_BANDS } from "@/lib/fleetAttention";
+import { useGridGroupAmbientState } from "./useGridGroupAmbientState";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -168,17 +166,9 @@ export const GridTabGroup = React.memo(function GridTabGroup({
   // Check if this group is currently focused
   const isGroupFocused = useMemo(() => panels.some((p) => p.id === focusedId), [panels, focusedId]);
 
-  // Compute highest-urgency agent state across all tabs so the group container
-  // reflects an ask or work even when that tab is not active. Waiting comes
-  // only from a hidden tab the fleet places in needs-you. Filter to PTY panels
-  // because getGroupAmbientAgentState expects agent-state fields only present
-  // on PtyPanelData; browser/dev-preview panels contribute nothing to ambient
-  // state anyway.
-  const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
-  const groupAmbientState = useMemo(
-    () => getGroupAmbientAgentState(panels.filter(isPtyPanel), needsYouRunIds, activeTabId),
-    [panels, needsYouRunIds, activeTabId]
-  );
+  // Highest-urgency agent state across the tabs, so the group container shows
+  // an ask or work even when that tab is not the one in front.
+  const groupAmbientState = useGridGroupAmbientState(panels, activeTabId);
 
   // Hand focus to the destination tab when switching tabs within a focused
   // group. The registry handler routes it to the tab's home, xterm or the

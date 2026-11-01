@@ -7,7 +7,7 @@
  * pins where the glyph actually lands.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { act, render, screen, cleanup } from "@testing-library/react";
 import type { AgentState } from "@shared/types/agent";
 import type { TabInfo } from "../TabButton";
 import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
@@ -167,7 +167,7 @@ describe("ContentPanel agent glyph placement", () => {
     expect(box.contains(agentGlyphs()[0]!)).toBe(true);
     expect(screen.getByTestId("panel-header-controls").innerHTML).toBe(controls);
 
-    seedUnreadAsk();
+    act(seedUnreadAsk);
     rerender(panel({ agentId: "claude", agentState: "waiting" }));
     expect(box.contains(agentGlyphs()[0]!)).toBe(true);
 

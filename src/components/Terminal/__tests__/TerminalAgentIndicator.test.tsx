@@ -425,6 +425,17 @@ describe("TerminalAgentIndicator — glyph and tooltip", () => {
     expect(screen.getByRole("status", { name: /^Agent state: waiting/ })).toBeTruthy();
   });
 
+  it("drops the ring as soon as the pane restarts, before the band catches up", () => {
+    mockTerminal = { id: "t1", agentState: "waiting", waitingReason: "question" };
+    setRun({ waitingReason: "question", canopy: UNREAD_ASK });
+    const { rerender } = render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
+    expect(screen.getByRole("status", { name: /^Agent state: waiting/ })).toBeTruthy();
+
+    mockTerminal = { ...mockTerminal, isRestarting: true };
+    rerender(<TerminalAgentIndicator id="t1" agentState="waiting" />);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
   it("draws an error wait as blocked, never as the waiting ring", () => {
     mockTerminal = { id: "t1", agentState: "waiting", waitingReason: "error" };
     setRun({ waitingReason: "error" });

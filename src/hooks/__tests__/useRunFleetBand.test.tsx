@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach } from "vitest";
-import { act, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { NEEDS_YOU_BANDS } from "@/lib/fleetAttention";
@@ -18,7 +18,10 @@ function push(runs: Array<Partial<FleetRunRow> & { runId: string }>, changedAt =
   act(() => useFleetSnapshotStore.setState({ snapshot }));
 }
 
-afterEach(() => useFleetSnapshotStore.setState({ snapshot: null }));
+afterEach(() => {
+  cleanup();
+  useFleetSnapshotStore.setState({ snapshot: null });
+});
 
 describe("useRunFleetBand", () => {
   it("reads nothing before the snapshot, then the run's band as it moves", () => {
@@ -35,18 +38,23 @@ describe("useRunFleetBand", () => {
     expect(result.current).toBeUndefined();
   });
 
-  it("doesn't re-render for a push that leaves the run's band alone", () => {
+  it("re-renders when the run's band moves, and not for a push that leaves it alone", () => {
     let renders = 0;
-    renderHook(() => {
+    const { result } = renderHook(() => {
       renders++;
       return useRunFleetBand("t1");
     });
+    const beforeReport = renders;
     push([{ runId: "t1", agentState: "working" }]);
+    expect(result.current).toBe("running");
+    expect(renders).toBeGreaterThan(beforeReport);
+
     const settled = renders;
     push([
       { runId: "t1", agentState: "working" },
       { runId: "t2", agentState: "waiting", canopy: ask },
     ]);
+    expect(result.current).toBe("running");
     expect(renders).toBe(settled);
   });
 });

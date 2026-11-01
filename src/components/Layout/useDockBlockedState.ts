@@ -24,6 +24,7 @@ type AgentStateSource = {
   launchAgentId?: string;
   runtimeStatus?: string;
   exitCode?: number | null;
+  isRestarting?: boolean;
 };
 
 function hasRuntimeAgentIdentity(panel: AgentStateSource): boolean {

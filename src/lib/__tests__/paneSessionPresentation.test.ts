@@ -14,7 +14,9 @@ describe("resolvePaneSessionPresentation", () => {
   it("names each quiet wait by its band, and draws nothing for one that isn't news", () => {
     expect(resolvePaneSessionPresentation("waiting", "review")).toBe("unread");
     expect(resolvePaneSessionPresentation("waiting", "done")).toBe("completed");
-    expect(resolvePaneSessionPresentation("waiting", "blocked", "error")).toBe("blocked");
+    expect(resolvePaneSessionPresentation("waiting", "blocked", { waitingReason: "error" })).toBe(
+      "blocked"
+    );
     for (const band of ["idle", "parked", "snoozed", "running", "quiet"] as const) {
       expect(resolvePaneSessionPresentation("waiting", band), band).toBeUndefined();
     }
@@ -29,7 +31,12 @@ describe("resolvePaneSessionPresentation", () => {
   });
 
   it("never draws amber over an error wait the band hasn't caught up with", () => {
-    expect(resolvePaneSessionPresentation("waiting", "needs-you", "error")).toBeUndefined();
+    expect(
+      resolvePaneSessionPresentation("waiting", "needs-you", {
+        agentState: "waiting",
+        waitingReason: "error",
+      })
+    ).toBeUndefined();
   });
 });
 
@@ -49,6 +56,31 @@ describe("isNeedsYouPane", () => {
     }
     expect(isNeedsYouPane(asking, { id: "t", agentState: "waiting", waitingReason: "error" })).toBe(
       false
+    );
+  });
+});
+
+describe("pane observation ahead of the band", () => {
+  it("draws no amber through a restart or an exit the band hasn't caught up with", () => {
+    for (const observed of [
+      { isRestarting: true },
+      { runtimeStatus: "exited" },
+      { runtimeStatus: "error" },
+      { exitCode: 0 },
+    ]) {
+      expect(
+        resolvePaneSessionPresentation("waiting", "needs-you", {
+          agentState: "waiting",
+          ...observed,
+        }),
+        JSON.stringify(observed)
+      ).toBeUndefined();
+      expect(isNeedsYouPane(new Set(["t"]), { id: "t", agentState: "waiting", ...observed })).toBe(
+        false
+      );
+    }
+    expect(resolvePaneSessionPresentation("waiting", "needs-you", { exitCode: null })).toBe(
+      "waiting"
     );
   });
 });

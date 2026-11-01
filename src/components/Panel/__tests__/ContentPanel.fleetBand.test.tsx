@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, act } from "@testing-library/react";
 import type { AgentState, WaitingReason } from "@shared/types/agent";
 import type { FleetRunRow, FleetSnapshot, RunCanopyRefinement } from "@shared/types/ipc/fleet";
+import { PANE_SESSION_COLORS } from "@/components/Worktree/terminalStateConfig";
 import {
   cleanupFleetSnapshotListeners,
   setupFleetSnapshotListeners,
@@ -125,12 +126,21 @@ const glyph = () =>
     .queryAllByRole("status")
     .find((el) => (el.getAttribute("aria-label") ?? "").startsWith("Agent state:"));
 const glyphLabel = () => glyph()?.getAttribute("aria-label") ?? null;
+const wearsWaitingHue = () => glyph()?.className.includes(PANE_SESSION_COLORS.waiting) ?? false;
 
 /** Past the error wait's debounce, so nothing amber can still be on its way. */
 function settle() {
   act(() => {
     vi.advanceTimersByTime(1_000);
   });
+}
+
+const electronDescriptor = Object.getOwnPropertyDescriptor(window, "electron");
+const hostIdDescriptor = Object.getOwnPropertyDescriptor(window, "__DAINTREE_HOST_ID__");
+
+function restoreGlobal(name: string, descriptor: PropertyDescriptor | undefined) {
+  if (descriptor) Object.defineProperty(window, name, descriptor);
+  else Reflect.deleteProperty(window, name);
 }
 
 beforeEach(() => {
@@ -144,7 +154,8 @@ afterEach(() => {
   cleanup();
   cleanupFleetSnapshotListeners();
   useFleetSnapshotStore.setState({ snapshot: null });
-  delete window.__DAINTREE_HOST_ID__;
+  restoreGlobal("electron", electronDescriptor);
+  restoreGlobal("__DAINTREE_HOST_ID__", hostIdDescriptor);
   vi.useRealTimers();
 });
 
@@ -155,7 +166,9 @@ describe("ContentPanel amber from the fleet band", () => {
   ])("draws no amber for an agent at its prompt with no Canopy reading %s", (_label, host) => {
     // A remote project's view reaches the host's fleet over the same channels;
     // the snapshot it holds is the host's, matched to panes by terminal id.
-    if (host) window.__DAINTREE_HOST_ID__ = host;
+    if (host) {
+      Object.defineProperty(window, "__DAINTREE_HOST_ID__", { configurable: true, value: host });
+    }
     let push: ((snapshot: FleetSnapshot) => void) | undefined;
     const hostFleet = snapshot({ agentState: "waiting", waitingReason: "prompt" });
     Object.defineProperty(window, "electron", {
@@ -198,6 +211,7 @@ describe("ContentPanel amber from the fleet band", () => {
 
     expect(hasEdge(container, "waiting")).toBe(false);
     expect(glyphLabel()).toBe("Agent state: unread");
+    expect(wearsWaitingHue()).toBe(false);
   });
 
   it("draws the edge and ring for an unread ask, and takes both away once it is seen", () => {
@@ -207,6 +221,7 @@ describe("ContentPanel amber from the fleet band", () => {
 
     expect(hasEdge(container, "waiting")).toBe(true);
     expect(glyphLabel()).toBe("Agent state: waiting (question)");
+    expect(wearsWaitingHue()).toBe(true);
 
     // Focus alone answers nothing: the edge keeps over the selected fill.
     rerender(pane({ agentState: "waiting", isFocused: true }));
@@ -256,14 +271,17 @@ describe("ContentPanel amber from the fleet band", () => {
     fleet({ agentState: "waiting", waitingReason: "question", canopy: UNREAD_ASK });
     observe("working");
     mockState.showGridAgentHighlights = true;
-    const { container } = render(pane({ agentState: "working" }));
+    const working = render(pane({ agentState: "working" }));
 
-    expect(hasEdge(container, "waiting")).toBe(false);
-    expect(hasEdge(container, "working")).toBe(true);
+    expect(hasEdge(working.container, "waiting")).toBe(false);
+    expect(hasEdge(working.container, "working")).toBe(true);
+    working.unmount();
 
     observe("waiting", "question", { isRestarting: true });
     const restarting = render(pane({ agentState: "waiting" }));
+    // Edge and ring go together, not one after the other.
     expect(hasEdge(restarting.container, "waiting")).toBe(false);
+    expect(glyph()).toBeUndefined();
   });
 
   it("raises the edge for a hidden tab's ask even while the shown tab sits at its prompt", () => {
@@ -289,12 +307,32 @@ describe("ContentPanel amber from the fleet band", () => {
     expect(glyphLabel()).toBe("Agent state: blocked (error)");
   });
 
-  it("keeps the failed edge for a failed exit", () => {
-    observe("exited", undefined, { exitCode: 1 });
+  it("keeps the failed edge for a failed exit, and none for a clean or interrupted one", () => {
     fleet({ agentState: "exited" });
-    const { container } = render(pane({ agentState: "exited", isExited: true, exitCode: 1 }));
+    for (const [exitCode, failed] of [
+      [1, true],
+      [0, false],
+      [130, false],
+    ] as const) {
+      observe("exited", undefined, { exitCode });
+      const { container, unmount } = render(
+        pane({ agentState: "exited", isExited: true, exitCode })
+      );
+      expect(hasEdge(container, "failed"), `exit ${exitCode}`).toBe(failed);
+      unmount();
+    }
+  });
 
+  it("ranks a failure over an ask, and keeps it over the selected fill", () => {
+    observe("waiting", "question", { spawnError: { message: "spawn failed" } });
+    fleet({ agentState: "waiting", waitingReason: "question", canopy: UNREAD_ASK });
+    const { container, rerender } = render(pane({ agentState: "waiting" }));
     expect(hasEdge(container, "failed")).toBe(true);
+    expect(hasEdge(container, "waiting")).toBe(false);
+
+    rerender(pane({ agentState: "waiting", isFocused: true }));
+    expect(hasEdge(container, "failed")).toBe(true);
+    expect(frame(container).classList.contains("terminal-selected")).toBe(true);
   });
 
   it("keeps the working edge behind the highlights setting", () => {
