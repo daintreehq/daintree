@@ -39,6 +39,7 @@ vi.mock("@/lib/remoteHosts", () => ({
 }));
 vi.mock("@/components/Hosts/hostList", () => ({
   useHostList: () => ({ hosts: state.hosts, localSummary: state.localSummary }),
+  useHostFigures: () => ({ hosts: state.hosts, localSummary: state.localSummary }),
   getHostListSnapshot: () => ({ hosts: state.hosts, localSummary: state.localSummary }),
   hasRemoteHosts: (list: { hosts: HostListEntry[] }) => list.hosts.length > 0,
 }));

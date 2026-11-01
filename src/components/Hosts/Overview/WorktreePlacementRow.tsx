@@ -20,7 +20,7 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useHostMetricsStore, type HostMetricsHistory } from "@/store/hostMetricsStore";
 import { cn } from "@/lib/utils";
 import { logWarn } from "@/utils/logger";
-import { hasRemoteHosts, useHostList } from "../hostList";
+import { hasRemoteHosts, useHostFigures, useHostList } from "../hostList";
 import {
   buildHostMenuRows,
   clientPlatform,
@@ -36,7 +36,6 @@ import {
   describePlacementProjectFacts,
   type PlacementProjectFacts,
 } from "./placementProjectFacts";
-import { startHostMetricsFeed } from "./hostMetricsFeed";
 import { compareHostCapacity, isLive, type PlacementComparison } from "./overviewModel";
 
 /** The new-worktree form as the dialog validated it; `path` is this host's absolute path. */
@@ -177,15 +176,15 @@ export function WorktreePlacementRow({
   onLeave,
   onCommitChange,
 }: WorktreePlacementRowProps) {
-  const hostList = useHostList();
+  const hostStatus = useHostList();
+  const visible = isRemoteShellSupported() && hasRemoteHosts(hostStatus);
+  // Each host's load is compared here, so its figures are followed while it shows.
+  const hostList = useHostFigures(visible);
   const history = useHostMetricsStore((state) => state.history);
   const windowHostId = getViewHostId() ?? LOCAL_HOST_ID;
   const [chosen, setChosen] = useState<HostId>(windowHostId);
   const [status, setStatus] = useState<PlacementStatus>("idle");
   const projectHosts = useProjectHosts(projectId);
-  const visible = isRemoteShellSupported() && hasRemoteHosts(hostList);
-
-  useEffect(() => (visible ? startHostMetricsFeed() : undefined), [visible]);
   const rows = buildHostMenuRows(hostList.hosts, {
     localPlatform: clientPlatform(),
     currentHostId: windowHostId,

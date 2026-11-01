@@ -13,9 +13,9 @@ import { useNotificationSettingsStore } from "@/store/notificationSettingsStore"
 import { useHostMetricsStore } from "@/store/hostMetricsStore";
 import { actionService } from "@/services/ActionService";
 import {
-  _resetHostMetricsFeedForTesting,
+  _resetHostAttentionFeedForTesting,
   presentHostAttention,
-  startHostMetricsFeed,
+  startHostAttentionFeed,
 } from "../hostMetricsFeed";
 
 const attention: HostAttentionEvent = {
@@ -99,7 +99,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  _resetHostMetricsFeedForTesting();
+  _resetHostAttentionFeedForTesting();
   vi.restoreAllMocks();
 });
 
@@ -226,33 +226,32 @@ describe("presentHostAttention", () => {
   });
 });
 
-describe("startHostMetricsFeed", () => {
-  it("seeds from the snapshots, applies pushed summaries and presents attention", async () => {
+describe("startHostAttentionFeed", () => {
+  it("presents attention and leaves summaries to whatever shows host figures", async () => {
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
-    const stop = startHostMetricsFeed();
-    await vi.waitFor(() =>
-      expect(useHostMetricsStore.getState().history.get("studio-01")).toHaveLength(1)
-    );
+    hostMetrics.getSnapshots.mockClear();
+    isInUse.mockClear();
+    const stop = startHostAttentionFeed();
     emit?.({ type: "summary", summary: summary("studio-01", 2) });
-    expect(
-      useHostMetricsStore
-        .getState()
-        .history.get("studio-01")!
-        .map((s) => s.sampledAt)
-    ).toEqual([2, 1]);
     emit?.(attention);
+    await Promise.resolve();
     expect(useNotificationStore.getState().notifications).toHaveLength(1);
+    expect(useHostMetricsStore.getState().history.size).toBe(0);
+    expect(hostMetrics.getSnapshots).not.toHaveBeenCalled();
+    expect(isInUse).not.toHaveBeenCalled();
     stop();
     expect(emit).toBeNull();
   });
 
-  it("reads nothing while remote hosts aren't in use", async () => {
-    isInUse.mockResolvedValue(false);
-    hostMetrics.getSnapshots.mockClear();
-    const stop = startHostMetricsFeed();
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(hostMetrics.getSnapshots).not.toHaveBeenCalled();
-    stop();
+  it("listens once for every owner and stops with the last, however often each releases", () => {
+    hostMetrics.onEvent.mockClear();
+    const first = startHostAttentionFeed();
+    const second = startHostAttentionFeed();
+    expect(hostMetrics.onEvent).toHaveBeenCalledTimes(1);
+    first();
+    first();
+    expect(emit).not.toBeNull();
+    second();
+    expect(emit).toBeNull();
   });
 });

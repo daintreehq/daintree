@@ -39,6 +39,7 @@ vi.mock("@/store", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) 
 vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
 vi.mock("@/components/Hosts/hostList", () => ({
   useHostList: () => hostList.value,
+  useHostFigures: () => hostList.value,
   getHostListSnapshot: () => hostList.value,
 }));
 vi.mock("@/lib/platform", async (importOriginal) => ({

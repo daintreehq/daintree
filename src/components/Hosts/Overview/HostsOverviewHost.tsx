@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useSyncExternalStore } from "react";
 import { retainCrossHostTargetsFor } from "@/components/Fleet/crossHostFleet";
 import { useHostList } from "../hostList";
-import { startHostMetricsFeed } from "./hostMetricsFeed";
+import { startHostAttentionFeed } from "./hostMetricsFeed";
 import {
   closeHostsOverview,
   isHostsOverviewOpen,
@@ -14,13 +14,13 @@ const LazyHostsOverviewDialog = lazy(() =>
 );
 
 /**
- * Follows host summaries for this view (so opted-in hosts' notifications and
- * the overview's sparklines have data) and shows the overview when asked.
+ * Presents opted-in hosts' notifications in this view and shows the overview
+ * when asked. The overview follows host summaries itself, only while open.
  */
 export function HostsOverviewHost() {
   const open = useSyncExternalStore(subscribeHostsOverview, isHostsOverviewOpen, () => false);
   useEffect(() => registerHostsOverviewHost(), []);
-  useEffect(() => startHostMetricsFeed(), []);
+  useEffect(() => startHostAttentionFeed(), []);
   const hostList = useHostList();
   useEffect(() => {
     // A forgotten host's agents leave this window's fleet with it.
