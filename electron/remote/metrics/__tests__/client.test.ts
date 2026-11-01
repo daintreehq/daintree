@@ -657,7 +657,14 @@ describe("HostMetricsClient", () => {
 
     h.setHosts([]);
     expect(h.local.projectsHeard).toBeNull();
+
+    // Followed again once another host is back, and let go on dispose.
     h.setHosts([descriptor("a")]);
+    h.local.projectsHeard?.();
+    expect(h.emitted).toEqual([
+      { type: "projects", hostId: "local" },
+      { type: "projects", hostId: "local" },
+    ]);
     h.client.dispose();
     expect(h.local.projectsHeard).toBeNull();
   });

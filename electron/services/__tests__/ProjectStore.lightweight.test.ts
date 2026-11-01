@@ -180,6 +180,21 @@ describe("opening a folder without git (#11405)", () => {
     expect(store.getAllProjects()).toHaveLength(1);
   });
 
+  it("tells registry listeners of a lightweight add and of its promotion, not of a plain reopen", async () => {
+    const folder = await makeDir("adopted");
+    const heard = vi.fn();
+    store.onProjectRegistryChanged(heard);
+
+    await store.addProject(folder, { gitBacked: false });
+    expect(heard).toHaveBeenCalledTimes(1);
+    await store.addProject(folder);
+    expect(heard).toHaveBeenCalledTimes(1);
+
+    repoPaths.add(folder);
+    await store.addProject(folder);
+    expect(heard).toHaveBeenCalledTimes(2);
+  });
+
   it("persists a mode change even while writes are suppressed", async () => {
     const folder = await makeDir("adopted");
     const lightweight = await store.addProject(folder, { gitBacked: false });

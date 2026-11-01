@@ -96,8 +96,9 @@ describe("useProjectPresence", () => {
     expect(result.current.get("a")).toEqual(has("a"));
   });
 
-  it("ignores a host that isn't a target, and the projects events of no host", () => {
+  it("asks nothing for a host that isn't a target, or for a target's worktrees moving", async () => {
     renderHook(() => useProjectPresence("p", ["a"]));
+    await answer(["a"], [none("a")]);
     act(() => {
       emit({ type: "projects", hostId: "z" });
       emit({ type: "worktrees", hostId: "a" });
@@ -149,11 +150,23 @@ describe("useProjectPresence", () => {
     expect(result.current.get("a")).toEqual(none("a"));
   });
 
-  it("stops listening and drops a late answer once unmounted", async () => {
-    const { result, unmount } = renderHook(() => useProjectPresence("p", ["a"]));
+  it("keeps a new project's answer when the last project's lands after it", async () => {
+    const { result, rerender } = renderHook(
+      ({ projectId }) => useProjectPresence(projectId, ["a"]),
+      { initialProps: { projectId: "p" } }
+    );
+    rerender({ projectId: "q" });
+
+    const [forP, forQ] = pending.splice(0, 2);
+    await act(async () => forQ!.resolve([none("a")]));
+    await act(async () => forP!.resolve([has("a")]));
+    expect(result.current.get("a")).toEqual(none("a"));
+  });
+
+  it("stops listening once unmounted", () => {
+    const { unmount } = renderHook(() => useProjectPresence("p", ["a"]));
+    expect(listeners.size).toBe(1);
     unmount();
     expect(listeners.size).toBe(0);
-    await answer(["a"], [has("a")]);
-    expect(result.current.size).toBe(0);
   });
 });
