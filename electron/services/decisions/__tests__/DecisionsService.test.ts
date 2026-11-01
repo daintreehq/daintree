@@ -634,7 +634,7 @@ describe("DecisionsService relay connection", () => {
     const delivery = {
       principalFor: () => null,
       getPtyClient: () => null,
-      holdWakes: () => ({ queueWake: () => {}, release: () => {} }),
+      holdWakes: () => ({ queueWake: () => {}, cancelQueued: () => {}, release: () => {} }),
       watchPanes: () => () => {},
     };
     const made: RelayConnectionOptions[] = [];
