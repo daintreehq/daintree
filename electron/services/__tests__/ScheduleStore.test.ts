@@ -239,14 +239,56 @@ describe("ScheduleStore", () => {
     const created = saved(await store.create(PROJECT, input)).schedule;
     await store.update(PROJECT, created.id, created.updatedAt, { name: "B" });
     await store.create(PROJECT, { ...input, name: "" });
-    unsubscribe();
     await store.remove(PROJECT, created.id);
+    unsubscribe();
+    await store.create(PROJECT, input);
 
     expect(heard.map((snapshot) => snapshot.schedules.map((s) => s.name))).toEqual([
       ["Nightly triage"],
       ["B"],
+      [],
     ]);
     expect(heard[1]!.revision).toBeGreaterThan(heard[0]!.revision);
+    expect(heard[2]!.revision).toBeGreaterThan(heard[1]!.revision);
+  });
+
+  it("creates and edits every policy and keeps a replaced prompt exactly as written", async () => {
+    const store = newStore();
+    const created = saved(
+      await store.create(PROJECT, {
+        ...input,
+        enabled: false,
+        policies: { overlap: "replace", precondition: { command: "test -f ready" } },
+      })
+    ).schedule;
+    expect(created.enabled).toBe(false);
+    expect(created.policies).toMatchObject({
+      overlap: "replace",
+      precondition: { command: "test -f ready" },
+      missedRuns: "run-once-late",
+    });
+
+    const policies = {
+      missedRuns: "skip",
+      overlap: "start-another",
+      precondition: null,
+      onDone: "close",
+      runWhenClosed: true,
+    } as const;
+    const launch = {
+      agentId: "codex",
+      presetId: "fast",
+      prompt: "\n  Spaced.\n",
+      worktreeId: "/w",
+    };
+    const edited = saved(
+      await store.update(PROJECT, created.id, created.updatedAt, { policies, launch })
+    ).schedule;
+
+    expect(edited.policies).toEqual(policies);
+    expect(edited.launch).toEqual(launch);
+    expect((await newStore().get(PROJECT, created.id))?.launch.prompt).toBe("\n  Spaced.\n");
+    expect((await newStore().get(PROJECT, created.id))?.policies).toEqual(policies);
   });
 
   it("keeps a failing listener from stopping the write or the other listeners", async () => {
@@ -348,6 +390,36 @@ describe("ScheduleStore", () => {
   });
 
   describe("removeProject", () => {
+    it("holds every later turn until the caller's files are gone", async () => {
+      const store = newStore();
+      saved(await store.create(PROJECT, input));
+      registered.delete(PROJECT);
+      let started: () => void = () => {};
+      const removalStarted = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      let release: () => void = () => {};
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+
+      const removing = store.removeProject(PROJECT, async () => {
+        started();
+        await released;
+        fs.rmSync(path.join(root, PROJECT), { recursive: true, force: true });
+      });
+      // The same project, added straight back, makes a schedule at once.
+      registered.add(PROJECT);
+      const again = store.create(PROJECT, { ...input, name: "Again" });
+      await removalStarted;
+      release();
+      await removing;
+
+      expect((await again).status).toBe("saved");
+      const names = (await newStore().list(PROJECT)).schedules.map((s) => s.name);
+      expect(names).toEqual(["Again"]);
+    });
+
     it("deletes the file and tells listeners the project has none", async () => {
       const store = newStore();
       saved(await store.create(PROJECT, input));

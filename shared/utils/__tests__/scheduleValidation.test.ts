@@ -58,7 +58,7 @@ describe("scheduleIssues", () => {
     ]);
   });
 
-  it("reports every field at fault at once, never quoting the prompt", () => {
+  it("reports every field at fault at once", () => {
     const base = schedule();
     const issues = scheduleIssues({
       ...base,
@@ -73,6 +73,26 @@ describe("scheduleIssues", () => {
       "policies.precondition.command",
     ]);
     expect(issues.every((issue) => issue.cronField === null)).toBe(true);
+  });
+
+  it("never quotes the prompt or the precondition command in a message", () => {
+    const base = schedule();
+    const issues = scheduleIssues({
+      ...base,
+      name: "",
+      cadence: { cron: "SECRET-CRON", timeZone: "UTC" },
+      launch: { ...base.launch, prompt: "SECRET-PROMPT", agentId: "" },
+      policies: {
+        ...base.policies,
+        precondition: { command: "SECRET-COMMAND" },
+        onDone: "SECRET" as never,
+      },
+    });
+
+    expect(issues.length).toBeGreaterThanOrEqual(4);
+    const messages = issues.map((issue) => issue.message).join("\n");
+    expect(messages).not.toContain("SECRET-PROMPT");
+    expect(messages).not.toContain("SECRET-COMMAND");
   });
 
   it("refuses a key the schedule doesn't have", () => {

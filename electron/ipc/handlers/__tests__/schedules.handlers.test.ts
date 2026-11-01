@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { inspect } from "node:util";
 import type { IpcContext } from "../../types.js";
 
 const ipcMainMock = vi.hoisted(() => ({
@@ -34,6 +35,7 @@ vi.mock("../../../window/webContentsRegistry.js", () => viewsMock);
 import { CHANNELS } from "../../channels.js";
 import { registerSchedulesHandlers, schedulesNamespace } from "../schedules.js";
 import { ScheduleStore } from "../../../services/ScheduleStore.js";
+import { AppError } from "../../../utils/errorTypes.js";
 import { encodeSchedulesFile } from "../../../services/schedulesCodec.js";
 import { createSchedule } from "../../../../shared/utils/scheduledRuns.js";
 import { toHostScopedKey } from "../../../../shared/types/remoteHosts.js";
@@ -235,15 +237,43 @@ describe("schedules handlers", () => {
       remove(ctx(PROJECT), 42 as never),
     ];
 
+    // Everything main would log of a thrown error: own and hidden properties, context, cause.
+    const logged = (error: unknown) => inspect(error, { showHidden: true, depth: 10 });
+    const carrying = new AppError({ code: "VALIDATION", message: "x", context: { input } });
+    expect(logged(carrying)).toContain("SECRET-MARKER");
+
     for (const attempt of attempts) {
       const error = await attempt.then(
         () => null,
         (reason: unknown) => reason
       );
       expect(error).toMatchObject({ code: "VALIDATION" });
-      expect(String((error as Error).message)).not.toContain("SECRET-MARKER");
+      expect(logged(error)).not.toContain("SECRET-MARKER");
     }
     expect((await list(ctx(PROJECT)))!.schedules).toEqual([schedule]);
+  });
+
+  it("creates a schedule with the policies the form chose and the rest at their defaults", async () => {
+    const outcome = await create(ctx(PROJECT), {
+      ...input,
+      cron: "0 3 * * SUN",
+      enabled: false,
+      launch: { ...input.launch, presetId: "yolo", worktreeId: "/repo/wt" },
+      policies: { onDone: "background", precondition: { command: "git fetch" } },
+    });
+
+    if (outcome.status !== "saved") throw new Error(outcome.status);
+    expect(outcome.schedule).toMatchObject({
+      enabled: false,
+      cadence: { cron: "0 3 * * SUN" },
+      launch: { presetId: "yolo", worktreeId: "/repo/wt", prompt: PROMPT },
+      policies: {
+        onDone: "background",
+        precondition: { command: "git fetch" },
+        overlap: "skip",
+        runWhenClosed: false,
+      },
+    });
   });
 
   it("never reads a schedule-like file in the project's .daintree directory", async () => {
@@ -299,10 +329,20 @@ describe("schedules handlers", () => {
       const registered = ipcMainMock.handle.mock.calls.map(([channel]) => channel);
       expect(registered.sort()).toEqual([...schedulesNamespace.channels()].sort());
 
-      const { snapshot } = await created();
+      const { schedule } = await created();
+      const edited = await update(ctx(PROJECT), schedule.id, schedule.updatedAt, { name: "B" });
+      const off = await setEnabled(ctx(PROJECT), schedule.id, false);
+      const on = await setEnabled(ctx(PROJECT), schedule.id, true);
+      const removed = await remove(ctx(PROJECT), schedule.id);
+      const sent = [edited, off, on, removed].map((outcome) =>
+        "snapshot" in outcome ? outcome.snapshot : null
+      );
 
       for (const target of [own, cached]) {
-        expect(target.webContents.send).toHaveBeenCalledWith(CHANNELS.SCHEDULES_CHANGED, snapshot);
+        const pushed = target.webContents.send.mock.calls;
+        expect(pushed.every(([channel]) => channel === CHANNELS.SCHEDULES_CHANGED)).toBe(true);
+        expect(pushed.map(([, snapshot]) => snapshot).slice(1)).toEqual(sent);
+        expect(pushed.at(-1)![1]).toMatchObject({ projectId: PROJECT, schedules: [] });
       }
       for (const target of [withheld, otherProject, remote]) {
         expect(target.webContents.send).not.toHaveBeenCalled();

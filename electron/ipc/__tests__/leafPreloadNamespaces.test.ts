@@ -23,6 +23,7 @@ import { buildProjectPresencePreloadBindings } from "../handlers/projectPresence
 import { buildProjectPresentationPreloadBindings } from "../handlers/projectPresentation.preload.js";
 import { buildPrivacyPreloadBindings } from "../handlers/privacy.preload.js";
 import { buildOnboardingPreloadBindings } from "../handlers/onboarding.preload.js";
+import { buildSchedulesPreloadBindings } from "../handlers/schedules.preload.js";
 
 describe("leaf preload namespace bindings", () => {
   describe("slashCommands", () => {
@@ -147,6 +148,29 @@ describe("leaf preload namespace bindings", () => {
 
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("plugin:actions-register", "plug-1", contribution);
+    });
+  });
+
+  describe("schedules", () => {
+    it("routes each op to its channel with every arg forwarded", async () => {
+      const invoke = vi.fn().mockResolvedValue({});
+      const bindings = buildSchedulesPreloadBindings(invoke);
+      const input = { name: "Nightly", launch: { agentId: "claude", prompt: "Go." } };
+      const patch = { name: "Renamed" };
+
+      await bindings.list();
+      await bindings.create(input);
+      await bindings.update("s1", 42, patch);
+      await bindings.setEnabled("s1", false);
+      await bindings.remove("s1");
+
+      expect(invoke.mock.calls).toEqual([
+        ["schedules:list"],
+        ["schedules:create", input],
+        ["schedules:update", "s1", 42, patch],
+        ["schedules:set-enabled", "s1", false],
+        ["schedules:remove", "s1"],
+      ]);
     });
   });
 

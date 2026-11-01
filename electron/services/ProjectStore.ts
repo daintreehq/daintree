@@ -973,26 +973,21 @@ export class ProjectStore {
       this.recipeSynchronizer.pruneInRepoRecipeHashes(project.path);
     }
 
-    // After the row is gone, so no schedule edit can write the file again, and
-    // before the directory goes, so one still finishing can't recreate it.
-    try {
-      await this.schedules.removeProject(projectId);
-    } catch (error) {
-      logError(`Failed to remove schedules for ${projectId}`, error);
-    }
-
     try {
       this.settingsManager.deleteAllEnvForProject(projectId);
     } catch (error) {
       logError(`Failed to remove secure env vars for ${projectId}`, error);
     }
 
-    if (existsSync(stateDir)) {
-      try {
-        await fs.rm(stateDir, { recursive: true, force: true });
-      } catch (error) {
-        logError(`Failed to remove state directory for ${projectId}`, error);
-      }
+    // The directory, schedules and all, goes in a schedule turn after the row:
+    // an edit already past its check finishes first, every later one refuses,
+    // and one for the same project added straight back waits until it's gone.
+    try {
+      await this.schedules.removeProject(projectId, async () => {
+        if (existsSync(stateDir)) await fs.rm(stateDir, { recursive: true, force: true });
+      });
+    } catch (error) {
+      logError(`Failed to remove state directory for ${projectId}`, error);
     }
     this.stateManager.invalidateProjectStateCache(projectId);
 

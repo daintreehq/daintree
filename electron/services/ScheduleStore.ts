@@ -148,23 +148,35 @@ export class ScheduleStore {
   }
 
   /**
-   * Deletes a removed project's schedules and tells every listener they're
-   * gone. Called once the project's row is deleted: an edit that started
-   * before then finishes first, and every turn after it refuses, so nothing
-   * writes the file again.
+   * Deletes a removed project's schedules, by default just its file, and tells
+   * every listener they're gone. Called once the project's row is deleted: an
+   * edit that started before then finishes first, and every turn after refuses.
+   * `removeFiles` runs inside the turn, so a caller removing the project's
+   * whole state directory does it before an edit for the same project, added
+   * again at once, can write there.
    */
-  removeProject(projectId: string): Promise<void> {
+  removeProject(
+    projectId: string,
+    removeFiles: () => Promise<void> = () => this.unlinkFile(projectId)
+  ): Promise<void> {
     return this.enqueue(projectId, async () => {
-      const filePath = schedulesFilePath(this.projectsConfigDir, projectId);
-      if (!filePath) return;
       try {
-        await resilientUnlink(filePath);
-      } catch (error) {
-        if (!isEnoent(error)) throw error;
+        await removeFiles();
+      } finally {
+        this.revision += 1;
+        this.notify(this.snapshot(projectId, []));
       }
-      this.revision += 1;
-      this.notify(this.snapshot(projectId, []));
     });
+  }
+
+  private async unlinkFile(projectId: string): Promise<void> {
+    const filePath = schedulesFilePath(this.projectsConfigDir, projectId);
+    if (!filePath) return;
+    try {
+      await resilientUnlink(filePath);
+    } catch (error) {
+      if (!isEnoent(error)) throw error;
+    }
   }
 
   // Strictly after the stored stamp, so an edit in the same millisecond, or
