@@ -22,11 +22,11 @@ import {
 } from "./ScheduledRunDonePolicy.js";
 
 /**
- * Asks every local view of the project to apply the policy to its pane. A view
- * holding the pane owns its place in the saved layout, so Main doesn't write
- * it; false when no view shows the project.
+ * Asks every local view of the project to apply the policy to its pane. A
+ * view acts only on a pane it holds; one that opened while main was launching
+ * the run may hold none, so the saved layout is written as well.
  */
-function askViews(target: ArmedScheduledRun, action: ScheduledRunFinishRequest["action"]): boolean {
+function askViews(target: ArmedScheduledRun, action: ScheduledRunFinishRequest["action"]): void {
   const views = getWebContentsForProject(target.projectId);
   const request: ScheduledRunFinishRequest = {
     runId: target.runId,
@@ -47,7 +47,6 @@ function askViews(target: ArmedScheduledRun, action: ScheduledRunFinishRequest["
       }
     );
   }
-  return views.length > 0;
 }
 
 /**
@@ -63,8 +62,17 @@ async function closeRunTerminal(target: ArmedScheduledRun, run: ScheduledRun): P
   if (!info || run.terminalSpawnedAt === null || info.spawnedAt !== run.terminalSpawnedAt) {
     return false;
   }
-  // The generation before the kill: a respawn under the same id must not take the record.
+  // Every spawn mints its generation here in main, so a restart asked for
+  // while the host answered shows as a newer one. Checked with no await before
+  // the kill is sent, which then reaches the host ahead of any later spawn.
   const launchGeneration = getLifecycleLedger().currentGeneration(target.terminalId);
+  if (
+    info.launchGeneration !== undefined &&
+    launchGeneration !== undefined &&
+    info.launchGeneration !== launchGeneration
+  ) {
+    return false;
+  }
   const sessionId = await ptyClient.gracefulKill(target.terminalId);
   // A terminal whose agent had already exited isn't killed by a graceful close.
   if (info.isExited === true) ptyClient.kill(target.terminalId, "scheduled-run-done");
@@ -96,13 +104,15 @@ async function applyDonePolicy(
   action: ScheduledRunDoneAction,
   run: ScheduledRun
 ): Promise<void> {
+  // The saved layout is written whether or not a view holds the pane: a view
+  // that does saves the same placement from its own store.
   if (action === "background") {
-    if (askViews(target, "background")) return;
+    askViews(target, "background");
     await backgroundViewlessTerminal(projectStore, target.projectId, target.terminalId);
     return;
   }
   if (!(await closeRunTerminal(target, run))) return;
-  if (askViews(target, "remove")) return;
+  askViews(target, "remove");
   await forgetViewlessTerminal(projectStore, target.projectId, target.terminalId);
 }
 

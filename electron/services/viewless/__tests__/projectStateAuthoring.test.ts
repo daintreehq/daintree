@@ -143,6 +143,21 @@ describe("backgroundViewlessTerminal (#15982)", () => {
     ]);
   });
 
+  it("parks a grid panel to come back to the grid", async () => {
+    const saved: ProjectState = {
+      projectId: "proj-1",
+      sidebarWidth: 280,
+      terminals: [SNAPSHOT],
+    };
+    const { writer, read } = writerOver(saved);
+
+    await backgroundViewlessTerminal(writer, "proj-1", "t-1");
+
+    expect(read()?.terminals).toEqual([
+      { ...SNAPSHOT, location: "background", backgroundRestoreLocation: "grid" },
+    ]);
+  });
+
   it("leaves a panel already parked, trashed or never saved alone", async () => {
     for (const location of ["background", "trash"] as const) {
       const saved: ProjectState = {

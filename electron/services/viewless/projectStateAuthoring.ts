@@ -110,14 +110,16 @@ export async function backgroundViewlessTerminal(
   noteHostStartedTerminalBackgrounded(projectId, terminalId);
   await writer.enqueueProjectStateUpdate(projectId, (existing) => {
     if (!existing || !Array.isArray(existing.terminals)) return null;
-    const panel = existing.terminals.find((terminal) => terminal.id === terminalId);
-    if (!panel || (panel.location !== "grid" && panel.location !== "dock")) return null;
+    const restoreLocation = existing.terminals.find(
+      (terminal) => terminal.id === terminalId
+    )?.location;
+    if (restoreLocation !== "grid" && restoreLocation !== "dock") return null;
     const tabGroups = withoutGroupMember(existing.tabGroups, terminalId);
     return {
       ...existing,
-      terminals: existing.terminals.map((terminal) =>
+      terminals: existing.terminals.map((terminal): PanelSnapshot =>
         terminal.id === terminalId
-          ? { ...terminal, location: "background", backgroundRestoreLocation: panel.location }
+          ? { ...terminal, location: "background", backgroundRestoreLocation: restoreLocation }
           : terminal
       ),
       ...(tabGroups !== undefined ? { tabGroups } : {}),

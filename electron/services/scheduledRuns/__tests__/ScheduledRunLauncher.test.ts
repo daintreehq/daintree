@@ -226,14 +226,23 @@ describe("launchScheduledRun", () => {
     const onLaunched = vi.fn();
     deps.onLaunched = onLaunched;
     schedule = { ...schedule, policies: { ...schedule.policies, onDone: "close" } };
+    let answer!: () => void;
     deps.launchInView = vi.fn(async (_view, request) => {
       spawnFor(request);
       // An edit made while the run launches applies to later runs.
       schedule = { ...schedule, policies: { ...schedule.policies, onDone: "keep" } };
+      await new Promise<void>((resolve) => {
+        answer = resolve;
+      });
       return launched(request.args.requestedId);
     });
 
-    await expect(run()).resolves.toMatchObject({ status: "started" });
+    const started = run();
+    await vi.waitFor(() => expect(recorder.registerLaunch).toHaveBeenCalled());
+    // Registered at the spawn, but the launch hasn't finished committing its pane.
+    expect(onLaunched).not.toHaveBeenCalled();
+    answer();
+    await expect(started).resolves.toMatchObject({ status: "started" });
     expect(onLaunched).toHaveBeenCalledWith({
       runId: "id-1",
       scheduleId: "schedule-1",

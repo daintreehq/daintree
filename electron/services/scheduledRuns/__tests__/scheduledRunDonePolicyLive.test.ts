@@ -13,6 +13,11 @@ const state = vi.hoisted(() => ({
   },
   background: vi.fn(async () => {}),
   forget: vi.fn(async () => {}),
+  generation: undefined as number | undefined,
+}));
+
+vi.mock("../../pty/lifecycleLedger.js", () => ({
+  getLifecycleLedger: () => ({ currentGeneration: () => state.generation }),
 }));
 
 vi.mock("../../../lifecycle/shutdownCoordinator.js", () => ({
@@ -73,6 +78,7 @@ function settledRun(evidence: ScheduledRunEvidence = DONE): ScheduledRun {
 const terminalInfo = (overrides: Record<string, unknown> = {}) => ({
   id: "terminal-1",
   spawnedAt: SPAWNED_AT,
+  launchGeneration: 4,
   launchAgentId: "codex",
   projectId: "project-1",
   worktreeId: "/repo",
@@ -104,6 +110,7 @@ beforeEach(() => {
   state.ptyClient.kill.mockReset();
   state.background.mockClear();
   state.forget.mockClear();
+  state.generation = 4;
 });
 
 afterEach(() => {
@@ -127,6 +134,7 @@ describe("a scheduled run's done policy, applied (#15982)", () => {
     expect(captured).toEqual([
       expect.objectContaining({
         terminalId: "terminal-1",
+        launchGeneration: 4,
         boundary: "kill",
         record: expect.objectContaining({
           sessionId: "codex-session",
@@ -146,7 +154,45 @@ describe("a scheduled run's done policy, applied (#15982)", () => {
         action: "remove",
       });
     }
-    // A view holding the pane saves its own layout.
+    // A view may hold no such pane (one opened while main launched the run),
+    // so the saved layout loses it too.
+    await vi.waitFor(() =>
+      expect(state.forget).toHaveBeenCalledWith({ id: "project-store" }, "project-1", "terminal-1")
+    );
+  });
+
+  it("captures nothing when the agent gave no session id, and still closes the pane", async () => {
+    const captured: unknown[] = [];
+    events.on("agent-session:captured", (payload) => captured.push(payload));
+    state.ptyClient.gracefulKill.mockResolvedValue(null);
+    state.runs.set("run-1", settledRun());
+
+    arm("close");
+
+    await vi.waitFor(() => expect(state.forget).toHaveBeenCalled());
+    expect(captured).toEqual([]);
+  });
+
+  it("ends a terminal whose agent had already exited, which a graceful close leaves", async () => {
+    state.ptyClient.getTerminalAsync.mockResolvedValue(terminalInfo({ isExited: true }));
+    state.runs.set("run-1", settledRun());
+
+    arm("close");
+
+    await vi.waitFor(() =>
+      expect(state.ptyClient.kill).toHaveBeenCalledWith("terminal-1", "scheduled-run-done")
+    );
+  });
+
+  it("closes nothing when a restart was asked for while the host answered", async () => {
+    state.generation = 5;
+    state.runs.set("run-1", settledRun());
+
+    arm("close");
+
+    await vi.waitFor(() => expect(state.ptyClient.getTerminalAsync).toHaveBeenCalled());
+    await Promise.resolve();
+    expect(state.ptyClient.gracefulKill).not.toHaveBeenCalled();
     expect(state.forget).not.toHaveBeenCalled();
   });
 
@@ -174,7 +220,7 @@ describe("a scheduled run's done policy, applied (#15982)", () => {
     expect(state.forget).not.toHaveBeenCalled();
   });
 
-  it("moves the pane to the background in the views, or in the saved layout with none", async () => {
+  it("moves the pane to the background in the views and the saved layout", async () => {
     const shown = view(1);
     state.views = [shown];
     state.runs.set("run-1", settledRun());
@@ -184,10 +230,6 @@ describe("a scheduled run's done policy, applied (#15982)", () => {
       terminalId: "terminal-1",
       action: "background",
     });
-    expect(state.background).not.toHaveBeenCalled();
-
-    state.views = [];
-    arm("background");
     await vi.waitFor(() =>
       expect(state.background).toHaveBeenCalledWith(
         { id: "project-store" },

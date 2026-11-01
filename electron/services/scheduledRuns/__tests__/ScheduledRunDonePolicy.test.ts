@@ -139,11 +139,26 @@ describe("ScheduledRunDonePolicy (#15982)", () => {
 
     policy.handleRunsDeleted({ projectId: "project-1", scheduleId: "schedule-2" });
     expect(policy.armedCount()).toBe(2);
+    settle(handback("done"), "run-2");
+    expect(apply).not.toHaveBeenCalled();
+    // Another project's run outlives this project's removal.
     policy.handleRunsDeleted({ projectId: "project-1", scheduleId: null });
     expect(policy.armedCount()).toBe(1);
-
     settle(handback("done"));
     expect(apply).not.toHaveBeenCalled();
+    settle(handback("done"), "run-3");
+    expect(apply).toHaveBeenCalledWith(
+      armed({ runId: "run-3", projectId: "project-2" }),
+      "close",
+      runs.get("run-3")
+    );
+  });
+
+  it("keeps a run armed when another schedule's history is deleted", () => {
+    policy.arm(armed());
+    policy.handleRunsDeleted({ projectId: "project-1", scheduleId: "schedule-2" });
+    settle(handback("done"));
+    expect(apply).toHaveBeenCalledTimes(1);
   });
 
   it("moves nothing while Daintree is quitting", () => {

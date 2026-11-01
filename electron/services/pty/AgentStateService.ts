@@ -426,7 +426,8 @@ export class AgentStateService {
       if (handbackHit) {
         terminal.lastHandback = handbackHit.handback;
         terminal.handbackTracker?.retire(handbackHit.code);
-        // The output check may not have seen this marker first (#15982).
+        // The settle retires the code, so its capture is a scheduled run's
+        // report (#15982), whether or not the output check saw it first.
         reportRunHandback(terminal, handbackHit, timestamp);
       }
       if (newState !== "working") terminal.lastHandbackUnpublished = false;
