@@ -758,24 +758,20 @@ describe("GitInitDialog", () => {
       expect(onSuccess).toHaveBeenCalledWith(expect.any(Object), null);
     });
 
-    it("starts over from the new folder's group when a request swaps the folder while open", () => {
+    it("starts over when a request swaps the folder while open, even with the same seed", () => {
+      // The seed is the same for both folders, so only the folder change can
+      // reset the choice made for the first one.
       useProjectGroupsStore.setState({
         groups: [makeProjectGroup("g1", "Daintree"), makeProjectGroup("g2", "Clients", 1)],
       });
-      const props = { onSuccess: vi.fn(), onCancel: vi.fn() };
+      const props = { initialGroupId: "g2", onSuccess: vi.fn(), onCancel: vi.fn() };
       const { rerender } = render(
         <GitInitDialog isOpen={true} directoryPath="/tmp/first-folder" {...props} />
       );
       fireEvent.change(groupField()!, { target: { value: "g1" } });
+      expect(groupField()?.value).toBe("g1");
 
-      rerender(
-        <GitInitDialog
-          isOpen={true}
-          directoryPath="/tmp/second-folder"
-          initialGroupId="g2"
-          {...props}
-        />
-      );
+      rerender(<GitInitDialog isOpen={true} directoryPath="/tmp/second-folder" {...props} />);
 
       expect(groupField()?.value).toBe("g2");
     });

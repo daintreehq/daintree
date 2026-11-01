@@ -81,13 +81,10 @@ vi.mock("electron", () => ({
 // Repository root normally IS the path handed in; set this to model the case
 // where the requested folder sits inside an existing repository.
 let repositoryRootOverride: string | null = null;
-// Runs inside the add's first await, to change the world while it is in flight.
-let duringRepositoryLookup: (() => void) | null = null;
 
 vi.mock("../GitService.js", () => ({
   GitService: class {
     async getRepositoryRoot(p: string): Promise<string> {
-      duringRepositoryLookup?.();
       return repositoryRootOverride ?? p;
     }
     repairWorktrees(...args: string[][]) {
@@ -183,7 +180,6 @@ describe("project identity across folder moves", () => {
     rewriteHibernationProjectPath.mockClear();
     repairMovedSubmodulePaths.mockClear();
     repositoryRootOverride = null;
-    duringRepositoryLookup = null;
     store = new ProjectStore();
   });
 
@@ -353,6 +349,7 @@ describe("project identity across folder moves", () => {
       });
 
       expect(created).toMatchObject({ name: "Chosen", emoji: "🚀", groupId: "g1" });
+      expect(storedGroupId(created.id)).toBe("g1");
     });
 
     it("cannot refile an already-registered project by re-adding it", async () => {
@@ -392,6 +389,8 @@ describe("project identity across folder moves", () => {
       const reopened = await store.addProject(canonicalMoved, { groupId: "g2" });
 
       expect(reopened.id).toBe(registered.id);
+      // The returned row is what every window is told, so it must agree too.
+      expect(reopened.groupId).toBe("g1");
       expect(storedGroupId(registered.id)).toBe("g1");
     });
 
@@ -405,17 +404,25 @@ describe("project identity across folder moves", () => {
       expect(storedGroupId(created.id)).toBeNull();
     });
 
-    it("lands the project ungrouped when its group is deleted while the add is in flight", async () => {
-      // The group exists when the add starts; checking it there instead of at
-      // the insert would file the project under an id no group carries.
+    it("lands the project ungrouped when its group is deleted during the add's last await", async () => {
+      // Deleted inside the re-check that is the add's final await before the
+      // insert: resolving the group at any earlier point would file the project
+      // under an id no group carries.
       seedGroups("g1", "g2");
-      duringRepositoryLookup = () => {
-        writeProjectGroups(readProjectGroups().filter((group) => group.id !== "g1"));
-      };
+      const lookUp = store.getProjectByPath.bind(store);
+      let lookups = 0;
+      vi.spyOn(store, "getProjectByPath").mockImplementation(async (projectPath) => {
+        lookups += 1;
+        if (lookups === 2) {
+          writeProjectGroups(readProjectGroups().filter((group) => group.id !== "g1"));
+        }
+        return lookUp(projectPath);
+      });
       const dir = await makeDir("fresh");
 
       const created = await store.addProject(dir, { groupId: "g1" });
 
+      expect(lookups).toBe(2);
       expect(created.groupId).toBeUndefined();
       expect(storedGroupId(created.id)).toBeNull();
     });

@@ -96,7 +96,7 @@ vi.mock("../projectQuarantineCleanup.js", () => ({
 
 import { ProjectStore } from "../ProjectStore.js";
 import { ProjectIdentityFiles } from "../ProjectIdentityFiles.js";
-import { writeProjectGroups } from "../projectGroupsDocument.js";
+import { readProjectGroups, writeProjectGroups } from "../projectGroupsDocument.js";
 import { setWritesSuppressed, resetWritesSuppressedForTesting } from "../diskPressureState.js";
 
 async function makeDir(name: string): Promise<string> {
@@ -166,6 +166,23 @@ describe("opening a folder without git (#11405)", () => {
     expect(sqlite.prepare("SELECT group_id FROM projects WHERE id = ?").get(project.id)).toEqual({
       group_id: null,
     });
+  });
+
+  it("adopts the folder ungrouped when its group is deleted during the add's last await", async () => {
+    writeProjectGroups([
+      { id: "g1", name: "Daintree", position: 0, sortMode: "mostUsed", createdAt: 0 },
+    ]);
+    const lookUp = store.getProjectByPath.bind(store);
+    vi.spyOn(store, "getProjectByPath").mockImplementation(async (projectPath) => {
+      writeProjectGroups(readProjectGroups().filter((group) => group.id !== "g1"));
+      return lookUp(projectPath);
+    });
+    const folder = await makeDir("downloads");
+
+    const project = await store.addProject(folder, { gitBacked: false, groupId: "g1" });
+
+    expect(project.groupId).toBeUndefined();
+    expect(store.getProjectById(project.id)?.groupId).toBeUndefined();
   });
 
   it("keeps a lightweight row's membership through re-adds and promotion to a repository", async () => {

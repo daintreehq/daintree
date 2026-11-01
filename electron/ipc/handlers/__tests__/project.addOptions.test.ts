@@ -176,23 +176,23 @@ describe("project:add options", () => {
     expect(options?.groupId).toBeUndefined();
   });
 
-  it("carries a creation group through beside the identity", async () => {
-    await handler(EVENT, "/tmp/repo", {
-      identity: { name: "Chosen", emoji: "🚀" },
-      groupId: "group-1",
-    });
+  it.each(["9b2f6a1e-4c3d-4e5f-8a7b-6c5d4e3f2a1b", "group-1"])(
+    "carries creation group %s through beside the identity",
+    async (groupId) => {
+      await handler(EVENT, "/tmp/repo", { identity: { name: "Chosen", emoji: "🚀" }, groupId });
 
-    expect(forwardedOptions()).toMatchObject({
-      identity: { name: "Chosen", emoji: "🚀" },
-      groupId: "group-1",
-    });
-  });
+      expect(forwardedOptions()).toMatchObject({
+        identity: { name: "Chosen", emoji: "🚀" },
+        groupId,
+      });
+    }
+  );
 
   it("keeps the group when the identity alongside it is malformed", async () => {
-    await handler(EVENT, "/tmp/repo", { identity: { name: "Only half" }, groupId: "group-1" });
+    await handler(EVENT, "/tmp/repo", { identity: { name: "Only half" }, groupId: "group-2" });
 
     const options = forwardedOptions();
-    expect(options?.groupId).toBe("group-1");
+    expect(options?.groupId).toBe("group-2");
     expect(options?.identity).toBeUndefined();
   });
 
