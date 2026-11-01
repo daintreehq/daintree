@@ -310,6 +310,8 @@ test("schedules view review — every state, per theme", async () => {
       );
 
       // 04 — Create with nothing filled in and a cron out of range: every field says what's wrong.
+      await page.locator(DIALOG).getByRole("combobox", { name: "Repeats" }).click();
+      await page.getByRole("option", { name: "Custom cron expression" }).click();
       const cadence = page.locator(`${DIALOG} input[placeholder="0 9 * * *"]`);
       await cadence.fill("61 9 * * *");
       await page.getByRole("button", { name: "Create schedule" }).click();

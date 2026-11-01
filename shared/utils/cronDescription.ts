@@ -114,12 +114,15 @@ function dayWords(cron: ParsedCron): DayWords | null | undefined {
   const weekdays = selected(cron.daysOfWeek, 0, 6);
   const everyMonthDay = monthDays.length === 31;
   const everyWeekday = weekdays.length === 7;
+  // Vixie cron fires on either day field only when neither starts with `*`, so
+  // there one full field (`1-31`, `0-6`) means every day, whatever the other says.
+  const eitherDay = !cron.dayOfMonthStarred && !cron.dayOfWeekStarred;
 
   if (everyMonthDay && everyWeekday) return null;
+  if (eitherDay && (everyMonthDay || everyWeekday)) return null;
   if (everyMonthDay) return weekdayWords(weekdays);
   if (everyWeekday) return monthDayWords(monthDays) ?? undefined;
-  // Both restricted: Vixie cron fires on either only when neither starts with `*`.
-  if (cron.dayOfMonthStarred || cron.dayOfWeekStarred) return undefined;
+  if (!eitherDay) return undefined;
   const byDate = monthDayWords(monthDays);
   if (!byDate) return undefined;
   const byWeekday = weekdayWords(weekdays);
