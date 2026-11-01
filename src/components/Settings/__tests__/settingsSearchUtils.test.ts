@@ -114,6 +114,16 @@ describe("filterSettings", () => {
     }
   );
 
+  it.each(["group", "folder", "project group"])(
+    "finds the project's group row by %s while a project is open",
+    (query) => {
+      const hit = filterSettings(SETTINGS_SEARCH_INDEX, query, { hasProject: true }).find(
+        (entry) => entry.id === "project-group"
+      );
+      expect(hit?.tab).toBe("project:general");
+    }
+  );
+
   it("still answers a misspelling, where fuzzy matching is the whole point", () => {
     // The gate only fires when a literal match exists, so typo tolerance has
     // to survive it untouched.
