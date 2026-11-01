@@ -102,10 +102,10 @@ function fakeServer() {
       return () => sessionListeners.delete(l);
     },
     onSessionExpired: () => () => {},
-    attach(link: ReturnType<typeof fakeLink>, resumed = false) {
+    attach(link: ReturnType<typeof fakeLink>, resumed = false, sessionId = "s1") {
       for (const l of sessionListeners) {
         l({
-          sessionId: "s1",
+          sessionId,
           resumed,
           client: { clientId: "c1", clientName: "greg-mbp", platform: "darwin" },
           session: link as unknown as LinkSession,
@@ -501,18 +501,46 @@ describe("initRemoteHostsHost inventory reads (#15907)", () => {
     expect(pty.inventoryReads).toBe(1);
   });
 
-  it("follows agent state while nobody reads it, for the first view to open", () => {
+  it("keeps reading while another Shell still has a view open", async () => {
+    const pty = new FakePty();
+    ptyRef.current = pty;
+    start();
+    const one = fakeLink();
+    const two = fakeLink();
+    server.attach(one, false, "s1");
+    server.attach(two, false, "s2");
+    one.open("view-1", "p1");
+    two.open("view-1", "p2");
+    await vi.advanceTimersByTimeAsync(0);
+    const opened = pty.inventoryReads;
+
+    one.drop();
+    await vi.advanceTimersByTimeAsync(ASSISTANT_SWEEP_MS);
+    expect(pty.inventoryReads).toBe(opened + 1);
+
+    two.close("view-1");
+    await vi.advanceTimersByTimeAsync(ASSISTANT_SWEEP_MS * 3);
+    expect(pty.inventoryReads).toBe(opened + 1);
+  });
+
+  it("follows agent state while nobody reads it, for the first view to open", async () => {
     const pty = new FakePty();
     ptyRef.current = pty;
     start();
     pty.owners.set("t-agent", "p1");
+    pty.inventory = [{ id: "t-agent", projectId: "p1", agentState: "working" }];
     stateChanged("t-agent", "working");
+    expect(pty.inventoryReads).toBe(0);
 
     const link = fakeLink();
     server.attach(link);
     link.open("view-1", "p1");
+    // Told from the events before the fresh reading lands, which agrees.
     expect(agentAnswers(link)).toEqual([
       { endpoints: [{ endpointId: "view-1", projectId: "p1", active: true }] },
     ]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pty.inventoryReads).toBe(1);
+    expect(agentAnswers(link)).toHaveLength(1);
   });
 });

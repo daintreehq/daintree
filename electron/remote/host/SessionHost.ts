@@ -295,7 +295,6 @@ export class SessionHost {
    * untouched still counts.
    */
   get servesViews(): boolean {
-    if (this.disposed) return false;
     for (const state of this.states.values()) {
       if (state.link?.isOpen && state.endpoints.size > 0) return true;
     }

@@ -191,12 +191,14 @@ describe("ProjectAgentActivityCache (#13359)", () => {
   it("stops listening and ignores a late inventory once disposed", async () => {
     const { cache, pty, onChange } = setup();
     cache.attach(pty);
+    cache.reconcile();
     cache.dispose();
     pty.answer({
       terminals: [{ id: "t1", projectId: "p1", agentState: "working" }],
       degraded: false,
     });
     await flush();
+    expect(pty.pending).toHaveLength(0);
     cache.noteState("t1", "working");
 
     expect(cache.isProjectActive("p1")).toBe(false);
@@ -228,6 +230,40 @@ describe("ProjectAgentActivityCache (#13359)", () => {
     });
     await flush();
     expect(cache.isProjectActive("p2")).toBe(true);
+  });
+
+  it("takes the inventory over what events said while it read none", async () => {
+    const { cache, pty, demand } = setup();
+    demand.wanted = false;
+    cache.attach(pty);
+    pty.owners.set("t1", "p1");
+    cache.noteState("t1", "working");
+    pty.emit("exit", "t2");
+
+    demand.wanted = true;
+    cache.reconcile();
+    pty.answer({
+      terminals: [
+        { id: "t1", projectId: "p1", agentState: "idle" },
+        { id: "t2", projectId: "p2", agentState: "working" },
+      ],
+      degraded: false,
+    });
+    await flush();
+    expect(cache.isProjectActive("p1")).toBe(false);
+    // Running again under the same id since: only an exit during the read counts.
+    expect(cache.isProjectActive("p2")).toBe(true);
+  });
+
+  it("queues no read asked for while nothing wanted it", async () => {
+    const { cache, pty, demand } = setup();
+    cache.attach(pty);
+    demand.wanted = false;
+    cache.reconcile();
+    demand.wanted = true;
+    pty.answer({ terminals: [], degraded: false });
+    await flush();
+    expect(pty.pending).toHaveLength(0);
   });
 
   it("drops a read queued behind one in flight once nothing wants it", async () => {
