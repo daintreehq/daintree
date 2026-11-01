@@ -22,6 +22,13 @@ import { FRAME_HEADER_BYTES, LANE_COUNT, LANE_PRIORITY, Lane, type LinkFrame } f
  * keystroke echo by a frame per busy terminal, not by everything they have
  * queued. Frames with no key share one flow, so a lane that never names one is
  * plain FIFO.
+ *
+ * Lane priority must not reorder one endpoint's traffic around its close: a
+ * close posted on the control lane waits until every frame enqueued before it
+ * for that endpoint has been written, so the peer never drops a view's last
+ * calls as addressed to an endpoint already gone. Unrelated control frames go
+ * on past it, and the endpoint's later frames on the close's lane (a reopen
+ * under the same id) wait behind it.
  */
 export interface LaneLimits {
   highWaterBytes: number;
@@ -56,6 +63,9 @@ export const INTERACTIVE_BURST_BYTES = 128 * 1024;
 
 export type EnqueueResult = "queued" | "over-high-water" | "refused";
 
+/** The endpoints a frame speaks for, or the one it closes. */
+export type EndpointOrder = { endpointIds: readonly string[] } | { closes: string };
+
 interface FlowQueue {
   frames: LinkFrame[];
   head: number;
@@ -67,9 +77,19 @@ interface LaneQueue {
   /** Keys of the flows with frames, in turn order, from `turnsHead`. */
   turns: string[];
   turnsHead: number;
+  /** Frames and bytes counted against the lane's limits, held ones included. */
   frameCount: number;
   bytes: number;
+  /** Frames in `flows`, ready to be served. */
+  ready: number;
   wasOverHighWater: boolean;
+}
+
+interface HeldFrame {
+  frame: LinkFrame;
+  flow: string;
+  seq: number;
+  closes: string | undefined;
 }
 
 /** The flow of frames enqueued without a key. */
@@ -82,6 +102,7 @@ function emptyLane(): LaneQueue {
     turnsHead: 0,
     frameCount: 0,
     bytes: 0,
+    ready: 0,
     wasOverHighWater: false,
   };
 }
@@ -95,17 +116,55 @@ export class LaneScheduler {
   private readonly drainListeners = new Set<(lane: Lane) => void>();
   private interactiveBurst = 0;
   private interactiveBurstBytes = 0;
+  private seq = 0;
+  /** Frames enqueued with endpoints, until written. */
+  private readonly unwritten = new Map<
+    LinkFrame,
+    { seq: number; endpointIds: readonly string[] }
+  >();
+  /** Each endpoint's unwritten frames by enqueue order, oldest first. */
+  private readonly unwrittenByEndpoint = new Map<string, Set<number>>();
+  /** Each endpoint's frames held behind its close, in order. */
+  private readonly held = new Map<string, HeldFrame[]>();
 
   constructor(private readonly limits: Record<Lane, LaneLimits> = DEFAULT_LANE_LIMITS) {
     this.lanes = Array.from({ length: LANE_COUNT }, emptyLane);
   }
 
-  /** `flow` names the stream the frame belongs to; frames of one flow leave in order. */
-  enqueue(frame: LinkFrame, flow: string = SHARED_FLOW): EnqueueResult {
+  /**
+   * `flow` names the stream the frame belongs to; frames of one flow leave in
+   * order. `order` names the endpoints it speaks for; the caller reports each
+   * such frame through `written` once the transport has taken it.
+   */
+  enqueue(frame: LinkFrame, flow: string = SHARED_FLOW, order?: EndpointOrder): EnqueueResult {
     const q = this.lanes[frame.lane]!;
     const cost = frameCost(frame);
     const { highWaterBytes, hardCapBytes, maxFrames } = this.limits[frame.lane];
     if (q.bytes + cost > hardCapBytes || q.frameCount >= maxFrames) return "refused";
+    q.frameCount++;
+    q.bytes += cost;
+    if (!order || !this.holdBack(frame, flow, order)) this.push(q, frame, flow);
+    if (q.bytes > highWaterBytes) {
+      q.wasOverHighWater = true;
+      return "over-high-water";
+    }
+    return "queued";
+  }
+
+  /** The transport took `frame`: anything held only behind it is ready. */
+  written(frame: LinkFrame): void {
+    const entry = this.unwritten.get(frame);
+    if (!entry) return;
+    this.unwritten.delete(frame);
+    for (const endpointId of entry.endpointIds) {
+      const seqs = this.unwrittenByEndpoint.get(endpointId)!;
+      seqs.delete(entry.seq);
+      if (seqs.size === 0) this.unwrittenByEndpoint.delete(endpointId);
+      this.release(endpointId);
+    }
+  }
+
+  private push(q: LaneQueue, frame: LinkFrame, flow: string): void {
     let fq = q.flows.get(flow);
     if (!fq) {
       fq = { frames: [], head: 0, bytes: 0 };
@@ -113,14 +172,49 @@ export class LaneScheduler {
       q.turns.push(flow);
     }
     fq.frames.push(frame);
-    fq.bytes += cost;
-    q.frameCount++;
-    q.bytes += cost;
-    if (q.bytes > highWaterBytes) {
-      q.wasOverHighWater = true;
-      return "over-high-water";
+    fq.bytes += frameCost(frame);
+    q.ready++;
+  }
+
+  /** Records the frame against its endpoints; true when it waits behind a close. */
+  private holdBack(frame: LinkFrame, flow: string, order: EndpointOrder): boolean {
+    const closes = "closes" in order ? order.closes : undefined;
+    const endpointIds = "closes" in order ? [order.closes] : order.endpointIds;
+    const seq = ++this.seq;
+    this.unwritten.set(frame, { seq, endpointIds });
+    for (const endpointId of endpointIds) {
+      const seqs = this.unwrittenByEndpoint.get(endpointId);
+      if (seqs) seqs.add(seq);
+      else this.unwrittenByEndpoint.set(endpointId, new Set([seq]));
     }
-    return "queued";
+    const held: HeldFrame = { frame, flow, seq, closes };
+    for (const endpointId of endpointIds) {
+      const queue = this.held.get(endpointId);
+      if (queue && queue[0]!.frame.lane === frame.lane) {
+        queue.push(held);
+        return true;
+      }
+    }
+    if (closes === undefined || this.oldestUnwritten(closes) === seq) return false;
+    this.held.set(closes, [held]);
+    return true;
+  }
+
+  private release(endpointId: string): void {
+    const queue = this.held.get(endpointId);
+    if (!queue) return;
+    while (queue.length > 0) {
+      const next = queue[0]!;
+      if (next.closes !== undefined && this.oldestUnwritten(next.closes) !== next.seq) break;
+      queue.shift();
+      this.push(this.lanes[next.frame.lane]!, next.frame, next.flow);
+    }
+    if (queue.length === 0) this.held.delete(endpointId);
+  }
+
+  private oldestUnwritten(endpointId: string): number | undefined {
+    // A set iterates in insertion order, and sequence numbers only grow.
+    return this.unwrittenByEndpoint.get(endpointId)?.values().next().value;
   }
 
   /** Next frame to write, or undefined when idle. */
@@ -139,7 +233,7 @@ export class LaneScheduler {
   }
 
   private hasFrames(lane: Lane): boolean {
-    return this.lanes[lane]!.frameCount > 0;
+    return this.lanes[lane]!.ready > 0;
   }
 
   private pickLane(): Lane | undefined {
@@ -188,6 +282,7 @@ export class LaneScheduler {
       q.turns.push(flow);
     }
     q.frameCount--;
+    q.ready--;
     q.bytes -= frameCost(frame);
     if (q.wasOverHighWater && q.bytes <= this.limits[lane].highWaterBytes / 2) {
       q.wasOverHighWater = false;
@@ -215,5 +310,8 @@ export class LaneScheduler {
     for (let lane = 0; lane < this.lanes.length; lane++) this.lanes[lane] = emptyLane();
     this.interactiveBurst = 0;
     this.interactiveBurstBytes = 0;
+    this.unwritten.clear();
+    this.unwrittenByEndpoint.clear();
+    this.held.clear();
   }
 }

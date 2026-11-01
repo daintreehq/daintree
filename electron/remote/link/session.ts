@@ -26,6 +26,7 @@ import {
 import {
   DEFAULT_LANE_LIMITS,
   LaneScheduler,
+  type EndpointOrder,
   type EnqueueResult,
   type LaneLimits,
 } from "./scheduler.js";
@@ -178,6 +179,51 @@ function flowOf(message: LinkMessage): string | undefined {
     return message.body.endpointId;
   }
   return undefined;
+}
+
+/**
+ * The endpoints a message speaks for, so the scheduler keeps it ahead of their
+ * close. Calls name theirs in the payload, by the services' convention.
+ */
+function endpointOrderOf(message: LinkMessage): EndpointOrder | undefined {
+  switch (message.lane) {
+    case Lane.CONTROL:
+      if (message.kind === ControlKind.ENDPOINT_CLOSE) return { closes: message.body.endpointId };
+      if (
+        message.kind === ControlKind.ENDPOINT_OPEN ||
+        message.kind === ControlKind.ENDPOINT_REBIND
+      ) {
+        return { endpointIds: [message.body.endpointId] };
+      }
+      return undefined;
+    case Lane.RPC:
+      if (message.kind === RpcKind.INVOKE || message.kind === RpcKind.SEND) {
+        return { endpointIds: [message.body.endpointId] };
+      }
+      if (message.kind === RpcKind.CALL) return callEndpointOrder(message.body.payload);
+      return undefined;
+    case Lane.INTERACTIVE:
+      if (
+        message.kind === InteractiveKind.TERMINAL_IN ||
+        message.kind === InteractiveKind.WORKTREE_PORT
+      ) {
+        return { endpointIds: [message.body.endpointId] };
+      }
+      return undefined;
+    default:
+      return undefined;
+  }
+}
+
+function callEndpointOrder(payload: unknown): EndpointOrder | undefined {
+  if (typeof payload !== "object" || payload === null) return undefined;
+  const { endpointId, endpointIds } = payload as { endpointId?: unknown; endpointIds?: unknown };
+  const ids = new Set<string>();
+  if (typeof endpointId === "string") ids.add(endpointId);
+  if (Array.isArray(endpointIds)) {
+    for (const id of endpointIds) if (typeof id === "string") ids.add(id);
+  }
+  return ids.size > 0 ? { endpointIds: [...ids] } : undefined;
 }
 
 /** The interactive-lane flow one endpoint's output for one terminal takes turns in. */
@@ -504,7 +550,7 @@ export class LinkSession {
     assertOutboundMessage(message);
     const frame = messageToFrame(message, this.encodingLimits);
     this.assertFrameSize(frame);
-    const result = this.scheduler.enqueue(frame, flowOf(message));
+    const result = this.scheduler.enqueue(frame, flowOf(message), endpointOrderOf(message));
     if (result !== "refused") this.scheduleFlush();
     return { result, frame };
   }
@@ -694,10 +740,16 @@ export class LinkSession {
       const request = frame.lane === Lane.RPC ? this.requestFrames.get(frame) : undefined;
       // Timed out or aborted while queued: its caller has moved on, and the
       // peer running it now would act on a call nobody is waiting for.
-      if (request?.settled) continue;
+      if (request?.settled) {
+        // Dropped rather than sent, but gone all the same: a close held behind
+        // it must still go.
+        this.scheduler.written(frame);
+        continue;
+      }
       const written = this.socket.write(encodeFrame(frame, this.maxFrameBytes));
       // A false return still took the bytes; only frames left in the scheduler
       // are known never to have reached the peer.
+      this.scheduler.written(frame);
       if (request) request.written = true;
       if (!written) {
         this.waitingForDrain = true;

@@ -287,6 +287,27 @@ describe("LinkSession request/response", () => {
       await new Promise((r) => setTimeout(r, 40));
       expect(await requestsReceived(client, b)).toEqual(["notice"]);
     });
+
+    it("still sends an endpoint's close held behind a request that settled unsent (#15881)", async () => {
+      const { client, b } = await stalledClient();
+      const ac = new AbortController();
+      const aborted = client.invoke("e1", "late", [], { signal: ac.signal });
+      client.post({
+        lane: Lane.CONTROL,
+        kind: ControlKind.ENDPOINT_CLOSE,
+        body: { endpointId: "e1" },
+      });
+      await new Promise((r) => setTimeout(r, 20));
+      ac.abort();
+      await aborted;
+      const frames = recordFrames(b);
+      expect(await requestsReceived(client, b)).toEqual([]);
+      expect(
+        frames.some(
+          (f) => f.lane === Lane.CONTROL && frameToMessage(f).kind === ControlKind.ENDPOINT_CLOSE
+        )
+      ).toBe(true);
+    });
   });
 
   it("refuses to send a message the peer would reject, without ending the session", async () => {
@@ -672,5 +693,133 @@ describe("LinkSession lane priority", () => {
     expect(frames.slice(interactiveAt + 1).some((f) => f.kind === BulkKind.TRANSFER_CHUNK)).toBe(
       true
     );
+  });
+});
+
+describe("LinkSession endpoint closes (#15881)", () => {
+  it("writes what an endpoint queued before its close ahead of it, and other control frames past it", async () => {
+    const { host, client } = await pair();
+    const arrived: string[] = [];
+    host.setSendHandler((body) => arrived.push(`send:${body.channel}`));
+    host.on(Lane.INTERACTIVE, InteractiveKind.TERMINAL_IN, () => arrived.push("input"));
+    host.on(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, (body) =>
+      arrived.push(`close:${body.endpointId}`)
+    );
+    host.on(Lane.CONTROL, ControlKind.ENDPOINT_OPEN, (body) =>
+      arrived.push(`open:${body.endpointId}`)
+    );
+
+    // All before one flush, where the control lane would otherwise go first.
+    client.send("e1", "commit", []);
+    client.post({
+      lane: Lane.INTERACTIVE,
+      kind: InteractiveKind.TERMINAL_IN,
+      body: { endpointId: "e1", message: { type: "write", data: "q" } },
+    });
+    client.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.ENDPOINT_CLOSE,
+      body: { endpointId: "e1" },
+    });
+    client.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.ENDPOINT_OPEN,
+      body: { endpointId: "e2", projectId: "p", openId: "o" },
+    });
+
+    await waitFor(() => arrived.length === 4);
+    expect(arrived).toEqual(["open:e2", "input", "send:commit", "close:e1"]);
+  });
+
+  // The queued frame's own answer, when it has one, to wait for before the sessions close.
+  it.each<[string, (client: LinkSession) => unknown, string?]>([
+    [
+      "terminal input",
+      (client) =>
+        client.post({
+          lane: Lane.INTERACTIVE,
+          kind: InteractiveKind.TERMINAL_IN,
+          body: { endpointId: "e1", message: { type: "write", data: "q" } },
+        }),
+    ],
+    [
+      "a worktree port message",
+      (client) =>
+        client.post({
+          lane: Lane.INTERACTIVE,
+          kind: InteractiveKind.WORKTREE_PORT,
+          body: { endpointId: "e1", message: { id: 1 } },
+        }),
+    ],
+    ["an invoke", (client) => client.invoke("e1", "commit", [])],
+    ["a call naming it", (client) => client.call("m", { endpointId: "e1" })],
+    [
+      "a call naming it last of several",
+      (client) => client.call("m", { endpointIds: ["e2", "e1"] }),
+    ],
+    [
+      "a call naming it first of several",
+      (client) => client.call("m", { endpointIds: ["e2", "e1"] }),
+      "e2",
+    ],
+    [
+      "a call naming it beside another endpoint",
+      (client) => client.call("m", { endpointId: "e2", endpointIds: ["e1"] }),
+    ],
+  ])("writes %s ahead of the endpoint's close", async (_kind, queue, closes = "e1") => {
+    const { host, client } = await pair();
+    const arrived: string[] = [];
+    const record = () => void arrived.push("frame");
+    host.on(Lane.INTERACTIVE, InteractiveKind.TERMINAL_IN, record);
+    host.on(Lane.INTERACTIVE, InteractiveKind.WORKTREE_PORT, record);
+    host.setInvokeHandler(async () => {
+      record();
+      return { __daintreeIpcEnvelope: true, ok: true, data: null };
+    });
+    host.registerCallHandler("m", z.unknown(), () => {
+      record();
+      return null;
+    });
+    host.on(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, () => arrived.push("close"));
+
+    const answered = queue(client);
+    client.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.ENDPOINT_CLOSE,
+      body: { endpointId: closes },
+    });
+
+    await waitFor(() => arrived.length === 2);
+    expect(arrived).toEqual(["frame", "close"]);
+    await answered;
+  });
+
+  it("keeps a reopen under the same id behind the close it follows", async () => {
+    const { host, client } = await pair();
+    const arrived: string[] = [];
+    host.setSendHandler(() => arrived.push("send"));
+    host.on(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, () => arrived.push("close"));
+    host.on(Lane.CONTROL, ControlKind.ENDPOINT_OPEN, () => arrived.push("open"));
+    host.on(Lane.CONTROL, ControlKind.ENDPOINT_REBIND, () => arrived.push("rebind"));
+
+    client.send("e1", "commit", []);
+    client.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.ENDPOINT_CLOSE,
+      body: { endpointId: "e1" },
+    });
+    client.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.ENDPOINT_OPEN,
+      body: { endpointId: "e1", projectId: "p", openId: "o2" },
+    });
+    client.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.ENDPOINT_REBIND,
+      body: { endpointId: "e1", projectId: "q" },
+    });
+
+    await waitFor(() => arrived.length === 4);
+    expect(arrived).toEqual(["send", "close", "open", "rebind"]);
   });
 });
