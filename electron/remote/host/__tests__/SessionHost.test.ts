@@ -12,6 +12,8 @@ import type { EndpointInvocation, RemoteSessionExpiryCause } from "../../../ipc/
 import { logBuffer } from "../../../services/LogBuffer.js";
 import { wrapSuccess } from "../../../../shared/utils/ipcErrorSerialization.js";
 import type { IpcEnvelope } from "../../../../shared/types/ipc/errors.js";
+import { CHANNELS } from "../../../ipc/channels.js";
+import type { HandshakeMismatch } from "../../../../shared/types/remoteHosts.js";
 import { Lane } from "../../link/frames.js";
 import { ControlKind, EventKind } from "../../link/messages.js";
 import type { EnqueueResult } from "../../link/scheduler.js";
@@ -107,12 +109,19 @@ function fakeServer() {
       expiredListeners.add(l);
       return () => expiredListeners.delete(l);
     },
-    attach(sessionId: string, link: ReturnType<typeof fakeLink>, resumed = false, clientId = "c1") {
+    attach(
+      sessionId: string,
+      link: ReturnType<typeof fakeLink>,
+      resumed = false,
+      clientId = "c1",
+      buildMismatch: HandshakeMismatch | null = null
+    ) {
       const ctx = {
         sessionId,
         resumed,
         client: { clientId, clientName: "greg-mbp", platform: "darwin" as const },
         session: link as unknown as LinkSession,
+        buildMismatch,
       };
       for (const l of sessionListeners) l(ctx);
     },
@@ -776,6 +785,76 @@ describe("SessionHost: one push for every view of a session (#15902)", () => {
 
     group.sendToAll(frame);
     expect(events(link)).toEqual([]);
+  });
+});
+
+describe("SessionHost: pushes a Shell would discard by locality (#15901)", () => {
+  /** What a host broadcast does: one event per remote endpoint in the registry. */
+  function broadcast(channel: string, args: unknown[]) {
+    for (const endpoint of registry.getRemote()) endpoint.send({ type: "event", channel, args });
+  }
+
+  const eventFrames = (link: ReturnType<typeof fakeLink>) =>
+    link.posted
+      .filter((m) => m.lane === Lane.EVENTS && m.kind === EventKind.EVENT)
+      .map((m) => m.body as { endpointId: string; channel: string; args: unknown[] });
+
+  it("sends no EVENT frame for a shell-locality broadcast and still sends a host-locality one", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+
+    broadcast(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, [{ percent: 40 }]);
+    expect(eventFrames(link)).toEqual([]);
+
+    broadcast(CHANNELS.TERMINAL_DATA, ["t1", "hi"]);
+    expect(eventFrames(link).map((f) => [f.endpointId, f.channel])).toEqual([
+      ["view-1", CHANNELS.TERMINAL_DATA],
+      ["view-2", CHANNELS.TERMINAL_DATA],
+    ]);
+  });
+
+  it("decides events:push by event name and hybrid channels by the half the host owns", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+
+    broadcast(CHANNELS.EVENTS_PUSH, [{ name: "sound:cancel", payload: {} }]);
+    broadcast(CHANNELS.KEEP_AWAKE_STATE_CHANGED, [{ active: true }]);
+    broadcast(CHANNELS.EVENTS_PUSH, [{ name: "agent-session:recorded", payload: {} }]);
+    broadcast(CHANNELS.APP_CONFIG_RELOADED, []);
+
+    expect(eventFrames(link).map((f) => f.channel)).toEqual([
+      CHANNELS.EVENTS_PUSH,
+      CHANNELS.APP_CONFIG_RELOADED,
+    ]);
+    expect(eventFrames(link)[0]!.args[0]).toMatchObject({ name: "agent-session:recorded" });
+  });
+
+  it("owes a resumed Shell no resync for a discarded push it missed while away", () => {
+    const first = fakeLink();
+    server.attach("s1", first);
+    open(first, "view-1", "p1");
+    first.drop();
+    broadcast(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, [{ percent: 40 }]);
+
+    const second = fakeLink();
+    server.attach("s1", second, true);
+    expect(second.calls).toEqual([]);
+  });
+
+  it("keeps sending everything to a Shell on another build, whose own tables decide", () => {
+    const link = fakeLink();
+    server.attach("s1", link, false, "c1", { kind: "commit", local: "abc", remote: "def" });
+    open(link, "view-1", "p1");
+
+    broadcast(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, [{ percent: 40 }]);
+    broadcast(CHANNELS.TERMINAL_DATA, ["t1", "hi"]);
+    expect(eventFrames(link).map((f) => f.channel)).toEqual([
+      CHANNELS.UPDATE_DOWNLOAD_PROGRESS,
+      CHANNELS.TERMINAL_DATA,
+    ]);
   });
 });
 
