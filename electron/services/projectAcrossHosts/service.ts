@@ -67,6 +67,7 @@ import {
   scanRoots,
   type RemoteLister,
 } from "./matcher.js";
+import { RemoteReadCache } from "./remoteReadCache.js";
 import type { ProjectAcrossHostsDeps } from "./types.js";
 
 const BRANCH_FETCH_TIMEOUT_MS = 15_000;
@@ -230,11 +231,20 @@ export class ProjectAcrossHostsService {
    */
   private readonly reservedDestinations = new Set<string>();
 
+  /**
+   * Remotes for `identify` and `find`, which every presence check and bare
+   * host switch repeats. Everything that creates or changes something from
+   * what it reads (a clone, a worktree, a push) reads fresh.
+   */
+  private readonly lookupRemotes: RemoteReadCache;
+
   constructor(
     private readonly deps: ProjectAcrossHostsDeps,
     private readonly listRemotes: RemoteLister = listRegisteredRemotes
   ) {
-    this.bundles = new BundleStore(() => deps.bundleDir(), deps.now ?? (() => Date.now()));
+    const now = deps.now ?? (() => Date.now());
+    this.bundles = new BundleStore(() => deps.bundleDir(), now);
+    this.lookupRemotes = new RemoteReadCache(listRemotes, { now });
   }
 
   private requireProject(projectId: unknown): Project {
@@ -374,7 +384,7 @@ export class ProjectAcrossHostsService {
   async identify(payload: IdentifyProjectPayload): Promise<ProjectIdentity> {
     const project = this.requireProject(payload?.projectId);
     const remotes = stripRemoteListCredentials(
-      await this.listRemotes(project.path).catch(() => [])
+      await this.lookupRemotes.read(project.path).catch(() => [])
     );
     const git = await this.deps.git.local(project.path);
     const tracked = await tryRaw(git, ["ls-files", "--", ".daintree/project.json"]);
@@ -594,6 +604,13 @@ export class ProjectAcrossHostsService {
   }
 
   find(payload: FindProjectMatchPayload): Promise<ProjectMatchCandidate[]> {
+    return this.findRegistered(payload, this.lookupRemotes.read);
+  }
+
+  private findRegistered(
+    payload: FindProjectMatchPayload,
+    listRemotes: RemoteLister
+  ): Promise<ProjectMatchCandidate[]> {
     return findRegisteredMatches(
       {
         remoteUrls: Array.isArray(payload?.remoteUrls) ? payload.remoteUrls : [],
@@ -601,7 +618,7 @@ export class ProjectAcrossHostsService {
           typeof payload?.committedProjectId === "string" ? payload.committedProjectId : null,
       },
       this.deps,
-      this.listRemotes
+      listRemotes
     );
   }
 
@@ -617,7 +634,8 @@ export class ProjectAcrossHostsService {
    * clone that is the same repository by its remotes).
    */
   async match(payload: FindProjectMatchPayload): Promise<ProjectMatchCandidate[]> {
-    const registered = await this.find(payload);
+    // A switch or an ensure clones or adds a worktree from this: read fresh, unlike a presence `find`.
+    const registered = await this.findRegistered(payload, this.listRemotes);
     if (registered.some((c) => c.matchedBy === "remote-url")) return registered;
     return [...registered, ...(await this.scan({ remoteUrls: payload.remoteUrls }))];
   }

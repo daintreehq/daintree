@@ -223,7 +223,7 @@ export async function resolveGitDirFromFs(worktreePath: string): Promise<string 
  * the common dir). Only trusts the unambiguous shapes; anything else returns
  * `null` so the caller falls back to `git rev-parse --git-common-dir`.
  */
-async function resolveCommonDirFromFs(worktreePath: string): Promise<string | null> {
+export async function resolveCommonDirFromFs(worktreePath: string): Promise<string | null> {
   const gitDir = await resolveGitDirFromFs(worktreePath);
   if (!gitDir) return null;
   try {
