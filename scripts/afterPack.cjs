@@ -532,62 +532,119 @@ function validateOnnxRuntime(unpackedPath) {
 }
 
 /**
- * onnxruntime-node ships every platform's binaries, plus the CUDA and TensorRT
- * execution providers on Linux (~270 MB). Daintree's only session (Silero VAD
- * in avr-vad) uses the default CPU provider, so a Linux package needs nothing
- * but `linux/<arch>` without those two libraries — the rest was ~380 MB of
- * every Linux download. Linux only: a mac universal build merges per-arch
- * intermediates that must keep identical file sets.
+ * onnxruntime-node ships every platform's runtime in one package, and a process
+ * loads exactly `bin/napi-v6/<platform>/<arch>/onnxruntime_binding.node` (its
+ * lib/binding.ts), which links one runtime library beside it. Both of
+ * Daintree's sessions, Silero VAD in avr-vad and the Canopy screen reader, use
+ * the default CPU provider.
+ *
+ * The other operating systems' runtimes never reach this hook: the platform
+ * `files` exclusions in electron-builder.config.cjs drop them, because
+ * @electron/universal reads every unpacked entry of both macOS merge inputs and
+ * a file deleted here from one of them aborts the merge (#15670). A foreign
+ * platform that does arrive is a config regression, so it fails the pack rather
+ * than being quietly deleted. What only the arch can decide happens here, where
+ * the -x64-temp/-arm64-temp output dir tells a merge input from a package that
+ * ships (see isMacUniversalIntermediate): the other arch's directory, and on
+ * Linux the CUDA and TensorRT providers (~270 MB) a CPU session never opens.
+ *
+ * Windows keeps DirectML.dll, dxcompiler.dll and dxil.dll: onnxruntime.dll
+ * delay-loads the first and loads the other two by name for its GPU providers,
+ * so no import table shows a CPU session never reaching them.
  */
 const ONNX_GPU_PROVIDER_LIBS = [
   "libonnxruntime_providers_cuda.so",
   "libonnxruntime_providers_tensorrt.so",
 ];
 
-function pruneOnnxRuntimeForLinux(unpackedPath, arches) {
+/** The library each platform's binding links, which must ship beside it. */
+const ONNX_RUNTIME_LIBRARY = {
+  darwin: "libonnxruntime.1.dylib",
+  linux: "libonnxruntime.so.1",
+  win32: "onnxruntime.dll",
+};
+exports.ONNX_RUNTIME_LIBRARY = ONNX_RUNTIME_LIBRARY;
+
+/**
+ * Targets onnxruntime-node ships no runtime for at all. 1.30.0 has no
+ * darwin/x64 build, so an Intel Mac (the x64 package, or the universal app's x64
+ * slice) has never been able to start a session: the workers report the failed
+ * load. Only a missing directory is excused here; a partial one still fails.
+ */
+const ONNX_UNSHIPPED_TARGETS = new Set(["darwin-x64"]);
+
+/**
+ * Takes the expected-arch target resolveBetterSqlitePrebuildTarget returns, so
+ * the two prunes agree on what a universal merge input carries. A target that
+ * is only a guess (`exact: false`) gets the foreign-platform check alone:
+ * deleting against the runner's arch could remove the package's own runtime.
+ */
+function pruneOnnxRuntime(unpackedPath, electronPlatformName, target) {
   const moduleDir = path.join(unpackedPath, "node_modules", "onnxruntime-node");
   if (!fs.existsSync(moduleDir)) return;
   const binRoot = path.join(moduleDir, "bin");
   const napiDirs = fs.existsSync(binRoot) ? fs.readdirSync(binRoot) : [];
+
+  const foreign = napiDirs.flatMap((napi) =>
+    fs
+      .readdirSync(path.join(binRoot, napi))
+      .filter((platform) => platform !== electronPlatformName)
+      .map((platform) => `${napi}/${platform}`)
+  );
+  if (foreign.length > 0) {
+    throw new Error(
+      `[afterPack] CRITICAL: onnxruntime-node runtimes for another platform survived packing ` +
+        `in ${binRoot}: ${foreign.join(", ")}. The package would ship native binaries it ` +
+        "never loads. Check the onnxruntime-node exclusions in the platform `files` of " +
+        "electron-builder.config.cjs."
+    );
+  }
+
+  if (!target.exact) return;
+
   for (const napi of napiDirs) {
-    const napiDir = path.join(binRoot, napi);
-    for (const platform of fs.readdirSync(napiDir)) {
-      const platformDir = path.join(napiDir, platform);
-      if (platform !== "linux") {
-        fs.rmSync(platformDir, { recursive: true, force: true });
+    const platformDir = path.join(binRoot, napi, electronPlatformName);
+    if (!fs.existsSync(platformDir)) continue;
+    for (const arch of fs.readdirSync(platformDir)) {
+      const archDir = path.join(platformDir, arch);
+      if (!target.arches.includes(arch)) {
+        fs.rmSync(archDir, { recursive: true, force: true });
+        console.log(`[afterPack] Removed foreign onnxruntime-node arch: ${archDir}`);
         continue;
       }
-      for (const arch of fs.readdirSync(platformDir)) {
-        const archDir = path.join(platformDir, arch);
-        if (!arches.includes(arch)) {
-          fs.rmSync(archDir, { recursive: true, force: true });
-          continue;
-        }
+      if (electronPlatformName === "linux") {
         for (const lib of ONNX_GPU_PROVIDER_LIBS)
           fs.rmSync(path.join(archDir, lib), { force: true });
-        if (!fs.existsSync(path.join(archDir, "onnxruntime_binding.node"))) {
-          throw new Error(
-            `[afterPack] CRITICAL: onnxruntime binding missing for linux-${arch} at ${archDir}. ` +
-              "Voice VAD segmentation would be disabled."
-          );
-        }
       }
     }
   }
-  // onnxruntime's loader requires exactly this file, so check it per expected
-  // arch: a package missing the whole directory passes the loop above.
-  for (const arch of arches) {
-    const binding = path.join(binRoot, "napi-v6", "linux", arch, "onnxruntime_binding.node");
-    if (!fs.existsSync(binding)) {
+
+  // Per expected arch rather than per directory found: a package missing the
+  // whole directory passes the loop above.
+  for (const arch of target.arches) {
+    const pair = `${electronPlatformName}-${arch}`;
+    const archDir = path.join(binRoot, "napi-v6", electronPlatformName, arch);
+    if (ONNX_UNSHIPPED_TARGETS.has(pair) && !fs.existsSync(archDir)) {
+      console.warn(
+        `[afterPack] onnxruntime-node ships no ${pair} runtime: voice VAD and the Canopy ` +
+          `reader cannot load on ${arch}`
+      );
+      continue;
+    }
+    const required = ["onnxruntime_binding.node", ONNX_RUNTIME_LIBRARY[electronPlatformName]];
+    const missing = required.filter((file) => !fs.existsSync(path.join(archDir, file)));
+    if (missing.length > 0) {
       throw new Error(
-        `[afterPack] CRITICAL: onnxruntime binding missing for linux-${arch} at ${binding}. ` +
-          "Voice VAD segmentation would be disabled."
+        `[afterPack] CRITICAL: onnxruntime ${missing.join(" and ")} missing for ${pair} at ` +
+          `${archDir}. Voice VAD segmentation and the Canopy reader would fail to load.`
       );
     }
   }
-  console.log(`[afterPack] onnxruntime-node pruned to linux-${arches.join("/")} (CPU provider)`);
+  console.log(
+    `[afterPack] onnxruntime-node pruned to ${electronPlatformName}-${target.arches.join("/")}`
+  );
 }
-exports.pruneOnnxRuntimeForLinux = pruneOnnxRuntimeForLinux;
+exports.pruneOnnxRuntime = pruneOnnxRuntime;
 
 /**
  * Get the path to unpacked resources for the platform
@@ -867,9 +924,7 @@ exports.default = async function afterPack(context) {
   console.log(`[afterPack] better-sqlite3 verified: ${betterSqlitePath}`);
 
   validateOnnxRuntime(unpackedPath);
-  if (electronPlatformName === "linux" && prebuildTarget.exact) {
-    pruneOnnxRuntimeForLinux(unpackedPath, prebuildTarget.arches);
-  }
+  pruneOnnxRuntime(unpackedPath, electronPlatformName, prebuildTarget);
 
   console.log("[afterPack] Complete - native modules validated");
 };

@@ -9,8 +9,9 @@ import {
   APP_ASAR_ROOT_ENTRIES,
   AVR_VAD_V5_MODEL,
   MAX_APP_ASAR_BYTES,
+  ONNX_RUNTIME_LIBRARY,
   applyPlatformFuses,
-  pruneOnnxRuntimeForLinux,
+  pruneOnnxRuntime,
 } from "./afterPack.cjs";
 
 const mockExistsSync = vi.fn();
@@ -19,6 +20,7 @@ const mockMkdirSync = vi.fn();
 const mockCopyFileSync = vi.fn();
 const mockStatSync = vi.fn();
 const mockUnlinkSync = vi.fn();
+const mockRmSync = vi.fn();
 const mockSpawnSync = vi.fn();
 const mockGetRawHeader = vi.fn();
 const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -76,6 +78,7 @@ describe("afterPack", () => {
     // mocks the prune drives before installing their defaults.
     mockReaddirSync.mockReset();
     mockUnlinkSync.mockReset();
+    mockRmSync.mockReset();
 
     // Default: every directory reads as empty. The foreign-prebuild prune
     // (#11829) enumerates better-sqlite3/prebuilds on every package, so without
@@ -99,6 +102,7 @@ describe("afterPack", () => {
           copyFileSync: mockCopyFileSync,
           statSync: mockStatSync,
           unlinkSync: mockUnlinkSync,
+          rmSync: mockRmSync,
         };
       }
       if (id === "child_process" || id === "node:child_process") {
@@ -310,7 +314,12 @@ describe("afterPack", () => {
         .mockReturnValueOnce(true) // sourceDir exists
         .mockReturnValue(true); // final validation passes
 
-      mockReaddirSync.mockReturnValue(["1.25.260303002"]);
+      // Only the conpty version scan sees the folder; the other directory
+      // reads (prebuilds, onnxruntime-node) keep the empty default.
+      const thirdPartyConpty = path.join(nodePtyPath, "third_party/conpty");
+      mockReaddirSync.mockImplementation((p: string) =>
+        String(p) === thirdPartyConpty ? ["1.25.260303002"] : []
+      );
 
       await afterPack(createContext("win32", "/build/win"));
 
@@ -1104,6 +1113,83 @@ describe("afterPack", () => {
       }
     );
   });
+
+  describe("onnxruntime-node prune wiring (#15670)", () => {
+    // The real-fs suite at the end of this file covers what the prune does;
+    // these cover which target each packed tree hands it. A universal merge
+    // input must never lose a file, or @electron/universal aborts the merge.
+    const unpackedFor = (platform: string, outDir: string) =>
+      platform === "darwin"
+        ? path.join(outDir, "Daintree.app/Contents/Resources/app.asar.unpacked")
+        : path.join(outDir, "resources/app.asar.unpacked");
+
+    /** Lists `bin/` as the given tree; every other directory reads empty. */
+    const seedOnnxBin = (unpacked: string, platforms: Record<string, string[]>) => {
+      const bin = path.join(unpacked, "node_modules", "onnxruntime-node", "bin");
+      const dirs = new Map<string, string[]>([
+        [bin, ["napi-v6"]],
+        [path.join(bin, "napi-v6"), Object.keys(platforms)],
+        ...Object.entries(platforms).map(
+          ([platform, arches]) =>
+            [path.join(bin, "napi-v6", platform), arches] as [string, string[]]
+        ),
+      ]);
+      mockReaddirSync.mockImplementation((p: string) => dirs.get(String(p)) ?? []);
+      return path.join(bin, "napi-v6");
+    };
+
+    const removedArchDirs = (platformDir: string) =>
+      mockRmSync.mock.calls.map((c) => String(c[0])).filter((p) => path.dirname(p) === platformDir);
+
+    it.each([
+      ["/build/mac-universal-x64-temp", Arch.x64],
+      ["/build/mac-universal-arm64-temp", Arch.arm64],
+      ["/build/mac-universal", Arch.universal],
+    ] as const)("removes nothing from the universal tree at %s", async (outDir, arch) => {
+      mockExistsSync.mockReturnValue(true);
+      seedOnnxBin(unpackedFor("darwin", outDir), { darwin: ["arm64"] });
+
+      await afterPack(createContext("darwin", outDir, "Daintree", arch));
+
+      expect(mockRmSync).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["darwin", "/build/mac", Arch.x64, ["arm64"], "arm64"],
+      ["win32", "/build/win", Arch.x64, ["x64", "arm64"], "arm64"],
+      ["win32", "/build/win-arm64", Arch.arm64, ["x64", "arm64"], "x64"],
+      ["linux", "/build/linux", Arch.x64, ["x64", "arm64"], "arm64"],
+      ["linux", "/build/linux-arm64-unpacked", Arch.arm64, ["x64", "arm64"], "x64"],
+    ] as const)(
+      "removes the other arch's runtime from a standalone %s package at %s",
+      async (platform, outDir, arch, packed, drop) => {
+        mockExistsSync.mockReturnValue(true);
+        const napi = seedOnnxBin(unpackedFor(platform, outDir), { [platform]: [...packed] });
+
+        await afterPack(createContext(platform, outDir, "Daintree", arch));
+
+        expect(removedArchDirs(path.join(napi, platform))).toEqual([
+          path.join(napi, platform, drop),
+        ]);
+      }
+    );
+
+    it.each([Arch.arm64, undefined])(
+      "fails a mac package that kept another OS's runtime (arch %s)",
+      async (arch) => {
+        mockExistsSync.mockReturnValue(true);
+        seedOnnxBin(unpackedFor("darwin", "/build/mac-arm64"), {
+          darwin: ["arm64"],
+          linux: ["x64"],
+        });
+
+        await expect(
+          afterPack(createContext("darwin", "/build/mac-arm64", "Daintree", arch))
+        ).rejects.toThrow(/runtimes for another platform survived packing/);
+        expect(mockRmSync).not.toHaveBeenCalled();
+      }
+    );
+  });
 });
 
 describe("applyPlatformFuses", () => {
@@ -1154,80 +1240,215 @@ describe("applyPlatformFuses", () => {
 
 // Real fs on a temp dir: the static import above loaded afterPack.cjs before
 // any test patched `require`, so this export keeps the real module's fs.
-describe("pruneOnnxRuntimeForLinux", () => {
-  // The layout onnxruntime-node 1.x ships under node_modules/onnxruntime-node/bin.
-  const SHIPPED = [
-    "napi-v6/darwin/arm64/onnxruntime_binding.node",
-    "napi-v6/darwin/arm64/libonnxruntime.1.dylib",
-    "napi-v6/win32/x64/onnxruntime_binding.node",
-    "napi-v6/win32/arm64/onnxruntime_binding.node",
-    "napi-v6/linux/arm64/onnxruntime_binding.node",
-    "napi-v6/linux/arm64/libonnxruntime.so.1",
-    "napi-v6/linux/x64/onnxruntime_binding.node",
-    "napi-v6/linux/x64/libonnxruntime.so.1",
-    "napi-v6/linux/x64/libonnxruntime_providers_shared.so",
-    "napi-v6/linux/x64/libonnxruntime_providers_cuda.so",
-    "napi-v6/linux/x64/libonnxruntime_providers_tensorrt.so",
+describe("pruneOnnxRuntime (#15670)", () => {
+  const WIN_RUNTIME = [
+    "onnxruntime_binding.node",
+    "onnxruntime.dll",
+    "DirectML.dll",
+    "dxcompiler.dll",
+    "dxil.dll",
   ];
+
+  // What reaches afterPack under node_modules/onnxruntime-node/bin once the
+  // platform `files` exclusions have dropped the other OSes: onnxruntime-node
+  // 1.30.0's own layout, plus the GPU providers its postinstall fetches on
+  // linux/x64.
+  const PACKED: Record<string, string[]> = {
+    darwin: [
+      "napi-v6/darwin/arm64/onnxruntime_binding.node",
+      "napi-v6/darwin/arm64/libonnxruntime.1.dylib",
+    ],
+    win32: ["x64", "arm64"].flatMap((arch) =>
+      WIN_RUNTIME.map((file) => `napi-v6/win32/${arch}/${file}`)
+    ),
+    linux: [
+      "napi-v6/linux/arm64/onnxruntime_binding.node",
+      "napi-v6/linux/arm64/libonnxruntime.so.1",
+      "napi-v6/linux/x64/onnxruntime_binding.node",
+      "napi-v6/linux/x64/libonnxruntime.so.1",
+      "napi-v6/linux/x64/libonnxruntime_providers_shared.so",
+      "napi-v6/linux/x64/libonnxruntime_providers_cuda.so",
+      "napi-v6/linux/x64/libonnxruntime_providers_tensorrt.so",
+    ],
+  };
+
+  const exact = (...arches: string[]) => ({ arches, exact: true });
 
   let unpacked: string;
   const binRoot = () => path.join(unpacked, "node_modules", "onnxruntime-node", "bin");
-  const remaining = () => SHIPPED.filter((rel) => fs.existsSync(path.join(binRoot(), rel))).sort();
-
-  beforeEach(() => {
-    unpacked = fs.mkdtempSync(path.join(os.tmpdir(), "onnx-prune-"));
-    for (const rel of SHIPPED) {
+  const seed = (files: string[]) => {
+    for (const rel of files) {
       const file = path.join(binRoot(), rel);
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, "x");
     }
+  };
+  const remove = (rel: string) => fs.rmSync(path.join(binRoot(), rel), { recursive: true });
+  const remaining = () =>
+    fs.existsSync(binRoot())
+      ? fs
+          .readdirSync(binRoot(), { recursive: true, withFileTypes: true })
+          .filter((entry) => entry.isFile())
+          .map((entry) =>
+            path
+              .relative(binRoot(), path.join(entry.parentPath, entry.name))
+              .split(path.sep)
+              .join("/")
+          )
+          .sort()
+      : [];
+
+  beforeEach(() => {
+    unpacked = fs.mkdtempSync(path.join(os.tmpdir(), "onnx-prune-"));
+    warnSpy.mockClear();
   });
 
   afterEach(() => fs.rmSync(unpacked, { recursive: true, force: true }));
 
-  it("keeps only the target arch's CPU runtime", () => {
-    pruneOnnxRuntimeForLinux(unpacked, ["x64"]);
-    expect(remaining()).toEqual(
+  it.each([
+    [
+      "linux",
+      "x64",
       [
-        "napi-v6/linux/x64/onnxruntime_binding.node",
         "napi-v6/linux/x64/libonnxruntime.so.1",
         "napi-v6/linux/x64/libonnxruntime_providers_shared.so",
-      ].sort()
+        "napi-v6/linux/x64/onnxruntime_binding.node",
+      ],
+    ],
+    [
+      "linux",
+      "arm64",
+      ["napi-v6/linux/arm64/libonnxruntime.so.1", "napi-v6/linux/arm64/onnxruntime_binding.node"],
+    ],
+    ["win32", "x64", WIN_RUNTIME.map((file) => `napi-v6/win32/x64/${file}`).sort()],
+    ["win32", "arm64", WIN_RUNTIME.map((file) => `napi-v6/win32/arm64/${file}`).sort()],
+    ["darwin", "arm64", [...PACKED.darwin].sort()],
+  ])("keeps only the %s-%s CPU runtime", (platform, arch, kept) => {
+    seed(PACKED[platform]);
+
+    pruneOnnxRuntime(unpacked, platform, exact(arch));
+
+    expect(remaining()).toEqual(kept);
+  });
+
+  it("drops the arm64 runtime from an Intel Mac package, which has no runtime of its own", () => {
+    // onnxruntime-node 1.30.0 ships no darwin/x64 build. An x64 process can't
+    // load an arm64 Mach-O, so the directory is dead weight, and its absence
+    // must not fail every Intel build.
+    seed(PACKED.darwin);
+
+    pruneOnnxRuntime(unpacked, "darwin", exact("x64"));
+
+    expect(remaining()).toEqual([]);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/ships no darwin-x64 runtime/));
+  });
+
+  it("leaves the darwin tree untouched for the universal build and both of its merge inputs", () => {
+    // @electron/universal reads every unpacked file of both inputs, and the
+    // inputs must hold the same Mach-O set: nothing may be deleted from them.
+    seed(PACKED.darwin);
+    const before = remaining();
+
+    pruneOnnxRuntime(unpacked, "darwin", exact("x64", "arm64"));
+
+    expect(remaining()).toEqual(before);
+  });
+
+  it("still fails a darwin-x64 runtime that ships incomplete", () => {
+    // Only a wholly absent directory is the known upstream gap.
+    seed([...PACKED.darwin, "napi-v6/darwin/x64/libonnxruntime.1.dylib"]);
+
+    expect(() => pruneOnnxRuntime(unpacked, "darwin", exact("x64", "arm64"))).toThrow(
+      /onnxruntime_binding\.node missing for darwin-x64/
     );
   });
 
-  it("keeps arm64 for an arm64 package", () => {
-    pruneOnnxRuntimeForLinux(unpacked, ["arm64"]);
-    expect(remaining()).toEqual(
-      [
-        "napi-v6/linux/arm64/onnxruntime_binding.node",
-        "napi-v6/linux/arm64/libonnxruntime.so.1",
-      ].sort()
-    );
+  it.each([
+    ["darwin", "arm64", "napi-v6/darwin/arm64/libonnxruntime.1.dylib", /libonnxruntime\.1\.dylib/],
+    ["win32", "x64", "napi-v6/win32/x64/onnxruntime.dll", /onnxruntime\.dll/],
+    ["linux", "x64", "napi-v6/linux/x64/libonnxruntime.so.1", /libonnxruntime\.so\.1/],
+    ["linux", "x64", "napi-v6/linux/x64/onnxruntime_binding.node", /onnxruntime_binding\.node/],
+  ])("fails a %s-%s package missing %s", (platform, arch, file, name) => {
+    seed(PACKED[platform]);
+    remove(file);
+
+    expect(() => pruneOnnxRuntime(unpacked, platform, exact(arch))).toThrow(name);
   });
 
-  it("fails the package when the target's binding is missing", () => {
-    fs.rmSync(path.join(binRoot(), "napi-v6/linux/x64/onnxruntime_binding.node"));
-    expect(() => pruneOnnxRuntimeForLinux(unpacked, ["x64"])).toThrow(
-      /binding missing for linux-x64/
-    );
-  });
+  it.each([
+    ["linux", "riscv64", null],
+    ["win32", "x64", "napi-v6/win32/x64"],
+    ["darwin", "arm64", "napi-v6/darwin/arm64"],
+  ])(
+    "fails a %s-%s package when the target's directory isn't there at all",
+    (platform, arch, dir) => {
+      seed(PACKED[platform]);
+      if (dir) remove(dir);
 
-  it("fails the package when the target arch's directory isn't there at all", () => {
-    expect(() => pruneOnnxRuntimeForLinux(unpacked, ["riscv64"])).toThrow(
-      /binding missing for linux-riscv64/
-    );
-  });
+      expect(() => pruneOnnxRuntime(unpacked, platform, exact(arch))).toThrow(
+        new RegExp(`missing for ${platform}-${arch}`)
+      );
+    }
+  );
 
   it("fails the package when onnxruntime-node has no binaries", () => {
-    fs.rmSync(binRoot(), { recursive: true, force: true });
-    expect(() => pruneOnnxRuntimeForLinux(unpacked, ["x64"])).toThrow(
-      /binding missing for linux-x64/
+    seed(PACKED.linux);
+    remove("");
+
+    expect(() => pruneOnnxRuntime(unpacked, "linux", exact("x64"))).toThrow(
+      /binding\.node and libonnxruntime\.so\.1 missing for linux-x64/
     );
+  });
+
+  it.each([exact("arm64"), { arches: ["arm64"], exact: false }])(
+    "reports rather than deletes another OS's runtime that survived packing",
+    (target) => {
+      // The platform `files` exclusions stopped working. Deleting here would hide
+      // it, and on a universal merge input it would abort the merge.
+      seed([...PACKED.darwin, "napi-v6/linux/x64/libonnxruntime.so.1"]);
+      const before = remaining();
+
+      expect(() => pruneOnnxRuntime(unpacked, "darwin", target)).toThrow(
+        /runtimes for another platform survived packing.*napi-v6\/linux/
+      );
+      expect(remaining()).toEqual(before);
+    }
+  );
+
+  it("deletes nothing when the target arch is only a guess", () => {
+    seed(PACKED.win32);
+    const before = remaining();
+
+    pruneOnnxRuntime(unpacked, "win32", { arches: ["x64"], exact: false });
+
+    expect(remaining()).toEqual(before);
   });
 
   it("does nothing without onnxruntime-node", () => {
-    fs.rmSync(path.join(unpacked, "node_modules"), { recursive: true, force: true });
-    expect(() => pruneOnnxRuntimeForLinux(unpacked, ["x64"])).not.toThrow();
+    expect(() => pruneOnnxRuntime(unpacked, "linux", exact("x64"))).not.toThrow();
+  });
+
+  it("names the library each installed binding actually links", () => {
+    // Read from the real package rather than restated: an onnxruntime-node
+    // release that renames its runtime fails here, not in a shipped app.
+    const napiDir = path.join(
+      path.dirname(createRequire(import.meta.url).resolve("onnxruntime-node/package.json")),
+      "bin",
+      "napi-v6"
+    );
+    const bindings = fs.readdirSync(napiDir).flatMap((platform) =>
+      fs.readdirSync(path.join(napiDir, platform)).map((arch) => ({
+        platform,
+        binding: path.join(napiDir, platform, arch, "onnxruntime_binding.node"),
+      }))
+    );
+
+    expect(bindings.length).toBeGreaterThan(0);
+    for (const { platform, binding } of bindings) {
+      const library: string | undefined =
+        ONNX_RUNTIME_LIBRARY[platform as keyof typeof ONNX_RUNTIME_LIBRARY];
+      expect(library, `no runtime library known for ${platform}`).toBeDefined();
+      expect(fs.readFileSync(binding).includes(library!), binding).toBe(true);
+    }
   });
 });
