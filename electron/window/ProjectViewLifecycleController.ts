@@ -158,9 +158,10 @@ export function deactivateEntry(
     // ran on the thaw that activation causes, in the view the user had just
     // returned to (#15680).
     //
-    // Skip the freeze for a project with a live agent: a frozen renderer can't
-    // apply queued agent:state-changed events, stranding the background
-    // dashboard on a stale state (mirrors the freezeAllCached guard). A live
+    // Skip the freeze for a project with a live agent, here or on its host: a
+    // frozen renderer can't apply queued agent:state-changed events, stranding
+    // the background dashboard on a stale state (mirrors the freezeAllCached
+    // guard), and a host keeps streaming its agents' output into it (#15879). A live
     // MCP session binding earns the same skip for the same reason — a frozen
     // renderer can't answer the dispatch IPC either, and this is the path that
     // would freeze a bound workspace the moment the user switches away from it
@@ -168,7 +169,7 @@ export function deactivateEntry(
     if (
       host.efficiencyFreezeEnabled &&
       !vc.isDestroyed() &&
-      !AgentStateCache.hasActiveAgent(host, capturedProjectId)
+      !AgentStateCache.viewHasActiveAgent(host, capturedProjectId, current)
     ) {
       const mcp = host.mcpActivityFor(capturedProjectId, vc);
       // A host's live assistant runs its tool calls through this view (#13392).

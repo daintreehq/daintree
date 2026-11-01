@@ -9,7 +9,7 @@ import { getAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
 import { logDebug, logInfo } from "../utils/logger.js";
 import { getProcessMemoryKb } from "../utils/processMemory.js";
 import { cleanupEntry, sumGuestMemoryKb } from "./ProjectViewLifecycleController.js";
-import { hasActiveAgent } from "./ProjectViewAgentStateCache.js";
+import { viewHasActiveAgent } from "./ProjectViewAgentStateCache.js";
 import { isLocalViewKey } from "./ProjectViewFactory.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { EvictionReason, ViewEntry } from "./ProjectViewManagerTypes.js";
@@ -188,22 +188,6 @@ function viewKeepsResident(host: ProjectViewManager, projectId: string, entry: V
   if (isLocalViewKey(projectId)) return isWorkspaceKeepResident(projectId);
   const wc = entry.view.webContents;
   return !wc.isDestroyed() && host.remoteKeepResident?.(wc.id) === true;
-}
-
-/**
- * The active-agent rank of a cached view. A view of a host's project is asked
- * of its host (#13359): its agents run there, so this machine's agent-state
- * cache never sees them, and without the host's answer every such view ranked
- * as the cheapest to evict.
- */
-function viewHasActiveAgent(
-  host: ProjectViewManager,
-  projectId: string,
-  entry: ViewEntry
-): boolean {
-  if (isLocalViewKey(projectId)) return hasActiveAgent(host, projectId);
-  const wc = entry.view.webContents;
-  return !wc.isDestroyed() && host.remoteAgentActive?.(wc.id) === true;
 }
 
 type EvictionMetrics = {

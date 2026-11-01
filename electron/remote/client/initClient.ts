@@ -182,6 +182,16 @@ function createViewSink(hostOf: (webContentsId: number) => HostId | null): ViewS
       sink.send(webContentsId, CHANNELS.REMOTE_HOSTS_EVENT, [event]);
     },
     hostOf,
+    agentActivated(webContentsId) {
+      const wc = resolveLiveWebContents(webContentsId);
+      const win = wc ? getWindowForWebContents(wc) : null;
+      if (!win || win.isDestroyed()) return;
+      // The sweep re-asks the host per view, so it wakes only views still
+      // cached, still bound to it and still active, and only under efficiency.
+      getWindowRegistry()
+        ?.getByWindowId(win.id)
+        ?.services.projectViewManager?.unfreezeActiveAgentViews();
+    },
   };
   return sink;
 }

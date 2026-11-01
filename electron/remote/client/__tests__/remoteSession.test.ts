@@ -135,6 +135,7 @@ function invoke(channel: string, fromView: number, ...args: unknown[]): Promise<
 function recordingSink() {
   const delivered = new Map<number, Array<{ channel: string; args: unknown[] }>>();
   const resyncs: Array<{ webContentsId: number; reason: string }> = [];
+  const activated: number[] = [];
   const goneListeners = new Map<number, () => void>();
   const hosts = new Map<number, string | null>();
   const sink: ViewSink = {
@@ -153,10 +154,11 @@ function recordingSink() {
     },
     // Views default to the host the test talks to; a test can move one away.
     hostOf: (webContentsId) => (hosts.has(webContentsId) ? hosts.get(webContentsId)! : HOST_ID),
+    agentActivated: (webContentsId) => activated.push(webContentsId),
   };
   /** The view was destroyed. */
   const gone = (webContentsId: number) => goneListeners.get(webContentsId)?.();
-  return { sink, delivered, resyncs, gone, hosts };
+  return { sink, delivered, resyncs, activated, gone, hosts };
 }
 
 interface Harness {
@@ -1240,6 +1242,33 @@ describe("remote session wiring", () => {
 
       await expect(say("proj-1", "no")).rejects.toMatchObject({ code: "VALIDATION" });
       expect(connection.hasActiveAgent(VIEW_B)).toBe(true);
+    });
+
+    it("tells the view sink when a view's agents go active, and only then (#15879)", async () => {
+      await startHarness();
+      const hostSessions: LinkSession[] = [];
+      cleanups.push(h.server.onSession((ctx) => hostSessions.push(ctx.session)));
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_B, {});
+      const say = (projectId: string, active: boolean) =>
+        hostSessions.at(-1)!.call(LinkMethod.ENDPOINT_AGENT_ACTIVITY, {
+          endpoints: [{ endpointId: "view-12", projectId, active }],
+        });
+
+      await say("proj-2", true);
+      expect(h.sink.activated).toEqual([VIEW_B]);
+
+      // A repeat says nothing new, and a stop needs no wake.
+      await say("proj-2", true);
+      await say("proj-2", false);
+      expect(h.sink.activated).toEqual([VIEW_B]);
+
+      // Said about a project the view isn't on: no wake.
+      await say("proj-1", true);
+      expect(h.sink.activated).toEqual([VIEW_B]);
+
+      await say("proj-2", true);
+      expect(h.sink.activated).toEqual([VIEW_B, VIEW_B]);
     });
 
     it("hears agents that outlived the session on a fresh one", async () => {

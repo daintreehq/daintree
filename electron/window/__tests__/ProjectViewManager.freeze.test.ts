@@ -660,6 +660,33 @@ describe("ProjectViewManager — efficiency freeze", () => {
 
       expect(frozeRemote()).toBe(true);
     });
+
+    it("wakes from a freeze once its host reports an active agent, and isn't frozen again", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      manager.setEfficiencyFreeze(true);
+      vi.advanceTimersByTime(500);
+      expect(frozeRemote()).toBe(true);
+      vi.mocked(freezeWebContents).mockClear();
+      vi.mocked(unfreezeWebContents).mockClear();
+
+      activeRemoteViews.add(remoteWc.id);
+      manager.unfreezeActiveAgentViews();
+      expect(vi.mocked(unfreezeWebContents)).toHaveBeenCalledWith(remoteWc);
+
+      manager.refreezeUnprotectedCachedViews();
+      expect(frozeRemote()).toBe(false);
+    });
+
+    it("never takes this machine's agents as the host's", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      // A local terminal whose project id happens to match the host's.
+      seedActiveAgent("t1", "proj-r");
+
+      manager.setEfficiencyFreeze(true);
+      vi.advanceTimersByTime(500);
+
+      expect(frozeRemote()).toBe(true);
+    });
   });
 
   it("unfreezeActiveAgentViews wakes a view that was frozen before its agent went active", async () => {
