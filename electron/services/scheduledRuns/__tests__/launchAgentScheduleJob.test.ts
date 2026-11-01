@@ -421,7 +421,9 @@ describe("createLaunchAgentScheduleJob", () => {
     expect(files.files.get(FILE)).toBe("old");
     // A status read that hangs is cut short rather than waited out.
     for (const [, args, options] of launchctl.run.mock.calls) {
-      if (args[0] === "print") expect(options).toEqual({ timeoutMs: expect.any(Number) });
+      if (args[0] !== "print") continue;
+      expect(options?.timeoutMs).toBeGreaterThan(0);
+      expect(options?.timeoutMs).toBeLessThanOrEqual(2_000);
     }
   });
 
@@ -467,6 +469,17 @@ describe("createLaunchAgentScheduleJob", () => {
     vi.mocked(files.fs.remove).mockRejectedValueOnce(new Error("EACCES"));
 
     await expect(adapter.sync([], "Europe/London", { reload: false })).rejects.toThrow("EACCES");
+    expect(launchctl.isLoaded()).toBe(false);
+  });
+
+  it("removes and unloads a job whose file can't be read", async () => {
+    const { files, launchctl, adapter } = machine();
+    await adapter.sync([NINE], "Europe/London", { reload: false });
+    vi.mocked(files.fs.readFile).mockRejectedValueOnce(new Error("EACCES"));
+
+    await adapter.sync([], "Europe/London", { reload: false });
+
+    expect(files.files.has(FILE)).toBe(false);
     expect(launchctl.isLoaded()).toBe(false);
   });
 

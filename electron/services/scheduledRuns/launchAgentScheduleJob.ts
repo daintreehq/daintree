@@ -264,12 +264,22 @@ export function createLaunchAgentScheduleJob(deps: {
       // A copy that can't point a job at itself leaves the one installed alone.
       if (!deps.target.ok) throw new Error(deps.target.unavailable);
       const desired = desiredContent(cadences, systemTimeZone);
-      const [onDisk, loaded] = await Promise.all([files.readFile(file), isLoaded()]);
+      // A file that can't be read is neither current nor known to be gone.
+      let unreadable = false;
+      const [onDisk, loaded] = await Promise.all([
+        files.readFile(file).catch(() => {
+          unreadable = true;
+          return null;
+        }),
+        isLoaded(),
+      ]);
       if (desired === null) {
         // The file goes first, so the next login can't load it however unloading
         // goes; a file that won't go still leaves the job to unload.
         let removal: unknown = null;
-        if (onDisk !== null) await files.remove(file).catch((error: unknown) => (removal = error));
+        if (onDisk !== null || unreadable) {
+          await files.remove(file).catch((error: unknown) => (removal = error));
+        }
         if (loaded !== false) await unload();
         if (removal) throw removal;
         return;
