@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  ClaimDecisionsRelayPayload,
+  DecisionsConnectResult,
   DecisionsRelayCheck,
   DecisionsStatus,
   PaneDecisionState,
+  RestoreDecisionsIdentityPayload,
   SetDecisionsEnabledPayload,
 } from "../../../../shared/types/decisions.js";
 
@@ -18,7 +21,7 @@ const saved = vi.hoisted(() => ({ value: undefined as unknown }));
 const decisionsEntry = vi.hoisted(() => ({
   evaluated: 0,
   libraries: 0,
-  getDecisionsStatus: vi.fn((): DecisionsStatus => ({ state: "not-connected" })),
+  getDecisionsStatus: vi.fn(async (): Promise<DecisionsStatus> => ({ state: "not-connected" })),
   getDecisionsPaneState: vi.fn((): PaneDecisionState | null => null),
   setDecisionsEnabled: vi.fn(async (enabled: boolean): Promise<DecisionsStatus> => ({
     state: enabled ? "not-connected" : "off",
@@ -27,6 +30,19 @@ const decisionsEntry = vi.hoisted(() => ({
     result: "invalid-url",
     reason: "not-https",
   })),
+  claimRelay: vi.fn(
+    async (_payload: ClaimDecisionsRelayPayload): Promise<DecisionsConnectResult> => ({
+      result: "saved",
+      status: { state: "not-connected", relayOrigin: "https://relay.example.com" },
+    })
+  ),
+  restoreIdentity: vi.fn(
+    async (_payload: RestoreDecisionsIdentityPayload): Promise<DecisionsConnectResult> => ({
+      result: "saved",
+      status: { state: "not-connected", relayOrigin: "https://relay.example.com" },
+    })
+  ),
+  disconnectRelay: vi.fn(async (): Promise<DecisionsStatus> => ({ state: "not-connected" })),
 }));
 
 vi.mock("electron", () => ({ ipcMain: ipcMainMock }));
@@ -43,6 +59,9 @@ vi.mock("../../../services/decisions/index.js", () => {
     getDecisionsPaneState: decisionsEntry.getDecisionsPaneState,
     setDecisionsEnabled: decisionsEntry.setDecisionsEnabled,
     checkRelay: decisionsEntry.checkRelay,
+    claimRelay: decisionsEntry.claimRelay,
+    restoreIdentity: decisionsEntry.restoreIdentity,
+    disconnectRelay: decisionsEntry.disconnectRelay,
   };
 });
 vi.mock("@daintreehq/decisions-protocol", () => {
@@ -83,11 +102,34 @@ const checkRelay = decisionsNamespace.ops.checkRelay.handler as unknown as (
   url: string
 ) => Promise<DecisionsRelayCheck>;
 
+const claimRelay = decisionsNamespace.ops.claimRelay.handler as unknown as (
+  payload: ClaimDecisionsRelayPayload
+) => Promise<DecisionsConnectResult>;
+const restoreIdentity = decisionsNamespace.ops.restoreIdentity.handler as unknown as (
+  payload: RestoreDecisionsIdentityPayload
+) => Promise<DecisionsConnectResult>;
+const disconnectRelay = decisionsNamespace.ops.disconnectRelay
+  .handler as unknown as () => Promise<DecisionsStatus>;
+
+const SECRET = "claim-secret-0123456789abcdef";
+const PASSPHRASE = "correct horse battery staple";
+const CLAIM: ClaimDecisionsRelayPayload = { url: "relay.example.com", claimSecret: SECRET };
+const RESTORE: RestoreDecisionsIdentityPayload = {
+  url: "relay.example.com",
+  kit: '{"v":1}',
+  passphrase: PASSPHRASE,
+};
+
+type SafeParse = { safeParse(value: unknown): { success: boolean } };
+
 const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_GET_STATUS,
   CHANNELS.DECISIONS_GET_PANE_STATE,
   CHANNELS.DECISIONS_SET_ENABLED,
   CHANNELS.DECISIONS_CHECK_RELAY,
+  CHANNELS.DECISIONS_CLAIM_RELAY,
+  CHANNELS.DECISIONS_RESTORE_IDENTITY,
+  CHANNELS.DECISIONS_DISCONNECT_RELAY,
 ];
 
 describe("decisions IPC", () => {
@@ -98,6 +140,9 @@ describe("decisions IPC", () => {
     decisionsEntry.getDecisionsPaneState.mockClear();
     decisionsEntry.setDecisionsEnabled.mockClear();
     decisionsEntry.checkRelay.mockClear();
+    decisionsEntry.claimRelay.mockClear();
+    decisionsEntry.restoreIdentity.mockClear();
+    decisionsEntry.disconnectRelay.mockClear();
     vi.mocked(store.set).mockClear();
   });
   afterEach(() => {
@@ -217,6 +262,30 @@ describe("decisions IPC", () => {
     expect(decisionsEntry.checkRelay).not.toHaveBeenCalled();
   });
 
+  it("refuses to claim, restore or disconnect while off, loading none of Decisions", async () => {
+    for (const value of [undefined, { enabled: false }, { enabled: "true" }]) {
+      saved.value = value;
+
+      await expect(claimRelay(CLAIM)).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(restoreIdentity(RESTORE)).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(disconnectRelay()).rejects.toMatchObject({ code: "PERMISSION" });
+    }
+
+    expect(decisionsEntry.evaluated).toBe(0);
+    expect(decisionsEntry.libraries).toBe(0);
+  });
+
+  it("refuses to claim, restore or disconnect once quit has sealed the loader", async () => {
+    saved.value = { enabled: true };
+    sealDecisionsModule();
+
+    await expect(claimRelay(CLAIM)).rejects.toMatchObject({ code: "CANCELLED" });
+    await expect(restoreIdentity(RESTORE)).rejects.toMatchObject({ code: "CANCELLED" });
+    await expect(disconnectRelay()).rejects.toMatchObject({ code: "CANCELLED" });
+
+    expect(decisionsEntry.evaluated).toBe(0);
+  });
+
   it("answers off once quit has sealed the loader, without loading it", async () => {
     saved.value = { enabled: true };
     sealDecisionsModule();
@@ -230,8 +299,8 @@ describe("decisions IPC", () => {
   it("asks Decisions itself once the setting is on, loading its entry once", async () => {
     saved.value = { enabled: true };
     decisionsEntry.getDecisionsStatus
-      .mockReturnValueOnce({ state: "not-connected" })
-      .mockReturnValueOnce({ state: "revoked" });
+      .mockResolvedValueOnce({ state: "not-connected" })
+      .mockResolvedValueOnce({ state: "revoked" });
 
     await expect(getStatus()).resolves.toEqual({ state: "not-connected" });
     await expect(getStatus()).resolves.toEqual({ state: "revoked" });
@@ -281,6 +350,78 @@ describe("decisions IPC", () => {
     expect(schema.safeParse("https://relay.example.com").success).toBe(true);
     for (const value of [undefined, 42, { url: "https://relay.example.com" }, "x".repeat(2049)]) {
       expect(schema.safeParse(value).success).toBe(false);
+    }
+  });
+
+  it("claims, restores and disconnects through Decisions itself once the setting is on", async () => {
+    saved.value = { enabled: true };
+
+    await expect(claimRelay(CLAIM)).resolves.toMatchObject({ result: "saved" });
+    await expect(restoreIdentity(RESTORE)).resolves.toMatchObject({ result: "saved" });
+    await expect(disconnectRelay()).resolves.toEqual({ state: "not-connected" });
+
+    expect(decisionsEntry.claimRelay).toHaveBeenCalledExactlyOnceWith(CLAIM);
+    expect(decisionsEntry.restoreIdentity).toHaveBeenCalledExactlyOnceWith(RESTORE);
+    expect(decisionsEntry.disconnectRelay).toHaveBeenCalledOnce();
+    expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("takes a claim secret only within the relay's own bounds", () => {
+    const schema = decisionsNamespace.ops.claimRelay.schema as SafeParse;
+
+    expect(schema.safeParse(CLAIM).success).toBe(true);
+    expect(schema.safeParse({ ...CLAIM, acceptWeakStorage: true }).success).toBe(true);
+    for (const value of [
+      { ...CLAIM, claimSecret: "too-short" },
+      { ...CLAIM, claimSecret: "x".repeat(257) },
+      { ...CLAIM, url: "x".repeat(2049) },
+      { ...CLAIM, extra: true },
+      { url: CLAIM.url },
+    ]) {
+      expect(schema.safeParse(value).success).toBe(false);
+    }
+  });
+
+  it("takes a recovery kit only up to its size cap", () => {
+    const schema = decisionsNamespace.ops.restoreIdentity.schema as SafeParse;
+
+    expect(schema.safeParse(RESTORE).success).toBe(true);
+    for (const value of [
+      { ...RESTORE, kit: "" },
+      { ...RESTORE, kit: "x".repeat(256 * 1024 + 1) },
+      { ...RESTORE, passphrase: "" },
+      { ...RESTORE, extra: true },
+    ]) {
+      expect(schema.safeParse(value).success).toBe(false);
+    }
+  });
+
+  it("logs and answers a malformed claim without the secret it carried", async () => {
+    saved.value = { enabled: true };
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const cleanup = registerDecisionsHandlers();
+    const registered = ipcMainMock.handle.mock.calls.find(
+      ([channel]) => channel === CHANNELS.DECISIONS_CLAIM_RELAY
+    )?.[1] as (event: unknown, payload: unknown) => Promise<unknown>;
+    try {
+      const failure = await registered(
+        { sender: { id: 1 }, senderFrame: null },
+        { ...CLAIM, unexpected: SECRET }
+      ).then(
+        () => null,
+        (error: unknown) => error
+      );
+
+      expect(failure).toBeInstanceOf(Error);
+      expect(errors.mock.calls.map(([first]) => String(first))).toContain(
+        `[IPC] Validation failed for ${CHANNELS.DECISIONS_CLAIM_RELAY}:`
+      );
+      expect(String((failure as Error).message)).not.toContain(SECRET);
+      expect(JSON.stringify(errors.mock.calls)).not.toContain(SECRET);
+      expect(decisionsEntry.claimRelay).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+      errors.mockRestore();
     }
   });
 

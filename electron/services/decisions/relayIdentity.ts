@@ -53,8 +53,6 @@ export interface RelaySetupOptions {
   /** Aborting it (quit) ends the setup's requests where they are. */
   signal?: AbortSignal;
   timeoutMs?: number;
-  /** The relay's unsigned check, run before anything is staged or signed. */
-  check?: (origin: string, signal: AbortSignal | undefined) => Promise<DecisionsRelayCheck>;
 }
 
 /** The label the relay and the owner's devices show for this computer. */
@@ -147,8 +145,13 @@ async function relayRequests(origin: string, options: RelaySetupOptions): Promis
   return { fetch: call as typeof fetch, lastFailure: () => failure };
 }
 
-function defaultCheck(origin: string, signal: AbortSignal | undefined) {
-  return checkDecisionsRelay(origin, signal ? { signal } : {});
+/** The relay's unsigned check, run before anything is staged or signed. */
+function checkFirst(origin: string, options: RelaySetupOptions): Promise<DecisionsRelayCheck> {
+  return checkDecisionsRelay(origin, {
+    ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+    ...(options.signal ? { signal: options.signal } : {}),
+    ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+  });
 }
 
 function failed(failure: DecisionsConnectFailure): RelaySetupOutcome {
@@ -269,7 +272,7 @@ export async function claimDecisionsRelay(
   const sealing = await prepareSealing(keys, payload.acceptWeakStorage);
   if (sealing) return failed(sealing);
 
-  const check = await (options.check ?? defaultCheck)(origin, options.signal);
+  const check = await checkFirst(origin, options);
   // A claimed relay goes ahead only to finish this computer's own unfinished
   // claim: the relay may have taken it and lost the answer.
   if (!(check.result === "unclaimed" || (check.result === "claimed" && staged))) {
@@ -461,7 +464,7 @@ export async function restoreDecisionsIdentity(
     if (sealing) return failed(sealing);
   }
 
-  const check = await (options.check ?? defaultCheck)(origin, options.signal);
+  const check = await checkFirst(origin, options);
   if (check.result !== "claimed") return failed({ result: "relay", check });
 
   const requests = await relayRequests(origin, options);

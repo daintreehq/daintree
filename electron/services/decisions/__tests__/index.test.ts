@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const saved = vi.hoisted(() => ({ value: undefined as unknown }));
 const loads = vi.hoisted(() => ({ constructed: 0, failNextConstruct: false, failNextOpen: false }));
@@ -7,6 +10,15 @@ const broadcast = vi.hoisted(() => vi.fn());
 const netFetch = vi.hoisted(() => vi.fn<(url: string, init: RequestInit) => Promise<Response>>());
 
 vi.mock("electron", () => ({ net: { fetch: netFetch }, app: {}, safeStorage: {} }));
+
+// The key file each service uses, in a directory of the test's own.
+const keyFile = vi.hoisted(() => ({ path: "" }));
+// Claim and restore are relayIdentity's; here only how the entry runs them.
+const setupRuns = vi.hoisted(() => ({ claim: vi.fn(), restore: vi.fn() }));
+vi.mock("../relayIdentity.js", () => ({
+  claimDecisionsRelay: setupRuns.claim,
+  restoreDecisionsIdentity: setupRuns.restore,
+}));
 
 vi.mock("../../../ipc/utils.js", () => ({ broadcastToProjectRenderers: broadcast }));
 
@@ -32,6 +44,7 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
       // `failNextOpen` makes the next open fail, once.
       super({
         ...options,
+        keyFilePath: () => keyFile.path,
         openStore: async () => {
           if (loads.failNextOpen) {
             loads.failNextOpen = false;
@@ -57,10 +70,13 @@ const CANCELLED = { name: "AppError", code: "CANCELLED" };
 import {
   _resetDecisionsForTesting,
   checkRelay,
+  claimRelay,
+  disconnectRelay,
   getDecisionsPaneState,
   getDecisionsService,
   getDecisionsStatus,
   peekDecisionsService,
+  restoreIdentity,
   setDecisionsEnabled,
   startDecisionsIfEnabled,
   stopDecisions,
@@ -74,7 +90,18 @@ const RELAY = {
 };
 
 describe("Decisions entry", () => {
+  beforeAll(() => {
+    keyFile.path = join(mkdtempSync(join(tmpdir(), "decisions-entry-")), "keys.bin");
+  });
+
+  afterAll(() => {
+    rmSync(join(keyFile.path, ".."), { recursive: true, force: true });
+  });
+
   beforeEach(() => {
+    rmSync(keyFile.path, { force: true });
+    setupRuns.claim.mockReset();
+    setupRuns.restore.mockReset();
     saved.value = undefined;
     loads.failNextConstruct = false;
     loads.failNextOpen = false;
@@ -150,7 +177,7 @@ describe("Decisions entry", () => {
     await startDecisionsIfEnabled();
 
     expect(peekDecisionsService()).toBeNull();
-    expect(getDecisionsStatus()).toEqual({ state: "off" });
+    expect(await getDecisionsStatus()).toEqual({ state: "off" });
   });
 
   it("makes no service at boot when the sanitiser turns a damaged record off", async () => {
@@ -159,7 +186,7 @@ describe("Decisions entry", () => {
     await startDecisionsIfEnabled();
 
     expect(peekDecisionsService()).toBeNull();
-    expect(getDecisionsStatus()).toEqual({ state: "off" });
+    expect(await getDecisionsStatus()).toEqual({ state: "off" });
   });
 
   it("starts the service at boot when the setting is on", async () => {
@@ -171,10 +198,10 @@ describe("Decisions entry", () => {
     expect(peekDecisionsService()?.getSettings()?.relayOrigin).toBe(RELAY.relayOrigin);
   });
 
-  it("reads on as not connected before the boot task has made the service", () => {
+  it("reads on as not connected before the boot task has made the service", async () => {
     saved.value = { enabled: true };
 
-    expect(getDecisionsStatus()).toEqual({ state: "not-connected" });
+    expect(await getDecisionsStatus()).toEqual({ state: "not-connected" });
     expect(peekDecisionsService()).toBeNull();
   });
 
@@ -224,10 +251,10 @@ describe("Decisions entry", () => {
     expect(saved.value).toMatchObject({ consentedAt: null });
   });
 
-  it("reports the saved consent with the switch off", () => {
+  it("reports the saved consent with the switch off", async () => {
     saved.value = { enabled: false, consentedAt: 1_761_955_200_000 };
 
-    expect(getDecisionsStatus()).toEqual({ state: "off", consentedAt: 1_761_955_200_000 });
+    expect(await getDecisionsStatus()).toEqual({ state: "off", consentedAt: 1_761_955_200_000 });
   });
 
   it("turns off at runtime, stopping the service and saving off", async () => {
@@ -283,7 +310,7 @@ describe("Decisions entry", () => {
     await startDecisionsIfEnabled();
 
     expect(peekDecisionsService()?.getStatus().state).toBe("off");
-    expect(getDecisionsStatus()).toEqual({ state: "off" });
+    expect(await getDecisionsStatus()).toEqual({ state: "off" });
     expect(store.set).not.toHaveBeenCalled();
   });
 
@@ -349,7 +376,7 @@ describe("Decisions entry", () => {
 
     await expect(setDecisionsEnabled(true)).rejects.toThrow("store unavailable");
     expect((saved.value as { enabled: boolean }).enabled).toBe(true);
-    expect(getDecisionsStatus()).toEqual({ state: "not-connected" });
+    expect(await getDecisionsStatus()).toEqual({ state: "not-connected" });
     expect(peekDecisionsService()?.getStore()).toBeNull();
 
     await setDecisionsEnabled(true);
@@ -439,6 +466,179 @@ describe("Decisions entry", () => {
       answer(Response.json({ ok: true }));
 
       await expect(check).resolves.toMatchObject({ result: "not-a-relay", status: 410 });
+    });
+  });
+
+  describe("relay setup", () => {
+    const SECRET = "claim-secret-0123456789abcdef";
+    const CLAIMED = {
+      relayOrigin: "https://relay.example.com",
+      installationId: "inst_12345678",
+      deviceId: "dev_12345678",
+      label: "Daintree",
+    };
+    const REFUSED = {
+      result: "refused",
+      origin: "https://relay.example.com",
+      reason: "wrong-secret",
+      kept: false,
+    } as const;
+
+    it("records a claimed relay's origin and ids with a host id minted for this computer", async () => {
+      saved.value = { enabled: true, consentedAt: 5, proxyAllowlisted: true };
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      setupRuns.claim.mockResolvedValue({ identity: CLAIMED });
+      writeFileSync(keyFile.path, "sealed");
+
+      const result = await claimRelay({ url: "relay.example.com", claimSecret: SECRET });
+
+      expect(result).toEqual({
+        result: "saved",
+        status: {
+          state: "not-connected",
+          relayOrigin: CLAIMED.relayOrigin,
+          consentedAt: 5,
+          keysStored: true,
+        },
+      });
+      expect(setupRuns.claim).toHaveBeenCalledExactlyOnceWith(
+        { url: "relay.example.com", claimSecret: SECRET },
+        { keys: service.getKeyStore(), signal: expect.any(AbortSignal) }
+      );
+      expect(saved.value).toEqual({
+        ...defaultDecisionsSettings(),
+        enabled: true,
+        consentedAt: 5,
+        proxyAllowlisted: true,
+        relayOrigin: CLAIMED.relayOrigin,
+        installationId: CLAIMED.installationId,
+        deviceId: CLAIMED.deviceId,
+        hostId: expect.stringMatching(/^[A-Za-z0-9_-]{8,64}$/),
+      });
+      expect(JSON.stringify(saved.value)).not.toContain(SECRET);
+      expect(service.getSettings()?.relayOrigin).toBe(CLAIMED.relayOrigin);
+    });
+
+    it("records a restored identity the same way", async () => {
+      saved.value = { enabled: true };
+      setupRuns.restore.mockResolvedValue({ identity: CLAIMED });
+
+      const result = await restoreIdentity({
+        url: "https://relay.example.com",
+        kit: "{}",
+        passphrase: "correct horse battery staple",
+      });
+
+      expect(result).toMatchObject({ result: "saved", status: { relayOrigin: CLAIMED.relayOrigin } });
+      expect(saved.value).toMatchObject({
+        relayOrigin: CLAIMED.relayOrigin,
+        installationId: CLAIMED.installationId,
+        deviceId: CLAIMED.deviceId,
+      });
+      expect(JSON.stringify(saved.value)).not.toContain("correct horse");
+    });
+
+    it("reports what stopped a claim and leaves the setting as it was", async () => {
+      saved.value = { enabled: true };
+      await startDecisionsIfEnabled();
+      vi.mocked(store.set).mockClear();
+      setupRuns.claim.mockResolvedValue({ failure: REFUSED });
+
+      await expect(claimRelay({ url: "relay.example.com", claimSecret: SECRET })).resolves.toEqual(
+        REFUSED
+      );
+      expect(store.set).not.toHaveBeenCalled();
+    });
+
+    it("refuses while off without making a service", async () => {
+      saved.value = { enabled: false };
+
+      await expect(claimRelay({ url: "relay.example.com", claimSecret: SECRET })).rejects.toMatchObject(
+        CANCELLED
+      );
+      await expect(disconnectRelay()).rejects.toMatchObject(CANCELLED);
+      expect(setupRuns.claim).not.toHaveBeenCalled();
+      expect(peekDecisionsService()).toBeNull();
+    });
+
+    it("refuses to claim or restore over a relay already set up", async () => {
+      saved.value = { enabled: true, ...RELAY };
+
+      await expect(claimRelay({ url: "relay.example.com", claimSecret: SECRET })).resolves.toEqual({
+        result: "conflict",
+        origin: RELAY.relayOrigin,
+        unfinished: false,
+      });
+      expect(setupRuns.claim).not.toHaveBeenCalled();
+    });
+
+    it("disconnects by removing the key file and the relay's ids, keeping the switch and consent", async () => {
+      saved.value = { enabled: true, consentedAt: 5, proxyAllowlisted: true, ...RELAY };
+      await startDecisionsIfEnabled();
+      writeFileSync(keyFile.path, "sealed");
+
+      const status = await disconnectRelay();
+
+      expect(existsSync(keyFile.path)).toBe(false);
+      expect(status).toEqual({ state: "not-connected", consentedAt: 5 });
+      expect(saved.value).toEqual({
+        ...defaultDecisionsSettings(),
+        enabled: true,
+        consentedAt: 5,
+        proxyAllowlisted: true,
+      });
+      expect(peekDecisionsService()?.getSettings()?.relayOrigin).toBeNull();
+    });
+
+    it("reports keys stored on this computer from the file alone", async () => {
+      saved.value = { enabled: true };
+      await startDecisionsIfEnabled();
+      expect(await getDecisionsStatus()).toEqual({ state: "not-connected" });
+
+      writeFileSync(keyFile.path, "sealed");
+
+      expect(await getDecisionsStatus()).toEqual({ state: "not-connected", keysStored: true });
+    });
+
+    it("turns off only once a claim in flight has settled, keeping what it recorded", async () => {
+      saved.value = { enabled: true, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      let finish!: (outcome: unknown) => void;
+      setupRuns.claim.mockImplementation(() => new Promise((resolve) => (finish = resolve)));
+
+      const claim = claimRelay({ url: "relay.example.com", claimSecret: SECRET });
+      await vi.waitFor(() => expect(setupRuns.claim).toHaveBeenCalled());
+      let off = false;
+      const turningOff = setDecisionsEnabled(false).then(() => (off = true));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(off).toBe(false);
+
+      finish({ identity: CLAIMED });
+      await claim;
+      await turningOff;
+
+      expect(saved.value).toMatchObject({ enabled: false, relayOrigin: CLAIMED.relayOrigin });
+    });
+
+    it("aborts a claim's requests at quit", async () => {
+      saved.value = { enabled: true };
+      await startDecisionsIfEnabled();
+      let signal!: AbortSignal;
+      setupRuns.claim.mockImplementation(
+        (_payload: unknown, options: { signal: AbortSignal }) =>
+          new Promise((resolve) => {
+            signal = options.signal;
+            signal.addEventListener("abort", () => resolve({ failure: REFUSED }));
+          })
+      );
+
+      const claim = claimRelay({ url: "relay.example.com", claimSecret: SECRET });
+      await vi.waitFor(() => expect(setupRuns.claim).toHaveBeenCalled());
+      await stopDecisions();
+
+      expect(signal.aborted).toBe(true);
+      await expect(claim).resolves.toEqual(REFUSED);
     });
   });
 });
