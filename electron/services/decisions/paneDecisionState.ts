@@ -51,7 +51,9 @@ function byAlias(a: QuestionRow, b: QuestionRow): number {
  * Imported history is never delivered and shows nowhere. Rows are taken in
  * question order, and a pane belongs to the project of its newest question.
  */
-export function projectPaneDecisionStates(rows: readonly QuestionRow[]): Map<string, ProjectedPane> {
+export function projectPaneDecisionStates(
+  rows: readonly QuestionRow[]
+): Map<string, ProjectedPane> {
   const panes = new Map<string, ProjectedPane>();
   for (const row of [...rows].sort(byAlias)) {
     if (row.history_only) continue;

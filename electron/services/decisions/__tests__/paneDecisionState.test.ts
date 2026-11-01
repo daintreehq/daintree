@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { QuestionRow } from "@daintreehq/decisions-client";
-import {
-  PaneDecisionStates,
-  projectPaneDecisionStates,
-} from "../paneDecisionState.js";
+import { PaneDecisionStates, projectPaneDecisionStates } from "../paneDecisionState.js";
 import type { PaneDecisionState } from "../../../../shared/types/decisions.js";
 import { SECRET, answers, row } from "./questionRows.js";
 
@@ -96,7 +93,12 @@ describe("projectPaneDecisionStates", () => {
     const state = only([
       row(1, {
         local_status: "expired",
-        answers_json: answers({ kind: "expired", action: "expire", source: "system", sealed: null }),
+        answers_json: answers({
+          kind: "expired",
+          action: "expire",
+          source: "system",
+          sealed: null,
+        }),
       }),
       row(2, {
         local_status: "human-answered",
@@ -148,7 +150,12 @@ describe("projectPaneDecisionStates", () => {
 
     expect(state?.openQuestions.map((q) => q.alias)).toEqual([1]);
     expect(state?.needsAttention).toEqual([
-      { questionId: "qid-1", alias: 1, deliveryStatus: "needs-attention", reason: "choice_required" },
+      {
+        questionId: "qid-1",
+        alias: 1,
+        deliveryStatus: "needs-attention",
+        reason: "choice_required",
+      },
     ]);
   });
 
@@ -256,13 +263,13 @@ describe("PaneDecisionStates", () => {
     states.replace([row(1), row(2, { origin: { pane_id: "pane-b" } })]);
     states.replace([row(1), row(2, { origin: { pane_id: "pane-b" } }), row(3)]);
 
-    expect(pushes.map(({ projectId, state }) => [projectId, state.terminalId, state.revision])).toEqual(
-      [
-        ["project-1", "pane-a", 1],
-        ["project-1", "pane-b", 2],
-        ["project-1", "pane-a", 3],
-      ]
-    );
+    expect(
+      pushes.map(({ projectId, state }) => [projectId, state.terminalId, state.revision])
+    ).toEqual([
+      ["project-1", "pane-a", 1],
+      ["project-1", "pane-b", 2],
+      ["project-1", "pane-a", 3],
+    ]);
     expect(states.get("pane-a")).toEqual(pushes[2]?.state);
     expect(states.get("pane-b")).toEqual(pushes[1]?.state);
   });
