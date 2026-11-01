@@ -15,6 +15,7 @@ import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { subscribeFleetDraftHoldRelease } from "@/store/fleetDraftHoldRelease";
 import { initBuiltInPanelKinds } from "@/panels/registry";
+import { writeComposerDraftThrough } from "@/services/voiceCorrectionLanding";
 import { HybridInputBar } from "../HybridInputBar";
 
 const WT_ID = "/repo/wt";
@@ -209,6 +210,27 @@ describe("HybridInputBar keeps a pane's own draft through a fleet", () => {
     });
     expect(editorText(container, "pane-a")).toBe("fix the flaky test");
     expect(editorText(container, "pane-b")).toBe("b in progress");
+  });
+
+  it("writes a pane's typing through for a correction once it takes the fleet over (#15873)", async () => {
+    seedDraft("pane-a", "fix the");
+    seedDraft("pane-b", "b in progress");
+    const { container } = render(bars(["pane-a", "pane-b"]));
+    await act(async () => {});
+    await act(async () => {
+      useFleetArmingStore.getState().armIds(["pane-a", "pane-b"]);
+    });
+    await focus("pane-b");
+    const view = editorOf(container, "pane-b");
+
+    await act(async () => {
+      view.dispatch({
+        changes: { from: view.state.doc.length, insert: " flaky test" },
+        userEvent: "input.type",
+      });
+      writeComposerDraftThrough("pane-b", undefined);
+      expect(draftOf("pane-b")).toBe("fix the flaky test");
+    });
   });
 
   it("gives a pane that wasn't mounted its own draft when it next mounts", async () => {

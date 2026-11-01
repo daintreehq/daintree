@@ -17,6 +17,8 @@ interface UseFleetMirrorParams {
   isFleetFollower: boolean;
   disabled: boolean;
   lastEmittedValueRef: React.RefObject<string>;
+  /** The draft the store held when the composer last wrote it or brought the editor to it (#15873). */
+  syncedDraftRef: React.RefObject<string>;
   /** A second composer outside the terminal's pane: it takes no part in the fleet. */
   isolated?: boolean;
 }
@@ -31,6 +33,7 @@ export function useFleetMirror({
   isFleetFollower,
   disabled,
   lastEmittedValueRef,
+  syncedDraftRef,
   isolated = false,
 }: UseFleetMirrorParams) {
   const isApplyingExternalValueRef = useRef(false);
@@ -55,6 +58,7 @@ export function useFleetMirror({
     if (isolated || !isFleetFollower) return;
     if (externalDraft === value) return;
     lastEmittedValueRef.current = externalDraft;
+    syncedDraftRef.current = externalDraft;
     setValue(externalDraft);
     const view = editorViewRef.current;
     if (view && view.state.doc.toString() !== externalDraft) {
@@ -81,6 +85,7 @@ export function useFleetMirror({
     if (isolated || holdsOwnDraft || !wasHeld) return;
     const draft = useTerminalInputStore.getState().draftInputs.get(externalDraftKey) ?? "";
     lastEmittedValueRef.current = draft;
+    syncedDraftRef.current = draft;
     setValue(draft);
     const view = editorViewRef.current;
     if (!view) return;

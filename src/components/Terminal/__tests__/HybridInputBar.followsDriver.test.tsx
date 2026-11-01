@@ -137,21 +137,18 @@ describe("HybridInputBar following the driver's draft", () => {
     expect(useTerminalInputStore.getState().getDraftInput("term-1")).toBe("driver typing more");
   });
 
-  it("leaves the driver's newer draft in place when a correction asks for its typing (#15873)", async () => {
+  it("leaves the driver's draft in place when a correction asks for its typing (#15873)", async () => {
     const { container } = mount(true);
     await act(async () => {});
     await hostDraft("driver typing");
+    const editor = EditorView.findFromDOM(container.querySelector<HTMLElement>(".cm-editor")!)!;
 
     await act(async () => {
-      useTerminalInputStore.setState((state) => ({
-        draftInputs: new Map(state.draftInputs).set("term-1", "driver typing more"),
-      }));
+      // Text only this view shows, over the driver's draft it last took in.
+      editor.dispatch({ changes: { from: editor.state.doc.length, insert: " here" } });
       writeComposerDraftThrough("term-1", undefined);
-      expect(useTerminalInputStore.getState().getDraftInput("term-1")).toBe("driver typing more");
-      useTerminalInputStore.getState().bumpExternalDraftRevision();
+      expect(useTerminalInputStore.getState().getDraftInput("term-1")).toBe("driver typing");
     });
-
-    expect(editorText(container)).toBe("driver typing more");
   });
 
   it("writes its own typing through for a correction once it takes over (#15873)", async () => {

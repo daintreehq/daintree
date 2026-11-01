@@ -809,6 +809,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       isFleetFollower,
       disabled,
       lastEmittedValueRef,
+      syncedDraftRef,
       isolated,
     });
 
