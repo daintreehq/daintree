@@ -253,15 +253,24 @@ export function relativeLuminance(hex: string): number {
     // 6-digit (#rrggbb) or 8-digit (#rrggbbaa): take first 6 chars, drop alpha for static analysis.
     rgb = clean.slice(0, 6);
   }
-  const red = hexToLinear(parseInt(rgb.slice(0, 2), 16));
-  const green = hexToLinear(parseInt(rgb.slice(2, 4), 16));
-  const blue = hexToLinear(parseInt(rgb.slice(4, 6), 16));
-  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+  return relativeLuminanceOfRgb(
+    parseInt(rgb.slice(0, 2), 16),
+    parseInt(rgb.slice(2, 4), 16),
+    parseInt(rgb.slice(4, 6), 16)
+  );
+}
+
+/** `relativeLuminance` for 0–255 channels, skipping the hex round trip. */
+export function relativeLuminanceOfRgb(red: number, green: number, blue: number): number {
+  return 0.2126 * hexToLinear(red) + 0.7152 * hexToLinear(green) + 0.0722 * hexToLinear(blue);
 }
 
 export function contrastRatio(foreground: string, background: string): number {
-  const l1 = relativeLuminance(foreground);
-  const l2 = relativeLuminance(background);
+  return contrastRatioFromLuminance(relativeLuminance(foreground), relativeLuminance(background));
+}
+
+/** `contrastRatio` for luminances already measured, so a search can reuse them. */
+export function contrastRatioFromLuminance(l1: number, l2: number): number {
   const lighter = Math.max(l1, l2);
   const darker = Math.min(l1, l2);
   return (lighter + 0.05) / (darker + 0.05);
@@ -1167,11 +1176,12 @@ function getDestructiveButtonWarnings(scheme: AppColorScheme): AppThemeValidatio
  */
 export function resolveStatusTextBackdrops(
   graphical: string,
-  tokens: Partial<Record<AppThemeTokenKey, string>>
+  tokens: Partial<Record<AppThemeTokenKey, string>>,
+  // The churn rows, when the caller already resolved them from these tokens.
+  rows: ReadonlyArray<{ label: string; hex: string }> = resolveDiffTextBackdrops(tokens)
 ): Array<{ label: string; hex: string }> {
-  const rows = resolveDiffTextBackdrops(tokens);
   const wash = parseTranslucent(graphical);
-  if (!wash) return rows;
+  if (!wash) return [...rows];
   const opacity = STATUS_TEXT_CONTRAST.washOpacity * wash.opacity;
   return rows.flatMap((row) => [
     row,

@@ -220,7 +220,154 @@ describe("liftToContrast", () => {
     // No lightness of anything reads 4.5:1 on mid grey from both sides at once.
     expect(liftToContrast("#3a6b45", ["#777777", "#ffffff"], 4.5, "dark")).toBe("#3a6b45");
   });
+
+  it("lands where measuring every candidate as a formatted hex lands", () => {
+    // Inks and backdrops in every form the parsers accept or reject, plus a
+    // seeded spread, so the reuse of luminances can't drift from the search
+    // the built-in themes were tuned against (#15673).
+    let seed = 15673;
+    const randomHex = () => {
+      seed = (seed * 1103515245 + 12345) % 2 ** 31;
+      return `#${seed.toString(16).padStart(6, "0").slice(-6)}`;
+    };
+    const inks = [
+      "#3a6b45",
+      "#5fae6f",
+      "#222222",
+      "#eeeeee",
+      "#3A6B45",
+      "  #3a6b45 ",
+      "#abc",
+      "#abcf",
+      "#3a6b45ff",
+      "#3a6b4580",
+      "oklch(0.5 0.1 140)",
+      ...Array.from({ length: 24 }, randomHex),
+    ];
+    const backdropSets = [
+      [],
+      ["#2a2a2a"],
+      ["#f2efe8"],
+      ["#000000", "#ffffff"],
+      ["#777777", "#ffffff"],
+      ["#1d2125", "#fff", "#2a2a2aff", " #333333"],
+      ["#2a2a2a", "rgba(0, 0, 0, 0.5)"],
+      ["#777f", "#3338", "#2a2a2a80"],
+      Array.from({ length: 12 }, randomHex),
+    ];
+    let compared = 0;
+    for (const ink of inks) {
+      for (const backdrops of backdropSets) {
+        for (const minimum of [3, 4.55, 7]) {
+          for (const type of ["dark", "light"] as const) {
+            expect(liftToContrast(ink, backdrops, minimum, type)).toBe(
+              referenceLift(ink, backdrops, minimum, type)
+            );
+            compared += 1;
+          }
+        }
+      }
+    }
+    expect(compared).toBe(inks.length * backdropSets.length * 3 * 2);
+  });
 });
+
+// `liftToContrast` before #15673: each candidate formatted to hex, and both
+// strings of every pair re-read for every ratio. The parser and the formatter
+// are frozen copies too, so a change to the shared helpers can't move both sides.
+function referenceLuminance(hex: string): number {
+  const linear = (channel: number) => {
+    const normalized = channel / 255;
+    return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+  };
+  const clean = hex.trim().replace("#", "");
+  const rgb =
+    clean.length === 3 || clean.length === 4
+      ? clean
+          .slice(0, 3)
+          .split("")
+          .map((char) => `${char}${char}`)
+          .join("")
+      : clean.slice(0, 6);
+  const red = linear(parseInt(rgb.slice(0, 2), 16));
+  const green = linear(parseInt(rgb.slice(2, 4), 16));
+  const blue = linear(parseInt(rgb.slice(4, 6), 16));
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+function referenceOklchToHex({ l, c, h }: { l: number; c: number; h: number }): string {
+  const toLinear = (L: number, a: number, b: number) => {
+    const lc = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+    const mc = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+    const sc = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
+    return [
+      4.0767416621 * lc - 3.3077115913 * mc + 0.2309699292 * sc,
+      -1.2684380046 * lc + 2.6097574011 * mc - 0.3413193965 * sc,
+      -0.0041960863 * lc - 0.7034186147 * mc + 1.707614701 * sc,
+    ];
+  };
+  const inGamut = (channels: number[]) => channels.every((v) => v >= -1e-4 && v <= 1 + 1e-4);
+  const toHexByte = (value: number) => {
+    const v = value <= 0.0031308 ? value * 12.92 : 1.055 * value ** (1 / 2.4) - 0.055;
+    return Math.round(Math.min(1, Math.max(0, v)) * 255)
+      .toString(16)
+      .padStart(2, "0");
+  };
+  const a = c * Math.cos((h * Math.PI) / 180);
+  const b = c * Math.sin((h * Math.PI) / 180);
+  let keep = 1;
+  if (!inGamut(toLinear(l, a, b))) {
+    let lo = 0;
+    let hi = 1;
+    for (let step = 0; step < 16; step++) {
+      const mid = (lo + hi) / 2;
+      if (inGamut(toLinear(l, a * mid, b * mid))) lo = mid;
+      else hi = mid;
+    }
+    keep = lo;
+  }
+  return `#${toLinear(l, a * keep, b * keep)
+    .map(toHexByte)
+    .join("")}`;
+}
+
+function referenceLift(
+  ink: string,
+  backdrops: readonly string[],
+  minimum: number,
+  type: "dark" | "light"
+): string {
+  const opaque = /^#(?:[0-9a-f]{3}f?|[0-9a-f]{6}(?:ff)?)$/i;
+  const start = opaque.test(ink.trim()) ? hexToOklch(ink.trim()) : null;
+  if (!start) return ink;
+  const ratio = (a: string, b: string) => {
+    const la = referenceLuminance(a);
+    const lb = referenceLuminance(b);
+    return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+  };
+  const reads = (hex: string) => backdrops.every((backdrop) => ratio(hex, backdrop) >= minimum);
+  if (reads(ink.trim())) return ink;
+  const at = (l: number) => referenceOklchToHex({ ...start, l });
+  const end = type === "dark" ? 1 : 0;
+  let near = start.l;
+  let far: number | null = null;
+  for (let step = 1; step <= 32; step++) {
+    const l = start.l + ((end - start.l) * step) / 32;
+    if (reads(at(l))) {
+      far = l;
+      break;
+    }
+    near = l;
+  }
+  if (far === null) return ink;
+  let pass = far;
+  for (let step = 0; step < 24; step++) {
+    const mid = (near + pass) / 2;
+    if (reads(at(mid))) pass = mid;
+    else near = mid;
+  }
+  return at(pass);
+}
 
 describe("oklchToHex", () => {
   it("inverts hexToOklch", () => {

@@ -1,4 +1,8 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
+import { fileURLToPath } from "node:url";
+import { types as utilTypes } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import {
   APP_THEME_TOKEN_KEYS,
@@ -39,6 +43,16 @@ import {
   type AuditSweep,
   type ResolvedTheme,
 } from "../lib/themeFixture";
+import {
+  PLAIN_DATA_VIOLATIONS_SOURCE,
+  instrumentThemeSource,
+  instrumentationMisses,
+  loadBuiltInSchemeSnapshot,
+  themeModuleOutputMisses,
+  type ThemeModuleOutput,
+} from "../lib/themeModuleFixture";
+
+const REPO_ROOT_FOR_THEME = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
 const context = { mode: "smoke" as const, now: () => performance.now() };
 
@@ -417,4 +431,148 @@ describe("PERF-305 brand ink oracle", () => {
     expect(sample.metrics!.warmSpeedup).toBeGreaterThan(1);
     expect(sample.metrics!.inkMisses).toBe(0);
   }, 20_000);
+});
+
+describe("PERF-306 theme module oracle", () => {
+  const recorded = loadBuiltInSchemeSnapshot();
+  const clone = (): ThemeModuleOutput => structuredClone(recorded);
+  const misses = (output: ThemeModuleOutput, shapeViolations = 0) =>
+    themeModuleOutputMisses({ output, shapeViolations }, recorded);
+  const walk = new Function(`${PLAIN_DATA_VIOLATIONS_SOURCE}; return plainDataViolations;`)() as (
+    value: unknown,
+    isProxy: (value: unknown) => boolean
+  ) => number;
+  const plainDataViolations = (value: unknown) => walk(value, utilTypes.isProxy);
+
+  it("records every built-in and the light fallback", () => {
+    expect(recorded.schemes.map((scheme) => (scheme as AppColorScheme).id)).toEqual(
+      BUILT_IN_APP_SCHEMES.map((scheme) => scheme.id)
+    );
+    expect((recorded.fallback as AppColorScheme).type).toBe("light");
+    expect(misses(clone())).toBe(0);
+  });
+
+  it("scores one token derived differently", () => {
+    const drifted = clone();
+    const tokens = (drifted.schemes[3] as AppColorScheme).tokens;
+    tokens["status-success-text"] = tokens["status-success"];
+    expect(misses(drifted)).toBe(1);
+  });
+
+  it("scores a dropped, a reordered and an extension-less cohort", () => {
+    const dropped = clone();
+    dropped.schemes.pop();
+    expect(misses(dropped)).toBeGreaterThan(0);
+
+    const reordered = clone();
+    reordered.schemes.reverse();
+    expect(misses(reordered)).toBeGreaterThan(0);
+
+    const bare = clone();
+    for (const scheme of bare.schemes) delete (scheme as AppColorScheme).extensions;
+    expect(misses(bare)).toBe(recorded.schemes.length);
+  });
+
+  it("scores a fallback that went missing or drifted", () => {
+    expect(misses({ ...clone(), fallback: undefined })).toBe(1);
+    const drifted = clone();
+    (drifted.fallback as AppColorScheme).tokens["destructive-fill"] = "#000000";
+    expect(misses(drifted)).toBe(1);
+  });
+
+  it("scores exports that only look right once serialised", () => {
+    expect(plainDataViolations(clone())).toBe(0);
+    expect(misses(clone(), 2)).toBe(2);
+
+    // A getter that would derive on read: counted, and never invoked.
+    let derivedOnRead = 0;
+    const lazy = clone();
+    const tokens = (lazy.schemes[0] as AppColorScheme).tokens;
+    Object.defineProperty(lazy.schemes[0], "tokens", {
+      enumerable: true,
+      get: () => {
+        derivedOnRead += 1;
+        return tokens;
+      },
+    });
+    expect(plainDataViolations(lazy)).toBe(1);
+    expect(derivedOnRead).toBe(0);
+
+    const stand = clone();
+    expect(plainDataViolations({ ...stand, schemes: { toJSON: () => stand.schemes } })).toBe(1);
+    expect(plainDataViolations({ ...stand, fallback: undefined })).toBe(1);
+    const odd = clone();
+    Object.assign(odd.schemes[1] as object, { extra: undefined, nan: Number.NaN, fn: () => 0 });
+    expect(plainDataViolations(odd)).toBe(3);
+    expect(plainDataViolations({ ...clone(), fallback: new Map() })).toBe(1);
+
+    // Arrays JSON would quietly reshape: a stray property, and a hole.
+    const stray = clone();
+    Object.assign(stray.schemes, { extra: "lost" });
+    expect(plainDataViolations(stray)).toBe(1);
+    const holed = clone();
+    holed.schemes.length += 1;
+    expect(plainDataViolations(holed)).toBe(1);
+    // Keys that read as numbers without being indices can't cancel a hole.
+    for (const key of ["4294967295", "-1", "1.5", "Infinity"]) {
+      expect(plainDataViolations(Object.assign(new Array(1), { [key]: "lost" }))).toBe(2);
+      expect(plainDataViolations(Object.assign([], { [key]: "lost" }))).toBe(1);
+    }
+    // A slot that exists but reads through an accessor is one miss, not two.
+    const accessorSlot = ["x"];
+    Object.defineProperty(accessorSlot, "0", { enumerable: true, get: () => "x" });
+    expect(plainDataViolations(accessorSlot)).toBe(1);
+
+    // A proxy whose reads would do the work after the clock stopped.
+    let trapped = 0;
+    const proxied = clone();
+    proxied.schemes[2] = new Proxy(proxied.schemes[2] as object, {
+      get: (target, key, receiver) => {
+        trapped += 1;
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    expect(plainDataViolations(proxied)).toBe(1);
+    expect(trapped).toBe(0);
+  });
+
+  it("scores a counter that measured nothing, too much, or ran in the timed arm", () => {
+    const evaluation = (linearisations: number, probe: number) => ({
+      parseMs: 1,
+      executeMs: 1,
+      shapeViolations: 0,
+      linearisations,
+      probeLinearisations: probe,
+      output: recorded,
+    });
+    expect(instrumentationMisses(evaluation(0, 0), evaluation(26_769, 3))).toBe(0);
+    expect(instrumentationMisses(evaluation(0, 0), evaluation(0, 3))).toBe(1);
+    expect(instrumentationMisses(evaluation(0, 0), evaluation(26_769, 6))).toBe(1);
+    expect(instrumentationMisses(evaluation(12, 3), evaluation(26_769, 3))).toBe(1);
+  });
+
+  it("splices counters into each linearisation once and refuses a drifted anchor", () => {
+    const contrast = "x\nexport function hexToLinear(channel: number): number {\n  return 0;\n}\n";
+    const spliced = instrumentThemeSource("/repo/shared/theme/contrast.ts", contrast, true);
+    expect(spliced.match(/__daintreePerfLinearisations \+= 1/g)).toHaveLength(1);
+    expect(instrumentThemeSource("/repo/shared/theme/contrast.ts", contrast, false)).toBe(contrast);
+
+    expect(() =>
+      instrumentThemeSource("/repo/shared/theme/contrast.ts", "export const x = 1;\n", true)
+    ).toThrow(/hexToLinear/);
+    expect(() =>
+      instrumentThemeSource("/repo/shared/theme/contrast.ts", contrast + contrast, true)
+    ).toThrow(/found 2/);
+    expect(() =>
+      instrumentThemeSource("/repo/shared/theme/themes.ts", "const OTHER = 1;\n", false)
+    ).toThrow(/INTERNAL_LIGHT_FALLBACK_SCHEME/);
+  });
+
+  it("anchors on the real theme sources", () => {
+    for (const file of ["contrast.ts", "themes.ts"]) {
+      const path = `${REPO_ROOT_FOR_THEME}/shared/theme/${file}`;
+      const spliced = instrumentThemeSource(path, readFileSync(path, "utf8"), true);
+      expect(spliced.match(/__daintreePerfLinearisations \+= 1/g)).toHaveLength(1);
+    }
+  });
 });

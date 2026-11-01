@@ -43,12 +43,15 @@ import { BRAND_MARK_SURFACES, resolveBrandMarkInk } from "../../../src/lib/brand
  *
  * - **The built-in cohort is resolved at module evaluation.** `themes.ts` maps
  *   `BUILT_IN_THEME_SOURCES` through a module-private `createThemeFromSource`
- *   when `@shared/theme` is first imported, so that exact call is unreachable
- *   from a benchmark — it has already run. PERF-300 drives
- *   `normalizeAppColorScheme`, the exported resolver every plugin and custom
- *   theme takes, over the same 15 palettes. It shares `compilePaletteToTokens`
- *   and `createDaintreeTokens` with the built-in path and diverges in exactly
- *   one token (see `ACCENT_FOREGROUND_DIVERGES` below).
+ *   when `@shared/theme` is first imported, so that exact call has already run
+ *   by the time this fixture can call anything; PERF-306
+ *   (`lib/themeModuleFixture.ts`) prices it by evaluating the module cold.
+ *   PERF-300 drives `normalizeAppColorScheme`, the exported resolver every
+ *   plugin and custom theme takes, over the same 15 palettes. It shares
+ *   `compilePaletteToTokens` and `createDaintreeTokens` with the built-in path
+ *   and diverges in exactly one token (see `ACCENT_FOREGROUND_DIVERGES` below),
+ *   but it runs the compile's own contrast pass, which the built-in path skips
+ *   when a theme's overrides make the follow-ups redo it.
  * - **There is no CSSOM.** PERF-304 drives the real `applyAppThemeToRoot` /
  *   `applyColorVisionMode` against a Map-backed stand-in for `HTMLElement`, so
  *   the counts (variables written, stale variables removed, CVD tokens
