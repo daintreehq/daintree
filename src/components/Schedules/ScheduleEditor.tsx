@@ -16,7 +16,7 @@ import { pluralize } from "@/lib/pluralize";
 import { actionService } from "@/services/ActionService";
 import { schedulesClient } from "@/clients/schedulesClient";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
-import { machineTimeZone } from "@shared/utils/cron";
+import { machineTimeZone, nextCronOccurrences } from "@shared/utils/cron";
 import { describeParsedCron } from "@shared/utils/cronDescription";
 import { createSchedule, validateCadence } from "@shared/utils/scheduledRuns";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -31,6 +31,8 @@ import type { SchedulesSnapshot } from "@shared/types/ipc/schedules";
 import { logError } from "@/utils/logger";
 import { useFirstAgentOptions } from "@/components/Worktree/hooks/useFirstAgentOptions";
 import { useScheduleLaunchOptions } from "./useScheduleLaunchOptions";
+import { CadencePicker } from "./CadencePicker";
+import { choiceFromCron, choiceIssue, type CadenceChoice } from "./cadenceChoice";
 import {
   DONE_CONSEQUENCE,
   DONE_OPTIONS,
@@ -40,7 +42,6 @@ import {
   OVERLAP_OPTIONS,
   formatNextRunRelative,
   formatRunInstant,
-  nextRunAt,
 } from "./scheduleWords";
 
 export interface WorktreeChoice {
@@ -63,7 +64,7 @@ interface Draft {
   presetId: string | null;
   prompt: string;
   worktreeId: string | null;
-  cron: string;
+  cadence: CadenceChoice;
   missedRuns: ScheduleMissedRunPolicy;
   overlap: ScheduleOverlapPolicy;
   checkFirst: boolean;
@@ -78,7 +79,7 @@ function draftFrom(schedule: Schedule): Draft {
     presetId: schedule.launch.presetId,
     prompt: schedule.launch.prompt,
     worktreeId: schedule.launch.worktreeId,
-    cron: schedule.cadence.cron,
+    cadence: choiceFromCron(schedule.cadence.cron),
     missedRuns: schedule.policies.missedRuns,
     overlap: schedule.policies.overlap,
     checkFirst: schedule.policies.precondition !== null,
@@ -100,7 +101,7 @@ const DRAFT_KEYS: readonly (keyof Draft)[] = [
   "presetId",
   "prompt",
   "worktreeId",
-  "cron",
+  "cadence",
   "missedRuns",
   "overlap",
   "checkFirst",
@@ -108,8 +109,11 @@ const DRAFT_KEYS: readonly (keyof Draft)[] = [
   "onDone",
 ];
 
+/** The cadence counts by the expression it saves, not by which picker state wrote it. */
 function sameDraft(a: Draft, b: Draft): boolean {
-  return DRAFT_KEYS.every((key) => a[key] === b[key]);
+  return DRAFT_KEYS.every((key) =>
+    key === "cadence" ? a.cadence.cron === b.cadence.cron : a[key] === b[key]
+  );
 }
 
 type FieldKey = "name" | "agentId" | "prompt" | "cron" | "checkCommand";
@@ -139,8 +143,10 @@ function localIssues(draft: Draft): Partial<Record<FieldKey, string>> {
   if (draft.name.trim() === "") issues.name = "Name the schedule";
   if (draft.agentId === "") issues.agentId = "Choose an agent";
   if (draft.prompt.trim() === "") issues.prompt = "Enter a prompt for the agent";
-  const cron = validateCadence({ cron: draft.cron, timeZone: "UTC" });
-  if (!cron.ok) issues.cron = cron.error.message;
+  const incomplete = choiceIssue(draft.cadence);
+  const cron = validateCadence({ cron: draft.cadence.cron, timeZone: "UTC" });
+  if (incomplete) issues.cron = incomplete;
+  else if (!cron.ok) issues.cron = cron.error.message;
   if (draft.checkFirst && draft.checkCommand.trim() === "") {
     issues.checkCommand = "Enter a command, or turn the check off";
   }
@@ -166,6 +172,7 @@ interface ScheduleEditorProps {
 }
 
 const MAIN_CHECKOUT_VALUE = "__main__";
+const PREVIEW_RUNS = 3;
 /** How long the cadence must sit still before its words or error are read out. */
 const CADENCE_ANNOUNCE_SETTLE_MS = 600;
 const NO_PRESET_VALUE = "__none__";
@@ -224,30 +231,37 @@ export function ScheduleEditor({
   const markTouched = (key: FieldKey) => setTouched((prev) => ({ ...prev, [key]: true }));
   const update = <K extends keyof Draft>(key: K, value: Draft[K]) => {
     setDraft((prev) => ({ ...prev, [key]: value }));
-    setServerIssues((prev) => prev.filter((issue) => ISSUE_FIELD[issue.path] !== key));
+    const field = key === "cadence" ? "cron" : key;
+    setServerIssues((prev) => prev.filter((issue) => ISSUE_FIELD[issue.path] !== field));
     setSaveError(null);
     setSubmitSummary("");
   };
 
   const timeZone = base?.cadence.timeZone ?? machineTimeZone();
-  const cadence = validateCadence({ cron: draft.cron, timeZone });
-  const cadenceWordsNow = cadence.ok ? describeParsedCron(cadence.cron) : null;
-  const nextRun = cadence.ok ? nextRunAt({ cron: draft.cron, timeZone }, now) : null;
-  const cadenceDescription = (() => {
-    if (!cadence.ok) return "Five fields: minute, hour, day of month, month, day of week";
-    const parts = [
-      cadenceWordsNow,
-      nextRun === null ? null : `next ${formatRunInstant(nextRun, timeZone)}`,
-      `times in ${timeZone}`,
-    ].filter(Boolean);
-    const sentence = parts.join(" · ");
-    return sentence.charAt(0).toUpperCase() + sentence.slice(1);
+  const cadence =
+    choiceIssue(draft.cadence) === null
+      ? validateCadence({ cron: draft.cadence.cron, timeZone })
+      : null;
+  const cadenceWordsNow = cadence?.ok ? describeParsedCron(cadence.cron) : null;
+  const nextRuns = (() => {
+    if (!cadence?.ok) return [];
+    try {
+      return nextCronOccurrences(cadence.cron, cadence.timeZone, now, PREVIEW_RUNS);
+    } catch {
+      return [];
+    }
   })();
+  const nextRun = nextRuns[0] ?? null;
 
-  // Read out once typing settles: the cadence in words while it's valid, and which
-  // cron field is wrong while it isn't, so a change between two bad values is heard.
+  // Read out once editing settles: the cadence in words and its next run while it's
+  // valid, and what's wrong while it isn't, so a change between two bad values is heard.
   const cronError = errorFor("cron");
-  const cadenceLive = cadence.ok ? cadenceDescription : cronError ? `Cadence: ${cronError}` : "";
+  const cadenceLive =
+    cadence?.ok && nextRun !== null
+      ? `${cadenceWordsNow ?? "Custom schedule"}, next run ${formatRunInstant(nextRun, timeZone, now)}`
+      : cronError
+        ? `Cadence: ${cronError}`
+        : "";
   const [settledCadenceLive, setSettledCadenceLive] = useState(cadenceLive);
   useEffect(() => {
     const timer = setTimeout(() => setSettledCadenceLive(cadenceLive), CADENCE_ANNOUNCE_SETTLE_MS);
@@ -326,7 +340,7 @@ export function ScheduleEditor({
         const outcome = await schedulesClient.create({
           name: draft.name,
           launch,
-          cron: draft.cron,
+          cron: draft.cadence.cron,
           policies,
         });
         if (outcome.status === "invalid") refused(outcome.issues);
@@ -334,7 +348,7 @@ export function ScheduleEditor({
       } else {
         const outcome = await schedulesClient.update(base.id, base.updatedAt, {
           name: draft.name,
-          cadence: { cron: draft.cron, timeZone: base.cadence.timeZone },
+          cadence: { cron: draft.cadence.cron, timeZone: base.cadence.timeZone },
           launch,
           policies: { ...policies, runWhenClosed: base.policies.runWhenClosed },
         });
@@ -390,8 +404,8 @@ export function ScheduleEditor({
   // What Create commits, said where the button is: the default cadence sits
   // below the fold of a new form, and a schedule starts on.
   const newSummary =
-    isNew && cadence.ok
-      ? `${cadenceWordsNow ?? draft.cron} · first run ${
+    isNew && cadence?.ok
+      ? `${cadenceWordsNow ?? draft.cadence.cron} · first run ${
           nextRun === null ? "never" : formatNextRunRelative(nextRun, now, timeZone)
         }`
       : undefined;
@@ -522,21 +536,23 @@ export function ScheduleEditor({
 
           <SettingsSection title="When it runs">
             <SettingsGroup>
-              <SettingsInput
-                rowId={FIELD_ROW.cron}
-                label="Cadence"
-                layout="inline"
-                controlWidth="wide"
-                className="font-mono"
-                spellCheck={false}
-                autoComplete="off"
-                value={draft.cron}
-                placeholder="0 9 * * *"
-                onChange={(event) => update("cron", event.target.value)}
-                onBlur={() => markTouched("cron")}
-                description={cadenceDescription}
+              <CadencePicker
+                choice={draft.cadence}
+                onChange={(next) => {
+                  update("cadence", next);
+                  // A typed expression is judged when the field is left; a picked one at once.
+                  if (next.kind !== "custom") markTouched("cron");
+                }}
+                errorRowId={FIELD_ROW.cron}
                 error={cronError}
+                onCustomBlur={() => markTouched("cron")}
+                words={cadenceWordsNow}
+                runs={nextRuns}
+                timeZone={timeZone}
+                now={now}
               />
+            </SettingsGroup>
+            <SettingsGroup>
               <SettingsPresetGroup
                 label="Missed runs"
                 description={MISSED_RUN_CONSEQUENCE[draft.missedRuns]}

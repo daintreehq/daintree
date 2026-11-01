@@ -194,7 +194,7 @@ function ScheduleRow({
                 </time>
               </p>
               <p className="truncate text-xs text-text-secondary">
-                {formatRunInstant(next, schedule.cadence.timeZone)}
+                {formatRunInstant(next, schedule.cadence.timeZone, now)}
               </p>
             </>
           )}

@@ -25,12 +25,22 @@ export function nextRunAt(cadence: ScheduleCadence, now: number): number | null 
   }
 }
 
+/** The calendar year of an instant in a zone. */
+function yearIn(epochMs: number, timeZone: string): number {
+  return Number(new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric" }).format(epochMs));
+}
+
 /**
  * A run's instant as the schedule's own zone reads it ("Mon, Nov 2, 2:00 AM").
  * The zone is named only when it isn't this machine's: a schedule keeps the zone
- * it was made in, so after travel its times are not the clock on the wall.
+ * it was made in, so after travel its times are not the clock on the wall. The
+ * year is named only when it isn't this one.
  */
-export function formatRunInstant(epochMs: number, timeZone: string): string {
+export function formatRunInstant(
+  epochMs: number,
+  timeZone: string,
+  now: number = Date.now()
+): string {
   const foreign = timeZone !== machineTimeZone();
   return new Intl.DateTimeFormat(undefined, {
     weekday: "short",
@@ -39,8 +49,33 @@ export function formatRunInstant(epochMs: number, timeZone: string): string {
     hour: "numeric",
     minute: "2-digit",
     timeZone,
+    ...(yearIn(epochMs, timeZone) !== yearIn(now, timeZone) ? { year: "numeric" } : {}),
     ...(foreign ? { timeZoneName: "short" } : {}),
   }).format(epochMs);
+}
+
+/** A run's date and its wall-clock time as the schedule's zone reads them, for a column of runs. */
+export function formatRunParts(
+  epochMs: number,
+  timeZone: string,
+  now: number
+): { day: string; time: string } {
+  const foreign = timeZone !== machineTimeZone();
+  return {
+    day: new Intl.DateTimeFormat(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      timeZone,
+      ...(yearIn(epochMs, timeZone) !== yearIn(now, timeZone) ? { year: "numeric" } : {}),
+    }).format(epochMs),
+    time: new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+      timeZone,
+      ...(foreign ? { timeZoneName: "short" } : {}),
+    }).format(epochMs),
+  };
 }
 
 const RELATIVE = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
