@@ -217,6 +217,7 @@ export const CHANNEL_LOCALITY = {
   "crash-recovery:set-config": "shell",
   "decisions:get-pane-state": "host",
   "decisions:get-status": "shell",
+  "decisions:set-enabled": "shell",
   "demo:annotate": "shell",
   "demo:capture-chunk": "shell",
   "demo:capture-stop": "shell",

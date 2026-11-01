@@ -242,6 +242,13 @@ const GLOBAL_TABS: Record<GlobalSettingsTab, TabExpectation> = {
       });
     },
   },
+  decisions: {
+    content: async (window) => {
+      await expect(window.getByRole("switch", { name: "Enable Decisions" })).toBeVisible({
+        timeout: T_SHORT,
+      });
+    },
+  },
   portal: { title: "Portal links" },
   mcp: {
     content: async (window) => {

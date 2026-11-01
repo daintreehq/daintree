@@ -53,6 +53,8 @@ export interface SettingsSearchEntry {
     settingId: string;
     /** Human-readable label shown in warnings (e.g. "MCP server") */
     label: string;
+    /** A proper noun, never lowercased mid-sentence (e.g. "Decisions") */
+    keepCase?: boolean;
   };
 }
 
@@ -96,6 +98,7 @@ function sectionToEntry(
           requiresEnabled: {
             settingId: section.requiresEnabled.settingId,
             label: section.requiresEnabled.label,
+            ...(section.requiresEnabled.keepCase ? { keepCase: true } : {}),
           },
         }
       : {}),

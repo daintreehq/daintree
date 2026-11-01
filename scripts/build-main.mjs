@@ -618,8 +618,12 @@ export function mainEsmConfig({ production, watch = false }) {
       ...mainBundlePlugins({ isProd: production }),
       ...(watch ? [createReadyMarkerPlugin()] : []),
     ],
+    // The import is aliased because the banner is raw text esbuild never renames
+    // around: a bundled ESM module that imports `createRequire` itself (fflate's
+    // node build, under the Decisions libraries) would otherwise declare it twice
+    // in one chunk, and that chunk fails to load.
     banner: {
-      js: `import { createRequire } from 'module'; const require = createRequire(import.meta.url);`,
+      js: `import { createRequire as __daintreeCreateRequire } from 'module'; const require = __daintreeCreateRequire(import.meta.url);`,
     },
   };
 }

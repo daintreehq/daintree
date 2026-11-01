@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DecisionsStatus, PaneDecisionState } from "../../../../shared/types/decisions.js";
+import type {
+  DecisionsStatus,
+  PaneDecisionState,
+  SetDecisionsEnabledPayload,
+} from "../../../../shared/types/decisions.js";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -15,6 +19,9 @@ const decisionsEntry = vi.hoisted(() => ({
   libraries: 0,
   getDecisionsStatus: vi.fn((): DecisionsStatus => ({ state: "not-connected" })),
   getDecisionsPaneState: vi.fn((): PaneDecisionState | null => null),
+  setDecisionsEnabled: vi.fn(async (enabled: boolean): Promise<DecisionsStatus> => ({
+    state: enabled ? "not-connected" : "off",
+  })),
 }));
 
 vi.mock("electron", () => ({ ipcMain: ipcMainMock }));
@@ -29,6 +36,7 @@ vi.mock("../../../services/decisions/index.js", () => {
   return {
     getDecisionsStatus: decisionsEntry.getDecisionsStatus,
     getDecisionsPaneState: decisionsEntry.getDecisionsPaneState,
+    setDecisionsEnabled: decisionsEntry.setDecisionsEnabled,
   };
 });
 vi.mock("@daintreehq/decisions-protocol", () => {
@@ -61,6 +69,15 @@ const getStatus = decisionsNamespace.ops.getStatus
 const getPaneState = decisionsNamespace.ops.getPaneState.handler as unknown as (
   terminalId: string
 ) => Promise<PaneDecisionState | null>;
+const setEnabled = decisionsNamespace.ops.setEnabled.handler as unknown as (
+  payload: SetDecisionsEnabledPayload
+) => Promise<DecisionsStatus>;
+
+const DECISIONS_CHANNELS = [
+  CHANNELS.DECISIONS_GET_STATUS,
+  CHANNELS.DECISIONS_GET_PANE_STATE,
+  CHANNELS.DECISIONS_SET_ENABLED,
+];
 
 describe("decisions IPC", () => {
   beforeEach(() => {
@@ -68,20 +85,21 @@ describe("decisions IPC", () => {
     _resetDecisionsModuleForTesting();
     decisionsEntry.getDecisionsStatus.mockClear();
     decisionsEntry.getDecisionsPaneState.mockClear();
+    decisionsEntry.setDecisionsEnabled.mockClear();
     vi.mocked(store.set).mockClear();
   });
   afterEach(() => {
     _resetDecisionsModuleForTesting();
   });
 
-  it("registers both reads and removes them on cleanup", () => {
+  it("registers the reads and the switch, and removes them on cleanup", () => {
     const cleanup = registerDecisionsHandlers();
-    for (const channel of [CHANNELS.DECISIONS_GET_STATUS, CHANNELS.DECISIONS_GET_PANE_STATE]) {
+    for (const channel of DECISIONS_CHANNELS) {
       expect(ipcMainMock.handle).toHaveBeenCalledWith(channel, expect.any(Function));
     }
 
     cleanup();
-    for (const channel of [CHANNELS.DECISIONS_GET_STATUS, CHANNELS.DECISIONS_GET_PANE_STATE]) {
+    for (const channel of DECISIONS_CHANNELS) {
       expect(ipcMainMock.removeHandler).toHaveBeenCalledWith(channel);
     }
   });
@@ -131,6 +149,37 @@ describe("decisions IPC", () => {
     expect(decisionsEntry.getDecisionsPaneState).not.toHaveBeenCalled();
   });
 
+  it("reports a saved consent time with the switch off, loading none of Decisions", async () => {
+    saved.value = { enabled: false, consentedAt: 1_761_955_200_000 };
+
+    await expect(getStatus()).resolves.toEqual({ state: "off", consentedAt: 1_761_955_200_000 });
+
+    expect(decisionsEntry.evaluated).toBe(0);
+  });
+
+  it("turns off with nothing on by answering from the store, loading none of Decisions", async () => {
+    saved.value = { enabled: false };
+
+    await expect(setEnabled({ enabled: false })).resolves.toEqual({ state: "off" });
+
+    expect(decisionsEntry.evaluated).toBe(0);
+    expect(decisionsEntry.libraries).toBe(0);
+    expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("refuses to turn on before the person has agreed, loading none of Decisions", async () => {
+    for (const value of [undefined, { enabled: false }, { enabled: false, consentedAt: "yes" }]) {
+      saved.value = value;
+
+      await expect(setEnabled({ enabled: true })).rejects.toThrow(/agree/);
+      await expect(setEnabled({ enabled: true, consent: false })).rejects.toThrow(/agree/);
+    }
+
+    expect(decisionsEntry.evaluated).toBe(0);
+    expect(decisionsEntry.libraries).toBe(0);
+    expect(store.set).not.toHaveBeenCalled();
+  });
+
   it("answers off once quit has sealed the loader, without loading it", async () => {
     saved.value = { enabled: true };
     sealDecisionsModule();
@@ -169,5 +218,36 @@ describe("decisions IPC", () => {
     await expect(getPaneState("pane-b")).resolves.toBeNull();
 
     expect(decisionsEntry.getDecisionsPaneState.mock.calls).toEqual([["pane-a"], ["pane-b"]]);
+  });
+
+  it("turns on with consent through Decisions itself, recording the consent", async () => {
+    saved.value = { enabled: false };
+
+    await expect(setEnabled({ enabled: true, consent: true })).resolves.toEqual({
+      state: "not-connected",
+    });
+
+    expect(decisionsEntry.setDecisionsEnabled).toHaveBeenCalledWith(true, { consent: true });
+  });
+
+  it("turns on again without asking once consent is saved, and off through Decisions", async () => {
+    saved.value = { enabled: false, consentedAt: 1_761_955_200_000 };
+    await expect(setEnabled({ enabled: true })).resolves.toEqual({ state: "not-connected" });
+    expect(decisionsEntry.setDecisionsEnabled).toHaveBeenLastCalledWith(true, { consent: false });
+
+    saved.value = { enabled: true, consentedAt: 1_761_955_200_000 };
+    await expect(setEnabled({ enabled: false })).resolves.toEqual({ state: "off" });
+    expect(decisionsEntry.setDecisionsEnabled).toHaveBeenLastCalledWith(false, { consent: false });
+  });
+
+  it("answers off without loading once quit has sealed the loader", async () => {
+    saved.value = { enabled: false, consentedAt: 1_761_955_200_000 };
+    sealDecisionsModule();
+
+    await expect(setEnabled({ enabled: true })).resolves.toEqual({
+      state: "off",
+      consentedAt: 1_761_955_200_000,
+    });
+    expect(decisionsEntry.setDecisionsEnabled).not.toHaveBeenCalled();
   });
 });

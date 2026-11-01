@@ -19,6 +19,7 @@ export function defaultDecisionsSettings(): DecisionsSettings {
     deviceId: null,
     hostId: null,
     proxyAllowlisted: false,
+    consentedAt: null,
   };
 }
 
@@ -39,6 +40,11 @@ export function normalizeRelayOrigin(value: unknown): string | null {
   const loopback = url.protocol === "http:" && LOOPBACK_HOSTNAMES.has(url.hostname);
   if (!secure && !loopback) return null;
   return url.origin;
+}
+
+/** A consent time is a positive epoch-ms number; anything else is no consent. */
+export function consentTime(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 
 function relayId(value: unknown): string | null {
@@ -77,6 +83,7 @@ export function sanitizeDecisionsSettings(raw: unknown): DecisionsSettings {
     deviceId,
     hostId,
     proxyAllowlisted: value.proxyAllowlisted === true,
+    consentedAt: consentTime(value.consentedAt),
   };
 }
 

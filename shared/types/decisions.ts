@@ -31,6 +31,12 @@ export interface DecisionsSettings {
    * turns it on.
    */
   proxyAllowlisted: boolean;
+  /**
+   * When the person agreed to what Decisions sends and where (epoch ms), the
+   * first time they turned it on; null until then. The switch asks first
+   * while it is null.
+   */
+  consentedAt: number | null;
 }
 
 /**
@@ -43,6 +49,20 @@ export type DecisionsState = "off" | "not-connected" | "connecting" | "connected
 
 export interface DecisionsStatus {
   state: DecisionsState;
+  /** The relay this computer is set up with, as an origin; absent until one is entered. */
+  relayOrigin?: string;
+  /** When the person agreed to what Decisions sends; absent until they have. */
+  consentedAt?: number;
+}
+
+/**
+ * Turning Decisions on or off from Settings. `consent` is the person agreeing,
+ * in the consent dialog, to what leaves the machine; turning it on is refused
+ * without it until they have agreed once.
+ */
+export interface SetDecisionsEnabledPayload {
+  enabled: boolean;
+  consent?: boolean;
 }
 
 export type DecisionsStatusEvent = { type: "status-changed"; status: DecisionsStatus };

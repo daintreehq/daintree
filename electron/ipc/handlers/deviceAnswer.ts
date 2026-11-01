@@ -15,7 +15,12 @@ import type {
   DeviceAnswerStatus,
   SetDeviceAnswerPayload,
 } from "../../../shared/types/ipc/deviceAnswer.js";
-import type { DecisionsStatus, PaneDecisionState } from "../../../shared/types/decisions.js";
+import type {
+  DecisionsStatus,
+  PaneDecisionState,
+  SetDecisionsEnabledPayload,
+} from "../../../shared/types/decisions.js";
+import { AppError } from "../../utils/errorTypes.js";
 
 /**
  * What Settings shows before the service was ever made: read straight from
@@ -85,25 +90,48 @@ export function registerDeviceAnswerHandlers(): () => void {
   return deviceAnswerNamespace.register();
 }
 
+function decisionsOn(): boolean {
+  return store.get("decisions")?.enabled === true;
+}
+
+/** The saved consent time, by the same test the setting's sanitiser applies. */
+function savedConsentTime(): number | undefined {
+  const value: unknown = store.get("decisions")?.consentedAt;
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+/** Off, read straight from the store. A relay isn't shown while off, so it isn't read. */
+function offStatus(): DecisionsStatus {
+  const consentedAt = savedConsentTime();
+  return consentedAt === undefined ? { state: "off" } : { state: "off", consentedAt };
+}
+
+function loadDecisions() {
+  return loadDecisionsModule(() => import("../../services/decisions/index.js"));
+}
+
+const setDecisionsEnabledSchema = z
+  .object({ enabled: z.boolean(), consent: z.boolean().optional() })
+  .strict();
+
 /**
- * Decisions' status read (#16001). It is declared here, beside the other
- * feature that answers agents from a phone, rather than in a module of its
- * own, so that Decisions adds no module to main's startup graph: this one
- * loads anyway, and the read imports nothing that isn't already loaded (the
- * channel comes from `CHANNELS`, not `decisions.preload.ts`, for that reason).
- * With the switch off it answers from the store; Decisions itself loads only
- * once it is on. Registered on every platform, unlike the device-answer ops.
+ * Decisions' status read (#16001), pane read (#16016) and switch (#16004).
+ * They are declared here, beside the other feature that answers agents from a
+ * phone, rather than in a module of their own, so that Decisions adds no
+ * module to main's startup graph: this one loads anyway, and the ops import
+ * nothing that isn't already loaded (the channels come from `CHANNELS`, not
+ * `decisions.preload.ts`, for that reason). With the switch off they answer
+ * from the store; Decisions itself loads only once it is on, or being turned
+ * on. Registered on every platform, unlike the device-answer ops.
  */
 export const decisionsNamespace = defineIpcNamespace({
   name: "decisions",
   ops: {
     getStatus: op(CHANNELS.DECISIONS_GET_STATUS, async (): Promise<DecisionsStatus> => {
-      if (store.get("decisions")?.enabled !== true) return { state: "off" };
-      const decisions = await loadDecisionsModule(
-        () => import("../../services/decisions/index.js")
-      );
+      if (!decisionsOn()) return offStatus();
+      const decisions = await loadDecisions();
       // Null only once quit has begun, when nothing of Decisions runs.
-      return decisions ? decisions.getDecisionsStatus() : { state: "off" };
+      return decisions ? decisions.getDecisionsStatus() : offStatus();
     }),
     // A pane's state for its chrome to show on mount (#16016); `host`, so a
     // view on a Remote Host reads its panes from the Host. Off answers null
@@ -113,11 +141,30 @@ export const decisionsNamespace = defineIpcNamespace({
       CHANNELS.DECISIONS_GET_PANE_STATE,
       z.string().min(1).max(256),
       async (terminalId: string): Promise<PaneDecisionState | null> => {
-        if (store.get("decisions")?.enabled !== true) return null;
-        const decisions = await loadDecisionsModule(
-          () => import("../../services/decisions/index.js")
-        );
+        if (!decisionsOn()) return null;
+        const decisions = await loadDecisions();
         return decisions ? decisions.getDecisionsPaneState(terminalId) : null;
+      }
+    ),
+    // Turning on is the one change that loads Decisions while the switch reads
+    // off, and only after the person has agreed to what it sends. Turning off
+    // while nothing is on loads nothing.
+    setEnabled: opValidated(
+      CHANNELS.DECISIONS_SET_ENABLED,
+      setDecisionsEnabledSchema,
+      async (payload: SetDecisionsEnabledPayload): Promise<DecisionsStatus> => {
+        if (!payload.enabled && !decisionsOn()) return offStatus();
+        if (payload.enabled && payload.consent !== true && savedConsentTime() === undefined) {
+          throw new AppError({
+            code: "PERMISSION",
+            message: "Decisions turns on only after you agree to what it sends",
+          });
+        }
+        const decisions = await loadDecisions();
+        if (!decisions) return offStatus();
+        return decisions.setDecisionsEnabled(payload.enabled, {
+          consent: payload.consent === true,
+        });
       }
     ),
   },

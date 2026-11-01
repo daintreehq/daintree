@@ -187,9 +187,37 @@ describe("Decisions entry", () => {
 
     const status = await setDecisionsEnabled(true);
 
-    expect(status).toEqual({ state: "not-connected" });
+    expect(status).toEqual({ state: "not-connected", relayOrigin: RELAY.relayOrigin });
     expect(saved.value).toMatchObject({ enabled: true, ...RELAY, proxyAllowlisted: true });
     expect(peekDecisionsService()?.getStatus().state).toBe("not-connected");
+  });
+
+  it("records the first consent, and keeps its time when consent comes again", async () => {
+    saved.value = { enabled: false };
+    vi.spyOn(Date, "now").mockReturnValueOnce(1_761_955_200_000);
+
+    const first = await setDecisionsEnabled(true, { consent: true });
+    await setDecisionsEnabled(false);
+    const again = await setDecisionsEnabled(true, { consent: true });
+
+    expect(first).toEqual({ state: "not-connected", consentedAt: 1_761_955_200_000 });
+    expect(again.consentedAt).toBe(1_761_955_200_000);
+    expect(saved.value).toMatchObject({ enabled: true, consentedAt: 1_761_955_200_000 });
+  });
+
+  it("leaves consent unrecorded when a switch comes without it", async () => {
+    saved.value = { enabled: false };
+
+    const status = await setDecisionsEnabled(true);
+
+    expect(status.consentedAt).toBeUndefined();
+    expect(saved.value).toMatchObject({ consentedAt: null });
+  });
+
+  it("reports the saved consent with the switch off", () => {
+    saved.value = { enabled: false, consentedAt: 1_761_955_200_000 };
+
+    expect(getDecisionsStatus()).toEqual({ state: "off", consentedAt: 1_761_955_200_000 });
   });
 
   it("turns off at runtime, stopping the service and saving off", async () => {
