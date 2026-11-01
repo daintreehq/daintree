@@ -1203,6 +1203,26 @@ describe("CanopyCard", () => {
         expect(chip(working.container)?.getAttribute("aria-label")).toBe("Agent state: working");
       });
 
+      it("follows its own pane past an exit or a stop the row still reports", () => {
+        viewWindow.__DAINTREE_INITIAL_PROJECT__ = { id: "p1" };
+        // The row as the fleet built it for an exited run: its chrome has exited.
+        const exitedRun = { ...itemFor("finished").row.run, agentState: "exited" as const };
+        const exited = buildPilotGroups([exitedRun], {
+          workspaces: new Map([["p1", { kind: "project", name: "app" }]]),
+          currentWorkspaceId: null,
+          nowMs: NOW,
+        }).flatMap((group) => group.rows)[0]!;
+        const base = itemFor("finished");
+        holdPane({ agentState: "working", runtimeStatus: "running" });
+        const restarted = renderCard({ ...base, row: { ...base.row, ...exited } } as CanopyItem);
+        expect(chip(restarted.container)?.getAttribute("aria-label")).toBe("Agent state: working");
+        restarted.unmount();
+
+        holdPane({ agentState: "waiting", runtimeStatus: "exited" });
+        const gone = renderCard(withRun({ agentState: "waiting", canopy: ask }));
+        expect(chip(gone.container)).toBeNull();
+      });
+
       it("keeps the row's own observation for another project's run under the same id", () => {
         viewWindow.__DAINTREE_INITIAL_PROJECT__ = { id: "p2" };
         holdPane({ agentState: "waiting", isRestarting: true });

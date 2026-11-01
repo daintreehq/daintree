@@ -31,6 +31,12 @@ let mockActiveDockTerminalId: string | null = null;
 const mockNeedsYou: ReadonlySet<string> = new Set(["t-1"]);
 let bandReads: string[] = [];
 let observationReads: Array<string | null> = [];
+// Per-run bands and pane observations, and the agent shape every tab takes;
+// the defaults draw nothing, as the rest of this suite expects.
+let mockBands: Record<string, string> = {};
+let mockObservations: Record<string, Record<string, unknown>> = {};
+let mockDockState: string | undefined = undefined;
+let mockIsAgent = false;
 let groupEdgeArgs: Array<{ ids: string[]; needsYou: ReadonlySet<string> }> = [];
 let mockTabGroups = new Map<string, TabGroup>();
 let capturedOnOpenChange: ((open: boolean) => void) | null = null;
@@ -137,7 +143,7 @@ vi.mock("../dockPanelPortalContext", () => ({
 
 vi.mock("../useDockBlockedState", () => ({
   useDockBlockedState: () => null,
-  getDockDisplayAgentState: () => undefined,
+  getDockDisplayAgentState: () => mockDockState,
   getGroupBlockedAgentState: (panels: Array<{ id: string }>, needsYou: ReadonlySet<string>) => {
     groupEdgeArgs.push({ ids: panels.map((p) => p.id), needsYou });
     return null;
@@ -152,34 +158,39 @@ vi.mock("../dockPopoverGuard", () => ({
 }));
 
 vi.mock("@/utils/terminalChrome", () => ({
-  deriveTerminalChrome: () => ({ isAgent: false, color: "#abc" }),
+  deriveTerminalChrome: () => ({ isAgent: mockIsAgent, color: "#abc" }),
 }));
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
 }));
 
-vi.mock("@/components/Worktree/terminalStateConfig", () => ({
-  getEffectiveStateIcon: () => null,
-  getEffectiveStateColor: () => "",
-  SESSION_ICONS: {},
-  SESSION_COLORS: {},
-  SESSION_LABELS: {},
-}));
+// The real session glyph maps, so the active tab's drawn glyph can be checked.
+vi.mock("@/components/Worktree/terminalStateConfig", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/Worktree/terminalStateConfig")>();
+  return {
+    getEffectiveStateIcon: () => null,
+    getEffectiveStateColor: () => "",
+    getEffectiveStateLabel: (state: string) => state,
+    SESSION_ICONS: actual.SESSION_ICONS,
+    SESSION_COLORS: actual.SESSION_COLORS,
+    SESSION_LABELS: actual.SESSION_LABELS,
+  };
+});
 
 // The fleet band read and the pane observation read stores this suite doesn't
 // stand up; with no band reported, the chip draws nothing amber.
 vi.mock("@/hooks/useRunFleetBand", () => ({
   useRunFleetBand: (id: string) => {
     bandReads.push(id);
-    return undefined;
+    return mockBands[id];
   },
   useFleetBandRunIds: () => mockNeedsYou,
 }));
 vi.mock("@/hooks/useRunSessionPresentation", () => ({
   usePaneObservation: (id: string | null) => {
     observationReads.push(id);
-    return undefined;
+    return id === null ? undefined : mockObservations[id];
   },
 }));
 
@@ -368,8 +379,52 @@ describe("DockedTabGroup reads the fleet band (#16057)", () => {
     bandReads = [];
     observationReads = [];
     groupEdgeArgs = [];
+    mockBands = {};
+    mockObservations = {};
+    mockDockState = undefined;
+    mockIsAgent = false;
     mockActiveDockTerminalId = null;
     mockTabGroups = new Map([["g-1", makeGroup(["t-1", "t-2"], "t-2")]]);
+  });
+
+  afterEach(() => {
+    mockBands = {};
+    mockObservations = {};
+    mockDockState = undefined;
+    mockIsAgent = false;
+  });
+
+  const chipName = (container: HTMLElement) =>
+    container.querySelector("[data-dock-item]")?.getAttribute("aria-label") ?? "";
+
+  it("draws the active tab's glyph by its own band, not a hidden tab's", () => {
+    mockDockState = "waiting";
+    mockIsAgent = true;
+    const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" })];
+    const group = makeGroup(["t-1", "t-2"], "t-2");
+
+    // The hidden tab asks; the active one sits at a prompt that asks nothing.
+    mockBands = { "t-1": "needs-you", "t-2": "idle" };
+    const prompt = render(<DockedTabGroup group={group} panels={panels} />);
+    expect(prompt.container.querySelector(".text-state-waiting")).toBeNull();
+    prompt.unmount();
+
+    mockBands = { "t-2": "needs-you" };
+    const asking = render(<DockedTabGroup group={group} panels={panels} />);
+    expect(asking.container.querySelector(".text-state-waiting")).not.toBeNull();
+    expect(chipName(asking.container)).toMatch(/— agent waiting/);
+    asking.unmount();
+
+    mockBands = { "t-2": "review" };
+    const unread = render(<DockedTabGroup group={group} panels={panels} />);
+    expect(chipName(unread.container)).toMatch(/— agent unread/);
+    unread.unmount();
+
+    // An ask its pane has moved past draws no amber before the band catches up.
+    mockBands = { "t-2": "needs-you" };
+    mockObservations = { "t-2": { agentState: "waiting", isRestarting: true } };
+    const restarting = render(<DockedTabGroup group={group} panels={panels} />);
+    expect(restarting.container.querySelector(".text-state-waiting")).toBeNull();
   });
 
   it("edges the chip from the fleet's needs-you runs, a hidden tab's included", () => {

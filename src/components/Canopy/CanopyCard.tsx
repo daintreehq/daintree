@@ -659,12 +659,21 @@ export function CanopyCard({
   // prompt that asks nothing draws nothing. The pane's newer observation
   // speaks for the run when this view holds it, as on the pane, and the row's
   // otherwise: another project's or host's terminal id names no pane here.
-  // Display state and observation come from the same one, so a pane already
-  // back at work draws its spinner rather than a wait the row still holds.
+  // Display state, exit and observation come from the same one, so a pane
+  // already back at work draws its spinner rather than a wait or an exit the
+  // row still holds. An exit is `runtimeStatus: "exited"`, as the pane reads
+  // its own.
   const ownPane = usePaneObservation(ownsContext ? item.runId : null);
   const observed = ownPane ?? run;
+  const displayChrome =
+    ownPane === undefined
+      ? row.chrome
+      : {
+          isAgent: row.chrome.isAgent,
+          hasExited: ownPane.runtimeStatus === "exited" || ownPane.agentState === "exited",
+        };
   const agentState = resolvePaneSessionPresentation(
-    getTerminalAgentDisplayState(row.chrome, observed.agentState),
+    getTerminalAgentDisplayState(displayChrome, observed.agentState),
     row.band,
     observed
   );

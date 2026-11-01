@@ -6,6 +6,7 @@ import type { QuickSwitcherItem as QuickSwitcherItemData } from "@/hooks/useQuic
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import { SESSION_COLORS } from "@/components/Worktree/terminalStateConfig";
 
 vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
@@ -147,6 +148,9 @@ describe("QuickSwitcherItem agent mark from the fleet band", () => {
   };
   const mark = (container: HTMLElement) =>
     [...container.querySelectorAll(".sr-only")].map((el) => el.textContent).join("");
+  // The row's only svg is its state glyph: the kind icon is stubbed.
+  const glyphClass = (container: HTMLElement) =>
+    container.querySelector("svg")?.getAttribute("class") ?? null;
 
   it("names a prompt that asks nothing with no state, and an unread ask waiting", () => {
     const { container } = render(
@@ -154,8 +158,10 @@ describe("QuickSwitcherItem agent mark from the fleet band", () => {
     );
     deliverRun({});
     expect(mark(container)).not.toMatch(/agent/);
+    expect(glyphClass(container)).toBeNull();
     deliverRun({ canopy: { kind: "asked", quote: "Run it?", readAt: 1, seen: false } });
     expect(mark(container)).toContain(", agent waiting");
+    expect(glyphClass(container)).toContain(SESSION_COLORS.waiting);
   });
 
   it("names a hand-back unread, then finished once read", () => {
@@ -164,7 +170,10 @@ describe("QuickSwitcherItem agent mark from the fleet band", () => {
     );
     deliverRun({ handBack: { stoppedAt: 1 } });
     expect(mark(container)).toContain(", agent unread");
+    expect(glyphClass(container)).toContain(SESSION_COLORS.unread);
     deliverRun({ handBack: { stoppedAt: 1, seenAt: 2 } });
     expect(mark(container)).toContain(", agent finished");
+    expect(glyphClass(container)).toContain(SESSION_COLORS.completed);
+    expect(glyphClass(container)).not.toContain(SESSION_COLORS.waiting);
   });
 });

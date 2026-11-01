@@ -7,6 +7,7 @@ import type { AgentState } from "@/types";
 import type { TrashedTerminalGroupMetadata } from "@/store/slices";
 import { act } from "react";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import type { FleetRunRow } from "@shared/types/ipc/fleet";
 
 const watchPanelMock = vi.fn();
 const unwatchPanelMock = vi.fn();
@@ -386,11 +387,14 @@ describe("BackgroundContainer", () => {
       act(() => {
         useFleetSnapshotStore.getState().applySnapshot({
           runs: [
-            { runId: "ask", canopy: { kind: "asked", quote: "Run it?", readAt: 1, seen: false } },
+            {
+              runId: "ask",
+              canopy: { kind: "asked", quote: "Run it?", readAt: 1, seen: false } as const,
+            },
             { runId: "prompt" },
             { runId: "review", handBack: { stoppedAt: 1 } },
             { runId: "done", handBack: { stoppedAt: 1, seenAt: 2 } },
-          ].map((run) => ({
+          ].map((run): FleetRunRow => ({
             workspaceId: "p1",
             spawnedAt: 1,
             cwd: "/tmp",

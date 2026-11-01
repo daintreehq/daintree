@@ -94,9 +94,6 @@ describe("aggregateAgentStates (#6650)", () => {
     it("counts an approval wait by its band: waiting for an unread ask, unread without one", () => {
       // Bands as the fleet places these runs, over a hand-back already read.
       const approval = {
-        workspaceId: "p1",
-        spawnedAt: 0,
-        cwd: "/x",
         agentState: "waiting",
         waitingReason: "approval",
         handBack: { stoppedAt: 1, seenAt: 2 },
@@ -106,11 +103,10 @@ describe("aggregateAgentStates (#6650)", () => {
           "asked",
           bandForRun({
             ...approval,
-            runId: "asked",
             canopy: { kind: "asked", quote: "Run it?", readAt: 3, seen: false },
           }),
         ],
-        ["guessed", bandForRun({ ...approval, runId: "guessed" })],
+        ["guessed", bandForRun(approval)],
       ]);
       const asked = aggregateAgentStates([agent("asked", { waitingReason: "approval" })], (id) =>
         bands.get(id)
