@@ -429,7 +429,8 @@ export function createSystemdScheduleJob(deps: {
       for (const unit of ["app", "launcher", "timer"] as const) {
         if (onDisk[unit] === desired[unit]) continue;
         // An AppImage move while this pass ran wrote the app unit already.
-        if (target !== writing) throw new Error("Daintree moved while its systemd units were written");
+        if (target !== writing)
+          throw new Error("Daintree moved while its systemd units were written");
         await files.writeFile(fileOf(units[unit]), desired[unit]);
       }
       const reloaded = await systemctl(["daemon-reload"]);
@@ -484,7 +485,10 @@ export function createSystemdScheduleJob(deps: {
         resilientAtomicWriteFileSync(file, buildScheduleAppUnit(target), "utf-8", { mode: 0o644 });
         deps.reloadSync();
       } catch (error) {
-        console.warn("[ScheduleOsJob] Couldn't point Daintree's systemd unit at the updated AppImage:", error);
+        console.warn(
+          "[ScheduleOsJob] Couldn't point Daintree's systemd unit at the updated AppImage:",
+          error
+        );
       }
     },
   };

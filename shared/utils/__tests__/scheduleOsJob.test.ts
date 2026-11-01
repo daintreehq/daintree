@@ -38,8 +38,12 @@ describe("runWhenClosedIssue", () => {
 
   it("judges a Linux cadence by what a systemd timer can hold", () => {
     // Days that match both fields, which launchd can't hold, are one OnCalendar line.
-    expect(runWhenClosedIssue({ cron: "0 0 */2 * MON", timeZone: "Europe/London" }, LINUX)).toBeNull();
-    expect(runWhenClosedIssue({ cron: "*/5 9-17 * * 1-5", timeZone: "Europe/London" }, LINUX)).toBeNull();
+    expect(
+      runWhenClosedIssue({ cron: "0 0 */2 * MON", timeZone: "Europe/London" }, LINUX)
+    ).toBeNull();
+    expect(
+      runWhenClosedIssue({ cron: "*/5 9-17 * * 1-5", timeZone: "Europe/London" }, LINUX)
+    ).toBeNull();
     expect(runWhenClosedIssue({ cron: "0 9 * * *", timeZone: "Asia/Tokyo" }, LINUX)).toMatch(
       /^systemd can only start Daintree on this computer's time \(Europe\/London\)/
     );

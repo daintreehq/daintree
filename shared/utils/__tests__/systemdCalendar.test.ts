@@ -67,7 +67,7 @@ function cronFirings(expression: string, from: number, days: number): number[] {
   if (!parsed.ok) throw new Error(parsed.error.message);
   const end = from + days * DAY_MS;
   const out: number[] = [];
-  for (let at = nextCronOccurrence(parsed.cron, "UTC", from - 1); at !== null && at < end; ) {
+  for (let at = nextCronOccurrence(parsed.cron, "UTC", from - 1); at !== null && at < end;) {
     out.push(at);
     at = nextCronOccurrence(parsed.cron, "UTC", at);
   }
@@ -117,9 +117,9 @@ describe("systemdCalendarFor", () => {
     expect(refusal("0 9 * * *", "America/New_York", "Europe/London")).toBe(
       "systemd can only start Daintree on this computer's time (Europe/London), and this schedule runs on America/New_York time"
     );
-    expect(systemdCalendarFor({ cron: "0 9 * * *", timeZone: "US/Eastern" }, "America/New_York").ok).toBe(
-      true
-    );
+    expect(
+      systemdCalendarFor({ cron: "0 9 * * *", timeZone: "US/Eastern" }, "America/New_York").ok
+    ).toBe(true);
     expect(refusal("0 9 * * *", "Not/AZone")).toMatch(/isn't a time zone/);
   });
 

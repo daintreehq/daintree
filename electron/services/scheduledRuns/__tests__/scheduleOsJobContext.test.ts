@@ -3,7 +3,9 @@ import { readSystemTimeZone, scheduleOsJobContext } from "../scheduleOsJobContex
 
 describe("readSystemTimeZone", () => {
   it("reads the zone the /etc/localtime link names, on macOS and Linux layouts alike", () => {
-    expect(readSystemTimeZone(() => "/var/db/timezone/zoneinfo/Europe/London")).toBe("Europe/London");
+    expect(readSystemTimeZone(() => "/var/db/timezone/zoneinfo/Europe/London")).toBe(
+      "Europe/London"
+    );
     expect(readSystemTimeZone(() => "../usr/share/zoneinfo/America/New_York")).toBe(
       "America/New_York"
     );

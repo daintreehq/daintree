@@ -257,7 +257,8 @@ describe("unit names", () => {
 });
 
 describe("buildScheduleAppUnit", () => {
-  const execStart = (unit: string) => unit.split("\n").find((line) => line.startsWith("ExecStart="));
+  const execStart = (unit: string) =>
+    unit.split("\n").find((line) => line.startsWith("ExecStart="));
 
   it("runs this install with the profile and the due-schedules switch, quoted for systemd", () => {
     const unit = buildScheduleAppUnit({
@@ -366,7 +367,9 @@ describe("parseUnitStates", () => {
   });
 
   it("says nothing when a unit is missing from the answer", () => {
-    expect(parseUnitStates("Id=a.timer\nActiveState=active\n", ["a.timer", "b.service"])).toBeNull();
+    expect(
+      parseUnitStates("Id=a.timer\nActiveState=active\n", ["a.timer", "b.service"])
+    ).toBeNull();
   });
 });
 
@@ -420,7 +423,9 @@ describe("createSystemdScheduleJob", () => {
       `start ${TIMER}`,
     ]);
     expect(
-      systemd.calls.filter((call) => call[0] !== "show" && (call.includes(APP) || call.includes(LAUNCHER)))
+      systemd.calls.filter(
+        (call) => call[0] !== "show" && (call.includes(APP) || call.includes(LAUNCHER))
+      )
     ).toEqual([]);
   });
 
@@ -721,7 +726,9 @@ describe("DISPLAY_WAIT_SCRIPT", () => {
 
   it("is written so systemd hands the shell exactly this script", () => {
     // systemd reads `$$` as `$` and `%%` as `%`, after unquoting the word.
-    const line = /^ExecStartPre="\/bin\/sh" "-c" "(.*)"$/m.exec(buildScheduleLauncherUnit(UNITS))![1]!;
+    const line = /^ExecStartPre="\/bin\/sh" "-c" "(.*)"$/m.exec(
+      buildScheduleLauncherUnit(UNITS)
+    )![1]!;
     expect(line.replace(/\\(.)/g, "$1").replace(/\$\$/g, "$").replace(/%%/g, "%")).toBe(
       DISPLAY_WAIT_SCRIPT
     );
