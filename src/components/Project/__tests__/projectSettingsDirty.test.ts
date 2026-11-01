@@ -129,7 +129,6 @@ describe("projectSettingsDirty", () => {
 
       expect(snapshot.excludedPaths).toEqual(["z/**", "a/**", "m/**"]);
     });
-
   });
 
   describe("areSnapshotsEqual", () => {
