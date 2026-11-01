@@ -174,7 +174,7 @@ A quit kills every terminal, and those exits are the quit's, not the run's: whil
 
 Each schedule keeps its newest 100 runs, newest by registration time. A run that is still open, or whose process was last seen running, is never pruned: a fact still due for it would have nowhere to land. It goes once it's over and the next prune runs. Pruning a run also drops its occurrence key's protection, so an occurrence that old is kept from running again by the scheduler's evaluation point (#15979), not by the history.
 
-Deleting a schedule deletes its history with it: `ScheduleStore.remove` calls `deleteForSchedule` in the schedule's turn, once the removal is committed. A history that couldn't be deleted is logged and leaves the removal standing. Removing a project removes its runs in the same transaction as its row. A fact that arrives later for a deleted run finds no row and records nothing.
+Deleting a schedule deletes its history with it: `ScheduleStore.remove` calls `deleteForSchedule` in the schedule's turn, once the removal is committed. A history that couldn't be deleted is logged and leaves the removal standing. Removing a project removes its runs in the same transaction as its row. A fact that arrives later for a deleted run finds no row and records nothing. A deleted run never ends, open or not, so each deletion is announced instead: `scheduled-runs:deleted` names the project, and the schedule unless the whole project went. The run's process isn't touched.
 
 ### Reading it and following it
 
@@ -184,7 +184,8 @@ Deleting a schedule deletes its history with it: `ScheduleStore.remove` calls `d
 | `window.electron.scheduledRuns.listBySchedule({ scheduleId })` | The schedule's runs, newest first |
 | `scheduled-runs:changed` on `events:push` | `{ projectId, scheduleIds }` after a committed change, sent only to views of the project; a view reads the runs again |
 | `scheduled-run:started` on the main event bus | A run was registered to launch, just before its terminal spawns |
-| `scheduled-run:ended` on the main event bus | A run settled, once, with its outcome. A run that starts ends, at the next startup if Daintree quits first; a skipped run neither starts nor ends |
+| `scheduled-run:ended` on the main event bus | A run settled, once, with its outcome. A run that starts ends, at the next startup if Daintree quits first, or is deleted; a skipped run neither starts nor ends |
+| `scheduled-runs:deleted` on the main event bus | `{ projectId, scheduleId }` once a schedule's history is deleted, or `scheduleId: null` once a project's is; its runs will never end |
 
 The IPC surface is read-only: main registers runs and records their facts, so no view can write one.
 
@@ -205,6 +206,16 @@ Only Daintree's scheduler can set it, by one of two entries, and neither reads i
 - **Main with no view**: `runAgentLaunch(request, project, deps, { scheduledRun })`. The generic viewless executor, which serves MCP, never passes the fourth argument.
 
 `agent.launch` and the other spawn actions validate `spawnedBy` against `TerminalSpawnSourceSchema`, which leaves `"schedule"` out, so an MCP or plugin caller can't claim it in arguments either. A terminal launched any other way carries no `scheduledRun`. Choosing the route and reaching the view from main belong to the launcher (#15978).
+
+## Keeping the machine awake
+
+An unattended run needs the display awake as well as the system: a run under `caffeinate -is` alone froze when the display slept. `PowerSaveBlockerService` holds a `prevent-display-sleep` blocker from `scheduled-run:started` until the run's `scheduled-run:ended` or a `scheduled-runs:deleted` that covers it, and on quit, when the service is disposed. Electron merges every blocker into one wake lock of the strongest type, and Chromium's display lock also holds off idle system sleep on macOS, Windows and Linux. It doesn't override a closed lid or another forced sleep.
+
+- Runs share the one blocker, released after the last one ends.
+- It follows the keep-awake setting and the battery rule (`isAllowedByPolicy`), and comes back when they allow it with no run event needed.
+- It ends on facts alone, so it runs on no budget: the agents' heuristic hold keeps its own `prevent-app-suspension` blocker and renewal budget, and either can be released without touching the other.
+- The recorder's start callback builds the service before the event goes out, so a run launched before any window has a listener.
+- `KeepAwakeState` carries `isDisplayBlocking` and `scheduledRunIds`; the diagnostics snapshot's `keepAwake` section adds the working agent and attached frontend counts, and never builds the service. The `[PowerSaveBlocker]` log lines name each run.
 
 ## Who writes what
 

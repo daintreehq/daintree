@@ -247,6 +247,7 @@ vi.mock("../projectQuarantineCleanup.js", () => ({
 import { ProjectStore } from "../ProjectStore.js";
 import { setWritesSuppressed, resetWritesSuppressedForTesting } from "../diskPressureState.js";
 import { getMruProjects } from "../../../shared/utils/projectMru.js";
+import { events } from "../events.js";
 
 describe("ProjectStore.getAllProjects reconciliation", () => {
   let store: ProjectStore;
@@ -1725,10 +1726,34 @@ describe("ProjectStore.onProjectRegistryChanged", () => {
     insertRun.run("beta-run", beta.id);
     insertRun.run("alpha-run", alphaId);
 
+    const deleted = vi.fn();
+    const offDeleted = events.on("scheduled-runs:deleted", deleted);
     await store.removeProject(beta.id);
+    offDeleted();
 
     const left = sqlite.prepare("SELECT id FROM scheduled_runs").pluck().all();
     expect(left).toEqual(["alpha-run"]);
+    // Their runs will never end, so the deletion itself is announced.
+    expect(deleted).toHaveBeenCalledTimes(1);
+    expect(deleted).toHaveBeenCalledWith({
+      projectId: beta.id,
+      scheduleId: null,
+      timestamp: expect.any(Number),
+    });
+  });
+
+  it("announces no deleted run history for a project that had none, or kept it", async () => {
+    const beta = await store.addProject(betaDir);
+    const deleted = vi.fn();
+    const offDeleted = events.on("scheduled-runs:deleted", deleted);
+
+    await store.removeProject(beta.id);
+    const gamma = await store.addProject(betaDir);
+    sqlite.exec("DROP TABLE scheduled_runs");
+    await expect(store.removeProject(gamma.id)).rejects.toThrow(/scheduled_runs/);
+    offDeleted();
+
+    expect(deleted).not.toHaveBeenCalled();
   });
 
   it("keeps the project when its run history can't be removed with it", async () => {

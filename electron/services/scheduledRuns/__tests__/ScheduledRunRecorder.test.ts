@@ -45,6 +45,7 @@ function lifetime(): ScheduledRunRecorder {
     onChanged: (change) => changes.push(change),
     onRunStarted: (payload) => emitted.push({ name: "scheduled-run:started", payload }),
     onRunEnded: (payload) => emitted.push({ name: "scheduled-run:ended", payload }),
+    onRunsDeleted: (payload) => emitted.push({ name: "scheduled-runs:deleted", payload }),
     logWarn: () => {},
   });
 }
@@ -540,6 +541,36 @@ describe("ScheduledRunRecorder", () => {
     expect(recorder.get("run-1")).toBeNull();
     expect(recorder.get("kept")).not.toBeNull();
     expect(changes).toEqual([{ projectId: "project-1", scheduleIds: ["schedule-1"] }]);
-    expect(emitted).toEqual([]);
+    // Deleted, its open run never ends: services hear of the deletion instead.
+    expect(emitted).toEqual([
+      {
+        name: "scheduled-runs:deleted",
+        payload: { projectId: "project-1", scheduleId: "schedule-1", timestamp: now },
+      },
+    ]);
+  });
+
+  it("reports a deletion even when a view listener throws, and none for a schedule with no runs", () => {
+    const deleted: unknown[] = [];
+    const recorder = new ScheduledRunRecorder({
+      store: new ScheduledRunStore(sqlite),
+      now: () => now,
+      onChanged: () => {
+        throw new Error("view gone");
+      },
+      onRunsDeleted: (payload) => deleted.push(payload),
+      logWarn: () => {},
+    });
+    recorder.registerLaunch(launch());
+
+    recorder.deleteForSchedule("schedule-none");
+    expect(deleted).toEqual([]);
+
+    try {
+      recorder.deleteForSchedule("schedule-1");
+    } catch {
+      // The view listener's failure is the caller's to log.
+    }
+    expect(deleted).toEqual([{ projectId: "project-1", scheduleId: "schedule-1", timestamp: now }]);
   });
 });
