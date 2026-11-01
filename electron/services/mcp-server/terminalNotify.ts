@@ -2686,11 +2686,7 @@ function recheckWake(wake: LaneWake, info?: NotifyTerminalInfo): LaneWakeCheck {
 }
 
 /** Recording an outcome must never unwind the line or the pane's state. */
-function reportWake(
-  wake: LaneWake,
-  outcome: LaneWakeOutcome,
-  evidence?: LaneWakeEvidence
-): void {
+function reportWake(wake: LaneWake, outcome: LaneWakeOutcome, evidence?: LaneWakeEvidence): void {
   try {
     if (evidence === undefined) wake.report(outcome);
     else wake.report(outcome, evidence);

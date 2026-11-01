@@ -25,11 +25,7 @@ export interface DecisionIdentitySources {
 
 /** Why a pane is not the run an answer is for, as the library names it. */
 export type IdentityMismatch =
-  | "host-offline"
-  | "relaunched"
-  | "generation-mismatch"
-  | "session-mismatch"
-  | "gone";
+  "host-offline" | "relaunched" | "generation-mismatch" | "session-mismatch" | "gone";
 
 /** The pane record's fields the identity check reads. */
 export type DecisionTerminalInfo = Pick<

@@ -378,13 +378,13 @@ export class TerminalInputController {
         : guard === "settled-prompt-exact"
           ? () => this.admitStrict(EXACT_PROMPT_GATE)
           : guard === "settled-prompt"
-          ? () =>
-              !this.isInputLocked &&
-              evaluateWakeGate(
-                wakeGateSnapshot(this.host.terminalInfo),
-                wakeGateOptionsFor(this.host.terminalInfo.detectedAgentId)
-              ).kind === "ready"
-          : undefined;
+            ? () =>
+                !this.isInputLocked &&
+                evaluateWakeGate(
+                  wakeGateSnapshot(this.host.terminalInfo),
+                  wakeGateOptionsFor(this.host.terminalInfo.detectedAgentId)
+                ).kind === "ready"
+            : undefined;
     this.host.writeQueue.submit(text, token, onPtyWritten, admit, imagePaths);
   }
 

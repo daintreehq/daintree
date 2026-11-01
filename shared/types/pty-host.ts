@@ -1501,9 +1501,7 @@ export type TerminalSubmitStatusState = "slow" | "stalled" | "settled" | "failed
  * exactly that (#16015).
  */
 export type TerminalSubmitGuard =
-  | "settled-prompt"
-  | "settled-prompt-strict"
-  | "settled-prompt-exact";
+  "settled-prompt" | "settled-prompt-strict" | "settled-prompt-exact";
 
 /** A submission's text as a run's first-prompt record, before it was written (#15521). */
 export type FirstPromptCandidate = Omit<TerminalFirstPrompt, "via" | "at">;
