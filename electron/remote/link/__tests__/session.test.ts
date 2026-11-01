@@ -12,6 +12,7 @@ import {
   frameToMessage,
   messageToFrame,
 } from "../messages.js";
+import { continuesMessage } from "../messageFragments.js";
 import { LinkSession } from "../session.js";
 import { bytesTransferSource } from "../transfer.js";
 import {
@@ -365,6 +366,38 @@ describe("LinkSession request/response", () => {
       await socketClosed;
       await new Promise((r) => setImmediate(r));
       expect(written).toEqual([]);
+    });
+
+    it("reports a fragmented message once, after its last fragment, and never one cut off partway", async () => {
+      const { a, b } = await socketPair(dir);
+      peers.push(b);
+      const client = new LinkSession(a, { role: "client", pingIntervalMs: 0, idleTimeoutMs: 0 });
+      sessions.push(client);
+      client.open({ peerReadsFragments: true });
+      b.pause();
+      const frames = recordFrames(b);
+      const written: string[] = [];
+      client.post(event("fragmented", [BEYOND_SOCKET_BUFFERS]), () => written.push("fragmented"));
+      await waitFor(() => a.writableNeedDrain);
+      // Early fragments have reached the socket by now; the message has not.
+      await new Promise((r) => setTimeout(r, 20));
+      expect(written).toEqual([]);
+
+      b.resume();
+      await waitFor(() => written.length === 1);
+      await waitFor(() => frames.some((f) => f.lane === Lane.EVENTS && !continuesMessage(f)));
+      expect(frames.filter((f) => f.lane === Lane.EVENTS).length).toBeGreaterThan(1);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(written).toEqual(["fragmented"]);
+
+      b.pause();
+      client.post(event("cut off", [BEYOND_SOCKET_BUFFERS]), () => written.push("cut off"));
+      await waitFor(() => a.writableNeedDrain);
+      const closed = closedPromise(client);
+      b.destroy();
+      await closed;
+      await new Promise((r) => setImmediate(r));
+      expect(written).toEqual(["fragmented"]);
     });
 
     it("reports a control frame the session writes on its way out", async () => {

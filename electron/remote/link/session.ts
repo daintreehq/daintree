@@ -580,14 +580,17 @@ export class LinkSession {
    * session is not open (or closed). Throws only for a message that could never
    * be sent (unencodable, or larger than a frame).
    *
-   * `onWritten` runs once the frame has been handed to the transport, past the
-   * lanes and the socket's own buffer; never for a frame the session drops
-   * unsent.
+   * `onWritten` runs once the message has been handed to the transport, past
+   * the lanes and the socket's own buffer; never for a message the session
+   * drops unsent.
    */
   post(message: LinkMessage, onWritten?: () => void): EnqueueResult {
     const queued = this.enqueue(message);
-    if (onWritten && queued.frame && queued.result !== "refused") {
-      this.writeListeners.set(queued.frame, onWritten);
+    // Fragments go in order on one socket, so the last one taken means the
+    // whole message was, and a message cut off unsent never gets there.
+    const last = queued.frames.at(-1);
+    if (onWritten && last && queued.result !== "refused") {
+      this.writeListeners.set(last, onWritten);
     }
     return queued.result;
   }
