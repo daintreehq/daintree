@@ -1742,6 +1742,8 @@ export interface IpcEventMap {
 
   // Main asks every local view of a project to move or remove a scheduled run's pane by its done policy (#15982).
   "schedules:finish-request": import("./schedules.js").ScheduledRunFinishRequest;
+  // Main closed a scheduled run's terminal to replace it (#15980); a view showing the project drops its pane.
+  "schedules:run-closed": import("./schedules.js").ScheduledRunClosedPush;
 
   /**
    * MCP server runtime-state transition. Distinct from

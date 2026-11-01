@@ -1003,6 +1003,7 @@ export const CHANNEL_LOCALITY = {
   "schedules:finish-request": "shell",
   "schedules:launch-request": "shell",
   "schedules:launch-response": "shell",
+  "schedules:run-closed": "shell",
   "schedules:list": "shell",
   "schedules:remove": "shell",
   "schedules:run-now": "shell",

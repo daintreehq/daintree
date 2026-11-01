@@ -5,7 +5,35 @@ import type { ActionContext } from "@shared/types/actions";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { useSchedulesViewStore } from "@/store/schedulesViewStore";
 import { schedulesClient } from "@/clients/schedulesClient";
+import { requestScheduleRunConfirmation } from "@/store/scheduleRunConfirmStore";
 import { ClientAppError } from "@/utils/clientAppError";
+import type { ScheduleRunNowOutcome } from "@shared/types/ipc/schedules";
+
+/** Answering a confirmation can find a run opened meanwhile; each new set is asked about once. */
+const MAX_OVERLAP_CONFIRMATIONS = 3;
+
+/**
+ * Run now under the schedule's overlap policy (#15980). With earlier runs
+ * still open, main records nothing and asks; the user's answer goes back with
+ * the runs it named, and main checks them again, so a run that opened since
+ * is asked about too. Backing out runs nothing and records nothing.
+ */
+async function runScheduleNow(scheduleId: string): Promise<ScheduleRunNowOutcome> {
+  let outcome = await schedulesClient.runNow(scheduleId);
+  for (let asked = 0; outcome.status === "confirm-overlap"; asked++) {
+    if (asked >= MAX_OVERLAP_CONFIRMATIONS) return outcome;
+    const approved = await requestScheduleRunConfirmation({
+      scheduleName: outcome.scheduleName,
+      policy: outcome.policy,
+      openRunCount: outcome.openRunIds.length,
+    });
+    if (!approved) return outcome;
+    outcome = await schedulesClient.runNow(scheduleId, {
+      overlap: { policy: outcome.policy, openRunIds: outcome.openRunIds },
+    });
+  }
+  return outcome;
+}
 
 // Schedules live on this machine and run agents here, so a window driving a
 // Remote Host's project, or a scratch, has none to show (#15973).
@@ -60,10 +88,12 @@ export function registerScheduleActions(actions: ActionRegistry): void {
       id: "schedules.runNow",
       title: "Run schedule now",
       description:
-        "Launch a schedule's agent now, with its preset and prompt in its worktree, as a run recorded in the schedule's history. Runs whether or not the schedule is enabled.",
+        "Launch a schedule's agent now, with its preset and prompt in its worktree, as a run recorded in the schedule's history. Runs whether or not the schedule is enabled, under its overlap policy and precondition.",
       category: "project",
       kind: "command",
-      danger: "safe",
+      danger: "confirm",
+      dangerRationale:
+        "With the schedule's earlier runs still open, running starts another agent beside them, or under its replace policy closes their terminals first.",
       denyPluginDispatch: true,
       mcpVisibility: "hidden",
       scope: "renderer",
@@ -73,7 +103,7 @@ export function registerScheduleActions(actions: ActionRegistry): void {
       argsSchema: z.object({
         scheduleId: z.string().min(1).max(200).describe("The schedule to run, from this project."),
       }),
-      run: async ({ scheduleId }: { scheduleId: string }) => schedulesClient.runNow(scheduleId),
+      run: async ({ scheduleId }: { scheduleId: string }) => runScheduleNow(scheduleId),
     })
   );
 }

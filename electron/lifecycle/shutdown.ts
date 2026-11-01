@@ -21,6 +21,7 @@ import { disposeWorkspaceClient } from "../services/WorkspaceClient.js";
 import { disposeMainProcessWatchdog } from "../services/MainProcessWatchdogClient.js";
 import { projectCheckService } from "../services/ProjectCheckService.js";
 import { projectCommandService } from "../services/ProjectCommandService.js";
+import { disposeSchedulePreconditions } from "../services/scheduledRuns/scheduledRunPrecondition.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { getCrashLoopGuard } from "../services/CrashLoopGuardService.js";
 import { getPanelSuspectLedger } from "../services/PanelSuspectLedgerService.js";
@@ -262,6 +263,11 @@ function finishGroupStop(): boolean {
     projectCommandService.dispose();
   } catch (err) {
     console.warn("[MAIN] projectCommandService.dispose failed:", err);
+  }
+  try {
+    disposeSchedulePreconditions();
+  } catch (err) {
+    console.warn("[MAIN] disposeSchedulePreconditions failed:", err);
   }
   // A chain that settled clean has written the markers already.
   if (outcome === "clean" && chainOutcome === null) writeCleanExitMarkers();
@@ -934,6 +940,12 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
             projectCommandService.dispose();
           } catch (err) {
             console.warn("[MAIN] projectCommandService.dispose failed:", err);
+          }
+          // Schedule preconditions run detached too, in their own process groups.
+          try {
+            disposeSchedulePreconditions();
+          } catch (err) {
+            console.warn("[MAIN] disposeSchedulePreconditions failed:", err);
           }
           try {
             disposeWorkspaceClient();

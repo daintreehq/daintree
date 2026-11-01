@@ -149,6 +149,12 @@ export interface BoundedProcessOutcome {
 
 export interface BoundedProcessOptions {
   command: string;
+  /**
+   * Runs this program with these arguments instead of handing `command` to
+   * the system shell, for a caller that picks the shell itself; `command` is
+   * then not run.
+   */
+  executable?: { file: string; args: readonly string[] };
   cwd: string;
   /**
    * Built inside the spawn's error boundary, once per run, so a failure to
@@ -168,29 +174,43 @@ export interface BoundedProcessOptions {
 }
 
 /**
- * Run one command to its end and report how it ended. `shell: true` is
- * mandatory: callers hand over real shell strings (`npm run test`, Procfile
- * entries with pipes, `git -C … status`), not argv arrays.
+ * Run one command to its end and report how it ended. A `command` runs with
+ * `shell: true`: callers hand over real shell strings (`npm run test`,
+ * Procfile entries with pipes, `git -C … status`), not argv arrays. An
+ * `executable` runs as given, for a caller that chose the shell itself.
  *
  * Resolves for every run that started, whatever its outcome; rejects only when
  * the child could not be spawned or errored before exiting.
  */
 export function runBoundedProcess(options: BoundedProcessOptions): Promise<BoundedProcessOutcome> {
-  const { command, cwd, env, timeoutMs, maxOutputBytes, label, logPrefix, signal, slot } = options;
+  const {
+    command,
+    executable,
+    cwd,
+    env,
+    timeoutMs,
+    maxOutputBytes,
+    label,
+    logPrefix,
+    signal,
+    slot,
+  } = options;
   return new Promise<BoundedProcessOutcome>((resolve, reject) => {
     const useGroup = process.platform !== "win32";
     const tail = new OutputTail(maxOutputBytes + SCRUB_OVERLAP_BYTES);
 
     let child: ChildProcess;
     try {
-      child = spawn(command, {
+      const spawnOptions = {
         cwd,
-        shell: true,
         windowsHide: true,
         detached: useGroup,
         env: env(),
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+        stdio: ["ignore", "pipe", "pipe"] as ["ignore", "pipe", "pipe"],
+      };
+      child = executable
+        ? spawn(executable.file, [...executable.args], spawnOptions)
+        : spawn(command, { ...spawnOptions, shell: true });
     } catch (err) {
       reject(
         options.createError(

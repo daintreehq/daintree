@@ -1166,6 +1166,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onFinishRequest(
       callback: (request: import("./schedules.js").ScheduledRunFinishRequest) => void
     ): () => void;
+    /** Main closed a scheduled run's terminal to replace it (#15980); drop the run's pane. */
+    onRunClosed(
+      callback: (push: import("./schedules.js").ScheduledRunClosedPush) => void
+    ): () => void;
   };
   // ensure / restart / stop / getState etc. come from GeneratedElectronAPI;
   // onStateChanged is a renderer-only subscription.

@@ -33,8 +33,7 @@ vi.mock("../../../services/ProjectStore.js", () => ({ projectStore: projectStore
 vi.mock("../../../window/webContentsRegistry.js", () => viewsMock);
 const launchMock = vi.hoisted(() => vi.fn());
 vi.mock("../../../services/scheduledRuns/scheduledRunLaunchLive.js", () => ({
-  RUN_NOW_ORIGIN: { trigger: "run-now", dueAt: null, occurrenceKey: null, coalesced: null },
-  launchScheduledRunLive: launchMock,
+  runScheduleNowLive: launchMock,
 }));
 
 import { CHANNELS } from "../../channels.js";
@@ -48,6 +47,7 @@ import type {
   ScheduleCreateInput,
   ScheduleCreateOutcome,
   ScheduleRemoveOutcome,
+  ScheduleRunNowOptions,
   ScheduleRunNowOutcome,
   ScheduleSetEnabledOutcome,
   ScheduleUpdateOutcome,
@@ -76,7 +76,11 @@ type SetEnabledHandler = (
   enabled: boolean
 ) => Promise<ScheduleSetEnabledOutcome>;
 type RemoveHandler = (ctx: IpcContext, scheduleId: string) => Promise<ScheduleRemoveOutcome>;
-type RunNowHandler = (ctx: IpcContext, scheduleId: string) => Promise<ScheduleRunNowOutcome>;
+type RunNowHandler = (
+  ctx: IpcContext,
+  scheduleId: string,
+  options?: ScheduleRunNowOptions
+) => Promise<ScheduleRunNowOutcome>;
 
 const list = schedulesNamespace.ops.list.handler as unknown as ListHandler;
 const create = schedulesNamespace.ops.create.handler as unknown as CreateHandler;
@@ -191,9 +195,52 @@ describe("schedules handlers", () => {
       expect(launchMock).toHaveBeenCalledWith({
         projectId: PROJECT,
         scheduleId: "schedule-1",
-        origin: { trigger: "run-now", dueAt: null, occurrenceKey: null, coalesced: null },
         preferredWebContentsId: 41,
       });
+    });
+
+    it("passes on the user's answer to open runs, and main's reply (#15980)", async () => {
+      const asked: ScheduleRunNowOutcome = {
+        status: "confirm-overlap",
+        policy: "skip",
+        openRunIds: ["run-1"],
+        scheduleName: "Nightly",
+      };
+      const skipped: ScheduleRunNowOutcome = {
+        status: "skipped",
+        runId: "run-2",
+        reason: { kind: "precondition", exitCode: 1, signal: null, error: null },
+      };
+      launchMock.mockResolvedValueOnce(asked).mockResolvedValueOnce(skipped);
+
+      await expect(runNow(ctx(PROJECT), "schedule-1")).resolves.toEqual(asked);
+      const overlap = { policy: "skip" as const, openRunIds: ["run-1"] };
+      await expect(runNow(ctx(PROJECT), "schedule-1", { overlap })).resolves.toEqual(skipped);
+      expect(launchMock).toHaveBeenLastCalledWith({
+        projectId: PROJECT,
+        scheduleId: "schedule-1",
+        preferredWebContentsId: 41,
+        overlapConfirmed: overlap,
+      });
+
+      launchMock.mockResolvedValue({ status: "not-found" });
+      const replace = { policy: "replace" as const, openRunIds: ["run-1", "run-2"] };
+      await runNow(ctx(PROJECT), "schedule-1", { overlap: replace });
+      expect(launchMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ overlapConfirmed: replace })
+      );
+
+      for (const bad of [
+        { overlap: { policy: "start-another", openRunIds: [] } },
+        { overlap: { policy: "skip", openRunIds: "run-1" } },
+        { overlap: { policy: "skip", openRunIds: [] }, force: true },
+        "yes",
+      ]) {
+        await expect(
+          runNow(ctx(PROJECT), "schedule-1", bad as unknown as ScheduleRunNowOptions)
+        ).rejects.toMatchObject({ code: "VALIDATION" });
+      }
+      expect(launchMock).toHaveBeenCalledTimes(3);
     });
 
     it("runs nothing for a view that can't have schedules or a request of the wrong shape", async () => {

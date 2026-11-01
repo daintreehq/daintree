@@ -2009,6 +2009,9 @@ function buildElectronApi(): ElectronAPI {
       onLaunchRequest: (callback: (request: IpcEventMap["schedules:launch-request"]) => void) =>
         _typedOn(CHANNELS.SCHEDULES_LAUNCH_REQUEST, callback),
 
+      onRunClosed: (callback: (push: IpcEventMap["schedules:run-closed"]) => void) =>
+        _typedOn(CHANNELS.SCHEDULES_RUN_CLOSED, callback),
+
       sendLaunchResponse: (
         response: import("../shared/types/ipc/schedules.js").ScheduledLaunchViewResponse
       ) => {

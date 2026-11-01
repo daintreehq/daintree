@@ -218,6 +218,7 @@ The forge action set now exposes issue write operations to MCP agents (#10653) a
 | `schedules.open` | safe | n/a | n/a | reversible | UI | D0 | Leave | — |
 | `ScheduleList.tsx` enabled switch (`window.electron.schedules.setEnabled`) | (bypass) | no — the switch is its own inverse | n/a | local-undo | one schedule | D0 | Leave | — |
 | `ScheduleEditor.tsx` "Delete schedule…" (`window.electron.schedules.remove`) | (bypass) | yes (`ConfirmDialog` "Delete 'name'?" / "Delete schedule") | n/a | local-irreversible | one schedule | D1 | Leave — schedule edits are IPC calls, not actions, and on no MCP tier (#15973), so the confirm lives in the component | — |
+| `schedules.runNow` | **confirm** (#15980) | yes, when earlier runs are open — `ScheduleRunConfirmDialog` (app-level host fed by `scheduleRunConfirmStore`; `run()` awaits it) naming the schedule: "Start another run" under the skip policy, "Replace run" under replace; main records nothing until the answer comes back with the runs it named, and asks again if another opened | absent (user source) | local-irreversible (replace closes the open runs' terminals; each session is kept to resume) | one schedule's open runs | D1 | Done (#15980) — no confirm when nothing is open or the policy starts another | #15980 |
 
 ### Portal / browser
 
