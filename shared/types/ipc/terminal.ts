@@ -6,6 +6,7 @@ import type {
   TerminalAgentObservation,
   TerminalRestoreProvenance,
   TerminalSpawnSource,
+  ScheduledRunRef,
 } from "../panel.js";
 import type { AgentId } from "../agent.js";
 import type { AgentState, WaitingReason } from "../agent.js";
@@ -63,6 +64,11 @@ export interface TerminalSpawnOptions {
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time */
   agentModelId?: string;
+  /**
+   * The scheduled run this terminal was launched for (#15977). Kept on the
+   * terminal record so a session captured when its agent ends names the run.
+   */
+  scheduledRun?: ScheduledRunRef;
   /**
    * Session id already known at launch (#11782) — minted by Daintree and passed
    * to the CLI via `resume.assignSessionIdArgs`, or the id this launch resumes.
@@ -172,6 +178,8 @@ export interface TerminalState {
   agentModelId?: string;
   /** Surface that spawned this terminal, captured at creation (#12419). */
   spawnedBy?: TerminalSpawnSource;
+  /** The scheduled run a `schedule`-spawned terminal belongs to (#15977). */
+  scheduledRun?: ScheduledRunRef;
   /** Preset ID selected at launch time */
   agentPresetId?: string;
   /** Preset brand color captured at launch time */

@@ -189,6 +189,11 @@ export type TerminalRuntimeStatus = PersistableFlowStatus | "background" | "exit
  * the user did not ask for directly; `mcp` is an arbitrary external client.
  * Collapsing them left a terminal the user never started looking identical to
  * one they did.
+ *
+ * `schedule` is Daintree's scheduler launching a scheduled run (#15977). It
+ * always travels with a {@link ScheduledRunRef} and is never caller-settable:
+ * action arguments validate against the narrower caller list, so an MCP or
+ * plugin caller can't claim it.
  */
 export const TERMINAL_SPAWN_SOURCES = [
   "quickrun",
@@ -197,9 +202,21 @@ export const TERMINAL_SPAWN_SOURCES = [
   "palette",
   "mcp",
   "assistant",
+  "schedule",
 ] as const;
 
 export type TerminalSpawnSource = (typeof TERMINAL_SPAWN_SOURCES)[number];
+
+/**
+ * The scheduled run a `schedule`-spawned terminal belongs to (#15977): the
+ * schedule and the run record ids from `shared/types/scheduledRuns.ts`. Present
+ * exactly when `spawnedBy` is `"schedule"`; `shared/utils/scheduledRunProvenance.ts`
+ * keeps the pair together wherever it is read back.
+ */
+export interface ScheduledRunRef {
+  scheduleId: string;
+  runId: string;
+}
 
 /** Focus policy for newly-created panels — orthogonal to provenance. */
 export type AddPanelFocusPolicy = "auto" | "preserve" | "take";
@@ -744,6 +761,8 @@ export interface PtyPanelData extends BasePanelData {
   agentPresetColor?: string;
   /** Origin that spawned this terminal */
   spawnedBy?: TerminalSpawnSource;
+  /** The scheduled run this terminal was launched for; present exactly when `spawnedBy` is `"schedule"`. */
+  scheduledRun?: ScheduledRunRef;
   /** Focus policy applied when this panel was created. */
   focusPolicy?: AddPanelFocusPolicy;
   /**
@@ -1398,6 +1417,8 @@ export interface TerminalInstance {
   agentPresetColor?: string;
   /** Origin that spawned this terminal */
   spawnedBy?: TerminalSpawnSource;
+  /** The scheduled run this terminal was launched for; present exactly when `spawnedBy` is `"schedule"`. */
+  scheduledRun?: ScheduledRunRef;
   /** Focus policy applied when this panel was created. */
   focusPolicy?: AddPanelFocusPolicy;
   /**

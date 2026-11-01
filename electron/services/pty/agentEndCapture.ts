@@ -7,6 +7,7 @@ import { events } from "../events.js";
 import { resolveCaptureBranch, trackAgentSessionCapture } from "./agentSessionCaptureDelivery.js";
 import { createSessionIdMatcher, tailMatchesPattern } from "./sessionIdCapture.js";
 import type { TerminalInfo } from "./types.js";
+import { scheduledRunForRecord } from "../../../shared/utils/scheduledRunProvenance.js";
 
 const logger = createLogger("pty:AgentEndCapture");
 
@@ -211,8 +212,13 @@ function emitCapture(
     projectId: terminal.projectId ?? null,
     // Flags and model describe the agent Daintree launched. A different agent
     // the user started by hand in the same pane must not inherit them.
+    // So does the scheduled run: a hand-started agent is not the run's.
     ...(agentId === terminal.launchAgentId
-      ? { agentLaunchFlags: terminal.agentLaunchFlags, agentModelId: terminal.agentModelId }
+      ? {
+          agentLaunchFlags: terminal.agentLaunchFlags,
+          agentModelId: terminal.agentModelId,
+          ...scheduledRunForRecord(terminal),
+        }
       : {}),
     cwd: cwd || undefined,
     closedBy: "exit" as const,

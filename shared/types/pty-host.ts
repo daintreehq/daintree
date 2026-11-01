@@ -14,6 +14,7 @@ import type {
   TerminalFlowStatus,
   PanelTitleMode,
   TerminalFirstPrompt,
+  ScheduledRunRef,
 } from "./panel.js";
 import type { ResourceProfile } from "./resourceProfile.js";
 import type { PowerPolicyLevel } from "./powerPolicy.js";
@@ -97,6 +98,11 @@ export interface PtyHostSpawnOptions {
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
+  /**
+   * The scheduled run this terminal was launched for (#15977), named on the
+   * session record captured when its agent ends.
+   */
+  scheduledRun?: ScheduledRunRef;
   /**
    * Session id already known at launch (#11782) — either minted by Daintree and
    * assigned via `resume.assignSessionIdArgs`, or the id this launch resumes.
@@ -1276,6 +1282,11 @@ export interface PtyHostTerminalInfo {
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
+  /**
+   * The scheduled run this terminal was launched for (#15977), named on the
+   * session record captured when its agent ends.
+   */
+  scheduledRun?: ScheduledRunRef;
   /** Worktree the terminal was spawned in; used when persisting agent session history */
   worktreeId?: string;
   /** Preset ID the agent was launched with. */

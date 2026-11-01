@@ -132,7 +132,12 @@ import type {
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
 import type { AgentState, AgentId, WaitingReason } from "../../shared/types/agent.js";
-import type { PanelKind, PanelTitleMode, TerminalFirstPrompt } from "../../shared/types/panel.js";
+import type {
+  PanelKind,
+  PanelTitleMode,
+  ScheduledRunRef,
+  TerminalFirstPrompt,
+} from "../../shared/types/panel.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
 import type { PowerPolicyLevel } from "../../shared/types/powerPolicy.js";
 import type {
@@ -195,6 +200,8 @@ interface TerminalInfoResponse {
   agentSessionId?: string;
   agentLaunchFlags?: string[];
   agentModelId?: string;
+  /** The scheduled run this terminal was launched for (#15977). */
+  scheduledRun?: ScheduledRunRef;
   /** Last non-useless OSC title observed from the agent — preferred over `title` for resume-record labels. */
   lastObservedTitle?: string;
   agentPresetId?: string;

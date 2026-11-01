@@ -13,6 +13,7 @@ import type {
   FileBrowserSortKey,
   FileBrowserTreeSnapshot,
   TerminalSpawnSource,
+  ScheduledRunRef,
   PanelRestoreRecovery,
   TerminalAgentObservation,
   TerminalRestoreProvenance,
@@ -373,6 +374,11 @@ export interface PanelSnapshot {
    * is no way to infer it after the fact, so those stay unattributed.
    */
   spawnedBy?: TerminalSpawnSource;
+  /**
+   * The scheduled run a `schedule`-spawned terminal belongs to (#15977). Read
+   * back only as a pair with `spawnedBy`, through `readSpawnProvenance`.
+   */
+  scheduledRun?: ScheduledRunRef;
   /** Preset ID active at launch time, used to restore colored icon on reload */
   agentPresetId?: string;
   /** Preset hex color captured at launch time; fallback when preset is later deleted */

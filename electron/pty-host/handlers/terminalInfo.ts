@@ -89,6 +89,7 @@ export function mapTerminalInfo(
     agentSessionId: t.agentSessionId,
     agentLaunchFlags: t.agentLaunchFlags,
     agentModelId: t.agentModelId,
+    scheduledRun: t.scheduledRun,
     worktreeId: t.worktreeId,
     agentPresetId: t.agentPresetId,
     agentPresetColor: t.agentPresetColor,

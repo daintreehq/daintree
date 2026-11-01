@@ -104,6 +104,7 @@ import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
 import { answerRunByLabel, isAnswerLabel } from "../../services/terminalAnswer.js";
 import { isCanopyViewerEndpointId } from "../endpoint.js";
 import { terminalAnswerOf } from "../../../shared/utils/terminalSubmission.js";
+import { scheduledRunForRecord } from "../../../shared/utils/scheduledRunProvenance.js";
 import { getGitBranch } from "../../utils/gitUtils.js";
 import { events } from "../../services/events.js";
 import { projectStore } from "../../services/ProjectStore.js";
@@ -1011,6 +1012,7 @@ function endOnHost(runId: string, info: HostTerminalRecord): void {
         agentLaunchFlags: info.agentLaunchFlags,
         agentModelId: info.agentModelId,
         cwd: info.cwd,
+        ...scheduledRunForRecord(info),
         ...attributeClose(info, "kill"),
       },
     });

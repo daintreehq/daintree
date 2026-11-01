@@ -17,6 +17,7 @@ import type {
   AgentSessionTrashClose,
 } from "../../../shared/types/ipc/agentSessionHistory.js";
 import { rebaseAbsolutePath } from "../../../shared/utils/projectPathRelocation.js";
+import { readScheduledRunRef } from "../../../shared/utils/scheduledRunProvenance.js";
 
 export type { AgentSessionRecord };
 
@@ -101,6 +102,9 @@ function evictRecords(
       // with, which never knows its own title (#13226). An older record of the
       // same session does, so re-journaling it must not blank its name.
       if (!existing.title && r.title) existing.title = r.title;
+      // The conversation a scheduled run started stays that run's when it is
+      // resumed from a pane no schedule launched (#15977).
+      if (!existing.scheduledRun && r.scheduledRun) existing.scheduledRun = r.scheduledRun;
     }
   }
 
@@ -211,12 +215,19 @@ function normalizeRecords(parsed: unknown): AgentSessionRecord[] {
     ) {
       continue;
     }
-    if ("snapshot" in raw) {
-      const { snapshot: _snapshot, ...rest } = raw as Record<string, unknown>;
-      records.push(rest as unknown as AgentSessionRecord);
-    } else {
-      records.push(raw as AgentSessionRecord);
+    let record = raw as Record<string, unknown>;
+    if ("snapshot" in record) {
+      const { snapshot: _snapshot, ...rest } = record;
+      record = rest;
     }
+    // A run reference that doesn't read as one is no reference (#15977), so
+    // the carry-forward in `evictRecords` never inherits a broken one.
+    if ("scheduledRun" in record) {
+      const { scheduledRun, ...rest } = record;
+      const ref = readScheduledRunRef(scheduledRun);
+      record = ref ? { ...rest, scheduledRun: ref } : rest;
+    }
+    records.push(record as unknown as AgentSessionRecord);
   }
   return records;
 }
