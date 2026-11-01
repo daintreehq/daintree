@@ -1,5 +1,8 @@
 import type { Schedule, ScheduledRun } from "../../../shared/types/scheduledRuns.js";
-import type { ScheduledRunInboxItem } from "../../../shared/types/ipc/scheduledRuns.js";
+import type {
+  ScheduledRunInboxItem,
+  ScheduledRunInboxTake,
+} from "../../../shared/types/ipc/scheduledRuns.js";
 
 /**
  * How long a view holds the runs it took before another view may take them
@@ -16,6 +19,12 @@ export interface ScheduledRunInboxDeps {
   readonly getSchedule: (projectId: string, scheduleId: string) => Promise<Schedule | null>;
   /** Whether the view behind this web contents id can still answer. */
   readonly isLive: (webContentsId: number) => boolean;
+  /**
+   * Whether it's the view a window has on screen. A view restored in the
+   * background, or cached, would file the runs where nobody looks: the view
+   * on screen keeps the history it loaded and never reads a sibling's writes.
+   */
+  readonly isShown: (webContentsId: number) => boolean;
   readonly now?: () => number;
   readonly logWarn?: (message: string, error?: unknown) => void;
 }
@@ -43,26 +52,28 @@ export class ScheduledRunInbox {
 
   /**
    * The waiting runs no other live view holds, oldest first, each with its
-   * schedule's name and zone as they read now. They are held for `holder`
-   * until it answers; asking again (a reloaded view) takes them again.
+   * schedule's name and zone as they read now, for a view on screen. They are
+   * held for `holder` until it answers; asking again (a reloaded view) takes
+   * them again. Runs another view holds come with when to ask again.
    */
-  async take(holder: number): Promise<ScheduledRunInboxItem[]> {
+  async take(holder: number): Promise<ScheduledRunInboxTake> {
+    if (!this.deps.isShown(holder)) return { items: [], retryInMs: null };
     const recorder = await this.deps.recorder();
-    if (!recorder) return [];
+    if (!recorder) return { items: [], retryInMs: null };
     const pending = recorder.listInboxPending();
     const pendingIds = new Set(pending.map((run) => run.id));
     for (const id of this.leases.keys()) {
       if (!pendingIds.has(id)) this.leases.delete(id);
     }
     const at = this.now();
+    let retryInMs: number | null = null;
     const taken = pending.filter((run) => {
       const lease = this.leases.get(run.id);
-      return (
-        !lease ||
-        lease.holder === holder ||
-        at - lease.at >= SCHEDULED_RUN_INBOX_LEASE_MS ||
-        !this.deps.isLive(lease.holder)
-      );
+      if (!lease || lease.holder === holder || !this.deps.isLive(lease.holder)) return true;
+      const left = lease.at + SCHEDULED_RUN_INBOX_LEASE_MS - at;
+      if (left <= 0) return true;
+      retryInMs = retryInMs === null ? left : Math.min(retryInMs, left);
+      return false;
     });
     // Held before the schedule reads below, so a view asking meanwhile skips them.
     for (const run of taken) this.leases.set(run.id, { holder, at });
@@ -84,7 +95,10 @@ export class ScheduledRunInbox {
         schedule ? { name: schedule.name, timeZone: schedule.cadence.timeZone } : null
       );
     }
-    return taken.map((run) => ({ run, schedule: schedules.get(run.scheduleId) ?? null }));
+    return {
+      items: taken.map((run) => ({ run, schedule: schedules.get(run.scheduleId) ?? null })),
+      retryInMs,
+    };
   }
 
   /** The view has written these runs to the inbox; returns the ids that were waiting. */

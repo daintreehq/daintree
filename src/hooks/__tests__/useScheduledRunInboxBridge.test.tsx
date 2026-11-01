@@ -1,13 +1,19 @@
 // @vitest-environment jsdom
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ScheduledRunInboxItem } from "@shared/types/ipc/scheduledRuns";
+import type { ScheduledRunInboxItem, ScheduledRunInboxTake } from "@shared/types/ipc/scheduledRuns";
 import type { ScheduledRun } from "@shared/types/scheduledRuns";
 
 const remote = vi.hoisted(() => ({ value: false }));
 const order = vi.hoisted(() => [] as string[]);
+const storage = vi.hoisted(() => ({ withhold: new Set<string>() }));
+const project = vi.hoisted(() => ({ current: { id: "project-1" } as { id: string } | null }));
 
 vi.mock("@/hooks/useHostPlatform", () => ({ isRemoteWindow: () => remote.value }));
+vi.mock("@/store/projectStore", () => ({
+  useProjectStore: (select: (state: { currentProject: { id: string } | null }) => unknown) =>
+    select({ currentProject: project.current }),
+}));
 vi.mock("@/store/slices/notificationHistorySlice", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/store/slices/notificationHistorySlice")>();
   return {
@@ -15,6 +21,12 @@ vi.mock("@/store/slices/notificationHistorySlice", async (importOriginal) => {
     flushNotificationHistory: () => {
       order.push("flush");
       actual.flushNotificationHistory();
+    },
+    // What storage holds, less what a test says never reached it.
+    notificationHistoryIdsInStorage: () => {
+      const ids = actual.notificationHistoryIdsInStorage();
+      for (const id of storage.withhold) ids.delete(id);
+      return ids;
     },
   };
 });
@@ -47,33 +59,54 @@ function item(id: string): ScheduledRunInboxItem {
   return { run, schedule: { name: "Nightly", timeZone: "UTC" } };
 }
 
-const takeInbox = vi.fn<() => Promise<ScheduledRunInboxItem[]>>();
+const take = (items: ScheduledRunInboxItem[], retryInMs: number | null = null) => ({
+  items,
+  retryInMs,
+});
+
+const takeInbox = vi.fn<() => Promise<ScheduledRunInboxTake>>();
 const ackInbox = vi.fn<(payload: { runIds: string[] }) => Promise<void>>();
+let reveal: (() => void) | null = null;
+const offRevealed = vi.fn();
 
 beforeEach(() => {
   remote.value = false;
+  project.current = { id: "project-1" };
   order.length = 0;
+  storage.withhold.clear();
+  localStorage.clear();
   useNotificationHistoryStore.setState({ entries: [], unreadCount: 0, snoozedThreads: {} });
-  takeInbox.mockReset();
+  takeInbox.mockReset().mockResolvedValue(take([]));
   ackInbox.mockReset().mockImplementation(async () => {
     order.push("ack");
   });
+  offRevealed.mockReset();
+  reveal = null;
   Object.defineProperty(window, "electron", {
     configurable: true,
     writable: true,
-    value: { scheduledRuns: { takeInbox, ackInbox } },
+    value: {
+      scheduledRuns: { takeInbox, ackInbox },
+      app: {
+        onViewRevealed: (callback: () => void) => {
+          reveal = callback;
+          return offRevealed;
+        },
+      },
+    },
   });
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   Reflect.deleteProperty(window, "electron");
 });
 
 const entryIds = () => useNotificationHistoryStore.getState().entries.map((e) => e.id);
 
 describe("useScheduledRunInboxBridge", () => {
-  it("waits for the view's state, then files each run unread and acks once it's stored", async () => {
-    takeInbox.mockResolvedValue([item("run-1"), item("run-2")]);
+  it("waits for the view's state, then files each run unread and acks once storage holds it", async () => {
+    takeInbox.mockResolvedValue(take([item("run-1"), item("run-2")]));
     const { rerender } = renderHook(({ loaded }) => useScheduledRunInboxBridge(loaded), {
       initialProps: { loaded: false },
     });
@@ -90,23 +123,73 @@ describe("useScheduledRunInboxBridge", () => {
     expect(order).toEqual(["flush", "ack"]);
   });
 
-  it("files a run handed over twice once", async () => {
-    takeInbox.mockResolvedValue([item("run-1")]);
-    const first = renderHook(() => useScheduledRunInboxBridge(true));
-    await vi.waitFor(() => expect(ackInbox).toHaveBeenCalledTimes(1));
-    first.unmount();
-
+  it("leaves a run storage didn't take with main, for another try", async () => {
+    storage.withhold.add(scheduledRunInboxEntryId("run-2"));
+    takeInbox.mockResolvedValue(take([item("run-1"), item("run-2")]));
     renderHook(() => useScheduledRunInboxBridge(true));
+
+    await vi.waitFor(() => expect(ackInbox).toHaveBeenCalled());
+    expect(ackInbox).toHaveBeenCalledExactlyOnceWith({ runIds: ["run-1"] });
+
+    storage.withhold.clear();
+    takeInbox.mockResolvedValue(take([item("run-2")]));
+    act(() => reveal?.());
     await vi.waitFor(() => expect(ackInbox).toHaveBeenCalledTimes(2));
-    expect(entryIds()).toEqual([scheduledRunInboxEntryId("run-1")]);
+    expect(ackInbox).toHaveBeenLastCalledWith({ runIds: ["run-2"] });
+    expect(entryIds().filter((id) => id === scheduledRunInboxEntryId("run-2"))).toHaveLength(1);
+  });
+
+  it("asks again when shown, and when another view's hold lapses", async () => {
+    vi.useFakeTimers();
+    // Only timers this test moves: vi.waitFor would advance them as it polls.
+    const settle = () =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+    const { unmount } = renderHook(() => useScheduledRunInboxBridge(true));
+    await settle();
+    expect(takeInbox).toHaveBeenCalledTimes(1);
+
+    takeInbox.mockResolvedValueOnce(take([], 5_000));
+    act(() => reveal?.());
+    await settle();
+    expect(takeInbox).toHaveBeenCalledTimes(2);
+
+    takeInbox.mockResolvedValueOnce(take([item("run-1")]));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_999);
+    });
+    expect(takeInbox).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    await settle();
+    expect(ackInbox).toHaveBeenCalledWith({ runIds: ["run-1"] });
+
+    unmount();
+    expect(offRevealed).toHaveBeenCalled();
+  });
+
+  it("asks once at a time, and once more for a request that came meanwhile", async () => {
+    let hand!: (value: ScheduledRunInboxTake) => void;
+    takeInbox.mockReturnValueOnce(new Promise((resolve) => (hand = resolve)));
+    renderHook(() => useScheduledRunInboxBridge(true));
+    act(() => {
+      reveal?.();
+      reveal?.();
+    });
+    expect(takeInbox).toHaveBeenCalledTimes(1);
+
+    hand(take([]));
+    await vi.waitFor(() => expect(takeInbox).toHaveBeenCalledTimes(2));
   });
 
   it("leaves the runs with main when the view goes before they arrive", async () => {
-    let hand!: (items: ScheduledRunInboxItem[]) => void;
+    let hand!: (value: ScheduledRunInboxTake) => void;
     takeInbox.mockReturnValue(new Promise((resolve) => (hand = resolve)));
     const { unmount } = renderHook(() => useScheduledRunInboxBridge(true));
     unmount();
-    hand([item("run-1")]);
+    hand(take([item("run-1")]));
     await Promise.resolve();
     await Promise.resolve();
 
@@ -114,14 +197,18 @@ describe("useScheduledRunInboxBridge", () => {
     expect(ackInbox).not.toHaveBeenCalled();
   });
 
-  it("acks nothing when it couldn't take the runs, and takes none in a remote host's window", async () => {
+  it("takes none outside a local project's view, and acks nothing when it couldn't take them", async () => {
+    project.current = null;
+    renderHook(() => useScheduledRunInboxBridge(true));
+    remote.value = true;
+    project.current = { id: "project-1" };
+    renderHook(() => useScheduledRunInboxBridge(true));
+    expect(takeInbox).not.toHaveBeenCalled();
+
+    remote.value = false;
     takeInbox.mockRejectedValueOnce(new Error("main gone"));
     renderHook(() => useScheduledRunInboxBridge(true));
     await vi.waitFor(() => expect(takeInbox).toHaveBeenCalledTimes(1));
     expect(ackInbox).not.toHaveBeenCalled();
-
-    remote.value = true;
-    renderHook(() => useScheduledRunInboxBridge(true));
-    expect(takeInbox).toHaveBeenCalledTimes(1);
   });
 });

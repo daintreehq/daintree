@@ -29,6 +29,16 @@ export interface ScheduledRunInboxItem {
   schedule: { name: string; timeZone: string } | null;
 }
 
+/** What `window.electron.scheduledRuns.takeInbox` hands a view. */
+export interface ScheduledRunInboxTake {
+  items: ScheduledRunInboxItem[];
+  /**
+   * When another live view holds runs still waiting, how long until its hold
+   * lapses and asking again may get them; null when none is held elsewhere.
+   */
+  retryInMs: number | null;
+}
+
 /** `window.electron.scheduledRuns.ackInbox`: these runs are in the inbox now. */
 export interface ScheduledRunsAckInboxPayload {
   runIds: string[];

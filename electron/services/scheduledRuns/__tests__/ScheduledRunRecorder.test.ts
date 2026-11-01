@@ -1014,6 +1014,9 @@ describe("ScheduledRunRecorder", () => {
   describe("runs that settle with no window open (#15983)", () => {
     const pendingIds = (recorder: ScheduledRunRecorder) =>
       recorder.listInboxPending().map((run) => run.id);
+    // The table itself: the list joins its runs, so it can't see a wait left behind.
+    const inboxRows = () =>
+      sqlite.prepare("SELECT COUNT(*) FROM scheduled_run_inbox").pluck().get() as number;
 
     it("waits for the inbox from the settlement's own write", () => {
       // Read through another connection the moment the run is said to have
@@ -1151,8 +1154,10 @@ describe("ScheduledRunRecorder", () => {
       const recorder = lifetime();
       recorder.registerLaunch(launch());
       recorder.settle("run-1", { kind: "cancel" });
+      expect(inboxRows()).toBe(1);
       recorder.deleteForSchedule("schedule-1");
-      expect(pendingIds(recorder)).toEqual([]);
+      expect(inboxRows()).toBe(0);
+      expect(hasInboxPendingRun(sqlite)).toBe(false);
 
       for (let i = 0; i <= SCHEDULED_RUN_HISTORY_LIMIT; i++) {
         now = T0 + i;
@@ -1168,6 +1173,124 @@ describe("ScheduledRunRecorder", () => {
       const waiting = pendingIds(recorder);
       expect(waiting).toHaveLength(SCHEDULED_RUN_HISTORY_LIMIT);
       expect(waiting).not.toContain("refused-0");
+      expect(inboxRows()).toBe(SCHEDULED_RUN_HISTORY_LIMIT);
+
+      // A project's removal deletes its runs by SQL of its own, as ProjectStore does.
+      sqlite.prepare("DELETE FROM scheduled_runs WHERE project_id = ?").run("project-1");
+      expect(inboxRows()).toBe(0);
+    });
+
+    it("waits on nothing while Daintree quits, or while the overlap policy holds a run", () => {
+      windowOpen = false;
+      const recorder = lifetime();
+      recorder.registerLaunch(launch());
+      recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT });
+      recorder.registerLaunch(launch({ id: "run-2", terminalId: "terminal-2" }));
+      recorder.handleSpawnResult("terminal-2", { success: true, spawnedAt: SPAWNED_AT });
+
+      shuttingDown = true;
+      recorder.handleExit({ terminalId: "terminal-1", spawnedAt: SPAWNED_AT, exitCode: 0 });
+      shuttingDown = false;
+      const replacement = recorder.beginReplacement("run-2");
+      recorder.handleExit({ terminalId: "terminal-2", spawnedAt: SPAWNED_AT, exitCode: 0 });
+      expect(pendingIds(recorder)).toEqual([]);
+
+      replacement?.finish("run-3");
+      expect(pendingIds(recorder)).toEqual(["run-2"]);
+    });
+
+    it("never waits again on a run the next startup finds settled with its process running", () => {
+      windowOpen = false;
+      const recorder = lifetime();
+      recorder.registerLaunch(launch());
+      recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT });
+      recorder.settle("run-1", { kind: "cancel" });
+      recorder.clearInboxPending(["run-1"]);
+      expect(recorder.get("run-1")?.process.pty.state).toBe("running");
+
+      sqlite.close();
+      sqlite = openDb(dbPath, migrationsFolder).sqlite;
+      const next = lifetime();
+      next.reconcileInterrupted();
+      expect(next.get("run-1")?.process.pty.state).toBe("exited");
+      expect(pendingIds(next)).toEqual([]);
+    });
+
+    describe("commits the wait and the settlement together or neither", () => {
+      function recorderOver(store: ScheduledRunStore): ScheduledRunRecorder {
+        return new ScheduledRunRecorder({
+          store,
+          now: () => now,
+          hasOpenWindow: () => windowOpen,
+          onRunEnded: (payload) => emitted.push({ name: "scheduled-run:ended", payload }),
+          logWarn: () => {},
+        });
+      }
+
+      it("leaves the run open when its wait can't be written", () => {
+        const store = new ScheduledRunStore(sqlite);
+        const recorder = recorderOver(store);
+        recorder.registerLaunch(launch());
+        windowOpen = false;
+        vi.spyOn(store, "markInboxPending").mockImplementation(() => {
+          throw new Error("disk full");
+        });
+
+        expect(recorder.settle("run-1", { kind: "cancel" })).toBeNull();
+        expect(recorder.get("run-1")?.settlement).toEqual({ state: "open" });
+        expect(emitted).toEqual([]);
+      });
+
+      it("takes the wait back when the settlement's write fails after it", () => {
+        const store = new ScheduledRunStore(sqlite);
+        const recorder = recorderOver(store);
+        recorder.registerLaunch(launch());
+        windowOpen = false;
+        vi.spyOn(store, "prune").mockImplementation(() => {
+          throw new Error("disk full");
+        });
+
+        expect(recorder.settle("run-1", { kind: "cancel" })).toBeNull();
+        expect(recorder.get("run-1")?.settlement).toEqual({ state: "open" });
+        expect(inboxRows()).toBe(0);
+      });
+
+      it("records no refused launch whose wait can't be written", () => {
+        const store = new ScheduledRunStore(sqlite);
+        const recorder = recorderOver(store);
+        windowOpen = false;
+        vi.spyOn(store, "markInboxPending").mockImplementation(() => {
+          throw new Error("disk full");
+        });
+
+        expect(() =>
+          recorder.registerRefusedLaunch({
+            id: "refused",
+            scheduleId: "schedule-1",
+            projectId: "project-1",
+            origin: launch().origin,
+            terminalId: null,
+            message: "The project's folder is missing.",
+          })
+        ).toThrow(/disk full/);
+        expect(recorder.get("refused")).toBeNull();
+      });
+
+      it("leaves every run open when startup can't write their waits", () => {
+        lifetime().registerLaunch(launch());
+        sqlite.close();
+        sqlite = openDb(dbPath, migrationsFolder).sqlite;
+        windowOpen = false;
+        const store = new ScheduledRunStore(sqlite);
+        const recorder = recorderOver(store);
+        vi.spyOn(store, "markInboxPending").mockImplementation(() => {
+          throw new Error("disk full");
+        });
+
+        expect(() => recorder.reconcileInterrupted()).toThrow(/disk full/);
+        expect(recorder.get("run-1")?.settlement).toEqual({ state: "open" });
+        expect(emitted.filter((e) => e.name === "scheduled-run:ended")).toEqual([]);
+      });
     });
 
     it("settles the run, unwaited, when it can't tell whether a window is open", () => {

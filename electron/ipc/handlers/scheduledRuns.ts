@@ -2,7 +2,7 @@ import { webContents } from "electron";
 import { z } from "zod";
 import type { ScheduledRun } from "../../../shared/types/scheduledRuns.js";
 import type {
-  ScheduledRunInboxItem,
+  ScheduledRunInboxTake,
   ScheduledRunsAckInboxPayload,
   ScheduledRunsListByProjectPayload,
   ScheduledRunsListBySchedulePayload,
@@ -13,6 +13,7 @@ import {
   getScheduledRunRecorderForInbox,
 } from "../../services/scheduledRuns/index.js";
 import { ScheduledRunInbox } from "../../services/scheduledRuns/ScheduledRunInbox.js";
+import { getShownAppWebContents } from "../../window/webContentsRegistry.js";
 import { defineIpcNamespace, op, opValidated } from "../define.js";
 import type { IpcContext } from "../types.js";
 import { SCHEDULED_RUNS_METHOD_CHANNELS } from "./scheduledRuns.preload.js";
@@ -35,6 +36,7 @@ function getInbox(): ScheduledRunInbox {
       const contents = webContents.fromId(id);
       return contents !== undefined && !contents.isDestroyed();
     },
+    isShown: (id) => getShownAppWebContents().some((contents) => contents.id === id),
   });
   return inbox;
 }
@@ -76,7 +78,7 @@ export const scheduledRunsNamespace = defineIpcNamespace({
     // loads, puts them in its notification inbox, then says so.
     takeInbox: op(
       SCHEDULED_RUNS_METHOD_CHANNELS.takeInbox,
-      async (ctx: IpcContext): Promise<ScheduledRunInboxItem[]> => {
+      async (ctx: IpcContext): Promise<ScheduledRunInboxTake> => {
         requireLocalView(ctx);
         return getInbox().take(ctx.webContentsId);
       },

@@ -6,8 +6,12 @@ import { formatRunInstant } from "../scheduleWords";
 import { scheduledRunInboxEntry, scheduledRunInboxEntryId } from "../scheduledRunInboxEntry";
 
 const NOW = Date.UTC(2026, 10, 1, 9);
-const STARTED = Date.UTC(2026, 10, 1, 2);
-const SETTLED = STARTED + 20 * 60_000;
+// Each instant apart, so the entry can only say the one it means.
+const DUE = Date.UTC(2026, 10, 1, 2);
+const CREATED = DUE + 5_000;
+const SPAWNED = DUE + 9 * 60_000;
+const STARTED = DUE + 13 * 60_000;
+const SETTLED = DUE + 40 * 60_000;
 const ZONE = "Asia/Tokyo";
 
 const DONE: ScheduledRun = {
@@ -16,13 +20,13 @@ const DONE: ScheduledRun = {
   projectId: "project-1",
   origin: {
     trigger: "scheduled",
-    dueAt: STARTED,
-    occurrenceKey: new Date(STARTED).toISOString(),
+    dueAt: DUE,
+    occurrenceKey: new Date(DUE).toISOString(),
     coalesced: null,
   },
-  createdAt: STARTED,
+  createdAt: CREATED,
   terminalId: "terminal-1",
-  terminalSpawnedAt: STARTED,
+  terminalSpawnedAt: SPAWNED,
   settlement: {
     state: "settled",
     settledAt: SETTLED,
@@ -107,7 +111,7 @@ describe("scheduledRunInboxEntry", () => {
     expect(entry?.type).toBe("error");
     expect(entry?.context).toEqual({ projectId: "project-1", eventKind: "agent" });
     expect(entry?.message).toContain("Failed to launch");
-    expect(entry?.message).toContain(`due ${formatRunInstant(STARTED, ZONE, NOW)}`);
+    expect(entry?.message).toContain(`due ${formatRunInstant(DUE, ZONE, NOW)}`);
     expect(entry?.message).toContain("The worktree is gone");
   });
 
@@ -116,6 +120,17 @@ describe("scheduledRunInboxEntry", () => {
     expect(entry?.title).toBe("Scheduled run");
     expect(entry?.actions).toBeUndefined();
     expect(entry?.message).toContain(formatRunInstant(STARTED, machineTimeZone(), NOW));
+  });
+
+  it("says when a run with no start and no due time was tried", () => {
+    const tried: ScheduledRun = {
+      ...REFUSED,
+      origin: { trigger: "run-now", dueAt: null, occurrenceKey: null, coalesced: null },
+    };
+    const message = scheduledRunInboxEntry({ run: tried, schedule }, NOW)?.message ?? "";
+    expect(message).toContain(formatRunInstant(CREATED, ZONE, NOW));
+    expect(message).not.toContain("due ");
+    expect(message).not.toContain("started ");
   });
 
   it("files nothing for a run that hasn't settled", () => {

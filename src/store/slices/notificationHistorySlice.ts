@@ -4,7 +4,11 @@ import type { ActionId } from "@shared/types/actions";
 import type { NotificationActionVariant } from "@/store/notificationStore";
 import type { NotificationEventKind } from "@/lib/notify";
 import type { NotificationPluginSource } from "@shared/types/ipc/maps";
-import { createDebouncedSafeJSONStorage } from "@/store/persistence/safeStorage";
+import {
+  createDebouncedSafeJSONStorage,
+  readLocalStorageItemSafely,
+  safeJSONParse,
+} from "@/store/persistence/safeStorage";
 import {
   mergeRecordByWriterDelta,
   pickFieldByWriterDelta,
@@ -339,7 +343,10 @@ function mergeEntryFields(
  * snapshot used to replace entries a sibling added, and revert rows it read,
  * archived or dismissed. Per entry id:
  *
- *   - added by this writer (absent from its baseline) → its entry is written.
+ *   - added by this writer (absent from its baseline) → its entry is written,
+ *     unless the disk already holds that id: an entry imported under its
+ *     source's id (#15983) can be filed by two views, and the disk's copy
+ *     keeps any read or archive a sibling gave it.
  *   - held by the writer and the disk → merged field by field.
  *   - known to the writer but gone from disk → stays gone, even if the writer
  *     edited it since: a sibling dismissed, cleared or pruned it, and a stale
@@ -371,11 +378,11 @@ function mergeNotificationHistoryPersistedWrite({
   const merged: NotificationHistoryEntry[] = [];
   for (const [id, entry] of inc.entries) {
     const before = base.entries.get(id);
+    const current = disk.entries.get(id);
     if (before === undefined) {
-      merged.push(entry);
+      merged.push(current !== undefined ? mergeEntryFields(entry, entry, current) : entry);
       continue;
     }
-    const current = disk.entries.get(id);
     if (current !== undefined) merged.push(mergeEntryFields(before, entry, current));
   }
   for (const [id, entry] of disk.entries) {
@@ -510,6 +517,31 @@ const notificationHistoryStorage = createDebouncedSafeJSONStorage<unknown>(300, 
  */
 export function flushNotificationHistory(): void {
   notificationHistoryStorage.flush(NOTIFICATION_HISTORY_STORAGE_KEY);
+}
+
+/**
+ * The entry ids the inbox's storage holds, read back from it: what survives a
+ * reload, which a write that hit the quota, fell back to memory or was cut by
+ * the entry cap doesn't reach.
+ */
+export function notificationHistoryIdsInStorage(): Set<string> {
+  const value = safeJSONParse<unknown>(
+    readLocalStorageItemSafely(NOTIFICATION_HISTORY_STORAGE_KEY),
+    { store: "notificationHistoryStore", key: NOTIFICATION_HISTORY_STORAGE_KEY },
+    null
+  );
+  const entries: unknown = fieldOf(fieldOf(value, "state"), "entries");
+  const ids = new Set<string>();
+  if (!Array.isArray(entries)) return ids;
+  for (const entry of entries) {
+    const id: unknown = fieldOf(entry, "id");
+    if (typeof id === "string") ids.add(id);
+  }
+  return ids;
+}
+
+function fieldOf(value: unknown, key: string): unknown {
+  return value !== null && typeof value === "object" ? Reflect.get(value, key) : undefined;
 }
 
 export const useNotificationHistoryStore = create<NotificationHistoryState>()(

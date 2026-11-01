@@ -29,6 +29,11 @@ vi.mock("../../../services/scheduledRuns/index.js", () => ({
   getScheduledRunRecorderForInbox: getInboxRecorder,
 }));
 
+vi.mock(import("../../../window/webContentsRegistry.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  getShownAppWebContents: () => [{ id: 1 }, { id: 2 }] as unknown as Electron.WebContents[],
+}));
+
 vi.mock("../../../services/ProjectStore.js", () => ({
   projectStore: { schedules: { get: getSchedule } },
 }));
@@ -78,15 +83,25 @@ describe("scheduledRuns handlers", () => {
     ]);
     getSchedule.mockResolvedValue({ name: "Nightly", cadence: { timeZone: "Europe/London" } });
 
-    await expect(invoke(CHANNELS.SCHEDULED_RUNS_TAKE_INBOX)).resolves.toEqual([
-      {
-        run: { id: "run-1", projectId: "project-1", scheduleId: "schedule-1" },
-        schedule: { name: "Nightly", timeZone: "Europe/London" },
-      },
-    ]);
+    await expect(invoke(CHANNELS.SCHEDULED_RUNS_TAKE_INBOX)).resolves.toEqual({
+      items: [
+        {
+          run: { id: "run-1", projectId: "project-1", scheduleId: "schedule-1" },
+          schedule: { name: "Nightly", timeZone: "Europe/London" },
+        },
+      ],
+      retryInMs: null,
+    });
     expect(getSchedule).toHaveBeenCalledWith("project-1", "schedule-1");
     // Another view asking while the first holds them gets none.
-    await expect(invoke(CHANNELS.SCHEDULED_RUNS_TAKE_INBOX, undefined, 2)).resolves.toEqual([]);
+    await expect(invoke(CHANNELS.SCHEDULED_RUNS_TAKE_INBOX, undefined, 2)).resolves.toMatchObject({
+      items: [],
+    });
+    // Nor does a view no window has on screen.
+    await expect(invoke(CHANNELS.SCHEDULED_RUNS_TAKE_INBOX, undefined, 3)).resolves.toEqual({
+      items: [],
+      retryInMs: null,
+    });
 
     await invoke(CHANNELS.SCHEDULED_RUNS_ACK_INBOX, { runIds: ["run-1"] });
     expect(recorderMock.clearInboxPending).toHaveBeenCalledWith(["run-1"]);
@@ -101,7 +116,10 @@ describe("scheduledRuns handlers", () => {
 
   it("hands nothing over when no run is waiting", async () => {
     getInboxRecorder.mockResolvedValue(null);
-    await expect(invoke(CHANNELS.SCHEDULED_RUNS_TAKE_INBOX)).resolves.toEqual([]);
+    await expect(invoke(CHANNELS.SCHEDULED_RUNS_TAKE_INBOX)).resolves.toEqual({
+      items: [],
+      retryInMs: null,
+    });
   });
 
   it("lists a project's runs and a schedule's runs", async () => {
