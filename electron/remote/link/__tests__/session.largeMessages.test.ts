@@ -1,9 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type net from "node:net";
-import { FrameDecoder, Lane, type LinkFrame } from "../frames.js";
-import { ControlKind, InteractiveKind } from "../messages.js";
+import { FrameDecoder, Lane, encodeFrame, type LinkFrame } from "../frames.js";
+import { FRAGMENT_MORE, MESSAGE_FRAGMENT_BYTES, MessageAssembler } from "../messageFragments.js";
+import {
+  ControlKind,
+  EventKind,
+  InteractiveKind,
+  RpcKind,
+  frameToMessage,
+  type LinkMessage,
+} from "../messages.js";
 import { LinkSession } from "../session.js";
-import { makeTempDir, removeTempDir, socketPair, waitFor } from "./linkTestUtils.js";
+import {
+  closedPromise,
+  heldWritesSocket,
+  makeTempDir,
+  removeTempDir,
+  socketPair,
+  waitFor,
+} from "./linkTestUtils.js";
 
 let dir: string;
 const sessions: LinkSession[] = [];
@@ -109,5 +124,151 @@ describe("LinkSession large messages (#15892)", () => {
     expect(echoAt).toBeGreaterThanOrEqual(0);
     expect(pingAt).toBeLessThan(resultEndsAt);
     expect(echoAt).toBeLessThan(resultEndsAt);
+  });
+});
+
+/** Every message in what a stream took, reassembled the way a peer would. */
+function messagesIn(written: Buffer[]): LinkMessage[] {
+  const decoder = new FrameDecoder();
+  const assembler = new MessageAssembler(16 * 1024 * 1024);
+  const messages: LinkMessage[] = [];
+  for (const chunk of written) {
+    for (const frame of decoder.push(chunk)) {
+      const whole = assembler.push(frame);
+      if (whole) messages.push(frameToMessage(whole));
+    }
+  }
+  return messages;
+}
+
+function callsIn(written: Buffer[]): Array<{ method: string; payload: unknown }> {
+  return messagesIn(written).flatMap((m) =>
+    m.lane === Lane.RPC && m.kind === RpcKind.CALL
+      ? [{ method: m.body.method, payload: m.body.payload }]
+      : []
+  );
+}
+
+/** A client session over a stream that takes one frame at a time when the test says. */
+function heldSession(options: { peerReadsFragments: boolean }) {
+  const held = heldWritesSocket();
+  const session = new LinkSession(held.socket, {
+    role: "client",
+    pingIntervalMs: 0,
+    idleTimeoutMs: 0,
+  });
+  sessions.push(session);
+  session.open(options);
+  /** Let every write through until the session has nothing left to write. */
+  const drain = async () => {
+    for (;;) {
+      await new Promise((resolve) => setImmediate(resolve));
+      if (!held.release()) {
+        await new Promise((resolve) => setImmediate(resolve));
+        if (!held.release()) return;
+      }
+    }
+  };
+  return { session, held, drain };
+}
+
+describe("LinkSession large messages and their requests (#15892)", () => {
+  it("lets a small answer overtake a large one already being written", async () => {
+    const { host, client, a, b } = await stalledPair();
+    let smallAnswered = false;
+    host.setInvokeHandler(async (msg) => {
+      // Answered once the large answer is already being written.
+      if (msg.channel === "small") {
+        await waitFor(() => a.writableNeedDrain);
+        smallAnswered = true;
+      }
+      return { __daintreeIpcEnvelope: true, ok: true, data: msg.channel === "big" ? BIG : 1 };
+    });
+    const settled: string[] = [];
+    const big = client.invoke("e1", "big", []).then(() => settled.push("big"));
+    const small = client.invoke("e1", "small", []).then(() => settled.push("small"));
+    await waitFor(() => smallAnswered);
+    await new Promise((r) => setTimeout(r, 20));
+    b.resume();
+    await Promise.all([big, small]);
+    expect(settled).toEqual(["small", "big"]);
+  });
+
+  it("never sends any of a large request that settled before its first fragment went", async () => {
+    const { session, held, drain } = heldSession({ peerReadsFragments: true });
+    session.post({
+      lane: Lane.EVENTS,
+      kind: EventKind.EVENT,
+      body: { endpointId: null, channel: "fill", args: [BIG] },
+    });
+    await waitFor(() => held.written.length === 1);
+    const late = session.call("late", BIG, { timeoutMs: 20 });
+    await expect(late).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
+    session.call("kept", null).catch(() => {});
+    await drain();
+    expect(callsIn(held.written).map((c) => c.method)).toEqual(["kept"]);
+  });
+
+  it("sends all of a large request once its first fragment went, though it settled meanwhile", async () => {
+    const { session, held, drain } = heldSession({ peerReadsFragments: true });
+    const ac = new AbortController();
+    const taken = session.call("taken", BIG, { signal: ac.signal });
+    await waitFor(() => held.written.length === 1);
+    ac.abort();
+    await expect(taken).rejects.toMatchObject({
+      code: "OUTCOME_UNKNOWN",
+      message: expect.stringMatching(/after it was sent/),
+    });
+    await drain();
+    expect(callsIn(held.written)).toEqual([{ method: "taken", payload: BIG }]);
+  });
+
+  it("writes a large message whole to a peer that never offered fragments", async () => {
+    const { session, held, drain } = heldSession({ peerReadsFragments: false });
+    session.post({
+      lane: Lane.EVENTS,
+      kind: EventKind.EVENT,
+      body: { endpointId: null, channel: "big", args: [BIG] },
+    });
+    await drain();
+    const frames = held.written.flatMap((chunk) => new FrameDecoder().push(chunk));
+    expect(frames).toHaveLength(1);
+    expect(frames[0]!.streamId).toBe(0);
+    expect(frameToMessage(frames[0]!).body).toMatchObject({ channel: "big", args: [BIG] });
+  });
+
+  it("ends the session on the first fragment of a message it can't read, before holding the rest", async () => {
+    const { a, b } = await socketPair(dir);
+    sockets.push(a, b);
+    const session = new LinkSession(a, { role: "host", pingIntervalMs: 0, idleTimeoutMs: 0 });
+    sessions.push(session);
+    session.open({ peerReadsFragments: true });
+    const closed = closedPromise(session);
+    b.write(
+      encodeFrame({
+        lane: Lane.RPC,
+        kind: 99 | FRAGMENT_MORE,
+        streamId: 1,
+        payload: new Uint8Array(MESSAGE_FRAGMENT_BYTES),
+      })
+    );
+    expect((await closed).reason).toMatch(/unknown message 1\/99/);
+  });
+
+  it("takes no fragments before the handshake", async () => {
+    const { a, b } = await socketPair(dir);
+    sockets.push(a, b);
+    const session = new LinkSession(a, { role: "host", pingIntervalMs: 0, idleTimeoutMs: 0 });
+    sessions.push(session);
+    const closed = closedPromise(session);
+    b.write(
+      encodeFrame({
+        lane: Lane.CONTROL,
+        kind: ControlKind.HELLO | FRAGMENT_MORE,
+        streamId: 1,
+        payload: new Uint8Array(16),
+      })
+    );
+    expect((await closed).reason).toMatch(/before handshake/);
   });
 });

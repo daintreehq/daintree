@@ -13,6 +13,7 @@ import {
   type LinkTransport,
 } from "../transport.js";
 import { FrameDecoder, Lane, encodeFrame, type LinkFrame } from "../../link/frames.js";
+import { fragmentFrame } from "../../link/messageFragments.js";
 import {
   ControlKind,
   EventKind,
@@ -669,6 +670,93 @@ describe("LinkClient session start", () => {
       await removeTempDir(dir);
     }
   });
+});
+
+describe("LinkClient message fragments (#15892)", () => {
+  const BIG = "f".repeat(200_000);
+
+  it.each([
+    ["a host that offers them", true],
+    ["an older host that doesn't", false],
+  ])(
+    "offers them in its HELLO, reads them behind WELCOME, and sends them only to %s",
+    async (_name, hostOffers) => {
+      const dir = await makeTempDir();
+      const socketPath = path.join(dir, "f.sock");
+      const received: LinkFrame[] = [];
+      let helloOffered: unknown;
+      const server = net.createServer((socket) => {
+        const decoder = new FrameDecoder();
+        socket.on("data", (chunk: Buffer) => {
+          for (const frame of decoder.push(chunk)) {
+            received.push(frame);
+            if (frame.lane !== Lane.CONTROL || frame.kind !== ControlKind.HELLO) continue;
+            helloOffered = (frameToMessage(frame).body as { messageFragments?: unknown })
+              .messageFragments;
+            const welcome = messageToFrame({
+              lane: Lane.CONTROL,
+              kind: ControlKind.WELCOME,
+              body: {
+                handshake: TEST_HANDSHAKE,
+                hostName: "h",
+                sessionId: "s1",
+                resumed: false,
+                ...(hostOffers ? { messageFragments: true } : {}),
+              },
+            });
+            const event = messageToFrame({
+              lane: Lane.EVENTS,
+              kind: EventKind.EVENT,
+              body: { endpointId: null, channel: "x:big", args: [BIG] },
+            });
+            // One write, so the client reads the fragments in the same chunk as WELCOME.
+            socket.write(
+              Buffer.concat(
+                [welcome, ...fragmentFrame(event, 1)].map((f) => Buffer.from(encodeFrame(f)))
+              )
+            );
+          }
+        });
+      });
+      await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+      try {
+        const events: unknown[] = [];
+        client = new LinkClient({
+          transport: createDirectTransport({ socketPath, token: "t" }),
+          handshake: TEST_HANDSHAKE,
+          client: { clientId: "c", clientName: "n", platform: "linux" },
+          session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+        });
+        client.onSession(({ session }) => {
+          session.on(Lane.EVENTS, EventKind.EVENT, (body) => events.push(body));
+          session.post({
+            lane: Lane.EVENTS,
+            kind: EventKind.EVENT,
+            body: { endpointId: null, channel: "x:reply", args: [BIG] },
+          });
+        });
+        client.start();
+        await waitFor(() => events.length > 0);
+        expect(helloOffered).toBe(true);
+        expect(events).toEqual([{ endpointId: null, channel: "x:big", args: [BIG] }]);
+
+        const ended = (f: LinkFrame) => f.lane === Lane.EVENTS && f.kind === EventKind.EVENT;
+        await waitFor(() => received.some(ended));
+        const sent = received.filter((f) => f.lane === Lane.EVENTS);
+        if (hostOffers) {
+          expect(sent.length).toBeGreaterThan(1);
+          expect(sent.every((f) => f.streamId !== 0)).toBe(true);
+        } else {
+          expect(sent).toHaveLength(1);
+          expect(frameToMessage(sent[0]!).body).toMatchObject({ channel: "x:reply" });
+        }
+      } finally {
+        await client?.stop();
+        server.close();
+        await removeTempDir(dir);
+      }
+    }
+  );
 });
 
 describe("LinkClient stop", () => {

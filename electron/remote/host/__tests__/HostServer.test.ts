@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodeFrame, FrameDecoder, Lane, type LinkFrame } from "../../link/frames.js";
 import {
   ControlKind,
+  EventKind,
   frameToMessage,
   messageToFrame,
   type LinkMessage,
@@ -382,6 +383,61 @@ describe("HostServer authentication", () => {
     const env = await client.session!.invoke("e1", "project:get-all", []);
     expect(env).toEqual({ __daintreeIpcEnvelope: true, ok: true, data: "project:get-all" });
   });
+
+  it.each([
+    ["a Shell that offers them", true],
+    ["an older Shell that doesn't", false],
+  ])(
+    "offers message fragments in its WELCOME and sends them only to %s (#15892)",
+    async (_name, shellOffers) => {
+      const server = await startServer();
+      const seen: HostSessionContext[] = [];
+      server.onSession((ctx) => seen.push(ctx));
+      const raw = await rawConnect();
+      raw.socket.write(
+        encodeFrame(
+          messageToFrame({
+            lane: Lane.CONTROL,
+            kind: ControlKind.HELLO,
+            body: {
+              handshake: TEST_HANDSHAKE,
+              token: server.token,
+              client: { clientId: "c-frag", clientName: "n", platform: "linux" },
+              resumeSessionId: null,
+              ...(shellOffers ? { messageFragments: true } : {}),
+            },
+          })
+        )
+      );
+      await waitFor(() =>
+        raw.frames.some((f) => f.lane === Lane.CONTROL && f.kind === ControlKind.WELCOME)
+      );
+      expect(seen).toHaveLength(1);
+      const welcome = raw.frames
+        .map((frame) => frameToMessage(frame))
+        .find((m) => m.kind === ControlKind.WELCOME)!;
+      expect(welcome.body).toMatchObject({ messageFragments: true });
+
+      const big = "r".repeat(200_000);
+      seen[0]!.session.post({
+        lane: Lane.EVENTS,
+        kind: EventKind.EVENT,
+        body: { endpointId: null, channel: "x:big", args: [big] },
+      });
+      await waitFor(() =>
+        raw.frames.some((f) => f.lane === Lane.EVENTS && f.kind === EventKind.EVENT)
+      );
+      const events = raw.frames.filter((f) => f.lane === Lane.EVENTS);
+      if (shellOffers) {
+        expect(events.length).toBeGreaterThan(1);
+        expect(events.every((f) => f.streamId !== 0)).toBe(true);
+      } else {
+        expect(events).toHaveLength(1);
+        expect(frameToMessage(events[0]!).body).toMatchObject({ args: [big] });
+      }
+      raw.socket.destroy();
+    }
+  );
 
   it("logs a Shell retrying into the same refusal once, and again after it gets a session", async () => {
     const server = await startServer();

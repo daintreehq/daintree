@@ -5,8 +5,9 @@
  *   u32 bodyLength | u8 lane | u8 kind | u32 streamId | payload (bodyLength - 6)
  *
  * `bodyLength` counts everything after itself. `streamId` scopes a frame to a
- * logical stream within its lane (a terminal, a transfer, an RPC request); it is
- * 0 when unused. `kind` is lane-specific and opaque to the framing layer.
+ * logical stream within its lane (a transfer, or the message a fragment belongs
+ * to: see messageFragments.ts); it is 0 when unused. `kind` is lane-specific and
+ * opaque to the framing layer.
  */
 
 export const Lane = {

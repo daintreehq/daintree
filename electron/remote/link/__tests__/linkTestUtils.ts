@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { Duplex } from "node:stream";
 import type { HostHandshakeInfo } from "../../../../shared/types/remoteHosts.js";
 import { LinkSession, type LinkSessionOptions } from "../session.js";
 
@@ -157,6 +158,40 @@ export async function openSessionPair(
   host.open({ peerReadsFragments: true });
   client.open({ peerReadsFragments: true });
   return { host, client };
+}
+
+/**
+ * A stream whose every write waits for the test to let it through, so a
+ * session writes one frame and then waits for drain: what it writes next
+ * shows its scheduling, with no socket buffer in the way.
+ */
+export function heldWritesSocket(): {
+  socket: Duplex;
+  /** Every chunk the stream has taken, released or not. */
+  written: Buffer[];
+  /** Let the write in progress complete; false when none is held. */
+  release: () => boolean;
+} {
+  let held: (() => void) | null = null;
+  const written: Buffer[] = [];
+  const socket = new Duplex({
+    writableHighWaterMark: 1,
+    read() {},
+    write(chunk: Buffer, _encoding, callback) {
+      written.push(chunk);
+      held = callback;
+    },
+  });
+  return {
+    socket,
+    written,
+    release: () => {
+      const callback = held;
+      held = null;
+      callback?.();
+      return callback !== null;
+    },
+  };
 }
 
 export async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {

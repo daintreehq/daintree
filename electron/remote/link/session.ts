@@ -33,6 +33,7 @@ import {
 } from "./scheduler.js";
 import {
   FRAGMENT_MORE,
+  MESSAGE_FRAGMENT_BYTES,
   MessageAssembler,
   MessageIds,
   fragmentFrame,
@@ -598,7 +599,9 @@ export class LinkSession {
     // everything else anyway, and a fragment queued apart from its own lane
     // could begin a second partial message there.
     const frames =
-      this.fragmentOutbound && queue !== Lane.CONTROL
+      this.fragmentOutbound &&
+      queue !== Lane.CONTROL &&
+      frame.payload.byteLength > MESSAGE_FRAGMENT_BYTES
         ? fragmentFrame(frame, this.messageIds.take())
         : [frame];
     const result = this.scheduler.enqueueMessage(
