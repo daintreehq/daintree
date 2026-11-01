@@ -74,7 +74,14 @@ describe("sanitizeDecisionsSettings", () => {
   });
 
   it("drops a malformed id and turns Decisions off, keeping the other ids", () => {
-    for (const bad of ["short", "x".repeat(65), "has space1", "dot.ted.id", "slash/id1", 12345678]) {
+    for (const bad of [
+      "short",
+      "x".repeat(65),
+      "has space1",
+      "dot.ted.id",
+      "slash/id1",
+      12345678,
+    ]) {
       const settings = sanitizeDecisionsSettings({ ...connected, deviceId: bad });
       expect(settings, String(bad)).toEqual({ ...connected, enabled: false, deviceId: null });
     }
@@ -153,7 +160,10 @@ describe("readDecisionsSettings and writeDecisionsSettings", () => {
   });
 
   it("writes the whole setting in one set, sanitised, and returns what it stored", () => {
-    const { store, writes, current } = memoryStore({ ...connected, claimSecret: "claim-7f3a9c1e5b" });
+    const { store, writes, current } = memoryStore({
+      ...connected,
+      claimSecret: "claim-7f3a9c1e5b",
+    });
     const next = {
       ...readDecisionsSettings(store),
       relayOrigin: "https://relay.example.com/setup?claim=claim-7f3a9c1e5b",
