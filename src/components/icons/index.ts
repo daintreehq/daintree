@@ -69,6 +69,7 @@ export {
   ListChecks, // bulk selection of forge rows — the preset picker that selects many issues or PRs at once
   MemoryStick, // a terminal host's own memory budget — the governor's app-wide output pause
   Menu, // the application menu, surfaced in-app where the native menu bar can't render
+  MessageCircleQuestionMark, // Daintree Decisions — an agent's question waiting for your answer from your phone, until the Decisions mark replaces it (#16028)
   Moon, // sleep a project — shut it down the way quitting does, restored on reopen
   Network, // Subagent tree — a parent session's spawned child sessions
   NotebookPen, // a terminal's Scratchpad — throwaway notes kept beside that one pane

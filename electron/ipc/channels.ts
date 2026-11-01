@@ -1504,6 +1504,7 @@ export const CHANNELS = {
   // One pane's Decisions state, for its chrome to show on mount (#16016).
   // Read from the machine that owns the pane.
   DECISIONS_GET_PANE_STATE: "decisions:get-pane-state",
+  DECISIONS_SET_ENABLED: "decisions:set-enabled",
 
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",

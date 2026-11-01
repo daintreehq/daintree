@@ -610,6 +610,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../decisions.js").DecisionsStatus;
   };
+  "decisions:set-enabled": {
+    args: [payload: import("../decisions.js").SetDecisionsEnabledPayload];
+    result: import("../decisions.js").DecisionsStatus;
+  };
   "demo:annotate": {
     args: [payload: import("./demo.js").DemoAnnotatePayload];
     result: import("./demo.js").DemoAnnotateResult;

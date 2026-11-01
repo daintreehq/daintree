@@ -138,8 +138,8 @@ let cachedVersionInfo: AppVersionInfo | null = null;
 // Lowercase the first letter so the label reads naturally mid-sentence
 // ("Requires voice input"), unless it starts with an initialism like
 // MCP / AI / API — those stay uppercase.
-function midSentenceLabel(label: string): string {
-  if (/^[A-Z]{2,}/.test(label)) return label;
+function midSentenceLabel({ label, keepCase }: { label: string; keepCase?: boolean }): string {
+  if (keepCase || /^[A-Z]{2,}/.test(label)) return label;
   return label.charAt(0).toLowerCase() + label.slice(1);
 }
 
@@ -344,6 +344,7 @@ function SettingsDialogInner({
   const [hiddenSettingBanner, setHiddenSettingBanner] = useState<{
     label: string;
     settingId: string;
+    keepCase?: boolean;
   } | null>(null);
 
   // Deep-link: scroll to a specific section after navigating.
@@ -617,7 +618,11 @@ function SettingsDialogInner({
   // What a gated result depends on, held until its landing reports whether the setting
   // was actually on the page. Showing the note up front claimed the setting was hidden
   // even when its parent was already on.
-  const pendingRequirementRef = useRef<{ settingId: string; label: string } | null>(null);
+  const pendingRequirementRef = useRef<{
+    settingId: string;
+    label: string;
+    keepCase?: boolean;
+  } | null>(null);
 
   // A page whose close-time save didn't go through keeps Settings open on its
   // draft and error, rather than closing as if it had saved: the user fixes it
@@ -712,7 +717,7 @@ function SettingsDialogInner({
 
   const handleResultClick = (
     { tab, subtab, sectionId }: SettingsNavTarget,
-    requiresEnabled?: { settingId: string; label: string },
+    requiresEnabled?: { settingId: string; label: string; keepCase?: boolean },
     plugin?: SettingsSearchEntry["plugin"]
   ) => {
     if (plugin) {
@@ -1327,7 +1332,7 @@ function SettingsDialogInner({
                             }
                           }}
                         >
-                          {midSentenceLabel(hiddenSettingBanner.label)}
+                          {midSentenceLabel(hiddenSettingBanner)}
                         </Button>{" "}
                         is on
                       </p>
@@ -2360,7 +2365,7 @@ interface SearchResultsProps {
   cleanQuery: string;
   onResultClick: (
     target: SettingsNavTarget,
-    requiresEnabled?: { settingId: string; label: string },
+    requiresEnabled?: { settingId: string; label: string; keepCase?: boolean },
     plugin?: SettingsSearchEntry["plugin"]
   ) => void;
   activeIndex?: number;
@@ -2527,7 +2532,7 @@ export function SearchResults({
                       // parent is on right now, and plain text so it cannot be read as a
                       // second scope chip.
                       <span className="ml-auto shrink-0 text-3xs text-text-secondary">
-                        Only when {midSentenceLabel(result.requiresEnabled.label)} is on
+                        Only when {midSentenceLabel(result.requiresEnabled)} is on
                       </span>
                     )}
                   </div>

@@ -390,6 +390,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       integrations: "Integrations",
       voice: "Voice input",
       canopy: "Canopy",
+      decisions: "Decisions",
       assistant: "Daintree Assistant",
 
       mcp: "MCP server",

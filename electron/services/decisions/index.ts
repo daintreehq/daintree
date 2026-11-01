@@ -55,11 +55,22 @@ async function settledService(): Promise<DecisionsService | null> {
   return service ?? (creating ? await creating.catch(() => null) : null);
 }
 
-/** What Settings shows: the service's own state once it exists, otherwise what the setting implies. */
+/**
+ * What Settings shows: the service's own state once it exists, otherwise what
+ * the setting implies, with the relay and consent as saved.
+ */
 export function getDecisionsStatus(): DecisionsStatus {
-  if (service) return service.getStatus();
-  const on = !shutDown && readDecisionsSettings(store).enabled;
-  return { state: on ? "not-connected" : "off" };
+  const settings = readDecisionsSettings(store);
+  const state = service
+    ? service.getStatus().state
+    : !shutDown && settings.enabled
+      ? "not-connected"
+      : "off";
+  return {
+    state,
+    ...(settings.relayOrigin ? { relayOrigin: settings.relayOrigin } : {}),
+    ...(settings.consentedAt !== null ? { consentedAt: settings.consentedAt } : {}),
+  };
 }
 
 /** A pane's state for its view to show on mount. Never makes or starts the service: null until it runs. */
@@ -82,11 +93,17 @@ export function startDecisionsIfEnabled(): Promise<void> {
  * Turns Decisions on or off at runtime: saves the switch, keeping every other
  * field as it reads (a damaged relay field reads as not set up, so turning on
  * over one starts afresh), then starts or stops the service to match what was
- * saved.
+ * saved. `consent` records the first agreement to what Decisions sends; a
+ * later one keeps the original time.
  */
-export function setDecisionsEnabled(enabled: boolean): Promise<DecisionsStatus> {
+export function setDecisionsEnabled(
+  enabled: boolean,
+  options: { consent?: boolean } = {}
+): Promise<DecisionsStatus> {
   return serialize(async () => {
-    const saved = writeDecisionsSettings(store, { ...readDecisionsSettings(store), enabled });
+    const current = readDecisionsSettings(store);
+    const consentedAt = current.consentedAt ?? (options.consent ? Date.now() : null);
+    const saved = writeDecisionsSettings(store, { ...current, enabled, consentedAt });
     if (saved.enabled && !shutDown) {
       const next = await getDecisionsService();
       await next.start(saved);

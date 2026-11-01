@@ -28,6 +28,7 @@ import {
   FolderGit2,
   Plug,
   McpServerIcon,
+  MessageCircleQuestionMark,
   Telescope,
   Workflow,
 } from "@/components/icons";
@@ -66,6 +67,8 @@ export interface SettingsSectionMeta {
   readonly requiresEnabled?: {
     readonly settingId: string;
     readonly label: string;
+    /** A proper noun ("Decisions"), never lowercased mid-sentence. */
+    readonly keepCase?: boolean;
   };
   /** What this entry writes when it differs from its section's or its tab's. */
   readonly settings?: readonly SettingRef[];
@@ -153,6 +156,7 @@ const importToolbarSettingsTab = () => import("./ToolbarSettingsTab");
 const importIntegrationsTab = () => import("./IntegrationsTab");
 const importVoiceInputSettingsTab = () => import("./VoiceInputSettingsTab");
 const importCanopySettingsTab = () => import("./CanopySettingsTab");
+const importDecisionsSettingsTab = () => import("./Decisions/DecisionsSettingsTab");
 const importMcpServerSettingsTab = () => import("./McpServerSettingsTab");
 const importPluginActionsSettingsTab = () => import("./PluginActionsSettingsTab");
 const importRunHistorySettingsTab = () => import("./RunHistorySettingsTab");
@@ -209,6 +213,10 @@ const LazyCodeForgeSettingsTab = lazyWithPreload(
   (m) => m.CodeForgeSettingsTab
 );
 const LazyCanopySettingsTab = lazyWithPreload(importCanopySettingsTab, (m) => m.CanopySettingsTab);
+const LazyDecisionsSettingsTab = lazyWithPreload(
+  importDecisionsSettingsTab,
+  (m) => m.DecisionsSettingsTab
+);
 const LazyVoiceInputSettingsTab = lazyWithPreload(
   importVoiceInputSettingsTab,
   (m) => m.VoiceInputSettingsTab
@@ -268,6 +276,12 @@ const VOICE_REQUIRES_ENABLED = {
 const VOICE_AI_REQUIRES_ENABLED = {
   settingId: "voice-ai-correction-enable",
   label: "AI text correction",
+} as const;
+
+const DECISIONS_REQUIRES_ENABLED = {
+  settingId: "decisions-enable",
+  label: "Decisions",
+  keepCase: true,
 } as const;
 
 const MCP_REQUIRES_ENABLED = {
@@ -2052,6 +2066,81 @@ export const SETTINGS_REGISTRY = [
   } satisfies LazySettingsTabEntry,
 
   {
+    id: "decisions",
+    scope: "global",
+    group: "Integrations",
+    settings: ["decisions.enabled"],
+    label: "Decisions",
+    icon: <MessageCircleQuestionMark className="w-4 h-4" />,
+    importKind: "lazy",
+    importer: LazyDecisionsSettingsTab.preload,
+    LazyComponent: LazyDecisionsSettingsTab,
+    searchNavDescription:
+      "Answer agents' questions from your phone, through a relay in your own Cloudflare account",
+    searchNavKeywords: [
+      "integrations",
+      "decisions",
+      "phone",
+      "mobile",
+      "ask",
+      "question",
+      "answer",
+      "relay",
+      "cloudflare",
+    ],
+    sections: [
+      {
+        id: "decisions-enable",
+        section: "Decisions",
+        title: "Enable Decisions",
+        description:
+          "Agents ask you a question and end their turn. You answer from your phone, and Daintree types your answer into the terminal that asked. Needs a relay in your own Cloudflare account and a paired phone.",
+        keywords: ["decisions", "enable", "phone", "ask human", "question", "answer", "consent"],
+      },
+      {
+        id: "decisions-connection",
+        section: "Connection",
+        title: "Relay connection",
+        description: "Whether this computer is connected to the relay in your Cloudflare account",
+        keywords: ["relay", "cloudflare", "connected", "status", "worker", "server"],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-devices",
+        section: "Devices",
+        title: "Paired phones",
+        description: "Phones you pair with this computer to answer your agents' questions",
+        keywords: ["phone", "pair", "device", "mobile"],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-policy",
+        section: "Policy",
+        title: "Who answers",
+        description: "Every question waits for your own answer",
+        keywords: ["policy", "proxy", "gate", "human", "required"],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-voice",
+        section: "Voice",
+        title: "Dictating answers",
+        description: "Dictation in the phone app isn't end-to-end encrypted",
+        keywords: ["voice", "dictation", "speech", "encrypted", "microphone"],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-data",
+        section: "Data",
+        title: "What's sent, and where",
+        description: "What Decisions sends to your relay, and what the relay can read",
+        keywords: ["privacy", "data", "encrypted", "metadata", "push", "consent", "sent"],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+    ],
+  } satisfies LazySettingsTabEntry,
+
+  {
     id: "run-history",
     scope: "global",
     group: "Integrations",
@@ -2608,6 +2697,7 @@ export const globalTabIcons: Record<GlobalSettingsTab, ReactNode> = {
   hosts: <Server className="w-5 h-5 text-text-secondary" />,
   voice: <Mic className="w-5 h-5 text-text-secondary" />,
   canopy: <Telescope className="w-5 h-5 text-text-secondary" />,
+  decisions: <MessageCircleQuestionMark className="w-5 h-5 text-text-secondary" />,
   mcp: <McpServerIcon className="w-5 h-5 text-text-secondary" />,
   plugins: <Package className="w-5 h-5 text-text-secondary" />,
   "plugin-actions": <ScrollText className="w-5 h-5 text-text-secondary" />,

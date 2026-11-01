@@ -22,6 +22,7 @@ const connected: DecisionsSettings = {
   deviceId: "dev-01HZY3K9QX",
   hostId: "host_01HZY3K9QY",
   proxyAllowlisted: true,
+  consentedAt: 1_761_955_200_000,
 };
 
 function memoryStore(initial?: unknown) {
@@ -129,6 +130,13 @@ describe("sanitizeDecisionsSettings", () => {
         enabled: false,
         relayOrigin: null,
       });
+    }
+  });
+
+  it("keeps a consent time only when it's a positive finite number, never turning off for one", () => {
+    for (const consentedAt of [0, -1, Number.NaN, Infinity, "1761955200000", true, {}, null]) {
+      const settings = sanitizeDecisionsSettings({ ...connected, consentedAt });
+      expect(settings, String(consentedAt)).toEqual({ ...connected, consentedAt: null });
     }
   });
 

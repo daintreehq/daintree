@@ -3,6 +3,7 @@ import type { IpcInvokeMap } from "../../types/index.js";
 export const DECISIONS_METHOD_CHANNELS = {
   getStatus: "decisions:get-status",
   getPaneState: "decisions:get-pane-state",
+  setEnabled: "decisions:set-enabled",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof DECISIONS_METHOD_CHANNELS;

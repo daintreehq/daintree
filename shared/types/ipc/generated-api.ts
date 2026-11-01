@@ -298,6 +298,9 @@ export interface GeneratedElectronAPI {
     getStatus(
       ...args: IpcInvokeMap["decisions:get-status"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-status"]["result"]>;
+    setEnabled(
+      ...args: IpcInvokeMap["decisions:set-enabled"]["args"]
+    ): Promise<IpcInvokeMap["decisions:set-enabled"]["result"]>;
   };
   deviceAnswer: {
     cancelPairingCode(
