@@ -12,6 +12,7 @@ import { notify } from "@/lib/notify";
 import { reduceAgentDetected, reduceAgentExited } from "./identityReducer";
 import { logIdentityDebugDev, recordIdentityEventDev } from "./identityDiagnostics";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
+import { hostObservedAt } from "@shared/utils/restoreProvenance";
 
 // Per-terminal baseline of `changedFileCount` captured the first time an
 // agent enters "working" in a session. Compared against the count at
@@ -85,7 +86,8 @@ export function setupIdentityListeners(): DisposableStore {
           return;
         }
 
-        if (terminal.lastStateChange && timestamp < terminal.lastStateChange) {
+        const observedAt = hostObservedAt(terminal);
+        if (observedAt !== undefined && timestamp < observedAt) {
           return;
         }
 

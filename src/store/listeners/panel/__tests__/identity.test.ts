@@ -580,3 +580,46 @@ describe("identity listener — agentIncarnation sync (#12535)", () => {
     d.dispose();
   });
 });
+
+describe("identity listener — a host whose clock runs behind this machine's (#16062)", () => {
+  const HOST_LAG_MS = 60_000;
+
+  it("takes the host's working report after this machine stamped its own overlay", () => {
+    const hostNow = Date.now() - HOST_LAG_MS;
+    setupPanel();
+    const d = setupIdentityListeners();
+    emitState(makePayload({ state: "waiting", previousState: "working", timestamp: hostNow }));
+
+    // A composer draft puts the pane in directing and leaving it reverts to the
+    // last reported state, both stamped with this machine's clock.
+    usePanelStore.getState().updateAgentState("term-1", "directing");
+    usePanelStore.getState().updateAgentState("term-1", "waiting");
+
+    emitState(
+      makePayload({ state: "working", previousState: "waiting", timestamp: hostNow + 5_000 })
+    );
+
+    expect(usePanelStore.getState().panelsById["term-1"]).toMatchObject({
+      agentState: "working",
+      lastStateChange: hostNow + 5_000,
+    });
+    d.dispose();
+  });
+
+  it("still drops a report from before the state the host last reported", () => {
+    const hostNow = Date.now() - HOST_LAG_MS;
+    setupPanel();
+    const d = setupIdentityListeners();
+    emitState(
+      makePayload({ state: "waiting", previousState: "working", timestamp: hostNow + 10_000 })
+    );
+    emitState(
+      makePayload({ state: "working", previousState: "waiting", timestamp: hostNow + 5_000 })
+    );
+
+    expect(usePanelStore.getState().panelsById["term-1"]).toMatchObject({
+      agentState: "waiting",
+    });
+    d.dispose();
+  });
+});

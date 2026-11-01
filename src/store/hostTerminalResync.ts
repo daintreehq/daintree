@@ -10,6 +10,7 @@ import {
 } from "@/services/terminal/terminalInstanceServiceAccessor";
 import type { TerminalPaintPlane } from "@/services/TerminalInstanceService";
 import { isSpawnUnconfirmed } from "@/store/slices/panelRegistry/unconfirmedSpawn";
+import { hostObservedAt } from "@shared/utils/restoreProvenance";
 
 export interface HostTerminalResyncOptions {
   /**
@@ -120,8 +121,9 @@ type HostAgentStateRecord = Pick<
 >;
 
 /**
- * Take the host's agent state for a pane where it is newer than the pane's, or
- * belongs to a new incarnation of the agent. `overGuess` takes it whatever its
+ * Take the host's agent state for a pane where it is newer than the state the
+ * host last reported there, or belongs to a new incarnation of the agent.
+ * `overGuess` takes it whatever its
  * stamp: the pane holds only the state it guessed at launch, which the host's
  * own clock never has to be ahead of.
  */
@@ -140,7 +142,8 @@ export function takeHostAgentState(
     (record.agentIncarnation !== undefined &&
       panel.agentIncarnation !== undefined &&
       record.agentIncarnation !== panel.agentIncarnation);
-  if (!newIncarnation && panel.lastStateChange && record.lastStateChange <= panel.lastStateChange) {
+  const observedAt = hostObservedAt(panel);
+  if (!newIncarnation && observedAt !== undefined && record.lastStateChange <= observedAt) {
     return;
   }
   instances.setAgentState(id, record.agentState);

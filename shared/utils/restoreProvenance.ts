@@ -53,6 +53,20 @@ export function newerObservation(
 }
 
 /**
+ * When the state the host last reported for a pane began, by the host's clock,
+ * which is the only clock its reports can be ordered by. The pane's
+ * `lastStateChange` won't do: this machine stamps its own overlays there (a
+ * launch guess, directing, an optimistic working), and a remote host's clock
+ * need not agree with this one's, so a host report that is the newest thing
+ * known could read as older than an overlay and be refused (#16062).
+ */
+export function hostObservedAt(pane: {
+  lastAgentObservation?: TerminalAgentObservation;
+}): number | undefined {
+  return pane.lastAgentObservation?.at;
+}
+
+/**
  * Read an on-disk provenance record (#14017). The snapshot schema passes unknown
  * keys through, so this is the only validation it gets. A record without a
  * usable time or disposition is dropped whole: it would describe a restore no

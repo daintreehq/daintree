@@ -301,8 +301,9 @@ describe("resyncHostTerminals", () => {
   });
 
   it("adopts a new agent incarnation's state even when it looks older", async () => {
-    panel("t-1", { lastStateChange: 50, agentIncarnation: 1 });
-    panel("t-2", { lastStateChange: 50, agentIncarnation: 1 });
+    const reported = { agentState: "working", at: 50 };
+    panel("t-1", { lastStateChange: 50, lastAgentObservation: reported, agentIncarnation: 1 });
+    panel("t-2", { lastStateChange: 50, lastAgentObservation: reported, agentIncarnation: 1 });
     getForProject.mockResolvedValue([
       {
         id: "t-1",
@@ -327,6 +328,33 @@ describe("resyncHostTerminals", () => {
     expect(store.updateAgentState).toHaveBeenCalledTimes(1);
     expect(store.updateAgentState.mock.calls[0]![0]).toBe("t-1");
     expect(setAgentState).toHaveBeenCalledWith("t-1", "idle");
+  });
+
+  it("takes a host report newer than its last one over this machine's later overlay (#16062)", async () => {
+    // The host's clock runs a minute behind this one: the pane's own revert
+    // from directing is stamped ahead of anything the host can report.
+    panel("t-1", {
+      agentState: "waiting",
+      lastStateChange: 160_000,
+      lastAgentObservation: { agentState: "waiting", at: 90_000 },
+      agentIncarnation: 1,
+    });
+    getForProject.mockResolvedValue([
+      { id: "t-1", cwd: "/", agentState: "working", lastStateChange: 100_000, agentIncarnation: 1 },
+    ]);
+
+    await resyncHostTerminals("proj-1", current);
+
+    expect(setAgentState).toHaveBeenCalledWith("t-1", "working");
+    expect(store.updateAgentState).toHaveBeenCalledWith(
+      "t-1",
+      "working",
+      undefined,
+      100_000,
+      undefined,
+      undefined,
+      undefined
+    );
   });
 
   it("replays this view's watched panes to the fresh session", async () => {
