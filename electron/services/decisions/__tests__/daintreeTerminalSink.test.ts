@@ -274,7 +274,11 @@ describe("DaintreeTerminalSink", () => {
           id: PANE,
           text: renderDecisionSection(parseAnswerNotice(text)!),
           token: expect.any(String),
-          guard: "settled-prompt-exact",
+          guard: {
+            kind: "settled-prompt-exact",
+            agentIncarnation: 0,
+            agentSessionId: "session-1",
+          },
         },
       ]);
       // Queued and submitted is not delivered.

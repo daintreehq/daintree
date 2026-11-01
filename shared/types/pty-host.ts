@@ -1495,13 +1495,24 @@ export type TerminalSubmitStatusState = "slow" | "stalled" | "settled" | "failed
  * another (#13496) is refused rather than taken in the middle of a turn. A
  * question the agent asked in prose still counts as its prompt (#14475).
  *
- * `settled-prompt-exact` is the strict check without that allowance: only an
- * agent waiting at its own prompt, settled since the lane last wrote to it,
- * never mid-turn and never at a question. A Decisions answer waits for
- * exactly that (#16015).
+ * {@link ExactPromptGuard} is the strict check without that allowance, for
+ * the run the line was meant for.
  */
-export type TerminalSubmitGuard =
-  "settled-prompt" | "settled-prompt-strict" | "settled-prompt-exact";
+export type TerminalSubmitGuard = "settled-prompt" | "settled-prompt-strict" | ExactPromptGuard;
+
+/**
+ * `settled-prompt-exact` (#16015): only an agent waiting at its own prompt,
+ * settled since the lane last wrote to it, never mid-turn and never at a
+ * question, and only the run main checked the line against. A Decisions
+ * answer waits for exactly that.
+ */
+export interface ExactPromptGuard {
+  kind: "settled-prompt-exact";
+  /** The agent incarnation main read; another one holding the PTY refuses the line. */
+  agentIncarnation?: number;
+  /** The agent session main read, when known. One learned since is still that run. */
+  agentSessionId?: string;
+}
 
 /** A submission's text as a run's first-prompt record, before it was written (#15521). */
 export type FirstPromptCandidate = Omit<TerminalFirstPrompt, "via" | "at">;

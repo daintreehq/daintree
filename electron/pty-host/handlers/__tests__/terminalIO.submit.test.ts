@@ -47,3 +47,32 @@ describe("submit (#15521)", () => {
     for (const call of ptyManager.submit.mock.calls) expect(call[6]).toBeUndefined();
   });
 });
+
+describe("submit guards (#16015)", () => {
+  function setup() {
+    const ptyManager = { submit: vi.fn() };
+    const handler = createTerminalIOHandlers({
+      ptyManager,
+      sendEvent: vi.fn(),
+    } as unknown as HostContext).submit!;
+    return { ptyManager, handler };
+  }
+
+  it("passes an exact guard on with only the run fields it may carry", () => {
+    const { ptyManager, handler } = setup();
+    const send = (guard: unknown) =>
+      handler({ type: "submit", id: "t1", text: "answer", guard: guard as never });
+
+    send({ kind: "settled-prompt-exact", agentIncarnation: 2, agentSessionId: "s-1", extra: 1 });
+    send({ kind: "settled-prompt-exact", agentIncarnation: "2", agentSessionId: 7 });
+    send({ kind: "anything-goes" });
+    send("settled-prompt-strict");
+
+    expect(ptyManager.submit.mock.calls.map((call) => call[4])).toEqual([
+      { kind: "settled-prompt-exact", agentIncarnation: 2, agentSessionId: "s-1" },
+      { kind: "settled-prompt-exact" },
+      undefined,
+      "settled-prompt-strict",
+    ]);
+  });
+});

@@ -1,6 +1,6 @@
 import { stat } from "fs/promises";
 import type { TerminalInfo } from "./types.js";
-import type { TerminalSubmitGuard } from "../../../shared/types/pty-host.js";
+import type { ExactPromptGuard, TerminalSubmitGuard } from "../../../shared/types/pty-host.js";
 import {
   ASSISTANT_SEND_GATE,
   EXACT_PROMPT_GATE,
@@ -375,33 +375,35 @@ export class TerminalInputController {
     const admit =
       guard === "settled-prompt-strict"
         ? () => this.admitStrict(ASSISTANT_SEND_GATE)
-        : guard === "settled-prompt-exact"
-          ? this.admitExact()
-          : guard === "settled-prompt"
-            ? () =>
-                !this.isInputLocked &&
-                evaluateWakeGate(
-                  wakeGateSnapshot(this.host.terminalInfo),
-                  wakeGateOptionsFor(this.host.terminalInfo.detectedAgentId)
-                ).kind === "ready"
+        : guard === "settled-prompt"
+          ? () =>
+              !this.isInputLocked &&
+              evaluateWakeGate(
+                wakeGateSnapshot(this.host.terminalInfo),
+                wakeGateOptionsFor(this.host.terminalInfo.detectedAgentId)
+              ).kind === "ready"
+          : guard !== undefined
+            ? this.admitExact(guard)
             : undefined;
     this.host.writeQueue.submit(text, token, onPtyWritten, admit, imagePaths);
   }
 
   /**
-   * The strict check without the prose-question allowance, for the run the
-   * line was handed to: an agent that restarted in this PTY while the line
-   * waited in the lane is another run, whatever its prompt shows.
+   * The strict check without the prose-question allowance, for the run main
+   * checked the line against: an agent that restarted in this PTY since is
+   * another run, whatever its prompt shows. A session learned since main read
+   * the pane is still that run; a known one that changed is not.
    */
-  private admitExact(): () => boolean {
-    const { agentIncarnation, agentSessionId } = this.host.terminalInfo;
+  private admitExact(run: ExactPromptGuard): () => boolean {
+    // Main always says which incarnation it read; a guard without one pins the run the host holds now.
+    const incarnation = run.agentIncarnation ?? this.host.terminalInfo.agentIncarnation;
     return () => {
       const terminal = this.host.terminalInfo;
-      return (
-        terminal.agentIncarnation === agentIncarnation &&
-        terminal.agentSessionId === agentSessionId &&
-        this.admitStrict(EXACT_PROMPT_GATE)
-      );
+      if (terminal.agentIncarnation !== incarnation) return false;
+      if (run.agentSessionId !== undefined && terminal.agentSessionId !== run.agentSessionId) {
+        return false;
+      }
+      return this.admitStrict(EXACT_PROMPT_GATE);
     };
   }
 

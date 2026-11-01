@@ -80,7 +80,11 @@ export function identityMismatch(
   if (info.launchGeneration !== undefined && info.launchGeneration !== generation) {
     return "generation-mismatch";
   }
-  if ((info.agentSessionId ?? null) !== target.agentSessionId) return "session-mismatch";
+  // A session learned since the question was asked is that run's; one that
+  // changed, or went unknown, is not.
+  if (target.agentSessionId !== null && info.agentSessionId !== target.agentSessionId) {
+    return "session-mismatch";
+  }
   // An answer for one worktree never lands in another.
   if (info.worktreeId !== target.worktreeId) return "gone";
   return null;

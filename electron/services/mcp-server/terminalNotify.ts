@@ -2431,9 +2431,16 @@ export class TerminalNotifyService {
     remember(this.lastDeliveryAt, owner.terminalId, deliveredAt);
     owner.delivery = { status: "outstanding", lastDeliveredAt: deliveredAt, token };
     // A decision answer is never typed into a working pane, even one whose
-    // CLI queues mid-turn input: the host holds the whole line to that.
-    const guard = wakes.some(({ wake }) => wake.kind === "decision")
-      ? "settled-prompt-exact"
+    // CLI queues mid-turn input, nor into any run but the one just checked:
+    // the host holds the whole line to that.
+    const guard: TerminalSubmitGuard = wakes.some(({ wake }) => wake.kind === "decision")
+      ? {
+          kind: "settled-prompt-exact",
+          ...(info.agentIncarnation !== undefined
+            ? { agentIncarnation: info.agentIncarnation }
+            : {}),
+          ...(info.agentSessionId !== undefined ? { agentSessionId: info.agentSessionId } : {}),
+        }
       : "settled-prompt";
     // The host re-checks the gate when the line reaches the lane, and drops
     // its Enter if anyone types before it lands.

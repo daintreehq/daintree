@@ -3018,6 +3018,11 @@ describe("decision wakes (#16015)", () => {
 
   it("types its section past the exact guard and reports the write it stands on", async () => {
     const h = setup({ enabled: false });
+    h.client.terminals.set(OWN, {
+      ...atPrompt(Date.now() - 60_000),
+      agentIncarnation: 2,
+      agentSessionId: "session-1",
+    });
     const scope = h.service.openWakeScope();
     const decision = decisionWake("Daintree Decisions: section");
     scope.enqueueWake(PANE, PROJECT, decision.wake);
@@ -3027,7 +3032,7 @@ describe("decision wakes (#16015)", () => {
       expect.objectContaining({
         id: OWN,
         text: "Daintree Decisions: section",
-        guard: "settled-prompt-exact",
+        guard: { kind: "settled-prompt-exact", agentIncarnation: 2, agentSessionId: "session-1" },
       }),
     ]);
     expect(decision.outcomes).toEqual([

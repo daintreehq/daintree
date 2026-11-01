@@ -1,5 +1,22 @@
-import type { BroadcastWriteTargetResult } from "../../../shared/types/pty-host.js";
+import type {
+  BroadcastWriteTargetResult,
+  ExactPromptGuard,
+} from "../../../shared/types/pty-host.js";
 import type { HandlerMap, HostContext } from "./types.js";
+
+/** An exact guard with only the fields it may carry, each only when well formed. */
+function exactPromptGuardOf(value: unknown): ExactPromptGuard | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const guard = value as Partial<Record<keyof ExactPromptGuard, unknown>>;
+  if (guard.kind !== "settled-prompt-exact") return undefined;
+  return {
+    kind: "settled-prompt-exact",
+    ...(typeof guard.agentIncarnation === "number"
+      ? { agentIncarnation: guard.agentIncarnation }
+      : {}),
+    ...(typeof guard.agentSessionId === "string" ? { agentSessionId: guard.agentSessionId } : {}),
+  };
+}
 
 export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
   const { ptyManager, sendEvent } = ctx;
@@ -17,11 +34,9 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
       // Only the known guards cross; anything else is dropped rather than
       // trusted to mean "no check".
       const guard =
-        msg.guard === "settled-prompt" ||
-        msg.guard === "settled-prompt-strict" ||
-        msg.guard === "settled-prompt-exact"
+        msg.guard === "settled-prompt" || msg.guard === "settled-prompt-strict"
           ? msg.guard
-          : undefined;
+          : exactPromptGuardOf(msg.guard);
       const imagePaths = Array.isArray(msg.imagePaths)
         ? msg.imagePaths.filter((path: unknown): path is string => typeof path === "string")
         : undefined;

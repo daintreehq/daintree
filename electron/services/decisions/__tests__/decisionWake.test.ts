@@ -88,6 +88,13 @@ describe("identityMismatch", () => {
     );
   });
 
+  it("takes a session learned since the question was asked as that run's", () => {
+    const { value } = sources();
+    const asked = { ...TARGET, agentSessionId: null };
+    expect(identityMismatch(value, asked, record({ agentSessionId: "session-9" }))).toBeNull();
+    expect(identityMismatch(value, asked, record({ agentSessionId: undefined }))).toBeNull();
+  });
+
   it("calls a relaunch a relaunch, though it changed the generation too", () => {
     const { state, value } = sources({ principal: "principal-2" });
     state.liveGeneration = 8;
