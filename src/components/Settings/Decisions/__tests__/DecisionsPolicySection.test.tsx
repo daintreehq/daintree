@@ -323,6 +323,13 @@ describe("useDecisionsPolicy", () => {
     await act(async () => late.resolve(policy({ proxyAllowlisted: false, revision: 5 })));
     expect(result.current.policy).toBeNull();
     expect(result.current.loadError).toContain("Decisions has stopped");
+    // The late save still lets go, so the next one is asked.
+    expect(result.current.pending).toBeNull();
+    setProxyAllowlisted.mockResolvedValueOnce(policy({ proxyAllowlisted: true, revision: 6 }));
+    await act(async () => {
+      await result.current.setProxyAllowlisted(true);
+    });
+    expect(setProxyAllowlisted).toHaveBeenCalledTimes(2);
 
     // Main's answer after turning on is shown, though its revision is lower than anything seen before.
     getPolicy.mockResolvedValueOnce(policy({ proxyAllowlisted: true, revision: 0 }));
