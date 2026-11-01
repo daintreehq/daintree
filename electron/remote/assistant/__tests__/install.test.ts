@@ -32,6 +32,16 @@ const mcp = vi.hoisted(() => ({
   released: [] as Array<[string, string]>,
 }));
 
+/** The app's shared database, as the link client's installer finds it. */
+const sharedDb = vi.hoisted(() => ({
+  sqlite: null as import("better-sqlite3").Database | null,
+}));
+vi.mock("../../../services/persistence/db.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../services/persistence/db.js")>()),
+  getSharedDb: () => {},
+  getSharedSqlite: () => sharedDb.sqlite,
+}));
+
 vi.mock("electron", () => ({
   app: {
     getPath: () => "/fake/userData",
@@ -145,7 +155,12 @@ import { getRemoteService, registerRemoteService } from "../../runtime.js";
 import { GLOBAL_ASSISTANT_ID } from "../../../../shared/config/globalAssistant.js";
 import type { HostCallRuntime, ObservedHost } from "../HostCallRuntime.js";
 import type { HostControlLinkClient } from "../HostControlLinkClient.js";
-import { assistantsUseHost, installHostControl, installRetiredSendsNotice } from "../install.js";
+import {
+  assistantsUseHost,
+  installHostControl,
+  installHostControlLinkClient,
+  installRetiredSendsNotice,
+} from "../install.js";
 import type { ThrowawayCallAnswer } from "../linkMethods.js";
 import type { HostDescriptor } from "../../../../shared/types/remoteHosts.js";
 import { TEST_HANDSHAKE } from "../../link/__tests__/linkTestUtils.js";
@@ -476,6 +491,45 @@ describe("assistantsUseHost (#15878)", () => {
       );
     return { hostId: studio.id, launch, throwawayRelease };
   }
+
+  it("is the link client's use check, until it is uninstalled", () => {
+    vi.useRealTimers();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-link-client-"));
+    const sqlite = openDb(path.join(dir, "shell.db"), migrationsFolder).sqlite;
+    sharedDb.sqlite = sqlite;
+    teardown.push(() => {
+      sharedDb.sqlite = null;
+      sqlite.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+    const holding = new Set(["studio"]);
+    teardown.push(
+      registerRemoteService("hostCallRelayClient", {
+        hasCallInFlight: () => false,
+        awaitsNotices: () => false,
+        holdsThrowawayRuns: (hostId: string) => holding.has(hostId),
+      } as never)
+    );
+    let check: ((hostId: string) => boolean) | undefined;
+    const offCheck = vi.fn();
+    const off = installHostControlLinkClient({
+      session: async () => null,
+      onSessionOpened: () => () => {},
+      knownHosts: () => [],
+      onHostsChanged: () => () => {},
+      addUseCheck: (registered) => {
+        check = registered;
+        return offCheck;
+      },
+      hostName: (hostId) => hostId,
+    });
+    expect(check?.("studio")).toBe(true);
+    expect(check?.("other")).toBe(false);
+    holding.clear();
+    expect(check?.("studio")).toBe(false);
+    off();
+    expect(offCheck).toHaveBeenCalledTimes(1);
+  });
 
   it("keeps the link to a windowless host while a throwaway run there may still be going", async () => {
     const h = windowlessHost();
