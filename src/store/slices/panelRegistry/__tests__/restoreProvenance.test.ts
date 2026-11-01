@@ -292,8 +292,8 @@ describe("updateAgentState", () => {
     usePanelStore.getState().flushHydrationBatch(token);
 
     expect(saveNormalized).toHaveBeenCalledTimes(1);
-    const [byId] = vi.mocked(saveNormalized).mock.calls[0]!;
-    expect((byId.a as PtyPanelData).lastAgentObservation).toEqual({
+    const saved = vi.mocked(saveNormalized).mock.calls[0]![0].a;
+    expect(saved && isPtyPanel(saved) ? saved.lastAgentObservation : undefined).toEqual({
       agentState: "waiting",
       at: 7_000,
     });
