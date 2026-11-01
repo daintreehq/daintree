@@ -197,10 +197,12 @@ async function stallingTransport() {
   });
   await new Promise<void>((resolve) => proxy.listen(proxyPath, resolve));
   let stallNext = false;
+  let lastStalled = false;
   let resumed: Promise<void> = Promise.resolve();
   let resume = () => {};
   const transport: LinkTransport = {
     async open(signal) {
+      lastStalled = stallNext;
       if (stallNext) {
         stallNext = false;
         const info = (await readDiscoveryFile(location.discoveryPath))!;
@@ -219,6 +221,8 @@ async function stallingTransport() {
       stallNext = true;
       resumed = new Promise((resolve) => (resume = resolve));
     },
+    /** Whether the latest dial is the one that reaches the stalled host. */
+    lastDialStalled: () => lastStalled,
     /** What the stalled dial has sent so far. */
     sent(): LinkMessage[] {
       const decoder = new FrameDecoder();
@@ -1132,9 +1136,7 @@ describe("HostServer session resume", () => {
 
 describe("HostServer and a Shell that gives up on a resume handshake (#15877)", () => {
   /** A connected Shell loses its link, and its redial, asking to resume, reaches a stalled host. */
-  async function resumeIntoAStall(
-    overrides: Partial<ConstructorParameters<typeof LinkClient>[0]> = {}
-  ) {
+  async function resumeIntoAStall(options: { stalledDialGivesUpAfterMs?: number } = {}) {
     const server = await startServer({ resumeGraceMs: 60_000 });
     const seen: HostSessionContext[] = [];
     const detached: string[] = [];
@@ -1145,7 +1147,20 @@ describe("HostServer and a Shell that gives up on a resume handshake (#15877)", 
       expired.push({ sessionId: info.sessionId, cause: info.cause })
     );
     const stalling = await stallingTransport();
-    const client = startClient(server, { transport: stalling.transport, ...overrides });
+    const client = startClient(server, {
+      transport: stalling.transport,
+      session: {
+        pingIntervalMs: 0,
+        idleTimeoutMs: 0,
+        // Read per dial: only the one that reaches the stalled host gives up
+        // early, so CI load can't time out the healthy dials around it.
+        get handshakeTimeoutMs() {
+          return stalling.lastDialStalled()
+            ? (options.stalledDialGivesUpAfterMs ?? 10_000)
+            : 10_000;
+        },
+      },
+    });
     const states: LinkClientState[] = [];
     client.onStateChange((state) => states.push(state));
     await waitFor(() => seen.length === 1 && client.getState().status === "connected");
@@ -1171,9 +1186,7 @@ describe("HostServer and a Shell that gives up on a resume handshake (#15877)", 
   }
 
   it("keeps the session a timed-out handshake resumed, for the next dial to resume", async () => {
-    const run = await resumeIntoAStall({
-      session: { pingIntervalMs: 0, idleTimeoutMs: 0, handshakeTimeoutMs: 300 },
-    });
+    const run = await resumeIntoAStall({ stalledDialGivesUpAfterMs: 100 });
     await catchUp(run);
     expect(run.states).toContainEqual(
       expect.objectContaining({ status: "unreachable", detail: "handshake timed out" })

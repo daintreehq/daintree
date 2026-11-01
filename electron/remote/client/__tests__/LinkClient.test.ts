@@ -738,7 +738,8 @@ describe("LinkClient stop", () => {
       await waitFor(() => client!.getState().status === "connected");
       await client.stop();
       client = null;
-      await waitFor(() => seen.includes(ControlKind.GOODBYE));
+      // A stop that has returned has let its GOODBYE reach the host.
+      expect(seen).toContain(ControlKind.GOODBYE);
     } finally {
       server.close();
       await removeTempDir(dir);
@@ -772,7 +773,8 @@ describe("LinkClient stop", () => {
       await waitFor(() => seen.includes(ControlKind.HELLO));
       await client.stop();
       client = null;
-      await waitFor(() => seen.includes(ControlKind.GOODBYE));
+      // A stop that has returned has let its GOODBYE reach the host.
+      expect(seen).toContain(ControlKind.GOODBYE);
     } finally {
       server.close();
       await removeTempDir(dir);
