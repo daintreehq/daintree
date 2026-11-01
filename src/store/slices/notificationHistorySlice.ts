@@ -611,7 +611,13 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
           held.add(e.id);
           return true;
         });
-        if (added.length === 0) return;
+        if (added.length === 0) {
+          // Written again all the same: a record handed over twice is most
+          // likely one whose entry never reached storage (a full storage drops
+          // the pending write), and only a write puts it there.
+          set({ entries: state.entries });
+          return;
+        }
         const now = Date.now();
         const candidate = [...added, ...state.entries].sort((a, b) => b.timestamp - a.timestamp);
         const updated = pruneNotificationEntries(candidate, now);

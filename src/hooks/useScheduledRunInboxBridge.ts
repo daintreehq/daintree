@@ -35,13 +35,16 @@ export function useScheduledRunInboxBridge(isStateLoaded: boolean): void {
     const api = window.electron?.scheduledRuns;
     if (!api?.takeInbox || !api.ackInbox) return;
     let disposed = false;
+    // Parked out of sight: runs that arrive now would be filed where nobody
+    // looks, so they're left with main, which hands them to the view shown.
+    let cached = false;
     let asking = false;
     let askAgain = false;
     let retry: ReturnType<typeof setTimeout> | null = null;
 
     const fileOnce = async (): Promise<void> => {
       const { items, retryInMs } = await api.takeInbox();
-      if (disposed) return;
+      if (disposed || cached) return;
       if (retryInMs !== null) {
         if (retry) clearTimeout(retry);
         retry = setTimeout(() => {
@@ -96,11 +99,18 @@ export function useScheduledRunInboxBridge(isStateLoaded: boolean): void {
 
     void ask();
     // A cached view shown again: it may be the only view on screen to file them.
-    const offRevealed = window.electron?.app?.onViewRevealed?.(() => void ask());
+    const offRevealed = window.electron?.app?.onViewRevealed?.(() => {
+      cached = false;
+      void ask();
+    });
+    const offCached = window.electron?.app?.onViewCached?.(() => {
+      cached = true;
+    });
     return () => {
       disposed = true;
       if (retry) clearTimeout(retry);
       offRevealed?.();
+      offCached?.();
     };
   }, [isStateLoaded, projectId]);
 }

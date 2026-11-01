@@ -128,6 +128,24 @@ describe("ScheduledRunInbox", () => {
     expect(ids(await first)).toEqual(["a"]);
   });
 
+  it("lets the runs go when the holder is switched away from while it reads", async () => {
+    const { inbox, getSchedule, shown } = setup([run("a")]);
+    let release!: () => void;
+    getSchedule.mockImplementationOnce(
+      () =>
+        new Promise<Schedule>((resolve) => {
+          release = () => resolve({ name: "Late", cadence: { timeZone: "UTC" } } as Schedule);
+        })
+    );
+
+    const first = inbox.take(1);
+    await vi.waitFor(() => expect(getSchedule).toHaveBeenCalled());
+    shown.delete(1);
+    release();
+    expect(await first).toEqual(none);
+    expect(ids(await inbox.take(2))).toEqual(["a"]);
+  });
+
   it("hands nothing over when the history isn't there", async () => {
     const inbox = new ScheduledRunInbox({
       recorder: async () => null,

@@ -8,7 +8,7 @@ import { scheduledRunInboxEntry, scheduledRunInboxEntryId } from "../scheduledRu
 const NOW = Date.UTC(2026, 10, 1, 9);
 // Each instant apart, so the entry can only say the one it means.
 const DUE = Date.UTC(2026, 10, 1, 2);
-const CREATED = DUE + 5_000;
+const CREATED = DUE + 3 * 60_000;
 const SPAWNED = DUE + 9 * 60_000;
 const STARTED = DUE + 13 * 60_000;
 const SETTLED = DUE + 40 * 60_000;

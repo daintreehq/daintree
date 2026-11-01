@@ -95,6 +95,14 @@ export class ScheduledRunInbox {
         schedule ? { name: schedule.name, timeZone: schedule.cadence.timeZone } : null
       );
     }
+    // A view switched away from while the reads ran would file them where
+    // nobody looks: let them go for the view now on screen to take.
+    if (!this.deps.isShown(holder)) {
+      for (const run of taken) {
+        if (this.leases.get(run.id)?.holder === holder) this.leases.delete(run.id);
+      }
+      return { items: [], retryInMs: null };
+    }
     return {
       items: taken.map((run) => ({ run, schedule: schedules.get(run.scheduleId) ?? null })),
       retryInMs,
