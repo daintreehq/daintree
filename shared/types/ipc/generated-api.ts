@@ -292,6 +292,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["copy-tree-history:get-records"]["result"]>;
   };
   decisions: {
+    getPaneState(
+      ...args: IpcInvokeMap["decisions:get-pane-state"]["args"]
+    ): Promise<IpcInvokeMap["decisions:get-pane-state"]["result"]>;
     getStatus(
       ...args: IpcInvokeMap["decisions:get-status"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-status"]["result"]>;

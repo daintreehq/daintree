@@ -5,7 +5,9 @@ import { defaultDecisionsSettings } from "../decisionsSettings.js";
 import type {
   DecisionsSettings,
   DecisionsStatusEvent,
+  PaneDecisionState,
 } from "../../../../shared/types/decisions.js";
+import { outstandingRows, row } from "./questionRows.js";
 
 interface FakeStore {
   close: ReturnType<typeof vi.fn>;
@@ -352,5 +354,148 @@ describe("DecisionsService store", () => {
     finishClose();
     await stopping;
     expect(states).toEqual(["not-connected", "off"]);
+  });
+});
+
+describe("DecisionsService pane state", () => {
+  function withPushes() {
+    const pushes: Array<{ projectId: string; state: PaneDecisionState }> = [];
+    const service = new DecisionsService({
+      openStore: async () => fakeStore(),
+      publishPaneState: (projectId, state) => pushes.push({ projectId, state }),
+    });
+    return { pushes, service };
+  }
+
+  it("holds and pushes nothing before it starts, whatever it is fed", () => {
+    const { pushes, service } = withPushes();
+
+    service.observeQuestions([row(1)]);
+
+    expect(pushes).toEqual([]);
+    expect(service.getPaneState("pane-a")).toBeNull();
+  });
+
+  it("pushes and answers each pane's state while running", async () => {
+    const { pushes, service } = withPushes();
+    await service.start(on());
+
+    service.observeQuestions([row(1)]);
+
+    expect(pushes).toEqual([
+      { projectId: "project-1", state: expect.objectContaining({ terminalId: "pane-a" }) },
+    ]);
+    expect(service.getPaneState("pane-a")).toEqual(pushes[0]?.state);
+    expect(service.getPaneState("pane-unknown")).toBeNull();
+  });
+
+  it("keeps a pane's state across a repeat start", async () => {
+    const { pushes, service } = withPushes();
+    await service.start(on());
+    service.observeQuestions([row(1)]);
+
+    await service.start(on({ proxyAllowlisted: true }));
+
+    expect(service.getPaneState("pane-a")?.openQuestions).toHaveLength(1);
+    expect(pushes).toHaveLength(1);
+  });
+
+  it("clears each pane's views fully once on stop, then pushes nothing while off", async () => {
+    const { pushes, service } = withPushes();
+    await service.start(on());
+    service.observeQuestions(outstandingRows());
+
+    await service.stop();
+    await service.stop();
+    service.observeQuestions([row(4)]);
+
+    expect(pushes).toHaveLength(2);
+    expect(pushes[1]).toEqual({
+      projectId: "project-1",
+      state: {
+        terminalId: "pane-a",
+        openQuestions: [],
+        waitingAnswers: [],
+        needsAttention: [],
+        revision: expect.any(Number),
+      },
+    });
+    expect(pushes[1]!.state.revision).toBeGreaterThan(pushes[0]!.state.revision);
+    expect(service.getPaneState("pane-a")).toBeNull();
+  });
+
+  it("clears a pane fed while the store is still closing", async () => {
+    let finishClose!: () => void;
+    const store = fakeStore();
+    store.close.mockImplementation(() => new Promise<void>((resolve) => (finishClose = resolve)));
+    const pushes: PaneDecisionState[] = [];
+    const service = new DecisionsService({
+      openStore: async () => store,
+      publishPaneState: (_projectId, state) => pushes.push(state),
+    });
+    await service.start(on());
+
+    const stopping = service.stop();
+    await vi.waitFor(() => expect(store.close).toHaveBeenCalledOnce());
+    service.observeQuestions([row(1)]);
+    finishClose();
+    await stopping;
+
+    expect(pushes.map((state) => state.openQuestions.length)).toEqual([1, 0]);
+    expect(service.getPaneState("pane-a")).toBeNull();
+  });
+
+  it("pushes nothing for a stop still closing the store when quit begins", async () => {
+    let finishClose!: () => void;
+    const store = fakeStore();
+    store.close.mockImplementation(() => new Promise<void>((resolve) => (finishClose = resolve)));
+    const pushes: PaneDecisionState[] = [];
+    const service = new DecisionsService({
+      openStore: async () => store,
+      publishPaneState: (_projectId, state) => pushes.push(state),
+    });
+    await service.start(on());
+    service.observeQuestions([row(1)]);
+
+    const stopping = service.stop();
+    await vi.waitFor(() => expect(store.close).toHaveBeenCalledOnce());
+    const disposing = service.dispose();
+    finishClose();
+    await Promise.all([stopping, disposing]);
+
+    expect(pushes).toHaveLength(1);
+  });
+
+  it("outranks the last lifetime's pushes after it starts again", async () => {
+    // A still clock, so only the service's own counter can order the pushes.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(0);
+    try {
+      const { pushes, service } = withPushes();
+      await service.start(on());
+      service.observeQuestions([row(1)]);
+      await service.stop();
+
+      await service.start(on());
+      service.observeQuestions([row(1)]);
+
+      expect(pushes.map(({ state }) => state.revision)).toEqual([1, 2, 3]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("pushes nothing from the moment quit begins, and nothing after", async () => {
+    const { pushes, service } = withPushes();
+    await service.start(on());
+    service.observeQuestions([row(1)]);
+
+    const disposing = service.dispose();
+    service.observeQuestions([row(1), row(2)]);
+    await disposing;
+    service.observeQuestions([row(3)]);
+
+    expect(pushes).toHaveLength(1);
+    expect(service.getPaneState("pane-a")).toBeNull();
   });
 });

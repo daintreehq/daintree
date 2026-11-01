@@ -46,3 +46,68 @@ export interface DecisionsStatus {
 }
 
 export type DecisionsStatusEvent = { type: "status-changed"; status: DecisionsStatus };
+
+/**
+ * How far an answer has got on its way into the terminal, as the client
+ * library records it per question. Mirrors its `LocalDeliveryStatus`.
+ */
+export type DecisionDeliveryStatus =
+  | "not-sent"
+  | "relay-queued"
+  | "desktop-received"
+  | "pending-host"
+  | "needs-attention"
+  | "delivery-uncertain"
+  | "terminal-delivered";
+
+/** A question the pane asked that has not been answered, cancelled or expired. */
+export interface PaneDecisionQuestion {
+  questionId: string;
+  /** The `N` of the `q-N` the agent was told. */
+  alias: number;
+  /** `queued` until the relay has the question, then `open`. */
+  status: "queued" | "open";
+  /** When the pane asked, ISO 8601 as recorded. */
+  askedAt: string;
+  /** ISO 8601 as recorded; null when the question never expires. */
+  expiresAt: string | null;
+}
+
+/** Something received for the pane that has not been typed into it yet. */
+export interface PaneDecisionWaiting {
+  questionId: string;
+  alias: number;
+  /** An answer (or correction), or only the notice that the question expired unanswered. */
+  kind: "answer" | "expired";
+  deliveryStatus: Exclude<DecisionDeliveryStatus, "needs-attention" | "delivery-uncertain">;
+}
+
+/** A question whose delivery stopped and needs a person to decide what happens next. */
+export interface PaneDecisionAttention {
+  questionId: string;
+  alias: number;
+  /** `delivery-uncertain`: the answer may or may not have been typed. */
+  deliveryStatus: "needs-attention" | "delivery-uncertain";
+  /** The library's code for why (`pane_gone`, `inject_ambiguous`, …); `unspecified` when none was recorded. */
+  reason: string;
+}
+
+/**
+ * One pane's Decisions state as main last observed it, pushed on
+ * `terminal:decision-state` to the pane's project views and read on mount
+ * with `decisions:get-pane-state`. It names questions by id and alias only:
+ * no question, option or answer text ever rides it. Empty lists mean
+ * nothing is outstanding for the pane.
+ */
+export interface PaneDecisionState {
+  terminalId: string;
+  openQuestions: PaneDecisionQuestion[];
+  waitingAnswers: PaneDecisionWaiting[];
+  needsAttention: PaneDecisionAttention[];
+  /**
+   * Increases with every change, so a late snapshot never overwrites a newer
+   * push. Never behind the sender's wall clock in ms, so a restarted Host's
+   * pushes outrank its previous run's.
+   */
+  revision: number;
+}

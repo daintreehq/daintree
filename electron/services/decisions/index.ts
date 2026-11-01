@@ -1,5 +1,7 @@
 import { store } from "../../store.js";
-import type { DecisionsStatus } from "../../../shared/types/decisions.js";
+import { CHANNELS } from "../../ipc/channels.js";
+import { broadcastToProjectRenderers } from "../../ipc/utils.js";
+import type { DecisionsStatus, PaneDecisionState } from "../../../shared/types/decisions.js";
 import { readDecisionsSettings, writeDecisionsSettings } from "./decisionsSettings.js";
 import type { DecisionsService } from "./DecisionsService.js";
 
@@ -14,6 +16,13 @@ let service: DecisionsService | null = null;
 let creating: Promise<DecisionsService> | null = null;
 let shutDown = false;
 let transitions: Promise<unknown> = Promise.resolve();
+
+function publishPaneState(projectId: string, state: PaneDecisionState): void {
+  broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
+    name: "terminal:decision-state",
+    payload: state,
+  });
+}
 
 function serialize<T>(step: () => Promise<T>): Promise<T> {
   const run = transitions.then(step);
@@ -30,7 +39,7 @@ export function getDecisionsService(): Promise<DecisionsService> {
     // After quit nothing new is made; one already being made is disposed by the stop.
     if (shutDown) return Promise.reject(new Error("Decisions has stopped for this run"));
     const made = import("./DecisionsService.js").then(({ DecisionsService }) => {
-      service = new DecisionsService();
+      service = new DecisionsService({ publishPaneState });
       return service;
     });
     creating = made;
@@ -51,6 +60,11 @@ export function getDecisionsStatus(): DecisionsStatus {
   if (service) return service.getStatus();
   const on = !shutDown && readDecisionsSettings(store).enabled;
   return { state: on ? "not-connected" : "off" };
+}
+
+/** A pane's state for its view to show on mount. Never makes or starts the service: null until it runs. */
+export function getDecisionsPaneState(terminalId: string): PaneDecisionState | null {
+  return service?.getPaneState(terminalId) ?? null;
 }
 
 /** Boot: starts the service only if the saved setting, sanitised, is on. */

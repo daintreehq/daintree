@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DecisionsStatus } from "../../../../shared/types/decisions.js";
+import type { DecisionsStatus, PaneDecisionState } from "../../../../shared/types/decisions.js";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -14,6 +14,7 @@ const decisionsEntry = vi.hoisted(() => ({
   evaluated: 0,
   libraries: 0,
   getDecisionsStatus: vi.fn((): DecisionsStatus => ({ state: "not-connected" })),
+  getDecisionsPaneState: vi.fn((): PaneDecisionState | null => null),
 }));
 
 vi.mock("electron", () => ({ ipcMain: ipcMainMock }));
@@ -25,7 +26,10 @@ vi.mock("../../../store.js", () => ({
 }));
 vi.mock("../../../services/decisions/index.js", () => {
   decisionsEntry.evaluated += 1;
-  return { getDecisionsStatus: decisionsEntry.getDecisionsStatus };
+  return {
+    getDecisionsStatus: decisionsEntry.getDecisionsStatus,
+    getDecisionsPaneState: decisionsEntry.getDecisionsPaneState,
+  };
 });
 vi.mock("@daintreehq/decisions-protocol", () => {
   decisionsEntry.libraries += 1;
@@ -54,27 +58,32 @@ import {
 
 const getStatus = decisionsNamespace.ops.getStatus
   .handler as unknown as () => Promise<DecisionsStatus>;
+const getPaneState = decisionsNamespace.ops.getPaneState.handler as unknown as (
+  terminalId: string
+) => Promise<PaneDecisionState | null>;
 
 describe("decisions IPC", () => {
   beforeEach(() => {
     saved.value = undefined;
     _resetDecisionsModuleForTesting();
     decisionsEntry.getDecisionsStatus.mockClear();
+    decisionsEntry.getDecisionsPaneState.mockClear();
     vi.mocked(store.set).mockClear();
   });
   afterEach(() => {
     _resetDecisionsModuleForTesting();
   });
 
-  it("registers the status read and removes it on cleanup", () => {
+  it("registers both reads and removes them on cleanup", () => {
     const cleanup = registerDecisionsHandlers();
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(
-      CHANNELS.DECISIONS_GET_STATUS,
-      expect.any(Function)
-    );
+    for (const channel of [CHANNELS.DECISIONS_GET_STATUS, CHANNELS.DECISIONS_GET_PANE_STATE]) {
+      expect(ipcMainMock.handle).toHaveBeenCalledWith(channel, expect.any(Function));
+    }
 
     cleanup();
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith(CHANNELS.DECISIONS_GET_STATUS);
+    for (const channel of [CHANNELS.DECISIONS_GET_STATUS, CHANNELS.DECISIONS_GET_PANE_STATE]) {
+      expect(ipcMainMock.removeHandler).toHaveBeenCalledWith(channel);
+    }
   });
 
   // These run before the positive control below (vitest keeps declared order):
@@ -95,6 +104,32 @@ describe("decisions IPC", () => {
       expect(store.set).not.toHaveBeenCalled();
     }
   );
+
+  it.each([
+    ["absent", undefined],
+    ["off", { enabled: false }],
+    ["a non-boolean switch", { enabled: "true" }],
+  ])(
+    "reads no pane state with the setting %s, loading none of Decisions",
+    async (_label, value) => {
+      saved.value = value;
+
+      await expect(getPaneState("pane-a")).resolves.toBeNull();
+
+      expect(decisionsEntry.evaluated).toBe(0);
+      expect(decisionsEntry.libraries).toBe(0);
+    }
+  );
+
+  it("reads no pane state once quit has sealed the loader, without loading it", async () => {
+    saved.value = { enabled: true };
+    sealDecisionsModule();
+
+    await expect(getPaneState("pane-a")).resolves.toBeNull();
+
+    expect(decisionsEntry.evaluated).toBe(0);
+    expect(decisionsEntry.getDecisionsPaneState).not.toHaveBeenCalled();
+  });
 
   it("answers off once quit has sealed the loader, without loading it", async () => {
     saved.value = { enabled: true };
@@ -117,5 +152,22 @@ describe("decisions IPC", () => {
 
     expect(decisionsEntry.evaluated).toBe(1);
     expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("asks Decisions itself for a pane's state once the setting is on", async () => {
+    saved.value = { enabled: true };
+    const state: PaneDecisionState = {
+      terminalId: "pane-a",
+      openQuestions: [],
+      waitingAnswers: [],
+      needsAttention: [],
+      revision: 4,
+    };
+    decisionsEntry.getDecisionsPaneState.mockReturnValueOnce(state);
+
+    await expect(getPaneState("pane-a")).resolves.toBe(state);
+    await expect(getPaneState("pane-b")).resolves.toBeNull();
+
+    expect(decisionsEntry.getDecisionsPaneState.mock.calls).toEqual([["pane-a"], ["pane-b"]]);
   });
 });

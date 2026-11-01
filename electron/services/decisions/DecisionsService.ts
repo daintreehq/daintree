@@ -1,13 +1,16 @@
+import type { QuestionRow } from "@daintreehq/decisions-client";
 import type {
   DecisionsSettings,
   DecisionsState,
   DecisionsStatus,
   DecisionsStatusEvent,
+  PaneDecisionState,
 } from "../../../shared/types/decisions.js";
 import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
 import { decisionsLibraries, type DecisionsLibraries } from "./libraries.js";
 import { openDecisionsLocalStore } from "./openLocalStore.js";
 import { decisionsKeyFilePath, SealedKeyStore } from "./keyStore.js";
+import { PaneDecisionStates, type PaneDecisionStatePublisher } from "./paneDecisionState.js";
 
 export type DecisionsStatusListener = (event: DecisionsStatusEvent) => void;
 
@@ -20,6 +23,8 @@ export interface DecisionsServiceOptions {
   openStore?: DecisionsStoreOpener;
   /** Where the sealed keys live: `userData/decisions/keys.bin` unless a test says otherwise. */
   keyFilePath?: () => string;
+  /** Sends one pane's state to its project's views (`terminal:decision-state`). */
+  publishPaneState?: PaneDecisionStatePublisher;
 }
 
 /**
@@ -43,10 +48,12 @@ export class DecisionsService {
   private readonly listeners = new Set<DecisionsStatusListener>();
   private readonly keyFilePath: () => string;
   private keyStore: SealedKeyStore | null = null;
+  private readonly panes: PaneDecisionStates;
 
   constructor(options: DecisionsServiceOptions = {}) {
     this.openStore = options.openStore ?? openDecisionsLocalStore;
     this.keyFilePath = options.keyFilePath ?? decisionsKeyFilePath;
+    this.panes = new PaneDecisionStates(options.publishPaneState ?? (() => {}));
   }
 
   getStatus(): DecisionsStatus {
@@ -84,6 +91,21 @@ export class DecisionsService {
     };
   }
 
+  /** A pane's state as last pushed; null while stopped, and for a pane with nothing outstanding. */
+  getPaneState(terminalId: string): PaneDecisionState | null {
+    return this.state === "off" ? null : this.panes.get(terminalId);
+  }
+
+  /**
+   * The store's question rows, all of them, after a write commits: each
+   * pane's state becomes what they show, and the panes that changed are
+   * pushed. Ignored while stopped, so nothing is pushed while Decisions is off.
+   */
+  observeQuestions(rows: readonly QuestionRow[]): void {
+    if (this.disposed || this.state === "off") return;
+    this.panes.replace(rows);
+  }
+
   /**
    * Begins, or carries on, an enabled lifetime with these settings. Settings
    * that are off start nothing. Rejects when the store can't be opened; the
@@ -108,20 +130,27 @@ export class DecisionsService {
 
   /** Ends the enabled lifetime, keeping everything stored. Another `start` may follow. */
   stop(): Promise<void> {
-    return this.enqueue(() => this.release());
+    return this.enqueue(() => this.release(true));
   }
 
   /** App shutdown: ends the lifetime for good, and no later start is honoured. */
   dispose(): Promise<void> {
     this.disposed = true;
     return this.enqueue(async () => {
-      await this.release();
+      await this.release(false);
       this.listeners.clear();
     });
   }
 
-  /** The stored rows and the key file stay: turning Decisions off keeps them for the next time it is on. */
-  private async release(): Promise<void> {
+  /**
+   * The stored rows and the key file stay: turning Decisions off keeps them
+   * for the next time it is on. A stop tells each pane that showed something
+   * that it has nothing now, so no view keeps a question that Decisions is no
+   * longer tracking; at quit the views are going too, and nothing is pushed.
+   * Panes are let go only once the store has closed, so a feed that lands
+   * while it closes is cleared too.
+   */
+  private async release(clearViews: boolean): Promise<void> {
     const store = this.store;
     const keyStore = this.keyStore;
     this.store = null;
@@ -131,6 +160,7 @@ export class DecisionsService {
       // Commits what the lifetime left queued; the rows stay until deleted.
       await store?.close();
     } finally {
+      this.panes.clear(clearViews && !this.disposed && this.state !== "off");
       await keyStore?.close();
       this.setState("off");
     }

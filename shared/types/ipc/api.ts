@@ -448,6 +448,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onNotifyState(
       callback: (data: import("../terminalNotify.js").PaneNotifyState) => void
     ): () => void;
+    /** A pane's Decisions state changed (#16016). Callers filter by `terminalId`. */
+    onDecisionState(
+      callback: (data: import("../decisions.js").PaneDecisionState) => void
+    ): () => void;
     onReliabilityMetric(callback: (data: TerminalReliabilityMetricPayload) => void): () => void;
     /**
      * Geometry the PTY actually holds after each resize it processed. Compare

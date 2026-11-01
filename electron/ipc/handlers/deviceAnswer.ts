@@ -15,7 +15,7 @@ import type {
   DeviceAnswerStatus,
   SetDeviceAnswerPayload,
 } from "../../../shared/types/ipc/deviceAnswer.js";
-import type { DecisionsStatus } from "../../../shared/types/decisions.js";
+import type { DecisionsStatus, PaneDecisionState } from "../../../shared/types/decisions.js";
 
 /**
  * What Settings shows before the service was ever made: read straight from
@@ -105,6 +105,21 @@ export const decisionsNamespace = defineIpcNamespace({
       // Null only once quit has begun, when nothing of Decisions runs.
       return decisions ? decisions.getDecisionsStatus() : { state: "off" };
     }),
+    // A pane's state for its chrome to show on mount (#16016); `host`, so a
+    // view on a Remote Host reads its panes from the Host. Off answers null
+    // from the store, and on never starts anything: until the service runs
+    // there is nothing to show, and its first push follows.
+    getPaneState: opValidated(
+      CHANNELS.DECISIONS_GET_PANE_STATE,
+      z.string().min(1).max(256),
+      async (terminalId: string): Promise<PaneDecisionState | null> => {
+        if (store.get("decisions")?.enabled !== true) return null;
+        const decisions = await loadDecisionsModule(
+          () => import("../../services/decisions/index.js")
+        );
+        return decisions ? decisions.getDecisionsPaneState(terminalId) : null;
+      }
+    ),
   },
 });
 
