@@ -15,11 +15,20 @@ export interface DecisionsSettings {
   relayOrigin: string | null;
   /** The relay installation this machine belongs to; null until it claims or restores one. */
   installationId: string | null;
-  /** This machine's device on that relay. */
+  /**
+   * This machine's device on that relay, as the owner's desktop. An enrolled
+   * Remote Host keeps its own identity in its own keychain store, never here.
+   */
   deviceId: string | null;
   /**
    * This machine's Decisions host id. Daintree's own "local" is only unique
    * per machine, so questions name their host by this instead.
    */
   hostId: string | null;
+  /**
+   * Whether a question with no trusted workflow gate may accept a proxy
+   * answer (the client library's `proxyAllowlisted`). Off unless the person
+   * turns it on.
+   */
+  proxyAllowlisted: boolean;
 }

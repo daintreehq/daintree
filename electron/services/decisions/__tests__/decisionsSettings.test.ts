@@ -1,10 +1,19 @@
+import type Store from "electron-store";
 import { describe, expect, it } from "vitest";
 import {
   defaultDecisionsSettings,
   normalizeRelayOrigin,
+  readDecisionsSettings,
   sanitizeDecisionsSettings,
+  writeDecisionsSettings,
+  type DecisionsStore,
 } from "../decisionsSettings.js";
+import type { StoreSchema } from "../../../store.js";
 import type { DecisionsSettings } from "../../../../shared/types/decisions.js";
+
+// The app's settings store is what callers hand these helpers.
+const appStoreFits: Store<StoreSchema> extends DecisionsStore ? true : never = true;
+void appStoreFits;
 
 const connected: DecisionsSettings = {
   enabled: true,
@@ -12,7 +21,21 @@ const connected: DecisionsSettings = {
   installationId: "inst_01HZY3K9QW",
   deviceId: "dev-01HZY3K9QX",
   hostId: "host_01HZY3K9QY",
+  proxyAllowlisted: true,
 };
+
+function memoryStore(initial?: unknown) {
+  let value = initial;
+  const writes: unknown[] = [];
+  const store: DecisionsStore = {
+    get: () => value,
+    set: (_key, next) => {
+      writes.push(next);
+      value = next;
+    },
+  };
+  return { store, writes, current: () => value };
+}
 
 describe("sanitizeDecisionsSettings", () => {
   it("reads anything that isn't a settings object as off with no relay, without throwing", () => {
@@ -23,11 +46,15 @@ describe("sanitizeDecisionsSettings", () => {
     }
   });
 
-  it("is on only for an exact true", () => {
-    for (const enabled of ["true", 1, {}, [true], null]) {
-      expect(sanitizeDecisionsSettings({ ...connected, enabled }).enabled, String(enabled)).toBe(
-        false
-      );
+  it("is on only for an exact true, and a proxy is allowed only for an exact true", () => {
+    for (const flag of ["true", 1, {}, [true], null]) {
+      const settings = sanitizeDecisionsSettings({
+        ...connected,
+        enabled: flag,
+        proxyAllowlisted: flag,
+      });
+      expect(settings.enabled, String(flag)).toBe(false);
+      expect(settings.proxyAllowlisted, String(flag)).toBe(false);
     }
     expect(sanitizeDecisionsSettings({ enabled: true }).enabled).toBe(true);
   });
@@ -46,15 +73,28 @@ describe("sanitizeDecisionsSettings", () => {
     expect(sanitizeDecisionsSettings({})).toEqual(defaultDecisionsSettings());
   });
 
-  it("drops each malformed id on its own and leaves the rest", () => {
+  it("drops a malformed id and turns Decisions off, keeping the other ids", () => {
     for (const bad of ["short", "x".repeat(65), "has space1", "dot.ted.id", "slash/id1", 12345678]) {
       const settings = sanitizeDecisionsSettings({ ...connected, deviceId: bad });
-      expect(settings, String(bad)).toEqual({ ...connected, deviceId: null });
+      expect(settings, String(bad)).toEqual({ ...connected, enabled: false, deviceId: null });
     }
-    expect(sanitizeDecisionsSettings({ ...connected, installationId: {} }).installationId).toBe(
-      null
-    );
-    expect(sanitizeDecisionsSettings({ ...connected, hostId: ["host_01HZY3K9QY"] }).hostId).toBe(
+    for (const field of ["installationId", "deviceId", "hostId"] as const) {
+      const settings = sanitizeDecisionsSettings({ ...connected, [field]: ["x".repeat(10)] });
+      expect(settings, field).toEqual({ ...connected, enabled: false, [field]: null });
+    }
+    // Daintree's own host id is unique only per machine, so it never names a host here.
+    expect(sanitizeDecisionsSettings({ ...connected, hostId: "local" })).toEqual({
+      ...connected,
+      enabled: false,
+      hostId: null,
+    });
+  });
+
+  it("takes ids at the protocol's length bounds", () => {
+    for (const id of ["a".repeat(8), "Z".repeat(64), "a_b-C_d-9"]) {
+      expect(sanitizeDecisionsSettings({ ...connected, deviceId: id }).deviceId, id).toBe(id);
+    }
+    expect(sanitizeDecisionsSettings({ ...connected, deviceId: "a".repeat(7) }).deviceId).toBe(
       null
     );
   });
@@ -74,9 +114,58 @@ describe("sanitizeDecisionsSettings", () => {
     }
   });
 
-  it("keeps the switch when the relay is unreadable, since it can be on before a relay is entered", () => {
-    const settings = sanitizeDecisionsSettings({ ...connected, relayOrigin: "not a url" });
-    expect(settings).toEqual({ ...connected, relayOrigin: null });
+  it("turns Decisions off when the relay origin is there but unreadable", () => {
+    for (const relayOrigin of ["not a url", "http://relay.example.com", 7, { href: "x" }]) {
+      const settings = sanitizeDecisionsSettings({ ...connected, relayOrigin });
+      expect(settings, String(relayOrigin)).toEqual({
+        ...connected,
+        enabled: false,
+        relayOrigin: null,
+      });
+    }
+  });
+
+  it("keeps the switch on while no relay is set up yet", () => {
+    const settings = sanitizeDecisionsSettings({
+      enabled: true,
+      relayOrigin: null,
+      installationId: null,
+      deviceId: null,
+      hostId: null,
+    });
+    expect(settings).toEqual({ ...defaultDecisionsSettings(), enabled: true });
+  });
+
+  it("leaves what it was given untouched", () => {
+    const raw = { ...connected, relayOrigin: "https://owner:pw@relay.example.com/x", extra: 1 };
+    const before = structuredClone(raw);
+    sanitizeDecisionsSettings(raw);
+    expect(raw).toEqual(before);
+  });
+});
+
+describe("readDecisionsSettings and writeDecisionsSettings", () => {
+  it("reads an absent setting as off without writing anything", () => {
+    const { store, writes } = memoryStore(undefined);
+    expect(readDecisionsSettings(store)).toEqual(defaultDecisionsSettings());
+    expect(readDecisionsSettings(memoryStore("garbage").store).enabled).toBe(false);
+    expect(writes).toEqual([]);
+  });
+
+  it("writes the whole setting in one set, sanitised, and returns what it stored", () => {
+    const { store, writes, current } = memoryStore({ ...connected, claimSecret: "claim-7f3a9c1e5b" });
+    const next = {
+      ...readDecisionsSettings(store),
+      relayOrigin: "https://relay.example.com/setup?claim=claim-7f3a9c1e5b",
+      token: "tok-91bc2d",
+    } as DecisionsSettings;
+
+    const stored = writeDecisionsSettings(store, next);
+
+    expect(stored).toEqual({ ...connected, relayOrigin: "https://relay.example.com" });
+    expect(writes).toEqual([stored]);
+    expect(current()).toEqual(stored);
+    expect(JSON.stringify(current())).not.toMatch(/claim-7f3a9c1e5b|tok-91bc2d/);
   });
 });
 
