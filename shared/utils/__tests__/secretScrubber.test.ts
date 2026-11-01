@@ -472,6 +472,26 @@ describe("secretScrubber", () => {
         input: `HEROKU_API_KEY=HRKU-AA${"a".repeat(58)} end`,
         expected: `HEROKU_API_KEY=${REDACTED} end`,
       },
+      {
+        name: "decisions-claim-secret",
+        input: `  Claim secret  ${"0a".repeat(32)}\nNext: pair your phone`,
+        expected: `  Claim secret  ${REDACTED}\nNext: pair your phone`,
+      },
+      {
+        name: "decisions-claim-secret-env",
+        input: `DECISIONS_CLAIM_SECRET="${"k".repeat(24)}" decisions setup`,
+        expected: `DECISIONS_CLAIM_SECRET="${REDACTED}" decisions setup`,
+      },
+      {
+        name: "decisions-claim-secret-flag",
+        input: `decisions setup --claim-secret=${"s".repeat(20)} --url https://relay.example`,
+        expected: `decisions setup --claim-secret=${REDACTED} --url https://relay.example`,
+      },
+      {
+        name: "decisions-recovery-passphrase",
+        input: "recovery passphrase: correct horse battery staple\nnext line",
+        expected: `recovery passphrase: ${REDACTED}\nnext line`,
+      },
     ];
 
     for (const { name, input, expected } of positive) {
@@ -513,6 +533,25 @@ describe("secretScrubber", () => {
     it("does not match partial PEM sigils", () => {
       const partial = "-----BEGIN CERTIFICATE----- without matching end marker";
       expect(scrubSecrets(partial)).toBe(partial);
+    });
+
+    it("leaves a claim secret's file path and the words about it alone", () => {
+      const text = [
+        "decisions setup --claim-secret-file /home/me/claim-secret.txt",
+        "This computer claimed the relay, so the claim secret has been used and is not needed again.",
+      ].join("\n");
+      expect(scrubSecrets(text)).toBe(text);
+    });
+
+    it("redacts a recovery passphrase once, however often it is scrubbed", () => {
+      const once = scrubSecrets("RECOVERY_PASSPHRASE=correct horse battery staple");
+      expect(once).toBe(`RECOVERY_PASSPHRASE=${REDACTED}`);
+      expect(scrubSecrets(once)).toBe(once);
+      const spaced = scrubSecrets("recovery passphrase: correct horse");
+      expect(scrubSecrets(spaced)).toBe(spaced);
+      // A value the logger already redacted by its key keeps its quotes.
+      const keyed = '"recoveryPassphrase": "[redacted]",';
+      expect(scrubSecrets(keyed)).toBe(keyed);
     });
 
     it("leaves an empty string unchanged", () => {

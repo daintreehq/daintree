@@ -765,7 +765,7 @@ function forwardEntryToParent(
 
 const loggerStringify = configure({ bigint: false });
 
-const SENSITIVE_KEY_PATTERNS = ["secret", "token", "password", "key"];
+const SENSITIVE_KEY_PATTERNS = ["secret", "token", "password", "passphrase", "key"];
 
 // Bounds for `redactSensitiveData`. Context objects are deep-cloned into the
 // 500-entry in-memory ring (LogBuffer); without caps a single stack trace,

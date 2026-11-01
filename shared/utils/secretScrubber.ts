@@ -473,6 +473,22 @@ export const PATTERNS: readonly SecretPattern[] = [
     replacement: REDACTED,
   },
   {
+    name: "decisions-claim-secret",
+    // The one-time secret that claims a Decisions relay: `CLAIM_SECRET=…`,
+    // `--claim-secret …`, and the deploy CLI's `Claim secret  <value>` line.
+    // A separator is required, so `--claim-secret-file <path>` names a file and stays.
+    regex:
+      /(^|[^A-Za-z0-9])(claim[_ -]?secret["']?(?:[ \t]{0,4}[:=][ \t]{0,4}|[ \t]{1,16})["']?)[^\s"'`]{16,256}/gi,
+    replacement: `$1$2${REDACTED}`,
+  },
+  {
+    name: "decisions-recovery-passphrase",
+    // A labelled Decisions recovery passphrase, to the end of its line: it may hold spaces.
+    regex:
+      /(^|[^A-Za-z0-9])(recovery[_ -]?passphrase["']?[ \t]{0,4}[:=][ \t]{0,4})(?![ \t]{0,4}["']?\[REDACTED\])[^\n]{1,512}/gi,
+    replacement: `$1$2${REDACTED}`,
+  },
+  {
     name: "generic-key-fallback",
     // Last-resort fallback for `.env`-shaped lines using common API key names.
     // The 16-char minimum body excludes short numeric values like `MAX_TOKENS=8192`,

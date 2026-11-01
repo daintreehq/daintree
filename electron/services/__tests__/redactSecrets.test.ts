@@ -159,6 +159,31 @@ describe("redactSecrets", () => {
     );
   });
 
+  it("drops a Decisions claim secret, a recovery passphrase and a Cloudflare token", () => {
+    const claim = "0a".repeat(32);
+    expect(redactSecrets(`  Worker URL    https://relay.example\n  Claim secret  ${claim}`)).toBe(
+      "  Worker URL    https://relay.example\n  Claim secret  [redacted]"
+    );
+    expect(redactSecrets(`CLAIM_SECRET=${claim}`)).toBe("CLAIM_SECRET=[redacted]");
+    expect(redactSecrets(`decisions setup --claim-secret ${claim}`)).toBe(
+      "decisions setup --claim-secret [redacted]"
+    );
+    expect(redactSecrets("Recovery passphrase: correct horse battery staple\nnext: value")).toBe(
+      "Recovery passphrase: [redacted]\nnext: value"
+    );
+    expect(redactSecrets(`token cfut_${"A".repeat(40)}0123abcd here`)).toBe(
+      "token [redacted] here"
+    );
+  });
+
+  it("keeps a claim secret's file path and the words about it", () => {
+    const text = [
+      "decisions setup --claim-secret-file /home/me/claim.txt",
+      "the claim secret has been used and is not needed again",
+    ].join("\n");
+    expect(redactSecrets(text)).toBe(text);
+  });
+
   it("drops the rest of a line whose quote never closes, and nothing past it", () => {
     expect(redactSecrets("password: 'unterminated\nI can't stop now")).toBe(
       "password: [redacted]\nI can't stop now"

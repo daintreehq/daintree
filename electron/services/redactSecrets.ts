@@ -15,6 +15,11 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   /\bhf_[A-Za-z0-9]{30,}\b/g,
   /\b(?:xox[abeprs]|xapp)-[A-Za-z0-9-]{10,}\b/g,
   /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
+  // Cloudflare's scannable tokens: `cfat_` (account), `cfut_` (user), `cfk_` (global key).
+  /\bcf(?:at|ut|k)_[A-Za-z0-9]{40}[0-9a-f]{8}\b/g,
+  // A Decisions relay's claim secret as its deploy CLI prints it, `Claim secret  <value>`,
+  // with no `=` or `:` for an assignment to find.
+  /\b(claim[ _-]?secret[ \t]{1,16})(?!\[redacted\])[^\s"'`]{16,256}/gi,
   /\bAIza[0-9A-Za-z_-]{30,}\b/g,
   /\bya29\.[A-Za-z0-9_-]{20,}/g,
   /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
@@ -57,6 +62,7 @@ const BARE_VALUE = /[^\s"',}]+/y;
 /** A YAML block scalar's indicator: the value is on the indented lines below. */
 const BLOCK_VALUE = /^[|>][-+]?$/;
 const INDENTED_LINES = /(?:\n[ \t]+[^\n]*)+/y;
+const REST_OF_LINE = /[^\n]*/y;
 /** A value that says there is none. */
 const EMPTY_VALUE = /^(?:undefined|null|nil|none|true|false|n\/a)$/i;
 
@@ -185,6 +191,10 @@ function redactAssignments(text: string): string {
       if (BLOCK_VALUE.test(bare)) {
         INDENTED_LINES.lastIndex = end;
         end += INDENTED_LINES.exec(text)?.[0].length ?? 0;
+      } else if (/passphrase/i.test(name)) {
+        // A passphrase may be several words, so the rest of its line goes with it.
+        REST_OF_LINE.lastIndex = end;
+        end += REST_OF_LINE.exec(text)?.[0].length ?? 0;
       } else if (bare.length < 6 && !/pass(?:word|wd|phrase)/i.test(name)) {
         // A password however short: `password: abc` is still a password.
         continue;

@@ -655,6 +655,11 @@ describe("logger", () => {
       expect(captured.cause?.message).toBe("root cause");
     });
 
+    it("redacts a passphrase under any name that says it is one", () => {
+      logWarn("recovery", { recoveryPassphrase: "correct horse battery staple" });
+      expect(lastContext()?.recoveryPassphrase).toBe("[redacted]");
+    });
+
     it("still redacts an Error stored under a sensitive key", () => {
       logWarn("auth", { apiKey: new Error("s3cret-in-the-message") });
       expect(lastContext()?.apiKey).toBe("[redacted]");
