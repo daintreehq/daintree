@@ -11,53 +11,28 @@
 }
 
 /* ── Pip conventions ──
- * The rules below describe what gets rendered and how the pip floats above
- * its icon. They are NOT enforced by CSS cascade — precedence is component
- * rendering logic. Reordering rules here will not change which pip wins.
+ * One badge vocabulary for the whole strip. Every mark is anchored to its
+ * button's glyph (never the button box), sits in the same top-right corner and
+ * carries the same 1px surface-coloured cut-out, so a lit button reads the same
+ * wherever it sits. What the mark means is told by its shape as well as its
+ * hue (WCAG 1.4.1 — forced colours paint every one of them CanvasText):
  *
- * 1. Precedence ladder. Each toolbar button renders at most one pip; the
- *    "ladder" is the conceptual ordering across surfaces, not a single
- *    arbitration site. Within ToolbarAssistantButton.tsx (describePip /
- *    describeAgentPip), the MCP health pip wins over the
- *    agent activity pip — `failed` and `starting` come from
- *    McpRuntimeSnapshot.state and surface as MCP health; `working`,
- *    `directing`, `waiting` come from AgentStateMachine and surface as the
- *    agent activity pip, which is suppressed when the panel is open or the
- *    state has been acknowledged. MCP audit anomalies deliberately get no pip:
- *    they are process-global diagnostics with nothing to act on, so they stay
- *    in Settings → MCP Server (#12509).
- *    NotificationCenterToolbarButton owns the `unread` dot on its own surface —
- *    it doesn't compete with the assistant pips, so the ordering reads:
+ *   round dot     ambient: unread, working, directing, info
+ *   washed ring   waiting on the user — the app-wide amber waiting ring
+ *   rounded square  warning
+ *   square        error
+ *   count pill    a quantity: Canopy's urgent asks, Problems' errors, a
+ *                 plugin's count
  *
- *      MCP failed > MCP starting > agent working / directing / waiting
- *      notification unread (independent surface)
+ * Precedence is component logic, not cascade order: each button renders at
+ * most one corner mark. Within ToolbarAssistantButton.tsx the MCP health mark
+ * wins over the agent mark (`failed` > `starting` > working / directing /
+ * waiting). MCP audit anomalies deliberately get no pip: they are
+ * process-global diagnostics with nothing to act on (#12509).
  *
- *    DND dimming (.toolbar-badge[data-dnd-active]) is a cross-tier overlay
- *    that drops opacity to 0.3; it only applies to the notification dot
- *    today.
- *
- * 2. Per-surface ring rule. The ring (box-shadow / Tailwind ring-1) creates
- *    a cut-out gap so the pip floats visually above the icon:
- *
- *      - ring-surface-sidebar — semantic-status pips on a colored dot
- *        (AssistantButton MCP/agent pips, AgentButton, LauncherMenuButton
- *        running-state pip, plus LauncherMenuButton's separate discovery
- *        badge — see `showDiscoveryBadge` in LauncherMenuButton.tsx), and
- *        the NotificationCenter unread dot, which takes the same ring on a
- *        neutral text-secondary fill. Ring color matches the toolbar /
- *        sidebar surface (they share a token across themes) so the gap reads
- *        as a clean cut-out.
- *      - No ring — .toolbar-problems-badge (size is the differentiator, see
- *        rule 3) and VoiceRecordingToolbarButton (an inline level waveform,
- *        not a .toolbar-badge and out of scope here). .toolbar-overflow-badge
- *        is severity-dependent: no ring on `critical`, a 1px box-shadow ring
- *        on `warning` and `info` (see the severity blocks below).
- *
- * 3. Problems-pip size. .toolbar-problems-badge is 8px (w-2 h-2); every other
- *    pip is 6px (w-1.5 h-1.5). The larger geometry is intentional — a
- *    non-color severity differentiator parallel to the .toolbar-overflow-badge
- *    shape tiers below (WCAG 1.4.1). The pip is always error-colored, so size
- *    reinforces a high-signal indicator instead of adding ring noise.
+ * A mark stands in for a surface that is shut. While the surface it reports on
+ * is open — the notification center, the problems dock, Canopy, the assistant
+ * panel — the open surface is the signal and the mark stands down.
  */
 
 /* ── Shared pip geometry ──
@@ -76,7 +51,7 @@
   height: 6px;
   width: 6px;
   border-radius: 9999px;
-  box-shadow: 0 0 0 1px var(--color-surface-sidebar);
+  box-shadow: 0 0 0 1px var(--toolbar-pip-cutout, var(--color-surface-sidebar));
 }
 
 /* A pip that carries a count (Canopy's "needs you"). Same corner and cut-out
@@ -96,7 +71,7 @@
   min-width: 12px;
   padding: 0 3px;
   border-radius: 9999px;
-  box-shadow: 0 0 0 1px var(--color-surface-sidebar);
+  box-shadow: 0 0 0 1px var(--toolbar-pip-cutout, var(--color-surface-sidebar));
   color: oklch(
     from var(--toolbar-count-fill, var(--color-state-waiting)) clamp(0, (0.56 - l) * 1000, 1) 0 0
   );
@@ -108,9 +83,30 @@
   text-align: center;
 }
 
-/* A plugin's count pill (#13503): the same fills PluginPanelBadges' dots draw. */
+/* A count's silhouette carries its severity as the dots' do (WCAG 1.4.1; forced
+ * colours paint every count the same): an error count is a tile with barely
+ * softened corners, a warning count softened further, and a waiting or neutral
+ * count stays a capsule — so Problems' errors and Canopy's urgent asks never
+ * share a shape. */
+.toolbar-count[data-badge-color="error"] {
+  border-radius: calc(var(--radius-xs) / 2);
+}
+
+.toolbar-count[data-badge-color="warning"] {
+  border-radius: var(--radius-xs);
+}
+
+/* A plugin's count pill (#13503): the same fills PluginPanelBadges' dots draw,
+ * except the default, which steps up from text-muted to text-secondary here.
+ * Muted has no dark-theme contrast floor (2.2:1 on namib), and a toolbar mark
+ * carries meaning; it matches the strip's neutral unread dot. */
 .toolbar-count[data-badge-color="default"] {
-  --toolbar-count-fill: var(--color-text-muted);
+  --toolbar-count-fill: var(--color-text-secondary);
+}
+
+.toolbar-pip[data-badge-color="default"],
+.toolbar-count[data-badge-color="default"] {
+  background-color: var(--color-text-secondary);
 }
 .toolbar-count[data-badge-color="success"] {
   --toolbar-count-fill: var(--color-text-primary);
@@ -122,13 +118,59 @@
   --toolbar-count-fill: var(--color-status-error);
 }
 
-/* A plugin pip's severity in its shape as well as its hue, as the overflow dot
- * does (WCAG 1.4.1): forced colours paint every pip the same CanvasText. */
-.toolbar-pip[data-badge-color="error"] {
+/* Severity in shape as well as hue (WCAG 1.4.1): forced colours paint every
+ * pip the same CanvasText. Error is a square. Warning is a 7px square with
+ * softened corners — at 6px a 2px radius left one pixel of corner, and it read
+ * as the ambient dot. */
+.toolbar-pip[data-badge-color="error"],
+.toolbar-overflow-badge[data-severity="critical"],
+.toolbar-menu-pip[data-badge-color="error"] {
   border-radius: 0;
 }
-.toolbar-pip[data-badge-color="warning"] {
-  border-radius: 2px;
+.toolbar-pip[data-badge-color="warning"],
+.toolbar-overflow-badge:is([data-severity="warning"], [data-severity="notice"]),
+.toolbar-menu-pip[data-badge-color="warning"] {
+  height: 7px;
+  width: 7px;
+  border-radius: calc(var(--radius-xs) / 2);
+}
+
+/* A second pip on one glyph (the problems button's watcher warning) takes the
+ * bottom corner, so it never collides with the count in the top one. */
+.toolbar-pip[data-pip-corner="bottom"] {
+  top: auto;
+  bottom: -3px;
+  right: -3px;
+}
+
+/* Waiting on the user: the app-wide waiting ring (AgentStateCircles'
+ * WashedRing) at pip scale — a 1.5px amber stroke over a 10% wash of its own
+ * colour, a size up from the dots so the hollow centre reads. A solid amber
+ * disc sat inside warm brand marks (Claude's rays) on every light theme, and
+ * the app keeps the one solid disc for unread. */
+.toolbar-pip[data-pip="waiting"],
+.toolbar-overflow-badge[data-severity="waiting"],
+.toolbar-menu-pip[data-pip="waiting"] {
+  top: -3px;
+  right: -3px;
+  height: 8px;
+  width: 8px;
+  border: 1.5px solid var(--color-state-waiting);
+  background-color: color-mix(
+    in oklab,
+    var(--color-state-waiting) 10%,
+    var(--toolbar-pip-cutout, var(--color-surface-sidebar))
+  );
+}
+
+/* In a menu row the ring sits on the menu's surface, so its cut-out and wash
+ * take that surface rather than the strip's. */
+.toolbar-menu-pip[data-pip="waiting"] {
+  background-color: color-mix(
+    in oklab,
+    var(--color-state-waiting) 10%,
+    var(--overlay-surface-solid, var(--color-surface-sidebar))
+  );
 }
 
 /* ── Badge entrance / exit ──
@@ -216,53 +258,57 @@
   }
 }
 
-/* ── Overflow severity dot ──
- * @property --overflow-badge-color (registered above) interpolates in OKLab
- * so severity class-swaps produce a smooth hue transition instead of a snap.
+/* ── Overflow severity mark ──
+ * The `…` trigger carries the most severe mark among the buttons folded into
+ * it, in the same shape that button would wear: square for an error, the
+ * waiting ring, a neutral dot for unread or info. Geometry and cut-out come
+ * from .toolbar-pip. @property --overflow-badge-color (registered above)
+ * interpolates the fill in OKLab when the severity changes.
  */
 .toolbar-overflow-badge {
   background-color: var(--overflow-badge-color);
   transition:
-    --overflow-badge-color 150ms ease-out,
+    --overflow-badge-color var(--duration-150) ease-out,
     display var(--duration-120) allow-discrete,
     opacity var(--duration-120) var(--ease-exit),
     transform var(--duration-120) var(--ease-exit);
 }
 
-/* WCAG 1.4.1: non-color shape differentiator per tier. Critical reads as a
- * square (border-radius: 0), warning as a slightly rounded square, info as a
- * pill — color still carries primary semantic weight but is no longer the sole
- * cue. The ring (box-shadow) lives here too so shape and ring always match —
- * a round ring on a square dot would look like a bug. */
 .toolbar-overflow-badge[data-severity="critical"] {
   --overflow-badge-color: var(--color-status-error);
-  border-radius: 0;
-  box-shadow: none;
+}
+
+.toolbar-overflow-badge[data-severity="waiting"] {
+  --overflow-badge-color: color-mix(
+    in oklab,
+    var(--color-state-waiting) 10%,
+    var(--toolbar-pip-cutout, var(--color-surface-sidebar))
+  );
 }
 
 .toolbar-overflow-badge[data-severity="warning"] {
-  --overflow-badge-color: var(--color-state-waiting);
-  border-radius: 2px;
-  box-shadow: 0 0 0 1px rgb(from var(--color-surface-canvas) r g b / 0.6);
+  --overflow-badge-color: var(--color-status-warning);
+}
+
+.toolbar-overflow-badge[data-severity="notice"] {
+  --overflow-badge-color: var(--color-text-secondary);
 }
 
 .toolbar-overflow-badge[data-severity="info"] {
-  --overflow-badge-color: var(--color-text-primary, #94a3b8);
-  opacity: 0.5;
-  border-radius: 9999px;
-  box-shadow: 0 0 0 1px rgb(from var(--color-surface-canvas) r g b / 0.6);
+  --overflow-badge-color: var(--color-text-secondary);
 }
 
-/* ── Problems dot ──
- * @property --problems-dot-color gives the dot a smooth color transition so
- * future color changes (e.g., severity tiers) animate instead of snapping.
- * Currently always error-colored; the custom property just programs for
- * smooth future changes.
+/* ── Problems count ──
+ * Errors are a quantity, so Problems wears a count pill (.toolbar-count) in the
+ * error fill, the same shape Canopy's urgent count takes. The digits pick
+ * their ink off --toolbar-count-fill. @property --problems-dot-color fades the
+ * fill in rather than snapping it.
  */
 .toolbar-problems-badge {
+  --toolbar-count-fill: var(--color-status-error);
   background-color: var(--problems-dot-color);
   transition:
-    --problems-dot-color 150ms ease-out,
+    --problems-dot-color var(--duration-150) ease-out,
     display var(--duration-120) allow-discrete,
     opacity var(--duration-120) var(--ease-exit),
     transform var(--duration-120) var(--ease-exit);
@@ -270,13 +316,6 @@
 
 .toolbar-problems-badge[data-visible="true"] {
   --problems-dot-color: var(--color-status-error);
-}
-
-/* DND dims the notification dot so muted and active unread states are
- * visually distinct. The data-dnd-active attribute is set on the badge
- * span itself, mirroring the button's attribute. */
-.toolbar-badge[data-dnd-active="true"] {
-  opacity: 0.3;
 }
 
 /* ── Reduced motion ──

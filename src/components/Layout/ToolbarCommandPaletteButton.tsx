@@ -7,10 +7,10 @@ import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { actionService } from "@/services/ActionService";
+import { toolbarIconButtonClass } from "./toolbarItemClasses";
 
 const PALETTE_ACTION_ID = "action.palette.open" as const;
 const PALETTE_LABEL = "Command palette";
-const toolbarIconButtonClass = "toolbar-icon-button text-text-primary relative";
 
 interface ToolbarCommandPaletteButtonProps {
   "data-toolbar-item"?: string;

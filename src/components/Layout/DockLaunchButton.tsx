@@ -1087,8 +1087,8 @@ export function DockLaunchButton({
                 <Plus />
                 <span
                   data-testid="launcher-discovery-badge"
-                  data-visible={showDiscoveryBadge}
-                  className="toolbar-badge absolute top-0 right-0 size-1.5 rounded-full bg-status-info ring-1 ring-surface-sidebar"
+                  data-visible={showDiscoveryBadge && !open}
+                  className="toolbar-pip toolbar-badge bg-text-secondary"
                   aria-hidden="true"
                 />
               </span>
@@ -1490,6 +1490,7 @@ function RunningDot({ state }: { state: AttentionAgentState | null }) {
     <span
       className={cn("toolbar-pip toolbar-badge", color)}
       data-visible={!!color}
+      data-pip={state ?? undefined}
       aria-hidden="true"
     />
   );

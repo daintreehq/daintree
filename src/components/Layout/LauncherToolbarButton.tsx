@@ -109,10 +109,13 @@ export function LauncherToolbarButton({
                 // labelled with why, matching the launcher: the pin is a placement
                 // the user made, and removing the button when a project closes
                 // would rearrange the toolbar under them.
-                disabled={disabledReason !== undefined}
+                // aria-disabled, not disabled: a native disabled button leaves the
+                // roving toolbar and fires no pointer events, so the tooltip
+                // carrying the reason could never open. The activation guards.
+                aria-disabled={disabledReason !== undefined || undefined}
                 onClick={() => activateDockLaunchItem(item, activationContext)}
                 className={cn(
-                  "toolbar-icon-button text-text-primary relative",
+                  "toolbar-icon-button toolbar-quiet-ink text-text-secondary relative",
                   showsName && "w-auto max-w-40 gap-1.5 px-2"
                 )}
                 aria-label={disabledReason ? `${label} (${disabledReason})` : label}

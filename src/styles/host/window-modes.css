@@ -180,8 +180,7 @@ body[data-power-saving="true"] .animate-spin-slow,
 body[data-power-saving="true"] .animate-activity-pulse,
 body[data-power-saving="true"] .animate-breathe,
 body[data-power-saving="true"] .animate-pulse,
-body[data-power-saving="true"] .motion-safe\:animate-pulse,
-body[data-power-saving="true"] .forge-status-error {
+body[data-power-saving="true"] .motion-safe\:animate-pulse {
   animation: none;
   will-change: auto;
 }
@@ -205,8 +204,7 @@ body[data-motion-rate="reduced"] .animate-spin-slow {
 body[data-motion-rate="reduced"] .animate-activity-pulse,
 body[data-motion-rate="reduced"] .animate-breathe,
 body[data-motion-rate="reduced"] .animate-pulse,
-body[data-motion-rate="reduced"] .motion-safe\:animate-pulse,
-body[data-motion-rate="reduced"] .forge-status-error {
+body[data-motion-rate="reduced"] .motion-safe\:animate-pulse {
   animation-timing-function: steps(2, end);
 }
 

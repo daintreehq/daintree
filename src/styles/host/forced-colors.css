@@ -898,13 +898,8 @@
 
   /* The forge status stripe paints with background colours, which are forced
      to Canvas, and its loading band is a gradient, which is dropped, so every
-     state vanished. Error rests in full ink; loading is a still GrayText bar.
-     The counters' em-dashes and the warning glyph still tell the two apart.
-     !important because performance mode pins the loading tint with it. */
-  .forge-status-error {
-    background-color: CanvasText !important;
-  }
-
+     state vanished. Loading is a still GrayText bar. !important because
+     performance mode pins the loading tint with it. */
   .forge-status-loading {
     background-color: GrayText !important;
   }
@@ -916,7 +911,6 @@
   /* The blanket button frame above draws each counter's bottom edge in the row
      just under the bar, which fused the two into one heavy border. One more
      row of lift keeps a Canvas gap between them. */
-  .forge-status-error,
   .forge-status-loading {
     bottom: 2px;
   }

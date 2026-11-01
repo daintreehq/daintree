@@ -85,10 +85,7 @@ function VoiceLockedButton({
               source: "user",
             });
           }}
-          className={cn(
-            "toolbar-icon-button relative mr-0.5 text-text-secondary",
-            VOICE_SLOT_CLASS
-          )}
+          className={cn("toolbar-icon-button relative text-text-secondary", VOICE_SLOT_CLASS)}
           aria-label={`Dictation locked to ${label}. Click to unlock.`}
           data-testid="voice-locked-button"
         >
@@ -211,10 +208,7 @@ function VoiceElsewhereIndicator({
               onClick={() => {
                 void voiceRecordingService.revealSessionElsewhere(session.sessionId);
               }}
-              className={cn(
-                "toolbar-icon-button relative mr-0.5 text-text-secondary",
-                VOICE_SLOT_CLASS
-              )}
+              className={cn("toolbar-icon-button relative text-text-secondary", VOICE_SLOT_CLASS)}
               aria-label={`${title}. Click to go there.`}
               data-testid="voice-elsewhere-button"
             >
@@ -441,7 +435,7 @@ function VoiceWave({
             ref={(el) => {
               barRefs.current[i] = el;
             }}
-            className="h-full w-0.5 rounded-full bg-accent-primary"
+            className="h-full w-0.5 rounded-full bg-text-primary"
             style={{ transform: `scaleY(${BAR_REST})` }}
           />
         ))}
@@ -457,10 +451,7 @@ function VoiceRecordingPlaceholder() {
   // by offsetParent, which opacity-0 does NOT null out).
   return (
     <div
-      className={cn(
-        "toolbar-icon-button relative mr-0.5 opacity-0 pointer-events-none",
-        VOICE_SLOT_CLASS
-      )}
+      className={cn("toolbar-icon-button relative opacity-0 pointer-events-none", VOICE_SLOT_CLASS)}
       aria-hidden="true"
     />
   );
@@ -572,10 +563,8 @@ export function VoiceRecordingToolbarButton({
                 void voiceRecordingService.focusActiveTarget();
               }}
               className={cn(
-                "toolbar-icon-button relative mr-0.5 gap-1",
-                VOICE_SLOT_CLASS,
-                "text-text-primary",
-                "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
+                "toolbar-icon-button toolbar-live-control relative gap-1",
+                VOICE_SLOT_CLASS
               )}
               aria-label={armingTitle}
             >
@@ -798,10 +787,9 @@ function VoiceSessionButton({
                 size="icon"
                 data-toolbar-item={dataToolbarItem}
                 className={cn(
-                  "toolbar-icon-button relative mr-0.5 gap-1",
+                  "toolbar-icon-button relative gap-1",
                   VOICE_SLOT_CLASS,
-                  isPaused ? "text-text-secondary" : "text-text-primary",
-                  "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
+                  !isPaused && "toolbar-live-control"
                 )}
                 aria-label={title}
                 data-testid={testId}

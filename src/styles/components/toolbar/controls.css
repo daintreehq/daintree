@@ -17,7 +17,7 @@
 .toolbar-stat-pill,
 .toolbar-project-pill,
 .host-chip-remote {
-  --_fill-duration: 150ms;
+  --_fill-duration: var(--duration-150);
 }
 
 .toolbar-icon-button:active,
@@ -31,10 +31,9 @@
 
 .toolbar-icon-button,
 .toolbar-agent-button {
-  --_hover-fg: var(--toolbar-control-hover-fg, var(--theme-accent-primary));
   --_hover-shadow: var(--toolbar-control-hover-shadow, none);
   transition:
-    color 150ms ease-out,
+    color var(--duration-150) ease-out,
     background-color var(--_fill-duration) ease-out;
 }
 
@@ -49,6 +48,25 @@
     var(--toolbar-control-hover-bg, var(--theme-overlay-elevated))
   );
   box-shadow: var(--_hover-shadow);
+}
+
+/* Quiet ink: the main strip's glyphs rest on secondary text and come up to
+ * primary when the pointer, the keyboard or an open surface is on them. A live
+ * control (dictation while it records) stays at primary — it is the signal.
+ * Unlayered, so it wins over the ink utility on the element. */
+.toolbar-quiet-ink:is(
+  :hover,
+  :focus-visible,
+  [aria-expanded="true"]:not([data-sidebar-toggle]),
+  [aria-pressed="true"]:not([data-sidebar-toggle]),
+  [data-state="open"]
+),
+.toolbar-live-control {
+  color: var(--theme-text-primary);
+}
+
+.toolbar-quiet-ink:is(:disabled, [aria-disabled="true"]):hover {
+  color: var(--theme-text-secondary);
 }
 
 /* The launcher is the one control on the strip that starts anything, and the
@@ -169,8 +187,10 @@
 
 /* A control that cannot be pressed never paints the hover fill, though it keeps
  * the pointer: its tooltip still says what it is (and why it is unavailable). */
-.toolbar-icon-button:disabled:hover,
-.toolbar-icon-button[aria-disabled="true"]:not([data-loading]):hover {
+.toolbar-icon-button:disabled:is(:hover, :active),
+.toolbar-icon-button[aria-disabled="true"]:not([data-loading]):is(:hover, :active),
+.toolbar-agent-button:disabled:is(:hover, :active),
+.toolbar-agent-button[aria-disabled="true"]:not([data-loading]):is(:hover, :active) {
   background: transparent;
   box-shadow: none;
 }
@@ -203,7 +223,7 @@
  * a second half. */
 .toolbar-agent-split {
   border-radius: var(--radius-md);
-  transition: background-color 150ms ease-out;
+  transition: background-color var(--duration-150) ease-out;
 }
 
 /* aria-expanded, not data-state: the chevron is also a tooltip trigger, and
@@ -223,7 +243,7 @@
   background: var(--toolbar-divider, var(--theme-border-divider));
   opacity: 0;
   pointer-events: none;
-  transition: opacity 150ms ease-out;
+  transition: opacity var(--duration-150) ease-out;
 }
 
 .toolbar-agent-split[data-split-live="true"]:is(:hover, :focus-within)
@@ -246,10 +266,16 @@
   }
 }
 
+/* The stats capsule takes the project pill's own edge unless a theme sets
+ * one for it: on ambient shadow it sat a plane above the workspace it belongs
+ * to, and the measured row's clip cut that shadow's blur flat at both ends. */
 .toolbar-stats {
   --_bg: var(--toolbar-stats-bg, var(--theme-overlay-hover));
   --_border: var(--toolbar-stats-border, var(--theme-border-subtle));
-  --_shadow: var(--toolbar-stats-shadow, var(--theme-shadow-ambient));
+  --_shadow: var(
+    --toolbar-stats-shadow,
+    var(--toolbar-project-shadow, var(--theme-shadow-ambient))
+  );
   --_divider: var(--toolbar-stats-divider, var(--theme-border-subtle));
   background: var(--_bg);
   border-color: var(--_border);
@@ -311,7 +337,7 @@
  * to remove here. */
 .toolbar-stat-pill {
   transition:
-    color 150ms ease-out,
+    color var(--duration-150) ease-out,
     background-color var(--_fill-duration) ease-out;
 }
 
@@ -358,12 +384,12 @@
    * on hover; layering preserves it. The press is the toolbar's (above): no
    * scale, so the pill's width — set by the project and branch names — never
    * decides how big a click looks. */
-  transition: color 150ms ease-out;
+  transition: color var(--duration-150) ease-out;
 }
 
 /* Surface-lift overlay. Sits above the pill's background fill but below its
  * content — direct children are lifted to z-index 1 so the tint never washes out
- * the label. Fading opacity keeps the Tier 1 150ms ease-out without animating the
+ * the label. Fading opacity keeps the Tier 1 var(--duration-150) ease-out without animating the
  * background-image layer (gradients can't be transitioned). Hover paints the
  * elevated overlay; armed escalates to emphasis (raised on light) and the press
  * to emphasis in both polarities. Both properties take the press timing. */
@@ -439,13 +465,13 @@
   border-color: var(--_border);
   color: var(--_fg);
   font-size: var(--_size);
-  transition: color 150ms ease-out;
+  transition: color var(--duration-150) ease-out;
 }
 
 .toolbar-project-meta {
   --_fg: var(--toolbar-project-meta-fg, var(--theme-text-secondary));
   color: var(--_fg);
-  transition: color 150ms ease-out;
+  transition: color var(--duration-150) ease-out;
 }
 
 /* The hover, armed and pressed overlays brighten the fill under the chip's own

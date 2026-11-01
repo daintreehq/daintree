@@ -52,7 +52,8 @@ import { installFakeAgent, fakeAgentEnv, ptyWrite, FAKE_AGENT_IDLE } from "../he
 import { FAKE_AGENT_READY } from "../helpers/fakeAgent";
 import { getTerminalText, waitForTerminalText, writeTerminalInput } from "../helpers/terminal";
 import { getGridPanelIds } from "../helpers/panels";
-import { seedNotificationHistory } from "../helpers/notifications";
+import { resetNotifications, seedNotificationHistory } from "../helpers/notifications";
+import { SAMPLE_PLUGINS_DIR, activateE2EPlugin } from "../helpers/plugins";
 import { SEL } from "../helpers/selectors";
 import { T_LONG } from "../helpers/timeouts";
 
@@ -98,6 +99,11 @@ const STEPS = [
   { name: "platform-windows", slug: "17-platform-windows" },
   { name: "platform-linux", slug: "18-platform-linux" },
   { name: "fullscreen", slug: "19-fullscreen-mac" },
+  { name: "rich-quiet", slug: "20-rich-quiet" },
+  { name: "agent-waiting", slug: "21-agent-waiting" },
+  { name: "unread", slug: "22-unread" },
+  { name: "context", slug: "23-context-attention" },
+  { name: "notification-open", slug: "24-notification-center-open" },
 ] as const;
 
 // Freeze animations and hide carets so captures are deterministic. Badges and
@@ -122,6 +128,7 @@ const RICH_RIGHT = [
   "voice-recording",
   "forge-stats",
   "plugin-tray",
+  "canopy",
   "notification-center",
   "copy-tree",
   "resume-sessions",
@@ -178,10 +185,12 @@ async function dumpStripState(page: Page, slug: string): Promise<void> {
       const trigger = root.querySelector<HTMLElement>(
         `[data-toolbar-overflow-trigger][data-toolbar-overflow-side="${side}"]`
       );
-      // The measured row sits directly before its side's trigger.
-      const row = trigger?.previousElementSibling as HTMLElement | null;
+      // The left trigger sits inside its measured row, after the buttons; the
+      // right one directly after its row.
+      const row = (trigger?.closest(".toolbar-measured-row") ??
+        trigger?.previousElementSibling) as HTMLElement | null;
       if (row && !row.classList.contains("toolbar-measured-row")) {
-        throw new Error(`expected the measured row before the ${side} trigger`);
+        throw new Error(`expected the ${side} trigger in or after its measured row`);
       }
       const rowRect = row ? rect(row) : null;
       const items = row
@@ -330,8 +339,8 @@ async function seedComposition(page: Page, left: string[], right: string[]): Pro
   await reloadAndWait(page);
 }
 
-/** Error count → the problems badge; unread history → the notification dot. */
-async function seedSignals(page: Page): Promise<void> {
+/** Error count → the problems badge. */
+async function seedErrors(page: Page): Promise<void> {
   await page.evaluate(() => {
     const w = window as unknown as { __DAINTREE_E2E_ADD_ERROR__?: (m: string) => void };
     if (!w.__DAINTREE_E2E_ADD_ERROR__) throw new Error("E2E error bridge not attached");
@@ -339,6 +348,64 @@ async function seedSignals(page: Page): Promise<void> {
     w.__DAINTREE_E2E_ADD_ERROR__("Failed to read .env: EACCES");
     w.__DAINTREE_E2E_ADD_ERROR__("Recipe 'Review' references a missing preset");
   });
+  await settle(page, 500);
+  // The first error auto-opens the diagnostics dock, and the count stands down
+  // while the dock is showing the errors. Close it, as a user who has seen them
+  // would, so the capture shows the strip carrying the count.
+  // Through the action layer rather than a click: a click teaches its
+  // shortcut in a hint bubble that would sit in every later capture.
+  const problems = page.locator(BUTTON("problems")).first();
+  if ((await problems.getAttribute("aria-expanded")) === "true") {
+    await page.evaluate(async () => {
+      const w = window as unknown as {
+        __daintreeDispatchAction?: (id: string, p: unknown, o: unknown) => Promise<unknown>;
+      };
+      await w.__daintreeDispatchAction?.("panel.toggleDiagnostics", undefined, { source: "test" });
+    });
+    await expect(problems).toHaveAttribute("aria-expanded", "false", { timeout: 5000 });
+    await settle(page, 500);
+  }
+  await expect(
+    page.locator(`${BUTTON("problems")} .toolbar-problems-badge[data-visible="true"]`),
+    "problems badge did not light — refusing to capture a signals state without it"
+  ).toBeAttached({ timeout: 5000 });
+}
+
+/**
+ * Clears whatever the launch itself left in the notification history, so a
+ * capture named for "nothing lit" shows nothing lit. What was there is written
+ * to a sidecar first — startup noise in the bell is worth knowing about, not
+ * worth hiding.
+ */
+async function clearStartupNotifications(page: Page, slug: string): Promise<void> {
+  const bell = page.locator('[data-testid="notification-unread-dot"][data-visible="true"]');
+  if ((await bell.count()) > 0) {
+    await page.evaluate(async () => {
+      const w = window as unknown as {
+        __daintreeDispatchAction?: (id: string, p: unknown, o: unknown) => Promise<unknown>;
+      };
+      await w.__daintreeDispatchAction?.("notifications.toggle", undefined, { source: "test" });
+    });
+    const center = page.locator('[data-testid="notification-center"]').first();
+    await center.waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
+    const text = (await center.innerText().catch(() => "")).trim();
+    writeFileSync(path.join(OUTPUT_DIR, `${slug}${TAG}.startup-notifications.txt`), text);
+    await page.keyboard.press("Escape");
+    // The keyboard close hands focus back to the bell with its ring, which is
+    // right for a keyboard user and wrong for an idle capture.
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await settle(page, 300);
+  }
+  await resetNotifications(page);
+  await settle(page, 300);
+  await expect(
+    page.locator('[data-testid="notification-unread-dot"][data-visible="true"]'),
+    "the bell is still lit after clearing history — refusing to capture an idle state"
+  ).toHaveCount(0, { timeout: 5000 });
+}
+
+/** Unread history → the notification dot. */
+async function seedUnread(page: Page): Promise<void> {
   const now = Date.now();
   await seedNotificationHistory(page, [
     {
@@ -358,9 +425,14 @@ async function seedSignals(page: Page): Promise<void> {
   ]);
   await settle(page, 500);
   await expect(
-    page.locator(`${BUTTON("problems")} .toolbar-problems-badge[data-visible="true"]`),
-    "problems badge did not light — refusing to capture a signals state without it"
+    page.locator('[data-testid="notification-unread-dot"][data-visible="true"]'),
+    "unread dot did not light — refusing to capture an unread state without it"
   ).toBeAttached({ timeout: 5000 });
+}
+
+async function seedSignals(page: Page): Promise<void> {
+  await seedUnread(page);
+  await seedErrors(page);
 }
 
 /**
@@ -392,7 +464,17 @@ async function launchWaitingAgent(page: Page): Promise<string> {
   await expect
     .poll(() => panel.getAttribute("data-agent-state"), { timeout: T_LONG })
     .toBe("working");
-  const wrote = await ptyWrite(page, panelId, `${FAKE_AGENT_IDLE}\r`);
+  // A bare idle is a hand-back — the agent finished its turn and asks for
+  // nothing — which the app draws settled, not amber. Echoing an approval
+  // selector into the visible rows first gives the waiting classifier the same
+  // evidence a real "Do you want to proceed?" dialog would, so the wait it sees
+  // is an ask. The classifier reads the bottom rows of the screen, where a
+  // real TUI draws its dialog, so blank rows push the echo down there first.
+  const wrote = await ptyWrite(
+    page,
+    panelId,
+    `${"\r".repeat(60)}Do you want to proceed?\r❯ 1. Yes\r  2. No\r${FAKE_AGENT_IDLE}\r`
+  );
   if (!wrote) throw new Error("terminal.write unavailable — cannot drive the agent to waiting");
   // The idle debounce that settles `working` into `waiting` runs longer than
   // T_LONG on a loaded machine; the theme tour gives it 2x and still warns.
@@ -505,7 +587,9 @@ test("toolbar strip review — every state of the strip", async () => {
       userDataDir,
       screenshotScale: SCALE,
       windowSize: WIDE,
-      env: fakeAgentEnv(fakeBinDir),
+      // The sample plugin contributes a toolbar button, so the plugin tray has
+      // something to hold and takes its real slot in the strip.
+      env: { ...fakeAgentEnv(fakeBinDir), DAINTREE_E2E_SIDELOAD_PLUGIN_DIR: SAMPLE_PLUGINS_DIR },
       extraArgs: ["--disable-gpu", "--in-process-gpu", "--disable-breakpad", "--noerrdialogs"],
     });
 
@@ -531,6 +615,7 @@ test("toolbar strip review — every state of the strip", async () => {
       await expect(
         win.locator(`${SEL.toolbar.toggleSidebar}[aria-disabled="true"]`)
       ).toBeAttached();
+      await clearStartupNotifications(win, "01-no-workspace");
       await snapStrip(win, "01-no-workspace");
     });
 
@@ -539,6 +624,9 @@ test("toolbar strip review — every state of the strip", async () => {
       const cur = await window.electron.project.getCurrent();
       if (cur?.id) await window.electron.project.update(cur.id, { emoji: "☀️", name });
     }, PROJECT_NAME);
+    await activateE2EPlugin(ctx.app, "daintree.hello").catch((error) => {
+      stepFailures.push(`plugin-activate: ${String(error).split("\n")[0]}`);
+    });
     await setAppTheme(page, THEME);
     await page.setViewportSize(WIDE);
     await page.addStyleTag({ content: POLISH_CSS }).catch(() => {});
@@ -553,6 +641,7 @@ test("toolbar strip review — every state of the strip", async () => {
     // 2. Rest, default composition, nothing lit. The strip most users see most
     // of the time.
     await step(page, "rest", async () => {
+      await clearStartupNotifications(page, "02-rest-default");
       await expectNoOverflow(page);
       await snapStrip(page, "02-rest-default");
     });
@@ -562,7 +651,21 @@ test("toolbar strip review — every state of the strip", async () => {
     await seedComposition(page, RICH_LEFT, RICH_RIGHT);
     await expect(page.locator(BUTTON("claude")).first()).toBeVisible({ timeout: 10_000 });
     await expect(page.locator(BUTTON("problems")).first()).toBeVisible({ timeout: 10_000 });
-    await seedSignals(page);
+    await expect(
+      page.locator(BUTTON("plugin-tray")).first(),
+      "plugin tray never mounted — the sample plugin did not contribute its button"
+    )
+      .toBeVisible({ timeout: 20_000 })
+      .catch((error) => stepFailures.push(`plugin-tray: ${String(error).split("\n")[0]}`));
+
+    // 20. The rich composition with nothing asking for anything: the strip as
+    // it sits in the corner of the eye most of the day.
+    await step(page, "rich-quiet", async () => {
+      await clearStartupNotifications(page, "20-rich-quiet");
+      await expectNoOverflow(page);
+      await snapStrip(page, "20-rich-quiet");
+    });
+
     // Not a shot of its own, but a `step` so a fake agent that never settles
     // fails the run at the end instead of aborting every capture after it.
     await step(page, "agent-signal", async () => {
@@ -570,6 +673,24 @@ test("toolbar strip review — every state of the strip", async () => {
     });
     await page.mouse.move(WIDE.width / 2, WIDE.height - 20);
     await settle(page, 600);
+
+    // 21. One agent waiting and nothing else, so the waiting signal can be
+    // judged on its own before unread and problems join it.
+    await step(page, "agent-waiting", async () => {
+      await expect(
+        page.locator(`${BUTTON("claude")} .toolbar-pip[data-visible="true"]`).first()
+      ).toHaveClass(/waiting/, { timeout: 5000 });
+      await snapStrip(page, "21-agent-waiting");
+    });
+
+    await seedUnread(page);
+
+    // 22. Waiting plus unread notifications.
+    await step(page, "unread", async () => {
+      await snapStrip(page, "22-unread");
+    });
+
+    await seedErrors(page);
 
     // 3. Wide, all signals: agent waiting, three errors, two unread, forge pill.
     await step(page, "signals", async () => {
@@ -580,6 +701,36 @@ test("toolbar strip review — every state of the strip", async () => {
         page.locator(`${BUTTON("claude")} .toolbar-pip[data-visible="true"]`).first()
       ).toHaveClass(/waiting/, { timeout: 5000 });
       await snapStrip(page, "03-signals-wide");
+    });
+
+    // 23. The attention loop in context: the strip above the sidebar and the
+    // waiting agent's pane header, so the toolbar's signals can be judged
+    // against the surfaces that already carry the same news.
+    await step(page, "context", async () => {
+      await settle(page, 400);
+      const file = path.join(OUTPUT_DIR, `23-context-attention${TAG}.png`);
+      await dumpStripState(page, "23-context-attention");
+      await page.screenshot({
+        path: file,
+        type: "png",
+        scale: "device",
+        animations: "disabled",
+        caret: "hide",
+        clip: { x: 0, y: 0, width: WIDE.width, height: 420 },
+      });
+      if (!existsSync(file)) throw new Error(`screenshot did not land at ${file}`);
+    });
+
+    // 24. The notification center open over the strip, so the bell's armed
+    // state and the panel's relation to its anchor read together.
+    await step(page, "notification-open", async () => {
+      await page.locator(BUTTON("notification-center")).first().click();
+      await page
+        .locator('[data-testid="notification-center"]')
+        .first()
+        .waitFor({ state: "visible", timeout: 8000 });
+      await settle(page, 600);
+      await snapStrip(page, "24-notification-center-open", 460);
     });
 
     // 4. Hover on an icon button, so the hover tier can be judged against the
@@ -728,20 +879,27 @@ test("toolbar strip review — every state of the strip", async () => {
           return result.ok ? "ok" : (result.error?.message ?? "failed");
         }, LONG_BRANCH);
         if (selected !== "ok") throw new Error(`worktree.select: ${selected}`);
-        // The pill's branch truncation spells its ellipsis as a single "…".
+        // The chip carries the whole branch and truncates it in CSS, so wait
+        // for the branch to land in the pill, then for its head to be clipped.
         let last = "";
         for (let i = 0; i < 40; i++) {
           const pill = await page.locator(SEL.toolbar.projectSwitcherTrigger).textContent();
-          if (pill?.includes("…")) break;
+          if (pill?.includes(LONG_BRANCH)) break;
           const cards = await page
             .locator("[data-worktree-branch]")
             .evaluateAll((els) => els.map((el) => el.getAttribute("data-worktree-branch")));
           last = `pill="${pill}" cards=${JSON.stringify(cards)}`;
           await page.waitForTimeout(250);
-          if (i === 39) throw new Error(`pill never showed the truncated long branch: ${last}`);
+          if (i === 39) throw new Error(`pill never showed the long branch: ${last}`);
         }
         await page.setViewportSize({ width: 1180, height: 1050 });
         await settle(page, 800);
+        const clipped = await page
+          .locator(`${SEL.toolbar.projectSwitcherTrigger} .toolbar-project-chip-label .truncate`)
+          .first()
+          .evaluate((el) => el.scrollWidth > el.clientWidth)
+          .catch(() => false);
+        if (!clipped) throw new Error("the long branch is not truncated at 1180px");
         await snapStrip(page, "12-long-names");
       } finally {
         await page
@@ -846,22 +1004,38 @@ test("toolbar strip review — every state of the strip", async () => {
 
     await overridePlatform(page, "MacIntel").catch(() => {});
 
-    // 19. macOS fullscreen: the traffic-light spacer collapses to w-0. Last,
-    // because entering fullscreen resizes the window under everything else.
+    // 19. macOS fullscreen: the traffic-light spacer collapses to w-0. The
+    // window is never put into real fullscreen — that takes over the whole
+    // screen, a new Space, while someone is working. Main's own fullscreen
+    // broadcast is replayed instead: the same `window:fullscreen-change` push
+    // `sendFullscreenChange` sends, to every view in the window, which is all
+    // the renderer ever learns of fullscreen. The window keeps its size.
+    const pushFullscreen = (next: boolean) =>
+      ctx!.app.evaluate(({ BrowserWindow }, isFullscreen) => {
+        const win = BrowserWindow.getAllWindows()[0];
+        if (!win || win.isDestroyed()) return;
+        const envelope = { name: "window:fullscreen-change", payload: isFullscreen };
+        const views = [
+          win.webContents,
+          ...(win.contentView?.children ?? []).map(
+            (child) => (child as Electron.WebContentsView).webContents
+          ),
+        ];
+        for (const wc of views) {
+          if (!wc || wc.isDestroyed()) continue;
+          wc.send("events:push", envelope);
+        }
+      }, next);
     await step(page, "fullscreen", async () => {
       await seedSignals(page);
-      await ctx!.app.evaluate(({ BrowserWindow }) => {
-        BrowserWindow.getAllWindows()[0]?.setFullScreen(true);
-      });
+      await pushFullscreen(true);
       await expect(page.locator('[data-fullscreen="true"]').first()).toBeAttached({
         timeout: 8000,
       });
-      await settle(page, 1500);
+      await settle(page, 600);
       await snapStrip(page, "19-fullscreen-mac");
-      await ctx!.app.evaluate(({ BrowserWindow }) => {
-        BrowserWindow.getAllWindows()[0]?.setFullScreen(false);
-      });
-      await settle(page, 1500);
+      await pushFullscreen(false);
+      await settle(page, 600);
     });
 
     // Count what landed against what was promised. The exit code says only

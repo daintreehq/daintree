@@ -191,7 +191,7 @@ export function PluginToolbarButton({
         );
       }}
       className={cn(
-        "toolbar-icon-button text-text-primary relative",
+        "toolbar-icon-button toolbar-quiet-ink text-text-secondary relative",
         hasMenu && actionId !== undefined && "rounded-r-none",
         disabled && !busy && ARIA_DISABLED_CLASSES
       )}
@@ -858,7 +858,7 @@ export function PluginTrayButton({
                         variant="ghost"
                         size="icon"
                         data-toolbar-item={dataToolbarItem}
-                        className="toolbar-icon-button text-text-primary relative"
+                        className="toolbar-icon-button toolbar-quiet-ink text-text-secondary relative"
                         aria-label={trayName}
                         onPointerEnter={() => {
                           isRestoringFocusRef.current = false;

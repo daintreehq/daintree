@@ -232,6 +232,34 @@ export function computeGuardedOverflow(
 }
 
 /**
+ * The tier a button holds while it carries a live signal — an agent waiting,
+ * errors, an urgent ask: one above the idle agents, so a squeezed side gives
+ * up a quiet agent before the one asking for something.
+ */
+export const LIT_SIGNAL_PRIORITY: ToolbarButtonPriority = 1;
+
+/**
+ * The overflow priorities with every lit signal button raised to
+ * `LIT_SIGNAL_PRIORITY`. Returns the shared table itself when nothing is lit,
+ * so an idle toolbar hands the overflow hook a stable reference.
+ */
+export function withLitSignalPriorities(
+  lit: Partial<Record<AnyToolbarButtonId, boolean>>
+): Record<string, ToolbarButtonPriority> {
+  const raised = Object.entries(lit).filter(
+    ([id, on]) =>
+      on === true &&
+      (TOOLBAR_BUTTON_PRIORITIES as Record<string, ToolbarButtonPriority>)[id] !== undefined &&
+      (TOOLBAR_BUTTON_PRIORITIES as Record<string, ToolbarButtonPriority>)[id]! >
+        LIT_SIGNAL_PRIORITY
+  );
+  if (raised.length === 0) return TOOLBAR_BUTTON_PRIORITIES;
+  const next: Record<string, ToolbarButtonPriority> = { ...TOOLBAR_BUTTON_PRIORITIES };
+  for (const [id] of raised) next[id] = LIT_SIGNAL_PRIORITY;
+  return next;
+}
+
+/**
  * The `…` menu's ids once a per-project profile has demoted some buttons
  * (#13771): what the width budget evicted plus what was demoted, in row order,
  * so a demoted button sits in the menu where it would have sat on the row.
@@ -258,7 +286,15 @@ export function useToolbarOverflow(
   leftIds: AnyToolbarButtonId[],
   rightIds: AnyToolbarButtonId[],
   pinnedIds?: ReadonlySet<AnyToolbarButtonId>,
-  resolveGroup?: (id: AnyToolbarButtonId) => string
+  resolveGroup?: (id: AnyToolbarButtonId) => string,
+  priorities: Record<string, ToolbarButtonPriority> = TOOLBAR_BUTTON_PRIORITIES,
+  /**
+   * Width the left `…` trigger takes inside the left row while it shows, and
+   * whether something other than this budget (a demoted button, the branch
+   * row) keeps it showing. The trigger sits in the row so it docks after the
+   * last visible button rather than across the row's slack by the pill.
+   */
+  leftTrigger: { reserve: number; pinned: boolean } = { reserve: 0, pinned: false }
 ): {
   leftVisible: AnyToolbarButtonId[];
   leftOverflow: AnyToolbarButtonId[];
@@ -343,19 +379,29 @@ export function useToolbarOverflow(
       const leftItemsResized = measureItems(leftContainer, leftWidthsRef.current);
       const pending = leftPendingWidthRef.current;
       leftPendingWidthRef.current = 0;
-      const containerWidth = pending > 0 ? pending : leftContainer.getBoundingClientRect().width;
-      const result = computeGuardedOverflow(
-        containerWidth,
-        leftWidthsRef.current,
-        leftIds,
-        TOOLBAR_BUTTON_PRIORITIES,
-        leftPrevWidthRef.current,
-        // Hysteresis is for the row's own width jittering. A result held
-        // against button widths that have since changed gets no say.
-        leftItemsResized ? null : leftPrevResultRef.current,
-        pinnedIds,
-        measureLayout(leftContainer)
-      );
+      const rowWidth = pending > 0 ? pending : leftContainer.getBoundingClientRect().width;
+      const layout = measureLayout(leftContainer);
+      const fit = (width: number) =>
+        computeGuardedOverflow(
+          width,
+          leftWidthsRef.current,
+          leftIds,
+          priorities,
+          leftPrevWidthRef.current,
+          // Hysteresis is for the row's own width jittering. A result held
+          // against button widths that have since changed gets no say.
+          leftItemsResized ? null : leftPrevResultRef.current,
+          pinnedIds,
+          layout
+        );
+      // The buttons get the row less the trigger's slot whenever the trigger
+      // shows: always while something pins it, else once anything overflows.
+      let containerWidth = leftTrigger.pinned ? rowWidth - leftTrigger.reserve : rowWidth;
+      let result = fit(containerWidth);
+      if (!leftTrigger.pinned && leftTrigger.reserve > 0 && result.overflowIds.length > 0) {
+        containerWidth = rowWidth - leftTrigger.reserve;
+        result = fit(containerWidth);
+      }
       // Ref writes inside the updater are safe under concurrent rendering:
       // `containerWidth` and `result` are captured in the enclosing closure,
       // so a re-invoked updater writes the same values (idempotent).
@@ -388,7 +434,7 @@ export function useToolbarOverflow(
         containerWidth,
         rightWidthsRef.current,
         rightIds,
-        TOOLBAR_BUTTON_PRIORITIES,
+        priorities,
         rightPrevWidthRef.current,
         rightItemsResized ? null : rightPrevResultRef.current,
         pinnedIds,
@@ -416,6 +462,9 @@ export function useToolbarOverflow(
     leftIds,
     rightIds,
     pinnedIds,
+    priorities,
+    leftTrigger.reserve,
+    leftTrigger.pinned,
     measureItems,
     measureLayout,
   ]);

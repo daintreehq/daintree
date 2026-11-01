@@ -4,8 +4,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { usePortalStore } from "@/store";
-
-const toolbarIconButtonClass = "toolbar-icon-button text-text-primary relative";
+import { toolbarIconButtonClass } from "./toolbarItemClasses";
 
 export function ToolbarPortalButton({
   "data-toolbar-item": dataToolbarItem,

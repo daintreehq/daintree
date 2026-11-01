@@ -8,15 +8,27 @@ import {
   pluginBadgeOverflowSeverity,
 } from "./pluginToolbarBadge";
 import { usePluginToolbarBadgeStore } from "@/store/pluginToolbarBadgeStore";
-import { useOverflowAgentObservations, useOverflowBadgeSeverity } from "./useOverflowBadgeSeverity";
+import {
+  useOverflowAgentObservations,
+  useOverflowBadgeSeverity,
+  useOverflowLauncherDiscovery,
+} from "./useOverflowBadgeSeverity";
 import { pluralize } from "@/lib/pluralize";
+import { PROJECT_SCOPED_TOOLBAR_IDS } from "./useToolbarItemPlacement";
+import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 
 export interface ToolbarOverflowStatusInput {
   leftOverflow: AnyToolbarButtonId[];
   rightOverflow: AnyToolbarButtonId[];
   hasActiveVoiceRecording: boolean;
+  /** With no project, the project-scoped slots are placeholders, not buttons. */
+  hasProject?: boolean;
   errorCount: number;
   canopyUrgentCount: number;
+  /** Problems' watcher warning in its own words, or null while watching is sound. */
+  watcherStatus?: string | null;
+  /** What the Forge capsule's warning says, while it shows one; null otherwise. */
+  forgeUnavailableObservation?: string | null;
   pluginConfigs: ReadonlyMap<string, ToolbarButtonConfig>;
   pinnedButtons: Partial<Record<string, boolean>>;
 }
@@ -27,8 +39,11 @@ export function useToolbarOverflowStatus({
   leftOverflow,
   rightOverflow,
   hasActiveVoiceRecording,
+  hasProject = true,
   errorCount,
   canopyUrgentCount,
+  watcherStatus = null,
+  forgeUnavailableObservation = null,
   pluginConfigs,
   pinnedButtons,
 }: ToolbarOverflowStatusInput) {
@@ -36,33 +51,50 @@ export function useToolbarOverflowStatus({
   // not pollute the overflow badge or dropdown when no session is active —
   // an inactive placeholder pushed into overflow would otherwise count as a
   // hidden item and trigger the warning severity in useOverflowBadgeSeverity.
+  // A project-scoped slot with no project is a placeholder holding the strip's
+  // shape; folded into the menu it would be a row that opens nothing.
   const visibleLeftOverflow = useMemo(
     () =>
-      hasActiveVoiceRecording
-        ? leftOverflow
-        : leftOverflow.filter((id) => id !== "voice-recording"),
-    [leftOverflow, hasActiveVoiceRecording]
+      leftOverflow.filter(
+        (id) =>
+          (hasActiveVoiceRecording || id !== "voice-recording") &&
+          (hasProject || !PROJECT_SCOPED_TOOLBAR_IDS.has(id))
+      ),
+    [leftOverflow, hasActiveVoiceRecording, hasProject]
   );
   const visibleRightOverflow = useMemo(
     () =>
-      hasActiveVoiceRecording
-        ? rightOverflow
-        : rightOverflow.filter((id) => id !== "voice-recording"),
-    [rightOverflow, hasActiveVoiceRecording]
+      rightOverflow.filter(
+        (id) =>
+          (hasActiveVoiceRecording || id !== "voice-recording") &&
+          (hasProject || !PROJECT_SCOPED_TOOLBAR_IDS.has(id))
+      ),
+    [rightOverflow, hasActiveVoiceRecording, hasProject]
   );
 
+  // The dock is showing the watcher's state while it is open, so the folded
+  // warning stands down like every other mark.
+  const diagnosticsOpen = useDiagnosticsStore((s) => s.isOpen);
+  const watcherUnreliable = watcherStatus !== null && !diagnosticsOpen;
+  const watcherObservation = watcherStatus?.toLowerCase() ?? null;
   const leftOverflowSeverity = useOverflowBadgeSeverity(
     visibleLeftOverflow,
     errorCount,
-    canopyUrgentCount
+    canopyUrgentCount,
+    watcherUnreliable,
+    forgeUnavailableObservation !== null
   );
   const rightOverflowSeverity = useOverflowBadgeSeverity(
     visibleRightOverflow,
     errorCount,
-    canopyUrgentCount
+    canopyUrgentCount,
+    watcherUnreliable,
+    forgeUnavailableObservation !== null
   );
   const leftAgentObservations = useOverflowAgentObservations(visibleLeftOverflow);
   const rightAgentObservations = useOverflowAgentObservations(visibleRightOverflow);
+  const leftLauncherDiscovery = useOverflowLauncherDiscovery(visibleLeftOverflow);
+  const rightLauncherDiscovery = useOverflowLauncherDiscovery(visibleRightOverflow);
 
   // Plugin badges folded into each `…` menu light its dot and join its name,
   // as the built-in buttons' signals do (#9821, #13503).
@@ -93,19 +125,47 @@ export function useToolbarOverflowStatus({
     );
   const leftMenuSeverity = maxOverflowSeverity(leftOverflowSeverity, leftPluginSeverity);
   const rightMenuSeverity = maxOverflowSeverity(rightOverflowSeverity, rightPluginSeverity);
+  const leftWatcherHidden = watcherUnreliable && visibleLeftOverflow.includes("problems");
+  const rightWatcherHidden = watcherUnreliable && visibleRightOverflow.includes("problems");
+  const leftForgeHidden =
+    forgeUnavailableObservation !== null && visibleLeftOverflow.includes("forge-stats");
+  const rightForgeHidden =
+    forgeUnavailableObservation !== null && visibleRightOverflow.includes("forge-stats");
   const leftObservations = useMemo(
-    () =>
-      leftPluginBadgeCount > 0
-        ? [...leftAgentObservations, pluralize(leftPluginBadgeCount, "plugin badge")]
-        : leftAgentObservations,
-    [leftAgentObservations, leftPluginBadgeCount]
+    () => [
+      ...leftAgentObservations,
+      ...(leftLauncherDiscovery ? ["new agents to try"] : []),
+      ...(leftWatcherHidden && watcherObservation ? [watcherObservation] : []),
+      ...(leftForgeHidden && forgeUnavailableObservation ? [forgeUnavailableObservation] : []),
+      ...(leftPluginBadgeCount > 0 ? [pluralize(leftPluginBadgeCount, "plugin badge")] : []),
+    ],
+    [
+      leftAgentObservations,
+      leftLauncherDiscovery,
+      leftWatcherHidden,
+      watcherObservation,
+      leftForgeHidden,
+      forgeUnavailableObservation,
+      leftPluginBadgeCount,
+    ]
   );
   const rightObservations = useMemo(
-    () =>
-      rightPluginBadgeCount > 0
-        ? [...rightAgentObservations, pluralize(rightPluginBadgeCount, "plugin badge")]
-        : rightAgentObservations,
-    [rightAgentObservations, rightPluginBadgeCount]
+    () => [
+      ...rightAgentObservations,
+      ...(rightLauncherDiscovery ? ["new agents to try"] : []),
+      ...(rightWatcherHidden && watcherObservation ? [watcherObservation] : []),
+      ...(rightForgeHidden && forgeUnavailableObservation ? [forgeUnavailableObservation] : []),
+      ...(rightPluginBadgeCount > 0 ? [pluralize(rightPluginBadgeCount, "plugin badge")] : []),
+    ],
+    [
+      rightAgentObservations,
+      rightLauncherDiscovery,
+      rightWatcherHidden,
+      watcherObservation,
+      rightForgeHidden,
+      forgeUnavailableObservation,
+      rightPluginBadgeCount,
+    ]
   );
   return {
     visibleLeftOverflow,

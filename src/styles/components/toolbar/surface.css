@@ -5,6 +5,9 @@
 }
 
 .surface-toolbar {
+  /* The pips' cut-out and the waiting ring's wash read against the strip's
+     own fill, which on most themes is a step off the sidebar's. */
+  --toolbar-pip-cutout: var(--toolbar-bg, var(--theme-surface-toolbar));
   background-color: var(--toolbar-bg, var(--theme-surface-toolbar));
   background-image: var(--toolbar-noise, var(--chrome-noise-texture));
   background-blend-mode: soft-light;
@@ -134,7 +137,7 @@
    * replacing it, on the toolbar's one press timing. */
   background: linear-gradient(var(--host-chip-lift), var(--host-chip-lift)), var(--_bg);
   transition:
-    color 150ms ease-out,
+    color var(--duration-150) ease-out,
     --host-chip-lift var(--_fill-duration) ease-out;
   border-color: color-mix(
     in oklab,

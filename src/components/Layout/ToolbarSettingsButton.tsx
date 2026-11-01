@@ -21,8 +21,7 @@ import {
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
-
-const toolbarIconButtonClass = "toolbar-icon-button text-text-primary relative";
+import { toolbarIconButtonClass } from "./toolbarItemClasses";
 
 // Each row wears the icon its tab wears in the Settings sidebar
 // (`settingsTabRegistry.tsx`), and "Panel grid" is that tab's own name.

@@ -3,6 +3,9 @@ import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
+import { useUIStore } from "@/store/uiStore";
+import { useDiagnosticsStore } from "@/store/diagnosticsStore";
+import { useCanopyStore } from "@/store/canopyStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useAgentDiscoveryOnboarding } from "@/hooks/app/useAgentDiscoveryOnboarding";
 import { agentStateDotColor } from "@/components/Worktree/terminalStateConfig";
@@ -18,7 +21,16 @@ import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
 
 const NO_HAND_BACKS: ReadonlySet<string> = new Set();
 
-export type OverflowBadgeSeverity = "critical" | "warning" | "info" | null;
+/**
+ * The overflow trigger's mark, named for what it draws — the shape the hidden
+ * button itself would wear: `critical` an error square, `waiting` the waiting
+ * ring (something asking for the user), `warning` the rounded warning square (a
+ * passive fault in the user's own project), `notice` the same shape in
+ * neutral ink (external data the app couldn't fetch — the Forge capsule's
+ * warning, which is neutral on the strip and stays neutral folded away),
+ * `info` the neutral dot. Ranked in that order.
+ */
+export type OverflowBadgeSeverity = "critical" | "waiting" | "warning" | "notice" | "info" | null;
 
 /**
  * Sessions of overflowed agents whose state carries a dot, counted per state.
@@ -95,6 +107,21 @@ export function useOverflowAgentObservations(overflowIds: readonly AnyToolbarBut
   );
 }
 
+/**
+ * Whether a launcher folded into `overflowIds` is carrying its discovery dot —
+ * a launchable agent the user hasn't seen yet. Shared by the badge and the
+ * trigger's name, so the dot is never unexplained.
+ */
+export function useOverflowLauncherDiscovery(overflowIds: readonly AnyToolbarButtonId[]): boolean {
+  const availability = useCliAvailabilityStore(useShallow((s) => s.availability));
+  const { loaded, seenAgentIds } = useAgentDiscoveryOnboarding();
+  return useMemo(() => {
+    if (!overflowIds.includes("launcher") || !loaded) return false;
+    const seen = new Set(seenAgentIds);
+    return BUILT_IN_AGENT_IDS.some((id) => isAgentLaunchable(availability?.[id]) && !seen.has(id));
+  }, [overflowIds, loaded, seenAgentIds, availability]);
+}
+
 const ACTIVE_AGENT_STATES: ReadonlySet<AgentState | undefined> = new Set<AgentState | undefined>([
   "idle",
   "working",
@@ -120,24 +147,36 @@ export function useOverflowBadgeSeverity(
   overflowIds: readonly AnyToolbarButtonId[],
   errorCount: number,
   /** Asks Canopy reads as urgent, for its button folded into the menu. */
-  canopyUrgentCount = 0
+  canopyUrgentCount = 0,
+  /** File watching is degraded or the topology watcher went dark. */
+  watcherUnreliable = false,
+  /** The Forge capsule is showing its "data unavailable" warning. */
+  forgeUnavailable = false
 ): OverflowBadgeSeverity {
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
   const handBackRunIds = useHandBackRunIds();
   // A boolean, not `panelsById`, so activity/headline flushes that replace
   // panel objects without changing a dot state don't re-render the toolbar.
-  const hasOverflowAgentState = usePanelStore(
-    (s) =>
-      countOverflowAgentStates(
-        s.panelsById,
-        s.panelIds,
-        activeWorktreeId,
-        overflowIds,
-        handBackRunIds
-      ).size > 0
-  );
+  // Only a wait asks for anything; a directing session is ambient. A primitive
+  // ("waiting" / "directing" / null) so the selector stays stable.
+  const overflowAgentTier = usePanelStore((s) => {
+    const counts = countOverflowAgentStates(
+      s.panelsById,
+      s.panelIds,
+      activeWorktreeId,
+      overflowIds,
+      handBackRunIds
+    );
+    if (counts.has("waiting")) return "waiting" as const;
+    return counts.size > 0 ? ("directing" as const) : null;
+  });
 
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
+  // A mark stands down while the surface it reports on is open, from the `…`
+  // trigger as from the button itself.
+  const notificationCenterOpen = useUIStore((s) => s.notificationCenterOpen);
+  const diagnosticsOpen = useDiagnosticsStore((s) => s.isOpen);
+  const canopyOpen = useCanopyStore((s) => s.isOpen);
 
   const availability = useCliAvailabilityStore(useShallow((s) => s.availability));
   const { loaded: onboardingLoaded, seenAgentIds } = useAgentDiscoveryOnboarding();
@@ -146,10 +185,12 @@ export function useOverflowBadgeSeverity(
     if (overflowIds.length === 0) return null;
 
     let critical = false;
+    let waiting = false;
     let warning = false;
+    let notice = false;
     let info = false;
 
-    if (overflowIds.includes("problems") && errorCount > 0) {
+    if (overflowIds.includes("problems") && errorCount > 0 && !diagnosticsOpen) {
       critical = true;
     }
 
@@ -157,15 +198,33 @@ export function useOverflowBadgeSeverity(
     // `getDominantAgentState` would let a `working` panel suppress a sibling
     // `waiting`/`directing` panel for the same agent, which is exactly the
     // silenced state the overflow dot is meant to surface.
-    if (hasOverflowAgentState) {
+    if (overflowAgentTier === "waiting") {
+      waiting = true;
+    } else if (overflowAgentTier === "directing") {
+      info = true;
+    }
+
+    // The problems button's watcher warning, which it shows even with no
+    // errors; folded away, it would otherwise vanish.
+    if (overflowIds.includes("problems") && watcherUnreliable && !diagnosticsOpen) {
       warning = true;
     }
 
-    if (overflowIds.includes("canopy") && canopyUrgentCount > 0) {
-      warning = true;
+    // The capsule's stale-data mark, folded away with it, at the loudness it
+    // had on the strip.
+    if (overflowIds.includes("forge-stats") && forgeUnavailable) {
+      notice = true;
     }
 
-    if (overflowIds.includes("notification-center") && notificationUnreadCount > 0) {
+    if (overflowIds.includes("canopy") && canopyUrgentCount > 0 && !canopyOpen) {
+      waiting = true;
+    }
+
+    if (
+      overflowIds.includes("notification-center") &&
+      notificationUnreadCount > 0 &&
+      !notificationCenterOpen
+    ) {
       info = true;
     }
 
@@ -180,14 +239,21 @@ export function useOverflowBadgeSeverity(
     }
 
     if (critical) return "critical";
+    if (waiting) return "waiting";
     if (warning) return "warning";
+    if (notice) return "notice";
     if (info) return "info";
     return null;
   }, [
     overflowIds,
     errorCount,
     canopyUrgentCount,
-    hasOverflowAgentState,
+    watcherUnreliable,
+    forgeUnavailable,
+    overflowAgentTier,
+    notificationCenterOpen,
+    diagnosticsOpen,
+    canopyOpen,
     notificationUnreadCount,
     availability,
     onboardingLoaded,
