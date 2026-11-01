@@ -757,6 +757,43 @@ describe("DaintreeLocalStore ordering and failures", () => {
     expect(plan).not.toMatch(/^SCAN decisions_questions$/m);
   });
 
+  it("tells commit listeners once per transaction that stored a write, never for reads or refusals", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const committed = vi.fn();
+    const off = store.onCommit(committed);
+
+    await Promise.all([
+      store.commitNewQuestion(row("q1", 1), item("o1", "q1")),
+      store.setMeta("k", "v"),
+    ]);
+    expect(committed).toHaveBeenCalledTimes(1);
+
+    await store.getQuestion("q1");
+    await store.listQuestions();
+    expect(committed).toHaveBeenCalledTimes(1);
+
+    await expect(store.commitNewQuestion(row("q1", 1), item("o2", "q1"))).rejects.toThrow();
+    expect(committed).toHaveBeenCalledTimes(1);
+
+    off();
+    await store.setMeta("k", "w");
+    expect(committed).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a write stored when a commit listener throws", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const later = vi.fn();
+    store.onCommit(() => {
+      throw new Error("listener broke");
+    });
+    store.onCommit(later);
+
+    await expect(store.setMeta("k", "v")).resolves.toBeUndefined();
+    expect(await store.getMeta("k")).toBe("v");
+    expect(later).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses a new question carrying plaintext content", async () => {
     const store = new DaintreeLocalStore(sqlite);
 

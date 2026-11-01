@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { QuestionOrigin, WebSocketLike } from "@daintreehq/decisions-client";
+import {
+  MemoryLocalStore,
+  type QuestionOrigin,
+  type WebSocketLike,
+} from "@daintreehq/decisions-client";
 
 vi.mock("electron", () => ({
   net: { isOnline: () => true },
@@ -14,6 +18,7 @@ import {
   isRelaySocketUrl,
   networkFingerprint,
   retireable,
+  socketBridgeStore,
   socketOriginOf,
   watchNetwork,
   watchResume,
@@ -135,9 +140,66 @@ describe("holdingTerminalSink", () => {
     expect(await holdingTerminalSink.isIdle(located.target!)).toBe(false);
     expect(await holdingTerminalSink.inject(located.target!, "answer", "inj-1")).toEqual({
       outcome: "held",
-      reason: "delivery-not-wired",
+      reason: "socket-attempt",
     });
     expect(await holdingTerminalSink.hasMarker(located.target!, "inj-1")).toBe(false);
+  });
+});
+
+describe("socketBridgeStore", () => {
+  const question = (id: string) =>
+    ({ question_id: id, alias: 1, origin: ORIGIN, delivery_status: "relay-queued" }) as never;
+
+  it("shows a socket attempt no injection intents, whatever the store holds", async () => {
+    const store = new MemoryLocalStore();
+    await store.putIntent({
+      injection_id: "inj-1",
+      question_id: "q-1",
+      answer_revision: 1,
+      host_id: ORIGIN.host_id,
+      pane_id: ORIGIN.pane_id,
+      terminal_generation: 3,
+      ownership_principal: ORIGIN.ownership_principal,
+      agent_incarnation: ORIGIN.agent_incarnation,
+      state: "intent",
+      created_at: 1,
+      updated_at: 1,
+    });
+    const view = socketBridgeStore(store, () => {});
+
+    expect(await view.openIntents()).toEqual([]);
+    expect(await store.openIntents()).toHaveLength(1);
+    expect(await view.getIntent("inj-1")).toMatchObject({ state: "intent" });
+  });
+
+  it("passes on an answer made deliverable once its write is stored, and nothing else", async () => {
+    const store = new MemoryLocalStore();
+    await store.commitNewQuestion(question("q-1"), {
+      id: "o-1",
+      kind: "create",
+      question_id: "q-1",
+      payload: {},
+      attempts: 0,
+      next_attempt_at: 0,
+      created_at: 0,
+      last_error: null,
+    });
+    const received = vi.fn();
+    const view = socketBridgeStore(store, received);
+
+    await view.updateQuestion("q-1", { local_status: "open" });
+    expect(received).not.toHaveBeenCalled();
+    const written = view.updateQuestion("q-1", { delivery_status: "desktop-received" });
+    expect(received).not.toHaveBeenCalled();
+    await written;
+    expect(received).toHaveBeenCalledTimes(1);
+
+    const refused = socketBridgeStore(
+      retireable(store, () => true),
+      received
+    ).updateQuestion("q-1", { delivery_status: "desktop-received" });
+    await expect(refused).rejects.toBeInstanceOf(RetiredAttemptError);
+    expect(received).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -927,6 +927,73 @@ describe("RelayConnection", () => {
     expect(socket.closedByClient).toBe(1000);
   });
 
+  it("leaves the store's injection intents to delivery: a socket attempt reconciles none", async () => {
+    const store = new MemoryLocalStore();
+    // An attempt's own engine would take this, with no question behind it, as abandoned.
+    await store.putIntent({
+      injection_id: "inj_12345678",
+      question_id: "q_12345678",
+      answer_revision: 1,
+      host_id: "host_12345678",
+      pane_id: "pane-1",
+      terminal_generation: 1,
+      ownership_principal: "principal-1",
+      agent_incarnation: "0",
+      state: "intent",
+      created_at: 1,
+      updated_at: 1,
+    });
+    const h = await harness({ store });
+
+    h.connection.start();
+    await connectLive(h);
+    expect(await store.getIntent("inj_12345678")).toMatchObject({ state: "intent" });
+    await h.connection.stop();
+  });
+
+  it("delivers for the connection's lifetime, while the relay is out of reach, and stops with it", async () => {
+    const holds = { taken: 0, released: 0 };
+    const watched = new Set<() => void>();
+    const h = await harness({
+      overrides: {
+        delivery: {
+          hostId: () => "host_12345678",
+          principalFor: () => null,
+          getPtyClient: () => null,
+          holdWakes: () => {
+            holds.taken += 1;
+            return {
+              queueWake: () => {},
+              release: () => {
+                holds.released += 1;
+              },
+            };
+          },
+          watchPanes: (onPane) => {
+            const entry = () => onPane("appeared");
+            watched.add(entry);
+            return () => watched.delete(entry);
+          },
+        },
+      },
+    });
+    h.relay.answerTicketsWith(
+      () => new Response(JSON.stringify({ code: "unavailable", message: "down" }), { status: 503 })
+    );
+
+    h.connection.start();
+    await h.status("reconnecting");
+    expect(holds.taken).toBe(1);
+    expect(watched.size).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(RECONNECT_CAP_MS);
+    expect(holds).toEqual({ taken: 1, released: 0 });
+
+    await h.connection.stop();
+    expect(holds).toEqual({ taken: 1, released: 1 });
+    expect(watched.size).toBe(0);
+  });
+
   it("picks up from the cursor the app database kept, after the app starts again", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-relay-connection-"));
     const migrations = path.resolve(

@@ -119,7 +119,7 @@ export const holdingTerminalSink: TerminalSink = {
     target: targetOf(origin),
   }),
   isIdle: async () => false,
-  inject: async (): Promise<InjectResult> => ({ outcome: "held", reason: "delivery-not-wired" }),
+  inject: async (): Promise<InjectResult> => ({ outcome: "held", reason: "socket-attempt" }),
   hasMarker: async () => false,
 };
 

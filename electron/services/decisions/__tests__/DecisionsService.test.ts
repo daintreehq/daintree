@@ -397,6 +397,36 @@ describe("DecisionsService pane state", () => {
     expect(service.getPaneState("pane-a")).toBeNull();
   });
 
+  it("shows each pane what the store holds when it starts, and again after each commit", async () => {
+    let rows = [row(1)];
+    const listeners = new Set<() => void>();
+    const store = {
+      ...fakeStore(),
+      onCommit: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      listQuestions: async () => rows,
+    } as unknown as DaintreeLocalStore;
+    const pushes: PaneDecisionState[] = [];
+    const service = new DecisionsService({
+      openStore: async () => store,
+      publishPaneState: (_projectId, state) => pushes.push(state),
+    });
+
+    await service.start(on());
+    expect(service.getPaneState("pane-a")?.openQuestions).toHaveLength(1);
+
+    rows = [row(1), row(2)];
+    for (const listener of listeners) listener();
+    for (const listener of listeners) listener();
+    await vi.waitFor(() => expect(service.getPaneState("pane-a")?.openQuestions).toHaveLength(2));
+    expect(pushes).toHaveLength(2);
+
+    await service.stop();
+    expect(listeners.size).toBe(0);
+  });
+
   it("pushes and answers each pane's state while running", async () => {
     const { pushes, service } = withPushes();
     await service.start(on());
@@ -565,6 +595,65 @@ describe("DecisionsService relay connection", () => {
     });
     return { service, events, made, revoked };
   }
+
+  it("closes the store only once a stopped connection has settled its deliveries", async () => {
+    const events: string[] = [];
+    let settle!: () => void;
+    const service = new DecisionsService({
+      openStore: async () => {
+        const store = fakeStore();
+        store.close.mockImplementation(async () => {
+          events.push("store closed");
+        });
+        return store;
+      },
+      keyFilePath: () => "/nonexistent/keys.bin",
+      connect: () => ({
+        start: () => {},
+        stop: () => {
+          events.push("connection stopped");
+          return new Promise<void>((resolve) => {
+            settle = () => {
+              events.push("deliveries settled");
+              resolve();
+            };
+          });
+        },
+      }),
+    });
+    await service.start(on(RELAY));
+
+    const stopping = service.stop();
+    await vi.waitFor(() => expect(events).toEqual(["connection stopped"]));
+    settle();
+    await stopping;
+    expect(events).toEqual(["connection stopped", "deliveries settled", "store closed"]);
+  });
+
+  it("hands delivery this machine's host id as the running settings name it", async () => {
+    const delivery = {
+      principalFor: () => null,
+      getPtyClient: () => null,
+      holdWakes: () => ({ queueWake: () => {}, release: () => {} }),
+      watchPanes: () => () => {},
+    };
+    const made: RelayConnectionOptions[] = [];
+    const service = new DecisionsService({
+      openStore: async () => fakeStore(),
+      keyFilePath: () => "/nonexistent/keys.bin",
+      delivery,
+      connect: (options) => {
+        made.push(options);
+        return { start: () => {}, stop: () => {} };
+      },
+    });
+    await service.start(on({ ...RELAY, hostId: "host_aaaaaaaa" }));
+
+    expect(made[0].delivery?.watchPanes).toBe(delivery.watchPanes);
+    expect(made[0].delivery?.hostId()).toBe("host_aaaaaaaa");
+    await service.stop();
+    expect(made[0].delivery?.hostId()).toBeNull();
+  });
 
   it("runs no connection without a complete relay identity", async () => {
     const { service, made } = connected();
