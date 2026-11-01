@@ -197,6 +197,41 @@ describe("SessionHost", () => {
     expect(host.attachedCount).toBe(0);
   });
 
+  it("serves views only while a live link has one open, untouched or not (#15907)", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    // A summary-only link reads no view's answers.
+    expect(host.servesViews).toBe(false);
+    open(link, "view-1", "p");
+    expect(host.servesViews).toBe(true);
+    vi.advanceTimersByTime(10 * 60_000);
+    expect(host.attachedCount).toBe(0);
+    expect(host.servesViews).toBe(true);
+
+    link.emit(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, { endpointId: "view-1" });
+    expect(host.servesViews).toBe(false);
+
+    open(link, "view-2", "p");
+    link.drop();
+    // Its views are kept for the Shell, but nothing can read their answers.
+    expect(registry.getRemote()).toHaveLength(1);
+    expect(host.servesViews).toBe(false);
+    const handshaking = fakeLink();
+    handshaking.isOpen = false;
+    server.attach("s1", handshaking, true);
+    expect(host.servesViews).toBe(false);
+    server.attach("s1", fakeLink(), true);
+    expect(host.servesViews).toBe(true);
+
+    const other = fakeLink();
+    server.attach("s2", other);
+    open(other, "view-1", "q");
+    server.expire("s1");
+    expect(host.servesViews).toBe(true);
+    host.dispose();
+    expect(host.servesViews).toBe(false);
+  });
+
   it("stops holding the host awake once a window has gone unused, and resumes on input", () => {
     const link = fakeLink();
     server.attach("s1", link);

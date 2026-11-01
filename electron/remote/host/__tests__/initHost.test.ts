@@ -38,6 +38,7 @@ class FakePty extends EventEmitter {
   readonly live = new Set<string>();
   readonly owners = new Map<string, string>();
   inventory: Array<{ id: string; projectId: string; agentState?: "working" | "idle" }> = [];
+  inventoryReads = 0;
   hasTerminal(id: string): boolean {
     return this.live.has(id);
   }
@@ -45,6 +46,7 @@ class FakePty extends EventEmitter {
     return this.owners.get(id) ?? null;
   }
   async getAllTerminalsWithCompletenessAsync() {
+    this.inventoryReads++;
     return { terminals: [...this.inventory], degraded: false };
   }
 }
@@ -53,7 +55,8 @@ type Listener = (body: unknown) => void;
 
 function fakeLink() {
   const listeners = new Map<string, Set<Listener>>();
-  return {
+  const closeListeners = new Set<() => void>();
+  const link = {
     isOpen: true,
     isClosed: false,
     call: vi.fn(async (_method: string, _payload: unknown): Promise<unknown> => null),
@@ -65,7 +68,10 @@ function fakeLink() {
       return () => set.delete(listener);
     },
     onWritable: () => () => {},
-    onClose: () => () => {},
+    onClose(cb: () => void) {
+      closeListeners.add(cb);
+      return () => closeListeners.delete(cb);
+    },
     registerCallHandler: () => () => {},
     setInvokeHandler: () => {},
     setSendHandler: () => {},
@@ -74,7 +80,18 @@ function fakeLink() {
         l({ endpointId, projectId });
       }
     },
+    close(endpointId: string) {
+      for (const l of listeners.get(`${Lane.CONTROL}/${ControlKind.ENDPOINT_CLOSE}`) ?? []) {
+        l({ endpointId });
+      }
+    },
+    drop() {
+      link.isOpen = false;
+      link.isClosed = true;
+      for (const cb of [...closeListeners]) cb();
+    },
   };
+  return link;
 }
 
 function fakeServer() {
@@ -85,11 +102,11 @@ function fakeServer() {
       return () => sessionListeners.delete(l);
     },
     onSessionExpired: () => () => {},
-    attach(link: ReturnType<typeof fakeLink>) {
+    attach(link: ReturnType<typeof fakeLink>, resumed = false, sessionId = "s1") {
       for (const l of sessionListeners) {
         l({
-          sessionId: "s1",
-          resumed: false,
+          sessionId,
+          resumed,
           client: { clientId: "c1", clientName: "greg-mbp", platform: "darwin" },
           session: link as unknown as LinkSession,
         });
@@ -375,5 +392,155 @@ describe("initRemoteHostsHost MCP bindings (#14228)", () => {
     expect(bindingAnswers(link)).toEqual([
       { endpoints: [{ endpointId: "view-1", projectId: "p1", liveBinding: false }] },
     ]);
+  });
+});
+
+describe("initRemoteHostsHost inventory reads (#15907)", () => {
+  const agentAnswers = (link: ReturnType<typeof fakeLink>) =>
+    link.call.mock.calls
+      .filter(([method]) => method === LinkMethod.ENDPOINT_AGENT_ACTIVITY)
+      .map(([, payload]) => payload);
+  const stateChanged = (terminalId: string, state: "working" | "idle") =>
+    events.emit("agent:state-changed", {
+      terminalId,
+      state,
+      previousState: state === "working" ? "idle" : "working",
+      timestamp: Date.now(),
+      trigger: "output",
+      confidence: 1,
+    } as never);
+
+  it("reads no inventory while no Shell has a view open here", async () => {
+    const pty = new FakePty();
+    ptyRef.current = pty;
+    start();
+    await vi.advanceTimersByTimeAsync(ASSISTANT_SWEEP_MS * 4);
+    expect(pty.inventoryReads).toBe(0);
+
+    // A Shell attached for summaries and listings reads no view's answers.
+    server.attach(fakeLink());
+    await vi.advanceTimersByTimeAsync(ASSISTANT_SWEEP_MS * 4);
+    expect(pty.inventoryReads).toBe(0);
+  });
+
+  it("takes a fresh reading when a view opens, and tells the Shell what it found", async () => {
+    const pty = new FakePty();
+    ptyRef.current = pty;
+    start();
+    await vi.advanceTimersByTimeAsync(ASSISTANT_SWEEP_MS * 3);
+    // An agent whose start no event reported while nobody was attached.
+    pty.inventory = [{ id: "t-agent", projectId: "p1", agentState: "working" }];
+
+    const link = fakeLink();
+    server.attach(link);
+    link.open("view-1", "p1");
+    expect(pty.inventoryReads).toBe(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(agentAnswers(link).at(-1)).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p1", active: true }],
+    });
+  });
+
+  it("stops reading when the last view closes, and reads fresh when one opens again", async () => {
+    const pty = new FakePty();
+    ptyRef.current = pty;
+    start();
+    const link = fakeLink();
+    server.attach(link);
+    link.open("view-1", "p1");
+    link.open("view-2", "p2");
+    await vi.advanceTimersByTimeAsync(ASSISTANT_SWEEP_MS);
+    // One read per opening, then one on the sweep.
+    expect(pty.inventoryReads).toBe(3);
+
+    link.close("view-1");
+    await vi.advanceTimersByTimeAsync(ASSISTANT_SWEEP_MS);
+    expect(pty.inventoryReads).toBe(4);
+
+    link.close("view-2");
+    await vi.advanceTimersByTimeAsync(ASSISTANT_SWEEP_MS * 3);
+    expect(pty.inventoryReads).toBe(4);
+
+    link.open("view-3", "p1");
+    expect(pty.inventoryReads).toBe(5);
+  });
+
+  it("reads nothing while a Shell is away, and reads fresh when it comes back to its views", async () => {
+    const pty = new FakePty();
+    ptyRef.current = pty;
+    start();
+    const link = fakeLink();
+    server.attach(link);
+    link.open("view-1", "p1");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pty.inventoryReads).toBe(1);
+
+    link.drop();
+    pty.inventory = [{ id: "t-agent", projectId: "p1", agentState: "working" }];
+    await vi.advanceTimersByTimeAsync(ASSISTANT_SWEEP_MS * 3);
+    expect(pty.inventoryReads).toBe(1);
+
+    const resumed = fakeLink();
+    server.attach(resumed, true);
+    expect(pty.inventoryReads).toBe(2);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(agentAnswers(resumed).at(-1)).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p1", active: true }],
+    });
+  });
+
+  it("seeds a PTY client that appears only when a view opens with one reading", async () => {
+    start();
+    const pty = new FakePty();
+    ptyRef.current = pty;
+    await vi.advanceTimersByTimeAsync(ASSISTANT_SWEEP_MS * 2);
+    const link = fakeLink();
+    server.attach(link);
+    link.open("view-1", "p1");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pty.inventoryReads).toBe(1);
+  });
+
+  it("keeps reading while another Shell still has a view open", async () => {
+    const pty = new FakePty();
+    ptyRef.current = pty;
+    start();
+    const one = fakeLink();
+    const two = fakeLink();
+    server.attach(one, false, "s1");
+    server.attach(two, false, "s2");
+    one.open("view-1", "p1");
+    two.open("view-1", "p2");
+    await vi.advanceTimersByTimeAsync(0);
+    const opened = pty.inventoryReads;
+
+    one.drop();
+    await vi.advanceTimersByTimeAsync(ASSISTANT_SWEEP_MS);
+    expect(pty.inventoryReads).toBe(opened + 1);
+
+    two.close("view-1");
+    await vi.advanceTimersByTimeAsync(ASSISTANT_SWEEP_MS * 3);
+    expect(pty.inventoryReads).toBe(opened + 1);
+  });
+
+  it("follows agent state while nobody reads it, for the first view to open", async () => {
+    const pty = new FakePty();
+    ptyRef.current = pty;
+    start();
+    pty.owners.set("t-agent", "p1");
+    pty.inventory = [{ id: "t-agent", projectId: "p1", agentState: "working" }];
+    stateChanged("t-agent", "working");
+    expect(pty.inventoryReads).toBe(0);
+
+    const link = fakeLink();
+    server.attach(link);
+    link.open("view-1", "p1");
+    // Told from the events before the fresh reading lands, which agrees.
+    expect(agentAnswers(link)).toEqual([
+      { endpoints: [{ endpointId: "view-1", projectId: "p1", active: true }] },
+    ]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pty.inventoryReads).toBe(1);
+    expect(agentAnswers(link)).toHaveLength(1);
   });
 });

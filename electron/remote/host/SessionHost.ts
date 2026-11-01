@@ -290,6 +290,18 @@ export class SessionHost {
   }
 
   /**
+   * Whether some Shell has a view open here over a live link: the only time an
+   * endpoint's answers are read. Unlike {@link attachedCount}, a view left
+   * untouched still counts.
+   */
+  get servesViews(): boolean {
+    for (const state of this.states.values()) {
+      if (state.link?.isOpen && state.endpoints.size > 0) return true;
+    }
+    return false;
+  }
+
+  /**
    * The Shell behind `sessionId` used this host just now (typed or resized
    * one of its terminals). Its streams report it; summaries, listings, pings
    * and acks never do.
