@@ -5,19 +5,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Radix's Select, reduced to what this row hands it: the value it was given
 // (on the trigger, so a value no option matches is visible as itself), the
-// trigger's own ARIA, and one option per item that picks it on click.
+// trigger's own ARIA, and a list that opens from the trigger — only while it
+// is enabled — with one option per item that picks it and closes.
 vi.mock("@/components/ui/select", async () => {
-  const { createContext, use } = await import("react");
+  const { createContext, use, useState } = await import("react");
   interface Picker {
     value: string;
     onValueChange: (value: string) => void;
     disabled?: boolean;
   }
-  const PickerContext = createContext<Picker | null>(null);
+  const PickerContext = createContext<
+    (Picker & { open: boolean; setOpen: (open: boolean) => void }) | null
+  >(null);
   return {
-    Select: ({ children, ...picker }: Picker & { children: ReactNode }) => (
-      <PickerContext value={picker}>{children}</PickerContext>
-    ),
+    Select: ({ children, ...picker }: Picker & { children: ReactNode }) => {
+      const [open, setOpen] = useState(false);
+      return <PickerContext value={{ ...picker, open, setOpen }}>{children}</PickerContext>;
+    },
     SelectTrigger: (props: ButtonHTMLAttributes<HTMLButtonElement>) => {
       const picker = use(PickerContext)!;
       return (
@@ -26,20 +30,26 @@ vi.mock("@/components/ui/select", async () => {
           role="combobox"
           aria-labelledby={props["aria-labelledby"]}
           aria-describedby={props["aria-describedby"]}
+          aria-expanded={picker.open}
           disabled={picker.disabled}
           data-value={picker.value}
+          onClick={() => picker.setOpen(true)}
         />
       );
     },
     SelectValue: () => null,
-    SelectContent: ({ children }: { children: ReactNode }) => <div role="listbox">{children}</div>,
+    SelectContent: ({ children }: { children: ReactNode }) =>
+      use(PickerContext)!.open ? <div role="listbox">{children}</div> : null,
     SelectItem: ({ value, children }: { value: string; children: ReactNode }) => {
       const picker = use(PickerContext)!;
       return (
         <div
           role="option"
           aria-selected={picker.value === value}
-          onClick={() => picker.onValueChange(value)}
+          onClick={() => {
+            picker.onValueChange(value);
+            picker.setOpen(false);
+          }}
         >
           {children}
         </div>
@@ -74,7 +84,11 @@ const init = vi.fn();
 
 const picker = () => screen.queryByRole<HTMLButtonElement>("combobox");
 const pickedValue = () => picker()?.getAttribute("data-value");
-const pick = (name: string) => fireEvent.click(screen.getByRole("option", { name }));
+const openPicker = () => fireEvent.click(picker()!);
+const pick = (name: string) => {
+  openPicker();
+  fireEvent.click(screen.getByRole("option", { name }));
+};
 const newGroupButton = () => screen.getByRole<HTMLButtonElement>("button", { name: /new group/i });
 const textOf = (ids: string | null | undefined) =>
   (ids ?? "")
@@ -121,6 +135,7 @@ describe("ProjectGroupSettingsRow", () => {
   it("shows the project's group and moves it to another", () => {
     renderRow("g1");
     expect(pickedValue()).toBe("g1");
+    openPicker();
     expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
       "No group",
       "Daintree",
@@ -160,6 +175,7 @@ describe("ProjectGroupSettingsRow", () => {
         groups: [makeProjectGroup("g1", "Daintree"), makeProjectGroup("g2", "Client work", 1)],
       });
     });
+    openPicker();
     expect(screen.getByRole("option", { selected: true }).textContent).toBe("Client work");
 
     act(() => {
@@ -204,6 +220,8 @@ describe("ProjectGroupSettingsRow", () => {
       </SettingsGroup>
     );
     expect(picker()?.disabled).toBe(true);
+    openPicker();
+    expect(screen.queryByRole("option")).toBeNull();
     expect(newGroupButton().disabled).toBe(true);
     fireEvent.click(newGroupButton());
     expect(openDialog).not.toHaveBeenCalled();
