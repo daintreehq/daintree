@@ -598,12 +598,15 @@ export class LinkSession {
     const requestId = this.allocateRequestId(table);
     return new Promise<IpcEnvelope>((resolve) => {
       let timer: ReturnType<typeof setTimeout> | null = null;
-      // The request may already be on the wire; the peer can still act on it.
+      // Still unknown either way, so callers keep one contract; only a written
+      // one can reach the peer, since a settled frame is never sent.
       const onAbort = () =>
         settle(
           appErrorEnvelope(
             "OUTCOME_UNKNOWN",
-            "Request aborted after it was sent; the peer may still act on it"
+            entry.written
+              ? "Request aborted after it was sent; the peer may still act on it"
+              : "Request aborted before it was sent"
           )
         );
       const settle = (envelope: IpcEnvelope) => {
