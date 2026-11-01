@@ -95,6 +95,69 @@ describe("ScheduledRunStore", () => {
     expect(store.listByProject("project-1")).toHaveLength(5);
   });
 
+  it("moves a schedule's evaluation point with each occurrence's run, never back", () => {
+    const store = new ScheduledRunStore(sqlite);
+    store.insert(run("run-now"));
+    expect(store.evaluationPoint("schedule-1")).toBeNull();
+
+    store.insert(scheduled("on-time", T0));
+    expect(store.evaluationPoint("schedule-1")).toBe(T0);
+
+    const caughtUp = T0 + 3 * 3_600_000;
+    store.insert(
+      run("caught-up", {
+        origin: {
+          trigger: "catch-up",
+          dueAt: caughtUp - 60_000,
+          occurrenceKey: occurrenceKeyFor(caughtUp - 60_000),
+          coalesced: { after: T0, through: caughtUp },
+        },
+      })
+    );
+    expect(store.evaluationPoint("schedule-1")).toBe(caughtUp);
+
+    // An older occurrence registered late (a slow launch) doesn't move it back.
+    store.insert(scheduled("late-registration", T0 + 60_000));
+    expect(store.evaluationPoint("schedule-1")).toBe(caughtUp);
+    expect(store.evaluationPoint("schedule-2")).toBeNull();
+  });
+
+  it("keeps the evaluation point when retention prunes the run behind it", () => {
+    const store = new ScheduledRunStore(sqlite);
+    store.insert(scheduled("on-time", T0));
+    for (let i = 0; i < 3; i++) store.insert(run(`run-now-${i}`, { createdAt: T0 + i + 1 }));
+
+    expect(store.prune("schedule-1", 3)).toBe(1);
+    expect(store.get("on-time")).toBeNull();
+    expect(store.evaluationPoint("schedule-1")).toBe(T0);
+  });
+
+  it("leaves the evaluation point where it was when the run's insert fails", () => {
+    const store = new ScheduledRunStore(sqlite);
+    store.insert(scheduled("first", T0));
+
+    expect(() => store.insert(scheduled("again", T0))).toThrow(ScheduledRunConflictError);
+    expect(() =>
+      store.insert({ ...scheduled("invalid", T0 + 60_000), terminalSpawnedAt: T0 })
+    ).toThrow();
+    expect(store.evaluationPoint("schedule-1")).toBe(T0);
+  });
+
+  it("deletes the evaluation point with its schedule's or project's runs", () => {
+    const store = new ScheduledRunStore(sqlite);
+    store.insert(scheduled("run-1", T0));
+    store.insert({ ...scheduled("run-2", T0), scheduleId: "schedule-2" });
+    store.insert({ ...scheduled("run-3", T0), scheduleId: "schedule-3", projectId: "project-2" });
+
+    store.deleteForSchedule("schedule-1");
+    expect(store.evaluationPoint("schedule-1")).toBeNull();
+    expect(store.evaluationPoint("schedule-2")).toBe(T0);
+
+    expect(store.deleteForProject("project-1")).toBe(1);
+    expect(store.evaluationPoint("schedule-2")).toBeNull();
+    expect(store.evaluationPoint("schedule-3")).toBe(T0);
+  });
+
   it("lists newest first, keeping registration order within a millisecond", () => {
     const store = new ScheduledRunStore(sqlite);
     store.insert(run("older", { createdAt: T0 - 1 }));

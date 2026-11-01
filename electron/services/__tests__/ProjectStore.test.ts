@@ -176,6 +176,11 @@ const CREATE_TABLES_SQL = `
     created_at INTEGER NOT NULL,
     record TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS schedule_evaluation_points (
+    schedule_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    evaluated_through INTEGER NOT NULL
+  );
 `;
 
 let sqlite: Database.Database;
@@ -1729,6 +1734,11 @@ describe("ProjectStore.onProjectRegistryChanged", () => {
     );
     insertRun.run("beta-run", beta.id);
     insertRun.run("alpha-run", alphaId);
+    const insertPoint = sqlite.prepare(
+      "INSERT INTO schedule_evaluation_points (schedule_id, project_id, evaluated_through) VALUES (?, ?, 0)"
+    );
+    insertPoint.run("beta-schedule", beta.id);
+    insertPoint.run("alpha-schedule", alphaId);
 
     const deleted = vi.fn();
     const committedFirst: boolean[] = [];
@@ -1741,6 +1751,11 @@ describe("ProjectStore.onProjectRegistryChanged", () => {
 
     const left = sqlite.prepare("SELECT id FROM scheduled_runs").pluck().all();
     expect(left).toEqual(["alpha-run"]);
+    const points = sqlite
+      .prepare("SELECT schedule_id FROM schedule_evaluation_points")
+      .pluck()
+      .all();
+    expect(points).toEqual(["alpha-schedule"]);
     // Their runs will never end, so the deletion itself is announced.
     expect(deleted).toHaveBeenCalledTimes(1);
     expect(deleted).toHaveBeenCalledWith({
