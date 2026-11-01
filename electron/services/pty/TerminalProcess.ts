@@ -235,8 +235,8 @@ export class TerminalProcess {
 
   /**
    * True when an agent is currently observed in this PTY. Used to drive
-   * chrome-level decisions (OSC color responder ownership, output fan-out to
-   * agent:output listeners). Detection wins, and durable launch affinity keeps
+   * chrome-level decisions (OSC color responder ownership, the agent output
+   * ring and, for the Assistant, agent:output). Detection wins, and durable launch affinity keeps
    * cold-launched/restored agents wired until an explicit exit signal arrives.
    */
   private get isAgentLive(): boolean {
