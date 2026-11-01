@@ -838,6 +838,139 @@ describe("passive agent session capture", () => {
     });
   });
 
+  describe("a run's own argv (#15994)", () => {
+    const HAND_ID = "0199aaaa-1111-7222-8333-444455556666";
+    let observed: DaintreeEventMap["agent-session:observed"][];
+    let offObserved: () => void;
+
+    beforeEach(() => {
+      observed = [];
+      offObserved = events.on("agent-session:observed", (payload) => {
+        observed.push(payload);
+      });
+    });
+
+    afterEach(() => {
+      offObserved();
+    });
+
+    function seeProcess(terminal: TerminalProcess, command: string): void {
+      terminal.handleAgentProcessObservation({ agentType: "codex", command }, spawnedAt(terminal));
+    }
+
+    /** Quit to the shell and start Codex again by hand: the next run in this generation. */
+    function handStartCodex(terminal: TerminalProcess, incarnation: number): void {
+      demote(terminal);
+      // What the real AgentStateService does when the shell hosts a new run.
+      terminal.getInfo().agentIncarnation = incarnation;
+      promoteCodex(terminal);
+    }
+
+    it("ships the id a hand-typed resume names, tagged with its run", () => {
+      const terminal = track(createTerminal());
+      promoteCodex(terminal);
+      handStartCodex(terminal, 1);
+
+      seeProcess(terminal, `node /opt/homebrew/bin/codex resume ${HAND_ID}`);
+
+      expect(observed).toEqual([
+        {
+          terminalId: "t-passive",
+          agentId: "codex",
+          projectId: "proj-1",
+          sessionId: HAND_ID,
+          run: { launchGeneration: 7, agentIncarnation: 1 },
+        },
+      ]);
+    });
+
+    it("reads each run once, and every new run afresh", () => {
+      const terminal = track(createTerminal());
+      promoteCodex(terminal);
+      seeProcess(terminal, "codex");
+      seeProcess(terminal, `codex resume ${HAND_ID}`);
+      expect(observed).toHaveLength(0);
+
+      handStartCodex(terminal, 1);
+      seeProcess(terminal, `codex resume ${HAND_ID}`);
+      seeProcess(terminal, `codex resume ${HAND_ID}`);
+      expect(observed.map((o) => o.run.agentIncarnation)).toEqual([1]);
+
+      handStartCodex(terminal, 2);
+      seeProcess(terminal, `codex resume ${SESSION_ID}`);
+      expect(observed.map((o) => [o.sessionId, o.run.agentIncarnation])).toEqual([
+        [HAND_ID, 1],
+        [SESSION_ID, 2],
+      ]);
+    });
+
+    it("waits until the pane has promoted the agent the process belongs to", () => {
+      const terminal = track(createTerminal());
+      seeProcess(terminal, `codex resume ${HAND_ID}`);
+      expect(observed).toHaveLength(0);
+
+      promoteCodex(terminal);
+      seeProcess(terminal, `codex resume ${HAND_ID}`);
+      expect(observed).toHaveLength(1);
+    });
+
+    it("ships nothing for an agent the pane wasn't launched as", () => {
+      const plain = track(createTerminal({ launchAgentId: undefined }));
+      promoteCodex(plain);
+      seeProcess(plain, `codex resume ${HAND_ID}`);
+
+      const claudePane = track(createTerminal({ launchAgentId: "claude" }));
+      promoteCodex(claudePane);
+      seeProcess(claudePane, `codex resume ${HAND_ID}`);
+
+      expect(observed).toHaveLength(0);
+    });
+
+    it("ships nothing for the assistant's overlay terminal", () => {
+      const terminal = track(createTerminal({ isAssistantTerminal: true }));
+      promoteCodex(terminal);
+      seeProcess(terminal, `codex resume ${HAND_ID}`);
+
+      expect(observed).toHaveLength(0);
+    });
+
+    it("ignores a process from a previous PTY incarnation", () => {
+      const terminal = track(createTerminal());
+      promoteCodex(terminal);
+      terminal.handleAgentProcessObservation(
+        { agentType: "codex", command: `codex resume ${HAND_ID}` },
+        spawnedAt(terminal) - 1
+      );
+
+      expect(observed).toHaveLength(0);
+    });
+
+    it("never logs the command line or the id", async () => {
+      const terminal = track(createTerminal());
+      promoteCodex(terminal);
+      seeProcess(terminal, `codex -c secret_token=abc resume ${HAND_ID}`);
+
+      const { logBuffer } = await import("../../LogBuffer.js");
+      const serialized = JSON.stringify(logBuffer.getAll());
+      expect(serialized).toContain("Agent run argv read");
+      expect(serialized).not.toContain(HAND_ID);
+      expect(serialized).not.toContain("secret_token");
+    });
+
+    it("tags a demotion's farewell with the run that ended, read before the branch stamp", async () => {
+      const terminal = track(createTerminal());
+      promoteCodex(terminal);
+      handStartCodex(terminal, 1);
+      mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n\nuser@host project % `);
+      demote(terminal);
+      // A new run starting while the farewell waits on its branch lookup.
+      terminal.getInfo().agentIncarnation = 2;
+
+      await flushCapture();
+      expect(captured.map((c) => c.run)).toEqual([{ launchGeneration: 7, agentIncarnation: 1 }]);
+    });
+  });
+
   describe("logging", () => {
     it("never writes the captured session id into the log context", async () => {
       const terminal = track(createTerminal());

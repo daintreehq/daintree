@@ -71,6 +71,7 @@ import { disposeLifecycleLedger, getLifecycleLedger } from "../lifecycleLedger.j
 import {
   acceptCapturedAgentSession,
   acceptLiveSessionAttribution,
+  acceptObservedAgentSession,
   noteRendererSessionIdentityEdits,
   noteTerminalLaunch,
   persistCapturedAgentSession,
@@ -81,6 +82,7 @@ import {
   writeBackCapturedSessionId,
   type CapturedAgentSession,
   type LiveSessionAttribution,
+  type ObservedAgentSession,
 } from "../agentSessionCapturePersistence.js";
 
 const PROJECT_ID = generateProjectId("/repo/passive-capture");
@@ -1063,6 +1065,195 @@ describe("captured agent session persistence (#12433)", () => {
         "info",
         "Live agent session attribution outcome",
         expect.objectContaining({ terminalId: TERMINAL_ID, pane: "filled" }),
+      ]);
+    });
+  });
+
+  describe("an id a run's own argv names (#15994)", () => {
+    const HAND_ID = "0199f8c1-2b4d-7e3a-9f10-5c6d7e8f9a0b";
+
+    function observed(
+      generation: number,
+      agentIncarnation: number,
+      overrides: Partial<ObservedAgentSession> = {}
+    ): ObservedAgentSession {
+      return {
+        terminalId: TERMINAL_ID,
+        agentId: "codex",
+        projectId: PROJECT_ID,
+        sessionId: HAND_ID,
+        run: { launchGeneration: generation, agentIncarnation },
+        ...overrides,
+      };
+    }
+
+    function demotion(generation: number, agentIncarnation: number, sessionId: string) {
+      return capture(null, {
+        boundary: "demotion",
+        run: { launchGeneration: generation, agentIncarnation },
+        record: { sessionId },
+      });
+    }
+
+    it("fills a pane that holds no id", async () => {
+      const generation = launch();
+      await seed([pane()]);
+
+      await expect(acceptObservedAgentSession(observed(generation, 1))).resolves.toBe("filled");
+      expect((await savedPane())?.agentSessionId).toBe(HAND_ID);
+    });
+
+    it("replaces an id the pane held from before the run", async () => {
+      // The launched conversation, loaded from disk: nothing this module wrote.
+      const generation = launch();
+      await seed([pane({ agentSessionId: "launched-conversation" })]);
+
+      await expect(acceptObservedAgentSession(observed(generation, 1))).resolves.toBe(
+        "superseded"
+      );
+      expect((await savedPane())?.agentSessionId).toBe(HAND_ID);
+    });
+
+    it("yields to the same run's exit capture after a /new", async () => {
+      const generation = launch();
+      await seed([pane()]);
+      await acceptObservedAgentSession(observed(generation, 1));
+
+      await expect(
+        writeBackCapturedSessionId(capture(generation, { record: { sessionId: "after-new" } }))
+      ).resolves.toBe("superseded");
+      expect((await savedPane())?.agentSessionId).toBe("after-new");
+    });
+
+    it("still yields to the run's own exit capture when the pane already held that id", async () => {
+      // A launched `codex resume <id>`: the argv names what the pane holds.
+      const generation = launch();
+      await seed([pane({ agentSessionId: HAND_ID })]);
+
+      await expect(acceptObservedAgentSession(observed(generation, 0))).resolves.toBe(
+        "unchanged"
+      );
+      await expect(
+        writeBackCapturedSessionId(capture(generation, { record: { sessionId: "after-new" } }))
+      ).resolves.toBe("superseded");
+      expect((await savedPane())?.agentSessionId).toBe("after-new");
+    });
+
+    it("is corrected by a farewell its own run printed on a demotion", async () => {
+      const generation = launch();
+      await seed([pane()]);
+      await acceptObservedAgentSession(observed(generation, 1));
+
+      await expect(writeBackCapturedSessionId(demotion(generation, 1, "after-new"))).resolves.toBe(
+        "superseded"
+      );
+      expect((await savedPane())?.agentSessionId).toBe("after-new");
+    });
+
+    it("is not corrected by another run's demotion", async () => {
+      // An earlier run's farewell that arrives late (its branch stamp yields)
+      // describes a conversation the pane has since left.
+      const generation = launch();
+      await seed([pane()]);
+      await acceptObservedAgentSession(observed(generation, 2));
+
+      await expect(
+        writeBackCapturedSessionId(demotion(generation, 1, "earlier-run"))
+      ).resolves.toBe("ineligible-boundary");
+      expect((await savedPane())?.agentSessionId).toBe(HAND_ID);
+    });
+
+    it("leaves a demotion unable to fill or replace anything it didn't write", async () => {
+      const generation = launch();
+      await seed([pane({ agentSessionId: "launched-conversation" })]);
+
+      await expect(
+        writeBackCapturedSessionId(demotion(generation, 1, "farewell"))
+      ).resolves.toBe("ineligible-boundary");
+      expect((await savedPane())?.agentSessionId).toBe("launched-conversation");
+    });
+
+    it("refuses once a renderer identity edit lands before the write", async () => {
+      const generation = launch();
+      await seed([pane({ agentSessionId: "chosen-by-user" })]);
+      const held = holdQueue();
+      const write = acceptObservedAgentSession(observed(generation, 1));
+
+      noteRendererSessionIdentityEdits([TERMINAL_ID]);
+      held.release();
+
+      await expect(write).resolves.toBe("identity-edited");
+      expect((await savedPane())?.agentSessionId).toBe("chosen-by-user");
+    });
+
+    it("refuses a run the pane has since relaunched past", async () => {
+      const first = launch();
+      launch();
+      await seed([pane()]);
+
+      await expect(acceptObservedAgentSession(observed(first, 1))).resolves.toBe(
+        "stale-generation"
+      );
+      expect((await savedPane())?.agentSessionId).toBeUndefined();
+    });
+
+    it("refuses a pane launched as another agent, which restore would relaunch", async () => {
+      const generation = launch({ launchAgentId: "claude" });
+      await seed([pane({ launchAgentId: "claude" })]);
+
+      await expect(acceptObservedAgentSession(observed(generation, 1))).resolves.toBe(
+        "agent-mismatch"
+      );
+      expect((await savedPane())?.agentSessionId).toBeUndefined();
+    });
+
+    it("journals nothing: the run hasn't closed", async () => {
+      const generation = launch();
+      await seed([pane()]);
+
+      await acceptObservedAgentSession(observed(generation, 1));
+
+      expect(persistAgentSession).not.toHaveBeenCalled();
+    });
+
+    it("is released by a fresh relaunch like any id this module wrote", async () => {
+      const generation = launch();
+      await seed([pane()]);
+      await acceptObservedAgentSession(observed(generation, 1));
+
+      const second = launch();
+      noteTerminalLaunch(TERMINAL_ID, { command: "codex" });
+      releaseSupersededCapturedSession(TERMINAL_ID, second);
+      await sealAndDrainCapturedSessionPersistence(5_000);
+
+      expect((await savedPane())?.agentSessionId).toBeUndefined();
+    });
+
+    it("is waited for by the quit drain, and refused once it seals", async () => {
+      const generation = launch();
+      await seed([pane()]);
+      const held = holdQueue();
+      void acceptObservedAgentSession(observed(generation, 1));
+
+      const drain = sealAndDrainCapturedSessionPersistence(5_000);
+      held.release();
+
+      await expect(drain).resolves.toEqual({ drained: true, pending: 0 });
+      expect((await savedPane())?.agentSessionId).toBe(HAND_ID);
+      await expect(acceptObservedAgentSession(observed(generation, 2))).resolves.toBe("sealed");
+    });
+
+    it("never logs the session id", async () => {
+      const generation = launch();
+      await seed([pane()]);
+
+      await acceptObservedAgentSession(observed(generation, 1));
+
+      expect(JSON.stringify(logCalls)).not.toContain(HAND_ID);
+      expect(logCalls).toContainEqual([
+        "info",
+        "Observed agent session outcome",
+        expect.objectContaining({ terminalId: TERMINAL_ID, incarnation: 1, pane: "filled" }),
       ]);
     });
   });

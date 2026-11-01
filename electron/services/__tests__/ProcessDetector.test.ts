@@ -798,6 +798,70 @@ describe("ProcessDetector", () => {
     );
   });
 
+  describe("agent process observer (#15994)", () => {
+    const TREE_COMMAND = "node /opt/homebrew/bin/codex resume 0199f8c1-2b4d-7e3a-9f10-5c6d7e8f9a0b";
+
+    it("hears the committed agent's process on every pass, not only on the commit", () => {
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "node", command: TREE_COMMAND }]);
+      const callback = vi.fn();
+      const observer = vi.fn();
+
+      const detector = new ProcessDetector("terminal-obs-1", 1, 100, callback, cache as never);
+      detector.setAgentProcessObserver(observer);
+      detector.start();
+      // One poll is below the hysteresis threshold: nothing committed yet.
+      expect(observer).not.toHaveBeenCalled();
+
+      cache.emitRefresh();
+      cache.emitRefresh();
+
+      expect(callback).toHaveBeenCalledTimes(1);
+      expect(observer.mock.calls).toEqual([
+        [{ agentType: "codex", command: TREE_COMMAND }, 1],
+        [{ agentType: "codex", command: TREE_COMMAND }, 1],
+      ]);
+    });
+
+    it("hears the census process, never the typed line that promoted the agent first", () => {
+      const cache = createCacheMock();
+      const callback = vi.fn();
+      const observer = vi.fn();
+
+      const detector = new ProcessDetector("terminal-obs-2", 1, 100, callback, cache as never);
+      detector.setAgentProcessObserver(observer);
+      detector.start();
+      detector.injectShellCommandEvidence(
+        { agentType: "codex", processIconId: "codex", processName: "codex" },
+        "codex resume 0199aaaa-1111-7222-8333-444455556666"
+      );
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({ agentType: "codex", evidenceSource: "shell_command" }),
+        1
+      );
+      expect(observer).not.toHaveBeenCalled();
+
+      cache.setChildren(100, [{ pid: 200, comm: "node", command: TREE_COMMAND }]);
+      cache.emitRefresh();
+
+      expect(observer).toHaveBeenCalledWith({ agentType: "codex", command: TREE_COMMAND }, 1);
+    });
+
+    it("says nothing for a process that is not an agent", () => {
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "npm", command: "npm run dev" }]);
+      const observer = vi.fn();
+
+      const detector = new ProcessDetector("terminal-obs-3", 1, 100, vi.fn(), cache as never);
+      detector.setAgentProcessObserver(observer);
+      detector.start();
+      cache.emitRefresh();
+      cache.emitRefresh();
+
+      expect(observer).not.toHaveBeenCalled();
+    });
+  });
+
   describe("hysteresis", () => {
     it("does not emit detection after a single agent poll", () => {
       const cache = createCacheMock();

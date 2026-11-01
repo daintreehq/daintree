@@ -12,6 +12,7 @@ import { getLifecycleLedger } from "./lifecycleLedger.js";
 const logger = createLogger("main:AgentSessionCapturePersistence");
 
 export type CapturedAgentSession = DaintreeEventMap["agent-session:captured"];
+export type ObservedAgentSession = DaintreeEventMap["agent-session:observed"];
 
 /**
  * What happened to the saved pane. Only `filled`, `superseded` and `unchanged`
@@ -60,11 +61,14 @@ interface AuthoredId {
   sessionId: string;
   projectId: string;
   /**
-   * Learned while the run was still going (#15268), not captured as it ended.
-   * The run can switch conversations after that, so its own exit capture may
-   * replace this id even within the same generation.
+   * What wrote it. Anything but `exit` was learned before the generation
+   * ended — attributed while live (#15268), read off a run's argv (#15994), or
+   * a farewell at a demotion — and the generation can switch conversations
+   * after that, so its own exit capture may replace the id.
    */
-  live?: true;
+  source: PaneClaim["source"];
+  /** The agent run within the generation, for an `argv` or `demotion` claim. */
+  incarnation?: number;
   /**
    * The claim this one replaced, kept until this one's save lands: if that
    * save fails, the pane still holds the older id, which is still ours.
@@ -149,16 +153,33 @@ function describeError(error: unknown, fallback: string, sessionId: string): str
   return sessionId ? message.split(sessionId).join("[session]") : message;
 }
 
-/** One id offered for one saved pane, by an exit capture or a live attribution. */
+/**
+ * One id offered for one saved pane: a capture as the PTY exited or as the
+ * agent demoted to its shell, a live attribution, or a run's own argv.
+ */
 interface PaneClaim {
   terminalId: string;
   agentId: string;
   sessionId: string;
   generation: number;
   projectId: string;
-  source: "exit" | "live";
-  /** Live only: `sessionIdentityRevision` from before the saved pane was read. */
+  source: "exit" | "demotion" | "live" | "argv";
+  /** `argv` and `demotion`: the agent run within the generation. */
+  incarnation?: number;
+  /** `live` and `argv`: `sessionIdentityRevision` from before the claim was made. */
   identityRevision?: number;
+}
+
+/** Whether the pane's id was written by this run's own argv: the one thing a demotion may correct. */
+function argvClaimOfRun(
+  authored: AuthoredId | undefined,
+  claim: PaneClaim
+): authored is AuthoredId {
+  return (
+    authored?.source === "argv" &&
+    authored.generation === claim.generation &&
+    authored.incarnation === claim.incarnation
+  );
 }
 
 function decidePaneWriteback(state: ProjectState | null, claim: PaneClaim): PaneWritebackOutcome {
@@ -192,6 +213,19 @@ function decidePaneWriteback(state: ProjectState | null, claim: PaneClaim): Pane
   }
   if (pane.launchAgentId !== agentId) return "agent-mismatch";
 
+  const authored = authoredIds.get(terminalId);
+  // A demotion leaves a live shell that can host another conversation, so its
+  // farewell never stands for the pane on its own. It only corrects an id the
+  // same run's argv wrote: `/resume` or `/new` inside the TUI switched
+  // conversations without touching argv.
+  if (claim.source === "demotion") {
+    if (!pane.agentSessionId || !argvClaimOfRun(authored, claim)) return "ineligible-boundary";
+    if (pane.agentSessionId === sessionId) return "unchanged";
+    if (!claimCovers(authored, pane.agentSessionId)) return "conflict";
+    pane.agentSessionId = sessionId;
+    return "superseded";
+  }
+
   if (!pane.agentSessionId) {
     pane.agentSessionId = sessionId;
     return "filled";
@@ -200,12 +234,18 @@ function decidePaneWriteback(state: ProjectState | null, claim: PaneClaim): Pane
   // A live attribution only ever fills: whatever already holds the pane was
   // either captured as a run ended or chosen by the user.
   if (claim.source === "live") return "conflict";
+  // The process was started on this conversation, which outranks whatever the
+  // pane held from before the run. Once per run, so a later capture of the
+  // same run still replaces it.
+  if (claim.source === "argv") {
+    pane.agentSessionId = sessionId;
+    return "superseded";
+  }
 
-  const authored = authoredIds.get(terminalId);
   if (
     authored !== undefined &&
     (authored.generation < generation ||
-      (authored.live === true && authored.generation === generation)) &&
+      (authored.source !== "exit" && authored.generation === generation)) &&
     claimCovers(authored, pane.agentSessionId)
   ) {
     pane.agentSessionId = sessionId;
@@ -219,6 +259,8 @@ function decidePaneWriteback(state: ProjectState | null, claim: PaneClaim): Pane
  * cold restore resumes the exact conversation (#12433). Only a final PTY exit
  * qualifies: a demotion leaves a live shell that can host another
  * conversation, and trash expiry belongs to a pane already on its way out.
+ * The one exception is a demotion correcting the id its own run's argv wrote
+ * (#15994), which the run may have left for another conversation.
  *
  * Goes through the project's serialized state queue like every other writer.
  * Fills an absent id, keeps an identical one, and never overwrites someone
@@ -227,7 +269,21 @@ function decidePaneWriteback(state: ProjectState | null, claim: PaneClaim): Pane
 export async function writeBackCapturedSessionId(
   capture: CapturedAgentSession
 ): Promise<PaneWritebackOutcome> {
-  const { terminalId, boundary, launchGeneration: generation, record } = capture;
+  const { terminalId, boundary, launchGeneration: generation, record, run } = capture;
+  if (boundary === "demotion" && run && record.projectId) {
+    const claim: PaneClaim = {
+      terminalId,
+      agentId: record.agentId,
+      sessionId: record.sessionId,
+      generation: run.launchGeneration,
+      projectId: record.projectId,
+      source: "demotion",
+      incarnation: run.agentIncarnation,
+    };
+    // Decided again when the queued update runs; this only spares the queue
+    // the common demotion that has nothing to correct.
+    if (argvClaimOfRun(authoredIds.get(terminalId), claim)) return writeBackPaneClaim(claim);
+  }
   if (boundary !== "exit") return "ineligible-boundary";
   if (typeof generation !== "number") return "unknown-generation";
   const projectId = record.projectId;
@@ -250,7 +306,13 @@ async function writeBackPaneClaim(claim: PaneClaim): Promise<PaneWritebackOutcom
   try {
     await projectStore.enqueueProjectStateUpdate(projectId, (state) => {
       outcome = decidePaneWriteback(state, claim);
-      if (outcome === "filled" || outcome === "superseded") {
+      // An argv id the pane already held is still this run's from now on, so
+      // the run's own later capture can replace it.
+      if (
+        outcome === "filled" ||
+        outcome === "superseded" ||
+        (outcome === "unchanged" && claim.source === "argv")
+      ) {
         // Claimed at decision time, not after the save: a renderer edit that
         // lands while the save is pending drops this claim, and must stay the
         // last word.
@@ -260,7 +322,8 @@ async function writeBackPaneClaim(claim: PaneClaim): Promise<PaneWritebackOutcom
           sessionId,
           projectId,
           previous,
-          ...(claim.source === "live" && { live: true as const }),
+          source: claim.source,
+          ...(claim.incarnation !== undefined && { incarnation: claim.incarnation }),
         };
         claimed = { mine, previous };
         rememberBounded(authoredIds, terminalId, mine);
@@ -508,6 +571,46 @@ export function acceptLiveSessionAttribution(
       terminalId: attribution.terminalId,
       projectId: attribution.projectId,
       generation: attribution.generation,
+      pane,
+    });
+    return pane;
+  });
+  track(work.then(() => {}));
+  return work;
+}
+
+/**
+ * Write the conversation a run's own argv resumes onto its saved pane (#15994):
+ * `codex resume <id>` typed into the pane's shell starts a run no capture can
+ * name if it ends mid-turn. Replaces whatever the pane held, once per run (the
+ * pty-host asks once), under the same generation, agent and pane checks as
+ * every claim, and is refused if a renderer identity edit lands before the
+ * write. The run's own later capture, a farewell or the quit teardown, still
+ * replaces it. Not a journal record: nothing has closed. Tracked for the quit
+ * drain; never rejects.
+ */
+export function acceptObservedAgentSession(
+  observation: ObservedAgentSession
+): Promise<PaneWritebackOutcome> {
+  const { terminalId, agentId, projectId, sessionId, run } = observation;
+  if (isHostThrowawayWorkspaceId(projectId)) return Promise.resolve("no-project");
+  if (sealed) return Promise.resolve("sealed");
+  const work = writeBackPaneClaim({
+    terminalId,
+    agentId,
+    sessionId,
+    generation: run.launchGeneration,
+    projectId,
+    source: "argv",
+    incarnation: run.agentIncarnation,
+    identityRevision: sessionIdentityRevision(terminalId),
+  }).then((pane) => {
+    // Correlation only — never the session id, which is a resume credential.
+    logger.info("Observed agent session outcome", {
+      terminalId,
+      projectId,
+      generation: run.launchGeneration,
+      incarnation: run.agentIncarnation,
       pane,
     });
     return pane;

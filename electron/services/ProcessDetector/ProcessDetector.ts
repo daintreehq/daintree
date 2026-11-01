@@ -16,7 +16,7 @@ import {
   makeUnknownResult,
   makeAmbiguousResult,
 } from "./types.js";
-import type { DetectionCallback } from "./types.js";
+import type { AgentProcessObserver, DetectionCallback } from "./types.js";
 import type { DetectionEvidenceSource } from "./types.js";
 import { isChromiumChildProcess, redactArgv } from "./commandParser.js";
 import { buildDetectedCandidate, selectPreferredCandidate } from "./candidateHelpers.js";
@@ -102,6 +102,7 @@ export class ProcessDetector {
   private spawnedAt: number;
   private ptyPid: number;
   private callback: DetectionCallback;
+  private agentProcessObserver: AgentProcessObserver | null = null;
   private lastDetected: BuiltInAgentId | null = null;
   private lastProcessIconId: string | null = null;
   private lastBusyState: boolean | null = null;
@@ -167,6 +168,16 @@ export class ProcessDetector {
    */
   setLaunchAnchored(isLaunchAnchored: boolean): void {
     this.isLaunchAnchored = isLaunchAnchored;
+  }
+
+  /**
+   * Hear, on every pass, which census process backs the committed agent. Kept
+   * apart from the detection callback, which only fires on a change: shell
+   * evidence can commit the agent before the census shows its process, and the
+   * pass that does show it changes nothing the callback reports.
+   */
+  setAgentProcessObserver(observer: AgentProcessObserver | null): void {
+    this.agentProcessObserver = observer;
   }
 
   /**
@@ -588,6 +599,20 @@ export class ProcessDetector {
           );
         }
         this.callback(result, this.spawnedAt);
+      }
+
+      // `treeMatch` only carries an agent when it supports this pass's result,
+      // so a shell-only identity never reaches the observer.
+      if (
+        this.agentProcessObserver &&
+        treeMatch?.agentType !== undefined &&
+        treeMatch.agentType === this.lastDetected &&
+        treeMatch.processCommand
+      ) {
+        this.agentProcessObserver(
+          { agentType: treeMatch.agentType, command: treeMatch.processCommand },
+          this.spawnedAt
+        );
       }
     } catch (_error) {
       console.error(`ProcessDetector error for terminal ${this.terminalId}:`, _error);
