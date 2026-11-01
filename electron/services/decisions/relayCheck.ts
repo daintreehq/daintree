@@ -257,7 +257,7 @@ async function getJson(
 }
 
 /** The body as text, or null once it passes `max` bytes. */
-async function readCapped(response: Response, max: number): Promise<string | null> {
+export async function readCapped(response: Response, max: number): Promise<string | null> {
   const reader = response.body?.getReader();
   if (!reader) return "";
   const chunks: Uint8Array[] = [];
@@ -280,13 +280,25 @@ async function readCapped(response: Response, max: number): Promise<string | nul
 }
 
 function failedRequest(error: unknown, timedOut: boolean): Answer {
-  if (timedOut) return { kind: "unreachable", reason: "timeout" };
+  const reason = requestFailureReason(error, timedOut);
+  return reason === "redirect" ? { kind: "redirected" } : { kind: "unreachable", reason };
+}
+
+/**
+ * Why a request got no answer, from the error it failed with; `redirect` when
+ * the network stack refused to follow one. Never the error's own text.
+ */
+export function requestFailureReason(
+  error: unknown,
+  timedOut: boolean
+): DecisionsRelayUnreachableReason | "redirect" {
+  if (timedOut) return "timeout";
   const name = error instanceof Error ? error.name : "";
   const message = formatErrorMessage(error, "");
   // Chromium's network stack refuses a redirect under `redirect: "error"`
   // (and cancels one under "manual") with its own message, not a 3xx status.
-  if (/redirect/i.test(message)) return { kind: "redirected" };
-  return { kind: "unreachable", reason: unreachableReason(name, message) };
+  if (/redirect/i.test(message)) return "redirect";
+  return unreachableReason(name, message);
 }
 
 function unreachableReason(name: string, message: string): DecisionsRelayUnreachableReason {
@@ -302,7 +314,7 @@ function unreachableReason(name: string, message: string): DecisionsRelayUnreach
 }
 
 /** Chromium's network stack, so the system proxy and certificate store apply as they do elsewhere. */
-async function electronNetFetch(): Promise<RelayFetch> {
+export async function electronNetFetch(): Promise<RelayFetch> {
   const { net } = await import("electron");
   return (url, init) => net.fetch(url, init);
 }

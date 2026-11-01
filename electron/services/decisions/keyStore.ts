@@ -135,7 +135,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Enough of the library's shape to tell keys from damage; the library checks the rest on import. */
-function isStoredIdentity(value: unknown): value is StoredIdentity {
+export function isStoredIdentity(value: unknown): value is StoredIdentity {
   if (!isRecord(value) || value.v !== 1) return false;
   const { config, keys, epochs, currentEpoch } = value;
   return (

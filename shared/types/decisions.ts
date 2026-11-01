@@ -49,10 +49,16 @@ export type DecisionsState = "off" | "not-connected" | "connecting" | "connected
 
 export interface DecisionsStatus {
   state: DecisionsState;
-  /** The relay this computer is set up with, as an origin; absent until one is entered. */
+  /** The relay this computer claimed or restored, as an origin; absent until it has one. */
   relayOrigin?: string;
   /** When the person agreed to what Decisions sends; absent until they have. */
   consentedAt?: number;
+  /**
+   * This computer's Decisions key file exists. Read only while on, from the
+   * file's presence alone, so it never asks the keychain. With no relay set
+   * up, it is the keys of a setup that didn't finish.
+   */
+  keysStored?: true;
 }
 
 /**
@@ -131,6 +137,92 @@ export type DecisionsRelayCheck =
       origin: string;
       compatibility: DecisionsRelayCompatibility;
     };
+
+/**
+ * Claiming a fresh relay (#16006). The secret goes to the relay once, from
+ * main, and is kept nowhere. `acceptWeakStorage` is the person accepting
+ * Linux's fixed-key storage after Daintree said it was all there was.
+ */
+export interface ClaimDecisionsRelayPayload {
+  url: string;
+  claimSecret: string;
+  acceptWeakStorage?: boolean;
+}
+
+/**
+ * Restoring an identity from a recovery kit (#16006): the kit file's text
+ * and its passphrase, neither kept after the attempt.
+ */
+export interface RestoreDecisionsIdentityPayload {
+  url: string;
+  kit: string;
+  passphrase: string;
+  acceptWeakStorage?: boolean;
+}
+
+/** Why the relay refused a claim outright. */
+export type DecisionsClaimRefusal =
+  | "wrong-secret"
+  | "already-claimed"
+  | "not-configured"
+  | "rate-limited"
+  | "rejected";
+
+/** Why a recovery kit wasn't restored. Nothing was saved for any of them. */
+export type DecisionsKitRefusal =
+  /** Not a Decisions recovery kit, or one whose keys don't work. */
+  | "not-a-kit"
+  /** The passphrase didn't open it, or the file is damaged. */
+  | "wrong-passphrase"
+  /** A kit for a different relay than the one checked. */
+  | "another-relay"
+  /** An enrolled Host's identity, not the owner's. */
+  | "not-owner"
+  /** Saved from a setup the relay never confirmed. */
+  | "unfinished"
+  /** The relay doesn't accept this identity: not its owner, or revoked. */
+  | "not-recognised";
+
+/** The key store's refusals that stop a setup, as `DecisionsKeyStoreError` names them. */
+export type DecisionsKeyStorageFailure =
+  | "locked"
+  | "unavailable"
+  | "timeout"
+  | "weak-storage-unconfirmed"
+  | "unreadable"
+  | "unsupported-format";
+
+/**
+ * What a claim or a restore observed (#16006). Only `saved` changed the
+ * setting. Otherwise nothing new is left on this computer, except where
+ * `kept` says the keys of an unfinished claim stay, because the relay may
+ * have accepted it and only those keys could finish it.
+ *
+ * - `saved`: the identity is sealed and the relay origin and ids are recorded.
+ * - `relay`: the relay's unsigned check stopped it first (unreachable, not a
+ *   relay, incompatible, or claimed when claiming / unclaimed when restoring).
+ * - `refused`: the relay refused the claim.
+ * - `unreachable`: no answer from the relay (`server-error`: it answered with
+ *   a failure), so it is unknown whether a claim arrived.
+ * - `kit-refused`: the recovery kit wasn't restored.
+ * - `conflict`: this computer already holds keys for another relay or
+ *   identity (`unfinished` when they are an unfinished claim's), or a relay
+ *   is already set up; they have to be removed first.
+ * - `key-storage`: the keys couldn't be read or sealed.
+ */
+export type DecisionsConnectResult =
+  | { result: "saved"; status: DecisionsStatus }
+  | { result: "relay"; check: DecisionsRelayCheck }
+  | { result: "refused"; origin: string; reason: DecisionsClaimRefusal; kept: boolean }
+  | {
+      result: "unreachable";
+      origin: string;
+      reason: DecisionsRelayUnreachableReason | "server-error";
+      kept: boolean;
+    }
+  | { result: "kit-refused"; origin: string; reason: DecisionsKitRefusal }
+  | { result: "conflict"; origin: string | null; unfinished: boolean }
+  | { result: "key-storage"; kind: DecisionsKeyStorageFailure; reason: string };
 
 /**
  * How far an answer has got on its way into the terminal, as the client

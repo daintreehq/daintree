@@ -606,6 +606,14 @@ export interface GeneratedIpcInvokeMap {
     args: [url: string];
     result: import("../decisions.js").DecisionsRelayCheck;
   };
+  "decisions:claim-relay": {
+    args: [payload: import("../decisions.js").ClaimDecisionsRelayPayload];
+    result: import("../decisions.js").DecisionsConnectResult;
+  };
+  "decisions:disconnect-relay": {
+    args: [];
+    result: import("../decisions.js").DecisionsStatus;
+  };
   "decisions:get-pane-state": {
     args: [terminalId: string];
     result: import("../decisions.js").PaneDecisionState | null;
@@ -613,6 +621,10 @@ export interface GeneratedIpcInvokeMap {
   "decisions:get-status": {
     args: [];
     result: import("../decisions.js").DecisionsStatus;
+  };
+  "decisions:restore-identity": {
+    args: [payload: import("../decisions.js").RestoreDecisionsIdentityPayload];
+    result: import("../decisions.js").DecisionsConnectResult;
   };
   "decisions:set-enabled": {
     args: [payload: import("../decisions.js").SetDecisionsEnabledPayload];
@@ -859,7 +871,7 @@ export interface GeneratedIpcInvokeMap {
               };
               verdict: "tested" | "untested";
               reasons: string[];
-              missingInstall: ("svelte" | "kit" | "tailwind" | "vite")[];
+              missingInstall: ("kit" | "svelte" | "tailwind" | "vite")[];
             };
             diagnostics: {
               code: "unresolved-layout-reset" | "duplicate-route-id" | "traversal-truncated";

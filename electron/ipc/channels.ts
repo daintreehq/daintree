@@ -1512,6 +1512,11 @@ export const CHANNELS = {
   DECISIONS_SET_ENABLED: "decisions:set-enabled",
   // A relay URL's unsigned health and protocol check (#16005), from main.
   DECISIONS_CHECK_RELAY: "decisions:check-relay",
+  // Claiming a relay, restoring an identity from a recovery kit, and removing
+  // this computer's identity (#16006), all in main.
+  DECISIONS_CLAIM_RELAY: "decisions:claim-relay",
+  DECISIONS_RESTORE_IDENTITY: "decisions:restore-identity",
+  DECISIONS_DISCONNECT_RELAY: "decisions:disconnect-relay",
 
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",

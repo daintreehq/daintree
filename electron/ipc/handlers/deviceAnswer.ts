@@ -16,9 +16,12 @@ import type {
   SetDeviceAnswerPayload,
 } from "../../../shared/types/ipc/deviceAnswer.js";
 import type {
+  ClaimDecisionsRelayPayload,
+  DecisionsConnectResult,
   DecisionsRelayCheck,
   DecisionsStatus,
   PaneDecisionState,
+  RestoreDecisionsIdentityPayload,
   SetDecisionsEnabledPayload,
 } from "../../../shared/types/decisions.js";
 import { AppError } from "../../utils/errorTypes.js";
@@ -115,6 +118,39 @@ const setDecisionsEnabledSchema = z
   .object({ enabled: z.boolean(), consent: z.boolean().optional() })
   .strict();
 
+// The relay's own bounds on a claim secret. Validation failures log field
+// paths and limits, never the values.
+const claimRelaySchema = z
+  .object({
+    url: z.string().max(2048),
+    claimSecret: z.string().min(16).max(256),
+    acceptWeakStorage: z.boolean().optional(),
+  })
+  .strict();
+
+// A kit is a few KiB; main checks its size again in bytes before reading it.
+const restoreIdentitySchema = z
+  .object({
+    url: z.string().max(2048),
+    kit: z
+      .string()
+      .min(1)
+      .max(256 * 1024),
+    passphrase: z.string().min(1).max(1024),
+    acceptWeakStorage: z.boolean().optional(),
+  })
+  .strict();
+
+function refuseWhileOff(action: string): void {
+  if (!decisionsOn()) {
+    throw new AppError({ code: "PERMISSION", message: `Turn on Decisions to ${action}` });
+  }
+}
+
+function setupCancelled(): AppError {
+  return new AppError({ code: "CANCELLED", message: "Decisions has stopped, so nothing was changed" });
+}
+
 /**
  * Decisions' status read (#16001), pane read (#16016) and switch (#16004).
  * They are declared here, beside the other feature that answers agents from a
@@ -185,6 +221,35 @@ export const decisionsNamespace = defineIpcNamespace({
         return decisions.checkRelay(url);
       }
     ),
+    // Claiming a relay, restoring an identity and disconnecting (#16006). Only
+    // while on: each needs the running lifetime's key store, and each runs
+    // behind the switch's transitions in main.
+    claimRelay: opValidated(
+      CHANNELS.DECISIONS_CLAIM_RELAY,
+      claimRelaySchema,
+      async (payload: ClaimDecisionsRelayPayload): Promise<DecisionsConnectResult> => {
+        refuseWhileOff("claim a relay");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.claimRelay(payload);
+      }
+    ),
+    restoreIdentity: opValidated(
+      CHANNELS.DECISIONS_RESTORE_IDENTITY,
+      restoreIdentitySchema,
+      async (payload: RestoreDecisionsIdentityPayload): Promise<DecisionsConnectResult> => {
+        refuseWhileOff("restore an identity");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.restoreIdentity(payload);
+      }
+    ),
+    disconnectRelay: op(CHANNELS.DECISIONS_DISCONNECT_RELAY, async (): Promise<DecisionsStatus> => {
+      refuseWhileOff("disconnect a relay");
+      const decisions = await loadDecisions();
+      if (!decisions) throw setupCancelled();
+      return decisions.disconnectRelay();
+    }),
   },
 });
 

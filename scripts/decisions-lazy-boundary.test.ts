@@ -81,6 +81,8 @@ describe("Decisions lazy boundary", () => {
       "electron/services/decisions/openLocalStore.ts",
       "electron/services/decisions/daintreeLocalStore.ts",
       "electron/services/decisions/relayCheck.ts",
+      "electron/services/decisions/relayIdentity.ts",
+      "electron/services/decisions/keyStore.ts",
     ]) {
       expect(inputs, file).toContain(file);
     }
