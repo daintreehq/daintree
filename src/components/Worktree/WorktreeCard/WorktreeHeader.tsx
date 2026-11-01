@@ -9,8 +9,6 @@ import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Sprout, Pin, BellOff } from "lucide-react";
 import { FolderOutput } from "@/components/icons";
 import type { AggregateCounts } from "./aggregateCounts";
-import { IssueBadge } from "./IssueBadge";
-import { PRBadge } from "./PRBadge";
 import { EnvironmentPopover } from "./EnvironmentPopover";
 import { WorktreeAttachmentChips } from "./WorktreeAttachmentChips";
 import { visibleAttachmentChips } from "./attachmentState";
@@ -62,6 +60,8 @@ export interface WorktreeHeaderProps {
   branchLabel: string;
   /** Normalised custom title (#13409); takes the headline slot when set. */
   customTitle?: string;
+  /** Names the worktree in its controls' accessible names. */
+  worktreeLabel?: string;
   sessionStates?: Record<AgentState, number>;
   sessionTotal?: number;
   /** Unread hand-backs, counted apart from `sessionStates`. */
@@ -122,6 +122,7 @@ export function WorktreeHeader({
   contentId,
   branchLabel,
   customTitle,
+  worktreeLabel,
   sessionStates,
   sessionTotal,
   sessionUnread,
@@ -171,7 +172,6 @@ export function WorktreeHeader({
   const hasAttachmentChips =
     !!onAttachmentAction && visibleAttachmentChips(worktree.attachments).length > 0;
   const pluginStatuses = useWorktreePluginStatuses(worktree.id);
-  const underlineOnHover = variant !== "sidebar" || isActive;
   // `hasBaseName` is the whole mount rule for the base line: the workspace-host
   // sets it only for a non-main worktree on a branch whose base it resolved, so
   // it is exactly "this is a branch, and we know what it is measured against".
@@ -355,33 +355,20 @@ export function WorktreeHeader({
               isMuted={isMuted}
             />
           ) : hasDisplayTitle ? (
-            isPrOriginated ? (
-              <PRBadge
-                prNumber={worktree.sourcePrNumber!}
-                prTitle={displayTitle}
-                prState={worktree.linked?.pr?.state}
-                prCiStatus={worktree.linked?.pr?.ciStatus}
-                mergeIntent={worktree.linked?.pr?.mergeIntent}
-                headMovedWhileArmed={worktree.linked?.pr?.headMovedWhileArmed}
-                isSubordinate={false}
-                worktreePath={worktree.path}
-                onOpen={badges.onOpenPR}
-                isHeadline
-                isActive={isActive}
-                underlineOnHover={underlineOnHover}
-              />
-            ) : (
-              <IssueBadge
-                issueNumber={worktree.issueNumber!}
-                issueTitle={displayTitle}
-                provenance={worktree}
-                worktreePath={worktree.path}
-                onOpen={badges.onOpenIssue}
-                isHeadline
-                isActive={isActive}
-                underlineOnHover={underlineOnHover}
-              />
-            )
+            // The issue or PR title, as words: the headline names the
+            // worktree, and a click on it selects the card like any of the
+            // card's content. It used to be the issue/PR badge itself, which
+            // selected an inactive card but opened the browser from the active
+            // one — the same click leaving the app depending on which card
+            // was current (#15864). The reference that opens it is its own
+            // control in the stack below.
+            <CustomTitleHeadline
+              title={displayTitle!}
+              displaced={[]}
+              isActive={isActive}
+              isMuted={isMuted}
+              testId="worktree-headline-title"
+            />
           ) : isMainStandardLayout && quietGit ? (
             <CustomTitleHeadline
               title={worktree.name}
@@ -672,7 +659,7 @@ export function WorktreeHeader({
             branchLabel={branchLabel}
             isActive={isActive}
             isMuted={isMuted}
-            underlineOnHover={underlineOnHover}
+            worktreeLabel={worktreeLabel}
             hasUpstreamDelta={hasUpstreamDelta}
             hasAuthFailedSignIn={hasAuthFailedSignIn}
             hasDisplayTitle={hasDisplayTitle}
@@ -708,11 +695,13 @@ function CustomTitleHeadline({
   displaced,
   isActive,
   isMuted,
+  testId = "worktree-custom-title",
 }: {
   title: string;
   displaced: string[];
   isActive: boolean;
   isMuted?: boolean;
+  testId?: string;
 }) {
   const span = (
     <span
@@ -724,7 +713,7 @@ function CustomTitleHeadline({
             ? "text-text-secondary font-normal"
             : "text-text-secondary font-medium"
       )}
-      data-testid="worktree-custom-title"
+      data-testid={testId}
     >
       {title}
     </span>

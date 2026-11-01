@@ -132,9 +132,45 @@
   --card-edge: inset -2px 0 0 color-mix(in srgb, var(--theme-accent-primary) 65%, transparent);
 }
 
-.sidebar-worktree-card[data-hoverable="true"]:hover,
+/* The card is the button (#15864). Its tint answers the pointer only over its
+   content: over a control, the control's own plate is the one surface that
+   lights up, so the hover never claims two different click results at once.
+   The list is `CARD_CONTROL_SELECTOR` in `cardClickTarget.ts`, which routes
+   the click the same way. `:where()` adds no specificity, so the drag rules
+   below still out-rank this one. */
+.sidebar-worktree-card[data-hoverable="true"]:hover:where(
+    :not(
+      :has(
+        :is(
+          button:not([data-card-select-overlay]),
+          a[href],
+          input,
+          select,
+          textarea,
+          summary,
+          [role="button"],
+          [role="checkbox"],
+          [role="switch"],
+          [role="tab"],
+          [role="option"],
+          [role="menuitem"],
+          [role="menuitemcheckbox"],
+          [role="menuitemradio"],
+          [data-card-control],
+          [data-worktree-row-drag-handle]
+        ):hover
+      )
+    )
+  ),
 .sidebar-worktree-card[data-hovered="true"] {
   background: var(--sidebar-hover-bg, rgba(255, 255, 255, 0.048));
+}
+
+/* An inactive card selects on a click anywhere on its content, so the whole
+   surface says so. Controls keep their own cursor; the active card's content
+   does nothing on click and keeps the default. */
+.sidebar-worktree-card[data-variant="sidebar"][data-hoverable="true"] {
+  cursor: pointer;
 }
 
 /* The selected-card fill as a standalone opaque plane (the details panel's

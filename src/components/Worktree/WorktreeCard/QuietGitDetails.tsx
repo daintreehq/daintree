@@ -9,6 +9,8 @@ interface QuietGitDetailsProps {
   worktree: WorktreeState;
   branchLabel: string;
   isActive: boolean;
+  /** Names the worktree in its references' accessible names. */
+  worktreeLabel?: string;
   onOpenIssue?: () => void;
   onOpenPR?: () => void;
   /**
@@ -28,6 +30,7 @@ export function QuietGitDetails({
   worktree,
   branchLabel,
   isActive,
+  worktreeLabel,
   onOpenIssue,
   onOpenPR,
   syncOnly = false,
@@ -60,8 +63,7 @@ export function QuietGitDetails({
           provenance={worktree}
           worktreePath={worktree.path}
           onOpen={onOpenIssue}
-          isActive={isActive}
-          underlineOnHover
+          worktreeLabel={worktreeLabel}
         />
       )}
       {!syncOnly && pr && (
@@ -75,8 +77,7 @@ export function QuietGitDetails({
           isSubordinate={false}
           worktreePath={worktree.path}
           onOpen={onOpenPR}
-          isActive={isActive}
-          underlineOnHover
+          worktreeLabel={worktreeLabel}
           prDetectionPaused={prDetectionPaused}
         />
       )}
