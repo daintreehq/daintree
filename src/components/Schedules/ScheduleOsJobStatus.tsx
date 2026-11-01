@@ -6,6 +6,7 @@ import { Callout } from "@/components/ui/Callout";
 import { pluralize } from "@/lib/pluralize";
 import type { Schedule } from "@shared/types/scheduledRuns";
 import type { ScheduleOsJobStatus as OsJobStatus } from "@shared/types/ipc/schedules";
+import { scheduleOsJobStarter } from "@shared/utils/scheduleOsJob";
 
 interface ScheduleOsJobStatusProps {
   status: OsJobStatus | null;
@@ -18,8 +19,8 @@ interface ScheduleOsJobStatusProps {
 
 /**
  * Whether the OS job that starts Daintree for this project's schedules, set
- * to run when it isn't running, is installed and current (#15990, #15991).
- * Silent while no switched-on schedule here asks for it.
+ * to run when it isn't running, is installed and current (#15990, #15991,
+ * #15993). Silent while no switched-on schedule here asks for it.
  */
 export function ScheduleOsJobStatus({
   status,
@@ -34,8 +35,9 @@ export function ScheduleOsJobStatus({
   const names = new Map(schedules.map((s) => [s.id, s.name]));
   const excluded = (status?.excluded ?? []).filter((entry) => names.has(entry.scheduleId));
   const started = optedIn.length - excluded.length;
+  const kind = status?.context.kind ?? null;
   // What starts Daintree, as the platform's own name for it.
-  const starter = status?.context.kind === "systemd-timer" ? "systemd" : "macOS";
+  const starter = kind ? scheduleOsJobStarter(kind) : "This computer";
   const repairButton = (
     <Button variant="outline" size="sm" onClick={onRepair} loading={repairing}>
       <RefreshCw />

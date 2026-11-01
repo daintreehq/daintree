@@ -34,7 +34,7 @@ import {
   type ScheduleOsJobKind,
 } from "@shared/utils/scheduleOsJob";
 import type { SchedulesSnapshot } from "@shared/types/ipc/schedules";
-import { isLinux, isMac } from "@/lib/platform";
+import { isLinux, isMac, isWindows } from "@/lib/platform";
 import { logError } from "@/utils/logger";
 import { useFirstAgentOptions } from "@/components/Worktree/hooks/useFirstAgentOptions";
 import { useScheduleLaunchOptions } from "./useScheduleLaunchOptions";
@@ -166,9 +166,14 @@ function runWhenClosedReason(
   timeZone: string,
   context: ScheduleOsJobContext | null
 ): string | null {
-  if (!context || choiceIssue(draft.cadence) !== null) return null;
-  if (!validateCadence({ cron: draft.cadence.cron, timeZone }).ok) return null;
-  return runWhenClosedIssue({ cron: draft.cadence.cron, timeZone }, context);
+  if (!context) return null;
+  const cadence = { cron: draft.cadence.cron, timeZone };
+  // Whether this machine or build can have the job at all doesn't wait for a valid cadence.
+  if (context.kind === null || context.unavailable !== null) {
+    return runWhenClosedIssue(cadence, context);
+  }
+  if (choiceIssue(draft.cadence) !== null || !validateCadence(cadence).ok) return null;
+  return runWhenClosedIssue(cadence, context);
 }
 
 /** The same reasons main gives, checked here so a field says what's wrong before Save. */
@@ -223,7 +228,10 @@ const RUN_WHEN_CLOSED_DESCRIPTION: Record<ScheduleOsJobKind, string> = {
     "macOS starts Daintree without a window when a run is due. One due while the Mac sleeps follows Missed runs when it wakes",
   "systemd-timer":
     "systemd starts Daintree without a window when a run is due. One due while the computer sleeps or is off follows Missed runs when it wakes or you next log in",
+  "task-scheduler":
+    "Windows starts Daintree without a window when a run is due and you're signed in, waking the PC where wake timers are allowed. One it missed follows Missed runs when Windows catches up",
 };
+const RUN_WHEN_CLOSED_FALLBACK_DESCRIPTION = "Daintree starts without a window when a run is due";
 const PREVIEW_RUNS = 3;
 /** How long the cadence must sit still before its words or error are read out. */
 const CADENCE_ANNOUNCE_SETTLE_MS = 600;
@@ -358,11 +366,18 @@ export function ScheduleEditor({
   }
 
   const agentName = getEffectiveAgentConfig(draft.agentId)?.name ?? "This agent";
+  // Before main's context arrives, judged by the platform the view runs on.
+  const osJobKind: ScheduleOsJobKind | null = osJobContext
+    ? osJobContext.kind
+    : isMac()
+      ? "launch-agent"
+      : isWindows()
+        ? "task-scheduler"
+        : isLinux()
+          ? "systemd-timer"
+          : null;
   // Shown where an OS job exists, and wherever the option is already on so it can be turned off.
-  const showRunWhenClosed =
-    draft.runWhenClosed || (osJobContext ? osJobContext.kind !== null : isMac() || isLinux());
-  const osJobKind: ScheduleOsJobKind =
-    osJobContext?.kind ?? (isLinux() ? "systemd-timer" : "launch-agent");
+  const showRunWhenClosed = draft.runWhenClosed || osJobKind !== null;
 
   const save = async () => {
     setAttempted(true);
@@ -641,7 +656,9 @@ export function ScheduleEditor({
                   description={
                     !draft.runWhenClosed && runWhenClosedRefusal !== null
                       ? runWhenClosedRefusal
-                      : RUN_WHEN_CLOSED_DESCRIPTION[osJobKind]
+                      : osJobKind
+                        ? RUN_WHEN_CLOSED_DESCRIPTION[osJobKind]
+                        : RUN_WHEN_CLOSED_FALLBACK_DESCRIPTION
                   }
                   checked={draft.runWhenClosed}
                   onChange={(value) => update("runWhenClosed", value)}

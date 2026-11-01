@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   relocationHandlers: [] as Array<(relocation: { previous: string; next: string }) => void>,
   systemdDeps: [] as Array<Record<string, unknown>>,
   launchAgentDeps: [] as Array<Record<string, unknown>>,
+  taskSchedulerDeps: [] as Array<Record<string, unknown>>,
   followAppImageMove: vi.fn(),
   schedules: [] as Schedule[],
   adapters: [] as Array<{ sync: ReturnType<typeof vi.fn> }>,
@@ -88,7 +89,16 @@ vi.mock("../launchAgentScheduleJob.js", async (importActual) => ({
   },
 }));
 
+vi.mock("../taskSchedulerScheduleJob.js", async (importActual) => ({
+  ...(await importActual<object>()),
+  createTaskSchedulerScheduleJob: (deps: Record<string, unknown>) => {
+    mocks.taskSchedulerDeps.push(deps);
+    return fakeAdapter("task-scheduler");
+  },
+}));
+
 const realPlatform = process.platform;
+const realWindowsStore = Object.getOwnPropertyDescriptor(process, "windowsStore");
 const realArgv = process.argv;
 
 function onPlatform(platform: NodeJS.Platform): void {
@@ -108,6 +118,7 @@ beforeEach(() => {
   mocks.relocationHandlers.length = 0;
   mocks.systemdDeps.length = 0;
   mocks.launchAgentDeps.length = 0;
+  mocks.taskSchedulerDeps.length = 0;
   mocks.followAppImageMove.mockReset();
   mocks.schedules = [];
   mocks.adapters.length = 0;
@@ -116,6 +127,8 @@ beforeEach(() => {
 
 afterEach(() => {
   onPlatform(realPlatform);
+  if (realWindowsStore) Object.defineProperty(process, "windowsStore", realWindowsStore);
+  else delete (process as { windowsStore?: boolean }).windowsStore;
   process.argv = realArgv;
   vi.unstubAllEnvs();
 });
@@ -271,20 +284,48 @@ describe("scheduleOsJobLive", () => {
     expect(mocks.systemdDeps).toEqual([]);
   });
 
-  it("keeps no job on Windows yet, and none once shutdown has begun", async () => {
+  it("keeps a Task Scheduler task on Windows, running this executable for this profile", async () => {
     onPlatform("win32");
-    const first = await live();
-    expect(await first.scheduleOsJobStatus("p1")).toMatchObject({
-      context: { kind: null },
-      state: "none",
-    });
-    vi.resetModules();
+    const { scheduleOsJobStatus } = await live();
 
-    onPlatform("linux");
-    mocks.activeShutdown = {};
-    const second = await live();
-    await second.scheduleOsJobStatus("p1");
+    expect((await scheduleOsJobStatus("p1")).context).toMatchObject({
+      kind: "task-scheduler",
+      unavailable: null,
+    });
     expect(mocks.systemdDeps).toEqual([]);
     expect(mocks.launchAgentDeps).toEqual([]);
+    expect(mocks.taskSchedulerDeps).toHaveLength(1);
+    expect(mocks.taskSchedulerDeps[0]).toMatchObject({
+      userDataDir: "/home/someone/.config/Daintree",
+      target: {
+        ok: true,
+        target: { execPath: process.execPath, userDataDir: "/home/someone/.config/Daintree" },
+      },
+    });
+  });
+
+  it("gives a Microsoft Store build a task it can't install, and says why", async () => {
+    onPlatform("win32");
+    Object.defineProperty(process, "windowsStore", { value: true, configurable: true });
+    const { scheduleOsJobStatus } = await live();
+
+    const status = await scheduleOsJobStatus("p1");
+    expect(status.context.unavailable).toMatch(/Microsoft Store/);
+    expect(mocks.taskSchedulerDeps[0]).toMatchObject({
+      target: { ok: false, unavailable: expect.stringMatching(/Microsoft Store/) },
+    });
+  });
+
+  it("keeps no job once shutdown has begun", async () => {
+    mocks.activeShutdown = {};
+    for (const platform of ["linux", "win32"] as const) {
+      vi.resetModules();
+      onPlatform(platform);
+      const { scheduleOsJobStatus } = await live();
+      expect(await scheduleOsJobStatus("p1")).toMatchObject({ state: "none" });
+    }
+    expect(mocks.systemdDeps).toEqual([]);
+    expect(mocks.launchAgentDeps).toEqual([]);
+    expect(mocks.taskSchedulerDeps).toEqual([]);
   });
 });

@@ -21,6 +21,10 @@ import {
   systemdScheduleTargetFor,
   type SystemdScheduleJob,
 } from "./systemdScheduleJob.js";
+import {
+  createTaskSchedulerScheduleJob,
+  taskSchedulerTargetFor,
+} from "./taskSchedulerScheduleJob.js";
 
 const BUNDLE_ID = "org.daintree.app";
 /** A dev build runs inside Electron.app, which is what macOS attributes the job to. */
@@ -88,10 +92,24 @@ function osJobAdapter(userDataDir: string): ScheduleOsJobAdapter | null {
     });
   }
   if (process.platform === "linux") return systemdJob(userDataDir);
+  if (process.platform === "win32") {
+    return createTaskSchedulerScheduleJob({
+      userDataDir,
+      target: taskSchedulerTargetFor({
+        execPath: process.execPath,
+        appPath: process.defaultApp ? app.getAppPath() : null,
+        userDataDir,
+        windowsStore: process.windowsStore === true,
+      }),
+      run: runCommand,
+      systemRoot: process.env.SystemRoot ?? process.env.windir ?? "C:\\Windows",
+      tempDir: os.tmpdir(),
+    });
+  }
   return null;
 }
 
-/** macOS and Linux until Windows (#15993) has its own. Never once shutdown began. */
+/** macOS, Linux and Windows. Never once shutdown began. */
 function getService(): ScheduleOsJobService | null {
   if (service || getActiveShutdown() !== null) return service;
   const userDataDir = app.getPath("userData");
@@ -125,7 +143,7 @@ async function statusWithoutJob(projectId: string): Promise<ScheduleOsJobStatus>
   const { schedules } = await projectStore.schedules.list(projectId);
   return {
     context,
-    unavailable: null,
+    unavailable: context.unavailable,
     state: "none",
     error: null,
     excluded: excludedSchedules(schedules, context),

@@ -800,6 +800,56 @@ describe("PtyClient fabric", () => {
       client.dispose();
     });
 
+    it("never replays a Decisions relay deploy after a crash, and reports it lost (#16023)", async () => {
+      const client = createFabricClient();
+      const lost: string[] = [];
+      client.on("terminal-lost", (id: string) => lost.push(id));
+      const deploy = "daintree-decisions-deploy-1";
+      client.spawn(deploy, {
+        cwd: "/home/me",
+        cols: 80,
+        rows: 24,
+        projectId: "project-a",
+        command: "npx --yes @daintreehq/decisions-cli@0.1.0 deploy --name n --bucket n",
+      });
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+      // The first launch runs it once.
+      expect(messagesOfType(shardA.child, "spawn").map((m) => m.id)).toEqual([deploy, "t1"]);
+
+      shardA.child.emit("exit", 1);
+      await vi.advanceTimersByTimeAsync(15_000);
+      const restarted = forks[forks.length - 1];
+      restarted.child.emit("message", { type: "ready" });
+
+      expect(messagesOfType(restarted.child, "spawn").map((m) => m.id)).toEqual(["t1"]);
+      expect(lost).toEqual([deploy]);
+      client.dispose();
+    });
+
+    it("leaves a Decisions relay deploy behind when its shard's terminals migrate (#16023)", async () => {
+      const client = createFabricClient();
+      client.spawn("daintree-decisions-deploy-1", {
+        cwd: "/home/me",
+        cols: 80,
+        rows: 24,
+        projectId: "project-a",
+        command: "npx --yes @daintreehq/decisions-cli@0.1.0 deploy --name n --bucket n",
+      });
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      projectShard("project-a").child.emit("message", { type: "ready" });
+
+      for (let i = 0; i < 3; i++) {
+        const shardChild = forks[forks.length - 1].child;
+        shardChild.emit("exit", 1);
+        await vi.advanceTimersByTimeAsync(15_000);
+      }
+
+      expect(messagesOfType(defaultShard().child, "spawn").map((m) => m.id)).toEqual(["t1"]);
+      client.dispose();
+    });
+
     it("migrates a crash-looping project shard's terminals to the default shard without a global host-crash", async () => {
       const client = createFabricClient();
       const hostCrash = vi.fn();

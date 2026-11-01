@@ -24,7 +24,7 @@ function schedule(id: string, options: { enabled?: boolean; runWhenClosed?: bool
 }
 
 const CURRENT: Status = {
-  context: { kind: "launch-agent", systemTimeZone: "Europe/London" },
+  context: { kind: "launch-agent", systemTimeZone: "Europe/London", unavailable: null },
   unavailable: null,
   state: "current",
   error: null,
@@ -75,7 +75,10 @@ describe("ScheduleOsJobStatus (#15990)", () => {
     expect(mac.text()).toContain("macOS starts Daintree without a window for 1 schedule here");
     cleanup();
 
-    const linux: Status = { ...CURRENT, context: { kind: "systemd-timer", systemTimeZone: "UTC" } };
+    const linux: Status = {
+      ...CURRENT,
+      context: { kind: "systemd-timer", systemTimeZone: "UTC", unavailable: null },
+    };
     expect(show(linux, [schedule("a")]).text()).toContain(
       "systemd starts Daintree without a window for 1 schedule here"
     );
@@ -147,5 +150,27 @@ describe("ScheduleOsJobStatus (#15990)", () => {
     ]);
     expect(text()).toContain("Temporary copy");
     expect(screen.queryByRole("button", { name: "Repair" })).toBeNull();
+  });
+});
+
+describe("ScheduleOsJobStatus on Windows (#15993)", () => {
+  const WINDOWS: Status = {
+    ...CURRENT,
+    context: { kind: "task-scheduler", systemTimeZone: "Europe/London", unavailable: null },
+  };
+
+  it("names Windows as what starts Daintree", () => {
+    const { text } = show(WINDOWS, [schedule("a"), schedule("b")]);
+    expect(text()).toContain("Windows starts Daintree without a window for 2 schedules here");
+    expect(text()).not.toContain("macOS");
+  });
+
+  it("names Windows when this build can't register the task, with the reason", () => {
+    const { text } = show(
+      { ...WINDOWS, state: "none", unavailable: "The Store build can't register tasks" },
+      [schedule("a")]
+    );
+    expect(text()).toContain("Windows can't start Daintree for these schedules");
+    expect(text()).toContain("The Store build can't register tasks");
   });
 });

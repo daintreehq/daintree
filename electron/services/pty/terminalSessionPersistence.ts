@@ -17,6 +17,7 @@ import type {
   TerminalGeometry,
 } from "../../../shared/types/terminal.js";
 import { isUsableTerminalGeometry } from "../../../shared/types/terminal.js";
+import { isScreenNeverSaved } from "../../../shared/config/terminalScreenPersistence.js";
 
 export interface RestoreResult {
   restored: boolean;
@@ -465,6 +466,8 @@ export function persistSessionSnapshotSync(
   terminalId: string,
   snapshot: SerializedTerminalSnapshot
 ): void {
+  // Every writer of a screen ends here, so this is the gate that holds for all of them.
+  if (isScreenNeverSaved(terminalId)) return;
   const sessionPath = getSessionPath(terminalId);
   const dir = getSessionDir();
   if (!sessionPath || !dir) return;
@@ -487,6 +490,7 @@ export async function persistSessionSnapshotAsync(
   terminalId: string,
   snapshot: SerializedTerminalSnapshot
 ): Promise<void> {
+  if (isScreenNeverSaved(terminalId)) return;
   const sessionPath = getSessionPath(terminalId);
   const dir = getSessionDir();
   if (!sessionPath || !dir) return;

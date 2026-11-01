@@ -117,6 +117,7 @@ import {
 import { HostLinkStatus } from "./Hosts/HostLinkStatus";
 import { requestHostSettings } from "./Hosts/hostSettingsRequests";
 import { hostEnvDrafts } from "./Hosts/hostEnvDrafts";
+import type { SettingsTabClose } from "./settingsTabClose";
 
 let rememberedTab: SettingsTab = "general";
 let rememberedProjectTab: SettingsTab = "project:general";
@@ -280,7 +281,14 @@ function SettingsDialogInner({
   const isOpenRef = useRef(isOpen);
   useEffect(() => {
     isOpenRef.current = isOpen;
+    // Reopened before the exit finished: that close's follow-up hears it didn't close.
+    if (isOpen) {
+      const cancelled = afterCloseRef.current;
+      afterCloseRef.current = null;
+      cancelled?.(false);
+    }
   }, [isOpen]);
+  const afterCloseRef = useRef<((closed: boolean) => void) | null>(null);
 
   const hasProject = !!projectId;
 
@@ -681,11 +689,15 @@ function SettingsDialogInner({
   };
 
   // Handed to tab content via the registry's `needsOnClose` flag. That route
-  // never passes through onBeforeClose, so it keeps its own flush — no tab
-  // invokes it today (AppThemePicker only tests it for presence), but a caller
-  // that did would otherwise close without persisting.
-  const handleClose = async () => {
-    if (await flushBeforeClose()) onClose();
+  // never passes through onBeforeClose, so it keeps its own flush, or a caller
+  // would close without persisting. `afterClose` hears once the dialog has gone
+  // and handed focus back, so what it opens can take focus; a held close runs
+  // nothing and answers false (`SettingsTabClose`).
+  const handleClose: SettingsTabClose = async (afterClose) => {
+    if (!(await flushBeforeClose())) return false;
+    afterCloseRef.current = afterClose ?? null;
+    onClose();
+    return true;
   };
 
   // A plugin's setting lives in the plugin manager or Project settings → Plugins,
@@ -957,6 +969,9 @@ function SettingsDialogInner({
         setTargetHostId(null);
         hostEnvDrafts.clear();
         setCloseHeldBy(null);
+        const afterClose = afterCloseRef.current;
+        afterCloseRef.current = null;
+        afterClose?.(true);
       }}
       size="4xl"
       // Search owns first focus (below), not the first tabbable — which was the scope
@@ -1470,7 +1485,7 @@ function LazyTabContentImpl({
   entry: LazySettingsTabEntry;
   activeSubtabs: Partial<Record<SettingsTab, string>>;
   setActiveSubtabs: React.Dispatch<React.SetStateAction<Partial<Record<SettingsTab, string>>>>;
-  onClose?: () => void;
+  onClose?: SettingsTabClose;
   onSettingsChange?: () => void;
   isActive: boolean;
   scrollToSectionId: string | null;
