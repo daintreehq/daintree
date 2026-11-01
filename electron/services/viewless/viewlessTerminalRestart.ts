@@ -30,13 +30,15 @@ export type ViewlessRestartOutcome =
  * is: one waiting for input, one held for recovery, and an agent that already
  * quit to its shell. So is one saved with a retired model, whose drop needs a
  * view to show it, and one holding a model a restart can't select. An input lock is a view's own preference, kept in that
- * view, so with no view there is none to honour.
+ * view, so with no view there is none to honour. `beforeChange` runs once,
+ * right before the first change, and only for a restart that goes ahead.
  */
 export async function restartTerminalWithoutView(
   projectId: string,
   terminalId: string,
   deps: ViewlessDeps,
-  isCurrent: () => boolean = () => true
+  isCurrent: () => boolean = () => true,
+  beforeChange: () => void = () => {}
 ): Promise<ViewlessRestartOutcome> {
   const pty = deps.getPtyReader();
   if (!pty) return "gone";
@@ -69,6 +71,7 @@ export async function restartTerminalWithoutView(
   // The reads above wait on the pty-host and the disk; the terminal may have
   // been relaunched meanwhile, and its successor isn't the one that leaked.
   if (!isCurrent()) return "stale";
+  beforeChange();
 
   let capturedSessionId: string | null = null;
   try {

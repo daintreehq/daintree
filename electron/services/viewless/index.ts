@@ -151,13 +151,14 @@ export async function spawnHostAssistantLive(
 export async function restartTerminalWithoutViewLive(
   projectId: string,
   terminalId: string,
-  isCurrent: () => boolean
+  isCurrent: () => boolean,
+  beforeChange?: () => void
 ): Promise<import("./viewlessTerminalRestart.js").ViewlessRestartOutcome> {
   const [{ restartTerminalWithoutView }, deps] = await Promise.all([
     import("./viewlessTerminalRestart.js"),
     loadLiveDeps(),
   ]);
-  return restartTerminalWithoutView(projectId, terminalId, deps, isCurrent);
+  return restartTerminalWithoutView(projectId, terminalId, deps, isCurrent, beforeChange);
 }
 
 /** The workspace identity a viewless result is stamped with, when it is a project. */

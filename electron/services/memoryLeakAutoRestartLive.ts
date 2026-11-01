@@ -30,11 +30,7 @@ function pickTarget(projectId: string): MemoryLeakRestartTarget {
   const drive = leases.getDriveTarget(projectId);
   if (drive.kind === "reserved") return { kind: "wait" };
   const endpoint = drive.kind === "live" ? drive.endpoint : leases.nextHolderEndpoint(projectId);
-  if (!endpoint || endpoint.isClosed()) {
-    // The host restarting a terminal itself changes a project nobody holds.
-    if (drive.kind === "vacant") leases.noteSessionChange(projectId, null);
-    return { kind: "host" };
-  }
+  if (!endpoint || endpoint.isClosed()) return { kind: "host" };
   const send = (payload: MemoryLeakRestartRequest) =>
     endpoint.send({
       type: "event",
@@ -87,7 +83,10 @@ export function startMemoryLeakAutoRestart(ptyClient: PtyClient): void {
     pickTarget,
     restartOnHost: async (projectId, terminalId, isCurrent) => {
       const { restartTerminalWithoutViewLive } = await import("./viewless/index.js");
-      return restartTerminalWithoutViewLive(projectId, terminalId, isCurrent);
+      // The host restarting a terminal itself changes a project nobody holds.
+      return restartTerminalWithoutViewLive(projectId, terminalId, isCurrent, () =>
+        getDriveLeaseService().noteSessionChange(projectId, null)
+      );
     },
     now: () => Date.now(),
   });

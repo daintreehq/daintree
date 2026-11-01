@@ -23,6 +23,11 @@ const leasesMock = vi.hoisted(() => ({
 }));
 vi.mock("../DriveLeaseService.js", () => ({ getDriveLeaseService: () => leasesMock }));
 
+const viewlessMock = vi.hoisted(() => ({
+  restartTerminalWithoutViewLive: vi.fn(async () => "restarted"),
+}));
+vi.mock("../viewless/index.js", () => viewlessMock);
+
 vi.mock("../pty/lifecycleLedger.js", () => ({
   getLifecycleLedger: () => ({ currentGeneration: () => 1 }),
 }));
@@ -78,17 +83,21 @@ describe("memory-leak auto-restart run by the host itself (#15918)", () => {
     } as never);
   });
 
-  it("tells the lease it changes a project nobody holds, and nothing where a view drives", () => {
+  it("tells the lease of the change only once the restart goes ahead", async () => {
     leasesMock.getDriveTarget.mockReturnValue({ kind: "vacant" });
     expect(serviceMock.deps!.pickTarget("proj-1")).toEqual({ kind: "host" });
-    expect(leasesMock.noteSessionChange).toHaveBeenCalledWith("proj-1", null);
+    expect(leasesMock.noteSessionChange).not.toHaveBeenCalled();
 
-    leasesMock.getDriveTarget.mockReturnValue({ kind: "reserved", holder: {} });
-    expect(serviceMock.deps!.pickTarget("proj-1")).toEqual({ kind: "wait" });
-    const closed = { ...makeEndpoint("remote-view"), isClosed: vi.fn(() => true) };
-    leasesMock.getDriveTarget.mockReturnValue({ kind: "live", endpoint: closed });
-    expect(serviceMock.deps!.pickTarget("proj-1")).toEqual({ kind: "host" });
-    expect(leasesMock.noteSessionChange).toHaveBeenCalledTimes(1);
+    const isCurrent = () => true;
+    await expect(serviceMock.deps!.restartOnHost("proj-1", "t1", isCurrent)).resolves.toBe(
+      "restarted"
+    );
+    const [, , passedCurrent, beforeChange] = viewlessMock.restartTerminalWithoutViewLive.mock
+      .calls[0] as [string, string, () => boolean, () => void];
+    expect(passedCurrent).toBe(isCurrent);
+    expect(leasesMock.noteSessionChange).not.toHaveBeenCalled();
+    beforeChange();
+    expect(leasesMock.noteSessionChange).toHaveBeenCalledWith("proj-1", null);
   });
 });
 
