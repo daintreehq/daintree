@@ -894,43 +894,28 @@ describe("restoreDecisionsIdentity", () => {
     expect(memory.stored).toEqual(newer);
   });
 
-  it("replaces the same identity sealed here when its own keys don't work", async () => {
-    const { relay, identity, kit } = await setup();
-    const memory = memoryKeys();
-    memory.stored = { ...identity, currentEpoch: 2 };
-
-    const outcome = await restoreDecisionsIdentity(
-      { url: ORIGIN, kit, passphrase: PASSPHRASE },
-      { keys: memory.keys, fetchImpl: relay.fetchImpl }
-    );
-
-    expect(outcome).toEqual({ identity: identity.config });
-    expect(memory.stored).toEqual(identity);
-  });
-
-  it("keeps the sealed copy's other epochs when the kit's keys replace its broken ones", async () => {
+  it("leaves a sealed copy of the same identity whose keys don't work as it is", async () => {
     const { relay, identity, kit } = await setup();
     const other = await claimedElsewhere(fakeRelay());
-    const epoch2 = { epoch: 2, raw: bytesToBase64Url(generateEpochKeyBytes()) };
-    const memory = memoryKeys();
-    memory.stored = {
+    // Its signing key is broken, and it holds an epoch the kit doesn't.
+    const broken: StoredIdentity = {
       ...identity,
       keys: { ...identity.keys, signing_private_pkcs8: other.keys.signing_private_pkcs8 },
-      epochs: [...identity.epochs, epoch2],
+      epochs: [...identity.epochs, { epoch: 2, raw: bytesToBase64Url(generateEpochKeyBytes()) }],
       currentEpoch: 2,
     };
+    const memory = memoryKeys();
+    memory.stored = broken;
 
     const outcome = await restoreDecisionsIdentity(
       { url: ORIGIN, kit, passphrase: PASSPHRASE },
       { keys: memory.keys, fetchImpl: relay.fetchImpl }
     );
 
-    expect(outcome).toEqual({ identity: identity.config });
-    expect(memory.stored).toEqual({
-      ...identity,
-      epochs: [...identity.epochs, epoch2],
-      currentEpoch: 2,
-    });
+    expect(outcome).toEqual({ failure: { result: "conflict", origin: ORIGIN, unfinished: false } });
+    expect(memory.keys.save).not.toHaveBeenCalled();
+    expect(memory.stored).toEqual(broken);
+    expect(relay.fetchImpl).not.toHaveBeenCalled();
   });
 
   it("refuses to take up a sealed copy whose exchange keys differ from the kit's", async () => {

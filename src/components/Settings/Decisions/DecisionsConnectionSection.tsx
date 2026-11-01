@@ -188,7 +188,7 @@ export function DecisionsConnectionSection({
                     setDraft(event.target.value);
                     // What was checked was the old address; drop it, and any check still out.
                     if (relay.check || relay.checking || relay.error) relay.reset();
-                    if (identity.result || identity.error) identity.reset();
+                    identity.reset();
                   }}
                   placeholder="https://decisions.example.workers.dev"
                   aria-labelledby={labelId}

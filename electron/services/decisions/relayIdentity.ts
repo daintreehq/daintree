@@ -486,27 +486,14 @@ function sameIdentity(a: StoredIdentity, b: StoredIdentity): boolean {
 }
 
 /**
- * The kit's proven keys, with every epoch either copy holds (the kit's where
- * both do), current at the newest epoch whose key is there: a repair of the
- * same identity keeps the history only the sealed copy can read.
- */
-function mergeEpochs(kit: StoredIdentity, held: StoredIdentity): StoredIdentity {
-  const known = new Set(kit.epochs.map((epoch) => epoch.epoch));
-  const epochs = [...kit.epochs, ...held.epochs.filter((epoch) => !known.has(epoch.epoch))];
-  const present = new Set(epochs.map((epoch) => epoch.epoch));
-  const newest = Math.max(kit.currentEpoch, held.currentEpoch);
-  const currentEpoch = present.has(newest) ? newest : kit.currentEpoch;
-  return { ...kit, epochs, currentEpoch };
-}
-
-/**
  * Restores an owner identity from a recovery kit and seals it (#16006).
  * Everything is proven before anything is saved: the kit opens with the
  * passphrase, holds a confirmed owner identity for the relay that was
  * checked, its keys work, and the relay itself accepts a request signed with
  * them and lists them as its owner, under the same signing and exchange
- * keys. A kit whose identity is already sealed here, with keys that work, is
- * taken up without replacing them, since they may hold newer epochs.
+ * keys. Sealed keys are never replaced: a kit whose identity is already
+ * sealed here, with keys that work, is taken up as it is, since they may
+ * hold newer epochs, and any other sealed keys are a conflict.
  */
 export async function restoreDecisionsIdentity(
   payload: RestoreDecisionsIdentityPayload,
@@ -551,11 +538,13 @@ export async function restoreDecisionsIdentity(
   const existing = await keyCall(() => keys.load());
   if ("failure" in existing) return existing;
   const held = existing.value;
-  if (held && !sameIdentity(held, stored)) return failed(conflictWith(held));
-  // The same identity sealed here is kept unless its own keys don't work, in
-  // which case the kit's, proven below, replace them, keeping its epochs.
-  const adopt = held && (await usable(held)) ? held : null;
-  if (!adopt) {
+  // Sealed keys are never replaced here: the same identity is taken up as it
+  // is, since it may hold epochs the kit doesn't, and anything else, broken
+  // copies of the same identity included, waits for the person to remove it.
+  if (held && !(sameIdentity(held, stored) && (await usable(held)))) {
+    return failed(conflictWith(held));
+  }
+  if (!held) {
     const sealing = await prepareSealing(keys, payload.acceptWeakStorage);
     if (sealing) return failed(sealing);
   }
@@ -585,10 +574,8 @@ export async function restoreDecisionsIdentity(
   }
   if (!relayRecognises(devices, identity)) return refuse("not-recognised");
 
-  if (adopt) return { identity: adopt.config };
-  const merged = held ? mergeEpochs(stored, held) : stored;
-  const sealed = held && !(await usable(merged)) ? stored : merged;
-  const saved = await keyCall(() => keys.save(sealed));
+  if (held) return { identity: held.config };
+  const saved = await keyCall(() => keys.save(stored));
   if ("failure" in saved) return saved;
-  return { identity: sealed.config };
+  return { identity: stored.config };
 }

@@ -85,7 +85,9 @@ describe("describeConnectResult", () => {
 
     expect(kept.label).toBe(dropped.label);
     expect(kept.detail).toMatch(/earlier claim from this computer/);
+    expect(kept.detail).toMatch(/may not be its owner's/);
     expect(kept.detail).toMatch(/stay on this computer until you remove them/);
+    expect(dropped.detail).toMatch(/^It refused the keys this claim made\./);
     expect(dropped.detail).toMatch(/Nothing was saved\.$/);
   });
 

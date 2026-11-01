@@ -321,6 +321,25 @@ describe("DecisionsConnectionSection claim and restore", () => {
     );
   });
 
+  it("forgets a setup's rerun check once the address is edited, even after keys were removed", async () => {
+    claimRelay.mockResolvedValue({ result: "relay", check: relayCheck("claimed") });
+    disconnectRelay.mockResolvedValue({ state: "not-connected" });
+    renderSection({ state: "not-connected", keysStored: true });
+    await checkAddress("unclaimed");
+    fireEvent.change(secretField(), { target: { value: SECRET } });
+    await submit(secretField());
+    fireEvent.click(screen.getByRole("button", { name: "Remove keys" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    });
+    expect(document.querySelector("#decisions-relay-check")).not.toBeNull();
+
+    fireEvent.change(screen.getByPlaceholderText(ORIGIN), { target: { value: "other.example" } });
+
+    expect(document.querySelector("#decisions-relay-check")).toBeNull();
+    expect(document.querySelector("#decisions-recovery-kit")).toBeNull();
+  });
+
   it("reads the status afresh for a claim that settles after the section moved on", async () => {
     const answer = deferred<DecisionsConnectResult>();
     claimRelay.mockReturnValue(answer.promise);
