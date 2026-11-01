@@ -407,6 +407,98 @@ describe("HostMetricsSampler", () => {
     }
   });
 
+  it("keeps a measured load average of zero on macOS and Linux", async () => {
+    for (const platform of ["darwin", "linux"] as const) {
+      const summary = await new HostMetricsSampler(
+        sources({ platform, loadavg: () => [0, 0, 0] })
+      ).sample();
+      expect(summary.cpuLoadAverage1m).toBe(0);
+    }
+  });
+
+  describe("a Windows Shell sampling itself (#15891)", () => {
+    function windows(overrides: Partial<HostSampleSources> = {}) {
+      const spies = {
+        readText: vi.fn(async () => null),
+        listDir: vi.fn(async () => []),
+        run: vi.fn(async () => null),
+        loadavg: vi.fn(() => [0, 0, 0]),
+        systemMemorySnapshot: vi.fn(() => null),
+        thermalState: vi.fn(() => null),
+      };
+      return { spies, sources: sources({ platform: "win32", ...spies, ...overrides }) };
+    }
+
+    it("reports what Node measures, and everything else as unmeasured rather than zero", async () => {
+      const { spies, sources: source } = windows();
+      const sampler = new HostMetricsSampler(source);
+      const first = await sampler.sample();
+      const summary = await sampler.sample();
+      expect(first.cpuPercent).toBeNull();
+      expect(summary).toMatchObject({
+        platform: "win32",
+        cpuPercent: 50,
+        cpuLogicalCoreCount: 1,
+        cpuLoadAverage1m: null,
+        memoryTotalBytes: 8 * 1024 ** 3,
+        memoryUsedBytes: null,
+        memoryPressure: null,
+        swapUsedBytes: null,
+        swapTotalBytes: null,
+        swapInBytesPerSec: null,
+        swapOutBytesPerSec: null,
+        thermal: null,
+        cpuPressure: null,
+        cpuPerformanceCoreCount: null,
+        cpuEfficiencyCoreCount: null,
+        agentsObserved: { working: 2, waiting: 1, idle: 3 },
+        projectCount: 4,
+        worktreeCount: 9,
+      });
+      expect(summary).not.toHaveProperty("cpuCapacityCores");
+      expect(summary).not.toHaveProperty("metricsScope");
+      expect(spies.loadavg).not.toHaveBeenCalled();
+      expect(spies.systemMemorySnapshot).not.toHaveBeenCalled();
+      expect(spies.thermalState).not.toHaveBeenCalled();
+    });
+
+    it("attempts no Linux or macOS read", async () => {
+      const { spies, sources: source } = windows();
+      const sampler = new HostMetricsSampler(source);
+      await sampler.sample();
+      await sampler.sample();
+      expect(spies.readText).not.toHaveBeenCalled();
+      expect(spies.listDir).not.toHaveBeenCalled();
+      expect(spies.run).not.toHaveBeenCalled();
+    });
+
+    it("takes a RAM size that isn't a positive number as unknown", async () => {
+      for (const total of [0, Number.NaN]) {
+        const summary = await new HostMetricsSampler(
+          windows({ totalmem: () => total }).sources
+        ).sample();
+        expect(summary.memoryTotalBytes).toBeNull();
+      }
+    });
+
+    it("keeps the CPU reading when the resource read fails, which only a Linux scope would drop", async () => {
+      const { sources: source } = windows({
+        totalmem: () => {
+          throw new Error("no totalmem");
+        },
+      });
+      const sampler = new HostMetricsSampler(source);
+      await sampler.sample();
+      const summary = await sampler.sample();
+      expect(summary).toMatchObject({
+        cpuPercent: 50,
+        cpuLogicalCoreCount: 1,
+        memoryTotalBytes: null,
+      });
+      expect(summary).not.toHaveProperty("cpuCapacityCores");
+    });
+  });
+
   it("splits Apple Silicon load by cluster, efficiency cores first, reading the sizes once", async () => {
     let tick = 0;
     let probes = 0;

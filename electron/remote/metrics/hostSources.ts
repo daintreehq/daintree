@@ -2,11 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { AgentId } from "../../../shared/types/agent.js";
-import type {
-  DriveLeaseHolder,
-  HostDriverObservation,
-  HostPlatform,
-} from "../../../shared/types/remoteHosts.js";
+import type { DriveLeaseHolder, HostDriverObservation } from "../../../shared/types/remoteHosts.js";
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { helpSessionService } from "../../services/HelpSessionService.js";
@@ -217,7 +213,8 @@ export function createHostSampleSources(now: () => number = Date.now): HostSampl
   let worktrees: { count: number; at: number } | null = null;
   let clis: { list: Array<{ agentId: string; version: string | null }>; at: number } | null = null;
   const forges = createForgeObserver(now);
-  const platform: HostPlatform = process.platform === "darwin" ? "darwin" : "linux";
+  const platform: HostSampleSources["platform"] =
+    process.platform === "darwin" ? "darwin" : process.platform === "win32" ? "win32" : "linux";
 
   async function projectsSample(open: ProjectInventory) {
     if (!worktrees || now() - worktrees.at > WORKTREE_COUNT_TTL_MS) {

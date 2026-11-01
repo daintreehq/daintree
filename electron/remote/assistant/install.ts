@@ -242,8 +242,8 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
           frontendAttached: isProjectFrontendAttached(project.id),
         }));
       },
-      // The sampler reads macOS and treats everything else as Linux, so a
-      // Windows machine has no measurement to offer rather than a borrowed one.
+      // The assistant's host contract names macOS and Linux, so this Windows
+      // machine has no summary to offer in it.
       latestSummary: () => (process.platform === "win32" ? null : getLocalSummaryLoop().latest()),
       summaryReceipt: (summary) => getLocalSummaryLoop().receiptOf(summary),
       relayCall: (payload) => local.relayCall(payload),

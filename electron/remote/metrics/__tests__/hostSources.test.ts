@@ -23,11 +23,15 @@ const pty = vi.hoisted(() => ({
   },
 }));
 
+const profile = vi.hoisted(() => ({
+  service: null as null | { getSnapshot: () => { thermalState: string } },
+}));
+
 vi.mock("../../../window/serviceRefs.js", () => ({
   getPtyClient: () => pty.client,
   getAgentVersionService: () => null,
   getCliAvailabilityServiceRef: () => cli.service,
-  getResourceProfileService: () => null,
+  getResourceProfileService: () => profile.service,
   getWorkspaceClientRef: () => workspace.client,
 }));
 const store = vi.hoisted(() => ({
@@ -147,6 +151,40 @@ describe("observeAgents", () => {
 });
 
 describe("createHostSampleSources", () => {
+  describe("platform", () => {
+    const realPlatform = process.platform;
+    const stub = (value: NodeJS.Platform) =>
+      Object.defineProperty(process, "platform", { value, configurable: true });
+    afterEach(() => {
+      stub(realPlatform);
+      profile.service = null;
+    });
+
+    it("names the machine it runs on, a Windows one as its own", () => {
+      for (const [os, sampled] of [
+        ["darwin", "darwin"],
+        ["linux", "linux"],
+        ["freebsd", "linux"],
+        ["win32", "win32"],
+      ] as const) {
+        stub(os);
+        expect(createHostSampleSources().platform).toBe(sampled);
+      }
+    });
+
+    it("reads the macOS thermal state there and nowhere else", () => {
+      profile.service = { getSnapshot: () => ({ thermalState: "fair" }) };
+      for (const [os, thermal] of [
+        ["darwin", "fair"],
+        ["linux", null],
+        ["win32", null],
+      ] as const) {
+        stub(os);
+        expect(createHostSampleSources().thermalState()).toBe(thermal);
+      }
+    });
+  });
+
   it("asks for agent CLIs itself when nothing has, so a windowless host lists them next sample", async () => {
     cli.service = {
       getAvailability: vi.fn(() => null),

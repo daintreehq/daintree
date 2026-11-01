@@ -3,7 +3,6 @@ import type {
   HostDriverObservation,
   HostForgeObservation,
   HostMetricsSummary,
-  HostPlatform,
 } from "../../../shared/types/remoteHosts.js";
 import type { SystemMemorySnapshot } from "../../utils/systemMemory.js";
 import { LOCAL_HOST_ID, MAX_HOST_SUMMARY_DRIVERS } from "../../../shared/types/remoteHosts.js";
@@ -45,7 +44,7 @@ export interface ObservedAgents {
 
 /** Where the sampler reads from; faked in tests, real in {@link createHostSampleSources}. */
 export interface HostSampleSources {
-  platform: HostPlatform;
+  platform: HostMetricsSummary["platform"];
   cpus(): CpuTimes[];
   totalmem(): number;
   /** Activity Monitor style memory, the reading Daintree's own reclaim uses; null when unavailable. */
@@ -203,9 +202,9 @@ export class HostMetricsSampler {
         budget,
         async () => {
           try {
-            return s.platform === "darwin"
-              ? { memory: await this.darwinMemory() }
-              : await this.linuxResources(cpus.length);
+            if (s.platform === "darwin") return { memory: await this.darwinMemory() };
+            if (s.platform === "win32") return { memory: this.windowsMemory() };
+            return await this.linuxResources(cpus.length);
           } catch (error) {
             // A failed reading must not leave a baseline the next one is measured across.
             this.previousSwap = null;
@@ -217,7 +216,7 @@ export class HostMetricsSampler {
         (read) =>
           read ?? {
             memory: NO_MEMORY,
-            ...(s.platform === "darwin" ? {} : { cgroupCpu: UNKNOWN_SCOPE_CPU }),
+            ...(s.platform === "linux" ? { cgroupCpu: UNKNOWN_SCOPE_CPU } : {}),
           }
       ),
       // A failed or late read is unknown, not zero: zero working agents lets an update restart the host.
@@ -339,6 +338,15 @@ export class HostMetricsSampler {
   }
 
   /**
+   * Only what the OS hands over without a Linux or macOS probe: the RAM size.
+   * Use, swap, pressure and temperature stay unknown rather than borrowed.
+   */
+  private windowsMemory(): HostMemoryFields {
+    const total = this.sources.totalmem();
+    return { ...NO_MEMORY, memoryTotalBytes: total > 0 ? total : null };
+  }
+
+  /**
    * Total less what Activity Monitor counts as available (free + purgeable +
    * file-backed), so file cache isn't read as used. Unknown, never the
    * cache-inclusive figure, when that reading isn't there.
@@ -355,6 +363,8 @@ export class HostMetricsSampler {
   }
 
   private loadAverage1m(): number | null {
+    // Windows has no load average: Node returns [0, 0, 0] there, which is a stub, not a reading.
+    if (this.sources.platform === "win32") return null;
     try {
       const value = this.sources.loadavg()[0];
       return value !== undefined && Number.isFinite(value) && value >= 0 ? value : null;
