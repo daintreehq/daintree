@@ -276,7 +276,7 @@ async function buildHostListener(
     setMcpDriveTargetResolver((projectId, change) => {
       const target = lease.getDriveTarget(projectId);
       if (target.kind === "vacant" && change) {
-        lease.noteViewlessChange(projectId, change.linkSessionId);
+        lease.noteSessionChange(projectId, change.linkSessionId);
       }
       if (target.kind === "live") {
         return { state: "live", endpoint: target.endpoint, holderName: target.holder.clientName };

@@ -807,8 +807,12 @@ describe("rendererBridge — relayed calls (#13493)", () => {
       { checkWrite: (changed: boolean) => Error | null },
     ];
     expect(asked).toEqual([]);
+    expect(request.checkWrite(false)).toBeNull();
     expect(request.checkWrite(true)).toBeNull();
-    expect(asked).toEqual([[WORKSPACE, { linkSessionId: null }]]);
+    expect(asked).toEqual([
+      [WORKSPACE, { linkSessionId: null }],
+      [WORKSPACE, { linkSessionId: null }],
+    ]);
   });
 
   it("never sends a change into a window here that only shows the project", async () => {

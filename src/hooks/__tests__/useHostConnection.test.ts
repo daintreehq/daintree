@@ -952,6 +952,7 @@ describe("coming back to drive after someone else drove meanwhile (#13921)", () 
     await vi.waitFor(() => expect(held.replay).toHaveBeenCalledTimes(1));
     await flush();
     expect(authoritativeReads()).toHaveLength(0);
+    expect(held.send).not.toHaveBeenCalled();
     expect(hasDeferredHostOwnedWrite("project-drafts:proj-1")).toBe(false);
     stop();
   });
@@ -966,6 +967,7 @@ describe("coming back to drive after someone else drove meanwhile (#13921)", () 
     await vi.waitFor(() => expect(authoritativeReads()).toHaveLength(1));
     await flush();
     expect(held.replay).not.toHaveBeenCalled();
+    expect(held.send).not.toHaveBeenCalled();
     expect(hasDeferredHostOwnedWrite("project-drafts:proj-1")).toBe(false);
     stop();
   });

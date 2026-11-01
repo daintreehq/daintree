@@ -42,6 +42,16 @@ export function isDeviceAnswerEndpointId(endpointId: string): boolean {
 }
 
 /**
+ * The caller a viewless action's host calls run as: this machine acting for
+ * one project with no renderer behind it. Never registered.
+ */
+export const VIEWLESS_ENDPOINT_PREFIX = "viewless:";
+
+export function isViewlessEndpointId(endpointId: string): boolean {
+  return endpointId.startsWith(VIEWLESS_ENDPOINT_PREFIX);
+}
+
+/**
  * Whether `endpointId` is one of a link session's views. SessionHost names a
  * remote endpoint `remote:<sessionId>:<clientEndpointId>`; the session id is
  * the host's own, unlike the client id a HELLO merely claims.

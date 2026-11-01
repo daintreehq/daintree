@@ -693,7 +693,48 @@ describe("drive-lease gate", () => {
       [{ rootPath: P1 }]
     );
     expect(noteUnheldChange).toHaveBeenCalledTimes(2);
+    expect(noteUnheldChange).toHaveBeenNthCalledWith(2, endpoint, ["proj-1"]);
     expect(driver).toHaveBeenCalledTimes(3);
+  });
+
+  it("refuses a call held for its lookup once its target is taken meanwhile, noting nothing (#15918)", async () => {
+    const handler = handle(DRIVER_CHANNEL);
+    const { endpoint } = makeRemoteEndpoint(-4, "proj-2");
+    const noteUnheldChange = vi.fn();
+    const holders = new Map<string, { endpointId: string; clientId: string }>();
+    installGate(
+      holders,
+      {
+        projectsForPath: async () => {
+          // The Shell back from its outage takes proj-1 while the lookup runs.
+          holders.set("proj-1", { endpointId: "remote:-8", clientId: "client-d" });
+          return ["proj-1"];
+        },
+      },
+      { keeps: true, noteUnheldChange }
+    );
+    const refused = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint, client: REMOTE_CLIENT },
+      DRIVER_CHANNEL,
+      [{ rootPath: P1 }]
+    );
+    expect(refused.ok ? null : refused.error.code).toBe("DRIVEN_ELSEWHERE");
+    expect(handler).not.toHaveBeenCalled();
+    expect(noteUnheldChange).not.toHaveBeenCalled();
+  });
+
+  it("lets a call whose lookup answers later through, noting where it landed (#15918)", async () => {
+    const handler = handle(DRIVER_CHANNEL);
+    const { endpoint } = makeRemoteEndpoint(-4, "proj-2");
+    const noteUnheldChange = vi.fn();
+    installGate(new Map(), { projectsForPath: async () => ["proj-1"] }, { keeps: true, noteUnheldChange });
+    await expect(
+      getIpcDispatcher().invokeForEndpoint({ endpoint, client: REMOTE_CLIENT }, DRIVER_CHANNEL, [
+        { rootPath: P1 },
+      ])
+    ).resolves.toEqual(wrapSuccess("ran"));
+    expect(noteUnheldChange).toHaveBeenCalledWith(endpoint, ["proj-1"]);
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 
   it("gates a hybrid channel's host leg over a link", async () => {

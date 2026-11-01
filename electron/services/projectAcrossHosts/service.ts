@@ -188,7 +188,10 @@ export interface PlacementAuthority {
  * can be driving it.
  */
 export function localPlacementAuthority(
-  lease: { getHolder(projectId: string): DriveLeaseHolder | null } | null
+  lease: {
+    getHolder(projectId: string): DriveLeaseHolder | null;
+    noteSessionChange(projectId: string, linkSessionId: string | null): void;
+  } | null
 ): PlacementAuthority {
   return {
     assertMayPlace(projectId) {
@@ -201,6 +204,8 @@ export function localPlacementAuthority(
           context: { projectId },
         });
       }
+      // Placing changes the project's saved active worktree.
+      lease?.noteSessionChange(projectId, null);
     },
   };
 }

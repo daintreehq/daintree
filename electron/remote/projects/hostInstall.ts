@@ -51,6 +51,8 @@ export interface ProjectsHostAuthority {
   isDriving(projectId: string, endpoint: BoundEndpoint): boolean;
   /** The endpoint holding the project's drive lease, or null while nobody does. */
   holderEndpointId(projectId: string): string | null;
+  /** A change this session makes to a project no view of its own is on. */
+  noteSessionChange(projectId: string, sessionId: string | null): void;
 }
 
 export const defaultProjectsHostAuthority: ProjectsHostAuthority = {
@@ -72,6 +74,8 @@ export const defaultProjectsHostAuthority: ProjectsHostAuthority = {
       null
     );
   },
+  noteSessionChange: (projectId, sessionId) =>
+    getDriveLeaseService().noteSessionChange(projectId, sessionId),
 };
 
 const GRANT_TTL_MS = 30 * 60_000;
@@ -521,6 +525,7 @@ export function attachProjectsHost(
         if (holder !== null && (sessionId === null || !isSessionEndpoint(sessionId, holder))) {
           throw drivenElsewhere();
         }
+        authority.noteSessionChange(projectId, sessionId);
       },
     };
     // An assistant's branch is never put into a project a window here holds,
@@ -557,6 +562,7 @@ export function attachProjectsHost(
           throw drivenElsewhere();
         }
         if (!grants.usePlacement(projectId, p.opId)) throw notAttached();
+        authority.noteSessionChange(projectId, sessionId);
       },
     };
     if (!operationOwners.mayClaim(p.opId, grants)) throw operationNotYours();
@@ -584,6 +590,7 @@ export function attachProjectsHost(
         throw drivenElsewhere();
       }
       grants.useCheckout(p.projectId, p.branch);
+      authority.noteSessionChange(p.projectId, sessionId);
     } else {
       requireDriving(p.projectId, bound);
     }

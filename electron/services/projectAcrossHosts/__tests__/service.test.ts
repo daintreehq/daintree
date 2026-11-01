@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ExecuteCloneOptions } from "../../../ipc/handlers/projectCrud/gitClone.js";
 import { AppError, GitOperationError } from "../../../utils/errorTypes.js";
 import { localPlacementAuthority } from "../service.js";
@@ -938,16 +938,23 @@ describe("placing a worktree asked for on another host", () => {
       isHostLocal: clientId === "local",
       acquiredAt: 0,
     });
+    const noteSessionChange = vi.fn();
+    const lease = (held: ReturnType<typeof holder> | null) => ({
+      getHolder: () => held,
+      noteSessionChange,
+    });
     expect(() => localPlacementAuthority(null).assertMayPlace("p")).not.toThrow();
-    expect(() =>
-      localPlacementAuthority({ getHolder: () => null }).assertMayPlace("p")
-    ).not.toThrow();
-    expect(() =>
-      localPlacementAuthority({ getHolder: () => holder("local") }).assertMayPlace("p")
-    ).not.toThrow();
-    expect(() =>
-      localPlacementAuthority({ getHolder: () => holder("client-b") }).assertMayPlace("p")
-    ).toThrow(expect.objectContaining({ code: "DRIVEN_ELSEWHERE" }));
+    expect(() => localPlacementAuthority(lease(null)).assertMayPlace("p")).not.toThrow();
+    expect(() => localPlacementAuthority(lease(holder("local"))).assertMayPlace("p")).not.toThrow();
+    // A placement let through is this machine changing the project (#15918).
+    expect(noteSessionChange.mock.calls).toEqual([
+      ["p", null],
+      ["p", null],
+    ]);
+    expect(() => localPlacementAuthority(lease(holder("client-b"))).assertMayPlace("p")).toThrow(
+      expect.objectContaining({ code: "DRIVEN_ELSEWHERE" })
+    );
+    expect(noteSessionChange).toHaveBeenCalledTimes(2);
   });
 
   it("says a recipe the host's copy lacks won't run, and refuses an occupied or escaping path", async () => {
