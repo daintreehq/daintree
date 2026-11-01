@@ -837,7 +837,6 @@ async function wallStates(run: Run, theme: string): Promise<void> {
     try {
       await readyGrid(page, grid.working);
       await expectBanner(page, grid.finished, /scrollback/i);
-      await expectBanner(page, grid.finished, /review when ready/i);
       await snapPane(page, outFile("stack", theme, "png"), grid.finished);
       await writeSidecar(page, "stack", theme, { pane: grid.finished });
     } finally {
@@ -874,10 +873,6 @@ async function bannerSheet(run: Run): Promise<void> {
       await expectBanner(page, grid.waiting, /timed out/i);
       await tile("reconnect-timeout", grid.waiting);
       await patchPanel(page, grid.waiting, { reconnectError: undefined });
-      await patchPanel(page, grid.finished, { agentState: "completed" });
-      await expectBanner(page, grid.finished, /review when ready/i);
-      await tile("completion", grid.finished);
-      await patchPanel(page, grid.finished, { agentState: "waiting" });
       execFileSync("magick", [
         "montage",
         ...tiles,

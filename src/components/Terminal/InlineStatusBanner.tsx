@@ -195,8 +195,7 @@ interface OptionalDismissProps {
  * are fine", so a success banner has to state how it leaves. Requiring the
  * timer and the handler it fires makes that structural rather than advisory
  * — there is no way to spell a success banner that stands. Completion that
- * genuinely needs to persist is `severity="neutral"`, which is what
- * `AgentCompletionBanner` already uses.
+ * genuinely needs to persist is `severity="neutral"`.
  */
 interface RequiredDismissProps {
   onClose: () => void;
