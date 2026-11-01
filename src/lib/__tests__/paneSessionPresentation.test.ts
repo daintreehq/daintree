@@ -64,9 +64,8 @@ describe("pane observation ahead of the band", () => {
   it("draws no amber through a restart or an exit the band hasn't caught up with", () => {
     for (const observed of [
       { isRestarting: true },
-      { runtimeStatus: "exited" },
-      { runtimeStatus: "error" },
       { exitCode: 0 },
+      { agentState: "exited" as const },
     ]) {
       expect(
         resolvePaneSessionPresentation("waiting", "needs-you", {

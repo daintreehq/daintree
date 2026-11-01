@@ -324,7 +324,7 @@ describe("ContentPanel amber from the fleet band", () => {
   });
 
   it("ranks a failure over an ask, and keeps it over the selected fill", () => {
-    observe("waiting", "question", { spawnError: { message: "spawn failed" } });
+    observe("waiting", "question", { restartError: { message: "restart failed" } });
     fleet({ agentState: "waiting", waitingReason: "question", canopy: UNREAD_ASK });
     const { container, rerender } = render(pane({ agentState: "waiting" }));
     expect(hasEdge(container, "failed")).toBe(true);

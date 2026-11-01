@@ -14,7 +14,6 @@ export interface PaneObservation {
   agentState?: AgentState;
   waitingReason?: WaitingReason;
   isRestarting?: boolean;
-  runtimeStatus?: string;
   exitCode?: number | null;
 }
 
@@ -22,18 +21,11 @@ export interface PaneObservation {
  * The pane's own observation still has the run stopped where it could be
  * asking. The band is main's polled read and the pane's state is pushed, so the
  * pane can be a beat ahead of it: amber must not outlive a reply that set the
- * agent working again, a restart, an exit (by the same signals the pane's
- * chrome reads one from), or a wait that has turned into an error.
+ * agent working again, a restart, an exit code on record (what a shown pane's
+ * own exit reads), or a wait that has turned into an error.
  */
 function isStillStopped(pane: PaneObservation): boolean {
-  if (pane.isRestarting === true) return false;
-  if (
-    pane.runtimeStatus === "exited" ||
-    pane.runtimeStatus === "error" ||
-    typeof pane.exitCode === "number"
-  ) {
-    return false;
-  }
+  if (pane.isRestarting === true || typeof pane.exitCode === "number") return false;
   const { agentState } = pane;
   if (agentState === "working" || agentState === "directing" || agentState === "exited") {
     return false;

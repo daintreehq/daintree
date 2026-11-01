@@ -95,7 +95,7 @@ describe("useGridGroupAmbientState", () => {
     const staleFields: Partial<PtyPanelData>[] = [
       { isRestarting: true },
       { exitCode: 0 },
-      { runtimeStatus: "exited" },
+      { agentState: "exited" },
     ];
     for (const fields of staleFields) {
       const stale = [panels[0]!, tab("hidden", { agentState: "waiting", ...fields })];
