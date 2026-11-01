@@ -67,12 +67,12 @@
      Canvas under 3:1. On the strip they take button ink like every other
      glyph, GrayText while their button is unavailable. Scoped to the toolbar:
      elsewhere a brand mark is decoration beside a label. */
-  .surface-toolbar .brand-mark {
-    color: ButtonText !important;
+  .surface-toolbar [data-toolbar-item] .brand-mark {
+    color: ButtonText;
   }
 
-  .surface-toolbar [aria-disabled="true"] .brand-mark {
-    color: GrayText !important;
+  .surface-toolbar [data-toolbar-item][aria-disabled="true"] .brand-mark {
+    color: GrayText;
   }
 
   /* The stats capsule is one frame with segment rules, as it is unforced: the
@@ -99,10 +99,10 @@
     border-color: CanvasText;
   }
 
-  /* Menu marks also carry `.status-mark`, whose host rule repaints with
-     !important; the ring outranks it on specificity to stay hollow. */
+  /* A menu's waiting ring leaves `.status-mark` off (that host rule fills
+     every mark), so it stays hollow here too. */
   .toolbar-menu-pip[data-pip="waiting"] {
-    background-color: Canvas !important;
+    background-color: Canvas;
     border-color: CanvasText;
   }
 

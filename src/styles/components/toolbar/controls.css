@@ -54,8 +54,11 @@
  * primary when the pointer, the keyboard or an open surface is on them. A live
  * control (dictation while it records) stays at primary — it is the signal.
  * Unlayered, so it wins over the ink utility on the element. */
+.toolbar-quiet-ink:hover {
+  color: var(--toolbar-control-hover-fg, var(--theme-text-primary));
+}
+
 .toolbar-quiet-ink:is(
-  :hover,
   :focus-visible,
   [aria-expanded="true"]:not([data-sidebar-toggle]),
   [aria-pressed="true"]:not([data-sidebar-toggle]),

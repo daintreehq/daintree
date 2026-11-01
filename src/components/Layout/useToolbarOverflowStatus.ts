@@ -53,24 +53,18 @@ export function useToolbarOverflowStatus({
   // hidden item and trigger the warning severity in useOverflowBadgeSeverity.
   // A project-scoped slot with no project is a placeholder holding the strip's
   // shape; folded into the menu it would be a row that opens nothing.
-  const visibleLeftOverflow = useMemo(
-    () =>
-      leftOverflow.filter(
-        (id) =>
-          (hasActiveVoiceRecording || id !== "voice-recording") &&
-          (hasProject || !PROJECT_SCOPED_TOOLBAR_IDS.has(id))
-      ),
-    [leftOverflow, hasActiveVoiceRecording, hasProject]
-  );
-  const visibleRightOverflow = useMemo(
-    () =>
-      rightOverflow.filter(
-        (id) =>
-          (hasActiveVoiceRecording || id !== "voice-recording") &&
-          (hasProject || !PROJECT_SCOPED_TOOLBAR_IDS.has(id))
-      ),
-    [rightOverflow, hasActiveVoiceRecording, hasProject]
-  );
+  const visibleLeftOverflow = useMemo(() => {
+    const shown = hasActiveVoiceRecording
+      ? leftOverflow
+      : leftOverflow.filter((id) => id !== "voice-recording");
+    return hasProject ? shown : shown.filter((id) => !PROJECT_SCOPED_TOOLBAR_IDS.has(id));
+  }, [leftOverflow, hasActiveVoiceRecording, hasProject]);
+  const visibleRightOverflow = useMemo(() => {
+    const shown = hasActiveVoiceRecording
+      ? rightOverflow
+      : rightOverflow.filter((id) => id !== "voice-recording");
+    return hasProject ? shown : shown.filter((id) => !PROJECT_SCOPED_TOOLBAR_IDS.has(id));
+  }, [rightOverflow, hasActiveVoiceRecording, hasProject]);
 
   // The dock is showing the watcher's state while it is open, so the folded
   // warning stands down like every other mark.

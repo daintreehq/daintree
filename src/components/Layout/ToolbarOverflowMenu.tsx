@@ -538,7 +538,8 @@ export function OverflowMenu({
                 mark.pip === "error" ? "error" : mark.pip === "warning" ? "warning" : undefined
               }
               className={cn(
-                "toolbar-menu-pip status-mark absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-[var(--overlay-surface-solid,var(--color-surface-sidebar))]",
+                "toolbar-menu-pip absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-[var(--overlay-surface-solid,var(--color-surface-sidebar))]",
+                mark.pip !== "waiting" && "status-mark",
                 mark.pip === "error" && "bg-status-error",
                 mark.pip === "warning" && "bg-status-warning",
                 mark.pip === "waiting" && "bg-state-waiting",
@@ -745,7 +746,10 @@ function AgentOverflowItem({
             aria-hidden="true"
             data-pip={attentionState ?? undefined}
             className={cn(
-              "toolbar-menu-pip status-mark absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-[var(--overlay-surface-solid,var(--color-surface-sidebar))]",
+              "toolbar-menu-pip absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-[var(--overlay-surface-solid,var(--color-surface-sidebar))]",
+              // The waiting ring stays hollow under forced colours, which the host
+              // `.status-mark` repaint would fill.
+              attentionState !== "waiting" && "status-mark",
               dotColor
             )}
           />

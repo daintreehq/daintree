@@ -84,16 +84,16 @@
 }
 
 /* A count's silhouette carries its severity as the dots' do (WCAG 1.4.1; forced
- * colours paint every count the same): an error count is a tile with barely
- * softened corners, a warning count softened further, and a waiting or neutral
- * count stays a capsule — so Problems' errors and Canopy's urgent asks never
- * share a shape. */
+ * colours paint every count the same): an error count is a square tile, a
+ * warning count slightly rounded, and a waiting or neutral count stays a
+ * capsule — so Problems' errors and Canopy's urgent asks never share a shape.
+ * Fixed radii, not the theme's: the shape is the meaning. */
 .toolbar-count[data-badge-color="error"] {
-  border-radius: calc(var(--radius-xs) / 2);
+  border-radius: 0;
 }
 
 .toolbar-count[data-badge-color="warning"] {
-  border-radius: var(--radius-xs);
+  border-radius: 2px;
 }
 
 /* A plugin's count pill (#13503): the same fills PluginPanelBadges' dots draw,
@@ -132,7 +132,7 @@
 .toolbar-menu-pip[data-badge-color="warning"] {
   height: 7px;
   width: 7px;
-  border-radius: calc(var(--radius-xs) / 2);
+  border-radius: 2px;
 }
 
 /* A second pip on one glyph (the problems button's watcher warning) takes the

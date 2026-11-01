@@ -148,7 +148,7 @@ export const TOOLBAR_BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, Toolbar
  * and the row reads `[launcher] │ [agents] │ [panels]`.
  *
  * `signals` comes last: the buttons whose marks answer "is anything asking for
- * me, wrong, or unread" — Canopy, the bell, Problems — and live dictation. One
+ * me, wrong, or unread" — Canopy, the bell, Problems. One
  * cluster at the strip's outer edge, so the eye has one place to check rather
  * than a mark that could be anywhere in a run of tools. The right side reads
  * `[forge stats, tools] │ [signals]`.
@@ -180,7 +180,6 @@ const BUILT_IN_TOOLBAR_GROUPS: ReadonlyMap<AnyToolbarButtonId, ToolbarButtonGrou
   ["canopy", "signals"],
   ["notification-center", "signals"],
   ["problems", "signals"],
-  ["voice-recording", "signals"],
 ]);
 
 /**

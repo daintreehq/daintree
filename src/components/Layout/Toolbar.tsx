@@ -1028,12 +1028,11 @@ export function Toolbar({
         isAvailable: true,
       },
       "voice-recording": {
-        // Only while a session is live. A standing invisible slot bought no
-        // stability — the row is right-aligned, so the slot's arrival only ever
-        // moved what sat to its left — and it cost every narrow window 44px of
-        // budget and left a visible hole wherever a layout put it mid-row.
+        // Slot is always available so the right-aligned items keep a stable
+        // footprint when a session starts/stops (#8176). The button itself returns
+        // an invisible placeholder when inactive (mirrors DevServerPlaceholder).
         render: () => <VoiceRecordingToolbarButton key="voice-recording" data-toolbar-item="" />,
-        isAvailable: hasActiveVoiceRecording,
+        isAvailable: true,
       },
       "forge-stats": {
         // The button owns its own shape now: full three-segment pill with a
@@ -1323,7 +1322,6 @@ export function Toolbar({
       canopyHidden,
       pluginButtonIds,
       pluginConfigs,
-      hasActiveVoiceRecording,
       devServerCombo,
       devServerHintHover,
       openFileBrowser,

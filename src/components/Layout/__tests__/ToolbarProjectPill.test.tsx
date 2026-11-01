@@ -91,10 +91,12 @@ describe("ToolbarProjectPill", () => {
   });
 
   it("names a detached HEAD by its commit rather than waiting on a branch", () => {
-    const { chip } = renderCase(CASES[2]!);
-    expect(chip!.getAttribute("aria-hidden")).toBeNull();
+    const { button, chip } = renderCase(CASES[2]!);
     expect(chip!.textContent).toContain("3f9a2c1");
-    expect(chip!.getAttribute("aria-label")).toContain("3f9a2c1");
+    // The button's own label wins over anything inside it, so the commit is
+    // said there; the chip itself is presentation only.
+    expect(button.getAttribute("aria-label")).toContain("detached at 3f9a2c1");
+    expect(chip!.getAttribute("aria-hidden")).toBe("true");
   });
 
   it("mounts no chip where no branch can exist", () => {

@@ -61,8 +61,21 @@ function rulesFor(selector: string): Rule[] {
   return RULES.filter((r) => r.selectors.includes(selector));
 }
 
+// The motion tokens as the design contract defines them, so a duration
+// written as `var(--duration-150)` is read as the value it stands for.
+const DURATION_TOKENS = new Map(
+  Array.from(
+    fs
+      .readFileSync(path.resolve(__dirname, "../../../styles/design-contract.css"), "utf-8")
+      .matchAll(/(--duration-[\w-]+):\s*([^;]+);/g),
+    (m) => [m[1]!, m[2]!.trim()] as const
+  )
+);
+
 function ms(value: string): number {
-  const m = /^(-?[\d.]+)(ms|s)$/.exec(value.trim());
+  const token = /^var\((--duration-[\w-]+)\)$/.exec(value.trim());
+  const literal = token ? DURATION_TOKENS.get(token[1]!) : value;
+  const m = literal === undefined ? null : /^(-?[\d.]+)(ms|s)$/.exec(literal.trim());
   if (!m) throw new Error(`not a duration: ${value}`);
   return Number(m[1]) * (m[2] === "s" ? 1000 : 1);
 }

@@ -146,9 +146,9 @@ describe("Toolbar responsive design — issue #4133", () => {
       const text = block![0];
       // Each signal the badge severity is derived from has a textual counterpart.
       expect(text).toMatch(/overflowIds\.includes\("problems"\) && errorCount > 0/);
-      expect(text).toMatch(
-        /overflowIds\.includes\("notification-center"\) && notificationUnreadCount > 0/
-      );
+      // Unread and urgent ride on the same marks the menu rows wear.
+      expect(text).toMatch(/for \(const id of \["notification-center", "canopy"\] as const\)/);
+      expect(text).toMatch(/signalMark\(id\)/);
       // Agent observations come from the same per-session derivation as the
       // badge severity, never from the per-agent pip map — the name counts
       // every session, where the map holds one state per agent.
@@ -290,17 +290,28 @@ describe("Toolbar responsive design — issue #4133", () => {
     });
 
     it("overflow severity dot uses a non-color shape differentiator per tier — WCAG 1.4.1", () => {
-      // Tier 1 evidence: each severity owns its own border-radius in CSS, so
-      // critical/warning/info are distinguishable without relying on color.
-      expect(css).toMatch(
-        /\.toolbar-overflow-badge\[data-severity="critical"\][\s\S]*?border-radius:\s*0;/
-      );
-      expect(css).toMatch(
-        /\.toolbar-overflow-badge\[data-severity="warning"\][\s\S]*?border-radius:\s*2px;/
-      );
-      expect(css).toMatch(
-        /\.toolbar-overflow-badge\[data-severity="info"\][\s\S]*?border-radius:\s*9999px;/
-      );
+      // Tier 1 evidence: each severity owns its own shape in CSS, so the tiers
+      // are distinguishable without relying on color: critical a square,
+      // warning and notice a slightly rounded square, waiting the hollow ring,
+      // info the round pip it inherits.
+      const ruleFor = (severity: string) =>
+        new RegExp(
+          `[^{}]*\\.toolbar-overflow-badge(?::is\\([^)]*)?\\[data-severity="${severity}"\\][^{}]*\\{[^}]*\\}`
+        );
+      const radius = (severity: string, value: string) =>
+        (css.match(new RegExp(ruleFor(severity).source, "g")) ?? []).some((rule) =>
+          new RegExp(`border-radius:\\s*${value};`).test(rule)
+        );
+      expect(radius("critical", "0")).toBe(true);
+      expect(radius("warning", "2px")).toBe(true);
+      expect(radius("notice", "2px")).toBe(true);
+      expect(
+        (css.match(new RegExp(ruleFor("waiting").source, "g")) ?? []).some((rule) =>
+          /border:\s*1\.5px solid/.test(rule)
+        )
+      ).toBe(true);
+      expect(css).toMatch(/\.toolbar-pip\s*\{[^}]*border-radius:\s*9999px;/);
+      expect(source).toMatch(/toolbar-pip toolbar-overflow-badge/);
 
       // Tier 2 evidence: the JSX className must NOT carry `rounded-full` or a
       // round `ring-*` utility — CSS data-attribute selectors own shape/ring so
@@ -546,7 +557,7 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
       // DropdownMenuLabel alone is insufficient — the Group wires role=group +
       // aria-labelledby so the boundary is announced.
       expect(source).toMatch(
-        /<DropdownMenuGroup[\s\S]*?<DropdownMenuLabel>\{forgeProviderName\}<\/DropdownMenuLabel>/
+        /<DropdownMenuGroup[\s\S]*?<DropdownMenuLabel[^>]*>\s*\{forgeProviderName\}[\s\S]*?<\/DropdownMenuLabel>/
       );
     });
   });

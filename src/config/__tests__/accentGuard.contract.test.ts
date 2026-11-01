@@ -192,7 +192,6 @@ const DURABLE_ALLOWLIST = new Set([
 // file no longer contains any non-focus-ring forbidden utility.
 const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
   "#5978-5986-pre-existing": [
-    "src/components/Layout/VoiceRecordingToolbarButton.tsx",
     "src/components/Terminal/HybridInputBar.tsx",
     "src/components/Worktree/WorktreeCard/WorktreeTerminalSection.tsx",
   ],

@@ -310,7 +310,7 @@ describe("NotificationCenterToolbarButton — DND state surface", () => {
       expect(btn.getAttribute("aria-label")).toBe("Notifications — quiet hours active");
     });
 
-    it("session mute label takes priority over unread count", () => {
+    it("says both the unread count and the session mute", () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date(2024, 0, 1, 12, 0));
       useNotificationHistoryStore.setState({ unreadCount: 7 });
@@ -319,7 +319,7 @@ describe("NotificationCenterToolbarButton — DND state surface", () => {
       });
       const { container } = render(<NotificationCenterToolbarButton />);
       const btn = container.querySelector("button")!;
-      expect(btn.getAttribute("aria-label")).toMatch(/^Notifications — paused until /);
+      expect(btn.getAttribute("aria-label")).toMatch(/^Notifications — 7 unread, paused until /);
     });
 
     it("button carries data-dnd-active='true' while DND is active", () => {
