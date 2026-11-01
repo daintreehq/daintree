@@ -583,10 +583,27 @@ describe("previews pulled ahead", () => {
     const pulls = () =>
       vi.mocked(ctx.client.call).mock.calls.filter(([method]) => method === FileLinkMethod.PULL)
         .length;
-    vi.spyOn(ctx.client, "call");
+    // A pull is answered only once its transfer is acknowledged, so the pulls
+    // outstanding on the Shell are the slots in use, whatever the host's reads cost.
+    const pullsInFlight = { now: 0, max: 0 };
+    const call = ctx.client.call.bind(ctx.client);
+    vi.spyOn(ctx.client, "call").mockImplementation(async (method, ...rest) => {
+      if (method !== FileLinkMethod.PULL) return call(method, ...rest);
+      pullsInFlight.now++;
+      pullsInFlight.max = Math.max(pullsInFlight.max, pullsInFlight.now);
+      try {
+        return await call(method, ...rest);
+      } finally {
+        pullsInFlight.now--;
+      }
+    });
+    const reset = () => {
+      observed!.reset();
+      pullsInFlight.max = pullsInFlight.now;
+    };
     const open = (file: string) =>
       ctx.proxy("daintree-media", new Request(url("daintree-media", file, project)));
-    return { ...ctx, ...observed, bodies, pulls, open };
+    return { ...ctx, ...observed, reset, bodies, pulls, pullsInFlight, open };
   }
 
   async function write(name: string, size: number): Promise<{ file: string; bytes: Buffer }> {
@@ -702,7 +719,7 @@ describe("previews pulled ahead", () => {
     const response = await ctx.open(c.file);
     expect(sha256(new Uint8Array(await response.arrayBuffer()))).toBe(sha256(c.bytes));
     expect(ctx.stats.held).toBe("barrier");
-    expect(ctx.stats.maxSends).toBe(PREVIEW_PULL_DEPTH);
+    expect(ctx.pullsInFlight.max).toBe(PREVIEW_PULL_DEPTH);
   });
 
   it("leaves a pull slot for another preview while ones whose readers paused hold their read-ahead", async () => {
