@@ -82,7 +82,11 @@ describe("session glyphs from the fleet band", () => {
       const unseenWait = snapshot([run({ agentState: "waiting", waitingReason })]);
       expect(glyph(unseenWait, "t1")).toBe("unread");
       const seenWait = snapshot([
-        run({ agentState: "waiting", waitingReason, wait: { stoppedAt: NOW - 5_000, seenAt: NOW } }),
+        run({
+          agentState: "waiting",
+          waitingReason,
+          wait: { stoppedAt: NOW - 5_000, seenAt: NOW },
+        }),
       ]);
       expect(glyph(seenWait, "t1")).toBeUndefined();
     }
@@ -100,7 +104,12 @@ describe("session glyphs from the fleet band", () => {
   it("draws amber only for an unread Canopy ask, over an older hand-back too", () => {
     const snap = snapshot([
       run({ runId: "ask", agentState: "waiting", canopy: canopyAsked(false) }),
-      run({ runId: "over-handback", agentState: "waiting", handBack: seen, canopy: canopyAsked(false) }),
+      run({
+        runId: "over-handback",
+        agentState: "waiting",
+        handBack: seen,
+        canopy: canopyAsked(false),
+      }),
       run({ runId: "finished-turn", agentState: "completed", canopy: canopyAsked(false) }),
       run({ runId: "seen-ask", agentState: "waiting", canopy: canopyAsked(true) }),
     ]);
@@ -173,7 +182,9 @@ describe("waiting counts from the fleet band", () => {
     expect(isNeedsYouPane(ids, { id: "t1", agentState: "waiting", waitingReason: "error" })).toBe(
       false
     );
-    expect(isNeedsYouPane(ids, { id: "t1", agentState: "waiting", isRestarting: true })).toBe(false);
+    expect(isNeedsYouPane(ids, { id: "t1", agentState: "waiting", isRestarting: true })).toBe(
+      false
+    );
     expect(isNeedsYouPane(ids, { id: "t1", agentState: "waiting", runtimeStatus: "exited" })).toBe(
       false
     );

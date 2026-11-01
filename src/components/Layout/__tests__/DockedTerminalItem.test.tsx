@@ -145,8 +145,10 @@ vi.mock("@/hooks/useRunSessionPresentation", async () => {
   const { useRunFleetBand } = await import("@/hooks/useRunFleetBand");
   const { resolvePaneSessionPresentation } = await import("@/lib/paneSessionPresentation");
   return {
-    useRunSessionPresentation: (id: string, state: Parameters<typeof resolvePaneSessionPresentation>[0]) =>
-      resolvePaneSessionPresentation(state, useRunFleetBand(id)),
+    useRunSessionPresentation: (
+      id: string,
+      state: Parameters<typeof resolvePaneSessionPresentation>[0]
+    ) => resolvePaneSessionPresentation(state, useRunFleetBand(id)),
   };
 });
 

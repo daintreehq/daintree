@@ -62,7 +62,9 @@ afterEach(() => {
 });
 
 /** Claude panes in the worktree, each at the given observed stop, and the fleet's rows for them. */
-function seed(sessions: Array<{ id: string; pane?: Partial<PtyPanelData>; run?: Partial<FleetRunRow> }>) {
+function seed(
+  sessions: Array<{ id: string; pane?: Partial<PtyPanelData>; run?: Partial<FleetRunRow> }>
+) {
   const panels = sessions.map(
     ({ id, pane }) =>
       ({

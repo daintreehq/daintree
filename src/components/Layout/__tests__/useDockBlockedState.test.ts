@@ -128,7 +128,10 @@ describe("getGroupBlockedAgentState", () => {
       )
     ).toBe(undefined);
     expect(
-      getGroupBlockedAgentState([{ id: "a", agentState: "waiting" as const, isRestarting: true }], ids)
+      getGroupBlockedAgentState(
+        [{ id: "a", agentState: "waiting" as const, isRestarting: true }],
+        ids
+      )
     ).toBe(undefined);
   });
 

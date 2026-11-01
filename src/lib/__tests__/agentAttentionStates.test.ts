@@ -56,7 +56,12 @@ describe("deriveAgentAttentionStates", () => {
     // A plain shell that starts Claude has to be tracked under Claude, or the
     // dot lands on the wrong launcher row.
     const map = derive([
-      ptyPanel({ launchAgentId: "terminal", detectedAgentId: "claude", agentState: "waiting", asks: true }),
+      ptyPanel({
+        launchAgentId: "terminal",
+        detectedAgentId: "claude",
+        agentState: "waiting",
+        asks: true,
+      }),
     ]);
     expect(map.get("claude")).toBe("waiting");
     expect(map.has("terminal")).toBe(false);
@@ -95,8 +100,18 @@ describe("deriveAgentAttentionStates", () => {
   it("counts only the active worktree once one is selected", () => {
     const map = derive(
       [
-        ptyPanel({ detectedAgentId: "claude", agentState: "waiting", worktreeId: "wt-1", asks: true }),
-        ptyPanel({ detectedAgentId: "gemini", agentState: "waiting", worktreeId: "wt-2", asks: true }),
+        ptyPanel({
+          detectedAgentId: "claude",
+          agentState: "waiting",
+          worktreeId: "wt-1",
+          asks: true,
+        }),
+        ptyPanel({
+          detectedAgentId: "gemini",
+          agentState: "waiting",
+          worktreeId: "wt-2",
+          asks: true,
+        }),
       ],
       "wt-1"
     );
@@ -106,7 +121,12 @@ describe("deriveAgentAttentionStates", () => {
 
   it("counts every worktree when none is selected", () => {
     const map = derive([
-      ptyPanel({ detectedAgentId: "claude", agentState: "waiting", worktreeId: "wt-1", asks: true }),
+      ptyPanel({
+        detectedAgentId: "claude",
+        agentState: "waiting",
+        worktreeId: "wt-1",
+        asks: true,
+      }),
       ptyPanel({ detectedAgentId: "gemini", agentState: "directing", worktreeId: "wt-2" }),
     ]);
     expect(map.get("claude")).toBe("waiting");
@@ -141,12 +161,16 @@ describe("deriveAgentAttentionStates", () => {
   });
 
   it("earns the amber pip for an ask Canopy read on a finished turn", () => {
-    const map = derive([ptyPanel({ detectedAgentId: "claude", agentState: "completed", asks: true })]);
+    const map = derive([
+      ptyPanel({ detectedAgentId: "claude", agentState: "completed", asks: true }),
+    ]);
     expect(map.get("claude")).toBe("waiting");
   });
 
   it("drops the amber pip once the pane has the agent working again", () => {
-    const map = derive([ptyPanel({ detectedAgentId: "claude", agentState: "working", asks: true })]);
+    const map = derive([
+      ptyPanel({ detectedAgentId: "claude", agentState: "working", asks: true }),
+    ]);
     expect(map.get("claude")).toBeNull();
   });
 });

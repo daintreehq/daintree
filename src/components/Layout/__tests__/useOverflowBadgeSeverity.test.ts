@@ -334,7 +334,13 @@ describe("useOverflowAgentObservations — per session, like the badge", () => {
   it("reports the waiting session even when a sibling of the same agent is working", () => {
     mockPanelsById = {
       a: makePanel({ id: "a", agentId: "claude", agentState: "working", worktreeId: "wt" }),
-      b: makePanel({ id: "b", agentId: "claude", agentState: "waiting", worktreeId: "wt", asks: true }),
+      b: makePanel({
+        id: "b",
+        agentId: "claude",
+        agentState: "waiting",
+        worktreeId: "wt",
+        asks: true,
+      }),
     };
     mockPanelIds = ["a", "b"];
     const { result } = renderHook(() => useOverflowAgentObservations(["claude"]));
@@ -346,8 +352,20 @@ describe("useOverflowAgentObservations — per session, like the badge", () => {
 
   it("counts sessions, not agent types", () => {
     mockPanelsById = {
-      a: makePanel({ id: "a", agentId: "claude", agentState: "waiting", worktreeId: "wt", asks: true }),
-      b: makePanel({ id: "b", agentId: "claude", agentState: "waiting", worktreeId: "wt", asks: true }),
+      a: makePanel({
+        id: "a",
+        agentId: "claude",
+        agentState: "waiting",
+        worktreeId: "wt",
+        asks: true,
+      }),
+      b: makePanel({
+        id: "b",
+        agentId: "claude",
+        agentState: "waiting",
+        worktreeId: "wt",
+        asks: true,
+      }),
     };
     mockPanelIds = ["a", "b"];
     const { result } = renderHook(() => useOverflowAgentObservations(["claude"]));
@@ -356,7 +374,13 @@ describe("useOverflowAgentObservations — per session, like the badge", () => {
 
   it("says nothing for an agent that is not overflowed", () => {
     mockPanelsById = {
-      a: makePanel({ id: "a", agentId: "claude", agentState: "waiting", worktreeId: "wt", asks: true }),
+      a: makePanel({
+        id: "a",
+        agentId: "claude",
+        agentState: "waiting",
+        worktreeId: "wt",
+        asks: true,
+      }),
     };
     mockPanelIds = ["a"];
     const { result } = renderHook(() => useOverflowAgentObservations(["settings"]));

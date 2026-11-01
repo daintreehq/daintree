@@ -231,7 +231,9 @@ describe("CollapsedSessionIndicators", () => {
       </TooltipProvider>
     );
     const segments = Array.from(
-      screen.getByTestId("collapsed-session-indicators").querySelectorAll<HTMLElement>("[data-state]")
+      screen
+        .getByTestId("collapsed-session-indicators")
+        .querySelectorAll<HTMLElement>("[data-state]")
     );
     // Drawn last, at the ring's x, and the one segment a cramped row keeps.
     expect(segments.map((s) => s.dataset.state)).toEqual(["working", "blocked"]);
