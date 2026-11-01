@@ -864,6 +864,32 @@ describe("ScheduledRunScheduler", () => {
     expect(origins()).toEqual([expect.objectContaining({ trigger: "scheduled", dueAt: at(9) })]);
   });
 
+  it("calls a due time missed when the clock jumped past it while a pass waited", async () => {
+    commit("project-1", [schedule()]);
+    await start();
+    let openHistory: () => void = () => {};
+    const asked = new Promise<void>((ask) =>
+      getRecorder.mockImplementationOnce(() => {
+        ask();
+        return new Promise((resolve) => (openHistory = () => resolve(recorder)));
+      })
+    );
+    scheduler!.unlock();
+    await asked;
+    setClock(at(9, 0, 20));
+    openHistory();
+    await settle();
+    expect(origins()).toEqual([expect.objectContaining({ trigger: "catch-up", dueAt: at(9) })]);
+  });
+
+  it("starts a switched-on schedule from now when its stamp ran ahead of a clock set back", async () => {
+    commit("project-1", [schedule({ enabled: false, updatedAt: at(12) })]);
+    await start();
+    commit("project-1", [schedule({ updatedAt: at(12) + 1 })]);
+    await elapse(30 * MINUTE);
+    expect(origins()).toEqual([expect.objectContaining({ trigger: "scheduled", dueAt: at(9) })]);
+  });
+
   it("stops every timer on dispose and launches nothing after", async () => {
     commit("project-1", [schedule({ updatedAt: at(8) })]);
     await start();

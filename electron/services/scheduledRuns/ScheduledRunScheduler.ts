@@ -206,7 +206,8 @@ export class ScheduledRunScheduler {
         if (!this.floors.has(schedule.id)) this.floors.set(schedule.id, before.updatedAt);
         continue;
       }
-      this.floors.set(schedule.id, schedule.updatedAt);
+      // A stamp kept ahead of a clock set back would hold off what's due.
+      this.floors.set(schedule.id, Math.min(schedule.updatedAt, this.now()));
       this.epochs.set(schedule.id, ++this.nextEpoch);
       this.unwatched.delete(schedule.id);
       this.retryAfter.delete(schedule.id);
@@ -294,6 +295,7 @@ export class ScheduledRunScheduler {
       return;
     }
 
+    this.noteClock(); // The clock may have jumped during the awaits.
     const now = this.now();
     const monotonic = this.monotonicNow();
     let nextDueAt: number | null = null;
