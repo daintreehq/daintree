@@ -20,6 +20,8 @@ import { useFileAutocomplete } from "@/hooks/useFileAutocomplete";
 import { useSlashCommandAutocomplete } from "@/hooks/useSlashCommandAutocomplete";
 import { useSlashCommandList } from "@/hooks/useSlashCommandList";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { useDictationRangeStore } from "@/store/dictationRangeStore";
+import type { TextChange } from "@/lib/textRangeMapping";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { AutocompleteMenu, getComboboxState, type AutocompleteItem } from "./AutocompleteMenu";
 import {
@@ -366,7 +368,13 @@ interface HybridInputE2EController {
 
 type ApplyEditorValue = (
   nextValue: string,
-  options?: { selection?: EditorSelection; focus?: boolean; resetHistory?: boolean }
+  options?: {
+    selection?: EditorSelection;
+    focus?: boolean;
+    resetHistory?: boolean;
+    /** The one edit that turns the current draft into `nextValue`, applied as just that. */
+    change?: TextChange;
+  }
 ) => void;
 
 const EMPTY_STALE_KEYS: ReadonlySet<string> = new Set<string>();
@@ -1084,6 +1092,24 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       setActiveCompletionContext,
     });
 
+    // Written through now and spelled out: a diff of the two drafts can put
+    // a completion's text inside the dictated words it was typed against,
+    // which would read as an edit to them (#15872). Only while this composer
+    // owns the draft and the store still holds what the edit was made on.
+    const writeDraftEdit = (
+      before: string,
+      after: string,
+      changes: TextChange | readonly TextChange[]
+    ) => {
+      if (followsDriver || isFleetFollower) return;
+      const inputStore = useTerminalInputStore.getState();
+      if (inputStore.getDraftInput(terminalId, projectId) !== before) return;
+      useDictationRangeStore
+        .getState()
+        .expectDraftChange(terminalId, projectId, before, after, changes);
+      inputStore.setDraftInput(terminalId, after, projectId);
+    };
+
     const applyEditorValue: ApplyEditorValue = (nextValue, options) => {
       if (lastEmittedValueRef.current !== nextValue) {
         lastEmittedValueRef.current = nextValue;
@@ -1098,14 +1124,22 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         if (options?.focus) view.focus();
         return;
       }
+      const change = options?.change;
+      const exact =
+        shouldChangeDoc &&
+        change !== undefined &&
+        current.slice(0, change.from) + change.insert + current.slice(change.to) === nextValue
+          ? change
+          : null;
       if (shouldChangeDoc) isApplyingExternalValueRef.current = true;
       view.dispatch({
         ...(shouldChangeDoc
-          ? { changes: { from: 0, to: view.state.doc.length, insert: nextValue } }
+          ? { changes: exact ?? { from: 0, to: view.state.doc.length, insert: nextValue } }
           : {}),
         ...(shouldChangeSelection ? { selection: options?.selection } : {}),
         scrollIntoView: true,
       });
+      if (exact) writeDraftEdit(current, nextValue, exact);
       if (options?.resetHistory) clearComposerHistory(view);
       if (options?.focus) view.focus();
     };
@@ -1949,10 +1983,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // pick made straight after typing the token would otherwise merge with
     // that typing.
     const cutTemplateToken = (view: EditorView, cut: DraftSpan) => {
+      const before = view.state.doc.toString();
       view.dispatch({
         changes: cut,
         annotations: [isolateHistory.of("full"), Transaction.userEvent.of("delete")],
       });
+      writeDraftEdit(before, view.state.doc.toString(), { ...cut, insert: "" });
     };
 
     // A template fills an empty draft and goes after a written one; routing it
@@ -1985,14 +2021,19 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // and undo steps already there are untouched. Either way the write is an
       // undo step of its own, or one undo straight after a quick pick would
       // take the typed token and the template back together.
+      const edits: TextChange[] = written
+        ? [
+            ...(cut ? [{ ...cut, insert: "" }] : []),
+            { from: doc.length, to: doc.length, insert: next.slice(draft.length) },
+          ]
+        : [{ from: 0, to: doc.length, insert: next }];
       view.dispatch({
-        changes: written
-          ? [...(cut ? [cut] : []), { from: doc.length, insert: next.slice(draft.length) }]
-          : { from: 0, to: doc.length, insert: next },
+        changes: edits,
         selection: EditorSelection.cursor(next.length),
         scrollIntoView: true,
         annotations: [isolateHistory.of("full"), Transaction.userEvent.of("input.paste")],
       });
+      writeDraftEdit(doc, view.state.doc.toString(), edits);
       view.focus();
     };
 

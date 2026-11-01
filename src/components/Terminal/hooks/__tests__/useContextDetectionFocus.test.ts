@@ -17,6 +17,7 @@ vi.mock("@/services/TerminalInstanceService", () => {
 });
 
 import { useContextDetection } from "../useContextDetection";
+import { completionBoundary } from "../../inputEditorExtensions/completionBoundary";
 import { getActiveCompletionContext } from "../../hybridInputParsing";
 
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
@@ -40,6 +41,8 @@ function makeUpdate(opts: {
   caret?: number;
   /** CM6 user-event names, one per simulated transaction (e.g. "input.type"). */
   userEvents?: string[];
+  /** The editor state after the update, in place of one built from `text`. */
+  state?: EditorState;
 }): ViewUpdate {
   const text = opts.text ?? "";
   // CM6 user events are hierarchical: a transaction tagged "input.type"
@@ -52,7 +55,7 @@ function makeUpdate(opts: {
     docChanged: opts.docChanged ?? false,
     selectionSet: opts.selectionSet ?? false,
     transactions,
-    state: EditorState.create({ doc: text, selection: { anchor: opts.caret ?? 0 } }),
+    state: opts.state ?? EditorState.create({ doc: text, selection: { anchor: opts.caret ?? 0 } }),
     view: { hasFocus: opts.hasFocus },
   } as unknown as ViewUpdate;
 }
@@ -195,6 +198,34 @@ describe("useContextDetection trigger detection", () => {
 });
 
 describe("useContextDetection multi-line drafts", () => {
+  it("ends a token typed against a word on a later line at that word (#15872)", () => {
+    const { result, setActiveCompletionContext } = setupHook(["/", "@"]);
+    const doc = "first line\nsee App.tsx";
+    let state = EditorState.create({
+      doc,
+      selection: { anchor: "first line\nsee ".length },
+      extensions: [completionBoundary],
+    });
+    for (const char of "@src/") {
+      const at = state.selection.main.head;
+      state = state.update({
+        changes: { from: at, insert: char },
+        selection: { anchor: at + 1 },
+        userEvent: "input.type",
+      }).state;
+    }
+    result.current.handleUpdateRef.current(
+      makeUpdate({ focusChanged: false, hasFocus: true, docChanged: true, state })
+    );
+    const start = "first line\nsee ".length;
+    expect(setActiveCompletionContext).toHaveBeenLastCalledWith({
+      triggerChar: "@",
+      start,
+      tokenEnd: start + "@src/".length,
+      query: "src/",
+    });
+  });
+
   it("reports doc-absolute offsets for a token on a later line", () => {
     const { result, setActiveCompletionContext } = setupHook(["/", "@"]);
     const text = "first line\nsecond @src/Ap more\nthird";

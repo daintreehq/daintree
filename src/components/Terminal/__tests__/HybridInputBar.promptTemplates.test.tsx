@@ -12,6 +12,10 @@ import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
+import {
+  subscribeDictationRangeTracking,
+  useDictationRangeStore,
+} from "@/store/dictationRangeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
@@ -251,6 +255,60 @@ describe("HybridInputBar prompt templates in the `/` menu", () => {
 
     expect(view.state.doc.toString()).toBe("Fix the loop\n\nRun the tests.");
   });
+
+  it.each([
+    ["fills in", entry("Run the tests."), "Fix it\n\nRun the tests."],
+    [
+      "opens a form for",
+      entry("Tell {{who}} when done.", [{ name: "who", label: "Who" }]),
+      "Fix it",
+    ],
+  ])(
+    "keeps a dictated passage the token was typed against, unedited, when it %s a template (#15872)",
+    async (_what, template, expected) => {
+      const stop = subscribeDictationRangeTracking();
+      try {
+        useDictationRangeStore.setState({ drafts: {}, anchors: {} });
+        const passage = "Fix it";
+        useDictationRangeStore.getState().expectDraftChange(TERMINAL_ID, undefined, "", passage, {
+          from: 0,
+          to: 0,
+          insert: passage,
+        });
+        useTerminalInputStore.getState().setDraftInput(TERMINAL_ID, passage);
+        useDictationRangeStore
+          .getState()
+          .recordUtterance(
+            { sessionId: "s1", panelId: TERMINAL_ID },
+            { insertion: { from: 0, to: passage.length }, words: { from: 0, to: passage.length } }
+          );
+        const { view, press } = await renderComposer("", [template]);
+        act(() => {
+          view.dispatch({ selection: { anchor: 0 } });
+        });
+        for (const char of "/boiler") {
+          await act(async () => {
+            const at = view.state.selection.main.head;
+            view.dispatch({
+              changes: { from: at, insert: char },
+              selection: { anchor: at + 1 },
+              userEvent: "input.type",
+            });
+          });
+        }
+        expect(view.state.doc.toString()).toBe(`/boiler${passage}`);
+
+        await press("Enter");
+
+        expect(view.state.doc.toString()).toBe(expected);
+        const [record] = useDictationRangeStore.getState().listDictations(TERMINAL_ID);
+        expect(record!.range.edited).toBe(false);
+        expect(storedDraft().slice(record!.range.from, record!.range.to)).toBe(passage);
+      } finally {
+        stop();
+      }
+    }
+  );
 
   it("replaces a draft that is only whitespace", async () => {
     const { view, type, press } = await renderComposer("  \n", [entry("Run the tests.")]);
