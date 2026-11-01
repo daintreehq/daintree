@@ -176,7 +176,7 @@ The human-readable name shown in UI listings (plugin palette, installed-plugins 
 
 ### `mcpName`
 
-The short name agents see your plugin's MCP server under, as `daintree-<mcpName>` — for example `"ledger"` gives `daintree-ledger`, and Claude names its tools `mcp__daintree-ledger__<tool>`. Lowercase letters, digits and hyphens, 1–16 characters, starting with a letter or digit; `docs` and `runbooks` are taken by the Daintree Assistant's own servers. Optional: without it Daintree uses the last segment of `name`. It only matters if the plugin declares [databases](./contribution-points.md#databases--shipped) or an [`agentMcp`](./agent-extensions.md#agent-mcp-endpoints) endpoint, and the resulting key is the same in every project; see [Reaching an agent](./agent-extensions.md#reaching-an-agent) for how a clash with another plugin's name is settled.
+The short name agents see your plugin's MCP server under, as `daintree-<mcpName>` — for example `"ledger"` gives `daintree-ledger`, and Claude names its tools `mcp__daintree-ledger__<tool>`. Lowercase letters, digits and hyphens, 1–16 characters, starting with a letter or digit; `docs` and `runbooks` are taken by the Daintree Assistant's own servers, and `decisions` by the server agents ask the person through (Decisions). Optional: without it Daintree uses the last segment of `name`. It only matters if the plugin declares [databases](./contribution-points.md#databases--shipped) or an [`agentMcp`](./agent-extensions.md#agent-mcp-endpoints) endpoint, and the resulting key is the same in every project; see [Reaching an agent](./agent-extensions.md#reaching-an-agent) for how a clash with another plugin's name is settled.
 
 ### `description`
 

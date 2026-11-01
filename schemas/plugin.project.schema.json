@@ -23,7 +23,7 @@
     },
     "mcpName": {
       "type": "string",
-      "pattern": "^(?!(?:docs|runbooks)$)[a-z0-9][a-z0-9-]{0,15}$"
+      "pattern": "^(?!(?:docs|runbooks|decisions)$)[a-z0-9][a-z0-9-]{0,15}$"
     },
     "description": {
       "type": "string"
