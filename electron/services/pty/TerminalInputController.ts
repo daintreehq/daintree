@@ -376,7 +376,7 @@ export class TerminalInputController {
       guard === "settled-prompt-strict"
         ? () => this.admitStrict(ASSISTANT_SEND_GATE)
         : guard === "settled-prompt-exact"
-          ? () => this.admitStrict(EXACT_PROMPT_GATE)
+          ? this.admitExact()
           : guard === "settled-prompt"
             ? () =>
                 !this.isInputLocked &&
@@ -386,6 +386,23 @@ export class TerminalInputController {
                 ).kind === "ready"
             : undefined;
     this.host.writeQueue.submit(text, token, onPtyWritten, admit, imagePaths);
+  }
+
+  /**
+   * The strict check without the prose-question allowance, for the run the
+   * line was handed to: an agent that restarted in this PTY while the line
+   * waited in the lane is another run, whatever its prompt shows.
+   */
+  private admitExact(): () => boolean {
+    const { agentIncarnation, agentSessionId } = this.host.terminalInfo;
+    return () => {
+      const terminal = this.host.terminalInfo;
+      return (
+        terminal.agentIncarnation === agentIncarnation &&
+        terminal.agentSessionId === agentSessionId &&
+        this.admitStrict(EXACT_PROMPT_GATE)
+      );
+    };
   }
 
   /**

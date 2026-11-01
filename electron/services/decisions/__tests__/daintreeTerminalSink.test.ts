@@ -10,6 +10,7 @@ import {
 } from "@daintreehq/decisions-client";
 import {
   TerminalNotifyService,
+  type LaneWake,
   type NotifyTerminalInfo,
   type TerminalNotifyPtyClient,
 } from "../../mcp-server/terminalNotify.js";
@@ -107,6 +108,8 @@ function atPrompt(settledAgoMs = 60_000): NotifyTerminalInfo {
   };
 }
 
+type Harness = ReturnType<typeof setup>;
+
 function setup() {
   const client = new FakePtyClient();
   const service = new TerminalNotifyService({
@@ -120,33 +123,39 @@ function setup() {
   });
   const scope = service.openWakeScope();
   const identity = { hostId: HOST as string | null, principal: "principal-1" as string | null };
+  const queued: LaneWake[] = [];
   const sink = new DaintreeTerminalSink({
     hostId: () => identity.hostId,
     principalFor: (paneId) => (paneId === PANE ? identity.principal : null),
     getPtyClient: () => client,
-    queueWake: (pane, projectId, wake) => scope.enqueueWake(pane, projectId, wake),
+    queueWake: (pane, projectId, wake) => {
+      queued.push(wake);
+      scope.enqueueWake(pane, projectId, wake);
+    },
   });
   client.terminals.set(PANE, atPrompt());
   client.generations.set(PANE, 7);
   const patch = (fields: Partial<NotifyTerminalInfo>) =>
     client.terminals.set(PANE, { ...client.terminals.get(PANE)!, ...fields });
-  return { client, service, scope, sink, identity, patch };
+  return { client, service, scope, sink, identity, patch, queued };
 }
 
-/** The library's notice for one answer to Q1, as `overrides` change it. */
-function notice(overrides: Partial<AnswerNoticeInput> = {}): string {
-  const block = formatAnswerNotice({
-    kind: "answer",
-    questionId: Q1,
-    alias: 1,
-    revision: 1,
-    source: "human",
-    choices: [{ id: "approve", label: "Approve" }],
-    comment: "Proceed.",
-    injectionId: I1,
-    ...overrides,
-  });
-  return batchNotices([block], Number.MAX_SAFE_INTEGER)[0];
+/** The library's notice for answers to Q1, each as its overrides change it. */
+function notice(...answers: Array<Partial<AnswerNoticeInput>>): string {
+  const blocks = (answers.length === 0 ? [{}] : answers).map((overrides) =>
+    formatAnswerNotice({
+      kind: "answer",
+      questionId: Q1,
+      alias: 1,
+      revision: 1,
+      source: "human",
+      choices: [{ id: "approve", label: "Approve" }],
+      comment: "Proceed.",
+      injectionId: I1,
+      ...overrides,
+    })
+  );
+  return batchNotices(blocks, Number.MAX_SAFE_INTEGER)[0];
 }
 
 /** Follows a promise without awaiting it, so a test can see it is still pending. */
@@ -181,42 +190,48 @@ describe("DaintreeTerminalSink", () => {
     it.each([
       [
         "relaunched, for a new ownership principal",
-        (h: ReturnType<typeof setup>) => (h.identity.principal = "principal-2"),
+        (h: Harness): void => {
+          h.identity.principal = "principal-2";
+        },
         "relaunched",
       ],
       [
         "relaunched, for a new agent incarnation",
-        (h: ReturnType<typeof setup>) => h.patch({ agentIncarnation: 1 }),
+        (h: Harness): unknown => h.patch({ agentIncarnation: 1 }),
         "relaunched",
       ],
       [
         "a generation mismatch",
-        (h: ReturnType<typeof setup>) => h.client.generations.set(PANE, 8),
+        (h: Harness): unknown => h.client.generations.set(PANE, 8),
         "generation-mismatch",
       ],
       [
         "a session mismatch",
-        (h: ReturnType<typeof setup>) => h.patch({ agentSessionId: "session-2" }),
+        (h: Harness): unknown => h.patch({ agentSessionId: "session-2" }),
         "session-mismatch",
       ],
       [
         "gone, for a pane the host no longer has",
-        (h: ReturnType<typeof setup>) => h.client.terminals.delete(PANE),
+        (h: Harness): unknown => h.client.terminals.delete(PANE),
         "gone",
       ],
       [
         "gone, for another worktree",
-        (h: ReturnType<typeof setup>) => h.patch({ worktreeId: "wt-2" }),
+        (h: Harness): unknown => h.patch({ worktreeId: "wt-2" }),
         "gone",
       ],
       [
         "host-offline, for another host's pane",
-        (h: ReturnType<typeof setup>) => (h.identity.hostId = "host-other-02"),
+        (h: Harness): void => {
+          h.identity.hostId = "host-other-02";
+        },
         "host-offline",
       ],
       [
         "host-offline, for a host that didn't answer in time",
-        (h: ReturnType<typeof setup>) => (h.client.strictReadFails = true),
+        (h: Harness): void => {
+          h.client.strictReadFails = true;
+        },
         "host-offline",
       ],
     ] as const)("reports %s", async (_label, change, state) => {
@@ -364,6 +379,77 @@ describe("DaintreeTerminalSink", () => {
         { outcome: "unavailable", reason: "rejected", detail: "invalid-notice" },
       ]);
       expect(h.service.getPaneState(PANE)).toBeNull();
+    });
+
+    it("holds overlapping answers and another target's attempt, and delivers a chunk whole", async () => {
+      const h = setup();
+      h.patch({ agentState: "working" });
+      const Q2 = "0190f0aa11112222333344445555cccc";
+      const chunk = track(
+        h.sink.inject(TARGET, notice({}, { questionId: Q2, injectionId: I2 }), I1)
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(h.sink.inject(TARGET, notice(), I1)).resolves.toEqual({
+        outcome: "held",
+        reason: "attempt-in-flight",
+      });
+      await expect(
+        h.sink.inject(
+          { ...TARGET, ownershipPrincipal: "principal-9" },
+          notice({}, { questionId: Q2, injectionId: I2 }),
+          I1
+        )
+      ).resolves.toEqual({ outcome: "held", reason: "attempt-in-flight" });
+      expect(h.queued).toHaveLength(1);
+
+      h.client.terminals.set(PANE, atPrompt());
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flushLine();
+      expect(h.client.submitted).toHaveLength(1);
+      expect(h.client.submitted[0].text.split(markerFor(I1))).toHaveLength(2);
+      expect(h.client.submitted[0].text.split(markerFor(I2))).toHaveLength(2);
+      expect(chunk.value).toMatchObject({ outcome: "delivered" });
+    });
+
+    it("joins an attempt that raced it, whatever its own read of the pane saw", async () => {
+      const h = setup();
+      h.patch({ agentState: "working" });
+      const first = track(h.sink.inject(TARGET, notice(), I1));
+      // The second's read times out after the first's has gone ahead.
+      h.client.strictReadFails = true;
+      const second = track(h.sink.inject(TARGET, notice(), I1));
+      await vi.advanceTimersByTimeAsync(0);
+      h.client.strictReadFails = false;
+      expect(second.settled).toBe(false);
+
+      h.client.terminals.set(PANE, atPrompt());
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flushLine();
+      expect(h.client.submitted).toHaveLength(1);
+      expect(first.value).toMatchObject({ outcome: "delivered" });
+      expect(second.value).toEqual(first.value);
+    });
+
+    it("routes an answer its hold let go of by the run as it is now", async () => {
+      const h = setup();
+      h.patch({ agentState: "working" });
+      const result = track(h.sink.inject(TARGET, notice(), I1));
+      await vi.advanceTimersByTimeAsync(0);
+      h.identity.principal = "principal-2";
+      h.scope.release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(result.value).toEqual({ outcome: "unavailable", reason: "relaunched" });
+      expect(h.client.submitted).toEqual([]);
+    });
+
+    it("never takes a delivered report without the write it stands on", async () => {
+      const h = setup();
+      h.patch({ agentState: "working" });
+      const result = track(h.sink.inject(TARGET, notice(), I1));
+      await vi.advanceTimersByTimeAsync(0);
+      h.queued[0].report({ kind: "delivered" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(result.value).toEqual({ outcome: "ambiguous", reason: "unproven" });
     });
 
     it("types hostile answer text as inert data", async () => {

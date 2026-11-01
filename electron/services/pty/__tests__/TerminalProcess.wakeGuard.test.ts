@@ -39,6 +39,7 @@ interface Internals {
     lastStateChange?: number;
     lastTypedInputAt?: number;
     detectedAgentId?: string;
+    agentSessionId?: string;
   };
 }
 
@@ -473,6 +474,32 @@ describe("TerminalProcess settled-prompt-exact guard (#16015)", () => {
 
     expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["a person's prompt", "\r"]);
     expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+  });
+
+  it("refuses an exact guarded submission once another run took the PTY while it waited", async () => {
+    const run = (restart: boolean) => {
+      ptyWriteMock = vi.fn<(data: string) => void>();
+      const terminal = createTerminal();
+      settleAtPrompt(terminal, Date.now() - 5_000);
+      terminal.submit("a person's prompt");
+      terminal.submit("answer", "tok-1", undefined, "settled-prompt-exact");
+      // While the answer waits in the lane, the prompt's turn ends; with a
+      // restart it ends in a new agent, settled at its own prompt.
+      if (restart) {
+        (info(terminal) as { agentIncarnation?: number }).agentIncarnation = 1;
+        info(terminal).agentSessionId = "session-2";
+      }
+      settleAtPrompt(terminal, Date.now() + 1_000);
+      return terminal;
+    };
+
+    const same = run(false);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(same.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
+
+    const restarted = run(true);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(restarted.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
   });
 
   it("types a multi-line Decisions answer as one bracketed paste and one Enter", async () => {

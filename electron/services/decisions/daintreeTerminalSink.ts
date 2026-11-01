@@ -126,10 +126,11 @@ export class DaintreeTerminalSink implements TerminalSink {
     if (early !== null) return early;
 
     const observed = await this.observe(target);
-    if (observed.state !== "alive") return { outcome: "unavailable", reason: observed.state };
-    // Another attempt may have queued these answers while the pane was read.
+    // Another attempt may have queued these answers while the pane was read,
+    // and its wake can still type them whatever this read saw.
     const raced = this.joinOrRefuse(id, target, injectionIds, answers);
     if (raced !== null) return raced;
+    if (observed.state !== "alive") return { outcome: "unavailable", reason: observed.state };
     const projectId = observed.info.projectId;
     if (projectId === undefined) return { outcome: "held", reason: "unreadable" };
 

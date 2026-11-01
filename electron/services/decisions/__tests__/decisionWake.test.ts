@@ -23,6 +23,8 @@ function sources(overrides: Partial<{ hostId: string | null; principal: string |
     principal: "principal-1" as string | null,
     liveGeneration: 7 as number | null,
     displaced: new Set<number>(),
+    /** Generations the lifecycle ledger no longer counts live, whatever `getLiveGeneration` says. */
+    notLive: new Set<number>(),
     client: true,
     ...overrides,
   };
@@ -34,7 +36,8 @@ function sources(overrides: Partial<{ hostId: string | null; principal: string |
         ? {
             getLiveGeneration: () => state.liveGeneration,
             isLiveGeneration: (_id, generation) =>
-              generation === state.liveGeneration || state.displaced.has(generation),
+              !state.notLive.has(generation) &&
+              (generation === state.liveGeneration || state.displaced.has(generation)),
           }
         : null,
   };
@@ -83,6 +86,18 @@ describe("identityMismatch", () => {
     expect(identityMismatch(value, TARGET, info === undefined ? undefined : record(info))).toBe(
       expected
     );
+  });
+
+  it("calls a relaunch a relaunch, though it changed the generation too", () => {
+    const { state, value } = sources({ principal: "principal-2" });
+    state.liveGeneration = 8;
+    expect(identityMismatch(value, TARGET, record({ launchGeneration: 8 }))).toBe("relaunched");
+  });
+
+  it("refuses the reported generation once the ledger stops counting it live", () => {
+    const { state, value } = sources();
+    state.notLive.add(7);
+    expect(identityMismatch(value, TARGET)).toBe("generation-mismatch");
   });
 
   it("refuses a generation that is not the live one, displaced spawns included", () => {

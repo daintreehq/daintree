@@ -60,15 +60,17 @@ export const MAX_DECISION_BLOCK_BYTES = 6_400;
 const MAX_NOTICE_INPUT_BYTES = 64_000;
 const TRUNCATED = " …[truncated]";
 
+/* eslint-disable no-control-regex */
 const CSI = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 const OSC = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g;
-const ESC_OTHER = /\u001b[\s\S]?/g;
-// C0 but newline, DEL, C1, zero-width and bidi controls, separators and BOM.
-// eslint-disable-next-line no-control-regex
+const ESC_OTHER = /\u001b[^\n]?/g;
+// C0 but newline, DEL, C1, zero-width and bidi controls (the Arabic letter
+// mark included), separators and BOM.
 const CONTROLS =
-  /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
+  /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
+/* eslint-enable no-control-regex */
 const DELIMITER_LIKE = /\[\s*(END\s+)?DAINTREE\s+DECISION\s+[A-Z ]+\]/gi;
-const MARKER_LIKE = /\[\s*decision-injection\b[^\]\n]*\]/gi;
+const MARKER_LIKE = /\[\s*decision-injection\b[^\]]*\]/gi;
 
 const encoder = new TextEncoder();
 const byteLength = (text: string) => encoder.encode(text).length;
@@ -91,8 +93,9 @@ export function sanitizeAnswerText(input: string, maxChars: number): string {
   return text;
 }
 
+/** Folded to one line before it is sanitised, so the fold can't rebuild a delimiter or marker. */
 function oneLine(input: string, maxChars: number): string {
-  return sanitizeAnswerText(input, maxChars).replace(/\n+/g, " ");
+  return sanitizeAnswerText(input.replace(/[\r\n\u2028\u2029]+/g, " "), maxChars);
 }
 
 /** Cut to at most `max` UTF-8 bytes without splitting a code point. */
@@ -239,7 +242,7 @@ export function decisionWakeId(blocks: readonly AnswerBlock[]): string {
   return `dec-${createHash("sha256").update(subject).digest("hex").slice(0, 60)}`;
 }
 
-function renderBlock(block: AnswerBlock, comment: string | null): string {
+function renderBlock(block: AnswerBlock): string {
   const lines = [
     DECISION_BLOCK_START,
     `question_id: ${block.questionId}${block.alias !== null ? ` (q-${block.alias})` : ""}`,
@@ -259,8 +262,8 @@ function renderBlock(block: AnswerBlock, comment: string | null): string {
     if (block.correction) lines.push(CORRECTION_NOTE);
     if (block.choice !== null) lines.push(`choice: ${block.choice}`);
     if (block.choiceLabel !== null) lines.push(`choice_label: ${block.choiceLabel}`);
-    if (comment !== null && comment.length > 0) {
-      const [first, ...rest] = comment.split("\n");
+    if (block.comment !== null && block.comment.length > 0) {
+      const [first, ...rest] = block.comment.split("\n");
       lines.push(`comment: ${first}`, ...rest.map((line) => `  ${line}`));
     }
   }
@@ -268,15 +271,26 @@ function renderBlock(block: AnswerBlock, comment: string | null): string {
   return lines.join("\n");
 }
 
-/** One block within {@link MAX_DECISION_BLOCK_BYTES}, its comment cut first and alone. */
-function boundedBlock(block: AnswerBlock): string {
-  let comment = block.comment;
-  let out = renderBlock(block, comment);
-  for (let i = 0; i < 12 && byteLength(out) > MAX_DECISION_BLOCK_BYTES && comment; i++) {
-    const over = byteLength(out) - MAX_DECISION_BLOCK_BYTES;
-    const keep = byteLength(comment) - over - byteLength(TRUNCATED) - 8;
-    comment = keep > 0 ? truncateBytes(comment, keep).trimEnd() + TRUNCATED : null;
-    out = renderBlock(block, comment);
+/** Answer text that may be cut to fit, in the order it is cut. */
+const CUTTABLE = ["comment", "choiceLabel", "choice"] as const;
+
+/**
+ * One block within {@link MAX_DECISION_BLOCK_BYTES}. Only answer text is cut,
+ * the comment first; the delimiters, ids, marker and notes always survive, and
+ * fit with room to spare once the cuttable fields are gone.
+ */
+function boundedBlock(original: AnswerBlock): string {
+  const block = { ...original };
+  let out = renderBlock(block);
+  for (const field of CUTTABLE) {
+    for (let i = 0; i < 12 && byteLength(out) > MAX_DECISION_BLOCK_BYTES; i++) {
+      const value = block[field];
+      if (value === null) break;
+      const over = byteLength(out) - MAX_DECISION_BLOCK_BYTES;
+      const keep = byteLength(value) - over - byteLength(TRUNCATED) - 8;
+      block[field] = keep > 0 ? truncateBytes(value, keep).trimEnd() + TRUNCATED : null;
+      out = renderBlock(block);
+    }
   }
   return out;
 }
