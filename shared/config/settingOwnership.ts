@@ -276,7 +276,6 @@ export const SETTING_CATALOG = {
       "daintree-canopy-scope": device,
       "daintree-canopy-all-hosts": device,
       "daintree-canopy-order": device,
-      "daintree-canopy-acknowledged": device,
       "daintree-canopy-role": device,
       "daintree-canopy-assistant-handbacks": device,
       "daintree-canopy-reading-offer-dismissed": device,

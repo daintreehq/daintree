@@ -91,6 +91,8 @@ const viewCached = vi.hoisted(() => ({ current: false }));
 vi.mock("@/lib/viewCacheState", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/viewCacheState")>()),
   isProjectViewCached: () => viewCached.current,
+  // The real one reads the module's own flag, which this mock doesn't reach.
+  isProjectViewObservable: () => !viewCached.current,
   subscribeProjectViewLifecycle: (listener: (phase: string) => void) => {
     lifecycle.add(listener);
     return () => lifecycle.delete(listener);
@@ -278,40 +280,7 @@ async function frames() {
   });
 }
 
-/** jsdom lays nothing out: rows are in view only when a test says so. */
-type FakeEntry = { target: Element; isIntersecting: boolean; intersectionRatio: number };
-type FakeObserverState = { cb: (entries: FakeEntry[]) => void; targets: Set<Element> };
-const observers = new Set<FakeObserverState>();
-class FakeIntersectionObserver {
-  private state: FakeObserverState;
-  constructor(cb: (entries: FakeEntry[]) => void) {
-    this.state = { cb, targets: new Set() };
-    observers.add(this.state);
-  }
-  observe(el: Element) {
-    this.state.targets.add(el);
-  }
-  unobserve(el: Element) {
-    this.state.targets.delete(el);
-  }
-  disconnect() {
-    observers.delete(this.state);
-  }
-}
-const realIntersectionObserver = globalThis.IntersectionObserver;
-function setInView(runId: string, ratio: number) {
-  act(() => {
-    for (const { cb, targets } of observers) {
-      const target = [...targets].find((el) => el.id === `canopy-card-${runId}`);
-      if (target) cb([{ target, isIntersecting: ratio > 0, intersectionRatio: ratio }]);
-    }
-  });
-}
-
 beforeEach(() => {
-  observers.clear();
-  window.localStorage.removeItem("daintree-canopy-acknowledged");
-  vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
   __resetCanopySeenForTests();
   __resetCanopyPlaceForTests();
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
@@ -348,7 +317,6 @@ afterEach(() => {
   window.localStorage.removeItem("daintree-canopy-order");
   window.localStorage.removeItem("daintree-canopy-reading-offer-dismissed");
   vi.useRealTimers();
-  vi.stubGlobal("IntersectionObserver", realIntersectionObserver);
   vi.clearAllMocks();
   vi.restoreAllMocks();
 });
@@ -993,16 +961,16 @@ describe("CanopyView", () => {
     expect(useCanopyStore.getState().isOpen).toBe(false);
   });
 
-  it("closes at once when it mounts in a view already in the background, acknowledging nothing", async () => {
-    installElectron({ ...canopySnapshot, cards: [stuckCard("working")] });
+  it("closes at once when it mounts in a view already in the background, looking at nothing", async () => {
+    const canopy = installElectron({ ...canopySnapshot, cards: [stuckCard("working")] });
     useCanopyStore.setState({ snapshot: { ...canopySnapshot, cards: [stuckCard("working")] } });
-    const acknowledged = useCanopyStore.getState().acknowledged;
     viewCached.current = true;
     try {
       render(<CanopyView />);
       await frames();
       expect(useCanopyStore.getState().isOpen).toBe(false);
-      expect(useCanopyStore.getState().acknowledged).toBe(acknowledged);
+      expect(canopy.markSeen).not.toHaveBeenCalledWith("working", true, "panel");
+      expect(canopy.setRead).not.toHaveBeenCalled();
     } finally {
       viewCached.current = false;
     }
@@ -2366,82 +2334,6 @@ describe("CanopyView", () => {
     await frames();
     expect(summaryWords()).toContain("Nothing needs you that Canopy could read");
     expect(bandWords()).toBe("Nothing needs you that Canopy could read");
-  });
-
-  it("counts as seen only the urgent asks it shows, not those the Unread filter hides", async () => {
-    // "working" reads as urgent, but it has nothing unread; "asking" has.
-    const snap = {
-      ...canopySnapshot,
-      cards: [stuckCard("working")],
-      reads: [unreadMark("asking", 1)],
-    };
-    useCanopyStore.setState({ snapshot: snap, unreadOnly: true, acknowledged: {} });
-    installElectron(snap);
-    render(<CanopyView />);
-    await frames();
-    expect(cards(document.body).map((card) => card.id)).not.toContain("canopy-card-working");
-    expect(useCanopyStore.getState().acknowledged.working).toBeUndefined();
-
-    act(() => useCanopyStore.getState().setUnreadOnly(false));
-    await frames();
-    // Listed now, but not looked at: its ask stays on the toolbar badge.
-    expect(useCanopyStore.getState().acknowledged.working).toBeUndefined();
-
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    setInView("working", 1);
-    act(() => void vi.advanceTimersByTime(1000));
-    expect(useCanopyStore.getState().acknowledged.working).toBe(`${NOW - 3_600_000}:2`);
-  });
-
-  it("keeps the ask of a row nobody scrolled to, and of one in view for under a second or half", async () => {
-    const snap = {
-      ...canopySnapshot,
-      cards: [stuckCard("waiting"), stuckCard("asking"), stuckCard("working")],
-    };
-    useCanopyStore.setState({ snapshot: snap, acknowledged: {} });
-    installElectron(snap);
-    render(<CanopyView />);
-    await frames();
-    // The landing selects the top row, whose pane is open: only it counts as seen.
-    expect(Object.keys(useCanopyStore.getState().acknowledged)).toEqual(["waiting"]);
-
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    setInView("working", 0.3);
-    setInView("asking", 0.6);
-    act(() => void vi.advanceTimersByTime(900));
-    setInView("asking", 0);
-    act(() => void vi.advanceTimersByTime(1000));
-    expect(Object.keys(useCanopyStore.getState().acknowledged)).toEqual(["waiting"]);
-
-    setInView("asking", 0.6);
-    act(() => void vi.advanceTimersByTime(1000));
-    expect(Object.keys(useCanopyStore.getState().acknowledged)).toEqual(["waiting", "asking"]);
-  });
-
-  it("counts the ask of a row whose pane is opened as seen, in view or not", async () => {
-    const snap = { ...canopySnapshot, cards: [stuckCard("waiting"), stuckCard("working")] };
-    useCanopyStore.setState({ snapshot: snap, acknowledged: {} });
-    installElectron(snap);
-    const { container } = render(<CanopyView />);
-    await frames();
-    const keys = () => Object.keys(useCanopyStore.getState().acknowledged);
-    expect(keys()).not.toContain("working");
-    fireEvent.click(cards(container).find((card) => card.id === "canopy-card-working")!);
-    await frames();
-    expect(keys()).toContain("working");
-  });
-
-  it("does not start the second while the window is unfocused", async () => {
-    const snap = { ...canopySnapshot, cards: [stuckCard("waiting"), stuckCard("working")] };
-    useCanopyStore.setState({ snapshot: snap, acknowledged: {} });
-    installElectron(snap);
-    render(<CanopyView />);
-    await frames();
-    vi.mocked(document.hasFocus).mockReturnValue(false);
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    setInView("working", 1);
-    act(() => void vi.advanceTimersByTime(2000));
-    expect(Object.keys(useCanopyStore.getState().acknowledged)).toEqual(["waiting"]);
   });
 
   it('withholds "Nothing needs you" while a read waits to be retried or agent status is unavailable', async () => {

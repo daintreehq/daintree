@@ -1015,7 +1015,11 @@ export class CanopyService {
     view?: { viewId: number; place: CanopyLookPlace; looking: boolean }
   ): void {
     if (this.disposed) return;
-    const entry = this.liveEntry(runId);
+    // While the fleet is unknown, the entry already held stands in for the
+    // run, so a look taken then still reads it. Only a look: a read or unread
+    // mark also moves the hand-back by run id, which may be a newer incarnation.
+    const entry =
+      this.deps.getRuns() === null ? (this.entries.get(runId) ?? null) : this.liveEntry(runId);
     if (!entry) return;
     entry.seenAt = this.now();
     if (view) this.noteLook(runId, entry, `${view.viewId}:${view.place}`, view.looking);

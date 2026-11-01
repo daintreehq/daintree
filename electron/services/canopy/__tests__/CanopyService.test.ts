@@ -4427,6 +4427,75 @@ describe("CanopyService refining attention", () => {
     );
   });
 
+  it("takes an ask out of Needs you once Canopy's panel showed it for the read dwell, not when arrowed past", async () => {
+    let now = 1_000_000;
+    const changed = vi.fn();
+    const h = await makeHarness({
+      classify: readScreen,
+      now: () => now,
+      onRefinementsChanged: changed,
+    });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "question", since: now }));
+    h.screens.set("a", ASK_SCREEN);
+    await h.service.refresh();
+    await vi.waitFor(() =>
+      expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: false })
+    );
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      // Arrowed past: the look ends short of the dwell, and nothing reads it after.
+      h.service.markSeen("a", { viewId: 1, place: "panel", looking: true });
+      now += CANOPY_READ_DWELL_MS - 1;
+      h.service.markSeen("a", { viewId: 1, place: "panel", looking: false });
+      now += CANOPY_READ_DWELL_MS;
+      vi.advanceTimersByTime(CANOPY_READ_DWELL_MS);
+      expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: false });
+
+      // Shown for the dwell, it is read then, with the panel still on it.
+      changed.mockClear();
+      h.service.markSeen("a", { viewId: 1, place: "panel", looking: true });
+      now += CANOPY_READ_DWELL_MS;
+      vi.advanceTimersByTime(CANOPY_READ_DWELL_MS);
+      expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: true });
+      vi.runOnlyPendingTimers();
+      expect(changed).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("takes a look in while the fleet is unknown, for the run it already holds", async () => {
+    let now = 1_000_000;
+    let known = true;
+    const changed = vi.fn();
+    const h = await makeHarness({
+      classify: readScreen,
+      now: () => now,
+      fleetKnown: () => known,
+      onRefinementsChanged: changed,
+    });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "question", since: now }));
+    h.screens.set("a", ASK_SCREEN);
+    await h.service.refresh();
+    await vi.waitFor(() =>
+      expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: false })
+    );
+
+    // A shard didn't answer: the fleet keeps its last rows, and the user reads the ask meanwhile.
+    known = false;
+    changed.mockClear();
+    h.service.markSeen("a", { viewId: 1, place: "pane", looking: true });
+    now += CANOPY_READ_DWELL_MS;
+    h.service.markSeen("a", { viewId: 1, place: "pane", looking: false });
+    expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: true });
+    await vi.waitFor(() => expect(changed).toHaveBeenCalled());
+
+    // A read or unread mark waits for the fleet: it moves the hand-back by run id.
+    expect(h.service.setRead("a", 1, false)).toBeNull();
+    expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: true });
+  });
+
   it("says whether the user has read the question wait it cleared, by that turn's read mark", async () => {
     const changed = vi.fn();
     const h = await makeHarness({
@@ -4482,6 +4551,21 @@ describe("CanopyService refining attention", () => {
     h.service.readerChanged();
     expect(h.service.getRefinement("a", 1)).toBeUndefined();
     await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+  });
+
+  it("gives way to the user replying from the panel to an ask not yet read", async () => {
+    const changed = vi.fn();
+    const h = await makeHarness({ classify: readScreen, onRefinementsChanged: changed });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "question" }));
+    h.screens.set("a", ASK_SCREEN);
+    await h.service.refresh();
+    await vi.waitFor(() =>
+      expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: false })
+    );
+    changed.mockClear();
+    h.service.markHandled("a", 1);
+    expect(h.service.getRefinement("a", 1)).toBeUndefined();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalled());
   });
 
   it("gives way to the user archiving the run, and comes back with an unarchive", async () => {
