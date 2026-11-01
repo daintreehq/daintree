@@ -52,6 +52,7 @@ import {
   filterSendToAgentRows,
 } from "@/components/Plugin/sendToAgentRows";
 import { pluginViewHostId } from "@/components/Plugin/remotePluginView";
+import { useRunFleetBand } from "@/hooks/useRunFleetBand";
 import {
   STATE_COLORS,
   STATE_ICONS,
@@ -790,15 +791,26 @@ function observedBadgeText(state: PluginAgentState | undefined): string | undefi
   return undefined;
 }
 
-function ObservedBadge({ state }: { state: PluginAgentState | undefined }) {
+/**
+ * The observed state, in the host picker's words. Only the waiting hue is the
+ * fleet's: a run Canopy read asking the user something they haven't seen.
+ */
+function ObservedBadge({
+  terminalId,
+  state,
+}: {
+  terminalId: string;
+  state: PluginAgentState | undefined;
+}) {
+  const band = useRunFleetBand(terminalId);
   const text = observedBadgeText(state);
   if (text === undefined) return null;
-  const waiting = state === "waiting";
+  const asking = state === "waiting" && band === "needs-you";
   return (
     <Badge
       size="xs"
       tone="outline"
-      className={cn("shrink-0", waiting ? "text-state-waiting" : "text-text-secondary")}
+      className={cn("shrink-0", asking ? "text-state-waiting" : "text-text-secondary")}
       data-state={state}
     >
       {text}
@@ -1086,7 +1098,10 @@ function KitAgentPicker(props: PluginAgentPickerProps) {
                     <span className="block truncate text-xs text-text-secondary">{detail}</span>
                   </span>
                   {row.kind === "agent" && row.pane.canDraft ? (
-                    <ObservedBadge state={row.pane.observedState} />
+                    <ObservedBadge
+                      terminalId={row.pane.terminalId}
+                      state={row.pane.observedState}
+                    />
                   ) : null}
                 </div>
               </div>

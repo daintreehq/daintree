@@ -21,6 +21,9 @@ import type { AgentState, SemanticSearchMatch } from "@shared/types";
 import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
 import { describeKeyCap } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
+import { useRunFleetBand } from "@/hooks/useRunFleetBand";
+import type { FleetBand } from "@/lib/fleetAttention";
+import { describeWaitBadge } from "./renderPaneStateBadge";
 
 export interface FleetPickerContentProps {
   /** Result of `useFleetPicker` — owned and called by the consumer. */
@@ -522,7 +525,8 @@ function TerminalRow({
   registerRow,
   testIdPrefix,
 }: TerminalRowProps): ReactElement {
-  const stateBadge = renderStateBadge(terminal.agentState);
+  const band = useRunFleetBand(terminal.id);
+  const stateBadge = renderStateBadge(terminal.agentState, band);
   const handleClick = useCallback(
     (e: React.MouseEvent) => onToggleId(terminal.id, e),
     [onToggleId, terminal.id]
@@ -628,20 +632,23 @@ function shortId(id: string): string {
  * This was a hand-rolled pill on a flat `text-text-secondary`, which rendered
  * "Waiting" and "Working" in identical grey — so the one question a fleet scan
  * is actually asking ("which of these is asking me for something?") could not
- * be answered by looking. `renderPaneStateBadge` already had the answer; the
- * picker just wasn't using it.
+ * be answered by looking. A wait takes the ribbon's words and hue from the
+ * fleet band, so only a run Canopy read asking is amber or called "Waiting".
  */
-function renderStateBadge(agentState: AgentState | undefined): ReactElement | null {
+function renderStateBadge(
+  agentState: AgentState | undefined,
+  band: FleetBand | undefined
+): ReactElement | null {
   if (agentState !== "waiting" && agentState !== "working") return null;
-  const waiting = agentState === "waiting";
+  const wait = agentState === "waiting" ? describeWaitBadge(band) : null;
   return (
     <Badge
       size="xs"
       tone="outline"
-      className={cn("shrink-0", waiting ? "text-state-waiting" : "text-text-secondary")}
+      className={cn("shrink-0", wait?.asking ? "text-state-waiting" : "text-text-secondary")}
       data-state={agentState}
     >
-      {waiting ? "Waiting" : "Working"}
+      {wait ? wait.label : "Working"}
     </Badge>
   );
 }

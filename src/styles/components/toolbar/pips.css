@@ -26,8 +26,8 @@
  *
  * Precedence is component logic, not cascade order: each button renders at
  * most one corner mark. Within ToolbarAssistantButton.tsx the MCP health mark
- * wins over the agent mark (`failed` > `starting` > working / directing /
- * waiting). MCP audit anomalies deliberately get no pip: they are
+ * wins over the agent mark (`failed` > `starting` > unread / working /
+ * directing). MCP audit anomalies deliberately get no pip: they are
  * process-global diagnostics with nothing to act on (#12509).
  *
  * A mark stands in for a surface that is shut. While the surface it reports on

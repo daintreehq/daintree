@@ -84,6 +84,31 @@ export function fleetBandRunKey(
   return key;
 }
 
+/** The one band amber stands for: a Canopy reading of an ask the user hasn't seen. */
+export const NEEDS_YOU_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>(["needs-you"]);
+
+const bandIndexCache = new WeakMap<FleetSnapshot, Map<string, FleetBand>>();
+
+/**
+ * One run's band (`runId` is the terminal id). Undefined until the snapshot
+ * arrives and for a run it doesn't hold: without the fleet's park, hand-back
+ * and Canopy facts nothing can be placed, and a guess from the panel would
+ * read every prompt as a question.
+ */
+export function fleetBandForRun(
+  snapshot: FleetSnapshot | null,
+  runId: string
+): FleetBand | undefined {
+  if (snapshot === null) return undefined;
+  let index = bandIndexCache.get(snapshot);
+  if (index === undefined) {
+    index = new Map();
+    for (const run of snapshot.runs) index.set(run.runId, bandForRun(run));
+    bandIndexCache.set(snapshot, index);
+  }
+  return index.get(runId);
+}
+
 /**
  * The band's own name for what the run is doing.
  *
