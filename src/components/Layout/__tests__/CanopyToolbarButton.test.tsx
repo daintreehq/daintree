@@ -149,10 +149,11 @@ describe("CanopyToolbarButton", () => {
   it("counts by the fleet's reading, whatever priority Canopy's cards rank the runs at", async () => {
     const card = (runId: string, priority: number) =>
       ({ runId, spawnedAt: 1, revision: 1, priority, handledAt: null }) as CanopyCard;
-    setFleet([asking("r1"), run("r2", { agentState: "working" })]);
-    expect(await pip(true, [card("r1", 60), card("r2", 95)])).toMatchObject({
-      label: "Canopy — 1 urgent",
-      glyph: "1",
+    setFleet([asking("r1"), asking("r2"), run("r3", { agentState: "working" })]);
+    // By priority this is one run; by cards, three.
+    expect(await pip(true, [card("r1", 60), card("r2", 60), card("r3", 95)])).toMatchObject({
+      label: "Canopy — 2 urgent",
+      glyph: "2",
     });
   });
 
@@ -191,8 +192,8 @@ describe("CanopyToolbarButton", () => {
 
   it("stays dark for an asking run that is parked or snoozed", async () => {
     setFleet([
-      asking("r1", false, { snooze: {} as never }),
-      asking("r2", false, { park: {} as never }),
+      asking("r1", false, { snooze: { snoozedAt: 1 } }),
+      asking("r2", false, { park: { parkedAt: 1 } }),
     ]);
     expect(await pip()).toMatchObject({ label: "Canopy", visible: "false" });
   });

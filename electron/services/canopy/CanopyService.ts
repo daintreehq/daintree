@@ -1022,9 +1022,19 @@ export class CanopyService {
     if (this.active) this.scheduleBroadcast();
   }
 
-  /** The entry for the incarnation of the run the fleet shows now, made if it has none; null when it shows none. */
+  /**
+   * The entry for the incarnation of the run the fleet shows now, made if it
+   * has none; null when it shows none. While the fleet is unknown, the entry
+   * already held stands in for it: a look or a mark the user makes then still
+   * lands, and nothing new is made.
+   */
   private liveEntry(runId: string, spawnedAt?: number): RunEntry | null {
-    const run = this.deps.getRuns()?.find((candidate) => candidate.runId === runId);
+    const runs = this.deps.getRuns();
+    if (runs === null) {
+      const held = this.entries.get(runId);
+      return held && (spawnedAt === undefined || held.spawnedAt === spawnedAt) ? held : null;
+    }
+    const run = runs.find((candidate) => candidate.runId === runId);
     if (!run || (spawnedAt !== undefined && run.spawnedAt !== spawnedAt)) return null;
     let entry = this.entries.get(runId);
     if (!entry || entry.spawnedAt !== run.spawnedAt) {
