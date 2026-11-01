@@ -1035,7 +1035,11 @@ export class ProjectStore {
     if ("groupId" in updates) set.groupId = updates.groupId ?? null;
 
     if (Object.keys(set).length > 0) {
-      const updated = db.update(projectsTable).set(set).where(eq(projectsTable.id, projectId)).run();
+      const updated = db
+        .update(projectsTable)
+        .set(set)
+        .where(eq(projectsTable.id, projectId))
+        .run();
       if (updated.changes > 0 && ("path" in set || "name" in set || "gitBacked" in set)) {
         this.notifyRegistryListeners();
       }

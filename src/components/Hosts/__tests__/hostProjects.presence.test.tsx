@@ -133,9 +133,12 @@ describe("useProjectPresence", () => {
   });
 
   it("asks every host for a new project and never shows the last one's answers for it", async () => {
-    const { result, rerender } = renderHook(({ projectId }) => useProjectPresence(projectId, ["a"]), {
-      initialProps: { projectId: "p" },
-    });
+    const { result, rerender } = renderHook(
+      ({ projectId }) => useProjectPresence(projectId, ["a"]),
+      {
+        initialProps: { projectId: "p" },
+      }
+    );
     rerender({ projectId: "q" });
     expect(locate.mock.calls.map(([payload]) => payload.projectId)).toEqual(["p", "q"]);
 
