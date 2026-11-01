@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 vi.mock("electron", () => ({
-  app: { quit: vi.fn() },
+  app: { quit: vi.fn(), emit: vi.fn() },
   BrowserWindow: { getAllWindows: vi.fn(() => []) },
 }));
 
@@ -19,6 +19,7 @@ vi.mock("../../utils/systemMemory.js", () => ({
 
 vi.mock("../../utils/logger.js", () => ({ logError: vi.fn(), logWarn: vi.fn() }));
 
+import { app } from "electron";
 import { notifyError } from "../../ipc/errorHandlers.js";
 import { logError, logWarn } from "../../utils/logger.js";
 import { attachAppViewRendererGoneHandler } from "../appViewRendererGone.js";
@@ -312,6 +313,27 @@ describe("app-view render-process-gone (#12954)", () => {
     expect(prepareWindowRecreation).toHaveBeenCalledTimes(1);
     expect(recreateWindow).toHaveBeenCalledTimes(1);
     expect(isWindowRecreating()).toBe(false);
+  });
+
+  it("replays the last window closing when the rebuild fails, so the lifetime rules still decide", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux" });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const recreateWindow = vi.fn(() => Promise.reject(new Error("no window")));
+      const { crash } = createHarness({ recreateWindow });
+
+      crash("oom");
+      await vi.runAllTimersAsync();
+
+      // A process kept up with no window (an OS launch, an open scheduled run)
+      // stays up; anything else quits through that same handler.
+      expect(app.emit).toHaveBeenCalledExactlyOnceWith("window-all-closed");
+      expect(app.quit).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
   });
 
   it("prepares the recreation at the crash, before the window is destroyed (#15564)", async () => {

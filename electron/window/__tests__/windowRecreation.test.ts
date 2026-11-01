@@ -4,7 +4,7 @@ import type { OpenWindowRecord } from "../../services/persistence/windowManifest
 const writeOpenWindowsManifest = vi.fn<(records: OpenWindowRecord[]) => void>();
 
 vi.mock("electron", () => ({
-  app: { quit: vi.fn() },
+  app: { quit: vi.fn(), emit: vi.fn() },
   BrowserWindow: { getAllWindows: vi.fn(() => []) },
 }));
 

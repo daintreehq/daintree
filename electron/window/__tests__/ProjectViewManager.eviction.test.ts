@@ -68,6 +68,7 @@ vi.mock("electron", () => {
       commandLine: { appendSwitch: vi.fn() },
       getAppMetrics: () => mockGetAppMetrics(),
       quit: vi.fn(),
+      emit: vi.fn(),
     },
     // Read after an OOM rebuild settles, to replay a quit the destroy swallowed.
     BrowserWindow: Object.assign(vi.fn(), { getAllWindows: vi.fn(() => []) }),

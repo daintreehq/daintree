@@ -65,6 +65,7 @@ import {
   hasOpenScheduledRun,
   onScheduledRunClosed,
   startScheduledRunFacts,
+  whenScheduledRunNotificationsSent,
   type ScheduledRunFactSource,
 } from "../index.js";
 
@@ -241,6 +242,13 @@ describe("scheduled-run history wiring", () => {
     expect(closed).toHaveBeenCalledTimes(2);
 
     stopListening();
+    recorder.registerLaunch({
+      ...launch,
+      id: "run-3",
+      scheduleId: "schedule-3",
+      terminalId: "terminal-3",
+    });
+    recorder.settle("run-3", { kind: "cancel" });
     recorder.deleteForSchedule("schedule-2");
     expect(closed).toHaveBeenCalledTimes(2);
   });
@@ -331,6 +339,32 @@ describe("scheduled-run history wiring", () => {
       ["run-2", { kind: "exited", process: "pty", exitCode: 2 }],
       ["run-3", { kind: "launch-failed" }],
     ]);
+  });
+
+  it("tells a quit when the notifications already set off have gone out", async () => {
+    await expect(whenScheduledRunNotificationsSent()).resolves.toBeUndefined();
+    let delivered!: () => void;
+    notifier.notify.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (delivered = resolve))
+    );
+    const recorder = (await getScheduledRunRecorder())!;
+    recorder.registerRefusedLaunch({
+      id: "run-3",
+      scheduleId: "schedule-1",
+      projectId: "project-1",
+      origin: launch.origin,
+      terminalId: "terminal-3",
+      message: "The project's folder is missing.",
+    });
+
+    let sent = false;
+    void whenScheduledRunNotificationsSent().then(() => (sent = true));
+    await vi.waitFor(() => expect(notifier.notify).toHaveBeenCalledOnce());
+    await Promise.resolve();
+    expect(sent).toBe(false);
+
+    delivered();
+    await vi.waitFor(() => expect(sent).toBe(true));
   });
 
   it("settles a run lost when its pty-host dies with its incarnation", async () => {

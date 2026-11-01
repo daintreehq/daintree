@@ -93,7 +93,11 @@ import { distributePortsToView, getRemoteViewHooks } from "./window/portDistribu
 import { findOtherProjectOwner, type ProjectOwner } from "./window/projectOwnership.js";
 import { openFolderInNewWindow } from "./window/newWindowOpen.js";
 import { setScheduledRunWindowOpener } from "./window/scheduledRunNotificationNavigation.js";
-import { hasOpenScheduledRun, onScheduledRunClosed } from "./services/scheduledRuns/index.js";
+import {
+  hasOpenScheduledRun,
+  onScheduledRunClosed,
+  whenScheduledRunNotificationsSent,
+} from "./services/scheduledRuns/index.js";
 import { deliverOpenSystemMemoryPressure } from "./window/systemMemoryPressureDelivery.js";
 import { toDisposable } from "./utils/lifecycle.js";
 import {
@@ -1263,7 +1267,11 @@ if (!gotTheLock) {
           console.error("[MAIN] Couldn't check due schedules:", error);
         });
     },
-    scheduledRuns: { hasOpen: hasOpenScheduledRun, onClosed: onScheduledRunClosed },
+    scheduledRuns: {
+      hasOpen: hasOpenScheduledRun,
+      onClosed: onScheduledRunClosed,
+      notified: whenScheduledRunNotificationsSent,
+    },
   });
 
   setAttachedShellsProvider(() => getRemoteService("hostMode")?.getAttachedClients() ?? []);

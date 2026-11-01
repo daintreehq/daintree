@@ -164,15 +164,17 @@ export function attachAppViewRendererGoneHandler(opts: AppViewRendererGoneOption
               endWindowRecreating();
               // The suppressed `window-all-closed` event must be replayed if
               // the recreation failed — otherwise on non-darwin the process
-              // hangs headless with no windows and no quit path. Skip when
-              // another OOM recreate is still in flight or any window remains
-              // (the natural `window-all-closed` path will cover those cases).
+              // hangs headless with no windows and no quit path. Replayed, not
+              // a bare quit, so a process that stays up without windows (an
+              // OS launch, a scheduled run still open) does. Skip when another
+              // OOM recreate is still in flight or any window remains (the
+              // natural `window-all-closed` path will cover those cases).
               if (
                 !isWindowRecreating() &&
                 process.platform !== "darwin" &&
                 BrowserWindow.getAllWindows().length === 0
               ) {
-                app.quit();
+                app.emit("window-all-closed");
               }
             });
         });

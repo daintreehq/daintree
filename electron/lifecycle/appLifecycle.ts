@@ -20,6 +20,9 @@ import { isHostModeRequested } from "../boot/hostModeLaunch.js";
 import { isDueScheduleCheckRequested } from "../boot/dueScheduleLaunch.js";
 
 const DISABLE_GPU_CRASH_LIMIT_SWITCH = "disable-gpu-process-crash-limit";
+// How long a quit after the last open scheduled run waits for that run's
+// notification to go out: shutdown discards one still loading.
+const RUN_NOTIFICATION_WAIT_MS = 10_000;
 const SIGNAL_ECHO_WINDOW_MS = 100;
 
 const CLI_PATH_FLAG = "--cli-path";
@@ -292,6 +295,8 @@ export interface AppLifecycleOptions {
     hasOpen: () => boolean;
     /** Calls back as runs end or are deleted, until the returned function is called. */
     onClosed: (listener: () => void) => () => void;
+    /** Settles once the notifications runs that already ended set off have gone out. */
+    notified: () => Promise<void>;
   };
 }
 
@@ -446,22 +451,41 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
     stopWaitingOnRuns = null;
     stop?.();
   };
+  // Whether the wait is still on with nothing left to wait for. Something
+  // that now keeps the process up, or a quit already under way, ends it.
+  const runsLetQuit = (): boolean => {
+    if (!stopWaitingOnRuns) return false;
+    if (getActiveShutdown() !== null || opts.keepsRunningWithoutWindows?.()) {
+      endWaitOnRuns();
+      return false;
+    }
+    return !isWindowRecreating() && !opts.scheduledRuns?.hasOpen();
+  };
+  const runNotificationsSent = (): Promise<void> =>
+    new Promise((resolve) => {
+      const timer = setTimeout(resolve, RUN_NOTIFICATION_WAIT_MS);
+      void Promise.resolve(opts.scheduledRuns?.notified())
+        .catch(() => {})
+        .then(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+    });
   const recheckRuns = (): void => {
-    // A run ending is heard mid-settlement: its other listeners (the
-    // needs-you notification among them) run first.
+    // A run ending is heard mid-settlement, before its notification is
+    // even set off; the check waits for the rest of it.
     if (runsRecheckQueued) return;
     runsRecheckQueued = true;
     setImmediate(() => {
       runsRecheckQueued = false;
-      if (!stopWaitingOnRuns) return;
-      if (getActiveShutdown() !== null || opts.keepsRunningWithoutWindows?.()) {
+      if (!runsLetQuit()) return;
+      void runNotificationsSent().then(() => {
+        // A window, a new run or a quit may have come meanwhile.
+        if (!runsLetQuit()) return;
         endWaitOnRuns();
-        return;
-      }
-      if (isWindowRecreating() || opts.scheduledRuns?.hasOpen()) return;
-      endWaitOnRuns();
-      console.log("[MAIN] The last open scheduled run ended with no window open. Quitting...");
-      app.quit();
+        console.log("[MAIN] The last open scheduled run ended with no window open. Quitting...");
+        app.quit();
+      });
     });
   };
   const waitOnRuns = (runs: NonNullable<AppLifecycleOptions["scheduledRuns"]>): void => {

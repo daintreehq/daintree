@@ -1093,6 +1093,7 @@ describe("registerAppLifecycleHandlers – a last window closed with scheduled r
         onClosed = listener;
         return stopFollowing;
       }),
+      notified: vi.fn(() => Promise.resolve()),
     };
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     const opts = makeOpts({ scheduledRuns, ...overrides });
@@ -1145,6 +1146,56 @@ describe("registerAppLifecycleHandlers – a last window closed with scheduled r
       expect(stopFollowing).toHaveBeenCalledOnce();
     }
   );
+
+  it("lets the last run's notification go out before it quits", async () => {
+    const { scheduledRuns, setOpen, runClosed, closeLastWindow } = await register("win32");
+    let sent!: () => void;
+    scheduledRuns.notified.mockReturnValue(new Promise<void>((resolve) => (sent = resolve)));
+    closeLastWindow();
+
+    setOpen(false);
+    runClosed();
+    await nextTurn();
+    expect(appMock.quit).not.toHaveBeenCalled();
+
+    sent();
+    await nextTurn();
+    expect(appMock.quit).toHaveBeenCalledOnce();
+  });
+
+  it("doesn't quit after the notification if a window opened meanwhile", async () => {
+    const { scheduledRuns, setOpen, runClosed, closeLastWindow } = await register("linux");
+    let sent!: () => void;
+    scheduledRuns.notified.mockReturnValue(new Promise<void>((resolve) => (sent = resolve)));
+    closeLastWindow();
+    setOpen(false);
+    runClosed();
+    await nextTurn();
+
+    announceWindow();
+    sent();
+    await nextTurn();
+
+    expect(appMock.quit).not.toHaveBeenCalled();
+  });
+
+  it("waits ten seconds at most for a notification that never goes out", async () => {
+    vi.useFakeTimers();
+    try {
+      const { scheduledRuns, setOpen, runClosed, closeLastWindow } = await register("linux");
+      scheduledRuns.notified.mockReturnValue(new Promise<void>(() => {}));
+      closeLastWindow();
+      setOpen(false);
+      runClosed();
+
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(appMock.quit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(appMock.quit).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("quits at once, as before, when no run is open", async () => {
     const { scheduledRuns, setOpen, closeLastWindow } = await register("linux");
@@ -1257,6 +1308,20 @@ describe("registerAppLifecycleHandlers – a last window closed with scheduled r
       const handle = registerAppLifecycleHandlers(
         makeOpts({ keepsRunningWithoutWindows: () => true })
       );
+
+      handle.onStartedWindowless();
+      handlerFor<() => void>("window-all-closed")();
+
+      expect(baseWindowMock.BaseWindow).not.toHaveBeenCalled();
+    });
+
+    it("never stands in once a quit has begun", async () => {
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      Object.defineProperty(process, "platform", { value: "win32" });
+      const handle = registerAppLifecycleHandlers(
+        makeOpts({ keepsRunningWithoutWindows: () => true })
+      );
+      getActiveShutdownMock.mockReturnValue({ phase: "cleaning" });
 
       handle.onStartedWindowless();
       handlerFor<() => void>("window-all-closed")();

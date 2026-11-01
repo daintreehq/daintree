@@ -488,7 +488,10 @@ describe("ScheduledRunRecorder", () => {
     recorder.settle("run-1", { kind: "cancel" });
     expect(recorder.hasAnyOpenRun()).toBe(true);
 
-    recorder.settle("run-2", { kind: "cancel" });
+    // Settled while its terminal runs on: still live, no longer open.
+    recorder.handleSpawnResult("terminal-2", { success: true, spawnedAt: SPAWNED_AT });
+    recorder.settle("run-2", { kind: "handback", report: "done", summary: null, truncated: false });
+    expect(recorder.get("run-2")?.process.pty).toMatchObject({ state: "running" });
     expect(recorder.hasAnyOpenRun()).toBe(false);
   });
 
