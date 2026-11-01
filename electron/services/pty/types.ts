@@ -304,7 +304,9 @@ export interface PtyManagerEvents {
     exitCode: number,
     signal?: number,
     launchGeneration?: number,
-    preserveSession?: boolean
+    preserveSession?: boolean,
+    /** The exiting incarnation's `TerminalInfo.spawnedAt`. */
+    spawnedAt?: number
   ) => void;
   error: (id: string, error: string) => void;
   "resize-result": (id: string, result: TerminalResizeResult) => void;

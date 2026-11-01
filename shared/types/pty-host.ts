@@ -707,6 +707,7 @@ export type PtyHostEvent =
     }
   // `launchGeneration` attributes the exit to one terminal incarnation so a
   // stale exit arriving after a same-id respawn can't close the successor.
+  // `spawnedAt` names that incarnation as session records do (#15976).
   // `preserveSession` marks an exit a session-preserving project teardown
   // caused, so the renderer keeps the pane in the layout (#13841).
   | {
@@ -715,6 +716,7 @@ export type PtyHostEvent =
       exitCode: number;
       signal?: number;
       launchGeneration?: number;
+      spawnedAt?: number;
       preserveSession?: boolean;
     }
   | { type: "error"; id: string; error: string }
@@ -1345,6 +1347,11 @@ export interface SpawnResult {
    * spawn entry or mis-record its ledger resolution.
    */
   launchGeneration?: number;
+  /**
+   * A successful spawn's start time, `TerminalInfo.spawnedAt`: with the id it
+   * names the incarnation, as session records and exits do.
+   */
+  spawnedAt?: number;
   error?: SpawnError;
 }
 

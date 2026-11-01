@@ -349,6 +349,37 @@ describe("PtyClient lifecycle ledger", () => {
     expect(client.recentExits.find("t1", 2)?.exitCode).toBe(3);
   });
 
+  it("reports every incarnation's exit by its spawn time, a superseded one's included (#15976)", () => {
+    const client = createReadyClient();
+    const facts = vi.fn();
+    client.on("incarnation-exit", facts);
+
+    client.spawn("t1", baseOptions);
+    client.kill("t1");
+    client.spawn("t1", baseOptions);
+    mockChild.emit("message", {
+      type: "exit",
+      id: "t1",
+      exitCode: 0,
+      signal: 15,
+      launchGeneration: 1,
+      spawnedAt: 1_000,
+    });
+    mockChild.emit("message", {
+      type: "exit",
+      id: "t1",
+      exitCode: 2,
+      signal: 0,
+      launchGeneration: 2,
+      spawnedAt: 2_000,
+    });
+
+    expect(facts.mock.calls).toEqual([
+      [{ terminalId: "t1", spawnedAt: 1_000, exitCode: 0, signal: 15 }],
+      [{ terminalId: "t1", spawnedAt: 2_000, exitCode: 2, signal: 0 }],
+    ]);
+  });
+
   it("asks the host to end one incarnation's trash grace and answers what it did (#15728)", async () => {
     const client = createReadyClient();
     client.spawn("t1", baseOptions);

@@ -594,7 +594,8 @@ export class PtyManager extends EventEmitter {
               exitCode,
               signal,
               options.launchGeneration,
-              this.sessionPreservingTeardowns.has(terminalProcess) || undefined
+              this.sessionPreservingTeardowns.has(terminalProcess) || undefined,
+              terminalProcess.getInfo().spawnedAt
             );
             if (!terminalProcess.shouldPreserveOnExit(exitCode)) {
               this.registry.delete(termId);

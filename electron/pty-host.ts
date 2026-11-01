@@ -941,7 +941,8 @@ ptyManager.on(
     exitCode: number,
     signal?: number,
     launchGeneration?: number,
-    preserveSession?: boolean
+    preserveSession?: boolean,
+    spawnedAt?: number
   ) => {
     // Release all pause holds and remove coordinator for this terminal
     const coordinator = pauseCoordinators.get(id);
@@ -1002,6 +1003,7 @@ ptyManager.on(
       exitCode,
       signal,
       launchGeneration,
+      ...(spawnedAt !== undefined && { spawnedAt }),
       ...(preserveSession && { preserveSession }),
     });
   }

@@ -75,6 +75,7 @@ import { buildForgeAuditPreloadBindings } from "./ipc/handlers/forgeAudit.preloa
 import { buildProjectGroupsPreloadBindings } from "./ipc/handlers/projectGroups.preload.js";
 import { buildRunHistoryPreloadBindings } from "./ipc/handlers/runHistory.preload.js";
 import { buildCopyTreeHistoryPreloadBindings } from "./ipc/handlers/copyTreeHistory.preload.js";
+import { buildScheduledRunsPreloadBindings } from "./ipc/handlers/scheduledRuns.preload.js";
 import { buildGeminiPreloadBindings } from "./ipc/handlers/gemini.preload.js";
 import { buildCodexPreloadBindings } from "./ipc/handlers/codex.preload.js";
 import { buildClaudePreloadBindings } from "./ipc/handlers/claude.preload.js";
@@ -3092,6 +3093,7 @@ function buildElectronApi(): ElectronAPI {
     projectGroups: buildProjectGroupsPreloadBindings(_unwrappingInvoke),
     runHistory: buildRunHistoryPreloadBindings(_unwrappingInvoke),
     copyTreeHistory: buildCopyTreeHistoryPreloadBindings(_unwrappingInvoke),
+    scheduledRuns: buildScheduledRunsPreloadBindings(_unwrappingInvoke),
 
     // Voice Input API
     voiceInput: {

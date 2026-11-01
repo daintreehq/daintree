@@ -151,6 +151,11 @@ export const ScheduledRunEvidenceSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("replace"), replacedByRunId: IdSchema }),
   /** The PTY host confirmed the run's terminal is gone, with no exit seen (a crash). */
   z.strictObject({ kind: z.literal("lost") }),
+  /**
+   * Daintree quit or crashed while the run was open; settled at the next
+   * startup. A quit's own terminal kills are never read as the run's exit.
+   */
+  z.strictObject({ kind: z.literal("interrupted") }),
 ]);
 
 export const SCHEDULED_RUN_OUTCOMES = [
@@ -162,6 +167,7 @@ export const SCHEDULED_RUN_OUTCOMES = [
   "cancelled",
   "replaced",
   "lost",
+  "interrupted",
 ] as const;
 
 /**
@@ -225,6 +231,12 @@ export const ScheduledRunSchema = z
      * run skipped before one was reserved keeps null.
      */
     terminalId: IdSchema.nullable(),
+    /**
+     * The spawn incarnation of `terminalId` the run was matched to, the PTY
+     * host's `spawnedAt`; null until the terminal first spawns. A restart under
+     * the same id is a different incarnation, so its facts aren't this run's.
+     */
+    terminalSpawnedAt: EpochMsSchema.nullable(),
     settlement: ScheduledRunSettlementSchema,
     process: z.strictObject({
       /** The agent CLI, which can exit and leave its shell running. */
@@ -312,6 +324,13 @@ export const ScheduledRunSchema = z
           });
         }
       }
+    }
+    if (run.terminalSpawnedAt !== null && run.terminalId === null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["terminalSpawnedAt"],
+        message: "an incarnation needs its terminal id",
+      });
     }
     if (run.pane.state !== "none" && run.terminalId === null) {
       ctx.addIssue({

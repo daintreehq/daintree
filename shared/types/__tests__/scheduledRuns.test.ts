@@ -31,6 +31,7 @@ function registered(overrides: Partial<ScheduledRun> = {}): ScheduledRun {
     },
     createdAt: NOW,
     terminalId: null,
+    terminalSpawnedAt: null,
     settlement: { state: "open" },
     process: { agent: { state: "not-started" }, pty: { state: "not-started" } },
     pane: { state: "none" },
@@ -302,6 +303,13 @@ describe("ScheduledRunSchema", () => {
         },
       })
     ).toContain("only an occurrence can be missed");
+  });
+
+  it("needs a terminal id for a matched incarnation", () => {
+    expect(issues(registered({ terminalSpawnedAt: NOW }))).toContain(
+      "an incarnation needs its terminal id"
+    );
+    expect(issues(registered({ terminalId: "terminal-1", terminalSpawnedAt: NOW }))).toEqual([]);
   });
 
   it("needs a terminal id once there's a pane", () => {

@@ -166,6 +166,16 @@ const CREATE_TABLES_SQL = `
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS scheduled_runs (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    schedule_id TEXT NOT NULL,
+    occurrence_key TEXT,
+    terminal_id TEXT,
+    live INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    record TEXT NOT NULL
+  );
 `;
 
 let sqlite: Database.Database;
@@ -1705,6 +1715,20 @@ describe("ProjectStore.onProjectRegistryChanged", () => {
 
     await store.removeProject(beta.id);
     expect(heard).toHaveBeenCalledTimes(2);
+  });
+
+  it("removes a project's scheduled-run history with it, and only its own", async () => {
+    const beta = await store.addProject(betaDir);
+    const insertRun = sqlite.prepare(
+      "INSERT INTO scheduled_runs (id, project_id, schedule_id, live, created_at, record) VALUES (?, ?, 'schedule', 0, 0, '{}')"
+    );
+    insertRun.run("beta-run", beta.id);
+    insertRun.run("alpha-run", alphaId);
+
+    await store.removeProject(beta.id);
+
+    const left = sqlite.prepare("SELECT id FROM scheduled_runs").pluck().all();
+    expect(left).toEqual(["alpha-run"]);
   });
 
   it("fires for a change to where a project is or what it is called, never for its status or ranking", () => {

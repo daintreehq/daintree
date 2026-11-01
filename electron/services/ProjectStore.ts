@@ -966,7 +966,16 @@ export class ProjectStore {
     const project = this.getProjectById(projectId);
 
     const db = getSharedDb();
-    const removed = db.delete(projectsTable).where(eq(projectsTable.id, projectId)).run();
+    // A project's schedules live in its state directory, removed below, so the
+    // history of their runs goes with the project row.
+    const removed = db.transaction(
+      (tx) => {
+        const result = tx.delete(projectsTable).where(eq(projectsTable.id, projectId)).run();
+        tx.run(sql`DELETE FROM scheduled_runs WHERE project_id = ${projectId}`);
+        return result;
+      },
+      { behavior: "immediate" }
+    );
     if (removed.changes > 0) this.notifyRegistryListeners();
 
     if (project) {

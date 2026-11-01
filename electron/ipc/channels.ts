@@ -1151,6 +1151,11 @@ export const CHANNELS = {
   // where it completes, so there is no append channel to forge entries through.
   COPY_TREE_HISTORY_GET_RECORDS: "copy-tree-history:get-records",
 
+  // Scheduled-run history (#15976). Read-only: main registers runs and records
+  // the facts on them.
+  SCHEDULED_RUNS_LIST_BY_PROJECT: "scheduled-runs:list-by-project",
+  SCHEDULED_RUNS_LIST_BY_SCHEDULE: "scheduled-runs:list-by-schedule",
+
   // Plugin channels
   PLUGIN_LIST: "plugin:list",
   PLUGIN_INSTALL: "plugin:install",

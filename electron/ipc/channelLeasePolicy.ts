@@ -145,6 +145,8 @@ export const CHANNEL_LEASE_POLICY = {
   "connectivity:get-state": "free",
   "connectivity:service-changed": "free",
   "copy-tree-history:get-records": "free",
+  "scheduled-runs:list-by-project": "free",
+  "scheduled-runs:list-by-schedule": "free",
   "copytree:available": "free",
   "copytree:cancel": "free",
   "copytree:generate": "free",

@@ -105,6 +105,8 @@ export function outcomeForEvidence(evidence: ScheduledRunEvidence): ScheduledRun
       return "replaced";
     case "lost":
       return "lost";
+    case "interrupted":
+      return "interrupted";
   }
 }
 

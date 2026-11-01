@@ -325,22 +325,29 @@ describe("routeHostEvent", () => {
     emitter.on("exit", onExit);
     deps.callbacks.onTerminalExit = recordExit;
 
-    routeHostEvent({ type: "exit", id: "t1", exitCode: 0, launchGeneration: 1 }, deps);
+    routeHostEvent(
+      { type: "exit", id: "t1", exitCode: 0, launchGeneration: 1, spawnedAt: 100 },
+      deps
+    );
 
     expect(state.pendingSpawns.get("t1")).toBe(successor);
     expect(state.terminalPids.get("t1")).toBe(999);
     expect(state.pendingKillCount.has("t1")).toBe(false);
     expect(callbacks.trashIdsRemoved).toEqual([]);
     expect(onExit).not.toHaveBeenCalled();
-    expect(recordExit).toHaveBeenCalledExactlyOnceWith("t1", 0, 1, undefined);
+    // The superseded incarnation's exit still reaches main, named by its spawn time.
+    expect(recordExit).toHaveBeenCalledExactlyOnceWith("t1", 0, 1, undefined, 100);
 
-    routeHostEvent({ type: "exit", id: "t1", exitCode: 0, signal: 9, launchGeneration: 2 }, deps);
+    routeHostEvent(
+      { type: "exit", id: "t1", exitCode: 0, signal: 9, launchGeneration: 2, spawnedAt: 200 },
+      deps
+    );
 
     expect(state.pendingSpawns.has("t1")).toBe(false);
     expect(state.terminalPids.has("t1")).toBe(false);
     expect(callbacks.trashIdsRemoved).toEqual(["t1"]);
     expect(onExit).toHaveBeenCalledExactlyOnceWith("t1", 0, 9, undefined);
-    expect(recordExit).toHaveBeenLastCalledWith("t1", 0, 2, 9);
+    expect(recordExit).toHaveBeenLastCalledWith("t1", 0, 2, 9, 200);
   });
 
   it("removes the pendingKillCount entry once it reaches zero", () => {
