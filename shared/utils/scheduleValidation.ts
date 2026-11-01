@@ -19,7 +19,11 @@ export function scheduleIssues(candidate: Schedule): ScheduleIssue[] {
   if (result.success) return [];
   return result.error.issues.map((issue) => {
     const path = issue.path.map(String).join(".");
-    return { path, cronField: path === "cadence.cron" ? cronFieldOf(candidate) : null, message: issue.message };
+    return {
+      path,
+      cronField: path === "cadence.cron" ? cronFieldOf(candidate) : null,
+      message: issue.message,
+    };
   });
 }
 

@@ -54,7 +54,9 @@ export class ScheduleStore {
   }
 
   list(projectId: string): Promise<SchedulesSnapshot> {
-    return this.enqueue(projectId, async () => this.snapshot(projectId, await this.read(projectId)));
+    return this.enqueue(projectId, async () =>
+      this.snapshot(projectId, await this.read(projectId))
+    );
   }
 
   async get(projectId: string, scheduleId: string): Promise<Schedule | null> {
@@ -92,7 +94,11 @@ export class ScheduleStore {
       const existing = current[index];
       if (!existing) return { status: "not-found", snapshot: this.snapshot(projectId, current) };
       if (existing.updatedAt !== expectedUpdatedAt) {
-        return { status: "conflict", schedule: existing, snapshot: this.snapshot(projectId, current) };
+        return {
+          status: "conflict",
+          schedule: existing,
+          snapshot: this.snapshot(projectId, current),
+        };
       }
       const schedule: Schedule = {
         ...existing,
@@ -224,7 +230,9 @@ export class ScheduleStore {
       decoded.reason === "future-version"
         ? `${filePath}.future-v${decoded.onDiskVersion}`
         : `${filePath}.corrupted.${this.now()}`;
-    const target = existsSync(quarantinePath) ? `${quarantinePath}.${randomUUID()}` : quarantinePath;
+    const target = existsSync(quarantinePath)
+      ? `${quarantinePath}.${randomUUID()}`
+      : quarantinePath;
     try {
       await resilientRename(filePath, target);
     } catch (error) {
@@ -242,7 +250,10 @@ export class ScheduleStore {
   private async write(projectId: string, schedules: Schedule[]): Promise<void> {
     const filePath = schedulesFilePath(this.projectsConfigDir, projectId);
     if (!filePath) {
-      throw new AppError({ code: "VALIDATION", message: `schedules: ${projectId} is not a project id` });
+      throw new AppError({
+        code: "VALIDATION",
+        message: `schedules: ${projectId} is not a project id`,
+      });
     }
     const content = encodeSchedulesFile(schedules);
     try {

@@ -19,7 +19,10 @@ vi.mock("../../utils/fs.js", async (importOriginal) => {
 import { ScheduleStore } from "../ScheduleStore.js";
 import { SCHEDULES_SCHEMA_VERSION, encodeSchedulesFile } from "../schedulesCodec.js";
 import { createSchedule } from "../../../shared/utils/scheduledRuns.js";
-import type { ScheduleCreateInput, SchedulesSnapshot } from "../../../shared/types/ipc/schedules.js";
+import type {
+  ScheduleCreateInput,
+  SchedulesSnapshot,
+} from "../../../shared/types/ipc/schedules.js";
 import type { Schedule } from "../../../shared/types/scheduledRuns.js";
 
 const PROJECT = "a".repeat(64);
@@ -38,7 +41,11 @@ let clock: number;
 let registered: Set<string>;
 
 function newStore(): ScheduleStore {
-  return new ScheduleStore(root, (id) => registered.has(id), () => clock);
+  return new ScheduleStore(
+    root,
+    (id) => registered.has(id),
+    () => clock
+  );
 }
 
 function schedulesFile(projectId = PROJECT): string {
@@ -266,7 +273,11 @@ describe("ScheduleStore", () => {
   });
 
   it("never writes for a scratch id or a path", async () => {
-    const store = new ScheduleStore(root, () => true, () => clock);
+    const store = new ScheduleStore(
+      root,
+      () => true,
+      () => clock
+    );
 
     for (const id of ["6f1c1f3e-6c8a-4a39-9a43-1d8f2b9d3c11", "../escape"]) {
       await expect(store.create(id, input)).rejects.toMatchObject({ code: "VALIDATION" });
@@ -284,10 +295,19 @@ describe("ScheduleStore", () => {
     it("is moved aside whole and read as none, and the next write starts afresh", async () => {
       vi.spyOn(console, "warn").mockImplementation(() => {});
       const good = createSchedule(
-        { id: "kept", projectId: PROJECT, name: "Good", launch: { agentId: "claude", prompt: "x" } },
+        {
+          id: "kept",
+          projectId: PROJECT,
+          name: "Good",
+          launch: { agentId: "claude", prompt: "x" },
+        },
         clock
       );
-      const bad: Schedule = { ...good, id: "bad", cadence: { cron: "61 * * * *", timeZone: "UTC" } };
+      const bad: Schedule = {
+        ...good,
+        id: "bad",
+        cadence: { cron: "61 * * * *", timeZone: "UTC" },
+      };
       const raw = encodeSchedulesFile([good, bad]);
       writeRaw(raw);
       const store = newStore();

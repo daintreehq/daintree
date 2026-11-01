@@ -1760,7 +1760,10 @@ describe("ProjectStore schedules (#15975)", () => {
   });
 
   function schedulesFile(): string {
-    const stateDir = getProjectStateDir(path.join("/tmp/daintree-reconciliation-test", "projects"), projectId);
+    const stateDir = getProjectStateDir(
+      path.join("/tmp/daintree-reconciliation-test", "projects"),
+      projectId
+    );
     if (!stateDir) throw new Error("expected a state directory");
     return path.join(stateDir, "schedules.json");
   }

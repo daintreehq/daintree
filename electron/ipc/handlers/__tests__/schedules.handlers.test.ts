@@ -52,7 +52,10 @@ const OTHER = "b".repeat(64);
 const PROMPT = "Read the failing tests and fix them. SECRET-MARKER";
 
 type ListHandler = (ctx: IpcContext) => Promise<SchedulesSnapshot | null>;
-type CreateHandler = (ctx: IpcContext, input: ScheduleCreateInput) => Promise<ScheduleCreateOutcome>;
+type CreateHandler = (
+  ctx: IpcContext,
+  input: ScheduleCreateInput
+) => Promise<ScheduleCreateOutcome>;
 type UpdateHandler = (
   ctx: IpcContext,
   scheduleId: string,
@@ -82,7 +85,11 @@ function ctx(
   projectId: string | null,
   endpoint: "local-view" | "remote-view" = "local-view"
 ): IpcContext {
-  return { projectId, endpoint: { kind: endpoint }, client: { kind: "local" } } as unknown as IpcContext;
+  return {
+    projectId,
+    endpoint: { kind: endpoint },
+    client: { kind: "local" },
+  } as unknown as IpcContext;
 }
 
 function view(id: number, projectId: string) {

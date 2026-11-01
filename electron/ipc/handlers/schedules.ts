@@ -109,7 +109,8 @@ function senderProjectId(ctx: IpcContext): string | null {
 
 function requireSenderProjectId(ctx: IpcContext): string {
   const projectId = senderProjectId(ctx);
-  if (!projectId) throw new AppError({ code: "VALIDATION", message: "schedules: sender has no project" });
+  if (!projectId)
+    throw new AppError({ code: "VALIDATION", message: "schedules: sender has no project" });
   return projectId;
 }
 
@@ -123,7 +124,10 @@ async function handleCreate(
   input: ScheduleCreateInput
 ): Promise<ScheduleCreateOutcome> {
   const projectId = requireSenderProjectId(ctx);
-  return projectStore.schedules.create(projectId, parsed(CreateInputShape, input, "not a new schedule"));
+  return projectStore.schedules.create(
+    projectId,
+    parsed(CreateInputShape, input, "not a new schedule")
+  );
 }
 
 /**
