@@ -223,10 +223,16 @@ const projectSwitch: HybridSplit = async ({ hostId, webContentsId, args, remote 
   // Before the swap, as a local switch records it: the view consumes it on activation.
   if (options.focusIntent) pvm?.setPendingFocusIntent(key, options.focusIntent);
   // The view's own project switch words its failure itself, as a local one does.
+  // The host's answer names the project's path there, so it isn't asked again.
   const shown = await client.switchWindowHost(
     senderContext(webContentsId),
     { hostId, projectId, newWindow: false },
-    { failureOnScreen: false }
+    {
+      failureOnScreen: false,
+      ...(result.project?.id === projectId && result.project.path
+        ? { known: { path: result.project.path, name: result.project.name } }
+        : {}),
+    }
   );
   // The asking view is still on screen unless this window really moved: a
   // window that already had the project came forward, or a newer navigation
@@ -283,7 +289,12 @@ const scratchSwitch: HybridSplit = async ({ hostId, webContentsId, args, remote 
   const shown = await client.switchWindowHost(
     senderContext(webContentsId),
     { hostId, projectId: scratch.id, newWindow: false },
-    { requesterReports: false, failureOnScreen: false }
+    {
+      requesterReports: false,
+      failureOnScreen: false,
+      // The host's answer names the scratch's path there, so it isn't asked again.
+      ...(scratch.path ? { known: { path: scratch.path, name: scratch.name || scratch.id } } : {}),
+    }
   );
   // Another window had it and came forward, or a newer navigation here won:
   // the asking view still shows what it showed, so it must not adopt the scratch.

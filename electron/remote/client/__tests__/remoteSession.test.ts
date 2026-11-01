@@ -84,6 +84,7 @@ import {
 } from "../../link/__tests__/linkTestUtils.js";
 import { HostRegistry, type RemoteHostsStore } from "../HostRegistry.js";
 import {
+  HOST_PROJECT_LOOKUP_TIMEOUT_MS,
   RemoteHostManager,
   type HostConnection,
   type ReverseRequestAnswerer,
@@ -835,6 +836,39 @@ describe("remote session wiring", () => {
     await connection.listProjects();
     const options = call.mock.calls[0]![2] as { timeoutMs?: number } | undefined;
     expect(options?.timeoutMs).toBeLessThan(60_000);
+  });
+
+  it("fails a switch's lookups on a host that doesn't answer well before the link's 60 s", async () => {
+    await startHarness();
+    await connect();
+    const connection = h.manager.get(HOST_ID)!;
+    // The host's answers stop being read: the link stays up, nothing comes back.
+    for (const socket of h.sockets) socket.pause();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const settled = (work: Promise<unknown>) => {
+        const state = { done: false, error: undefined as unknown };
+        work.then(
+          () => (state.done = true),
+          (error: unknown) => {
+            state.done = true;
+            state.error = error;
+          }
+        );
+        return state;
+      };
+      const described = settled(connection.describeProject("proj-1"));
+      const last = settled(connection.lastActiveProject());
+      await vi.advanceTimersByTimeAsync(HOST_PROJECT_LOOKUP_TIMEOUT_MS - 1);
+      expect([described.done, last.done]).toEqual([false, false]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(described.error).toMatchObject({ code: "OUTCOME_UNKNOWN" });
+      expect(last.error).toMatchObject({ code: "OUTCOME_UNKNOWN" });
+      expect(HOST_PROJECT_LOOKUP_TIMEOUT_MS).toBeLessThan(60_000);
+    } finally {
+      vi.useRealTimers();
+      for (const socket of h.sockets) socket.resume();
+    }
   });
 
   it("exposes the host's open session with no view bound, and none while the link is down", async () => {

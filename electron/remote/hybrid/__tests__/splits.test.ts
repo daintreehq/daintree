@@ -493,6 +493,20 @@ describe("project activation", () => {
     );
   });
 
+  it("hands the project's path the host just answered with to the swap, so it isn't asked again", async () => {
+    const project = { id: "p2", name: "Two", path: "/home/greg/two" };
+    const { invoke } = setup(
+      () => ({ outcome: "switched", project }),
+      () => "local"
+    );
+    await invoke(CHANNELS.PROJECT_SWITCH, ["p2", { terminals: [] }]);
+    expect(mocks.client.switchWindowHost).toHaveBeenCalledWith(
+      expect.objectContaining({ webContentsId: REMOTE_SENDER }),
+      { hostId: "studio", projectId: "p2", newWindow: false },
+      { failureOnScreen: false, known: { path: "/home/greg/two", name: "Two" } }
+    );
+  });
+
   it("tells only the view it lands on that it switched, with the focus intent recorded first", async () => {
     const order: string[] = [];
     mocks.pvm.setPendingFocusIntent.mockImplementation(() => order.push("focus"));
@@ -616,8 +630,13 @@ describe("scratch switch", () => {
     expect(mocks.client.switchWindowHost).toHaveBeenCalledWith(
       expect.objectContaining({ webContentsId: REMOTE_SENDER }),
       { hostId: "studio", projectId: "s1", newWindow: false },
-      // Its callers word a failure themselves, so main keeps the report.
-      { requesterReports: false, failureOnScreen: false }
+      // Its callers word a failure themselves, so main keeps the report. The
+      // host just named the scratch's path, so the swap doesn't ask again.
+      {
+        requesterReports: false,
+        failureOnScreen: false,
+        known: { path: scratch.path, name: scratch.name },
+      }
     );
     expect(mocks.viewSend).toHaveBeenCalledWith(CHANNELS.SCRATCH_ON_SWITCH, {
       scratch,
