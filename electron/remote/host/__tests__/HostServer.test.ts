@@ -34,7 +34,7 @@ let root: string;
 let location: HostSocketLocation;
 const servers: HostServer[] = [];
 const clients: LinkClient[] = [];
-const proxies: net.Server[] = [];
+const cleanups: Array<() => void> = [];
 
 beforeEach(async () => {
   logBuffer.clear();
@@ -46,7 +46,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   for (const c of clients.splice(0)) await c.stop();
   for (const s of servers.splice(0)) await s.close();
-  for (const p of proxies.splice(0)) p.close();
+  for (const cleanup of cleanups.splice(0)) cleanup();
   await removeTempDir(root);
 });
 
@@ -176,24 +176,29 @@ function closedSocket(socket: net.Socket): Promise<void> {
  * Dials the host directly, except that after `stall()` the next dial reaches a
  * host stalled under memory pressure: what the Shell sends sits unread until
  * `deliver()`, then reaches the host in the order it was sent, its end
- * included. Dials after the stalled one wait for that delivery.
+ * included. Dials after the stalled one wait for `resume()`.
  */
 async function stallingTransport() {
   const direct = createDirectTransport({ discoveryPath: location.discoveryPath });
   const proxyPath = path.join(root, "stall.sock");
+  const sockets: net.Socket[] = [];
   let held: { chunks: Buffer[]; ended: boolean } | null = null;
   const proxy = net.createServer((socket) => {
+    sockets.push(socket);
     const entry = { chunks: [] as Buffer[], ended: false };
     held = entry;
     socket.on("data", (chunk: Buffer) => entry.chunks.push(chunk));
     socket.on("end", () => (entry.ended = true));
     socket.on("error", () => {});
   });
-  proxies.push(proxy);
+  cleanups.push(() => {
+    for (const socket of sockets) socket.destroy();
+    proxy.close();
+  });
   await new Promise<void>((resolve) => proxy.listen(proxyPath, resolve));
   let stallNext = false;
-  let delivered: Promise<void> = Promise.resolve();
-  let markDelivered = () => {};
+  let resumed: Promise<void> = Promise.resolve();
+  let resume = () => {};
   const transport: LinkTransport = {
     async open(signal) {
       if (stallNext) {
@@ -201,7 +206,10 @@ async function stallingTransport() {
         const info = (await readDiscoveryFile(location.discoveryPath))!;
         return createDirectTransport({ socketPath: proxyPath, token: info.token }).open(signal);
       }
-      await delivered;
+      await new Promise<void>((resolve, reject) => {
+        void resumed.then(resolve);
+        signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
+      });
       return direct.open(signal);
     },
   };
@@ -209,7 +217,7 @@ async function stallingTransport() {
     transport,
     stall() {
       stallNext = true;
-      delivered = new Promise((resolve) => (markDelivered = resolve));
+      resumed = new Promise((resolve) => (resume = resolve));
     },
     /** What the stalled dial has sent so far. */
     sent(): LinkMessage[] {
@@ -220,18 +228,20 @@ async function stallingTransport() {
     },
     /** The Shell has closed its end of the stalled dial. */
     abandoned: () => held?.ended === true,
-    /** The host catches up: it reads the stalled dial, then the dials after it go. */
+    /** The host catches up on the stalled dial and reads it to its end. */
     async deliver() {
       const entry = held!;
       const upstream = net.connect(location.socketPath);
+      sockets.push(upstream);
       upstream.on("error", () => {});
       upstream.resume();
       await new Promise<void>((resolve) => upstream.once("connect", resolve));
       for (const chunk of entry.chunks) upstream.write(chunk);
       if (entry.ended) upstream.end();
       await closedSocket(upstream);
-      markDelivered();
     },
+    /** Dials after the stalled one go. */
+    resume: () => resume(),
   };
 }
 
@@ -1101,8 +1111,8 @@ describe("HostServer session resume", () => {
     server.onSessionExpired((info) => expired.push(info.sessionId));
     const client = startClient(server);
     await waitFor(() => seen.length === 1);
-    // The host has its session before the client has read WELCOME; a client
-    // stopped before then just drops the dial, with no GOODBYE to send.
+    // The host has its session before the client has read WELCOME; this is
+    // the stop of a connected Shell, not of one still dialling.
     await waitFor(() => client.getState().status === "connected");
     await client.stop();
     await waitFor(() => expired.length === 1);
@@ -1155,6 +1165,7 @@ describe("HostServer and a Shell that gives up on a resume handshake (#15877)", 
     // It resumed the session on the abandoned HELLO and lost that link in turn.
     await waitFor(() => run.seen.length === 2 && run.detached.length === 2);
     expect(run.seen[1]).toMatchObject({ sessionId: run.sessionId, resumed: true });
+    run.stalling.resume();
   }
 
   it("keeps the session a timed-out handshake resumed, for the next dial to resume", async () => {
