@@ -124,6 +124,8 @@ export class ScheduledRunScheduler {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private unsubscribe: (() => void) | null = null;
   private started = false;
+  /** No pass runs before the first read of every project, so none sees only some of them. */
+  private read = false;
   private disposed = false;
   /**
    * The next pass finds what came due while nobody watched: at startup, after
@@ -163,6 +165,7 @@ export class ScheduledRunScheduler {
     }
     this.nextReadAt = this.monotonicNow() + UNRECORDED_RETRY_MS;
     await this.readProjects(projectIds);
+    this.read = true;
     this.requestPass();
   }
 
@@ -175,6 +178,7 @@ export class ScheduledRunScheduler {
 
   resume(): void {
     this.recoverAll = true;
+    this.osLaunchAt = null;
     this.requestPass();
   }
 
@@ -291,7 +295,7 @@ export class ScheduledRunScheduler {
 
   private async pass(): Promise<void> {
     this.clearTimer();
-    if (this.isShuttingDown()) return;
+    if (this.isShuttingDown() || !this.read) return;
     this.noteClock();
     if (this.unread.size > 0 && this.monotonicNow() >= this.nextReadAt) {
       this.nextReadAt = this.monotonicNow() + UNRECORDED_RETRY_MS;
@@ -337,7 +341,7 @@ export class ScheduledRunScheduler {
             recorder.evaluationPoint(schedule.id),
             now,
             missedThrough,
-            osLaunchAt
+            osLaunchAt === null ? null : { at: osLaunchAt, unwatchedThrough }
           );
         } catch (error) {
           this.logWarn(`[ScheduledRuns] Couldn't evaluate schedule ${schedule.id}:`, error);
@@ -366,16 +370,17 @@ export class ScheduledRunScheduler {
 
   /**
    * What one schedule's window holds at `now`. An occurrence due by
-   * `missedThrough` came while nobody watched, so it isn't on time, unless an
-   * OS job launched Daintree for it: one due within a minute before
-   * `osLaunchAt`, or after it while Daintree started.
+   * `missedThrough` came while nobody watched, so it isn't on time. In the
+   * startup pass after an OS launch the job watched instead: an occurrence due
+   * within a minute before the launch is on time, and one due after it is on
+   * time when found within a minute, as when Daintree watches.
    */
   private decide(
     schedule: Schedule,
     evaluationPoint: number | null,
     now: number,
     missedThrough: number | null,
-    osLaunchAt: number | null
+    osLaunch: { readonly at: number; readonly unwatchedThrough: number | null } | null
   ): Decision {
     const cron = this.parse(schedule.cadence.cron);
     if (!cron) return { kind: "wait", nextDueAt: null };
@@ -391,8 +396,10 @@ export class ScheduledRunScheduler {
     }
     const occurrence = { dueAt: latest, occurrenceKey: occurrenceKeyFor(latest) };
     const onlyOne = nextCronOccurrence(cron, timeZone, after) === latest;
-    if (osLaunchAt !== null) {
-      if (onlyOne && osLaunchAt - latest < ON_TIME_GRACE_MS) {
+    if (osLaunch) {
+      const foundAt = latest > osLaunch.at ? now : osLaunch.at;
+      const unwatched = osLaunch.unwatchedThrough !== null && latest <= osLaunch.unwatchedThrough;
+      if (!unwatched && onlyOne && foundAt - latest < ON_TIME_GRACE_MS) {
         return { kind: "launch", origin: { trigger: "os-launch", ...occurrence, coalesced: null } };
       }
     } else {
@@ -402,7 +409,7 @@ export class ScheduledRunScheduler {
       }
     }
     const origin: ScheduledRunOrigin = {
-      trigger: osLaunchAt === null ? "catch-up" : "os-launch",
+      trigger: osLaunch ? "os-launch" : "catch-up",
       ...occurrence,
       coalesced: { after, through: now },
     };
@@ -509,6 +516,7 @@ export class ScheduledRunScheduler {
     const drift = look.wall - last.wall - (look.monotonic - last.monotonic);
     if (Math.abs(drift) <= CLOCK_DRIFT_MS) return;
     this.recoverAll = true;
+    this.osLaunchAt = null;
     this.logInfo(
       `[ScheduledRuns] The clock moved ${Math.round(drift / 1000)}s; due times recomputed`
     );

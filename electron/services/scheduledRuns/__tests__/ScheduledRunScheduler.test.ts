@@ -938,6 +938,43 @@ describe("ScheduledRunScheduler", () => {
       ]);
     });
 
+    it("calls one that came due after the launch late when a slow start found it late", async () => {
+      setClock(at(9, 2));
+      commit("project-1", [daily()]);
+      await start(at(8, 59));
+
+      expect(origins()).toEqual([
+        expect.objectContaining({
+          trigger: "os-launch",
+          dueAt: at(9),
+          coalesced: { after: at(8), through: at(9, 2) },
+        }),
+      ]);
+    });
+
+    it("gives the job no more than a minute between the due time and its launch", async () => {
+      setClock(at(9, 1, 5));
+      commit("project-1", [daily()]);
+      await start(at(9, 1));
+
+      expect(origins()).toEqual([
+        expect.objectContaining({ trigger: "os-launch", coalesced: expect.any(Object) }),
+      ]);
+    });
+
+    it("keeps the launch's watch through a pass the history wasn't ready for", async () => {
+      setClock(at(9, 0, 10));
+      commit("project-1", [skipping()]);
+      getRecorder.mockResolvedValueOnce(null);
+      await start(at(9));
+      expect(launches).toEqual([]);
+
+      await elapse(SCHEDULER_TICK_MS);
+      expect(origins()).toEqual([
+        expect.objectContaining({ trigger: "os-launch", dueAt: at(9), coalesced: null }),
+      ]);
+    });
+
     it("applies the missed-run policy to a job the OS ran late", async () => {
       // launchd runs a job the machine slept through when it wakes.
       setClock(at(13, 0, 10));
@@ -1007,6 +1044,38 @@ describe("ScheduledRunScheduler", () => {
         expect.objectContaining({ trigger: "catch-up", dueAt: at(9) }),
       ]);
     });
+  });
+
+  it("runs no pass before every project's first read", async () => {
+    setClock(at(9, 0, 30));
+    projects.add("project-2");
+    commit("project-1", [schedule({ updatedAt: at(8) })]);
+    commit("project-2", [schedule({ id: "schedule-2", projectId: "project-2", updatedAt: at(8) })]);
+    let release: () => void = () => {};
+    const slowRead = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const base = deps();
+    scheduler = new ScheduledRunScheduler({
+      ...base,
+      listSchedules: async (projectId) => {
+        if (projectId === "project-2") await slowRead;
+        return base.listSchedules(projectId);
+      },
+    });
+    const starting = scheduler.start();
+    await settle();
+    scheduler.check();
+    await settle();
+    expect(launches).toEqual([]);
+
+    release();
+    await starting;
+    await scheduler.idle();
+    expect(launches.map((launch) => [launch.scheduleId, launch.origin.trigger])).toEqual([
+      ["schedule-1", "catch-up"],
+      ["schedule-2", "catch-up"],
+    ]);
   });
 
   it("looks again at once when an OS job reaches a running Daintree", async () => {
