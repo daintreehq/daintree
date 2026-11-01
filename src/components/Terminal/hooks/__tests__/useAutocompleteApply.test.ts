@@ -6,6 +6,7 @@ import { EditorView } from "@codemirror/view";
 import type { AutocompleteItem } from "../../AutocompleteMenu";
 import type { ActiveCompletionContext } from "../../hybridInputParsing";
 import { useAutocompleteApply } from "../useAutocompleteApply";
+import { completionBoundary } from "../../inputEditorExtensions/completionBoundary";
 
 type Params = Parameters<typeof useAutocompleteApply>[0];
 type Latest = NonNullable<Params["latestRef"]["current"]>;
@@ -14,11 +15,25 @@ function setup(
   doc: string,
   item: AutocompleteItem,
   context: ActiveCompletionContext,
-  selectedIndex = 0
+  selectedIndex = 0,
+  /** Typed into `doc` at `at` a key at a time, as the composer's editor tracks it. */
+  typed?: { at: number; text: string }
 ) {
   const view = new EditorView({
-    state: EditorState.create({ doc, selection: { anchor: doc.length } }),
+    state: EditorState.create({
+      doc,
+      selection: { anchor: typed?.at ?? doc.length },
+      extensions: typed ? [completionBoundary] : [],
+    }),
   });
+  for (const char of typed?.text ?? "") {
+    const at = view.state.selection.main.head;
+    view.dispatch({
+      changes: { from: at, insert: char },
+      selection: { anchor: at + 1 },
+      userEvent: "input.type",
+    });
+  }
   const applyEditorValue = vi.fn<Params["applyEditorValue"]>();
   const onExecute = vi.fn<Params["onExecute"]>();
   const onPickTemplate = vi.fn<Params["onPickTemplate"]>();
@@ -180,6 +195,71 @@ describe("useAutocompleteApply", () => {
     }
   });
 
+  describe("a token typed in front of a word (#15872)", () => {
+    const typedCommand = { at: 0, text: "/com" };
+
+    it.each(["complete", "enter"] as const)(
+      "%s inserts the token and keeps the word, a space between",
+      (mode) => {
+        const insertRow: AutocompleteItem = { ...command, enterAction: "insert" };
+        const { applyAutocompleteSelection, applyEditorValue, view } = setup(
+          "it works",
+          insertRow,
+          slashContext,
+          0,
+          typedCommand
+        );
+        try {
+          expect(view.state.doc.toString()).toBe("/comit works");
+          expect(applyAutocompleteSelection(mode)).toBe(true);
+          const [next, options] = applyEditorValue.mock.calls[0]!;
+          expect(next).toBe("/commit it works");
+          expect(options?.change).toEqual({ from: 0, to: 4, insert: "/commit " });
+          expect(options?.selection?.main.head).toBe("/commit ".length);
+        } finally {
+          view.destroy();
+        }
+      }
+    );
+
+    it("runs an execute row with the word kept apart from it", () => {
+      const { applyAutocompleteSelection, applyEditorValue, onExecute, view } = setup(
+        "it works",
+        command,
+        slashContext,
+        0,
+        typedCommand
+      );
+      try {
+        expect(applyAutocompleteSelection("enter")).toBe(true);
+        expect(onExecute).toHaveBeenCalledWith("/commit it works");
+        expect(applyEditorValue).not.toHaveBeenCalled();
+      } finally {
+        view.destroy();
+      }
+    });
+
+    it("still replaces the whole token the caret was moved into", () => {
+      const { applyAutocompleteSelection, applyEditorValue, view } = setup(
+        "/compact now",
+        command,
+        slashContext
+      );
+      try {
+        view.dispatch({ selection: { anchor: "/com".length } });
+        expect(applyAutocompleteSelection("complete")).toBe(true);
+        expect(applyEditorValue.mock.calls[0]![0]).toBe("/commit now");
+        expect(applyEditorValue.mock.calls[0]![1]?.change).toEqual({
+          from: 0,
+          to: "/compact".length,
+          insert: "/commit",
+        });
+      } finally {
+        view.destroy();
+      }
+    });
+  });
+
   describe("a prompt template row", () => {
     const template: AutocompleteItem = {
       key: "template:acme::boilerplate",
@@ -228,6 +308,23 @@ describe("useAutocompleteApply", () => {
         handleAutocompleteSelect(template);
         expect(onPickTemplate).toHaveBeenCalledWith("acme::boilerplate", { from: 0, to: 5 });
         expect(applyEditorValue).not.toHaveBeenCalled();
+      } finally {
+        view.destroy();
+      }
+    });
+
+    it("hands over only the typed token, not the word it was typed against", () => {
+      const { applyAutocompleteSelection, onPickTemplate, view } = setup(
+        "Fix it",
+        template,
+        midDraft,
+        0,
+        { at: 4, text: "/boil" }
+      );
+      try {
+        expect(view.state.doc.toString()).toBe("Fix /boilit");
+        applyAutocompleteSelection("complete");
+        expect(onPickTemplate).toHaveBeenCalledWith("acme::boilerplate", { from: 4, to: 9 });
       } finally {
         view.destroy();
       }
