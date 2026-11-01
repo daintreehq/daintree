@@ -61,6 +61,11 @@ import {
   type VoiceScratchRefusal,
 } from "@/store/voiceRecordingStore";
 import { keepRecentDictation, keepRecentDictationCorrection } from "@/services/recentDictations";
+import {
+  getLeaseInputBlock,
+  subscribeTerminalInputGate,
+  type TerminalInputBlock,
+} from "@/services/terminal/inputGate";
 import { joinCompletedSegments } from "@/lib/voiceTranscriptSegments";
 import { startVoiceDetailsPublisher } from "@/services/voiceSessionDetailsPublisher";
 import { setElsewhereLevel } from "@/services/voiceElsewhereLevel";
@@ -573,14 +578,43 @@ function draftChanges(
   });
 }
 
+type DrivenElsewhere = Extract<TerminalInputBlock, { kind: "driven-elsewhere" }>;
+
+/**
+ * Another screen's control of the project a draft belongs to, which hands
+ * that draft over to its driver: what is written here is never saved and is
+ * replaced by the driver's own. A draft with no project (a Canopy reply) is
+ * this view's alone.
+ */
+function drivenElsewhereFor(projectId: string | undefined): DrivenElsewhere | null {
+  if (projectId === undefined) return null;
+  const block = getLeaseInputBlock();
+  if (block?.kind !== "driven-elsewhere") return null;
+  return block.projectId === undefined || block.projectId === projectId ? block : null;
+}
+
+/** Who has control, named as the pane's read-only notice names them. */
+function controllerName(block: DrivenElsewhere): string {
+  return block.driverIsHostScreen ? `${block.driverName}'s own screen` : block.driverName;
+}
+
 /** A spoken rewrite of a composer selection, on its way to the model. */
 interface PendingRewrite {
   panelId: string;
+  projectId: string | undefined;
   selection: RewriteSelection;
   /** Landed or dropped; either way it will never touch the draft again. */
   done: boolean;
   settled: Promise<void>;
   settle: () => void;
+}
+
+/** Whether a dictation's draft went to another screen's driver: its words are kept, not written. */
+function isDraftDetached(dictationSessionId: string | null | undefined): boolean {
+  return (
+    !!dictationSessionId &&
+    useVoiceRecordingStore.getState().draftDetachedSessionId === dictationSessionId
+  );
 }
 
 /** The text a session dictated into its target's draft, while the draft still holds it. */
@@ -1014,10 +1048,11 @@ class VoiceRecordingService {
         if (delta.trim()) this.noteWordsHeard();
         const voiceState = useVoiceRecordingStore.getState();
         const target = voiceState.activeTarget;
-        // An instruction streams into liveText only; it never lands in the draft.
-        if (target && !target.rewrite) {
+        const buffer = target ? voiceState.panelBuffers[target.panelId] : undefined;
+        // An instruction streams into liveText only; it never lands in the draft,
+        // and nor does a dictation whose draft another screen now drives.
+        if (target && !target.rewrite && !isDraftDetached(buffer?.dictationSessionId)) {
           if (delta.trim()) this.timelines.get(sessionId)?.markNextFrame("firstText");
-          const buffer = voiceState.panelBuffers[target.panelId];
           // An empty revision retracts a preview; it never starts an utterance.
           const isFirstDelta = delta !== "" && (!buffer || buffer.liveText === "");
           if (isFirstDelta) {
@@ -1081,6 +1116,10 @@ class VoiceRecordingService {
           }
           const panelId = voiceState.activeTarget?.panelId;
           const projectId = voiceState.activeTarget?.projectId;
+          if (panelId && isDraftDetached(voiceState.panelBuffers[panelId]?.dictationSessionId)) {
+            this.keepDetachedWords(panelId, sessionId, text, itemId, send);
+            return;
+          }
           let completedText = text;
           let completedHeard = heard?.trim();
           let completedUncertain = uncertain;
@@ -1299,6 +1338,7 @@ class VoiceRecordingService {
         if (!buffer) return;
 
         const { dictationSessionId } = buffer;
+        if (isDraftDetached(dictationSessionId)) return;
         const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
         const plan = planVoiceBreak(
           draft,
@@ -1617,6 +1657,10 @@ class VoiceRecordingService {
       })
     );
 
+    // Read once now too: a view can open already driven from elsewhere.
+    this.unsubscribers.push(subscribeTerminalInputGate(() => this.followDriveLease()));
+    this.followDriveLease();
+
     // Dictation takes Escape only once every overlay, menu, dialog and focused
     // widget has had its turn; the target composer hands it over itself.
     this.unsubscribers.push(registerEscapeFallback(() => this.handleEscape()));
@@ -1740,6 +1784,13 @@ class VoiceRecordingService {
     const stopping = this.stopPanelDictation(target.panelId);
     if (stopping) {
       await stopping;
+      return;
+    }
+
+    // Words for a draft another screen drives would never be saved (#15919).
+    const driven = drivenElsewhereFor(target.projectId);
+    if (driven) {
+      this.reportDrivenStart(driven);
       return;
     }
 
@@ -2409,6 +2460,13 @@ class VoiceRecordingService {
 
   async start(target: VoiceRecordingTarget): Promise<void> {
     this.initialize();
+    const driven = drivenElsewhereFor(target.projectId);
+    if (driven) {
+      // A caller may have armed it already.
+      this.cancelArming("lease_lost");
+      this.reportDrivenStart(driven);
+      return;
+    }
     this.releasePendingCapture();
     // A newer start in this view replaces one still under way, and a send the
     // dictation still finishing lands isn't the user's last word any more.
@@ -3323,7 +3381,9 @@ class VoiceRecordingService {
             const remaining =
               preview && this.sessionDropsHesitations ? stripHesitations(preview) : preview;
             committedLiveText = remaining;
-            if (remaining) {
+            // Kept for Recent dictations either way; only a draft this view
+            // still drives takes them.
+            if (remaining && !isDraftDetached(buffer?.dictationSessionId)) {
               const { words } = writeVoiceWords(
                 panelId,
                 projectId,
@@ -3375,6 +3435,9 @@ class VoiceRecordingService {
       // Every word the transcription will give is in the draft by now.
       stopTimeline?.mark("settled");
 
+      // Its draft went to another screen's driver: the words are kept as heard,
+      // and nothing rewrites what is now the driver's text.
+      const detached = isDraftDetached(stoppedSessionId);
       // Chunks cleaned while it ran are settled; what's left is the stop's.
       const cleanup = stoppedSessionId ? this.cleanups.get(stoppedSessionId) : undefined;
       if (cleanup) cleanup.stopped = true;
@@ -3386,7 +3449,7 @@ class VoiceRecordingService {
       // stop that keeps the text gets this, whether or not correction runs.
       // A rewrite's instruction goes to the model as spoken. A chunk had its
       // own rerun before its cleanup, which nothing reruns over.
-      if (stoppedTarget && !stoppedTarget.rewrite && this.heardAsRules) {
+      if (stoppedTarget && !stoppedTarget.rewrite && this.heardAsRules && !detached) {
         const rewrites = [
           ...(cleanup?.rewrites ?? []),
           ...this.applyHeardAsRules(stoppedTarget, stoppedSessionId, this.heardAsRules, unclaimed),
@@ -3406,10 +3469,11 @@ class VoiceRecordingService {
       // doesn't await it: the decoration shows progress, and a send waits for
       // it through waitForPendingCorrections(). It is registered before stop()
       // resolves, so a caller that awaited stop() can always see it.
-      const graceful = !skipRemoteStop && nextStatus === "idle" && !options.skipCorrection;
+      const graceful =
+        !skipRemoteStop && nextStatus === "idle" && !options.skipCorrection && !detached;
       if (stoppedTarget?.rewrite) {
         if (graceful && !stoppedTarget.rewrite.cancelled) {
-          this.runRewrite(stoppedTarget.panelId, stoppedTarget.rewrite);
+          this.runRewrite(stoppedTarget, stoppedTarget.rewrite);
         } else if (this.liveStartup()?.target.rewrite !== stoppedTarget.rewrite) {
           // A restart of the same rewrite (a microphone switch) keeps recording into it.
           stoppedTarget.rewrite.selection.release();
@@ -4332,7 +4396,7 @@ class VoiceRecordingService {
    * Registered before stop() resolves, so a send waits for it like a
    * correction; an edit that reaches the selection drops it.
    */
-  private runRewrite(panelId: string, rewrite: VoiceRewriteRequest): void {
+  private runRewrite(target: VoiceRecordingTarget, rewrite: VoiceRewriteRequest): void {
     const { selection } = rewrite;
     const instruction = rewrite.instruction
       .join(" ")
@@ -4343,10 +4407,23 @@ class VoiceRecordingService {
       this.reportRewriteSkipped("No instruction was heard. The selection is unchanged.");
       return;
     }
-    this.requestRewrite(panelId, selection, instruction);
+    this.requestRewrite(target.panelId, target.projectId, selection, instruction);
   }
 
-  private requestRewrite(panelId: string, selection: RewriteSelection, instruction: string): void {
+  private requestRewrite(
+    panelId: string,
+    projectId: string | undefined,
+    selection: RewriteSelection,
+    instruction: string
+  ): void {
+    const driven = drivenElsewhereFor(projectId);
+    if (driven) {
+      selection.release();
+      this.reportRewriteSkipped(
+        `${controllerName(driven)} has control of this project, so the selection wasn't rewritten.`
+      );
+      return;
+    }
     if (!selection.range()) {
       this.reportRewriteSkipped("The selection was edited, so it wasn't rewritten.");
       return;
@@ -4354,6 +4431,7 @@ class VoiceRecordingService {
     let settle!: () => void;
     const job: PendingRewrite = {
       panelId,
+      projectId,
       selection,
       done: false,
       settled: new Promise<void>((resolve) => {
@@ -4440,7 +4518,7 @@ class VoiceRecordingService {
           message: "The request failed or timed out. The selection is unchanged.",
           replaceKey: "voice-rewrite",
           context: { eventKind: "connectivity" },
-          action: this.retryAction(() => this.requestRewrite(job.panelId, selection, instruction)),
+          action: this.retryAction(() => this.requestRewrite(job.panelId, job.projectId, selection, instruction)),
         });
         return;
     }
@@ -5676,6 +5754,164 @@ class VoiceRecordingService {
         resolve();
       });
     });
+  }
+
+  /**
+   * An utterance of a dictation whose draft another screen drives: kept with
+   * the session's words for Recent dictations, never written, and never a
+   * command. A scratch has nothing here to take back, so it's only dropped.
+   */
+  private keepDetachedWords(
+    panelId: string,
+    sessionId: string,
+    text: string,
+    itemId: string | undefined,
+    send: boolean | undefined
+  ): void {
+    if (send) {
+      logVoiceSendRefused({ asker: "spoken_send", reason: "composer_disabled", panelId, sessionId });
+    }
+    const spoken = text.trim();
+    if (spoken && isScratchCommand(spoken)) {
+      useVoiceRecordingStore.getState().completeSegment("", itemId, { discard: true });
+      return;
+    }
+    if (!spoken && !itemId) return;
+    useVoiceRecordingStore.getState().completeSegment(text, itemId);
+  }
+
+  /**
+   * Another screen took control of the project a dictation writes into (#15919).
+   * Its drafts are the driver's now: nothing written here is saved, and the
+   * driver's replace it. The session ends, what it heard kept for Recent
+   * dictations rather than written, and nothing already on its way (a
+   * cleanup, a rewrite, a file link) lands in those drafts.
+   */
+  private followDriveLease(): void {
+    if (getLeaseInputBlock()?.kind !== "driven-elsewhere") return;
+    this.dropDrivenDraftWork();
+
+    // A start waiting behind another session has no session of its own to stop.
+    const { pendingTarget, activeTarget: sessionTarget } = useVoiceRecordingStore.getState();
+    const pendingDriven = pendingTarget ? drivenElsewhereFor(pendingTarget.projectId) : null;
+    if (pendingDriven && pendingTarget!.panelId !== sessionTarget?.panelId) {
+      this.cancelArming("lease_lost");
+      this.reportDrivenStart(pendingDriven);
+    }
+
+    const state = useVoiceRecordingStore.getState();
+    const target = state.activeTarget;
+    const driven = target ? drivenElsewhereFor(target.projectId) : null;
+    if (!target || !driven) return;
+    if (state.status === "arming") {
+      this.cancelArming("lease_lost");
+      this.reportDrivenStart(driven);
+      return;
+    }
+    if (!isActiveVoiceSession(state.status)) return;
+    const buffer = state.panelBuffers[target.panelId];
+    const sessionId = buffer?.dictationSessionId;
+    if (!sessionId || state.draftDetachedSessionId === sessionId) return;
+    state.detachSessionDraft(sessionId);
+    useDictationRangeStore.getState().releaseAnchors(sessionId);
+    logInfo(`${LOG_PREFIX} Another screen took control of the dictation's project`, {
+      status: state.status,
+      stopping: this.stopPromise !== null,
+    });
+    if (target.rewrite) {
+      // Its stop gives the selection back as it was.
+      this.reportRewriteSkipped(
+        `${controllerName(driven)} has control of this project, so the selection wasn't rewritten.`
+      );
+    } else {
+      this.reportDrivenStop(
+        driven,
+        buffer.completedSegments.length > 0 || buffer.liveText.trim() !== ""
+      );
+    }
+    // A stop already draining ends the session; it writes nothing more now.
+    if (this.stopPromise) return;
+    void this.stop(
+      `Dictation stopped because ${controllerName(driven)} has control of this project.`,
+      { preserveLiveText: true, reason: "lease_lost" }
+    );
+  }
+
+  /**
+   * Lets go of every dictated range in a draft another screen drives, and the
+   * cleanups and rewrites aimed at them: they would land in text that is the
+   * driver's now. A cleanup's reply is still kept for Recent dictations.
+   */
+  private dropDrivenDraftWork(): void {
+    const ranges = useDictationRangeStore.getState();
+    for (const records of Object.values(ranges.drafts)) {
+      for (const record of records) {
+        if (drivenElsewhereFor(record.projectId)) ranges.releaseDictation(record.id);
+      }
+    }
+    const panels = new Set<string>();
+    for (const correction of this.pendingCorrections) {
+      if (drivenElsewhereFor(correction.projectId)) panels.add(correction.panelId);
+    }
+    let rewriteDropped: DrivenElsewhere | null = null;
+    for (const rewrite of this.pendingRewrites) {
+      const driven = drivenElsewhereFor(rewrite.projectId);
+      if (!driven) continue;
+      panels.add(rewrite.panelId);
+      rewriteDropped = driven;
+    }
+    for (const panelId of panels) this.discardPendingCorrections(panelId);
+    if (rewriteDropped) {
+      this.reportRewriteSkipped(
+        `${controllerName(rewriteDropped)} has control of this project, so the selection wasn't rewritten.`
+      );
+    }
+  }
+
+  private reportDrivenStop(driven: DrivenElsewhere, keptWords: boolean): void {
+    const controls = `${controllerName(driven)} has control of this project.`;
+    notify({
+      type: "info",
+      placement: "grid-bar",
+      title: "Dictation stopped",
+      message: keptWords ? `${controls} What you said is in Recent dictations.` : controls,
+      priority: "high",
+      replaceKey: "voice-drive-lease",
+      context: { eventKind: "recovery" },
+      ...(keptWords
+        ? {
+            action: {
+              label: "Open recent dictations",
+              actionId: "voiceInput.openRecentDictations" as const,
+              onClick: () => this.openRecentDictations(),
+            },
+          }
+        : {}),
+    });
+  }
+
+  /** Feedback on the user's own press: the composer already shows it is read-only. */
+  private reportDrivenStart(driven: DrivenElsewhere): void {
+    const message = `${controllerName(driven)} has control of this project.`;
+    useVoiceRecordingStore.getState().announce(`Dictation didn't start. ${message}`);
+    notify({
+      type: "info",
+      title: "Dictation didn't start",
+      message,
+      transient: true,
+      priority: "high",
+      replaceKey: "voice-drive-lease",
+      context: { eventKind: "uiFeedback" },
+    });
+  }
+
+  private openRecentDictations(): void {
+    safeFireAndForget(
+      import("@/services/ActionService").then(({ actionService }) =>
+        actionService.dispatch("voiceInput.openRecentDictations", undefined, { source: "user" })
+      ),
+      { context: "Opening recent dictations" }
+    );
   }
 
   private async handleSuspend(): Promise<void> {

@@ -37,6 +37,8 @@ export const VOICE_STOP_REASONS = [
   "retarget",
   // A start in another view replaced it.
   "superseded",
+  // Another screen took control of the project whose draft it wrote into.
+  "lease_lost",
   "start_failed",
   // Abandoned before it began: a second press while arming, or a newer start.
   "cancelled",
