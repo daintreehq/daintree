@@ -3,9 +3,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Lane } from "../frames.js";
-import { BulkKind, EventKind, type TransferBeginMessage } from "../messages.js";
+import {
+  BulkKind,
+  EventKind,
+  RpcKind,
+  type LinkMessage,
+  type TransferBeginMessage,
+} from "../messages.js";
 import type { LinkSession } from "../session.js";
 import {
+  LinkTransfers,
   TRANSFER_WINDOW_BYTES,
   bytesTransferSource,
   fileTransferSource,
@@ -392,43 +399,111 @@ describe("bulk transfer", () => {
     expect(host.transfers.activeIncoming).toBe(0);
   });
 
-  it("keeps credit moving while the receiver's events lane never empties", async () => {
-    const transfers = { inactivityTimeoutMs: 2_000 };
-    const { host, client } = await openSessionPair(
-      dir,
-      { transfers },
-      { transfers },
-      { oneWayDelayMs: 0, bytesPerSecond: 8 * 1024 * 1024 }
-    );
-    sessions.push(host, client);
-    const { sinks, factory } = memorySinks();
-    host.transfers.setSinkFactory(factory);
-    const filler = { endpointId: null, channel: "fill", args: ["x".repeat(16 * 1024)] };
-    // More than one write pass can take, so the lane is never empty when the
-    // scheduler picks; refilled after every pass.
-    let leastQueuedAfterPass = Infinity;
-    const refill = () => {
-      leastQueuedAfterPass = Math.min(leastQueuedAfterPass, host.queuedBytes(Lane.EVENTS));
-      while (host.queuedBytes(Lane.EVENTS) < 2 * 1024 * 1024) {
-        host.post({ lane: Lane.EVENTS, kind: EventKind.EVENT, body: filler });
+  const fillers: Array<[string, Lane, LinkMessage]> = [
+    [
+      "events",
+      Lane.EVENTS,
+      {
+        lane: Lane.EVENTS,
+        kind: EventKind.EVENT,
+        body: { endpointId: null, channel: "fill", args: ["x".repeat(16 * 1024)] },
+      },
+    ],
+    [
+      "rpc",
+      Lane.RPC,
+      {
+        lane: Lane.RPC,
+        kind: RpcKind.SEND,
+        body: { endpointId: "e", channel: "fill", args: ["x".repeat(16 * 1024)] },
+      },
+    ],
+  ];
+
+  it.each(fillers)(
+    "keeps credit moving while the receiver's %s lane never empties",
+    async (_name, lane, filler) => {
+      const transfers = { inactivityTimeoutMs: 3_000 };
+      const { host, client } = await openSessionPair(
+        dir,
+        { transfers },
+        { transfers },
+        { oneWayDelayMs: 0, bytesPerSecond: 8 * 1024 * 1024 }
+      );
+      sessions.push(host, client);
+      const { sinks, factory } = memorySinks();
+      host.transfers.setSinkFactory(factory);
+      // More than one write pass can take, so the lane is never empty when the
+      // scheduler picks; refilled after every pass.
+      let leastQueuedAfterPass = Infinity;
+      const refill = () => {
+        leastQueuedAfterPass = Math.min(leastQueuedAfterPass, host.queuedBytes(lane));
+        while (host.queuedBytes(lane) < 2 * 1024 * 1024) host.post(filler);
+      };
+      refill();
+      leastQueuedAfterPass = Infinity;
+      const stopRefill = host.onWritable(refill);
+      const payload = crypto.randomBytes(3 * TRANSFER_WINDOW_BYTES);
+      try {
+        const result = await client.transfers.send(bytesTransferSource(payload), {
+          name: "busy.bin",
+          destination: { kind: "inbox", bucket: "files" },
+        });
+        expect(result.bytes).toBe(payload.byteLength);
+      } finally {
+        stopRefill();
       }
-    };
-    refill();
-    leastQueuedAfterPass = Infinity;
-    const stopRefill = host.onWritable(refill);
-    const payload = crypto.randomBytes(3 * TRANSFER_WINDOW_BYTES);
-    try {
-      const result = await client.transfers.send(bytesTransferSource(payload), {
-        name: "busy.bin",
+      expect(concat(sinks[0]!.chunks).equals(payload)).toBe(true);
+      expect(leastQueuedAfterPass).toBeGreaterThan(0);
+    },
+    15_000
+  );
+
+  it("posts credit while a refused abort waits for the bulk lane", async () => {
+    const posted: LinkMessage[] = [];
+    let refuseAborts = true;
+    const transfers = new LinkTransfers({
+      role: "client",
+      post(message) {
+        if (refuseAborts && message.kind === BulkKind.TRANSFER_ABORT) return "refused";
+        posted.push(message);
+        return "queued";
+      },
+      isOpen: () => true,
+      protocolError: () => {
+        throw new Error("unexpected protocol error");
+      },
+    });
+    const controller = new AbortController();
+    const sent = transfers.send(bytesTransferSource(new Uint8Array(0)), {
+      name: "gone.bin",
+      destination: { kind: "inbox", bucket: "files" },
+      signal: controller.signal,
+    });
+    const settled = sent.catch((err: unknown) => err);
+    await waitFor(() => posted.some((m) => m.kind === BulkKind.TRANSFER_END));
+    controller.abort();
+    await settled;
+    transfers.handle({
+      lane: Lane.BULK,
+      kind: BulkKind.TRANSFER_BEGIN,
+      body: {
+        transferId: 2,
+        name: "in.bin",
+        size: 1,
+        sha256: "0".repeat(64),
         destination: { kind: "inbox", bucket: "files" },
-      });
-      expect(result.bytes).toBe(payload.byteLength);
-    } finally {
-      stopRefill();
-    }
-    expect(concat(sinks[0]!.chunks).equals(payload)).toBe(true);
-    expect(leastQueuedAfterPass).toBeGreaterThan(0);
-  }, 15_000);
+      },
+    });
+    expect(posted.at(-1)).toMatchObject({
+      kind: BulkKind.TRANSFER_ACK,
+      body: { transferId: 2, error: "not-accepted" },
+    });
+    expect(posted.some((m) => m.kind === BulkKind.TRANSFER_ABORT)).toBe(false);
+    refuseAborts = false;
+    transfers.onWritable();
+    await waitFor(() => posted.some((m) => m.kind === BulkKind.TRANSFER_ABORT));
+  });
 
   it("reports OUTCOME_UNKNOWN when the sender's commit wait runs out", async () => {
     const { host, client } = await pair({}, { transfers: { commitTimeoutMs: 100 } });

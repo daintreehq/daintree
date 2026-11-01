@@ -29,6 +29,10 @@ import { FRAME_HEADER_BYTES, LANE_COUNT, LANE_PRIORITY, Lane, type LinkFrame } f
  * calls as addressed to an endpoint already gone. Unrelated control frames go
  * on past it, and the endpoint's later frames on the close's lane (a reopen
  * under the same id) wait behind it.
+ *
+ * A frame normally waits in its own lane's queue, but a producer may name a
+ * higher one: the frame keeps its lane on the wire and is counted, capped,
+ * drained and ordered as the queue it waits in.
  */
 export interface LaneLimits {
   highWaterBytes: number;
@@ -88,6 +92,8 @@ interface LaneQueue {
 interface HeldFrame {
   frame: LinkFrame;
   flow: string;
+  /** The queue it waits in, which its limits were counted against. */
+  lane: Lane;
   seq: number;
   closes: string | undefined;
 }
@@ -134,16 +140,22 @@ export class LaneScheduler {
   /**
    * `flow` names the stream the frame belongs to; frames of one flow leave in
    * order. `order` names the endpoints it speaks for; the caller reports each
-   * such frame through `written` once the transport has taken it.
+   * such frame through `written` once the transport has taken it. `queue` is
+   * the lane whose queue the frame waits in, its own by default.
    */
-  enqueue(frame: LinkFrame, flow: string = SHARED_FLOW, order?: EndpointOrder): EnqueueResult {
-    const q = this.lanes[frame.lane]!;
+  enqueue(
+    frame: LinkFrame,
+    flow: string = SHARED_FLOW,
+    order?: EndpointOrder,
+    queue: Lane = frame.lane
+  ): EnqueueResult {
+    const q = this.lanes[queue]!;
     const cost = frameCost(frame);
-    const { highWaterBytes, hardCapBytes, maxFrames } = this.limits[frame.lane];
+    const { highWaterBytes, hardCapBytes, maxFrames } = this.limits[queue];
     if (q.bytes + cost > hardCapBytes || q.frameCount >= maxFrames) return "refused";
     q.frameCount++;
     q.bytes += cost;
-    if (!order || !this.holdBack(frame, flow, order)) this.push(q, frame, flow);
+    if (!order || !this.holdBack(frame, flow, order, queue)) this.push(q, frame, flow);
     if (q.bytes > highWaterBytes) {
       q.wasOverHighWater = true;
       return "over-high-water";
@@ -177,7 +189,7 @@ export class LaneScheduler {
   }
 
   /** Records the frame against its endpoints; true when it waits behind a close. */
-  private holdBack(frame: LinkFrame, flow: string, order: EndpointOrder): boolean {
+  private holdBack(frame: LinkFrame, flow: string, order: EndpointOrder, lane: Lane): boolean {
     const closes = "closes" in order ? order.closes : undefined;
     const endpointIds = "closes" in order ? [order.closes] : order.endpointIds;
     const seq = ++this.seq;
@@ -187,10 +199,10 @@ export class LaneScheduler {
       if (seqs) seqs.add(seq);
       else this.unwrittenByEndpoint.set(endpointId, new Set([seq]));
     }
-    const held: HeldFrame = { frame, flow, seq, closes };
+    const held: HeldFrame = { frame, flow, lane, seq, closes };
     for (const endpointId of endpointIds) {
       const queue = this.held.get(endpointId);
-      if (queue && queue[0]!.frame.lane === frame.lane) {
+      if (queue && queue[0]!.lane === lane) {
         queue.push(held);
         return true;
       }
@@ -207,7 +219,7 @@ export class LaneScheduler {
       const next = queue[0]!;
       if (next.closes !== undefined && this.oldestUnwritten(next.closes) !== next.seq) break;
       queue.shift();
-      this.push(this.lanes[next.frame.lane]!, next.frame, next.flow);
+      this.push(this.lanes[next.lane]!, next.frame, next.flow);
     }
     if (queue.length === 0) this.held.delete(endpointId);
   }

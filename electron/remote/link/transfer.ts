@@ -23,10 +23,13 @@ import { TransferBeginSchema } from "./schemas.js";
  * credit-based: the receiver's TRANSFER_ACK reports bytes it has handed to its
  * sink, and the sender never has more than {@link TRANSFER_WINDOW_BYTES}
  * unacknowledged, so a slow disk on the far side throttles the sender instead
- * of filling memory. The receiver hashes as it goes and only commits (moves
- * into place) when the digest matches; where the bytes land is decided by the
- * injected sink. A final ACK carries the placed path or the error, as a
- * {@link TransferReason} code; the diagnostic stays in the local log.
+ * of filling memory. The session queues credit with its control frames (it is
+ * still a BULK message on the wire), so a receiver whose own answers and events
+ * keep the link busy still releases the sender. The receiver hashes as it goes
+ * and only commits (moves into place) when the digest matches; where the bytes
+ * land is decided by the injected sink. A final ACK carries the placed path or
+ * the error, as a {@link TransferReason} code; the diagnostic stays in the
+ * local log.
  *
  * Both ends time a transfer out when it stops moving (no chunk or ack for
  * {@link DEFAULT_INACTIVITY_TIMEOUT_MS}) or when placing it takes longer than
@@ -239,7 +242,12 @@ function logFailure(side: "send" | "receive", id: number, reason: TransferReason
 export class LinkTransfers {
   private readonly outgoing = new Map<number, Outgoing>();
   private readonly incoming = new Map<number, Incoming>();
-  private readonly retry: LinkMessage[] = [];
+  /**
+   * Refused posts, by the queue they wait for: credit waits with control
+   * frames, aborts with the bulk data, so a full BULK lane never holds credit.
+   */
+  private readonly ackRetry: LinkMessage[] = [];
+  private readonly abortRetry: LinkMessage[] = [];
   private sinkFactory: TransferSinkFactory | null = null;
   private readonly sinkProviders: TransferSinkProvider[] = [];
   private nextId: number;
@@ -384,7 +392,9 @@ export class LinkTransfers {
 
   /** Session hook: a write pass finished; refused frames can be retried. */
   onWritable(): void {
-    if (this.retry.length > 0 || this.outgoing.size > 0) this.schedulePump();
+    if (this.ackRetry.length > 0 || this.abortRetry.length > 0 || this.outgoing.size > 0) {
+      this.schedulePump();
+    }
   }
 
   /** Session hook: the BULK lane fell back below half its high-water mark. */
@@ -397,7 +407,8 @@ export class LinkTransfers {
   closeAll(reason: string): void {
     if (this.closed) return;
     this.closed = true;
-    this.retry.length = 0;
+    this.ackRetry.length = 0;
+    this.abortRetry.length = 0;
     for (const [id, t] of [...this.outgoing]) {
       // Once END is out the receiver may have verified and placed the file
       // before the link dropped; only the missing ack is certain.
@@ -493,7 +504,11 @@ export class LinkTransfers {
 
   private postControl(message: LinkMessage): void {
     if (this.closed) return;
-    if (this.retry.length === 0) {
+    const retry =
+      message.lane === Lane.BULK && message.kind === BulkKind.TRANSFER_ACK
+        ? this.ackRetry
+        : this.abortRetry;
+    if (retry.length === 0) {
       let result: EnqueueResult;
       try {
         result = this.link.post(message);
@@ -503,18 +518,24 @@ export class LinkTransfers {
       }
       if (result !== "refused") return;
     }
-    if (this.retry.length >= MAX_RETRY_QUEUE) {
+    if (this.ackRetry.length + this.abortRetry.length >= MAX_RETRY_QUEUE) {
       this.link.protocolError("transfer control backlog");
       return;
     }
-    this.retry.push(message);
+    retry.push(message);
     this.schedulePump();
   }
 
+  /** False while aborts still wait: the BULK lane is refusing, so data would be too. */
   private flushRetry(): boolean {
-    while (this.retry.length > 0) {
-      if (this.link.post(this.retry[0]!) === "refused") return false;
-      this.retry.shift();
+    this.flushQueue(this.ackRetry);
+    return this.flushQueue(this.abortRetry);
+  }
+
+  private flushQueue(retry: LinkMessage[]): boolean {
+    while (retry.length > 0) {
+      if (this.link.post(retry[0]!) === "refused") return false;
+      retry.shift();
     }
     return true;
   }
