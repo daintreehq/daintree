@@ -48,6 +48,7 @@ import { logInfo, logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { primeHostPreviewCapability } from "@/components/FileViewer/filePreviewKinds";
 import { watchHostConnectionAnnouncements } from "@/components/Recovery/hostConnectionAnnouncements";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 
 /** The remote host this view runs on, or null when it runs on this machine. */
 export function getViewHostId(): HostId | null {
@@ -86,6 +87,14 @@ let resyncRunning: Promise<void> | null = null;
 let resyncAgain = false;
 /** A pass still owed the project state, because a request that asked for it was coalesced. */
 let resyncProjectStateOwed = false;
+/**
+ * A full pass asked for while this view was cached, put off until main shows
+ * it again: what it refetches only matters on screen, and every cached view
+ * of a host asking at once would crowd the visible one's recovery off the link.
+ */
+let resyncFullOwed = false;
+/** Run the owed full pass even though the view is cached: saves wait on it. */
+let resyncFullNow = false;
 /**
  * The panes a host restart ended, by the restart key each was lost under,
  * held until the host says whether this view drives: it relaunches them, or
@@ -142,12 +151,19 @@ export interface ResyncFromHostOptions {
  * Refetch what this view shows from its host after the host dropped events on
  * their way here or the link came back fresh. Terminal output is not part of
  * this: it resumes on its own stream. Overlapping requests coalesce into one
- * follow-up pass.
+ * follow-up pass. A cached view reads only what must stay live while nobody
+ * sees it (who drives, its terminals and their agents) and owes the rest
+ * until it is shown; one that watches still follows the driver meanwhile.
  */
 export function resyncFromHost(options: ResyncFromHostOptions = {}): Promise<void> {
   resyncGeneration += 1;
   if (options.freshSession) resyncProjectStateOwed = true;
   if (options.hostRestarted) armRestartRecovery(options.previousEnd);
+  resyncFullOwed = true;
+  return runResyncs();
+}
+
+function runResyncs(): Promise<void> {
   if (resyncRunning) {
     resyncAgain = true;
     return resyncRunning;
@@ -155,9 +171,15 @@ export function resyncFromHost(options: ResyncFromHostOptions = {}): Promise<voi
   resyncRunning = (async () => {
     do {
       resyncAgain = false;
-      const projectState = resyncProjectStateOwed;
-      resyncProjectStateOwed = false;
-      await runResyncPass(projectState);
+      // Decided per pass: a view cached again since stops at what stays live.
+      const full = resyncFullOwed && (resyncFullNow || !isCachedRemoteView());
+      const projectState = full && resyncProjectStateOwed;
+      if (full) {
+        resyncFullOwed = false;
+        resyncFullNow = false;
+        resyncProjectStateOwed = false;
+      }
+      await runResyncPass(full, projectState);
     } while (resyncAgain);
   })().finally(() => {
     resyncRunning = null;
@@ -165,7 +187,22 @@ export function resyncFromHost(options: ResyncFromHostOptions = {}): Promise<voi
   return resyncRunning;
 }
 
-async function runResyncPass(projectState: boolean): Promise<void> {
+/**
+ * Main has cached this view of a host's project: what only matters on screen
+ * waits until it is shown. A view on this machine has no link to crowd.
+ */
+function isCachedRemoteView(): boolean {
+  return getViewHostId() !== null && isProjectViewCached();
+}
+
+/** The full pass a cached view put off, now that it is shown or its saves wait on it. */
+function runOwedResync(now = false): Promise<void> {
+  if (!resyncFullOwed) return resyncRunning ?? Promise.resolve();
+  if (now) resyncFullNow = true;
+  return runResyncs();
+}
+
+async function runResyncPass(full: boolean, projectState: boolean): Promise<void> {
   const projectId = getViewWorkspaceId();
   const generation = resyncGeneration;
   const readBacks = readBacksStarted;
@@ -179,7 +216,6 @@ async function runResyncPass(projectState: boolean): Promise<void> {
         onLost: recovery ? recordRestartLoss : undefined,
       })
     : Promise.resolve();
-  const worktrees = window.electron.worktree.refresh();
   // A pass that hydrates hands the settings its answer carries to their syncs,
   // which would otherwise read the same three again over the link.
   let settleHydrated: (settings: HydratedSettings | null) => void = () => {};
@@ -190,22 +226,8 @@ async function runResyncPass(projectState: boolean): Promise<void> {
         })
       : undefined;
   const steps: Array<[string, () => Promise<unknown>]> = [
-    ["worktrees", () => worktrees],
-    [
-      "worktree topology",
-      () => window.electron.worktreePort.request("reconcile-topology", { force: true }),
-    ],
     ["terminals", () => terminals],
-    [
-      "plugins",
-      async () => {
-        const { usePluginRuntimeStore } = await import("@/store/pluginRuntimeStore");
-        usePluginRuntimeStore.getState().refresh();
-      },
-    ],
     ["drive lease", () => lease],
-    // Dev previews and anything else kept from host events refetch for themselves.
-    ["event-fed state", async () => notifyHostResync({ hydrated })],
   ];
   if (projectId) {
     // A dropped event may have been the driver's panels changing. A follow
@@ -220,6 +242,25 @@ async function runResyncPass(projectState: boolean): Promise<void> {
         }
       },
     ]);
+  }
+  const worktrees = full ? window.electron.worktree.refresh() : Promise.resolve();
+  if (full) {
+    steps.push(
+      ["worktrees", () => worktrees],
+      [
+        "worktree topology",
+        () => window.electron.worktreePort.request("reconcile-topology", { force: true }),
+      ],
+      [
+        "plugins",
+        async () => {
+          const { usePluginRuntimeStore } = await import("@/store/pluginRuntimeStore");
+          usePluginRuntimeStore.getState().refresh();
+        },
+      ],
+      // Dev previews and anything else kept from host events refetch for themselves.
+      ["event-fed state", async () => notifyHostResync({ hydrated })]
+    );
   }
   if (projectState && projectId) {
     steps.push([
@@ -1209,11 +1250,13 @@ function beginSync(): () => void {
   if (hostId !== null) disposers.push(watchHostConnectionAnnouncements(hostId));
 
   // Saves held while the link was down go out only after the lease is re-read
-  // and any resync in flight (a fresh session's rehydrate) has finished.
+  // and any resync in flight (a fresh session's rehydrate) has finished,
+  // including one a cached view put off.
   disposers.push(
     setHostOwnedWriteFlushBarrier(async () => {
       await refreshLease();
       if (resyncRunning) await resyncRunning;
+      await runOwedResync(true);
     })
   );
 
@@ -1269,6 +1312,13 @@ function beginSync(): () => void {
   if (hostId !== null && remoteHosts) {
     const store = useHostConnectionStore.getState();
     store.bindHost(hostId, null);
+    // Main says when it shows this view again: what it put off runs then,
+    // as the view comes out from behind the switch's bridge.
+    disposers.push(
+      subscribeProjectViewLifecycle((phase) => {
+        if (phase !== "cached") void runOwedResync();
+      })
+    );
     disposers.push(
       useHostConnectionStore.subscribe((next, prev) => {
         if (
@@ -1364,6 +1414,8 @@ function beginSync(): () => void {
     takeOverGeneration += 1;
     restartRecoveryGeneration += 1;
     restartRecovery = null;
+    resyncFullOwed = false;
+    resyncFullNow = false;
     for (const dispose of disposers.splice(0)) dispose();
     driverNavigation = null;
     navigationLeaseId = undefined;
@@ -1491,6 +1543,8 @@ export function _reloadHostConnectionSyncForTesting(): void {
   resyncRunning = null;
   resyncAgain = false;
   resyncProjectStateOwed = false;
+  resyncFullOwed = false;
+  resyncFullNow = false;
   restartRecovery = null;
   restartRecoveryGeneration += 1;
   followRunning = null;
