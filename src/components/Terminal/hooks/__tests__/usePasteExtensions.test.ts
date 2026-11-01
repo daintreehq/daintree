@@ -30,6 +30,7 @@ vi.mock("../../inputEditorExtensions", () => ({
 }));
 
 const { usePasteExtensions } = await import("../usePasteExtensions");
+const { userEdit } = await import("../../inputEditorExtensions/userEdit");
 const { setRemoteMaterializer } = await import("@/services/materialize");
 const {
   getHeldBackAttachments,
@@ -205,6 +206,8 @@ describe("usePasteExtensions — materialize seam", () => {
         },
       },
       selection: { anchor: 5 + path.length + 1 },
+      // The user's own edit, which words still being corrected refuse (#15874).
+      annotations: userEdit.of(true),
     });
   });
 

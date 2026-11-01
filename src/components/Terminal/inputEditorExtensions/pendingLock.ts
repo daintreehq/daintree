@@ -1,5 +1,6 @@
 import {
   EditorState,
+  Prec,
   StateEffect,
   StateField,
   Transaction,
@@ -9,14 +10,7 @@ import {
   type StateCommand,
   type TransactionSpec,
 } from "@codemirror/state";
-import {
-  Decoration,
-  EditorView,
-  ViewPlugin,
-  type Command,
-  type DecorationSet,
-  type ViewUpdate,
-} from "@codemirror/view";
+import { Decoration, EditorView, ViewPlugin, type Command, type ViewUpdate } from "@codemirror/view";
 import { VOICE_PENDING_REFUSAL_MS } from "@/lib/animationUtils";
 import { setPendingAIRanges } from "./base";
 import { outsideWrite } from "./correctionReview";
@@ -29,6 +23,16 @@ export interface PendingBlock {
 }
 
 const NO_BLOCKS: readonly PendingBlock[] = [];
+
+// Text inserted at a block's edge stays outside it.
+function mapBlocks(blocks: readonly PendingBlock[], changes: ChangeDesc): readonly PendingBlock[] {
+  const next = blocks.flatMap(({ from, to }) => {
+    const mappedFrom = changes.mapPos(from, 1);
+    const mappedTo = changes.mapPos(to, -1);
+    return mappedFrom < mappedTo ? [{ from: mappedFrom, to: mappedTo }] : [];
+  });
+  return next.length > 0 ? next : NO_BLOCKS;
+}
 
 /**
  * Each passage the composer draws as pending, whole: the words a streamed
@@ -48,13 +52,7 @@ export const pendingBlocksField = StateField.define<readonly PendingBlock[]>({
       });
       return next.length > 0 ? next : NO_BLOCKS;
     }
-    if (!tr.docChanged || blocks.length === 0) return blocks;
-    const next = blocks.flatMap(({ from, to }) => {
-      const mappedFrom = tr.changes.mapPos(from, 1);
-      const mappedTo = tr.changes.mapPos(to, -1);
-      return mappedFrom < mappedTo ? [{ from: mappedFrom, to: mappedTo }] : [];
-    });
-    return next.length > 0 ? next : NO_BLOCKS;
+    return tr.docChanged && blocks.length > 0 ? mapBlocks(blocks, tr.changes) : blocks;
   },
 });
 
@@ -110,27 +108,33 @@ function isUserEdit(tr: Transaction): boolean {
 export const pendingEditRefused = StateEffect.define<readonly PendingBlock[]>();
 const refusalEnded = StateEffect.define<null>();
 
-const refusedMark = Decoration.mark({ class: "cm-voice-pending-refused" });
+// Inclusive, so the wash opens ahead of a streamed rewrite at the block's start
+// and closes after one running to its end, and covers it whole.
+const refusedMark = Decoration.mark({ class: "cm-voice-pending-refused", inclusive: true });
 
 /**
  * The blocks that last refused an edit, washed for a moment so a refused
  * keystroke never goes nowhere unseen. Gone with the blocks themselves.
  */
-const refusalField = StateField.define<DecorationSet>({
-  create: () => Decoration.none,
+const refusalField = StateField.define<readonly PendingBlock[]>({
+  create: () => NO_BLOCKS,
   update(value, tr) {
-    if (tr.docChanged) value = value.map(tr.changes);
+    if (tr.docChanged && value.length > 0) value = mapBlocks(value, tr.changes);
     for (const effect of tr.effects) {
-      if (effect.is(pendingEditRefused)) {
-        value = Decoration.set(effect.value.map((block) => refusedMark.range(block.from, block.to)));
-      } else if (effect.is(refusalEnded)) {
-        value = Decoration.none;
-      }
+      if (effect.is(pendingEditRefused)) value = effect.value;
+      else if (effect.is(refusalEnded)) value = NO_BLOCKS;
     }
-    if (value.size > 0 && tr.state.field(pendingBlocksField).length === 0) return Decoration.none;
+    if (value.length > 0 && tr.state.field(pendingBlocksField).length === 0) return NO_BLOCKS;
     return value;
   },
-  provide: (f) => EditorView.decorations.from(f),
+  // Below the pending field's, so the wash is the outer mark: one wrapping a
+  // streamed rewrite has to be.
+  provide: (f) =>
+    Prec.low(
+      EditorView.decorations.from(f, (blocks) =>
+        Decoration.set(blocks.map((block) => refusedMark.range(block.from, block.to)))
+      )
+    ),
 });
 
 const REFUSAL_ANNOUNCEMENT = "Still correcting these words";
@@ -138,7 +142,7 @@ const REFUSAL_ANNOUNCEMENT = "Still correcting these words";
 /** What a refused edit becomes: the selection where it was, and the wash. */
 function refusal(state: EditorState, blocks: readonly PendingBlock[]): TransactionSpec {
   // Said once per wash, not once per key held down.
-  const announce = state.field(refusalField).size === 0;
+  const announce = state.field(refusalField).length === 0;
   return {
     effects: [
       pendingEditRefused.of(blocks),
@@ -172,7 +176,7 @@ const refusalTimer = ViewPlugin.fromClass(
           this.timer = null;
           this.view.dispatch({ effects: refusalEnded.of(null) });
         }, VOICE_PENDING_REFUSAL_MS);
-      } else if (update.state.field(refusalField).size === 0) {
+      } else if (update.state.field(refusalField).length === 0) {
         this.stop();
       }
     }
