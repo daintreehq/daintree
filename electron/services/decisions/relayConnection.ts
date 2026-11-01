@@ -272,7 +272,7 @@ export class RelayConnection {
       const retired = () => attempt.retired;
       bridge = new DecisionsBridge({
         identity,
-        keyStore: this.bridgeKeys(retireable(this.keys, retired)),
+        keyStore: this.bridgeKeys(attempt, retireable(this.keys, retired)),
         store: retireable(this.store, retired),
         sink: this.o.sink ?? holdingTerminalSink,
         // The outbox keeps its own retry times, so a request is tried once per pass.
@@ -306,10 +306,14 @@ export class RelayConnection {
    * inbox takes a failed reload as final for the event that needed it, and
    * marks that event processed, so an answer would be lost to a keychain that
    * was only locked. A failed reload stops the connection first, which
-   * refuses the mark: the event stays stored for the next lifetime.
+   * refuses the mark: the event stays stored for the next lifetime. A reload
+   * that fails after its attempt was retired leaves the attempt that replaced
+   * it alone: the retired one can't reach the store anyway.
    */
-  private bridgeKeys(keys: KeyStore): KeyStore {
-    const unusable = () => this.halt({ state: "not-connected", problem: "keys" });
+  private bridgeKeys(attempt: Attempt, keys: KeyStore): KeyStore {
+    const unusable = () => {
+      if (!attempt.retired) this.halt({ state: "not-connected", problem: "keys" });
+    };
     return {
       load: () =>
         keys.load().then(

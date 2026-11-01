@@ -728,6 +728,58 @@ describe("RelayConnection", () => {
     expect((await store.unprocessedEvents(10)).map((event) => event.seq)).toEqual([1]);
   });
 
+  it("leaves the attempt that replaced one alone when the retired one's key reload fails late", async () => {
+    let loads = 0;
+    let failHeld!: () => void;
+    const real = new MemoryKeyStore();
+    await real.save(identity);
+    const keys: KeyStore = {
+      load: async () => {
+        loads += 1;
+        if (loads === 2) {
+          await new Promise<void>((resolve) => {
+            failHeld = resolve;
+          });
+          throw new Error("keychain timed out");
+        }
+        return real.load();
+      },
+      save: (stored) => real.save(stored),
+      clear: () => real.clear(),
+    };
+    const h = await harness({ keys });
+    h.connection.start();
+    const first = await connectLive(h);
+    first.onmessage?.({
+      data: JSON.stringify({
+        t: "event",
+        event: {
+          protocol_version: 1,
+          seq: 1,
+          event_id: "evt_00000001",
+          event_type: "device.key_rotated",
+          occurred_at: new Date().toISOString(),
+          question_id: null,
+          question_revision: null,
+          origin_device_id: null,
+          data: { key_epoch: 2 },
+        },
+      }),
+    });
+    await vi.waitUntil(() => loads === 2, { interval: 1 });
+
+    first.drop(1006);
+    await h.status("reconnecting");
+    await vi.advanceTimersByTimeAsync(RECONNECT_BASE_MS);
+    await connectLive(h, 1);
+
+    failHeld();
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    expect(h.statuses.at(-1)).toEqual({ state: "connected" });
+    expect(h.watching()).toBe(2);
+    h.connection.stop();
+  });
+
   it("opens no socket for a ticket that answers after a stop", async () => {
     let asked!: () => void;
     const askedForTicket = new Promise<void>((resolve) => {

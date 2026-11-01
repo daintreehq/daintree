@@ -846,7 +846,12 @@ describe("Decisions entry", () => {
       setupRuns.claim.mockImplementation(async () => {
         writeFileSync(keyFile.path, "staged");
         return {
-          failure: { result: "unreachable", origin: CLAIMED.relayOrigin, reason: "timeout", kept: true },
+          failure: {
+            result: "unreachable",
+            origin: CLAIMED.relayOrigin,
+            reason: "timeout",
+            kept: true,
+          },
         };
       });
 
