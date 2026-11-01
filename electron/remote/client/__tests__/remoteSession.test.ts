@@ -371,15 +371,39 @@ describe("remote session wiring", () => {
     });
   });
 
-  it("never takes a Shell-owned push from a host", async () => {
+  it("never takes a Shell-owned push from a host, and a host on this build never sends one (#15901)", async () => {
     await startHarness();
     await connect();
     await invoke(HOST_CHANNEL, VIEW_A, {});
+    const crossed: string[] = [];
+    h.manager
+      .get(HOST_ID)!
+      .currentSession!.on(Lane.EVENTS, EventKind.EVENT, (body) => crossed.push(body.channel));
 
     broadcastToRenderer("accessibility:support-changed", true);
+    broadcastToRenderer(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, { percent: 40 });
     broadcastToRenderer(EVENT_CHANNEL, "term-all", "hi");
     await waitFor(() => (h.sink.delivered.get(VIEW_A)?.length ?? 0) === 1);
     expect(h.sink.delivered.get(VIEW_A)).toEqual([
+      { channel: EVENT_CHANNEL, args: ["term-all", "hi"] },
+    ]);
+    expect(crossed).toEqual([EVENT_CHANNEL]);
+  });
+
+  it("still drops a Shell-owned push a host on another build sends", async () => {
+    await startHarness();
+    const sink = await connectOlderShell();
+    await invoke(HOST_CHANNEL, VIEW_A, {});
+    const crossed: string[] = [];
+    sink.manager
+      .get(HOST_ID)!
+      .currentSession!.on(Lane.EVENTS, EventKind.EVENT, (body) => crossed.push(body.channel));
+
+    broadcastToRenderer("accessibility:support-changed", true);
+    broadcastToRenderer(EVENT_CHANNEL, "term-all", "hi");
+    await waitFor(() => (sink.delivered.get(VIEW_A)?.length ?? 0) === 1);
+    expect(crossed).toEqual(["accessibility:support-changed", EVENT_CHANNEL]);
+    expect(sink.delivered.get(VIEW_A)).toEqual([
       { channel: EVENT_CHANNEL, args: ["term-all", "hi"] },
     ]);
   });
@@ -725,7 +749,7 @@ describe("remote session wiring", () => {
     );
     older.connect(HOST_ID);
     await waitFor(() => older.connectionState(HOST_ID).status === "connected");
-    return sink;
+    return { ...sink, manager: older };
   }
 
   it("names the host and both builds when a host on another build doesn't have a channel (#13918)", async () => {

@@ -8,10 +8,16 @@ vi.mock("electron", () => ({
 
 import { EndpointRegistryImpl } from "../../../ipc/endpointRegistry.js";
 import { DriveLeaseService } from "../../../services/DriveLeaseService.js";
-import type { EndpointInvocation, RemoteSessionExpiryCause } from "../../../ipc/endpoint.js";
+import type {
+  EndpointGroup,
+  EndpointInvocation,
+  RemoteSessionExpiryCause,
+} from "../../../ipc/endpoint.js";
 import { logBuffer } from "../../../services/LogBuffer.js";
 import { wrapSuccess } from "../../../../shared/utils/ipcErrorSerialization.js";
 import type { IpcEnvelope } from "../../../../shared/types/ipc/errors.js";
+import { CHANNELS } from "../../../ipc/channels.js";
+import type { HandshakeMismatch } from "../../../../shared/types/remoteHosts.js";
 import { Lane } from "../../link/frames.js";
 import { ControlKind, EventKind } from "../../link/messages.js";
 import type { EnqueueResult } from "../../link/scheduler.js";
@@ -107,12 +113,19 @@ function fakeServer() {
       expiredListeners.add(l);
       return () => expiredListeners.delete(l);
     },
-    attach(sessionId: string, link: ReturnType<typeof fakeLink>, resumed = false, clientId = "c1") {
+    attach(
+      sessionId: string,
+      link: ReturnType<typeof fakeLink>,
+      resumed = false,
+      clientId = "c1",
+      buildMismatch: HandshakeMismatch | null = null
+    ) {
       const ctx = {
         sessionId,
         resumed,
         client: { clientId, clientName: "greg-mbp", platform: "darwin" as const },
         session: link as unknown as LinkSession,
+        buildMismatch,
       };
       for (const l of sessionListeners) l(ctx);
     },
@@ -522,7 +535,12 @@ describe("SessionHost", () => {
 });
 
 describe("SessionHost: one push for every view of a session (#15902)", () => {
-  const frame = { type: "event" as const, channel: "worktree:update", args: [{ id: "w" }] };
+  // A host-locality channel: a same-build Shell would discard anything else on arrival (#15901).
+  const frame = {
+    type: "event" as const,
+    channel: CHANNELS.WORKTREE_ACTIVATED,
+    args: [{ worktreeId: "w" }],
+  };
   const events = (link: ReturnType<typeof fakeLink>) =>
     link.posted.filter((m) => m.lane === Lane.EVENTS && m.kind === EventKind.EVENT);
   const addressed = (link: ReturnType<typeof fakeLink>) =>
@@ -777,6 +795,164 @@ describe("SessionHost: one push for every view of a session (#15902)", () => {
     group.sendToAll(frame);
     expect(events(link)).toEqual([]);
   });
+});
+
+describe("SessionHost: pushes a Shell would discard by locality (#15901)", () => {
+  /** What a host broadcast does: one session-wide event per link session's group. */
+  function broadcast(channel: string, args: unknown[]) {
+    const frame = { type: "event" as const, channel, args };
+    const groups = new Set<EndpointGroup>();
+    for (const endpoint of registry.getRemote()) {
+      if (!endpoint.group) endpoint.send(frame);
+      else if (!groups.has(endpoint.group)) {
+        groups.add(endpoint.group);
+        endpoint.group.sendToAll(frame);
+      }
+    }
+  }
+
+  const eventFrames = (link: ReturnType<typeof fakeLink>) =>
+    link.posted
+      .filter((m) => m.lane === Lane.EVENTS && m.kind === EventKind.EVENT)
+      .map((m) => m.body as { endpointId: string | null; channel: string; args: unknown[] });
+
+  it("sends no EVENT frame for a shell-locality broadcast and still sends a host-locality one", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+
+    broadcast(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, [{ percent: 40 }]);
+    expect(eventFrames(link)).toEqual([]);
+
+    broadcast(CHANNELS.TERMINAL_DATA, ["t1", "hi"]);
+    expect(eventFrames(link).map((f) => [f.endpointId, f.channel])).toEqual([
+      [null, CHANNELS.TERMINAL_DATA],
+    ]);
+  });
+
+  it("keeps a shell-locality push addressed to one view off the link too", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+    const endpoint = registry.getForProject("p1")[0]!;
+
+    endpoint.send({ type: "event", channel: CHANNELS.UPDATE_DOWNLOAD_PROGRESS, args: [{}] });
+    endpoint.send({ type: "event", channel: CHANNELS.TERMINAL_DATA, args: ["t1", "hi"] });
+    expect(eventFrames(link).map((f) => [f.endpointId, f.channel])).toEqual([
+      ["view-1", CHANNELS.TERMINAL_DATA],
+    ]);
+  });
+
+  it("decides events:push by event name and hybrid channels by the half the host owns", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+
+    broadcast(CHANNELS.EVENTS_PUSH, [{ name: "sound:cancel", payload: {} }]);
+    broadcast(CHANNELS.KEEP_AWAKE_STATE_CHANGED, [{ active: true }]);
+    broadcast(CHANNELS.EVENTS_PUSH, [{ name: "agent-session:recorded", payload: {} }]);
+    broadcast(CHANNELS.APP_CONFIG_RELOADED, []);
+
+    expect(eventFrames(link).map((f) => f.channel)).toEqual([
+      CHANNELS.EVENTS_PUSH,
+      CHANNELS.APP_CONFIG_RELOADED,
+    ]);
+    expect(eventFrames(link)[0]!.args[0]).toMatchObject({ name: "agent-session:recorded" });
+  });
+
+  it("sends nothing a matching Shell would drop as unclassified, and keeps plugin pushes", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+
+    broadcast("made:up", []);
+    broadcast(CHANNELS.EVENTS_PUSH, [{ name: "made:up", payload: {} }]);
+    broadcast(CHANNELS.EVENTS_PUSH, ["not an envelope"]);
+    broadcast("plugin:acme:status", [{ ok: true }]);
+
+    expect(eventFrames(link).map((f) => f.channel)).toEqual(["plugin:acme:status"]);
+  });
+
+  it("keeps a discarded push off a backed-up lane, so it starts no resync", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+
+    link.postResult = "refused";
+    broadcast(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, [{ percent: 40 }]);
+    link.postResult = "over-high-water";
+    link.queued = 5_000;
+    broadcast(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, [{ percent: 41 }]);
+    vi.advanceTimersByTime(100);
+
+    link.postResult = "queued";
+    link.queued = 0;
+    broadcast(CHANNELS.TERMINAL_DATA, ["t1", "hi"]);
+    link.tick();
+    expect(eventFrames(link).map((f) => f.channel)).toEqual([CHANNELS.TERMINAL_DATA]);
+    expect(link.calls).toEqual([]);
+  });
+
+  it("owes no resync for a discarded push that met a closing link", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+
+    // Closed but not yet reported closed: drop() would mark every endpoint stale itself.
+    link.isOpen = false;
+    broadcast(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, [{ percent: 40 }]);
+    link.isOpen = true;
+    link.tick();
+    expect(link.calls).toEqual([]);
+
+    broadcast(CHANNELS.TERMINAL_DATA, ["t1", "hi"]);
+    expect(eventFrames(link).map((f) => f.channel)).toEqual([CHANNELS.TERMINAL_DATA]);
+  });
+
+  it("follows the build of the Shell's latest attach across resumes", () => {
+    const mismatch: HandshakeMismatch = { kind: "version", local: "1.2.3", remote: "1.2.4" };
+    const sent = (link: ReturnType<typeof fakeLink>) => {
+      broadcast(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, [{ percent: 40 }]);
+      return eventFrames(link).length;
+    };
+    const first = fakeLink();
+    server.attach("s1", first);
+    open(first, "view-1", "p1");
+    expect(sent(first)).toBe(0);
+
+    first.drop();
+    const second = fakeLink();
+    server.attach("s1", second, true, "c1", mismatch);
+    expect(sent(second)).toBe(1);
+
+    second.drop();
+    const third = fakeLink();
+    server.attach("s1", third, true);
+    expect(sent(third)).toBe(0);
+  });
+
+  it.each<[string, HandshakeMismatch]>([
+    ["version", { kind: "version", local: "1.2.3", remote: "1.2.4" }],
+    ["commit", { kind: "commit", local: "abc", remote: "def" }],
+  ])(
+    "keeps sending everything to a Shell on another %s, whose own tables decide",
+    (_, mismatch) => {
+      const link = fakeLink();
+      server.attach("s1", link, false, "c1", mismatch);
+      open(link, "view-1", "p1");
+
+      broadcast(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, [{ percent: 40 }]);
+      broadcast(CHANNELS.EVENTS_PUSH, [{ name: "made:up", payload: {} }]);
+      broadcast(CHANNELS.TERMINAL_DATA, ["t1", "hi"]);
+      expect(eventFrames(link).map((f) => f.channel)).toEqual([
+        CHANNELS.UPDATE_DOWNLOAD_PROGRESS,
+        CHANNELS.EVENTS_PUSH,
+        CHANNELS.TERMINAL_DATA,
+      ]);
+    }
+  );
 });
 
 describe("SessionHost: endpoint changes a dropped link lost (#13917)", () => {
