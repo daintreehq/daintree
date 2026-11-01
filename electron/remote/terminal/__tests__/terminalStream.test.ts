@@ -1000,6 +1000,39 @@ describe("terminal stream over the link", () => {
     expect(h.renderer().ofType("reset")).toHaveLength(2);
   });
 
+  it("confirms the reset a renderer took when an earlier one at the same point never reached it", async () => {
+    const h = await setup({ ackTimeoutMs: 10_000 });
+    h.snapshots.set("t1", "SNAP");
+    await h.connectLink();
+    // Larger than anything acked after: counting acks never ends the catch-up.
+    const pre = h.pty().emit("t1", "x".repeat(1000));
+    await waitFor(() => rendererData(h).length === 1);
+    // The view reloads: the first reset finds no renderer port, and the new
+    // document asks for another at the same point.
+    h.renderer().close();
+    await waitFor(() => !h.relay.hasRendererPort);
+    await h.client.call(TERMINAL_RESUME_METHOD, {
+      endpointId: ENDPOINT,
+      terminals: [{ id: "t1", incarnation: 1, lastSeq: 1, reset: true }],
+    });
+    await waitFor(() => h.resets.length === 1);
+    h.relay.deliverPort();
+    await waitFor(() => h.renderer().ofType("reset").length === 1);
+
+    h.renderer().post({ type: "reset-ack", id: "t1" });
+    const during = h.pty().emit("t1", "restored");
+    await waitFor(() => rendererData(h).length === 1);
+    await waitFor(() => h.pty().ackedBytes("t1") === pre + during);
+    h.renderer().post({ type: "ack", id: "t1", bytes: during });
+    await hostCaughtUp(h);
+    const live = h.pty().emit("t1", "live");
+    await waitFor(() => rendererData(h).includes("live"));
+    await hostCaughtUp(h);
+    expect(h.pty().ackedBytes("t1")).toBe(pre + during);
+    h.renderer().post({ type: "ack", id: "t1", bytes: live });
+    await waitFor(() => h.pty().ackedBytes("t1") === pre + during + live);
+  });
+
   it("never times out output still waiting in the ring for a busy lane", async () => {
     const h = await setup({ ackTimeoutMs: 100 });
     await h.connectLink();
@@ -1097,6 +1130,7 @@ describe("terminal stream over the link", () => {
     h.pty().emit("t1", "a");
     await waitFor(() => rendererData(h).length === 1);
     h.renderer().post({ type: "ack", id: "t1", bytes: 1 });
+    await waitFor(() => h.pty().ackedBytes("t1") === 1);
     await requestRepaint(h, 1);
 
     for (let i = 0; i < 3; i++) h.pty().emit("t1", String(i).repeat(10));

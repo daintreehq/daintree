@@ -84,7 +84,7 @@ interface AckTrack {
   /** Acks for output before this were settled by the host at a resume. */
   forwardFrom: number;
   /** Resets delivered to the renderer it has not yet said it took, oldest first. */
-  resets: { at: number; session: LinkSession | null; incarnation: number; seq: number }[];
+  resets: { at: number; session: number; incarnation: number; seq: number }[];
 }
 
 interface HeldWrite {
@@ -108,6 +108,8 @@ export class ClientTerminalRelay {
   private port: PortLike | null = null;
   private portsDelivered = 0;
   private session: LinkSession | null = null;
+  /** Counts the sessions attached, so a reset can say which one it came on. */
+  private sessionNumber = 0;
   private sessionCleanup: (() => void)[] = [];
   private readonly positions = new Map<string, Position>();
   private readonly resuming = new Set<string>();
@@ -190,6 +192,7 @@ export class ClientTerminalRelay {
     if (this.disposed || this.session === session) return;
     this.detach();
     this.session = session;
+    this.sessionNumber++;
     this.sessionCleanup = [
       session.on(Lane.INTERACTIVE, InteractiveKind.TERMINAL_OUT, (body) => {
         if (body.endpointId !== this.endpointId) return;
@@ -267,7 +270,7 @@ export class ClientTerminalRelay {
     if (!reset) return;
     // It dropped what it still owed acks for when it took the reset.
     track.acked = Math.max(track.acked, reset.at);
-    if (reset.session !== this.session) return;
+    if (!this.session || reset.session !== this.sessionNumber) return;
     this.sendIn({
       type: "reset-ack",
       id: message.id,
@@ -432,7 +435,7 @@ export class ClientTerminalRelay {
     // Undelivered, the position stays put and the next port asks for another reset.
     if (!safePost(this.port, { type: "reset", id, snapshot })) return;
     const track = this.ackTrack(id);
-    track.resets.push({ at: track.delivered, session: this.session, incarnation, seq });
+    track.resets.push({ at: track.delivered, session: this.sessionNumber, incarnation, seq });
     this.setPosition(id, { incarnation, lastSeq: seq });
   }
 
@@ -488,7 +491,10 @@ export class ClientTerminalRelay {
       if (this.session === session) for (const id of wanted) this.resuming.delete(id);
       if (this.session !== session) return;
       if (reset && answered) this.resetOwed = false;
-      for (const id of forget) this.positions.delete(id);
+      for (const id of forget) {
+        this.positions.delete(id);
+        this.acks.delete(id);
+      }
       if (forget.length > 0) {
         const suppressedCount = logLimiter.take(`resume-forgot:${this.endpointId}:${answered}`);
         if (suppressedCount !== null) {

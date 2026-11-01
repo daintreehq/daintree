@@ -1108,12 +1108,18 @@ export class TerminalStreamBridge {
    */
   private onResetAck(stream: StreamState, incarnation?: number, seq?: number): void {
     const ledger = stream.ledger;
-    const index = ledger.unconfirmedResets.findIndex(
-      (reset) =>
-        (incarnation === undefined || reset.incarnation === incarnation) &&
-        (seq === undefined || reset.seq === seq)
-    );
+    const matches = (reset: { incarnation: number; seq: number }) =>
+      (incarnation === undefined || reset.incarnation === incarnation) &&
+      (seq === undefined || reset.seq === seq);
+    let index = ledger.unconfirmedResets.findIndex(matches);
     if (index < 0) return;
+    // Resets that share a seq had nothing posted between them: the last is the one it took.
+    while (
+      index + 1 < ledger.unconfirmedResets.length &&
+      matches(ledger.unconfirmedResets[index + 1]!)
+    ) {
+      index++;
+    }
     const [reset] = ledger.unconfirmedResets.splice(0, index + 1).slice(-1);
     ledger.ackedTo = reset!.at;
     // From here an ack is for output after the reset, so only those count
