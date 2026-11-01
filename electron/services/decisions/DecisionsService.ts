@@ -9,8 +9,15 @@ import type {
 } from "../../../shared/types/decisions.js";
 import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
 import { decisionsLibraries, type DecisionsLibraries } from "./libraries.js";
-import { openDecisionsLocalStore } from "./openLocalStore.js";
+import { openDecisionsLocalStore, openDecisionsRows } from "./openLocalStore.js";
 import { decisionsKeyFilePath, SealedKeyStore } from "./keyStore.js";
+import {
+  eraseLocalDecisionsData,
+  finishInterruptedErase,
+  type DecisionsRows,
+  type LocalEraseDeps,
+  type LocalEraseOutcome,
+} from "./localData.js";
 import { PaneDecisionStates, type PaneDecisionStatePublisher } from "./paneDecisionState.js";
 
 export type DecisionsStatusListener = (event: DecisionsStatusEvent) => void;
@@ -26,6 +33,13 @@ export interface DecisionsServiceOptions {
   keyFilePath?: () => string;
   /** Sends one pane's state to its project's views (`terminal:decision-state`). */
   publishPaneState?: PaneDecisionStatePublisher;
+  /** The stored rows, for deleting them: the app database's unless a test says otherwise. */
+  openRows?: () => Promise<DecisionsRows>;
+  /**
+   * Saves the setting without the relay's origin and ids, returning what was
+   * saved; throws when it can't. A deletion of local data (#16025) calls it.
+   */
+  forgetIdentity?: () => DecisionsSettings;
 }
 
 /**
@@ -50,11 +64,19 @@ export class DecisionsService {
   private readonly keyFilePath: () => string;
   private keyStore: SealedKeyStore | null = null;
   private readonly panes: PaneDecisionStates;
+  private readonly openRows: () => Promise<DecisionsRows>;
+  private readonly forgetIdentity: () => DecisionsSettings;
 
   constructor(options: DecisionsServiceOptions = {}) {
     this.openStore = options.openStore ?? openDecisionsLocalStore;
     this.keyFilePath = options.keyFilePath ?? decisionsKeyFilePath;
     this.panes = new PaneDecisionStates(options.publishPaneState ?? (() => {}));
+    this.openRows = options.openRows ?? openDecisionsRows;
+    this.forgetIdentity =
+      options.forgetIdentity ??
+      (() => {
+        throw new Error("Nothing saves the Decisions setting here");
+      });
   }
 
   getStatus(): DecisionsStatus {
@@ -142,12 +164,53 @@ export class DecisionsService {
       // socket until one opens, so on is honestly "not connected" for now.
       if (this.state === "off") this.setState("not-connected");
       if (this.store) return;
+      // A deletion that stopped partway is finished or undone before any row
+      // can be written, since the rows left are how it tells which.
+      await finishInterruptedErase(this.eraseDeps());
+      if (this.disposed) return;
       const opened = await this.openStore(() => this.disposed);
       if (this.disposed) {
         await opened?.close();
         return;
       }
       this.store = opened;
+    });
+  }
+
+  /**
+   * Deletes this computer's Decisions data (#16025): the stored rows, the key
+   * file and the relay record in the setting. The store and the key store
+   * close first, committing what was queued, and an empty store opens after,
+   * so the lifetime carries on with nothing stored. A deletion that didn't
+   * finish leaves the store closed, since a row written now would read as one
+   * it never reached; the next start finishes it first. Only while on.
+   */
+  eraseLocalData(): Promise<LocalEraseOutcome> {
+    return this.enqueue(async () => {
+      if (this.disposed || this.settings === null) {
+        throw new Error("Decisions is off, so its data can't be deleted");
+      }
+      const store = this.store;
+      const keyStore = this.keyStore;
+      this.store = null;
+      this.keyStore = null;
+      try {
+        await store?.close();
+      } finally {
+        await keyStore?.close();
+      }
+      const outcome = await eraseLocalDecisionsData(this.eraseDeps());
+      // Every row is gone, so no pane has anything outstanding.
+      if (outcome.result !== "failed") this.panes.clear(true);
+      if (outcome.result !== "incomplete" && !this.disposed && this.settings !== null) {
+        try {
+          this.store = await this.openStore(() => this.disposed);
+        } catch (err) {
+          // The next start tries again; the deletion stands either way.
+          console.warn("[Decisions] The store didn't reopen after deleting data:", err);
+        }
+      }
+      return outcome;
     });
   }
 
@@ -189,9 +252,23 @@ export class DecisionsService {
     }
   }
 
-  private enqueue(step: () => void | Promise<void>): Promise<void> {
+  private eraseDeps(): LocalEraseDeps {
+    return {
+      keyFilePath: this.keyFilePath(),
+      openRows: this.openRows,
+      forgetIdentity: () => {
+        const saved = this.forgetIdentity();
+        if (this.settings !== null && saved.enabled) this.settings = saved;
+      },
+    };
+  }
+
+  private enqueue<T>(step: () => T | Promise<T>): Promise<T> {
     const run = this.transitions.then(step);
-    this.transitions = run.catch(() => {});
+    this.transitions = run.then(
+      () => {},
+      () => {}
+    );
     return run;
   }
 

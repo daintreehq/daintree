@@ -298,9 +298,18 @@ export interface GeneratedElectronAPI {
     claimRelay(
       ...args: IpcInvokeMap["decisions:claim-relay"]["args"]
     ): Promise<IpcInvokeMap["decisions:claim-relay"]["result"]>;
+    deleteLocalData(
+      ...args: IpcInvokeMap["decisions:delete-local-data"]["args"]
+    ): Promise<IpcInvokeMap["decisions:delete-local-data"]["result"]>;
+    deleteRelayData(
+      ...args: IpcInvokeMap["decisions:delete-relay-data"]["args"]
+    ): Promise<IpcInvokeMap["decisions:delete-relay-data"]["result"]>;
     disconnectRelay(
       ...args: IpcInvokeMap["decisions:disconnect-relay"]["args"]
     ): Promise<IpcInvokeMap["decisions:disconnect-relay"]["result"]>;
+    exportData(
+      ...args: IpcInvokeMap["decisions:export-data"]["args"]
+    ): Promise<IpcInvokeMap["decisions:export-data"]["result"]>;
     getPaneState(
       ...args: IpcInvokeMap["decisions:get-pane-state"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-pane-state"]["result"]>;

@@ -610,9 +610,21 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisions.js").ClaimDecisionsRelayPayload];
     result: import("../decisions.js").DecisionsConnectResult;
   };
+  "decisions:delete-local-data": {
+    args: [];
+    result: import("../decisions.js").DecisionsLocalDeleteResult;
+  };
+  "decisions:delete-relay-data": {
+    args: [payload: import("../decisions.js").DeleteDecisionsRelayDataPayload];
+    result: import("../decisions.js").DecisionsRelayDeleteResult;
+  };
   "decisions:disconnect-relay": {
     args: [];
     result: import("../decisions.js").DecisionsStatus;
+  };
+  "decisions:export-data": {
+    args: [payload: import("../decisions.js").ExportDecisionsDataPayload];
+    result: import("../decisions.js").DecisionsExportResult;
   };
   "decisions:get-pane-state": {
     args: [terminalId: string];

@@ -227,6 +227,97 @@ export type DecisionsConnectResult =
     };
 
 /**
+ * Exporting this computer's decision history (#16025). The archive is
+ * encrypted with the passphrase, which goes no further than the encryption.
+ */
+export interface ExportDecisionsDataPayload {
+  passphrase: string;
+}
+
+/** The shortest export passphrase the library's archive encryption accepts. */
+export const DECISIONS_EXPORT_PASSPHRASE_MIN_LENGTH = 12;
+
+/**
+ * What an export observed (#16025). Only `saved` wrote a file.
+ *
+ * - `saved`: the encrypted archive is at `path`, holding the questions and
+ *   audit events counted.
+ * - `cancelled`: no file was chosen, or Decisions stopped before one was written.
+ * - `no-identity`: this computer holds no complete Decisions identity, so the
+ *   stored history, sealed under its keys, can't be opened.
+ * - `key-storage`: the keys couldn't be read.
+ * - `store-unavailable`: the stored history isn't open (it couldn't be opened
+ *   when Decisions started).
+ */
+export type DecisionsExportResult =
+  | { result: "saved"; path: string; questions: number; auditEvents: number }
+  | { result: "cancelled" }
+  | { result: "no-identity" }
+  | { result: "key-storage"; kind: DecisionsKeyStorageFailure; reason: string }
+  | { result: "store-unavailable" };
+
+/**
+ * Deleting the relay's stored questions, answers and attachments (#16025).
+ * `origin` is the relay the person confirmed, so a relay set up since then is
+ * never the one deleted from.
+ */
+export interface DeleteDecisionsRelayDataPayload {
+  origin: string;
+}
+
+/** Why the relay refused a deletion. Nothing was deleted for any of them. */
+export type DecisionsRelayDeleteRefusal =
+  /** It doesn't accept this computer as its owner. */
+  | "not-recognised"
+  | "rate-limited"
+  | "rejected";
+
+/**
+ * What deleting the relay's data observed (#16025). This computer's history,
+ * keys and settings are untouched by every one of them.
+ *
+ * - `deleted`: the relay answered that its questions, answers and attachments are deleted.
+ * - `not-sent`: the request never reached the relay; nothing there changed.
+ * - `unconfirmed`: the request may have reached the relay, but no answer
+ *   confirmed it (`server-error`: it answered with a failure;
+ *   `unexpected-answer`: a success that wasn't the relay's). The relay may
+ *   have deleted some or all of it.
+ * - `refused`: the relay refused the request.
+ * - `changed`: the relay set up here is no longer the one confirmed (`origin`
+ *   is the one set up now, null for none); nothing was sent.
+ * - `no-identity`: this computer holds no owner identity for the relay, so it can't sign the request.
+ * - `key-storage`: the keys couldn't be read.
+ */
+export type DecisionsRelayDeleteResult =
+  | { result: "deleted"; origin: string }
+  | { result: "not-sent"; origin: string; reason: DecisionsRelayUnreachableReason }
+  | {
+      result: "unconfirmed";
+      origin: string;
+      reason: DecisionsRelayUnreachableReason | "server-error" | "unexpected-answer";
+    }
+  | { result: "refused"; origin: string; reason: DecisionsRelayDeleteRefusal; status: number }
+  | { result: "changed"; origin: string | null }
+  | { result: "no-identity"; origin: string }
+  | { result: "key-storage"; kind: DecisionsKeyStorageFailure; reason: string };
+
+/**
+ * What deleting this computer's Decisions data observed (#16025): its stored
+ * history, its keys and its record of the relay. Nothing is sent to the relay.
+ *
+ * - `deleted`: all three are gone; `status` is Decisions as it is now.
+ * - `failed`: nothing was deleted (`disk-pressure`: writes are refused while
+ *   disk space is critical; `storage`: the database refused; `keys`: the key
+ *   file couldn't be moved).
+ * - `incomplete`: the history is deleted, but a last step didn't finish;
+ *   Decisions finishes it the next time it starts, and holds no history until then.
+ */
+export type DecisionsLocalDeleteResult =
+  | { result: "deleted"; status: DecisionsStatus }
+  | { result: "failed"; reason: "disk-pressure" | "storage" | "keys" }
+  | { result: "incomplete"; status: DecisionsStatus };
+
+/**
  * How far an answer has got on its way into the terminal, as the client
  * library records it per question. Mirrors its `LocalDeliveryStatus`.
  */
