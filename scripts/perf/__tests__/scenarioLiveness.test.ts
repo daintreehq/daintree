@@ -181,6 +181,8 @@ const WALL_CLOCK_TIMED: Readonly<Record<string, string>> = {
   "PERF-033": "-1 — the pipeline plans ARE the bracket; no sub-timing to report",
   "PERF-034": "-1 — the pipeline plans ARE the bracket; no sub-timing to report",
   "PERF-035": "-1 — the awaited fleet sweep is the workload; cost is reported as cpuMs metrics",
+  "PERF-037":
+    "-1 — counts only: arrivals run on a virtual clock, so there is no real duration to report",
   "PERF-042":
     "0 — reports event-loop lag; its own elapsed time is the synthetic load, not a reading",
   "PERF-074": "0 — counts only: no renderer, so no phase on the switch path has an honest duration",

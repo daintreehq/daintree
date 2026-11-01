@@ -149,6 +149,14 @@ const FAMILIES: readonly Family[] = [
       "Real ingest, chunking and retention against a fake IPty and a headless terminal. No Chromium scheduling and no paint: this is parse-side cost, not perceived latency.",
   },
   {
+    label: "agent output forwarding",
+    ids: ["PERF-037"],
+    kind: "mechanism",
+    fidelity: withFidelity({ pty: "fake" }),
+    claim:
+      "The real PtyDataPipeline and AgentOutputForwarder over a fake IPty, counting agent:output emits and their UTF-8 bytes on the host's event bus, which is what pty-host.ts sends to Main one message per emit. Chunk arrivals follow a declared rate on a virtual clock, so the batching is the forwarder's own but the timing is simulated. It counts what would cross to Main, not what Main spends on it: no utility-process transport, no Main handlers, no CPU reading.",
+  },
+  {
     label: "xterm write-to-parse",
     ids: ["PERF-033", "PERF-034"],
     kind: "mechanism",

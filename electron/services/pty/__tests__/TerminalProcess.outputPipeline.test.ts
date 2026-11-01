@@ -4,6 +4,8 @@ import type { IPty } from "node-pty";
 import { RATE_LIMIT_SETTLE_MS, TerminalProcess } from "../TerminalProcess.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 import { events } from "../../events.js";
+import { AgentOutputForwarder } from "../AgentOutputForwarder.js";
+import { OUTPUT_BUFFER_SIZE } from "../types.js";
 
 vi.mock("../../../utils/windowsTreeKill.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../utils/windowsTreeKill.js")>()),
@@ -594,6 +596,8 @@ describe("TerminalProcess rate-limit fallback offer (#14370)", () => {
 });
 
 describe("TerminalProcess agent:output coalescing", () => {
+  // Only the Assistant's output is forwarded to Main (#15667).
+  const assistant = { launchAgentId: "claude", isAssistantTerminal: true } as const;
   let received: Array<{ agentId: string; data: string; terminalId?: string }>;
   let unsubscribe: () => void;
 
@@ -613,7 +617,7 @@ describe("TerminalProcess agent:output coalescing", () => {
   });
 
   it("coalesces multiple chunks into one emit on the flush timer", () => {
-    const terminal = createTerminal({ launchAgentId: "claude" });
+    const terminal = createTerminal(assistant);
     expect(ptyOnDataCallback).not.toBeNull();
 
     ptyOnDataCallback!("chunk-a");
@@ -630,13 +634,34 @@ describe("TerminalProcess agent:output coalescing", () => {
   });
 
   it("flushes immediately when pending output reaches the size cap", () => {
-    const terminal = createTerminal({ launchAgentId: "claude" });
+    const terminal = createTerminal(assistant);
     const big = "x".repeat(2500);
 
     ptyOnDataCallback!(big);
     expect(received).toHaveLength(1);
     expect(received[0].data).toBe(big);
 
+    terminal.dispose();
+  });
+
+  it("emits nothing for an agent terminal that is not the Assistant", () => {
+    const queue = vi.spyOn(AgentOutputForwarder.prototype, "queue");
+    const emitData = vi.fn();
+    const terminal = createTerminal({ launchAgentId: "claude" }, { emitData });
+    const big = "x".repeat(2500);
+
+    ptyOnDataCallback!("agent output");
+    ptyOnDataCallback!(big);
+    vi.advanceTimersByTime(100);
+    terminal.kill("user requested");
+
+    expect(received).toHaveLength(0);
+    expect(queue).not.toHaveBeenCalled();
+    // The renderer and the host-local ring still get every byte.
+    expect(emitData.mock.calls.map((call) => call[1]).join("")).toBe(`agent output${big}`);
+    expect(terminal.getInfo().outputBuffer).toBe(`agent output${big}`.slice(-OUTPUT_BUFFER_SIZE));
+
+    queue.mockRestore();
     terminal.dispose();
   });
 
@@ -655,7 +680,7 @@ describe("TerminalProcess agent:output coalescing", () => {
     const offOrder = events.on("agent:output", () => {
       order.push("output");
     });
-    const terminal = createTerminal({ launchAgentId: "claude" }, undefined, {
+    const terminal = createTerminal(assistant, undefined, {
       updateAgentState: () => {
         order.push("state");
       },
@@ -675,7 +700,7 @@ describe("TerminalProcess agent:output coalescing", () => {
   });
 
   it("flushes pending output on dispose without waiting for the timer", () => {
-    const terminal = createTerminal({ launchAgentId: "claude" });
+    const terminal = createTerminal(assistant);
 
     ptyOnDataCallback!("last-words");
     expect(received).toHaveLength(0);

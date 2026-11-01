@@ -258,7 +258,7 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     category: "agent",
     requiresContext: true,
     requiresTimestamp: true,
-    description: "Agent produced output (sanitized in EventBuffer)",
+    description: "Daintree Assistant terminal produced output (sanitized in EventBuffer)",
   },
   "agent:completed": {
     category: "agent",
@@ -784,7 +784,9 @@ export type DaintreeEventMap = {
   };
 
   /**
-   * Emitted when an agent produces output.
+   * Emitted when an agent in a Daintree Assistant terminal produces output.
+   * Other agent terminals' output never leaves the PTY host this way: Main
+   * has no reader for it (#15667).
    * Note: This is separate from terminal data and may be parsed/structured.
    * WARNING: The data field may contain sensitive information (API keys, secrets, etc.).
    * Consumers should sanitize or redact before logging/persisting.

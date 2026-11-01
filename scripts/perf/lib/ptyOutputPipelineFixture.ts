@@ -82,7 +82,7 @@ const TERMINAL_ID = "perf-terminal";
 const DETECTED_AGENT_ID = "claude";
 const LAUNCH_AGENT_ID = "codex";
 /** What `getLiveAgentId` must therefore return on every chunk. */
-const EXPECTED_LIVE_AGENT_ID = DETECTED_AGENT_ID;
+export const EXPECTED_LIVE_AGENT_ID = DETECTED_AGENT_ID;
 /** Blanked before every chunk, so a re-stamp is the only way back to now. */
 const STALE_OUTPUT_STAMP = 0;
 
@@ -144,7 +144,7 @@ const OUTPUT_LINES = [
   "  \x1b[2mtrace\x1b[0m worker pool drained, 4 idle threads",
 ] as const;
 
-const OSC_11_QUERY = "\x1b]11;?\x07";
+export const OSC_11_QUERY = "\x1b]11;?\x07";
 /** OSC 12 (cursor colour) — passes the `\x1b]1` gate, is not a colour query. */
 const OSC_12_DECOY = "\x1b]12;?\x07";
 
@@ -301,6 +301,17 @@ export interface PipelineHarness {
   dispose(): void;
 }
 
+export interface PipelineHarnessOptions {
+  /**
+   * The spawn stamp for a PTY backing the Daintree Assistant. Defaults to true
+   * so PERF-030..032 keep grading the agent output queue: only an Assistant
+   * terminal's output is queued for Main. PERF-037 runs both kinds.
+   */
+  isAssistantTerminal?: boolean;
+  /** Receives every queued chunk after it is counted, e.g. a real forwarder. */
+  onAgentOutput?: (agentId: string, data: string) => void;
+}
+
 /**
  * Build one real `PtyDataPipeline` over a real terminal record.
  *
@@ -309,7 +320,10 @@ export interface PipelineHarness {
  * actually touches are populated. The cast is the fixture admitting that, not
  * papering over a missing dependency.
  */
-export function createPipelineHarness(terminalId = TERMINAL_ID): PipelineHarness {
+export function createPipelineHarness(
+  terminalId = TERMINAL_ID,
+  options: PipelineHarnessOptions = {}
+): PipelineHarness {
   let emitCalls = 0;
   let emittedChars = 0;
   let analysisFeeds = 0;
@@ -337,6 +351,7 @@ export function createPipelineHarness(terminalId = TERMINAL_ID): PipelineHarness
     semanticBuffer: [] as string[],
     detectedAgentId: DETECTED_AGENT_ID,
     launchAgentId: LAUNCH_AGENT_ID,
+    isAssistantTerminal: options.isAssistantTerminal ?? true,
     agentState: "working",
     // Both start where a freshly spawned terminal starts them: no byte has
     // arrived yet, so `firstByteAt` is absent and there is no output stamp.
@@ -418,6 +433,7 @@ export function createPipelineHarness(terminalId = TERMINAL_ID): PipelineHarness
       // the wrong agent, and the wrong bytes.
       if (agentId !== EXPECTED_LIVE_AGENT_ID) agentQueueIdMisses += 1;
       agentQueueChars += data.length;
+      options.onAgentOutput?.(agentId, data);
     },
     shouldDiscardCapturedChunk: (): boolean => false,
   });

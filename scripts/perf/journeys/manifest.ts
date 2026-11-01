@@ -150,6 +150,7 @@ export const JOURNEYS: readonly JourneyDefinition[] = [
       "PERF-034",
       "PERF-035",
       "PERF-036",
+      "PERF-037",
       "PERF-110",
       "PERF-111",
       "PERF-112",
