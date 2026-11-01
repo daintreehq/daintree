@@ -2919,6 +2919,39 @@ describe("wake scopes (#15999)", () => {
     expect(w.outcomes).toEqual([{ kind: "unavailable", reason: "stopped" }]);
   });
 
+  it("ends a wake once when its own hooks end its scope, while another scope keeps the pane", async () => {
+    const h = setup({ enabled: false });
+    const keeper = h.service.openWakeScope();
+    const kept = fakeWake("decision-0");
+    kept.wake.retired = [{ hostName: "studio-02", count: 2 }];
+    keeper.enqueueWake(PANE, PROJECT, kept.wake);
+    const recheckScope = h.service.openWakeScope();
+    const rechecked = fakeWake("decision-1");
+    let rechecks = 0;
+    // Ready when queued; at delivery its hook ends the scope and reports it gone too.
+    rechecked.wake.recheck = () => {
+      if (rechecks++ === 0) return { kind: "ready" };
+      recheckScope.release();
+      return { kind: "unavailable", reason: "moved-on" };
+    };
+    const reserveScope = h.service.openWakeScope();
+    const reserved = fakeWake("decision-2");
+    reserved.wake.beforeType = () => {
+      reserveScope.release();
+      return true;
+    };
+    recheckScope.enqueueWake(PANE, PROJECT, rechecked.wake);
+    reserveScope.enqueueWake(PANE, PROJECT, reserved.wake);
+
+    await flushWake();
+    expect(h.client.submitted.map((s) => s.text)).toEqual([
+      formatRetiredExchangesLine([{ hostName: "studio-02", count: 2 }]),
+    ]);
+    expect(rechecked.outcomes).toEqual([{ kind: "unavailable", reason: "stopped" }]);
+    expect(reserved.outcomes).toEqual([{ kind: "unavailable", reason: "stopped" }]);
+    expect(kept.outcomes).toEqual([{ kind: "delivered" }]);
+  });
+
   it("stays subscribed when a wake replaces the pane's only other owner", () => {
     const h = setup({ enabled: false });
     h.client.terminals.set(OWN, working());

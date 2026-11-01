@@ -1539,6 +1539,8 @@ export class TerminalNotifyService {
         continue;
       }
       const check = recheckWake(entry.wake);
+      // Its hook may have ended it already, scope or pane, with its outcome.
+      if (owner.wakes.get(id) !== entry) continue;
       if (check.kind === "unavailable") {
         owner.wakes.delete(id);
         reportWake(entry.wake, check);
@@ -2535,8 +2537,10 @@ export class TerminalNotifyService {
       reserved = entry.wake.beforeType();
     } catch (err) {
       console.error("[MCP] terminal notify: reserving a lane wake failed:", err);
-      owner.wakes.delete(entry.key);
-      reportWake(entry.wake, { kind: "unavailable", reason: "reserve-failed" });
+      if (owner.wakes.get(entry.key) === entry) {
+        owner.wakes.delete(entry.key);
+        reportWake(entry.wake, { kind: "unavailable", reason: "reserve-failed" });
+      }
       return false;
     }
     if (!reserved) owner.wakes.delete(entry.key);

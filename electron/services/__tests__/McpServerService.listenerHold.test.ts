@@ -401,9 +401,12 @@ describe("McpServerService listener holds (#15999)", () => {
 
     await service.setPort(target);
     expect(close).toHaveBeenCalledTimes(1);
-    expect(hold.port).toBe(target);
+    // From the new port up: another process may have taken it meanwhile.
+    const moved = hold.port!;
+    expect(moved).toBeGreaterThanOrEqual(target);
+    expect(moved).not.toBe(before);
     expect(service.isRunning).toBe(false);
-    expect((await request(target, "/mcp/feature")).status).toBe(200);
+    expect((await request(moved, "/mcp/feature")).status).toBe(200);
     await expect(request(before, "/mcp/feature")).rejects.toMatchObject({ code: "ECONNREFUSED" });
   });
 
@@ -441,8 +444,10 @@ describe("McpServerService listener holds (#15999)", () => {
     const target = await freePort();
 
     await Promise.all([service.setEnabled(false), service.setPort(target)]);
-    expect(hold.port).toBe(target);
-    expect((await request(target, "/mcp/feature")).status).toBe(200);
+    const moved = hold.port!;
+    expect(moved).toBeGreaterThanOrEqual(target);
+    expect(moved).not.toBe(before);
+    expect((await request(moved, "/mcp/feature")).status).toBe(200);
     await expect(request(before, "/mcp/feature")).rejects.toMatchObject({ code: "ECONNREFUSED" });
   });
 
@@ -485,17 +490,23 @@ describe("McpServerService listener holds (#15999)", () => {
       });
       req.on("error", reject);
     });
-    req.flushHeaders();
-    // The handshake is under way, waiting on its body, when the server goes off.
-    await vi.waitFor(() => expect(store.sessionTierMap.size).toBe(1));
-    await service.setEnabled(false);
-    req.end(INIT_BODY);
+    // Settled however the test ends, so a failure below leaves no stray rejection.
+    answered.catch(() => {});
+    try {
+      req.flushHeaders();
+      // The handshake is under way, waiting on its body, when the server goes off.
+      await vi.waitFor(() => expect(store.sessionTierMap.size).toBe(1), { timeout: 5_000 });
+      await service.setEnabled(false);
+      req.end(INIT_BODY);
 
-    const { status, sessionId } = await answered;
-    expect(status).toBe(200);
-    await vi.waitFor(() => expect(store.httpSessions.size).toBe(0));
-    await service.setEnabled(true);
-    expect((await callOnSession(port, API_KEY, sessionId!)).status).toBe(404);
+      const { status, sessionId } = await answered;
+      expect(status).toBe(200);
+      await vi.waitFor(() => expect(store.httpSessions.size).toBe(0), { timeout: 5_000 });
+      await service.setEnabled(true);
+      expect((await callOnSession(port, API_KEY, sessionId!)).status).toBe(404);
+    } finally {
+      req.destroy();
+    }
   });
 
   it("keeps a hold's queued wakes and ends the rest when the server is turned off", async () => {

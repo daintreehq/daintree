@@ -1245,6 +1245,12 @@ export class HttpLifecycle {
   }
 
   private async halt(closeListener: boolean): Promise<void> {
+    // A restart the holds are waiting on survives the control surface stopping;
+    // one a close owes goes now, even if that close only joins a stop under way.
+    if (this.restartTimer && (closeListener || this.holds.size === 0)) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
     if (this.stopPromise) {
       await this.stopPromise;
       // The stop joined may have kept the listener, for a hold since gone or
@@ -1255,11 +1261,6 @@ export class HttpLifecycle {
       return;
     }
 
-    // A restart the holds are waiting on survives the control surface stopping.
-    if (this.restartTimer && (closeListener || this.holds.size === 0)) {
-      clearTimeout(this.restartTimer);
-      this.restartTimer = null;
-    }
     if (this.stableTimer) {
       clearTimeout(this.stableTimer);
       this.stableTimer = null;

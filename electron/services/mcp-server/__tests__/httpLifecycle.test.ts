@@ -447,6 +447,20 @@ describe("HttpLifecycle", () => {
       expect(lc.isListening).toBe(false);
     });
 
+    it("drops a pending restart when shutdown joins a stop the holds survived", async () => {
+      const servers = serveMocks();
+      const lc = new HttpLifecycle(fakeDeps());
+      lc.isEnabled = () => true;
+      await lc.start({} as unknown as never);
+      await lc.holdListener("feature", heldRoute());
+      closeUnexpectedly(servers[0]);
+
+      await Promise.all([lc.stop(), lc.shutdown()]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(servers).toHaveLength(1);
+      expect(lc.isListening).toBe(false);
+    });
+
     it("refuses a hold that shutdown ended while its listener was opening", async () => {
       const s = mockServer();
       let bind: (() => void) | undefined;
