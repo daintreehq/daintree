@@ -1782,7 +1782,7 @@ describe("buildInputBarTheme", () => {
     }
   });
 
-  it("floors chip pills at the content line-height rather than pinning a fixed height", () => {
+  it("floors chip pills so pill and margin fill the content line, without pinning a height", () => {
     const css = readGeneratedCss([buildInputBarTheme(theme)]);
     const contentLineHeight = parseDeclarations(extractRuleBody(css, ".cm-content"))["line-height"];
     expect(contentLineHeight).toBeDefined();
@@ -1800,10 +1800,17 @@ describe("buildInputBarTheme", () => {
       for (const prop of ["height", "block-size", "max-height", "max-block-size"]) {
         expect(decls[prop], `${selector} must not pin its block size via ${prop}`).toBeUndefined();
       }
-      // The floor preserves the single-line size, so it has to track the
-      // editor's line-height instead of drifting from it.
-      expect(decls["min-height"], `${selector} should floor at the content line-height`).toBe(
-        contentLineHeight
+      // The floor plus the vertical margin preserves the single-line size, so
+      // it has to track the editor's line-height instead of drifting from it;
+      // the margin is the channel between pills on adjacent rows.
+      const marginBlock = parseFloat((decls["margin"] ?? "0").split(/\s+/)[0]!);
+      expect(marginBlock, `${selector} should leave a channel between rows`).toBeGreaterThan(0);
+      expect(
+        parseFloat(decls["min-height"]!) + 2 * marginBlock,
+        `${selector} should fill the content line-height with its margin`
+      ).toBe(parseFloat(contentLineHeight!));
+      expect(decls["line-height"], `${selector} should set its own line at the floor`).toBe(
+        decls["min-height"]
       );
     }
   });

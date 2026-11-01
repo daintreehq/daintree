@@ -581,10 +581,14 @@ async function switchTheme(page: Page, theme: string): Promise<void> {
 }
 
 test.describe("agent composer review", () => {
-  test.skip(!ENABLED, "design capture harness — set DAINTREE_SHOT_COMPOSER=1");
   test.setTimeout(30 * 60_000);
 
   test("captures the composer across states and themes", async () => {
+    test.info().annotations.push({
+      type: "conditional-skip",
+      description: "DAINTREE_SHOT_COMPOSER is required for the agent composer capture",
+    });
+    test.skip(!ENABLED, "Set DAINTREE_SHOT_COMPOSER=1 to run the agent composer capture");
     if (!OUTPUT_DIR)
       throw new Error("DESIGN_CAPTURE_DIR must be set to a directory outside the repo");
     mkdirSync(OUTPUT_DIR, { recursive: true });
