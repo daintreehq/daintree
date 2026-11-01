@@ -117,6 +117,7 @@ import {
 } from "@/services/voiceStartDiagnostics";
 import {
   recordCorrectionLanded,
+  writeComposerDraftThrough,
   type CorrectionBaseline,
   type LandedCorrection,
 } from "@/services/voiceCorrectionLanding";
@@ -4093,6 +4094,10 @@ class VoiceRecordingService {
     });
 
     const { panelId, projectId } = correction;
+    // Placed in the text the composer shows, not the store's copy a render
+    // behind it (#15873). Typing that reached a passage drops it as any edit
+    // does, and one that reached them all retires the correction here.
+    if (!correction.done) writeComposerDraftThrough(panelId, projectId);
     if (correction.done) {
       // The history keeps the cleaned text even when the draft it was meant
       // for was sent or edited first: that is when it's worth recovering.

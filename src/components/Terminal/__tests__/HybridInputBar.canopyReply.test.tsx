@@ -25,7 +25,11 @@ import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voice
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import { canopyReplyVoiceId } from "@/services/canopyReplyDictation";
-import { recordCorrectionLanded, takeLandedCorrection } from "@/services/voiceCorrectionLanding";
+import {
+  recordCorrectionLanded,
+  takeLandedCorrection,
+  writeComposerDraftThrough,
+} from "@/services/voiceCorrectionLanding";
 import { isolatedComposerScope } from "@/lib/draftKey";
 import { HybridInputBar, type HybridInputBarHandle } from "../HybridInputBar";
 import { correctionReviewField } from "../inputEditorExtensions/correctionReview";
@@ -450,5 +454,50 @@ describe("HybridInputBar — Canopy's reply beside the pane's own composer", () 
     expect(handleEscape).toHaveBeenCalledWith(REPLY.panelId);
     expect(onSendKey).not.toHaveBeenCalled();
     expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("places a correction in the reply's typing the store hasn't caught up with, and leaves the pane's alone (#15873)", async () => {
+    const { surface } = await mountBoth();
+    const reply = surface("reply").view;
+    const pane = surface("pane").view;
+    const RAW = "open the zoo stand store";
+    const FIXED = "Open the Zustand store.";
+    await act(async () => {
+      const inputs = useTerminalInputStore.getState();
+      inputs.setDraftInput(REPLY.panelId, RAW);
+      inputs.bumpExternalDraftRevision({ keepsSelection: true });
+    });
+
+    // Typing in both composers is a render from the store when the reply's correction lands.
+    await act(async () => {
+      reply.dispatch({
+        changes: { from: 0, insert: "/review " },
+        selection: { anchor: "/review ".length },
+        userEvent: "input.type",
+      });
+      pane.dispatch({ changes: { from: 0, insert: "pane text" }, userEvent: "input.type" });
+      writeComposerDraftThrough(REPLY.panelId, undefined);
+      const inputs = useTerminalInputStore.getState();
+      const before = inputs.getDraftInput(REPLY.panelId);
+      expect(before).toBe("/review " + RAW);
+      expect(inputs.getDraftInput("term-1")).toBe("");
+      const from = "/review ".length;
+      const after = "/review " + FIXED;
+      inputs.setDraftInput(REPLY.panelId, after);
+      recordCorrectionLanded(REPLY.panelId, undefined, {
+        from,
+        rawText: RAW,
+        correctedText: FIXED,
+        baseline: null,
+        sessionId: "reply-session",
+        write: { before, after, changes: [{ from, to: before.length, insert: FIXED }] },
+      });
+      inputs.bumpExternalDraftRevision({ keepsSelection: true });
+    });
+
+    expect(reply.state.doc.toString()).toBe("/review " + FIXED);
+    expect(useTerminalInputStore.getState().getDraftInput(REPLY.panelId)).toBe("/review " + FIXED);
+    expect(pane.state.doc.toString()).toBe("pane text");
+    expect(useTerminalInputStore.getState().getDraftInput("term-1")).toBe("pane text");
   });
 });

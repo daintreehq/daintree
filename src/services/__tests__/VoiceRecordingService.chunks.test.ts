@@ -263,6 +263,33 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     );
   });
 
+  it("cleans the finished part in the typing its composer shows, not the store's copy behind it (#15873)", async () => {
+    const { service, inputStore, say, pause, draft, words, flush } = await setup();
+    const chunk = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(chunk.promise);
+    const landing = await import("@/services/voiceCorrectionLanding");
+
+    for (const sentence of OPENING) say(sentence);
+    pause();
+    say(NEXT);
+    expect(correct).toHaveBeenCalledTimes(1);
+    const shown = `/review ${draft()}`;
+    landing.registerComposerDraftWriter(PANEL, undefined, () =>
+      inputStore.getState().setDraftInput(PANEL, shown)
+    );
+
+    chunk.resolve({ action: "replace", correctedText: CLEANED_OPENING });
+    await flush();
+
+    expect(draft()).toBe(`/review ${CLEANED_OPENING} ${NEXT}`);
+    expect(words()).toHaveLength(OPENING.length + 1);
+    expect(words().every(([, edited]) => edited === false)).toBe(true);
+    expect(words()[0]![0]).toBe(
+      "The deploy pipeline has been unreliable all week because the integration tests time out whenever the staging database is busy."
+    );
+    expect(service.hasPendingCorrection(PANEL)).toBe(false);
+  });
+
   it("keeps a short dictation to the one pass at stop", async () => {
     const { service, say, pause } = await setup();
     correct.mockResolvedValue({ action: "no_change", correctedText: "" });

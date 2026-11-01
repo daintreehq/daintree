@@ -190,7 +190,11 @@ import {
 import {
   isLatestDictation,
   outsideWriteChange,
+  peekLandedCorrection,
+  rebaseCorrectionBaseline,
+  registerComposerDraftWriter,
   takeLandedCorrection,
+  typedPastCorrection,
 } from "@/services/voiceCorrectionLanding";
 import {
   SCRATCH_REFUSAL_CAPTION,
@@ -539,6 +543,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const listboxId = useId();
     const rootRef = useRef<HTMLDivElement | null>(null);
     const lastEmittedValueRef = useRef<string>(value);
+    // The draft the store held when this composer last wrote it or brought the
+    // editor to it. A store reading otherwise holds an outside write the editor
+    // hasn't shown yet (#15873).
+    const syncedDraftRef = useRef<string>(value);
     const focusGenerationRef = useRef(0);
     const [activeCompletionContext, setActiveCompletionContext] =
       useState<ActiveCompletionContext | null>(null);
@@ -750,6 +758,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const draft = getDraftInput(terminalId, projectId);
       setValue(draft);
       lastEmittedValueRef.current = draft;
+      syncedDraftRef.current = draft;
       setActiveCompletionContext(null);
       setSelectedIndex(0);
       lastQueryRef.current = "";
@@ -786,7 +795,17 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // The primary owns a follower's draft slot. Writing its local value here
       // can overwrite a newer mirrored keystroke before the editor catches up.
       if (followsDriver || wasFollowing || isFleetFollower || wasFleetFollower) return;
+      // A correction was placed in this text, or in typing written through
+      // before it: written back, the value would take the correction out
+      // again. The sync below brings the editor to it first (#15873).
+      if (
+        value !== useTerminalInputStore.getState().getDraftInput(terminalId, projectId) &&
+        peekLandedCorrection(terminalId, projectId)
+      ) {
+        return;
+      }
       setDraftInput(terminalId, value, projectId);
+      syncedDraftRef.current = value;
     }, [terminalId, value, projectId, setDraftInput, followsDriver, isFleetFollower]);
 
     const { isApplyingExternalValueRef } = useFleetMirror({
@@ -799,6 +818,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       isFleetFollower,
       disabled,
       lastEmittedValueRef,
+      syncedDraftRef,
       isolated,
     });
 
@@ -1150,6 +1170,26 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // that the editor does not show yet.
     const appliedExternalDraftRevisionRef = useRef(externalDraftRevision);
 
+    // Typing a render ahead of the store, written through for a correction to
+    // be placed in the text this composer shows (#15873).
+    useEffect(
+      () =>
+        registerComposerDraftWriter(terminalId, projectId, () => {
+          const view = editorViewRef.current;
+          // Another screen's or the fleet primary's draft: the store holds it.
+          if (!view || wasFollowingDriverRef.current || wasFleetFollowerRef.current) return;
+          const inputs = useTerminalInputStore.getState();
+          const stored = inputs.getDraftInput(terminalId, projectId);
+          const shown = view.state.doc.toString();
+          // Ahead by typing only over the draft this composer left: anything
+          // else is an outside write the editor is behind.
+          if (shown === stored || stored !== syncedDraftRef.current) return;
+          inputs.setDraftInput(terminalId, shown, projectId);
+          syncedDraftRef.current = shown;
+        }),
+      [terminalId, projectId]
+    );
+
     useEffect(() => {
       const appliedBefore = appliedExternalDraftRevisionRef.current;
       appliedExternalDraftRevisionRef.current = externalDraftRevision;
@@ -1169,9 +1209,20 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const landed = takeLandedCorrection(terminalId, projectId, draft);
       const reviewed = landed !== null && isLatestDictation(voiceId, landed);
       const scratched = takeScratchLanded(terminalId, projectId, draft);
+      const shown = view.state.doc.toString();
+      if (typedPastCorrection(shown, draft, landed, syncedDraftRef.current)) {
+        // The editor and its caret stay as typed; the draft takes them back.
+        rebaseCorrectionBaseline(voiceId, landed, "raw");
+        setValue(shown);
+        lastEmittedValueRef.current = shown;
+        inputState.setDraftInput(terminalId, shown, projectId);
+        syncedDraftRef.current = shown;
+        return;
+      }
+      syncedDraftRef.current = draft;
       // Only what differs is replaced, so an append leaves the image and
       // file chips already in the draft attached.
-      const change = outsideWriteChange(view.state.doc.toString(), draft, landed);
+      const change = outsideWriteChange(shown, draft, landed);
       if (change !== null) {
         setValue(draft);
         lastEmittedValueRef.current = draft;
@@ -2241,7 +2292,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // Sync external value changes to editor doc
     useEffect(() => {
       const view = editorViewRef.current;
-      if (!view) return;
+      // A render behind: the editor already shows a newer value.
+      if (!view || value !== lastEmittedValueRef.current) return;
       const current = view.state.doc.toString();
       if (value === current) return;
       isApplyingExternalValueRef.current = true;

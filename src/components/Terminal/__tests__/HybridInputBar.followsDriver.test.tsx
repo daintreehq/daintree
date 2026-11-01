@@ -14,6 +14,7 @@ import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktree
 import { usePanelStore } from "@/store/panelStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
+import { writeComposerDraftThrough } from "@/services/voiceCorrectionLanding";
 import { HybridInputBar } from "../HybridInputBar";
 
 const WT_ID = "/repo/wt";
@@ -31,6 +32,9 @@ afterAll(() => {
   else delete (Range.prototype as Partial<Range>).getClientRects;
   Range.prototype.getBoundingClientRect = originalRangeBounds;
 });
+
+// A test below swaps the setter for a spy; every other test writes through the real one.
+const realSetDraftInput = useTerminalInputStore.getState().setDraftInput;
 
 beforeEach(() => {
   initBuiltInPanelKinds();
@@ -56,7 +60,7 @@ beforeEach(() => {
     panelIdsByWorktreeId: { [WT_ID]: [panel.id] },
     focusedId: panel.id,
   });
-  useTerminalInputStore.setState({ draftInputs: new Map() });
+  useTerminalInputStore.setState({ draftInputs: new Map(), setDraftInput: realSetDraftInput });
 });
 
 afterEach(() => {
@@ -131,6 +135,40 @@ describe("HybridInputBar following the driver's draft", () => {
     expect(editorText(container)).toBe("driver typing more");
     expect(setDraftInput).not.toHaveBeenCalled();
     expect(useTerminalInputStore.getState().getDraftInput("term-1")).toBe("driver typing more");
+  });
+
+  it("leaves the driver's draft in place when a correction asks for its typing (#15873)", async () => {
+    const { container } = mount(true);
+    await act(async () => {});
+    await hostDraft("driver typing");
+    const editor = EditorView.findFromDOM(container.querySelector<HTMLElement>(".cm-editor")!)!;
+
+    await act(async () => {
+      // Text only this view shows, over the driver's draft it last took in.
+      editor.dispatch({ changes: { from: editor.state.doc.length, insert: " here" } });
+      writeComposerDraftThrough("term-1", undefined);
+      expect(useTerminalInputStore.getState().getDraftInput("term-1")).toBe("driver typing");
+    });
+  });
+
+  it("writes its own typing through for a correction once it takes over (#15873)", async () => {
+    const view = mount(true);
+    await act(async () => {});
+    await hostDraft("fix the parsr");
+    await act(async () => {
+      view.rerender(bar(false));
+    });
+    const editor = EditorView.findFromDOM(
+      view.container.querySelector<HTMLElement>(".cm-editor")!
+    )!;
+
+    await act(async () => {
+      editor.dispatch({ changes: { from: 0, insert: "/review " }, userEvent: "input.type" });
+      writeComposerDraftThrough("term-1", undefined);
+      expect(useTerminalInputStore.getState().getDraftInput("term-1")).toBe(
+        "/review fix the parsr"
+      );
+    });
   });
 
   it("takes over from the driver's latest draft, not the one a render behind", async () => {
