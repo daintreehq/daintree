@@ -3,6 +3,8 @@ import { store } from "../../store.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { broadcastToProjectRenderers } from "../../ipc/utils.js";
 import { getAllAppWebContents } from "../../window/webContentsRegistry.js";
+import { getMcpServerServiceRef, getPtyClient } from "../../window/serviceRefs.js";
+import { mcpPaneConfigService } from "../McpPaneConfigService.js";
 import type { RelayConfig } from "@daintreehq/decisions-client";
 import { newId } from "@daintreehq/decisions-crypto";
 import {
@@ -38,6 +40,7 @@ import {
 import type { DecisionsService } from "./DecisionsService.js";
 import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
 import { buildDecisionsArchive, type DecisionsArchive } from "./dataExport.js";
+import { openDecisionsMcpRoute, type DecisionsMcpRouteSources } from "./mcpRoute.js";
 import { OwnerDevices } from "./pairing.js";
 import type { RelayBinding } from "./relayConnection.js";
 import { RelayCheckCancelledError, checkDecisionsRelay } from "./relayCheck.js";
@@ -155,6 +158,28 @@ function recordRevocation(relay: RelayBinding): void {
   publishStatus();
 }
 
+/** Where `/mcp/decisions` reads a pane's bearer and run from, and holds the listener through. */
+function mcpRouteSources(running: () => DecisionsService | null): DecisionsMcpRouteSources {
+  return {
+    bearerFor: (token) => {
+      if (!mcpPaneConfigService.isValidPaneToken(token)) return null;
+      const paneId = mcpPaneConfigService.getPaneIdForToken(token);
+      const principal = mcpPaneConfigService.getOwnershipPrincipalForToken(token);
+      if (paneId === null || principal === null) return null;
+      const workspaceId = mcpPaneConfigService.getPaneWorkspaceBindingForToken(token)?.workspaceId;
+      return { paneId, principal, ...(workspaceId !== undefined ? { workspaceId } : {}) };
+    },
+    principalFor: (paneId) => mcpPaneConfigService.getOrchestratorPane(paneId)?.principalId ?? null,
+    hostId: () => running()?.getSettings()?.hostId ?? null,
+    getPtyClient,
+    holdListener: (id, route) => {
+      const mcp = getMcpServerServiceRef();
+      if (mcp === null) return Promise.reject(new Error("The MCP server service isn't loaded"));
+      return mcp.holdListener(id, route);
+    },
+  };
+}
+
 function serialize<T>(step: () => Promise<T>): Promise<T> {
   const run = transitions.then(step);
   transitions = run.catch(() => {});
@@ -170,10 +195,12 @@ export function getDecisionsService(): Promise<DecisionsService> {
     // After quit nothing new is made; one already being made is disposed by the stop.
     if (shutDown) return Promise.reject(new Error("Decisions has stopped for this run"));
     const made = import("./DecisionsService.js").then(({ DecisionsService }) => {
-      const next = new DecisionsService({
+      const sources = mcpRouteSources(() => next);
+      const next: DecisionsService = new DecisionsService({
         publishPaneState,
         onRelayRevoked: recordRevocation,
         forgetIdentity: forgetRecordedIdentity,
+        openQuestions: (source) => openDecisionsMcpRoute(source, sources),
       });
       next.onStatusChanged(() => publishStatus());
       service = next;

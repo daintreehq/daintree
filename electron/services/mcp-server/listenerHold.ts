@@ -41,6 +41,14 @@ export function heldRouteServes(path: string, pathname: string): boolean {
   return pathname === path || pathname.startsWith(`${path}/`);
 }
 
+/**
+ * Whether `pathname` lies where a hold's route would be: under `/mcp/`, outside
+ * the plugin namespace. With no hold serving it, nothing is there.
+ */
+export function inHeldRouteNamespace(pathname: string): boolean {
+  return pathname.startsWith("/mcp/") && !pathname.startsWith(PLUGIN_MCP_ROUTE_PREFIX);
+}
+
 /** A route's own teardown must never stop the listener's. */
 export function closeHeldRoute(route: ListenerRoute): void {
   try {

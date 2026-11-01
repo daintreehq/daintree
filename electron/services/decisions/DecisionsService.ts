@@ -17,9 +17,12 @@ import {
   type LocalEraseDeps,
   type LocalEraseOutcome,
 } from "./localData.js";
+import type { DecisionsQuestions } from "./mcpRoute.js";
 import { PaneDecisionStates, type PaneDecisionStatePublisher } from "./paneDecisionState.js";
+import { observeQuestionWrites, QuestionRowsFeed } from "./questionFeed.js";
 import {
   RelayConnection,
+  type QuestionSource,
   type RelayBinding,
   type RelayConnectionOptions,
 } from "./relayConnection.js";
@@ -83,6 +86,11 @@ export interface DecisionsServiceOptions {
    * saved; throws when it can't. A deletion of local data (#16025) calls it.
    */
   forgetIdentity?: () => DecisionsSettings;
+  /**
+   * Serves agents' questions over a connection that can take them
+   * (`/mcp/decisions`, #16011). Without it, no route is served.
+   */
+  openQuestions?: (source: QuestionSource) => DecisionsQuestions;
 }
 
 /**
@@ -117,6 +125,13 @@ export class DecisionsService {
    * allowlist reaches the running bridge without a reconnect.
    */
   private policy: PolicyRegistry | null = null;
+  private readonly openQuestions: ((source: QuestionSource) => DecisionsQuestions) | null;
+  /** The route agents ask through, while the connection can take questions. */
+  private questions: DecisionsQuestions | null = null;
+  /** Routes closed and not yet let go of the listener; a stop waits for them. */
+  private questionsClosing: Promise<void> = Promise.resolve();
+  /** Feeds the panes' state from the lifetime's store, for as long as it is open. */
+  private feed: QuestionRowsFeed | null = null;
   /** The store didn't open for this lifetime; the next start tries it again. */
   private storeFailed = false;
   /**
@@ -140,6 +155,7 @@ export class DecisionsService {
       (() => {
         throw new Error("Nothing saves the Decisions setting here");
       });
+    this.openQuestions = options.openQuestions ?? null;
   }
 
   getStatus(): DecisionsStatus {
@@ -272,6 +288,14 @@ export class DecisionsService {
         }
         this.store = opened;
         this.storeFailed = false;
+        if (opened) {
+          // The panes show what the store holds from the start, then after every write.
+          this.feed = new QuestionRowsFeed(
+            () => opened.listQuestions(),
+            (rows) => this.observeQuestions(rows)
+          );
+          this.feed.refresh();
+        }
       }
       this.reconcileConnection();
     });
@@ -346,6 +370,10 @@ export class DecisionsService {
   private async release(clearViews: boolean): Promise<void> {
     // The connection goes first: nothing may reach the store or keys once they close.
     this.dropConnection();
+    this.feed?.stop();
+    this.feed = null;
+    // The route lets go of the listener before the lifetime ends.
+    await this.questionsClosing;
     const store = this.store;
     const keyStore = this.keyStore;
     this.store = null;
@@ -391,13 +419,26 @@ export class DecisionsService {
     const policy = this.policy;
     if (!store || !policy) return;
     let connection: DecisionsRelayConnection | null = null;
+    const feed = this.feed;
     connection = this.connect({
       relay: wanted,
-      store,
+      store: observeQuestionWrites(store, () => feed?.refresh()),
       keys: this.getKeyStore(),
       policy,
       onStatus: (status) => {
-        if (this.connection === connection) this.setStatus(status);
+        if (this.connection !== connection) return;
+        // Stopped for this lifetime: nothing could publish what an agent asks.
+        if (status.state === "not-connected" || status.state === "revoked") this.closeQuestions();
+        this.setStatus(status);
+      },
+      onQuestionsReady: (source) => {
+        if (this.connection !== connection || this.openQuestions === null) return;
+        this.closeQuestions();
+        try {
+          this.questions = this.openQuestions(source);
+        } catch (error) {
+          console.warn("[Decisions] /mcp/decisions couldn't be opened:", error);
+        }
       },
       onRevoked: () => {
         if (this.connection !== connection) return;
@@ -426,6 +467,7 @@ export class DecisionsService {
     const connection = this.connection;
     this.connection = null;
     this.connectionKey = null;
+    this.closeQuestions();
     connection?.stop();
   }
 
@@ -438,6 +480,17 @@ export class DecisionsService {
         if (this.settings !== null && saved.enabled) this.settings = saved;
       },
     };
+  }
+
+  /** Refuses agents' questions at once; the listener hold goes when the route has let go. */
+  private closeQuestions(): void {
+    const questions = this.questions;
+    this.questions = null;
+    if (questions === null) return;
+    const closed = questions.close().catch((error: unknown) => {
+      console.warn("[Decisions] Closing /mcp/decisions failed:", error);
+    });
+    this.questionsClosing = Promise.all([this.questionsClosing, closed]).then(() => {});
   }
 
   private enqueue<T>(step: () => T | Promise<T>): Promise<T> {

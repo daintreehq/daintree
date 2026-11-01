@@ -38,6 +38,7 @@ import {
   assertHeldRoutePath,
   closeHeldRoute,
   heldRouteServes,
+  inHeldRouteNamespace,
   type ListenerHold,
   type ListenerRoute,
 } from "./listenerHold.js";
@@ -1426,8 +1427,10 @@ export class HttpLifecycle {
     }
     // Held open for features alone, the listener serves nothing else. The
     // control surface and plugin routes answer as nothing there would, before
-    // any credential is read, counted or matched to a session.
-    if (this.holdsOnly) {
+    // any credential is read, counted or matched to a session. A feature's
+    // path with no hold on it (Decisions off) is not there either, whatever
+    // the credential, so it never reaches the control surface's gate.
+    if (this.holdsOnly || inHeldRouteNamespace(url.pathname)) {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("Not found");
       return;
