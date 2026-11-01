@@ -261,7 +261,12 @@ function setup(options: { store?: DaintreeLocalStore; ptyReady?: boolean } = {})
   const works = () => {
     patch({ agentState: "working", lastStateChange: Date.now() });
     for (const listener of stateListeners) {
-      listener({ terminalId: PANE, state: "working", previousState: "waiting", timestamp: Date.now() });
+      listener({
+        terminalId: PANE,
+        state: "working",
+        previousState: "waiting",
+        timestamp: Date.now(),
+      });
     }
   };
   /** The agent's turn ends at its prompt. */
@@ -358,7 +363,11 @@ async function answered(
 }
 
 /** An injection the library recorded before typing, as a crash would leave it. */
-function intent(id: string, questionId: string, over: Partial<InjectionIntent> = {}): InjectionIntent {
+function intent(
+  id: string,
+  questionId: string,
+  over: Partial<InjectionIntent> = {}
+): InjectionIntent {
   return {
     injection_id: id,
     question_id: questionId,
@@ -440,11 +449,7 @@ describe("AnswerDelivery", () => {
       (h: ReturnType<typeof setup>) => h.patch({ worktreeId: "wt-2" }),
       "pane_gone",
     ],
-    [
-      "gone",
-      (h: ReturnType<typeof setup>) => h.client.terminals.delete(PANE),
-      "pane_gone",
-    ],
+    ["gone", (h: ReturnType<typeof setup>) => h.client.terminals.delete(PANE), "pane_gone"],
   ] as const)(
     "never types an answer whose run was %s anywhere, and leaves it needing attention",
     async (_label, change, code) => {

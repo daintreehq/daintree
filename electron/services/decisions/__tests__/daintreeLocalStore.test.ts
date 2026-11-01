@@ -718,7 +718,10 @@ describe("DaintreeLocalStore ordering and failures", () => {
 
   it("says an answer waits only while one waits to be typed or reported", async () => {
     const store = new DaintreeLocalStore(sqlite);
-    await store.commitNewQuestion(row("q1", 1, { delivery_status: "relay-queued" }), item("o1", "q1"));
+    await store.commitNewQuestion(
+      row("q1", 1, { delivery_status: "relay-queued" }),
+      item("o1", "q1")
+    );
     await store.commitNewQuestion(
       row("q2", 2, { delivery_status: "desktop-received", history_only: true }),
       item("o2", "q2")
