@@ -603,6 +603,23 @@ describe("HelpSessionTabs", () => {
     expect(container.querySelector(`[id="${describedBy}"]`)!.textContent).toBe("working");
   });
 
+  // No Canopy reading ever covers an assistant, so a lane at its prompt asks
+  // nothing: no waiting ring and no "waiting" description, whether it is the
+  // lane on screen or one in the background (#16059).
+  it("draws and says nothing for a lane at its prompt, on screen or not", () => {
+    const { container } = renderStrip({
+      tabs: [
+        { slot: 0, label: "Session 1", agentState: "waiting" },
+        { slot: 1, label: "Session 2", agentState: "waiting" },
+      ],
+    });
+    for (const tab of tabs(container)) {
+      expect(tab.querySelector('[class*="state-waiting"]')).toBeNull();
+      expect(tab.getAttribute("aria-describedby")).toBeNull();
+      expect(tab.textContent).not.toMatch(/waiting/i);
+    }
+  });
+
   it("keeps the new-session control present, focusable and explained once every lane is taken", async () => {
     // Parked rather than removed: a control that vanishes takes its own explanation with
     // it, and the strip's width budget stays constant either way. `aria-disabled` rather

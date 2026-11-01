@@ -17,28 +17,67 @@ describe("renderPaneStateBadge", () => {
     expect(renderPaneStateBadge("p1", undefined)).toBeNull();
   });
 
-  it("labels a waiting pane with the classified reason when evidence exists", () => {
-    renderBadge("p1", "waiting", "approval");
+  it("names a waiting pane by its fleet band, and only needs-you is Waiting", () => {
+    const cases = [
+      ["needs-you", "Waiting"],
+      ["review", "Unread"],
+      ["done", "Finished"],
+      ["blocked", "Blocked"],
+      ["parked", "Parked"],
+      ["snoozed", "Snoozed"],
+      ["idle", "Idle"],
+    ] as const;
+    for (const [band, label] of cases) {
+      renderBadge(`p-${band}`, "waiting", "question", band);
+      expect(screen.getByTestId(`fleet-pane-state-p-${band}-waiting`).textContent).toBe(label);
+    }
+  });
+
+  it("wears the waiting hue only for needs-you", () => {
+    renderBadge("ask", "waiting", "question", "needs-you");
+    renderBadge("unread", "waiting", "question", "review");
+    renderBadge("prompt", "waiting", "prompt", "idle");
+    renderBadge("k", "working", undefined, "needs-you");
+    expect(screen.getByTestId("fleet-pane-state-ask-waiting").className).toContain(
+      "text-state-waiting"
+    );
+    for (const id of ["unread-waiting", "prompt-waiting", "k-working"]) {
+      expect(screen.getByTestId(`fleet-pane-state-${id}`).className).not.toContain(
+        "text-state-waiting"
+      );
+    }
+  });
+
+  // The band is polled and the pane's state is pushed: a wait that has turned
+  // into an error since must not keep a stale ask's hue or its word.
+  it("drops a stale ask once the pane shows an error wait", () => {
+    renderBadge("stale", "waiting", "error", "needs-you");
+    const badge = screen.getByTestId("fleet-pane-state-stale-waiting");
+    expect(badge.className).not.toContain("text-state-waiting");
+    expect(badge.textContent).toBe("Last seen waiting");
+  });
+
+  it("says only what the terminal showed while the fleet has no band for it", () => {
+    renderBadge("none", "waiting", "approval");
+    renderBadge("lagging", "waiting", "prompt", "running");
+    for (const id of ["none", "lagging"]) {
+      const badge = screen.getByTestId(`fleet-pane-state-${id}-waiting`);
+      expect(badge.textContent).toBe("Last seen waiting");
+      expect(badge.className).not.toContain("text-state-waiting");
+    }
+  });
+
+  it("keeps the classified reason as an observation, never the label", () => {
+    renderBadge("p1", "waiting", "approval", "needs-you");
     const badge = screen.getByTestId("fleet-pane-state-p1-waiting");
-    expect(badge.textContent).toBe("Approval");
     expect(badge.getAttribute("data-waiting-reason")).toBe("approval");
     expect(badge.getAttribute("data-state")).toBe("waiting");
-  });
-
-  it("keeps the generic Waiting label for the prompt fallback and missing reasons", () => {
-    renderBadge("p1", "waiting", "prompt");
-    const badge = screen.getByTestId("fleet-pane-state-p1-waiting");
     expect(badge.textContent).toBe("Waiting");
-    expect(badge.hasAttribute("data-waiting-reason")).toBe(false);
-  });
 
-  it("tints waiting panes with the waiting state color while working stays muted", () => {
-    renderBadge("w", "waiting", "question");
-    renderBadge("k", "working");
-    const waiting = screen.getByTestId("fleet-pane-state-w-waiting");
-    const working = screen.getByTestId("fleet-pane-state-k-working");
-    expect(waiting.className).toContain("text-state-waiting");
-    expect(working.className).not.toContain("text-state-waiting");
+    renderBadge("p2", "waiting", "prompt", "needs-you");
+    expect(
+      screen.getByTestId("fleet-pane-state-p2-waiting").hasAttribute("data-waiting-reason")
+    ).toBe(false);
   });
 
   // The exited badge reads at the same text contrast as the live states, so the
@@ -46,7 +85,7 @@ describe("renderPaneStateBadge", () => {
   // between the states rather than against whichever fill class is in use.
   it("drops the chip fill on exited panes while live states keep it", () => {
     renderBadge("x", "exited");
-    renderBadge("w", "waiting", "question");
+    renderBadge("w", "waiting", "question", "needs-you");
     renderBadge("k", "working");
     const fill = (id: string) =>
       screen

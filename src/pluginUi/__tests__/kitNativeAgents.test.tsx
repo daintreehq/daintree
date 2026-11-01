@@ -48,6 +48,7 @@ import { snapshotLines } from "@/components/PluginKit/PluginKitNativeAgents";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { keybindingService } from "@/services/KeybindingService";
 import { useNotificationStore } from "@/store/notificationStore";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { installAppPluginKitHost } from "@/services/plugin/appPluginKitHost";
 
 // The app's own kit host, so the kit reaches the app services mocked here.
@@ -75,6 +76,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  useFleetSnapshotStore.setState({ snapshot: null });
 });
 
 function untyped(name: string, props: Record<string, unknown>, ...children: ReactNode[]) {
@@ -633,6 +635,42 @@ describe("AgentPicker", () => {
       agentId: "codex",
       worktreeId: "w-feat",
     });
+  });
+
+  // The words stay observed; only the waiting hue is the host fleet's, for a
+  // run Canopy read asking that the user hasn't seen (#16059).
+  it("gives an observed wait the waiting hue only while the fleet has it needing the user", () => {
+    picker({ worktreeId: "w-feat" });
+    const badge = () =>
+      screen
+        .getAllByRole("option")
+        .find((o) => o.getAttribute("data-terminal-id") === "t2")!
+        .querySelector<HTMLElement>('[data-state="waiting"]')!;
+    expect(badge().textContent).toBe("Last seen waiting");
+    expect(badge().className).not.toContain("text-state-waiting");
+
+    act(() =>
+      useFleetSnapshotStore.setState({
+        snapshot: {
+          runs: [
+            {
+              runId: "t2",
+              workspaceId: "p1",
+              spawnedAt: 0,
+              cwd: "/repo",
+              agentState: "waiting",
+              waitingReason: "question",
+              canopy: { kind: "asked", quote: "Ship it?", readAt: 0, seen: false },
+            },
+          ],
+          changedAt: 0,
+          degraded: false,
+          lastSuccessfulAt: null,
+        },
+      })
+    );
+    expect(badge().textContent).toBe("Last seen waiting");
+    expect(badge().className).toContain("text-state-waiting");
   });
 
   it("lists a pane that can't take a draft, disabled with its reason, and steps past it", () => {

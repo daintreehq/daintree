@@ -9,6 +9,8 @@ import { usePanelStore } from "@/store/panelStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useFleetPickerSessionStore } from "@/store/fleetPickerSessionStore";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import { _resetForTests as resetEscapeStack, dispatchEscape } from "@/lib/escapeStack";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { createWorktreeStore } from "@/store/createWorktreeStore";
@@ -65,6 +67,20 @@ function resetStores(): void {
   });
   useFleetPickerSessionStore.setState({ activeOwner: null });
   useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+  useFleetSnapshotStore.setState({ snapshot: null });
+}
+
+function pushFleet(runs: Array<Partial<FleetRunRow> & { runId: string }>): void {
+  act(() =>
+    useFleetSnapshotStore.setState({
+      snapshot: {
+        runs: runs.map((run) => ({ workspaceId: "p1", spawnedAt: 0, cwd: "/repo", ...run })),
+        changedAt: 0,
+        degraded: false,
+        lastSuccessfulAt: null,
+      },
+    })
+  );
 }
 
 interface HarnessProps {
@@ -624,6 +640,49 @@ describe("FleetPickerContent + useFleetPicker", () => {
         .filter((n) => n.hasAttribute("data-terminal-id"));
       expect(rows).toHaveLength(2);
       expect(rows[0]?.textContent).not.toBe(rows[1]?.textContent);
+    });
+  });
+
+  // Amber and "Waiting" are the fleet's needs-you alone (#16059).
+  describe("state badges", () => {
+    const badgeFor = (id: string) =>
+      screen
+        .getAllByRole("treeitem")
+        .find((row) => row.getAttribute("data-terminal-id") === id)
+        ?.querySelector<HTMLElement>('[data-state="waiting"]') ?? null;
+
+    it("takes a wait's words and hue from the fleet band", async () => {
+      seedTerminals([
+        makeTerminal("ask", { agentState: "waiting" }),
+        makeTerminal("prompt", { agentState: "waiting" }),
+        makeTerminal("unknown", { agentState: "waiting" }),
+      ]);
+      const ask = { kind: "asked", quote: "Ship it?", readAt: 0, seen: false } as const;
+      pushFleet([
+        { runId: "ask", agentState: "waiting", waitingReason: "question", canopy: ask },
+        { runId: "prompt", agentState: "waiting", waitingReason: "prompt" },
+      ]);
+      renderHarness([makeWorktreeSnap("wt-1", "main")], { mode: "add", onCommit: () => {} });
+      await act(async () => {});
+
+      expect(badgeFor("ask")?.textContent).toBe("Waiting");
+      expect(badgeFor("ask")?.className).toContain("text-state-waiting");
+      expect(badgeFor("prompt")?.textContent).toBe("Idle");
+      expect(badgeFor("prompt")?.className).not.toContain("text-state-waiting");
+      expect(badgeFor("unknown")?.textContent).toBe("Last seen waiting");
+      expect(badgeFor("unknown")?.className).not.toContain("text-state-waiting");
+
+      // The band moves with no change to the pane, and the badge follows it.
+      pushFleet([
+        {
+          runId: "ask",
+          agentState: "waiting",
+          waitingReason: "question",
+          canopy: { ...ask, seen: true },
+        },
+      ]);
+      expect(badgeFor("ask")?.textContent).toBe("Idle");
+      expect(badgeFor("ask")?.className).not.toContain("text-state-waiting");
     });
   });
 

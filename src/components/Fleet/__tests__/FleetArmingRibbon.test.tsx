@@ -86,6 +86,8 @@ import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressSt
 import { useFleetPickerSessionStore } from "@/store/fleetPickerSessionStore";
 import { useFleetRunStore, type FleetRun, type FleetRunTarget } from "@/store/fleetRunStore";
 import { usePanelStore } from "@/store/panelStore";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import type { ProjectSettings } from "@shared/types/project";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -120,7 +122,21 @@ function resetStores() {
   useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1", isFleetScopeActive: false });
   useWorktreeFilterStore.setState({ quickStateFilter: "all" });
   useAnnouncerStore.setState({ polite: null, assertive: null });
+  useFleetSnapshotStore.setState({ snapshot: null });
   resetEscapeStack();
+}
+
+function pushFleet(runs: Array<Partial<FleetRunRow> & { runId: string }>): void {
+  act(() =>
+    useFleetSnapshotStore.setState({
+      snapshot: {
+        runs: runs.map((run) => ({ workspaceId: "p1", spawnedAt: 0, cwd: "/repo", ...run })),
+        changedAt: 0,
+        degraded: false,
+        lastSuccessfulAt: null,
+      },
+    })
+  );
 }
 
 function seed(terminals: PtyPanelData[]): void {
@@ -237,12 +253,53 @@ describe("FleetArmingRibbon", () => {
     render(<FleetArmingRibbon />);
     fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
     expect(screen.getByTestId("fleet-pane-state-t1-working").textContent).toBe("Working");
-    expect(screen.getByTestId("fleet-pane-state-t2-waiting").textContent).toBe("Waiting");
+    // No fleet report yet: the wait is only what the terminal showed.
+    expect(screen.getByTestId("fleet-pane-state-t2-waiting").textContent).toBe("Last seen waiting");
     expect(screen.getByTestId("fleet-pane-state-t3-exited").textContent).toBe("Exited");
     // idle / completed / directing render no badge — verify by absence
     expect(screen.queryByTestId("fleet-pane-state-t4-idle")).toBeNull();
     expect(screen.queryByTestId("fleet-pane-state-t5-completed")).toBeNull();
     expect(screen.queryByTestId("fleet-pane-state-t6-directing")).toBeNull();
+  });
+
+  // Amber and "Waiting" are the fleet's needs-you alone (#16059): a wait the
+  // fleet places anywhere else keeps a neutral badge in its band's words, and
+  // follows the band as it moves without the pane changing.
+  it("draws a waiting pane's badge from its fleet band", () => {
+    seed([
+      { ...makeAgent("t1", "waiting"), title: "alpha" } as PtyPanelData,
+      { ...makeAgent("t2", "waiting"), title: "beta" } as PtyPanelData,
+    ]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    const ask = { kind: "asked", quote: "Ship it?", readAt: 0, seen: false } as const;
+    pushFleet([
+      { runId: "t1", agentState: "waiting", waitingReason: "question", canopy: ask },
+      { runId: "t2", agentState: "waiting", waitingReason: "prompt" },
+    ]);
+    render(<FleetArmingRibbon />);
+    fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
+
+    const asking = screen.getByTestId("fleet-pane-state-t1-waiting");
+    const prompt = screen.getByTestId("fleet-pane-state-t2-waiting");
+    expect(asking.textContent).toBe("Waiting");
+    expect(asking.className).toContain("text-state-waiting");
+    expect(prompt.textContent).toBe("Idle");
+    expect(prompt.className).not.toContain("text-state-waiting");
+
+    // Looking at the ask settles it: the same pane leaves amber.
+    pushFleet([
+      {
+        runId: "t1",
+        agentState: "waiting",
+        waitingReason: "question",
+        canopy: { ...ask, seen: true },
+      },
+      { runId: "t2", agentState: "waiting", waitingReason: "prompt" },
+    ]);
+    expect(screen.getByTestId("fleet-pane-state-t1-waiting").textContent).toBe("Idle");
+    expect(screen.getByTestId("fleet-pane-state-t1-waiting").className).not.toContain(
+      "text-state-waiting"
+    );
   });
 
   it("renders one badge per pane when multiple panes share the same state", () => {
