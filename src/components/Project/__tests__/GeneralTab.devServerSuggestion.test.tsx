@@ -73,6 +73,13 @@ vi.mock("@/components/icons", () => ({
   McpServerIcon: () => null,
 }));
 
+// The row has its own suite; here it only reports what GeneralTab hands it.
+vi.mock("../ProjectGroupSettingsRow", () => ({
+  ProjectGroupSettingsRow: ({ projectId, groupId }: { projectId: string; groupId?: string }) => (
+    <div id="project-group" data-project-id={projectId} data-group-id={groupId} />
+  ),
+}));
+
 import { GeneralTab } from "../GeneralTab";
 
 function devRunner(): RunCommand {
@@ -211,6 +218,7 @@ describe("GeneralTab — DOM anchors for settings deep-links", () => {
     name: "Sample",
     emoji: "🌲",
     lastOpened: 0,
+    groupId: "clients",
   } as const;
 
   it("exposes the project-name and project-group anchors for settings deep-links", () => {
@@ -242,7 +250,9 @@ describe("GeneralTab — DOM anchors for settings deep-links", () => {
       />
     );
     expect(container.querySelector("#project-name")).not.toBeNull();
-    expect(container.querySelector("#project-group")).not.toBeNull();
+    const groupRow = container.querySelector<HTMLElement>("#project-group");
+    expect(groupRow?.dataset.projectId).toBe(baseProject.id);
+    expect(groupRow?.dataset.groupId).toBe(baseProject.groupId);
   });
 
   it("exposes the project-dev-server anchor for settings deep-links", () => {
