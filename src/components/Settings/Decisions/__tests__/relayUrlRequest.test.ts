@@ -88,6 +88,18 @@ describe("relay URL request", () => {
     release();
   });
 
+  it("keeps a request the page claimed, past the claiming window", () => {
+    vi.useFakeTimers();
+    requestRelayUrl();
+    const claiming = holdRelayUrlRequests();
+    vi.advanceTimersByTime(UNCLAIMED_REQUEST_TTL_MS + 1);
+    const again = holdRelayUrlRequests();
+
+    expect(takePendingRelayUrlRequest()).toBe(true);
+    claiming();
+    again();
+  });
+
   it("keeps a claimed request however long Decisions takes to be turned on", async () => {
     vi.useFakeTimers();
     const first = holdRelayUrlRequests();

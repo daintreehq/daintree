@@ -37,7 +37,9 @@ describe("Decisions page and a deploy pane's request for the relay URL", () => {
       </TooltipProvider>
     );
     await settle();
+    expect(takePendingRelayUrlRequest()).toBe(true);
 
+    requestRelayUrl();
     unmount();
     await settle();
 
