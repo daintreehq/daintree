@@ -28,9 +28,23 @@ describe("relay check copy", () => {
     expect(older.detail).toContain("Daintree never updates it for you");
   });
 
+  it.each([
+    ["a major release ahead", "1.0.0", "The relay is newer than Daintree"],
+    ["a patch ahead", "0.3.1", "The relay is newer than Daintree"],
+    ["a patch behind, with a higher protocol", "0.2.9", "The relay needs an update"],
+    ["a prerelease of the same release", "0.3.0-rc.1", "The relay needs an update"],
+  ])("orders a relay %s by release", (_label, workerVersion, label) => {
+    const protocolMax = workerVersion === "0.2.9" ? 3 : DAINTREE.protocolMax;
+
+    expect(describeCompatibility(compare({ workerVersion, protocolMax })).label).toBe(label);
+  });
+
   it("falls back to the protocol range, then to no side, when versions can't be ordered", () => {
     expect(describeCompatibility(compare({ workerVersion: "dev", protocolMax: 3 })).label).toBe(
       "The relay is newer than Daintree"
+    );
+    expect(describeCompatibility(compare({ workerVersion: "dev", protocolMax: 1 })).label).toBe(
+      "The relay needs an update"
     );
     expect(describeCompatibility(compare({ workerVersion: "dev" })).label).toBe(
       "Relay and Daintree versions differ"
@@ -41,7 +55,7 @@ describe("relay check copy", () => {
     const same = describeCompatibility(compare({}));
 
     expect(same.label).toBe("Relay and Daintree versions match");
-    expect(same.detail).not.toMatch(/update/i);
+    expect(same.detail).toBe("Both on 0.3.0, protocols 1–2");
   });
 
   it("reads a one-version range as a single protocol", () => {
@@ -71,6 +85,25 @@ describe("relay check copy", () => {
         reason: "timeout",
       })?.detail
     ).toBe("/health answered, but /api/v1/info didn't answer in time");
+  });
+
+  it("names the first read when it was the one that failed", () => {
+    expect(
+      describeRelayCheck({
+        result: "http-error",
+        origin: "https://relay.example.com",
+        endpoint: "health",
+        status: 500,
+      })?.detail
+    ).toMatch(/^\/health answered HTTP 500\./);
+    expect(
+      describeRelayCheck({
+        result: "unreachable",
+        origin: "https://relay.example.com",
+        endpoint: "info",
+        reason: "refused",
+      })?.detail
+    ).toBe("/health answered, but the connection failed reading /api/v1/info");
   });
 
   it("leaves an address that was never sent to the field", () => {

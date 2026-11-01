@@ -11,6 +11,7 @@ import type {
   DecisionsRelayUnreachableReason,
   DecisionsRelayVersions,
 } from "../../../shared/types/decisions.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { normalizeRelayOrigin } from "./decisionsSettings.js";
 
@@ -29,7 +30,12 @@ const REQUEST_TIMEOUT_MS = 10_000;
 /** `/health` and `/info` are a few hundred bytes; anything far bigger isn't a relay. */
 const MAX_BODY_BYTES = 64 * 1024;
 const WORKER_VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/;
-const HAS_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
+/**
+ * A scheme the person typed, as distinct from a bare `host:port` (a digit
+ * after the colon). Dots are left out, so `relay.example.dev:@other` reads as
+ * a host with userinfo rather than a scheme no one would type.
+ */
+const SCHEME = /^([A-Za-z][A-Za-z0-9+-]*):(?!\d)/;
 /** Whitespace, control characters and backslashes, which URL parsing would otherwise quietly reinterpret. */
 const UNSAFE_CHARACTERS = /[\s\\\p{Cc}]/u;
 
@@ -74,7 +80,14 @@ export function relayOriginFromInput(
   if (trimmed === "" || UNSAFE_CHARACTERS.test(trimmed)) {
     return { result: "invalid-url", reason: "unparsable" };
   }
-  const candidate = HAS_SCHEME.test(trimmed) ? trimmed : `https://${trimmed}`;
+  const scheme = SCHEME.exec(trimmed);
+  if (scheme && !trimmed.startsWith("//", scheme[0].length)) {
+    // `https:/relay.example.dev` would otherwise gain a second scheme and
+    // check the host "https".
+    const https = scheme[1]!.toLowerCase() === "https";
+    return { result: "invalid-url", reason: https ? "unparsable" : "not-https" };
+  }
+  const candidate = scheme ? trimmed : `https://${trimmed}`;
   const url = URL.parse(candidate);
   if (!url || url.hostname === "") return { result: "invalid-url", reason: "unparsable" };
   if (url.protocol !== "https:") return { result: "invalid-url", reason: "not-https" };
@@ -218,7 +231,7 @@ async function getJson(
       signal: combined,
     });
   } catch (error) {
-    return failedRequest(error);
+    return failedRequest(error, deadline.aborted);
   }
   const declared = Number(response.headers.get("content-length"));
   if (!response.ok || declared > MAX_BODY_BYTES) {
@@ -229,7 +242,8 @@ async function getJson(
   try {
     text = await readCapped(response, MAX_BODY_BYTES);
   } catch (error) {
-    return failedRequest(error);
+    // Chromium ends a body cut off by the deadline as a plain abort, without the timeout's reason.
+    return failedRequest(error, deadline.aborted);
   }
   if (text === null) return { kind: "not-json" };
   try {
@@ -262,9 +276,10 @@ async function readCapped(response: Response, max: number): Promise<string | nul
   return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
-function failedRequest(error: unknown): Answer {
+function failedRequest(error: unknown, timedOut: boolean): Answer {
+  if (timedOut) return { kind: "unreachable", reason: "timeout" };
   const name = error instanceof Error ? error.name : "";
-  const message = error instanceof Error ? error.message : String(error);
+  const message = formatErrorMessage(error, "");
   // Chromium's network stack refuses a redirect under `redirect: "error"`
   // (and cancels one under "manual") with its own message, not a 3xx status.
   if (/redirect/i.test(message)) return { kind: "redirected" };

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { describe, expect, it, vi } from "vitest";
 import { MIN_PROTOCOL_VERSION, PROTOCOL_VERSION } from "@daintreehq/decisions-protocol";
 import {
@@ -8,7 +10,17 @@ import {
   type RelayFetch,
 } from "../relayCheck.js";
 
-const DAINTREE_RELAY_VERSION = DAINTREE_RELAY_VERSIONS.workerVersion;
+/** The installed protocol package's version, read from disk rather than through the module under test. */
+const DAINTREE_RELAY_VERSION = (
+  JSON.parse(
+    readFileSync(
+      createRequire(import.meta.url).resolve("@daintreehq/decisions-protocol/package.json"),
+      "utf8"
+    )
+  ) as { version: string }
+).version;
+
+const CANCELLED = { name: "AppError", code: "CANCELLED" };
 
 const ORIGIN = "https://decisions.example.workers.dev";
 
@@ -70,6 +82,7 @@ describe("relayOriginFromInput", () => {
     ["HTTPS://Decisions.Example.Workers.Dev", ORIGIN],
     ["https://decisions.example.workers.dev:8443/x", "https://decisions.example.workers.dev:8443"],
     ["localhost:8787", "https://localhost:8787"],
+    ["decisions.example.workers.dev:8443/x", "https://decisions.example.workers.dev:8443"],
   ])("reads %j as the origin %s", (input, origin) => {
     expect(relayOriginFromInput(input)).toEqual({ origin });
   });
@@ -81,6 +94,9 @@ describe("relayOriginFromInput", () => {
     ["https://exa mple.com", "unparsable"],
     ["https://evil.example\\@decisions.example.workers.dev", "unparsable"],
     ["https://decisions.example.workers.dev\u0000", "unparsable"],
+    ["https:/decisions.example.workers.dev", "unparsable"],
+    ["https:decisions.example.workers.dev", "unparsable"],
+    ["http:/decisions.example.workers.dev", "not-https"],
     ["http://decisions.example.workers.dev", "not-https"],
     ["http://localhost:8787", "not-https"],
     ["http://127.0.0.1:8787", "not-https"],
@@ -217,6 +233,28 @@ describe("checkDecisionsRelay", () => {
     });
   });
 
+  it("times a read out when the body stalls after the headers", async () => {
+    const fetchImpl = vi.fn<RelayFetch>(async (_url, init) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"ok":'));
+          // Chromium errors a body cut off by an abort as a plain AbortError.
+          init.signal?.addEventListener("abort", () =>
+            controller.error(new DOMException("The operation was aborted", "AbortError"))
+          );
+        },
+      });
+      return new Response(body, { headers: { "content-type": "application/json" } });
+    });
+
+    await expect(checkDecisionsRelay(ORIGIN, { fetchImpl, timeoutMs: 10 })).resolves.toEqual({
+      result: "unreachable",
+      origin: ORIGIN,
+      endpoint: "health",
+      reason: "timeout",
+    });
+  });
+
   it("reports a redirect as not a relay, without following it", async () => {
     const fetchImpl = failingWith(
       new Error("Attempted to redirect, but redirect policy was 'error'")
@@ -282,7 +320,7 @@ describe("checkDecisionsRelay", () => {
   it.each([
     ["another service's name", info({ name: "something-else" })],
     ["a missing claim flag", { ...info(), claimed: undefined }],
-    ["a non-integer protocol", info({ protocol_min: 1.5 })],
+    ["a non-integer protocol", info({ protocol_min: 1, protocol_max: 1.5 })],
     ["an inverted range", info({ protocol_min: 3, protocol_max: 2 })],
     ["a protocol below 1", info({ protocol_min: 0 })],
     ["an unreadable worker version", info({ worker_version: "<script>" })],
@@ -337,10 +375,18 @@ describe("checkDecisionsRelay", () => {
     });
   });
 
-  it("stops reading a body far bigger than a relay's", async () => {
-    const { fetchImpl } = relay({
-      "/health": () => new Response(`{"ok":true,"pad":"${"x".repeat(70 * 1024)}"}`),
+  it("stops reading once small chunks add up to far more than a relay sends", async () => {
+    const chunk = new TextEncoder().encode("x".repeat(1024));
+    let pulled = 0;
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        controller.enqueue(chunk);
+      },
+      cancel,
     });
+    const { fetchImpl } = relay({ "/health": () => new Response(body) });
 
     await expect(checkDecisionsRelay(ORIGIN, { fetchImpl })).resolves.toEqual({
       result: "not-a-relay",
@@ -349,6 +395,10 @@ describe("checkDecisionsRelay", () => {
       answered: "body",
       status: null,
     });
+    expect(cancel).toHaveBeenCalledOnce();
+    // 64 KiB of 1 KiB chunks, the one past the cap, and at most the stream's own read-ahead.
+    expect(pulled).toBeGreaterThan(64);
+    expect(pulled).toBeLessThan(70);
   });
 
   it("refuses a body declared far bigger than a relay's without reading it", async () => {
@@ -377,9 +427,9 @@ describe("checkDecisionsRelay", () => {
         })
     );
 
-    await expect(
-      checkDecisionsRelay(ORIGIN, { fetchImpl, signal: controller.signal })
-    ).rejects.toBeInstanceOf(RelayCheckCancelledError);
+    const check = checkDecisionsRelay(ORIGIN, { fetchImpl, signal: controller.signal });
+    await expect(check).rejects.toBeInstanceOf(RelayCheckCancelledError);
+    await expect(check).rejects.toMatchObject(CANCELLED);
   });
 
   it("sends nothing once its signal has aborted", async () => {
@@ -389,7 +439,7 @@ describe("checkDecisionsRelay", () => {
 
     await expect(
       checkDecisionsRelay(ORIGIN, { fetchImpl, signal: controller.signal })
-    ).rejects.toBeInstanceOf(RelayCheckCancelledError);
+    ).rejects.toMatchObject(CANCELLED);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
@@ -397,7 +447,7 @@ describe("checkDecisionsRelay", () => {
     expect(DAINTREE_RELAY_VERSIONS).toEqual({
       protocolMin: MIN_PROTOCOL_VERSION,
       protocolMax: PROTOCOL_VERSION,
-      workerVersion: expect.stringMatching(/^\d+\.\d+\.\d+/),
+      workerVersion: DAINTREE_RELAY_VERSION,
     });
   });
 });

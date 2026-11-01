@@ -67,9 +67,10 @@ export function DecisionsConnectionSection({
   useEffect(() => {
     forget();
   }, [savedOrigin]);
+  // Not while the switch is changing; unlocked, it runs then.
   useEffect(() => {
-    if (connected && savedOrigin) checkSaved(savedOrigin);
-  }, [connected, savedOrigin]);
+    if (connected && savedOrigin && !locked) checkSaved(savedOrigin);
+  }, [connected, savedOrigin, locked]);
 
   const check = relay.check;
   const observation = check ? describeRelayCheck(check) : null;
@@ -171,12 +172,13 @@ export function DecisionsConnectionSection({
             description={savedOrigin}
             error={rowError}
             disabled={locked}
-            control={({ disabled }) => (
+            control={({ descriptionId, disabled }) => (
               <Button
                 variant="outline"
                 size="sm"
                 loading={relay.checking}
                 disabled={disabled}
+                aria-describedby={descriptionId}
                 onClick={() => relay.run(savedOrigin)}
               >
                 {check || relay.error ? "Check again" : "Check"}

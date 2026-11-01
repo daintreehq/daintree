@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type {
   DecisionsRelayCheck,
   DecisionsRelayCompatibility,
@@ -54,7 +54,11 @@ async function typeAndCheck(value: string) {
 describe("DecisionsConnectionSection relay check", () => {
   beforeEach(() => {
     checkRelay.mockReset();
-    (window as unknown as { electron: unknown }).electron = { decisions: { checkRelay } };
+    Object.defineProperty(window, "electron", {
+      value: { decisions: { checkRelay } },
+      configurable: true,
+      writable: true,
+    });
   });
   afterEach(() => {
     cleanup();
@@ -74,34 +78,40 @@ describe("DecisionsConnectionSection relay check", () => {
     expect(screen.getByText("Relay and Daintree versions match")).toBeTruthy();
   });
 
-  it.each<[string, DecisionsRelayCheck, string]>([
+  it.each<[string, DecisionsRelayCheck, string, RegExp]>([
     [
       "unreachable",
       { result: "unreachable", origin: ORIGIN, endpoint: "health", reason: "dns" },
       "Couldn't reach decisions.example.workers.dev",
+      /^Its name doesn't resolve/,
     ],
     [
       "not a relay",
       { result: "not-a-relay", origin: ORIGIN, endpoint: "info", answered: "status", status: 404 },
       "decisions.example.workers.dev isn't a Decisions relay",
+      /^\/api\/v1\/info answered HTTP 404$/,
     ],
     [
       "claimed",
       { result: "claimed", origin: ORIGIN, compatibility: SAME },
       "decisions.example.workers.dev is claimed",
+      /already has an owner/,
     ],
     [
       "claim secret not configured",
       { result: "claim-not-configured", origin: ORIGIN, compatibility: SAME },
       "decisions.example.workers.dev has no claim secret set",
+      /until CLAIM_SECRET is set on the Worker/,
     ],
-  ])("says a relay is %s", async (_label, result, text) => {
+  ])("says a relay is %s, and what was seen", async (_label, result, text, detail) => {
     checkRelay.mockResolvedValue(result);
     renderSection({ state: "not-connected" });
 
     await typeAndCheck(ORIGIN);
 
-    expect(screen.getByText(text)).toBeTruthy();
+    const row = document.getElementById("decisions-relay-check")!;
+    expect(within(row).getByText(text)).toBeTruthy();
+    expect(within(row).getByText(detail)).toBeTruthy();
   });
 
   it("names both protocol ranges for an incompatible relay, with the update prompt", async () => {
@@ -133,7 +143,12 @@ describe("DecisionsConnectionSection relay check", () => {
 
     expect(urlField().getAttribute("aria-invalid")).toBe("true");
     // Under the field, and announced: it arrives after the submit, not as the person types.
-    expect(screen.getAllByText("Use the relay's https:// address")).toHaveLength(2);
+    const copies = screen.getAllByText("Use the relay's https:// address");
+    const announced = copies.filter((copy) => copy.closest('[role="status"]'));
+    const shown = copies.filter((copy) => !copy.closest('[role="status"]'));
+    expect([announced.length, shown.length]).toEqual([1, 1]);
+    const errorId = shown[0]!.closest("[id]")!.id;
+    expect(urlField().getAttribute("aria-describedby")?.split(" ")).toContain(errorId);
   });
 
   it("drops a check still out once the address is edited", async () => {
@@ -175,6 +190,68 @@ describe("DecisionsConnectionSection relay check", () => {
     });
     expect(checkRelay).toHaveBeenCalledTimes(2);
     expect(screen.queryByText(/Couldn't check the relay/)).toBeNull();
+  });
+
+  it("waits for the switch to settle before checking a connected relay by itself", async () => {
+    checkRelay.mockResolvedValue({ result: "claimed", origin: ORIGIN, compatibility: SAME });
+    const connected: DecisionsStatus = { state: "connected", relayOrigin: ORIGIN };
+
+    const view = renderSection(connected, true);
+    expect(checkRelay).not.toHaveBeenCalled();
+    expect(checkButton().disabled).toBe(true);
+
+    await act(async () => {
+      view.rerender(
+        <TooltipProvider>
+          <DecisionsConnectionSection status={connected} locked={false} />
+        </TooltipProvider>
+      );
+    });
+    expect(checkRelay).toHaveBeenCalledExactlyOnceWith(ORIGIN);
+  });
+
+  it("checks once on mount when already connected, not again for an equal status", async () => {
+    checkRelay.mockResolvedValue({ result: "claimed", origin: ORIGIN, compatibility: SAME });
+
+    const view = renderSection({ state: "connected", relayOrigin: ORIGIN });
+    await act(async () => {});
+    expect(checkRelay).toHaveBeenCalledExactlyOnceWith(ORIGIN);
+
+    await act(async () => {
+      view.rerender(
+        <TooltipProvider>
+          <DecisionsConnectionSection status={{ state: "connected", relayOrigin: ORIGIN }} />
+        </TooltipProvider>
+      );
+    });
+    expect(checkRelay).toHaveBeenCalledTimes(1);
+  });
+
+  it("forgets the last relay's observation and checks the new one when the saved relay changes", async () => {
+    const other = "https://other.example.workers.dev";
+    const second = deferred<DecisionsRelayCheck>();
+    checkRelay
+      .mockResolvedValueOnce({ result: "claimed", origin: ORIGIN, compatibility: SAME })
+      .mockReturnValueOnce(second.promise);
+
+    const view = renderSection({ state: "connected", relayOrigin: ORIGIN });
+    await act(async () => {});
+    expect(screen.getByText("decisions.example.workers.dev is claimed")).toBeTruthy();
+
+    await act(async () => {
+      view.rerender(
+        <TooltipProvider>
+          <DecisionsConnectionSection status={{ state: "connected", relayOrigin: other }} />
+        </TooltipProvider>
+      );
+    });
+    expect(screen.queryByText("decisions.example.workers.dev is claimed")).toBeNull();
+    expect(checkRelay).toHaveBeenLastCalledWith(other);
+
+    await act(async () => {
+      second.resolve({ result: "claimed", origin: other, compatibility: SAME });
+    });
+    expect(screen.getByText("other.example.workers.dev is claimed")).toBeTruthy();
   });
 
   it("starts nothing while the switch is changing", async () => {
@@ -230,6 +307,8 @@ describe("DecisionsConnectionSection relay check", () => {
       reason: "timeout",
     });
     renderSection({ state: "not-connected", relayOrigin: ORIGIN });
+    await act(async () => {});
+    expect(checkRelay).not.toHaveBeenCalled();
 
     await act(async () => {
       fireEvent.click(checkButton());

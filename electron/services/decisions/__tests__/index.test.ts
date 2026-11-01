@@ -51,6 +51,9 @@ import { CHANNELS } from "../../../ipc/channels.js";
 import { outstandingRows, row } from "./questionRows.js";
 import { defaultDecisionsSettings } from "../decisionsSettings.js";
 import { RelayCheckCancelledError } from "../relayCheck.js";
+
+/** What the renderer recognises: an AppError by name, and its code. */
+const CANCELLED = { name: "AppError", code: "CANCELLED" };
 import {
   _resetDecisionsForTesting,
   checkRelay,
@@ -368,9 +371,7 @@ describe("Decisions entry", () => {
       for (const value of [undefined, { enabled: false }]) {
         saved.value = value;
 
-        await expect(checkRelay("https://relay.example.com")).rejects.toBeInstanceOf(
-          RelayCheckCancelledError
-        );
+        await expect(checkRelay("https://relay.example.com")).rejects.toMatchObject(CANCELLED);
       }
       expect(netFetch).not.toHaveBeenCalled();
     });
@@ -407,6 +408,7 @@ describe("Decisions entry", () => {
       await setDecisionsEnabled(false);
 
       await expect(check).rejects.toBeInstanceOf(RelayCheckCancelledError);
+      await expect(check).rejects.toMatchObject(CANCELLED);
     });
 
     it("is cancelled by quit", async () => {
@@ -418,6 +420,7 @@ describe("Decisions entry", () => {
       await stopDecisions();
 
       await expect(check).rejects.toBeInstanceOf(RelayCheckCancelledError);
+      await expect(check).rejects.toMatchObject(CANCELLED);
       await expect(checkRelay("https://relay.example.com")).rejects.toBeInstanceOf(
         RelayCheckCancelledError
       );

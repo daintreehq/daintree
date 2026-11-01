@@ -328,6 +328,13 @@ test("Decisions settings page review — every state, per theme", async () => {
         await step(page, state, async () => {
           await answerStatus(app, status);
           await openDecisions(page);
+          if (status.state === "connected") {
+            // Scoped to the row: the live region above it repeats the words, 1 px wide.
+            await expect(page.locator(`${PANEL} #decisions-relay-versions`)).toContainText(
+              "The relay needs an update",
+              { timeout: 8000 }
+            );
+          }
           await capturePage(page, state, theme, words);
           await closeSettings(page);
         });
@@ -396,6 +403,9 @@ test("Decisions settings page review — every state, per theme", async () => {
           await openDecisions(page);
           await page.getByPlaceholder("https://decisions.example.workers.dev").fill(RELAY);
           await page.getByRole("button", { name: "Check", exact: true }).click();
+          await expect(page.locator(`${PANEL} #decisions-relay-check`)).toContainText(words, {
+            timeout: 8000,
+          });
           await capturePage(page, state, theme, words);
           await closeSettings(page);
         });

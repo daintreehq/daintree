@@ -39,7 +39,8 @@ export function useRelayCheck(): UseRelayCheckResult {
     const mine = ++generation.current;
     setChecking(true);
     setError(null);
-    void window.electron.decisions.checkRelay(url).then(
+    // Both outcomes are handled here, so nothing is left to reject unseen.
+    window.electron.decisions.checkRelay(url).then(
       (next) => {
         if (generation.current !== mine) return;
         setCheck(next);

@@ -1,3 +1,4 @@
+import * as semver from "semver";
 import type { StatusSeverity } from "@/lib/statusSeverity";
 import type {
   DecisionsRelayCheck,
@@ -122,22 +123,18 @@ export function describeRelayCheck(check: DecisionsRelayCheck): RelayObservation
   }
 }
 
-type SemVer = [number, number, number];
-
-function semver(version: string): SemVer | null {
-  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
-  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
-}
-
-/** Which side is the newer release, when that can be told; null when it can't. */
+/**
+ * Which side is the newer release, when that can be told; null when it
+ * can't. Release order first (a prerelease before its release), then the
+ * protocol range's top.
+ */
 function newerSide(compatibility: DecisionsRelayCompatibility): "relay" | "daintree" | null {
-  const relay = semver(compatibility.relay.workerVersion);
-  const daintree = semver(compatibility.daintree.workerVersion);
+  const relay = semver.valid(compatibility.relay.workerVersion);
+  const daintree = semver.valid(compatibility.daintree.workerVersion);
   if (relay && daintree) {
-    for (let i = 0; i < 3; i += 1) {
-      if (relay[i]! > daintree[i]!) return "relay";
-      if (relay[i]! < daintree[i]!) return "daintree";
-    }
+    const order = semver.compare(relay, daintree);
+    if (order > 0) return "relay";
+    if (order < 0) return "daintree";
   }
   if (compatibility.relay.protocolMax > compatibility.daintree.protocolMax) return "relay";
   if (compatibility.relay.protocolMax < compatibility.daintree.protocolMax) return "daintree";
