@@ -2431,6 +2431,21 @@ describe("VoiceRecordingService — the key with no agent focused (#15550)", () 
       expectStartedInAssistant(arranged);
     });
 
+    it("lets the open dock's agent used after the Assistant keep the key from it", async () => {
+      const arranged = await arrange({
+        panels: [agent("agent-a"), agent("docked", { location: "dock" }), assistantPanel()],
+        mru: ["terminal:agent-a", "terminal:docked"],
+      });
+      arranged.panel.activeDockTerminalId = "docked";
+      const help = await runAssistant();
+      usedAssistantBefore("docked");
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      await expectStartedIn("agent-a", arranged);
+      expectAssistantLeftAlone(help);
+    });
+
     it.each([
       ["closed", false, false],
       ["hidden by the focus gesture", true, true],
