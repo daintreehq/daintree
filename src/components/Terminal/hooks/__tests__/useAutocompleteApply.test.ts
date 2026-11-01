@@ -314,10 +314,11 @@ describe("useAutocompleteApply", () => {
     });
 
     it("hands over only the typed token, not the word it was typed against", () => {
+      // The menu's context is a step behind: the live token is read again.
       const { applyAutocompleteSelection, onPickTemplate, view } = setup(
         "Fix it",
         template,
-        midDraft,
+        { ...midDraft, tokenEnd: 11 },
         0,
         { at: 4, text: "/boil" }
       );

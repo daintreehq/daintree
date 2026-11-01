@@ -1,78 +1,77 @@
-import { StateEffect, StateField, type EditorState, type Extension } from "@codemirror/state";
-import { invertedEffects } from "@codemirror/commands";
+import { StateField, type EditorState, type Text } from "@codemirror/state";
 
 /**
- * Where text the user typed or pasted in front of a word meets that word
- * (#15872). A completion token is the whole whitespace-delimited run around
- * the caret, so without this `/gith` typed against `I found` would take the
- * `I` with it when a completion replaces the token.
- *
- * A boundary is a position with a non-space character either side. Typing at
- * it stays in front of it; once a space or a line break reaches either side,
- * or the text either side is deleted, it is dropped. Re-completing a token the
- * caret was moved into records nothing, so the whole token is still replaced.
+ * A completion token typed straight in front of a word (#15872): `from` is
+ * where its trigger went, `to` where the word it was typed against starts.
  */
-const restoreBoundary = StateEffect.define<number>({
-  map: (pos, mapping) => mapping.mapPos(pos, 1),
-});
+interface TypedToken {
+  from: number;
+  to: number;
+}
+
+// Every char `ComposerTrigger` names. A run that opens with anything else can
+// never be a completion token, so it records nothing.
+const TRIGGERS = new Set(["/", "@", "#", "$"]);
 
 const isNonSpace = (char: string) => char !== "" && !/\s/.test(char);
 
-function joinsWords(state: EditorState, pos: number): boolean {
-  const { doc } = state;
-  return (
-    pos > 0 &&
-    pos < doc.length &&
-    isNonSpace(doc.sliceString(pos - 1, pos)) &&
-    isNonSpace(doc.sliceString(pos, pos + 1))
-  );
+/**
+ * Still one unbroken run from a word start through the first char of the word
+ * it was typed against. A space typed anywhere in it, or a deleted space that
+ * merges it into the word before, means it no longer marks a token's end.
+ */
+function holds(doc: Text, { from, to }: TypedToken): boolean {
+  if (from >= to || to >= doc.length) return false;
+  if (from > 0 && isNonSpace(doc.sliceString(from - 1, from))) return false;
+  return !/\s/.test(doc.sliceString(from, to + 1));
 }
 
-export const completionBoundaryField = StateField.define<readonly number[]>({
+/**
+ * Where a completion token the user typed or pasted in front of a word meets
+ * that word. A completion token is the whole whitespace-delimited run around
+ * the caret, so without this `/gith` typed against `I found` would take the
+ * `I` with it when a completion replaces the token. Typing at the join stays
+ * in front of it. A token the caret was moved into records nothing, so
+ * re-completing it still replaces all of it.
+ *
+ * Undo and redo record by the same rule: undoing an accepted completion puts
+ * the typed token back in front of the word, which marks it again.
+ */
+export const completionBoundary = StateField.define<readonly TypedToken[]>({
   create: () => [],
-  update(boundaries, tr) {
-    const restored: number[] = [];
-    for (const effect of tr.effects) if (effect.is(restoreBoundary)) restored.push(effect.value);
-    if (!tr.docChanged && restored.length === 0) return boundaries;
-
-    const next = new Set(boundaries.map((pos) => tr.changes.mapPos(pos, 1)));
-    for (const pos of restored) next.add(pos);
-    if (tr.isUserEvent("input.type") || tr.isUserEvent("input.paste")) {
+  update(tokens, tr) {
+    if (!tr.docChanged) return tokens;
+    const next = tokens.map(({ from, to }) => ({
+      from: tr.changes.mapPos(from, -1),
+      to: tr.changes.mapPos(to, 1),
+    }));
+    if (
+      tr.isUserEvent("input.type") ||
+      tr.isUserEvent("input.paste") ||
+      tr.isUserEvent("undo") ||
+      tr.isUserEvent("redo")
+    ) {
       const before = tr.startState.doc;
-      tr.changes.iterChanges((fromA, toA, _fromB, toB, inserted) => {
-        if (inserted.length === 0) return;
-        // Only text written where a word starts: typing inside a token the
-        // caret was moved into is still editing that one token.
+      tr.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
+        if (!TRIGGERS.has(inserted.sliceString(0, 1))) return;
         const opensWord = fromA === 0 || !isNonSpace(before.sliceString(fromA - 1, fromA));
-        if (opensWord && isNonSpace(before.sliceString(toA, toA + 1))) next.add(toB);
+        if (opensWord && isNonSpace(before.sliceString(toA, toA + 1))) {
+          next.push({ from: fromB, to: toB });
+        }
       });
     }
-    const kept = [...next].filter((pos) => joinsWords(tr.state, pos)).sort((a, b) => a - b);
-    return kept.length === boundaries.length && kept.every((pos, i) => pos === boundaries[i])
-      ? boundaries
-      : kept;
+    const kept = next.filter((token) => holds(tr.state.doc, token)).sort((a, b) => a.to - b.to);
+    return kept.filter((token, i) => i === 0 || token.to !== kept[i - 1]!.to);
   },
 });
 
-// Undo brings back the boundaries a change dropped, so accepting a completion,
-// undoing it and picking another still leaves the word alone.
-const restoreOnUndo = invertedEffects.of((tr) => {
-  if (!tr.docChanged) return [];
-  const before = tr.startState.field(completionBoundaryField, false);
-  if (!before || before.length === 0) return [];
-  const after = tr.state.field(completionBoundaryField);
-  return before
-    .filter((pos) => !after.includes(tr.changes.mapPos(pos, 1)))
-    .map((pos) => restoreBoundary.of(pos));
-});
-
-export const completionBoundary: Extension = [completionBoundaryField, restoreOnUndo];
-
 /**
- * The nearest boundary at or after `caret`, for `getActiveCompletionContext`
- * to end the token at. Undefined when the editor doesn't track them.
+ * Where the word starts that a token at `caret` was typed against, for
+ * `getActiveCompletionContext` to end the token at: the nearest join at or
+ * after the caret. Undefined when there is none or the editor doesn't track
+ * them.
  */
 export function completionBoundaryAt(state: EditorState, caret: number): number | undefined {
-  const boundaries = state.field(completionBoundaryField, false);
-  return boundaries?.find((pos) => pos >= caret);
+  const tokens = state.field(completionBoundary, false);
+  return tokens?.find((token) => token.to >= caret && token.from < caret)?.to;
 }
