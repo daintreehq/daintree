@@ -430,14 +430,16 @@ describe("ScheduleStore", () => {
       const heard: SchedulesSnapshot[] = [];
       store.subscribe((snapshot) => heard.push(snapshot));
 
-      await expect(
-        store.removeProject(PROJECT, async () => {
-          throw new Error("EBUSY");
-        })
-      ).rejects.toThrow("EBUSY");
+      const removal = store.removeProject(PROJECT, async () => {
+        throw new Error("EBUSY");
+      });
+      // Queued behind the failing turn, so it must not inherit the failure.
+      const next = store.create(PROJECT, { ...input, name: "Next" });
 
-      expect(heard).toEqual([{ projectId: PROJECT, schedules: [], revision: before + 1 }]);
-      expect((await store.create(PROJECT, { ...input, name: "Next" })).status).toBe("saved");
+      await expect(removal).rejects.toThrow("EBUSY");
+      expect((await next).status).toBe("saved");
+      expect(heard[0]).toEqual({ projectId: PROJECT, schedules: [], revision: before + 1 });
+      expect(heard).toHaveLength(2);
     });
 
     it("deletes the file and tells listeners the project has none", async () => {
