@@ -612,7 +612,7 @@ export class ScheduledRunRecorder {
         }
         if (!this.store.update(next)) continue;
         changed.push(next);
-        if (settles && windowless) this.store.markInboxPending(next.id);
+        if (settles && windowless) this.store.markInboxPending(next.id, at);
       }
     });
     this.changed(changed);
@@ -690,7 +690,7 @@ export class ScheduledRunRecorder {
       const inboxPending = ended && this.windowless();
       written = this.store.transaction(() => {
         const updated = this.store.update(run);
-        if (updated && inboxPending) this.store.markInboxPending(run.id);
+        if (updated && inboxPending) this.store.markInboxPending(run.id, this.now());
         if (updated && run.settlement.state === "settled") this.store.prune(run.scheduleId);
         return updated;
       });

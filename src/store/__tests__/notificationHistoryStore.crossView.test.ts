@@ -459,4 +459,37 @@ describe("notificationHistoryStore cross-view write merge (#15534)", () => {
     expect(ids).not.toContain("old-199");
     expect(ids).toContain("old-195");
   });
+
+  describe("entries imported under their source's id (#15983)", () => {
+    async function openViewWithFlush() {
+      vi.resetModules();
+      const module = await import("../slices/notificationHistorySlice");
+      vi.advanceTimersByTime(FLUSH_MS);
+      return module;
+    }
+
+    it("writes an import before its debounce when flushed", async () => {
+      const backing = installLocalStorage(seed([]));
+      const view = await openViewWithFlush();
+
+      view.useNotificationHistoryStore.getState().importEntries([makeEntry({ id: "run-1" })]);
+      view.flushNotificationHistory();
+
+      expect(entryById(backing, "run-1")).toBeDefined();
+    });
+
+    it("holds one entry when two views import the same record", async () => {
+      const backing = installLocalStorage(seed([makeEntry({ id: "existing" })]));
+      const viewA = await openViewWithFlush();
+      const viewB = await openViewWithFlush();
+
+      viewA.useNotificationHistoryStore.getState().importEntries([makeEntry({ id: "run-1" })]);
+      viewB.useNotificationHistoryStore.getState().importEntries([makeEntry({ id: "run-1" })]);
+      flush();
+
+      const ids = readBlob(backing).state.entries.map((e) => e.id);
+      expect(ids.filter((id) => id === "run-1")).toHaveLength(1);
+      expect(ids).toContain("existing");
+    });
+  });
 });

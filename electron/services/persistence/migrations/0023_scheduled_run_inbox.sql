@@ -1,4 +1,5 @@
--- Scheduled runs that settled while no Daintree window was open (#15983). `inbox_pending` is 1 from that settlement, written in the same transaction, until a view has put the run in the notification inbox. A pruned or deleted run takes its mark with it.
-ALTER TABLE `scheduled_runs` ADD COLUMN `inbox_pending` integer NOT NULL DEFAULT 0;
---> statement-breakpoint
-CREATE INDEX IF NOT EXISTS `scheduled_runs_inbox_pending_idx` ON `scheduled_runs` (`inbox_pending`) WHERE `inbox_pending` = 1;
+-- Scheduled runs that settled while no Daintree window was open (#15983), each waiting until a view has put it in the notification inbox. Written in the same transaction as the run's settlement. Cascades from the run, so a run that retention prunes or a deletion removes takes its wait with it.
+CREATE TABLE IF NOT EXISTS `scheduled_run_inbox` (
+	`run_id` text PRIMARY KEY NOT NULL REFERENCES `scheduled_runs`(`id`) ON DELETE CASCADE,
+	`created_at` integer NOT NULL
+);

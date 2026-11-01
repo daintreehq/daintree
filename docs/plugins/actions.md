@@ -368,7 +368,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `project.toggleNeverAutoSleep` | Never sleep automatically | safe | `enabled?`, `projectId?` |
 | `project.unarchive` | Unarchive project | safe | `projectId?` |
 | `project.update` | Update project | safe | `projectId`, `updates` |
-| `schedules.open` | Schedules… | safe | `scheduleId?` |
+| `schedules.open` | Schedules… | safe | `projectId?`, `scheduleId?` |
 
 ## recipes
 

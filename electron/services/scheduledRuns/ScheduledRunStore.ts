@@ -53,10 +53,7 @@ function isUniqueViolation(error: unknown): boolean {
  * table so a view loading with no run waiting never opens the history.
  */
 export function hasInboxPendingRun(sqlite: Database.Database): boolean {
-  return (
-    sqlite.prepare("SELECT 1 FROM scheduled_runs WHERE inbox_pending = 1 LIMIT 1").pluck().get() !==
-    undefined
-  );
+  return sqlite.prepare("SELECT 1 FROM scheduled_run_inbox LIMIT 1").pluck().get() !== undefined;
 }
 
 /**
@@ -89,8 +86,8 @@ export class ScheduledRunStore {
         this.sqlite
           .prepare(
             `INSERT INTO scheduled_runs
-               (id, project_id, schedule_id, occurrence_key, terminal_id, live, created_at, record, inbox_pending)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+               (id, project_id, schedule_id, occurrence_key, terminal_id, live, created_at, record)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
           )
           .run(
             record.id,
@@ -100,9 +97,9 @@ export class ScheduledRunStore {
             record.terminalId,
             isLive(record) ? 1 : 0,
             record.createdAt,
-            JSON.stringify(record),
-            options.inboxPending ? 1 : 0
+            JSON.stringify(record)
           );
+        if (options.inboxPending) this.markInboxPending(record.id, record.createdAt);
         const evaluated = evaluatedThrough(record);
         if (evaluated !== null) {
           this.sqlite
@@ -213,13 +210,16 @@ export class ScheduledRunStore {
   /**
    * Marks a run as waiting for the notification inbox (#15983): it settled
    * with no window open. Rewriting the record leaves the mark alone, and
-   * pruning or deleting the run takes it away with the row.
+   * pruning or deleting the run takes it away through the cascade.
    */
-  markInboxPending(id: string): boolean {
-    return (
-      this.sqlite.prepare("UPDATE scheduled_runs SET inbox_pending = 1 WHERE id = ?").run(id)
-        .changes > 0
-    );
+  markInboxPending(id: string, at: number = Date.now()): void {
+    this.sqlite
+      .prepare(
+        `INSERT INTO scheduled_run_inbox (run_id, created_at)
+         SELECT id, ? FROM scheduled_runs WHERE id = ?
+         ON CONFLICT (run_id) DO NOTHING`
+      )
+      .run(at, id);
   }
 
   /** Runs waiting for the notification inbox, oldest first. */
@@ -227,7 +227,9 @@ export class ScheduledRunStore {
     return this.decodeAll(
       this.sqlite
         .prepare(
-          "SELECT id, record FROM scheduled_runs WHERE inbox_pending = 1 ORDER BY created_at, rowid"
+          `SELECT r.id, r.record FROM scheduled_run_inbox i
+           JOIN scheduled_runs r ON r.id = i.run_id
+           ORDER BY r.created_at, r.rowid`
         )
         .all() as RunRow[]
     );
@@ -237,9 +239,7 @@ export class ScheduledRunStore {
   clearInboxPending(ids: readonly string[]): string[] {
     const cleared: string[] = [];
     if (ids.length === 0) return cleared;
-    const clear = this.sqlite.prepare(
-      "UPDATE scheduled_runs SET inbox_pending = 0 WHERE id = ? AND inbox_pending = 1"
-    );
+    const clear = this.sqlite.prepare("DELETE FROM scheduled_run_inbox WHERE run_id = ?");
     this.transaction(() => {
       for (const id of new Set(ids)) {
         if (clear.run(id).changes > 0) cleared.push(id);

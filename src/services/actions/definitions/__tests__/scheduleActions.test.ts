@@ -8,6 +8,11 @@ const client = vi.hoisted(() => ({
 
 vi.mock("@/clients/schedulesClient", () => ({ schedulesClient: client }));
 
+const projects = vi.hoisted(() => ({ switchProject: vi.fn(async () => {}) }));
+vi.mock("@/store/projectStore", () => ({
+  useProjectStore: { getState: () => projects },
+}));
+
 import {
   cancelScheduleRunConfirmations,
   resolveScheduleRunConfirmation,
@@ -16,6 +21,7 @@ import {
 import type { ActionContext } from "@shared/types/actions";
 import type { ActionRegistry } from "../../actionTypes";
 import { registerScheduleActions } from "../scheduleActions";
+import { useSchedulesViewStore } from "@/store/schedulesViewStore";
 
 const ctx: ActionContext = { projectId: "project-1" };
 
@@ -43,6 +49,35 @@ const pending = () => useScheduleRunConfirmStore.getState().current;
 
 beforeEach(() => {
   client.runNow.mockReset();
+  projects.switchProject.mockClear();
+});
+
+async function openSchedules(args: unknown): Promise<void> {
+  const actions: ActionRegistry = new Map();
+  registerScheduleActions(actions);
+  const definition = actions.get("schedules.open")?.();
+  if (!definition) throw new Error("schedules.open is not registered");
+  await definition.run(args, ctx);
+}
+
+describe("schedules.open", () => {
+  it("opens this project's schedule in place", async () => {
+    await openSchedules({ scheduleId: "schedule-1", projectId: "project-1" });
+    expect(projects.switchProject).not.toHaveBeenCalled();
+    expect(useSchedulesViewStore.getState()).toMatchObject({
+      isOpen: true,
+      request: { scheduleId: "schedule-1" },
+    });
+  });
+
+  it("switches to another project's schedule, for that project's view to open (#15983)", async () => {
+    useSchedulesViewStore.getState().close();
+    await openSchedules({ scheduleId: "schedule-9", projectId: "project-2" });
+    expect(projects.switchProject).toHaveBeenCalledExactlyOnceWith("project-2", {
+      focusIntent: { intent: "open-schedules", scheduleId: "schedule-9" },
+    });
+    expect(useSchedulesViewStore.getState()).toMatchObject({ isOpen: false });
+  });
 });
 
 afterEach(() => {

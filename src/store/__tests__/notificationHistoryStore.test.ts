@@ -589,6 +589,42 @@ describe("notificationHistorySlice", () => {
     });
   });
 
+  describe("importEntries", () => {
+    it("adds whole entries under their own ids, in timestamp order, counting the unread", () => {
+      const now = Date.now();
+      getState().importEntries([makeEntry({ id: "newer", timestamp: now - 1_000 })]);
+      getState().importEntries([
+        makeEntry({ id: "older", timestamp: now - 60_000 }),
+        makeEntry({ id: "newest", timestamp: now }),
+      ]);
+
+      expect(getState().entries.map((e) => e.id)).toEqual(["newest", "newer", "older"]);
+      expect(getState().unreadCount).toBe(3);
+    });
+
+    it("skips an id already held, read or archived, and repeats within one import", () => {
+      getState().importEntries([makeEntry({ id: "run", message: "first" })]);
+      getState().markIdsRead(["run"]);
+      getState().archiveEntry("run");
+
+      getState().importEntries([
+        makeEntry({ id: "run", message: "again" }),
+        makeEntry({ id: "other" }),
+        makeEntry({ id: "other", message: "twice" }),
+      ]);
+
+      expect(getState().entries.map((e) => [e.id, e.message])).toEqual(
+        expect.arrayContaining([
+          ["run", "first"],
+          ["other", "msg"],
+        ])
+      );
+      expect(getState().entries).toHaveLength(2);
+      expect(getState().entries.find((e) => e.id === "run")?.archivedAt).not.toBeNull();
+      expect(getState().unreadCount).toBe(1);
+    });
+  });
+
   describe("supersede on addEntry", () => {
     it("supersedes by exact id archives the target entry", () => {
       const oldId = getState().addEntry({ type: "error", message: "Disconnected" });

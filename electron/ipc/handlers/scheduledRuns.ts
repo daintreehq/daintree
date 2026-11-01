@@ -8,7 +8,6 @@ import type {
   ScheduledRunsListBySchedulePayload,
 } from "../../../shared/types/ipc/scheduledRuns.js";
 import { AppError } from "../../utils/errorTypes.js";
-import { projectStore } from "../../services/ProjectStore.js";
 import {
   getScheduledRunRecorder,
   getScheduledRunRecorderForInbox,
@@ -27,7 +26,11 @@ let inbox: ScheduledRunInbox | null = null;
 function getInbox(): ScheduledRunInbox {
   inbox ??= new ScheduledRunInbox({
     recorder: getScheduledRunRecorderForInbox,
-    getSchedule: (projectId, scheduleId) => projectStore.schedules.get(projectId, scheduleId),
+    // Loaded on first use: the store is built as its module evaluates.
+    getSchedule: async (projectId, scheduleId) => {
+      const { projectStore } = await import("../../services/ProjectStore.js");
+      return projectStore.schedules.get(projectId, scheduleId);
+    },
     isLive: (id) => {
       const contents = webContents.fromId(id);
       return contents !== undefined && !contents.isDestroyed();
