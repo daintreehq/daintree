@@ -312,22 +312,26 @@ describe("PanelHeader", () => {
   });
 
   describe("schedule chip", () => {
+    // The active pane is the header's `id`; here it is the second tab.
     const tabs = [
       {
-        id: "test-panel",
+        id: "t1",
         title: "Tab 1",
-        kind: "terminal" as const,
-        chrome: deriveTerminalChrome(),
-        isActive: true,
-      },
-      {
-        id: "t2",
-        title: "Tab 2",
         kind: "terminal" as const,
         chrome: deriveTerminalChrome(),
         isActive: false,
       },
+      {
+        id: "test-panel",
+        title: "Tab 2",
+        kind: "terminal" as const,
+        chrome: deriveTerminalChrome(),
+        isActive: true,
+      },
     ];
+
+    const follows = (earlier: Element, later: Element) =>
+      (earlier.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
 
     it("draws nothing for a pane no schedule launched", () => {
       mockHasPty = true;
@@ -339,17 +343,16 @@ describe("PanelHeader", () => {
       expect(screen.queryByTestId("terminal-schedule-chip")).toBeNull();
     });
 
-    it.each([
-      ["a single pane", {}],
-      ["a tab group, for its active pane", { tabs, onTabClick: vi.fn() }],
-    ])("follows the title in %s, outside the window controls", async (_layout, extra) => {
+    it("follows a single pane's title, ahead of its metadata and outside the controls", async () => {
       mockHasPty = true;
       mockStoreState = { ...mockStoreState, panelsById: { "test-panel": SCHEDULED_PANEL } };
-      render(<PanelHeader {...makeProps(extra)} />);
+      render(<PanelHeader {...makeProps({ headerContent: <span>metadata</span> })} />);
       await act(async () => {});
 
       const chip = screen.getByTestId("terminal-schedule-chip");
       expect(chip.textContent).toBe("Nightly triage");
+      expect(follows(screen.getAllByText("Test Panel")[0]!, chip)).toBe(true);
+      expect(follows(chip, screen.getByTestId("panel-header-content"))).toBe(true);
       expect(screen.getByTestId("panel-header-controls").contains(chip)).toBe(false);
 
       fireEvent.click(chip);
@@ -358,6 +361,30 @@ describe("PanelHeader", () => {
         { scheduleId: "sched-1" },
         { source: "user" }
       );
+    });
+
+    it("follows a tab group's strip for its active pane, where the maximized readout keeps clear of it", async () => {
+      mockHasPty = true;
+      mockStoreState = {
+        ...mockStoreState,
+        panelsById: {
+          t1: { id: "t1", kind: "terminal" },
+          "test-panel": SCHEDULED_PANEL,
+        },
+      };
+      render(
+        <PanelHeader
+          {...makeProps({ tabs, onTabClick: vi.fn(), headerContent: <span>metadata</span> })}
+        />
+      );
+      await act(async () => {});
+
+      const chip = screen.getByTestId("terminal-schedule-chip");
+      expect(chip.textContent).toBe("Nightly triage");
+      expect(follows(screen.getAllByText("Tab 2")[0]!, chip)).toBe(true);
+      expect(follows(chip, screen.getByTestId("panel-header-content"))).toBe(true);
+      expect(screen.getByTestId("panel-header-controls").contains(chip)).toBe(false);
+      expect(chip.closest("[data-readout-obstacle]")).not.toBeNull();
     });
   });
 

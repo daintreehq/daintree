@@ -8,20 +8,22 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { _resetScheduleNamesForTests } from "@/store/scheduleNamesStore";
 import { TerminalScheduleChip } from "../TerminalScheduleChip";
 
-const { dispatchMock, client, remote, panels } = vi.hoisted(() => ({
+const { dispatchMock, client, remote } = vi.hoisted(() => ({
   dispatchMock: vi.fn(),
   client: { list: vi.fn(), onChanged: vi.fn() },
   remote: { value: false },
-  panels: { byId: {} as Record<string, unknown> },
 }));
 
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: dispatchMock } }));
 vi.mock("@/clients/schedulesClient", () => ({ schedulesClient: client }));
 vi.mock("@/hooks/useHostPlatform", () => ({ isRemoteWindow: () => remote.value }));
-vi.mock("@/store/panelStore", () => ({
-  usePanelStore: (selector: (state: { panelsById: Record<string, unknown> }) => unknown) =>
-    selector({ panelsById: panels.byId }),
-}));
+// A live store, so a pane's provenance can change under a mounted chip.
+vi.mock("@/store/panelStore", async () => {
+  const { create } = await import("zustand");
+  return { usePanelStore: create(() => ({ panelsById: {} as Record<string, unknown> })) };
+});
+
+const { usePanelStore } = await import("@/store/panelStore");
 
 let push: ((snapshot: SchedulesSnapshot) => void) | undefined;
 
@@ -34,7 +36,11 @@ function schedules(revision: number, names: Record<string, string>): SchedulesSn
 }
 
 function seedPanel(panel: Record<string, unknown>) {
-  panels.byId = { "term-1": { id: "term-1", kind: "terminal", ...panel } };
+  act(() => {
+    usePanelStore.setState({
+      panelsById: { "term-1": { id: "term-1", kind: "terminal", ...panel } },
+    });
+  });
 }
 
 async function renderChip() {
@@ -52,7 +58,7 @@ const SCHEDULED = { spawnedBy: "schedule", scheduledRun: { scheduleId: "s1", run
 beforeEach(() => {
   _resetScheduleNamesForTests();
   remote.value = false;
-  panels.byId = {};
+  usePanelStore.setState({ panelsById: {} });
   push = undefined;
   dispatchMock.mockReset();
   dispatchMock.mockResolvedValue({ ok: true, result: undefined });
@@ -88,6 +94,8 @@ describe("TerminalScheduleChip", () => {
     const chip = screen.getByTestId("terminal-schedule-chip");
     expect(chip.textContent).toBe("Nightly triage");
     expect(chip.getAttribute("aria-label")).toContain("Nightly triage");
+    // The mark is drawn, and left to the accessible name to say.
+    expect(chip.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
 
     fireEvent.click(chip);
     expect(dispatchMock).toHaveBeenCalledWith(
@@ -128,8 +136,7 @@ describe("TerminalScheduleChip", () => {
 
     act(() => push?.(schedules(3, {})));
     const chip = screen.getByTestId("terminal-schedule-chip");
-    expect(chip.textContent).not.toContain("Weekly triage");
-    expect(chip.textContent).not.toBe("");
+    expect(chip.textContent).toMatch(/deleted/i);
     // Still opens: the view says the schedule is gone.
     fireEvent.click(chip);
     expect(dispatchMock).toHaveBeenCalledWith(
@@ -144,13 +151,41 @@ describe("TerminalScheduleChip", () => {
     seedPanel(SCHEDULED);
     await renderChip();
     const chip = screen.getByTestId("terminal-schedule-chip");
-    expect(chip.textContent).not.toContain("Nightly triage");
+    // Unread is never claimed as deleted.
+    expect(chip.textContent).not.toMatch(/deleted|Nightly triage/i);
+    expect(chip.textContent).not.toBe("");
 
     fireEvent.click(chip);
     await act(async () => {});
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     expect(client.list).toHaveBeenCalledTimes(2);
     expect(screen.getByTestId("terminal-schedule-chip").textContent).toBe("Nightly triage");
+  });
+
+  it("follows the pane's provenance while mounted, and lets go when it stops being a run", async () => {
+    const off = vi.fn();
+    client.onChanged.mockImplementation((callback: (snapshot: SchedulesSnapshot) => void) => {
+      push = callback;
+      return off;
+    });
+    client.list.mockResolvedValue(schedules(1, { s1: "Nightly triage", s2: "Weekly review" }));
+    seedPanel(SCHEDULED);
+    await renderChip();
+    expect(screen.getByTestId("terminal-schedule-chip").textContent).toBe("Nightly triage");
+
+    seedPanel({ spawnedBy: "schedule", scheduledRun: { scheduleId: "s2", runId: "r2" } });
+    const chip = screen.getByTestId("terminal-schedule-chip");
+    expect(chip.textContent).toBe("Weekly review");
+    fireEvent.click(chip);
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "schedules.open",
+      { scheduleId: "s2" },
+      { source: "user" }
+    );
+
+    seedPanel({ spawnedBy: "agent" });
+    expect(screen.queryByTestId("terminal-schedule-chip")).toBeNull();
+    expect(off).toHaveBeenCalledTimes(1);
   });
 
   it("is a plain label in a window driving a Remote Host", async () => {

@@ -191,10 +191,88 @@ describe("scheduleNamesStore", () => {
     expect(nameOf("s1")).toEqual({ kind: "remote" });
   });
 
-  it("puts each reading into the words beside the mark", () => {
+  it("says deleted only for a schedule the read found missing", () => {
     expect(scheduleNameLabel({ kind: "named", name: "Nightly" })).toBe("Nightly");
-    expect(scheduleNameLabel({ kind: "deleted" })).not.toBe(scheduleNameLabel({ kind: "unnamed" }));
-    expect(scheduleNameLabel({ kind: "remote" })).toBe(scheduleNameLabel({ kind: "unnamed" }));
+    expect(scheduleNameLabel({ kind: "deleted" })).toMatch(/deleted/i);
+    expect(scheduleNameLabel({ kind: "unnamed" })).not.toMatch(/deleted/i);
+    expect(scheduleNameLabel({ kind: "remote" })).not.toMatch(/deleted/i);
+  });
+
+  it("keeps names a push brought when the first read then fails or finds no project", async () => {
+    for (const settle of ["reject", "null"] as const) {
+      _resetScheduleNamesForTests();
+      const reply = deferred<SchedulesSnapshot | null>();
+      client.list.mockReturnValue(reply.promise);
+      acquireScheduleNames();
+      await act(async () => {});
+      act(() => push?.(snapshot(1, { s1: "Nightly" })));
+
+      await act(async () =>
+        settle === "reject" ? reply.reject(new Error("boom")) : reply.resolve(null)
+      );
+      expect(useScheduleNamesStore.getState().status).toBe("ready");
+      expect(nameOf("s1")).toEqual({ kind: "named", name: "Nightly" });
+    }
+  });
+
+  it("leaves the names as they are for a snapshot of a revision already taken", async () => {
+    client.list.mockResolvedValue(snapshot(1, { s1: "Nightly" }));
+    acquireScheduleNames();
+    await act(async () => {});
+    const names = useScheduleNamesStore.getState().names;
+
+    act(() => push?.(snapshot(1, { s1: "Nightly" })));
+    expect(useScheduleNamesStore.getState().names).toBe(names);
+  });
+
+  it("lets a read from before a quick release and re-hold change nothing, settled either way", async () => {
+    const stale = deferred<SchedulesSnapshot | null>();
+    const staleFailure = deferred<SchedulesSnapshot | null>();
+    const fresh = deferred<SchedulesSnapshot | null>();
+    client.list
+      .mockReturnValueOnce(stale.promise)
+      .mockReturnValueOnce(staleFailure.promise)
+      .mockReturnValueOnce(fresh.promise);
+
+    acquireScheduleNames()();
+    await act(async () => {});
+    acquireScheduleNames()();
+    await act(async () => {});
+    acquireScheduleNames();
+    await act(async () => {});
+    expect(client.list).toHaveBeenCalledTimes(3);
+
+    await act(async () => stale.resolve(snapshot(9, { s1: "Old" })));
+    await act(async () => staleFailure.reject(new Error("boom")));
+    expect(useScheduleNamesStore.getState().status).toBe("loading");
+
+    await act(async () => fresh.resolve(snapshot(1, { s1: "Nightly" })));
+    expect(nameOf("s1")).toEqual({ kind: "named", name: "Nightly" });
+  });
+
+  it("keeps a read from before a release from freeing a retry still in flight", async () => {
+    const stale = deferred<SchedulesSnapshot | null>();
+    const retry = deferred<SchedulesSnapshot | null>();
+    client.list
+      .mockReturnValueOnce(stale.promise)
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockReturnValueOnce(retry.promise);
+
+    acquireScheduleNames()();
+    await act(async () => {});
+    acquireScheduleNames();
+    await act(async () => {});
+    expect(useScheduleNamesStore.getState().status).toBe("failed");
+
+    retryScheduleNames();
+    await act(async () => {});
+    expect(client.list).toHaveBeenCalledTimes(3);
+
+    // The stale read settling mustn't mark the retry as finished.
+    await act(async () => stale.resolve(null));
+    retryScheduleNames();
+    await act(async () => {});
+    expect(client.list).toHaveBeenCalledTimes(3);
   });
 });
 

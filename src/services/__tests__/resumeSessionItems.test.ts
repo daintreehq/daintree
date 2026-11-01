@@ -187,7 +187,9 @@ describe("scheduled sessions", () => {
     const byId = new Map(items.map((item) => [item.session.sessionId, item]));
     expect(byId.get("run")?.schedule?.scheduleId).toBe("sched-1");
     expect(byId.get("run")?.schedule?.name).toBeNull();
+    // Unread, so it names no schedule and claims none was deleted.
     expect(byId.get("run")?.schedule?.label).toBeTruthy();
+    expect(byId.get("run")?.schedule?.label).not.toMatch(/deleted/i);
     expect(byId.get("hand")).not.toHaveProperty("schedule");
     expect(byId.get("mangled")).not.toHaveProperty("schedule");
     // Findable as scheduled before any name is read; others aren't.

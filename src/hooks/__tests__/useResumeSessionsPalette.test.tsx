@@ -4,9 +4,12 @@ import { act, renderHook } from "@testing-library/react";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 import type { SchedulesSnapshot } from "@shared/types/ipc/schedules";
 
-const { client, records } = vi.hoisted(() => ({
+const { client, records, worktrees } = vi.hoisted(() => ({
   client: { list: vi.fn(), onChanged: vi.fn() },
   records: { sessions: [] as AgentSessionRecord[] },
+  // One map for every render, as the store hands back: a fresh one each time
+  // would rebuild the items anyway and hide a missing names dependency.
+  worktrees: new Map<string, unknown>([["wt1", { name: "feature-a", path: "/repo/wt-a" }]]),
 }));
 
 vi.mock("@/clients/schedulesClient", () => ({ schedulesClient: client }));
@@ -21,7 +24,7 @@ vi.mock("@/hooks/useAgentSessionRecords", () => ({
 }));
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: <T,>(selector: (state: { worktrees: Map<string, unknown> }) => T) =>
-    selector({ worktrees: new Map([["wt1", { name: "feature-a", path: "/repo/wt-a" }]]) }),
+    selector({ worktrees }),
 }));
 
 import { useResumeSessionsPalette } from "../useResumeSessionsPalette";
@@ -121,6 +124,28 @@ describe("useResumeSessionsPalette schedule names", () => {
     );
     expect(afterDelete?.schedule?.name).toBeNull();
     expect(afterDelete?.schedule?.label).not.toBe("Nightly triage");
+  });
+
+  it("follows a rename while a search is showing", async () => {
+    const sessions = [rec({ sessionId: "run", scheduledRun }), rec({ sessionId: "hand" })];
+    records.sessions = sessions;
+    const { result } = renderHook(() => useResumeSessionsPalette());
+    openPalette(true);
+    await act(async () => {});
+    act(() => result.current.setQuery("nightly"));
+    expect(result.current.results.map((item) => item.session.sessionId)).toEqual(["run"]);
+
+    act(() =>
+      push?.({
+        projectId: "p1",
+        revision: 2,
+        schedules: [{ id: "sched-1", name: "Weekly review" }],
+      } as unknown as SchedulesSnapshot)
+    );
+    expect(result.current.results).toEqual([]);
+    act(() => result.current.setQuery("weekly"));
+    expect(result.current.results.map((item) => item.session.sessionId)).toEqual(["run"]);
+    expect(result.current.results[0]?.schedule?.label).toBe("Weekly review");
   });
 
   it("lets go of the names once the palette closes", async () => {

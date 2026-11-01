@@ -1546,8 +1546,16 @@ function PanelHeaderComponent({
         )}
 
         {/* A tab group's titles are in the strip; the active pane's schedule
-            follows it, ahead of that pane's metadata. */}
-        {hasTabs && hasPty && <TerminalScheduleChip terminalId={id} />}
+            follows it, ahead of that pane's metadata, and the maximized readout
+            keeps clear of it as it does of the strip. */}
+        {hasTabs && hasPty && (
+          <div
+            data-readout-obstacle=""
+            className="flex min-w-0 shrink-[2] items-center empty:hidden"
+          >
+            <TerminalScheduleChip terminalId={id} />
+          </div>
+        )}
 
         {headerContent != null && (
           // Keeps its full width until it would take more than half the region,
