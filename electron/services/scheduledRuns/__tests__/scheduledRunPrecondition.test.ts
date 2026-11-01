@@ -98,16 +98,20 @@ describe.runIf(posix)("runSchedulePrecondition", () => {
     expect(fs.existsSync(marker)).toBe(false);
   });
 
-  it("kills what's still running at quit at once, even what ignores SIGTERM", async () => {
+  it("kills what's still running at quit at once, its whole tree, even what ignores SIGTERM", async () => {
     const ready = path.join(dir, "ready");
-    // An ignored signal stays ignored across exec, so sleep ignores SIGTERM too.
-    const pending = check(`trap '' TERM; touch '${ready}'; sleep 5`);
+    const marker = path.join(dir, "late");
+    // An ignored signal stays ignored across exec, so every descendant ignores
+    // SIGTERM too; the subshell is one a kill of the shell alone would miss.
+    const pending = check(`trap '' TERM; (sleep 1; touch '${marker}') & touch '${ready}'; sleep 5`);
     await vi.waitFor(() => expect(fs.existsSync(ready)).toBe(true));
     const started = Date.now();
     disposeSchedulePreconditions();
     await expect(pending).resolves.toMatchObject({ kind: "precondition", exitCode: null });
     // A polite SIGTERM would have waited out the 5 s escalation.
     expect(Date.now() - started).toBeLessThan(2_500);
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(fs.existsSync(marker)).toBe(false);
     await expect(check("true")).resolves.toMatchObject({ error: "Daintree was quitting." });
   });
 });

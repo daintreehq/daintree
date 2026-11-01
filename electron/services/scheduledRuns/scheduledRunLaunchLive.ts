@@ -97,7 +97,17 @@ async function closeRunTerminal(run: ScheduledRun): Promise<string | null> {
 async function removeRunPane(run: ScheduledRun): Promise<void> {
   const { terminalId } = run;
   if (terminalId === null) return;
-  const live = await liveIncarnation(terminalId).catch(() => null);
+  let live: number | null;
+  try {
+    live = await liveIncarnation(terminalId);
+  } catch (error) {
+    // Unknown isn't gone: a restart may hold the id, and its pane must stay.
+    console.warn(
+      `[ScheduledRuns] Kept replaced run ${run.id}'s pane; its terminal couldn't be read:`,
+      error
+    );
+    return;
+  }
   if (live !== null && live !== run.terminalSpawnedAt) return;
   const push: ScheduledRunClosedPush = { runId: run.id, terminalId };
   for (const view of getWebContentsForProject(run.projectId)) {
