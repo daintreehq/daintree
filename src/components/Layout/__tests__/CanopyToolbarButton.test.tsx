@@ -190,7 +190,10 @@ describe("CanopyToolbarButton", () => {
   });
 
   it("stays dark for an asking run that is parked or snoozed", async () => {
-    setFleet([asking("r1", false, { snooze: {} as never }), asking("r2", false, { park: {} as never })]);
+    setFleet([
+      asking("r1", false, { snooze: {} as never }),
+      asking("r2", false, { park: {} as never }),
+    ]);
     expect(await pip()).toMatchObject({ label: "Canopy", visible: "false" });
   });
 
