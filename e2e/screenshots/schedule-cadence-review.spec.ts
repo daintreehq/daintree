@@ -156,12 +156,7 @@ async function showCadence(page: Page): Promise<void> {
 }
 
 async function openSchedule(page: Page, scheduleId: string): Promise<void> {
-  const result = await dispatchAction(
-    page,
-    "schedules.open",
-    { scheduleId },
-    { source: "user" }
-  );
+  const result = await dispatchAction(page, "schedules.open", { scheduleId }, { source: "user" });
   if (!result.ok) throw new Error(`schedules.open failed: ${JSON.stringify(result)}`);
   await page.locator(DIALOG).waitFor({ state: "visible", timeout: 8000 });
   await showCadence(page);
@@ -282,7 +277,12 @@ test("schedule cadence picker review — every kind and state, per theme", async
       // 12 — the 31st, which some months don't have.
       await openSchedule(page, ids.monthly);
       await pick(page, "Day of the month", "31st");
-      await snap(page, theme, "12-monthly-31st", `${DIALOG} >> text=Skipped in months without a 31st`);
+      await snap(
+        page,
+        theme,
+        "12-monthly-31st",
+        `${DIALOG} >> text=Skipped in months without a 31st`
+      );
       await closeView(page);
 
       // 13 — a bad expression says which field is wrong.

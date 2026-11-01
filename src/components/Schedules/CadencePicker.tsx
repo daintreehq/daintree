@@ -105,7 +105,8 @@ export function CadencePicker({
 }: CadencePickerProps) {
   const set = (change: Partial<CadenceChoice>) => onChange(withChoice(choice, change));
   const kind = choice.kind;
-  const showsTime = kind === "daily" || kind === "weekdays" || kind === "days" || kind === "monthly";
+  const showsTime =
+    kind === "daily" || kind === "weekdays" || kind === "days" || kind === "monthly";
 
   return (
     <>
@@ -228,7 +229,11 @@ function DaysRow({
             const id = `${baseId}-${day}`;
             const checked = days.includes(day);
             return (
-              <label key={day} htmlFor={id} className="flex items-center gap-2 text-sm text-text-primary">
+              <label
+                key={day}
+                htmlFor={id}
+                className="flex items-center gap-2 text-sm text-text-primary"
+              >
                 <Checkbox
                   id={id}
                   checked={checked}
