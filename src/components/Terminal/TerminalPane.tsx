@@ -48,8 +48,6 @@ import { RestoreRecoveryGate } from "./RestoreRecoveryGate";
 import { MemoryPressureGate } from "./MemoryPressureGate";
 import { DriveLeaseGate } from "./DriveLeaseGate";
 import { InlineStatusBanner, PaneBannerSurfaceContext } from "./InlineStatusBanner";
-import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
-import { isHandBackWait } from "@/lib/handBackPresentation";
 import { useDockBlockedState } from "@/components/Layout/useDockBlockedState";
 import { getVisibleTabbableElements, restoreFocusTo } from "@/lib/accessibility";
 import { PluginKindSetupStrip } from "@/components/Plugin/PluginSetupStrip";
@@ -67,7 +65,6 @@ import { isAttachedProcessRunning } from "./attachedProcessRunning";
 import { useShouldSuppressLocalError } from "@/components/Recovery/useShouldSuppressLocalError";
 import { UpdateCwdDialog } from "./UpdateCwdDialog";
 import { CompactErrorList } from "../Errors/CompactErrorList";
-import { AgentCompletionBanner } from "./AgentCompletionBanner";
 import { TerminalScratchpad } from "./TerminalScratchpad";
 import { isScratchpadElement } from "@/lib/terminalScratchpad";
 import { ContentPanel } from "@/components/Panel";
@@ -106,16 +103,12 @@ import {
   buildMissingCliContinueArgs,
   buildMissingCliRelaunchOptions,
 } from "@/utils/missingCliGate";
-import { useReviewDialogOpenForWorktree } from "./useReviewDialogOpenForWorktree";
 import { InputTracker } from "@/services/clearCommandDetection";
 import { getAgentConfig, getMergedPresets } from "@/config/agents";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { terminalClient } from "@/clients";
-import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
-import { sendCompletionToAgent, sendCompletionToAssistant } from "./completionHandoff";
-import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import type { HybridInputBarHandle } from "./HybridInputBar";
 const LazyHybridInputBar = lazy(() =>
   import("./HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
@@ -478,7 +471,6 @@ function TerminalPaneComponent({
   );
   const [isUpdateCwdOpen, setIsUpdateCwdOpen] = useState(false);
   const [isAutoRestarting, setIsAutoRestarting] = useState(false);
-  const [completionBannerDismissed, setCompletionBannerDismissed] = useState(false);
   const autoRestartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoRestartAttemptRef = useRef(0);
   const processStartTimeRef = useRef<number>(0);
@@ -1342,16 +1334,11 @@ function TerminalPaneComponent({
     peekTerminalService()?.setAgentState(id, agentState ?? "idle");
   }, [id, agentState]);
 
-  // The FSM holds `completed` for half a second before the agent settles into a
-  // hand-back wait, so the finished phase the completion strip belongs to is
-  // either. A blocked wait (`error`) is its own case: it gets an error banner.
+  // A blocked wait (`error`) gets an error banner.
   const waitingReason = usePanelStore((state) => {
     const panel = state.panelsById[id];
     return panel && isPtyPanel(panel) ? panel.waitingReason : undefined;
   });
-  const handBackRunIds = useHandBackRunIds();
-  const isFinished =
-    agentState === "completed" || isHandBackWait(handBackRunIds, { id, agentState, waitingReason });
   // Debounced the way the pane frame is, so the banner and the failed edge
   // arrive together and a momentary wait never flashes either.
   // A restart or an exit is the newer observation: the dead run's error wait
@@ -1376,20 +1363,12 @@ function TerminalPaneComponent({
     ? (getAgentConfig(effectiveAgentId)?.name ?? effectiveAgentId)
     : "Agent";
 
-  // Per-pane dismiss state resets when the agent leaves the finished phase —
-  // a rerun should re-arm the banner from scratch.
-  useEffect(() => {
-    if (!isFinished) {
-      setCompletionBannerDismissed(false);
-    }
-  }, [isFinished]);
-
   useEffect(() => {
     if (!isBlockedWait) setBlockedBannerDismissed(false);
   }, [isBlockedWait]);
 
-  // The current worktree's changed-file count drives the review strip and
-  // the zero-change pill. We prefer the explicit `worktreeId` prop (matches
+  // The current worktree's changed-file count drives the zero-change pill.
+  // We prefer the explicit `worktreeId` prop (matches
   // `worktree.id` in WorktreeCard) over `cwd` so a user-initiated `cd` away
   // from the worktree root doesn't break the lookup.
   const reviewWorktreeId = worktreeId ?? cwd;
@@ -1400,54 +1379,7 @@ function TerminalPaneComponent({
       ? s.worktrees.get(reviewWorktreeId)?.worktreeChanges?.changedFileCount
       : undefined
   );
-  const changedFileCount = observedChangedFileCount ?? 0;
-
-  const completedWithChanges = isFinished && changedFileCount > 0;
   const completedWithNoChanges = agentState === "completed" && observedChangedFileCount === 0;
-
-  // Any review surface opening for this worktree dismisses the completion
-  // banner: the user is already looking at the changes it was pointing at.
-  const reviewDialogOpen = useReviewDialogOpenForWorktree(reviewWorktreeId);
-  useEffect(() => {
-    if (reviewDialogOpen) setCompletionBannerDismissed(true);
-  }, [reviewDialogOpen]);
-
-  const handleOpenReviewHub = () => {
-    if (reviewWorktreeId) {
-      void actionService.dispatch("worktree.openReviewHub", { worktreeId: reviewWorktreeId });
-    }
-  };
-
-  // "Send to assistant" drafts this agent's completion output into the active
-  // assistant session's composer. Offered whenever that session exists: a
-  // draft never submits, so a working assistant can take one too, and a
-  // session that can't take one says why when the button is pressed.
-  const helpTerminalId = useHelpPanelStore((s) => selectActiveSlot(s).terminalId);
-  const assistantAvailable = !!helpTerminalId && helpTerminalId !== id;
-
-  // The "Send to agent" palette has nothing to offer when this is the only
-  // eligible PTY pane — hide it rather than render a button that no-ops.
-  // Short-circuit on agentState: the result only gates the completion
-  // banner's button, so idle/working panes skip the O(N) scan per store write.
-  const hasAgentTargets = usePanelStore(
-    (s) =>
-      isFinished &&
-      s.panelIds.some((tid) => {
-        const t = s.panelsById[tid];
-        return (
-          !!t &&
-          t.id !== id &&
-          t.location !== "trash" &&
-          t.location !== "background" &&
-          t.location !== "overlay" &&
-          (t.kind ? panelKindHasPty(t.kind) : true) &&
-          (!isPtyPanel(t) || t.hasPty !== false)
-        );
-      })
-  );
-
-  const handleSendToAssistant = useCallback(() => sendCompletionToAssistant(id), [id]);
-  const handleSendToAgent = useCallback(() => sendCompletionToAgent(id), [id]);
 
   const isWorking = agentState === "working";
   const allowPing = !isMaximized;
@@ -2005,16 +1937,6 @@ function TerminalPaneComponent({
                   <TerminalBackendOverlay recovering={isBackendRecovering} />
                 )}
               </div>
-
-              {completedWithChanges && !completionBannerDismissed && (
-                <AgentCompletionBanner
-                  fileCount={changedFileCount}
-                  onReview={handleOpenReviewHub}
-                  onDismiss={() => setCompletionBannerDismissed(true)}
-                  onSendToAssistant={assistantAvailable ? handleSendToAssistant : undefined}
-                  onSendToAgent={hasAgentTargets ? handleSendToAgent : undefined}
-                />
-              )}
 
               {showHybridInputBar && (
                 <Suspense fallback={null}>
