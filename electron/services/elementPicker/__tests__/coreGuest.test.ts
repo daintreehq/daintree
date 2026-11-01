@@ -633,8 +633,12 @@ describe("CoreGuest", () => {
       }
     });
 
-    it("stops waiting on a read that never answers", async () => {
-      const h = harness({ probeResult: ASTRO, servedContent: () => new Promise(() => {}) });
+    it("stops waiting on a read that has not answered by its deadline, and ignores the late answer", async () => {
+      let answer!: (value: unknown) => void;
+      const h = harness({
+        probeResult: ASTRO,
+        servedContent: () => new Promise((resolve) => (answer = resolve)),
+      });
       await h.install();
       h.guest.onGuestEvent(0, READY);
       await flush();
@@ -644,6 +648,10 @@ describe("CoreGuest", () => {
       h.timers[1]!();
       await h.settle();
       expect(astroInstall(h)).toContain("served: null");
+      answer({ result: { value: SERVED } });
+      await h.settle();
+      expect(h.extractorEvaluates()).toHaveLength(1);
+      expect(h.availabilities().at(-1)?.extractors).toEqual({ astro: "installed" });
     });
 
     it("installs nothing when the document changes while the markup is being read", async () => {

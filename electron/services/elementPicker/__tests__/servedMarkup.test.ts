@@ -40,6 +40,19 @@ describe("the served-markup fetch", () => {
       redirect: "error",
       cache: "no-store",
     });
+    // Abandoned in the guest too once main stops waiting.
+    expect(requests[0]!.init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("decodes the markup as the document itself was decoded", async () => {
+    Object.defineProperty(document, "characterSet", { value: "windows-1252", configurable: true });
+    try {
+      const bytes = new Uint8Array([0x43, 0x61, 0x66, 0xe9]);
+      const { value } = await runInGuest(() => html(bytes, "text/html"));
+      expect(value).toMatchObject({ html: "Café" });
+    } finally {
+      delete (document as unknown as Record<string, unknown>).characterSet;
+    }
   });
 
   it("answers nothing for a response that is not an OK HTML page, or a fetch that fails", async () => {
@@ -55,14 +68,19 @@ describe("the served-markup fetch", () => {
   it("stops reading past the byte cap rather than cut the markup down", async () => {
     const chunk = new Uint8Array(64 * 1024).fill(97);
     let sent = 0;
+    let cancelled = false;
     const endless = new ReadableStream<Uint8Array>({
       pull(controller) {
         sent += chunk.byteLength;
         controller.enqueue(chunk);
       },
+      cancel() {
+        cancelled = true;
+      },
     });
     expect((await runInGuest(() => html(endless))).value).toBeNull();
     expect(sent).toBeLessThanOrEqual(MAX_SERVED_MARKUP_BYTES + 2 * chunk.byteLength);
+    await vi.waitFor(() => expect(cancelled).toBe(true));
   });
 });
 

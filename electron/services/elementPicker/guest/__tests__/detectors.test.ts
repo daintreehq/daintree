@@ -219,8 +219,8 @@ describe("detectMarkup", () => {
 
 describe("sampleDocument", () => {
   it("stops at its limit, so a marker past it goes unseen", () => {
-    // Nested, so the body's tail (read separately) does not reach it.
-    document.body.innerHTML = "<p></p>".repeat(20) + '<section><div data-v-app=""></div></section>';
+    // Last in the body, where only a tag past the sample is read, never an attribute.
+    document.body.innerHTML = "<p></p>".repeat(20) + '<div data-v-app=""></div>';
     const bounded = new DetectionSet();
     sampleDocument(document, bounded, { expandos: false, limit: 10 });
     expect(bounded.size).toBe(0);

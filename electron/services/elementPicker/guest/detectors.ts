@@ -24,8 +24,9 @@ export const DETECTION_LIMITS = { detections: 8, signals: 16 } as const;
 /** Elements the document sample visits; the probe stops there whatever it found. */
 export const DOCUMENT_SAMPLE_LIMIT = 256;
 /**
- * The body's last children, read past the sample: a dev tool appends its own
- * element there once the page has loaded, after however much markup.
+ * The body's last children, read for their tag alone when the sample stopped
+ * short of them: a dev tool appends its own element there once the page has
+ * loaded, after however much markup.
  */
 export const BODY_TAIL_LIMIT = 8;
 /** Ancestors walked from a selected element, its own node included. */
@@ -275,9 +276,9 @@ export function detectMarkup(node: Element, via: Via, into: DetectionSet): void 
 }
 
 /**
- * A bounded walk of the document in tree order, then the body's last few
- * children. Bounded by count rather than time so two runs over the same
- * document report the same thing.
+ * A bounded walk of the document in tree order and, when that stopped short,
+ * the tags of the body's last few children. Bounded by count rather than time
+ * so two runs over the same document report the same thing.
  */
 export function sampleDocument(
   doc: Document,
@@ -286,23 +287,22 @@ export function sampleDocument(
 ): void {
   const root = doc.documentElement;
   if (root === null) return;
-  const visit = (element: Element) => {
-    detectMarkup(element, "document-sample", into);
-    if (options.expandos) detectExpandos(element, into);
-  };
   const limit = options.limit ?? DOCUMENT_SAMPLE_LIMIT;
   const walker = doc.createTreeWalker(root, 1 /* NodeFilter.SHOW_ELEMENT */);
   let visited = 0;
-  for (let node: Node | null = walker.currentNode; node !== null && visited < limit;) {
-    if (node.nodeType === 1) {
-      visited += 1;
-      visit(node as Element);
-    }
-    node = walker.nextNode();
+  let node: Node | null = walker.currentNode;
+  for (; node !== null && visited < limit; node = walker.nextNode()) {
+    if (node.nodeType !== 1) continue;
+    visited += 1;
+    const element = node as Element;
+    detectMarkup(element, "document-sample", into);
+    if (options.expandos) detectExpandos(element, into);
   }
+  if (node === null) return;
   let tail = doc.body?.lastElementChild ?? null;
   for (let count = 0; tail !== null && count < BODY_TAIL_LIMIT; count += 1) {
-    visit(tail);
+    const framework = TAG_MARKERS.get(tail.localName);
+    if (framework !== undefined) into.add(framework, "document-sample", "<" + tail.localName + ">");
     tail = tail.previousElementSibling;
   }
 }

@@ -2,12 +2,14 @@
  * The markup a dev server serves for the preview's current document, for an
  * extractor whose framework's dev tooling takes its stamps off the live
  * elements after load (Astro's toolbar). Fetched once more from the
- * document's own URL, inside the picker's isolated world, so page script can
- * neither see nor patch the request, and with the page's cookies, as the
- * document itself was requested. The server renders the page a second time
- * to answer. The browser's cache cannot stand in: in a dev preview,
+ * document's own URL, inside the picker's isolated world so page script
+ * cannot patch the request, with the page's cookies, as the document itself
+ * was requested: the dev server renders the page a second time to answer, or
+ * a service worker controlling the page answers as it would any request of
+ * the page's. The browser's cache cannot stand in: in a dev preview,
  * `Page.getResourceContent` finds no cached copy of the document even when
- * its response was cacheable.
+ * its response was cacheable. The bytes are decoded as the document's own
+ * were, by its `characterSet`, so its text reads the same in both.
  *
  * It is only markup the page's server wrote, so the extractor that receives
  * it reports what it finds there as an observation, like any other.
@@ -62,7 +64,13 @@ export function buildServedMarkupSource(): string {
       bytes.set(chunk, offset);
       offset += chunk.byteLength;
     }
-    return { url, html: new TextDecoder().decode(bytes) };
+    let decoder;
+    try {
+      decoder = new TextDecoder(document.characterSet);
+    } catch {
+      decoder = new TextDecoder();
+    }
+    return { url, html: decoder.decode(bytes) };
   } catch {
     return null;
   }
