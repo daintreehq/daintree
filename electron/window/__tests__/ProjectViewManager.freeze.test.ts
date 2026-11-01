@@ -602,6 +602,7 @@ describe("ProjectViewManager — efficiency freeze", () => {
 
   describe("a host's project whose agents are working there (#15879)", () => {
     let activeRemoteViews: Set<number>;
+    let localWc: ReturnType<typeof createMockWebContents>;
     let remoteWc: Electron.WebContents;
     const frozeRemote = () =>
       vi.mocked(freezeWebContents).mock.calls.some((call) => call[0] === remoteWc);
@@ -618,8 +619,9 @@ describe("ProjectViewManager — efficiency freeze", () => {
       });
       (manager as unknown as { waitForPaint: () => Promise<string> }).waitForPaint = () =>
         Promise.resolve("signal");
+      localWc = createMockWebContents();
       manager.registerInitialView(
-        { webContents: createMockWebContents(), setBounds: vi.fn() } as never,
+        { webContents: localWc, setBounds: vi.fn() } as never,
         "proj-a",
         "/path/a"
       );
@@ -672,6 +674,8 @@ describe("ProjectViewManager — efficiency freeze", () => {
       activeRemoteViews.add(remoteWc.id);
       manager.unfreezeActiveAgentViews();
       expect(vi.mocked(unfreezeWebContents)).toHaveBeenCalledWith(remoteWc);
+      // The idle local view stays frozen: the wake is for active agents only.
+      expect(vi.mocked(unfreezeWebContents)).not.toHaveBeenCalledWith(localWc);
 
       manager.refreezeUnprotectedCachedViews();
       expect(frozeRemote()).toBe(false);

@@ -1197,6 +1197,8 @@ describe("remote session wiring", () => {
       h.allowConnect.value = true;
       await waitFor(() => connection.unavailableEnvelope() === null);
       await waitFor(() => !connection.hasActiveAgent(VIEW_A) && !connection.hasActiveAgent(VIEW_B));
+      // Each went active once; the resume repeated nothing as a fresh start.
+      expect(h.sink.activated).toEqual([VIEW_A, VIEW_B]);
     });
 
     it("forgets a view's answer when it closes", async () => {
@@ -1286,6 +1288,8 @@ describe("remote session wiring", () => {
       h.allowConnect.value = true;
       await waitFor(() => getEndpointRegistry().getRemote().length === 1);
       await waitFor(() => connection.hasActiveAgent(VIEW_A));
+      // A fresh session forgot every answer, so hearing it again is a new activation.
+      expect(h.sink.activated).toEqual([VIEW_A, VIEW_A]);
     });
   });
 

@@ -169,6 +169,7 @@ const fakePvm = vi.hoisted(() => {
     setPendingFocusIntent: (key: string, intent: unknown) => {
       pvmState.parked.push({ key, intent, before: pvmState.requested.length });
     },
+    unfreezeActiveAgentViews: vi.fn(),
   };
 });
 
@@ -213,6 +214,8 @@ import type { IpcEnvelope } from "../../../shared/types/ipc/errors.js";
 import type { ProjectHistoryTarget } from "../../../shared/types/ipc/project.js";
 import { parseHostScopedKey, toHostScopedKey } from "../../../shared/types/remoteHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { LinkMethod } from "../host/linkMethods.js";
+import type { LinkSession } from "../link/session.js";
 import type { ClientEndpoint } from "../../ipc/endpoint.js";
 import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { registerProjectHistoryHandlers } from "../../ipc/handlers/projectHistory.js";
@@ -518,6 +521,35 @@ describe("switching hosts (integration harness)", () => {
         })
       ).resolves.toMatchObject({ result: { ok: false, error: { code: "NOT_FOUND" } } });
       expect(mcp.dispatched).toHaveLength(3);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    "wakes the owning window's views when the host says a view's agent went active (#15879)",
+    async () => {
+      h = await startRemoteHarness();
+      const harness = h;
+      const hostSessions: LinkSession[] = [];
+      cleanups.push(harness.server().onSession((ctx) => hostSessions.push(ctx.session)));
+      await harness.connect();
+      const client = harnessState.client!;
+      const remote = harness.addView(40, "proj-1");
+      // Any host call opens the view's endpoint.
+      data(await harness.invoke(CHANNELS.OPERATIONS_LIST, remote, {}));
+      await waitForEndpoint();
+      // What the window's sweep would read from the host, at the moment it runs.
+      const heard: boolean[] = [];
+      fakePvm.unfreezeActiveAgentViews.mockImplementation(() => {
+        heard.push(client.client.viewHasActiveAgent(remote.id));
+      });
+      cleanups.push(() => fakePvm.unfreezeActiveAgentViews.mockReset());
+
+      await hostSessions.at(-1)!.call(LinkMethod.ENDPOINT_AGENT_ACTIVITY, {
+        endpoints: [{ endpointId: `view-${remote.id}`, projectId: "proj-1", active: true }],
+      });
+
+      expect(heard).toEqual([true]);
     },
     TEST_TIMEOUT_MS
   );
