@@ -477,6 +477,39 @@ describe("resumeAgentSessionAsPane", () => {
     expect(spawns(invoke)).toHaveLength(0);
   });
 
+  it("returns a pane that started holding the session while the launch was being prepared", async () => {
+    const terminals: Record<string, ViewlessTerminalRecord> = {};
+    const { deps, invoke } = resumeDeps({
+      terminals,
+      state: {
+        projectId: PROJECT.id,
+        sidebarWidth: 350,
+        terminals: [{ id: "pane-1", kind: "terminal", location: "grid" } as PanelSnapshot],
+      },
+    });
+    deps.agents.getSettings = async () => {
+      terminals["pane-1"] = { agentSessionId: SESSION, worktreeId: WORKTREE.id };
+      return null;
+    };
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+    expect(result).toMatchObject({ status: "existing", terminalId: "pane-1" });
+    expect(spawns(invoke)).toHaveLength(0);
+  });
+
+  it("returns an existing pane even when the CLI can no longer launch", async () => {
+    const { deps } = resumeDeps({
+      terminals: { "pane-1": { agentSessionId: SESSION, worktreeId: WORKTREE.id } },
+      state: {
+        projectId: PROJECT.id,
+        sidebarWidth: 350,
+        terminals: [{ id: "pane-1", kind: "terminal", location: "grid" } as PanelSnapshot],
+      },
+    });
+    deps.agents.getCliDetail = async () => ({ state: "missing", via: "which" }) as never;
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+    expect(result).toMatchObject({ status: "existing", terminalId: "pane-1" });
+  });
+
   it("refuses rather than duplicate a holder nothing places", async () => {
     const { deps, invoke } = resumeDeps({
       terminals: { "pane-1": { agentSessionId: SESSION, worktreeId: WORKTREE.id } },

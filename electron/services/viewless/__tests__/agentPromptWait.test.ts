@@ -219,6 +219,40 @@ describe("waitForAgentAtPrompt", () => {
     }
   );
 
+  it("releases every listener when it settles while still subscribing", async () => {
+    const realOn = events.on.bind(events);
+    const offs: Array<ReturnType<typeof vi.fn>> = [];
+    const terminalId = nextTerminal();
+    vi.spyOn(events, "on").mockImplementation(((
+      event: Parameters<typeof events.on>[0],
+      listener: Parameters<typeof events.on>[1]
+    ) => {
+      const off = vi.fn(realOn(event, listener));
+      offs.push(off);
+      // A bus that replays its last event to a new listener: the wait
+      // settles before this registration even returns.
+      if (event === "agent:state-changed") {
+        (listener as (payload: unknown) => void)({
+          agentId: "claude",
+          terminalId,
+          state: "waiting",
+          previousState: "working",
+          trigger: "output",
+          confidence: 1,
+          timestamp: Date.now(),
+        });
+      }
+      return off;
+    }) as typeof events.on);
+
+    await expect(waitForAgentAtPrompt(terminalId, { timeoutMs: 60_000 })).resolves.toMatchObject({
+      outcome: "settled",
+    });
+    expect(offs).toHaveLength(3);
+    for (const off of offs) expect(off).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("releases everything when it answers before waiting at all", async () => {
     const terminalId = nextTerminal();
     spawn(terminalId);
