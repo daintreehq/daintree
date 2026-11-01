@@ -1,5 +1,6 @@
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import net from "node:net";
 import path from "node:path";
@@ -768,6 +769,137 @@ describe("SshTransport with an injected ssh", () => {
     });
   });
 });
+
+// ssh hands a command to the remote user's login shell as `$SHELL -c`. These
+// run the discovery read through real local shells instead, whose startup
+// files print the way a `~/.zshenv` echo or a `~/.bashrc` line above its
+// interactive guard does over ssh.
+describe.skipIf(process.platform === "win32")(
+  "reading the discovery file through the host user's shell",
+  () => {
+    const TARGET = "studio";
+    const printsAtStartup = (dir: string) => {
+      writeFileSync(path.join(dir, "bashenv"), `echo "Welcome to ${TARGET}"; printf 'bashenv'\n`);
+      writeFileSync(path.join(dir, ".zshenv"), `echo "Welcome to ${TARGET}"; printf 'zshenv'\n`);
+      writeFileSync(path.join(dir, ".cshrc"), `echo "Welcome to ${TARGET}"; printf 'cshrc'\n`);
+      return { BASH_ENV: path.join(dir, "bashenv"), ZDOTDIR: dir, HOME: dir };
+    };
+    const SHELLS = ["/bin/sh", "/bin/bash", "/bin/zsh", "/bin/csh"].filter((shell) =>
+      existsSync(shell)
+    );
+
+    /** A `cat` that reports a missing file in German, as cat does under a German locale. */
+    const germanCat = (dir: string) => {
+      const bin = path.join(dir, "bin");
+      mkdirSync(bin);
+      writeFileSync(
+        path.join(bin, "cat"),
+        [
+          "#!/bin/sh",
+          "for f; do :; done",
+          'if [ -e "$f" ]; then exec /bin/cat "$@"; fi',
+          'echo "cat: $f: Datei oder Verzeichnis nicht gefunden" >&2',
+          "exit 1",
+        ].join("\n") + "\n",
+        { mode: 0o755 }
+      );
+      return bin;
+    };
+
+    /** The probe answers as a Mac whose home is `home`; the read runs through `shell`. */
+    const hostShell = (
+      shell: string,
+      home: string,
+      env: NodeJS.ProcessEnv,
+      onForward: (args: string[]) => void = () => {}
+    ): SshSpawner => {
+      return (args) => {
+        const command = args.at(-1)!;
+        if (command === PROBE_COMMAND) {
+          const child = new FakeChild();
+          child.finish(0, `Darwin\n501\n${home}\n`);
+          return child;
+        }
+        if (args.at(-3) === "--" && args.at(-2) === TARGET) {
+          return spawn(shell, ["-c", command], {
+            env,
+            stdio: ["ignore", "pipe", "pipe"],
+          }) as SshChild;
+        }
+        const child = new FakeChild();
+        if (args[0] === "-G") child.finish(0, "controlpath /cp/cm1-resolved\n");
+        else {
+          if (args.includes("forward")) onForward(args);
+          child.finish(0);
+        }
+        return child;
+      };
+    };
+
+    it.each(SHELLS)(
+      "reads the file when %s prints at startup, from a home that needs quoting",
+      async (shell) => {
+        const hostLoc = hostSocketLocation({ platform: "darwin", userDataDir: path.join(root, "h") });
+        server = new HostServer({ location: hostLoc, handshake: TEST_HANDSHAKE, hostName: TARGET });
+        await server.listen();
+        const remoteHome = path.join(root, "o'brien $(x)");
+        const remote = remoteHostSocketLocation({ platform: "darwin", uid: 501, home: remoteHome });
+        mkdirSync(path.dirname(remote.discoveryPath), { recursive: true });
+        writeFileSync(
+          remote.discoveryPath,
+          JSON.stringify({ version: 1, socketPath: remote.socketPath, token: server.token, pid: 1 })
+        );
+        const startup = path.join(root, "startup");
+        mkdirSync(startup);
+        const env = {
+          ...process.env,
+          ...printsAtStartup(startup),
+          PATH: `${germanCat(root)}:${process.env.PATH ?? ""}`,
+        };
+        const proxies: net.Server[] = [];
+        const transport = new SshTransport({
+          target: TARGET,
+          clientDir: path.join(root, "c"),
+          spawn: hostShell(shell, remoteHome, env, (args) =>
+            proxies.push(fakeForward(args, remote.socketPath, hostLoc.socketPath))
+          ),
+        });
+        const connection = await transport.open(new AbortController().signal);
+        try {
+          expect(connection.token).toBe(server.token);
+          expect(transport.route).toBe("forward");
+        } finally {
+          connection.socket.destroy();
+          await connection.dispose();
+          for (const proxy of proxies) proxy.close();
+        }
+      }
+    );
+
+    it.each(SHELLS)(
+      "reports a missing file as Host mode off when %s's cat says so in German",
+      async (shell) => {
+        const startup = path.join(root, "startup");
+        mkdirSync(startup);
+        const env = {
+          ...process.env,
+          ...printsAtStartup(startup),
+          PATH: `${germanCat(root)}:${process.env.PATH ?? ""}`,
+        };
+        const transport = new SshTransport({
+          target: TARGET,
+          clientDir: path.join(root, "c"),
+          spawn: hostShell(shell, path.join(root, "home"), env),
+        });
+        const error = await transport.open(new AbortController().signal).catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(HostModeOffError);
+        expect(error).toMatchObject({
+          detail: "Daintree isn't running in Host mode there (no host.json).",
+        });
+      }
+    );
+  }
+);
 
 describe("when the ssh server refuses socket forwarding", () => {
   const REFUSED_VIA_MASTER = "Stdio forwarding request failed: Session open refused by peer\n";
