@@ -459,4 +459,76 @@ describe("notificationHistoryStore cross-view write merge (#15534)", () => {
     expect(ids).not.toContain("old-199");
     expect(ids).toContain("old-195");
   });
+
+  describe("entries imported under their source's id (#15983)", () => {
+    async function openViewWithFlush() {
+      vi.resetModules();
+      const module = await import("../slices/notificationHistorySlice");
+      vi.advanceTimersByTime(FLUSH_MS);
+      return module;
+    }
+
+    it("writes an import before its debounce when flushed", async () => {
+      const backing = installLocalStorage(seed([]));
+      const view = await openViewWithFlush();
+
+      view.useNotificationHistoryStore.getState().importEntries([makeEntry({ id: "run-1" })]);
+      view.flushNotificationHistory();
+
+      expect(entryById(backing, "run-1")).toBeDefined();
+    });
+
+    it("merges an explicit flush with a sibling's entries, and a later write keeps them", async () => {
+      const backing = installLocalStorage(seed([]));
+      const viewA = await openViewWithFlush();
+      const viewB = await openViewWithFlush();
+
+      viewB.useNotificationHistoryStore.getState().addEntry({ type: "info", message: "from B" });
+      flush();
+      const siblingId = readBlob(backing).state.entries[0]!.id;
+
+      viewA.useNotificationHistoryStore.getState().importEntries([makeEntry({ id: "run-1" })]);
+      viewA.flushNotificationHistory();
+      expect(entryById(backing, siblingId)).toBeDefined();
+      expect(entryById(backing, "run-1")).toBeDefined();
+
+      viewA.useNotificationHistoryStore.getState().markIdsRead(["run-1"]);
+      flush();
+      expect(entryById(backing, siblingId)).toBeDefined();
+      expect(entryById(backing, "run-1")?.seenAsToast).toBe(true);
+      expect(viewA.notificationHistoryIdsInStorage()).toEqual(new Set([siblingId, "run-1"]));
+    });
+
+    it("keeps a sibling's archive when a stale view files the same record again", async () => {
+      const backing = installLocalStorage(seed([]));
+      const viewA = await openViewWithFlush();
+      const viewB = await openViewWithFlush();
+
+      viewA.useNotificationHistoryStore.getState().importEntries([makeEntry({ id: "run-1" })]);
+      viewA.flushNotificationHistory();
+      viewA.useNotificationHistoryStore.getState().archiveEntry("run-1");
+      flush();
+      expect(entryById(backing, "run-1")?.archivedAt).not.toBeNull();
+
+      viewB.useNotificationHistoryStore.getState().importEntries([makeEntry({ id: "run-1" })]);
+      viewB.flushNotificationHistory();
+
+      expect(entryById(backing, "run-1")).toMatchObject({ seenAsToast: true });
+      expect(entryById(backing, "run-1")?.archivedAt).not.toBeNull();
+    });
+
+    it("holds one entry when two views import the same record", async () => {
+      const backing = installLocalStorage(seed([makeEntry({ id: "existing" })]));
+      const viewA = await openViewWithFlush();
+      const viewB = await openViewWithFlush();
+
+      viewA.useNotificationHistoryStore.getState().importEntries([makeEntry({ id: "run-1" })]);
+      viewB.useNotificationHistoryStore.getState().importEntries([makeEntry({ id: "run-1" })]);
+      flush();
+
+      const ids = readBlob(backing).state.entries.map((e) => e.id);
+      expect(ids.filter((id) => id === "run-1")).toHaveLength(1);
+      expect(ids).toContain("existing");
+    });
+  });
 });

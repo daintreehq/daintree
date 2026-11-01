@@ -49,6 +49,14 @@ function isUniqueViolation(error: unknown): boolean {
 }
 
 /**
+ * Whether any run waits for the notification inbox, read straight from the
+ * table so a view loading with no run waiting never opens the history.
+ */
+export function hasInboxPendingRun(sqlite: Database.Database): boolean {
+  return sqlite.prepare("SELECT 1 FROM scheduled_run_inbox LIMIT 1").pluck().get() !== undefined;
+}
+
+/**
  * The `scheduled_runs` table: each row is one validated {@link ScheduledRun}
  * beside the columns its queries read. Synchronous, so a registration has
  * committed before the caller goes on to spawn.
@@ -67,10 +75,11 @@ export class ScheduledRunStore {
   /**
    * A run for an occurrence also moves its schedule's evaluation point up to
    * that occurrence, in the same transaction, so neither commits alone.
+   * `inboxPending` inserts it already waiting for the notification inbox.
    *
    * @throws {ScheduledRunConflictError} when the occurrence already has a run.
    */
-  insert(run: ScheduledRun): void {
+  insert(run: ScheduledRun, options: { inboxPending?: boolean } = {}): void {
     const record = ScheduledRunSchema.parse(run);
     try {
       this.transaction(() => {
@@ -90,6 +99,7 @@ export class ScheduledRunStore {
             record.createdAt,
             JSON.stringify(record)
           );
+        if (options.inboxPending) this.markInboxPending(record.id, record.createdAt);
         const evaluated = evaluatedThrough(record);
         if (evaluated !== null) {
           this.sqlite
@@ -195,6 +205,47 @@ export class ScheduledRunStore {
          )`
       )
       .run({ scheduleId, limit }).changes;
+  }
+
+  /**
+   * Marks a run as waiting for the notification inbox (#15983): it settled
+   * with no window open. Rewriting the record leaves the mark alone, and
+   * pruning or deleting the run takes it away through the cascade.
+   */
+  markInboxPending(id: string, at: number = Date.now()): void {
+    this.sqlite
+      .prepare(
+        `INSERT INTO scheduled_run_inbox (run_id, created_at)
+         SELECT id, ? FROM scheduled_runs WHERE id = ?
+         ON CONFLICT (run_id) DO NOTHING`
+      )
+      .run(at, id);
+  }
+
+  /** Runs waiting for the notification inbox, oldest first. */
+  listInboxPending(): ScheduledRun[] {
+    return this.decodeAll(
+      this.sqlite
+        .prepare(
+          `SELECT r.id, r.record FROM scheduled_run_inbox i
+           JOIN scheduled_runs r ON r.id = i.run_id
+           ORDER BY r.created_at, r.rowid`
+        )
+        .all() as RunRow[]
+    );
+  }
+
+  /** Clears the inbox mark of these runs; returns the ids that held one. */
+  clearInboxPending(ids: readonly string[]): string[] {
+    const cleared: string[] = [];
+    if (ids.length === 0) return cleared;
+    const clear = this.sqlite.prepare("DELETE FROM scheduled_run_inbox WHERE run_id = ?");
+    this.transaction(() => {
+      for (const id of new Set(ids)) {
+        if (clear.run(id).changes > 0) cleared.push(id);
+      }
+    });
+    return cleared;
   }
 
   /** Returns the projects whose history changed. */

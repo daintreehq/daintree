@@ -125,6 +125,11 @@ export type ProjectFocusOnActivateIntent =
    * the run never had a terminal to show.
    */
   | { intent: "focus-scheduled-run"; runId: string; scheduleId: string; panelId: string | null }
+  /**
+   * Open this project's Schedules view, at a schedule's page when one is named:
+   * an inbox entry for another project's scheduled run (#15983).
+   */
+  | { intent: "open-schedules"; scheduleId: string | null }
   | {
       /**
        * A plugin's OS banner was clicked (#13505): run its first action, which

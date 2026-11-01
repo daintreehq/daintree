@@ -510,7 +510,10 @@ export function createSafeJSONStorage<T>(options?: SafeJSONStorageOptions<T>): P
 export function createDebouncedSafeJSONStorage<T>(
   delayMs: number,
   options?: SafeJSONStorageOptions<T>
-): PersistStorage<T> {
+): PersistStorage<T> & {
+  /** Writes the key's pending value now, through the same merge a timer's write takes. */
+  flush(name: string): void;
+} {
   const raw = createResilientStorage(resolveLocalStorage());
   const writer = createPersistWriter(raw, options?.mergeOnWrite);
   // Retain the typed incoming value (not just its serialized form) so a
@@ -532,6 +535,7 @@ export function createDebouncedSafeJSONStorage<T>(
   };
 
   return {
+    flush,
     getItem: (name) => {
       // Flush any pending write so reads-after-writes are coherent.
       flush(name);

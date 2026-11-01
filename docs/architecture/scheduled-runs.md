@@ -27,6 +27,7 @@ A project can run an agent on a schedule (#15973). A due schedule launches its a
 | Firing due schedules: evaluation points, the clock, power events, catch-up | `electron/services/scheduledRuns/ScheduledRunScheduler.ts`, `scheduledRunSchedulerLive.ts` |
 | Notifying when a run needs you, and where its click lands | `electron/services/scheduledRuns/scheduledRunAttention.ts`, `scheduledRunNotifierLive.ts`, `electron/window/scheduledRunNotificationNavigation.ts`, `src/services/scheduledRunLanding.ts` |
 | The OS job's launch: the `--run-due-schedules` flag, the windowless start, the first window | `electron/boot/dueScheduleLaunch.ts`, `electron/lifecycle/appLifecycle.ts`, `electron/lifecycle/initialWindowRequest.ts`, `electron/main.ts` |
+| Inbox entries for runs that ended with no window open | `electron/services/scheduledRuns/ScheduledRunInbox.ts`, `src/hooks/useScheduledRunInboxBridge.ts`, `src/components/Schedules/scheduledRunInboxEntry.ts` |
 
 ## Boundaries
 
@@ -215,8 +216,9 @@ Deleting a schedule deletes its history and its evaluation point with it: `Sched
 | `scheduled-run:ended` on the main event bus | A run settled, once, with its outcome. A run that starts ends, at the next startup if Daintree quits first, or is deleted; a skipped run neither starts nor ends |
 | `scheduled-runs:deleted` on the main event bus | `{ projectId, scheduleId }` once a schedule's history is deleted, or `scheduleId: null` once a project's is; its runs will never end |
 | The recorder's `onRunSettled` | Every committed settlement once, with the whole record: each run that ends, and the skipped and refused runs that neither start nor end. The record holds the agent's summary, so it stays in main and is never put on the bus |
+| `window.electron.scheduledRuns.takeInbox()`, `ackInbox({ runIds })` | The runs waiting for the notification inbox, and a view saying it filed them (see Runs that ended with no window open) |
 
-The IPC surface is read-only: main registers runs and records their facts, so no view can write one.
+The IPC surface reads, apart from the inbox handoff: main registers runs and records their facts, so no view can write one.
 
 ## Provenance
 
@@ -354,6 +356,17 @@ An unattended run needs the display awake as well as the system: a run under `ca
 - The recorder's start callback builds the service before the event goes out, so a run launched before any window has a listener.
 - `KeepAwakeState` carries `isDisplayBlocking` and `scheduledRunIds`; the diagnostics snapshot's `keepAwake` section adds the working agent and attached frontend counts, and never builds the service. The `[PowerSaveBlocker]` log lines name each run.
 
+## Runs that ended with no window open
+
+A run often ends while nobody is looking, with no window open at all, since macOS keeps Daintree running windowless. The notification inbox is each view's own state, so main keeps those runs until a window's view files them there (#15983).
+
+- **Marked as it settles.** A run that settles while no Daintree window is registered (minimised and hidden ones count; a cached view or another machine's Shell driving this one doesn't) gets a row in `scheduled_run_inbox` (migration 0023), written in the same transaction as its settlement, so neither commits alone. Every settlement counts, a refused launch included, and so does a run the next startup settles as interrupted when no window is open by then. A skip never does: it launched nothing, and the history shows it. A run that settles with a window open is never filed, then or later. Facts recorded after the settlement add nothing.
+- **Kept as long as the run.** The row cascades from the run, so retention and deletion take it along: a long absence leaves at most what the history keeps, 100 runs per schedule.
+- **Handed to one view at a time.** A project view on this machine asks once its state has loaded and again whenever it's shown (`app:view-revealed`); a Remote Host's window and a view with no project don't ask, since the entry's **View history** opens a project's schedules. `takeInbox` answers only a view a window has on screen, checked again once its reads finish, and a view parked meanwhile drops what arrives: a view restored in the background, or cached, would file the runs where nobody looks, because a view keeps the inbox it loaded and never reads a sibling's writes. It hands that view the waiting runs, oldest first, each with its schedule's name and zone as they read now, and holds them for it: another view asking meanwhile gets none, with how long until the hold lapses, and asks again then; the holder asking again, reloaded, gets them again; a holder that's gone or kept quiet for 60 seconds holds nothing. A view with nothing waiting doesn't open the history.
+- **Filed once.** The view adds one unread entry per run under the id `scheduled-run:<runId>` (`importEntries`, which skips an id it already holds, read or archived), writes the inbox to storage without waiting for its debounce, reads the stored inbox back, and only then calls `ackInbox` for the runs whose entries storage holds. A run that didn't reach storage (a full or failed storage, or cut by the inbox's 200-entry cap) keeps waiting for a later try, which writes the inbox again even when the entry is already in the view's memory, and a view that dies first leaves its runs for the next view shown. A run filed twice is still one entry: views merge the inbox by id when they write it, and an entry a sibling already stored keeps the read or archive it was given.
+
+Each entry is titled with the schedule's name and says the outcome as the history shows it, when the run started (or, when it never did, was due) in the schedule's zone, and the agent's summary under its name or the recorded reason. Its time is the settlement's, and its severity the outcome's. Its address is the run's project and worktree, and its terminal once that was seen to start, so a click goes to the terminal, or to the worktree once the terminal is gone. **View history** opens the schedule's page through `schedules.open` with `{ scheduleId, projectId }`; for another project's run it switches to that project with the `open-schedules` activation intent, and the incoming view opens the page once its state has loaded.
+
 ## Who writes what
 
 | Child | Owns |
@@ -368,5 +381,6 @@ An unattended run needs the display awake as well as the system: a run under `ca
 | #15982 | The done and needs-you handback, and the done policy |
 | #15988 | Notifying when a run fails or needs you, and landing its click |
 | #15984, #15985 | The Schedules view and the cadence picker |
+| #15983 | Inbox entries for runs that ended with no window open |
 | #15989 | The `--run-due-schedules` launch: the check on a running Daintree, the windowless start, and its first pass (see Running due schedules from an OS job) |
 | #15990-#15993 | The per-platform OS jobs, and Windows' windowless start |

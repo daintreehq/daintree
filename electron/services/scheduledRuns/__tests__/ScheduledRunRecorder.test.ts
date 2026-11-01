@@ -14,7 +14,11 @@ vi.mock("electron", () => ({
 }));
 
 import { openDb } from "../../persistence/db.js";
-import { ScheduledRunStore, SCHEDULED_RUN_HISTORY_LIMIT } from "../ScheduledRunStore.js";
+import {
+  hasInboxPendingRun,
+  ScheduledRunStore,
+  SCHEDULED_RUN_HISTORY_LIMIT,
+} from "../ScheduledRunStore.js";
 import {
   ScheduledRunRecorder,
   type RegisterScheduledLaunchInput,
@@ -35,6 +39,7 @@ let dbPath: string;
 let sqlite: Database.Database;
 let now: number;
 let shuttingDown: boolean;
+let windowOpen: boolean;
 let changes: ScheduledRunsChange[];
 let emitted: Array<{ name: string; payload: Record<string, unknown> }>;
 
@@ -43,6 +48,7 @@ function lifetime(): ScheduledRunRecorder {
     store: new ScheduledRunStore(sqlite),
     now: () => now,
     isShuttingDown: () => shuttingDown,
+    hasOpenWindow: () => windowOpen,
     onChanged: (change) => changes.push(change),
     onRunStarted: (payload) => emitted.push({ name: "scheduled-run:started", payload }),
     onRunEnded: (payload) => emitted.push({ name: "scheduled-run:ended", payload }),
@@ -67,6 +73,7 @@ beforeEach(() => {
   sqlite = openDb(dbPath, migrationsFolder).sqlite;
   now = T0;
   shuttingDown = false;
+  windowOpen = true;
   changes = [];
   emitted = [];
 });
@@ -1002,5 +1009,304 @@ describe("ScheduledRunRecorder", () => {
     expect(() => recorder.deleteForSchedule("schedule-1")).not.toThrow();
     expect(viewChanges).toEqual([{ projectId: "project-1", scheduleIds: ["schedule-1"] }]);
     expect(recorder.get("run-1")).toBeNull();
+  });
+
+  describe("runs that settle with no window open (#15983)", () => {
+    const pendingIds = (recorder: ScheduledRunRecorder) =>
+      recorder.listInboxPending().map((run) => run.id);
+    // The table itself: the list joins its runs, so it can't see a wait left behind.
+    const inboxRows = () =>
+      sqlite.prepare("SELECT COUNT(*) FROM scheduled_run_inbox").pluck().get() as number;
+
+    it("waits for the inbox from the settlement's own write", () => {
+      // Read through another connection the moment the run is said to have
+      // ended: the wait committed with the settlement, not after it.
+      const reader = openDb(dbPath, migrationsFolder).sqlite;
+      let waitingWhenEnded: boolean | null = null;
+      const recorder = new ScheduledRunRecorder({
+        store: new ScheduledRunStore(sqlite),
+        now: () => now,
+        hasOpenWindow: () => windowOpen,
+        onRunEnded: () => {
+          waitingWhenEnded = hasInboxPendingRun(reader);
+        },
+        logWarn: () => {},
+      });
+      try {
+        recorder.registerLaunch(launch());
+        recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT });
+        windowOpen = false;
+        recorder.handleExit({ terminalId: "terminal-1", spawnedAt: SPAWNED_AT, exitCode: 1 });
+
+        expect(waitingWhenEnded).toBe(true);
+        expect(pendingIds(recorder)).toEqual(["run-1"]);
+      } finally {
+        reader.close();
+      }
+    });
+
+    it("leaves a run that settles while a window is open, whenever it launched", () => {
+      windowOpen = false;
+      const recorder = lifetime();
+      recorder.registerLaunch(launch());
+      recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT });
+      windowOpen = true;
+      recorder.handleExit({ terminalId: "terminal-1", spawnedAt: SPAWNED_AT, exitCode: 0 });
+
+      expect(recorder.get("run-1")?.settlement.state).toBe("settled");
+      expect(pendingIds(recorder)).toEqual([]);
+    });
+
+    it("waits on every settlement: a handback, a launch error, a loss, another service's", () => {
+      windowOpen = false;
+      const recorder = lifetime();
+      recorder.registerLaunch(
+        launch({ id: "handback", terminalId: "t-1", handbackCode: "k7f3qa" })
+      );
+      recorder.handleSpawnResult("t-1", { success: true, spawnedAt: SPAWNED_AT });
+      recorder.handleHandback({
+        terminalId: "t-1",
+        spawnedAt: SPAWNED_AT,
+        code: "k7f3qa",
+        report: "needs-you",
+        message: "two need a decision",
+        truncated: false,
+      });
+      recorder.registerLaunch(launch({ id: "spawn-failed", terminalId: "t-2" }));
+      recorder.handleSpawnResult("t-2", { success: false, error: { message: "spawn ENOENT" } });
+      recorder.registerLaunch(launch({ id: "lost", terminalId: "t-3" }));
+      recorder.handleSpawnResult("t-3", {
+        success: true,
+        spawnedAt: SPAWNED_AT,
+        launchGeneration: 4,
+      });
+      recorder.handleIncarnationLost({ terminalId: "t-3", launchGeneration: 4 });
+      recorder.registerLaunch(launch({ id: "cancelled", terminalId: "t-4" }));
+      recorder.settle("cancelled", { kind: "cancel" });
+
+      expect(pendingIds(recorder).sort()).toEqual(
+        ["cancelled", "handback", "lost", "spawn-failed"].sort()
+      );
+    });
+
+    it("waits on a refused launch but never on a skip, which launched nothing", () => {
+      windowOpen = false;
+      const recorder = lifetime();
+      recorder.registerRefusedLaunch({
+        id: "refused",
+        scheduleId: "schedule-1",
+        projectId: "project-1",
+        origin: launch().origin,
+        terminalId: "terminal-3",
+        message: "The project's folder is missing.",
+      });
+      recorder.registerSkip({
+        id: "skipped",
+        scheduleId: "schedule-1",
+        projectId: "project-1",
+        origin: {
+          trigger: "scheduled",
+          dueAt: T0,
+          occurrenceKey: occurrenceKeyFor(T0),
+          coalesced: null,
+        },
+        reason: { kind: "overlap", openRunId: "run-1" },
+      });
+
+      expect(pendingIds(recorder)).toEqual(["refused"]);
+    });
+
+    it("waits on a run the next startup finds interrupted only when no window is open by then", () => {
+      lifetime().registerLaunch(launch());
+      lifetime().registerLaunch(launch({ id: "run-2", terminalId: "terminal-2" }));
+      sqlite.close();
+      sqlite = openDb(dbPath, migrationsFolder).sqlite;
+      windowOpen = false;
+      const windowless = lifetime();
+      windowless.reconcileInterrupted();
+      expect(pendingIds(windowless).sort()).toEqual(["run-1", "run-2"]);
+
+      windowless.clearInboxPending(["run-1", "run-2"]);
+      lifetime().registerLaunch(launch({ id: "run-3", terminalId: "terminal-3" }));
+      windowOpen = true;
+      const windowed = restart();
+      expect(windowed.get("run-3")?.settlement).toMatchObject({ outcome: "interrupted" });
+      expect(pendingIds(windowed)).toEqual([]);
+    });
+
+    it("waits once: facts after the settlement add nothing, and a cleared wait stays cleared", () => {
+      const recorder = lifetime();
+      recorder.registerLaunch(launch());
+      recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT });
+      windowOpen = false;
+      recorder.settle("run-1", { kind: "cancel" });
+      expect(recorder.clearInboxPending(["run-1", "run-1", "missing"])).toEqual(["run-1"]);
+
+      recorder.handleExit({ terminalId: "terminal-1", spawnedAt: SPAWNED_AT, exitCode: 0 });
+      recorder.handleSessionCaptured(capture("session-1", SPAWNED_AT));
+      expect(recorder.get("run-1")?.resume?.agentSessionId).toBe("session-1");
+      expect(pendingIds(recorder)).toEqual([]);
+      expect(recorder.clearInboxPending(["run-1"])).toEqual([]);
+    });
+
+    it("loses the wait with the run when its history is deleted or pruned", () => {
+      windowOpen = false;
+      const recorder = lifetime();
+      recorder.registerLaunch(launch());
+      recorder.settle("run-1", { kind: "cancel" });
+      expect(inboxRows()).toBe(1);
+      recorder.deleteForSchedule("schedule-1");
+      expect(inboxRows()).toBe(0);
+      expect(hasInboxPendingRun(sqlite)).toBe(false);
+
+      for (let i = 0; i <= SCHEDULED_RUN_HISTORY_LIMIT; i++) {
+        now = T0 + i;
+        recorder.registerRefusedLaunch({
+          id: `refused-${i}`,
+          scheduleId: "schedule-2",
+          projectId: "project-1",
+          origin: launch().origin,
+          terminalId: null,
+          message: "The project's folder is missing.",
+        });
+      }
+      const waiting = pendingIds(recorder);
+      expect(waiting).toHaveLength(SCHEDULED_RUN_HISTORY_LIMIT);
+      expect(waiting).not.toContain("refused-0");
+      expect(inboxRows()).toBe(SCHEDULED_RUN_HISTORY_LIMIT);
+
+      // A project's removal deletes its runs by SQL of its own, as ProjectStore does.
+      sqlite.prepare("DELETE FROM scheduled_runs WHERE project_id = ?").run("project-1");
+      expect(inboxRows()).toBe(0);
+    });
+
+    it("waits on nothing while Daintree quits, or while the overlap policy holds a run", () => {
+      windowOpen = false;
+      const recorder = lifetime();
+      recorder.registerLaunch(launch());
+      recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT });
+      recorder.registerLaunch(launch({ id: "run-2", terminalId: "terminal-2" }));
+      recorder.handleSpawnResult("terminal-2", { success: true, spawnedAt: SPAWNED_AT });
+
+      shuttingDown = true;
+      recorder.handleExit({ terminalId: "terminal-1", spawnedAt: SPAWNED_AT, exitCode: 0 });
+      shuttingDown = false;
+      const replacement = recorder.beginReplacement("run-2");
+      recorder.handleExit({ terminalId: "terminal-2", spawnedAt: SPAWNED_AT, exitCode: 0 });
+      expect(pendingIds(recorder)).toEqual([]);
+
+      replacement?.finish("run-3");
+      expect(pendingIds(recorder)).toEqual(["run-2"]);
+    });
+
+    it("never waits again on a run the next startup finds settled with its process running", () => {
+      windowOpen = false;
+      const recorder = lifetime();
+      recorder.registerLaunch(launch());
+      recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT });
+      recorder.settle("run-1", { kind: "cancel" });
+      recorder.clearInboxPending(["run-1"]);
+      expect(recorder.get("run-1")?.process.pty.state).toBe("running");
+
+      sqlite.close();
+      sqlite = openDb(dbPath, migrationsFolder).sqlite;
+      const next = lifetime();
+      next.reconcileInterrupted();
+      expect(next.get("run-1")?.process.pty.state).toBe("exited");
+      expect(pendingIds(next)).toEqual([]);
+    });
+
+    describe("commits the wait and the settlement together or neither", () => {
+      function recorderOver(store: ScheduledRunStore): ScheduledRunRecorder {
+        return new ScheduledRunRecorder({
+          store,
+          now: () => now,
+          hasOpenWindow: () => windowOpen,
+          onRunEnded: (payload) => emitted.push({ name: "scheduled-run:ended", payload }),
+          logWarn: () => {},
+        });
+      }
+
+      it("leaves the run open when its wait can't be written", () => {
+        const store = new ScheduledRunStore(sqlite);
+        const recorder = recorderOver(store);
+        recorder.registerLaunch(launch());
+        windowOpen = false;
+        vi.spyOn(store, "markInboxPending").mockImplementation(() => {
+          throw new Error("disk full");
+        });
+
+        expect(recorder.settle("run-1", { kind: "cancel" })).toBeNull();
+        expect(recorder.get("run-1")?.settlement).toEqual({ state: "open" });
+        expect(emitted).toEqual([]);
+      });
+
+      it("takes the wait back when the settlement's write fails after it", () => {
+        const store = new ScheduledRunStore(sqlite);
+        const recorder = recorderOver(store);
+        recorder.registerLaunch(launch());
+        windowOpen = false;
+        vi.spyOn(store, "prune").mockImplementation(() => {
+          throw new Error("disk full");
+        });
+
+        expect(recorder.settle("run-1", { kind: "cancel" })).toBeNull();
+        expect(recorder.get("run-1")?.settlement).toEqual({ state: "open" });
+        expect(inboxRows()).toBe(0);
+      });
+
+      it("records no refused launch whose wait can't be written", () => {
+        const store = new ScheduledRunStore(sqlite);
+        const recorder = recorderOver(store);
+        windowOpen = false;
+        vi.spyOn(store, "markInboxPending").mockImplementation(() => {
+          throw new Error("disk full");
+        });
+
+        expect(() =>
+          recorder.registerRefusedLaunch({
+            id: "refused",
+            scheduleId: "schedule-1",
+            projectId: "project-1",
+            origin: launch().origin,
+            terminalId: null,
+            message: "The project's folder is missing.",
+          })
+        ).toThrow(/disk full/);
+        expect(recorder.get("refused")).toBeNull();
+      });
+
+      it("leaves every run open when startup can't write their waits", () => {
+        lifetime().registerLaunch(launch());
+        sqlite.close();
+        sqlite = openDb(dbPath, migrationsFolder).sqlite;
+        windowOpen = false;
+        const store = new ScheduledRunStore(sqlite);
+        const recorder = recorderOver(store);
+        vi.spyOn(store, "markInboxPending").mockImplementation(() => {
+          throw new Error("disk full");
+        });
+
+        expect(() => recorder.reconcileInterrupted()).toThrow(/disk full/);
+        expect(recorder.get("run-1")?.settlement).toEqual({ state: "open" });
+        expect(emitted.filter((e) => e.name === "scheduled-run:ended")).toEqual([]);
+      });
+    });
+
+    it("settles the run, unwaited, when it can't tell whether a window is open", () => {
+      const recorder = new ScheduledRunRecorder({
+        store: new ScheduledRunStore(sqlite),
+        now: () => now,
+        hasOpenWindow: () => {
+          throw new Error("registry gone");
+        },
+        logWarn: () => {},
+      });
+      recorder.registerLaunch(launch());
+      recorder.settle("run-1", { kind: "cancel" });
+
+      expect(recorder.get("run-1")?.settlement).toMatchObject({ outcome: "cancelled" });
+      expect(pendingIds(recorder)).toEqual([]);
+    });
   });
 });

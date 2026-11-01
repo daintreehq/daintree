@@ -4,6 +4,7 @@ import { defineAction } from "../defineAction";
 import type { ActionContext } from "@shared/types/actions";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { useSchedulesViewStore } from "@/store/schedulesViewStore";
+import { useProjectStore } from "@/store/projectStore";
 import { schedulesClient } from "@/clients/schedulesClient";
 import { requestScheduleRunConfirmation } from "@/store/scheduleRunConfirmStore";
 import { ClientAppError } from "@/utils/clientAppError";
@@ -60,6 +61,11 @@ export function registerScheduleActions(actions: ActionRegistry): void {
       argsSchema: z
         .object({
           scheduleId: z.string().min(1).optional().describe("Open at this schedule's page"),
+          projectId: z
+            .string()
+            .min(1)
+            .optional()
+            .describe("The schedule's project, switched to first when it isn't this one"),
         })
         .optional(),
       isEnabled: canShowSchedules,
@@ -67,7 +73,10 @@ export function registerScheduleActions(actions: ActionRegistry): void {
         canShowSchedules(ctx)
           ? undefined
           : "Schedules are for projects on this machine. Open one to manage its schedules",
-      run: async (args: { scheduleId?: string } | undefined, ctx: ActionContext) => {
+      run: async (
+        args: { scheduleId?: string; projectId?: string } | undefined,
+        ctx: ActionContext
+      ) => {
         if (!canShowSchedules(ctx)) {
           throw new ClientAppError(
             "UNSUPPORTED",
@@ -75,7 +84,17 @@ export function registerScheduleActions(actions: ActionRegistry): void {
             "Schedules are for projects on this machine."
           );
         }
-        useSchedulesViewStore.getState().open(args?.scheduleId ?? null);
+        const scheduleId = args?.scheduleId ?? null;
+        if (args?.projectId && args.projectId !== ctx.projectId) {
+          // This view can't open another project's dialog: the schedule rides
+          // the switch, and the incoming view opens it once its state has
+          // loaded. A switch that fails reports itself.
+          await useProjectStore.getState().switchProject(args.projectId, {
+            focusIntent: { intent: "open-schedules", scheduleId },
+          });
+          return;
+        }
+        useSchedulesViewStore.getState().open(scheduleId);
       },
     })
   );

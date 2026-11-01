@@ -9,7 +9,8 @@ type FocusPayload =
   | { intent: "open-assistant"; subject: Record<string, unknown> }
   | { intent: "restore-trashed"; runId: string; spawnedAt: number; expiresAt: number }
   | { intent: "placement-note"; note: string }
-  | { intent: "focus-scheduled-run"; runId: string; scheduleId: string; panelId: string | null };
+  | { intent: "focus-scheduled-run"; runId: string; scheduleId: string; panelId: string | null }
+  | { intent: "open-schedules"; scheduleId: string | null };
 
 const onFocusOnActivateMock = vi.hoisted(() =>
   vi.fn<(cb: (payload: FocusPayload) => void) => () => void>()
@@ -433,6 +434,27 @@ describe("useFocusOnActivateIntent", () => {
     expect(landOnWorktreeMock).not.toHaveBeenCalled();
     rerender({ loaded: true });
     expect(notifyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the Schedules view at the schedule once hydrated (#15983)", async () => {
+    dispatchMock.mockResolvedValue({ ok: true });
+    const { rerender } = renderHook(({ loaded }) => useFocusOnActivateIntent(loaded), {
+      initialProps: { loaded: false },
+    });
+    act(() => {
+      lastCallback?.({ intent: "open-schedules", scheduleId: "schedule-1" });
+    });
+    expect(dispatchMock).not.toHaveBeenCalled();
+
+    rerender({ loaded: true });
+    expect(dispatchMock).toHaveBeenCalledExactlyOnceWith("schedules.open", {
+      scheduleId: "schedule-1",
+    });
+
+    act(() => {
+      lastCallback?.({ intent: "open-schedules", scheduleId: null });
+    });
+    expect(dispatchMock).toHaveBeenLastCalledWith("schedules.open", undefined);
   });
 
   it("drops a landing still waiting when a newer intent arrives or the view unmounts", () => {

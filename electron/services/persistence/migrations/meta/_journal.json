@@ -162,6 +162,13 @@
       "when": 1793664000000,
       "tag": "0022_decisions_store",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1793750400000,
+      "tag": "0023_scheduled_run_inbox",
+      "breakpoints": true
     }
   ]
 }

@@ -589,6 +589,62 @@ describe("notificationHistorySlice", () => {
     });
   });
 
+  describe("importEntries", () => {
+    it("adds whole entries under their own ids, in timestamp order, counting the unread", () => {
+      const now = Date.now();
+      getState().importEntries([makeEntry({ id: "newer", timestamp: now - 1_000 })]);
+      getState().importEntries([
+        makeEntry({ id: "older", timestamp: now - 60_000 }),
+        makeEntry({ id: "newest", timestamp: now }),
+      ]);
+
+      expect(getState().entries.map((e) => e.id)).toEqual(["newest", "newer", "older"]);
+      expect(getState().unreadCount).toBe(3);
+    });
+
+    it("skips an id already held, whatever its state, and repeats within one import", () => {
+      getState().importEntries([
+        makeEntry({ id: "unread", message: "first" }),
+        makeEntry({ id: "read", message: "first" }),
+        makeEntry({ id: "archived", message: "first" }),
+      ]);
+      getState().markIdsRead(["read"]);
+      getState().archiveEntry("archived");
+
+      getState().importEntries([
+        makeEntry({ id: "unread", message: "again" }),
+        makeEntry({ id: "read", message: "again" }),
+        makeEntry({ id: "archived", message: "again" }),
+        makeEntry({ id: "other" }),
+        makeEntry({ id: "other", message: "twice" }),
+      ]);
+
+      const byId = new Map(getState().entries.map((e) => [e.id, e]));
+      expect(byId.size).toBe(4);
+      expect(byId.get("unread")).toMatchObject({ message: "first", seenAsToast: false });
+      expect(byId.get("read")).toMatchObject({ message: "first", seenAsToast: true });
+      expect(byId.get("archived")?.archivedAt).not.toBeNull();
+      expect(byId.get("other")?.message).toBe("msg");
+      expect(getState().unreadCount).toBe(2);
+    });
+
+    it("counts an import in a snoozed thread as the thread's, and keeps an old unread one", () => {
+      const now = Date.now();
+      useNotificationHistoryStore.setState({ snoozedThreads: { thread: now + 60_000 } });
+      getState().importEntries([
+        makeEntry({ id: "snoozed", correlationId: "thread" }),
+        makeEntry({ id: "old", timestamp: now - 2 * READ_RETENTION_MS }),
+      ]);
+
+      expect(
+        getState()
+          .entries.map((e) => e.id)
+          .sort()
+      ).toEqual(["old", "snoozed"]);
+      expect(getState().unreadCount).toBe(1);
+    });
+  });
+
   describe("supersede on addEntry", () => {
     it("supersedes by exact id archives the target entry", () => {
       const oldId = getState().addEntry({ type: "error", message: "Disconnected" });

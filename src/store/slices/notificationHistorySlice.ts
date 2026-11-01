@@ -4,7 +4,11 @@ import type { ActionId } from "@shared/types/actions";
 import type { NotificationActionVariant } from "@/store/notificationStore";
 import type { NotificationEventKind } from "@/lib/notify";
 import type { NotificationPluginSource } from "@shared/types/ipc/maps";
-import { createDebouncedSafeJSONStorage } from "@/store/persistence/safeStorage";
+import {
+  createDebouncedSafeJSONStorage,
+  readLocalStorageItemSafely,
+  safeJSONParse,
+} from "@/store/persistence/safeStorage";
 import {
   mergeRecordByWriterDelta,
   pickFieldByWriterDelta,
@@ -339,7 +343,10 @@ function mergeEntryFields(
  * snapshot used to replace entries a sibling added, and revert rows it read,
  * archived or dismissed. Per entry id:
  *
- *   - added by this writer (absent from its baseline) → its entry is written.
+ *   - added by this writer (absent from its baseline) → its entry is written,
+ *     unless the disk already holds that id: an entry imported under its
+ *     source's id (#15983) can be filed by two views, and the disk's copy
+ *     keeps any read or archive a sibling gave it.
  *   - held by the writer and the disk → merged field by field.
  *   - known to the writer but gone from disk → stays gone, even if the writer
  *     edited it since: a sibling dismissed, cleared or pruned it, and a stale
@@ -371,11 +378,11 @@ function mergeNotificationHistoryPersistedWrite({
   const merged: NotificationHistoryEntry[] = [];
   for (const [id, entry] of inc.entries) {
     const before = base.entries.get(id);
+    const current = disk.entries.get(id);
     if (before === undefined) {
-      merged.push(entry);
+      merged.push(current !== undefined ? mergeEntryFields(entry, entry, current) : entry);
       continue;
     }
-    const current = disk.entries.get(id);
     if (current !== undefined) merged.push(mergeEntryFields(before, entry, current));
   }
   for (const [id, entry] of disk.entries) {
@@ -418,6 +425,14 @@ interface NotificationHistoryState {
    */
   snoozedThreads: Record<string, number>;
   addEntry: (entry: AddEntryInput) => string;
+  /**
+   * Adds entries that arrive whole, each under the id its source gave it, so
+   * the same record arriving twice is one entry: an id already held, read or
+   * archived, is skipped, and sibling views merge by id when they persist.
+   * They keep their own timestamps and take their place by them, under the
+   * same retention and cap as any entry.
+   */
+  importEntries: (entries: readonly NotificationHistoryEntry[]) => void;
   /**
    * Replaces the `message` text on an existing entry without bumping
    * `timestamp` or any read/archived state. Used by the rate-limit overflow
@@ -492,6 +507,43 @@ interface NotificationHistoryState {
   clearExpiredSnoozes: (now?: number) => void;
 }
 
+const notificationHistoryStorage = createDebouncedSafeJSONStorage<unknown>(300, {
+  mergeOnWrite: mergeNotificationHistoryPersistedWrite,
+});
+
+/**
+ * Writes the inbox's pending persist now rather than after its debounce, for a
+ * caller that must know it reached storage before telling its source so.
+ */
+export function flushNotificationHistory(): void {
+  notificationHistoryStorage.flush(NOTIFICATION_HISTORY_STORAGE_KEY);
+}
+
+/**
+ * The entry ids the inbox's storage holds, read back from it: what survives a
+ * reload, which a write that hit the quota, fell back to memory or was cut by
+ * the entry cap doesn't reach.
+ */
+export function notificationHistoryIdsInStorage(): Set<string> {
+  const value = safeJSONParse<unknown>(
+    readLocalStorageItemSafely(NOTIFICATION_HISTORY_STORAGE_KEY),
+    { store: "notificationHistoryStore", key: NOTIFICATION_HISTORY_STORAGE_KEY },
+    null
+  );
+  const entries: unknown = fieldOf(fieldOf(value, "state"), "entries");
+  const ids = new Set<string>();
+  if (!Array.isArray(entries)) return ids;
+  for (const entry of entries) {
+    const id: unknown = fieldOf(entry, "id");
+    if (typeof id === "string") ids.add(id);
+  }
+  return ids;
+}
+
+function fieldOf(value: unknown, key: string): unknown {
+  return value !== null && typeof value === "object" ? Reflect.get(value, key) : undefined;
+}
+
 export const useNotificationHistoryStore = create<NotificationHistoryState>()(
   persist(
     (set, get) => ({
@@ -550,6 +602,29 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
           };
         });
         return newEntry.id;
+      },
+      importEntries: (incoming) => {
+        const state = get();
+        const held = new Set(state.entries.map((e) => e.id));
+        const added = incoming.filter((e) => {
+          if (held.has(e.id)) return false;
+          held.add(e.id);
+          return true;
+        });
+        if (added.length === 0) {
+          // Written again all the same: a record handed over twice is most
+          // likely one whose entry never reached storage (a full storage drops
+          // the pending write), and only a write puts it there.
+          set({ entries: state.entries });
+          return;
+        }
+        const now = Date.now();
+        const candidate = [...added, ...state.entries].sort((a, b) => b.timestamp - a.timestamp);
+        const updated = pruneNotificationEntries(candidate, now);
+        set({
+          entries: updated,
+          unreadCount: computeUnreadCount(updated, state.snoozedThreads, now),
+        });
       },
       updateEntryMessage: (id, message) => {
         const state = get();
@@ -774,9 +849,7 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
       // because `migrate` can return a pre-v2 blob shape; the persist
       // middleware then funnels that through `merge`, which does its own
       // defensive coercion.
-      storage: createDebouncedSafeJSONStorage<unknown>(300, {
-        mergeOnWrite: mergeNotificationHistoryPersistedWrite,
-      }),
+      storage: notificationHistoryStorage,
       // Only persist entries + snoozedThreads — unreadCount is recomputed on
       // hydration, and evictedToInboxCount is a session-only discoverability
       // counter that resets to 0 on every fresh load.

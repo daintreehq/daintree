@@ -49,7 +49,8 @@ export function useFocusOnActivateIntent(isStateLoaded: boolean): void {
         payload?.intent !== "open-assistant" &&
         payload?.intent !== "restore-trashed" &&
         payload?.intent !== "placement-note" &&
-        payload?.intent !== "focus-scheduled-run"
+        payload?.intent !== "focus-scheduled-run" &&
+        payload?.intent !== "open-schedules"
       ) {
         return;
       }
@@ -147,6 +148,13 @@ export function useFocusOnActivateIntent(isStateLoaded: boolean): void {
         ),
         { context: "Landing on a scheduled run from its notification" }
       );
+      return;
+    }
+    if (pending.intent === "open-schedules") {
+      const args = pending.scheduleId ? { scheduleId: pending.scheduleId } : undefined;
+      void actionService.dispatch("schedules.open", args).then((result) => {
+        if (!result.ok) logWarn("Couldn't open the schedules view", { error: result.error });
+      });
       return;
     }
     if (pending.intent === "focus-worktree") {

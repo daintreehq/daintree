@@ -1155,6 +1155,9 @@ export const CHANNELS = {
   // the facts on them.
   SCHEDULED_RUNS_LIST_BY_PROJECT: "scheduled-runs:list-by-project",
   SCHEDULED_RUNS_LIST_BY_SCHEDULE: "scheduled-runs:list-by-schedule",
+  // Runs that settled with no window open, for a view's notification inbox (#15983).
+  SCHEDULED_RUNS_TAKE_INBOX: "scheduled-runs:take-inbox",
+  SCHEDULED_RUNS_ACK_INBOX: "scheduled-runs:ack-inbox",
 
   // Plugin channels
   PLUGIN_LIST: "plugin:list",

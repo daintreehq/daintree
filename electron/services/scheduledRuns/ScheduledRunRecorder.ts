@@ -123,6 +123,12 @@ export interface ScheduledRunRecorderDeps {
    * the run stays open for the next startup to settle as interrupted.
    */
   readonly isShuttingDown?: () => boolean;
+  /**
+   * Whether a Daintree window is open. A run that settles while none is waits
+   * for the notification inbox, marked in its settlement's own write (#15983).
+   * Without it, every run reads as settling in view.
+   */
+  readonly hasOpenWindow?: () => boolean;
   /** After a committed change, for the views of each project. */
   readonly onChanged?: (change: ScheduledRunsChange) => void;
   /** A run was registered to launch; for other main-side services. */
@@ -196,6 +202,7 @@ export class ScheduledRunRecorder {
   private readonly store: ScheduledRunStore;
   private readonly now: () => number;
   private readonly isShuttingDown: () => boolean;
+  private readonly hasOpenWindow: () => boolean;
   private readonly onChanged: (change: ScheduledRunsChange) => void;
   private readonly onRunStarted: NonNullable<ScheduledRunRecorderDeps["onRunStarted"]>;
   private readonly onRunEnded: NonNullable<ScheduledRunRecorderDeps["onRunEnded"]>;
@@ -226,6 +233,7 @@ export class ScheduledRunRecorder {
     this.store = deps.store;
     this.now = deps.now ?? Date.now;
     this.isShuttingDown = deps.isShuttingDown ?? (() => false);
+    this.hasOpenWindow = deps.hasOpenWindow ?? (() => true);
     this.onChanged = deps.onChanged ?? (() => {});
     this.onRunStarted = deps.onRunStarted ?? (() => {});
     this.onRunEnded = deps.onRunEnded ?? (() => {});
@@ -288,12 +296,19 @@ export class ScheduledRunRecorder {
    * starts nor ends, and it has nothing to resume: no launch plan ran.
    */
   registerRefusedLaunch(input: RegisterRefusedLaunchInput): ScheduledRun {
-    return this.insertSettled(input, { kind: "launch-error", message: input.message });
+    return this.insertSettled(
+      input,
+      { kind: "launch-error", message: input.message },
+      this.windowless()
+    );
   }
 
-  /** Records an occurrence that was skipped, with its reason. It never launches. */
+  /**
+   * Records an occurrence that was skipped, with its reason. It never launches,
+   * so it never waits for the notification inbox: the history shows it.
+   */
   registerSkip(input: RegisterScheduledSkipInput): ScheduledRun {
-    return this.insertSettled(input, { kind: "skip", reason: input.reason });
+    return this.insertSettled(input, { kind: "skip", reason: input.reason }, false);
   }
 
   /** Whether a run of the project is registered and not yet settled. */
@@ -308,7 +323,8 @@ export class ScheduledRunRecorder {
       RegisterScheduledSkipInput,
       "id" | "scheduleId" | "projectId" | "origin" | "terminalId"
     >,
-    evidence: ScheduledRunEvidence
+    evidence: ScheduledRunEvidence,
+    inboxPending: boolean
   ): ScheduledRun {
     const timestamp = this.now();
     const run: ScheduledRun = {
@@ -330,7 +346,7 @@ export class ScheduledRunRecorder {
       resume: null,
     };
     this.store.transaction(() => {
-      this.store.insert(run);
+      this.store.insert(run, { inboxPending });
       this.store.prune(run.scheduleId);
     });
     this.changed([run]);
@@ -579,6 +595,7 @@ export class ScheduledRunRecorder {
     const at = this.now();
     const changed: ScheduledRun[] = [];
     const interrupted: ScheduledRun[] = [];
+    const windowless = this.windowless();
     this.store.transaction(() => {
       for (const run of this.store.listLive()) {
         let next: ScheduledRun = {
@@ -588,11 +605,14 @@ export class ScheduledRunRecorder {
             pty: goneProcess(run.process.pty, at),
           },
         };
-        if (next.settlement.state === "open") {
+        const settles = next.settlement.state === "open";
+        if (settles) {
           next = this.withSettlement(next, { kind: "interrupted" }, at);
           interrupted.push(next);
         }
-        if (this.store.update(next)) changed.push(next);
+        if (!this.store.update(next)) continue;
+        changed.push(next);
+        if (settles && windowless) this.store.markInboxPending(next.id, at);
       }
     });
     this.changed(changed);
@@ -619,6 +639,16 @@ export class ScheduledRunRecorder {
 
   listBySchedule(scheduleId: string): ScheduledRun[] {
     return this.store.listBySchedule(scheduleId);
+  }
+
+  /** Runs that settled with no window open and aren't in the notification inbox yet, oldest first. */
+  listInboxPending(): ScheduledRun[] {
+    return this.store.listInboxPending();
+  }
+
+  /** A view has put these runs in the notification inbox; returns the ids that were waiting. */
+  clearInboxPending(runIds: readonly string[]): string[] {
+    return this.store.clearInboxPending(runIds);
   }
 
   /**
@@ -657,8 +687,10 @@ export class ScheduledRunRecorder {
   private commit(run: ScheduledRun, ended = false): boolean {
     let written: boolean;
     try {
+      const inboxPending = ended && this.windowless();
       written = this.store.transaction(() => {
         const updated = this.store.update(run);
+        if (updated && inboxPending) this.store.markInboxPending(run.id, this.now());
         if (updated && run.settlement.state === "settled") this.store.prune(run.scheduleId);
         return updated;
       });
@@ -702,6 +734,17 @@ export class ScheduledRunRecorder {
       })
     );
     this.notify(() => this.onRunSettled(run));
+  }
+
+  // Read before a settlement's write, never inside it: a window check that
+  // throws must not cost the run its settlement. It then reads as in view.
+  private windowless(): boolean {
+    try {
+      return !this.hasOpenWindow();
+    } catch (error) {
+      this.logWarn("[ScheduledRuns] Couldn't tell whether a window is open", error);
+      return false;
+    }
   }
 
   // Listeners follow a run that is already committed; one that throws can't undo it.
