@@ -144,7 +144,6 @@ describe("projectActions adversarial", () => {
         runCommands: [],
         daintreeMcpTier: "full",
         resourceEnvironments: { prod: { connect: "ssh -i ~/.ssh/id_ed25519 deploy@prod" } },
-        commandOverrides: [{ id: "c1" }],
         preferredEditor: { command: "code" },
         fleetSavedScopes: [{ kind: "snapshot", id: "s1" }],
         gitInitDefaults: { createInitialCommit: true },

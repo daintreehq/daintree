@@ -26,7 +26,6 @@ import type {
   ResourceEnvironment,
 } from "@shared/types/project";
 import { resolveDaintreeMcpTier } from "@shared/types/project";
-import type { CommandOverride } from "@shared/types/commands";
 import type { NotificationSettings } from "@shared/types/ipc/api";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
@@ -75,7 +74,6 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   const [turbopackEnabled, setTurbopackEnabled] = useState<boolean>(true);
   const [daintreeMcpTier, setDaintreeMcpTier] = useState<DaintreeMcpTier>("off");
   const [daintreeMcpSkipConfirmations, setDaintreeMcpSkipConfirmations] = useState(false);
-  const [commandOverrides, setCommandOverrides] = useState<CommandOverride[]>([]);
   const [copyTreeSettings, setCopyTreeSettings] = useState<CopyTreeSettings>({});
   const [branchPrefixMode, setBranchPrefixMode] = useState<"none" | "username" | "custom">("none");
   const [branchPrefixCustom, setBranchPrefixCustom] = useState<string>("");
@@ -168,7 +166,6 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       environmentVariables,
       runCommands,
       defaultWorktreeRecipeId,
-      commandOverrides,
       copyTreeSettings,
       branchPrefixMode,
       branchPrefixCustom,
@@ -199,7 +196,6 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     environmentVariables,
     runCommands,
     defaultWorktreeRecipeId,
-    commandOverrides,
     copyTreeSettings,
     branchPrefixMode,
     branchPrefixCustom,
@@ -277,7 +273,6 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       setTurbopackEnabled(true);
       setDaintreeMcpTier("off");
       setDaintreeMcpSkipConfirmations(false);
-      setCommandOverrides([]);
       setCopyTreeSettings({});
       setProjectAutoSaveError(null);
       setProjectColor(undefined);
@@ -324,7 +319,6 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     const initialDaintreeMcpTier = resolveDaintreeMcpTier(projectSettings);
     const initialDaintreeMcpSkipConfirmations =
       projectSettings.daintreeMcpSkipConfirmations === true;
-    const initialCommandOverrides = projectSettings.commandOverrides || [];
     const initialCopyTreeSettings = projectSettings.copyTreeSettings || {};
     const initialBranchPrefixMode = projectSettings.branchPrefixMode ?? "none";
     const initialBranchPrefixCustom = projectSettings.branchPrefixCustom ?? "";
@@ -371,7 +365,6 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     setTurbopackEnabled(initialTurbopackEnabled);
     setDaintreeMcpTier(initialDaintreeMcpTier);
     setDaintreeMcpSkipConfirmations(initialDaintreeMcpSkipConfirmations);
-    setCommandOverrides(initialCommandOverrides);
     setCopyTreeSettings(initialCopyTreeSettings);
     setBranchPrefixMode(initialBranchPrefixMode);
     setBranchPrefixCustom(initialBranchPrefixCustom);
@@ -397,7 +390,6 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       initialEnvVars,
       initialRunCommands,
       initialDefaultWorktreeRecipeId,
-      initialCommandOverrides,
       initialCopyTreeSettings,
       initialBranchPrefixMode,
       initialBranchPrefixCustom,
@@ -428,7 +420,6 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
         turbopackEnabled: initialTurbopackEnabled,
         daintreeMcpTier: initialDaintreeMcpTier,
         daintreeMcpSkipConfirmations: initialDaintreeMcpSkipConfirmations,
-        commandOverrides: initialCommandOverrides,
         copyTreeSettings: initialCopyTreeSettings,
         branchPrefixMode: initialBranchPrefixMode,
         branchPrefixCustom: initialBranchPrefixCustom,
@@ -479,7 +470,6 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
         turbopackEnabled,
         daintreeMcpTier,
         daintreeMcpSkipConfirmations,
-        commandOverrides,
         copyTreeSettings,
         branchPrefixMode,
         branchPrefixCustom,
@@ -627,8 +617,6 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
     setDaintreeMcpTier,
     daintreeMcpSkipConfirmations,
     setDaintreeMcpSkipConfirmations,
-    commandOverrides,
-    setCommandOverrides,
     copyTreeSettings,
     setCopyTreeSettings,
     branchPrefixMode,

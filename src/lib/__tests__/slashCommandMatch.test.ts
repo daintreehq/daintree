@@ -29,8 +29,8 @@ describe("rankSlashCommands", () => {
   });
 
   it("prioritizes full-token matches over partial prefix matches", () => {
-    const ranked = rankSlashCommands([cmd("/github:work-issue"), cmd("/worktree:remove")], "/work");
-    expect(ranked.map((c) => c.label)).toEqual(["/github:work-issue", "/worktree:remove"]);
+    const ranked = rankSlashCommands([cmd("/forge:work-issue"), cmd("/worktree:remove")], "/work");
+    expect(ranked.map((c) => c.label)).toEqual(["/forge:work-issue", "/worktree:remove"]);
   });
 
   it("prioritizes colon-segment start matches over dash-subword matches", () => {

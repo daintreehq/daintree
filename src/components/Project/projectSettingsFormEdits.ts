@@ -1,5 +1,4 @@
 import type { CopyTreeSettings, ProjectSettings, RunCommand } from "@/types";
-import type { CommandOverride } from "@shared/types/commands";
 import type {
   DaintreeMcpTier,
   ProjectTerminalSettings,
@@ -23,7 +22,6 @@ export interface ProjectSettingsFormValues {
   turbopackEnabled: boolean;
   daintreeMcpTier: DaintreeMcpTier;
   daintreeMcpSkipConfirmations: boolean;
-  commandOverrides: CommandOverride[];
   copyTreeSettings: CopyTreeSettings;
   branchPrefixMode: "none" | "username" | "custom";
   branchPrefixCustom: string;
@@ -52,7 +50,6 @@ type FormOwnedField =
   | "turbopackEnabled"
   | "daintreeMcpTier"
   | "daintreeMcpSkipConfirmations"
-  | "commandOverrides"
   | "copyTreeSettings"
   | "branchPrefixMode"
   | "branchPrefixCustom"
@@ -167,7 +164,6 @@ export function toFormOwnedSettings(
     turbopackEnabled: values.turbopackEnabled === true ? undefined : false,
     daintreeMcpTier: values.daintreeMcpTier !== "off" ? values.daintreeMcpTier : undefined,
     daintreeMcpSkipConfirmations: values.daintreeMcpSkipConfirmations ? true : undefined,
-    commandOverrides: values.commandOverrides.length > 0 ? values.commandOverrides : undefined,
     copyTreeSettings:
       Object.keys(sanitizedCopyTreeSettings).length > 0 ? sanitizedCopyTreeSettings : undefined,
     branchPrefixMode: branchPrefixMode !== "none" ? branchPrefixMode : undefined,

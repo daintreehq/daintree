@@ -17,7 +17,6 @@ const formValues: ProjectSettingsFormValues = {
   turbopackEnabled: true,
   daintreeMcpTier: "off",
   daintreeMcpSkipConfirmations: false,
-  commandOverrides: [],
   copyTreeSettings: {},
   branchPrefixMode: "none",
   branchPrefixCustom: "",

@@ -1936,7 +1936,7 @@ describe("WorkspaceClient multi-process manager", () => {
       const listener = vi.fn();
       client.on("worktree-activated", listener);
 
-      // Non-silent Main-originated activation (the githubWorkIssue path).
+      // Non-silent Main-originated activation.
       const activatePromise = client.setActiveWorktree("wt-1", 1);
       await tick();
       const setActiveReq = h(0)

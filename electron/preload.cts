@@ -59,7 +59,6 @@ import { buildAccessibilityPreloadBindings } from "./ipc/handlers/accessibility.
 import { buildConfigBundlePreloadBindings } from "./ipc/handlers/configBundle.preload.js";
 import { buildHelpPreloadBindings } from "./ipc/handlers/help.preload.js";
 import { buildEventInspectorPreloadBindings } from "./ipc/handlers/eventInspector.preload.js";
-import { buildCommandsPreloadBindings } from "./ipc/handlers/commands.preload.js";
 import { buildPortalPreloadBindings } from "./ipc/handlers/portal.preload.js";
 import { buildDevPreviewPreloadBindings } from "./ipc/handlers/devPreview.preload.js";
 import { buildPluginPreloadBindings } from "./ipc/handlers/plugin.preload.js";
@@ -2633,9 +2632,6 @@ function buildElectronApi(): ElectronAPI {
 
     // Per-project consent for plugin agent tools. Renderer-only by design.
     pluginAgentMcp: buildPluginAgentMcpPreloadBindings(_unwrappingInvoke),
-
-    // Commands API
-    commands: buildCommandsPreloadBindings(_unwrappingInvoke),
 
     // App Agent API - Configuration and API key management
     appAgent: {

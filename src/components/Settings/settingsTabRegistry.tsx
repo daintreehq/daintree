@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 import { lazyWithPreload } from "@/lib/lazyWithPreload";
 import {
   Blocks,
-  Command,
   FileCode,
   GitBranch,
   GitBranchPlus,
@@ -168,7 +167,6 @@ const importProjectContextTab = () => import("@/components/Project/ContextTab");
 const importProjectVariablesTab = () => import("@/components/Project/EnvironmentVariablesEditor");
 const importProjectAutomationTab = () => import("@/components/Project/AutomationTab");
 const importProjectRecipesTab = () => import("@/components/Project/RecipesTab");
-const importProjectCommandsTab = () => import("./CommandOverridesTab");
 const importProjectNotificationsTab = () => import("@/components/Project/ProjectNotificationsTab");
 const importProjectCodeForgeTab = () => import("@/components/Project/CodeForgeTab");
 const importProjectPluginsTab = () => import("./ProjectPluginsTab");
@@ -253,10 +251,6 @@ const LazyProjectAutomationTab = lazyWithPreload(
   (m) => m.AutomationTab
 );
 const LazyProjectRecipesTab = lazyWithPreload(importProjectRecipesTab, (m) => m.RecipesTab);
-const LazyProjectCommandsTab = lazyWithPreload(
-  importProjectCommandsTab,
-  (m) => m.CommandOverridesTab
-);
 const LazyProjectNotificationsTab = lazyWithPreload(
   importProjectNotificationsTab,
   (m) => m.ProjectNotificationsTab
@@ -2262,19 +2256,6 @@ export const SETTINGS_REGISTRY = [
   } satisfies LazySettingsTabEntry,
 
   {
-    id: "project:commands",
-    scope: "project",
-    group: "Project",
-    settings: ["projectPresentation"],
-    label: "Commands",
-    icon: <Command className="w-4 h-4" />,
-    importKind: "lazy",
-    importer: LazyProjectCommandsTab.preload,
-    LazyComponent: LazyProjectCommandsTab,
-    needsProjectForm: true,
-  } satisfies LazySettingsTabEntry,
-
-  {
     id: "project:notifications",
     scope: "project",
     group: "Project",
@@ -2516,11 +2497,6 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
       },
     ],
   },
-  "project:commands": {
-    tabLabel: "Commands",
-    searchNavDescription: "Project-specific command overrides",
-    searchNavKeywords: ["project", "commands", "overrides", "alias"],
-  },
   "project:notifications": {
     tabLabel: "Notifications",
     searchNavDescription: "Project-specific notification overrides",
@@ -2637,7 +2613,6 @@ export const projectTabIcons: Record<ProjectSettingsTab, ReactNode> = {
   "project:variables": <KeyRound className="w-5 h-5 text-text-secondary" />,
   "project:automation": <GitBranchPlus className="w-5 h-5 text-text-secondary" />,
   "project:recipes": <Workflow className="w-5 h-5 text-text-secondary" />,
-  "project:commands": <Command className="w-5 h-5 text-text-secondary" />,
   "project:notifications": <Bell className="w-5 h-5 text-text-secondary" />,
   "project:code-forge": <GitBranch className="w-5 h-5 text-text-secondary" />,
   "project:plugins": <Package className="w-5 h-5 text-text-secondary" />,

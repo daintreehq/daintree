@@ -582,22 +582,6 @@ export interface GeneratedIpcInvokeMap {
     args: [__0: { cwd: string }];
     result: string | null;
   };
-  "commands:execute": {
-    args: [payload: import("../commands.js").CommandExecutePayload];
-    result: import("../commands.js").CommandResult<unknown>;
-  };
-  "commands:get": {
-    args: [payload: import("../commands.js").CommandGetPayload];
-    result: import("../commands.js").CommandManifestEntry | null;
-  };
-  "commands:get-builder": {
-    args: [commandId: string];
-    result: { steps: import("../commands.js").BuilderStep[] } | null;
-  };
-  "commands:list": {
-    args: [context?: import("../commands.js").CommandContext | undefined];
-    result: import("../commands.js").CommandManifestEntry[];
-  };
   "config-bundle:apply-import": {
     args: [payload: { bundleJson: string }];
     result: import("../configBundle.js").ConfigImportReport;

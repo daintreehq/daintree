@@ -686,23 +686,6 @@ export type {
   ActionDispatchPayload,
 } from "./actions.js";
 
-// Command system types - global command registry and execution
-export type {
-  CommandCategory,
-  CommandArgumentType,
-  CommandArgument,
-  CommandContext,
-  CommandResult,
-  BuilderFieldType,
-  BuilderFieldValidation,
-  BuilderField,
-  BuilderStep,
-  DaintreeCommand,
-  CommandManifestEntry,
-  CommandExecutePayload,
-  CommandGetPayload,
-} from "./commands.js";
-
 // App Agent types - AI configuration
 export type { AppAgentProvider, AppAgentConfig } from "./appAgent.js";
 

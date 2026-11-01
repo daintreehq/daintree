@@ -107,7 +107,6 @@ import { trackProjectVisibility } from "../services/projectVisibilityClock.js";
 import { getProjectPresenceTracker } from "../services/ProjectPresenceTracker.js";
 import { getCompositeMemorySnapshot } from "../services/memoryAccounting.js";
 import { scratchStore } from "../services/ScratchStore.js";
-import { registerCommands } from "../services/commands/index.js";
 import { hasLegacyAuditRingSources, store, wasStoreFreshAtBoot } from "../store.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
@@ -1111,20 +1110,6 @@ export async function initGlobalServices(
       // startWatching() is idempotent.
       ccr.startWatching();
       console.log("[MAIN] CcrConfigService initialized");
-    },
-  });
-
-  // Built-in commands — registration fires the githubCreateIssue/githubWorkIssue
-  // chunk imports, so it belongs in the deferred queue, not main-module eval.
-  // The commands IPC awaits builtinCommandsReady(), so a settings page that
-  // lists commands before the queue drains still sees them. registerCommands()
-  // is fire-and-forget internally and returns synchronously, never stalling the
-  // drain. Registered once per process (initGlobalServices runs once),
-  // matching the previous main.ts semantics.
-  registerDeferredTask({
-    name: "builtin-commands",
-    run: () => {
-      registerCommands();
     },
   });
 

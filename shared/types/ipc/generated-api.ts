@@ -270,20 +270,6 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["codex:resolve-resume-latest-session"]["args"]
     ): Promise<IpcInvokeMap["codex:resolve-resume-latest-session"]["result"]>;
   };
-  commands: {
-    execute(
-      ...args: IpcInvokeMap["commands:execute"]["args"]
-    ): Promise<IpcInvokeMap["commands:execute"]["result"]>;
-    get(
-      ...args: IpcInvokeMap["commands:get"]["args"]
-    ): Promise<IpcInvokeMap["commands:get"]["result"]>;
-    getBuilder(
-      ...args: IpcInvokeMap["commands:get-builder"]["args"]
-    ): Promise<IpcInvokeMap["commands:get-builder"]["result"]>;
-    list(
-      ...args: IpcInvokeMap["commands:list"]["args"]
-    ): Promise<IpcInvokeMap["commands:list"]["result"]>;
-  };
   configBundle: {
     applyImport(
       ...args: IpcInvokeMap["config-bundle:apply-import"]["args"]
