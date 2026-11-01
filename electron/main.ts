@@ -86,6 +86,7 @@ import { hasPendingOpen, isWindowBound, reserveWindowForOpen } from "./window/wi
 import { distributePortsToView, getRemoteViewHooks } from "./window/portDistribution.js";
 import { findOtherProjectOwner, type ProjectOwner } from "./window/projectOwnership.js";
 import { openFolderInNewWindow } from "./window/newWindowOpen.js";
+import { setScheduledRunWindowOpener } from "./window/scheduledRunNotificationNavigation.js";
 import { deliverOpenSystemMemoryPressure } from "./window/systemMemoryPressureDelivery.js";
 import { toDisposable } from "./utils/lifecycle.js";
 import {
@@ -1089,6 +1090,20 @@ if (!gotTheLock) {
   });
 
   setAttachedShellsProvider(() => getRemoteService("hostMode")?.getAttachedClients() ?? []);
+
+  // A scheduled run's banner, clicked with no window on this machine (a
+  // windowless Host, or macOS after the last window closed), opens one on the
+  // run's project (#15988).
+  setScheduledRunWindowOpener(async (projectId) => {
+    if (headlessOzone || !app.isReady()) return null;
+    let windowId: number | null = null;
+    const result = await createWindow(undefined, projectId, {
+      onRegistered: (id) => {
+        windowId = id;
+      },
+    });
+    return result === "ok" ? windowId : null;
+  });
 
   // Remote Hosts' start at launch (#15888): as soon as the focused window is up
   // when restored windows need a host, otherwise once the restore has settled,

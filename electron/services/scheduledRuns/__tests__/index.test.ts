@@ -47,6 +47,14 @@ vi.mock("../../PowerSaveBlockerService.js", () => ({
   getPowerSaveBlockerService: keepAwake.getService,
 }));
 
+const notifier = vi.hoisted(() => ({
+  notify: vi.fn(async (_run: { id: string }, _attention: unknown) => {}),
+}));
+
+vi.mock("../scheduledRunNotifierLive.js", () => ({
+  notifyScheduledRunAttention: notifier.notify,
+}));
+
 import { openDb } from "../../persistence/db.js";
 import { events } from "../../events.js";
 import { ScheduledRunStore } from "../ScheduledRunStore.js";
@@ -71,6 +79,7 @@ beforeEach(() => {
   state.shutdown = null;
   state.sent = [];
   keepAwake.getService.mockReset();
+  notifier.notify.mockClear();
   _resetScheduledRunRecorderForTest();
   source = new EventEmitter();
   stop = startScheduledRunFacts(source as unknown as ScheduledRunFactSource);
@@ -228,6 +237,42 @@ describe("scheduled-run history wiring", () => {
       outcome: "needs-you",
       evidence: { kind: "handback", report: "needs-you", summary: "a label needs a call" },
     });
+  });
+
+  it("notifies about a run that settles needing a person, and not one that went fine (#15988)", async () => {
+    const recorder = (await getScheduledRunRecorder())!;
+    recorder.registerLaunch(launch);
+    recorder.registerLaunch({ ...launch, id: "run-2", terminalId: "terminal-2" });
+    source.emit("spawn-result", "terminal-1", { success: true, id: "terminal-1", spawnedAt: 50 });
+    source.emit("spawn-result", "terminal-2", { success: true, id: "terminal-2", spawnedAt: 51 });
+    source.emit("incarnation-exit", {
+      terminalId: "terminal-1",
+      spawnedAt: 50,
+      exitCode: 0,
+      signal: null,
+    });
+    source.emit("incarnation-exit", {
+      terminalId: "terminal-2",
+      spawnedAt: 51,
+      exitCode: 2,
+      signal: null,
+    });
+    recorder.registerRefusedLaunch({
+      id: "run-3",
+      scheduleId: "schedule-1",
+      projectId: "project-1",
+      origin: launch.origin,
+      terminalId: "terminal-3",
+      message: "The project's folder is missing.",
+    });
+
+    await vi.waitFor(() =>
+      expect(notifier.notify.mock.calls.map(([run]) => run.id)).toEqual(["run-2", "run-3"])
+    );
+    expect(notifier.notify.mock.calls.map(([run, attention]) => [run.id, attention])).toEqual([
+      ["run-2", { kind: "exited", process: "pty", exitCode: 2 }],
+      ["run-3", { kind: "launch-failed" }],
+    ]);
   });
 
   it("settles a run lost when its pty-host dies with its incarnation", async () => {

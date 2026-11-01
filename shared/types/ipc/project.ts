@@ -118,6 +118,13 @@ export type ProjectFocusOnActivateIntent =
    * project is showing rather than dropped with the dialog (#14991).
    */
   | { intent: "placement-note"; note: string }
+  /**
+   * A scheduled run's banner was clicked (#15988): bring forward the run's
+   * pane if this view still holds it, and otherwise open the schedule's
+   * history, or the list when the schedule is gone. `panelId` is null when
+   * the run never had a terminal to show.
+   */
+  | { intent: "focus-scheduled-run"; runId: string; scheduleId: string; panelId: string | null }
   | {
       /**
        * A plugin's OS banner was clicked (#13505): run its first action, which
