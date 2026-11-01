@@ -25,6 +25,12 @@ vi.mock("@/store/macroFocusStore", () => ({
     getState: () => ({ setRegionRef: () => {} }),
   }),
 }));
+// The View submenu's collapse/expand rows read the worktree list; the app
+// mounts WorktreeStoreProvider at its root, above anything rendered here.
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStore: (selector: (state: { worktrees: Map<string, unknown> }) => unknown) =>
+    selector({ worktrees: new Map() }),
+}));
 vi.mock("@/components/Project/ProjectResourceBadge", () => ({
   ProjectResourceBadge: () => null,
 }));
@@ -65,6 +71,11 @@ vi.mock("@/components/ui/context-menu", async (importOriginal) => ({
     <div data-testid="menu-sub-trigger">{children}</div>
   ),
   ContextMenuSubContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  ContextMenuItem: ({ children, disabled }: { children: ReactNode; disabled?: boolean }) => (
+    <div role="menuitem" aria-disabled={disabled}>
+      {children}
+    </div>
+  ),
   ContextMenuRadioGroup: ({ value, children }: { value: string; children: ReactNode }) => (
     <div role="group" data-value={value}>
       {children}
@@ -92,6 +103,7 @@ vi.mock("@/components/ui/context-menu", async (importOriginal) => ({
 
 const { Sidebar } = await import("../Sidebar");
 const { useWorktreeFilterStore } = await import("@/store/worktreeFilterStore");
+const { hostFileManagerRevealLabel } = await import("@/hooks/useHostPlatform");
 
 const GIT_PROJECT: WorkspaceRoot = {
   kind: "project",
@@ -219,7 +231,8 @@ describe("Sidebar background context menu — workspace kind (#11499)", () => {
       .getAllByRole("menuitem")
       .find((el) => el.getAttribute("data-action-id") === "system.openPath");
     expect(reveal?.getAttribute("data-args")).toBe(JSON.stringify({ path: SCRATCH.path }));
-    expect(reveal?.textContent).toContain("Reveal workspace in Finder");
+    expect(reveal?.textContent).toBe(hostFileManagerRevealLabel());
+    expect(reveal?.textContent).not.toMatch(/project/i);
   });
 
   it("keeps project settings for a folder opened without git, but not its worktree entries", () => {

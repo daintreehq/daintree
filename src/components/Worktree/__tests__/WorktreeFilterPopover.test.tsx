@@ -179,7 +179,7 @@ describe("WorktreeFilterPopover chip states are told apart without colour", () =
     expect(chip(/^Feature/)).toBeDefined();
     expect(chip(/^Bugfix/)).toBeDefined();
     expect(chip(/^Detached/)).toBeUndefined();
-    const more = screen.getByText(/with no matches$/);
+    const more = screen.getByText(/more, none match$/);
     fireEvent.click(more);
     expect(chip(/^Detached/)).toBeDefined();
   });
@@ -250,7 +250,7 @@ describe("WorktreeFilterPopover chip states are told apart without colour", () =
         chipCounts={manyMatching}
       />
     );
-    expect(screen.queryByText(/with no matches$/)).toBeNull();
+    expect(screen.queryByText(/more, none match$/)).toBeNull();
     expect(screen.getByText(/\d+ more$/)).toBeTruthy();
   });
 

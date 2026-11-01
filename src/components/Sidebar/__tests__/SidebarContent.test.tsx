@@ -59,20 +59,16 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
     expect(source).toMatch(/totalCount \+ \(mainWorktree \? 1 : 0\)/);
   });
 
-  it("says the state tabs ignore the query, but only while one is running", () => {
-    // The tabs count a different set on purpose — non-main, and not narrowed by
-    // the query — so a search puts "1 of 5 worktrees" directly under a tab
-    // reading "All 4". Both are right; the line has to say which is which or
-    // the sidebar reads as self-contradictory.
-    //
-    // Gated on hasQuery: with no query the two scopes differ by the main
-    // worktree alone, and the pinned card already accounts for that. Explaining
-    // it unconditionally would put standing noise under every facet filter.
+  it("shows the scope line for the search and facets only, never for a state segment", () => {
+    // The state segments count the same narrowed set the list shows, main
+    // included, so there is no second scope to footnote. A segment shows its
+    // own choice and count on the bar; a line appearing above the bar on click
+    // pushed it out from under the pointer that had just pressed it.
     const start = source.indexOf("const scopeText =");
     expect(start).toBeGreaterThan(-1);
     const region = source.slice(start, start + 320);
-    expect(region).toContain("hasQuery");
-    expect(region).toContain("state tabs ignore search");
+    expect(region).toMatch(/showScope && \(hasQuery \|\| hasFacetFiltersActive\)/);
+    expect(region).not.toContain("state tabs ignore search");
   });
 
   it("hands the bar the scope and the filter identity as separate parts", () => {
@@ -93,7 +89,7 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
   });
 
   it("gates the scope text on showScope and falls back through the drag reason", () => {
-    expect(source).toMatch(/scopeText\s*=\s*showScope\s*\?/);
+    expect(source).toMatch(/scopeText\s*=\s*showScope\s*&&/);
     // The reorder note is what is left when there is nothing else to say —
     // it is a standing explanation, not news, so it no longer outranks the
     // scope and the filter identities by consuming the line alongside them.
@@ -131,28 +127,34 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
     expect(modelHookSource).toMatch(
       /const nonMainWorktrees = useMemo\(\s*\(\) =>\s*deferredWorktrees\.filter\(\(w\) => w\.id !== mainWorktree\?\.id\)/
     );
-    // quick-state counts, chip counts, the main card aggregate, and the list.
-    // "All" is the number the user saw read 0 above a visible worktree, so tie
-    // it to the shared array directly — iterating it is not enough, the old
-    // code iterated too and then skipped the worktree it had already pinned.
-    expect(modelHookSource).toMatch(/all: nonMainWorktrees\.length/);
-    expect(modelHookSource).toMatch(/for \(const w of nonMainWorktrees\)/);
+    // The quick-state bar sits over every card it filters, main included, so
+    // its counts describe the narrowed set the cards come from: every worktree
+    // the search and facets leave, with no exclusion the list lacks. "All" is
+    // the number the user saw read 0 above a visible worktree, so tie it to
+    // that set directly — iterating it is not enough, the old code iterated
+    // too and then skipped the worktree it had already pinned.
+    expect(modelHookSource).toMatch(
+      /const narrowedWorktrees = isNarrowed\s*\?\s*deferredWorktrees\.filter\(/
+    );
+    expect(modelHookSource).toMatch(/all: narrowedWorktrees\.length/);
+    expect(modelHookSource).toMatch(/for \(const w of narrowedWorktrees\)/);
     // Chip counts read a population derived from the same shared array but
     // deliberately WIDER: the main worktree is not a list row yet is still
     // facet-filtered, so excluding it made every facet only it satisfies read
     // zero — and a zero count now disables the chip. The rule is that the
     // counted set is a superset of the rendered set, never a subset.
-    // Main is added because it is facet-filtered; quick-state is applied to the
-    // rest because the rows are, so a chip cannot promise matches the quick
-    // state has already excluded.
+    // Main is added because it is facet-filtered; quick-state is applied to it
+    // and the rest because the cards are, so a chip cannot promise matches the
+    // quick state has already excluded.
     expect(modelHookSource).toMatch(/const countedWorktrees = useMemo\(/);
-    expect(modelHookSource).toMatch(/mainWorktree \? \[mainWorktree, \.\.\.eligible\] : eligible/);
+    expect(modelHookSource).toMatch(
+      /mainEligible && mainWorktree \? \[mainWorktree, \.\.\.eligible\] : eligible/
+    );
     expect(modelHookSource).toMatch(
       /const eligible =\s*quickStateFilter === "all"\s*\?\s*nonMainWorktrees\s*:\s*nonMainWorktrees\.filter\(/
     );
     expect(modelHookSource).toMatch(/matchesQuickStateFilter\(quickStateFilter, meta\)/);
     expect(modelHookSource).toMatch(/computeChipCounts\(\s*countedWorktrees,/);
-    expect(modelHookSource).toMatch(/const nonMainCount = nonMainWorktrees\.length;/);
     expect(rowModelSource).toMatch(/const filtered = nonMainWorktrees\.filter\(/);
     // No second, branch-derived exclusion anywhere in the sidebar: neither the
     // removed helper nor a fresh hardcoded list of "integration" branch names.
@@ -389,14 +391,14 @@ describe("Worktrees sidebar control zone — issue #11991", () => {
     headerRow = shared.match(/SIDEBAR_HEADER_ROW = "([^"]*)"/)?.[1] ?? "";
   });
 
-  it("carries exactly one horizontal rule, at the bottom of the whole zone", () => {
+  it("draws the header's rule only when no control zone renders below it", () => {
     // The header used to draw a rule and the rail drew another, putting two
     // hairlines inside the first 90px of the sidebar with the list's own
-    // dividers immediately below. Whichever row is last owns the rule: the
-    // rail when it renders, the header when it does not.
+    // dividers immediately below. The header owns a rule only when it is the
+    // last row of the zone; otherwise the rail below it carries one.
     const header = rowClasses(sidebar, "group/header");
     expect(header).not.toMatch(/(?:^|\s)border-b(?:\s|$)/);
-    expect(sidebar).toMatch(/!hasNonMainWorktrees && "border-b border-divider"/);
+    expect(sidebar).toMatch(/!showControlZone && "border-b border-divider"/);
 
     const rail = rowClasses(searchBar, RAIL_MARKER);
     expect(rail).toMatch(/\bborder-b\b/);
@@ -423,7 +425,7 @@ describe("Worktrees sidebar control zone — issue #11991", () => {
     expect(headerRow).toMatch(/(?:^|\s)h-\d+(?:\s|$)/);
     expect(headerRow).not.toMatch(/\bpy-/);
 
-    const worktreeBranches = sidebar.match(/cn\(\s*SIDEBAR_HEADER_ROW\b/g) ?? [];
+    const worktreeBranches = sidebar.match(/className=\{(?:cn\(\s*)?SIDEBAR_HEADER_ROW\b/g) ?? [];
     expect(worktreeBranches.length).toBeGreaterThanOrEqual(3);
     expect(workspaceSidebar).toMatch(/cn\(\s*SIDEBAR_HEADER_ROW\b/);
 
@@ -669,7 +671,7 @@ describe("SidebarContent initial loading skeleton — issues #7215, #8804", () =
     // changes size when worktrees finish loading and the list jumps (#10318).
     // Both draw the shared sidebar header row, whose height is fixed in one
     // place, so neither can size itself differently from the other.
-    expect(branch).toMatch(/cn\(\s*SIDEBAR_HEADER_ROW\b/);
+    expect(branch).toMatch(/className=\{(?:cn\(\s*)?SIDEBAR_HEADER_ROW\b/);
     const groupIdx = source.indexOf("group/header");
     const loadedRow = source.slice(source.lastIndexOf("<div", groupIdx), groupIdx);
     expect(loadedRow).toMatch(/cn\(\s*SIDEBAR_HEADER_ROW\b/);
@@ -696,7 +698,11 @@ describe("SidebarContent initial loading skeleton — issues #7215, #8804", () =
     const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
     const branch = source.slice(branchStart, branchEnd);
     expect(branch).toContain("WORKTREE_SKELETON_CARDS.map");
-    expect(branch).not.toContain("border-b border-border-default");
+    // The cards, not the control zone's placeholder above them, which keeps
+    // the zone's own bottom edges.
+    const cardsStart = branch.indexOf("WORKTREE_SKELETON_CARDS.map");
+    const cards = branch.slice(cardsStart, branch.indexOf("</Skeleton>", cardsStart));
+    expect(cards).not.toMatch(/\bborder-[btlr]?\b/);
   });
 
   it("does not measure the skeleton container with useResizeObserverRaf — #8804", () => {
@@ -739,8 +745,9 @@ describe("SidebarContent workspace error banner — issue #8394", () => {
     expect(source).not.toMatch(/if \(error\) \{\s*return/);
   });
 
-  it("renders InlineStatusBanner with severity=warning, role=status, ariaLive=polite", () => {
-    expect(source).toContain('severity="warning"');
+  it("renders InlineStatusBanner with severity=error, role=status, ariaLive=polite", () => {
+    // Error, not warning: it shows only once recovery has failed and settled.
+    expect(source).toContain('severity="error"');
     expect(source).toContain('role="status"');
     expect(source).toContain('ariaLive="polite"');
   });
@@ -940,9 +947,14 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
       expect(source).toMatch(/tabIndex:\s*_tabIndex/);
     });
 
-    it("exposes a stable DOM id via getWorktreeSidebarRowId for aria-activedescendant", () => {
-      expect(source).toContain("getWorktreeSidebarRowId");
-      expect(source).toContain("id={getWorktreeSidebarRowId(worktreeId)}");
+    it("leaves the aria-activedescendant id to the card's select button", async () => {
+      // One element per id: the card's select button carries it, so the
+      // row wrapper must not carry a duplicate.
+      expect(source).not.toContain("id={getWorktreeSidebarRowId(");
+      const cardSource = await fs.readFile(WORKTREE_CARD_PATH, "utf-8");
+      const overlay =
+        cardSource.match(/<button\b[^>]*\bdata-card-select-overlay=""[^>]*>/)?.[0] ?? "";
+      expect(overlay).toContain("id={getWorktreeSidebarRowId(worktree.id)}");
     });
   });
 
@@ -957,7 +969,7 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
     });
 
     it("keeps outline-hidden on the inner click-target button to preserve forced-colors UA outline (#8094)", () => {
-      expect(source).toMatch(/"absolute inset-0 z-0 outline-hidden"/);
+      expect(source).toMatch(/"row-select-target absolute inset-0 z-0 outline-hidden"/);
     });
 
     it("does not paint a duplicate accent focus ring on the inner button — card-level :has(> button:focus-visible) ring is canonical (#8094)", () => {
@@ -1046,7 +1058,10 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
 
     it("sets a single tab stop on the grid container (not on individual rows)", () => {
       // aria-activedescendant pattern: container holds tabIndex=0, rows stay -1.
-      expect(source).toMatch(/role="grid"[\s\S]{0,300}tabIndex=\{0\}/);
+      // No rows, no stop: an empty grid would take focus with nothing to show.
+      expect(source).toMatch(
+        /role="grid"[\s\S]{0,400}tabIndex=\{keyboardItems\.length > 0 \? 0 : -1\}/
+      );
     });
 
     it("passes overscan + skipAnimationFrameInResizeObserver to Virtuoso", () => {
@@ -1080,10 +1095,11 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
       expect(staticSource).toContain('role="gridcell"');
     });
 
-    it("applies the stable aria-activedescendant id to StaticWorktreeRow", async () => {
+    it("leaves StaticWorktreeRow without a duplicate of the select button's id", async () => {
+      // The card inside it carries the aria-activedescendant id on its select
+      // button; a second element with that id would make the target ambiguous.
       const staticSource = await fs.readFile(STATIC_ROW_PATH, "utf-8");
-      expect(staticSource).toContain("getWorktreeSidebarRowId");
-      expect(staticSource).toContain("id={getWorktreeSidebarRowId(worktreeId)}");
+      expect(staticSource).not.toContain("id={getWorktreeSidebarRowId(");
     });
   });
 
@@ -1446,9 +1462,20 @@ describe("SidebarContent header reveal — issue #6964", () => {
     source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
   });
 
-  it("uses invisible + group-*:visible to remove hidden buttons from the tab order", () => {
-    expect(source).toMatch(/\binvisible\b[^"']*group-hover\/header:visible/);
-    expect(source).toMatch(/\binvisible\b[^"']*group-focus-within\/header:visible/);
+  // The reveal's own class string, anchored on its hover rule.
+  function revealClasses(src: string): string | undefined {
+    return src.match(/"([^"]*group-hover\/header:opacity-100[^"]*)"/)?.[1];
+  }
+
+  it("fades the hidden buttons rather than hiding them, so Tab still reaches them", () => {
+    // `visibility: hidden` took them out of the tab order, so focus-within
+    // could never reveal them and a keyboard user tabbing in never met them.
+    const reveal = revealClasses(source);
+    expect(reveal).toBeTruthy();
+    expect(reveal).not.toMatch(/\binvisible\b/);
+    expect(reveal).toMatch(/(?:^|\s)opacity-0(?:\s|$)/);
+    expect(reveal).toContain("group-focus-within/header:opacity-100");
+    expect(reveal).toContain("group-focus-within/header:pointer-events-auto");
   });
 
   // Slice the header region so assertions about the four header icon buttons
@@ -1462,20 +1489,20 @@ describe("SidebarContent header reveal — issue #6964", () => {
     return src.slice(start, end);
   }
 
-  it("builds all four header actions from the shared ghost icon button — issue #7602", () => {
+  it("builds all five header actions from the shared ghost icon button — issue #7602", () => {
     // The Button primitive owns the focus ring, hover and press for every one
-    // of them, so none of the four can drift into its own treatment.
+    // of them, so none of the five can drift into its own treatment.
     const header = headerSlice(source);
     const buttons = header.match(/<Button\s+variant="ghost"\s+size="icon-xs"/g) ?? [];
-    expect(buttons).toHaveLength(4);
+    expect(buttons).toHaveLength(5);
     expect(header).not.toMatch(/<button\b/);
     expect(header).not.toMatch(/focus-visible:outline-accent-primary/);
   });
 
-  it("gives the always-visible create button the same treatment as its revealed siblings", () => {
+  it("gives the always-visible buttons the same treatment as their revealed siblings", () => {
     // Visibility is the cluster's only hierarchy: the three secondary actions
-    // are hidden until the header is hovered or focused, and create is not.
-    // Once shown, all four read as one family.
+    // are hidden until the header is hovered or focused, and View options and
+    // create are not. Once shown, all five read as one family.
     const header = headerSlice(source);
     expect(header).not.toMatch(/text-daintree-text\//);
     // The buttons' own classes: the title row also holds non-action content
@@ -1483,25 +1510,25 @@ describe("SidebarContent header reveal — issue #6964", () => {
     const classNames = [
       ...header.matchAll(/<Button\b(?:(?!<\/Button)[\s\S])*?className=\{([^}]*)\}/g),
     ].map((m) => m[1] ?? "");
-    expect(classNames).toHaveLength(4);
+    expect(classNames).toHaveLength(5);
     expect(classNames.every((cls) => cls.includes("SIDEBAR_HEADER_ACTION"))).toBe(true);
   });
 
   it("keeps the reveal's fade under reduced motion", () => {
-    // The reveal is opacity and visibility only — not motion — so it must not
-    // be switched off under reduced motion.
-    const reveal = source.match(/className="([^"]*group-hover\/header:visible[^"]*)"/)?.[1];
+    // The reveal is opacity only — not motion — so it must not be switched
+    // off under reduced motion.
+    const reveal = revealClasses(source);
     expect(reveal).toBeTruthy();
-    expect(reveal).toMatch(/transition-\[opacity,visibility\]/);
+    expect(reveal).toMatch(/(?:^|\s)transition-opacity(?:\s|$)/);
     expect(reveal).not.toMatch(/motion-reduce:/);
   });
 
   it("keeps the cluster on screen, and clickable, while the refresh icon is turning", () => {
     // Keyed off SpinningIcon's own data-spinning rather than isRefreshing, so
     // the cluster fades back only after the finishing turn, not mid-rotation.
-    const reveal = source.match(/className="([^"]*group-hover\/header:visible[^"]*)"/)?.[1];
+    const reveal = revealClasses(source);
     expect(reveal).toBeTruthy();
-    for (const state of ["visible", "opacity-100", "pointer-events-auto"]) {
+    for (const state of ["opacity-100", "pointer-events-auto"]) {
       expect(reveal).toContain(`has-[[data-spinning]]:${state}`);
     }
     expect(reveal).not.toMatch(/isRefreshing/);
@@ -1955,8 +1982,6 @@ describe("SidebarContent clock reads under React Compiler (#14351)", () => {
     const modelHookSource = await fs.readFile(MODEL_HOOK_PATH, "utf-8");
     expect(source).toMatch(/now - reconnectingAt >= RECONNECT_ESCALATE_MS/);
     expect(source).toMatch(/needsReconnectRetry\([^)]*\}, now\)/);
-    expect(modelHookSource).toMatch(
-      /mainWorktree\.id === activeWorktreeId,\s*devServerSessions,\s*now\s*\)/
-    );
+    expect(modelHookSource).toMatch(/w\.id === activeWorktreeId,\s*devServerSessions,\s*now\s*\)/);
   });
 });

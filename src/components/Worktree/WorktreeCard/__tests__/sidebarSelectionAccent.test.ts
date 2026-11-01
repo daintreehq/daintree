@@ -7,9 +7,9 @@
  * and asserts the ORDER and SHAPE of the accent rules, not their exact values.
  *
  * The rule being defended: an active row shows a full-strength accent edge, but
- * while a control inside it is drawing its own accent focus ring, that edge must
- * recede — two full-strength accent shapes in one frame leave neither reading as
- * the anchor.
+ * while any control in the sidebar is drawing its own accent focus ring, that
+ * edge must recede to a neutral ink — two full-strength accent shapes in one
+ * frame leave neither reading as the anchor.
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
@@ -47,44 +47,58 @@ function blockAt(offset: number): string {
   return CSS.slice(open + 1, close);
 }
 
+// The receded edge is scoped to the whole sidebar: a ring on any of its
+// controls is a second accent in front of the user, not only one inside the row.
+const FOCUSED_ACTIVE =
+  /\.sidebar-root:has\(:focus-visible[^{]*?\)\s+\.sidebar-worktree-card\[data-active="true"\](?::not\(\[data-drop-target="true"\]\))?\s*\{/;
+
+/** Every `inset Xpx 0 0 <colour>` edge in a declaration block. */
+function insetEdges(block: string): { x: number; colour: string }[] {
+  return [...block.matchAll(/inset\s+(-?\d+)px\s+0\s+0\s+([^,;]+)/g)].map((m) => ({
+    x: Number(m[1]),
+    colour: m[2]!.trim(),
+  }));
+}
+
 describe("sidebar selection accent", () => {
-  it("dims the active row's accent edge while a control inside it owns the focus ring", () => {
-    const offsets = ruleOffsets(
-      /\.sidebar-worktree-card\[data-active="true"\](?::not\(\[data-drop-target="true"\]\))?:has\(:focus-visible\)/
-    );
+  it("recedes the active row's accent edge while a sidebar control owns the focus ring", () => {
+    const offsets = ruleOffsets(FOCUSED_ACTIVE);
     expect(
       offsets.length,
-      "expected a rule scoping the active card's edge to the case where a descendant is focus-visible"
+      "expected a rule scoping the active card's edge to the case where a sidebar control is focus-visible"
     ).toBeGreaterThan(0);
 
     for (const offset of offsets) {
-      const block = blockAt(offset);
-      expect(
-        /color-mix\([^)]*--theme-accent-primary/.test(block),
-        "the focused-descendant rule must use a dimmed (color-mixed) accent, not the full-strength token"
-      ).toBe(true);
+      const edges = insetEdges(blockAt(offset));
+      expect(edges.length, "the focused rule must still draw a selection edge").toBeGreaterThan(0);
+      for (const { colour } of edges) {
+        expect(
+          colour.includes("--theme-accent-primary"),
+          `the focused rule must recede to a neutral edge, not the accent (got ${colour})`
+        ).toBe(false);
+      }
     }
   });
 
-  it("orders the dimmed rule after the full-strength one so it actually wins", () => {
+  it("orders the receded rule after the full-strength one so it actually wins", () => {
     // Same specificity would be a coin toss decided by source order, and this
     // file is unlayered — so order is the whole mechanism.
     const base = ruleOffsets(/\.sidebar-worktree-card\[data-active="true"\]\s*\{/);
-    const focused = ruleOffsets(
-      /\.sidebar-worktree-card\[data-active="true"\](?::not\(\[data-drop-target="true"\]\))?:has\(:focus-visible\)/
-    );
+    const focused = ruleOffsets(FOCUSED_ACTIVE);
     expect(base.length).toBeGreaterThan(0);
     expect(focused.length).toBeGreaterThan(0);
     expect(
       Math.min(...focused),
-      "the focused-descendant rule must come after the base active-row rule"
+      "the focused rule must come after the base active-row rule"
     ).toBeGreaterThan(Math.min(...base));
   });
 
   it("keeps the selection marker on the right edge in every mode, including forced colors", () => {
     // #9711 round 3, all themes. A left-edge fallback put the marker on the
     // opposite side for exactly the high-contrast users least able to absorb a
-    // second, different selection signal.
+    // second, different selection signal. The keyboard cursor's neutral
+    // `selection-outline` edge is the one mark allowed on the left: it is the
+    // cursor, not the selection.
     const activeRules = ruleOffsets(/\.sidebar-worktree-card\[data-active="true"\]/).map(blockAt);
     expect(activeRules.length).toBeGreaterThan(0);
     for (const block of activeRules) {
@@ -92,13 +106,11 @@ describe("sidebar selection accent", () => {
         /border-left\s*:/.test(block),
         "no active-row rule may mark selection on the left edge"
       ).toBe(false);
-      // The inset box-shadow form is a negative x-offset (right edge).
-      const inset = block.match(/inset\s+(-?\d+)px\s+0\s+0/);
-      if (inset) {
-        expect(
-          Number(inset[1]),
-          "the inset selection marker must sit on the right edge"
-        ).toBeLessThan(0);
+      for (const { x, colour } of insetEdges(block)) {
+        if (colour.includes("--theme-selection-outline")) continue;
+        expect(x, `the inset selection marker (${colour}) must sit on the right edge`).toBeLessThan(
+          0
+        );
       }
     }
   });

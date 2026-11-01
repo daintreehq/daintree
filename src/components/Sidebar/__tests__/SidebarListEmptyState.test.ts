@@ -23,9 +23,22 @@ function resolve(overrides: Partial<ResolveInput>): SidebarListEmpty | null {
 }
 
 describe("resolveSidebarListEmpty", () => {
-  it("is null while the list has rows, or when there are no other worktrees to list", () => {
+  it("is null while the list has rows, or when there are no other worktrees and main shows", () => {
     expect(resolve({ filteredCount: 2, quickStateFilter: "working" })).toBeNull();
-    expect(resolve({ hasNonMainWorktrees: false, quickStateFilter: "working" })).toBeNull();
+    expect(
+      resolve({ hasNonMainWorktrees: false, quickStateFilter: "working", mainVisible: true })
+    ).toBeNull();
+    expect(resolve({ hasNonMainWorktrees: false })).toBeNull();
+  });
+
+  it("still speaks with no other worktrees when a filter is what hid main", () => {
+    // The state tabs filter the main card too; without this the user is left
+    // with an empty list and no way back.
+    expect(resolve({ hasNonMainWorktrees: false, quickStateFilter: "working" })).toEqual({
+      kind: "drained",
+      bucket: "working",
+      mainInBucket: false,
+    });
   });
 
   it("reads a state tab with no search or facet as drained, whatever the counterfactual", () => {

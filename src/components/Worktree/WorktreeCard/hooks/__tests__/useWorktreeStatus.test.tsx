@@ -186,7 +186,7 @@ describe("useWorktreeStatus — lifecycle labels for resource phases", () => {
         completedAt: Date.now(),
       },
     });
-    expect(label).toBe("resource failed");
+    expect(label).toBe("Resource failed");
   });
 
   it("shows timed-out label for resource-status", () => {
@@ -198,7 +198,7 @@ describe("useWorktreeStatus — lifecycle labels for resource phases", () => {
         completedAt: Date.now(),
       },
     });
-    expect(label).toBe("resource status timed out");
+    expect(label).toBe("Resource status timed out");
   });
 });
 

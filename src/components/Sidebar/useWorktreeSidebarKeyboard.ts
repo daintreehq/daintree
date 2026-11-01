@@ -288,7 +288,7 @@ export function useWorktreeSidebarKeyboard({
       if (!row) return;
       for (const el of getAllRowFocusables(row)) el.tabIndex = -1;
     },
-    [findRowEl, getToolbarItemsForRow]
+    [findRowEl]
   );
 
   const enterListMode = useCallback(

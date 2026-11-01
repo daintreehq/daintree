@@ -294,7 +294,7 @@ describe("QuickStateFilterBar", () => {
         value="all"
         onChange={() => {}}
         counts={{ all: 9, working: 3, waiting: 1, finished: 2 }}
-        finishedUnseen={1}
+        finishedUnseen={2}
       />
     );
     const colorBySegment: [RegExp, string][] = [
@@ -311,7 +311,7 @@ describe("QuickStateFilterBar", () => {
     }
   });
 
-  it("draws Finished as unread only while it holds an unread hand-back, as Pilot does (#13234)", () => {
+  it("draws Finished as unread only while every finished worktree is unread (#13234)", () => {
     const finishedGlyphClass = (finishedUnseen: number) => {
       const { unmount } = renderBar(
         <QuickStateFilterBar
@@ -327,8 +327,11 @@ describe("QuickStateFilterBar", () => {
       return cls;
     };
     const seen = finishedGlyphClass(0);
-    const unseen = finishedGlyphClass(1);
+    const partlyUnseen = finishedGlyphClass(1);
+    const unseen = finishedGlyphClass(3);
     expect(seen).not.toBe(unseen);
+    // The count beside the disc must be honest: one unread of three keeps the ring.
+    expect(partlyUnseen).toBe(seen);
     expect(seen).toContain("text-text-secondary");
     expect(seen).not.toMatch(FADED);
   });
