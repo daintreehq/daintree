@@ -595,6 +595,15 @@ export class ScheduledRunRecorder {
     return this.store.get(runId);
   }
 
+  /**
+   * The latest occurrence the schedule had a run registered for, launched,
+   * refused or skipped, or null. It moves with that run's registration and
+   * outlives its pruning, so no occurrence at or before it runs again.
+   */
+  evaluationPoint(scheduleId: string): number | null {
+    return this.store.evaluationPoint(scheduleId);
+  }
+
   listByProject(projectId: string): ScheduledRun[] {
     return this.store.listByProject(projectId);
   }

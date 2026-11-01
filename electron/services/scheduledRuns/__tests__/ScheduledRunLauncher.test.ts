@@ -506,6 +506,26 @@ describe("launchScheduledRun", () => {
     expect(recorder.registerRefusedLaunch).not.toHaveBeenCalled();
   });
 
+  it("fires nothing for a scheduled occurrence of a schedule switched off since, but Run now runs it", async () => {
+    schedule = { ...schedule, enabled: false };
+    const dueAt = Date.UTC(2026, 10, 2, 9);
+    const scheduled = {
+      trigger: "scheduled",
+      dueAt,
+      occurrenceKey: new Date(dueAt).toISOString(),
+      coalesced: null,
+    } as const;
+
+    await expect(
+      launchScheduledRun({ projectId: "project-1", scheduleId: "schedule-1", origin: scheduled }, deps)
+    ).resolves.toEqual({ status: "not-found" });
+    expect(deps.launchInView).not.toHaveBeenCalled();
+    expect(recorder.registerRefusedLaunch).not.toHaveBeenCalled();
+    expect(hasPendingScheduledLaunch("project-1")).toBe(false);
+
+    await expect(run()).resolves.toMatchObject({ status: "started" });
+  });
+
   it("refuses to run when the history can't record it", async () => {
     deps.getRecorder = async () => null;
 

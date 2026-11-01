@@ -203,9 +203,9 @@ function declineReason(result: ActionDispatchResult): string {
  * the values the terminal starts with (see `scheduledRunAdmission.ts`), and a
  * launch refused before it spawns is recorded as a failed run with its reason.
  *
- * Every trigger goes through here: Run now today, the scheduler (#15979) with
- * its own origins. Each first meets the schedule's overlap policy and
- * precondition (#15980), one launch of a schedule at a time.
+ * Every trigger goes through here: Run now, and the scheduler (#15979) with
+ * `scheduled` and `catch-up` origins. Each first meets the schedule's overlap
+ * policy and precondition (#15980), one launch of a schedule at a time.
  */
 export function launchScheduledRun<View>(
   input: ScheduledRunLaunchInput,
@@ -235,6 +235,9 @@ async function launchInScheduleTurn<View>(
     return null;
   });
   if (!schedule) return { status: "not-found" };
+  // The scheduler decided on a schedule it read earlier: one switched off
+  // since fires nothing, and records nothing. Run now runs either way.
+  if (origin.trigger !== "run-now" && !schedule.enabled) return { status: "not-found" };
   // Removing a project removes its schedules and their history with them.
   const project = deps.getProject(projectId);
   if (!project) return { status: "not-found" };
