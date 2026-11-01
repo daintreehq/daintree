@@ -2703,7 +2703,9 @@ describe("useHostConnection", () => {
     expect(renders).toBe(before + 1);
     expect(result.current.hostName).toBe("Studio");
 
-    act(() => useHostConnectionStore.getState().bindHost("build-02", null));
-    expect(result.current).toEqual({ hostId: "build-02", hostName: "build-02" });
+    // Same name, so only the id's own subscription can carry the change.
+    act(() => useHostConnectionStore.getState().bindHost("build-02", "Studio"));
+    expect(renders).toBe(before + 2);
+    expect(result.current).toEqual({ hostId: "build-02", hostName: "Studio" });
   });
 });
