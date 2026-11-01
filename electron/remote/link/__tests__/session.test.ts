@@ -710,7 +710,8 @@ describe("LinkSession endpoint closes (#15881)", () => {
     expect(arrived).toEqual(["open:e2", "input", "send:commit", "close:e1"]);
   });
 
-  it.each<[string, (client: LinkSession) => void]>([
+  // The queued frame's own answer, when it has one, to wait for before the sessions close.
+  it.each<[string, (client: LinkSession) => unknown, string?]>([
     [
       "terminal input",
       (client) =>
@@ -729,13 +730,22 @@ describe("LinkSession endpoint closes (#15881)", () => {
           body: { endpointId: "e1", message: { id: 1 } },
         }),
     ],
-    ["an invoke", (client) => void client.invoke("e1", "commit", [])],
-    ["a call naming it", (client) => void client.call("m", { endpointId: "e1" })],
+    ["an invoke", (client) => client.invoke("e1", "commit", [])],
+    ["a call naming it", (client) => client.call("m", { endpointId: "e1" })],
     [
-      "a call naming it among others",
-      (client) => void client.call("m", { endpointIds: ["e2", "e1"] }),
+      "a call naming it last of several",
+      (client) => client.call("m", { endpointIds: ["e2", "e1"] }),
     ],
-  ])("writes %s ahead of the endpoint's close", async (_kind, queue) => {
+    [
+      "a call naming it first of several",
+      (client) => client.call("m", { endpointIds: ["e2", "e1"] }),
+      "e2",
+    ],
+    [
+      "a call naming it beside another endpoint",
+      (client) => client.call("m", { endpointId: "e2", endpointIds: ["e1"] }),
+    ],
+  ])("writes %s ahead of the endpoint's close", async (_kind, queue, closes = "e1") => {
     const { host, client } = await pair();
     const arrived: string[] = [];
     const record = () => void arrived.push("frame");
@@ -751,15 +761,16 @@ describe("LinkSession endpoint closes (#15881)", () => {
     });
     host.on(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, () => arrived.push("close"));
 
-    queue(client);
+    const answered = queue(client);
     client.post({
       lane: Lane.CONTROL,
       kind: ControlKind.ENDPOINT_CLOSE,
-      body: { endpointId: "e1" },
+      body: { endpointId: closes },
     });
 
     await waitFor(() => arrived.length === 2);
     expect(arrived).toEqual(["frame", "close"]);
+    await answered;
   });
 
   it("keeps a reopen under the same id behind the close it follows", async () => {

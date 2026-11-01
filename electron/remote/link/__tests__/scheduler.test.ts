@@ -270,6 +270,8 @@ describe("LaneScheduler endpoint closes (#15881)", () => {
     // Served but never written, as a session that closed mid-flush leaves it.
     const served = s.next()!;
     s.clear();
+    expect(s.isEmpty).toBe(true);
+    expect(s.queuedBytes(Lane.CONTROL)).toBe(0);
     s.written(served);
     s.enqueue(tagged(Lane.CONTROL, 3), undefined, { closes: "e1" });
     expect(drain(s)).toEqual([3]);
