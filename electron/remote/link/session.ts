@@ -112,6 +112,8 @@ interface Pending {
   resolve: (envelope: IpcEnvelope) => void;
   /** The request frame reached the socket, so the peer may have acted on it. */
   written: boolean;
+  /** Its caller has its answer; a frame still queued for it is never sent. */
+  settled: boolean;
 }
 
 type PendingKind = typeof RpcKind.INVOKE | typeof RpcKind.CALL | typeof RpcKind.REVERSE_REQUEST;
@@ -606,13 +608,14 @@ export class LinkSession {
         );
       const settle = (envelope: IpcEnvelope) => {
         if (table.get(requestId) !== entry) return;
+        entry.settled = true;
         table.delete(requestId);
         this.pendingCount--;
         if (timer) clearTimeout(timer);
         signal?.removeEventListener("abort", onAbort);
         resolve(envelope);
       };
-      const entry: Pending = { kind, resolve: settle, written: false };
+      const entry: Pending = { kind, resolve: settle, written: false, settled: false };
       table.set(requestId, entry);
       this.pendingCount++;
       if (timeoutMs > 0) {
@@ -673,13 +676,14 @@ export class LinkSession {
   private flush(): void {
     if (this.state === "closed" || this.waitingForDrain) return;
     for (let frame = this.scheduler.next(); frame; frame = this.scheduler.next()) {
+      const request = frame.lane === Lane.RPC ? this.requestFrames.get(frame) : undefined;
+      // Timed out or aborted while queued: its caller has moved on, and the
+      // peer running it now would act on a call nobody is waiting for.
+      if (request?.settled) continue;
       const written = this.socket.write(encodeFrame(frame, this.maxFrameBytes));
       // A false return still took the bytes; only frames left in the scheduler
       // are known never to have reached the peer.
-      if (frame.lane === Lane.RPC) {
-        const request = this.requestFrames.get(frame);
-        if (request) request.written = true;
-      }
+      if (request) request.written = true;
       if (!written) {
         this.waitingForDrain = true;
         break;

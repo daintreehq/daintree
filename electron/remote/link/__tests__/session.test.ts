@@ -170,6 +170,68 @@ describe("LinkSession request/response", () => {
     });
   });
 
+  describe("a request settled while its frame waits behind backpressure (#15882)", () => {
+    /**
+     * A client whose peer is a paused raw socket, with one frame larger than
+     * any socket buffer already handed to the stream: until the peer reads,
+     * every later frame stays in the scheduler.
+     */
+    async function stalledClient() {
+      const { a, b } = await socketPair(dir);
+      const client = new LinkSession(a, { role: "client", pingIntervalMs: 0, idleTimeoutMs: 0 });
+      sessions.push(client);
+      client.open();
+      b.pause();
+      client.post({
+        lane: Lane.EVENTS,
+        kind: EventKind.EVENT,
+        body: { endpointId: null, channel: "fill", args: ["x".repeat(4 * 1024 * 1024)] },
+      });
+      await waitFor(() => a.writableNeedDrain);
+      return { client, b };
+    }
+
+    /** Resume the peer and collect every CALL it receives up to a sentinel posted behind them. */
+    async function callsReceived(client: LinkSession, b: net.Socket): Promise<string[]> {
+      const frames = recordFrames(b);
+      client.post({
+        lane: Lane.EVENTS,
+        kind: EventKind.EVENT,
+        body: { endpointId: null, channel: "sentinel", args: [] },
+      });
+      b.resume();
+      const isSentinel = (f: LinkFrame) =>
+        f.lane === Lane.EVENTS &&
+        (frameToMessage(f).body as { channel: string }).channel === "sentinel";
+      await waitFor(() => frames.some(isSentinel));
+      return frames
+        .filter((f) => f.lane === Lane.RPC && f.kind === RpcKind.CALL)
+        .map((f) => (frameToMessage(f).body as { method: string }).method);
+    }
+
+    it("never sends a request that timed out before it was written", async () => {
+      const { client, b } = await stalledClient();
+      const timedOut = client.call("late", null, { timeoutMs: 20 });
+      expect(client.queuedBytes(Lane.RPC)).toBeGreaterThan(0);
+      await expect(timedOut).rejects.toMatchObject({ code: expect.any(String) });
+      const kept = client.call("kept", null);
+      kept.catch(() => {});
+      expect(await callsReceived(client, b)).toEqual(["kept"]);
+    });
+
+    it("never sends a request that was aborted before it was written", async () => {
+      const { client, b } = await stalledClient();
+      const ac = new AbortController();
+      const aborted = client.call("late", null, { signal: ac.signal });
+      expect(client.queuedBytes(Lane.RPC)).toBeGreaterThan(0);
+      ac.abort();
+      await expect(aborted).rejects.toMatchObject({ code: expect.any(String) });
+      const kept = client.call("kept", null);
+      kept.catch(() => {});
+      expect(await callsReceived(client, b)).toEqual(["kept"]);
+    });
+  });
+
   it("refuses to send a message the peer would reject, without ending the session", async () => {
     const { client } = await pair();
     expect(() =>
