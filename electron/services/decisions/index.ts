@@ -64,8 +64,9 @@ export function startDecisionsIfEnabled(): Promise<void> {
 
 /**
  * Turns Decisions on or off at runtime: saves the switch, keeping every other
- * field, then starts or stops the service to match what was saved. A request
- * to turn it on that the sanitiser refuses (a damaged relay record) saves off.
+ * field as it reads (a damaged relay field reads as not set up, so turning on
+ * over one starts afresh), then starts or stops the service to match what was
+ * saved.
  */
 export function setDecisionsEnabled(enabled: boolean): Promise<DecisionsStatus> {
   return serialize(async () => {

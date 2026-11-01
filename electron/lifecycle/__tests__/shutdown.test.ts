@@ -117,6 +117,14 @@ const deviceAnswerMock = vi.hoisted(() => ({
 
 vi.mock("../../services/deviceAnswer/index.js", () => deviceAnswerMock);
 
+// Shutdown must never import Decisions itself: only the load the serviceRefs
+// mock hands back is stopped. A real import of the entry module would count here.
+const decisionsEntryEvaluated = vi.hoisted(() => ({ count: 0 }));
+vi.mock("../../services/decisions/index.js", () => {
+  decisionsEntryEvaluated.count += 1;
+  return { stopDecisions: vi.fn() };
+});
+
 // The shutdown chain reaches this module through a dynamic import, so the export
 // is exposed behind a getter that can be armed to throw. Arming it makes the
 // chain's `const { drainRateLimitQueues } = await import(...)` statement itself
@@ -259,6 +267,7 @@ const serviceRefsMock = vi.hoisted(() => {
   let agentNotification: { dispose: () => void } | null = null;
   let autoUpdater: { dispose: () => void } | null = null;
   let windowsStoreNotifier: { dispose: () => void } | null = null;
+  let decisions: Promise<{ stopDecisions: () => Promise<void> }> | null = null;
   return {
     setInitialState: (state: {
       ccr?: typeof ccr;
@@ -268,6 +277,7 @@ const serviceRefsMock = vi.hoisted(() => {
       agentNotification?: typeof agentNotification;
       autoUpdater?: typeof autoUpdater;
       windowsStoreNotifier?: typeof windowsStoreNotifier;
+      decisions?: typeof decisions;
     }) => {
       ccr = state.ccr ?? null;
       resourceProfile = state.resourceProfile ?? null;
@@ -276,6 +286,7 @@ const serviceRefsMock = vi.hoisted(() => {
       agentNotification = state.agentNotification ?? null;
       autoUpdater = state.autoUpdater ?? null;
       windowsStoreNotifier = state.windowsStoreNotifier ?? null;
+      decisions = state.decisions ?? null;
     },
     getCcrConfigService: vi.fn(() => ccr),
     setCcrConfigService: vi.fn((v: typeof ccr) => {
@@ -306,6 +317,7 @@ const serviceRefsMock = vi.hoisted(() => {
     setWindowsStoreNotifierServiceRef: vi.fn((v: typeof windowsStoreNotifier) => {
       windowsStoreNotifier = v;
     }),
+    sealDecisionsModule: vi.fn(() => decisions),
   };
 });
 
@@ -465,6 +477,89 @@ describe("registerShutdownHandler", () => {
     // Paired devices stop answering before any terminal is enumerated or killed.
     expect(order[1]).toBe("device-answer-stop");
     expect(order).toContain("pty-dispose");
+  });
+
+  it("imports no Decisions module at quit when nothing loaded it", async () => {
+    const { beforeQuitCb } = await setup();
+    const exited = new Promise<void>((resolve) => {
+      appMock.exit.mockImplementationOnce(() => resolve());
+    });
+
+    await beforeQuitCb(makeEvent());
+    await exited;
+
+    expect(serviceRefsMock.sealDecisionsModule).toHaveBeenCalledOnce();
+    expect(decisionsEntryEvaluated.count).toBe(0);
+    expect(appMock.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("seals the Decisions loader in the same step that halts deferred startup", async () => {
+    const order: string[] = [];
+    deferredInitQueueMock.haltDeferredQueue.mockImplementationOnce(() => {
+      order.push("halt");
+    });
+    serviceRefsMock.sealDecisionsModule.mockImplementationOnce(() => {
+      order.push("seal");
+      return null;
+    });
+    const { beforeQuitCb } = await setup();
+    const exited = new Promise<void>((resolve) => {
+      appMock.exit.mockImplementationOnce(() => resolve());
+    });
+
+    await beforeQuitCb(makeEvent());
+    await exited;
+
+    expect(order).toEqual(["halt", "seal"]);
+  });
+
+  it("stops a Decisions load already under way before any PTY is enumerated", async () => {
+    const order: string[] = [];
+    const stopDecisions = vi.fn(async () => {
+      order.push("decisions-stop");
+    });
+    serviceRefsMock.setInitialState({ decisions: Promise.resolve({ stopDecisions }) });
+    const ptyClient = {
+      gracefulKillByProject: vi.fn(async () => []),
+      getPartialGracefulKillResults: vi.fn(() => []),
+      getAllTerminalsAsync: vi.fn(async () => {
+        order.push("pty-enumerate");
+        return [];
+      }),
+      finishAgentSessionCaptures: vi.fn(async () => ({ complete: true, pending: 0 })),
+      dispose: vi.fn(),
+    };
+    const { beforeQuitCb } = await setup({ getPtyClient: vi.fn(() => ptyClient as never) });
+    const exited = new Promise<void>((resolve) => {
+      appMock.exit.mockImplementationOnce(() => resolve());
+    });
+
+    await beforeQuitCb(makeEvent());
+    await exited;
+
+    expect(stopDecisions).toHaveBeenCalledOnce();
+    expect(order.indexOf("decisions-stop")).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf("decisions-stop")).toBeLessThan(order.indexOf("pty-enumerate"));
+    expect(decisionsEntryEvaluated.count).toBe(0);
+  });
+
+  it("finishes a clean shutdown when the Decisions load or stop fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const failedLoad = Promise.reject(new Error("chunk missing"));
+    // Handled here too, so the rejection can't be reported before shutdown awaits it.
+    failedLoad.catch(() => {});
+    serviceRefsMock.setInitialState({ decisions: failedLoad });
+    const { beforeQuitCb } = await setup();
+    const exited = new Promise<void>((resolve) => {
+      appMock.exit.mockImplementationOnce(() => resolve());
+    });
+
+    await beforeQuitCb(makeEvent());
+    await exited;
+
+    expect(appMock.exit).toHaveBeenCalledWith(0);
+    expect(warn).toHaveBeenCalledWith("[MAIN] Decisions stop failed:", expect.any(Error));
+    warn.mockRestore();
   });
 
   it("finishes a clean shutdown when stopping Remote Hosts fails", async () => {

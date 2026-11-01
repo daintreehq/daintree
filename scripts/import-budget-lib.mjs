@@ -212,6 +212,15 @@ export const FORBIDDEN_EAGER_PATTERNS = [
       file.includes("packages/svelte-source-model/") ||
       /node_modules\/@daintreehq\/svelte-source-model/.test(file),
   },
+  {
+    // Decisions costs nothing while off (#16001): its service and the libraries
+    // it binds load only through the dynamic import its boot task makes once
+    // the setting reads as on. Its IPC adapter lives in electron/ipc/handlers/.
+    label: "Decisions",
+    test: (file) =>
+      /(^|\/)electron\/services\/decisions\//.test(file) ||
+      /node_modules\/@daintreehq\/decisions-/.test(file),
+  },
 ];
 
 /**

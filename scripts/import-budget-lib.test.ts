@@ -648,6 +648,25 @@ describe("scanForbiddenModules", () => {
     ).toEqual([]);
   });
 
+  it("catches Decisions' service and libraries wherever they resolve, but not its IPC adapter", () => {
+    const found = scanForbiddenModules([
+      "electron/ipc/handlers/decisions.ts",
+      "electron/services/decisions/index.ts",
+      "electron/services/decisions/decisionsSettings.ts",
+      "node_modules/@daintreehq/decisions-client/dist/index.js",
+      "electron/node_modules/@daintreehq/decisions-protocol/dist/index.js",
+      "node_modules/@daintreehq/decisionsish/index.js",
+      "electron/services/decisionsLog.ts",
+    ]);
+
+    expect(found).toEqual([
+      { file: "electron/node_modules/@daintreehq/decisions-protocol/dist/index.js", label: "Decisions" },
+      { file: "electron/services/decisions/decisionsSettings.ts", label: "Decisions" },
+      { file: "electron/services/decisions/index.ts", label: "Decisions" },
+      { file: "node_modules/@daintreehq/decisions-client/dist/index.js", label: "Decisions" },
+    ]);
+  });
+
   it("passes an eager graph that reaches none of them", () => {
     // The builder's own main code is fine on the eager path — it is the heavy
     // dependencies behind its `await import()`s that must not be.
