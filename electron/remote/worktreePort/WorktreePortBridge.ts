@@ -237,6 +237,7 @@ export class WorktreePortClientRelay {
   private disposed = false;
   /** What the host was last told, as the host bridge assumes at each session's start. */
   private hostSeesPort = true;
+  private offWritable: (() => void) | null = null;
 
   constructor(options: WorktreePortClientRelayOptions) {
     this.opts = options;
@@ -261,11 +262,11 @@ export class WorktreePortClientRelay {
     port.onClose(() => {
       if (this.port !== port) return;
       this.port = null;
-      this.reportPort(false);
+      this.reportPort();
     });
     previous?.close();
     // Before the view holds its end, so the host resumes ahead of its first request.
-    this.reportPort(true);
+    this.reportPort();
   }
 
   attach(session: LinkSession): void {
@@ -284,13 +285,14 @@ export class WorktreePortClientRelay {
     ];
     this.hostSeesPort = true;
     this.opts.deliver();
-    if (this.port === null) this.reportPort(false);
+    this.reportPort();
   }
 
   detach(): void {
     if (!this.session) return;
     this.session = null;
     for (const cleanup of this.sessionCleanup.splice(0)) cleanup();
+    this.stopReportRetry();
     this.opts.close();
     // The view's port went with it; a late close event must not stand in for
     // the next session's delivery.
@@ -308,13 +310,27 @@ export class WorktreePortClientRelay {
     port?.close();
   }
 
-  private reportPort(open: boolean): void {
-    if (!this.session || this.hostSeesPort === open) return;
-    // A refused report leaves the host as it was: sending everything, or
-    // paused until this view's next request.
-    if (postWorktree(this.session, this.endpointId, { type: "view-port", open })) {
-      this.hostSeesPort = open;
+  /** Tell the host whether the view holds a port, when that differs from what it was last told. */
+  private reportPort(): void {
+    const session = this.session;
+    const open = this.port !== null;
+    if (!session || this.hostSeesPort === open) {
+      this.stopReportRetry();
+      return;
     }
+    if (postWorktree(session, this.endpointId, { type: "view-port", open })) {
+      this.hostSeesPort = open;
+      this.stopReportRetry();
+    } else if (!this.offWritable && session.isOpen) {
+      // A full lane refused it: a stranded resume would leave a live view
+      // without events, so try again as the link drains.
+      this.offWritable = session.onWritable(() => this.reportPort());
+    }
+  }
+
+  private stopReportRetry(): void {
+    this.offWritable?.();
+    this.offWritable = null;
   }
 
   private onRendererMessage(raw: unknown): void {

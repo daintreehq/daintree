@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Lane } from "../../link/frames.js";
 import { InteractiveKind } from "../../link/messages.js";
+import { DEFAULT_LANE_LIMITS } from "../../link/scheduler.js";
 import type { LinkSession } from "../../link/session.js";
 import {
   makeTempDir,
@@ -27,6 +28,9 @@ const PROJECT_ROOT = "/repos/project-a";
 
 const event = (type: string) => ({ type: "event", event: { type, worktree: { id: "w" } } });
 
+const VIEW_PORT_OPEN = { type: "view-port", open: true };
+const VIEW_PORT_CLOSED = { type: "view-port", open: false };
+
 const isViewPort = (open: boolean) => (message: unknown) =>
   (message as { type?: unknown; open?: unknown }).type === "view-port" &&
   (message as { open?: unknown }).open === open;
@@ -35,12 +39,12 @@ const isViewPort = (open: boolean) => (message: unknown) =>
 function tap(h: { hostSession(): LinkSession; clientSession(): LinkSession }) {
   const shellFrames: unknown[] = [];
   const hostHeard: unknown[] = [];
-  h.clientSession().on(Lane.INTERACTIVE, InteractiveKind.WORKTREE_PORT, (body) =>
-    shellFrames.push(body.message)
-  );
-  h.hostSession().on(Lane.INTERACTIVE, InteractiveKind.WORKTREE_PORT, (body) =>
-    hostHeard.push(body.message)
-  );
+  h.clientSession().on(Lane.INTERACTIVE, InteractiveKind.WORKTREE_PORT, (body) => {
+    if (body.endpointId === "ep-1") shellFrames.push(body.message);
+  });
+  h.hostSession().on(Lane.INTERACTIVE, InteractiveKind.WORKTREE_PORT, (body) => {
+    if (body.endpointId === "ep-1") hostHeard.push(body.message);
+  });
   return { shellFrames, hostHeard };
 }
 
@@ -101,14 +105,14 @@ async function setup(projectRoot: string | null = PROJECT_ROOT, mayDrive?: () =>
     closedViews: () => closedViews,
     /** Post the view a fresh port, as a cached view's reactivation does. */
     redeliver: deliver,
-    /** Make the view's next deliveries fail, as a refused broker post does. */
+    /** Deliver no port from now on, as when the view is gone or the broker refuses it. */
     failDelivery() {
       delivers = false;
     },
     hostSession: () => host!,
     clientSession: () => client!,
-    async connect() {
-      const pair = await openSessionPair(dir);
+    async connect(clientOptions: Parameters<typeof openSessionPair>[2] = {}) {
+      const pair = await openSessionPair(dir, {}, clientOptions);
       host = pair.host;
       client = pair.client;
       cleanups.push(() => {
@@ -268,13 +272,18 @@ describe("worktree port over the link", () => {
     expect(h.bridge.hasPort).toBe(true);
     expect(h.released()).toBe(0);
 
-    // Reactivation: the host resumes ahead of the view's first request.
+    // Reactivation: the resume is on the link before the view holds its end,
+    // so it goes ahead of the view's first request.
+    const posted = vi.spyOn(h.clientSession(), "post");
     h.redeliver();
+    expect(posted).toHaveBeenCalledWith(
+      expect.objectContaining({ body: { endpointId: "ep-1", message: VIEW_PORT_OPEN } })
+    );
     h.renderer().post({ id: "refetch", action: "get-all-states", payload: {} });
     await waitFor(() => h.workspace().received.length === 1);
     expect(t.hostHeard).toEqual([
-      { type: "view-port", open: false },
-      { type: "view-port", open: true },
+      VIEW_PORT_CLOSED,
+      VIEW_PORT_OPEN,
       { id: "refetch", action: "get-all-states", payload: {} },
     ]);
     h.workspace().post(event("worktree-update"));
@@ -282,23 +291,57 @@ describe("worktree port over the link", () => {
     expect(h.renderer().received).toEqual([event("worktree-update")]);
   });
 
-  it("resumes on the view's next request when its resume never reached the host", async () => {
+  it("retries a resume the full link refused, before the view asks for anything", async () => {
+    const h = await setup();
+    await h.connect({
+      laneLimits: {
+        ...DEFAULT_LANE_LIMITS,
+        [Lane.INTERACTIVE]: { ...DEFAULT_LANE_LIMITS[Lane.INTERACTIVE], maxFrames: 1 },
+      },
+    });
+    const t = tap(h);
+    h.renderer().close();
+    await waitFor(() => t.hostHeard.some(isViewPort(false)));
+
+    // Another endpoint's frame fills the lane, so the resume is refused.
+    expect(
+      h.clientSession().post({
+        lane: Lane.INTERACTIVE,
+        kind: InteractiveKind.WORKTREE_PORT,
+        body: { endpointId: "ep-other", message: { id: "x", action: "refresh" } },
+      })
+    ).not.toBe("refused");
+    h.redeliver();
+    await waitFor(() => t.hostHeard.some(isViewPort(true)));
+    h.workspace().post(event("worktree-tick"));
+    await waitFor(() => h.renderer().received.length === 1);
+    expect(h.renderer().received).toEqual([event("worktree-tick")]);
+    expect(t.hostHeard).toEqual([VIEW_PORT_CLOSED, VIEW_PORT_OPEN]);
+  });
+
+  it("takes the view's request as its resume when the resume itself was refused", async () => {
     const h = await setup();
     await h.connect();
     const t = tap(h);
     h.renderer().close();
     await waitFor(() => t.hostHeard.some(isViewPort(false)));
 
-    // A request with no resume ahead of it, as when the link refused the resume.
-    h.clientSession().post({
-      lane: Lane.INTERACTIVE,
-      kind: InteractiveKind.WORKTREE_PORT,
-      body: { endpointId: "ep-1", message: { id: "r", action: "refresh" } },
-    });
+    vi.spyOn(h.clientSession(), "post").mockImplementationOnce(() => "refused");
+    h.redeliver();
+    h.renderer().post({ id: "r", action: "refresh" });
     await waitFor(() => h.workspace().received.length === 1);
     h.workspace().post(event("worktree-tick"));
-    await waitFor(() => t.shellFrames.length === 1);
-    expect(t.shellFrames).toEqual([event("worktree-tick")]);
+    await waitFor(() => h.renderer().received.length === 1);
+    expect(h.renderer().received).toEqual([event("worktree-tick")]);
+
+    // The host already resumed, so no resume follows, and the next close pauses it again.
+    h.renderer().close();
+    await waitFor(() => t.hostHeard.length === 3);
+    expect(t.hostHeard).toEqual([
+      VIEW_PORT_CLOSED,
+      { id: "r", action: "refresh" },
+      VIEW_PORT_CLOSED,
+    ]);
   });
 
   it("starts every session sending events, whatever the last one was told", async () => {
@@ -332,21 +375,43 @@ describe("worktree port over the link", () => {
     expect(t.shellFrames).toEqual([{ id: "late", result: null }]);
   });
 
+  it("forgets the view's port when the link drops, even if its close never comes", async () => {
+    const h = await setup();
+    await h.connect();
+    const stuck = { postMessage() {}, onMessage() {}, onClose() {}, close: vi.fn() };
+    h.relay.setRendererPort(stuck);
+    await h.drop();
+    expect(stuck.close).toHaveBeenCalled();
+
+    h.failDelivery();
+    await h.connect();
+    const t = tap(h);
+    await waitFor(() => t.hostHeard.some(isViewPort(false)));
+  });
+
   it("keeps sending events to a view whose port was replaced", async () => {
     const h = await setup();
     await h.connect();
     const t = tap(h);
+    const closed = (peer: FakePeer) =>
+      new Promise<void>((resolve) => peer.port.onClose(() => resolve()));
 
+    const firstClosed = closed(h.renderer());
     h.redeliver();
+    const secondClosed = closed(h.renderer());
     h.redeliver();
+    await Promise.all([firstClosed, secondClosed]);
+
     h.workspace().post(event("worktree-update"));
     h.workspace().post({ id: "fence", result: null });
-    await waitFor(() => t.shellFrames.length === 2);
+    await waitFor(() => h.renderer().received.length === 2);
     expect(h.renderer().received).toEqual([
       event("worktree-update"),
       { id: "fence", result: null },
     ]);
-    expect(t.hostHeard).toEqual([]);
+    h.renderer().post({ id: "still-here", action: "refresh" });
+    await waitFor(() => h.workspace().received.length === 1);
+    expect(t.hostHeard).toEqual([{ id: "still-here", action: "refresh" }]);
   });
 
   it("answers at once when the workspace host is not connected", async () => {
