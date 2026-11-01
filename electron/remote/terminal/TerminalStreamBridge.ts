@@ -163,8 +163,8 @@ interface AckLedger {
   writtenTo: number;
   /** Where posted output still charged against the pty-host starts; null when none is. */
   chargedFrom: number | null;
-  /** Where each reset the renderer has not yet said it took was posted, oldest first. */
-  unconfirmedResets: number[];
+  /** Resets the renderer has not yet said it took: where each was posted, oldest first. */
+  unconfirmedResets: { at: number; incarnation: number; seq: number }[];
   /**
    * The latest reset, until the client shows it has applied it: where it was
    * posted and how much the client had acked by then. Output meanwhile is
@@ -919,7 +919,11 @@ export class TerminalStreamBridge {
     stream.resetReason = null;
     stream.sentSeq = held.boundary;
     const ledger = stream.ledger;
-    ledger.unconfirmedResets.push(ledger.posted);
+    ledger.unconfirmedResets.push({
+      at: ledger.posted,
+      incarnation: stream.incarnation,
+      seq: held.boundary,
+    });
     ledger.applying = { at: ledger.posted, acked: ledger.acked };
     return true;
   }
@@ -1030,11 +1034,7 @@ export class TerminalStreamBridge {
       const stream = this.streams.get(message.id);
       if (!stream) return;
       if (message.type === "ack") this.onAck(stream, message.bytes);
-      else if (stream.ledger.unconfirmedResets.length > 0) {
-        // Every ack the renderer sent before this one was for output from
-        // before the reset; it dropped the rest.
-        stream.ledger.ackedTo = stream.ledger.unconfirmedResets.shift()!;
-      }
+      else this.onResetAck(stream, message.incarnation, message.seq);
       return;
     }
     // Only the driver types into or sizes the PTY; anyone else's input would
@@ -1073,9 +1073,12 @@ export class TerminalStreamBridge {
         // after a reset only once it has restored the snapshot.
         ledger.applying = null;
       } else if (ledger.acked > applying.at) {
-        // A client that never confirms resets: it has now acked more than was
+        // A client that predates reset-ack: it has now acked more than was
         // ever posted before the reset, so some of this is for output after
-        // it. Placed as far on as it can be, so nothing live goes unpaid.
+        // it. Which of its acks since were late ones for output before the
+        // reset can't be told, so it is placed as if none were: at worst a
+        // few catch-up acks then pay down live output, never the reverse,
+        // which would leave live output owed for good.
         ledger.unconfirmedResets = [];
         ledger.ackedTo = Math.min(ledger.posted, applying.at + ledger.acked - applying.acked);
         ledger.applying = null;
@@ -1096,6 +1099,29 @@ export class TerminalStreamBridge {
     }
     this.updateAckClock(stream, end > start);
     if (applying) this.pump(stream);
+  }
+
+  /**
+   * Every ack the renderer sent before this was for output from before the
+   * reset; it dropped the rest. Resets ahead of the one named never reached
+   * it. One that matches no reset posted on this session is ignored.
+   */
+  private onResetAck(stream: StreamState, incarnation?: number, seq?: number): void {
+    const ledger = stream.ledger;
+    const index = ledger.unconfirmedResets.findIndex(
+      (reset) =>
+        (incarnation === undefined || reset.incarnation === incarnation) &&
+        (seq === undefined || reset.seq === seq)
+    );
+    if (index < 0) return;
+    const [reset] = ledger.unconfirmedResets.splice(0, index + 1).slice(-1);
+    ledger.ackedTo = reset!.at;
+    // From here an ack is for output after the reset, so only those count
+    // toward the restore window. Before it they can't be told apart from
+    // late ones for output before it, and let output through too.
+    if (ledger.applying && ledger.unconfirmedResets.length === 0) {
+      ledger.applying.acked = ledger.acked;
+    }
   }
 
   private settleOutstanding(stream: StreamState): void {

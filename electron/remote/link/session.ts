@@ -816,13 +816,7 @@ export class LinkSession {
         this.scheduler.written(frame);
         continue;
       }
-      const onWritten = this.writeListeners.get(frame);
-      const done = onWritten
-        ? (err?: Error | null) => {
-            if (!err) this.safely(onWritten);
-          }
-        : undefined;
-      const written = this.socket.write(encodeFrame(frame, this.maxFrameBytes), done);
+      const written = this.writeFrame(frame);
       // A false return still took the bytes; only frames left in the scheduler
       // are known never to have reached the peer.
       this.scheduler.written(frame);
@@ -834,6 +828,17 @@ export class LinkSession {
     }
     for (const listener of this.tickListeners) listener();
     this.transfers.onWritable();
+  }
+
+  /** Hand a frame to the socket, telling its poster once the socket has taken it. */
+  private writeFrame(frame: LinkFrame): boolean {
+    const onWritten = this.writeListeners.get(frame);
+    const done = onWritten
+      ? (err?: Error | null) => {
+          if (!err) this.safely(onWritten);
+        }
+      : undefined;
+    return this.socket.write(encodeFrame(frame, this.maxFrameBytes), done);
   }
 
   private onData(chunk: Buffer): void {
@@ -1081,7 +1086,7 @@ export class LinkSession {
     }
     if (!this.socket.destroyed && info.by !== "transport") {
       try {
-        for (const frame of control) this.socket.write(encodeFrame(frame, this.maxFrameBytes));
+        for (const frame of control) this.writeFrame(frame);
         this.socket.end();
       } catch {
         // The stream is already gone.

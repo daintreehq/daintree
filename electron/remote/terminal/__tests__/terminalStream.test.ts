@@ -864,26 +864,23 @@ describe("terminal stream over the link", () => {
   });
 
   it("resets once, not in a loop, when the client takes longer than the ack timeout to apply a snapshot while output continues", async () => {
-    const h = await setup({ ackTimeoutMs: 40 });
+    const h = await setup({ ackTimeoutMs: 150 });
     h.snapshots.set("t1", "SNAP");
     await h.connectLink();
-    const first = h.pty().emit("t1", "before");
-    await waitFor(() => rendererData(h).length === 1);
-    h.renderer().post({ type: "ack", id: "t1", bytes: first });
-    await waitFor(() => h.pty().ackedBytes("t1") === first);
+    // A repaint before any output, so nothing is owed going into it.
+    await requestRepaint(h, 0);
 
-    await requestRepaint(h, 1);
     // The renderer takes the reset, then spends several ack timeouts
     // restoring it, acking nothing, while the PTY keeps printing.
     h.renderer().post({ type: "reset-ack", id: "t1" });
     let during = 0;
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 10; i++) {
       during += h.pty().emit("t1", `during-${i}`);
-      await sleep(30);
+      await sleep(50);
     }
-    await waitFor(() => rendererData(h).filter((d) => d.startsWith("during-")).length === 6);
+    await waitFor(() => rendererData(h).filter((d) => d.startsWith("during-")).length === 10);
     // None of it was held against the PTY meanwhile.
-    await waitFor(() => h.pty().ackedBytes("t1") === first + during);
+    await waitFor(() => h.pty().ackedBytes("t1") === during);
     expect(h.renderer().ofType("reset")).toHaveLength(1);
 
     // Restored: it acks what it deferred, and its acks pace the PTY again.
@@ -892,10 +889,34 @@ describe("terminal stream over the link", () => {
     const live = h.pty().emit("t1", "live");
     await waitFor(() => rendererData(h).includes("live"));
     await hostCaughtUp(h);
-    expect(h.pty().ackedBytes("t1")).toBe(first + during);
+    expect(h.pty().ackedBytes("t1")).toBe(during);
     h.renderer().post({ type: "ack", id: "t1", bytes: live });
-    await waitFor(() => h.pty().ackedBytes("t1") === first + during + live);
-    await sleep(100);
+    await waitFor(() => h.pty().ackedBytes("t1") === during + live);
+    expect(h.renderer().ofType("reset")).toHaveLength(1);
+  });
+
+  it("ends a reset's catch-up on the renderer's reset-ack, even when its acks alone could not show it", async () => {
+    const h = await setup();
+    h.snapshots.set("t1", "SNAP");
+    await h.connectLink();
+    // Dropped by the renderer when it takes the reset, and larger than
+    // anything acked after it: counting acks never gets past it.
+    const pre = h.pty().emit("t1", "x".repeat(1000));
+    await waitFor(() => rendererData(h).length === 1);
+    await requestRepaint(h, 1);
+    h.renderer().post({ type: "reset-ack", id: "t1" });
+    const during = h.pty().emit("t1", "restored");
+    await waitFor(() => rendererData(h).length === 2);
+    await waitFor(() => h.pty().ackedBytes("t1") === pre + during);
+
+    h.renderer().post({ type: "ack", id: "t1", bytes: during });
+    await hostCaughtUp(h);
+    const live = h.pty().emit("t1", "live");
+    await waitFor(() => rendererData(h).includes("live"));
+    await hostCaughtUp(h);
+    expect(h.pty().ackedBytes("t1")).toBe(pre + during);
+    h.renderer().post({ type: "ack", id: "t1", bytes: live });
+    await waitFor(() => h.pty().ackedBytes("t1") === pre + during + live);
     expect(h.renderer().ofType("reset")).toHaveLength(1);
   });
 
@@ -924,8 +945,63 @@ describe("terminal stream over the link", () => {
     await waitFor(() => h.pty().ackedBytes("t1") === seen + away + live);
   });
 
+  it("never lets a write that finishes after a reconnect pay down output sent since", async () => {
+    const h = await setup();
+    await h.connectLink();
+    const old = h.pty().emit("t1", "written just before the link dropped");
+    await waitFor(() => rendererData(h).length === 1);
+    await h.dropLink();
+    // Settled when the client went away.
+    await waitFor(() => h.pty().ackedBytes("t1") === old);
+    await h.connectLink();
+    const live = h.pty().emit("t1", "live after the reconnect");
+    await waitFor(() => rendererData(h).length === 2);
+
+    // The renderer's write of the old frame only completes now.
+    h.renderer().post({ type: "ack", id: "t1", bytes: old });
+    await hostCaughtUp(h);
+    expect(h.pty().ackedBytes("t1")).toBe(old);
+    h.renderer().post({ type: "ack", id: "t1", bytes: live });
+    await waitFor(() => h.pty().ackedBytes("t1") === old + live);
+  });
+
+  it("ignores a renderer's reset-ack for a reset sent on an earlier session", async () => {
+    const h = await setup({ ackTimeoutMs: 10_000 });
+    h.snapshots.set("t1", "SNAP");
+    await h.connectLink();
+    const pre = h.pty().emit("t1", "x".repeat(100));
+    await waitFor(() => rendererData(h).length === 1);
+    // The first reset reaches the renderer port, which is too busy to take it
+    // before the link drops and comes back.
+    await requestRepaint(h, 1);
+    await h.dropLink();
+    await h.connectLink();
+    const between = h.pty().emit("t1", "between");
+    await waitFor(() => rendererData(h).length === 2);
+    await requestRepaint(h, 2);
+
+    // It takes the first reset only now, and finishes writing what followed it.
+    h.renderer().post({ type: "reset-ack", id: "t1" });
+    h.renderer().post({ type: "ack", id: "t1", bytes: between });
+    await hostCaughtUp(h);
+    // The second reset is still unconfirmed, so what follows is still settled.
+    const during = h.pty().emit("t1", "during");
+    await waitFor(() => h.pty().ackedBytes("t1") === pre + between + during, 1_000);
+
+    h.renderer().post({ type: "reset-ack", id: "t1" });
+    h.renderer().post({ type: "ack", id: "t1", bytes: during });
+    await hostCaughtUp(h);
+    const live = h.pty().emit("t1", "live");
+    await waitFor(() => rendererData(h).includes("live"));
+    await hostCaughtUp(h);
+    expect(h.pty().ackedBytes("t1")).toBe(pre + between + during);
+    h.renderer().post({ type: "ack", id: "t1", bytes: live });
+    await waitFor(() => h.pty().ackedBytes("t1") === pre + between + during + live);
+    expect(h.renderer().ofType("reset")).toHaveLength(2);
+  });
+
   it("never times out output still waiting in the ring for a busy lane", async () => {
-    const h = await setup({ ackTimeoutMs: 40 });
+    const h = await setup({ ackTimeoutMs: 100 });
     await h.connectLink();
     const real = h.host.queuedBytes.bind(h.host);
     // The lane is past its busy mark with this terminal's own frames, so its
@@ -934,7 +1010,7 @@ describe("terminal stream over the link", () => {
       flow === undefined ? Number.MAX_SAFE_INTEGER : 64 * 1024;
     const held = h.pty().emit("t1", "held back");
     await waitFor(() => h.bridge.position("t1")?.seq === 1);
-    await sleep(150);
+    await sleep(300);
     expect(rendererData(h)).toEqual([]);
     expect(h.pty().ofType("serialize-fence")).toEqual([]);
 
@@ -1025,7 +1101,9 @@ describe("terminal stream over the link", () => {
 
     for (let i = 0; i < 3; i++) h.pty().emit("t1", String(i).repeat(10));
     await waitFor(() => h.bridge.position("t1")?.seq === 4);
-    await sleep(30);
+    // Two went out after the reset at seq 1; the third waits in the ring.
+    expect(h.bridge.position("t1")?.sentSeq).toBe(3);
+    await waitFor(() => rendererData(h).length === 3);
     expect(rendererData(h).slice(1)).toEqual(["0".repeat(10), "1".repeat(10)]);
 
     h.renderer().post({ type: "reset-ack", id: "t1" });
@@ -1058,7 +1136,7 @@ describe("terminal stream over the link", () => {
   });
 
   it("keeps settling output after a reset when a late ack for output from before it arrives", async () => {
-    const h = await setup();
+    const h = await setup({ ackTimeoutMs: 10_000 });
     h.snapshots.set("t1", "SNAP");
     await h.connectLink();
     const pre = h.pty().emit("t1", "written before the reset");
@@ -1070,7 +1148,7 @@ describe("terminal stream over the link", () => {
     h.renderer().post({ type: "ack", id: "t1", bytes: pre });
     await hostCaughtUp(h);
     const during = h.pty().emit("t1", "still restoring");
-    await waitFor(() => h.pty().ackedBytes("t1") === pre + during);
+    await waitFor(() => h.pty().ackedBytes("t1") === pre + during, 1_000);
 
     h.renderer().post({ type: "reset-ack", id: "t1" });
     h.renderer().post({ type: "ack", id: "t1", bytes: during });
@@ -1081,6 +1159,7 @@ describe("terminal stream over the link", () => {
     expect(h.pty().ackedBytes("t1")).toBe(pre + during);
     h.renderer().post({ type: "ack", id: "t1", bytes: live });
     await waitFor(() => h.pty().ackedBytes("t1") === pre + during + live);
+    expect(h.renderer().ofType("reset")).toHaveLength(1);
   });
 
   it("resyncs the busiest terminal when the endpoint's total unacked output grows too large", async () => {

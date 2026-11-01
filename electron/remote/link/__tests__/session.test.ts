@@ -352,15 +352,32 @@ describe("LinkSession request/response", () => {
       expect(written).toEqual(["fill", "behind"]);
     });
 
-    it("never reports a frame the session dropped unsent", async () => {
-      const { client, a } = await stalledClient();
+    it("never reports a frame the session dropped unsent, or one the socket failed to take", async () => {
+      const { client, a, b } = await stalledClient();
       const written: string[] = [];
       client.post(event("fill", [BEYOND_SOCKET_BUFFERS]), () => written.push("fill"));
       await waitFor(() => a.writableNeedDrain);
       client.post(event("dropped"), () => written.push("dropped"));
-      client.close("gone");
-      await new Promise((r) => setTimeout(r, 20));
+      const closed = closedPromise(client);
+      const socketClosed = new Promise((resolve) => a.once("close", resolve));
+      b.destroy();
+      await closed;
+      await socketClosed;
+      await new Promise((r) => setImmediate(r));
       expect(written).toEqual([]);
+    });
+
+    it("reports a control frame the session writes on its way out", async () => {
+      const { client, b } = await stalledClient();
+      const frames = recordFrames(b);
+      const written: string[] = [];
+      client.post({ lane: Lane.CONTROL, kind: ControlKind.PING, body: { sentAt: 1 } }, () =>
+        written.push("ping")
+      );
+      client.close("gone");
+      b.resume();
+      await waitFor(() => written.length === 1);
+      expect(frames.some((f) => f.lane === Lane.CONTROL)).toBe(true);
     });
   });
 

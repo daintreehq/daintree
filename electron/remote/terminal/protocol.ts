@@ -35,10 +35,15 @@ export const TerminalInPortMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ack"), id: terminalId, bytes: byteCount }),
   /**
    * The renderer took a reset: every ack it sent before this was for output
-   * from before the reset, and none for that output follows. A host that
-   * predates it ignores it.
+   * from before the reset, and none for that output follows. The relay names
+   * the reset it was for. A host that predates it ignores it.
    */
-  z.object({ type: z.literal("reset-ack"), id: terminalId }),
+  z.object({
+    type: z.literal("reset-ack"),
+    id: terminalId,
+    incarnation: incarnation.optional(),
+    seq: seq.optional(),
+  }),
 ]);
 export type TerminalInPortMessage = z.infer<typeof TerminalInPortMessageSchema>;
 

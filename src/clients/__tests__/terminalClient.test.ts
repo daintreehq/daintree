@@ -866,22 +866,34 @@ describe("terminalClient MessagePort data routing", () => {
       const port = acquirePort();
       const sent: unknown[] = [];
       port.addEventListener("message", (event: MessageEvent<unknown>) => {
-        const msg = event.data as { type?: unknown };
-        if (msg?.type === "ack" || msg?.type === "reset-ack") sent.push(msg);
+        const msg = event.data;
+        if (msg && typeof msg === "object" && "type" in msg) {
+          if (msg.type === "ack" || msg.type === "reset-ack") sent.push(msg);
+        }
       });
       port.start();
-      terminalClient.onData("term-1", () => {});
+      const received: string[] = [];
+      terminalClient.onData("term-1", (data) => received.push(String(data)));
 
       port.postMessage({ type: "data", id: "term-1", data: "one", bytes: 3 });
-      await tick();
-      terminalClient.acknowledgePortData("term-1", 0);
+      port.postMessage({ type: "data", id: "term-1", data: "two", bytes: 4 });
+      await vi.waitFor(() => expect(received).toEqual(["one", "two"]));
+      const before = terminalClient.getPortAckGeneration("term-1");
+      terminalClient.acknowledgePortData("term-1", 0, 1, before);
       port.postMessage({ type: "reset", id: "term-1", snapshot: SNAP });
       port.postMessage({ type: "data", id: "term-1", data: "after", bytes: 5 });
-      await tick();
+      await vi.waitFor(() => expect(received).toHaveLength(4));
+      // "two" was being written when the reset came: its completion is stale.
+      terminalClient.acknowledgePortData("term-1", 0, 1, before);
       // The repaint's zero entry and the chunk after it, written together.
-      terminalClient.acknowledgePortData("term-1", 0, 2);
-      await tick();
+      terminalClient.acknowledgePortData(
+        "term-1",
+        0,
+        2,
+        terminalClient.getPortAckGeneration("term-1")
+      );
 
+      await vi.waitFor(() => expect(sent).toHaveLength(3));
       expect(sent).toEqual([
         { type: "ack", id: "term-1", bytes: 3 },
         { type: "reset-ack", id: "term-1" },

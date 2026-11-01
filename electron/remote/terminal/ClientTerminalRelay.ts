@@ -39,6 +39,13 @@ const logLimiter = createKeyedLogLimiter();
  * PTY incarnation it was typed at: a held keystroke delivered after a
  * reconnect, or into a restarted PTY, lands somewhere the user never typed.
  * What is typed with no session attached is dropped.
+ *
+ * The renderer's acks run on across link sessions and resumes, but the host
+ * settles everything a resume covers. So the relay counts what it delivered
+ * against what the renderer acked and passes on only acks for output
+ * delivered since the terminal's last resume; and it tells the host which
+ * reset a renderer's reset-ack is for, or drops it when that reset went out
+ * on an earlier session.
  */
 
 export interface ClientTerminalRelayOptions {
@@ -66,6 +73,19 @@ interface Position {
 }
 
 type WriteMessage = Extract<TerminalInPortMessage, { type: "write" }>;
+type AckMessage = Extract<TerminalInPortMessage, { type: "ack" | "reset-ack" }>;
+
+/** One terminal's renderer acks, set against the output delivered to the current port. */
+interface AckTrack {
+  /** Data bytes delivered to the renderer. */
+  delivered: number;
+  /** Where the renderer's acks have reached, in delivered bytes. */
+  acked: number;
+  /** Acks for output before this were settled by the host at a resume. */
+  forwardFrom: number;
+  /** Resets delivered to the renderer it has not yet said it took, oldest first. */
+  resets: { at: number; session: LinkSession | null; incarnation: number; seq: number }[];
+}
 
 interface HeldWrite {
   message: WriteMessage;
@@ -97,6 +117,7 @@ export class ClientTerminalRelay {
   private pendingInput: HeldWrite[] = [];
   private pendingInputBytes = 0;
   private readonly pendingResize = new Map<string, ResizeMessage>();
+  private readonly acks = new Map<string, AckTrack>();
   private disposed = false;
 
   constructor(options: ClientTerminalRelayOptions) {
@@ -154,6 +175,8 @@ export class ClientTerminalRelay {
       if (this.port === port) this.port = null;
     });
     previous?.close();
+    // A new document has a fresh ack queue.
+    this.acks.clear();
     if (replaced && this.positions.size > 0) {
       // The new document starts from nothing: what the old port painted is
       // gone, and a replay would only draw what came after it.
@@ -182,6 +205,8 @@ export class ClientTerminalRelay {
       session.onWritable(() => this.flushPendingInput()),
     ];
     this.flushPendingInput();
+    // The host settled everything delivered before this session.
+    for (const id of this.acks.keys()) this.settleAcks(id);
     void this.resume([...this.positions.keys()], true);
   }
 
@@ -203,6 +228,7 @@ export class ClientTerminalRelay {
     this.port = null;
     port?.close();
     this.positions.clear();
+    this.acks.clear();
     this.pendingInput = [];
     this.pendingInputBytes = 0;
     this.pendingResize.clear();
@@ -212,6 +238,10 @@ export class ClientTerminalRelay {
     const parsed = TerminalInPortMessageSchema.safeParse(raw);
     if (!parsed.success) return;
     const message = parsed.data;
+    if (message.type === "ack" || message.type === "reset-ack") {
+      this.onRendererAck(message);
+      return;
+    }
     const held = this.pendingInput.length > 0 || this.pendingResize.size > 0;
     if (this.session?.isOpen && !held && this.sendIn(message)) return;
     this.hold(message);
@@ -219,10 +249,49 @@ export class ClientTerminalRelay {
   }
 
   /**
-   * Keep input the link could not take (down, or its queue full) to send in
-   * order once it can. Acks are dropped: the host settles its own flow
-   * control for a client that is away.
+   * Acks never wait behind held input: they don't change the terminal, and
+   * one held is one the host's ledger never sees. One the link can't take is
+   * dropped; with no session the host is settling for itself anyway.
    */
+  private onRendererAck(message: AckMessage): void {
+    const track = this.acks.get(message.id);
+    if (!track) return;
+    if (message.type === "ack") {
+      const from = Math.max(track.acked, track.forwardFrom);
+      track.acked += message.bytes;
+      const bytes = track.acked - from;
+      if (bytes > 0) this.sendIn({ type: "ack", id: message.id, bytes });
+      return;
+    }
+    const reset = track.resets.shift();
+    if (!reset) return;
+    // It dropped what it still owed acks for when it took the reset.
+    track.acked = Math.max(track.acked, reset.at);
+    if (reset.session !== this.session) return;
+    this.sendIn({
+      type: "reset-ack",
+      id: message.id,
+      incarnation: reset.incarnation,
+      seq: reset.seq,
+    });
+  }
+
+  private ackTrack(id: string): AckTrack {
+    let track = this.acks.get(id);
+    if (!track) {
+      track = { delivered: 0, acked: 0, forwardFrom: 0, resets: [] };
+      this.acks.set(id, track);
+    }
+    return track;
+  }
+
+  /** The host settles what it delivered so far: acks for it are not passed on. */
+  private settleAcks(id: string): void {
+    const track = this.acks.get(id);
+    if (track) track.forwardFrom = track.delivered;
+  }
+
+  /** Keep input the link could not take (down, or its queue full) to send in order once it can. */
   private hold(message: TerminalInPortMessage): void {
     if (message.type === "write") {
       const session = this.session;
@@ -319,6 +388,7 @@ export class ClientTerminalRelay {
       const oldest = this.positions.keys().next().value;
       if (oldest === undefined) break;
       this.positions.delete(oldest);
+      this.acks.delete(oldest);
     }
   }
 
@@ -349,6 +419,7 @@ export class ClientTerminalRelay {
       }
     }
     if (!safePost(port, message)) return;
+    this.ackTrack(id).delivered += message.bytes;
     this.setPosition(id, { incarnation, lastSeq: seq });
   }
 
@@ -360,6 +431,8 @@ export class ClientTerminalRelay {
   ): void {
     // Undelivered, the position stays put and the next port asks for another reset.
     if (!safePost(this.port, { type: "reset", id, snapshot })) return;
+    const track = this.ackTrack(id);
+    track.resets.push({ at: track.delivered, session: this.session, incarnation, seq });
     this.setPosition(id, { incarnation, lastSeq: seq });
   }
 
@@ -369,7 +442,10 @@ export class ClientTerminalRelay {
     const wanted = all ? ids : ids.filter((id) => !this.resuming.has(id));
     if (!all && wanted.length === 0) return;
     const reset = all && this.resetOwed;
-    for (const id of wanted) this.resuming.add(id);
+    for (const id of wanted) {
+      this.resuming.add(id);
+      this.settleAcks(id);
+    }
     const terminals: TerminalResumeRequest["terminals"] = wanted.flatMap((id) => {
       const p = this.positions.get(id);
       if (!p) return [];
