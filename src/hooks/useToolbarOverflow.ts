@@ -314,26 +314,33 @@ export function useToolbarOverflow(
     [resolveGroup]
   );
 
-  const measureItems = useCallback((container: HTMLElement, widthsCache: Map<string, number>) => {
-    const elements = container.querySelectorAll<HTMLElement>("[data-toolbar-button-id]");
-    for (const el of elements) {
-      const id = el.getAttribute("data-toolbar-button-id");
-      if (id) {
-        const width = el.offsetWidth;
-        // Only update cache if element is visible (hidden elements report 0)
-        if (width > 0) {
-          widthsCache.set(id, width);
+  // Whether any button measured a width other than the one cached for it.
+  const measureItems = useCallback(
+    (container: HTMLElement, widthsCache: Map<string, number>): boolean => {
+      let resized = false;
+      const elements = container.querySelectorAll<HTMLElement>("[data-toolbar-button-id]");
+      for (const el of elements) {
+        const id = el.getAttribute("data-toolbar-button-id");
+        if (id) {
+          const width = el.offsetWidth;
+          // Only update cache if element is visible (hidden elements report 0)
+          if (width > 0 && widthsCache.get(id) !== width) {
+            widthsCache.set(id, width);
+            resized = true;
+          }
         }
       }
-    }
-  }, []);
+      return resized;
+    },
+    []
+  );
 
   const recalculate = useCallback(() => {
     const leftContainer = leftContainerRef.current;
     const rightContainer = rightContainerRef.current;
 
     if (leftContainer) {
-      measureItems(leftContainer, leftWidthsRef.current);
+      const leftItemsResized = measureItems(leftContainer, leftWidthsRef.current);
       const pending = leftPendingWidthRef.current;
       leftPendingWidthRef.current = 0;
       const containerWidth = pending > 0 ? pending : leftContainer.getBoundingClientRect().width;
@@ -343,7 +350,9 @@ export function useToolbarOverflow(
         leftIds,
         TOOLBAR_BUTTON_PRIORITIES,
         leftPrevWidthRef.current,
-        leftPrevResultRef.current,
+        // Hysteresis is for the row's own width jittering. A result held
+        // against button widths that have since changed gets no say.
+        leftItemsResized ? null : leftPrevResultRef.current,
         pinnedIds,
         measureLayout(leftContainer)
       );
@@ -364,7 +373,7 @@ export function useToolbarOverflow(
     }
 
     if (rightContainer) {
-      measureItems(rightContainer, rightWidthsRef.current);
+      const rightItemsResized = measureItems(rightContainer, rightWidthsRef.current);
       const pending = rightPendingWidthRef.current;
       rightPendingWidthRef.current = 0;
       const containerWidth = pending > 0 ? pending : rightContainer.getBoundingClientRect().width;
@@ -374,7 +383,7 @@ export function useToolbarOverflow(
         rightIds,
         TOOLBAR_BUTTON_PRIORITIES,
         rightPrevWidthRef.current,
-        rightPrevResultRef.current,
+        rightItemsResized ? null : rightPrevResultRef.current,
         pinnedIds,
         measureLayout(rightContainer)
       );

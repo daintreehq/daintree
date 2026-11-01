@@ -11,12 +11,12 @@ import { useRef } from "react";
 import type { AnyToolbarButtonId } from "@shared/types/toolbar";
 import { useToolbarOverflow } from "../useToolbarOverflow";
 
-const ROW_WIDTH = 260;
+let rowWidth = 260;
 const IDS: AnyToolbarButtonId[] = ["voice-recording", "forge-stats", "canopy", "settings"];
 const widths = new Map<string, number>();
 const observers = new Set<FakeResizeObserver>();
 
-class FakeResizeObserver {
+class FakeResizeObserver implements ResizeObserver {
   readonly targets = new Set<Element>();
   constructor(private readonly callback: ResizeObserverCallback) {
     observers.add(this);
@@ -34,10 +34,14 @@ class FakeResizeObserver {
   /** Delivers a resize of `target` the way the browser does: only to observers watching it. */
   deliver(target: Element) {
     if (!this.targets.has(target)) return;
-    this.callback(
-      [{ target } as unknown as ResizeObserverEntry],
-      this as unknown as ResizeObserver
-    );
+    const entry: ResizeObserverEntry = {
+      target,
+      contentRect: target.getBoundingClientRect(),
+      borderBoxSize: [],
+      contentBoxSize: [],
+      devicePixelContentBoxSize: [],
+    };
+    this.callback([entry], this);
   }
 }
 
@@ -61,8 +65,9 @@ function Row() {
   );
 }
 
-const rightOverflow = () =>
-  document.querySelector<HTMLElement>('[data-row="right"]')?.dataset.overflow ?? "";
+const rightRow = () => document.querySelector<HTMLElement>('[data-row="right"]')!;
+const rightOverflow = () => rightRow().dataset.overflow ?? "";
+const forgePill = () => document.querySelector('[data-toolbar-button-id="forge-stats"]')!;
 
 beforeEach(() => {
   vi.stubGlobal("ResizeObserver", FakeResizeObserver);
@@ -79,9 +84,9 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
     this: HTMLElement
   ) {
-    const width = this.dataset.row === "right" ? ROW_WIDTH : 0;
-    return { width, height: 32, top: 0, left: 0, right: width, bottom: 32, x: 0, y: 0 } as DOMRect;
+    return DOMRect.fromRect({ width: this.dataset.row === "right" ? rowWidth : 0, height: 32 });
   });
+  rowWidth = 260;
   for (const id of IDS) widths.set(id, 36);
 });
 
@@ -99,9 +104,8 @@ describe("useToolbarOverflow when a button changes width in place", () => {
     render(<Row />);
     expect(rightOverflow()).not.toBe("");
 
-    const pill = document.querySelector('[data-toolbar-button-id="forge-stats"]')!;
     widths.set("forge-stats", 70);
-    act(() => resize(pill));
+    act(() => resize(forgePill()));
 
     expect(rightOverflow()).toBe("");
   });
@@ -111,10 +115,38 @@ describe("useToolbarOverflow when a button changes width in place", () => {
     render(<Row />);
     expect(rightOverflow()).toBe("");
 
-    const pill = document.querySelector('[data-toolbar-button-id="forge-stats"]')!;
     widths.set("forge-stats", 208);
-    act(() => resize(pill));
+    act(() => resize(forgePill()));
 
     expect(rightOverflow()).not.toBe("");
+  });
+
+  it("restores once the pill settles even after the row grew a little in between", () => {
+    widths.set("forge-stats", 208);
+    render(<Row />);
+    const held = rightOverflow();
+    expect(held).not.toBe("");
+
+    rowWidth = 261;
+    act(() => resize(rightRow()));
+    expect(rightOverflow()).toBe(held);
+
+    widths.set("forge-stats", 70);
+    act(() => resize(forgePill()));
+
+    expect(rightOverflow()).toBe("");
+  });
+
+  it("keeps the row's own hysteresis while no button changes width", () => {
+    widths.set("forge-stats", 208);
+    render(<Row />);
+    const held = rightOverflow();
+    expect(held).not.toBe("");
+
+    // Room for one more 36px button, but short of the restore buffer.
+    rowWidth = 281;
+    act(() => resize(rightRow()));
+
+    expect(rightOverflow()).toBe(held);
   });
 });
