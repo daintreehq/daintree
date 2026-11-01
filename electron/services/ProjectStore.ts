@@ -43,6 +43,7 @@ import { ProjectStateManager, type ProjectStateReadResult } from "./ProjectState
 import { invalidatePrefetchCache } from "./prefetchHydrateCache.js";
 import { ProjectFileStore } from "./ProjectFileStore.js";
 import { ScheduleStore } from "./ScheduleStore.js";
+import { events } from "./events.js";
 import { ProjectRecipeSynchronizer } from "./ProjectRecipeSynchronizer.js";
 import type {
   CopyTreeHistoryAppendInput,
@@ -973,15 +974,19 @@ export class ProjectStore {
     const db = getSharedDb();
     // A project's schedules live in its state directory, removed below, so the
     // history of their runs goes with the project row.
-    const removed = db.transaction(
+    const { removed, runsRemoved } = db.transaction(
       (tx) => {
         const result = tx.delete(projectsTable).where(eq(projectsTable.id, projectId)).run();
-        tx.run(sql`DELETE FROM scheduled_runs WHERE project_id = ${projectId}`);
-        return result;
+        const runs = tx.run(sql`DELETE FROM scheduled_runs WHERE project_id = ${projectId}`);
+        return { removed: result, runsRemoved: runs.changes };
       },
       { behavior: "immediate" }
     );
     if (removed.changes > 0) this.notifyRegistryListeners();
+    // Those runs, open ones included, will never end now.
+    if (runsRemoved > 0) {
+      events.emit("scheduled-runs:deleted", { projectId, scheduleId: null, timestamp: Date.now() });
+    }
 
     if (project) {
       this.recipeSynchronizer.pruneInRepoRecipeHashes(project.path);

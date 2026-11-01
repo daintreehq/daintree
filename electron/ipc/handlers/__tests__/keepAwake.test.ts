@@ -35,7 +35,13 @@ describe("keep-awake IPC", () => {
   let config: KeepAwakeConfig;
   let updateConfigSpy: ReturnType<typeof vi.fn>;
 
-  const state = (): KeepAwakeState => ({ config: { ...config }, isBlocking: false, revision: 4 });
+  const state = (): KeepAwakeState => ({
+    config: { ...config },
+    isBlocking: true,
+    isDisplayBlocking: true,
+    scheduledRunIds: ["run-1"],
+    revision: 4,
+  });
 
   beforeEach(() => {
     ipcHandlers.clear();
@@ -86,7 +92,9 @@ describe("keep-awake IPC", () => {
     expect(updateConfigSpy).toHaveBeenCalledWith({ onBattery: true });
     expect(result).toEqual({
       config: { enabled: true, onBattery: true },
-      isBlocking: false,
+      isBlocking: true,
+      isDisplayBlocking: true,
+      scheduledRunIds: ["run-1"],
       revision: 4,
     });
   });

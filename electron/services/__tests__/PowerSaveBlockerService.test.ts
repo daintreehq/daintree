@@ -85,6 +85,7 @@ import {
   initializePowerSaveBlockerService,
   disposePowerSaveBlockerService,
   setAttachedFrontendCount,
+  getKeepAwakeDiagnostics,
   type TerminalRegistry,
 } from "../PowerSaveBlockerService.js";
 import { events } from "../events.js";
@@ -731,6 +732,8 @@ describe("PowerSaveBlockerService", () => {
       expect(broadcastToRenderer).toHaveBeenLastCalledWith(CHANNELS.KEEP_AWAKE_STATE_CHANGED, {
         config: { enabled: true, onBattery: false },
         isBlocking: true,
+        isDisplayBlocking: false,
+        scheduledRunIds: [],
         revision: 1,
       });
 
@@ -742,6 +745,8 @@ describe("PowerSaveBlockerService", () => {
       expect(broadcastToRenderer).toHaveBeenLastCalledWith(CHANNELS.KEEP_AWAKE_STATE_CHANGED, {
         config: { enabled: true, onBattery: true },
         isBlocking: true,
+        isDisplayBlocking: false,
+        scheduledRunIds: [],
         revision: 2,
       });
 
@@ -749,6 +754,8 @@ describe("PowerSaveBlockerService", () => {
       expect(broadcastToRenderer).toHaveBeenLastCalledWith(CHANNELS.KEEP_AWAKE_STATE_CHANGED, {
         config: { enabled: true, onBattery: true },
         isBlocking: false,
+        isDisplayBlocking: false,
+        scheduledRunIds: [],
         revision: 3,
       });
       expect(service.getState().revision).toBe(3);
@@ -1194,5 +1201,247 @@ describe("attached remote frontends", () => {
     setAttachedFrontendCount(1);
 
     expect(powerSaveBlocker.start).not.toHaveBeenCalled();
+  });
+});
+
+describe("scheduled runs", () => {
+  const HOUR = 60 * 60 * 1000;
+  let service: PowerSaveBlockerService;
+  let log: ReturnType<typeof vi.spyOn>;
+
+  function startRun(runId: string, opts: { scheduleId?: string; projectId?: string } = {}) {
+    events.emit("scheduled-run:started", {
+      runId,
+      scheduleId: opts.scheduleId ?? "schedule-1",
+      projectId: opts.projectId ?? "project-1",
+      terminalId: `terminal-${runId}`,
+      timestamp: Date.now(),
+    });
+  }
+
+  function endRun(runId: string, opts: { scheduleId?: string; projectId?: string } = {}) {
+    events.emit("scheduled-run:ended", {
+      runId,
+      scheduleId: opts.scheduleId ?? "schedule-1",
+      projectId: opts.projectId ?? "project-1",
+      terminalId: `terminal-${runId}`,
+      outcome: "done",
+      timestamp: Date.now(),
+    });
+  }
+
+  function deleteRuns(projectId: string, scheduleId: string | null) {
+    events.emit("scheduled-runs:deleted", { projectId, scheduleId, timestamp: Date.now() });
+  }
+
+  const startedTypes = () =>
+    (powerSaveBlocker.start as Mock).mock.calls.map(([type]) => type as string);
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    log = vi.spyOn(console, "log").mockImplementation(() => {});
+    service = new PowerSaveBlockerService();
+  });
+
+  afterEach(() => {
+    service.dispose();
+    disposePowerSaveBlockerService();
+    log.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("holds the display, and with it the system, from a run's start until it ends", () => {
+    startRun("run-1");
+
+    expect(startedTypes()).toEqual(["prevent-display-sleep"]);
+    expect(service.isBlocking()).toBe(true);
+    expect(service.getState()).toMatchObject({
+      isBlocking: true,
+      isDisplayBlocking: true,
+      scheduledRunIds: ["run-1"],
+    });
+
+    endRun("run-1");
+
+    expect(powerSaveBlocker.stop).toHaveBeenCalledTimes(1);
+    expect(service.isBlocking()).toBe(false);
+    expect(service.getState()).toMatchObject({ isDisplayBlocking: false, scheduledRunIds: [] });
+  });
+
+  it("shares one hold between concurrent runs and releases it after the last ends", () => {
+    startRun("run-1");
+    startRun("run-2", { scheduleId: "schedule-2" });
+    expect(powerSaveBlocker.start).toHaveBeenCalledTimes(1);
+
+    endRun("run-1");
+    expect(service.isBlocking()).toBe(true);
+    expect(powerSaveBlocker.stop).not.toHaveBeenCalled();
+    expect(service.getState().scheduledRunIds).toEqual(["run-2"]);
+
+    endRun("run-2", { scheduleId: "schedule-2" });
+    expect(service.isBlocking()).toBe(false);
+    expect(powerSaveBlocker.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a repeated start, and an end for a run it never saw start", () => {
+    startRun("run-1");
+    startRun("run-1");
+    // A run an earlier lifetime left open ends at startup with no start here.
+    endRun("run-old");
+
+    expect(powerSaveBlocker.start).toHaveBeenCalledTimes(1);
+    expect(service.getState().scheduledRunIds).toEqual(["run-1"]);
+    expect(service.isBlocking()).toBe(true);
+
+    endRun("run-1");
+    endRun("run-1");
+    expect(powerSaveBlocker.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs on no budget: a run holds past every agent safety period", () => {
+    const registry = { hasTerminal: vi.fn(() => false) };
+    service.setTerminalRegistry(registry);
+    startRun("run-1");
+
+    vi.advanceTimersByTime(24 * HOUR);
+
+    expect(service.isBlocking()).toBe(true);
+    expect(powerSaveBlocker.stop).not.toHaveBeenCalled();
+    expect(registry.hasTerminal).not.toHaveBeenCalled();
+  });
+
+  it("keeps the display hold when the agents' claim times out, and the agents' when the run ends", () => {
+    emitStateChanged("term-1", "working");
+    startRun("run-1");
+    expect(startedTypes()).toEqual(["prevent-app-suspension", "prevent-display-sleep"]);
+
+    // No registry: the agents' four-hour release stands.
+    vi.advanceTimersByTime(4 * HOUR);
+    expect(service.getActiveCount()).toBe(0);
+    expect(powerSaveBlocker.stop).toHaveBeenCalledTimes(1);
+    expect(service.getState()).toMatchObject({ isBlocking: true, isDisplayBlocking: true });
+
+    emitStateChanged("term-1", "working");
+    endRun("run-1");
+    expect(powerSaveBlocker.stop).toHaveBeenCalledTimes(2);
+    expect(service.getState()).toMatchObject({ isBlocking: true, isDisplayBlocking: false });
+    expect(service.getActiveCount()).toBe(1);
+  });
+
+  it("follows the keep-awake setting, coming back with no run event", () => {
+    service.updateConfig({ enabled: false });
+    startRun("run-1");
+    expect(powerSaveBlocker.start).not.toHaveBeenCalled();
+    expect(service.getState()).toMatchObject({
+      isBlocking: false,
+      isDisplayBlocking: false,
+      scheduledRunIds: ["run-1"],
+    });
+
+    service.updateConfig({ enabled: true });
+    expect(startedTypes()).toEqual(["prevent-display-sleep"]);
+
+    service.updateConfig({ enabled: false });
+    expect(service.isBlocking()).toBe(false);
+    expect(powerSaveBlocker.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("follows the battery rule", () => {
+    startRun("run-1");
+
+    power.onBattery = true;
+    power.emit("on-battery");
+    expect(service.isBlocking()).toBe(false);
+    expect(service.getState().scheduledRunIds).toEqual(["run-1"]);
+
+    power.onBattery = false;
+    power.emit("on-ac");
+    expect(service.isBlocking()).toBe(true);
+    expect(startedTypes()).toEqual(["prevent-display-sleep", "prevent-display-sleep"]);
+
+    service.updateConfig({ onBattery: true });
+    power.onBattery = true;
+    power.emit("on-battery");
+    expect(service.getState().isDisplayBlocking).toBe(true);
+  });
+
+  it("drops the runs whose history was deleted, and only those", () => {
+    startRun("run-1", { scheduleId: "schedule-1" });
+    startRun("run-2", { scheduleId: "schedule-2" });
+    startRun("run-3", { projectId: "project-2", scheduleId: "schedule-3" });
+
+    deleteRuns("project-1", "schedule-1");
+    expect(service.getState().scheduledRunIds).toEqual(["run-2", "run-3"]);
+
+    deleteRuns("project-1", null);
+    expect(service.getState().scheduledRunIds).toEqual(["run-3"]);
+    expect(service.isBlocking()).toBe(true);
+
+    deleteRuns("project-2", null);
+    expect(service.isBlocking()).toBe(false);
+    expect(powerSaveBlocker.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("pushes a state each time the runs holding it change", () => {
+    startRun("run-1");
+    startRun("run-2");
+    endRun("run-1");
+
+    const pushed = broadcastToRenderer.mock.calls
+      .filter(([channel]) => channel === CHANNELS.KEEP_AWAKE_STATE_CHANGED)
+      .map(([, state]) => state as { scheduledRunIds: string[]; revision: number });
+    expect(pushed.map((state) => state.scheduledRunIds)).toEqual([
+      ["run-1"],
+      ["run-1", "run-2"],
+      ["run-2"],
+    ]);
+    expect(pushed.map((state) => state.revision)).toEqual([1, 2, 3]);
+  });
+
+  it("names the run in its logs", () => {
+    startRun("run-1");
+    endRun("run-1");
+
+    const lines = log.mock.calls.map(([line]) => String(line));
+    expect(lines).toContainEqual(expect.stringContaining("Holding for scheduled run run-1"));
+    expect(lines).toContainEqual(
+      expect.stringMatching(/Started display blocker .*for scheduled runs: run-1/)
+    );
+    expect(lines).toContainEqual(expect.stringContaining("Scheduled run run-1 ended (done)"));
+    expect(lines).toContainEqual(expect.stringContaining("reason=no-scheduled-runs"));
+  });
+
+  it("releases on dispose and stops following runs", () => {
+    startRun("run-1");
+
+    service.dispose();
+    expect(service.isBlocking()).toBe(false);
+    expect(powerSaveBlocker.stop).toHaveBeenCalledTimes(1);
+    expect(service.getState().scheduledRunIds).toEqual([]);
+
+    startRun("run-2");
+    expect(powerSaveBlocker.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports its holders to diagnostics without building a service", () => {
+    expect(getKeepAwakeDiagnostics()).toBeNull();
+    expect(powerSaveBlocker.start).not.toHaveBeenCalled();
+
+    const live = initializePowerSaveBlockerService();
+    emitStateChanged("term-1", "working");
+    live.setAttachedFrontendCount(2);
+    startRun("run-1");
+
+    expect(getKeepAwakeDiagnostics()).toMatchObject({
+      isBlocking: true,
+      isDisplayBlocking: true,
+      scheduledRunIds: ["run-1"],
+      workingAgentCount: 1,
+      attachedFrontendCount: 2,
+    });
+
+    disposePowerSaveBlockerService();
+    expect(getKeepAwakeDiagnostics()).toBeNull();
   });
 });

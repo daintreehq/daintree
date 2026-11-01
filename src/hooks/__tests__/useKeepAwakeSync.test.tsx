@@ -25,7 +25,13 @@ import { useKeepAwakeStore } from "@/store/keepAwakeStore";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 
 function makeState(isBlocking: boolean, revision: number): KeepAwakeState {
-  return { config: { enabled: true, onBattery: false }, isBlocking, revision };
+  return {
+    config: { enabled: true, onBattery: false },
+    isBlocking,
+    isDisplayBlocking: false,
+    scheduledRunIds: [],
+    revision,
+  };
 }
 
 interface PendingRead {
