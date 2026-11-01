@@ -75,14 +75,17 @@ describe("lastRunWords", () => {
 
   it("gives only done, needs-you, failed and lost a severity", () => {
     expect({
-      done: lastRunWords(settled("done", { kind: "handback", report: "done", summary: null, truncated: false })).severity,
-      needsYou: lastRunWords(settled("needs-you", {
+      done: lastRunWords(
+        settled("done", { kind: "handback", report: "done", summary: null, truncated: false })
+      ).severity,
+      needsYou: lastRunWords(
+        settled("needs-you", {
           kind: "handback",
           report: "needs-you",
           summary: null,
           truncated: false,
-        }))
-        .severity,
+        })
+      ).severity,
       lost: lastRunWords(settled("lost", { kind: "lost" })).severity,
       cancelled: lastRunWords(settled("cancelled", { kind: "cancel" })).severity,
       interrupted: lastRunWords(settled("interrupted", { kind: "interrupted" })).severity,

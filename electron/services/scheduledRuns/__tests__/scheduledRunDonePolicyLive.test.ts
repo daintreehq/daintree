@@ -156,11 +156,7 @@ describe("a scheduled run's done policy, applied (#15982)", () => {
     arm("close");
 
     await vi.waitFor(() =>
-      expect(state.forget).toHaveBeenCalledWith(
-        { id: "project-store" },
-        "project-1",
-        "terminal-1"
-      )
+      expect(state.forget).toHaveBeenCalledWith({ id: "project-store" }, "project-1", "terminal-1")
     );
   });
 

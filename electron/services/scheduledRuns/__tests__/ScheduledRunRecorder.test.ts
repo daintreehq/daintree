@@ -465,13 +465,22 @@ describe("ScheduledRunRecorder", () => {
     expect(recorder.settle("run-1", { kind: "cancel" })?.settlement).toMatchObject({
       outcome: "cancelled",
     });
-    expect(recorder.settle("run-1", { kind: "handback", report: "done", summary: null, truncated: false })).toBeNull();
+    expect(
+      recorder.settle("run-1", {
+        kind: "handback",
+        report: "done",
+        summary: null,
+        truncated: false,
+      })
+    ).toBeNull();
     expect(recorder.get("run-1")?.settlement).toMatchObject({ outcome: "cancelled" });
     expect(emitted.filter((e) => e.name === "scheduled-run:ended")).toHaveLength(1);
   });
 
   describe("the agent's handback (#15982)", () => {
-    const report = (overrides: Partial<ScheduledRunHandbackFact> = {}): ScheduledRunHandbackFact => ({
+    const report = (
+      overrides: Partial<ScheduledRunHandbackFact> = {}
+    ): ScheduledRunHandbackFact => ({
       terminalId: "terminal-1",
       spawnedAt: SPAWNED_AT,
       code: "k7f3qa",

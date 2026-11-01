@@ -275,7 +275,11 @@ describe("findHandback for a scheduled run's launch (#15982)", () => {
       [runRequest],
       1
     );
-    expect(done).toMatchObject({ report: "done", run: true, handback: { message: "triaged all six" } });
+    expect(done).toMatchObject({
+      report: "done",
+      run: true,
+      handback: { message: "triaged all six" },
+    });
   });
 
   it("never reads the echoed run instruction as either report", () => {
@@ -285,7 +289,9 @@ describe("findHandback for a scheduled run's launch (#15982)", () => {
 
   it("finds no needs-you report for a request that was never offered one", () => {
     const text = "⏺ DAINTREE-NEEDS-YOU-k7f3qa: stuck END-k7f3qa";
-    expect(findHandback(screen(text), [{ code: CODE, seq: 1, delivered: true }], 1)).toBeUndefined();
+    expect(
+      findHandback(screen(text), [{ code: CODE, seq: 1, delivered: true }], 1)
+    ).toBeUndefined();
     expect(findHandback(screen(text), [runRequest], 1)?.report).toBe("needs-you");
   });
 
@@ -312,9 +318,10 @@ describe("findHandback for a scheduled run's launch (#15982)", () => {
   });
 
   it("finds a needs-you marker the TUI split at a hyphen", () => {
-    const text = ["• Blocked on credentials. DAINTREE-NEEDS-", "  YOU-k7f3qa: no API key END-k7f3qa"].join(
-      "\n"
-    );
+    const text = [
+      "• Blocked on credentials. DAINTREE-NEEDS-",
+      "  YOU-k7f3qa: no API key END-k7f3qa",
+    ].join("\n");
     expect(findHandback(screen(text), [runRequest], 1)).toMatchObject({
       report: "needs-you",
       handback: { message: "no API key" },

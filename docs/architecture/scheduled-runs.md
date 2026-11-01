@@ -137,18 +137,18 @@ The three axes keep three events apart: the run settling, the agent or PTY exiti
 
 The outcome follows from the evidence (`outcomeForEvidence`), and the schema refuses a record where it doesn't:
 
-| Evidence                                                              | Outcome              |
-| --------------------------------------------------------------------- | -------------------- |
+| Evidence | Outcome |
+| --- | --- |
 | `handback`: the marker the agent printed, `done` or `needs-you`, with its summary | `done` / `needs-you` |
-| `exit` of the agent or PTY with code 0 and no signal                  | `done`               |
-| `exit` with a non-zero code or a signal                               | `failed`             |
-| `exit` with no code or signal known                                   | `exited`             |
-| `launch-error`                                                        | `failed`             |
-| `skip`, with its reason                                               | `skipped`            |
-| `cancel`: the user stopped the run                                    | `cancelled`          |
-| `replace`: the overlap policy put `replacedByRunId` in its place      | `replaced`           |
-| `lost`: the PTY host confirmed the terminal is gone with no exit seen | `lost`               |
-| `interrupted`: Daintree quit or crashed while the run was open        | `interrupted`        |
+| `exit` of the agent or PTY with code 0 and no signal | `done` |
+| `exit` with a non-zero code or a signal | `failed` |
+| `exit` with no code or signal known | `exited` |
+| `launch-error` | `failed` |
+| `skip`, with its reason | `skipped` |
+| `cancel`: the user stopped the run | `cancelled` |
+| `replace`: the overlap policy put `replacedByRunId` in its place | `replaced` |
+| `lost`: the PTY host confirmed the terminal is gone with no exit seen | `lost` |
+| `interrupted`: Daintree quit or crashed while the run was open | `interrupted` |
 
 A `needs-you` run is settled: the schedule's attempt is over and its terminal stays for the user. Only the agent's `done` handback applies the done policy, never an exit that reads as `done`. A restart that hasn't yet reconnected to a run's terminal is not `lost`. A run Daintree's quit or crash left open is `interrupted`, settled at the next startup.
 
