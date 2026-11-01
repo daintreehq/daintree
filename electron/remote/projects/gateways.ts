@@ -237,7 +237,8 @@ export class RemoteHostGateway implements HostGateway {
     const onAbort = () => {
       if (opId === undefined) return;
       void this.session()
-        .then((session) => session.call(ProjectLinkMethod.PUSH_CANCEL, { opId }))
+        // No deadline: a cancel that settles unsent is dropped, and the push runs on.
+        .then((session) => session.call(ProjectLinkMethod.PUSH_CANCEL, { opId }, { timeoutMs: 0 }))
         .catch(() => {});
     };
     signal?.addEventListener("abort", onAbort, { once: true });

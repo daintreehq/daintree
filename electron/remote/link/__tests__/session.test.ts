@@ -282,6 +282,8 @@ describe("LinkSession request/response", () => {
       late.catch(() => {});
       notice.catch(() => {});
       await expect(late).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
+      // Past the session's deadline for a call made a moment after the first.
+      await new Promise((r) => setTimeout(r, 40));
       expect(await requestsReceived(client, b)).toEqual(["notice"]);
     });
   });
