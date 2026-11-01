@@ -165,6 +165,13 @@ Drive state chips in panel headers and worktree card indicators.
 | `activity-waiting`   | Agent waiting for user input (amber) | Required                  |
 | `activity-idle`      | Inactive/dormant state               | Required                  |
 | `activity-completed` | Finished successfully                | Derived: `status-success` |
+| `activity-working-text` | Text-grade working ink for status sentences such as the project switcher's "2 running" | Derived: `activity-working` lifted along OKLCH lightness until it holds 4.5:1 on every backdrop `diff-text-*` answers to, and on the switcher's rows at rest and highlighted |
+| `activity-waiting-text` | Text-grade waiting ink | Derived: same rule |
+| `activity-completed-text` | Text-grade completed ink ("2 agents unread") | Derived: same rule |
+
+The activity inks are graphical, held to 3:1 for the spinners, rings and dots beside a status sentence, so a sentence paints the `*-text` twin. The switcher's dark palette surface is a translucent material over whichever plane sits beneath it, which none of the display surfaces spell, so those rows are measured as well. A theme that names one keeps it, and the contrast gate reports it if it falls short. Colour-vision modes lift them again from the hues they swap in.
+
+`activity-completed` must stay apart from `activity-working`: the switcher's two-tone mark draws a project with runs going and runs finished-unread as a pie of the two. A theme whose `status-success` is its working green names `activity-completed` itself, as bondi, atacama, bali, serengeti and svalbard do.
 
 ## Overlay Tokens
 

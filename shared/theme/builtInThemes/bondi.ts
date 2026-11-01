@@ -132,6 +132,12 @@ export const theme: BuiltInThemeSource = {
     },
   },
   tokens: {
+    // Completed falls back to `status-success`, which is the working green here,
+    // so a project with runs going and runs finished-unread drew its two-tone
+    // mark as one disc (#15866). Same hue, a step deeper and duller, the way
+    // table-mountain and hokkaido already part the two: ΔE 0.093 from working,
+    // and the lightness step survives a red-green reading where chroma doesn't.
+    "activity-completed": "#29543E",
     "accent-muted": "rgba(0,78,107,0.30)",
     // Bondi's selection vocabulary is "elevate to white, mark with a rail" — it
     // never fills with accent. `accent-soft`'s single consumer is QuickRun's

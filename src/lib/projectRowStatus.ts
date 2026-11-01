@@ -28,20 +28,24 @@ export type ProjectRowTone =
  * longer prints a status word at all — its rows say the state with a glyph and
  * in their accessible name — so the switcher is the caller that keeps this
  * honest today.
+ *
+ * Every hue here is a `*-text` twin, never the graphical ink the mark beside it
+ * paints. The sentence is small text on a row that also takes the highlight
+ * fill, and the graphical inks only hold 3:1 there (#15866).
  */
 export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
-  blocked: "text-status-danger",
-  waiting: "text-activity-waiting",
+  blocked: "text-status-danger-text",
+  waiting: "text-activity-waiting-text",
   // Finished-awaiting-review: the completed-state hue, distinct from both the
   // warning of a wait and the success-green of a healthy process. Never danger
   // — completion is the desired outcome, not a fault.
-  review: "text-activity-completed",
+  review: "text-activity-completed-text",
   // Mark-only today: `working` is what a row draws when liveness has claimed a
   // mark demand had no use for, and such a row has no sentence to colour. The
   // entry stays because the map is total over the union — a tone must not be
   // able to ship without an answer here — and because a surface with room for a
   // "running" sentence should draw it in this hue rather than inventing one.
-  working: "text-activity-working",
+  working: "text-activity-working-text",
   running: "text-text-secondary",
   // Muted like the other settled states, and deliberately NOT the accent: a
   // snooze is the user telling this row to stop asking for them, so it must not
@@ -59,7 +63,7 @@ export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
   assistant: "text-text-secondary",
   // An assistant that failed says so in the danger hue — the severity is real
   // — while its dot stays hollow, so it never reads as a worker run.
-  "assistant-blocked": "text-status-danger",
+  "assistant-blocked": "text-status-danger-text",
 };
 
 /**
@@ -82,7 +86,8 @@ export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
  *
  * One standing exception: `review` keeps the completed hue, which derives from
  * `status-success` and so reads green in most palettes even though nothing is
- * executing. It predates this legend and the row's line always names the count
+ * executing. Every built-in keeps it apart from the working green, so the pie
+ * still splits when both are present (#15866). It predates this legend and the row's line always names the count
  * ("2 agents unread"), so it is recorded here rather than quietly reconciled.
  *
  * A hollow ring must never land on a row with something running. It used to:

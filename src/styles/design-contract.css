@@ -140,6 +140,9 @@
   --color-activity-working: var(--theme-activity-working);
   --color-activity-waiting: var(--theme-activity-waiting);
   --color-activity-completed: var(--theme-activity-completed);
+  --color-activity-working-text: var(--theme-activity-working-text);
+  --color-activity-waiting-text: var(--theme-activity-waiting-text);
+  --color-activity-completed-text: var(--theme-activity-completed-text);
   --color-overlay-base: var(--theme-overlay-base);
   --color-overlay-subtle: var(--theme-overlay-subtle);
   --color-overlay-soft: var(--theme-overlay-soft);

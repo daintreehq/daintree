@@ -80,9 +80,9 @@ describe("PilotRunState", () => {
   });
 
   it("separates work in flight from work handed back", () => {
-    // The collision this exists to prevent: `activity-completed` is unset in
-    // every built-in theme and falls back to `status-success`, which is the
-    // same hex as `activity-working` in five of them. Hueing `running` without
+    // The collision this exists to prevent: `activity-completed` falls back to
+    // `status-success`, which is the same hex as `activity-working` in five
+    // built-ins unless the theme names it (#15866). Hueing `running` without
     // moving `review` off that fallback would leave spinner-versus-check as the
     // only difference between two states an operator has to tell apart.
     expect(toneOf("review")).not.toBe(toneOf("running"));

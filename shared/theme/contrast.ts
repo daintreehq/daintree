@@ -76,6 +76,18 @@ export const STATUS_TEXT_INKS = {
 
 export const STATUS_TEXT_CONTRAST = { minimum: 4.5, washOpacity: 0.15 } as const;
 
+// The project switcher's status sentences ("2 running", "1 agent unread") are small
+// text in an activity hue. The activity inks are graphical, held to 3:1 for the
+// spinners, rings and dots beside them, so each sentence hue gets a text-grade twin
+// lifted the way the status letters' are (#15866).
+export const ACTIVITY_TEXT_INKS = {
+  "activity-working": "activity-working-text",
+  "activity-waiting": "activity-waiting-text",
+  "activity-completed": "activity-completed-text",
+} as const satisfies Partial<Record<AppThemeTokenKey, AppThemeTokenKey>>;
+
+export const ACTIVITY_TEXT_MIN_CONTRAST = 4.5;
+
 // The graphical status inks (dots, icons, borders) hold the 3:1 non-text floor on
 // every surface they sit on. Exported because the colour-vision modes fit the
 // status inks they swap in to this same contract (#15580).
@@ -662,6 +674,7 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
   warnings.push(...getDestructiveButtonWarnings(scheme));
   warnings.push(...getDiffTextContrastWarnings(scheme));
   warnings.push(...getStatusTextWarnings(scheme));
+  warnings.push(...getActivityTextWarnings(scheme));
 
   // Terminal ANSI / syntax legibility and distinctness — OKLab-based because
   // the terminal background is always dark and WCAG ratios are unreliable there.
@@ -700,20 +713,55 @@ const DARK_PALETTE_SURFACE_OPACITY = 0.94;
 
 // Every colour the palette surface can actually render as, worst case last.
 function resolvePaletteSurfaces(scheme: AppColorScheme): string[] | null {
-  if (scheme.type === "light") {
-    const elevated = scheme.tokens["surface-panel-elevated"];
-    return isHexColor(elevated) ? [elevated] : null;
+  const surfaces = collectPaletteSurfaces(scheme.tokens, scheme.type);
+  return surfaces && surfaces.map((surface) => surface.hex);
+}
+
+function collectPaletteSurfaces(
+  tokens: Partial<Record<AppThemeTokenKey, string>>,
+  type: "dark" | "light"
+): Array<{ label: string; hex: string }> | null {
+  if (type === "light") {
+    const elevated = tokens["surface-panel-elevated"];
+    return typeof elevated === "string" && isHexColor(elevated)
+      ? [{ label: "the palette surface", hex: elevated }]
+      : null;
   }
-  const sidebar = scheme.tokens["surface-sidebar"];
-  if (!isHexColor(sidebar)) return null;
+  const sidebar = tokens["surface-sidebar"];
+  if (typeof sidebar !== "string" || !isHexColor(sidebar)) return null;
   // The solid sidebar stays in the running: performance mode and
   // `prefers-contrast: more` both drop the material and render it opaque.
-  return [
-    sidebar,
-    ...DARK_PALETTE_BACKDROPS.map((key) => scheme.tokens[key])
-      .filter(isHexColor)
-      .map((backdrop) => blendOverBackground(sidebar, backdrop, DARK_PALETTE_SURFACE_OPACITY)),
-  ];
+  const surfaces = [{ label: "the palette surface", hex: sidebar }];
+  for (const key of DARK_PALETTE_BACKDROPS) {
+    const backdrop = tokens[key];
+    if (typeof backdrop !== "string" || !isHexColor(backdrop)) continue;
+    surfaces.push({
+      label: `the palette surface over ${key}`,
+      hex: blendOverBackground(sidebar, backdrop, DARK_PALETTE_SURFACE_OPACITY),
+    });
+  }
+  return surfaces;
+}
+
+/**
+ * Every backdrop a project switcher row can paint on: the palette surface at rest,
+ * and `overlay-highlight` over it when the row holds the cursor. Empty when the
+ * surface or the fill isn't a colour this math can composite.
+ */
+export function resolvePaletteRowBackdrops(
+  tokens: Partial<Record<AppThemeTokenKey, string>>,
+  type: "dark" | "light"
+): Array<{ label: string; hex: string }> {
+  const surfaces = collectPaletteSurfaces(tokens, type);
+  const fill = tokens["overlay-highlight"];
+  if (!surfaces || typeof fill !== "string") return [];
+  const rows: Array<{ label: string; hex: string }> = [];
+  for (const surface of surfaces) {
+    const highlighted = resolveOverBackdrop(fill, surface.hex);
+    if (highlighted === null) return [];
+    rows.push(surface, { label: `the highlighted row on ${surface.label}`, hex: highlighted });
+  }
+  return rows;
 }
 
 const SELECTION_OUTLINE_MIN_CONTRAST = 3.0;
@@ -1171,6 +1219,59 @@ function getStatusTextWarnings(scheme: AppColorScheme): AppThemeValidationWarnin
       warnings.push({
         kind: "low-contrast",
         message: `${textKey} on ${worst.label} is ${worst.ratio.toFixed(2)}:1; target is ${minimum.toFixed(1)}:1`,
+      });
+    }
+  }
+  return warnings;
+}
+
+/**
+ * Every backdrop an activity sentence can paint on: the rows status text shares
+ * with the churn counts, plus the project switcher's own rows, whose dark palette
+ * surface is a translucent material none of the display surfaces spell.
+ */
+export function resolveActivityTextBackdrops(
+  tokens: Partial<Record<AppThemeTokenKey, string>>,
+  type: "dark" | "light"
+): Array<{ label: string; hex: string }> {
+  return [...resolveDiffTextBackdrops(tokens), ...resolvePaletteRowBackdrops(tokens, type)];
+}
+
+/**
+ * The activity sentence inks hold AA on every backdrop they paint on. Fills the
+ * math can't composite are already named by the churn and recent-activity gates,
+ * which measure the same rows.
+ */
+function getActivityTextWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
+  const warnings: AppThemeValidationWarning[] = [];
+  const backdrops = resolveActivityTextBackdrops(scheme.tokens, scheme.type);
+  if (backdrops.length === 0) {
+    warnings.push({
+      kind: "unevaluable",
+      message: "Cannot evaluate activity text contrast: no row backdrop is a hex color",
+    });
+    return warnings;
+  }
+  for (const textKey of Object.values(ACTIVITY_TEXT_INKS)) {
+    const ink = scheme.tokens[textKey];
+    let worst: { label: string; ratio: number } | null = null;
+    for (const backdrop of backdrops) {
+      const painted = resolveOverBackdrop(ink, backdrop.hex);
+      if (painted === null) {
+        warnings.push({
+          kind: "unevaluable",
+          message: `Cannot evaluate ${textKey} contrast: ${textKey}="${ink}" is neither hex nor rgba()`,
+        });
+        worst = null;
+        break;
+      }
+      const ratio = contrastRatio(painted, backdrop.hex);
+      if (worst === null || ratio < worst.ratio) worst = { label: backdrop.label, ratio };
+    }
+    if (worst && worst.ratio < ACTIVITY_TEXT_MIN_CONTRAST) {
+      warnings.push({
+        kind: "low-contrast",
+        message: `${textKey} on ${worst.label} is ${worst.ratio.toFixed(2)}:1; target is ${ACTIVITY_TEXT_MIN_CONTRAST.toFixed(1)}:1`,
       });
     }
   }
