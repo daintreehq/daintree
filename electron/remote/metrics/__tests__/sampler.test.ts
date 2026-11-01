@@ -656,6 +656,8 @@ describe("HostMetricsSampler", () => {
       for (const [gap, expected] of [
         [15_000, 25],
         [15_001, null],
+        // Core-time shares don't divide by the interval, so a clock that stood still still measures.
+        [0, 25],
         [-1_000, null],
       ] as const) {
         const step = pausedSampler();
