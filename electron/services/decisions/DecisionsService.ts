@@ -2,7 +2,6 @@ import { stat } from "node:fs/promises";
 import type { QuestionRow } from "@daintreehq/decisions-client";
 import type {
   DecisionsSettings,
-  DecisionsState,
   DecisionsStatus,
   DecisionsStatusEvent,
   PaneDecisionState,
@@ -12,8 +11,44 @@ import { decisionsLibraries, type DecisionsLibraries } from "./libraries.js";
 import { openDecisionsLocalStore } from "./openLocalStore.js";
 import { decisionsKeyFilePath, SealedKeyStore } from "./keyStore.js";
 import { PaneDecisionStates, type PaneDecisionStatePublisher } from "./paneDecisionState.js";
+import {
+  RelayConnection,
+  type RelayBinding,
+  type RelayConnectionOptions,
+} from "./relayConnection.js";
 
 export type DecisionsStatusListener = (event: DecisionsStatusEvent) => void;
+
+/** What the service runs a relay connection with; tests hand in their own. */
+export interface DecisionsRelayConnection {
+  start(): void;
+  stop(): void;
+}
+
+export type DecisionsConnectionFactory = (
+  options: RelayConnectionOptions
+) => DecisionsRelayConnection;
+
+/** The service's own part of the status; the entry adds what the setting says. */
+type ServiceStatus = Pick<DecisionsStatus, "state" | "nextAttemptAt" | "problem">;
+
+/** The relay a lifetime's settings name, complete; null while one isn't set up. */
+export function relayBindingOf(settings: DecisionsSettings | null): RelayBinding | null {
+  if (!settings?.relayOrigin || !settings.installationId || !settings.deviceId) return null;
+  return {
+    relayOrigin: settings.relayOrigin,
+    installationId: settings.installationId,
+    deviceId: settings.deviceId,
+  };
+}
+
+function bindingKey(relay: RelayBinding): string {
+  return `${relay.relayOrigin}\n${relay.installationId}\n${relay.deviceId}`;
+}
+
+function sameServiceStatus(a: ServiceStatus, b: ServiceStatus): boolean {
+  return a.state === b.state && a.nextAttemptAt === b.nextAttemptAt && a.problem === b.problem;
+}
 
 /** Opens the store for an enabled lifetime; null when `isCancelled` turned true before it opened. */
 export type DecisionsStoreOpener = (
@@ -26,6 +61,13 @@ export interface DecisionsServiceOptions {
   keyFilePath?: () => string;
   /** Sends one pane's state to its project's views (`terminal:decision-state`). */
   publishPaneState?: PaneDecisionStatePublisher;
+  /**
+   * The relay revoked the identity this lifetime connected with. The entry
+   * records it in the setting, so no later lifetime connects with it either.
+   */
+  onRelayRevoked?: (relay: RelayBinding) => void;
+  /** Makes the relay connection for a lifetime with a relay set up. */
+  connect?: DecisionsConnectionFactory;
 }
 
 /**
@@ -40,7 +82,7 @@ export interface DecisionsServiceOptions {
 export class DecisionsService {
   readonly libraries: DecisionsLibraries = decisionsLibraries;
 
-  private state: DecisionsState = "off";
+  private status: ServiceStatus = { state: "off" };
   private settings: DecisionsSettings | null = null;
   private store: DaintreeLocalStore | null = null;
   private disposed = false;
@@ -50,15 +92,27 @@ export class DecisionsService {
   private readonly keyFilePath: () => string;
   private keyStore: SealedKeyStore | null = null;
   private readonly panes: PaneDecisionStates;
+  private readonly connect: DecisionsConnectionFactory;
+  private readonly onRelayRevoked: (relay: RelayBinding) => void;
+  private connection: DecisionsRelayConnection | null = null;
+  private connectionKey: string | null = null;
+  /** The store didn't open for this lifetime; the next start tries it again. */
+  private storeFailed = false;
 
   constructor(options: DecisionsServiceOptions = {}) {
     this.openStore = options.openStore ?? openDecisionsLocalStore;
     this.keyFilePath = options.keyFilePath ?? decisionsKeyFilePath;
     this.panes = new PaneDecisionStates(options.publishPaneState ?? (() => {}));
+    this.connect = options.connect ?? ((connection) => new RelayConnection(connection));
+    this.onRelayRevoked = options.onRelayRevoked ?? (() => {});
   }
 
   getStatus(): DecisionsStatus {
-    return { state: this.state };
+    return { ...this.status };
+  }
+
+  private get state(): DecisionsStatus["state"] {
+    return this.status.state;
   }
 
   /** The settings the running lifetime started with; null while stopped. */
@@ -91,6 +145,22 @@ export class DecisionsService {
   updateSettings(settings: DecisionsSettings): void {
     if (this.disposed || this.settings === null || !settings.enabled) return;
     this.settings = settings;
+    this.reconcileConnection();
+  }
+
+  /**
+   * Stops the relay connection until the next settings change or
+   * `resumeConnection`: disconnecting removes the keys it runs on, so it
+   * stops first.
+   */
+  suspendConnection(): void {
+    this.dropConnection();
+    if (this.settings !== null && !this.disposed) this.setStatus({ state: "not-connected" });
+  }
+
+  /** Connects again after `suspendConnection`, if the settings still want it. */
+  resumeConnection(): void {
+    if (this.settings !== null && !this.disposed) this.reconcileConnection();
   }
 
   /**
@@ -140,14 +210,24 @@ export class DecisionsService {
       this.settings = settings;
       // There is no relay identity until a relay is claimed or restored, and no
       // socket until one opens, so on is honestly "not connected" for now.
-      if (this.state === "off") this.setState("not-connected");
-      if (this.store) return;
-      const opened = await this.openStore(() => this.disposed);
-      if (this.disposed) {
-        await opened?.close();
-        return;
+      if (this.state === "off") this.setStatus({ state: "not-connected" });
+      if (!this.store) {
+        let opened: DaintreeLocalStore | null;
+        try {
+          opened = await this.openStore(() => this.disposed);
+        } catch (error) {
+          this.storeFailed = true;
+          this.reconcileConnection();
+          throw error;
+        }
+        if (this.disposed) {
+          await opened?.close();
+          return;
+        }
+        this.store = opened;
+        this.storeFailed = false;
       }
-      this.store = opened;
+      this.reconcileConnection();
     });
   }
 
@@ -174,19 +254,69 @@ export class DecisionsService {
    * while it closes is cleared too.
    */
   private async release(clearViews: boolean): Promise<void> {
+    // The connection goes first: nothing may reach the store or keys once they close.
+    this.dropConnection();
     const store = this.store;
     const keyStore = this.keyStore;
     this.store = null;
     this.keyStore = null;
     this.settings = null;
+    this.storeFailed = false;
     try {
       // Commits what the lifetime left queued; the rows stay until deleted.
       await store?.close();
     } finally {
       this.panes.clear(clearViews && !this.disposed && this.state !== "off");
       await keyStore?.close();
-      this.setState("off");
+      this.setStatus({ state: "off" });
     }
+  }
+
+  /**
+   * Runs the relay connection the settings call for: one per relay identity,
+   * only with the store open and the identity not revoked. A different
+   * identity (a disconnect and a new claim) gets a fresh connection.
+   */
+  private reconcileConnection(): void {
+    const settings = this.settings;
+    const relay = this.disposed ? null : relayBindingOf(settings);
+    const wanted =
+      relay !== null && settings?.revokedAt === null && this.store !== null ? relay : null;
+    const key = wanted ? bindingKey(wanted) : null;
+    if (this.connectionKey !== key) this.dropConnection();
+    if (wanted === null || key === null) {
+      if (this.disposed || settings === null) return;
+      if (relay !== null && settings.revokedAt !== null) this.setStatus({ state: "revoked" });
+      else if (relay !== null && this.storeFailed) {
+        this.setStatus({ state: "not-connected", problem: "storage" });
+      } else this.setStatus({ state: "not-connected" });
+      return;
+    }
+    if (this.connection) return;
+    const store = this.store;
+    if (!store) return;
+    let connection: DecisionsRelayConnection | null = null;
+    connection = this.connect({
+      relay: wanted,
+      store,
+      keys: this.getKeyStore(),
+      onStatus: (status) => {
+        if (this.connection === connection) this.setStatus(status);
+      },
+      onRevoked: () => {
+        if (this.connection === connection) this.onRelayRevoked(wanted);
+      },
+    });
+    this.connection = connection;
+    this.connectionKey = key;
+    connection.start();
+  }
+
+  private dropConnection(): void {
+    const connection = this.connection;
+    this.connection = null;
+    this.connectionKey = null;
+    connection?.stop();
   }
 
   private enqueue(step: () => void | Promise<void>): Promise<void> {
@@ -195,9 +325,13 @@ export class DecisionsService {
     return run;
   }
 
-  private setState(next: DecisionsState): void {
-    if (this.state === next) return;
-    this.state = next;
+  private setStatus(next: ServiceStatus): void {
+    if (sameServiceStatus(this.status, next)) return;
+    this.status = {
+      state: next.state,
+      ...(next.nextAttemptAt !== undefined ? { nextAttemptAt: next.nextAttemptAt } : {}),
+      ...(next.problem !== undefined ? { problem: next.problem } : {}),
+    };
     const event: DecisionsStatusEvent = { type: "status-changed", status: this.getStatus() };
     for (const listener of [...this.listeners]) {
       try {

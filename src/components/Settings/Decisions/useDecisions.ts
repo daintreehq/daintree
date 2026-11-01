@@ -20,10 +20,12 @@ export interface UseDecisionsResult {
 }
 
 /**
- * Decisions as main last reported it, read on mount and after every change.
- * There is no status push yet; the child that first needs live status adds
- * one. Changes go through one at a time, with promise chains rather than
- * try/finally, which the React Compiler can't lower.
+ * Decisions as main last reported it: read on mount, pushed on every change
+ * (`decisions:status-changed`, the relay connection's included), and answered
+ * by every change asked here. Whichever carries the higher revision wins, so
+ * a read that lands after a newer push can't roll it back. Changes go through
+ * one at a time, with promise chains rather than try/finally, which the React
+ * Compiler can't lower.
  */
 export function useDecisions(): UseDecisionsResult {
   const [status, setStatus] = useState<DecisionsStatus | null>(null);
@@ -31,11 +33,23 @@ export function useDecisions(): UseDecisionsResult {
   const [pending, setPending] = useState<SetDecisionsEnabledPayload | null>(null);
   const [saveFailure, setSaveFailure] = useState<DecisionsSaveFailure | null>(null);
   const savingRef = useRef(false);
+  const revisionRef = useRef(-1);
+
+  /** Shows `next` unless something newer is already shown. */
+  const accept = (next: DecisionsStatus): boolean => {
+    const revision = next.revision ?? 0;
+    if (revision < revisionRef.current) return false;
+    revisionRef.current = revision;
+    setStatus(next);
+    return true;
+  };
 
   const reload = (): Promise<void> => {
     setLoadError(null);
     return window.electron.decisions.getStatus().then(
-      (next) => setStatus(next),
+      (next) => {
+        accept(next);
+      },
       (error: unknown) =>
         setLoadError(formatErrorMessage(error, "Decisions status couldn't be read."))
     );
@@ -43,9 +57,13 @@ export function useDecisions(): UseDecisionsResult {
 
   useEffect(() => {
     let active = true;
+    // Subscribed before the read, so a change between the two is never missed.
+    const off = window.electron.events.on("decisions:status-changed", (next) => {
+      if (active && accept(next)) setLoadError(null);
+    });
     window.electron.decisions.getStatus().then(
       (next) => {
-        if (active) setStatus(next);
+        if (active) accept(next);
       },
       (error: unknown) => {
         if (active) setLoadError(formatErrorMessage(error, "Decisions status couldn't be read."));
@@ -53,6 +71,7 @@ export function useDecisions(): UseDecisionsResult {
     );
     return () => {
       active = false;
+      off();
     };
   }, []);
 
@@ -65,7 +84,7 @@ export function useDecisions(): UseDecisionsResult {
       .setEnabled(payload)
       .then(
         (next) => {
-          setStatus(next);
+          accept(next);
           setLoadError(null);
         },
         (error: unknown) => {
@@ -75,7 +94,12 @@ export function useDecisions(): UseDecisionsResult {
           });
           // A failed start can still have saved the switch (the store didn't
           // open, say), so show what main now holds rather than what was asked.
-          return window.electron.decisions.getStatus().then(setStatus, () => {});
+          return window.electron.decisions.getStatus().then(
+            (next) => {
+              accept(next);
+            },
+            () => {}
+          );
         }
       )
       .then(() => {
@@ -85,8 +109,7 @@ export function useDecisions(): UseDecisionsResult {
   };
 
   const applyStatus = (next: DecisionsStatus) => {
-    setStatus(next);
-    setLoadError(null);
+    if (accept(next)) setLoadError(null);
   };
 
   return { status, loadError, pending, saveFailure, reload, applyStatus, setEnabled };

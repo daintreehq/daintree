@@ -1400,6 +1400,8 @@ export const EVENT_LOCALITY: Readonly<Record<string, ChannelLocality>> = {
   "terminal:first-prompt": "host",
   "terminal:notify-state": "host",
   "terminal:decision-state": "host",
+  // The owner machine's switch and relay connection, like its settings.
+  "decisions:status-changed": "shell",
   "watchdog:active": "host",
   "watchdog:disabled": "host",
   "window:destroy-hidden-webviews": "shell",
