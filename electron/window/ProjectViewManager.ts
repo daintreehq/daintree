@@ -34,7 +34,7 @@ import {
   restoreInBackground,
   type BackgroundRestoreResult,
 } from "./ProjectViewRestoreController.js";
-import { hasActiveAgent, initAgentStateCache } from "./ProjectViewAgentStateCache.js";
+import { initAgentStateCache, viewHasActiveAgent } from "./ProjectViewAgentStateCache.js";
 import type {
   PaintGate,
   PaintGateOutcome,
@@ -1570,8 +1570,10 @@ export class ProjectViewManager {
     // cannot run JS, so the queued agent:state-changed IPC sits in Mojo and
     // the background dashboard stays stuck on its pre-freeze state (e.g.
     // "waiting") until the view is foregrounded. Idle/completed projects
-    // still freeze for the efficiency win.
-    if (hasActiveAgent(this, projectId)) return;
+    // still freeze for the efficiency win. A host's project is asked of its
+    // host, which also keeps streaming its agents' output into the view, where
+    // a frozen renderer can't acknowledge it (#15879).
+    if (viewHasActiveAgent(this, projectId, entry)) return;
     const wc = entry.view.webContents;
     if (wc.isDestroyed()) return;
     // A live MCP session binding is the same argument (#11790): the whole
@@ -1651,12 +1653,13 @@ export class ProjectViewManager {
   // once its event loop runs again. No-op outside efficiency.
   //
   // Not `private`: called from ProjectViewAgentStateCache's seed() after a
-  // fresh agent-state map lands (#11004).
+  // fresh agent-state map lands (#11004), and when a host says an agent in a
+  // view's project went active there (#15879).
   unfreezeActiveAgentViews(): void {
     if (!this.efficiencyFreezeEnabled) return;
     for (const [projectId, entry] of this.views) {
       if (projectId === this.activeProjectId) continue;
-      if (!hasActiveAgent(this, projectId)) continue;
+      if (!viewHasActiveAgent(this, projectId, entry)) continue;
       const wc = entry.view.webContents;
       if (wc.isDestroyed()) continue;
       void unfreezeWebContents(wc);

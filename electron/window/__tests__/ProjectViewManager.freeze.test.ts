@@ -600,6 +600,99 @@ describe("ProjectViewManager — efficiency freeze", () => {
     expect(frozeProjA).toBe(false);
   });
 
+  describe("a host's project whose agents are working there (#15879)", () => {
+    let activeRemoteViews: Set<number>;
+    let localWc: ReturnType<typeof createMockWebContents>;
+    let remoteWc: Electron.WebContents;
+    const frozeRemote = () =>
+      vi.mocked(freezeWebContents).mock.calls.some((call) => call[0] === remoteWc);
+
+    beforeEach(async () => {
+      manager.dispose();
+      activeRemoteViews = new Set();
+      manager = new ProjectViewManager(win as never, {
+        dirname: "/test",
+        cachedProjectViews: 3,
+        paintGateTimeoutMs: 0,
+        paintGateHardTimeoutMs: 0,
+        remoteAgentActive: (webContentsId) => activeRemoteViews.has(webContentsId),
+      });
+      (manager as unknown as { waitForPaint: () => Promise<string> }).waitForPaint = () =>
+        Promise.resolve("signal");
+      localWc = createMockWebContents();
+      manager.registerInitialView(
+        { webContents: localWc, setBounds: vi.fn() } as never,
+        "proj-a",
+        "/path/a"
+      );
+      await manager.switchToHostProject("studio-02", "proj-r", "/srv/r");
+      remoteWc = manager.getAllViews().find((v) => v.projectId.startsWith("studio-02"))!.view
+        .webContents;
+    });
+
+    it("isn't batch-frozen while its host reports an active agent", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      activeRemoteViews.add(remoteWc.id);
+
+      manager.setEfficiencyFreeze(true);
+      vi.advanceTimersByTime(500);
+      expect(frozeRemote()).toBe(false);
+
+      // Once the host says its agents settled, the next pass freezes it like any other.
+      activeRemoteViews.clear();
+      manager.refreezeUnprotectedCachedViews();
+      expect(frozeRemote()).toBe(true);
+    });
+
+    it("isn't frozen as the user leaves it while its host reports an active agent", async () => {
+      manager.setEfficiencyFreeze(true);
+      vi.advanceTimersByTime(500);
+      activeRemoteViews.add(remoteWc.id);
+
+      await manager.switchTo("proj-b", "/path/b");
+
+      expect(frozeRemote()).toBe(false);
+    });
+
+    it("is frozen as the user leaves it when its host reports no active agent", async () => {
+      manager.setEfficiencyFreeze(true);
+      vi.advanceTimersByTime(500);
+
+      await manager.switchTo("proj-b", "/path/b");
+
+      expect(frozeRemote()).toBe(true);
+    });
+
+    it("wakes from a freeze once its host reports an active agent, and isn't frozen again", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      manager.setEfficiencyFreeze(true);
+      vi.advanceTimersByTime(500);
+      expect(frozeRemote()).toBe(true);
+      vi.mocked(freezeWebContents).mockClear();
+      vi.mocked(unfreezeWebContents).mockClear();
+
+      activeRemoteViews.add(remoteWc.id);
+      manager.unfreezeActiveAgentViews();
+      expect(vi.mocked(unfreezeWebContents)).toHaveBeenCalledWith(remoteWc);
+      // The idle local view stays frozen: the wake is for active agents only.
+      expect(vi.mocked(unfreezeWebContents)).not.toHaveBeenCalledWith(localWc);
+
+      manager.refreezeUnprotectedCachedViews();
+      expect(frozeRemote()).toBe(false);
+    });
+
+    it("never takes this machine's agents as the host's", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      // A local terminal whose project id happens to match the host's.
+      seedActiveAgent("t1", "proj-r");
+
+      manager.setEfficiencyFreeze(true);
+      vi.advanceTimersByTime(500);
+
+      expect(frozeRemote()).toBe(true);
+    });
+  });
+
   it("unfreezeActiveAgentViews wakes a view that was frozen before its agent went active", async () => {
     await manager.switchTo("proj-b", "/path/b");
     manager.setEfficiencyFreeze(true);

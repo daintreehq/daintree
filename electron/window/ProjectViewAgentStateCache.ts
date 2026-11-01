@@ -14,8 +14,10 @@
 import { events } from "../services/events.js";
 import { unfreezeWebContents } from "../utils/webContentsLifecycle.js";
 import { ACTIVE_AGENT_STATES, type AgentState } from "../../shared/types/agent.js";
+import { isLocalHostId, parseHostScopedKey } from "../../shared/types/remoteHosts.js";
 import type { PtyClient } from "../services/PtyClient.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
+import type { ViewEntry } from "./ProjectViewManagerTypes.js";
 
 const RECONCILE_DEBOUNCE_MS = 250;
 const RECONCILE_MAX_WAIT_MS = 1_000;
@@ -243,4 +245,20 @@ export function hasActiveAgent(host: ProjectViewManager, projectId: string): boo
     if (state != null && ACTIVE_AGENT_STATES.has(state)) return true;
   }
   return false;
+}
+
+/**
+ * Whether a view's project has an active agent, wherever its agents run. A
+ * view of a host's project is asked of its host (#13359, #15879): its agents
+ * run there, so this machine's cache never sees them, and a local answer for
+ * it would always be no.
+ */
+export function viewHasActiveAgent(
+  host: ProjectViewManager,
+  projectId: string,
+  entry: ViewEntry
+): boolean {
+  if (isLocalHostId(parseHostScopedKey(projectId).hostId)) return hasActiveAgent(host, projectId);
+  const wc = entry.view.webContents;
+  return !wc.isDestroyed() && host.remoteAgentActive?.(wc.id) === true;
 }

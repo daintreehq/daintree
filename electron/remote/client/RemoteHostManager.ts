@@ -91,6 +91,13 @@ export interface ViewSink {
    * delivers nothing to, and carries no streams for, a view bound elsewhere.
    */
   hostOf?(webContentsId: number): HostId | null;
+  /**
+   * The host now says an agent in the view's project is active, where before
+   * it said none was (#15879). A view frozen in the meantime must wake: the
+   * host streams that agent's output into it, and a frozen renderer can't
+   * acknowledge any of it.
+   */
+  agentActivated?(webContentsId: number): void;
 }
 
 interface OpenEndpoint {
@@ -718,13 +725,22 @@ export class HostConnection {
       LinkMethod.ENDPOINT_AGENT_ACTIVITY,
       EndpointAgentActivityPayloadSchema,
       ({ endpoints }) => {
+        const activated: number[] = [];
         for (const { endpointId, projectId, active } of endpoints) {
           const webContentsId = this.viewsByEndpoint.get(endpointId);
           if (webContentsId === undefined) continue;
           // Said about a binding the view has since left.
           if (this.endpoints.get(webContentsId)?.projectId !== projectId) continue;
+          if (active && !this.activeAgentViews.has(webContentsId)) activated.push(webContentsId);
           if (active) this.activeAgentViews.add(webContentsId);
           else this.activeAgentViews.delete(webContentsId);
+        }
+        for (const webContentsId of activated) {
+          try {
+            this.views.agentActivated?.(webContentsId);
+          } catch (error) {
+            console.error("[RemoteHostManager] agent-activated sink failed:", error);
+          }
         }
         return null;
       }
