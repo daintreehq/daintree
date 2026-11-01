@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, RefreshCw } from "lucide-react";
-import { CalendarClock } from "@/components/icons";
+import { useShallow } from "zustand/react/shallow";
+import { CalendarClock, Play } from "@/components/icons";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
@@ -10,23 +11,38 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useWallClock } from "@/hooks/useWallClock";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useSchedulesViewStore } from "@/store/schedulesViewStore";
+import { usePanelStore } from "@/store/panelStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useResumeAgentSession } from "@/hooks/useResumeAgentSession";
+import { useScheduleLaunchOptions } from "./useScheduleLaunchOptions";
 import { schedulesClient } from "@/clients/schedulesClient";
 import { useFirstAgentOptions } from "@/components/Worktree/hooks/useFirstAgentOptions";
 import { worktreeDisplayName } from "@/utils/recipeScope";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import type { Schedule } from "@shared/types/scheduledRuns";
+import type { Schedule, ScheduledRun } from "@shared/types/scheduledRuns";
+import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 import type { SchedulesSnapshot } from "@shared/types/ipc/schedules";
 import { logError } from "@/utils/logger";
 import { ScheduleList, scheduleRowSelector, NEW_SCHEDULE_SELECTOR } from "./ScheduleList";
 import { ScheduleEditor, type EditorLeaveState, type WorktreeChoice } from "./ScheduleEditor";
 import { useProjectSchedules } from "./useProjectSchedules";
 import { useLastRuns } from "./useLastRuns";
+import { ScheduleRuns } from "./ScheduleRuns";
+import { useScheduleRuns } from "./useScheduleRuns";
 
-type Page = { kind: "list" } | { kind: "schedule"; id: string } | { kind: "new" };
+type Page =
+  | { kind: "list" }
+  | { kind: "schedule"; id: string }
+  | { kind: "edit"; id: string }
+  | { kind: "new" };
 
 /** Where focus goes once a page has rendered. */
 type FocusTarget =
-  { kind: "row"; id: string } | { kind: "new-button" } | { kind: "name" } | { kind: "title" };
+  | { kind: "row"; id: string }
+  | { kind: "new-button" }
+  | { kind: "name" }
+  | { kind: "title" }
+  | { kind: "edit-button" };
 
 /** A leave that waits on "Discard changes?", with what the question names. */
 interface DiscardPrompt {
@@ -54,8 +70,48 @@ function pageFor(scheduleId: string | null): Page {
 
 function focusTargetFor(page: Page): FocusTarget {
   if (page.kind === "new") return { kind: "name" };
-  if (page.kind === "schedule") return { kind: "title" };
-  return { kind: "new-button" };
+  if (page.kind === "list") return { kind: "new-button" };
+  return { kind: "title" };
+}
+
+/**
+ * Bring a run's terminal forward: out of the trash or the background, into its
+ * worktree, and focused. A pane in the trash still holds the run's agent, so it's
+ * restored rather than resumed beside itself.
+ */
+function revealRunTerminal(terminalId: string): boolean {
+  const panels = usePanelStore.getState();
+  const panel = panels.panelsById[terminalId];
+  if (!panel) return false;
+  if (panel.location === "trash") panels.restoreTerminal(terminalId);
+  const worktreeId = usePanelStore.getState().panelsById[terminalId]?.worktreeId ?? null;
+  const selection = useWorktreeSelectionStore.getState();
+  if (worktreeId && worktreeId !== selection.activeWorktreeId) {
+    selection.selectWorktree(worktreeId, { source: "user" });
+  }
+  if (usePanelStore.getState().panelsById[terminalId]?.location === "background") {
+    usePanelStore.getState().restoreBackgroundTerminal(terminalId);
+  }
+  usePanelStore.getState().activateTerminal(terminalId);
+  return true;
+}
+
+/** A run's resume snapshot as the session record every resume surface takes. */
+function sessionRecordFor(run: ScheduledRun, schedule: Schedule): AgentSessionRecord | null {
+  const resume = run.resume;
+  if (!resume?.agentSessionId) return null;
+  return {
+    sessionId: resume.agentSessionId,
+    agentId: resume.agentId,
+    worktreeId: resume.worktreeId,
+    title: schedule.name,
+    projectId: run.projectId,
+    savedAt: run.settlement.state === "settled" ? run.settlement.settledAt : run.createdAt,
+    agentLaunchFlags: resume.agentLaunchFlags,
+    ...(resume.agentModelId ? { agentModelId: resume.agentModelId } : {}),
+    cwd: resume.cwd,
+    scheduledRun: { scheduleId: run.scheduleId, runId: run.id },
+  };
 }
 
 export function SchedulesDialog({ isOpen, onClose }: SchedulesDialogProps) {
@@ -87,10 +143,14 @@ export function SchedulesDialog({ isOpen, onClose }: SchedulesDialogProps) {
   const { lastRuns, retryLastRuns } = useLastRuns(
     isOpen ? (state.snapshot?.projectId ?? null) : null
   );
+  const { runsState, retryRuns } = useScheduleRuns(
+    isOpen && page.kind === "schedule" ? (state.snapshot?.projectId ?? null) : null,
+    page.kind === "schedule" ? page.id : null
+  );
   // Re-read on a schedule change and on fresh run history too, so a run that just
   // landed is never timed against an older clock reading.
   const now = useWallClock(
-    `${state.snapshot?.revision ?? -1}:${lastRuns.version}`,
+    `${state.snapshot?.revision ?? -1}:${lastRuns.version}:${runsState.version}`,
     untilNextMinute
   );
   const { worktrees } = useWorktrees();
@@ -99,7 +159,85 @@ export function SchedulesDialog({ isOpen, onClose }: SchedulesDialogProps) {
   const [enabledError, setEnabledError] = useState<string | null>(null);
 
   const schedules = state.snapshot?.schedules ?? [];
-  const shown = page.kind === "schedule" ? schedules.find((s) => s.id === page.id) : undefined;
+  const shown =
+    page.kind === "schedule" || page.kind === "edit"
+      ? schedules.find((s) => s.id === page.id)
+      : undefined;
+
+  const runTerminalIds = runsState.runs.flatMap((run) => (run.terminalId ? [run.terminalId] : []));
+  // Only the runs' own panes, compared by value, so other panes coming and going
+  // don't re-render the history.
+  const liveTerminalIdList = usePanelStore(
+    useShallow((s) =>
+      runTerminalIds.filter((id) => {
+        const panel = s.panelsById[id];
+        return panel !== undefined && panel.location !== "dialog";
+      })
+    )
+  );
+  const liveTerminalIds = useMemo(() => new Set(liveTerminalIdList), [liveTerminalIdList]);
+  const worktreeIds = useMemo(() => new Set(worktrees.map((worktree) => worktree.id)), [worktrees]);
+  const { preset: shownPreset, stopsAtPrompts: shownSettingsRead } = useScheduleLaunchOptions(
+    shown?.launch.agentId ?? "",
+    shown?.launch.presetId ?? null
+  );
+  // Claimed missing only once agent settings have been read, so a cold open never flashes it.
+  const presetMissing =
+    shown?.launch.presetId != null && shownSettingsRead !== null && shownPreset === undefined;
+  const resumeSession = useResumeAgentSession();
+
+  const [runNowPending, setRunNowPending] = useState(false);
+  const [runNowError, setRunNowError] = useState<string | null>(null);
+  const [requestedRunIds, setRequestedRunIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [runNowFor, setRunNowFor] = useState<string | null>(null);
+  const shownId = shown?.id ?? null;
+  if (runNowFor !== shownId) {
+    // A Run now outcome belongs to the schedule it was asked of.
+    setRunNowFor(shownId);
+    setRunNowError(null);
+    setRequestedRunIds(new Set());
+  }
+
+  // The history announces a run starting or failing, and shows a recorded refusal
+  // as its newest row; the page speaks only for a failure the history couldn't record.
+  const runNow = async (schedule: Schedule) => {
+    if (runNowPending) return;
+    setRunNowPending(true);
+    try {
+      const outcome = await schedulesClient.runNow(schedule.id);
+      const runId = outcome.status === "not-found" ? null : outcome.runId;
+      if (runId !== null) setRequestedRunIds((prev) => new Set(prev).add(runId));
+      setRunNowError(
+        outcome.status === "failed" && outcome.runId === null ? outcome.message : null
+      );
+    } catch (error) {
+      logError("Failed to run a schedule now", error);
+      setRunNowError(formatErrorMessage(error, "Try again."));
+    } finally {
+      setRunNowPending(false);
+    }
+  };
+
+  // Open and Resume take the keyboard into the grid, so they wait until the dialog
+  // has closed and handed focus back to its opener; done earlier, that restore
+  // would pull focus straight back out of the terminal.
+  const afterCloseRef = useRef<(() => void) | null>(null);
+  const closeThen = (then: () => void) => {
+    afterCloseRef.current = then;
+    onClose();
+  };
+
+  const openRun = (run: ScheduledRun) => {
+    const terminalId = run.terminalId;
+    if (!terminalId) return;
+    closeThen(() => revealRunTerminal(terminalId));
+  };
+
+  const resumeRun = (run: ScheduledRun, schedule: Schedule) => {
+    const record = sessionRecordFor(run, schedule);
+    if (!record) return;
+    closeThen(() => void resumeSession(record));
+  };
 
   // Focus moves with the page, deliberately: to the field a new schedule starts
   // with, to the page title of an existing one, and back to the row it came from.
@@ -115,6 +253,8 @@ export function SchedulesDialog({ isOpen, onClose }: SchedulesDialogProps) {
         target = root.querySelector<HTMLElement>('[data-schedule-focus="name"]');
       else if (focusTarget.kind === "row")
         target = root.querySelector<HTMLElement>(scheduleRowSelector(focusTarget.id));
+      else if (focusTarget.kind === "edit-button")
+        target = root.querySelector<HTMLElement>("[data-schedule-edit]");
       target ??= root.querySelector<HTMLElement>(NEW_SCHEDULE_SELECTOR);
       if (!target) return;
       target.focus({ preventScroll: false });
@@ -168,6 +308,8 @@ export function SchedulesDialog({ isOpen, onClose }: SchedulesDialogProps) {
 
   const returnFocus = (): FocusTarget =>
     page.kind === "schedule" ? { kind: "row", id: page.id } : { kind: "new-button" };
+  const backToSchedule = (id: string) =>
+    leave(() => go({ kind: "schedule", id }, { kind: "edit-button" }));
 
   /** Leaving a page with unsaved edits asks first; a save in flight holds the page. */
   const leave = (then: () => void) => {
@@ -187,6 +329,7 @@ export function SchedulesDialog({ isOpen, onClose }: SchedulesDialogProps) {
     then();
   };
   const backToList = () => leave(() => go({ kind: "list" }, returnFocus()));
+  const back = () => (page.kind === "edit" ? backToSchedule(page.id) : backToList());
 
   const handleBeforeClose = () => {
     const editor = leaveStateRef.current;
@@ -205,7 +348,8 @@ export function SchedulesDialog({ isOpen, onClose }: SchedulesDialogProps) {
 
   const handleSaved = (snapshot: SchedulesSnapshot, scheduleId: string) => {
     accept(snapshot);
-    go({ kind: "list" }, { kind: "row", id: scheduleId });
+    if (page.kind === "edit") go({ kind: "schedule", id: scheduleId }, { kind: "edit-button" });
+    else go({ kind: "list" }, { kind: "row", id: scheduleId });
   };
 
   const handleDeleted = (snapshot: SchedulesSnapshot, deletedId: string) => {
@@ -222,7 +366,10 @@ export function SchedulesDialog({ isOpen, onClose }: SchedulesDialogProps) {
       ? "Schedules"
       : page.kind === "new"
         ? "New schedule"
-        : (shown?.name ?? "Schedule");
+        : page.kind === "edit"
+          ? "Edit schedule"
+          : (shown?.name ?? "Schedule");
+  const backLabel = page.kind === "edit" ? "Back to schedule" : "Back to schedules";
 
   return (
     <AppDialog
@@ -232,6 +379,11 @@ export function SchedulesDialog({ isOpen, onClose }: SchedulesDialogProps) {
       size="4xl"
       maxHeight="h-[min(48rem,85vh)]"
       initialFocus="none"
+      onCloseComplete={() => {
+        const then = afterCloseRef.current;
+        afterCloseRef.current = null;
+        then?.();
+      }}
       data-testid="schedules-dialog"
     >
       <AppDialog.Header>
@@ -243,13 +395,13 @@ export function SchedulesDialog({ isOpen, onClose }: SchedulesDialogProps) {
                   variant="ghost"
                   size="icon-sm"
                   className="-ml-2 mr-1.5 shrink-0"
-                  aria-label="Back to schedules"
-                  onClick={backToList}
+                  aria-label={backLabel}
+                  onClick={back}
                 >
                   <ChevronLeft aria-hidden="true" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">Back to schedules</TooltipContent>
+              <TooltipContent side="bottom">{backLabel}</TooltipContent>
             </Tooltip>
           )}
           <AppDialog.Title icon={page.kind === "list" ? <CalendarClock /> : undefined}>
@@ -258,12 +410,24 @@ export function SchedulesDialog({ isOpen, onClose }: SchedulesDialogProps) {
             <span
               ref={titleRef}
               tabIndex={-1}
-              className="truncate rounded-[var(--radius-sm)] outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+              className="-mx-1 truncate rounded-[var(--radius-sm)] px-1 outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
             >
               {title}
             </span>
           </AppDialog.Title>
         </div>
+        {page.kind === "schedule" && shown && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="mr-2 shrink-0"
+            onClick={() => void runNow(shown)}
+            loading={runNowPending}
+          >
+            <Play />
+            Run now
+          </Button>
+        )}
         <AppDialog.CloseButton />
       </AppDialog.Header>
 
@@ -299,20 +463,49 @@ export function SchedulesDialog({ isOpen, onClose }: SchedulesDialogProps) {
         />
       )}
 
-      {page.kind === "schedule" &&
-        (shown ? (
-          <ScheduleEditor
-            key={shown.id}
+      {page.kind === "schedule" && shown && (
+        <AppDialog.Body>
+          <ScheduleRuns
             schedule={shown}
-            defaultAgentId={shown.launch.agentId}
-            worktrees={worktreeChoices}
             now={now}
-            leaveStateRef={leaveStateRef}
-            onSaved={handleSaved}
-            onDeleted={handleDeleted}
-            onCancel={backToList}
+            worktreeLabel={
+              shown.launch.worktreeId === null
+                ? null
+                : (worktreeLabels.get(shown.launch.worktreeId) ?? "Missing worktree")
+            }
+            presetName={shown.launch.presetId === null ? null : (shownPreset?.name ?? null)}
+            presetMissing={presetMissing}
+            runsState={runsState}
+            onRetryRuns={retryRuns}
+            liveTerminalIds={liveTerminalIds}
+            worktreeIds={worktreeIds}
+            runNowError={runNowError}
+            runNowRetrying={runNowPending}
+            requestedRunIds={requestedRunIds}
+            onRetryRunNow={() => void runNow(shown)}
+            onEdit={() => go({ kind: "edit", id: shown.id }, { kind: "title" })}
+            onOpenRun={openRun}
+            onResumeRun={(run) => resumeRun(run, shown)}
           />
-        ) : (
+        </AppDialog.Body>
+      )}
+
+      {page.kind === "edit" && shown && (
+        <ScheduleEditor
+          key={shown.id}
+          schedule={shown}
+          defaultAgentId={shown.launch.agentId}
+          worktrees={worktreeChoices}
+          now={now}
+          leaveStateRef={leaveStateRef}
+          onSaved={handleSaved}
+          onDeleted={handleDeleted}
+          onCancel={() => backToSchedule(shown.id)}
+        />
+      )}
+
+      {(page.kind === "schedule" || page.kind === "edit") &&
+        (shown ? null : (
           <AppDialog.Body>
             {state.status === "loading" ? (
               <Skeleton label="Loading schedule" className="space-y-3">

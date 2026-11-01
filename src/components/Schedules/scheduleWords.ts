@@ -81,7 +81,7 @@ export function formatRunParts(
 const RELATIVE = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
 
 /** The local calendar date of an instant in a zone, as a day count for subtraction. */
-function localDayNumber(epochMs: number, timeZone: string): number {
+export function localDayNumber(epochMs: number, timeZone: string): number {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,
     year: "numeric",

@@ -38,6 +38,9 @@ export const schedulesClient = {
   /** The project's recorded runs, newest first (#15976). */
   listRuns: (projectId: string): Promise<ScheduledRun[]> =>
     window.electron.scheduledRuns.listByProject({ projectId }),
+  /** One schedule's recorded runs, newest first (#15976). */
+  listScheduleRuns: (scheduleId: string): Promise<ScheduledRun[]> =>
+    window.electron.scheduledRuns.listBySchedule({ scheduleId }),
   onRunsChanged: (callback: (payload: ScheduledRunsChangedPayload) => void): (() => void) =>
     window.electron.events.on("scheduled-runs:changed", callback),
 };
