@@ -88,7 +88,13 @@ describe("useWorktreeAgentBuckets", () => {
     const { view } = renderCounted({ ids: ["a"], merged: false, worktreeId: "wt-1" });
     expect(view.result.current).toMatchObject({ working: true, attention: false });
 
-    push([run("a", { agentState: "waiting", waitingReason: "approval" })]);
+    push([
+      run("a", {
+        agentState: "waiting",
+        waitingReason: "approval",
+        canopy: { kind: "asked", quote: "Run the migration?", readAt: 1, seen: false },
+      }),
+    ]);
 
     expect(view.result.current).toMatchObject({ working: false, attention: true });
   });
@@ -127,7 +133,11 @@ describe("useWorktreeAgentBuckets", () => {
   it("follows a change in its own panel membership without a fleet push", () => {
     push([
       run("a", { agentState: "working" }),
-      run("b", { agentState: "waiting", waitingReason: "approval" }),
+      run("b", {
+        agentState: "waiting",
+        waitingReason: "approval",
+        canopy: { kind: "asked", quote: "Run the migration?", readAt: 1, seen: false },
+      }),
     ]);
     const { view } = renderCounted({ ids: ["a"], merged: false, worktreeId: "wt-1" });
     expect(view.result.current).toMatchObject({ working: true, attention: false });

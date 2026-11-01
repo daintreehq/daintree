@@ -1047,10 +1047,24 @@ describe("computeProjectAgentCounts — Canopy refinements (#13239)", () => {
     expect(
       count(
         terminals,
-        { kind: "asked", quote: "Want me to update the tests?", readAt: 700 },
+        { kind: "asked", quote: "Want me to update the tests?", readAt: 700, seen: false },
         records
       )
     ).toMatchObject({ waiting: 1, completed: 0, oldestWaitingSince: 500 });
+  });
+
+  it("dates an ask Canopy read on a question wait from the wait, not an earlier hand-back", () => {
+    const terminals = [
+      agent({ id: "a", agentState: "waiting", waitingReason: "question", lastStateChange: 900 }),
+    ];
+    const records = { a: { stoppedAt: 500, seenAt: 600 } };
+    expect(
+      count(
+        terminals,
+        { kind: "asked", quote: "Want me to update the tests?", readAt: 950, seen: false },
+        records
+      )
+    ).toMatchObject({ waiting: 1, oldestWaitingSince: 900 });
   });
 
   const NOT_ASKING = {

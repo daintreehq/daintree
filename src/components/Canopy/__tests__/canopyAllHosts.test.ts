@@ -234,16 +234,25 @@ describe("mergeHostReadings", () => {
   });
 
   it("lists runs of a host whose reader is off as observed, without a reader's placement", () => {
-    const placed: FleetRunRow = {
-      ...run("r1"),
-      canopy: { kind: "asked", quote: "Proceed?", readAt: 1 },
-    };
+    const asked = { kind: "asked", quote: "Proceed?", readAt: 1, seen: false } as const;
+    const wait = { stoppedAt: 1 };
+    const placed = (runId: string): FleetRunRow => ({ ...run(runId), canopy: asked, wait });
     const merged = mergeHostReadings([
-      { hostId: "a", canopy: canopy({ activated: false }), fleet: fleet([placed]), error: null },
-      { hostId: "b", canopy: canopy(), fleet: fleet([run("r2")]), error: null },
+      {
+        hostId: "a",
+        canopy: canopy({ activated: false }),
+        fleet: fleet([placed("r1")]),
+        error: null,
+      },
+      { hostId: "b", canopy: canopy(), fleet: fleet([placed("r2")]), error: null },
     ]);
-    expect(merged.fleet!.runs.map((r) => r.runId)).toHaveLength(2);
-    expect(merged.fleet!.runs.every((r) => r.canopy === undefined)).toBe(true);
+    const byKey = new Map(merged.fleet!.runs.map((r) => [r.runId, r]));
+    expect(byKey.size).toBe(2);
+    // The host that reads keeps its own reading; the one that doesn't is placed
+    // by the fallback its own fleet sent.
+    expect(byKey.get(allHostsKey("b", "r2"))).toMatchObject({ canopy: asked, wait });
+    expect(byKey.get(allHostsKey("a", "r1"))?.canopy).toBeUndefined();
+    expect(byKey.get(allHostsKey("a", "r1"))?.wait).toEqual(wait);
     expect([...merged.offRuns]).toEqual([allHostsKey("a", "r1")]);
   });
 

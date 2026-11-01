@@ -1,6 +1,13 @@
 import type { AgentState, WaitingReason } from "../types/agent.js";
 import type { RunCanopyRefinement } from "../types/ipc/fleet.js";
-import { isHandBackStop } from "./runHandBack.js";
+
+/**
+ * A stop a reading may find asking the user something: finished, or waiting
+ * for anything but an error. An error wait is blocked whatever its screen says.
+ */
+export function isAskableStop(state: AgentState, waitingReason?: WaitingReason): boolean {
+  return state === "completed" || (state === "waiting" && waitingReason !== "error");
+}
 
 /**
  * The Canopy refinement that places a run now, or undefined when the run lands
@@ -10,9 +17,9 @@ import { isHandBackStop } from "./runHandBack.js";
  * was read against by the moment it takes the next turn to count. Each kind
  * applies only to the observed state it refines:
  *
- * - `asked` only to a stop the free rules file as a hand-back — a finished
- *   turn, or a bare prompt. A wait that already names what it wants is
- *   already a demand.
+ * - `asked` to any stop that could be asking: a finished turn, or any wait
+ *   but an error. The reading, not the wait the patterns named, is what says
+ *   the run asks something.
  * - `not-asking` only to a wait the patterns took for a question. An approval
  *   or an error Daintree observed itself is never cleared by a reading.
  * - `stalled` only to a working run, and only while Daintree's own silence
@@ -28,7 +35,7 @@ export function canopyPlacement(
   if (refinement === undefined || agentState === undefined) return undefined;
   switch (refinement.kind) {
     case "asked":
-      return isHandBackStop(agentState, waitingReason) ? refinement : undefined;
+      return isAskableStop(agentState, waitingReason) ? refinement : undefined;
     case "not-asking":
       return agentState === "waiting" && waitingReason === "question" ? refinement : undefined;
     case "stalled":

@@ -196,13 +196,21 @@ describe("WorktreeOverviewModal under activity-headline churn", () => {
     // Worktree 0's prompt waits are hand-backs, so nothing in it is asking until
     // one of its agents starts to.
     expect(chipStateCalls.attention).toEqual([]);
-    const runs = useFleetSnapshotStore
-      .getState()
-      .snapshot!.runs.map((run) =>
-        run.runId === panelId(0, 1)
-          ? { ...run, agentState: "waiting" as const, waitingReason: "approval" as const }
-          : run
-      );
+    const runs = useFleetSnapshotStore.getState().snapshot!.runs.map((run) =>
+      run.runId === panelId(0, 1)
+        ? {
+            ...run,
+            agentState: "waiting" as const,
+            waitingReason: "approval" as const,
+            canopy: {
+              kind: "asked" as const,
+              quote: "Run the migration?",
+              readAt: 1,
+              seen: false,
+            },
+          }
+        : run
+    );
     act(() => {
       useFleetSnapshotStore.getState().applySnapshot(fleet(runs));
     });

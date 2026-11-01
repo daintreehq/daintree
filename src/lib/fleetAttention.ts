@@ -5,6 +5,7 @@ import {
   runCanopyPlacement,
   type FleetBand,
 } from "@shared/utils/fleetBands";
+import { isHandBackStop } from "@shared/utils/runHandBack";
 
 export { FLEET_BANDS, bandForRun, runCanopyPlacement, type FleetBand };
 
@@ -155,18 +156,15 @@ export function bandTimestamp(run: FleetRunRow, band: FleetBand): number | undef
     }
     case "review":
     case "done":
-      // Dated from the stop itself, not the slide into `waiting` after it. A
-      // question wait Canopy read as asking nothing is its own stop; the
-      // record, if any, is an earlier one.
-      if (runCanopyPlacement(run)?.kind === "not-asking") return run.since;
-      return run.handBack?.stoppedAt ?? run.since;
     case "needs-you":
-      // An ask Canopy read on a hand-back is as old as the stop it was asked
-      // at: the slide from `completed` into a prompt wait would otherwise make
-      // an outstanding question look new and sort it under fresher demands.
-      return runCanopyPlacement(run)?.kind === "asked"
-        ? (run.handBack?.stoppedAt ?? run.since)
-        : run.since;
+      // Dated from the stop itself, not the slide into `waiting` after it: an
+      // outstanding question would otherwise look new and sort under fresher
+      // demands. An approval or question wait is its own stop, and a hand-back
+      // record the run carries then is an earlier one.
+      if (run.agentState !== undefined && isHandBackStop(run.agentState, run.waitingReason)) {
+        return run.handBack?.stoppedAt ?? run.since;
+      }
+      return run.wait?.stoppedAt ?? run.since;
     default:
       return run.since;
   }

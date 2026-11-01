@@ -50,10 +50,18 @@ function deliverRuns(runs: RunOverrides[]) {
   });
 }
 
-/** The fleet reporting each of these terminals as asking for an approval. */
+/** Canopy's unread reading of an approval: the only thing that puts a run in Waiting. */
+const ASK = { kind: "asked", quote: "Run the migration?", readAt: 3, seen: false } as const;
+
+/** The fleet reporting each of these terminals as asking for an approval, as Canopy read it. */
 function deliverAsks(ids: string[]) {
   deliverRuns(
-    ids.map((runId) => ({ runId, agentState: "waiting", waitingReason: "approval" as const }))
+    ids.map((runId) => ({
+      runId,
+      agentState: "waiting",
+      waitingReason: "approval" as const,
+      canopy: ASK,
+    }))
   );
 }
 
@@ -329,10 +337,10 @@ describe("useWaitingTerminals", () => {
       { id: "t4", agentState: "waiting", location: "background" },
     ]);
     deliverRuns([
-      { runId: "t1", agentState: "waiting", waitingReason: "approval" },
+      { runId: "t1", agentState: "waiting", waitingReason: "approval", canopy: ASK },
       { runId: "t2", agentState: "working" },
-      { runId: "t3", agentState: "waiting", waitingReason: "approval" },
-      { runId: "t4", agentState: "waiting", waitingReason: "approval" },
+      { runId: "t3", agentState: "waiting", waitingReason: "approval", canopy: ASK },
+      { runId: "t4", agentState: "waiting", waitingReason: "approval", canopy: ASK },
     ]);
 
     const { result } = renderHook(() => useWaitingTerminals());
@@ -659,7 +667,7 @@ describe("hand-backs are not waits", () => {
     deliverRuns([
       { runId: "unread", agentState: "waiting", handBack: { stoppedAt: 2 } },
       { runId: "read", agentState: "waiting", handBack: { stoppedAt: 2, seenAt: 3 } },
-      { runId: "approval", agentState: "waiting", waitingReason: "approval" },
+      { runId: "approval", agentState: "waiting", waitingReason: "approval", canopy: ASK },
     ]);
 
     const waiting = renderHook(() => useWaitingTerminals());
@@ -746,7 +754,7 @@ describe("the dock's agent pills read the fleet bands", () => {
         runId: "asked",
         agentState: "completed",
         handBack: { stoppedAt: 2, seenAt: 3 },
-        canopy: { kind: "asked", quote: "Ship it?", readAt: 3 },
+        canopy: { kind: "asked", quote: "Ship it?", readAt: 3, seen: false },
       },
       {
         runId: "not-asking",
@@ -758,6 +766,36 @@ describe("the dock's agent pills read the fleet bands", () => {
 
     expect(ids(renderHook(() => useWaitingTerminals()).result.current)).toEqual(["asked"]);
     expect(ids(renderHook(() => useUnreadTerminals()).result.current)).toEqual(["not-asking"]);
+  });
+
+  it("puts an approval or question no reading placed in Unread until looked at, never Waiting", () => {
+    setupBoth([
+      { id: "approval", agentState: "waiting", waitingReason: "approval", location: "grid" },
+      { id: "question", agentState: "waiting", waitingReason: "question", location: "grid" },
+      { id: "read-ask", agentState: "waiting", waitingReason: "approval", location: "grid" },
+    ]);
+    const deliver = (wait: FleetRunRow["wait"]) =>
+      deliverRuns([
+        { runId: "approval", agentState: "waiting", waitingReason: "approval", wait },
+        { runId: "question", agentState: "waiting", waitingReason: "question", wait },
+        {
+          runId: "read-ask",
+          agentState: "waiting",
+          waitingReason: "approval",
+          canopy: { ...ASK, seen: true },
+        },
+      ]);
+
+    deliver({ stoppedAt: 2 });
+    const waiting = renderHook(() => useWaitingTerminals());
+    const unread = renderHook(() => useUnreadTerminals());
+    expect(waiting.result.current).toEqual([]);
+    expect(ids(unread.result.current)).toEqual(["approval", "question"]);
+
+    // Looked at, they are no more than idle: in neither pill.
+    deliver({ stoppedAt: 2, seenAt: 3 });
+    expect(waiting.result.current).toEqual([]);
+    expect(unread.result.current).toEqual([]);
   });
 
   it("drains Unread when the hand-back is seen, and keeps Unread to visible terminals", () => {

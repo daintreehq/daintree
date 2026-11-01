@@ -7,7 +7,12 @@ describe("canopyEvidence", () => {
   it("quotes the question and says who read it, and when", () => {
     expect(
       canopyEvidence(
-        { kind: "asked", quote: "Should I also migrate the tests?", readAt: NOW - 3 * 60_000 },
+        {
+          kind: "asked",
+          quote: "Should I also migrate the tests?",
+          readAt: NOW - 3 * 60_000,
+          seen: false,
+        },
         NOW
       )
     ).toBe('Asked: "Should I also migrate the tests?" · read by Canopy 3m ago');
@@ -28,7 +33,10 @@ describe("canopyEvidence", () => {
   });
 
   it("cuts a long quote short with an ellipsis rather than spilling the screen line", () => {
-    const text = canopyEvidence({ kind: "asked", quote: "x".repeat(400), readAt: NOW }, NOW);
+    const text = canopyEvidence(
+      { kind: "asked", quote: "x".repeat(400), readAt: NOW, seen: false },
+      NOW
+    );
     const quoted = /"(.*)"/.exec(text)?.[1] ?? "";
     expect(quoted.length).toBeLessThan(400);
     expect(quoted.endsWith("…")).toBe(true);

@@ -28,10 +28,33 @@ function run(overrides: Partial<FleetRunRow> = {}): FleetRunRow {
 }
 
 describe("bandForRun", () => {
-  it("splits a specific wait into blocked and needs-you on the error reason", () => {
+  it("reads an error wait as blocked and an unread ask wait no reading placed as review", () => {
     expect(bandForRun(run({ agentState: "waiting", waitingReason: "error" }))).toBe("blocked");
-    expect(bandForRun(run({ agentState: "waiting", waitingReason: "question" }))).toBe("needs-you");
-    expect(bandForRun(run({ agentState: "waiting", waitingReason: "approval" }))).toBe("needs-you");
+    for (const waitingReason of ["question", "approval"] as const) {
+      // The patterns' guess is news, never a demand: no reading, no amber.
+      expect(bandForRun(run({ agentState: "waiting", waitingReason }))).toBe("review");
+      const unseen = run({ agentState: "waiting", waitingReason, wait: { stoppedAt: NOW } });
+      expect(bandForRun(unseen)).toBe("review");
+    }
+  });
+
+  it("lands an ask wait no reading placed where an idle run does once looked at", () => {
+    for (const waitingReason of ["question", "approval"] as const) {
+      const looked = run({
+        agentState: "waiting",
+        waitingReason,
+        wait: { stoppedAt: NOW - 60_000, seenAt: NOW - 30_000 },
+      });
+      // Never done: it hasn't finished anything.
+      expect(bandForRun(looked)).toBe("idle");
+    }
+    // A wait's seen mark is no excuse for an error.
+    const error = run({
+      agentState: "waiting",
+      waitingReason: "error",
+      wait: { stoppedAt: NOW - 60_000, seenAt: NOW - 30_000 },
+    });
+    expect(bandForRun(error)).toBe("blocked");
   });
 
   it("reads a stop with no watched work before it as idle, not a demand", () => {
@@ -333,10 +356,11 @@ describe("watched hand-backs", () => {
     expect(bandForRun(run({ agentState: "waiting", handBack: remarked }))).toBe("review");
   });
 
-  it("never lets a hand-back quiet a specific ask or a run back at work", () => {
+  it("never lets a hand-back speak for an ask wait or a run back at work", () => {
+    // The record is an earlier stop's: its seen mark says nothing of this wait.
     for (const waitingReason of ["approval", "question"] as const) {
       expect(bandForRun(run({ agentState: "waiting", waitingReason, handBack: seen }))).toBe(
-        "needs-you"
+        "review"
       );
     }
     expect(bandForRun(run({ agentState: "waiting", waitingReason: "error", handBack: seen }))).toBe(
@@ -352,7 +376,12 @@ describe("watched hand-backs", () => {
 });
 
 describe("Canopy refinements", () => {
-  const ASKED = { kind: "asked", quote: "Want me to update the tests too?", readAt: NOW } as const;
+  const ASKED = {
+    kind: "asked",
+    quote: "Want me to update the tests too?",
+    readAt: NOW,
+    seen: false,
+  } as const;
   const NOT_ASKING = {
     kind: "not-asking",
     quote: "All 14 tests pass.",
@@ -366,17 +395,94 @@ describe("Canopy refinements", () => {
     stalledSince: NOW - 15 * 60_000,
   } as const;
 
-  it("promotes a stop that asks something into needs-you, seen or not", () => {
+  const ASKING_STOPS = [
+    { agentState: "completed" },
+    { agentState: "waiting" },
+    { agentState: "waiting", waitingReason: "prompt" },
+    { agentState: "waiting", waitingReason: "question" },
+    { agentState: "waiting", waitingReason: "approval" },
+  ] as const;
+
+  it("puts a stop Canopy read asking in needs-you, whatever wait the patterns named", () => {
     for (const handBack of [
       { stoppedAt: NOW - 60_000 },
       { stoppedAt: NOW - 60_000, seenAt: NOW - 30_000 },
       undefined,
     ]) {
-      for (const agentState of ["completed", "waiting"] as const) {
-        const row = run({ agentState, ...(handBack ? { handBack } : {}), canopy: ASKED });
+      for (const stop of ASKING_STOPS) {
+        const row = run({ ...stop, ...(handBack ? { handBack } : {}), canopy: ASKED });
         expect(bandForRun(row)).toBe("needs-you");
       }
     }
+  });
+
+  it("lands an ask the user has read where an idle run does, never done", () => {
+    const read = { ...ASKED, seen: true };
+    for (const handBack of [
+      { stoppedAt: NOW - 60_000 },
+      { stoppedAt: NOW - 60_000, seenAt: NOW - 30_000 },
+      undefined,
+    ]) {
+      for (const stop of ASKING_STOPS) {
+        const row = run({ ...stop, ...(handBack ? { handBack } : {}), canopy: read });
+        expect(bandForRun(row)).toBe("idle");
+      }
+    }
+    // A new ask on a later turn is unread again, and amber again.
+    expect(
+      bandForRun(run({ agentState: "waiting", waitingReason: "approval", canopy: ASKED }))
+    ).toBe("needs-you");
+  });
+
+  it("puts an unread ask in needs-you only at a stop that could be asking", () => {
+    const keyOf = (state: Pick<FleetRunRow, "agentState" | "waitingReason">) =>
+      `${state.agentState}:${state.waitingReason ?? ""}`;
+    const askable = new Set(ASKING_STOPS.map(keyOf));
+    for (const state of [
+      ...ASKING_STOPS,
+      { agentState: "waiting", waitingReason: "error" },
+      { agentState: "working" },
+      { agentState: "directing" },
+      { agentState: "idle" },
+      { agentState: "exited" },
+    ] as const) {
+      const key = keyOf(state);
+      const band = bandForRun(run({ ...state, canopy: ASKED }));
+      expect(band === "needs-you", key).toBe(askable.has(key));
+    }
+  });
+
+  it("only ever puts a run in needs-you on an unread Canopy ask", () => {
+    const states = [
+      ...ASKING_STOPS,
+      { agentState: "waiting", waitingReason: "error" },
+      { agentState: "working" },
+      { agentState: "directing" },
+      { agentState: "idle" },
+      { agentState: "exited" },
+    ] as const;
+    const handBacks = [undefined, { stoppedAt: NOW - 60_000 }];
+    const waits = [undefined, { stoppedAt: NOW - 60_000 }];
+    for (const state of states) {
+      for (const handBack of handBacks) {
+        for (const wait of waits) {
+          for (const canopy of [undefined, NOT_ASKING, STALLED, { ...ASKED, seen: true }]) {
+            const row = run({
+              ...state,
+              ...(handBack ? { handBack } : {}),
+              ...(wait ? { wait } : {}),
+              ...(canopy ? { canopy } : {}),
+            });
+            expect(bandForRun(row)).not.toBe("needs-you");
+          }
+        }
+      }
+    }
+  });
+
+  it("never lets an ask clear an error wait", () => {
+    const row = run({ agentState: "waiting", waitingReason: "error", canopy: ASKED });
+    expect(bandForRun(row)).toBe("blocked");
   });
 
   it("leaves the user's own decisions above an ask", () => {
@@ -434,7 +540,7 @@ describe("Canopy refinements", () => {
     expect(bandForRun(run({ ...wait, snooze: { snoozedAt: NOW } }))).toBe("snoozed");
   });
 
-  it("never clears an approval or an error Daintree observed itself", () => {
+  it("never lets a reading that asks nothing clear an approval or an error", () => {
     for (const waitingReason of ["approval", "error"] as const) {
       const observed = bandForRun(run({ agentState: "waiting", waitingReason }));
       expect(bandForRun(run({ agentState: "waiting", waitingReason, canopy: NOT_ASKING }))).toBe(
@@ -458,7 +564,7 @@ describe("Canopy refinements", () => {
 
 describe("Canopy asks keep their age", () => {
   it("dates an ask on a hand-back from the stop, through the slide into a prompt wait", () => {
-    const canopy = { kind: "asked", quote: "Ship it?", readAt: NOW } as const;
+    const canopy = { kind: "asked", quote: "Ship it?", readAt: NOW, seen: false } as const;
     const handBack = { stoppedAt: NOW - 10 * 60_000 };
     const completed = run({ agentState: "completed", since: NOW - 10 * 60_000, handBack, canopy });
     const slid = run({
@@ -470,9 +576,32 @@ describe("Canopy asks keep their age", () => {
     });
     expect(bandTimestamp(completed, "needs-you")).toBe(handBack.stoppedAt);
     expect(bandTimestamp(slid, "needs-you")).toBe(handBack.stoppedAt);
-    // An ask Daintree observed itself keeps its own clock.
-    const observed = run({ agentState: "waiting", waitingReason: "question", since: NOW - 5_000 });
+    // An ask read on a wait the patterns named is its own stop: an earlier
+    // hand-back the run carries is not when it began.
+    const observed = run({
+      agentState: "waiting",
+      waitingReason: "question",
+      since: NOW - 5_000,
+      handBack,
+      canopy,
+    });
     expect(bandTimestamp(observed, "needs-you")).toBe(NOW - 5_000);
+    const tracked = run({ ...observed, wait: { stoppedAt: NOW - 8_000 } });
+    expect(bandTimestamp(tracked, "needs-you")).toBe(NOW - 8_000);
+  });
+
+  it("dates an ask wait no reading placed from its own stop, never an earlier hand-back", () => {
+    const row = run({
+      agentState: "waiting",
+      waitingReason: "approval",
+      since: NOW - 5_000,
+      handBack: { stoppedAt: NOW - 60 * 60_000 },
+      wait: { stoppedAt: NOW - 8_000 },
+    });
+    expect(bandForRun(row)).toBe("review");
+    expect(bandTimestamp(row, "review")).toBe(NOW - 8_000);
+    const { wait: _wait, ...untracked } = row;
+    expect(bandTimestamp(untracked, "review")).toBe(NOW - 5_000);
   });
 });
 
@@ -505,18 +634,36 @@ describe("fleetBandRunKey", () => {
       runId: "canopy-ask",
       agentState: "completed",
       handBack: seen,
-      canopy: { kind: "asked", quote: "Ship it?", readAt: NOW },
+      canopy: { kind: "asked", quote: "Ship it?", readAt: NOW, seen: false },
+    }),
+    run({
+      runId: "canopy-approval",
+      agentState: "waiting",
+      waitingReason: "approval",
+      canopy: { kind: "asked", quote: "Run npm test?", readAt: NOW, seen: false },
+    }),
+    run({
+      runId: "read-ask",
+      agentState: "waiting",
+      waitingReason: "question",
+      canopy: { kind: "asked", quote: "Ship it?", readAt: NOW, seen: true },
+    }),
+    run({
+      runId: "looked-approval",
+      agentState: "waiting",
+      waitingReason: "approval",
+      wait: { stoppedAt: NOW - 60_000, seenAt: NOW - 30_000 },
     }),
     run({ runId: "working", agentState: "working" }),
   ]);
 
-  it("holds the asks for Attention and only the unread hand-backs for Unread", () => {
+  it("holds Canopy's unread asks for Attention, and unread hand-backs and waits for Unread", () => {
     expect(fleetBandRunKey(fleet, ATTENTION_FILTER_BANDS).split("\n")).toEqual([
-      "approval",
+      "canopy-approval",
       "canopy-ask",
       "error",
     ]);
-    expect(fleetBandRunKey(fleet, UNREAD_FILTER_BANDS)).toBe("unread");
+    expect(fleetBandRunKey(fleet, UNREAD_FILTER_BANDS).split("\n")).toEqual(["approval", "unread"]);
   });
 
   it("splits the demands between the two with nothing shared or left over", () => {

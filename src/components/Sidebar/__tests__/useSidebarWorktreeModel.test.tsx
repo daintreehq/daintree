@@ -264,7 +264,11 @@ describe("useSidebarWorktreeModel — quick-state counts", () => {
       [{ agentState: "working" }, { working: 1, waiting: 0, finished: 0 }],
       [{ agentState: "idle" }, { working: 0, waiting: 0, finished: 0 }],
       [
-        { agentState: "waiting", waitingReason: "approval" },
+        {
+          agentState: "waiting",
+          waitingReason: "approval",
+          canopy: { kind: "asked", quote: "Run the migration?", readAt: 1, seen: false },
+        },
         { working: 0, waiting: 1, finished: 0 },
       ],
       [{ agentState: "idle" }, { working: 0, waiting: 0, finished: 0 }],

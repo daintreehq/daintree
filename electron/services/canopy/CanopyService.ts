@@ -2531,9 +2531,9 @@ export class CanopyService {
     if (held === null || held.turn !== entry.reads.turn) return undefined;
     // The verdict is held for the turn; whether the user has read that turn
     // is not, and every read or mark since settles through here.
-    return held.value.kind === "not-asking"
-      ? { ...held.value, seen: !isUnread(entry.reads) }
-      : held.value;
+    return held.value.kind === "stalled"
+      ? held.value
+      : { ...held.value, seen: !isUnread(entry.reads) };
   }
 
   /** Readings refine attention only for a user who turned Canopy on and has its model. */

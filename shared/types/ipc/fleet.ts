@@ -52,6 +52,23 @@ export interface RunHandBackRecord {
 }
 
 /**
+ * An approval or question wait Daintree observed, and whether the user has
+ * had the run in front of them since it began. Without a Canopy reading of the
+ * stop, this is all that places it: the patterns that filed it as an ask are a
+ * guess, so it is news until looked at and never a demand.
+ *
+ * Owned by Main (`RunHandBackService`) beside the hand-back, and deliberately
+ * not one: a wait hands nothing back. Held in memory only, and kept through
+ * the run's slides between stops until it works, exits or errors again.
+ */
+export interface RunWaitRecord {
+  /** When Daintree saw the run stop on the wait, or first saw it waiting (epoch ms). */
+  stoppedAt: number;
+  /** When the user had the run in front of them for the dwell after that stop. */
+  seenAt?: number;
+}
+
+/**
  * What Canopy read off a run's screen that refines where it lands, held for
  * the agent's turn it was read in.
  *
@@ -60,7 +77,8 @@ export interface RunHandBackRecord {
  * variant carries the screen's own words as its evidence, so a surface that
  * places a run by it can say what was read and when.
  *
- * - `asked`: the run stopped on a message that asks the user something.
+ * - `asked`: the run stopped on a message that asks the user something — a
+ *   question or an approval, whatever wait the patterns filed the stop as.
  * - `not-asking`: a wait Daintree's patterns took for a question asks nothing.
  * - `stalled`: a working run's screen has stood still behind its spinner.
  */
@@ -71,6 +89,12 @@ export type RunCanopyRefinement =
       quote: string;
       /** When the screen behind the verdict was read (epoch ms). */
       readAt: number;
+      /**
+       * The user has read the turn this ask is, by Canopy's own read mark for
+       * it. Seeing a question answers nothing, but one the user has had in
+       * front of them is no longer news; a new ask is a new turn, unread again.
+       */
+      seen: boolean;
     }
   | {
       kind: "not-asking";
@@ -221,6 +245,12 @@ export interface FleetRunRow {
    * finished run stays tellable from one that never did anything here.
    */
   handBack?: RunHandBackRecord;
+  /**
+   * Present iff the run is stopped in an episode that included an approval or
+   * question wait Daintree observed. Read only while that wait is what the run
+   * shows, and only when no Canopy reading of the stop places it.
+   */
+  wait?: RunWaitRecord;
   /**
    * When a WORKING run last showed signs of life — the later of its last
    * output and its entry into the current working stint — present only once
