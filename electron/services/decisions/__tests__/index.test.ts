@@ -172,11 +172,13 @@ import {
   disconnectRelay,
   exportData,
   getDecisionsPaneState,
+  getDecisionsPolicy,
   getDecisionsService,
   getDecisionsStatus,
   peekDecisionsService,
   restoreIdentity,
   setDecisionsEnabled,
+  setDecisionsProxyAllowlisted,
   startDecisionsIfEnabled,
   stopDecisions,
 } from "../index.js";
@@ -492,6 +494,48 @@ describe("Decisions entry", () => {
 
     await setDecisionsEnabled(true);
     expect(peekDecisionsService()?.getStore()).not.toBeNull();
+  });
+
+  describe("policy", () => {
+    it("reads the trusted gates and the proxy allowlist as saved", () => {
+      saved.value = { enabled: true, proxyAllowlisted: true };
+      const policy = getDecisionsPolicy();
+      expect(policy.proxyAllowlisted).toBe(true);
+      expect(policy.gates.map((gate) => gate.id)).toContain("design-review/final");
+      expect(policy.defaultQuestionExpiryMs).toBeGreaterThan(0);
+    });
+
+    it("saves the proxy allowlist, keeping every other field, and the running policy follows it", async () => {
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      const running = peekDecisionsService()!.getPolicy()!;
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+
+      const policy = await setDecisionsProxyAllowlisted(true);
+
+      expect(policy.proxyAllowlisted).toBe(true);
+      expect(saved.value).toEqual({
+        ...defaultDecisionsSettings(),
+        enabled: true,
+        ...RELAY,
+        consentedAt: 5,
+        proxyAllowlisted: true,
+      });
+      expect(peekDecisionsService()!.getPolicy()).toBe(running);
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
+      expect(connections).toHaveLength(1);
+      expect(connections[0]!.stopped).toBe(0);
+
+      expect((await setDecisionsProxyAllowlisted(false)).proxyAllowlisted).toBe(false);
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+    });
+
+    it("refuses to change the allowlist while off, and saves nothing", async () => {
+      saved.value = { enabled: false };
+      await expect(setDecisionsProxyAllowlisted(true)).rejects.toMatchObject(CANCELLED);
+      expect(store.set).not.toHaveBeenCalled();
+      expect(peekDecisionsService()).toBeNull();
+    });
   });
 
   describe("relay check", () => {
