@@ -194,16 +194,16 @@ function useReadoutClearance(
     }
     const measure = () => {
       const r = readout.getBoundingClientRect();
-      const blocked = Array.from(
-        bar.querySelectorAll<HTMLElement>("[data-readout-obstacle]")
-      ).some((el) => {
-        const o = el.getBoundingClientRect();
-        return (
-          o.width > 0 &&
-          o.right + READOUT_CLEARANCE_PX > r.left &&
-          o.left - READOUT_CLEARANCE_PX < r.right
-        );
-      });
+      const blocked = Array.from(bar.querySelectorAll<HTMLElement>("[data-readout-obstacle]")).some(
+        (el) => {
+          const o = el.getBoundingClientRect();
+          return (
+            o.width > 0 &&
+            o.right + READOUT_CLEARANCE_PX > r.left &&
+            o.left - READOUT_CLEARANCE_PX < r.right
+          );
+        }
+      );
       setClear(!blocked);
     };
     const resizes = new ResizeObserver(measure);
@@ -213,9 +213,7 @@ function useReadoutClearance(
       resizes.disconnect();
       resizes.observe(bar);
       resizes.observe(readout);
-      bar
-        .querySelectorAll("[data-readout-obstacle]")
-        .forEach((el) => resizes.observe(el));
+      bar.querySelectorAll("[data-readout-obstacle]").forEach((el) => resizes.observe(el));
       measure();
     };
     observeAll();
@@ -1446,7 +1444,9 @@ function PanelHeaderComponent({
                     <BellDot className="w-3.5 h-3.5" aria-hidden="true" />
                   </span>
                 </TooltipTrigger>
-                <TooltipContent side="bottom">Watching — waiting for agent completion</TooltipContent>
+                <TooltipContent side="bottom">
+                  Watching — waiting for agent completion
+                </TooltipContent>
               </Tooltip>
             )}
 
