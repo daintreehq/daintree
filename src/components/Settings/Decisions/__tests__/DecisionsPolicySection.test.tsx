@@ -111,7 +111,9 @@ describe("DecisionsPolicySection", () => {
 
   it("shows main's value and a retry when a change fails", async () => {
     getPolicy.mockResolvedValue(policy());
-    setProxyAllowlisted.mockRejectedValueOnce(new Error("Decisions is off, so nothing was changed"));
+    setProxyAllowlisted.mockRejectedValueOnce(
+      new Error("Decisions is off, so nothing was changed")
+    );
     await renderPolicy();
 
     await act(async () => {
@@ -185,7 +187,9 @@ describe("policy copy", () => {
   });
 
   it("describes a gate from what it registers", () => {
-    expect(gateDescription(REVIEW)).toMatch(/^Only you can answer: Approve or Reject, and nothing else\. /);
+    expect(gateDescription(REVIEW)).toMatch(
+      /^Only you can answer: Approve or Reject, and nothing else\. /
+    );
     expect(gateDescription(REVIEW)).toContain("screenshots");
     const lenient: DecisionsWorkflowGate = {
       id: "x/y",
@@ -198,7 +202,9 @@ describe("policy copy", () => {
       allowsText: true,
       bindsAttachments: false,
     };
-    expect(gateDescription(lenient)).toBe("A proxy may answer: A, B or C, with a note if you like.");
+    expect(gateDescription(lenient)).toBe(
+      "A proxy may answer: A, B or C, with a note if you like."
+    );
     expect(gateDescription({ ...lenient, choices: [] })).toBe("A proxy may answer.");
   });
 });

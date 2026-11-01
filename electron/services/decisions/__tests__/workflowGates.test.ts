@@ -125,7 +125,12 @@ function deviceInfo(cert: DeviceCert) {
   };
 }
 
-async function certFor(identity: Identity, deviceId: string, role: "owner-desktop" | "phone", keys: DeviceKeys) {
+async function certFor(
+  identity: Identity,
+  deviceId: string,
+  role: "owner-desktop" | "phone",
+  keys: DeviceKeys
+) {
   return issueDeviceCert({
     issuerDeviceId: OWNER,
     issuerSigningKey: identity.keys.signing.privateKey,
@@ -142,7 +147,12 @@ async function harness(options: { proxyAllowlisted?: boolean } = {}): Promise<Ha
   const ownerKeys = await generateDeviceKeys(true);
   const stored: StoredIdentity = {
     v: 1,
-    config: { relayOrigin: RELAY_ORIGIN, installationId: INSTALLATION, deviceId: OWNER, label: "Desktop" },
+    config: {
+      relayOrigin: RELAY_ORIGIN,
+      installationId: INSTALLATION,
+      deviceId: OWNER,
+      label: "Desktop",
+    },
     keys: await serializeDeviceKeys(ownerKeys),
     epochs: [{ epoch: 1, raw: bytesToBase64Url(generateEpochKeyBytes()) }],
     currentEpoch: 1,
@@ -210,7 +220,11 @@ async function harness(options: { proxyAllowlisted?: boolean } = {}): Promise<Ha
   bridges.push(bridge);
 
   let seq = 0;
-  const applyEvent = async (event_type: string, questionId: string, data: Record<string, unknown>) => {
+  const applyEvent = async (
+    event_type: string,
+    questionId: string,
+    data: Record<string, unknown>
+  ) => {
     seq += 1;
     await bridge.inbox.persist({
       protocol_version: 1,
@@ -262,7 +276,12 @@ async function harness(options: { proxyAllowlisted?: boolean } = {}): Promise<Ha
     let next: { status: string; revision: number };
     try {
       next = applyAction(
-        { status: "open", revision: row.question_revision, requirement: row.requirement, proxyAbstained: false },
+        {
+          status: "open",
+          revision: row.question_revision,
+          requirement: row.requirement,
+          proxyAbstained: false,
+        },
         kind,
         signer.role,
         row.question_revision
@@ -382,7 +401,9 @@ describe("trusted workflow gates", () => {
     for (const gate of described) {
       const registered = policy.get(gate.id);
       expect(registered?.minRequirement).toBe(gate.requirement);
-      expect(registered?.choices?.map(({ id, label }) => ({ id, label })) ?? []).toEqual(gate.choices);
+      expect(registered?.choices?.map(({ id, label }) => ({ id, label })) ?? []).toEqual(
+        gate.choices
+      );
       expect(registered?.bindArtifacts === true).toBe(gate.bindsAttachments);
     }
     expect(described.find((gate) => gate.id === DESIGN_REVIEW_FINAL_GATE_ID)).toMatchObject({
@@ -437,13 +458,13 @@ describe("trusted workflow gates", () => {
 
   it("lets a question with no gate take the proxy level its agent asks for only once allowlisted, live", async () => {
     const h = await harness();
-    expect((await ask(h, { question: "Tabs?", requested_requirement: "proxy-ok" })).requirement).toBe(
-      "human-required"
-    );
+    expect(
+      (await ask(h, { question: "Tabs?", requested_requirement: "proxy-ok" })).requirement
+    ).toBe("human-required");
     h.policy.proxyAllowlisted = true;
-    expect((await ask(h, { question: "Tabs?", requested_requirement: "proxy-ok" })).requirement).toBe(
-      "proxy-ok"
-    );
+    expect(
+      (await ask(h, { question: "Tabs?", requested_requirement: "proxy-ok" })).requirement
+    ).toBe("proxy-ok");
     // Asking for nothing is still a question for the person.
     expect((await ask(h, { question: "Spaces?" })).requirement).toBe("human-required");
     // An unknown gate is no gate, so the allowlist applies to it as to any gate-less question.
@@ -463,10 +484,14 @@ describe("trusted workflow gates", () => {
     const approve = { id: "approve", label: "Approve" };
     const reject = { id: "reject", label: "Reject" };
     expect(
-      await refusal(ask(h, { ...REVIEW_INPUT, options: [approve, reject, { id: "ship", label: "Ship" }] }))
+      await refusal(
+        ask(h, { ...REVIEW_INPUT, options: [approve, reject, { id: "ship", label: "Ship" }] })
+      )
     ).toContain("validation_error");
     expect(
-      await refusal(ask(h, { ...REVIEW_INPUT, options: [{ id: "approve", label: "LGTM" }, reject] }))
+      await refusal(
+        ask(h, { ...REVIEW_INPUT, options: [{ id: "approve", label: "LGTM" }, reject] })
+      )
     ).toContain("must use the workflow gate's label");
     expect(await refusal(ask(h, { ...REVIEW_INPUT, options: [approve] }))).toContain(
       "options must be exactly the workflow gate's choices"

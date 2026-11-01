@@ -56,7 +56,9 @@ export function DecisionsPolicySection() {
       </SettingsGroup>
       {saveFailure && (
         <SettingsLoadErrorBanner
-          title={saveFailure.allowed ? "Couldn't allow proxy answers" : "Couldn't stop proxy answers"}
+          title={
+            saveFailure.allowed ? "Couldn't allow proxy answers" : "Couldn't stop proxy answers"
+          }
           message={saveFailure.message}
           onRetry={() => void setProxyAllowlisted(saveFailure.allowed)}
         />
