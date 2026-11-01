@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import type { SchedulesSnapshot } from "@shared/types/ipc/schedules";
 
 const { client, remote } = vi.hoisted(() => ({
   client: {
@@ -25,16 +24,23 @@ import {
   useScheduleNamesStore,
 } from "../scheduleNamesStore";
 
+/** What main pushes and answers, as far as the schedule names read it. */
+type NamesSnapshot = {
+  projectId: string;
+  revision: number;
+  schedules: { id: string; name: string }[];
+};
+
 function snapshot(
   revision: number,
   schedules: Record<string, string>,
   projectId = "proj-a"
-): SchedulesSnapshot {
+): NamesSnapshot {
   return {
     projectId,
     revision,
     schedules: Object.entries(schedules).map(([id, name]) => ({ id, name })),
-  } as unknown as SchedulesSnapshot;
+  };
 }
 
 function deferred<T>() {
@@ -47,7 +53,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-let push: ((snapshot: SchedulesSnapshot) => void) | undefined;
+let push: ((snapshot: NamesSnapshot) => void) | undefined;
 const offChanged = vi.fn();
 
 function nameOf(scheduleId: string) {
@@ -62,7 +68,7 @@ beforeEach(() => {
   offChanged.mockReset();
   client.list.mockReset();
   client.onChanged.mockReset();
-  client.onChanged.mockImplementation((callback: (snapshot: SchedulesSnapshot) => void) => {
+  client.onChanged.mockImplementation((callback: (snapshot: NamesSnapshot) => void) => {
     push = callback;
     return offChanged;
   });
@@ -76,10 +82,10 @@ describe("scheduleNamesStore", () => {
   });
 
   it("subscribes before it reads, and every holder shares one read", async () => {
-    const reply = deferred<SchedulesSnapshot | null>();
+    const reply = deferred<NamesSnapshot | null>();
     client.list.mockReturnValue(reply.promise);
     const order: string[] = [];
-    client.onChanged.mockImplementation((callback: (s: SchedulesSnapshot) => void) => {
+    client.onChanged.mockImplementation((callback: (s: NamesSnapshot) => void) => {
       order.push("subscribe");
       push = callback;
       return offChanged;
@@ -107,7 +113,7 @@ describe("scheduleNamesStore", () => {
   });
 
   it("takes a newer push and ignores an older reply that crosses it", async () => {
-    const reply = deferred<SchedulesSnapshot | null>();
+    const reply = deferred<NamesSnapshot | null>();
     client.list.mockReturnValue(reply.promise);
     acquireScheduleNames();
 
@@ -149,7 +155,7 @@ describe("scheduleNamesStore", () => {
     const release = acquireScheduleNames();
     await act(async () => {});
 
-    const reply = deferred<SchedulesSnapshot | null>();
+    const reply = deferred<NamesSnapshot | null>();
     client.list.mockReturnValue(reply.promise);
     retryScheduleNames();
     retryScheduleNames();
@@ -163,7 +169,7 @@ describe("scheduleNamesStore", () => {
   });
 
   it("drops a reply or push that arrives after the last holder let go", async () => {
-    const reply = deferred<SchedulesSnapshot | null>();
+    const reply = deferred<NamesSnapshot | null>();
     client.list.mockReturnValue(reply.promise);
     const release = acquireScheduleNames();
     const stalePush = push;
@@ -201,7 +207,7 @@ describe("scheduleNamesStore", () => {
   it("keeps names a push brought when the first read then fails or finds no project", async () => {
     for (const settle of ["reject", "null"] as const) {
       _resetScheduleNamesForTests();
-      const reply = deferred<SchedulesSnapshot | null>();
+      const reply = deferred<NamesSnapshot | null>();
       client.list.mockReturnValue(reply.promise);
       acquireScheduleNames();
       await act(async () => {});
@@ -226,9 +232,9 @@ describe("scheduleNamesStore", () => {
   });
 
   it("lets a read from before a quick release and re-hold change nothing, settled either way", async () => {
-    const stale = deferred<SchedulesSnapshot | null>();
-    const staleFailure = deferred<SchedulesSnapshot | null>();
-    const fresh = deferred<SchedulesSnapshot | null>();
+    const stale = deferred<NamesSnapshot | null>();
+    const staleFailure = deferred<NamesSnapshot | null>();
+    const fresh = deferred<NamesSnapshot | null>();
     client.list
       .mockReturnValueOnce(stale.promise)
       .mockReturnValueOnce(staleFailure.promise)
@@ -251,8 +257,8 @@ describe("scheduleNamesStore", () => {
   });
 
   it("keeps a read from before a release from freeing a retry still in flight", async () => {
-    const stale = deferred<SchedulesSnapshot | null>();
-    const retry = deferred<SchedulesSnapshot | null>();
+    const stale = deferred<NamesSnapshot | null>();
+    const retry = deferred<NamesSnapshot | null>();
     client.list
       .mockReturnValueOnce(stale.promise)
       .mockRejectedValueOnce(new Error("boom"))

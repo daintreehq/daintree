@@ -3,15 +3,22 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import type { SchedulesSnapshot } from "@shared/types/ipc/schedules";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { _resetScheduleNamesForTests } from "@/store/scheduleNamesStore";
 import { TerminalScheduleChip } from "../TerminalScheduleChip";
 
-const { dispatchMock, client, remote } = vi.hoisted(() => ({
+/** What main pushes and answers, as far as the schedule names read it. */
+type NamesSnapshot = {
+  projectId: string;
+  revision: number;
+  schedules: { id: string; name: string }[];
+};
+
+const { dispatchMock, client, remote, panels } = vi.hoisted(() => ({
   dispatchMock: vi.fn(),
   client: { list: vi.fn(), onChanged: vi.fn() },
   remote: { value: false },
+  panels: { set: (_panelsById: Record<string, unknown>): void => {} },
 }));
 
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: dispatchMock } }));
@@ -20,27 +27,23 @@ vi.mock("@/hooks/useHostPlatform", () => ({ isRemoteWindow: () => remote.value }
 // A live store, so a pane's provenance can change under a mounted chip.
 vi.mock("@/store/panelStore", async () => {
   const { create } = await import("zustand");
-  return { usePanelStore: create(() => ({ panelsById: {} as Record<string, unknown> })) };
+  const usePanelStore = create(() => ({ panelsById: {} as Record<string, unknown> }));
+  panels.set = (panelsById) => usePanelStore.setState({ panelsById });
+  return { usePanelStore };
 });
 
-const { usePanelStore } = await import("@/store/panelStore");
+let push: ((snapshot: NamesSnapshot) => void) | undefined;
 
-let push: ((snapshot: SchedulesSnapshot) => void) | undefined;
-
-function schedules(revision: number, names: Record<string, string>): SchedulesSnapshot {
+function schedules(revision: number, names: Record<string, string>): NamesSnapshot {
   return {
     projectId: "proj-a",
     revision,
     schedules: Object.entries(names).map(([id, name]) => ({ id, name })),
-  } as unknown as SchedulesSnapshot;
+  };
 }
 
 function seedPanel(panel: Record<string, unknown>) {
-  act(() => {
-    usePanelStore.setState({
-      panelsById: { "term-1": { id: "term-1", kind: "terminal", ...panel } },
-    });
-  });
+  act(() => panels.set({ "term-1": { id: "term-1", kind: "terminal", ...panel } }));
 }
 
 async function renderChip() {
@@ -58,13 +61,13 @@ const SCHEDULED = { spawnedBy: "schedule", scheduledRun: { scheduleId: "s1", run
 beforeEach(() => {
   _resetScheduleNamesForTests();
   remote.value = false;
-  usePanelStore.setState({ panelsById: {} });
+  panels.set({});
   push = undefined;
   dispatchMock.mockReset();
   dispatchMock.mockResolvedValue({ ok: true, result: undefined });
   client.list.mockReset();
   client.onChanged.mockReset();
-  client.onChanged.mockImplementation((callback: (snapshot: SchedulesSnapshot) => void) => {
+  client.onChanged.mockImplementation((callback: (snapshot: NamesSnapshot) => void) => {
     push = callback;
     return () => {};
   });
@@ -164,7 +167,7 @@ describe("TerminalScheduleChip", () => {
 
   it("follows the pane's provenance while mounted, and lets go when it stops being a run", async () => {
     const off = vi.fn();
-    client.onChanged.mockImplementation((callback: (snapshot: SchedulesSnapshot) => void) => {
+    client.onChanged.mockImplementation((callback: (snapshot: NamesSnapshot) => void) => {
       push = callback;
       return off;
     });

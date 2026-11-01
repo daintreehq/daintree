@@ -2,7 +2,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
-import type { SchedulesSnapshot } from "@shared/types/ipc/schedules";
 
 const { client, records, worktrees } = vi.hoisted(() => ({
   client: { list: vi.fn(), onChanged: vi.fn() },
@@ -32,6 +31,13 @@ import { usePaletteStore } from "@/store/paletteStore";
 import { useProjectStore } from "@/store/projectStore";
 import { _resetScheduleNamesForTests } from "@/store/scheduleNamesStore";
 
+/** What main pushes and answers, as far as the schedule names read it. */
+type NamesSnapshot = {
+  projectId: string;
+  revision: number;
+  schedules: { id: string; name: string }[];
+};
+
 function rec(over: Partial<AgentSessionRecord>): AgentSessionRecord {
   return {
     sessionId: "s1",
@@ -46,7 +52,7 @@ function rec(over: Partial<AgentSessionRecord>): AgentSessionRecord {
 
 const scheduledRun = { scheduleId: "sched-1", runId: "run-1" };
 
-let push: ((snapshot: SchedulesSnapshot) => void) | undefined;
+let push: ((snapshot: NamesSnapshot) => void) | undefined;
 
 function openPalette(open: boolean) {
   act(() => {
@@ -59,7 +65,7 @@ beforeEach(() => {
   push = undefined;
   client.list.mockReset();
   client.onChanged.mockReset();
-  client.onChanged.mockImplementation((callback: (snapshot: SchedulesSnapshot) => void) => {
+  client.onChanged.mockImplementation((callback: (snapshot: NamesSnapshot) => void) => {
     push = callback;
     return () => {};
   });
@@ -67,12 +73,12 @@ beforeEach(() => {
     projectId: "p1",
     revision: 1,
     schedules: [{ id: "sched-1", name: "Nightly triage" }],
-  } as unknown as SchedulesSnapshot);
+  });
   records.sessions = [];
   usePaletteStore.setState({ activePaletteId: null });
   useProjectStore.setState({
     currentProject: { id: "p1", name: "App", path: "/repo", emoji: "", lastOpened: 0 },
-  } as never);
+  });
 });
 
 describe("useResumeSessionsPalette schedule names", () => {
@@ -114,7 +120,7 @@ describe("useResumeSessionsPalette schedule names", () => {
         projectId: "p1",
         revision: 2,
         schedules: [],
-      } as unknown as SchedulesSnapshot)
+      })
     );
     const deleted = result.current.results.find((item) => item.session.sessionId === "run");
     expect(deleted).toBeUndefined();
@@ -140,7 +146,7 @@ describe("useResumeSessionsPalette schedule names", () => {
         projectId: "p1",
         revision: 2,
         schedules: [{ id: "sched-1", name: "Weekly review" }],
-      } as unknown as SchedulesSnapshot)
+      })
     );
     expect(result.current.results).toEqual([]);
     act(() => result.current.setQuery("weekly"));
