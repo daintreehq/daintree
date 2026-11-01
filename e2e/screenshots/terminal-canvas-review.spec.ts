@@ -246,7 +246,13 @@ interface PaneStatus {
 
 async function paneStatus(page: Page, id: string): Promise<PaneStatus> {
   const result = (await act(page, "terminal.getStatus", { terminalIds: [id] })) as
-    | { terminals?: Array<{ terminalId: string; agentState: string | null; waitingReason?: string }> }
+    | {
+        terminals?: Array<{
+          terminalId: string;
+          agentState: string | null;
+          waitingReason?: string;
+        }>;
+      }
     | Array<{ terminalId: string; agentState: string | null; waitingReason?: string }>;
   const rows = Array.isArray(result) ? result : (result?.terminals ?? []);
   const row = rows.find((r) => r.terminalId === id);
@@ -329,7 +335,9 @@ async function writeSidecar(
   );
 }
 
-async function gridBox(page: Page): Promise<{ x: number; y: number; width: number; height: number }> {
+async function gridBox(
+  page: Page
+): Promise<{ x: number; y: number; width: number; height: number }> {
   const box = await page.locator('[role="region"][aria-label="Panels"]').first().boundingBox();
   if (!box || box.width < 200) throw new Error("panel region not on screen");
   return box;
@@ -565,7 +573,9 @@ async function growToEight(page: Page, grid: Grid): Promise<void> {
   await waitForPrompt(page, exited);
   await ptyWrite(page, exited, "exit 3\r");
   await expectBanner(page, exited, /exited with code 3|code 3/i);
-  console.log(`[terminal-canvas] exited ${JSON.stringify((await readPanes(page)).find((p) => p.panelId === exited))}`);
+  console.log(
+    `[terminal-canvas] exited ${JSON.stringify((await readPanes(page)).find((p) => p.panelId === exited))}`
+  );
 
   // An idle shell that has printed the ANSI sheet — the palette state reads off it.
   const idle = await openShell(page);
@@ -659,7 +669,10 @@ async function verifyGrid(page: Page, grid: Grid, count: 4 | 8, focused: string)
   await expectState(grid.waiting, "waiting", "question");
   await expectState(grid.blocked, "waiting", "error");
   const done = await paneStatus(page, grid.finished);
-  if (done.agentState !== "waiting" || (done.waitingReason !== null && done.waitingReason !== "prompt")) {
+  if (
+    done.agentState !== "waiting" ||
+    (done.waitingReason !== null && done.waitingReason !== "prompt")
+  ) {
     throw new Error(`finished pane is ${JSON.stringify(done)}`);
   }
   if (count === 8) {
@@ -722,7 +735,12 @@ function wanted(state: State): boolean {
   return ONLY.length === 0 || ONLY.includes(state);
 }
 
-async function shoot(run: Run, state: State, theme: string, fn: () => Promise<void>): Promise<void> {
+async function shoot(
+  run: Run,
+  state: State,
+  theme: string,
+  fn: () => Promise<void>
+): Promise<void> {
   if (!wanted(state)) return;
   const started = Date.now();
   try {
@@ -907,7 +925,8 @@ function expectedFiles(): string[] {
 
 test("capture the terminal canvas across states and themes", async () => {
   test.skip(!ENABLED, "design capture harness — set DAINTREE_SHOT_TERMINAL_CANVAS=1");
-  if (!OUTPUT_DIR) throw new Error("DESIGN_CAPTURE_DIR must be set to a directory outside the repo");
+  if (!OUTPUT_DIR)
+    throw new Error("DESIGN_CAPTURE_DIR must be set to a directory outside the repo");
   test.setTimeout(60 * 60_000);
 
   mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -950,7 +969,10 @@ test("capture the terminal canvas across states and themes", async () => {
     const run: Run = { app: ctx.app, page, grid, failures, written };
 
     // The daintree pass runs last in each phase so the run ends on the default theme.
-    const order = [...THEMES.filter((t) => t !== "daintree"), ...THEMES.filter((t) => t === "daintree")];
+    const order = [
+      ...THEMES.filter((t) => t !== "daintree"),
+      ...THEMES.filter((t) => t === "daintree"),
+    ];
     for (const theme of order) {
       await switchTheme(page, theme).catch((e) => failures.push(`${theme}: ${String(e)}`));
       await quadStates(run, theme);
@@ -974,7 +996,8 @@ test("capture the terminal canvas across states and themes", async () => {
           const g = document.getElementById("panel-grid");
           return !!g && g.scrollHeight > g.clientHeight + 4;
         });
-        if (!scrolls) throw new Error("eight panes at 1600x1000 did not put the grid in scroll mode");
+        if (!scrolls)
+          throw new Error("eight panes at 1600x1000 did not put the grid in scroll mode");
         await snapGrid(page, "scroll", "daintree");
       });
       await shoot(run, "split", "daintree", async () => {

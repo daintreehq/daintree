@@ -495,8 +495,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     ambientAgentState === "waiting" && ownAgentState !== "waiting" && blockedState === "waiting";
   // Only a live pane can ask. An error wait is never asking: it is failed
   // while the run is alive and nothing once a restart or exit replaces it.
-  const ownCanAsk =
-    paneSignals.waitingReason !== "error" && !paneSignals.isRestarting && !isExited;
+  const ownCanAsk = paneSignals.waitingReason !== "error" && !paneSignals.isRestarting && !isExited;
   const isAskingWait =
     (ownBlockedState === "waiting" && ownCanAsk && !isHandBack) ||
     hiddenTabAsking ||

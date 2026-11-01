@@ -322,7 +322,9 @@ function nearestStackSurvivor(
   if (!stack?.isConnected) return undefined;
   const inStack = candidates.filter((c) => {
     const member = c.closest(`[${STACK_MEMBER_ATTR}]`);
-    return !!member && (member.parentElement === stack || member.closest(PANE_STACK_SELECTOR) === stack);
+    return (
+      !!member && (member.parentElement === stack || member.closest(PANE_STACK_SELECTOR) === stack)
+    );
   });
   if (!above?.isConnected || !stack.contains(above)) return inStack[0];
   return (
@@ -500,7 +502,10 @@ export function InlineStatusBanner({
       // notice goes the keyboard returns to the pane it was about.
       const members = Array.from(paneStack.querySelectorAll(`[${STACK_MEMBER_ATTR}]`));
       focusHomeRef.current = paneStack;
-      focusStackRef.current = { stack: paneStack, above: members[members.indexOf(root) - 1] ?? null };
+      focusStackRef.current = {
+        stack: paneStack,
+        above: members[members.indexOf(root) - 1] ?? null,
+      };
       return;
     }
     focusHomeRef.current =

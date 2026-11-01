@@ -1747,7 +1747,9 @@ function TerminalPaneComponent({
                   : setDismissedRestartPrompt(true)
             }
             onResumeConversation={
-              offeredSessionId ? () => void resumeFromAgentEndOffer(id, offeredSessionId) : undefined
+              offeredSessionId
+                ? () => void resumeFromAgentEndOffer(id, offeredSessionId)
+                : undefined
             }
             onDismissAll={
               restartBannerVariant.type === "session-resume-unavailable"
@@ -1795,7 +1797,9 @@ function TerminalPaneComponent({
                   : setDismissedRestartPrompt(true)
             }
             onResumeConversation={
-              offeredSessionId ? () => void resumeFromAgentEndOffer(id, offeredSessionId) : undefined
+              offeredSessionId
+                ? () => void resumeFromAgentEndOffer(id, offeredSessionId)
+                : undefined
             }
             onDismissAll={
               restartBannerVariant.type === "session-resume-unavailable"
@@ -1845,7 +1849,9 @@ function TerminalPaneComponent({
             severity={injectionStatus === "waiting" ? "neutral" : "info"}
             title={injectionStatus === "waiting" ? "Waiting for agent" : "Injecting context"}
             description={
-              injectionStatus === "waiting" ? "Context will inject when the agent is idle" : undefined
+              injectionStatus === "waiting"
+                ? "Context will inject when the agent is idle"
+                : undefined
             }
             contextLine={injectionStatus === "injecting" ? injectionProgress?.message : undefined}
             role="status"
