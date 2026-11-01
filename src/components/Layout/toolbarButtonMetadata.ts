@@ -143,11 +143,23 @@ export const TOOLBAR_BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, Toolbar
  * dividers in arbitrary positions and could split the agent brand marks.
  *
  * `utilities` trails deliberately. Any built-in a user drags onto the left
- * side — settings, notifications, copy-tree — plus every plugin contribution
- * lands there, and calling those "panels" would be a lie. On a normal layout
- * the group is empty and the row reads `[launcher] │ [agents] │ [panels]`.
+ * side — settings, copy-tree — plus every plugin contribution lands there, and
+ * calling those "panels" would be a lie. On a normal layout the group is empty
+ * and the row reads `[launcher] │ [agents] │ [panels]`.
+ *
+ * `signals` comes last: the buttons whose marks answer "is anything asking for
+ * me, wrong, or unread" — Canopy, the bell, Problems. One
+ * cluster at the strip's outer edge, so the eye has one place to check rather
+ * than a mark that could be anywhere in a run of tools. The right side reads
+ * `[forge stats, tools] │ [signals]`.
  */
-export const TOOLBAR_BUTTON_GROUP_ORDER = ["launcher", "agents", "panels", "utilities"] as const;
+export const TOOLBAR_BUTTON_GROUP_ORDER = [
+  "launcher",
+  "agents",
+  "panels",
+  "utilities",
+  "signals",
+] as const;
 
 export type ToolbarButtonGroup = (typeof TOOLBAR_BUTTON_GROUP_ORDER)[number];
 
@@ -165,6 +177,9 @@ const BUILT_IN_TOOLBAR_GROUPS: ReadonlyMap<AnyToolbarButtonId, ToolbarButtonGrou
   ["file-browser", "panels"],
   ["browser", "panels"],
   ["dev-server", "panels"],
+  ["canopy", "signals"],
+  ["notification-center", "signals"],
+  ["problems", "signals"],
 ]);
 
 /**

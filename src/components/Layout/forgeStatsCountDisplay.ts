@@ -78,5 +78,7 @@ export function formatExactCountNoun(
   singular: string,
   plural = `${singular}s`
 ): string {
+  // No count is no count: "— open issues" read aloud as "em dash open issues".
+  if (display === null) return `${plural.charAt(0).toUpperCase()}${plural.slice(1)} unavailable`;
   return `${formatExactCount(display)} ${display === 1 ? singular : plural}`;
 }

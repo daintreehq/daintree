@@ -16,14 +16,14 @@ import { useShallow } from "zustand/react/shallow";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
 import { isScheduledQuietNow } from "@shared/utils/quietHours";
 import { DURATION_200, DURATION_250 } from "@/lib/animationUtils";
+import { toolbarIconButtonClass } from "./toolbarItemClasses";
+import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 
 const LazyNotificationCenter = lazyWithPreload(
   () => import("@/components/Notifications/NotificationCenter"),
   (m) => m.NotificationCenter
 );
 const preloadNotificationCenter = LazyNotificationCenter.preload;
-
-const toolbarIconButtonClass = "toolbar-icon-button text-text-primary";
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
@@ -61,6 +61,9 @@ export function NotificationCenterToolbarButton({
     const active = document.activeElement;
     const strandedInPanel = !!active?.closest('[data-testid="notification-center"]');
     if (!active || active === document.body || strandedInPanel) {
+      // A returned focus is not a hover: without the mark, the bell's tooltip
+      // opened on it and stood over the strip with no pointer near.
+      armTooltipFocusSuppression();
       notificationCenterButtonRef.current?.focus();
     }
   }, [notificationCenterOpen]);
@@ -259,14 +262,19 @@ export function NotificationCenterToolbarButton({
 
   if (!notificationsEnabled) return null;
 
+  // Both facts, when both hold: muting changes what arrives, not what is
+  // already waiting unread, and the dot still says so.
   const label = (() => {
-    if (isSessionMuted) {
-      return `Notifications — paused until ${timeFormatter.format(new Date(quietUntil))}`;
-    }
-    if (isScheduledMuted) return "Notifications — quiet hours active";
-    if (osDndActive === true) return "Notifications — OS Do Not Disturb active";
-    if (notificationUnreadCount > 0) return `Notifications — ${notificationUnreadCount} unread`;
-    return "Notifications";
+    const unread = notificationUnreadCount > 0 ? `${notificationUnreadCount} unread` : null;
+    const muted = isSessionMuted
+      ? `paused until ${timeFormatter.format(new Date(quietUntil))}`
+      : isScheduledMuted
+        ? "quiet hours active"
+        : osDndActive === true
+          ? "OS Do Not Disturb active"
+          : null;
+    const parts = [unread, muted].filter((part): part is string => part !== null);
+    return parts.length > 0 ? `Notifications — ${parts.join(", ")}` : "Notifications";
   })();
 
   const Icon = isDndActive ? BellOff : Bell;
@@ -298,7 +306,11 @@ export function NotificationCenterToolbarButton({
                   {/* Anchored to the glyph, not the button box, with the shared pip
                     geometry — so the unread dot sits where the agent and
                     assistant pips sit on their marks. Neutral, never a status
-                    colour: unread is ambient, not something going wrong. */}
+                    colour: unread is ambient, not something going wrong. It
+                    stands down while the center is open, which is showing the
+                    unread rows itself. Full strength while muted: BellOff
+                    already says the bell is muted, and a dimmed dot fell under
+                    3:1 against the strip. */}
                   <span className="relative inline-flex">
                     <span
                       data-testid="notification-bell-icon"
@@ -311,8 +323,7 @@ export function NotificationCenterToolbarButton({
                     </span>
                     <span
                       data-testid="notification-unread-dot"
-                      data-visible={notificationUnreadCount > 0}
-                      data-dnd-active={isDndActive ? "true" : undefined}
+                      data-visible={notificationUnreadCount > 0 && !notificationCenterOpen}
                       className="toolbar-pip toolbar-badge bg-text-secondary"
                     />
                   </span>

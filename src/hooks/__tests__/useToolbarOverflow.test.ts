@@ -594,7 +594,10 @@ describe("computeOverflow — backfill across a group boundary", () => {
 });
 
 describe("computeGuardedOverflow — restoring a wide item after a backfill", () => {
-  // forge-stats (130, priority 1) plus three 32px utilities, gap 2.
+  // A wide item that outranks three 32px utilities, gap 2. The forge pill now
+  // sits below the utilities in the shared table, so the scenario names its
+  // own ranking: the mechanism under test is the restore gate, not the table.
+  const WIDE_FIRST = { ...TOOLBAR_BUTTON_PRIORITIES, "forge-stats": 1 } as const;
   const ids: ToolbarButtonId[] = ["forge-stats", "notification-center", "settings", "problems"];
   const widths = new Map<string, number>([
     ["forge-stats", 130],
@@ -607,22 +610,13 @@ describe("computeGuardedOverflow — restoring a wide item after a backfill", ()
   it("does not wait for the whole row to fit before restoring the pill", () => {
     // 138: the pill alone fits. The trigger appears and shrinks the row to
     // 100 (shrinking → fresh): the pill goes, three utilities backfill.
-    const at138 = computeGuardedOverflow(
-      138,
-      widths,
-      ids,
-      TOOLBAR_BUTTON_PRIORITIES,
-      0,
-      null,
-      undefined,
-      layout
-    );
+    const at138 = computeGuardedOverflow(138, widths, ids, WIDE_FIRST, 0, null, undefined, layout);
     expect(at138.visibleIds).toEqual(["forge-stats"]);
     const at100 = computeGuardedOverflow(
       100,
       widths,
       ids,
-      TOOLBAR_BUTTON_PRIORITIES,
+      WIDE_FIRST,
       138,
       at138,
       undefined,
@@ -636,7 +630,7 @@ describe("computeGuardedOverflow — restoring a wide item after a backfill", ()
       150,
       widths,
       ids,
-      TOOLBAR_BUTTON_PRIORITIES,
+      WIDE_FIRST,
       100,
       at100,
       undefined,
@@ -655,7 +649,7 @@ describe("computeGuardedOverflow — restoring a wide item after a backfill", ()
       140,
       widths,
       ids,
-      TOOLBAR_BUTTON_PRIORITIES,
+      WIDE_FIRST,
       100,
       held,
       undefined,

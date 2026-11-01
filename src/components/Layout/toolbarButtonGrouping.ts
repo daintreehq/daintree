@@ -32,6 +32,17 @@ export function orderToolbarButtonsByGroup(
 }
 
 /**
+ * The run a group's buttons share for divider purposes. Panels and utilities
+ * are both plain tool glyphs, so the boundary between them carries no meaning
+ * a hairline should spend: a user who moves settings onto the left side gets
+ * one run of tools after the agents, not a one-button cell fenced on both
+ * sides. Ordering still follows the declared groups; only the hairline goes.
+ */
+export function toolbarDividerRun(group: ToolbarButtonGroup): ToolbarButtonGroup {
+  return group === "utilities" ? "panels" : group;
+}
+
+/**
  * Ids that a divider follows, given already-grouped ids and which of them are
  * visible.
  *

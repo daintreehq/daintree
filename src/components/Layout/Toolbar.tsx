@@ -25,7 +25,7 @@ import {
 import { Spinner } from "@/components/ui/Spinner";
 import { BrandSurface, FolderTree, Folders } from "@/components/icons";
 import { buildPluginToolbarMeta } from "./pluginToolbarMeta";
-import { getToolbarDividerAfterIds } from "./toolbarButtonGrouping";
+import { getToolbarDividerAfterIds, toolbarDividerRun } from "./toolbarButtonGrouping";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { ToolbarButtonsContextMenu } from "./ToolbarButtonsContextMenu";
 import { cn } from "@/lib/utils";
@@ -70,7 +70,11 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { useToolbarOverflow, withDemotedOverflow } from "@/hooks/useToolbarOverflow";
+import {
+  useToolbarOverflow,
+  withDemotedOverflow,
+  withLitSignalPriorities,
+} from "@/hooks/useToolbarOverflow";
 import { useProjectToolbarOverlay, useResolvedPresentation } from "@/hooks/useResolvedPresentation";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
 import { useWindowFullscreen } from "@/hooks/useWindowFullscreen";
@@ -247,6 +251,13 @@ export function Toolbar({
   const branchName = activeWorktree?.branch;
   const watcherDegraded = useWorktreeStore((state) => state.watcherDegraded);
   const topologyWatcherDark = useWorktreeStore((state) => state.topologyWatcherDark);
+  // The Problems button's own wording for the two, so its row in `…` and the
+  // trigger's name say what the button would.
+  const watcherStatus = watcherDegraded
+    ? "File watching degraded"
+    : topologyWatcherDark
+      ? "Worktree list may be stale"
+      : null;
   // Read here as well as in the indicator, so its arrival or departure re-renders
   // the toolbar and the roving tab-stop sync below sees the item list change.
   const hostMemoryPauseVisible = useHostMemoryPauseStore((state) => state.visible);
@@ -348,8 +359,11 @@ export function Toolbar({
     [clearCopyTreeNotice]
   );
 
+  // A session another view is running counts too: the button is where this
+  // view reveals, pauses or stops it.
   const hasActiveVoiceRecording = useVoiceRecordingStore(
     (state) =>
+      state.sessionElsewhere !== null ||
       state.lockedTarget !== null ||
       state.pendingTarget !== null ||
       (state.activeTarget !== null &&
@@ -372,6 +386,7 @@ export function Toolbar({
   // nearest visible item to preserve keyboard navigation (WCAG 2.4.3).
   const prevFocusedToolbarItemRef = useRef<HTMLElement | null>(null);
   const forgeStatsRef = useRef<ForgeStatsHandle>(null);
+  const [forgeDataUnavailable, setForgeDataUnavailable] = useState(false);
 
   const { handleCopyTree, handleCopyTreeWithOptions } = useWorktreeActions();
   const sidebarShortcut = useEffectiveCombo("nav.toggleSidebar");
@@ -642,6 +657,49 @@ export function Toolbar({
     }
   });
 
+  // A child can add or drop a control without the toolbar rendering — the
+  // Forge capsule's rate-limit and PR-detection segments, a plugin button — and
+  // a native button arrives with its own default Tab stop. Re-sync the roving
+  // stops whenever the strip's controls change underneath it, so it stays one
+  // Tab stop. The focus redirect stays with the layout effect above.
+  useEffect(() => {
+    const root = toolbarRef.current;
+    if (!root) return;
+    let frame = 0;
+    const observer = new MutationObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const items = getToolbarItems();
+        if (items.length === 0) return;
+        const focusedIndex = items.findIndex((el) => el === document.activeElement);
+        const index =
+          focusedIndex !== -1
+            ? focusedIndex
+            : Math.min(activeToolbarIndexRef.current, items.length - 1);
+        activeToolbarIndexRef.current = index;
+        syncToolbarTabStops(items, index);
+        // A focused control a child removed on its own drops focus to <body>
+        // with no toolbar render to catch it; hand it to the nearest
+        // survivor so arrow navigation still works.
+        const prev = prevFocusedToolbarItemRef.current;
+        if (prev && !items.includes(prev)) {
+          prevFocusedToolbarItemRef.current = null;
+          if (document.activeElement === document.body) items[index]?.focus();
+        }
+      });
+    });
+    observer.observe(root, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["disabled", "aria-hidden"],
+    });
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+    };
+  }, [getToolbarItems, syncToolbarTabStops]);
+
   const handleToolbarFocusCapture = useCallback(
     (e: React.FocusEvent<HTMLElement>) => {
       const target = e.target as HTMLElement;
@@ -655,6 +713,33 @@ export function Toolbar({
     },
     [getToolbarItems, syncToolbarTabStops]
   );
+
+  // Focus that leaves the strip for somewhere else lets go of the last item.
+  // Without this, a button focused once and since left — the user clicked
+  // into a terminal, or onto empty canvas — still counted as "the focused
+  // item" when a narrowing window later evicted it, and the redirect below
+  // dragged focus, its ring and its tooltip onto the `…` trigger unasked.
+  // A blur to nowhere is checked a frame later: an eviction blurs to nowhere
+  // too, and the layout effect has handled that one by then.
+  const handleToolbarBlurCapture = useCallback((e: React.FocusEvent<HTMLElement>) => {
+    const next = e.relatedTarget as Node | null;
+    if (next && toolbarRef.current?.contains(next)) return;
+    const left = e.target as HTMLElement;
+    if (next) {
+      if (prevFocusedToolbarItemRef.current === left) prevFocusedToolbarItemRef.current = null;
+      return;
+    }
+    requestAnimationFrame(() => {
+      if (
+        prevFocusedToolbarItemRef.current === left &&
+        document.activeElement !== left &&
+        left.isConnected &&
+        left.closest('[aria-hidden="true"]') === null
+      ) {
+        prevFocusedToolbarItemRef.current = null;
+      }
+    });
+  }, []);
 
   const handleToolbarKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLElement>) => {
@@ -944,7 +1029,7 @@ export function Toolbar({
       },
       "voice-recording": {
         // Slot is always available so the right-aligned items keep a stable
-        // footprint when a session starts/stops. The button itself returns
+        // footprint when a session starts/stops (#8176). The button itself returns
         // an invisible placeholder when inactive (mirrors DevServerPlaceholder).
         render: () => <VoiceRecordingToolbarButton key="voice-recording" data-toolbar-item="" />,
         isAvailable: true,
@@ -965,6 +1050,7 @@ export function Toolbar({
               key="forge-stats"
               ref={forgeStatsRef}
               currentProject={currentProject}
+              onDataUnavailableChange={setForgeDataUnavailable}
               data-toolbar-item=""
             />
           ) : (
@@ -1031,8 +1117,7 @@ export function Toolbar({
                           aria-disabled={!canCopyTree || undefined}
                           aria-busy={isCopyingTree || undefined}
                           className={cn(
-                            "toolbar-icon-button relative",
-                            "text-text-primary",
+                            toolbarIconButtonClass,
                             "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                           )}
                           aria-label={isCopyingTree ? "Copying…" : "Copy context"}
@@ -1280,6 +1365,41 @@ export function Toolbar({
     hasActiveVoiceRecording,
   });
 
+  // The left `…` lives inside the left row, after its last visible button: its
+  // 32px plus the 4px margin and 2px row gap that put it 6px clear, as the
+  // right side's trigger sits. A demoted button or the branch row keeps it up
+  // whatever the width.
+  const leftTriggerPinned =
+    branchOverflowRow !== null || availableLeftIds.some((id) => demotedIds.has(id));
+  const leftOverflowTrigger = useMemo(
+    () => ({ reserve: 38, pinned: leftTriggerPinned }),
+    [leftTriggerPinned]
+  );
+
+  // Where the hairlines fall, which the overflow budget has to count the same
+  // way the render draws them.
+  const resolveDividerRun = useCallback(
+    (id: AnyToolbarButtonId) => toolbarDividerRun(resolveToolbarGroup(id)),
+    [resolveToolbarGroup]
+  );
+
+  // A button carrying a live signal holds its place on the strip while it is
+  // lit: a squeezed window keeps Problems with errors and Canopy with an urgent
+  // ask, and evicts a quiet tool in their place. Unread is ambient, so the bell
+  // keeps its own tier — above the tools, below a lit error. Unlit, they fall
+  // back to their ordinary tier.
+  const overflowPriorities = useMemo(
+    () =>
+      withLitSignalPriorities({
+        problems: errorCount > 0 || watcherDegraded || topologyWatcherDark,
+        canopy: canopyUrgentCount > 0,
+        ...Object.fromEntries(
+          [...agentAttentionStates].map(([agentId, state]) => [agentId, state === "waiting"])
+        ),
+      }),
+    [errorCount, watcherDegraded, topologyWatcherDark, canopyUrgentCount, agentAttentionStates]
+  );
+
   const {
     leftVisible,
     leftOverflow: measuredLeftOverflow,
@@ -1291,7 +1411,9 @@ export function Toolbar({
     measuredLeftIds,
     measuredRightIds,
     pinnedIds,
-    resolveToolbarGroup
+    resolveDividerRun,
+    overflowPriorities,
+    leftOverflowTrigger
   );
   const leftOverflow = useMemo(
     () => withDemotedOverflow(availableLeftIds, measuredLeftOverflow, demotedIds),
@@ -1313,8 +1435,14 @@ export function Toolbar({
     leftOverflow,
     rightOverflow,
     hasActiveVoiceRecording,
+    hasProject: currentProject !== null,
     errorCount,
     canopyUrgentCount,
+    watcherStatus,
+    forgeUnavailableObservation:
+      forgeDataUnavailable && forgeStatsLevel !== "hidden"
+        ? `${forgeProviderName ?? "Repository"} data unavailable`
+        : null,
     pluginConfigs,
     pinnedButtons,
   });
@@ -1349,7 +1477,7 @@ export function Toolbar({
     const dividerAfter = getToolbarDividerAfterIds(
       available,
       (id) => visibleSet.has(id),
-      resolveToolbarGroup
+      resolveDividerRun
     );
 
     const elements: React.ReactNode[] = [];
@@ -1530,7 +1658,8 @@ export function Toolbar({
     side: "left" | "right",
     severity: OverflowBadgeSeverity,
     agentObservations: readonly string[],
-    branchRow: OverflowMenuProps["branchRow"] = null
+    branchRow: OverflowMenuProps["branchRow"] = null,
+    triggerClassName?: string
   ) => (
     <OverflowMenu
       overflowIds={overflowIds}
@@ -1539,11 +1668,13 @@ export function Toolbar({
       errorCount={errorCount}
       notificationUnreadCount={notificationUnreadCount}
       canopyUrgentCount={canopyUrgentCount}
+      watcherStatus={watcherStatus}
       agentObservations={agentObservations}
       agentAttentionStates={agentAttentionStates}
       canCopyTree={canCopyTree}
       forgeStatsRef={forgeStatsRef}
       forgeProviderName={forgeProviderName}
+      forgeDataUnavailable={forgeDataUnavailable}
       overflowActions={overflowActions}
       dynamicOverflowMeta={dynamicOverflowMeta}
       pluginTrayGroups={pluginTrayGroups}
@@ -1553,8 +1684,9 @@ export function Toolbar({
       panelTrayDisabled={panelTrayDisabled}
       keybindingById={OVERFLOW_KEYBINDING_BY_ID}
       branchRow={branchRow}
-      resolveGroup={resolveToolbarGroup}
+      resolveGroup={resolveDividerRun}
       unavailableReasonById={overflowUnavailableReasons}
+      triggerClassName={triggerClassName}
     />
   );
 
@@ -1577,6 +1709,7 @@ export function Toolbar({
             aria-label="Main toolbar"
             onKeyDown={handleToolbarKeyDown}
             onFocusCapture={handleToolbarFocusCapture}
+            onBlurCapture={handleToolbarBlurCapture}
             // A window working on another machine shows it as light behind the
             // project pill and host chip (toolbar/surface.css), so the difference reads
             // before anything is read.
@@ -1629,14 +1762,17 @@ export function Toolbar({
                 className="toolbar-measured-row flex flex-1 min-w-0 items-center gap-0.5"
               >
                 {renderGroupedButtons(effectiveLeftButtons, leftVisibleSet)}
+                {renderOverflowMenu(
+                  visibleLeftOverflow,
+                  "left",
+                  leftMenuSeverity,
+                  leftObservations,
+                  branchOverflowRow,
+                  // Clear of the last visible button; with none left, the
+                  // group's own gap already spaces it from the divider.
+                  leftVisible.length > 0 ? "ml-1" : undefined
+                )}
               </div>
-              {renderOverflowMenu(
-                visibleLeftOverflow,
-                "left",
-                leftMenuSeverity,
-                leftObservations,
-                branchOverflowRow
-              )}
             </div>
 
             {/* CENTER GROUP - Grid-centered, shrinks gracefully on narrow windows */}

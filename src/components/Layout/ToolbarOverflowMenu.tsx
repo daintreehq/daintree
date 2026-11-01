@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type React from "react";
 import { Button } from "@/components/ui/button";
-import { CircleDot, Ellipsis, GitCommit, GitPullRequest } from "lucide-react";
+import { CircleDot, Ellipsis, GitCommit, GitPullRequest, TriangleAlert } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { GitBranch } from "@/components/icons";
 import { TOOLBAR_BUTTON_METADATA, type ToolbarButtonGroup } from "./toolbarButtonMetadata";
@@ -43,6 +43,9 @@ import type { ForgeRepositoryStats } from "@shared/types/ipc/forge";
 import type { ForgeStatsHandle } from "./ForgeStatsToolbarButton";
 import type { OverflowBadgeSeverity } from "./useOverflowBadgeSeverity";
 import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
+import { useUIStore } from "@/store/uiStore";
+import { useDiagnosticsStore } from "@/store/diagnosticsStore";
+import { useCanopyStore } from "@/store/canopyStore";
 import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
 import { pluralize } from "@/lib/pluralize";
 import { cn } from "@/lib/utils";
@@ -83,6 +86,10 @@ export interface OverflowMenuProps {
   notificationUnreadCount: number;
   /** Asks Canopy reads as urgent, said when its button is folded in here. */
   canopyUrgentCount: number;
+  /** Extra classes for the trigger button: the left one's clearance in its row. */
+  triggerClassName?: string;
+  /** Problems' watcher observation ("File watching degraded"), or null. */
+  watcherStatus?: string | null;
   // Per-session agent states behind the badge, already worded — derived by
   // the same rule as `severity`, so the name never says less than the dot.
   agentObservations: readonly string[];
@@ -93,6 +100,8 @@ export interface OverflowMenuProps {
   // (no matching plugin / owning plugin disabled) — the stats group is
   // skipped entirely in that case.
   forgeProviderName: string | null;
+  /** The capsule's "data unavailable" warning, carried into its group here. */
+  forgeDataUnavailable?: boolean;
   overflowActions: Partial<Record<AnyToolbarButtonId, () => void>>;
   // Display metadata for every dynamically-registered button — plugin
   // contributions and pinned launcher items (#12217) alike. The overflow menu
@@ -143,11 +152,14 @@ export function OverflowMenu({
   errorCount,
   notificationUnreadCount,
   canopyUrgentCount,
+  watcherStatus = null,
+  triggerClassName,
   agentObservations,
   agentAttentionStates,
   canCopyTree,
   forgeStatsRef,
   forgeProviderName,
+  forgeDataUnavailable = false,
   overflowActions,
   dynamicOverflowMeta,
   pluginTrayGroups,
@@ -231,24 +243,54 @@ export function OverflowMenu({
   // actually reporting rides behind the count instead, as the observations
   // themselves: the error count, the unread count, the agent states seen.
   const n = overflowIds.length + (branchRow === null ? 0 : 1);
+  // What each folded signal button would be marking right now. A mark stands
+  // down while the surface it reports on is open, here as on the strip, so the
+  // trigger's name never says more than its dot.
+  const diagnosticsOpen = useDiagnosticsStore((s) => s.isOpen);
+  const notificationCenterOpen = useUIStore((s) => s.notificationCenterOpen);
+  const canopyOpen = useCanopyStore((s) => s.isOpen);
+  const signalMark = (
+    id: AnyToolbarButtonId
+  ): { pip: "error" | "warning" | "waiting" | "unread"; spoken: string } | null => {
+    if (id === "problems" && !diagnosticsOpen) {
+      if (errorCount > 0) {
+        const errors = pluralize(errorCount, "error");
+        return {
+          pip: "error",
+          spoken: watcherStatus ? `${errors}, ${watcherStatus.toLowerCase()}` : errors,
+        };
+      }
+      if (watcherStatus) return { pip: "warning", spoken: watcherStatus.toLowerCase() };
+    }
+    if (id === "canopy" && canopyUrgentCount > 0 && !canopyOpen) {
+      return { pip: "waiting", spoken: `${canopyUrgentCount} urgent` };
+    }
+    if (id === "notification-center" && notificationUnreadCount > 0 && !notificationCenterOpen) {
+      return { pip: "unread", spoken: `${notificationUnreadCount} unread` };
+    }
+    return null;
+  };
+  // The trigger's own words: counts only. The watcher's wording already
+  // arrives with the side's observations, so it is never said twice.
   const observations: string[] = [];
-  if (overflowIds.includes("problems") && errorCount > 0) {
-    observations.push(`${pluralize(errorCount, "error")}`);
+  if (overflowIds.includes("problems") && errorCount > 0 && !diagnosticsOpen) {
+    observations.push(pluralize(errorCount, "error"));
   }
-  if (overflowIds.includes("notification-center") && notificationUnreadCount > 0) {
-    observations.push(`${notificationUnreadCount} unread`);
-  }
-  if (overflowIds.includes("canopy") && canopyUrgentCount > 0) {
-    observations.push(`${canopyUrgentCount} urgent`);
+  for (const id of ["notification-center", "canopy"] as const) {
+    if (!overflowIds.includes(id)) continue;
+    const mark = signalMark(id);
+    if (mark) observations.push(mark.spoken);
   }
   observations.push(...agentObservations);
   const tooltipText = `More — ${n} hidden${observations.length > 0 ? ` · ${observations.join(" · ")}` : ""}`;
   const ariaLabel = `More toolbar items — ${n} hidden${observations.length > 0 ? `, ${observations.join(", ")}` : ""}`;
 
+  // Counts follow their marks: a surface that is open is showing them itself.
   const overflowCount = (id: AnyToolbarButtonId) => {
-    if (id === "problems" && errorCount > 0) return errorCount;
-    if (id === "notification-center" && notificationUnreadCount > 0) return notificationUnreadCount;
-    if (id === "canopy" && canopyUrgentCount > 0) return canopyUrgentCount;
+    if (id === "problems" && errorCount > 0 && !diagnosticsOpen) return errorCount;
+    if (id === "notification-center" && notificationUnreadCount > 0 && !notificationCenterOpen)
+      return notificationUnreadCount;
+    if (id === "canopy" && canopyUrgentCount > 0 && !canopyOpen) return canopyUrgentCount;
     return null;
   };
 
@@ -283,21 +325,38 @@ export function OverflowMenu({
       }
       return [
         <DropdownMenuGroup key="forge-group">
-          <DropdownMenuLabel>{forgeProviderName}</DropdownMenuLabel>
+          <DropdownMenuLabel className="flex items-center gap-1.5">
+            {forgeProviderName}
+            {/* The capsule's warning segment, folded in with it: without it
+                the dashes below say nothing about why. */}
+            {forgeDataUnavailable && (
+              <span className="ml-auto inline-flex items-center gap-1 font-normal normal-case tracking-normal text-text-secondary">
+                <TriangleAlert className="h-3 w-3" aria-hidden="true" />
+                Data unavailable
+              </span>
+            )}
+          </DropdownMenuLabel>
           <DropdownMenuItem
             key="forge-issues"
             onClick={() => forgeStatsRef.current?.openIssues()}
             aria-label={
               repoStats?.issueCount != null
                 ? `Issues, ${formatCountExact(repoStats.issueCount)}`
-                : undefined
+                : "Open issues unavailable"
             }
           >
-            <CircleDot className="mr-2 h-3.5 w-3.5 text-pr-open" />
+            {/* With no count the row says what the capsule's dash says, and
+                its glyph steps down with it, as the capsule's does. */}
+            <CircleDot
+              className={cn(
+                "mr-2 h-3.5 w-3.5",
+                repoStats?.issueCount != null ? "text-pr-open" : "text-text-secondary"
+              )}
+            />
             Issues
-            {repoStats?.issueCount != null && (
-              <DropdownMenuMeta>{formatCountExact(repoStats.issueCount)}</DropdownMenuMeta>
-            )}
+            <DropdownMenuMeta>
+              {repoStats?.issueCount != null ? formatCountExact(repoStats.issueCount) : "—"}
+            </DropdownMenuMeta>
           </DropdownMenuItem>
           <DropdownMenuItem
             key="forge-prs"
@@ -305,14 +364,19 @@ export function OverflowMenu({
             aria-label={
               repoStats?.prCount != null
                 ? `Pull requests, ${formatCountExact(repoStats.prCount)}`
-                : undefined
+                : "Open pull requests unavailable"
             }
           >
-            <GitPullRequest className="mr-2 h-3.5 w-3.5 text-pr-merged" />
+            <GitPullRequest
+              className={cn(
+                "mr-2 h-3.5 w-3.5",
+                repoStats?.prCount != null ? "text-pr-merged" : "text-text-secondary"
+              )}
+            />
             Pull requests
-            {repoStats?.prCount != null && (
-              <DropdownMenuMeta>{formatCountExact(repoStats.prCount)}</DropdownMenuMeta>
-            )}
+            <DropdownMenuMeta>
+              {repoStats?.prCount != null ? formatCountExact(repoStats.prCount) : "—"}
+            </DropdownMenuMeta>
           </DropdownMenuItem>
           <DropdownMenuItem
             key="forge-commits"
@@ -320,14 +384,19 @@ export function OverflowMenu({
             aria-label={
               repoStats?.commitCount != null
                 ? `Commits, ${formatCountExact(repoStats.commitCount)}`
-                : undefined
+                : "Commits unavailable"
             }
           >
-            <GitCommit className="mr-2 h-3.5 w-3.5" />
+            <GitCommit
+              className={cn(
+                "mr-2 h-3.5 w-3.5",
+                repoStats?.commitCount == null && "text-text-secondary"
+              )}
+            />
             Commits
-            {repoStats?.commitCount != null && (
-              <DropdownMenuMeta>{formatCountExact(repoStats.commitCount)}</DropdownMenuMeta>
-            )}
+            <DropdownMenuMeta>
+              {repoStats?.commitCount != null ? formatCountExact(repoStats.commitCount) : "—"}
+            </DropdownMenuMeta>
           </DropdownMenuItem>
         </DropdownMenuGroup>,
       ];
@@ -445,6 +514,7 @@ export function OverflowMenu({
     // narrower the moment the copy lands.
     const copying = id === "copy-tree" && isCopyingTree;
     const count = overflowCount(id);
+    const mark = signalMark(id);
     return [
       <DropdownMenuItem
         key={id}
@@ -453,7 +523,30 @@ export function OverflowMenu({
         keybinding={keybindingById[id]}
       >
         {copying && showCopyingSpinner ? (
-          <Spinner size="sm" className="mr-2" />
+          <Spinner size="sm" className="mr-2" rootAttributes={{ "data-menu-icon": "" }} />
+        ) : mark ? (
+          // The mark the button itself would wear, on the row's glyph.
+          <span
+            data-menu-icon=""
+            className="relative mr-2 inline-flex h-3.5 w-3.5 items-center justify-center"
+          >
+            <Icon className="h-3.5 w-3.5" />
+            <span
+              aria-hidden="true"
+              data-pip={mark.pip === "waiting" ? "waiting" : undefined}
+              data-badge-color={
+                mark.pip === "error" ? "error" : mark.pip === "warning" ? "warning" : undefined
+              }
+              className={cn(
+                "toolbar-menu-pip absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-[var(--overlay-surface-solid,var(--color-surface-sidebar))]",
+                mark.pip !== "waiting" && "status-mark",
+                mark.pip === "error" && "bg-status-error",
+                mark.pip === "warning" && "bg-status-warning",
+                mark.pip === "waiting" && "bg-state-waiting",
+                mark.pip === "unread" && "bg-text-secondary"
+              )}
+            />
+          </span>
         ) : (
           <Icon className="mr-2 h-3.5 w-3.5" />
         )}
@@ -468,10 +561,16 @@ export function OverflowMenu({
             </span>
           </span>
         ) : (
-          <span className="flex-1">{meta.label}</span>
+          <span className="flex-1">
+            {meta.label}
+            {/* The mark is aria-hidden; the row's name says what it draws,
+                with its unit, in the buttons' own "— 3 errors" form. */}
+            {mark && <span className="sr-only">{` — ${mark.spoken}`}</span>}
+          </span>
         )}
-        {/* Audible: the count belongs in the row's accessible name. */}
-        {count !== null && <DropdownMenuMeta aria-hidden={false}>{count}</DropdownMenuMeta>}
+        {count !== null && (
+          <DropdownMenuMeta aria-hidden={mark !== null ? true : false}>{count}</DropdownMenuMeta>
+        )}
         {unavailableReason !== undefined && (
           <DropdownMenuMeta aria-hidden={false}>{unavailableReason}</DropdownMenuMeta>
         )}
@@ -501,21 +600,25 @@ export function OverflowMenu({
                   // around it would stay a zero-width flex item that still owns a
                   // gap — which is what gave the fixed divider 12px of clearance
                   // on one side while there was nothing to overflow.
-                  className={cn(toolbarIconButtonClass, "app-no-drag")}
+                  className={cn(toolbarIconButtonClass, "app-no-drag shrink-0", triggerClassName)}
                   data-toolbar-overflow-side={side}
                   data-visible={isEmpty ? "false" : "true"}
                   aria-hidden={isEmpty || undefined}
                   tabIndex={isEmpty ? -1 : undefined}
                   aria-label={ariaLabel}
                 >
-                  <Ellipsis />
-                  <span
-                    aria-hidden="true"
-                    data-testid="toolbar-overflow-badge"
-                    data-severity={severity}
-                    data-visible={severity !== null}
-                    className="toolbar-overflow-badge toolbar-badge absolute top-1.5 right-1.5 h-1.5 w-1.5 pointer-events-none"
-                  />
+                  {/* The hidden buttons' most severe mark, in the shape that
+                      button would wear, on the glyph like every other pip. */}
+                  <span className="relative inline-flex">
+                    <Ellipsis />
+                    <span
+                      aria-hidden="true"
+                      data-testid="toolbar-overflow-badge"
+                      data-severity={severity}
+                      data-visible={severity !== null && !open}
+                      className="toolbar-pip toolbar-overflow-badge toolbar-badge pointer-events-none"
+                    />
+                  </span>
                 </Button>
               </PopoverAnchor>
             </DropdownMenuTrigger>
@@ -633,13 +736,20 @@ function AgentOverflowItem({
   const dotColor = attentionState ? agentStateDotColor(attentionState) : null;
   return (
     <DropdownMenuItem onClick={onSelect} keybinding={`agent.${id}`}>
-      <span className="relative mr-2 inline-flex h-3.5 w-3.5 items-center justify-center">
+      <span
+        data-menu-icon=""
+        className="relative mr-2 inline-flex h-3.5 w-3.5 items-center justify-center"
+      >
         <Icon className="h-3.5 w-3.5" />
         {dotColor && (
           <span
             aria-hidden="true"
+            data-pip={attentionState ?? undefined}
             className={cn(
-              "toolbar-menu-pip status-mark absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-surface-canvas",
+              "toolbar-menu-pip absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-[var(--overlay-surface-solid,var(--color-surface-sidebar))]",
+              // The waiting ring stays hollow under forced colours, which the host
+              // `.status-mark` repaint would fill.
+              attentionState !== "waiting" && "status-mark",
               dotColor
             )}
           />

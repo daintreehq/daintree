@@ -630,6 +630,7 @@ export function AgentButton({
       <span
         className={cn("toolbar-pip toolbar-badge", dotColor)}
         data-visible={!!(isSessionActive && dotColor)}
+        data-pip={attentionState ?? undefined}
         aria-hidden="true"
       />
     </div>

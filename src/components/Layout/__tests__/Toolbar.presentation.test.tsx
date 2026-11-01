@@ -72,17 +72,22 @@ const forgeMenuShown = () =>
 
 beforeEach(async () => {
   // Room for every button, so only the profile can put one in the `…` menu.
-  vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
-    width: 5000,
-    height: 40,
-    top: 0,
-    left: 0,
-    right: 5000,
-    bottom: 40,
-    x: 0,
-    y: 0,
-    toJSON: () => ({}),
-  } as DOMRect);
+  // A group divider keeps its hairline width: the overflow budget counts each
+  // divider's footprint, and a 5000px one would evict the row it separates.
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+    const width = this.classList.contains("toolbar-divider") ? 1 : 5000;
+    return {
+      width,
+      height: 40,
+      top: 0,
+      left: 0,
+      right: width,
+      bottom: 40,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect;
+  });
   _resetProjectPresentationStoreForTest();
   initBuiltInPanelKinds();
   useWorktreeSelectionStore.setState({ activeWorktreeId: null });

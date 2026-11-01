@@ -33,11 +33,12 @@ import { useAssistantAgentChoices } from "@/hooks/useAssistantAgentChoices";
 import { actionService } from "@/services/ActionService";
 import type { McpRuntimeSnapshot } from "@shared/types";
 import type { AgentState } from "@/types";
-
-const toolbarIconButtonClass = "toolbar-icon-button text-text-primary relative";
+import { toolbarIconButtonClass } from "./toolbarItemClasses";
 
 interface PipDescriptor {
   className: string;
+  /** The mark's shape tier in pips.css: warning a rounded square, error a square. */
+  shape: "warning" | "error";
   delayed: boolean;
   tooltip: string;
 }
@@ -47,12 +48,14 @@ function describePip(snapshot: McpRuntimeSnapshot): PipDescriptor | null {
     case "starting":
       return {
         className: "bg-status-warning",
+        shape: "warning",
         delayed: true,
         tooltip: "MCP starting…",
       };
     case "failed":
       return {
         className: "bg-status-danger",
+        shape: "error",
         delayed: false,
         tooltip: snapshot.lastError ?? "MCP failed to start",
       };
@@ -254,6 +257,8 @@ export function ToolbarAssistantButton({
                         data-testid="assistant-working-pip"
                         data-agent-state={agentState ?? ""}
                         data-visible={pip !== null || showAgentPip}
+                        data-badge-color={pip?.shape}
+                        data-pip={!pip && showAgentPip ? (unreadState ?? undefined) : undefined}
                         className={cn(
                           "toolbar-pip toolbar-badge",
                           pip?.className ?? (showAgentPip ? agentPip?.className : undefined),

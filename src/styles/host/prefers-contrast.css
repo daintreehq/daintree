@@ -6,6 +6,61 @@
  * above but keeps theme colors (the user wants more contrast, not a
  * system-color repaint). */
 @media (prefers-contrast: more) {
+  /* The toolbar's capsules take the same ink as the buttons around them
+     (`text-secondary`, held to 4.5:1, see the frame rule below): left on
+     border-strong (1.2-1.5:1) the project pill — the strip's anchor — was the
+     faintest edge on it. The stats capsule owns one frame and its own segment
+     rules; the inner segments are buttons and would otherwise each draw a
+     second box inside it. */
+  .toolbar-project-pill,
+  .toolbar-project-chip,
+  .toolbar-stats {
+    --_border: var(--theme-text-secondary);
+  }
+
+  .toolbar-stats {
+    --_divider: var(--theme-text-secondary);
+    border-width: 2px;
+  }
+
+  .toolbar-stats > button[data-stat-segment] {
+    border-width: 0;
+  }
+
+  /* Open, the pill's edge steps up rather than back to border-strong; an open
+     stats segment's inset edge, and every armed toolbar control's frame, do
+     the same, so "this one is open" stays a contrast step and not a tint. */
+  .toolbar-project-pill:is([aria-expanded="true"], [data-state="open"]) {
+    border-color: var(--theme-text-primary);
+  }
+
+  .toolbar-stat-pill[aria-expanded="true"]::after {
+    border-width: 2px;
+    border-color: var(--theme-text-primary);
+  }
+
+  :is(.toolbar-icon-button, .toolbar-agent-button):is(
+      [aria-expanded="true"],
+      [aria-pressed="true"],
+      [data-state="open"]
+    ):not([data-sidebar-toggle]) {
+    border-color: var(--theme-text-primary);
+  }
+
+  /* Group dividers stay visible between framed buttons. */
+  .toolbar-divider {
+    background-color: var(--theme-text-secondary);
+  }
+
+  /* A preset split is one control: one frame, one seam. */
+  .toolbar-agent-split > button:first-child {
+    border-inline-end-width: 0;
+  }
+
+  .toolbar-agent-split .toolbar-agent-split-toggle::before {
+    display: none;
+  }
+
   /* Every quick-state glyph at full strength; the digit still says "empty". */
   .quick-state-glyph-empty {
     opacity: 1;

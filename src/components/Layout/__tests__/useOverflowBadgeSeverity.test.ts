@@ -115,9 +115,9 @@ describe("useOverflowBadgeSeverity", () => {
     expect(result.current).toBeNull();
   });
 
-  it("warns of urgent Canopy asks only while Canopy's own button is folded in", () => {
+  it("marks urgent Canopy asks as waiting only while Canopy's own button is folded in", () => {
     expect(renderHook(() => useOverflowBadgeSeverity(["canopy"], 0, 2)).result.current).toBe(
-      "warning"
+      "waiting"
     );
     expect(renderHook(() => useOverflowBadgeSeverity(["canopy"], 0, 0)).result.current).toBeNull();
     expect(
@@ -130,22 +130,22 @@ describe("useOverflowBadgeSeverity", () => {
     expect(result.current).toBe("critical");
   });
 
-  it("returns warning when an overflowed agent has a waiting panel", () => {
+  it("returns waiting when an overflowed agent has a waiting panel", () => {
     mockPanelsById = {
       "p-1": makePanel({ id: "p-1", agentId: "claude", agentState: "waiting" }),
     };
     mockPanelIds = ["p-1"];
     const { result } = renderHook(() => useOverflowBadgeSeverity(["claude"], 0));
-    expect(result.current).toBe("warning");
+    expect(result.current).toBe("waiting");
   });
 
-  it("returns warning when an overflowed agent has a directing panel", () => {
+  it("returns info when an overflowed agent is only being directed", () => {
     mockPanelsById = {
       "p-1": makePanel({ id: "p-1", agentId: "claude", agentState: "directing" }),
     };
     mockPanelIds = ["p-1"];
     const { result } = renderHook(() => useOverflowBadgeSeverity(["claude"], 0));
-    expect(result.current).toBe("warning");
+    expect(result.current).toBe("info");
   });
 
   it("surfaces a waiting panel even when a sibling working panel exists for the same agent", () => {
@@ -158,7 +158,7 @@ describe("useOverflowBadgeSeverity", () => {
     };
     mockPanelIds = ["p-1", "p-2"];
     const { result } = renderHook(() => useOverflowBadgeSeverity(["claude"], 0));
-    expect(result.current).toBe("warning");
+    expect(result.current).toBe("waiting");
   });
 
   it("ignores overflowed agents whose panels are in passive states", () => {
@@ -264,7 +264,7 @@ describe("useOverflowBadgeSeverity", () => {
     expect(result.current).toBe("critical");
   });
 
-  it("prefers warning over info when both are present", () => {
+  it("prefers waiting over info when both are present", () => {
     mockPanelsById = {
       "p-1": makePanel({ id: "p-1", agentId: "claude", agentState: "waiting" }),
     };
@@ -273,7 +273,7 @@ describe("useOverflowBadgeSeverity", () => {
     const { result } = renderHook(() =>
       useOverflowBadgeSeverity(["claude", "notification-center"], 0)
     );
-    expect(result.current).toBe("warning");
+    expect(result.current).toBe("waiting");
   });
 
   it("ignores unknown ids without crashing", () => {
@@ -302,7 +302,7 @@ describe("useOverflowAgentObservations — per session, like the badge", () => {
     expect(result.current).toEqual(["1 agent waiting"]);
     // And it agrees with the badge.
     const severity = renderHook(() => useOverflowBadgeSeverity(["claude"], 0));
-    expect(severity.result.current).toBe("warning");
+    expect(severity.result.current).toBe("waiting");
   });
 
   it("counts sessions, not agent types", () => {

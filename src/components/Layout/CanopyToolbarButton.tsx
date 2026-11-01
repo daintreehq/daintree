@@ -14,10 +14,10 @@ import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { preloadCanopyView } from "@/lazyPanels";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
+import { toolbarIconButtonClass } from "./toolbarItemClasses";
 
 const CANOPY_ACTION_ID = "canopy.toggle" as const;
 const CANOPY_LABEL = "Canopy";
-const toolbarIconButtonClass = "toolbar-icon-button text-text-primary relative";
 
 /**
  * Runs Canopy reads as blocked on the user right now, not yet answered or put
@@ -89,7 +89,7 @@ export function CanopyToolbarButton({
   // "Urgent", not "need you": the badge counts only urgent readings — asks,
   // and the rare breach of an explicit instruction — while the panel's own
   // "need you" counts everything left for the user to check.
-  const label = activated && needYou > 0 ? `${CANOPY_LABEL}, ${needYou} urgent` : CANOPY_LABEL;
+  const label = activated && needYou > 0 ? `${CANOPY_LABEL} — ${needYou} urgent` : CANOPY_LABEL;
   const shortcut = useEffectiveCombo(CANOPY_ACTION_ID);
   const ariaShortcut = useAriaKeyshortcuts(CANOPY_ACTION_ID);
   const hover = useShortcutHintHover(CANOPY_ACTION_ID);

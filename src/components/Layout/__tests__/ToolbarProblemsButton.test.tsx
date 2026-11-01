@@ -158,13 +158,20 @@ describe("ToolbarProblemsButton — watcher-degraded pip", () => {
   it("reflects watcher degradation in the accessible label", () => {
     const { container } = render(<ToolbarProblemsButton errorCount={0} watcherDegraded />);
     expect(container.querySelector("button")?.getAttribute("aria-label")).toBe(
-      "Problems: 0 errors, file watching degraded"
+      "Problems — file watching degraded"
     );
   });
 
   it("omits the degraded clause from the label when healthy", () => {
     const { container } = render(<ToolbarProblemsButton errorCount={1} />);
-    expect(container.querySelector("button")?.getAttribute("aria-label")).toBe("Problems: 1 error");
+    expect(container.querySelector("button")?.getAttribute("aria-label")).toBe(
+      "Problems — 1 error"
+    );
+  });
+
+  it("names the button alone at rest, with no zero count", () => {
+    const { container } = render(<ToolbarProblemsButton errorCount={0} />);
+    expect(container.querySelector("button")?.getAttribute("aria-label")).toBe("Problems");
   });
 });
 
@@ -181,7 +188,7 @@ describe("ToolbarProblemsButton — topology-watcher-dark pip (#9908)", () => {
   it("reflects the topology-dark state in the accessible label", () => {
     const { container } = render(<ToolbarProblemsButton errorCount={0} topologyWatcherDark />);
     expect(container.querySelector("button")?.getAttribute("aria-label")).toBe(
-      "Problems: 0 errors, worktree list may be stale"
+      "Problems — worktree list may be stale"
     );
   });
 
@@ -190,7 +197,7 @@ describe("ToolbarProblemsButton — topology-watcher-dark pip (#9908)", () => {
       <ToolbarProblemsButton errorCount={0} watcherDegraded topologyWatcherDark />
     );
     expect(container.querySelector("button")?.getAttribute("aria-label")).toBe(
-      "Problems: 0 errors, file watching degraded"
+      "Problems — file watching degraded"
     );
   });
 
@@ -221,8 +228,9 @@ describe("ToolbarProblemsButton — tooltip carries what the button shows", () =
       const status = container
         .querySelector("button")!
         .getAttribute("aria-label")!
-        .replace(/^Problems: /, "")
-        .split(", ");
+        .replace(/^Problems(?: — )?/, "")
+        .split(", ")
+        .filter(Boolean);
       const tooltip = tooltipText(container).toLowerCase();
       for (const part of status) {
         if (props.errorCount === 0 && /errors?$/.test(part)) continue;
