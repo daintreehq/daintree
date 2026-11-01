@@ -233,6 +233,44 @@ describe("ProjectSettingsManager caching", () => {
     expect(loaded.forgeProviderOverride).toBe("daintree.github.github");
   });
 
+  it("loads a file still carrying the retired commandOverrides quietly, and drops it on the next save (#15759)", async () => {
+    const settingsPath = path.join(tempDir, projectId, "settings.json");
+    const legacy = JSON.stringify({
+      _schemaVersion: PROJECT_SETTINGS_SCHEMA_VERSION,
+      runCommands: [{ id: "npm-dev", name: "dev", command: "npm run dev" }],
+      devServerCommand: "npm run dev",
+      commandOverrides: [
+        { commandId: "retired:one", disabled: true },
+        { commandId: "retired:two", defaults: null, prompt: "" },
+        "not-an-override",
+      ],
+    });
+    await fs.writeFile(settingsPath, legacy, "utf-8");
+    const warn = vi.spyOn(console, "warn");
+    const error = vi.spyOn(console, "error");
+
+    try {
+      const loaded = await manager.getProjectSettings(projectId);
+      expect(loaded.runCommands).toHaveLength(1);
+      expect(loaded.devServerCommand).toBe("npm run dev");
+      expect("commandOverrides" in loaded).toBe(false);
+      expect(warn).not.toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+      expect(broadcastSpy).not.toHaveBeenCalled();
+      // Reading never rewrites the file.
+      expect(await fs.readFile(settingsPath, "utf-8")).toBe(legacy);
+
+      await manager.saveProjectSettings(projectId, { ...loaded, devServerCommand: "npm start" });
+      const saved = JSON.parse(await fs.readFile(settingsPath, "utf-8"));
+      expect(saved.commandOverrides).toBeUndefined();
+      expect(saved.devServerCommand).toBe("npm start");
+      expect(saved.runCommands).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+    }
+  });
+
   it("loads settings whose JSON is prefixed with a UTF-8 BOM", async () => {
     const settingsPath = path.join(tempDir, projectId, "settings.json");
     const json = JSON.stringify({

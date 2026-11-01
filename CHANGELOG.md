@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Breaking Changes
+
+- Daintree no longer ships the built-in `github:create-issue` and `github:work-issue` commands or the command registry behind them: v0.48.0 removed the composer picker that ran them, but they still registered at startup and were listed under the project Settings › Commands tab, which is now gone along with its per-project overrides. Projects with saved overrides load as before and drop them on their next save. Start work on an issue from New worktree's Issue field (or `workflow.startWorkOnIssue` for agents on the `full` tool set), and have agents file issues with their own forge CLI (#15759)
+
 ## [0.48.0] - 2026-10-30
 
 Dictation cleanup can run on Anthropic's Claude Haiku 5.5 or Sonnet 5.5, reasons briefly before it edits on every model, and reads the slash command a prompt opens with. Canopy opens as a full-window view, Codex panes find their own conversation after a crash or a busy quit, Copy clean text lifts a Claude Code reply as its original Markdown, remote host setup, update and switching dialogs lead with one verdict, and destructive confirms, dialogs and theme contrast get a design pass.

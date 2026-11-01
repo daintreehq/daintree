@@ -1704,7 +1704,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     setSettings(enabled: boolean): Promise<{ enabled: boolean }>;
   };
   // gemini is generated — see GeneratedElectronAPI.
-  // commands is generated — see GeneratedElectronAPI.
   appAgent: {
     /** Get the current app agent config (without API key) */
     getConfig(): Promise<Omit<AppAgentConfig, "apiKey">>;
