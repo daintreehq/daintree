@@ -534,24 +534,35 @@ describe("SessionHost: one push for every view of a session (#15902)", () => {
     ]);
   });
 
-  it("addresses each endpoint while the Shell holds a view refused at the cap", () => {
+  it("addresses each endpoint for the rest of a session that refused a view at the cap", () => {
+    const first = fakeLink();
+    server.attach("s1", first);
+    open(first, "view-1", "p1");
+    open(first, "view-2", "p1");
+    open(first, "view-3", "p1");
+    const group = registry.getRemote()[0]!.group!;
+    const addressed = (link: ReturnType<typeof fakeLink>) =>
+      events(link).map((m) => (m.body as { endpointId: unknown }).endpointId);
+
+    group.sendToAll(frame);
+    // The Shell would hand a session-wide event to view-3 too, which has no endpoint here.
+    expect(addressed(first)).toEqual(["view-1", "view-2"]);
+
+    // A resumed link forgets the refusal until the Shell repeats view-3's open.
+    first.drop();
+    const second = fakeLink();
+    server.attach("s1", second, true);
+    group.sendToAll(frame);
+    expect(addressed(second)).toEqual(["view-1", "view-2"]);
+  });
+
+  it("keeps one push for a session filled to the cap without turning a view away", () => {
     const link = fakeLink();
     server.attach("s1", link);
     open(link, "view-1", "p1");
     open(link, "view-2", "p1");
-    open(link, "view-3", "p1");
-    const group = registry.getRemote()[0]!.group!;
 
-    group.sendToAll(frame);
-    // The Shell would hand a session-wide event to view-3 too, which has no endpoint here.
-    expect(events(link).map((m) => (m.body as { endpointId: unknown }).endpointId)).toEqual([
-      "view-1",
-      "view-2",
-    ]);
-
-    link.emit(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, { endpointId: "view-3" });
-    link.posted.length = 0;
-    group.sendToAll(frame);
+    registry.getRemote()[0]!.group!.sendToAll(frame);
     expect(events(link).map((m) => (m.body as { endpointId: unknown }).endpointId)).toEqual([
       null,
     ]);

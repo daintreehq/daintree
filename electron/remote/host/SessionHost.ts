@@ -192,6 +192,13 @@ interface SessionState {
    */
   refusedOnLink: Map<string, { projectId: string | null; openId: string | undefined }>;
   /**
+   * An open was refused at the endpoint cap at some point in this session.
+   * The Shell may still hold that view after `refusedOnLink` forgets it (a new
+   * link clears the map until the Shell repeats its opens), so the session
+   * stops taking session-wide events for good.
+   */
+  refusedAnOpen: boolean;
+  /**
    * What the Shell was last told about each endpoint, per answer, by client
    * endpoint id. An endpoint missing here is owed an answer: cleared when the
    * link drops, so a resumed Shell hears every endpoint again.
@@ -444,6 +451,7 @@ export class SessionHost {
         openedOnLink: new Set(),
         createdOnLink: new Set(),
         refusedOnLink: new Map(),
+        refusedAnOpen: false,
         told: {
           assistant: new Map(),
           agents: new Map(),
@@ -612,6 +620,7 @@ export class SessionHost {
         maxEndpoints: this.maxEndpoints,
       });
       state.refusedOnLink.set(clientEndpointId, { projectId, openId });
+      state.refusedAnOpen = true;
       const oldest = state.refusedOnLink.keys().next().value;
       if (state.refusedOnLink.size > this.maxEndpoints && oldest !== undefined) {
         state.refusedOnLink.delete(oldest);
@@ -760,14 +769,14 @@ export class SessionHost {
 
   /**
    * One EVENT addressed to the whole session, which the Shell hands to every
-   * view it holds for this host. That includes any open this link refused at
-   * the endpoint cap, which has no endpoint here and must hear nothing, so
-   * while one is refused each endpoint is addressed on its own.
+   * view it holds for this host. That would include a view whose open was
+   * refused at the endpoint cap, which has no endpoint here and must hear
+   * nothing, so a session that ever refused one addresses each endpoint.
    */
   private broadcastEvent(state: SessionState, frame: HostFrame): void {
     const endpoints = [...state.endpoints.values()].filter((endpoint) => !endpoint.isClosed());
     if (endpoints.length === 0) return;
-    if (state.refusedOnLink.size > 0) {
+    if (state.refusedAnOpen) {
       for (const endpoint of endpoints) this.sendEvent(state, endpoint, frame);
       return;
     }

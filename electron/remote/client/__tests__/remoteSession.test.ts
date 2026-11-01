@@ -492,6 +492,36 @@ describe("remote session wiring", () => {
       args: ["term-all", "hi"],
     });
     expect(h.sink.delivered.has(VIEW_LOCAL)).toBe(false);
+
+    // In order with the events addressed to one view, on the same lane.
+    broadcastToProjectRenderers("proj-1", EVENT_CHANNEL, "before");
+    broadcastToRenderer(EVENT_CHANNEL, "all");
+    broadcastToProjectRenderers("proj-1", EVENT_CHANNEL, "after");
+    await waitFor(() => (h.sink.delivered.get(VIEW_A)?.length ?? 0) === 4);
+    expect(h.sink.delivered.get(VIEW_A)!.map((event) => event.args[0])).toEqual([
+      "term-all",
+      "before",
+      "all",
+      "after",
+    ]);
+  });
+
+  it("keeps a global broadcast from a view the host turned away at its endpoint cap", async () => {
+    projectKeys.set(VIEW_C, `${HOST_ID}:proj-1`);
+    await startHarness({ maxEndpoints: 2 });
+    await connect();
+    await invoke(HOST_CHANNEL, VIEW_A, {});
+    await invoke(HOST_CHANNEL, VIEW_B, {});
+    const refused = await invoke(HOST_CHANNEL, VIEW_C, {});
+    expect(refused.ok).toBe(false);
+
+    broadcastToRenderer(EVENT_CHANNEL, "term-all", "hi");
+    await waitFor(() => (h.sink.delivered.get(VIEW_A)?.length ?? 0) === 1);
+    await waitFor(() => (h.sink.delivered.get(VIEW_B)?.length ?? 0) === 1);
+    // A sentinel behind it, so the broadcast has had its chance to reach view C.
+    broadcastToProjectRenderers("proj-1", EVENT_CHANNEL, "sentinel");
+    await waitFor(() => (h.sink.delivered.get(VIEW_A)?.length ?? 0) === 2);
+    expect(h.sink.delivered.has(VIEW_C)).toBe(false);
   });
 
   it("resolves HOST_DISCONNECTED immediately while the host is down", async () => {

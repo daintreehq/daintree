@@ -237,11 +237,21 @@ describe("broadcast helpers with a link session's grouped endpoints (#15902)", (
 
     broadcastToProjectRenderers("proj-1", "terminal:data", "one");
     broadcastToProjectRenderersExcept(null, new Set([-2]), "terminal:data", "all-but-b");
+    broadcastSlicedToProjectRenderers(
+      "resources:batch",
+      { t1: 1, t2: 2 },
+      (key) => (key === "t1" ? "proj-1" : "proj-2"),
+      (slice) => slice
+    );
 
     expect(studio.sendToAll).not.toHaveBeenCalled();
-    expect(a.send.mock.calls.map(([frame]) => frame.args)).toEqual([["one"], ["all-but-b"]]);
-    expect(b.send.mock.calls.map(([frame]) => frame.args)).toEqual([["one"]]);
-    expect(c.send.mock.calls.map(([frame]) => frame.args)).toEqual([["all-but-b"]]);
+    expect(a.send.mock.calls.map(([frame]) => frame.args)).toEqual([
+      ["one"],
+      ["all-but-b"],
+      [{ t1: 1 }],
+    ]);
+    expect(b.send.mock.calls.map(([frame]) => frame.args)).toEqual([["one"], [{ t1: 1 }]]);
+    expect(c.send.mock.calls.map(([frame]) => frame.args)).toEqual([["all-but-b"], [{ t2: 2 }]]);
   });
 
   it("keep delivering to other sessions when one session's push throws", () => {
