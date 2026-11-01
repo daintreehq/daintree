@@ -1913,7 +1913,7 @@ describe("re-reading the host only when the project changed hands (#15900)", () 
     stop();
   });
 
-  it("follows the driver again after an explicit disconnect and connect, which main can't announce", async () => {
+  it("follows the driver again after an explicit disconnect and connect, once main says so", async () => {
     const { emitHost, stop } = await watchAnotherLaptop();
     const connected = { status: "connected", rttMs: 5, handshake: HANDSHAKE } as const;
 
@@ -1923,6 +1923,7 @@ describe("re-reading the host only when the project changed hands (#15900)", () 
       connection: { status: "disconnected" },
     } as RemoteHostsEvent);
     emitHost({ type: "connection-changed", hostId: "studio-01", connection: connected });
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
 
     await vi.waitFor(() => expect(followCalls()).toHaveLength(2));
     await flush();
