@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { DecisionsService } from "../DecisionsService.js";
 import { defaultDecisionsSettings } from "../decisionsSettings.js";
-import type { DecisionsSettings, DecisionsStatusEvent } from "../../../../shared/types/decisions.js";
+import type {
+  DecisionsSettings,
+  DecisionsStatusEvent,
+} from "../../../../shared/types/decisions.js";
 
 function on(overrides: Partial<DecisionsSettings> = {}): DecisionsSettings {
   return { ...defaultDecisionsSettings(), enabled: true, ...overrides };

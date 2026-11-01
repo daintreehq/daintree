@@ -34,7 +34,8 @@ import {
   sealDecisionsModule,
 } from "../../../window/serviceRefs.js";
 
-const getStatus = decisionsNamespace.ops.getStatus.handler as unknown as () => Promise<DecisionsStatus>;
+const getStatus = decisionsNamespace.ops.getStatus
+  .handler as unknown as () => Promise<DecisionsStatus>;
 
 describe("decisions IPC", () => {
   beforeEach(() => {
@@ -49,7 +50,10 @@ describe("decisions IPC", () => {
 
   it("registers the status read and removes it on cleanup", () => {
     const cleanup = registerDecisionsHandlers();
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(CHANNELS.DECISIONS_GET_STATUS, expect.any(Function));
+    expect(ipcMainMock.handle).toHaveBeenCalledWith(
+      CHANNELS.DECISIONS_GET_STATUS,
+      expect.any(Function)
+    );
 
     cleanup();
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith(CHANNELS.DECISIONS_GET_STATUS);
@@ -60,14 +64,17 @@ describe("decisions IPC", () => {
     ["absent", undefined],
     ["off", { enabled: false }],
     ["a non-boolean switch", { enabled: "true" }],
-  ])("answers off from the store with the setting %s, loading none of Decisions", async (_label, value) => {
-    saved.value = value;
+  ])(
+    "answers off from the store with the setting %s, loading none of Decisions",
+    async (_label, value) => {
+      saved.value = value;
 
-    await expect(getStatus()).resolves.toEqual({ state: "off" });
+      await expect(getStatus()).resolves.toEqual({ state: "off" });
 
-    expect(decisionsEntry.evaluated).toBe(0);
-    expect(store.set).not.toHaveBeenCalled();
-  });
+      expect(decisionsEntry.evaluated).toBe(0);
+      expect(store.set).not.toHaveBeenCalled();
+    }
+  );
 
   it("answers off once quit has sealed the loader, without loading it", async () => {
     saved.value = { enabled: true };

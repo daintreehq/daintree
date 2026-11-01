@@ -1888,23 +1888,29 @@ describe("Decisions boot task (#16001)", () => {
     ["absent", undefined],
     ["off", { enabled: false }],
     ["a non-boolean switch", { enabled: "true" }],
-  ])("with the setting %s, imports no Decisions module and leaves nothing running", async (_label, saved) => {
-    const run = await decisionsTask(saved);
-    const readsBefore = vi.mocked(store.get).mock.calls.length;
-    const resourcesBefore = process.getActiveResourcesInfo().sort();
-    const powerSubscriptionsBefore = vi.mocked(powerMonitor.on).mock.calls.length;
-    const handlersBefore = vi.mocked(ipcMain.handle).mock.calls.length;
+  ])(
+    "with the setting %s, imports no Decisions module and leaves nothing running",
+    async (_label, saved) => {
+      const run = await decisionsTask(saved);
+      const readsBefore = vi.mocked(store.get).mock.calls.length;
+      const resourcesBefore = process.getActiveResourcesInfo().sort();
+      const powerSubscriptionsBefore = vi.mocked(powerMonitor.on).mock.calls.length;
+      const handlersBefore = vi.mocked(ipcMain.handle).mock.calls.length;
 
-    await run();
+      await run();
 
-    expect(evaluatedTotal()).toBe(0);
-    expect(decisionsEvaluated.start).not.toHaveBeenCalled();
-    const reads = vi.mocked(store.get).mock.calls.slice(readsBefore).map(([key]) => key);
-    expect(reads).toEqual(["decisions"]);
-    expect(process.getActiveResourcesInfo().sort()).toEqual(resourcesBefore);
-    expect(vi.mocked(powerMonitor.on).mock.calls.length).toBe(powerSubscriptionsBefore);
-    expect(vi.mocked(ipcMain.handle).mock.calls.length).toBe(handlersBefore);
-  });
+      expect(evaluatedTotal()).toBe(0);
+      expect(decisionsEvaluated.start).not.toHaveBeenCalled();
+      const reads = vi
+        .mocked(store.get)
+        .mock.calls.slice(readsBefore)
+        .map(([key]) => key);
+      expect(reads).toEqual(["decisions"]);
+      expect(process.getActiveResourcesInfo().sort()).toEqual(resourcesBefore);
+      expect(vi.mocked(powerMonitor.on).mock.calls.length).toBe(powerSubscriptionsBefore);
+      expect(vi.mocked(ipcMain.handle).mock.calls.length).toBe(handlersBefore);
+    }
+  );
 
   it("loads nothing once quit has sealed the loader, even with the setting on", async () => {
     const run = await decisionsTask({ enabled: true });

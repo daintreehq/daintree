@@ -117,7 +117,10 @@ describe("Decisions lazy boundary", () => {
       expect(inputs, file).toContain(file);
     }
     for (const library of LIBRARIES) {
-      expect(inputs.some((file) => libraryOf(file) === library), library).toBe(true);
+      expect(
+        inputs.some((file) => libraryOf(file) === library),
+        library
+      ).toBe(true);
     }
   });
 
@@ -145,7 +148,9 @@ describe("Decisions lazy boundary", () => {
     }
 
     const externalImports = Object.values(metafile.outputs).flatMap((output) =>
-      output.imports.filter((edge) => edge.external && edge.path.startsWith("@daintreehq/decisions"))
+      output.imports.filter(
+        (edge) => edge.external && edge.path.startsWith("@daintreehq/decisions")
+      )
     );
     expect(externalImports).toEqual([]);
   });

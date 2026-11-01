@@ -660,7 +660,10 @@ describe("scanForbiddenModules", () => {
     ]);
 
     expect(found).toEqual([
-      { file: "electron/node_modules/@daintreehq/decisions-protocol/dist/index.js", label: "Decisions" },
+      {
+        file: "electron/node_modules/@daintreehq/decisions-protocol/dist/index.js",
+        label: "Decisions",
+      },
       { file: "electron/services/decisions/decisionsSettings.ts", label: "Decisions" },
       { file: "electron/services/decisions/index.ts", label: "Decisions" },
       { file: "node_modules/@daintreehq/decisions-client/dist/index.js", label: "Decisions" },
