@@ -775,9 +775,10 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
     const resource = screen.getByTestId("terminal-resource-badge");
     expect(allStatuses[0]).not.toBe(resource);
     expect(resource).toBeTruthy();
-    const exitBadge = allStatuses[0]!;
+    const exitBadge = allStatuses.find((el) => el.textContent?.includes("[exit 1]"));
+    expect(exitBadge).toBeTruthy();
     expect(
-      exitBadge.compareDocumentPosition(resource) & Node.DOCUMENT_POSITION_FOLLOWING
+      exitBadge!.compareDocumentPosition(resource) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
   });
 });
