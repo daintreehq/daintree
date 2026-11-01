@@ -9,7 +9,7 @@ import { ProcessesDialog } from "@/components/Project/ProcessesDialog";
 import { createHostProcessesSource } from "@/components/Project/processesSource";
 import { PluginParitySummary } from "../PluginParitySummary";
 import { PortsView } from "../PortsView";
-import { useHostList } from "../hostList";
+import { useHostFigures } from "../hostList";
 import { buildHostMenuRows, clientPlatform } from "../hostModel";
 import { switchToHost } from "../hostSwitching";
 import { useHostProjectLists } from "../hostProjects";
@@ -35,7 +35,7 @@ interface HostsOverviewDialogProps {
  * this window to that host (Cmd/Ctrl-click opens a new window).
  */
 export function HostsOverviewDialog({ onClose }: HostsOverviewDialogProps) {
-  const hostList = useHostList();
+  const hostList = useHostFigures();
   useOverviewConnections(hostList.hosts);
   const history = useHostMetricsStore((state) => state.history);
   const [addingTo, setAddingTo] = useState<{ hostId: HostId; name: string } | null>(null);

@@ -6,10 +6,9 @@ import { isMac } from "@/lib/platform";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { deferPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { usePaletteStore, type PaletteId } from "@/store/paletteStore";
-import { useHostMetricsStore } from "@/store/hostMetricsStore";
+import { useHostMetricsStore, type HostMetricsHistory } from "@/store/hostMetricsStore";
 import { getViewHostId } from "@/hooks/useHostConnection";
-import { useHostList } from "@/components/Hosts/hostList";
-import { startHostMetricsFeed } from "@/components/Hosts/Overview/hostMetricsFeed";
+import { useHostFigures } from "@/components/Hosts/hostList";
 import {
   buildHostMenuRows,
   clientPlatform,
@@ -27,6 +26,8 @@ const FUSE_OPTIONS = { keys: ["name"], threshold: 0.4, ignoreLocation: true };
 
 // This machine plus the host list's 64: every host stays reachable by arrow keys.
 const MAX_ROWS = 65;
+
+const NO_HISTORY: HostMetricsHistory = new Map();
 
 const getRowId = (row: HostMenuRow) => row.hostId;
 
@@ -100,13 +101,12 @@ function useRecentHosts(isOpen: boolean): readonly HostRecentUse[] | null {
  */
 export function HostSwitcherPalette() {
   const isOpen = usePaletteStore((s) => s.activePaletteId === HOST_SWITCHER_PALETTE_ID);
-  const hostList = useHostList();
+  // Load, round trips and sparklines are followed only while the switcher is
+  // open: closed, it stays mounted and must not wake for each of them.
+  const hostList = useHostFigures(isOpen);
   const currentHostId = getViewHostId() ?? LOCAL_HOST_ID;
   const recents = useRecentHosts(isOpen);
-  const history = useHostMetricsStore((s) => s.history);
-
-  // The sparklines draw from the same feed the hosts overview follows.
-  useEffect(() => (isOpen ? startHostMetricsFeed() : undefined), [isOpen]);
+  const history = useHostMetricsStore((s) => (isOpen ? s.history : NO_HISTORY));
 
   // Every input to the order is fixed for an opening (the recency read, the
   // window's host, names), so rows update in place and never move.

@@ -19,7 +19,12 @@ import { ALL_HOSTS_ID } from "@/store/canopyStore";
 import { AgentCounts } from "@/components/Hosts/AgentCounts";
 import { HostNameText } from "@/components/Hosts/HostNameText";
 import { PlatformGlyph } from "@/components/Hosts/PlatformGlyph";
-import { hasRemoteHosts, useHostList } from "@/components/Hosts/hostList";
+import {
+  hasRemoteHosts,
+  useHostFigures,
+  useHostList,
+  type HostListSnapshot,
+} from "@/components/Hosts/hostList";
 import {
   buildHostMenuRows,
   clientPlatform,
@@ -83,6 +88,22 @@ export function useCanopyHostRows(shownHostId: HostId): HostMenuRow[] | null {
     currentHostId: shownHostId,
     localSummary: hostList.localSummary,
   });
+}
+
+function withFigures(row: HostMenuRow, figures: HostListSnapshot): HostMenuRow {
+  const summary = row.isLocal
+    ? figures.localSummary
+    : (figures.hosts.find((entry) => entry.descriptor.id === row.hostId)?.summary ?? null);
+  return summary === null ? row : { ...row, summary };
+}
+
+/**
+ * The menu's hosts with their agent counts. The header's rows carry no
+ * figures, so each host's summary is followed only while the menu is open.
+ */
+function HostPickerItems({ rows }: { rows: readonly HostMenuRow[] }) {
+  const figures = useHostFigures();
+  return rows.map((row) => <HostPickerItem key={row.hostId} row={withFigures(row, figures)} />);
 }
 
 function HostPickerItem({ row }: { row: HostMenuRow }) {
@@ -247,9 +268,7 @@ export function CanopyHostPicker({
               <DropdownMenuSeparator />
             </>
           )}
-          {rows.map((row) => (
-            <HostPickerItem key={row.hostId} row={row} />
-          ))}
+          <HostPickerItems rows={rows} />
         </DropdownMenuRadioGroup>
         {onEnableAll && (
           <>

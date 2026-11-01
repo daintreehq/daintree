@@ -1449,12 +1449,15 @@ export async function runHostOperation<T>(
   }
 }
 
+/**
+ * Which host this view runs on, by id and name. Only the identity: a link's
+ * pings replace its connection every few seconds, so anything showing the
+ * link's state selects it from the store itself.
+ */
 export function useHostConnection() {
   const hostId = useHostConnectionStore((s) => s.hostId);
   const hostName = useHostConnectionStore((s) => s.hostName);
-  const connection = useHostConnectionStore((s) => s.connection);
-  const lastSeenAt = useHostConnectionStore((s) => s.lastSeenAt);
-  return { hostId, hostName: hostName ?? hostId, connection, lastSeenAt };
+  return { hostId, hostName: hostName ?? hostId };
 }
 
 /** Why terminals in this view take no input right now, or null when they do. */

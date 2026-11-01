@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock("../../hostList", () => ({
   useHostList: () => ({ hosts: h.hosts, localSummary: null }),
+  useHostFigures: () => ({ hosts: h.hosts, localSummary: null }),
 }));
 vi.mock("@/store/hostMetricsStore", () => ({
   useHostMetricsStore: (select: (state: { history: Map<string, never[]> }) => unknown) =>

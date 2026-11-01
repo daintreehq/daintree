@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
 import type { DriveLeaseEvent, DriveLeaseView } from "@shared/types/ipc/driveLease";
 import type { HostProjectRehydrateOptions } from "@/store/hostProjectRehydrate";
@@ -119,6 +119,7 @@ import {
   runHostOperation,
   startHostConnectionSync,
   takeOverDrive,
+  useHostConnection,
   useHostConnectionSync,
 } from "../useHostConnection";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
@@ -2762,5 +2763,44 @@ describe("host restart", () => {
     await vi.waitFor(() => expect(relaunchLost).toHaveBeenCalledTimes(2));
     expect([...relaunchLost.mock.calls[1]![1]]).toEqual([["t-agent", 2]]);
     stop();
+  });
+});
+
+describe("useHostConnection", () => {
+  it("renders its caller when the view's host is named, never for a ping on its link", () => {
+    const store = useHostConnectionStore.getState();
+    store.bindHost("studio-01", null);
+    store.applyConnection({ status: "connected", rttMs: 5, rttSampledAt: 1, handshake: HANDSHAKE });
+    let renders = 0;
+    const { result } = renderHook(() => {
+      renders += 1;
+      return useHostConnection();
+    });
+    expect(result.current).toEqual({ hostId: "studio-01", hostName: "studio-01" });
+    const before = renders;
+
+    act(() => {
+      useHostConnectionStore.getState().applyConnection({
+        status: "connected",
+        rttMs: 6,
+        rttSampledAt: 2,
+        handshake: { ...HANDSHAKE },
+      });
+    });
+    expect(useHostConnectionStore.getState().connection).toMatchObject({ rttMs: 6 });
+    expect(renders).toBe(before);
+
+    act(() => useHostConnectionStore.getState().applyConnection({ status: "disconnected" }));
+    expect(useHostConnectionStore.getState().lastSeenAt).not.toBeNull();
+    expect(renders).toBe(before);
+
+    act(() => useHostConnectionStore.getState().setHostName("Studio"));
+    expect(renders).toBe(before + 1);
+    expect(result.current.hostName).toBe("Studio");
+
+    // Same name, so only the id's own subscription can carry the change.
+    act(() => useHostConnectionStore.getState().bindHost("build-02", "Studio"));
+    expect(renders).toBe(before + 2);
+    expect(result.current).toEqual({ hostId: "build-02", hostName: "Studio" });
   });
 });
