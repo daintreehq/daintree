@@ -12,7 +12,6 @@ import { useWallClock } from "@/hooks/useWallClock";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useSchedulesViewStore } from "@/store/schedulesViewStore";
 import { usePanelStore } from "@/store/panelStore";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useResumeAgentSession } from "@/hooks/useResumeAgentSession";
 import { useScheduleLaunchOptions } from "./useScheduleLaunchOptions";
 import { schedulesClient } from "@/clients/schedulesClient";
@@ -23,6 +22,7 @@ import type { Schedule, ScheduledRun } from "@shared/types/scheduledRuns";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 import type { ScheduleRunNowOutcome, SchedulesSnapshot } from "@shared/types/ipc/schedules";
 import { actionService } from "@/services/ActionService";
+import { revealRunTerminal } from "@/services/scheduledRunLanding";
 import { logError } from "@/utils/logger";
 import { ScheduleList, scheduleRowSelector, NEW_SCHEDULE_SELECTOR } from "./ScheduleList";
 import { ScheduleEditor, type EditorLeaveState, type WorktreeChoice } from "./ScheduleEditor";
@@ -73,28 +73,6 @@ function focusTargetFor(page: Page): FocusTarget {
   if (page.kind === "new") return { kind: "name" };
   if (page.kind === "list") return { kind: "new-button" };
   return { kind: "title" };
-}
-
-/**
- * Bring a run's terminal forward: out of the trash or the background, into its
- * worktree, and focused. A pane in the trash still holds the run's agent, so it's
- * restored rather than resumed beside itself.
- */
-function revealRunTerminal(terminalId: string): boolean {
-  const panels = usePanelStore.getState();
-  const panel = panels.panelsById[terminalId];
-  if (!panel) return false;
-  if (panel.location === "trash") panels.restoreTerminal(terminalId);
-  const worktreeId = usePanelStore.getState().panelsById[terminalId]?.worktreeId ?? null;
-  const selection = useWorktreeSelectionStore.getState();
-  if (worktreeId && worktreeId !== selection.activeWorktreeId) {
-    selection.selectWorktree(worktreeId, { source: "user" });
-  }
-  if (usePanelStore.getState().panelsById[terminalId]?.location === "background") {
-    usePanelStore.getState().restoreBackgroundTerminal(terminalId);
-  }
-  usePanelStore.getState().activateTerminal(terminalId);
-  return true;
 }
 
 /** A run's resume snapshot as the session record every resume surface takes. */
