@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { ATTACH_STDIO_FLAG } from "../host/attachStdio.js";
@@ -92,6 +93,8 @@ export interface SshTransportOptions {
    */
   ensureRunning?: (signal: AbortSignal) => Promise<boolean>;
   linuxDirName?: string;
+  /** The ssh config files a remembered route depends on; the user's and the system's unless given. */
+  sshConfigFiles?: string[];
 }
 
 export interface RemoteProbe {
@@ -699,6 +702,32 @@ interface KnownHost {
   info: HostDiscoveryInfo;
   /** From `ssh -G`; undefined until a forward needed it. */
   resolvedControlPath?: string | null;
+  /** {@link sshConfigStamp} from before the dial that learned this. */
+  configStamp: string;
+}
+
+/**
+ * How the ssh config files stood. A remembered route is only good while they
+ * are unchanged: one that re-points the alias would otherwise keep reaching
+ * the old host through the master still open to it. Files they `Include`
+ * aren't covered; a person's Retry dials afresh whatever they say.
+ */
+async function sshConfigStamp(files: readonly string[]): Promise<string> {
+  const stamps = await Promise.all(
+    files.map(async (file) => {
+      try {
+        const stat = await fs.stat(file);
+        return `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+      } catch {
+        return "-";
+      }
+    })
+  );
+  return stamps.join("|");
+}
+
+function defaultSshConfigFiles(): string[] {
+  return [path.join(os.homedir(), ".ssh", "config"), "/etc/ssh/ssh_config"];
 }
 
 const SSH_TIMED_OUT = "ssh did not finish in time";
@@ -739,7 +768,10 @@ export class SshTransport implements LinkTransport {
       this.known = null;
       this.streamLocal = "unverified";
     }
-    const known = this.known;
+    let known = this.known;
+    if (known && known.configStamp !== (await this.configStamp())) {
+      this.known = known = null;
+    }
     if (known) {
       try {
         const connection = await this.openKnown(known, signal);
@@ -769,6 +801,8 @@ export class SshTransport implements LinkTransport {
     onReached: () => void
   ): Promise<LinkTransportConnection> {
     const { target, clientDir } = this.options;
+    // Before anything is read: a change made during this dial shows on the next one.
+    const configStamp = await this.configStamp();
     await fs.mkdir(clientDir, { recursive: true, mode: 0o700 });
     await fs.chmod(clientDir, 0o700);
     const controlPath = controlPathFor(clientDir, target);
@@ -825,7 +859,11 @@ export class SshTransport implements LinkTransport {
         `The host's discovery file names a socket at ${info.socketPath}, not beside it at ${location.socketPath}`
       );
     }
-    return this.reach(controlPath, info, null, signal);
+    return this.reach(controlPath, info, null, configStamp, signal);
+  }
+
+  private configStamp(): Promise<string> {
+    return sshConfigStamp(this.options.sshConfigFiles ?? defaultSshConfigFiles());
   }
 
   /** Straight to the route an earlier open found, through the master it left running. */
@@ -833,7 +871,7 @@ export class SshTransport implements LinkTransport {
     const { target, clientDir } = this.options;
     const controlPath = controlPathFor(clientDir, target);
     noteSshMaster(target, controlPath, (timeoutMs) => this.exitMaster(controlPath, timeoutMs));
-    return this.reach(controlPath, known.info, known, signal);
+    return this.reach(controlPath, known.info, known, known.configStamp, signal);
   }
 
   /**
@@ -846,11 +884,12 @@ export class SshTransport implements LinkTransport {
     controlPath: string,
     info: HostDiscoveryInfo,
     known: KnownHost | null,
+    configStamp: string,
     signal: AbortSignal
   ): Promise<LinkTransportConnection> {
-    const remember = (next: KnownHost) => {
+    const remember = (resolvedControlPath: string | null | undefined) => {
       // An open a Retry abandoned may finish after the Retry's own dial learned newer details.
-      if (!signal.aborted) this.known = next;
+      if (!signal.aborted) this.known = { info, resolvedControlPath, configStamp };
     };
     const remoteSocket = info.socketPath;
     // A home folder with ":", "${" or "%" in its name puts them in the socket
@@ -864,7 +903,7 @@ export class SshTransport implements LinkTransport {
       }
       const connection = await this.openOverStdio(controlPath, info, signal);
       this.lastRoute = "attach-stdio";
-      remember({ info, resolvedControlPath: known?.resolvedControlPath });
+      remember(known?.resolvedControlPath);
       return connection;
     }
 
@@ -882,13 +921,13 @@ export class SshTransport implements LinkTransport {
       connection.socket.once("close", () => {
         if (this.streamLocal === "refused") this.streamLocal = "unverified";
       });
-      remember({ info, resolvedControlPath: known?.resolvedControlPath });
+      remember(known?.resolvedControlPath);
       return connection;
     }
     const forward = await this.openForward(controlPath, remoteSocket, info.token, known, signal);
     this.lastRoute = "forward";
     // A dedicated forward leaves no master to forward through next time.
-    if (forward.viaMaster) remember({ info, resolvedControlPath: forward.resolvedControlPath });
+    if (forward.viaMaster) remember(forward.resolvedControlPath);
     return forward.connection;
   }
 

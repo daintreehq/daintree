@@ -1520,15 +1520,18 @@ describe("LinkClient retry during an attempt (#13926)", () => {
 });
 
 describe("LinkClient connections opened from what earlier links learned (#15895)", () => {
-  type Answer = "welcome" | "unauthorized" | "busy" | "close";
+  type Answer = "welcome" | "unauthorized" | "busy" | "close" | "goodbye";
 
   /**
    * A host that answers each HELLO with the next of `answers` (the last one
-   * repeats), reached by a transport whose opens are `remembered` unless the
-   * dial asks for `fresh`. `holdFresh` keeps a fresh open waiting until its
-   * dial is cancelled.
+   * repeats), reached by a transport that marks its opens `remembered`: every
+   * one but a fresh dial's ("plain"), none, or all of them. `holdFresh` keeps
+   * a fresh open waiting until its dial is cancelled.
    */
-  async function rememberingHost(answers: Answer[], options: { holdFresh?: boolean } = {}) {
+  async function rememberingHost(
+    answers: Answer[],
+    options: { remember?: "plain" | "never" | "always"; holdFresh?: boolean } = {}
+  ) {
     const dir = await makeTempDir();
     const socketPath = path.join(dir, "k.sock");
     let hellos = 0;
@@ -1555,33 +1558,49 @@ describe("LinkClient connections opened from what earlier links learned (#15895)
                     resumed: false,
                   },
                 }
-              : {
-                  lane: Lane.CONTROL,
-                  kind: ControlKind.REJECT,
-                  body: { reason: answer, handshake: null, detail: null },
-                };
+              : answer === "goodbye"
+                ? { lane: Lane.CONTROL, kind: ControlKind.GOODBYE, body: { reason: "going away" } }
+                : {
+                    lane: Lane.CONTROL,
+                    kind: ControlKind.REJECT,
+                    body: { reason: answer, handshake: null, detail: null },
+                  };
           socket.write(encodeFrame(messageToFrame(message)));
+          if (answer === "goodbye") socket.end();
         }
       });
     });
     await new Promise<void>((resolve) => server.listen(socketPath, resolve));
     const direct = createDirectTransport({ socketPath, token: "t" });
     const opens: boolean[] = [];
+    const signals: AbortSignal[] = [];
+    let settled = 0;
+    const remember = options.remember ?? "plain";
     const transport: LinkTransport = {
       async open(signal, openOptions) {
         const fresh = openOptions?.fresh === true;
         opens.push(fresh);
-        if (fresh && options.holdFresh) {
-          await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
-          throw new TransportError("Connection cancelled", null);
+        signals.push(signal);
+        try {
+          if (fresh && options.holdFresh) {
+            await new Promise((resolve) =>
+              signal.addEventListener("abort", resolve, { once: true })
+            );
+            throw new TransportError("Connection cancelled", null);
+          }
+          const connection = await direct.open(signal);
+          const remembered = remember === "always" || (remember === "plain" && !fresh);
+          return remembered ? { ...connection, remembered: true as const } : connection;
+        } finally {
+          settled++;
         }
-        const connection = await direct.open(signal);
-        return fresh ? connection : { ...connection, remembered: true as const };
       },
     };
     return {
       transport,
       opens,
+      signals,
+      settled: () => settled,
       hellos: () => hellos,
       async close() {
         server.close();
@@ -1647,30 +1666,72 @@ describe("LinkClient connections opened from what earlier links learned (#15895)
     }
   });
 
-  it("takes any other refusal as the host's own answer", async () => {
-    const host = await rememberingHost(["busy"]);
-    const states: LinkClientState[] = [];
+  it("dials afresh only for a remembered connection, and only once", async () => {
+    // Read from the host just now: the refusal is the host's answer.
+    const unremembered = await rememberingHost(["unauthorized"], { remember: "never" });
     try {
-      client = linkOver(host.transport, states);
+      client = linkOver(unremembered.transport, []);
       client.start();
       await waitFor(() => client!.getState().status === "unreachable");
-      expect(host.opens).toEqual([false]);
-      expect(client.getState()).toMatchObject({ detail: "Host refused the connection: busy" });
+      expect(unremembered.opens).toEqual([false]);
     } finally {
       await client?.stop();
       client = null;
-      await host.close();
+      await unremembered.close();
+    }
+
+    // A fresh dial that still comes back remembered isn't dialled a third time.
+    const always = await rememberingHost(["unauthorized"], { remember: "always" });
+    try {
+      client = linkOver(always.transport, []);
+      client.start();
+      await waitFor(() => client!.getState().status === "unreachable");
+      expect(always.opens).toEqual([false, true]);
+      // The attempt is over: asking again dials again.
+      client.retryNow();
+      await waitFor(() => always.opens.length === 4);
+      expect(always.opens).toEqual([false, true, false, true]);
+    } finally {
+      await client?.stop();
+      client = null;
+      await always.close();
     }
   });
 
-  it("ends the attempt when stopped during the fresh dial", async () => {
+  it("takes any other answer from the host as its own", async () => {
+    for (const [answer, detail] of [
+      ["busy", "Host refused the connection: busy"],
+      ["goodbye", "going away"],
+    ] as const) {
+      const host = await rememberingHost([answer]);
+      try {
+        client = linkOver(host.transport, []);
+        client.start();
+        await waitFor(() => client!.getState().status === "unreachable");
+        expect(host.opens).toEqual([false]);
+        expect(client.getState()).toMatchObject({ detail });
+      } finally {
+        await client?.stop();
+        client = null;
+        await host.close();
+      }
+    }
+  });
+
+  it("holds the attempt through the fresh dial, and a stop cancels it", async () => {
     const host = await rememberingHost(["unauthorized"], { holdFresh: true });
     const states: LinkClientState[] = [];
     try {
       client = linkOver(host.transport, states);
       client.start();
       await waitFor(() => host.opens.length === 2);
+      // A dial is under way: asking for the link again starts no other.
+      client.retryNow();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(host.opens).toEqual([false, true]);
       await client.stop();
+      expect(host.signals[1]!.aborted).toBe(true);
+      await waitFor(() => host.settled() === 2);
       expect(client.getState()).toEqual({ status: "disconnected" });
       expect(host.opens).toEqual([false, true]);
       expect(states.some((state) => state.status === "unreachable")).toBe(false);

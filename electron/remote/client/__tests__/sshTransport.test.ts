@@ -1244,6 +1244,38 @@ describe("reconnecting to a host the transport already knows", () => {
     host.closeProxies();
   });
 
+  it("dials afresh once the ssh config may point the alias somewhere else", async () => {
+    const host = await knownHost();
+    const config = path.join(root, "ssh_config");
+    writeFileSync(config, "Host studio\n  HostName a.example\n");
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: host.spawner,
+      sshConfigFiles: [config, path.join(root, "no-system-config")],
+    });
+    const first = await transport.open(new AbortController().signal);
+    await first.dispose();
+    const second = await transport.open(new AbortController().signal);
+    expect(second.remembered).toBe(true);
+    await second.dispose();
+
+    // The master still open to a.example would otherwise keep carrying the link.
+    writeFileSync(config, "Host studio\n  HostName b.example.org\n");
+    const before = host.calls.length;
+    const third = await transport.open(new AbortController().signal);
+    expect(third.remembered).toBeUndefined();
+    const redial = host.calls.slice(before);
+    expect(redial.filter(isProbe)).toHaveLength(1);
+    expect(redial.filter(isResolve)).toHaveLength(1);
+    await third.dispose();
+    // What that dial learned holds while the config stays as it is now.
+    const fourth = await transport.open(new AbortController().signal);
+    expect(fourth.remembered).toBe(true);
+    await fourth.dispose();
+    host.closeProxies();
+  });
+
   it("starts no fresh dial for a remembered one that was cancelled", async () => {
     const host = await knownHost();
     const transport = new SshTransport({
