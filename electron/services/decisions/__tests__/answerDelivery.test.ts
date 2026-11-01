@@ -90,6 +90,9 @@ class FakePtyClient implements TerminalNotifyPtyClient, DecisionSinkPtyClient {
   failStrictReads = 0;
   /** Screen reads that come back empty, as the client answers one that timed out. */
   failScreenReads = 0;
+  /** Screen reads answered before every later one comes back empty. */
+  screenReadsLeft = Number.MAX_SAFE_INTEGER;
+  screenReads = 0;
 
   async getTerminalAsync(id: string, submissionToken?: string, options?: { strict?: boolean }) {
     if (options?.strict === true && this.failStrictReads > 0) {
@@ -120,10 +123,13 @@ class FakePtyClient implements TerminalNotifyPtyClient, DecisionSinkPtyClient {
   withdrawGuardedSubmission() {}
 
   async getSerializedStateAsync(id: string) {
+    this.screenReads += 1;
     if (this.failScreenReads > 0) {
       this.failScreenReads -= 1;
       return null;
     }
+    if (this.screenReadsLeft <= 0) return null;
+    this.screenReadsLeft -= 1;
     const data = this.screens.get(id);
     return data === undefined ? null : { data };
   }
@@ -831,21 +837,42 @@ describe("AnswerDelivery", () => {
     expect(h.client.submitted).toEqual([]);
   });
 
-  it("calls a crashed injection uncertain once its run's screen stays unreadable past the retries", async () => {
+  it("acts on the screen recovery read, never on a second read that could fail", async () => {
     const h = setup();
     await answered(h.store, Q1, 1, "approve");
     await h.store.putIntent(intent(CRASHED, Q1));
     h.client.screens.set(PANE, `${markerFor(CRASHED)}\r\n`);
-    h.client.failScreenReads = Number.MAX_SAFE_INTEGER;
+    h.client.screenReadsLeft = 1;
 
     h.delivery.start();
-    for (let i = 0; i < RECOVERY_RETRIES - 1; i += 1) {
+    await until(async () => (await h.question(Q1))?.delivery_status === "terminal-delivered");
+    expect(h.client.screenReads).toBe(1);
+    expect(h.client.submitted).toEqual([]);
+  });
+
+  it("calls crashed injections uncertain once their run's screen stays unreadable past the retries", async () => {
+    const CRASHED_2 = "0190f0aa11112222333344445555cc02";
+    const h = setup();
+    await answered(h.store, Q1, 1, "approve");
+    await answered(h.store, Q2, 2, "reject");
+    await h.store.putIntent(intent(CRASHED, Q1));
+    await h.store.putIntent(intent(CRASHED_2, Q2));
+    h.client.screens.set(PANE, `${markerFor(CRASHED)}\r\n${markerFor(CRASHED_2)}\r\n`);
+    h.client.failScreenReads = Number.MAX_SAFE_INTEGER;
+
+    // One attempt counts once, however many of its injections it couldn't read.
+    h.delivery.start();
+    await advance(2_000);
+    for (let i = 1; i < RECOVERY_RETRIES; i += 1) {
       h.signal("appeared");
       await advance(2_000);
     }
     expect((await h.store.getIntent(CRASHED))?.state).toBe("intent");
+    expect((await h.store.getIntent(CRASHED_2))?.state).toBe("intent");
+
     h.signal("appeared");
-    await until(async () => (await h.question(Q1))?.delivery_status === "delivery-uncertain");
+    await until(async () => (await h.question(Q2))?.delivery_status === "delivery-uncertain");
+    expect((await h.question(Q1))?.delivery_status).toBe("delivery-uncertain");
     expect(h.client.submitted).toEqual([]);
   });
 
