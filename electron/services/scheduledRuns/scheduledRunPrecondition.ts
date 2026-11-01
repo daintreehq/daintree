@@ -5,6 +5,7 @@ import { runBoundedProcess, type BoundedProcessSlot } from "../boundedProcess.js
 import { getDefaultShell, waitForWindowsShell } from "../pty/terminalShell.js";
 import type { ScheduledRunSkipReason } from "../../../shared/types/scheduledRuns.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { pluralize } from "../../../shared/utils/pluralize.js";
 
 /**
  * How long a schedule's precondition may run. Past it the occurrence is
@@ -58,11 +59,6 @@ function signalNumber(name: string | null): number | null {
   return typeof value === "number" && value > 0 ? value : null;
 }
 
-function describeSeconds(ms: number): string {
-  const seconds = Math.round(ms / 1000);
-  return seconds === 1 ? "1 second" : `${seconds} seconds`;
-}
-
 /**
  * Runs a schedule's precondition in its worktree (#15980). Resolves null when
  * it exited 0, so the run goes ahead; otherwise with the skip the history
@@ -101,7 +97,11 @@ export async function runSchedulePrecondition(
       slot,
       createError: (message) => new Error(message),
     });
-    if (outcome.timedOut) return skip({ error: `Timed out after ${describeSeconds(timeoutMs)}.` });
+    if (outcome.timedOut) {
+      return skip({
+        error: `Timed out after ${pluralize(Math.round(timeoutMs / 1000), "second")}.`,
+      });
+    }
     if (outcome.aborted) return skip({ error: "Stopped before it finished." });
     const signal = signalNumber(outcome.signalName);
     if (signal !== null) return skip({ exitCode: outcome.exitCode, signal });
