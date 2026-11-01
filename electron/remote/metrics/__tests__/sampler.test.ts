@@ -679,7 +679,11 @@ describe("HostMetricsSampler", () => {
           [100, 900],
           [500, 500],
         ])
-      ).toMatchObject({ cpuPercent: null, cpuEfficiencyPercent: null, cpuPerformancePercent: null });
+      ).toMatchObject({
+        cpuPercent: null,
+        cpuEfficiencyPercent: null,
+        cpuPerformancePercent: null,
+      });
       const resumed = await step(105_000 + HOUR_MS, [
         [190, 910],
         [540, 560],
