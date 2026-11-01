@@ -465,6 +465,36 @@ describe("ScheduledRunRecorder", () => {
     expect(recorder.hasOpenRun("project-1")).toBe(false);
   });
 
+  it("has any open run, in any project, until every one settles", () => {
+    const recorder = lifetime();
+    expect(recorder.hasAnyOpenRun()).toBe(false);
+    recorder.registerLaunch(launch());
+    recorder.registerLaunch(
+      launch({
+        id: "run-2",
+        scheduleId: "schedule-2",
+        projectId: "project-2",
+        terminalId: "terminal-2",
+      })
+    );
+    recorder.registerSkip({
+      id: "run-3",
+      scheduleId: "schedule-3",
+      projectId: "project-1",
+      origin: launch().origin,
+      reason: { kind: "overlap", openRunId: "run-1" },
+    });
+
+    recorder.settle("run-1", { kind: "cancel" });
+    expect(recorder.hasAnyOpenRun()).toBe(true);
+
+    // Settled while its terminal runs on: still live, no longer open.
+    recorder.handleSpawnResult("terminal-2", { success: true, spawnedAt: SPAWNED_AT });
+    recorder.settle("run-2", { kind: "handback", report: "done", summary: null, truncated: false });
+    expect(recorder.get("run-2")?.process.pty).toMatchObject({ state: "running" });
+    expect(recorder.hasAnyOpenRun()).toBe(false);
+  });
+
   it("settles a run another service saw end, once", () => {
     const recorder = lifetime();
     recorder.registerLaunch(launch());

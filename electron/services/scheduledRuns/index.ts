@@ -87,6 +87,8 @@ export function getScheduledRunRecorder(): Promise<ScheduledRunRecorder | null> 
 
 type ScheduledRunNotifierModule = typeof import("./scheduledRunNotifierLive.js");
 let notifierModule: Promise<ScheduledRunNotifierModule> | null = null;
+/** Notifications set off and not yet out; a quit that follows a run waits on them. */
+const pendingNotifications = new Set<Promise<void>>();
 
 /**
  * A run that settled needing a person gets a native notification (#15988).
@@ -100,11 +102,22 @@ function notifyIfNeeded(run: ScheduledRun): void {
     notifierModule = null;
     throw error;
   });
-  void notifierModule
+  const delivery = notifierModule
     .then(({ notifyScheduledRunAttention }) => notifyScheduledRunAttention(run, attention))
     .catch((error: unknown) => {
       console.warn(`[ScheduledRuns] Couldn't notify about run ${run.id}:`, error);
     });
+  pendingNotifications.add(delivery);
+  void delivery.finally(() => pendingNotifications.delete(delivery));
+}
+
+/**
+ * Settles once every notification already set off for a settled run has gone
+ * out or failed, so a quit that follows the run doesn't drop it: the notifier
+ * shows nothing once a shutdown has begun.
+ */
+export function whenScheduledRunNotificationsSent(): Promise<void> {
+  return Promise.all(pendingNotifications).then(() => {});
 }
 
 /**
@@ -136,6 +149,34 @@ export async function getScheduledRunRecorderForInbox(): Promise<ScheduledRunRec
     return null;
   }
   return getScheduledRunRecorder();
+}
+
+/**
+ * Whether a run of this lifetime is open, without opening the history to find
+ * out. A history that can't be read counts as none, so a last window closing
+ * quits as it always did.
+ */
+export function hasOpenScheduledRun(): boolean {
+  if (!recorder) return false;
+  try {
+    return recorder.hasAnyOpenRun();
+  } catch (error) {
+    console.warn("[ScheduledRuns] Couldn't read which runs are open:", error);
+    return false;
+  }
+}
+
+/**
+ * Calls back whenever a run ends or a schedule's or project's run history is
+ * deleted (those runs never end), until the returned function is called.
+ */
+export function onScheduledRunClosed(listener: () => void): () => void {
+  const offEnded = events.on("scheduled-run:ended", listener);
+  const offDeleted = events.on("scheduled-runs:deleted", listener);
+  return () => {
+    offEnded();
+    offDeleted();
+  };
 }
 
 /**

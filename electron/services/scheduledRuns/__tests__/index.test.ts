@@ -62,7 +62,10 @@ import type { RegisterScheduledLaunchInput } from "../ScheduledRunRecorder.js";
 import {
   _resetScheduledRunRecorderForTest,
   getScheduledRunRecorder,
+  hasOpenScheduledRun,
+  onScheduledRunClosed,
   startScheduledRunFacts,
+  whenScheduledRunNotificationsSent,
   type ScheduledRunFactSource,
 } from "../index.js";
 
@@ -187,6 +190,69 @@ describe("scheduled-run history wiring", () => {
     });
   });
 
+  it("reads open runs without opening the history, which has none until it opens", async () => {
+    new ScheduledRunStore(state.sqlite!).insert({
+      ...launch,
+      createdAt: 1,
+      terminalSpawnedAt: null,
+      settlement: { state: "open" },
+      process: { agent: { state: "not-started" }, pty: { state: "not-started" } },
+      pane: { state: "none" },
+    });
+    // An earlier lifetime's run, settled as interrupted once the history opens.
+    expect(hasOpenScheduledRun()).toBe(false);
+
+    const recorder = (await getScheduledRunRecorder())!;
+    expect(hasOpenScheduledRun()).toBe(false);
+    recorder.registerLaunch({ ...launch, id: "run-2", terminalId: "terminal-2" });
+    expect(hasOpenScheduledRun()).toBe(true);
+  });
+
+  it("counts a history it can't read as no open run", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const recorder = (await getScheduledRunRecorder())!;
+    recorder.registerLaunch(launch);
+    state.sqlite!.close();
+
+    expect(hasOpenScheduledRun()).toBe(false);
+    warn.mockRestore();
+    state.sqlite = openDb(path.join(dir, "app.db"), migrationsFolder).sqlite;
+  });
+
+  it("hears every way a run stops being open, until it stops listening", async () => {
+    const closed = vi.fn();
+    const stopListening = onScheduledRunClosed(closed);
+    const recorder = (await getScheduledRunRecorder())!;
+    recorder.registerLaunch(launch);
+    recorder.registerLaunch({
+      ...launch,
+      id: "run-2",
+      scheduleId: "schedule-2",
+      terminalId: "terminal-2",
+    });
+
+    recorder.settle("run-1", { kind: "cancel" });
+    expect(closed).toHaveBeenCalledTimes(1);
+    // A project removed with its history: its runs never end.
+    events.emit("scheduled-runs:deleted", {
+      projectId: "project-1",
+      scheduleId: null,
+      timestamp: 1,
+    });
+    expect(closed).toHaveBeenCalledTimes(2);
+
+    stopListening();
+    recorder.registerLaunch({
+      ...launch,
+      id: "run-3",
+      scheduleId: "schedule-3",
+      terminalId: "terminal-3",
+    });
+    recorder.settle("run-3", { kind: "cancel" });
+    recorder.deleteForSchedule("schedule-2");
+    expect(closed).toHaveBeenCalledTimes(2);
+  });
+
   it("records the PTY and session facts of a launched run", async () => {
     const recorder = (await getScheduledRunRecorder())!;
     recorder.registerLaunch(launch);
@@ -273,6 +339,32 @@ describe("scheduled-run history wiring", () => {
       ["run-2", { kind: "exited", process: "pty", exitCode: 2 }],
       ["run-3", { kind: "launch-failed" }],
     ]);
+  });
+
+  it("tells a quit when the notifications already set off have gone out", async () => {
+    await expect(whenScheduledRunNotificationsSent()).resolves.toBeUndefined();
+    let delivered!: () => void;
+    notifier.notify.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (delivered = resolve))
+    );
+    const recorder = (await getScheduledRunRecorder())!;
+    recorder.registerRefusedLaunch({
+      id: "run-3",
+      scheduleId: "schedule-1",
+      projectId: "project-1",
+      origin: launch.origin,
+      terminalId: "terminal-3",
+      message: "The project's folder is missing.",
+    });
+
+    let sent = false;
+    void whenScheduledRunNotificationsSent().then(() => (sent = true));
+    await vi.waitFor(() => expect(notifier.notify).toHaveBeenCalledOnce());
+    await Promise.resolve();
+    expect(sent).toBe(false);
+
+    delivered();
+    await vi.waitFor(() => expect(sent).toBe(true));
   });
 
   it("settles a run lost when its pty-host dies with its incarnation", async () => {

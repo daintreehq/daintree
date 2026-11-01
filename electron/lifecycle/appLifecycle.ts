@@ -1,5 +1,5 @@
 // eager-import-allow: manages application lifetime hooks and native deep link triggers on startup
-import { app, BrowserWindow } from "electron";
+import { app, BaseWindow, BrowserWindow } from "electron";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +12,7 @@ import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { setSignalShutdown, setSafetyBeltTimer } from "./signalShutdownState.js";
 import { finishIfGroupStop } from "./groupStop.js";
 import { isWindowRecreating } from "./windowRecreationState.js";
+import { getActiveShutdown } from "./shutdownCoordinator.js";
 import { SAFETY_BELT_TIMEOUT_MS } from "./shutdownConfig.js";
 import { extractDaintreeUrl, handleDaintreeUrl } from "../setup/deepLinkInstall.js";
 import { dispatchOpenDirPath, hasOpenDirConsumer } from "../setup/environment.js";
@@ -19,6 +20,9 @@ import { isHostModeRequested } from "../boot/hostModeLaunch.js";
 import { isDueScheduleCheckRequested } from "../boot/dueScheduleLaunch.js";
 
 const DISABLE_GPU_CRASH_LIMIT_SWITCH = "disable-gpu-process-crash-limit";
+// How long a quit after the last open scheduled run waits for that run's
+// notification to go out: shutdown discards one still loading.
+const RUN_NOTIFICATION_WAIT_MS = 10_000;
 const SIGNAL_ECHO_WINDOW_MS = 100;
 
 const CLI_PATH_FLAG = "--cli-path";
@@ -281,6 +285,19 @@ export interface AppLifecycleOptions {
    * (`--run-due-schedules`). Such a launch never focuses or opens a window.
    */
   onDueScheduleCheckRequested?: () => void;
+  /**
+   * Scheduled runs this process has open. Off macOS, closing the last window
+   * while one is open doesn't quit: the process stays up with no window until
+   * none is, so the run isn't ended with the window, and a relaunch meanwhile
+   * opens a window on it.
+   */
+  scheduledRuns?: {
+    hasOpen: () => boolean;
+    /** Calls back as runs end or are deleted, until the returned function is called. */
+    onClosed: (listener: () => void) => () => void;
+    /** Settles once the notifications runs that already ended set off have gone out. */
+    notified: () => Promise<void>;
+  };
 }
 
 export interface AppLifecycleHandle {
@@ -290,6 +307,11 @@ export interface AppLifecycleHandle {
    * is answered now.
    */
   onLaunchSettled(): void;
+  /**
+   * Called as this launch starts its backend with no window, before the
+   * backend is up, so the end of the user's session reaches it on Windows.
+   */
+  onStartedWindowless(): void;
 }
 
 export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLifecycleHandle {
@@ -391,6 +413,90 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
   };
   if (app.isReady()) registerTerminationSignals();
   else void app.whenReady().then(registerTerminationSignals);
+
+  // Windows sends the end of the user's session (logoff, shutdown, restart)
+  // only to top-level windows; powerMonitor's window is message-only, so it
+  // never hears it. With no window the process would be killed with no
+  // cleanup and look crashed at the next launch. While it runs windowless, a
+  // hidden BaseWindow, with no web contents, takes the message for it. It
+  // exists only while no BrowserWindow does, so the last real window closing
+  // still emits `window-all-closed`.
+  let sessionEndWindow: BaseWindow | null = null;
+  const holdSessionEndWindow = (): void => {
+    if (process.platform !== "win32" || sessionEndWindow || !app.isReady()) return;
+    if (getActiveShutdown() !== null || BrowserWindow.getAllWindows().length > 0) return;
+    try {
+      const win = new BaseWindow({ show: false, skipTaskbar: true, focusable: false });
+      registerWindowSessionEndHandler(win);
+      win.once("closed", () => {
+        if (sessionEndWindow === win) sessionEndWindow = null;
+      });
+      sessionEndWindow = win;
+    } catch (error) {
+      console.error("[MAIN] Couldn't create the window that hears the session end:", error);
+    }
+  };
+  const releaseSessionEndWindow = (): void => {
+    const win = sessionEndWindow;
+    sessionEndWindow = null;
+    if (win && !win.isDestroyed()) win.destroy();
+  };
+
+  // Set while the last window has closed with a scheduled run open; the quit
+  // that close would have made waits until no run is.
+  let stopWaitingOnRuns: (() => void) | null = null;
+  let runsRecheckQueued = false;
+  // Bumped by every run end and by the wait ending, so only the newest check
+  // waiting on notifications may quit: an older one would drop a later run's.
+  let runsCheck = 0;
+  const endWaitOnRuns = (): void => {
+    runsCheck += 1;
+    const stop = stopWaitingOnRuns;
+    stopWaitingOnRuns = null;
+    stop?.();
+  };
+  // Whether the wait is still on with nothing left to wait for. Something
+  // that now keeps the process up, or a quit already under way, ends it.
+  const runsLetQuit = (): boolean => {
+    if (!stopWaitingOnRuns) return false;
+    if (getActiveShutdown() !== null || opts.keepsRunningWithoutWindows?.()) {
+      endWaitOnRuns();
+      return false;
+    }
+    return !isWindowRecreating() && !opts.scheduledRuns?.hasOpen();
+  };
+  const runNotificationsSent = (): Promise<void> =>
+    new Promise((resolve) => {
+      const timer = setTimeout(resolve, RUN_NOTIFICATION_WAIT_MS);
+      void Promise.resolve(opts.scheduledRuns?.notified())
+        .catch(() => {})
+        .then(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+    });
+  const recheckRuns = (): void => {
+    runsCheck += 1;
+    // A run ending is heard mid-settlement, before its notification is
+    // even set off; the check waits for the rest of it.
+    if (runsRecheckQueued) return;
+    runsRecheckQueued = true;
+    setImmediate(() => {
+      runsRecheckQueued = false;
+      if (!runsLetQuit()) return;
+      const check = runsCheck;
+      void runNotificationsSent().then(() => {
+        // A window, a new run or a quit may have come meanwhile.
+        if (check !== runsCheck || !runsLetQuit()) return;
+        endWaitOnRuns();
+        console.log("[MAIN] The last open scheduled run ended with no window open. Quitting...");
+        app.quit();
+      });
+    });
+  };
+  const waitOnRuns = (runs: NonNullable<AppLifecycleOptions["scheduledRuns"]>): void => {
+    stopWaitingOnRuns ??= runs.onClosed(recheckRuns);
+  };
 
   // A second launch that arrived before the first had anything on screen.
   // `plainRelaunch` is true if any of them was a plain relaunch, `targeted` if
@@ -499,7 +605,7 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
     }
     // Unless this process runs windowless, a relaunch with nothing on screen
     // behaves as it always has (the folder routing above still applies).
-    if (!opts.keepsRunningWithoutWindows?.()) return;
+    if (!opts.keepsRunningWithoutWindows?.() && !stopWaitingOnRuns) return;
     if (!app.isReady() || !(opts.isLaunchSettled?.() ?? true)) {
       // The launch is still bringing up its own windows or its windowless
       // Host; decided once it has, against whatever is on screen then.
@@ -528,6 +634,11 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
   }
 
   app.on("browser-window-created", (_event, win) => {
+    // Before the hidden stand-in goes, so no moment is left unheard.
+    registerWindowSessionEndHandler(win);
+    releaseSessionEndWindow();
+    // A window is on screen again: closing it decides afresh.
+    endWaitOnRuns();
     if (process.platform !== "darwin") {
       win.on("close", (event) => noteWindowClosing(win, event));
     }
@@ -558,9 +669,19 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
     // survives windowless with just its menu bar.
     refreshProjectMenuState();
 
-    if (process.platform !== "darwin" && !opts.keepsRunningWithoutWindows?.()) {
-      app.quit();
+    if (process.platform === "darwin") return;
+    if (opts.keepsRunningWithoutWindows?.()) {
+      holdSessionEndWindow();
+      return;
     }
+    const runs = opts.scheduledRuns;
+    if (runs && getActiveShutdown() === null && runs.hasOpen()) {
+      console.log("[MAIN] Last window closed with a scheduled run open; staying up until it ends");
+      waitOnRuns(runs);
+      holdSessionEndWindow();
+      return;
+    }
+    app.quit();
   });
 
   app.on("activate", () => {
@@ -606,6 +727,7 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
         opensFolder: pending.opensFolder,
       });
     },
+    onStartedWindowless: holdSessionEndWindow,
   };
 }
 
@@ -619,7 +741,7 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
 // `CrashRecoveryService` covers truncation. `TerminateProcess`/`taskkill /F`
 // bypass `WM_ENDSESSION` entirely; that case is also handled by the marker
 // fallback. See `docs/architecture/fatal-error-spine.md`.
-export function registerWindowSessionEndHandler(win: BrowserWindow): void {
+export function registerWindowSessionEndHandler(win: BaseWindow): void {
   if (process.platform !== "win32") return;
   win.on("session-end", () => {
     setSignalShutdown();

@@ -45,7 +45,6 @@ import {
   extractDirectoryPaths,
   hasCliPathFlag,
   registerAppLifecycleHandlers,
-  registerWindowSessionEndHandler,
 } from "./lifecycle/appLifecycle.js";
 import {
   resolveFirstWindowLaunch,
@@ -94,6 +93,11 @@ import { distributePortsToView, getRemoteViewHooks } from "./window/portDistribu
 import { findOtherProjectOwner, type ProjectOwner } from "./window/projectOwnership.js";
 import { openFolderInNewWindow } from "./window/newWindowOpen.js";
 import { setScheduledRunWindowOpener } from "./window/scheduledRunNotificationNavigation.js";
+import {
+  hasOpenScheduledRun,
+  onScheduledRunClosed,
+  whenScheduledRunNotificationsSent,
+} from "./services/scheduledRuns/index.js";
 import { deliverOpenSystemMemoryPressure } from "./window/systemMemoryPressureDelivery.js";
 import { toDisposable } from "./utils/lifecycle.js";
 import {
@@ -182,11 +186,7 @@ import {
   requestedUpdateChannel,
   resolveHostModeLaunch,
 } from "./boot/hostModeLaunch.js";
-import {
-  DUE_SCHEDULES_UNSUPPORTED_EXIT_CODE,
-  isDueScheduleCheckRequested,
-  startsWindowlessForDueSchedules,
-} from "./boot/dueScheduleLaunch.js";
+import { isDueScheduleCheckRequested } from "./boot/dueScheduleLaunch.js";
 import { isEitherRemoteRoleSupported, isRemoteHostSupported } from "./remote/buildGate.js";
 import { getRemoteService } from "./remote/runtime.js";
 
@@ -397,15 +397,6 @@ if (!gotTheLock) {
   // Daintree; with none to hand over to, it must not become the backend there.
   console.log("[MAIN] Host mode handoff found no running instance. Quitting...");
   app.exit(HOST_MODE_HANDOFF_NOBODY_EXIT_CODE);
-} else if (
-  isDueScheduleCheckRequested(process.argv) &&
-  !startsWindowlessForDueSchedules({ platform: process.platform, argv: process.argv })
-) {
-  // An OS job asked for due schedules to run in the background, and this
-  // platform can't start without a window yet (#15992). Opening every window
-  // would answer a background request with the whole app.
-  console.log("[MAIN] Due schedules can't run without a window on this platform. Quitting...");
-  app.exit(DUE_SCHEDULES_UNSUPPORTED_EXIT_CODE);
 } else {
   initializeLogger(app.getPath("userData"));
 
@@ -538,10 +529,7 @@ if (!gotTheLock) {
   // the windowless start waits for it. It isn't Host mode: no listener starts
   // for it, and the windows the launch would have opened wait for the first
   // request to see the app.
-  const dueScheduleLaunch = startsWindowlessForDueSchedules({
-    platform: process.platform,
-    argv: process.argv,
-  });
+  const dueScheduleLaunch = isDueScheduleCheckRequested(process.argv);
   // Set by that launch until the first request to see the app.
   let initialWindowRequest: InitialWindowRequest | null = null;
   const listenForHandedOffHostMode = (): void => {
@@ -1028,7 +1016,6 @@ if (!gotTheLock) {
     ensureFocusThrottle();
 
     registerWindowForFocusThrottle(win);
-    registerWindowSessionEndHandler(win);
 
     // Idle harness (#12521). Started here rather than beside the freeze harness
     // in setupWindowServices: the agent-state cache the freeze-skip reads and
@@ -1280,6 +1267,11 @@ if (!gotTheLock) {
           console.error("[MAIN] Couldn't check due schedules:", error);
         });
     },
+    scheduledRuns: {
+      hasOpen: hasOpenScheduledRun,
+      onClosed: onScheduledRunClosed,
+      notified: whenScheduledRunNotificationsSent,
+    },
   });
 
   setAttachedShellsProvider(() => getRemoteService("hostMode")?.getAttachedClients() ?? []);
@@ -1517,6 +1509,7 @@ if (!gotTheLock) {
             isShuttingDown: () => getActiveShutdown() !== null,
           });
         }
+        appLifecycle.onStartedWindowless();
         if ((await startHostRuntime({ windowRegistry })) === "exit-requested") return;
         ensurePowerMonitor();
         ensureFocusThrottle();

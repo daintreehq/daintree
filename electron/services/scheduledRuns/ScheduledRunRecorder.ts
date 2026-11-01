@@ -318,6 +318,11 @@ export class ScheduledRunRecorder {
       .some((run) => run.projectId === projectId && run.settlement.state === "open");
   }
 
+  /** Whether any run is registered and not yet settled. */
+  hasAnyOpenRun(): boolean {
+    return this.store.listLive().some((run) => run.settlement.state === "open");
+  }
+
   private insertSettled(
     input: Pick<
       RegisterScheduledSkipInput,

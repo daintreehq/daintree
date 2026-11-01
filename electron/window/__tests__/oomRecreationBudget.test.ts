@@ -1,7 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 vi.mock("electron", () => ({
-  app: { quit: vi.fn(), getPath: vi.fn(() => "/tmp"), isPackaged: false, on: vi.fn() },
+  app: {
+    quit: vi.fn(),
+    emit: vi.fn(),
+    getPath: vi.fn(() => "/tmp"),
+    isPackaged: false,
+    on: vi.fn(),
+  },
   BrowserWindow: { getAllWindows: vi.fn(() => []), fromWebContents: vi.fn(() => null) },
   ipcMain: { on: vi.fn(), handle: vi.fn(), removeHandler: vi.fn() },
   webContents: { fromId: vi.fn(() => null), getAllWebContents: vi.fn(() => []) },
