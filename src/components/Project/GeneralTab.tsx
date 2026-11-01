@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils";
 import { sanitizeSvg, svgToDataUrl } from "@/lib/svg";
 import { GITIGNORE_SNIPPET } from "./projectSettingsConstants";
 import { ProjectThemeRows } from "./ProjectThemeSettings";
+import { ProjectGroupSettingsRow } from "./ProjectGroupSettingsRow";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isClientAppError } from "@/utils/clientAppError";
 import type { DaintreeMcpTier, Project } from "@shared/types/project";
@@ -620,6 +621,11 @@ export function GeneralTab({
                   )}
                 </>
               )}
+            />
+
+            <ProjectGroupSettingsRow
+              projectId={currentProject.id}
+              groupId={currentProject.groupId}
             />
 
             <SettingsRow
