@@ -1243,11 +1243,16 @@ describe("LinkClient retry during an attempt (#13926)", () => {
     // A host that reads HELLO and never answers it.
     const accepted: net.Socket[] = [];
     let hellos = 0;
+    const goodbyes: number[] = [];
     const server = net.createServer((socket) => {
-      accepted.push(socket);
+      const index = accepted.push(socket) - 1;
+      goodbyes[index] = 0;
       const decoder = new FrameDecoder();
       socket.on("data", (chunk: Buffer) => {
-        for (const frame of decoder.push(chunk)) if (frame.kind === ControlKind.HELLO) hellos++;
+        for (const frame of decoder.push(chunk)) {
+          if (frame.kind === ControlKind.HELLO) hellos++;
+          if (frame.kind === ControlKind.GOODBYE) goodbyes[index]!++;
+        }
       });
       socket.on("error", () => {});
     });
@@ -1291,6 +1296,10 @@ describe("LinkClient retry during an attempt (#13926)", () => {
       // Late enough for the abandoned handshakes to have settled and let go too.
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(disposes).toEqual([1, 1]);
+      // The host may have resumed a session on either HELLO: the restart leaves
+      // it for the next dial, and only the stop ends it (#15877).
+      await waitFor(() => goodbyes[1] === 1);
+      expect(goodbyes).toEqual([0, 1]);
     } finally {
       await client?.stop();
       for (const socket of accepted) socket.destroy();

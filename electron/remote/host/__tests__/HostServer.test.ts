@@ -12,7 +12,7 @@ import {
   type LinkMessage,
 } from "../../link/messages.js";
 import { LinkClient, type LinkClientState } from "../../client/LinkClient.js";
-import { createDirectTransport } from "../../client/transport.js";
+import { createDirectTransport, type LinkTransport } from "../../client/transport.js";
 import { HostServer, MAX_PENDING_HANDSHAKES, type HostSessionContext } from "../HostServer.js";
 import { HANDSHAKE_MAX_FRAME_BYTES } from "../../link/session.js";
 import {
@@ -34,6 +34,7 @@ let root: string;
 let location: HostSocketLocation;
 const servers: HostServer[] = [];
 const clients: LinkClient[] = [];
+const proxies: net.Server[] = [];
 
 beforeEach(async () => {
   logBuffer.clear();
@@ -45,6 +46,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   for (const c of clients.splice(0)) await c.stop();
   for (const s of servers.splice(0)) await s.close();
+  for (const p of proxies.splice(0)) p.close();
   await removeTempDir(root);
 });
 
@@ -168,6 +170,69 @@ function closedSocket(socket: net.Socket): Promise<void> {
     if (socket.destroyed) resolve();
     else socket.once("close", () => resolve());
   });
+}
+
+/**
+ * Dials the host directly, except that after `stall()` the next dial reaches a
+ * host stalled under memory pressure: what the Shell sends sits unread until
+ * `deliver()`, then reaches the host in the order it was sent, its end
+ * included. Dials after the stalled one wait for that delivery.
+ */
+async function stallingTransport() {
+  const direct = createDirectTransport({ discoveryPath: location.discoveryPath });
+  const proxyPath = path.join(root, "stall.sock");
+  let held: { chunks: Buffer[]; ended: boolean } | null = null;
+  const proxy = net.createServer((socket) => {
+    const entry = { chunks: [] as Buffer[], ended: false };
+    held = entry;
+    socket.on("data", (chunk: Buffer) => entry.chunks.push(chunk));
+    socket.on("end", () => (entry.ended = true));
+    socket.on("error", () => {});
+  });
+  proxies.push(proxy);
+  await new Promise<void>((resolve) => proxy.listen(proxyPath, resolve));
+  let stallNext = false;
+  let delivered: Promise<void> = Promise.resolve();
+  let markDelivered = () => {};
+  const transport: LinkTransport = {
+    async open(signal) {
+      if (stallNext) {
+        stallNext = false;
+        const info = (await readDiscoveryFile(location.discoveryPath))!;
+        return createDirectTransport({ socketPath: proxyPath, token: info.token }).open(signal);
+      }
+      await delivered;
+      return direct.open(signal);
+    },
+  };
+  return {
+    transport,
+    stall() {
+      stallNext = true;
+      delivered = new Promise((resolve) => (markDelivered = resolve));
+    },
+    /** What the stalled dial has sent so far. */
+    sent(): LinkMessage[] {
+      const decoder = new FrameDecoder();
+      return (held?.chunks ?? []).flatMap((chunk) =>
+        decoder.push(chunk).map((frame) => frameToMessage(frame)!)
+      );
+    },
+    /** The Shell has closed its end of the stalled dial. */
+    abandoned: () => held?.ended === true,
+    /** The host catches up: it reads the stalled dial, then the dials after it go. */
+    async deliver() {
+      const entry = held!;
+      const upstream = net.connect(location.socketPath);
+      upstream.on("error", () => {});
+      upstream.resume();
+      await new Promise<void>((resolve) => upstream.once("connect", resolve));
+      for (const chunk of entry.chunks) upstream.write(chunk);
+      if (entry.ended) upstream.end();
+      await closedSocket(upstream);
+      markDelivered();
+    },
+  };
 }
 
 describe("HostServer socket and discovery", () => {
@@ -1052,6 +1117,74 @@ describe("HostServer session resume", () => {
     const closed = new Promise((r) => session.onClose(r));
     await server.close();
     await expect(closed).resolves.toEqual({ reason: "shutting-down", by: "remote" });
+  });
+});
+
+describe("HostServer and a Shell that gives up on a resume handshake (#15877)", () => {
+  /** A connected Shell loses its link, and its redial, asking to resume, reaches a stalled host. */
+  async function resumeIntoAStall(overrides: Partial<ConstructorParameters<typeof LinkClient>[0]> = {}) {
+    const server = await startServer({ resumeGraceMs: 60_000 });
+    const seen: HostSessionContext[] = [];
+    const detached: string[] = [];
+    const expired: Array<{ sessionId: string; cause: string }> = [];
+    server.onSession((ctx) => seen.push(ctx));
+    server.onSessionDetached((info) => detached.push(info.sessionId));
+    server.onSessionExpired((info) =>
+      expired.push({ sessionId: info.sessionId, cause: info.cause })
+    );
+    const stalling = await stallingTransport();
+    const client = startClient(server, { transport: stalling.transport, ...overrides });
+    const states: LinkClientState[] = [];
+    client.onStateChange((state) => states.push(state));
+    await waitFor(() => seen.length === 1 && client.getState().status === "connected");
+    const sessionId = seen[0]!.sessionId;
+    stalling.stall();
+    (seen[0]!.session as unknown as { socket: net.Socket }).socket.destroy();
+    await waitFor(() => stalling.sent().length > 0);
+    expect(stalling.sent()[0]).toMatchObject({
+      kind: ControlKind.HELLO,
+      body: { resumeSessionId: sessionId },
+    });
+    return { client, stalling, sessionId, seen, detached, expired, states };
+  }
+
+  /** The host catches up on the abandoned dial, and the Shell's next dial goes through. */
+  async function catchUp(run: Awaited<ReturnType<typeof resumeIntoAStall>>) {
+    await waitFor(() => run.stalling.abandoned());
+    await run.stalling.deliver();
+    // It resumed the session on the abandoned HELLO and lost that link in turn.
+    await waitFor(() => run.seen.length === 2 && run.detached.length === 2);
+    expect(run.seen[1]).toMatchObject({ sessionId: run.sessionId, resumed: true });
+  }
+
+  it("keeps the session a timed-out handshake resumed, for the next dial to resume", async () => {
+    const run = await resumeIntoAStall({
+      session: { pingIntervalMs: 0, idleTimeoutMs: 0, handshakeTimeoutMs: 300 },
+    });
+    await catchUp(run);
+    expect(run.states).toContainEqual(
+      expect.objectContaining({ status: "unreachable", detail: "handshake timed out" })
+    );
+    await waitFor(() => run.seen.length === 3 && run.client.getState().status === "connected");
+    expect(run.seen[2]).toMatchObject({ sessionId: run.sessionId, resumed: true });
+    expect(run.expired).toEqual([]);
+  });
+
+  it("keeps the session a handshake abandoned for a restart resumed, for the next dial to resume", async () => {
+    const run = await resumeIntoAStall();
+    run.client.retryNow({ restart: true });
+    await catchUp(run);
+    await waitFor(() => run.seen.length === 3 && run.client.getState().status === "connected");
+    expect(run.seen[2]).toMatchObject({ sessionId: run.sessionId, resumed: true });
+    expect(run.expired).toEqual([]);
+  });
+
+  it("still ends the session at once when the Shell is stopped during a resume handshake", async () => {
+    const run = await resumeIntoAStall();
+    await run.client.stop();
+    await catchUp(run);
+    await waitFor(() => run.expired.length === 1);
+    expect(run.expired).toEqual([{ sessionId: run.sessionId, cause: "goodbye" }]);
   });
 });
 

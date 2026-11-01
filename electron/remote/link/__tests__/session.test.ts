@@ -15,6 +15,7 @@ import {
 import { LinkSession } from "../session.js";
 import { bytesTransferSource } from "../transfer.js";
 import {
+  TEST_HANDSHAKE,
   closedPromise,
   makeTempDir,
   openSessionPair,
@@ -385,6 +386,50 @@ describe("LinkSession liveness", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("gives up a client handshake without a GOODBYE, so a stalled host that reads the HELLO keeps what it resumed (#15877)", async () => {
+    const { a, b } = await socketPair(dir);
+    const frames = recordFrames(b);
+    const session = new LinkSession(a, { role: "client", handshakeTimeoutMs: 30 });
+    sessions.push(session);
+    session.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.HELLO,
+      body: {
+        handshake: TEST_HANDSHAKE,
+        token: "t",
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        resumeSessionId: "s-1",
+        resumeSecret: "secret",
+      },
+    });
+    await expect(closedPromise(session)).resolves.toEqual({
+      reason: "handshake timed out",
+      by: "local",
+    });
+    await new Promise<void>((resolve) => b.once("end", resolve));
+    expect(frames.map((f) => f.kind)).toEqual([ControlKind.HELLO]);
+    b.destroy();
+  });
+
+  it("tells a client that never said HELLO why the host gave up on it", async () => {
+    const { a, b } = await socketPair(dir);
+    const frames = recordFrames(b);
+    const session = new LinkSession(a, { role: "host", handshakeTimeoutMs: 30 });
+    sessions.push(session);
+    await expect(closedPromise(session)).resolves.toEqual({
+      reason: "handshake timed out",
+      by: "local",
+    });
+    await new Promise<void>((resolve) => b.once("end", resolve));
+    expect(frames.map((f) => frameToMessage(f))).toEqual([
+      expect.objectContaining({
+        kind: ControlKind.GOODBYE,
+        body: { reason: "handshake timed out" },
+      }),
+    ]);
+    b.destroy();
   });
 
   it("ends with a GOODBYE the peer sees as a remote close", async () => {

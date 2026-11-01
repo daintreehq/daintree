@@ -396,14 +396,14 @@ export class LinkClient {
     this.connection = connection;
 
     const session = new LinkSession(connection.socket, { ...this.options.session, role: "client" });
-    // Past the transport, the signal reaches nothing: close the session the handshake waits on.
-    const abandon = () => session.close("client stopped");
+    // Past the transport, the signal reaches nothing: end the session the handshake waits on.
+    const abandon = () => this.endAttempt(session);
     abort.signal.addEventListener("abort", abandon, { once: true });
     const outcome = await this.handshake(session, connection.token);
     abort.signal.removeEventListener("abort", abandon);
     if (this.attemptAbort === abort) this.attemptAbort = null;
     if (stale()) {
-      session.close("client stopped");
+      this.endAttempt(session);
       await this.release(connection);
       return;
     }
@@ -447,6 +447,17 @@ export class LinkClient {
       return;
     }
     this.fail(outcome.reason);
+  }
+
+  /**
+   * End an attempt this link no longer wants. The host may already have
+   * resumed the session its HELLO named, and takes a GOODBYE as the Shell
+   * leaving for good: only a stop says one. An attempt given up for another
+   * leaves the session parked for that one to resume (#15877).
+   */
+  private endAttempt(session: LinkSession): void {
+    if (this.running) session.drop("attempt abandoned");
+    else session.close("client stopped");
   }
 
   private noteClose(info: LinkCloseInfo): void {
