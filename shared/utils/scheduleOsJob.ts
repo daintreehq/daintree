@@ -1,9 +1,13 @@
 import type { Schedule, ScheduleCadence } from "../types/scheduledRuns.js";
 import { launchdCalendarFor } from "./launchdCalendar.js";
 import type { ScheduleIssue } from "./scheduleValidation.js";
+import { systemdCalendarFor } from "./systemdCalendar.js";
 
-/** The OS job that starts Daintree for schedules when it isn't running (#15990). */
-export type ScheduleOsJobKind = "launch-agent";
+/**
+ * The OS job that starts Daintree for schedules when it isn't running: a
+ * LaunchAgent on macOS (#15990), a `systemd --user` timer on Linux (#15991).
+ */
+export type ScheduleOsJobKind = "launch-agent" | "systemd-timer";
 
 /**
  * What decides whether a schedule can use the OS job on this machine. Main
@@ -22,7 +26,7 @@ export const RUN_WHEN_CLOSED_PATH = "policies.runWhenClosed";
 /**
  * Why a cadence can't start Daintree when it isn't running, or null when it
  * can. Main refuses to store the option on with a reason; a stored schedule
- * that stops qualifying (the Mac's zone changed) is left out of the job.
+ * that stops qualifying (the machine's zone changed) is left out of the job.
  */
 export function runWhenClosedIssue(
   cadence: Pick<ScheduleCadence, "cron" | "timeZone">,
@@ -30,6 +34,11 @@ export function runWhenClosedIssue(
 ): string | null {
   if (context.kind === null) {
     return "Starting Daintree for a schedule isn't available on this platform yet";
+  }
+  if (context.kind === "systemd-timer") {
+    if (context.systemTimeZone === null) return "Couldn't read this computer's time zone";
+    const calendar = systemdCalendarFor(cadence, context.systemTimeZone);
+    return calendar.ok ? null : calendar.reason;
   }
   if (context.systemTimeZone === null) return "Couldn't read this Mac's time zone";
   const calendar = launchdCalendarFor(cadence, context.systemTimeZone);

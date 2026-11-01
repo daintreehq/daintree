@@ -8,6 +8,7 @@ import {
 } from "../scheduleOsJob.js";
 
 const MAC: ScheduleOsJobContext = { kind: "launch-agent", systemTimeZone: "Europe/London" };
+const LINUX: ScheduleOsJobContext = { kind: "systemd-timer", systemTimeZone: "Europe/London" };
 
 function schedule(cron: string, runWhenClosed: boolean, timeZone = "Europe/London") {
   return createSchedule(
@@ -33,6 +34,21 @@ describe("runWhenClosedIssue", () => {
     expect(runWhenClosedIssue({ cron: "0 0 */2 * MON", timeZone: "Europe/London" }, MAC)).toMatch(
       /both the day of the month and the weekday/
     );
+  });
+
+  it("judges a Linux cadence by what a systemd timer can hold", () => {
+    // Days that match both fields, which launchd can't hold, are one OnCalendar line.
+    expect(runWhenClosedIssue({ cron: "0 0 */2 * MON", timeZone: "Europe/London" }, LINUX)).toBeNull();
+    expect(runWhenClosedIssue({ cron: "*/5 9-17 * * 1-5", timeZone: "Europe/London" }, LINUX)).toBeNull();
+    expect(runWhenClosedIssue({ cron: "0 9 * * *", timeZone: "Asia/Tokyo" }, LINUX)).toMatch(
+      /^systemd can only start Daintree on this computer's time \(Europe\/London\)/
+    );
+    expect(
+      runWhenClosedIssue(
+        { cron: "0 9 * * *", timeZone: "Europe/London" },
+        { kind: "systemd-timer", systemTimeZone: null }
+      )
+    ).toBe("Couldn't read this computer's time zone");
   });
 
   it("refuses everything on a platform with no job yet", () => {

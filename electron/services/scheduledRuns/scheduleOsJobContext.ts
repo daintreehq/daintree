@@ -10,10 +10,10 @@ import type { ScheduleIssue } from "../../../shared/utils/scheduleValidation.js"
 const LOCALTIME = "/etc/localtime";
 
 /**
- * The zone launchd reads its calendars in: the system's, from the
- * `/etc/localtime` link, not this process's `Intl` zone, which a `TZ` in the
- * environment Daintree was started from can move. Null when neither names a
- * zone, never UTC by default.
+ * The zone launchd and the systemd user manager read their calendars in: the
+ * system's, from the `/etc/localtime` link, not this process's `Intl` zone,
+ * which a `TZ` in the environment Daintree was started from can move. Null
+ * when neither names a zone, never UTC by default.
  */
 export function readSystemTimeZone(
   readLink: (file: string) => string = readlinkSync
@@ -39,8 +39,9 @@ export function readSystemTimeZone(
 export function scheduleOsJobContext(
   platform: NodeJS.Platform = process.platform
 ): ScheduleOsJobContext {
-  if (platform !== "darwin") return { kind: null, systemTimeZone: null };
-  return { kind: "launch-agent", systemTimeZone: readSystemTimeZone() };
+  if (platform === "darwin") return { kind: "launch-agent", systemTimeZone: readSystemTimeZone() };
+  if (platform === "linux") return { kind: "systemd-timer", systemTimeZone: readSystemTimeZone() };
+  return { kind: null, systemTimeZone: null };
 }
 
 /** The store's check on a schedule about to be written with the option on. */

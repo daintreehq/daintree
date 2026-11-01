@@ -56,8 +56,10 @@ const DRAIN_TIMEOUT_MS = 10_000;
 
 const UNREAD_ERROR =
   "Couldn't read every project's schedules, so the job that starts Daintree was left as it was";
-const NO_ZONE_ERROR =
-  "Couldn't read this Mac's time zone, so the job that starts Daintree was left as it was";
+function noZoneError(kind: ScheduleOsJobKind): string {
+  const machine = kind === "launch-agent" ? "this Mac's" : "this computer's";
+  return `Couldn't read ${machine} time zone, so the job that starts Daintree was left as it was`;
+}
 
 function optedIn(schedule: Schedule): boolean {
   return schedule.enabled && schedule.policies.runWhenClosed;
@@ -76,7 +78,7 @@ export function excludedSchedules(
 
 /**
  * Keeps the machine's one OS job matching every switched-on schedule, in every
- * local project, set to run when Daintree isn't running (#15990). It reads
+ * local project, set to run when Daintree isn't running (#15990, #15991). It reads
  * each project's schedules once, follows every committed change, and rewrites
  * the job after each, one pass at a time: changes that arrive during a pass
  * are taken by the next, from the newest snapshots.
@@ -258,7 +260,7 @@ export class ScheduleOsJobService {
     }
     const context = this.deps.context();
     if (context.systemTimeZone === null) {
-      this.lastError = NO_ZONE_ERROR;
+      this.lastError = noZoneError(adapter.kind);
       return;
     }
     try {
