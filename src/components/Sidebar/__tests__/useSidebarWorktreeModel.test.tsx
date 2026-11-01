@@ -155,12 +155,18 @@ describe("useSidebarWorktreeModel — rows", () => {
     expect(result.current.ariaRowCount).toBe(3);
   });
 
-  it("hides the main worktree for a query it fails, but never for the quick state", () => {
+  it("hides the main worktree for a quick state or a query it fails, like any card", () => {
     const { result } = renderModel();
 
+    // The bar sits above every card it filters, main included: an idle main
+    // card leaves the Working segment, and counts as hidden by it.
     act(() => useWorktreeFilterStore.getState().setQuickStateFilter("working"));
-    expect(result.current.mainVisible).toBe(true);
+    expect(result.current.mainVisible).toBe(false);
+    expect(result.current.mainHiddenByQuickState).toBe(true);
     expect(result.current.filteredWorktrees).toEqual([]);
+
+    act(() => useWorktreeFilterStore.getState().setQuickStateFilter("all"));
+    expect(result.current.mainVisible).toBe(true);
 
     act(() => useWorktreeFilterStore.getState().setLiveQuery("zzz"));
     expect(result.current.mainVisible).toBe(false);
@@ -194,7 +200,7 @@ describe("useSidebarWorktreeModel — rows", () => {
   });
 });
 
-describe("useSidebarWorktreeModel — main card aggregate counts", () => {
+describe("useSidebarWorktreeModel — quick-state counts", () => {
   function pushFleet(runs: FleetRunRow[]): void {
     act(() =>
       useFleetSnapshotStore.getState().applySnapshot({
@@ -239,17 +245,16 @@ describe("useSidebarWorktreeModel — main card aggregate counts", () => {
     });
   });
 
-  it("moves with each count and keeps its identity across pushes that move none", () => {
-    // A fresh object here re-renders the main card through its memoized row.
+  it("moves with each count, main included", () => {
     seedAgentPanel("agent-a", "a");
     pushFleet([run("agent-a", { agentState: "idle" }), run("x", { agentState: "working" })]);
     const { result } = renderModel();
-    const idle = result.current.mainWorktreeAggregateCounts;
-    expect(idle).toEqual({ worktrees: 2, working: 0, waiting: 0, finished: 0 });
-
-    pushFleet([run("agent-a", { agentState: "idle" }), run("x", { agentState: "idle" })]);
-    pushFleet([run("agent-a", { agentState: "idle", title: "renamed" })]);
-    expect(result.current.mainWorktreeAggregateCounts).toBe(idle);
+    expect(result.current.quickStateCounts).toMatchObject({
+      all: 3,
+      working: 0,
+      waiting: 0,
+      finished: 0,
+    });
 
     // Each step moves exactly one count off the idle baseline, so every count
     // is checked on its own.
@@ -271,15 +276,15 @@ describe("useSidebarWorktreeModel — main card aggregate counts", () => {
     ];
     for (const [overrides, counts] of states) {
       pushFleet([run("agent-a", overrides)]);
-      expect(result.current.mainWorktreeAggregateCounts).toEqual({ worktrees: 2, ...counts });
+      expect(result.current.quickStateCounts).toMatchObject({ all: 3, ...counts });
     }
   });
 
-  it("follows the worktree count and drops out with only the main worktree", () => {
+  it("follows the worktree count, the main card counted with the rest", () => {
     pushFleet([]);
     const { result, rerender } = renderModel();
-    expect(result.current.mainWorktreeAggregateCounts).toEqual({
-      worktrees: 2,
+    expect(result.current.quickStateCounts).toMatchObject({
+      all: 3,
       working: 0,
       waiting: 0,
       finished: 0,
@@ -291,9 +296,9 @@ describe("useSidebarWorktreeModel — main card aggregate counts", () => {
       canPruneWorktreeIds: true,
     };
     rerender({ ...props, worktrees: [...snapshot(), makeWorktree("c")] });
-    expect(result.current.mainWorktreeAggregateCounts).toMatchObject({ worktrees: 3 });
+    expect(result.current.quickStateCounts.all).toBe(4);
 
     rerender({ ...props, worktrees: snapshot().filter((w) => w.isMainWorktree) });
-    expect(result.current.mainWorktreeAggregateCounts).toBeUndefined();
+    expect(result.current.quickStateCounts.all).toBe(1);
   });
 });

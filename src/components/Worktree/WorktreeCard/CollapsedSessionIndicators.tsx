@@ -42,10 +42,15 @@ export function CollapsedSessionIndicators({
   sessionAriaLabel,
   secondaryClassName,
 }: CollapsedSessionIndicatorsProps) {
-  const leadIndex = Math.max(
-    0,
-    visibleStates.findIndex((v) => v.state === "waiting")
-  );
+  // Waiting, when present, is drawn last: nearest the card's controls, at the
+  // one x every card's waiting ring lands on, with any other states ahead of
+  // it rather than pushing it along the row.
+  const waitingAt = visibleStates.findIndex((v) => v.state === "waiting");
+  const ordered =
+    waitingAt === -1
+      ? visibleStates
+      : [...visibleStates.filter((_, i) => i !== waitingAt), visibleStates[waitingAt]!];
+  const leadIndex = waitingAt === -1 ? 0 : ordered.length - 1;
   return (
     // The breakdown is the only full reading once a narrow row drops groups,
     // so it stays while hovered or focused and can be hovered itself.
@@ -57,7 +62,7 @@ export function CollapsedSessionIndicators({
           aria-label={sessionAriaLabel}
           data-testid="collapsed-session-indicators"
         >
-          {visibleStates.map(({ state, count }, index) => {
+          {ordered.map(({ state, count }, index) => {
             const Icon = SESSION_ICONS[state];
             return (
               <span

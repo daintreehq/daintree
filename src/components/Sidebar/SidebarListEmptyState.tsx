@@ -71,8 +71,13 @@ export function resolveSidebarListEmpty({
   mainInQuickState: boolean;
   displayQuery: string;
 }): SidebarListEmpty | null {
-  if (filteredCount > 0 || !hasNonMainWorktrees) return null;
+  if (filteredCount > 0) return null;
   const isNarrowed = hasQuery || hasFacets;
+  // No feature worktrees: nothing to say unless a filter is what hid main, in
+  // which case the user needs the way back.
+  if (!hasNonMainWorktrees && (mainVisible || (!isNarrowed && quickStateFilter === "all"))) {
+    return null;
+  }
   if (quickStateFilter !== "all") {
     if (!isNarrowed) {
       return { kind: "drained", bucket: quickStateFilter, mainInBucket: mainInQuickState };

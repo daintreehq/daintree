@@ -1383,8 +1383,27 @@ export function WorktreeMenuItems({
     </C.Item>
   );
 
+  // The two things a card's menu is opened for most, one click away rather
+  // than behind a submenu each time. Both stay in their groups below, which
+  // hold the rest of the long tail.
+  const directRows = compact(
+    onOpenPanelPalette && (
+      <C.Item key="new-session" onSelect={() => onOpenPanelPalette(source)}>
+        <Plus className={ICON} />
+        New session…
+      </C.Item>
+    ),
+    worktree && onOpenReviewHub && (
+      <C.Item key="review-direct" onSelect={onOpenReviewHub}>
+        <GitCommitHorizontal className={ICON} />
+        Review worktree
+      </C.Item>
+    )
+  );
+
   const rows = joinGroups(
     [
+      directRows,
       compact(launchSub, openSub, !quietGit && reviewSub, gitSub),
       compact(sessionsSub, recipesSub, runtimeSub),
       compact(linkedWorkSub, copySub, organizeSub, viewSubmenu, extensionsSub),

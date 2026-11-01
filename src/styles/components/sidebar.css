@@ -92,44 +92,34 @@
    is the card's resting material (idle rows carry it too), not a selection
    signal. */
 .sidebar-worktree-card[data-active="true"] {
-  background: var(--sidebar-active-bg, rgba(255, 255, 255, 0.065));
+  background: var(--sidebar-active-bg, rgba(255, 255, 255, 0.096));
   --card-edge: inset -2px 0 0 var(--theme-accent-primary);
 }
 
-/* Inactive selection: when the sidebar loses focus the selected row must stay
-   visibly selected, not blank. Selection is distinct from focus and persists
-   when focus leaves the list (WAI-ARIA APG tree view; macOS HIG secondary
-   highlight; VS Code `list.inactiveSelectionBackground`). Keep the neutral fill
-   and a dimmed right-edge accent border rather than zeroing the box-shadow. */
-.sidebar-root:not(:focus-within)
+/* Inactive selection keeps the full-strength accent edge. Selection is
+   distinct from focus and persists when focus leaves the list (WAI-ARIA APG;
+   VS Code `list.inactiveSelectionBackground`), and the user spends most of
+   their time with focus in a terminal, so this is the state the sidebar is
+   usually read in. The edge is the SOLE indicator of selection there (the
+   neutral lift measures about 1.03:1), and an alpha-faded accent fell under
+   WCAG 1.4.11's 3:1 on most palettes (65% measured 2.4:1 on movile, 2.6:1 on
+   bali). With focus elsewhere there is no second accent in the sidebar for it
+   to compete with.
+
+   Accent restraint, though, still applies while a control inside the active
+   row draws its own accent focus ring: two load-bearing accent shapes in one
+   frame and neither reads as the anchor. Focus wins for as long as it lasts,
+   and the selection edge steps to `border-interactive`, the neutral edge the
+   overview grid's current card wears, which holds 3:1 against the card on
+   every built-in palette. Scoped to the whole sidebar, not the active card: a
+   ring on any of its controls (another card, the quick-state bar, a header
+   button) is just as much a second accent in front of the user. Two focus
+   targets draw no accent and are left out: the grid itself (its cursor is a
+   neutral edge) and the search field (a neutral focus by ruling).
+   `:focus-visible` and not `:focus-within`, so a mouse click recedes nothing. */
+.sidebar-root:has(:focus-visible:not([role="grid"]):not(input))
   .sidebar-worktree-card[data-active="true"]:not([data-drop-target="true"]) {
-  background: var(--sidebar-active-bg, rgba(255, 255, 255, 0.065));
-  --card-edge: inset -2px 0 0 color-mix(in srgb, var(--theme-accent-primary) 65%, transparent);
-}
-
-/* Accent restraint: exactly one accent anchor per focus region. While a
-   control inside the active row is drawing its own accent focus ring, the
-   full-strength selection edge and that ring are two load-bearing accent
-   shapes in one frame and neither reads as the anchor. Focus wins for as long
-   as it lasts — it is the transient thing the user is steering — so the
-   selection edge recedes to the same dimmed accent it already uses when the
-   sidebar loses focus entirely, rather than the ring changing colour depending
-   on which row it lands on.
-
-   65%, not 45%. The receded edge is still the SOLE indicator that a row is
-   selected — the neutral lift measures about 1.03:1 and cannot carry the state
-   on its own — so it owes WCAG 1.4.11's 3:1. Alpha-mixing to transparent is
-   what broke that: on the light palettes 45% of the accent composited over a
-   white selected card measured 2.33:1. At 65% it clears 3:1 there and still
-   sits visibly under full strength on the dark palettes, which is the only
-   thing the recede has to say.
-
-   `:has(:focus-visible)` and not `:focus-within`: the keyboard-cursor row
-   draws no ring at all (#8094), so on that path there is no second accent to
-   yield to and the edge must stay at full strength. */
-.sidebar-root
-  .sidebar-worktree-card[data-active="true"]:not([data-drop-target="true"]):has(:focus-visible) {
-  --card-edge: inset -2px 0 0 color-mix(in srgb, var(--theme-accent-primary) 65%, transparent);
+  --card-edge: inset -2px 0 0 var(--theme-border-interactive);
 }
 
 /* The card is the button (#15864). Its tint answers the pointer only over its
@@ -167,7 +157,7 @@
 }
 
 .sidebar-worktree-card[data-hovered="true"] {
-  background: var(--sidebar-hover-bg, rgba(255, 255, 255, 0.048));
+  background: var(--sidebar-hover-bg, rgba(255, 255, 255, 0.064));
 }
 
 /* An inactive card selects on a click anywhere on its content, so the whole
@@ -184,8 +174,8 @@
 .sidebar-active-well {
   background-color: var(--theme-surface-sidebar);
   background-image: linear-gradient(
-    var(--sidebar-active-bg, rgba(255, 255, 255, 0.065)),
-    var(--sidebar-active-bg, rgba(255, 255, 255, 0.065))
+    var(--sidebar-active-bg, rgba(255, 255, 255, 0.096)),
+    var(--sidebar-active-bg, rgba(255, 255, 255, 0.096))
   );
 }
 
@@ -239,9 +229,10 @@ html[data-dragging="true"]
    no cursor chrome under the mouse — which is what the no-ring decision was
    protecting.
 
-   Skipped on the active row: it already carries the accent right edge, so it is
-   never the ambiguous one, and painting both would put two edges on one card.
-   The grid selector covers grid-mode navigation, where focus stays on the
+   The active row draws it too, on its left edge, opposite the accent: Tab
+   lands the cursor on the first row, which is often the active one, and
+   with no mark there nothing on screen changed when focus arrived (WCAG
+   2.4.7). The grid selector covers grid-mode navigation, where focus stays on the
    container and `:focus-visible` never matches a row. `:focus-visible` on the
    grid rather than `:focus-within`: clicking a control inside the grid keeps
    focus within it, and the cursor row kept an edge that is meant to exist only
@@ -255,10 +246,21 @@ html[data-dragging="true"]
   --card-edge: inset 2px 0 0 var(--theme-selection-outline);
 }
 
+[data-worktree-row]:focus-visible
+  .sidebar-worktree-card[data-active="true"]:not([data-drop-target="true"]),
+.sidebar-root
+  [role="grid"]:focus-visible
+  [data-worktree-row][data-keyboard-cursor="true"]
+  .sidebar-worktree-card[data-active="true"]:not([data-drop-target="true"]) {
+  --card-edge:
+    inset 2px 0 0 var(--theme-selection-outline), inset -2px 0 0 var(--theme-accent-primary);
+}
+
 /* A labelled card's leading edge already carries its colour bar, and a neutral
    2px edge on top of it would read as part of the label. The cursor edge moves
-   to the right there; it already skips the active row, so it never meets the
-   selection edge (#13408). */
+   to the right there (#13408). A labelled ACTIVE card has neither edge free,
+   so its cursor is a 1px perimeter in the same neutral ink, inside the accent
+   edge rather than on top of it. */
 [data-worktree-row]:focus-visible
   .sidebar-worktree-card[data-label]:not([data-active="true"]):not([data-drop-target="true"]),
 .sidebar-root
@@ -266,6 +268,16 @@ html[data-dragging="true"]
   [data-worktree-row][data-keyboard-cursor="true"]
   .sidebar-worktree-card[data-label]:not([data-active="true"]):not([data-drop-target="true"]) {
   --card-edge: inset -2px 0 0 var(--theme-selection-outline);
+}
+
+[data-worktree-row]:focus-visible
+  .sidebar-worktree-card[data-label][data-active="true"]:not([data-drop-target="true"]),
+.sidebar-root
+  [role="grid"]:focus-visible
+  [data-worktree-row][data-keyboard-cursor="true"]
+  .sidebar-worktree-card[data-label][data-active="true"]:not([data-drop-target="true"]) {
+  --card-edge:
+    inset -2px 0 0 var(--theme-accent-primary), inset 0 0 0 1px var(--theme-selection-outline);
 }
 
 /* The colour label's ink, shared by the bar and the menu swatch so the two

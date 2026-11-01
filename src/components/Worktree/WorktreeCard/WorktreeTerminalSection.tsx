@@ -50,6 +50,7 @@ import {
   CARD_DENSITY,
   DISCLOSURE_BUTTON,
   DISCLOSURE_BUTTON_LABELLED,
+  INLINE_SESSIONS_SLOT,
 } from "./sectionChrome";
 import { pluralize } from "@/lib/pluralize";
 
@@ -63,6 +64,8 @@ interface MarqueeBox {
 interface TerminalRowProps {
   term: PtyPanelData;
   onClick: (term: PtyPanelData) => void;
+  /** Enter on an armable row opens its session rather than arming it. */
+  onOpen?: (term: PtyPanelData) => void;
   /** Vertical padding of the row's button — `CardDensity.sessionRowY`. */
   padY: string;
   /** See {@link WorktreeTerminalSectionProps.rowClick}. */
@@ -108,7 +111,7 @@ function CanopyEvidenceLine({ refinement, id, pointer }: CanopyEvidenceLineProps
   );
 }
 
-function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
+function TerminalRow({ term, onClick, onOpen, padY, canArm }: TerminalRowProps) {
   const { ref, isTruncated } = useTruncationDetection();
   const dragHandle = useDragHandle();
   const isArmed = useFleetArmingStore((s) => s.armedIds.has(term.id));
@@ -133,11 +136,10 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
     term.waitingReason,
     handBack
   );
-  // Only the primary ("last armed") row gets the accent ring — it's the
-  // singular focus anchor that will receive keyboard focus when fleet scope
-  // exits. Secondary armed peers keep the dashed shape but use a neutral
-  // border color so multiple accents never render at once. The arm-position
-  // badge stays accent-colored as the secondary signal.
+  // The primary ("last armed") row is the one keyboard focus returns to when
+  // fleet scope exits; it is told apart by a solid outline against the peers'
+  // dashed one, both neutral, since a persistent accent here sat beside the
+  // active card's edge as a second "this one".
   const isPrimary = useFleetArmingStore((s) => s.lastArmedId === term.id);
   const isArmable = canArm && isFleetArmEligible(term);
   const StateIcon = glyphState ? SESSION_ICONS[glyphState] : null;
@@ -174,7 +176,10 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
           // 4px in, not 2: at 2 the stroke sat 1px inside the well's border and
           // met the next armed row's stroke edge to edge.
           isArmed && "outline outline-2 outline-offset-[-4px]",
-          isArmed && isPrimary && "outline-solid outline-accent-primary",
+          // Neutral, like the peers: armed is membership, and accent is the
+          // sidebar's one "this one" (the active card's edge, or a focus ring).
+          // Solid against the peers' dashed still says which is primary.
+          isArmed && isPrimary && "outline-solid outline-text-secondary",
           isArmed && !isPrimary && "outline-dashed outline-border-strong"
         )}
       >
@@ -207,10 +212,21 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
               what a click has to answer to. */}
             <button
               type="button"
+              data-session-row-button=""
               onMouseDown={suppressShiftClickTextSelection}
               onClick={(e) => {
                 e.stopPropagation();
                 onClick(term);
+              }}
+              // A click arms (the fleet gesture); from the keyboard, Space
+              // arms the same way and Enter opens the session, so there is a
+              // key that reaches a waiting agent's pane, not only one that
+              // adds it to a broadcast.
+              onKeyDown={(e) => {
+                if (!isArmable || e.key !== "Enter" || !onOpen) return;
+                e.preventDefault();
+                e.stopPropagation();
+                onOpen(term);
               }}
               aria-pressed={isArmable ? isArmed : undefined}
               // Named by the title alone: the placement and command below are
@@ -356,11 +372,6 @@ export interface WorktreeTerminalSectionProps {
   onStartSession?: () => void;
   /** See {@link WorktreeDetailsSectionProps.variant} — same reasoning. */
   variant?: "sidebar" | "grid";
-  /**
-   * Sidebar only. A comfortable card keeps its "Start a session" tray; a
-   * compact one drops it (see the empty branch below).
-   */
-  density?: "comfortable" | "compact";
   isExpanded: boolean;
   counts: WorktreeTerminalCounts;
   terminals: PtyPanelData[];
@@ -395,7 +406,6 @@ export function WorktreeTerminalSection({
   worktreeId,
   onStartSession,
   variant = "sidebar",
-  density: cardDensity = "compact",
   isExpanded,
   counts,
   terminals,
@@ -608,15 +618,13 @@ export function WorktreeTerminalSection({
      baseline, and "no sessions" and "the sessions row did not render" looked
      the same. The row names the next action rather than the absence.
 
-     The comfortable sidebar card keeps it as a plain row in the sessions
-     slot, so the action stays where sessions would be; no well, since a box
-     around nothing gave an idle card the same footer shape as a busy one.
-     The compact card drops it. Repeated down a 25-card list it was a
-     30px box on every idle card, the largest single share of the list's
-     height. Starting a session stays one step away in the card's menus. */
+     The sidebar card drops it in both densities. Repeated down a long list
+     it was the same call to action on every idle card, the quietest cards
+     carrying an extra row, and the list's largest single share of height.
+     Starting a session stays one step away in the card's menus. */
   if (!showMetaFooter) {
     // No tray without somewhere for its row to go: see `onStartSession`.
-    if (!onStartSession || (isSidebar && cardDensity === "compact")) return null;
+    if (!onStartSession || isSidebar) return null;
     return (
       <div
         id={terminalsId}
@@ -654,6 +662,7 @@ export function WorktreeTerminalSection({
       aria-label={triggerName}
       aria-describedby={summaryId}
       id={`${terminalsId}-button`}
+      data-session-trigger=""
       className={cn(DISCLOSURE_BUTTON, isExpanded && !inline && DISCLOSURE_BUTTON_LABELLED)}
     >
       <ChevronRight
@@ -680,9 +689,9 @@ export function WorktreeTerminalSection({
     </span>
   );
   const summaryGlyph = SummaryIcon ? (
-    <SummaryIcon className="w-3 h-3" />
+    <SummaryIcon className="w-3 h-3 shrink-0" />
   ) : (
-    <SquareTerminal className="w-3 h-3" />
+    <SquareTerminal className="w-3 h-3 shrink-0" />
   );
 
   const panel = (
@@ -697,7 +706,7 @@ export function WorktreeTerminalSection({
               two gestures that exist rather than a Shift variant that does
               the same thing as a plain click. The transparent border is the
               rows' own, so the text starts on their glyph column. */}
-          <span>Click or drag across sessions to select</span>
+          <span>Click or drag to select · Enter opens</span>
           <DismissButton
             className="-my-1 -mr-1.5"
             aria-label="Dismiss hint"
@@ -707,6 +716,11 @@ export function WorktreeTerminalSection({
               e.stopPropagation();
               localStorage.setItem(FLEET_HINT_DISMISSED_KEY, "1");
               setHintDismissed(true);
+              // The button is about to unmount; focus goes to the first
+              // session rather than falling to the document.
+              scrollRef.current
+                ?.querySelector<HTMLElement>("[data-session-row-button]")
+                ?.focus({ preventScroll: true });
             }}
           />
         </div>
@@ -715,6 +729,7 @@ export function WorktreeTerminalSection({
         id={terminalsPanelId}
         ref={scrollRef}
         role="list"
+        data-session-list=""
         // The fleet-arming surface: a marquee drag that ends in here is an
         // arming gesture, never a click on the card.
         data-card-control=""
@@ -738,6 +753,7 @@ export function WorktreeTerminalSection({
             <TerminalRow
               term={term}
               onClick={handleTerminalClick}
+              onOpen={onTerminalSelect}
               padY={density.sessionRowY}
               canArm={rowClick === "arm"}
             />
@@ -764,7 +780,14 @@ export function WorktreeTerminalSection({
       <>
         <div id={terminalsId} className="mt-1 shrink-0 border border-transparent">
           <div
-            className={cn("flex min-h-6 items-center text-xs text-text-secondary", density.rowBox)}
+            // One width whatever its count says, so the age beside it lands on
+            // one column down the list.
+            className={cn(
+              "flex min-h-6 items-center text-xs text-text-secondary",
+              density.rowBox,
+              "pr-1",
+              INLINE_SESSIONS_SLOT
+            )}
           >
             {disclosureButton}
             <span aria-hidden="true" className="flex items-center gap-1.5">
@@ -777,7 +800,12 @@ export function WorktreeTerminalSection({
               <span
                 className={cn(
                   "font-mono tabular-nums",
-                  stateGlyphsElsewhere && counts.total === 1 && "@xs/card:hidden"
+                  // Only when the title row really carries a glyph for it: a
+                  // lone plain shell draws none there.
+                  stateGlyphsElsewhere &&
+                    counts.total === 1 &&
+                    visibleTerminalStates.length > 0 &&
+                    "@xs/card:hidden"
                 )}
               >
                 {counts.total}

@@ -90,7 +90,7 @@ export function IssueBadge({
           className={cn(
             // A bounded control with its own plate, on the text's own x: the
             // negative margin cancels the padding the plate is drawn on.
-            "-mx-1 flex min-w-0 items-center gap-1 rounded-[var(--radius-sm)] px-1 text-left text-xs cursor-pointer transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
+            "relative -mx-1 flex min-w-0 items-center gap-1 rounded-[var(--radius-sm)] px-1 text-left text-xs cursor-pointer transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary after:absolute after:inset-x-0 after:-inset-y-1 after:content-['']",
             freshnessClass(freshnessLevel)
           )}
           aria-label={
@@ -116,14 +116,9 @@ export function IssueBadge({
           >
             {issueTitle ||
               (hideColdNumber ? null : (
-                <span
-                  className={cn(
-                    "font-mono",
-                    missingCredential ? "text-text-secondary" : "text-pr-open"
-                  )}
-                >
-                  {issueLabel}
-                </span>
+                // The number in the line's own ink; the issue glyph beside it
+                // carries the state in hue, as the PR line does.
+                <span className="font-mono">{issueLabel}</span>
               ))}
           </span>
           {showPausedGlyph && (

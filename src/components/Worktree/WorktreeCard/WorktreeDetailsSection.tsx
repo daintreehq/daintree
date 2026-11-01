@@ -19,7 +19,6 @@ import { useForgeAuthorAvatar } from "@/hooks/useForgeAuthorAvatar";
 import { useReviewChangeHint } from "@/hooks/useReviewChangeHint";
 import {
   Activity,
-  ChevronDown,
   ChevronRight,
   GitCommitHorizontal,
   Pause,
@@ -730,10 +729,21 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
               </Button>
             </div>
             {hasLifecycleDetails && (
-              <details className="text-xs">
-                <summary className="flex items-center gap-1 rounded-[var(--radius-xs)] text-text-secondary cursor-pointer select-none transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary">
-                  <ChevronDown className="w-3 h-3" aria-hidden="true" />
-                  Show details
+              <details className="group/setup-log text-xs">
+                {/* Its own control: a click opens the log, never also selects
+                    the card underneath. */}
+                <summary
+                  onClick={(e) => e.stopPropagation()}
+                  className="flex min-h-6 items-center gap-1 rounded-[var(--radius-xs)] text-text-secondary cursor-pointer select-none transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+                >
+                  {/* The card's own disclosure grammar: a right chevron that
+                      turns down when open. A static down chevron claimed the
+                      log was showing before it was. */}
+                  <ChevronRight
+                    className="w-3 h-3 transition-transform duration-150 group-open/setup-log:rotate-90 motion-reduce:transition-none"
+                    aria-hidden="true"
+                  />
+                  Output
                 </summary>
                 <pre className="mt-1.5 max-h-32 overflow-auto rounded-[var(--radius-md)] bg-status-error/5 p-2 font-mono text-2xs text-text-secondary whitespace-pre-wrap break-all select-text">
                   {[lifecycleError, lifecycleOutput].filter(Boolean).join("\n\n")}

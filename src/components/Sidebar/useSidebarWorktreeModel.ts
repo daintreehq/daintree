@@ -12,7 +12,6 @@ import {
 import {
   matchesFilters,
   matchesQuickStateFilter,
-  matchesWorktreeQuery,
   computeChipCounts,
   type DerivedWorktreeMeta,
   type FilterState,
@@ -40,12 +39,25 @@ import {
 } from "./sidebarWorktreeModel";
 import { useRenderTime } from "./useRenderTime";
 import type { SidebarKeyboardItem } from "./useWorktreeSidebarKeyboard";
+import { worktreeProblemTone, type WorktreeProblemTone } from "./worktreeProblems";
 
 const SIDEBAR_DEFER_FILTER_MIN_WORKTREES = 60;
 
 // Stable empty ref so `filterArmEligibleIds` can bail to a constant when no
 // worktrees are in scope instead of yielding a fresh `[]`.
 const EMPTY_ELIGIBLE_IDS: readonly string[] = [];
+
+const EMPTY_DERIVED_META: DerivedWorktreeMeta = {
+  terminalCount: 0,
+  hasAgent: false,
+  hasWorkingAgent: false,
+  hasWaitingAgent: false,
+  hasCompletedAgent: false,
+  hasExitedAgent: false,
+  hasMergeConflict: false,
+  buckets: EMPTY_WORKTREE_AGENT_BUCKETS,
+  chipState: null,
+};
 
 interface UseSidebarWorktreeModelOptions {
   worktrees: WorktreeState[];
@@ -287,15 +299,46 @@ export function useSidebarWorktreeModel({
     [deferredWorktrees, mainWorktree]
   );
 
+  // The search and the facets narrow every card, main included, and the
+  // quick-state counts describe that narrowed set: the bar sits under the
+  // search field and over every card it filters, so "All 4" over a list of
+  // four is the only reading that does not need a footnote. Quick-state itself
+  // is left out, so each segment says what choosing it would leave.
+  const now = useRenderTime();
+  const narrowingFilters: FilterState = {
+    query: deferredQuery,
+    statusFilters,
+    typeFilters,
+    prIssueFilters,
+    sessionFilters,
+    hasAgentFilter,
+    activityFilters,
+    devServerFilters,
+    customTitles: worktreeCustomTitles,
+  };
+  const isNarrowed = deferredQuery.trim().length > 0 || hasFacetFiltersActive;
+  const narrowedWorktrees = isNarrowed
+    ? deferredWorktrees.filter((w) =>
+        matchesFilters(
+          w,
+          narrowingFilters,
+          derivedMetaMap.get(w.id) ?? EMPTY_DERIVED_META,
+          w.id === activeWorktreeId,
+          devServerSessions,
+          now
+        )
+      )
+    : deferredWorktrees;
+
   const quickStateCounts = useMemo(() => {
     const counts = {
-      all: nonMainWorktrees.length,
+      all: narrowedWorktrees.length,
       working: 0,
       waiting: 0,
       finished: 0,
       finishedUnseen: 0,
     };
-    for (const w of nonMainWorktrees) {
+    for (const w of narrowedWorktrees) {
       const meta = derivedMetaMap.get(w.id);
       if (!meta) continue;
       if (matchesQuickStateFilter("working", meta)) counts.working++;
@@ -304,17 +347,17 @@ export function useSidebarWorktreeModel({
       if (meta.buckets.finishedUnseen) counts.finishedUnseen++;
     }
     return counts;
-  }, [nonMainWorktrees, derivedMetaMap]);
+  }, [narrowedWorktrees, derivedMetaMap]);
 
   /**
    * The population the chip counts describe. It is deliberately WIDER than
    * `nonMainWorktrees`: the main worktree is not a list row, but it is subject
-   * to the same facets (`mainMatchesFacetsPre` below), so leaving it out made
+   * to the same facets (`mainVisible` below), so leaving it out made
    * every facet it alone satisfies read zero. "Main" is the clear case — the
    * only worktree of that type is the main one, so the chip read (0) forever.
    *
-   * Quick-state IS applied, and main is exempt from it, because that is exactly
-   * how the rows themselves are gated. The `alwaysShowActive` / `alwaysShowWaiting`
+   * Quick-state IS applied, to main as well, because that is exactly how the
+   * cards themselves are gated. The `alwaysShowActive` / `alwaysShowWaiting`
    * bypasses are deliberately ignored: they only fire while no facet filter is
    * active, so selecting any chip switches them off anyway — a count taken
    * without them is the count that will actually apply once the chip is clicked.
@@ -332,7 +375,12 @@ export function useSidebarWorktreeModel({
             const meta = derivedMetaMap.get(w.id);
             return meta ? matchesQuickStateFilter(quickStateFilter, meta) : false;
           });
-    return mainWorktree ? [mainWorktree, ...eligible] : eligible;
+    const mainMeta = mainWorktree ? derivedMetaMap.get(mainWorktree.id) : undefined;
+    const mainEligible =
+      mainWorktree !== null &&
+      (quickStateFilter === "all" ||
+        (mainMeta !== undefined && matchesQuickStateFilter(quickStateFilter, mainMeta)));
+    return mainEligible && mainWorktree ? [mainWorktree, ...eligible] : eligible;
   }, [mainWorktree, nonMainWorktrees, quickStateFilter, derivedMetaMap]);
 
   const chipCounts = useMemo(() => {
@@ -368,27 +416,6 @@ export function useSidebarWorktreeModel({
     devServerSessions,
     worktreeCustomTitles,
   ]);
-
-  // Keyed on the counts, not on `quickStateCounts`: that object is rebuilt on
-  // every fleet push, and a fresh prop here would re-render the main card
-  // through its memoized row even when no count moved.
-  const nonMainCount = nonMainWorktrees.length;
-  const {
-    working: workingCount,
-    waiting: waitingCount,
-    finished: finishedCount,
-  } = quickStateCounts;
-  const mainWorktreeAggregateCounts = useMemo(() => {
-    if (nonMainCount === 0 && workingCount === 0 && waitingCount === 0 && finishedCount === 0) {
-      return undefined;
-    }
-    return {
-      worktrees: nonMainCount,
-      working: workingCount,
-      waiting: waitingCount,
-      finished: finishedCount,
-    };
-  }, [nonMainCount, workingCount, waitingCount, finishedCount]);
 
   const {
     filteredWorktrees,
@@ -460,12 +487,32 @@ export function useSidebarWorktreeModel({
   );
   const sortableIds = useMemo(() => dragStartOrder.map(getWorktreeSortDragId), [dragStartOrder]);
 
+  // Main-row visibility. The main worktree is a pinned card rather than a list
+  // row, but it sits under the same search, facets and quick-state bar as
+  // every other card, so it takes all three, with no bypass a list row lacks:
+  // a segment shows exactly the cards its count says.
+  const mainMeta = mainWorktree ? derivedMetaMap.get(mainWorktree.id) : undefined;
+  const mainNarrowed = mainWorktree !== null && narrowedWorktrees.includes(mainWorktree);
+  const mainMatchesQuickState =
+    quickStateFilter === "all" ||
+    (mainMeta !== undefined && matchesQuickStateFilter(quickStateFilter, mainMeta));
+  const mainVisible = mainNarrowed && mainMatchesQuickState;
+  // Main matched the search and facets but the segment hid it: one of the
+  // results a segment is hiding, which the empty state has to count.
+  const mainHiddenByQuickState = mainNarrowed && !mainMatchesQuickState;
+  // Main sitting on screen under a segment because it is in that bucket: the
+  // empty state then says the list is empty rather than that nothing is.
+  const mainInQuickState = quickStateFilter !== "all" && mainVisible && mainMatchesQuickState;
+
   // Arm-eligible agent terminals inside the currently visible worktrees, split
   // so an arm/disarm elsewhere only re-walks the unarmed tally rather than
   // re-scanning every panel. Drives the QuickStateFilterBar arm affordance,
   // which is agent-scoped like the state-filter presets beside it (#11637).
   const filterArmEligibleIds = useMemo(() => {
+    // The main card counts in the segments it sits under, so its agents arm
+    // with the rest; the bar's count and its arm button describe one set.
     const worktreeIdSet = new Set(filteredWorktrees.map((w) => w.id));
+    if (mainVisible && mainWorktree) worktreeIdSet.add(mainWorktree.id);
     if (worktreeIdSet.size === 0) return EMPTY_ELIGIBLE_IDS;
     const ids: string[] = [];
     for (const id of panelIds) {
@@ -475,60 +522,7 @@ export function useSidebarWorktreeModel({
       ids.push(id);
     }
     return ids;
-  }, [filteredWorktrees, panelIds, fleetEligibleWorktreeById]);
-
-  // Main-row visibility. The main worktree is a pinned card rather than a list
-  // row, so it takes the query and the facets but never the quick-state filter.
-  const worktreeMatchesQueryPre = (w: WorktreeState) =>
-    matchesWorktreeQuery(w, deferredQuery, worktreeCustomTitles[w.id]);
-
-  const pinnedFiltersPre: FilterState = {
-    query: deferredQuery,
-    statusFilters,
-    typeFilters,
-    prIssueFilters,
-    sessionFilters,
-    hasAgentFilter,
-    activityFilters,
-    devServerFilters,
-    customTitles: worktreeCustomTitles,
-  };
-
-  // The activity facets measure against the clock. Left to `matchesFilters`'
-  // own read, the compiled check would be cached and main would never age out.
-  const now = useRenderTime();
-  const mainMatchesQueryPre = mainWorktree && worktreeMatchesQueryPre(mainWorktree);
-  const mainMatchesFacetsPre =
-    !hasFacetFiltersActive ||
-    (mainWorktree &&
-      matchesFilters(
-        mainWorktree,
-        pinnedFiltersPre,
-        derivedMetaMap.get(mainWorktree.id) ?? {
-          terminalCount: 0,
-          hasAgent: false,
-          hasWorkingAgent: false,
-          hasWaitingAgent: false,
-          hasCompletedAgent: false,
-          hasExitedAgent: false,
-          hasMergeConflict: false,
-          buckets: EMPTY_WORKTREE_AGENT_BUCKETS,
-          chipState: null,
-        },
-        mainWorktree.id === activeWorktreeId,
-        devServerSessions,
-        now
-      ));
-  const mainVisible = mainMatchesQueryPre && mainMatchesFacetsPre;
-  // Main is exempt from the tab, so it can sit on screen in the very state the
-  // tab below it reads as empty. The empty state has to say so rather than
-  // claim nothing is working under a card that visibly is.
-  const mainMeta = mainWorktree ? derivedMetaMap.get(mainWorktree.id) : undefined;
-  const mainInQuickState =
-    quickStateFilter !== "all" &&
-    mainVisible === true &&
-    mainMeta !== undefined &&
-    matchesQuickStateFilter(quickStateFilter, mainMeta);
+  }, [filteredWorktrees, panelIds, fleetEligibleWorktreeById, mainVisible, mainWorktree]);
 
   const mainRowIndex = mainVisible ? 1 : 0;
   const firstScrollableRowIndex = mainRowIndex + 1;
@@ -589,6 +583,18 @@ export function useSidebarWorktreeModel({
     return ids;
   }, [derivedMetaMap]);
 
+  // Rows reporting something broken that no agent is asking about (conflict,
+  // failing CI, failed setup, failed sign-in), so a band can say a failure is
+  // past the edge even when nothing there is waiting.
+  const problemWorktreeTones = useMemo(() => {
+    const tones = new Map<string, WorktreeProblemTone>();
+    for (const worktree of deferredWorktrees) {
+      const tone = worktreeProblemTone(worktree, derivedMetaMap.get(worktree.id));
+      if (tone) tones.set(worktree.id, tone);
+    }
+    return tones;
+  }, [deferredWorktrees, derivedMetaMap]);
+
   // The pinned main row lives OUTSIDE the Virtuoso surface but INSIDE the
   // role="grid" container, so keyboard navigation must visit it before
   // descending into the virtualized list. It carries isPinned so the hook
@@ -625,10 +631,10 @@ export function useSidebarWorktreeModel({
     mainWorktree,
     mainVisible,
     mainInQuickState,
+    mainHiddenByQuickState,
     nonMainWorktrees,
     quickStateCounts,
     chipCounts,
-    mainWorktreeAggregateCounts,
     filteredWorktrees,
     groupedSections,
     hasResultsWithoutQuickState,
@@ -641,6 +647,7 @@ export function useSidebarWorktreeModel({
     ariaRowCount,
     sidebarItems,
     attentionWorktreeIds,
+    problemWorktreeTones,
     keyboardItems,
   };
 }

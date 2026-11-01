@@ -152,8 +152,8 @@ export const theme: BuiltInThemeSource = {
     // Composited settings-sidebar-bg over the shell.
     "settings-sidebar-scroll-fade": "#161E1C",
     "sidebar-action-hover-bg": "rgba(255,255,255,0.05)",
-    "sidebar-active-bg": "rgba(255,255,255,0.065)",
-    "sidebar-hover-bg": "rgba(255,255,255,0.048)",
+    "sidebar-active-bg": "rgba(255,255,255,0.096)",
+    "sidebar-hover-bg": "rgba(255,255,255,0.064)",
     "toolbar-agent-hover-bg": "rgba(255,255,255,0.06)",
     // Hover/armed are neutral light, never accent. Armed/active hold the
     // +0.04 alpha step over hover.

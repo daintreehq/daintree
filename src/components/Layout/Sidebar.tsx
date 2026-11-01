@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { hostFileManagerRevealLabel, isRemoteWindow, isWslWindow } from "@/hooks/useHostPlatform";
 import { cn } from "@/lib/utils";
 import { SidebarFooter } from "./SidebarFooter";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
@@ -226,7 +227,13 @@ export function Sidebar({
           disabled={!revealPath}
         >
           <FolderOpen className={ICON_CLASS} />
-          {projectId != null ? "Reveal project in Finder" : "Reveal workspace in Finder"}
+          {/* The card menus' wording for the host's file manager, so this
+              row stops saying Finder on Windows and Linux. */}
+          {isRemoteWindow() && !isWslWindow()
+            ? projectId != null
+              ? "Reveal project in Finder"
+              : "Reveal workspace in Finder"
+            : hostFileManagerRevealLabel()}
         </ContextMenuActionItem>
         {projectId != null && (
           <ContextMenuActionItem actionId="project.settings.open">
