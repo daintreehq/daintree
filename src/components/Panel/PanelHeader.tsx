@@ -84,6 +84,7 @@ import {
   useTabOverflow,
 } from "@/hooks";
 import { TerminalHostSuffix } from "@/components/Terminal/TerminalHostSuffix";
+import { TerminalScheduleChip } from "@/components/Terminal/TerminalScheduleChip";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { usePanelStore } from "@/store/panelStore";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
@@ -1347,6 +1348,8 @@ function PanelHeaderComponent({
 
             {hasPty && <TerminalHostSuffix />}
 
+            {hasPty && <TerminalScheduleChip terminalId={id} />}
+
             {hasDangerousFlags && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -1539,6 +1542,18 @@ function PanelHeaderComponent({
 
             {/* Process runs somewhere other than the worktree this panel is filed
               under, by the user's own choice (#11840). */}
+          </div>
+        )}
+
+        {/* A tab group's titles are in the strip; the active pane's schedule
+            follows it, ahead of that pane's metadata, and the maximized readout
+            keeps clear of it as it does of the strip. */}
+        {hasTabs && hasPty && (
+          <div
+            data-readout-obstacle=""
+            className="flex min-w-0 shrink-[2] items-center empty:hidden"
+          >
+            <TerminalScheduleChip terminalId={id} />
           </div>
         )}
 

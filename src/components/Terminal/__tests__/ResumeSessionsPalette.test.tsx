@@ -372,6 +372,77 @@ describe("ResumeSessionsPalette", () => {
     expect(footer).toMatch(/to resume Session a/);
     expect(footer).not.toMatch(/resume resume/i);
   });
+
+  it("marks a scheduled run's row with its schedule, after the location", () => {
+    const scheduled = makeItem("s", {
+      schedule: { scheduleId: "sched-1", name: "Nightly triage", label: "Nightly triage" },
+    });
+    paletteState.results = [scheduled, makeItem("a")];
+    paletteState.visibleResults = [scheduled, makeItem("a")];
+    paletteState.removedResults = [];
+    renderPalette();
+
+    const meta = document.getElementById("resume-session-option-s-meta");
+    expect(meta?.querySelector("svg")).not.toBeNull();
+    const visible = [...(meta?.childNodes ?? [])]
+      .filter((node) => !(node instanceof HTMLElement && node.classList.contains("sr-only")))
+      .map((node) => node.textContent)
+      .join("");
+    expect(visible).toBe("feature-a · Nightly triage · Opus 4.8");
+    // Spoken with what the name is, since the mark is hidden from assistive tech.
+    expect(meta?.textContent).toMatch(/scheduled run of Nightly triage/i);
+
+    // An ordinary row draws no mark.
+    const plain = document.getElementById("resume-session-option-a-meta");
+    expect(plain?.querySelector("svg")).toBeNull();
+    expect(plain?.textContent).toBe("feature-a · Opus 4.8");
+  });
+
+  it("tells lookalike rows apart by their schedule before falling back to close times", () => {
+    const at = new Date(2026, 9, 13, 2, 14).getTime();
+    const lookalike = (id: string, label: string, scheduleId = `id-${label}`) =>
+      makeItem(id, {
+        title: "Claude session",
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- journal-record fixture stub
+        session: { sessionId: id, agentId: "claude", savedAt: at } as ResumeSessionItem["session"],
+        schedule: { scheduleId, name: label, label },
+      });
+    const rows = [
+      lookalike("n", "Nightly"),
+      lookalike("w", "Weekly"),
+      // Another schedule with the same name reads the same.
+      lookalike("n2", "Nightly", "id-other-nightly"),
+    ];
+    paletteState.results = rows;
+    paletteState.visibleResults = rows;
+    paletteState.removedResults = [];
+    renderPalette();
+
+    const metaOf = (id: string) =>
+      document.getElementById(`resume-session-option-${id}-meta`)?.textContent ?? "";
+    // Its schedule already sets it apart, so it carries no close time.
+    expect(metaOf("w")).toBe("feature-a · Scheduled run of Weekly · Opus 4.8");
+    // Runs of schedules that share a name read the same, so each says when it closed.
+    for (const id of ["n", "n2"]) {
+      expect(metaOf(id).startsWith("feature-a · Scheduled run of Nightly · Opus 4.8 · ")).toBe(
+        true
+      );
+    }
+  });
+
+  it("names a schedule it couldn't read without claiming a name", () => {
+    const scheduled = makeItem("s", {
+      location: null,
+      schedule: { scheduleId: "sched-1", name: null, label: "Scheduled run" },
+    });
+    paletteState.results = [scheduled];
+    paletteState.visibleResults = [scheduled];
+    paletteState.removedResults = [];
+    renderPalette();
+
+    const meta = document.getElementById("resume-session-option-s-meta");
+    expect(meta?.textContent).toBe("Scheduled run · Opus 4.8");
+  });
 });
 
 describe("ResumeSessionsPalette Escape", () => {

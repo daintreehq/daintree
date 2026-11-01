@@ -3,7 +3,20 @@ import { isUselessTitle } from "@shared/utils/isUselessTitle";
 import { cleanTaskTitle } from "@shared/utils/taskTitle";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { inferWorktreeIdFromCwd } from "@/utils/worktreePaths";
+import { readScheduledRunRef } from "@shared/utils/scheduledRunProvenance";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
+
+/** The schedule a session's run came from (#15987). */
+export interface ResumeSessionSchedule {
+  scheduleId: string;
+  /** The schedule's name, once read and while it still exists. */
+  name: string | null;
+  /** What the row shows beside the schedule mark: the schedule's name, or a stand-in until it's read. */
+  label: string;
+}
+
+/** A scheduled session's label before its schedule's name has been read. */
+export const UNNAMED_SCHEDULE_LABEL = "Scheduled run";
 
 /**
  * Shared model for a browsable "resume closed session" entry. Built from a
@@ -66,6 +79,8 @@ export interface ResumeSessionItem {
   worktreeName?: string;
   /** Branch the session was captured on (live value preferred over recorded). */
   branchName?: string;
+  /** Present only for a session launched by a scheduled run. */
+  schedule?: ResumeSessionSchedule;
 }
 
 /** Minimal shape of a live worktree needed for labelling/stale detection. */
@@ -191,9 +206,12 @@ export function buildResumeSessionItems(
         .filter((part): part is string => !!part)
         .join(" · ");
 
+      const scheduledRun = readScheduledRunRef(session.scheduledRun);
+
       const searchAliases = [
         // Still findable by the task title the label replaced.
         bookmarkLabel && hasTitle ? taskTitle : null,
+        scheduledRun ? "scheduled" : null,
         session.agentId,
         agentName,
         modelName,
@@ -219,6 +237,33 @@ export function buildResumeSessionItems(
         isStale,
         worktreeName,
         branchName,
+        ...(scheduledRun && {
+          schedule: {
+            scheduleId: scheduledRun.scheduleId,
+            name: null,
+            label: UNNAMED_SCHEDULE_LABEL,
+          },
+        }),
       };
     });
+}
+
+/**
+ * Puts each scheduled session's schedule into words, once the view's schedules
+ * have been read. `describe` answers the label and, when the schedule still
+ * exists, its name, which becomes searchable. Other items pass through as they are.
+ */
+export function labelResumeSessionSchedules(
+  items: ResumeSessionItem[],
+  describe: (scheduleId: string) => { label: string; name: string | null }
+): ResumeSessionItem[] {
+  return items.map((item) => {
+    if (!item.schedule) return item;
+    const { label, name } = describe(item.schedule.scheduleId);
+    return {
+      ...item,
+      schedule: { ...item.schedule, name, label },
+      searchAliases: name ? [...item.searchAliases, name] : item.searchAliases,
+    };
+  });
 }

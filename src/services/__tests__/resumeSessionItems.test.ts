@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildResumeSessionItems,
+  labelResumeSessionSchedules,
   isAgentPlaceholderTitle,
   pathBasename,
   prettifyModelId,
@@ -164,6 +165,65 @@ describe("buildResumeSessionItems", () => {
     expect(item?.location).toBe("feature-a");
     // Still findable by agent, though.
     expect(item?.searchAliases).toContain("Claude");
+  });
+});
+
+describe("scheduled sessions", () => {
+  const scheduledRun = { scheduleId: "sched-1", runId: "run-1" };
+
+  it("carries the schedule only for a session a scheduled run launched", () => {
+    const items = buildResumeSessionItems(
+      [
+        rec({ sessionId: "run", scheduledRun }),
+        rec({ sessionId: "hand" }),
+        // A mangled reference is no reference.
+        rec({
+          sessionId: "mangled",
+          scheduledRun: { scheduleId: "", runId: "run-2" } as typeof scheduledRun,
+        }),
+      ],
+      { currentProjectId: "p1", worktrees }
+    );
+    const byId = new Map(items.map((item) => [item.session.sessionId, item]));
+    expect(byId.get("run")?.schedule?.scheduleId).toBe("sched-1");
+    expect(byId.get("run")?.schedule?.name).toBeNull();
+    // Unread, so it names no schedule and claims none was deleted.
+    expect(byId.get("run")?.schedule?.label).toBeTruthy();
+    expect(byId.get("run")?.schedule?.label).not.toMatch(/deleted/i);
+    expect(byId.get("hand")).not.toHaveProperty("schedule");
+    expect(byId.get("mangled")).not.toHaveProperty("schedule");
+    // Findable as scheduled before any name is read; others aren't.
+    expect(byId.get("run")?.searchAliases).toContain("scheduled");
+    expect(byId.get("hand")?.searchAliases).not.toContain("scheduled");
+  });
+
+  it("puts each schedule into words and makes a live schedule's name searchable", () => {
+    const items = buildResumeSessionItems(
+      [
+        rec({ sessionId: "live", scheduledRun }),
+        rec({ sessionId: "gone", scheduledRun: { scheduleId: "sched-gone", runId: "run-9" } }),
+        rec({ sessionId: "hand" }),
+      ],
+      { currentProjectId: "p1", worktrees }
+    );
+    const labelled = labelResumeSessionSchedules(items, (scheduleId) =>
+      scheduleId === "sched-1"
+        ? { label: "Nightly triage", name: "Nightly triage" }
+        : { label: "Deleted schedule", name: null }
+    );
+    const byId = new Map(labelled.map((item) => [item.session.sessionId, item]));
+    expect(byId.get("live")?.schedule).toEqual({
+      scheduleId: "sched-1",
+      name: "Nightly triage",
+      label: "Nightly triage",
+    });
+    expect(byId.get("live")?.searchAliases).toContain("Nightly triage");
+    expect(byId.get("gone")?.schedule?.label).toBe("Deleted schedule");
+    expect(byId.get("gone")?.searchAliases).toEqual(
+      items.find((item) => item.session.sessionId === "gone")?.searchAliases
+    );
+    // An ordinary session passes through untouched.
+    expect(byId.get("hand")).toBe(items.find((item) => item.session.sessionId === "hand"));
   });
 });
 

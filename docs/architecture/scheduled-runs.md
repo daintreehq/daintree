@@ -13,6 +13,7 @@ A project can run an agent on a schedule (#15973). A due schedule launches its a
 | Run history: the `scheduled_runs` table, registration, recorded facts | `electron/services/scheduledRuns/` |
 | Run history over `window.electron.scheduledRuns` | `electron/ipc/handlers/scheduledRuns.ts` |
 | Schedule provenance on terminals, snapshots and session records | `shared/utils/scheduledRunProvenance.ts` |
+| The schedule mark on a run's pane and resume rows, and the names they show | `src/components/Terminal/TerminalScheduleChip.tsx`, `src/components/Terminal/ResumeSessionsPalette.tsx`, `src/store/scheduleNamesStore.ts` |
 | A cadence in words | `shared/utils/cronDescription.ts` |
 | The cadence picker, and reading an expression as a picker state | `src/components/Schedules/CadencePicker.tsx`, `src/components/Schedules/cadenceChoice.ts` |
 | The Schedules view and the `schedules.open` action | `src/components/Schedules/`, `src/services/actions/definitions/scheduleActions.ts` |
@@ -231,6 +232,10 @@ Only Daintree's scheduler can set it, by one of two entries, and neither reads i
 - **Main with no view**: `runAgentLaunch(request, project, deps, { scheduledRun })`. The generic viewless executor, which serves MCP, never passes the fourth argument.
 
 `agent.launch` and the other spawn actions validate `spawnedBy` against `TerminalSpawnSourceSchema`, which leaves `"schedule"` out, so an MCP or plugin caller can't claim it in arguments either. A terminal launched any other way carries no `scheduledRun`.
+
+### Where it shows
+
+A scheduled run's pane header carries the schedule mark (`CalendarClock`) and the schedule's current name after its title, or after the tab strip for a tab group's active pane (#15987). Activating it dispatches `schedules.open` at that schedule's page. The resume palette's rows for a scheduled session carry the same mark and name after the location, and the name is searchable. The names come from one shared read of the view's schedules (`scheduleNamesStore`), held only while a scheduled pane or palette row is shown, so a view with no scheduled runs reads nothing. A schedule the read doesn't contain shows as "Deleted schedule"; one not read yet, or whose read failed, as "Scheduled run". A window driving a Remote Host reads nothing, and its mark is a plain label.
 
 ## Launching a run
 
