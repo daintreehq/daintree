@@ -1508,6 +1508,8 @@ export const CHANNELS = {
   // Read from the machine that owns the pane.
   DECISIONS_GET_PANE_STATE: "decisions:get-pane-state",
   DECISIONS_SET_ENABLED: "decisions:set-enabled",
+  // A relay URL's unsigned health and protocol check (#16005), from main.
+  DECISIONS_CHECK_RELAY: "decisions:check-relay",
 
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",

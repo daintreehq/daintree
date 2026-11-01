@@ -602,6 +602,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./copyTreeHistory.js").CopyTreeHistoryRecord[];
   };
+  "decisions:check-relay": {
+    args: [url: string];
+    result: import("../decisions.js").DecisionsRelayCheck;
+  };
   "decisions:get-pane-state": {
     args: [terminalId: string];
     result: import("../decisions.js").PaneDecisionState | null;

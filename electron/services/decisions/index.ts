@@ -1,9 +1,14 @@
 import { store } from "../../store.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { broadcastToProjectRenderers } from "../../ipc/utils.js";
-import type { DecisionsStatus, PaneDecisionState } from "../../../shared/types/decisions.js";
+import type {
+  DecisionsRelayCheck,
+  DecisionsStatus,
+  PaneDecisionState,
+} from "../../../shared/types/decisions.js";
 import { readDecisionsSettings, writeDecisionsSettings } from "./decisionsSettings.js";
 import type { DecisionsService } from "./DecisionsService.js";
+import { RelayCheckCancelledError, checkDecisionsRelay } from "./relayCheck.js";
 
 /**
  * Nothing imports this module until the saved setting reads as on (the boot
@@ -16,6 +21,8 @@ let service: DecisionsService | null = null;
 let creating: Promise<DecisionsService> | null = null;
 let shutDown = false;
 let transitions: Promise<unknown> = Promise.resolve();
+/** Relay checks in flight. Turning off or quitting aborts them, so none outlives the switch. */
+const relayChecks = new Set<AbortController>();
 
 function publishPaneState(projectId: string, state: PaneDecisionState): void {
   broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
@@ -78,6 +85,26 @@ export function getDecisionsPaneState(terminalId: string): PaneDecisionState | n
   return service?.getPaneState(terminalId) ?? null;
 }
 
+/**
+ * Checks a relay URL through its unsigned reads (#16005). Needs no identity
+ * and never makes or starts the service, and runs beside the switch's
+ * transitions rather than behind them, so turning off never waits on a slow
+ * relay. Turning off or quitting cancels it: `RelayCheckCancelledError`.
+ */
+export async function checkRelay(url: string): Promise<DecisionsRelayCheck> {
+  if (shutDown || !readDecisionsSettings(store).enabled) throw new RelayCheckCancelledError();
+  const controller = new AbortController();
+  relayChecks.add(controller);
+  return checkDecisionsRelay(url, { signal: controller.signal }).finally(() =>
+    relayChecks.delete(controller)
+  );
+}
+
+function cancelRelayChecks(): void {
+  for (const controller of relayChecks) controller.abort();
+  relayChecks.clear();
+}
+
 /** Boot: starts the service only if the saved setting, sanitised, is on. */
 export function startDecisionsIfEnabled(): Promise<void> {
   return serialize(async () => {
@@ -104,6 +131,7 @@ export function setDecisionsEnabled(
     const current = readDecisionsSettings(store);
     const consentedAt = current.consentedAt ?? (options.consent ? Date.now() : null);
     const saved = writeDecisionsSettings(store, { ...current, enabled, consentedAt });
+    if (!saved.enabled) cancelRelayChecks();
     if (saved.enabled && !shutDown) {
       const next = await getDecisionsService();
       await next.start(saved);
@@ -117,11 +145,13 @@ export function setDecisionsEnabled(
 /** Quit: ends the service for good. One still being made is waited for, so it can't start afterwards. */
 export async function stopDecisions(): Promise<void> {
   shutDown = true;
+  cancelRelayChecks();
   await (await settledService())?.dispose();
 }
 
 /** @internal Tests only. */
 export function _resetDecisionsForTesting(): void {
+  cancelRelayChecks();
   service = null;
   creating = null;
   shutDown = false;
