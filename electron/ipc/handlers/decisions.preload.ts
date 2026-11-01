@@ -5,6 +5,9 @@ export const DECISIONS_METHOD_CHANNELS = {
   getPaneState: "decisions:get-pane-state",
   setEnabled: "decisions:set-enabled",
   checkRelay: "decisions:check-relay",
+  claimRelay: "decisions:claim-relay",
+  restoreIdentity: "decisions:restore-identity",
+  disconnectRelay: "decisions:disconnect-relay",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof DECISIONS_METHOD_CHANNELS;

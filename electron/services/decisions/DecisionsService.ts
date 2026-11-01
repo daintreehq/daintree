@@ -1,3 +1,4 @@
+import { stat } from "node:fs/promises";
 import type { QuestionRow } from "@daintreehq/decisions-client";
 import type {
   DecisionsSettings,
@@ -81,6 +82,28 @@ export class DecisionsService {
     }
     this.keyStore ??= new SealedKeyStore(this.keyFilePath());
     return this.keyStore;
+  }
+
+  /**
+   * The running lifetime's settings changed under it: a relay was claimed,
+   * restored or disconnected. Ignored while stopped, and for settings that are off.
+   */
+  updateSettings(settings: DecisionsSettings): void {
+    if (this.disposed || this.settings === null || !settings.enabled) return;
+    this.settings = settings;
+  }
+
+  /**
+   * Whether the key file exists, from its presence alone: no keychain is
+   * asked and nothing is opened. Anything there but a missing file counts.
+   */
+  async hasKeyFile(): Promise<boolean> {
+    try {
+      await stat(this.keyFilePath());
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException | null)?.code !== "ENOENT";
+    }
   }
 
   /** Called on every change of state, never for a repeat. Listeners outlive a stop, not a dispose. */

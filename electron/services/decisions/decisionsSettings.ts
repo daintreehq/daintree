@@ -47,8 +47,13 @@ export function consentTime(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
 
+/** An id in the shape a relay mints, so the setting's sanitiser keeps it. */
+export function isRelayId(value: unknown): value is string {
+  return typeof value === "string" && RELAY_ID.test(value);
+}
+
 function relayId(value: unknown): string | null {
-  return typeof value === "string" && RELAY_ID.test(value) ? value : null;
+  return isRelayId(value) ? value : null;
 }
 
 /** Absent is a relay not set up yet; anything else that didn't read is damage. */

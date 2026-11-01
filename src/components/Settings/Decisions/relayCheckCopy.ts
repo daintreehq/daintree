@@ -27,6 +27,11 @@ const UNREACHABLE: Record<DecisionsRelayUnreachableReason, string> = {
   network: "The connection failed before it answered",
 };
 
+/** Why a request got no answer, in words. */
+export function describeUnreachable(reason: DecisionsRelayUnreachableReason): string {
+  return UNREACHABLE[reason];
+}
+
 /** Why a typed address wasn't checked, for the field's own error. */
 export function describeInvalidUrl(
   reason: Extract<DecisionsRelayCheck, { result: "invalid-url" }>["reason"]
@@ -41,7 +46,7 @@ export function describeInvalidUrl(
   }
 }
 
-function hostOf(origin: string): string {
+export function hostOf(origin: string): string {
   try {
     return new URL(origin).host;
   } catch {

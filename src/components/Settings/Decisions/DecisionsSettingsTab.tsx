@@ -73,7 +73,11 @@ export function DecisionsSettingsTab() {
 
       {on && (
         <>
-          <DecisionsConnectionSection status={status} locked={pending !== null} />
+          <DecisionsConnectionSection
+            status={status}
+            locked={pending !== null}
+            onChanged={(next) => (next ? decisions.applyStatus(next) : void decisions.reload())}
+          />
           <DecisionsDevicesSection />
           <DecisionsQuestionsSection />
           <DecisionsPolicySection />

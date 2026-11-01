@@ -14,6 +14,8 @@ export interface UseDecisionsResult {
   pending: SetDecisionsEnabledPayload | null;
   saveFailure: DecisionsSaveFailure | null;
   reload(): Promise<void>;
+  /** Shows a status main answered some other change with. */
+  applyStatus(next: DecisionsStatus): void;
   setEnabled(payload: SetDecisionsEnabledPayload): Promise<void>;
 }
 
@@ -82,5 +84,10 @@ export function useDecisions(): UseDecisionsResult {
       });
   };
 
-  return { status, loadError, pending, saveFailure, reload, setEnabled };
+  const applyStatus = (next: DecisionsStatus) => {
+    setStatus(next);
+    setLoadError(null);
+  };
+
+  return { status, loadError, pending, saveFailure, reload, applyStatus, setEnabled };
 }

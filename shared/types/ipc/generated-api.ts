@@ -295,12 +295,21 @@ export interface GeneratedElectronAPI {
     checkRelay(
       ...args: IpcInvokeMap["decisions:check-relay"]["args"]
     ): Promise<IpcInvokeMap["decisions:check-relay"]["result"]>;
+    claimRelay(
+      ...args: IpcInvokeMap["decisions:claim-relay"]["args"]
+    ): Promise<IpcInvokeMap["decisions:claim-relay"]["result"]>;
+    disconnectRelay(
+      ...args: IpcInvokeMap["decisions:disconnect-relay"]["args"]
+    ): Promise<IpcInvokeMap["decisions:disconnect-relay"]["result"]>;
     getPaneState(
       ...args: IpcInvokeMap["decisions:get-pane-state"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-pane-state"]["result"]>;
     getStatus(
       ...args: IpcInvokeMap["decisions:get-status"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-status"]["result"]>;
+    restoreIdentity(
+      ...args: IpcInvokeMap["decisions:restore-identity"]["args"]
+    ): Promise<IpcInvokeMap["decisions:restore-identity"]["result"]>;
     setEnabled(
       ...args: IpcInvokeMap["decisions:set-enabled"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-enabled"]["result"]>;
