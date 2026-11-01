@@ -368,6 +368,24 @@ describe("ScheduleOsJobService", () => {
     expect(job.syncs).toHaveLength(2);
   });
 
+  it("starts no rewrite from a status read still answering when it's disposed", async () => {
+    const store = fakeStore({ a: [schedule("a1", "a")] });
+    const job = fakeAdapter();
+    const svc = service(store, job.adapter);
+    await svc.start();
+    job.drift();
+    const observed = deferred<ScheduleOsJobObservation>();
+    vi.mocked(job.adapter.observe).mockReturnValueOnce(observed.promise);
+
+    const reading = svc.status("a");
+    await vi.waitFor(() => expect(job.adapter.observe).toHaveBeenCalled());
+    await svc.dispose();
+    observed.resolve({ installed: true, current: false, loaded: true });
+
+    expect(await reading).toMatchObject({ state: "stale" });
+    expect(job.syncs).toHaveLength(1);
+  });
+
   it("writes an edit committed while the first reads are out, even when quitting meanwhile", async () => {
     const store = fakeStore({ a: [], b: [] });
     const slow = deferred<SchedulesSnapshot>();
@@ -380,10 +398,14 @@ describe("ScheduleOsJobService", () => {
     await Promise.resolve();
 
     store.commit("a", [schedule("a1", "a")]);
-    const disposing = svc.dispose();
+    const disposing = svc.dispose().then(() => job.events.push("disposed"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(job.events).toEqual([]);
     slow.resolve({ projectId: "b", schedules: [], revision: 0 });
-    await Promise.all([started, disposing]);
+    await disposing;
 
     expect(job.syncs).toEqual([{ crons: ["0 9 * * *"], reload: false }]);
+    expect(job.events).toEqual(["synced", "disposed"]);
+    await started;
   });
 });

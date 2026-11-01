@@ -266,9 +266,12 @@ export function createLaunchAgentScheduleJob(deps: {
       const desired = desiredContent(cadences, systemTimeZone);
       const [onDisk, loaded] = await Promise.all([files.readFile(file), isLoaded()]);
       if (desired === null) {
-        // The file goes first, so the next login can't load it however unloading goes.
-        if (onDisk !== null) await files.remove(file);
+        // The file goes first, so the next login can't load it however unloading
+        // goes; a file that won't go still leaves the job to unload.
+        let removal: unknown = null;
+        if (onDisk !== null) await files.remove(file).catch((error: unknown) => (removal = error));
         if (loaded !== false) await unload();
+        if (removal) throw removal;
         return;
       }
       if (!options.reload && onDisk === desired && loaded === true) return;

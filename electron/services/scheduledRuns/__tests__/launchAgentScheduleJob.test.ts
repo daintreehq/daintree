@@ -82,48 +82,54 @@ function fakeLaunchctl(options: {
   let stillListed = 0;
   let bootedOut = false;
   const calls: string[][] = [];
-  const run = vi.fn(async (file: string, args: readonly string[]): Promise<CommandResult> => {
-    expect(file).toBe("/bin/launchctl");
-    calls.push([...args]);
-    options.events?.push(args[0]!);
-    switch (args[0]) {
-      case "print":
-        if (bootedOut && options.unansweredAfterBootout) return unanswered;
-        if (stillListed > 0) {
-          stillListed -= 1;
+  const run = vi.fn(
+    async (
+      file: string,
+      args: readonly string[],
+      _options?: { timeoutMs?: number }
+    ): Promise<CommandResult> => {
+      expect(file).toBe("/bin/launchctl");
+      calls.push([...args]);
+      options.events?.push(args[0]!);
+      switch (args[0]) {
+        case "print":
+          if (bootedOut && options.unansweredAfterBootout) return unanswered;
+          if (stillListed > 0) {
+            stillListed -= 1;
+            return ok();
+          }
+          return loaded ? ok() : notFound;
+        case "bootout":
+          bootedOut = true;
+          if (options.bootoutSticks) return { code: 5, stdout: "", stderr: "Boot-out failed: 5" };
+          loaded = false;
+          stillListed = options.listedAfterBootout ?? 0;
+          return ok();
+        case "bootstrap": {
+          if (bootstrapFailures > 0) {
+            bootstrapFailures -= 1;
+            return { code: 5, stdout: "", stderr: "Bootstrap failed: 5: Input/output error" };
+          }
+          const content = options.files?.get(args[2]!);
+          if (
+            options.files &&
+            !(
+              content?.includes(`\t<key>Label</key>\n\t<string>${LABEL}</string>`) &&
+              content.includes(
+                `\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>/usr/bin/open</string>`
+              )
+            )
+          ) {
+            return { code: 5, stdout: "", stderr: "Bootstrap failed: 5: unreadable plist" };
+          }
+          if (!options.bootstrapLoadsNothing) loaded = true;
           return ok();
         }
-        return loaded ? ok() : notFound;
-      case "bootout":
-        bootedOut = true;
-        if (options.bootoutSticks) return { code: 5, stdout: "", stderr: "Boot-out failed: 5" };
-        loaded = false;
-        stillListed = options.listedAfterBootout ?? 0;
-        return ok();
-      case "bootstrap": {
-        if (bootstrapFailures > 0) {
-          bootstrapFailures -= 1;
-          return { code: 5, stdout: "", stderr: "Bootstrap failed: 5: Input/output error" };
-        }
-        const content = options.files?.get(args[2]!);
-        if (
-          options.files &&
-          !(
-            content?.includes(`\t<key>Label</key>\n\t<string>${LABEL}</string>`) &&
-            content.includes(
-              `\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>/usr/bin/open</string>`
-            )
-          )
-        ) {
-          return { code: 5, stdout: "", stderr: "Bootstrap failed: 5: unreadable plist" };
-        }
-        if (!options.bootstrapLoadsNothing) loaded = true;
-        return ok();
+        default:
+          throw new Error(`unexpected launchctl ${args.join(" ")}`);
       }
-      default:
-        throw new Error(`unexpected launchctl ${args.join(" ")}`);
     }
-  });
+  );
   return { run, calls, isLoaded: () => loaded };
 }
 
@@ -413,6 +419,10 @@ describe("createLaunchAgentScheduleJob", () => {
     );
     expect(commands(launchctl)).toEqual(["print", "bootout", "print"]);
     expect(files.files.get(FILE)).toBe("old");
+    // A status read that hangs is cut short rather than waited out.
+    for (const [, args, options] of launchctl.run.mock.calls) {
+      if (args[0] === "print") expect(options).toEqual({ timeoutMs: expect.any(Number) });
+    }
   });
 
   it("tries loading again before giving up, naming launchctl's answer", async () => {
@@ -449,6 +459,15 @@ describe("createLaunchAgentScheduleJob", () => {
     launchctl.calls.length = 0;
     await adapter.sync([], "Europe/London", { reload: false });
     expect(commands(launchctl)).toEqual(["print"]);
+  });
+
+  it("still unloads the job when its file won't go, and says so", async () => {
+    const { files, launchctl, adapter } = machine({}, {});
+    await adapter.sync([NINE], "Europe/London", { reload: false });
+    vi.mocked(files.fs.remove).mockRejectedValueOnce(new Error("EACCES"));
+
+    await expect(adapter.sync([], "Europe/London", { reload: false })).rejects.toThrow("EACCES");
+    expect(launchctl.isLoaded()).toBe(false);
   });
 
   it("removes the file even when the job won't unload, and says so", async () => {

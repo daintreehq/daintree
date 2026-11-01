@@ -164,7 +164,7 @@ export class ScheduleOsJobService {
     });
     await this.read(this.deps.listProjectIds());
     this.ready = true;
-    await this.request(false);
+    await this.request(false, true);
   }
 
   /**
@@ -209,8 +209,13 @@ export class ScheduleOsJobService {
     return this.loop ?? Promise.resolve();
   }
 
-  /** A pass that takes every change made before it ends. */
-  private request(reload: boolean): Promise<void> {
+  /**
+   * A pass that takes every change made before it ends. Once disposed, only
+   * startup's pass is still owed: a status read or repair still answering
+   * starts nothing a quit could cut off halfway.
+   */
+  private request(reload: boolean, owed = false): Promise<void> {
+    if (this.disposed && !owed) return this.settled();
     this.dirty = true;
     if (reload) this.reloadRequested = true;
     this.loop ??= this.run();
