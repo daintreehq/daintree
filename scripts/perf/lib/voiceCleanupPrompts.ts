@@ -1042,12 +1042,26 @@ const HAIKU_CLARIFY_3 = revise(HAIKU_CLARIFY_2, {
 
 // Review: a clarification settles a word that sounds like what it names,
 // even a plausible one ("Dev" for Dave), not only nonsense, as the examples
-// already showed; "that is" or "as in" alone is no sign of one.
+// already showed; "that is" or "as in" alone is no sign of one. Haiku read
+// that wider: it dropped a spelled-out name ("It's W-R-E-N") in 4 of 4 trials
+// and landed the reported passage in 1 of 4 against 3.
 const HAIKU_CLARIFY_4 = revise(HAIKU_CLARIFY_3, {
   core: [
     [
       " settles a word or fragment that makes no sense where it stands, even when it names a person and doesn't repeat the words around it.",
       ' settles an earlier word or fragment that sounds like what it names, even one that reads as a real word or name, a person\'s included, and even when it doesn\'t repeat the words around it. The words "that is" or "as in" alone are no sign of one: they have to name what an earlier word was.',
+    ],
+  ],
+});
+
+// Round 5: haiku-clarify3's rule, with the example's misheard name one that
+// makes no sense where it stands, as the rule says. It landed 40 of 56
+// trials against haiku-clarify3's 44, so Haiku keeps haiku-clarify3.
+const HAIKU_CLARIFY_5 = revise(HAIKU_CLARIFY_3, {
+  core: [
+    [
+      '- Target: "Loop in Dev on the migration, he owns the schema. That\'s Dave, as in Dave Kim."',
+      '- Target: "Loop in Day V on the migration, he owns the schema. That\'s Dave, as in Dave Kim."',
     ],
   ],
 });
@@ -1305,6 +1319,11 @@ export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
     description:
       "Haiku: haiku-clarify3 settling a word that sounds like the clarification, even a plausible one",
     instructionsFor: fixed(HAIKU_CLARIFY_4),
+  },
+  "haiku-clarify5": {
+    description:
+      "Haiku: haiku-clarify3 with the person example misheard as a word that makes no sense",
+    instructionsFor: fixed(HAIKU_CLARIFY_5),
   },
   "terra-clarify3": {
     description:

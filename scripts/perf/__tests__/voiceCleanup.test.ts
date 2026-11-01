@@ -1165,7 +1165,7 @@ describe("prompt variants", () => {
       PROMPT_VARIANTS["intent-opening"]!.instructionsFor("gpt-6.1-terra")
     );
     expect(production.instructionsFor("claude-haiku-5-5")).toEqual(
-      PROMPT_VARIANTS["haiku-clarify4"]!.instructionsFor("claude-haiku-5-5")
+      PROMPT_VARIANTS["haiku-clarify3"]!.instructionsFor("claude-haiku-5-5")
     );
     expect(production.instructionsFor("claude-haiku-5-5")).not.toEqual(
       PROMPT_VARIANTS["haiku-opening"]!.instructionsFor("claude-haiku-5-5")
