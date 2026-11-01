@@ -63,7 +63,7 @@ export function WorkspaceRootRow({
   const menuActions = useWorkspaceRootMenuActions(workspace);
 
   const { visibleStates, label: sessionAriaLabel } = useMemo(
-    () => summarizeSessionStates(counts.byState, counts.total, counts.unread),
+    () => summarizeSessionStates(counts.byState, counts.total, counts.unread, counts.blocked),
     [counts]
   );
 

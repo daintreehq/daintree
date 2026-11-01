@@ -40,7 +40,8 @@ import {
 } from "./PluginTrayButton";
 import { LAUNCHER_PANEL_ITEMS } from "./launcherPanelItems";
 import { deriveAgentAttentionStates } from "@/lib/agentAttentionStates";
-import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
+import { useFleetBandRunIds } from "@/hooks/useRunFleetBand";
+import { NEEDS_YOU_BANDS } from "@/lib/fleetAttention";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { DockLaunchButton } from "./DockLaunchButton";
 import { useRecipeStore } from "@/store/recipeStore";
@@ -275,10 +276,10 @@ export function Toolbar({
   // derivation so the overflow dot matches the visible agent button; computed
   // inside useShallow so agent ticks that don't change a pip state don't
   // re-render the whole toolbar (issue #7451 pattern).
-  const handBackRunIds = useHandBackRunIds();
+  const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
   const agentAttentionStates = usePanelStore(
     useShallow((s) =>
-      deriveAgentAttentionStates(s.panelsById, s.panelIds, activeWorktreeId, handBackRunIds)
+      deriveAgentAttentionStates(s.panelsById, s.panelIds, activeWorktreeId, needsYouRunIds)
     )
   );
 

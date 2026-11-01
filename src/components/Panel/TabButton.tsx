@@ -24,7 +24,7 @@ import {
   SESSION_ICONS,
   SESSION_LABELS,
 } from "@/components/Worktree/terminalStateConfig";
-import { useSessionPresentation } from "@/hooks/useRunHandBackState";
+import { useRunSessionPresentation } from "@/hooks/useRunSessionPresentation";
 import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import { DURATION_100 } from "@/lib/animationUtils";
@@ -324,9 +324,9 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     [isActive, onClick, sortableKeyDown, startEditing]
   );
 
-  // A hand-back draws unread or done here as it does on the pane's own chip,
-  // never as the amber waiting ring.
-  const displayAgentState = useSessionPresentation(
+  // The run's fleet band decides the glyph, as on the pane's own chip: amber
+  // only for an unread Canopy ask.
+  const displayAgentState = useRunSessionPresentation(
     id,
     getTerminalAgentDisplayState(chrome, agentState)
   );

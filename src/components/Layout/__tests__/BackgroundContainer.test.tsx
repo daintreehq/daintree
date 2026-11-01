@@ -5,6 +5,9 @@ import type { PtyPanelData } from "@shared/types/panel";
 import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
 import type { AgentState } from "@/types";
 import type { TrashedTerminalGroupMetadata } from "@/store/slices";
+import { act } from "react";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import type { FleetRunRow } from "@shared/types/ipc/fleet";
 
 const watchPanelMock = vi.fn();
 const unwatchPanelMock = vi.fn();
@@ -199,6 +202,25 @@ vi.mock("@/components/Terminal/TerminalContextMenu", () => ({
 
 import { BackgroundContainer } from "../BackgroundContainer";
 
+/** The fleet reporting an unread Canopy ask on each of these runs: the only waits counted. */
+function deliverAsks(ids: string[]) {
+  act(() => {
+    useFleetSnapshotStore.getState().applySnapshot({
+      runs: ids.map((runId) => ({
+        runId,
+        workspaceId: "p1",
+        spawnedAt: 1,
+        cwd: "/tmp",
+        agentState: "waiting" as const,
+        canopy: { kind: "asked" as const, quote: "Run it?", readAt: 1, seen: false },
+      })),
+      changedAt: 2,
+      degraded: false,
+      lastSuccessfulAt: 2,
+    });
+  });
+}
+
 function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id: "t1",
@@ -216,6 +238,7 @@ function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
 }
 
 beforeEach(() => {
+  useFleetSnapshotStore.setState({ snapshot: null });
   markEscapeYieldedMock.mockReset();
   watchPanelMock.mockReset();
   unwatchPanelMock.mockReset();
@@ -271,12 +294,25 @@ describe("BackgroundContainer", () => {
       );
     });
 
+    it("leaves a prompt that asks nothing out of the waiting count", () => {
+      mockTerminals = [
+        makeTerminal({ id: "t1", agentState: "waiting" }),
+        makeTerminal({ id: "t2", agentState: "waiting" }),
+      ];
+      render(<BackgroundContainer />);
+      const trigger = screen.getByRole("button", { name: /^Background: 2 panels/ });
+      expect(trigger.getAttribute("aria-label")).toBe(
+        "Background: 2 panels across all worktrees, all in this one"
+      );
+    });
+
     it("appends waiting count when terminals are waiting", () => {
       mockTerminals = [
         makeTerminal({ id: "t1", agentState: "waiting" }),
         makeTerminal({ id: "t2", agentState: "waiting" }),
         makeTerminal({ id: "t3", agentState: "working" }),
       ];
+      deliverAsks(["t1", "t2", "t3"]);
       render(<BackgroundContainer />);
       const trigger = screen.getByRole("button", { name: /^Background: 3 panels/ });
       expect(trigger.getAttribute("aria-label")).toBe(
@@ -293,17 +329,18 @@ describe("BackgroundContainer", () => {
           worktreeId: "wt-2",
           title: "Fix auth bug",
           agentState: "waiting",
-          activityHeadline: "Awaiting permission",
+          activityHeadline: "Asked for permission",
           lastStateChange: 1700000000123,
         }),
       ];
+      deliverAsks(["t1"]);
       render(<BackgroundContainer />);
       const row = screen.getByTestId("background-single-item");
       const text = row.textContent ?? "";
       expect(text).toContain("Fix auth bug");
       expect(text).toContain("feature-ui");
       expect(text).toContain("waiting");
-      expect(text).toContain("Awaiting permission");
+      expect(text).toContain("Asked for permission");
       expect(within(row).getByTestId("live-time-ago")).toBeTruthy();
     });
 
@@ -329,12 +366,59 @@ describe("BackgroundContainer", () => {
         makeTerminal({ id: "t-work", title: "b", agentState: "working" }),
         makeTerminal({ id: "t-idle", title: "c", agentState: "idle" }),
       ];
+      deliverAsks(["t-wait"]);
       render(<BackgroundContainer />);
       const rows = screen.getAllByTestId("background-single-item");
       expect(rows).toHaveLength(3);
       expect(new Set(rows.map((row) => row.className)).size).toBe(1);
       for (const row of rows) expect(row.className).not.toMatch(/panel-state-|border-l-/);
       expect(screen.getAllByText(/waiting/i).length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("row glyphs from the fleet band", () => {
+    it("draws each row the way its pane does: amber only for the unread ask", () => {
+      mockTerminals = [
+        makeTerminal({ id: "ask", title: "a", agentState: "waiting" }),
+        makeTerminal({ id: "prompt", title: "b", agentState: "waiting" }),
+        makeTerminal({ id: "review", title: "c", agentState: "waiting" }),
+        makeTerminal({ id: "done", title: "d", agentState: "waiting" }),
+      ];
+      act(() => {
+        useFleetSnapshotStore.getState().applySnapshot({
+          runs: [
+            {
+              runId: "ask",
+              canopy: { kind: "asked", quote: "Run it?", readAt: 1, seen: false } as const,
+            },
+            { runId: "prompt" },
+            { runId: "review", handBack: { stoppedAt: 1 } },
+            { runId: "done", handBack: { stoppedAt: 1, seenAt: 2 } },
+          ].map((run): FleetRunRow => ({
+            workspaceId: "p1",
+            spawnedAt: 1,
+            cwd: "/tmp",
+            agentState: "waiting" as const,
+            ...run,
+          })),
+          changedAt: 2,
+          degraded: false,
+          lastSuccessfulAt: 2,
+        });
+      });
+      render(<BackgroundContainer />);
+      const row = (title: string) =>
+        screen
+          .getAllByTestId("background-single-item")
+          .find((r) => r.textContent?.startsWith(title))!;
+      expect(row("a").querySelector(".text-state-waiting")).not.toBeNull();
+      expect(row("a").textContent).toContain("waiting");
+      for (const title of ["b", "c", "d"]) {
+        expect(row(title).querySelector(".text-state-waiting")).toBeNull();
+      }
+      expect(row("b").textContent).not.toMatch(/waiting|unread|finished/);
+      expect(row("c").textContent).toContain("unread");
+      expect(row("d").textContent).toContain("finished");
     });
   });
 
@@ -544,6 +628,27 @@ describe("BackgroundContainer", () => {
       // Expanded by default → the toggle offers to collapse, not expand.
       expect(screen.getByRole("button", { name: "Collapse group" })).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Expand group" })).toBeNull();
+    });
+
+    it("counts only the group's unread Canopy ask as waiting, not its bare prompt", () => {
+      const groupMetadata: TrashedTerminalGroupMetadata = {
+        panelIds: ["t1", "t2"],
+        activeTabId: "t1",
+        location: "dock",
+        worktreeId: "wt-1",
+      };
+      mockTerminals = [
+        makeTerminal({ id: "t1", title: "claude", agentState: "waiting" }),
+        makeTerminal({ id: "t2", title: "gemini", agentState: "waiting" }),
+      ];
+      mockBackgroundedTerminals = new Map([
+        ["t1", { groupRestoreId: "g1", groupMetadata }],
+        ["t2", { groupRestoreId: "g1", groupMetadata }],
+      ]);
+      deliverAsks(["t1"]);
+      render(<BackgroundContainer />);
+      const header = screen.getByRole("button", { name: "Collapse group" }).parentElement!;
+      expect(header.textContent).toContain("· 1 waiting");
     });
 
     it("gives every member its own Restore, the row's keyboard target", () => {

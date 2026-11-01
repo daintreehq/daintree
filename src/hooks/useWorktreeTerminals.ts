@@ -7,15 +7,18 @@ import type { WaitingReason } from "@shared/types/agent";
 import { getDominantAgentState } from "@/components/Worktree/terminalStateConfig";
 import { deriveTerminalChrome, type TerminalChromeInput } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
-import { resolveSessionPresentation, type HandBackSeenState } from "@/lib/handBackPresentation";
-import { useRunHandBackStates } from "./useRunHandBackState";
+import { resolvePaneSessionPresentation } from "@/lib/paneSessionPresentation";
+import type { FleetBand } from "@/lib/fleetAttention";
+import { useRunFleetBands } from "./useRunSessionPresentation";
 
 export interface WorktreeTerminalCounts {
   total: number;
-  /** Sessions by the state their glyph draws, `unread` hand-backs excepted. */
+  /** Sessions by the state their glyph draws, `unread` and `blocked` excepted. */
   byState: Record<AgentState, number>;
   /** Hand-backs the user has not read yet. */
   unread: number;
+  /** Agents stopped on an error. */
+  blocked: number;
 }
 
 export interface UseWorktreeTerminalsResult {
@@ -30,28 +33,31 @@ type AggregateInput = TerminalChromeInput & {
   id: string;
   agentState?: AgentState;
   waitingReason?: WaitingReason;
+  isRestarting?: boolean;
+  runtimeStatus?: string;
 };
 
-const NO_HAND_BACK = (): HandBackSeenState => "none";
+const NO_BAND = (): FleetBand | undefined => undefined;
 
 /**
  * Pure aggregator over a worktree's terminal list, exposed for unit tests.
  *
- * Uses the same display-state coercion as compact terminal indicators: active
- * states are credited during the identity boot window, live-agent idle/missing/
- * completed states count as waiting, and exited or plain-shell terminals count
- * as idle so stale states don't bleed into badges.
- *
- * A hand-back the user has read counts as completed and an unread one as
- * `unread`, so neither inflates the waiting count. `agentStates` stays on the
- * display state: reading a stop must not change the worktree's dominant state.
+ * Counts each session as its glyph draws it: the compact indicators' display
+ * state (active states credited during the identity boot window, a live
+ * agent's idle, missing or completed state shown as waiting, exited and
+ * plain-shell terminals idle) through the run's fleet band, as the pane does.
+ * Only an unread Canopy ask counts as waiting; a hand-back is `unread` or
+ * completed, an error wait `blocked`, and a prompt that asks nothing — or a
+ * run the fleet hasn't reported — idle. `agentStates` stays on the display
+ * state: reading a stop must not change the worktree's dominant state.
  */
 export function aggregateAgentStates(
   terminals: AggregateInput[],
-  handBackOf: (terminalId: string) => HandBackSeenState = NO_HAND_BACK
+  bandOf: (terminalId: string) => FleetBand | undefined = NO_BAND
 ): {
   byState: Record<AgentState, number>;
   unread: number;
+  blocked: number;
   agentStates: (AgentState | undefined)[];
 } {
   const byState: Record<AgentState, number> = {
@@ -63,19 +69,17 @@ export function aggregateAgentStates(
     exited: 0,
   };
   let unread = 0;
+  let blocked = 0;
   const agentStates: (AgentState | undefined)[] = [];
 
   terminals.forEach((terminal) => {
     const rawState = terminal.agentState;
     const displayState = getTerminalAgentDisplayState(deriveTerminalChrome(terminal), rawState);
-    const presented = resolveSessionPresentation(
-      displayState,
-      rawState,
-      terminal.waitingReason,
-      handBackOf(terminal.id)
-    );
+    const presented = resolvePaneSessionPresentation(displayState, bandOf(terminal.id), terminal);
     if (presented === "unread") {
       unread += 1;
+    } else if (presented === "blocked") {
+      blocked += 1;
     } else {
       const state = presented ?? "idle";
       byState[state] = (byState[state] || 0) + 1;
@@ -86,7 +90,7 @@ export function aggregateAgentStates(
     }
   });
 
-  return { byState, unread, agentStates };
+  return { byState, unread, blocked, agentStates };
 }
 
 function useDebouncedValue<T>(value: T, delay: number): T {
@@ -135,13 +139,12 @@ export function useWorktreeTerminals(worktreeId: string): UseWorktreeTerminalsRe
   );
 
   const terminalIds = useMemo(() => terminals.map((t) => t.id), [terminals]);
-  const handBackStates = useRunHandBackStates(terminalIds);
+  const bands = useRunFleetBands(terminalIds);
 
   const result = useMemo(() => {
-    const handBackById = new Map(terminalIds.map((id, i) => [id, handBackStates[i] ?? "none"]));
-    const { byState, unread, agentStates } = aggregateAgentStates(
-      terminals,
-      (id) => handBackById.get(id) ?? "none"
+    const bandById = new Map(terminalIds.map((id, i) => [id, bands[i]]));
+    const { byState, unread, blocked, agentStates } = aggregateAgentStates(terminals, (id) =>
+      bandById.get(id)
     );
     const dominantAgentState = getDominantAgentState(agentStates);
 
@@ -151,10 +154,11 @@ export function useWorktreeTerminals(worktreeId: string): UseWorktreeTerminalsRe
         total: terminals.length,
         byState,
         unread,
+        blocked,
       },
       dominantAgentState,
     };
-  }, [terminals, terminalIds, handBackStates]);
+  }, [terminals, terminalIds, bands]);
 
   // Debounce counts to prevent UI jitter during rapid state changes (e.g., app restart)
   const debouncedCounts = useDebouncedValue(result.counts, 250);

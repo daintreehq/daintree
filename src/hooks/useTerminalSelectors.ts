@@ -8,12 +8,12 @@ import { getNarrowPanels } from "@/store/slices/panelRegistry/selectors";
 import { panelMatchesWorktreeScope } from "@/store/slices/panelRegistry/worktreeIndex";
 import { isTerminalOrphaned, isTerminalVisible } from "@/lib/terminalVisibility";
 import { isTerminalErrorClusterEligible } from "@/store/fleetEligibility";
-import { isAskingWait } from "@/lib/handBackPresentation";
-import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
+import { isNeedsYouPane } from "@/lib/paneSessionPresentation";
 import { useFleetBandRunIds } from "@/hooks/useRunFleetBand";
 import {
   ATTENTION_FILTER_BANDS,
   DEMAND_BANDS,
+  NEEDS_YOU_BANDS,
   UNREAD_FILTER_BANDS,
   type FleetBand,
 } from "@/lib/fleetAttention";
@@ -62,9 +62,10 @@ export function useTerminalNotificationCounts(blurTime?: number | null): {
   waitingCount: number;
 } {
   const worktreeIds = useWorktreeIds();
-  // A hand-back is not asking for anything, so it never reaches the title's
-  // `(N)` or the Dock badge — the same call every other waiting count makes.
-  const handBackIds = useHandBackRunIds();
+  // Only an unread Canopy ask reaches the title's `(N)` or the Dock badge — the
+  // same call every other waiting count makes. A prompt that asks nothing and
+  // a hand-back don't.
+  const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
 
   return usePanelStore(
     useShallow((state) => {
@@ -78,7 +79,7 @@ export function useTerminalNotificationCounts(blurTime?: number | null): {
         if (!isPtyPanel(panel)) continue;
         if (!isTerminalVisible(panel, state.isInTrash, worktreeIds)) continue;
 
-        if (!isAskingWait(handBackIds, panel)) continue;
+        if (!isNeedsYouPane(needsYouRunIds, panel)) continue;
 
         if (blurTime !== undefined) {
           if (panel.lastStateChange == null) continue;
@@ -236,7 +237,7 @@ export function useBackgroundPanelStats(
   workingCount: number;
   waitingCount: number;
 } {
-  const handBackIds = useHandBackRunIds();
+  const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
   return usePanelStore(
     useShallow((state) => {
       if (!enabled) return EMPTY_BACKGROUND_PANEL_STATS;
@@ -259,7 +260,7 @@ export function useBackgroundPanelStats(
         cells.add(groupId ?? panel.id);
         if (isPtyPanel(panel)) {
           if (panel.agentState === "working") working++;
-          else if (isAskingWait(handBackIds, panel)) waiting++;
+          else if (isNeedsYouPane(needsYouRunIds, panel)) waiting++;
         }
       }
       return { activeCount: cells.size, workingCount: working, waitingCount: waiting };

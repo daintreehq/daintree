@@ -7,6 +7,9 @@ import { useCanopyStore } from "@/store/canopyStore";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import type { CanopyCard as CanopyCardData, CanopyCategory } from "@shared/types/ipc/canopy";
 import { buildPilotGroups } from "@/components/Pilot/pilotRows";
+import { bandForRun } from "@shared/utils/fleetBands";
+import { usePanelStore } from "@/store/panelStore";
+import type { PtyPanelData } from "@shared/types/panel";
 import { buildCanopyInbox, type CanopyItem } from "../canopyModel";
 import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voiceRecordingStore";
 import { DICTATION_OWNER_ATTR, canopyReplyVoiceId } from "@/services/canopyReplyDictation";
@@ -1116,9 +1119,11 @@ describe("CanopyCard", () => {
     expect(container.querySelector("button[data-armed]")).toBeNull();
   });
   describe("the pane's state chip", () => {
+    // The row carries the run's band, as the fleet places it, beside the run.
     function withRun(overrides: Partial<FleetRunRow>): CanopyItem {
       const base = itemFor("finished");
-      return { ...base, row: { ...base.row, run: { ...base.row.run, ...overrides } } };
+      const run = { ...base.row.run, ...overrides };
+      return { ...base, row: { ...base.row, run, band: bandForRun(run) } };
     }
     const chip = (container: HTMLElement) =>
       container.querySelector('[role="status"][aria-label^="Agent state"]');
@@ -1137,15 +1142,99 @@ describe("CanopyCard", () => {
       }
     });
 
-    it("keeps an approval wait on the waiting chip whatever the hand-back says", () => {
-      const { container } = renderCard(
+    it("draws an approval wait amber only for an unread Canopy ask, whatever the hand-back says", () => {
+      const approval = {
+        agentState: "waiting",
+        waitingReason: "approval",
+        handBack: { stoppedAt: NOW - 2, seenAt: NOW - 1 },
+      } as const;
+      const asked = renderCard(
         withRun({
-          agentState: "waiting",
-          waitingReason: "approval",
-          handBack: { stoppedAt: NOW - 2, seenAt: NOW - 1 },
+          ...approval,
+          canopy: { kind: "asked", quote: "Run npm test?", readAt: NOW - 1, seen: false },
         })
       );
-      expect(chip(container)?.getAttribute("aria-label")).toBe("Agent state: waiting");
+      expect(chip(asked.container)?.getAttribute("aria-label")).toBe("Agent state: waiting");
+      asked.unmount();
+
+      // With no reading it is the patterns' guess: unread until looked at.
+      const guessed = renderCard(withRun(approval));
+      expect(chip(guessed.container)?.getAttribute("aria-label")).toBe("Agent state: unread");
+    });
+
+    it("draws nothing for a prompt that asks nothing", () => {
+      const { container } = renderCard(withRun({ agentState: "waiting" }));
+      expect(chip(container)).toBeNull();
+    });
+
+    describe("the pane this view holds speaks for the run", () => {
+      const ask = { kind: "asked", quote: "Run npm test?", readAt: NOW - 1, seen: false } as const;
+      const viewWindow = window as { __DAINTREE_INITIAL_PROJECT__?: { id: string } };
+
+      function holdPane(observation: Partial<PtyPanelData>) {
+        const pane = {
+          id: "run-1",
+          kind: "terminal",
+          title: "Claude",
+          location: "grid",
+          cwd: "/Users/dev/app",
+          cols: 80,
+          rows: 24,
+          launchAgentId: "claude",
+          ...observation,
+        } as PtyPanelData;
+        usePanelStore.setState({ panelsById: { "run-1": pane }, panelIds: ["run-1"] });
+      }
+
+      afterEach(() => {
+        delete viewWindow.__DAINTREE_INITIAL_PROJECT__;
+        usePanelStore.setState({ panelsById: {}, panelIds: [] });
+      });
+
+      it("drops the ask's amber once its own pane restarts or works, ahead of the row", () => {
+        viewWindow.__DAINTREE_INITIAL_PROJECT__ = { id: "p1" };
+        holdPane({ agentState: "waiting", isRestarting: true });
+        const restarting = renderCard(withRun({ agentState: "waiting", canopy: ask }));
+        expect(chip(restarting.container)).toBeNull();
+        restarting.unmount();
+
+        holdPane({ agentState: "working" });
+        const working = renderCard(withRun({ agentState: "waiting", canopy: ask }));
+        expect(chip(working.container)?.getAttribute("aria-label")).toBe("Agent state: working");
+      });
+
+      it("follows its own pane past an exit or a stop the row still reports", () => {
+        viewWindow.__DAINTREE_INITIAL_PROJECT__ = { id: "p1" };
+        // The row as the fleet built it for an exited run: its chrome has exited.
+        const exitedRun = { ...itemFor("finished").row.run, agentState: "exited" as const };
+        const exited = buildPilotGroups([exitedRun], {
+          workspaces: new Map([["p1", { kind: "project", name: "app" }]]),
+          currentWorkspaceId: null,
+          nowMs: NOW,
+        }).flatMap((group) => group.rows)[0]!;
+        const base = itemFor("finished");
+        holdPane({ agentState: "working", runtimeStatus: "running" });
+        const restarted = renderCard({ ...base, row: { ...base.row, ...exited } } as CanopyItem);
+        expect(chip(restarted.container)?.getAttribute("aria-label")).toBe("Agent state: working");
+        restarted.unmount();
+
+        holdPane({ agentState: "waiting", runtimeStatus: "exited" });
+        const gone = renderCard(withRun({ agentState: "waiting", canopy: ask }));
+        expect(chip(gone.container)).toBeNull();
+        gone.unmount();
+
+        // An exit on record outranks a stale working state, as on the pane.
+        holdPane({ agentState: "working", runtimeStatus: "exited" });
+        const exitedPane = renderCard(withRun({ agentState: "working" }));
+        expect(chip(exitedPane.container)).toBeNull();
+      });
+
+      it("keeps the row's own observation for another project's run under the same id", () => {
+        viewWindow.__DAINTREE_INITIAL_PROJECT__ = { id: "p2" };
+        holdPane({ agentState: "waiting", isRestarting: true });
+        const { container } = renderCard(withRun({ agentState: "waiting", canopy: ask }));
+        expect(chip(container)?.getAttribute("aria-label")).toBe("Agent state: waiting");
+      });
     });
 
     it("draws nothing for a completion with no hand-back", () => {

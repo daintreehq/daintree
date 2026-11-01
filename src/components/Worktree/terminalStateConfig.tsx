@@ -10,8 +10,7 @@ import {
   BlockedCircle,
 } from "@/components/icons";
 import { pluralize } from "@/lib/pluralize";
-import type { SessionPresentationState } from "@/lib/handBackPresentation";
-import type { PaneSessionPresentationState } from "@/lib/paneSessionPresentation";
+import type { SessionPresentationState } from "@/lib/paneSessionPresentation";
 
 export const STATE_ICONS = {
   working: SpinnerCircle,
@@ -50,48 +49,35 @@ export const STATE_PRIORITY = [
 ] as const satisfies readonly AgentState[];
 
 /**
- * The state maps for a session glyph, which adds the presentation-only `unread`
- * hand-back to the observed states. Neutral like `completed`: a turn handed
- * back is not the agent asking for anything, so it never takes the waiting hue.
+ * The state maps for a session glyph, which add the presentation-only states
+ * to the observed ones. `unread` is a hand-back the user hasn't read: neutral
+ * like `completed`, since a turn handed back is not the agent asking for
+ * anything. `blocked` is an error wait, in the failure mark and hue a pane
+ * header also gives a plugin's failed activity, so an agent stopped on an
+ * error never wears the waiting ring.
  */
 export const SESSION_ICONS = {
   ...STATE_ICONS,
   unread: UnreadCircle,
+  blocked: BlockedCircle,
 } satisfies Record<SessionPresentationState, React.ComponentType<{ className?: string }>>;
 
 export const SESSION_COLORS = {
   ...STATE_COLORS,
   unread: "text-text-primary",
+  blocked: "text-status-error",
 } as const satisfies Record<SessionPresentationState, string>;
 
 export const SESSION_LABELS = {
   ...STATE_LABELS,
   unread: "unread",
-} as const satisfies Record<SessionPresentationState, string>;
-
-/**
- * The state maps for a pane header's glyph, which adds `blocked` for an error
- * wait: the same failure mark and hue the header gives a plugin's failed
- * activity, so an agent stopped on an error never wears the waiting ring.
- */
-export const PANE_SESSION_ICONS = {
-  ...SESSION_ICONS,
-  blocked: BlockedCircle,
-} satisfies Record<PaneSessionPresentationState, React.ComponentType<{ className?: string }>>;
-
-export const PANE_SESSION_COLORS = {
-  ...SESSION_COLORS,
-  blocked: "text-status-error",
-} as const satisfies Record<PaneSessionPresentationState, string>;
-
-export const PANE_SESSION_LABELS = {
-  ...SESSION_LABELS,
   blocked: "blocked",
-} as const satisfies Record<PaneSessionPresentationState, string>;
+} as const satisfies Record<SessionPresentationState, string>;
 
 export const SESSION_PRIORITY = [
   "working",
   "directing",
+  "blocked",
   "waiting",
   "unread",
   "completed",
@@ -174,15 +160,16 @@ export interface SessionStateSummary {
  * of the breakdown on purpose, so the total is stated separately rather than
  * left to be added up from the segments — it would come out short.
  *
- * `unread` counts hand-backs the user has not read, kept apart from `byState`
- * because `byState` holds observed states only.
+ * `unread` counts hand-backs the user has not read and `blocked` error waits,
+ * kept apart from `byState` because `byState` holds observed states only.
  */
 export function summarizeSessionStates(
   byState: Record<AgentState, number>,
   total: number,
-  unread = 0
+  unread = 0,
+  blocked = 0
 ): SessionStateSummary {
-  const counts: Record<SessionPresentationState, number> = { ...byState, unread };
+  const counts: Record<SessionPresentationState, number> = { ...byState, unread, blocked };
   const visibleStates = SESSION_PRIORITY.filter((s) => s !== "idle" && counts[s] > 0).map((s) => ({
     state: s,
     count: counts[s],

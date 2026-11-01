@@ -1,4 +1,4 @@
-import type { SessionPresentationState } from "@/lib/handBackPresentation";
+import type { SessionPresentationState } from "@/lib/paneSessionPresentation";
 import { cn } from "@/lib/utils";
 import { SESSION_ICONS, SESSION_COLORS } from "../terminalStateConfig";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
@@ -7,9 +7,10 @@ interface CollapsedSessionIndicatorsProps {
   visibleStates: { state: SessionPresentationState; count: number }[];
   sessionAriaLabel: string;
   /**
-   * Applied to every group but the one that matters most (waiting, else the
-   * first), so a cramped row keeps a single state and gives the rest of its
-   * width to the title. The tooltip and accessible name keep the breakdown.
+   * Applied to every group but the one that matters most (waiting, else
+   * blocked, else the first), so a cramped row keeps a single state and gives
+   * the rest of its width to the title. The tooltip and accessible name keep
+   * the breakdown.
    */
   secondaryClassName?: string;
 }
@@ -42,15 +43,17 @@ export function CollapsedSessionIndicators({
   sessionAriaLabel,
   secondaryClassName,
 }: CollapsedSessionIndicatorsProps) {
-  // Waiting, when present, is drawn last: nearest the card's controls, at the
-  // one x every card's waiting ring lands on, with any other states ahead of
-  // it rather than pushing it along the row.
+  // The state that wants the user — waiting, else blocked — is drawn last:
+  // nearest the card's controls, at the one x every card's ring lands on, with
+  // any other states ahead of it rather than pushing it along the row.
   const waitingAt = visibleStates.findIndex((v) => v.state === "waiting");
+  const leadAt =
+    waitingAt !== -1 ? waitingAt : visibleStates.findIndex((v) => v.state === "blocked");
   const ordered =
-    waitingAt === -1
+    leadAt === -1
       ? visibleStates
-      : [...visibleStates.filter((_, i) => i !== waitingAt), visibleStates[waitingAt]!];
-  const leadIndex = waitingAt === -1 ? 0 : ordered.length - 1;
+      : [...visibleStates.filter((_, i) => i !== leadAt), visibleStates[leadAt]!];
+  const leadIndex = leadAt === -1 ? 0 : ordered.length - 1;
   return (
     // The breakdown is the only full reading once a narrow row drops groups,
     // so it stays while hovered or focused and can be hovered itself.

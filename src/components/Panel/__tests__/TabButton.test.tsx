@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 import React from "react";
 import { act } from "react";
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { TabButton } from "../TabButton";
 import { inlineRenameFieldClassName } from "../inlineRenameField";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { GLYPH_SELECTOR } from "@/components/icons/__tests__/glyphBox";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import type { FleetRunRow } from "@shared/types/ipc/fleet";
 
 // Each tab and session row owns a TerminalContextMenu, which reads the worktree
 // store; its scoping is pinned in its own suite, so it is a passthrough here.
@@ -387,18 +389,44 @@ describe("TabButton", () => {
       expect(queryStateIcon(container)).toBeUndefined();
     });
 
-    it("renders waiting icon when agentState='idle' but agent chrome is live", () => {
-      const { container } = render(
-        <TabButton
-          {...defaultProps}
-          chrome={deriveTerminalChrome({ launchAgentId: "claude" })}
-          agentState="idle"
-        />
-      );
-      expect(queryStateIcon(container)).toBeDefined();
+    afterEach(() => {
+      useFleetSnapshotStore.setState({ snapshot: null });
     });
 
-    it("renders waiting icon when agentState='completed' and agent chrome is live", () => {
+    /** The fleet reporting the tab's run, so its band is known. */
+    function deliverRun(overrides: Partial<FleetRunRow>) {
+      act(() => {
+        useFleetSnapshotStore.getState().applySnapshot({
+          runs: [
+            { runId: defaultProps.id, workspaceId: "p1", spawnedAt: 1, cwd: "/repo", ...overrides },
+          ],
+          changedAt: 2,
+          degraded: false,
+          lastSuccessfulAt: 2,
+        });
+      });
+    }
+
+    const UNREAD_ASK = { kind: "asked", quote: "Run it?", readAt: 1, seen: false } as const;
+
+    it.each(["idle", "completed", undefined] as const)(
+      "draws no glyph for a live agent at a prompt (%s) that asks nothing",
+      (agentState) => {
+        const { container } = render(
+          <TabButton
+            {...defaultProps}
+            chrome={deriveTerminalChrome({ launchAgentId: "claude" })}
+            agentState={agentState}
+          />
+        );
+        expect(queryStateIcon(container)).toBeUndefined();
+        deliverRun({ agentState: "waiting" });
+        expect(queryStateIcon(container)).toBeUndefined();
+      }
+    );
+
+    it("draws the amber ring only for an unread Canopy ask, on a finished turn too", () => {
+      deliverRun({ agentState: "completed", canopy: UNREAD_ASK });
       const { container } = render(
         <TabButton
           {...defaultProps}
@@ -406,15 +434,32 @@ describe("TabButton", () => {
           agentState="completed"
         />
       );
-      const waitingIcon = container.querySelector(".text-state-waiting");
-      expect(waitingIcon).not.toBeNull();
+      expect(container.querySelector(".text-state-waiting")).not.toBeNull();
+      expect(screen.getByRole("tab", { name: /Agent waiting/ })).not.toBeNull();
     });
 
-    it("renders waiting icon when agentState is undefined but agent chrome is live", () => {
+    it("draws an ask amber on live agent chrome before the pane reports any state", () => {
+      // The boot window: agent chrome is live, the pane has observed nothing yet.
+      deliverRun({ agentState: "waiting", canopy: UNREAD_ASK });
       const { container } = render(
         <TabButton {...defaultProps} chrome={deriveTerminalChrome({ launchAgentId: "claude" })} />
       );
-      expect(queryStateIcon(container)).toBeDefined();
+      expect(container.querySelector(".text-state-waiting")).not.toBeNull();
+      expect(screen.getByRole("tab", { name: /Agent waiting/ })).not.toBeNull();
+    });
+
+    it("draws a hand-back unread, then finished once read, and an error wait blocked", () => {
+      const chrome = deriveTerminalChrome({ launchAgentId: "claude" });
+      const { container } = render(
+        <TabButton {...defaultProps} chrome={chrome} agentState="waiting" />
+      );
+      deliverRun({ agentState: "waiting", handBack: { stoppedAt: 1 } });
+      expect(screen.getByRole("tab", { name: /Agent unread/ })).not.toBeNull();
+      deliverRun({ agentState: "waiting", handBack: { stoppedAt: 1, seenAt: 2 } });
+      expect(screen.getByRole("tab", { name: /Agent finished/ })).not.toBeNull();
+      deliverRun({ agentState: "waiting", waitingReason: "error" });
+      expect(screen.getByRole("tab", { name: /Agent blocked/ })).not.toBeNull();
+      expect(container.querySelector(".text-state-waiting")).toBeNull();
     });
 
     it("does not render state icon when agentState is undefined (plain shell)", () => {
@@ -433,6 +478,7 @@ describe("TabButton", () => {
     });
 
     it("uses the effective state label when state is coerced (idle -> waiting)", () => {
+      deliverRun({ agentState: "waiting", canopy: UNREAD_ASK });
       render(
         <TabButton
           {...defaultProps}

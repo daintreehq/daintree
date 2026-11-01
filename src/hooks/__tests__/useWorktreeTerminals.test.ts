@@ -5,6 +5,7 @@ import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import type { PtyPanelData } from "@shared/types/panel";
+import { bandForRun, type FleetBand } from "@/lib/fleetAttention";
 import { aggregateAgentStates, useWorktreeTerminals } from "../useWorktreeTerminals";
 
 // #6650 — Active agentState (working/waiting/directing) credited to counts
@@ -39,17 +40,19 @@ describe("aggregateAgentStates (#6650)", () => {
     expect(agentStates).toEqual([]);
   });
 
-  it("coerces live-agent idle/completed states to waiting for badge display", () => {
+  it("counts a live agent at its prompt as idle, not waiting, with no band behind it", () => {
     const { byState, agentStates } = aggregateAgentStates([
       term({ launchAgentId: "claude", agentState: "working" }),
       term({ launchAgentId: "claude", agentState: "completed" }),
       term({ launchAgentId: "claude", agentState: "idle" }),
+      term({ launchAgentId: "claude", agentState: "waiting" }),
     ]);
     expect(byState.working).toBe(1);
-    expect(byState.waiting).toBe(2);
+    expect(byState.waiting).toBe(0);
     expect(byState.completed).toBe(0);
-    expect(byState.idle).toBe(0);
-    expect(agentStates).toEqual(["working", "waiting", "waiting"]);
+    expect(byState.idle).toBe(3);
+    // The dominant state still reads the display state the badge smooths to.
+    expect(agentStates).toEqual(["working", "waiting", "waiting", "waiting"]);
   });
 
   it("treats a plain shell with no agentState as idle", () => {
@@ -58,44 +61,95 @@ describe("aggregateAgentStates (#6650)", () => {
     expect(agentStates).toEqual([]);
   });
 
-  describe("hand-backs (#13235)", () => {
+  describe("fleet bands (#16057)", () => {
     const agent = (id: string, overrides: Partial<PtyPanelData> = {}) =>
       term({ id, launchAgentId: "claude", agentState: "waiting", ...overrides });
 
-    it("counts a read hand-back as completed and an unread one apart from waiting", () => {
-      const states = new Map<string, "seen" | "unseen">([
-        ["seen", "seen"],
-        ["unseen", "unseen"],
+    it("counts done as completed, review apart as unread, and needs-you alone as waiting", () => {
+      const bands = new Map<string, FleetBand>([
+        ["done", "done"],
+        ["review", "review"],
+        ["ask", "needs-you"],
+        ["prompt", "idle"],
       ]);
-      const { byState, unread, agentStates } = aggregateAgentStates(
-        [agent("seen"), agent("unseen", { agentState: "completed" }), agent("plain")],
-        (id) => states.get(id) ?? "none"
+      const { byState, unread, blocked, agentStates } = aggregateAgentStates(
+        [
+          agent("done"),
+          agent("review", { agentState: "completed" }),
+          agent("ask"),
+          agent("prompt"),
+          agent("unreported"),
+        ],
+        (id) => bands.get(id)
       );
       expect(byState.completed).toBe(1);
       expect(unread).toBe(1);
       expect(byState.waiting).toBe(1);
-      // The dominant state follows the observation, not the read state.
-      expect(agentStates).toEqual(["waiting", "waiting", "waiting"]);
+      expect(byState.idle).toBe(2);
+      expect(blocked).toBe(0);
+      // The dominant state follows the observation, not the band.
+      expect(agentStates).toEqual(["waiting", "waiting", "waiting", "waiting", "waiting"]);
     });
 
-    it("keeps an approval wait counted as waiting even with a read hand-back", () => {
-      const { byState, unread } = aggregateAgentStates(
-        [agent("a", { waitingReason: "approval" })],
-        () => "seen"
+    it("counts an approval wait by its band: waiting for an unread ask, unread without one", () => {
+      // Bands as the fleet places these runs, over a hand-back already read.
+      const approval = {
+        agentState: "waiting",
+        waitingReason: "approval",
+        handBack: { stoppedAt: 1, seenAt: 2 },
+      } as const;
+      const bands = new Map<string, FleetBand>([
+        [
+          "asked",
+          bandForRun({
+            ...approval,
+            canopy: { kind: "asked", quote: "Run it?", readAt: 3, seen: false },
+          }),
+        ],
+        ["guessed", bandForRun(approval)],
+      ]);
+      const asked = aggregateAgentStates([agent("asked", { waitingReason: "approval" })], (id) =>
+        bands.get(id)
       );
-      expect(byState.waiting).toBe(1);
-      expect(byState.completed).toBe(0);
-      expect(unread).toBe(0);
+      expect(asked.byState.waiting).toBe(1);
+      expect(asked.byState.completed).toBe(0);
+      expect(asked.unread).toBe(0);
+      expect(asked.blocked).toBe(0);
+
+      const guessed = aggregateAgentStates(
+        [agent("guessed", { waitingReason: "approval" })],
+        (id) => bands.get(id)
+      );
+      expect(guessed.unread).toBe(1);
+      expect(guessed.byState.waiting).toBe(0);
+      expect(guessed.byState.completed).toBe(0);
     });
 
-    it("counts nothing as unread without hand-back data", () => {
-      const { byState, unread } = aggregateAgentStates([agent("a")]);
-      expect(byState.waiting).toBe(1);
+    it("counts an error wait as blocked, never as waiting", () => {
+      const { byState, blocked } = aggregateAgentStates(
+        [agent("a", { waitingReason: "error" })],
+        () => "blocked"
+      );
+      expect(blocked).toBe(1);
+      expect(byState.waiting).toBe(0);
+    });
+
+    it("drops an unread ask the pane has moved past before the band catches up", () => {
+      const { byState } = aggregateAgentStates(
+        [agent("restarting", { isRestarting: true }), agent("exited", { runtimeStatus: "exited" })],
+        () => "needs-you"
+      );
+      expect(byState.waiting).toBe(0);
+    });
+
+    it("counts nothing as waiting or unread without a band", () => {
+      const { byState, unread } = aggregateAgentStates([agent("a", { waitingReason: "approval" })]);
+      expect(byState.waiting).toBe(0);
       expect(unread).toBe(0);
     });
   });
 
-  describe("useWorktreeTerminals hand-back subscription", () => {
+  describe("useWorktreeTerminals fleet band subscription", () => {
     afterEach(() => {
       usePanelStore.setState({ panelsById: {}, panelIdsByWorktreeId: {} });
       useFleetSnapshotStore.setState({ snapshot: null });
@@ -114,7 +168,7 @@ describe("aggregateAgentStates (#6650)", () => {
         panelsById: { [panel.id]: panel },
         panelIdsByWorktreeId: { "wt-hb": [panel.id] },
       });
-      const setHandBack = (handBack: FleetRunRow["handBack"]) =>
+      const setRun = (overrides: Partial<FleetRunRow>) =>
         act(() => {
           useFleetSnapshotStore.setState({
             snapshot: {
@@ -125,7 +179,7 @@ describe("aggregateAgentStates (#6650)", () => {
                   spawnedAt: 0,
                   cwd: "/x",
                   agentState: "waiting",
-                  handBack,
+                  ...overrides,
                 },
               ],
               changedAt: 0,
@@ -142,15 +196,20 @@ describe("aggregateAgentStates (#6650)", () => {
         });
 
       const { result } = renderHook(() => useWorktreeTerminals("wt-hb"));
-      expect(result.current.counts.byState.waiting).toBe(1);
+      // A prompt with no reading behind it is not waiting.
+      expect(result.current.counts.byState.waiting).toBe(0);
       expect(result.current.counts.unread).toBe(0);
 
-      setHandBack({ stoppedAt: 1 });
+      setRun({ canopy: { kind: "asked", quote: "Run it?", readAt: 1, seen: false } });
+      settle();
+      expect(result.current.counts.byState.waiting).toBe(1);
+
+      setRun({ handBack: { stoppedAt: 1 } });
       settle();
       expect(result.current.counts.unread).toBe(1);
       expect(result.current.counts.byState.waiting).toBe(0);
 
-      setHandBack({ stoppedAt: 1, seenAt: 2 });
+      setRun({ handBack: { stoppedAt: 1, seenAt: 2 } });
       settle();
       expect(result.current.counts.unread).toBe(0);
       expect(result.current.counts.byState.completed).toBe(1);

@@ -4,7 +4,7 @@ import { PlaceholderContent } from "./PlaceholderContent";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import { SESSION_COLORS, SESSION_ICONS } from "@/components/Worktree/terminalStateConfig";
-import { useSessionPresentation } from "@/hooks/useRunHandBackState";
+import { useRunSessionPresentation } from "@/hooks/useRunSessionPresentation";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -30,8 +30,8 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
   // Drag visual color mirrors the same chrome descriptor used by tabs/panels.
   const chrome = deriveTerminalChrome(terminal);
   const agentState = isPtyPanel(terminal) ? terminal.agentState : undefined;
-  // A hand-back draws unread or done, as on the pane's own chip.
-  const displayAgentState = useSessionPresentation(
+  // The run's fleet band decides the glyph, as on the pane's own chip.
+  const displayAgentState = useRunSessionPresentation(
     terminal.id,
     getTerminalAgentDisplayState(chrome, agentState)
   );

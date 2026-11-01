@@ -111,8 +111,10 @@ import { UI_ANIMATION_DURATION, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDismissableTooltip } from "@/hooks/useDismissableTooltip";
-import { useHandBackRunIds, useRunHandBackState } from "@/hooks/useRunHandBackState";
-import { resolveSessionPresentation } from "@/lib/handBackPresentation";
+import { useFleetBandRunIds, useRunFleetBand } from "@/hooks/useRunFleetBand";
+import { usePaneObservation } from "@/hooks/useRunSessionPresentation";
+import { NEEDS_YOU_BANDS } from "@/lib/fleetAttention";
+import { resolvePaneSessionPresentation } from "@/lib/paneSessionPresentation";
 import { DockPopoverChildProvider } from "@/components/ui/DockPopoverChildContext";
 import {
   consultPanelCloseGuards,
@@ -193,7 +195,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     return panels.find((p) => p.id === activeTabId) ?? panels[0];
   }, [panels, activeTabId]);
   const activePanelId = activePanel?.id;
-  const activeHandBack = useRunHandBackState(activePanelId ?? "");
+  // Read before the early return below; the glyph resolves after it.
+  const activeBand = useRunFleetBand(activePanelId ?? "");
+  const activeObservation = usePaneObservation(activePanelId ?? null);
   const badge = useDockChipBadge(activePanelId ?? "");
   // The active tab's plugin report, like its agent glyph (#13820).
   const reportedActivity = usePluginPanelActivity(activePanelId ?? "");
@@ -634,8 +638,8 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     }
   }, [activePanel, group.id, addPanel, addPanelToGroup, trashPanel, setActiveTab]);
 
-  const handBackRunIds = useHandBackRunIds();
-  const groupBlockedState = getGroupBlockedAgentState(panels, handBackRunIds);
+  const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
+  const groupBlockedState = getGroupBlockedAgentState(panels, needsYouRunIds);
   const blockedState = useDockBlockedState(groupBlockedState);
   const isDeprioritized = !isOpen && isGroupDeprioritized(panels);
   const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
@@ -716,8 +720,16 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     presetColor: brandColor,
   });
   const agentState = getDockDisplayAgentState(activePanel);
+  const displayAgentState = getTerminalAgentDisplayState(activeChrome, agentState);
+  // The run's fleet band decides the glyph, as on the pane's own chip: only an
+  // unread Canopy ask is a wait.
+  const shownAgentState = resolvePaneSessionPresentation(
+    displayAgentState,
+    activeBand,
+    activeObservation
+  );
   const isWorking = agentState === "working";
-  const isWaiting = agentState === "waiting";
+  const isWaiting = shownAgentState === "waiting";
   const isActive = isWorking || isWaiting;
   const commandText = activePanel.activityHeadline || activePanel.lastCommand;
   // Command text belongs to the active tab, so gate it on the active panel's own
@@ -741,20 +753,13 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
       ? `${fullTitle} — ${commandText}`
       : fullTitle;
   const showTitleTip = titleTooltip !== displayTitle || displayTitle.length > 18;
-  const displayAgentState = getTerminalAgentDisplayState(activeChrome, agentState);
-  // A hand-back draws unread or done, as on the pane's own chip.
-  const shownAgentState = resolveSessionPresentation(
-    displayAgentState,
-    activePanel.agentState,
-    activePanel.waitingReason,
-    activeHandBack
-  );
   // The glyph is smoothed (idle/missing shows as waiting); the words are not.
   const observedStateLabel = agentState ? getEffectiveStateLabel(agentState) : undefined;
-  // A hand-back is named for what it is drawn as; the observation rides along.
-  const isHandBack = shownAgentState !== displayAgentState;
+  // A state the band redrew is named for what it is drawn as; the observation
+  // rides along.
+  const isReinterpreted = shownAgentState !== displayAgentState;
   const stateLabel =
-    isHandBack && shownAgentState ? SESSION_LABELS[shownAgentState] : observedStateLabel;
+    isReinterpreted && shownAgentState ? SESSION_LABELS[shownAgentState] : observedStateLabel;
   const StateIcon = shownAgentState ? SESSION_ICONS[shownAgentState] : null;
   // Only where no agent glyph is drawn, and never folded into the agent state.
   const pluginActivity = displayAgentState ? null : reportedActivity;
@@ -884,7 +889,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
                     {stateLabel
-                      ? isHandBack
+                      ? isReinterpreted
                         ? `Agent ${stateLabel} · Observed: ${observedStateLabel}`
                         : `Agent ${stateLabel}`
                       : "No agent state observed"}

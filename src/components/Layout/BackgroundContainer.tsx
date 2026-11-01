@@ -37,8 +37,11 @@ import {
   SESSION_ICONS,
   SESSION_LABELS,
 } from "@/components/Worktree/terminalStateConfig";
-import { useHandBackRunIds, useSessionPresentation } from "@/hooks/useRunHandBackState";
-import { isAskingWait } from "@/lib/handBackPresentation";
+import { useFleetBandRunIds } from "@/hooks/useRunFleetBand";
+import { useRunSessionPresentation } from "@/hooks/useRunSessionPresentation";
+import { NEEDS_YOU_BANDS } from "@/lib/fleetAttention";
+import { isNeedsYouPane } from "@/lib/paneSessionPresentation";
+import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import {
   KILL_TERMINAL_TITLE,
@@ -100,11 +103,12 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
   );
   const worktreeNames = useWorktreeNames();
 
-  // A hand-back is not asking for anything, so the pill does not count it.
-  const handBackRunIds = useHandBackRunIds();
+  // Only an unread Canopy ask is waiting: a prompt that asks nothing and a
+  // hand-back are not counted.
+  const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
   const waitingCount = useMemo(
-    () => terminals.filter((t) => isAskingWait(handBackRunIds, t)).length,
-    [terminals, handBackRunIds]
+    () => terminals.filter((t) => isNeedsYouPane(needsYouRunIds, t)).length,
+    [terminals, needsYouRunIds]
   );
   const hereCount = useMemo(
     () => terminals.filter((t) => (t.worktreeId ?? null) === (activeWorktreeId ?? null)).length,
@@ -444,8 +448,13 @@ function BackgroundSingleItem({
   onKill,
   compact = false,
 }: BackgroundSingleItemProps) {
-  // A hand-back draws unread or done, as on the pane's own chip.
-  const agentState = useSessionPresentation(terminal.id, terminal.agentState);
+  // The pane's display state through the run's fleet band, as on the pane's
+  // own chip: amber only for an unread Canopy ask.
+  const chrome = deriveTerminalChrome(terminal);
+  const agentState = useRunSessionPresentation(
+    terminal.id,
+    getTerminalAgentDisplayState(chrome, terminal.agentState)
+  );
   const StateIcon = agentState ? SESSION_ICONS[agentState] : null;
   const stateLabel = agentState ? SESSION_LABELS[agentState] : null;
   const stateColor = agentState ? SESSION_COLORS[agentState] : null;
@@ -478,7 +487,7 @@ function BackgroundSingleItem({
         <div className="shrink-0 opacity-70 group-hover:opacity-100 transition-opacity">
           <TerminalIcon
             kind={terminal.kind}
-            chrome={deriveTerminalChrome(terminal)}
+            chrome={chrome}
             className={compact ? "h-2.5 w-2.5" : "h-3 w-3"}
           />
         </div>
@@ -640,8 +649,8 @@ function BackgroundGroupItem({
   const [isExpanded, setIsExpanded] = useState(true);
   const tabCount = terminals.length;
   const groupName = `Tab group (${pluralize(tabCount, "tab")})`;
-  const handBackRunIds = useHandBackRunIds();
-  const groupWaiting = terminals.filter((t) => isAskingWait(handBackRunIds, t)).length;
+  const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
+  const groupWaiting = terminals.filter((t) => isNeedsYouPane(needsYouRunIds, t)).length;
   // Named on the header too, so a collapsed group still says where it lives.
   const groupWorktreeId = groupMetadata.worktreeId ?? terminals[0]?.worktreeId;
   const groupWorktreeName =

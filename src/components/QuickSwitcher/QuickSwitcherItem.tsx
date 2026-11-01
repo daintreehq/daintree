@@ -9,7 +9,7 @@ import {
   SESSION_ICONS,
   SESSION_LABELS,
 } from "@/components/Worktree/terminalStateConfig";
-import { useSessionPresentation } from "@/hooks/useRunHandBackState";
+import { useRunSessionPresentation } from "@/hooks/useRunSessionPresentation";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import type { QuickSwitcherItem as QuickSwitcherItemData } from "@/hooks/useQuickSwitcher";
 import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
@@ -76,7 +76,7 @@ function contextIndices(
 
 function AgentStateMark({ item }: { item: QuickSwitcherItemData }) {
   const terminalId = item.id.replace(/^terminal:/, "");
-  const display = useSessionPresentation(
+  const display = useRunSessionPresentation(
     terminalId,
     item.chrome ? getTerminalAgentDisplayState(item.chrome, item.agentState) : undefined
   );

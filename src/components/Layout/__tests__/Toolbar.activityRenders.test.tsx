@@ -31,6 +31,7 @@ import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktree
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore } from "@/store/panelStore";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useAgentToolbarPinsStore } from "@/store/agentToolbarPinsStore";
 import { enqueueActivityUpdate, flushPanelStatusBuffer } from "@/store/panelStatusBuffer";
@@ -122,7 +123,10 @@ beforeEach(async () => {
   toolbarRenders.count = 0;
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  useFleetSnapshotStore.setState({ snapshot: null });
+});
 
 async function settle(): Promise<void> {
   await act(async () => {
@@ -151,6 +155,10 @@ describe("Toolbar under activity-only panel churn", () => {
   // Proves the counter sees real renders, so the zero above is not vacuous. The
   // overflow hooks' outputs are covered in useOverflowBadgeSeverity.test.ts.
   it("still re-renders when an agent pip state changes", async () => {
+    const amberPips = () =>
+      document.querySelectorAll('[data-visible="true"][class*="bg-state-waiting"]').length;
+
+    // A pane stopped at a prompt with no reading behind it earns no amber pip.
     act(() => {
       usePanelStore.setState((s) => ({
         panelsById: {
@@ -160,6 +168,30 @@ describe("Toolbar under activity-only panel churn", () => {
       }));
     });
     await settle();
+    expect(amberPips()).toBe(0);
+
+    // Amber comes from the fleet band alone: an unread Canopy ask on the run,
+    // with nothing about the pane changing.
+    toolbarRenders.count = 0;
+    act(() => {
+      useFleetSnapshotStore.getState().applySnapshot({
+        runs: [
+          {
+            runId: "pane-0",
+            workspaceId: "p1",
+            spawnedAt: 1,
+            cwd: "/repo",
+            agentState: "waiting",
+            canopy: { kind: "asked", quote: "Run it?", readAt: 1, seen: false },
+          },
+        ],
+        changedAt: 2,
+        degraded: false,
+        lastSuccessfulAt: 2,
+      });
+    });
+    await settle();
+    expect(amberPips()).toBe(1);
     expect(toolbarRenders.count).toBeGreaterThan(0);
   });
 });

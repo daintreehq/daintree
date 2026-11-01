@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from "react";
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from "vitest";
 import { act, cleanup, render, screen, fireEvent } from "@testing-library/react";
 import { PanelHeader } from "../PanelHeader";
 import type { PanelHeaderProps } from "../PanelHeader";
@@ -2567,6 +2567,25 @@ describe("PanelHeader", () => {
 
     it("names a hidden tab's agent state in text, not only in a glyph", () => {
       mockHiddenTabIds = new Set(["t2"]);
+      // An unread Canopy ask: the state a hidden tab is drawn and named by.
+      useFleetSnapshotStore.setState({
+        snapshot: {
+          runs: [
+            {
+              runId: "t2",
+              workspaceId: "p1",
+              spawnedAt: 0,
+              cwd: "/repo",
+              agentState: "waiting",
+              canopy: { kind: "asked", quote: "Ship it?", readAt: 0, seen: false },
+            },
+          ],
+          changedAt: 0,
+          degraded: false,
+          lastSuccessfulAt: null,
+        },
+      });
+      onTestFinished(() => useFleetSnapshotStore.setState({ snapshot: null }));
       render(
         <PanelHeader
           {...makeProps({

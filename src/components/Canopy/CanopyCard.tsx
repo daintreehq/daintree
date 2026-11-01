@@ -46,8 +46,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { AgentStateChip } from "@/components/Terminal/TerminalAgentIndicator";
 import { SESSION_LABELS } from "@/components/Worktree/terminalStateConfig";
-import { resolveSessionPresentation, type HandBackSeenState } from "@/lib/handBackPresentation";
-import { isHandBackStop, isHandBackUnseen } from "@shared/utils/runHandBack";
+import { resolvePaneSessionPresentation } from "@/lib/paneSessionPresentation";
+import { usePaneObservation } from "@/hooks/useRunSessionPresentation";
+import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import type { BrandMarkSurface } from "@/lib/brandIcon";
 import type { HybridInputBarHandle } from "@/components/Terminal/HybridInputBar";
 import { isMac } from "@/lib/platform";
@@ -653,26 +654,29 @@ export function CanopyCard({
   }, [dictationRequest]);
 
   const agentId = isBuiltInAgentId(run.agentId) ? run.agentId : undefined;
-  // The grid's chip rules: nothing while idle, and a settled agent keeps its
-  // glyph only to explain a session cost, which the panel does not have.
-  // A hand-back draws unread or done, as on the grid's own chip, rather than
-  // the amber waiting ring; a plain settled agent still draws nothing.
-  const handBack: HandBackSeenState =
-    run.handBack === undefined ? "none" : isHandBackUnseen(run.handBack) ? "unseen" : "seen";
-  const agentState = resolveSessionPresentation(
-    run.agentState,
-    run.agentState,
-    run.waitingReason,
-    handBack
+  // The grid pane's own glyph: its display state through the run's fleet band.
+  // Amber is an unread Canopy ask, a hand-back is unread or finished, and a
+  // prompt that asks nothing draws nothing. The pane's newer observation
+  // speaks for the run when this view holds it, as on the pane, and the row's
+  // otherwise: another project's or host's terminal id names no pane here.
+  // Display state, exit and observation come from the same one, so a pane
+  // already back at work draws its spinner rather than a wait or an exit the
+  // row still holds. An exit is `runtimeStatus: "exited"`, as the pane reads
+  // its own.
+  const ownPane = usePaneObservation(ownsContext ? item.runId : null);
+  const observed = ownPane ?? run;
+  const displayChrome =
+    ownPane === undefined
+      ? row.chrome
+      : {
+          isAgent: row.chrome.isAgent,
+          hasExited: ownPane.runtimeStatus === "exited" || ownPane.agentState === "exited",
+        };
+  const agentState = resolvePaneSessionPresentation(
+    getTerminalAgentDisplayState(displayChrome, observed.agentState),
+    row.band,
+    observed
   );
-  const isHandBack =
-    handBack !== "none" &&
-    run.agentState !== undefined &&
-    isHandBackStop(run.agentState, run.waitingReason);
-  const showState =
-    agentState !== undefined &&
-    agentState !== "idle" &&
-    (isHandBack || (agentState !== "completed" && agentState !== "exited"));
   const { detail, action, progress, facts, contextWarning, readerWritten } = itemDetail(item);
   // An open question is the pane's anchor, whole and in the screen's words: the
   // row could only fit a headline, and a summary of it would only say it again.
@@ -917,7 +921,7 @@ export function CanopyCard({
         {/* The agent's state chip, in the reserved box at the far right where every agent pane keeps it. */}
         {agentId !== undefined && (
           <span className="ml-2 flex h-5 w-5 shrink-0 items-center justify-center">
-            {showState && (
+            {agentState !== undefined && (
               <AgentStateChip
                 agentState={agentState}
                 ariaLabel={`Agent state: ${SESSION_LABELS[agentState]}`}

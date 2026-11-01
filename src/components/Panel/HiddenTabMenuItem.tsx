@@ -7,18 +7,18 @@ import {
   SESSION_ICONS,
   SESSION_LABELS,
 } from "@/components/Worktree/terminalStateConfig";
-import { useSessionPresentation } from "@/hooks/useRunHandBackState";
+import { useRunSessionPresentation } from "@/hooks/useRunSessionPresentation";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import type { TabInfo } from "./TabButton";
 
 /**
  * One row of a tab strip's overflow menu. A tab that has scrolled out of the
  * strip is still the same tab, so its row resolves the session the way the
- * tab itself does (`TabButton`): a hand-back reads as unread or done here too,
- * never as the amber waiting ring it would show from the raw agent state.
+ * tab itself does (`TabButton`): from the run's fleet band, never as the amber
+ * waiting ring a prompt would show from the raw agent state.
  */
 export function HiddenTabMenuItem({ tab, onSelect }: { tab: TabInfo; onSelect: () => void }) {
-  const state = useSessionPresentation(
+  const state = useRunSessionPresentation(
     tab.id,
     getTerminalAgentDisplayState(tab.chrome, tab.agentState)
   );

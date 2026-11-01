@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, act } from "@testing-library/react";
 import type { AgentState, WaitingReason } from "@shared/types/agent";
 import type { FleetRunRow, FleetSnapshot, RunCanopyRefinement } from "@shared/types/ipc/fleet";
-import { PANE_SESSION_COLORS } from "@/components/Worktree/terminalStateConfig";
+import { SESSION_COLORS } from "@/components/Worktree/terminalStateConfig";
 import {
   cleanupFleetSnapshotListeners,
   setupFleetSnapshotListeners,
@@ -126,7 +126,7 @@ const glyph = () =>
     .queryAllByRole("status")
     .find((el) => (el.getAttribute("aria-label") ?? "").startsWith("Agent state:"));
 const glyphLabel = () => glyph()?.getAttribute("aria-label") ?? null;
-const wearsWaitingHue = () => glyph()?.className.includes(PANE_SESSION_COLORS.waiting) ?? false;
+const wearsWaitingHue = () => glyph()?.className.includes(SESSION_COLORS.waiting) ?? false;
 
 /** Past the error wait's debounce, so nothing amber can still be on its way. */
 function settle() {
