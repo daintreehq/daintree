@@ -63,6 +63,7 @@ import { initializeDatabaseForBoot } from "./lifecycle/databaseBoot.js";
 import { registerShutdownHandler } from "./lifecycle/shutdown.js";
 import { setAttachedShellsProvider } from "./lifecycle/attachedShells.js";
 import { getActiveShutdown } from "./lifecycle/shutdownCoordinator.js";
+import { createRemoteHostsLaunch, type RemoteHostsLaunch } from "./lifecycle/remoteHostsLaunch.js";
 import {
   setMainWindow,
   getMainWindow,
@@ -495,7 +496,6 @@ if (!gotTheLock) {
   // Flips once the initial windows (or the windowless Host runtime) are up, so
   // a second launch before then doesn't open a window of its own.
   let launchSettled = false;
-  let stopRemoteHosts: (() => Promise<void>) | null = null;
   // A later `--host-mode` launch (login item, systemd unit, a Shell starting
   // Host mode over SSH) hands over to this process: it serves as a host until
   // quit, without changing the setting. Kept apart from `hostModeLaunch`,
@@ -508,6 +508,8 @@ if (!gotTheLock) {
   let setupUpdateChannel = isRemoteHostSupported() ? requestedUpdateChannel(process.argv) : null;
   let remoteHostsStarted = false;
   const listenForHandedOffHostMode = (): void => {
+    // A handoff arriving mid-quit would start listening just before the stop.
+    if (getActiveShutdown() !== null) return;
     const hostMode = getRemoteService("hostMode");
     if (!hostMode) return;
     const enable = hostModeEnableRequested;
@@ -1084,6 +1086,95 @@ if (!gotTheLock) {
 
   setAttachedShellsProvider(() => getRemoteService("hostMode")?.getAttachedClients() ?? []);
 
+  // Remote Hosts' start at launch (#15888): as soon as the focused window is up
+  // when restored windows need a host, otherwise once the restore has settled,
+  // and never once a quit has begun.
+  let remoteHostsLaunch: RemoteHostsLaunch | null = null;
+  if (__DAINTREE_REMOTE_HOSTS__) {
+    if (isEitherRemoteRoleSupported()) {
+      remoteHostsLaunch = createRemoteHostsLaunch({
+        isShuttingDown: () => getActiveShutdown() !== null,
+        load: async () => {
+          const remoteHosts = await import("./remote/boot.js");
+          remoteHosts.setRemoteHostsWindowOpener(async (options) => {
+            let id = -1;
+            await createWindow(null, undefined, {
+              onRegistered: (w) => {
+                id = w;
+                options?.onRegistered?.(w);
+              },
+            });
+            return id;
+          });
+          return {
+            start: async () => {
+              try {
+                await remoteHosts.startRemoteHosts({
+                  hostMode: hostModeLaunch || hostModeHandedOff || isHostModeEnabled(),
+                });
+              } catch (error) {
+                if (!(error instanceof remoteHosts.HostModeListenError)) throw error;
+                console.error("[MAIN] Host mode couldn't start listening:", error);
+                // A headless host is here only to listen: exiting lets its unit
+                // restart it, where staying up would leave `systemctl start` a no-op.
+                if (headlessOzone && hostModeLaunch) {
+                  void (remoteHostsLaunch?.stop() ?? Promise.resolve()).finally(() =>
+                    app.exit(1)
+                  );
+                }
+              }
+            },
+            stop: remoteHosts.stopRemoteHosts,
+          };
+        },
+        onStarted: () => {
+          // Set even when listening failed: a later handoff or the switch tries again.
+          remoteHostsStarted = true;
+          // A handoff that landed while the start was in flight, or setup's enable.
+          if (hostModeHandedOff || hostModeEnableRequested) listenForHandedOffHostMode();
+          // Windows that were on a host's project when the app quit go back there.
+          void restoreRemoteWindows({
+            isWindowWaiting: (windowId) => {
+              const ctx = windowRegistry.getByWindowId(windowId);
+              if (!ctx || ctx.browserWindow.isDestroyed() || getActiveShutdown() !== null) {
+                return false;
+              }
+              // A folder the person is opening there (or its git-init prompt) wins.
+              if (hasPendingOpen(windowId)) return false;
+              return (ctx.services.projectViewManager?.getActiveProjectId() ?? null) === null;
+            },
+            canRestoreInBackground: (windowId) => {
+              const ctx = windowRegistry.getByWindowId(windowId);
+              const pvm = ctx?.services.projectViewManager;
+              return (
+                ctx !== undefined &&
+                !ctx.browserWindow.isDestroyed() &&
+                pvm !== undefined &&
+                !pvm.disposed &&
+                getActiveShutdown() === null
+              );
+            },
+            viewOf: (windowId) => {
+              const ctx = windowRegistry.getByWindowId(windowId);
+              if (!ctx || ctx.browserWindow.isDestroyed()) return null;
+              // A window on the picker has no project view: its UI is the
+              // window's first view, as ProjectViewManager itself falls back to.
+              const view =
+                ctx.services.projectViewManager?.getActiveView() ??
+                ctx.browserWindow.contentView.children[0];
+              return view && "webContents" in view ? (view as WebContentsView).webContents : null;
+            },
+            onRestored: () => scheduleOpenWindowsSave(),
+          });
+        },
+        dial: (hostId) => {
+          getRemoteService("remoteHostsClient")?.connect({ hostId });
+        },
+        onError: (message, error) => console.error(`[MAIN] ${message}:`, error),
+      });
+    }
+  }
+
   registerShutdownHandler({
     getPtyClient,
     setPtyClient: setPtyClientRef,
@@ -1101,9 +1192,7 @@ if (!gotTheLock) {
     getStopDiskSpaceMonitor,
     setStopDiskSpaceMonitor,
     windowRegistry,
-    stopRemoteHosts: async () => {
-      await stopRemoteHosts?.();
-    },
+    stopRemoteHosts: () => remoteHostsLaunch?.stop() ?? Promise.resolve(),
   });
 
   // Before whenReady so the eagerly created persist:daintree / persist:portal
@@ -1269,6 +1358,12 @@ if (!gotTheLock) {
           onBackgroundWindowFailed,
           isProjectOwned,
           isShuttingDown,
+          onRemoteHostsNeeded: (hostIds) => {
+            // A saved window can name a host removed since: only hosts still set
+            // up here start anything early, so a launch with none starts nothing.
+            const configured = new Set(store.get("remoteHosts")?.hosts.map((host) => host.id));
+            remoteHostsLaunch?.need(hostIds.filter((id) => configured.has(id)));
+          },
         });
 
         // Installed before the startup window boots: its renderer resolves the
@@ -1328,80 +1423,7 @@ if (!gotTheLock) {
       launchSettled = true;
       appLifecycle.onLaunchSettled();
 
-      if (__DAINTREE_REMOTE_HOSTS__) {
-        if (isEitherRemoteRoleSupported()) {
-          try {
-            const remoteHosts = await import("./remote/boot.js");
-            // Published before the start resolves, so a quit during it still
-            // stops whatever the start got as far as.
-            stopRemoteHosts = remoteHosts.stopRemoteHosts;
-            remoteHosts.setRemoteHostsWindowOpener(async (options) => {
-              let id = -1;
-              await createWindow(null, undefined, {
-                onRegistered: (w) => {
-                  id = w;
-                  options?.onRegistered?.(w);
-                },
-              });
-              return id;
-            });
-            try {
-              await remoteHosts.startRemoteHosts({
-                hostMode: hostModeLaunch || hostModeHandedOff || isHostModeEnabled(),
-              });
-            } catch (error) {
-              if (!(error instanceof remoteHosts.HostModeListenError)) throw error;
-              console.error("[MAIN] Host mode couldn't start listening:", error);
-              // A headless host is here only to listen: exiting lets its unit
-              // restart it, where staying up would leave `systemctl start` a no-op.
-              if (headlessOzone && hostModeLaunch) {
-                void (stopRemoteHosts?.() ?? Promise.resolve()).finally(() => app.exit(1));
-                return;
-              }
-            }
-            // Set even when listening failed: a later handoff or the switch tries again.
-            remoteHostsStarted = true;
-            // A handoff that landed while the start was in flight, or setup's enable.
-            if (hostModeHandedOff || hostModeEnableRequested) listenForHandedOffHostMode();
-            // Windows that were on a host's project when the app quit go back there.
-            void restoreRemoteWindows({
-              isWindowWaiting: (windowId) => {
-                const ctx = windowRegistry.getByWindowId(windowId);
-                if (!ctx || ctx.browserWindow.isDestroyed() || getActiveShutdown() !== null) {
-                  return false;
-                }
-                // A folder the person is opening there (or its git-init prompt) wins.
-                if (hasPendingOpen(windowId)) return false;
-                return (ctx.services.projectViewManager?.getActiveProjectId() ?? null) === null;
-              },
-              canRestoreInBackground: (windowId) => {
-                const ctx = windowRegistry.getByWindowId(windowId);
-                const pvm = ctx?.services.projectViewManager;
-                return (
-                  ctx !== undefined &&
-                  !ctx.browserWindow.isDestroyed() &&
-                  pvm !== undefined &&
-                  !pvm.disposed &&
-                  getActiveShutdown() === null
-                );
-              },
-              viewOf: (windowId) => {
-                const ctx = windowRegistry.getByWindowId(windowId);
-                if (!ctx || ctx.browserWindow.isDestroyed()) return null;
-                // A window on the picker has no project view: its UI is the
-                // window's first view, as ProjectViewManager itself falls back to.
-                const view =
-                  ctx.services.projectViewManager?.getActiveView() ??
-                  ctx.browserWindow.contentView.children[0];
-                return view && "webContents" in view ? (view as WebContentsView).webContents : null;
-              },
-              onRestored: () => scheduleOpenWindowsSave(),
-            });
-          } catch (error) {
-            console.error("[MAIN] Remote Hosts failed to start:", error);
-          }
-        }
-      }
+      await remoteHostsLaunch?.start();
     } catch (error) {
       console.error("[MAIN] Startup failed:", error);
       // Startup crashes hard-exit without running before-quit, which means

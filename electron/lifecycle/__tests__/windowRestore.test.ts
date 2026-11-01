@@ -424,6 +424,53 @@ describe("restoreWindowFleet", () => {
     expect(h.persisted()).toBe(true);
   });
 
+  it("names each host the restore needs once the focused window is up, before the rest (#15888)", async () => {
+    const onHost = `studio-01:${"a".repeat(64)}`;
+    const onOtherHost = `studio-02:${"b".repeat(64)}`;
+    const windowsAtHook: number[] = [];
+    const onRemoteHostsNeeded = vi.fn(() => {
+      windowsAtHook.push(h.createWindow.mock.calls.length);
+    });
+    h = harness({
+      records: [
+        { projectId: "local", backgroundProjectIds: [onHost, "local-bg"] },
+        record(onOtherHost),
+        record(`studio-01:${"c".repeat(64)}`),
+      ],
+      hadManifest: true,
+      onRemoteHostsNeeded,
+    });
+    await restoreWindowFleet(h.deps);
+    expect(onRemoteHostsNeeded).toHaveBeenCalledTimes(1);
+    expect(onRemoteHostsNeeded).toHaveBeenCalledWith(["studio-01", "studio-02"]);
+    expect(windowsAtHook).toEqual([1]);
+  });
+
+  it("names no host for a restore that has none", async () => {
+    const onRemoteHostsNeeded = vi.fn();
+    h = harness({
+      records: [{ projectId: "a", backgroundProjectIds: ["b"] }, record("c"), record(null)],
+      hadManifest: true,
+      onRemoteHostsNeeded,
+    });
+    await restoreWindowFleet(h.deps);
+    expect(onRemoteHostsNeeded).not.toHaveBeenCalled();
+  });
+
+  it("names no host when the focused window didn't come up", async () => {
+    const onRemoteHostsNeeded = vi.fn();
+    h = harness(
+      {
+        records: [record(`studio-01:${"a".repeat(64)}`), record("b")],
+        hadManifest: true,
+        onRemoteHostsNeeded,
+      },
+      async () => "exit-requested"
+    );
+    await restoreWindowFleet(h.deps);
+    expect(onRemoteHostsNeeded).not.toHaveBeenCalled();
+  });
+
   it("opens one picker window when every saved project was deleted", async () => {
     h = harness({ records: [], hadManifest: true, fallbackProjectId: "unrelated" });
     await restoreWindowFleet(h.deps);
