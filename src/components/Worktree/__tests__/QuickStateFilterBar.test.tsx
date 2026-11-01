@@ -184,6 +184,31 @@ describe("QuickStateFilterBar", () => {
     expect(onChange).toHaveBeenCalledWith("all");
   });
 
+  it("returns focus to All when the keyboard unchecks the active segment", () => {
+    renderBar(<StatefulBar initial="working" />);
+    const working = screen.getByRole("radio", { name: /Working/ });
+    working.focus();
+
+    // Space or Enter on a button arrives as a click with detail 0.
+    fireEvent.click(working, { detail: 0 });
+
+    const all = screen.getByRole("radio", { name: /^All/ });
+    expect(checkedName()).toBe("All, 9 worktrees");
+    // The unchecked radio lost its tab stop, so focus must travel with the choice.
+    expect(document.activeElement).toBe(all);
+  });
+
+  it("leaves focus alone when a pointer unchecks the active segment", () => {
+    renderBar(<StatefulBar initial="working" />);
+    const working = screen.getByRole("radio", { name: /Working/ });
+    working.focus();
+
+    fireEvent.click(working, { detail: 1 });
+
+    expect(checkedName()).toBe("All, 9 worktrees");
+    expect(document.activeElement).toBe(working);
+  });
+
   it("renders a state icon on each non-All segment and no icon on All", () => {
     renderBar(
       <QuickStateFilterBar
@@ -294,13 +319,15 @@ describe("QuickStateFilterBar", () => {
         value="all"
         onChange={() => {}}
         counts={{ all: 9, working: 3, waiting: 1, finished: 2 }}
-        finishedUnseen={2}
+        finishedUnseen={1}
       />
     );
+    // One of two finished unread keeps the finished ring (only an all-unread
+    // bucket swaps to the disc), so Finished shows the ring's own full hue.
     const colorBySegment: [RegExp, string][] = [
       [/Working/, "text-state-working"],
       [/Attention/, "text-state-waiting"],
-      [/Finished/, "text-text-primary"],
+      [/Finished/, "text-text-secondary"],
     ];
     for (const [name, colorClass] of colorBySegment) {
       const svg = glyphBox(screen.getByRole("radio", { name }));
@@ -326,14 +353,16 @@ describe("QuickStateFilterBar", () => {
       unmount();
       return cls;
     };
+    // The disc beside a count of 3 would claim all three are unread, so a
+    // partly-unread bucket keeps the ring and only an all-unread one swaps.
     const seen = finishedGlyphClass(0);
     const partlyUnseen = finishedGlyphClass(1);
-    const unseen = finishedGlyphClass(3);
-    expect(seen).not.toBe(unseen);
-    // The count beside the disc must be honest: one unread of three keeps the ring.
+    const allUnseen = finishedGlyphClass(3);
     expect(partlyUnseen).toBe(seen);
+    expect(allUnseen).not.toBe(seen);
     expect(seen).toContain("text-text-secondary");
     expect(seen).not.toMatch(FADED);
+    expect(allUnseen).not.toMatch(FADED);
   });
 
   it("says in the accessible name how many Finished worktrees are unread", () => {

@@ -26,8 +26,8 @@ const DRAINED_TITLES: Record<QuickStateBucket, string> = {
   finished: "Nothing in Finished",
 };
 
-// The tab counts leave main out, and main is exempt from the tab, so main can
-// be on screen in the very state its tab reads as empty.
+// Main is a pinned card, not a list row, so a tab whose only member is main
+// leaves the list under it empty while main sits on screen in that state.
 const MAIN_ONLY_TITLES: Record<QuickStateBucket, string> = {
   working: "Only the main worktree is working",
   waiting: "Only the main worktree needs attention",

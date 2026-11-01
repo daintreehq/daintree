@@ -67,30 +67,84 @@ describe("ScrollIndicator", () => {
   });
 
   // The number is bare on screen; the name is where the noun lives.
+  // The action names what the jump lands on: waiting rows win over problems,
+  // so with both past the edge it says "needs attention".
   it.each([
-    ["below", 3, 0, "3 more worktrees below. Click to show the next page"],
-    ["above", 1, 0, "1 more worktree above. Click to show the next page"],
-    ["below", 7, 1, "7 more worktrees below, 1 needs attention. Click to show it"],
+    ["below", 3, 0, 0, "3 more worktrees below. Click to show the next page"],
+    ["above", 1, 0, 0, "1 more worktree above. Click to show the next page"],
+    ["below", 7, 1, 0, "7 more worktrees below, 1 needs attention. Click to show it"],
     [
       "above",
       7,
       2,
+      0,
       "7 more worktrees above, 2 need attention. Click to show the nearest that needs attention",
     ],
+    ["below", 4, 0, 1, "4 more worktrees below, 1 reports a problem. Click to show it"],
+    [
+      "below",
+      4,
+      0,
+      2,
+      "4 more worktrees below, 2 report a problem. Click to show the nearest problem",
+    ],
+    [
+      "above",
+      5,
+      1,
+      1,
+      "5 more worktrees above, 1 needs attention, 1 reports a problem. Click to show the nearest that needs attention",
+    ],
   ] as const)(
-    "names %s with %i hidden, %i needing attention",
-    (direction, count, attentionCount, name) => {
+    "names %s with %i hidden, %i needing attention, %i reporting a problem",
+    (direction, count, attentionCount, problemCount, name) => {
       render(
         <ScrollIndicator
           direction={direction}
           count={count}
           attentionCount={attentionCount}
+          problemCount={problemCount}
+          problemTone={problemCount > 0 ? "warning" : null}
           onClick={onClick}
         />
       );
       expect(screen.getByRole("button").getAttribute("aria-label")).toBe(name);
     }
   );
+
+  it("marks a problem past the edge only when it has a tone to draw", () => {
+    const { rerender } = render(
+      <ScrollIndicator
+        direction="below"
+        count={4}
+        problemCount={1}
+        problemTone="error"
+        onClick={onClick}
+      />
+    );
+    expect(screen.queryByTestId("scroll-indicator-problem-mark")).not.toBeNull();
+
+    rerender(<ScrollIndicator direction="below" count={4} problemCount={0} onClick={onClick} />);
+    expect(screen.queryByTestId("scroll-indicator-problem-mark")).toBeNull();
+  });
+
+  it("draws the error and warning problem marks as different glyphs", () => {
+    const markFor = (tone: "error" | "warning") => {
+      const { unmount } = render(
+        <ScrollIndicator
+          direction="below"
+          count={4}
+          problemCount={1}
+          problemTone={tone}
+          onClick={onClick}
+        />
+      );
+      const html = screen.getByTestId("scroll-indicator-problem-mark").outerHTML;
+      unmount();
+      return html;
+    };
+    expect(markFor("error")).not.toBe(markFor("warning"));
+  });
 
   it("uses translate-y-0 when visible (below)", () => {
     render(<ScrollIndicator direction="below" count={1} onClick={onClick} />);

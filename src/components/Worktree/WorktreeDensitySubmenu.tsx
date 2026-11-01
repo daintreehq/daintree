@@ -19,7 +19,11 @@ import {
 import { Rows3 } from "@/components/icons";
 import { CARD_DENSITY_OPTIONS } from "@/components/Worktree/cardDensityOptions";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
-import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
+
+// Outside a project's worktree store (a menu rendered before one mounts) there
+// is nothing to fold.
+const NO_WORKTREES: ReadonlyMap<string, unknown> = new Map();
 
 const CONTEXT = {
   Sub: ContextMenuSub,
@@ -56,7 +60,10 @@ export function WorktreeDensityItems({ kind }: { kind: "context" | "dropdown" })
   const collapsed = useWorktreeFilterStore((s) => s.collapsedWorktrees);
   const collapseWorktrees = useWorktreeFilterStore((s) => s.collapseWorktrees);
   const expandAllWorktrees = useWorktreeFilterStore((s) => s.expandAllWorktrees);
-  const worktreeIds = useWorktreeStore((s) => s.worktrees);
+  const worktreeIds = useWorktreeStoreOptional(
+    (s): ReadonlyMap<string, unknown> => s.worktrees,
+    NO_WORKTREES
+  );
   // Measured against the worktrees that exist, so an id left behind by a
   // deleted worktree never keeps "Expand all" enabled over a fully open list.
   let collapsedLive = 0;

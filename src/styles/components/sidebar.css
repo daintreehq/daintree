@@ -109,9 +109,11 @@
    Accent restraint, though, still applies while a control inside the active
    row draws its own accent focus ring: two load-bearing accent shapes in one
    frame and neither reads as the anchor. Focus wins for as long as it lasts,
-   and the selection edge steps to `border-interactive`, the neutral edge the
-   overview grid's current card wears, which holds 3:1 against the card on
-   every built-in palette. Scoped to the whole sidebar, not the active card: a
+   and the selection edge steps to `selection-outline`, the neutral stroke every
+   theme holds at 3:1 (WCAG 1.4.11). `border-interactive` measured 1.4-1.9:1
+   against the selected card, too faint for the only mark selection has then.
+   The keyboard cursor wears the same ink on the LEFT edge; selection keeps the
+   right, so the side still says which is which. Scoped to the whole sidebar, not the active card: a
    ring on any of its controls (another card, the quick-state bar, a header
    button) is just as much a second accent in front of the user. Two focus
    targets draw no accent and are left out: the grid itself (its cursor is a
@@ -119,7 +121,7 @@
    `:focus-visible` and not `:focus-within`, so a mouse click recedes nothing. */
 .sidebar-root:has(:focus-visible:not([role="grid"]):not(input))
   .sidebar-worktree-card[data-active="true"]:not([data-drop-target="true"]) {
-  --card-edge: inset -2px 0 0 var(--theme-border-interactive);
+  --card-edge: inset -2px 0 0 var(--theme-selection-outline);
 }
 
 /* The card is the button (#15864). Its tint answers the pointer only over its
@@ -153,7 +155,7 @@
       )
     )
   ) {
-  background: var(--sidebar-hover-bg, rgba(255, 255, 255, 0.048));
+  background: var(--sidebar-hover-bg, rgba(255, 255, 255, 0.064));
 }
 
 .sidebar-worktree-card[data-hovered="true"] {
