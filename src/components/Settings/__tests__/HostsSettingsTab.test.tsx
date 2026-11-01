@@ -183,6 +183,24 @@ describe("HostsSettingsTab", () => {
     expect(await screen.findByText("bigbox")).toBeTruthy();
   });
 
+  it("keeps hosts an event listed when the first read answers empty after it (#15887)", async () => {
+    let answer!: (hosts: HostListEntry[]) => void;
+    remoteHosts.list!.mockReturnValueOnce(new Promise<HostListEntry[]>((r) => (answer = r)));
+    render(
+      <TooltipProvider>
+        <HostsSettingsTab />
+      </TooltipProvider>
+    );
+    await waitFor(() => expect(remoteHosts.list).toHaveBeenCalledTimes(1));
+    act(() =>
+      listeners.forEach((l) => l({ type: "hosts-changed", hosts: [entry("bigbox", "bigbox")] }))
+    );
+    expect(await screen.findByText("bigbox")).toBeTruthy();
+
+    await act(async () => answer([]));
+    expect(screen.getByText("bigbox")).toBeTruthy();
+  });
+
   it("opens a host's detail and removes it only after confirming", async () => {
     remoteHosts.list!.mockResolvedValue([entry("studio-03", "studio-03")]);
     render(

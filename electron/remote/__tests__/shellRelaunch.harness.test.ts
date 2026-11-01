@@ -216,6 +216,9 @@ vi.mock("../../services/HelpSessionService.js", () => ({
  * registered where the webContents registry looks. A relaunch opens new
  * windows; the old ones close with the Shell they belonged to.
  */
+/** Views on this machine that every Remote Hosts broadcast reaches, as `getAllAppWebContents` lists them. */
+const localAppViews = vi.hoisted(() => new Set<{ webContents: unknown }>());
+
 const shellWindows = vi.hoisted(() => {
   interface View {
     id: number;
@@ -325,7 +328,7 @@ vi.mock("../../window/webContentsRegistry.js", async () => {
       (wc && shellWindows.windowOf(wc.id)?.browserWindow) ?? null,
     getProjectForWebContents: (id: number) => projectKeys.get(id) ?? null,
     getAppWebContents: () => null,
-    getAllAppWebContents: () => [],
+    getAllAppWebContents: () => [...localAppViews].map((view) => view.webContents),
     getWebContentsForProject: () => [],
     hasRegisteredProjectViews: () => false,
     isCachedViewWebContents: () => false,
@@ -338,6 +341,7 @@ vi.mock("../../window/webContentsRegistry.js", async () => {
 });
 
 import type { IpcEnvelope } from "../../../shared/types/ipc/errors.js";
+import type { RemoteHostsEvent } from "../../../shared/types/ipc/remoteHosts.js";
 import type { TerminalReconnectResult } from "../../../shared/types/ipc.js";
 import type { ProjectState } from "../../../shared/types/project.js";
 import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.js";
@@ -374,7 +378,8 @@ import { getLocalHandshakeInfo } from "../handshakeInfo.js";
 import type { RemoteViewEndpoint } from "../host/RemoteViewEndpoint.js";
 import { Lane } from "../link/frames.js";
 import { ControlKind } from "../link/messages.js";
-import type { FakeView } from "./harness/fakeView.js";
+import { getRemoteService } from "../runtime.js";
+import { FakeView } from "./harness/fakeView.js";
 import { memoryProjectStore } from "./harness/harnessState.js";
 import { waitUntil } from "./harness/poll.js";
 import { HOST_ID, startRemoteHarness, type RemoteHarness } from "./harness/remoteHarness.js";
@@ -390,6 +395,7 @@ let nextViewId = 100;
 
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+  localAppViews.clear();
   closeShellWindows();
   await h?.dispose();
   h = null;
@@ -638,6 +644,50 @@ describe("a relaunch of the Shell against a host that stays up (integration harn
         previous = identity;
       }
       expect(spawns.map((spawn) => spawn.request.id)).toEqual(["t1", "t-launch-2", "t-launch-3"]);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    "relaunch: a view open before Remote Hosts start hears the saved hosts once the client is up, with no connection event (#15887)",
+    async () => {
+      const { r } = await harness();
+      await quitShell(r);
+      // A window restored ahead of Remote Hosts: its host list read found no client.
+      expect(getRemoteService("remoteHostsClient")).toBeUndefined();
+      const early = new FakeView(nextViewId++);
+      localAppViews.add(early);
+      cleanups.push(() => early.destroy());
+      const heard: Array<{ event: RemoteHostsEvent; listedThen: string[] }> = [];
+      const deliver = early.webContents.send;
+      early.webContents.send = (channel, ...args) => {
+        deliver(channel, ...args);
+        if (channel !== CHANNELS.REMOTE_HOSTS_EVENT) return;
+        // What a list read made on hearing the event would answer.
+        const listedThen =
+          getRemoteService("remoteHostsClient")
+            ?.list()
+            .map((entry) => entry.descriptor.id) ?? [];
+        heard.push({ event: args[0] as RemoteHostsEvent, listedThen });
+      };
+
+      await r.startShell();
+
+      expect(heard).toEqual([
+        {
+          event: {
+            type: "hosts-changed",
+            hosts: [
+              expect.objectContaining({
+                descriptor: expect.objectContaining({ id: HOST_ID }),
+                connection: { status: "disconnected" },
+              }),
+            ],
+          },
+          listedThen: [HOST_ID],
+        },
+      ]);
+      expect(r.isConnected()).toBe(false);
     },
     TEST_TIMEOUT_MS
   );
