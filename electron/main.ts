@@ -1252,8 +1252,8 @@ if (!gotTheLock) {
   }
 
   const appLifecycle = registerAppLifecycleHandlers({
-    onCreateWindow: () =>
-      initialWindowRequest ? initialWindowRequest.open() : createWindow().then(() => {}),
+    onCreateWindow: (request) =>
+      initialWindowRequest ? initialWindowRequest.open(request) : createWindow().then(() => {}),
     getMainWindow,
     windowRegistry,
     keepsRunningWithoutWindows: () =>
@@ -1502,11 +1502,14 @@ if (!gotTheLock) {
         );
         if (windowsDeferred) {
           initialWindowRequest = createInitialWindowRequest({
-            // Read when asked: a folder queued or a crash state since the start decides it.
-            openLaunchWindows: () => {
+            // Read when asked: a folder queued or a crash state since the start
+            // decides it, and so does a relaunch that named something to open,
+            // which this process's own argv and queues don't carry.
+            openLaunchWindows: ({ targeted }) => {
               const signals = readLaunchSignals();
+              const intent = resolveLaunchIntent(signals);
               return openLaunchWindows(
-                resolveLaunchIntent(signals),
+                targeted && intent === "cold" ? "targeted" : intent,
                 resolveRestoreFallbackProjectId(signals, readLastActiveProjectIdSync()),
                 { savesHeld: true }
               );

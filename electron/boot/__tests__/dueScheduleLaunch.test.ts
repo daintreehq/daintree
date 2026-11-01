@@ -12,7 +12,7 @@ describe("dueScheduleLaunch", () => {
     expect(isDueScheduleCheckRequested(["daintree", "run-due-schedules"])).toBe(false);
   });
 
-  it("starts windowless on macOS and Linux, and leaves Windows an ordinary launch", () => {
+  it("starts windowless on macOS and Linux, and not on Windows", () => {
     const argv = ["daintree", "--run-due-schedules"];
     expect(startsWindowlessForDueSchedules({ platform: "darwin", argv })).toBe(true);
     expect(startsWindowlessForDueSchedules({ platform: "linux", argv })).toBe(true);

@@ -9,6 +9,20 @@ import { ScheduledRunScheduler } from "./ScheduledRunScheduler.js";
 
 let scheduler: ScheduledRunScheduler | null = null;
 let stopPowerEvents: (() => void) | null = null;
+/** The OS job's launch is this process's start, given to the first scheduler only. */
+let osLaunchTaken = false;
+
+/**
+ * When an OS job started this process (#15989), on the wall clock and the
+ * monotonic one (`performance.now()` counts from `timeOrigin`).
+ */
+function takeOsLaunch(): { at: number; monotonicAt: number } | null {
+  if (osLaunchTaken) return null;
+  osLaunchTaken = true;
+  return isDueScheduleCheckRequested(process.argv)
+    ? { at: performance.timeOrigin, monotonicAt: 0 }
+    : null;
+}
 
 /**
  * Starts firing due schedules for the life of the process (#15979), with or
@@ -30,10 +44,7 @@ export function startScheduledRunScheduler(): void {
     cancelLaunches: (scheduleId) => cancelScheduledLaunches({ scheduleId, automaticOnly: true }),
     newId: randomUUID,
     isShuttingDown: () => getActiveShutdown() !== null,
-    // An OS job started this process (#15989); it began watching then.
-    osLaunchAt: isDueScheduleCheckRequested(process.argv)
-      ? Math.round(performance.timeOrigin)
-      : null,
+    osLaunch: takeOsLaunch(),
   });
   scheduler = created;
 

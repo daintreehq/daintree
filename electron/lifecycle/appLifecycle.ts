@@ -232,8 +232,18 @@ export async function queueDntrPaths(archivePaths: readonly string[]): Promise<v
   await enqueueArchiveInstallIntents(archivePaths);
 }
 
+/** What asked for a window. */
+export interface WindowRequest {
+  /**
+   * A relaunch that named something to open (a folder, even one that didn't
+   * resolve, or a `.dntr` archive), so a launch that deferred its windows
+   * opens them as a targeted launch would.
+   */
+  readonly targeted: boolean;
+}
+
 export interface AppLifecycleOptions {
-  onCreateWindow: () => void | Promise<void>;
+  onCreateWindow: (request?: WindowRequest) => void | Promise<void>;
   getMainWindow: () => BrowserWindow | null;
   windowRegistry?: WindowRegistry;
   /**
@@ -381,8 +391,9 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
   else void app.whenReady().then(registerTerminationSignals);
 
   // A second launch that arrived before the first had anything on screen.
-  // `plainRelaunch` is true if any of them was a plain relaunch.
-  let deferredRelaunch: { plainRelaunch: boolean } | null = null;
+  // `plainRelaunch` is true if any of them was a plain relaunch, `targeted` if
+  // any named something to open.
+  let deferredRelaunch: { plainRelaunch: boolean; targeted: boolean } | null = null;
 
   const focusWindow = (win: BrowserWindow): void => {
     if (win.isMinimized()) win.restore();
@@ -398,10 +409,10 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
   // closed. A relaunch is the user asking to see the app, so it gets a window.
   // A folder open only needs one when no window has ever set up the routing
   // that would make one for it; queued, it opens in the new window.
-  const openWindowIfNeeded = (plainRelaunch: boolean): void => {
+  const openWindowIfNeeded = (plainRelaunch: boolean, targeted: boolean): void => {
     if (opts.canOpenWindows && !opts.canOpenWindows()) return;
     if (!plainRelaunch && hasOpenDirConsumer()) return;
-    void Promise.resolve(opts.onCreateWindow()).catch((err) =>
+    void Promise.resolve(opts.onCreateWindow({ targeted })).catch((err) =>
       console.error("[MAIN] Failed to open a window for a second launch:", err)
     );
   };
@@ -478,6 +489,8 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
     // re-launches (no path argument). A CLI path or folder open raises the
     // window it lands in, so it is excluded.
     const plainRelaunch = dntrPaths.length > 0 || (!cliPath && directoryPaths.length === 0);
+    const targeted =
+      hasCliPathFlag(commandLine) || directoryPaths.length > 0 || dntrPaths.length > 0;
     if (liveWindow) {
       if (plainRelaunch) focusWindow(liveWindow);
       return;
@@ -490,10 +503,11 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
       // Host; decided once it has, against whatever is on screen then.
       deferredRelaunch = {
         plainRelaunch: (deferredRelaunch?.plainRelaunch ?? false) || plainRelaunch,
+        targeted: (deferredRelaunch?.targeted ?? false) || targeted,
       };
       return;
     }
-    openWindowIfNeeded(plainRelaunch);
+    openWindowIfNeeded(plainRelaunch, targeted);
   });
 
   // The application menu is process-global but its project gates track the
@@ -554,7 +568,7 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
       opts.keepsRunningWithoutWindows?.() &&
       (!app.isReady() || !(opts.isLaunchSettled?.() ?? true))
     ) {
-      deferredRelaunch = { plainRelaunch: true };
+      deferredRelaunch = { plainRelaunch: true, targeted: deferredRelaunch?.targeted ?? false };
       return;
     }
     // A Dock click during a slow startup fires `activate` before
@@ -580,7 +594,7 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
         if (pending.plainRelaunch) focusWindow(liveWindow);
         return;
       }
-      openWindowIfNeeded(pending.plainRelaunch);
+      openWindowIfNeeded(pending.plainRelaunch, pending.targeted);
     },
   };
 }

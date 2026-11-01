@@ -26,6 +26,8 @@ export const CLOCK_DRIFT_MS = 10_000;
  * a project whose schedules couldn't be read, before they're tried again.
  */
 export const UNRECORDED_RETRY_MS = 60_000;
+/** A project whose schedules haven't answered by then counts as unread, so one read can't hold up the rest. */
+export const READ_TIMEOUT_MS = 10_000;
 
 /** The parts of the run history the scheduler reads and writes. */
 export interface ScheduledRunSchedulerRecorder {
@@ -54,11 +56,13 @@ export interface ScheduledRunSchedulerDeps {
   readonly newId: () => string;
   readonly isShuttingDown?: () => boolean;
   /**
-   * When an OS job started this process to run due schedules (#15989). The job
-   * watched while Daintree wasn't running, so the startup pass doesn't call
-   * the occurrence it fired for missed, and launches with trigger `os-launch`.
+   * When an OS job started this process to run due schedules (#15989), on
+   * both clocks. The job watched while Daintree wasn't running, so the startup
+   * pass doesn't call the occurrence it fired for missed, and launches with
+   * trigger `os-launch`. The clocks are the first look, so a sleep or clock
+   * change before the first pass is seen.
    */
-  readonly osLaunchAt?: number | null;
+  readonly osLaunch?: { readonly at: number; readonly monotonicAt: number } | null;
   readonly now?: () => number;
   readonly monotonicNow?: () => number;
   readonly logInfo?: (message: string) => void;
@@ -145,7 +149,10 @@ export class ScheduledRunScheduler {
     this.isShuttingDown = deps.isShuttingDown ?? (() => false);
     this.logInfo = deps.logInfo ?? console.log;
     this.logWarn = deps.logWarn ?? console.warn;
-    this.osLaunchAt = deps.osLaunchAt ?? null;
+    this.osLaunchAt = deps.osLaunch?.at ?? null;
+    if (deps.osLaunch) {
+      this.lastLook = { wall: deps.osLaunch.at, monotonic: deps.osLaunch.monotonicAt };
+    }
   }
 
   /** Reads every project's schedules, then evaluates them; the first pass catches up. */
@@ -260,13 +267,29 @@ export class ScheduledRunScheduler {
     await Promise.all(
       projectIds.map(async (projectId) => {
         try {
-          this.holdRead(await this.deps.listSchedules(projectId));
+          this.holdRead(await this.readSchedules(projectId));
         } catch (error) {
           this.unread.add(projectId);
           this.logWarn(`[ScheduledRuns] Couldn't read project ${projectId}'s schedules:`, error);
         }
       })
     );
+  }
+
+  private readSchedules(projectId: string): Promise<SchedulesSnapshot> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`no answer within ${READ_TIMEOUT_MS} ms`)),
+        READ_TIMEOUT_MS
+      );
+      let read: Promise<SchedulesSnapshot>;
+      try {
+        read = Promise.resolve(this.deps.listSchedules(projectId));
+      } catch (error) {
+        read = Promise.reject(error);
+      }
+      read.then(resolve, reject).finally(() => clearTimeout(timer));
+    });
   }
 
   private requestPass(): void {
@@ -322,6 +345,8 @@ export class ScheduledRunScheduler {
     const now = this.now();
     const monotonic = this.monotonicNow();
     const osLaunchAt = this.osLaunchAt;
+    // Evaluating spends the OS launch's watch, even if a schedule's turn throws.
+    this.osLaunchAt = null;
     let nextDueAt: number | null = null;
     for (const [projectId, snapshot] of this.projects) {
       for (const schedule of snapshot.schedules) {
@@ -364,7 +389,6 @@ export class ScheduledRunScheduler {
     // A schedule passed over here needs none of it: its launch ending, or the
     // retry it waits out, marks it unwatched through then.
     this.recoverAll = false;
-    this.osLaunchAt = null;
     this.arm(nextDueAt === null ? SCHEDULER_TICK_MS : nextDueAt - now);
   }
 

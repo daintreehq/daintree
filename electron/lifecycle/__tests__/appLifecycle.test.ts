@@ -73,6 +73,12 @@ const installPluginMock = vi.hoisted(() => vi.fn());
 vi.mock("../../services/PluginService.js", () => ({
   pluginService: { installPlugin: installPluginMock },
 }));
+const handleDaintreeUrlMock = vi.hoisted(() => vi.fn<(url: string) => void>());
+vi.mock("../../setup/deepLinkInstall.js", () => ({
+  extractDaintreeUrl: (argv: string[]) =>
+    argv.find((arg) => arg.startsWith("daintree://")) ?? null,
+  handleDaintreeUrl: handleDaintreeUrlMock,
+}));
 // environment.ts registers real `open-file` listeners and calls enableSandbox()
 // at import time; only the external folder-open dispatch is needed here.
 const dispatchOpenDirPathMock = vi.hoisted(() => vi.fn<(dirPath: string) => void>());
@@ -571,12 +577,26 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
       getMainWindow: vi.fn(() => win as unknown as import("electron").BrowserWindow),
     });
 
-    handler({}, ["/opt/Daintree/daintree", "--run-due-schedules", cliDir], "/home/greg");
+    handler(
+      {},
+      [
+        "/opt/Daintree/daintree",
+        "--run-due-schedules",
+        `--cli-path=${cliDir}`,
+        pathToFileURL(cliDir).href,
+        nodePath.join(cliDir, "plugin.dntr"),
+        "daintree://install?plugin=x",
+      ],
+      "/home/greg"
+    );
+    await Promise.resolve();
 
     expect(onDueScheduleCheckRequested).toHaveBeenCalledOnce();
     expect(win.focus).not.toHaveBeenCalled();
     expect(opts.onCreateWindow).not.toHaveBeenCalled();
     expect(dispatchOpenDirPathMock).not.toHaveBeenCalled();
+    expect(enqueueArchiveInstallIntentsMock).not.toHaveBeenCalled();
+    expect(handleDaintreeUrlMock).not.toHaveBeenCalled();
   });
 
   it("opens nothing for an OS job's launch with nothing to run the check", async () => {
@@ -613,7 +633,18 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
 
     handler({}, ["daintree"], "/");
 
-    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+    expect(opts.onCreateWindow).toHaveBeenCalledExactlyOnceWith({ targeted: false });
+  });
+
+  it("says a relaunch that named something to open was targeted", async () => {
+    hasOpenDirConsumerMock.mockReturnValue(false);
+    const { opts, handler } = await register();
+
+    handler({}, ["daintree", nodePath.join(cliDir, "plugin.dntr")], "/");
+    handler({}, ["daintree", "--cli-path=/nowhere/at/all"], "/");
+
+    expect(opts.onCreateWindow).toHaveBeenNthCalledWith(1, { targeted: true });
+    expect(opts.onCreateWindow).toHaveBeenNthCalledWith(2, { targeted: true });
   });
 
   it("treats a destroyed primary window as no window", async () => {
@@ -670,10 +701,12 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
 
     handler({}, ["daintree", `--cli-path=${cliDir}`], "/");
     expect(dispatchOpenDirPathMock).toHaveBeenCalledExactlyOnceWith(cliDir);
+    handler({}, ["daintree"], "/");
     settled = true;
     handle.onLaunchSettled();
 
-    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+    // Targeted, though a plain relaunch arrived after it.
+    expect(opts.onCreateWindow).toHaveBeenCalledExactlyOnceWith({ targeted: true });
   });
 
   it("does nothing on settle when no second launch arrived", async () => {

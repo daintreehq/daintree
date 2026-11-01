@@ -169,19 +169,31 @@ describe("scheduledRunSchedulerLive", () => {
     expect(power.listenerCount("unlock-screen")).toBe(0);
   });
 
-  it("treats a process an OS job started as watched from its start", () => {
-    process.argv = [...originalArgv, "--run-due-schedules"];
-    startScheduledRunScheduler();
+  /** A fresh copy of the module, as a new process has. */
+  async function freshLive() {
+    vi.resetModules();
+    return import("../scheduledRunSchedulerLive.js");
+  }
 
-    const osLaunchAt = mocks.instances[0]!.deps.osLaunchAt as number;
-    expect(osLaunchAt).toBe(Math.round(performance.timeOrigin));
-    expect(osLaunchAt).toBeLessThanOrEqual(Date.now());
+  it("gives the first scheduler of a process an OS job started its launch on both clocks", async () => {
+    process.argv = [...originalArgv, "--run-due-schedules"];
+    const live = await freshLive();
+    live.startScheduledRunScheduler();
+    const osLaunch = mocks.instances[0]!.deps.osLaunch as { at: number; monotonicAt: number };
+    expect(osLaunch.at).toBe(performance.timeOrigin);
+    expect(osLaunch.at + performance.now()).toBeCloseTo(Date.now(), -3);
+
+    await live.stopScheduledRunScheduler();
+    live.startScheduledRunScheduler();
+    expect(mocks.instances[1]!.deps.osLaunch).toBeNull();
+    await live.stopScheduledRunScheduler();
   });
 
-  it("treats any other launch as unwatched until its first look", () => {
-    startScheduledRunScheduler();
-
-    expect(mocks.instances[0]!.deps.osLaunchAt).toBeNull();
+  it("gives any other launch no OS launch", async () => {
+    const live = await freshLive();
+    live.startScheduledRunScheduler();
+    expect(mocks.instances[0]!.deps.osLaunch).toBeNull();
+    await live.stopScheduledRunScheduler();
   });
 
   it("asks a running scheduler to look at once, and does nothing before it starts", () => {

@@ -18,6 +18,7 @@ import { ScheduledRunRecorder } from "../ScheduledRunRecorder.js";
 import { ScheduledRunStore } from "../ScheduledRunStore.js";
 import {
   ON_TIME_GRACE_MS,
+  READ_TIMEOUT_MS,
   SCHEDULER_TICK_MS,
   ScheduledRunScheduler,
   type ScheduledRunSchedulerDeps,
@@ -139,8 +140,16 @@ function deps(): ScheduledRunSchedulerDeps {
   };
 }
 
+/** An OS job's launch at `at`, with no sleep or clock change between it and now. */
+function osLaunch(at: number) {
+  return { at, monotonicAt: at - skew };
+}
+
 async function start(osLaunchAt: number | null = null): Promise<ScheduledRunScheduler> {
-  scheduler = new ScheduledRunScheduler({ ...deps(), osLaunchAt });
+  scheduler = new ScheduledRunScheduler({
+    ...deps(),
+    osLaunch: osLaunchAt === null ? null : osLaunch(osLaunchAt),
+  });
   await scheduler.start();
   await scheduler.idle();
   return scheduler;
@@ -962,17 +971,20 @@ describe("ScheduledRunScheduler", () => {
       ]);
     });
 
-    it("keeps the launch's watch through a pass the history wasn't ready for", async () => {
+    it("keeps the launch's watch through passes the history wasn't ready for", async () => {
       setClock(at(9, 0, 10));
       commit("project-1", [skipping()]);
-      getRecorder.mockResolvedValueOnce(null);
+      getRecorder.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
       await start(at(9));
+      await elapse(SCHEDULER_TICK_MS);
       expect(launches).toEqual([]);
 
+      // Found more than a minute after it came due, but the job launched on time.
       await elapse(SCHEDULER_TICK_MS);
       expect(origins()).toEqual([
         expect.objectContaining({ trigger: "os-launch", dueAt: at(9), coalesced: null }),
       ]);
+      expect(launchedAt[0]! - at(9)).toBeGreaterThan(ON_TIME_GRACE_MS);
     });
 
     it("applies the missed-run policy to a job the OS ran late", async () => {
@@ -999,7 +1011,34 @@ describe("ScheduledRunScheduler", () => {
       expect(launches).toEqual([]);
       expect(recorder.listBySchedule("schedule-1")).toEqual([
         expect.objectContaining({
-          origin: expect.objectContaining({ trigger: "os-launch", dueAt: at(9) }),
+          origin: {
+            trigger: "os-launch",
+            dueAt: at(9),
+            occurrenceKey: occurrenceKeyFor(at(9)),
+            coalesced: { after: at(8), through: at(13, 0, 10) },
+          },
+          settlement: expect.objectContaining({
+            outcome: "skipped",
+            evidence: { kind: "skip", reason: { kind: "missed" } },
+          }),
+        }),
+      ]);
+    });
+
+    it("skips an on-time occurrence with the missed ones before it when missed runs are skipped", async () => {
+      // Off yesterday: yesterday's 09:00 was missed, and the job fires for today's.
+      setClock(at(9, 0, 10));
+      commit("project-1", [skipping({ updatedAt: at(8) - 24 * HOUR })]);
+      await start(at(9));
+
+      expect(launches).toEqual([]);
+      expect(recorder.listBySchedule("schedule-1")).toEqual([
+        expect.objectContaining({
+          origin: expect.objectContaining({
+            trigger: "os-launch",
+            dueAt: at(9),
+            coalesced: { after: at(8) - 24 * HOUR, through: at(9, 0, 10) },
+          }),
           settlement: expect.objectContaining({ outcome: "skipped" }),
         }),
       ]);
@@ -1035,16 +1074,110 @@ describe("ScheduledRunScheduler", () => {
       ]);
     });
 
+    it("spends the launch's watch on a pass that finds nothing enabled", async () => {
+      setClock(at(9, 0, 5));
+      commit("project-1", [daily({ enabled: false })]);
+      await start(at(9));
+      commit("project-1", [daily()]);
+      await scheduler!.idle();
+
+      expect(origins()).toEqual([
+        expect.objectContaining({ trigger: "scheduled", dueAt: at(9) }),
+      ]);
+    });
+
+    it("spends the launch's watch on a pass whose evaluation throws", async () => {
+      setClock(at(13, 0, 10));
+      commit("project-1", [skipping()]);
+      let failures = 1;
+      scheduler = new ScheduledRunScheduler({
+        ...deps(),
+        osLaunch: osLaunch(at(13)),
+        projectExists: (projectId) => {
+          if (failures-- > 0) throw new Error("database busy");
+          return projects.has(projectId);
+        },
+      });
+      await scheduler.start();
+      await scheduler.idle();
+      expect(recorder.listBySchedule("schedule-1")).toEqual([]);
+
+      await elapse(SCHEDULER_TICK_MS);
+      expect(recorder.listBySchedule("schedule-1")).toEqual([
+        expect.objectContaining({ origin: expect.objectContaining({ trigger: "catch-up" }) }),
+      ]);
+    });
+
     it("calls the occurrence late when the machine slept before the first look", async () => {
       setClock(at(9, 0, 5));
       commit("project-1", [daily()]);
-      scheduler = new ScheduledRunScheduler({ ...deps(), osLaunchAt: at(9) });
+      scheduler = new ScheduledRunScheduler({ ...deps(), osLaunch: osLaunch(at(9)) });
       scheduler.suspend();
       sleepFor(4 * HOUR);
       await scheduler.start();
       await scheduler.idle();
 
-      expect(origins()).toEqual([expect.objectContaining({ trigger: "catch-up", dueAt: at(9) })]);
+      expect(origins()).toEqual([
+        expect.objectContaining({ trigger: "catch-up", dueAt: at(9) }),
+      ]);
+    });
+
+    it("calls it late when a wake before the first look is the only event", async () => {
+      setClock(at(9, 0, 5));
+      commit("project-1", [daily()]);
+      scheduler = new ScheduledRunScheduler({ ...deps(), osLaunch: osLaunch(at(9)) });
+      scheduler.resume();
+      await scheduler.start();
+      await scheduler.idle();
+
+      expect(origins()).toEqual([
+        expect.objectContaining({ trigger: "catch-up", dueAt: at(9) }),
+      ]);
+    });
+
+    it("calls it late after a sleep or clock change before the first look, with no event", async () => {
+      setClock(at(9, 0, 5));
+      commit("project-1", [daily()]);
+      const launched = osLaunch(at(9));
+      // Linux stops monotonic time while asleep, and reports nothing to a
+      // process that is still starting.
+      sleepFor(4 * HOUR);
+      scheduler = new ScheduledRunScheduler({ ...deps(), osLaunch: launched });
+      await scheduler.start();
+      await scheduler.idle();
+
+      expect(origins()).toEqual([
+        expect.objectContaining({ trigger: "catch-up", dueAt: at(9) }),
+      ]);
+    });
+
+    it("calls an occurrence late in a project read only after it came due", async () => {
+      setClock(at(9, 0, 10));
+      projects.add("project-2");
+      commit("project-1", [daily()]);
+      let refusals = 1;
+      const base = deps();
+      getRecorder.mockResolvedValueOnce(null);
+      scheduler = new ScheduledRunScheduler({
+        ...base,
+        osLaunch: osLaunch(at(9)),
+        listSchedules: async (projectId) => {
+          if (projectId === "project-2" && refusals-- > 0) throw new Error("unreadable");
+          return base.listSchedules(projectId);
+        },
+      });
+      await scheduler.start();
+      await scheduler.idle();
+      expect(launches).toEqual([]);
+
+      commit("project-2", [daily({ id: "schedule-2", projectId: "project-2" })]);
+      await scheduler.idle();
+      expect(
+        launches.map((launch) => [launch.scheduleId, launch.origin.trigger, launch.origin.coalesced])
+      ).toEqual([
+        ["schedule-1", "os-launch", null],
+        ["schedule-2", "os-launch", { after: at(8), through: at(9, 0, 10) }],
+      ]);
     });
   });
 
@@ -1078,6 +1211,24 @@ describe("ScheduledRunScheduler", () => {
       ["schedule-1", "catch-up"],
       ["schedule-2", "catch-up"],
     ]);
+  });
+
+  it("counts a project whose read never answers as unread, and fires the rest", async () => {
+    setClock(at(9, 0, 30));
+    projects.add("project-2");
+    commit("project-1", [schedule({ updatedAt: at(8) })]);
+    const base = deps();
+    scheduler = new ScheduledRunScheduler({
+      ...base,
+      listSchedules: (projectId) =>
+        projectId === "project-2" ? new Promise(() => {}) : base.listSchedules(projectId),
+    });
+    void scheduler.start();
+    await settle();
+    expect(launches).toEqual([]);
+
+    await elapse(READ_TIMEOUT_MS);
+    expect(origins()).toEqual([expect.objectContaining({ trigger: "catch-up", dueAt: at(9) })]);
   });
 
   it("looks again at once when an OS job reaches a running Daintree", async () => {
