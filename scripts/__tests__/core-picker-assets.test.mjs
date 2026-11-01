@@ -52,6 +52,8 @@ function frameworkOwning(file) {
   if (file.startsWith(`${GUEST_DIR}/svelte/`)) return "svelte";
   if (file.startsWith(`${GUEST_DIR}/preact/`)) return "preact";
   if (file === `${GUEST_DIR}/astroExtractor.ts`) return "astro";
+  // Only Astro's dev toolbar takes stamps off the live page, so only its reader matches served markup.
+  if (file === `${GUEST_DIR}/servedDocument.ts`) return "astro";
   if (!file.startsWith(`${EXTRACTORS_DIR}/`)) return undefined;
   return FRAMEWORK_PREFIX.exec(path.basename(file))?.[1];
 }
