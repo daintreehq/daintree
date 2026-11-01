@@ -58,20 +58,25 @@ describe("submit guards (#16015)", () => {
     return { ptyManager, handler };
   }
 
-  it("passes an exact guard on with only the run fields it may carry", () => {
+  it("passes an exact guard on with only its run fields, and makes a malformed one refuse", () => {
     const { ptyManager, handler } = setup();
     const send = (guard: unknown) =>
       handler({ type: "submit", id: "t1", text: "answer", guard: guard as never });
 
     send({ kind: "settled-prompt-exact", agentIncarnation: 2, agentSessionId: "s-1", extra: 1 });
-    send({ kind: "settled-prompt-exact", agentIncarnation: "2", agentSessionId: 7 });
+    send({ kind: "settled-prompt-exact" });
+    send({ kind: "settled-prompt-exact", agentIncarnation: "2" });
+    send({ kind: "settled-prompt-exact", agentIncarnation: 1, agentSessionId: 7 });
     send({ kind: "anything-goes" });
     send("settled-prompt-strict");
 
+    const refusing = { kind: "settled-prompt-exact", agentIncarnation: -1 };
     expect(ptyManager.submit.mock.calls.map((call) => call[4])).toEqual([
       { kind: "settled-prompt-exact", agentIncarnation: 2, agentSessionId: "s-1" },
       { kind: "settled-prompt-exact" },
-      undefined,
+      refusing,
+      refusing,
+      refusing,
       "settled-prompt-strict",
     ]);
   });

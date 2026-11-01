@@ -488,12 +488,16 @@ describe("TerminalProcess settled-prompt-exact guard (#16015)", () => {
   async function queuedAnswer(
     meanwhile: (t: Internals["terminalInfo"]) => void,
     guard: ExactPromptGuard = { ...EXACT, agentIncarnation: 0, agentSessionId: "session-1" },
-    sessionAtSubmit: string | undefined = "session-1"
+    /** Null: the host doesn't know the session yet when the line arrives. */
+    sessionAtSubmit: string | null = "session-1"
   ) {
     ptyWriteMock = vi.fn<(data: string) => void>();
     const terminal = createTerminal();
     settleAtPrompt(terminal, Date.now() - 5_000);
-    Object.assign(info(terminal), { agentIncarnation: 0, agentSessionId: sessionAtSubmit });
+    Object.assign(info(terminal), {
+      agentIncarnation: 0,
+      agentSessionId: sessionAtSubmit ?? undefined,
+    });
     terminal.submit("a person's prompt");
     terminal.submit("answer", "tok-1", undefined, guard);
     meanwhile(info(terminal));
@@ -507,10 +511,11 @@ describe("TerminalProcess settled-prompt-exact guard (#16015)", () => {
     await expect(
       queuedAnswer(
         (t) => {
+          expect(t.agentSessionId).toBeUndefined();
           t.agentSessionId = "session-1";
         },
         { ...EXACT, agentIncarnation: 0 },
-        undefined
+        null
       )
     ).resolves.toBe("pty_written");
   });

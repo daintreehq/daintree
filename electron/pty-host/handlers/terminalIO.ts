@@ -4,17 +4,28 @@ import type {
 } from "../../../shared/types/pty-host.js";
 import type { HandlerMap, HostContext } from "./types.js";
 
-/** An exact guard with only the fields it may carry, each only when well formed. */
+/**
+ * No run has a negative incarnation: a guard pinned to one refuses its line,
+ * which is what a malformed exact guard must do rather than admit on weaker
+ * terms.
+ */
+const REFUSING_GUARD: ExactPromptGuard = { kind: "settled-prompt-exact", agentIncarnation: -1 };
+
+/**
+ * An exact guard as main sent it, with only the fields it may carry. Any other
+ * object, or a field that is present but malformed, refuses the line.
+ */
 function exactPromptGuardOf(value: unknown): ExactPromptGuard | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const guard = value as Partial<Record<keyof ExactPromptGuard, unknown>>;
-  if (guard.kind !== "settled-prompt-exact") return undefined;
+  if (guard.kind !== "settled-prompt-exact") return REFUSING_GUARD;
+  const { agentIncarnation, agentSessionId } = guard;
+  if (agentIncarnation !== undefined && !Number.isInteger(agentIncarnation)) return REFUSING_GUARD;
+  if (agentSessionId !== undefined && typeof agentSessionId !== "string") return REFUSING_GUARD;
   return {
     kind: "settled-prompt-exact",
-    ...(typeof guard.agentIncarnation === "number"
-      ? { agentIncarnation: guard.agentIncarnation }
-      : {}),
-    ...(typeof guard.agentSessionId === "string" ? { agentSessionId: guard.agentSessionId } : {}),
+    ...(agentIncarnation !== undefined ? { agentIncarnation: agentIncarnation as number } : {}),
+    ...(agentSessionId !== undefined ? { agentSessionId } : {}),
   };
 }
 
