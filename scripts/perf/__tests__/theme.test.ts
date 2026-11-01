@@ -513,6 +513,15 @@ describe("PERF-306 theme module oracle", () => {
     const holed = clone();
     holed.schemes.length += 1;
     expect(plainDataViolations(holed)).toBe(1);
+    // Keys that read as numbers without being indices can't cancel a hole.
+    for (const key of ["4294967295", "-1", "1.5", "Infinity"]) {
+      expect(plainDataViolations(Object.assign(new Array(1), { [key]: "lost" }))).toBe(2);
+      expect(plainDataViolations(Object.assign([], { [key]: "lost" }))).toBe(1);
+    }
+    // A slot that exists but reads through an accessor is one miss, not two.
+    const accessorSlot = ["x"];
+    Object.defineProperty(accessorSlot, "0", { enumerable: true, get: () => "x" });
+    expect(plainDataViolations(accessorSlot)).toBe(1);
 
     // A proxy whose reads would do the work after the clock stopped.
     let trapped = 0;

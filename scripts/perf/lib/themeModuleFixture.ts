@@ -205,18 +205,22 @@ export const PLAIN_DATA_VIOLATIONS_SOURCE = `function plainDataViolations(root, 
     }
     let indices = 0;
     for (const key of Reflect.ownKeys(node)) {
-      if (array && key === "length") continue;
-      // JSON keeps an array's indices and nothing else.
-      if (array && !(typeof key === "string" && String(Number(key)) === key)) {
-        violations += 1;
-        continue;
+      if (array) {
+        if (key === "length") continue;
+        // JSON keeps an array's indices and nothing else. An own index is a
+        // canonical integer below length; anything else is a stray property.
+        const index = typeof key === "string" ? Number(key) : Number.NaN;
+        if (!(String(index) === key && Number.isInteger(index) && index >= 0 && index < node.length)) {
+          violations += 1;
+          continue;
+        }
+        indices += 1;
       }
       const descriptor = Object.getOwnPropertyDescriptor(node, key);
       if (typeof key === "symbol" || !descriptor.enumerable || !("value" in descriptor)) {
         violations += 1;
         continue;
       }
-      if (array) indices += 1;
       visit(descriptor.value);
     }
     // Holes, which JSON fills with null.
