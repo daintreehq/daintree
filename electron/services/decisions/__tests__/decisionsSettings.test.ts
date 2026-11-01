@@ -47,7 +47,7 @@ describe("sanitizeDecisionsSettings", () => {
   });
 
   it("is on only for an exact true, and a proxy is allowed only for an exact true", () => {
-    for (const flag of ["true", 1, {}, [true], null]) {
+    for (const flag of [false, "true", 1, {}, [true], null]) {
       const settings = sanitizeDecisionsSettings({
         ...connected,
         enabled: flag,
@@ -159,6 +159,14 @@ describe("readDecisionsSettings and writeDecisionsSettings", () => {
     expect(writes).toEqual([]);
   });
 
+  it("reads a damaged setting sanitised, leaving the file as it was", () => {
+    const onDisk = { ...connected, deviceId: "short", claimSecret: "claim-7f3a9c1e5b" };
+    const { store, writes, current } = memoryStore(onDisk);
+    expect(readDecisionsSettings(store)).toEqual({ ...connected, enabled: false, deviceId: null });
+    expect(writes).toEqual([]);
+    expect(current()).toBe(onDisk);
+  });
+
   it("writes the whole setting in one set, sanitised, and returns what it stored", () => {
     const { store, writes, current } = memoryStore({
       ...connected,
@@ -194,6 +202,14 @@ describe("normalizeRelayOrigin", () => {
     expect(normalizeRelayOrigin("http://127.0.0.1:8787/")).toBe("http://127.0.0.1:8787");
     expect(normalizeRelayOrigin("http://relay.example.com")).toBeNull();
     expect(normalizeRelayOrigin("http://192.168.1.20:8787")).toBeNull();
+    for (const other of ["ftp://localhost:8787", "wss://127.0.0.1:8787", "ws://localhost:8787"]) {
+      expect(normalizeRelayOrigin(other), other).toBeNull();
+      expect(sanitizeDecisionsSettings({ ...connected, relayOrigin: other }), other).toEqual({
+        ...connected,
+        enabled: false,
+        relayOrigin: null,
+      });
+    }
   });
 
   it("refuses anything that isn't an http(s) URL", () => {
