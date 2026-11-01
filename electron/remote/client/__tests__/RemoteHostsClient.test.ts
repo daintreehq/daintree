@@ -3660,17 +3660,26 @@ describe("RemoteHostsClient", () => {
       await vi.waitFor(() => expect(resyncs()).toHaveLength(1));
     });
 
-    it("keeps none of a forgotten host's views, even from a link that goes after them", async () => {
+    it("keeps none of a forgotten host's views, even from a link dialled while it went", async () => {
       keys.set(9, "studio-01:proj-1");
       views = [9];
       manager.connect("studio-01");
-      // The real manager says so once each connection it discards has stopped.
+      // As the real manager does: nothing to discard says nothing, and a
+      // connection dialled again while the old one stopped speaks for the host.
       const discard = manager.disconnect.getMockImplementation()!;
+      let redialled = false;
       manager.disconnect.mockImplementation(async (hostId: string) => {
+        if (!manager.get(hostId)) return;
         await discard(hostId);
+        if (!redialled) {
+          redialled = true;
+          manager.connect(hostId);
+          return;
+        }
         manager.emit(hostId, { status: "disconnected" });
       });
       await client.forget({ hostId: "studio-01" });
+      expect(manager.disconnect).toHaveBeenCalledTimes(2);
       registry.add({ name: "studio-01", connection: { kind: "ssh", target: "studio.example" } });
       manager.connect("studio-01");
       manager.emit("studio-01", connected);
