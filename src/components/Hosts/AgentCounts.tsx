@@ -1,6 +1,7 @@
 import type { HostMetricsSummary } from "@shared/types/remoteHosts";
 import { cn } from "@/lib/utils";
-import { BlockedCircle, HollowCircle, SpinnerCircle } from "@/components/icons";
+import { SpinnerCircle } from "@/components/icons";
+import { BAND_GLYPH, BAND_GLYPH_TONE } from "@/components/Pilot/PilotRunState";
 
 /** A reading the host didn't give: a dash, said in full to a screen reader. */
 export function MetricDash({ label, align }: { label: string; align?: "right" }) {
@@ -49,7 +50,8 @@ export function AgentCounts({
       ]
         .filter(Boolean)
         .join(", ")}`;
-  const AskingGlyph = blocked > 0 ? BlockedCircle : HollowCircle;
+  const askingBand = blocked > 0 ? "blocked" : "needs-you";
+  const AskingGlyph = BAND_GLYPH[askingBand];
   return (
     <span className="flex items-center gap-2 text-xs tabular-nums text-text-primary">
       <span className="sr-only">{spoken} (observed)</span>
@@ -65,12 +67,7 @@ export function AgentCounts({
           <span aria-hidden="true" className="flex w-7 items-center gap-1">
             {asking > 0 && (
               <>
-                <AskingGlyph
-                  className={cn(
-                    "h-3 w-3 shrink-0",
-                    blocked > 0 ? "text-status-danger" : "text-state-waiting"
-                  )}
-                />
+                <AskingGlyph className={cn("h-3 w-3 shrink-0", BAND_GLYPH_TONE[askingBand])} />
                 {asking}
               </>
             )}

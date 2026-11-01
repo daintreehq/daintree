@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 import type { HostMetricsSummary } from "@shared/types/remoteHosts";
-import { BlockedCircle, HollowCircle } from "@/components/icons";
+import { BAND_GLYPH, BAND_GLYPH_TONE } from "@/components/Pilot/PilotRunState";
 import { AgentCounts } from "../AgentCounts";
 import { makeSummary } from "../Overview/__tests__/fixtures";
 
@@ -45,7 +45,7 @@ describe("AgentCounts", () => {
     });
   });
 
-  it("wears the blocked glyph only when a run is blocked", () => {
+  it("wears the band's glyph and tone: blocked only when a run is blocked", () => {
     const askingGlyph = (attention: { waiting: number; blocked: number }) => {
       const { container } = render(
         <AgentCounts
@@ -58,16 +58,21 @@ describe("AgentCounts", () => {
       const glyph = container.firstElementChild!.querySelector(
         ':scope > span[aria-hidden="true"] > *'
       )!;
-      return { shape: glyph.innerHTML, tone: glyph.getAttribute("class") };
+      return { shape: glyph.innerHTML, classes: glyph.classList };
     };
-    const shapeOf = (Glyph: typeof BlockedCircle) =>
-      render(<Glyph />).container.firstElementChild!.innerHTML;
+    const shapeOf = (band: "blocked" | "needs-you") => {
+      const Glyph = BAND_GLYPH[band];
+      return render(<Glyph />).container.firstElementChild!.innerHTML;
+    };
 
     const waiting = askingGlyph({ waiting: 2, blocked: 0 });
     const blocked = askingGlyph({ waiting: 1, blocked: 1 });
-    expect(waiting.shape).toBe(shapeOf(HollowCircle));
-    expect(blocked.shape).toBe(shapeOf(BlockedCircle));
-    expect(blocked.tone).not.toBe(waiting.tone);
+    expect(waiting.shape).toBe(shapeOf("needs-you"));
+    expect(blocked.shape).toBe(shapeOf("blocked"));
+    expect(waiting.classes.contains(BAND_GLYPH_TONE["needs-you"])).toBe(true);
+    expect(waiting.classes.contains(BAND_GLYPH_TONE.blocked)).toBe(false);
+    expect(blocked.classes.contains(BAND_GLYPH_TONE.blocked)).toBe(true);
+    expect(blocked.classes.contains(BAND_GLYPH_TONE["needs-you"])).toBe(false);
   });
 
   it("says nothing about waiting for a host too old to band its runs", () => {
