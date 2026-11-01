@@ -87,11 +87,12 @@ describe("ScheduledRunStore", () => {
     store.insert(scheduled("run-1", T0));
 
     expect(() => store.insert(scheduled("run-2", T0))).toThrow(ScheduledRunConflictError);
+    store.insert(scheduled("next-occurrence", T0 + 60_000));
     store.insert({ ...scheduled("run-3", T0), scheduleId: "schedule-2" });
     // Run-now runs carry no occurrence, so any number of them can be registered.
     store.insert(run("run-4"));
     store.insert(run("run-5"));
-    expect(store.listByProject("project-1")).toHaveLength(4);
+    expect(store.listByProject("project-1")).toHaveLength(5);
   });
 
   it("lists newest first, keeping registration order within a millisecond", () => {
@@ -99,9 +100,16 @@ describe("ScheduledRunStore", () => {
     store.insert(run("older", { createdAt: T0 - 1 }));
     store.insert(run("first", { createdAt: T0 }));
     store.insert(run("second", { createdAt: T0 }));
+    store.insert(run("same-project", { createdAt: T0, scheduleId: "schedule-2" }));
     store.insert(run("elsewhere", { createdAt: T0 + 1, projectId: "project-2", scheduleId: "s2" }));
 
     expect(store.listBySchedule("schedule-1").map((r) => r.id)).toEqual([
+      "second",
+      "first",
+      "older",
+    ]);
+    expect(store.listByProject("project-1").map((r) => r.id)).toEqual([
+      "same-project",
       "second",
       "first",
       "older",
@@ -112,14 +120,39 @@ describe("ScheduledRunStore", () => {
   it("prunes a schedule past its newest runs, but never one still live", () => {
     const store = new ScheduledRunStore(sqlite);
     store.insert(run("open-oldest", { createdAt: T0 - 10, settlement: { state: "open" } }));
-    for (let i = 0; i < 5; i++) store.insert(run(`run-${i}`, { createdAt: T0 + i }));
+    // Settled, but its terminal was last seen running: still live.
+    store.insert(
+      run("pty-running", {
+        createdAt: T0 - 9,
+        terminalId: "terminal-1",
+        terminalSpawnedAt: T0 - 9,
+        process: {
+          agent: { state: "not-started" },
+          pty: { state: "running", startedAt: T0 - 9 },
+        },
+      })
+    );
+    store.insert(
+      run("agent-running", {
+        createdAt: T0 - 8,
+        process: {
+          agent: { state: "running", startedAt: T0 - 8 },
+          pty: { state: "not-started" },
+        },
+      })
+    );
+    for (let i = 0; i < 5; i++)
+      store.insert(run(`run-${i}`, { createdAt: T0 + Math.floor((i + 1) / 2) }));
     store.insert(run("other-schedule", { createdAt: T0 - 20, scheduleId: "schedule-2" }));
 
     expect(store.prune("schedule-1", 3)).toBe(2);
+    // Ties go by registration order, so run-2 outranks run-1 in the same millisecond.
     expect(store.listBySchedule("schedule-1").map((r) => r.id)).toEqual([
       "run-4",
       "run-3",
       "run-2",
+      "agent-running",
+      "pty-running",
       "open-oldest",
     ]);
     expect(store.listBySchedule("schedule-2")).toHaveLength(1);
@@ -128,9 +161,11 @@ describe("ScheduledRunStore", () => {
   it("deletes a schedule's runs and names the projects they were in", () => {
     const store = new ScheduledRunStore(sqlite);
     store.insert(run("run-1"));
+    store.insert(run("run-1b"));
     store.insert(run("run-2", { scheduleId: "schedule-2" }));
 
     expect(store.deleteForSchedule("schedule-1")).toEqual(["project-1"]);
+    expect(store.get("run-1b")).toBeNull();
     expect(store.get("run-1")).toBeNull();
     expect(store.get("run-2")).not.toBeNull();
     expect(store.deleteForSchedule("schedule-1")).toEqual([]);
@@ -155,13 +190,13 @@ describe("ScheduledRunStore", () => {
     const warn = vi.fn();
     const store = new ScheduledRunStore(sqlite, warn);
     store.insert(run("good"));
-    sqlite
-      .prepare(
-        "INSERT INTO scheduled_runs (id, project_id, schedule_id, live, created_at, record) VALUES ('bad', 'project-1', 'schedule-1', 0, 0, '{\"id\":\"bad\"}')"
-      )
-      .run();
+    const insertRaw = sqlite.prepare(
+      "INSERT INTO scheduled_runs (id, project_id, schedule_id, live, created_at, record) VALUES (?, 'project-1', 'schedule-1', 0, 0, ?)"
+    );
+    insertRaw.run("invalid", '{"id":"invalid"}');
+    insertRaw.run("unreadable", "{not json");
 
     expect(store.listByProject("project-1").map((r) => r.id)).toEqual(["good"]);
-    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(2);
   });
 });

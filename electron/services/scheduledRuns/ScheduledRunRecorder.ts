@@ -62,8 +62,6 @@ export interface ScheduledRunsChange {
   readonly scheduleIds: readonly string[];
 }
 
-type RunEventName = "scheduled-run:started" | "scheduled-run:ended";
-
 export interface ScheduledRunRecorderDeps {
   readonly store: ScheduledRunStore;
   readonly now?: () => number;
@@ -75,8 +73,10 @@ export interface ScheduledRunRecorderDeps {
   readonly isShuttingDown?: () => boolean;
   /** After a committed change, for the views of each project. */
   readonly onChanged?: (change: ScheduledRunsChange) => void;
-  /** Main-side run events, for other services to follow. */
-  readonly emit?: <K extends RunEventName>(name: K, payload: DaintreeEventMap[K]) => void;
+  /** A run was registered to launch; for other main-side services. */
+  readonly onRunStarted?: (payload: DaintreeEventMap["scheduled-run:started"]) => void;
+  /** A run settled, once; for other main-side services. */
+  readonly onRunEnded?: (payload: DaintreeEventMap["scheduled-run:ended"]) => void;
   readonly logWarn?: (message: string, error?: unknown) => void;
 }
 
@@ -102,7 +102,7 @@ function exitedProcess(
   exitedAt: number,
   exitCode: number | null,
   signal: number | null,
-  startedAt: number | null
+  startedAt: number
 ): ScheduledRunProcess {
   return {
     state: "exited",
@@ -120,29 +120,35 @@ function exitedProcess(
  * Every write is synchronous and committed before anyone is told of it.
  *
  * Runs are matched to facts by terminal incarnation, `{terminalId, spawnedAt}`.
- * A run takes the first incarnation its reserved terminal spawns; a restart
- * under the same id is another incarnation, and its facts aren't the run's.
+ * A run takes the first incarnation its reserved terminal spawns. The host
+ * spawns an id again only once the terminal it had is gone, so a later
+ * incarnation under the id (a restart, or a crashed pty-host's replay) means
+ * the run's own ended unseen if its exit hasn't arrived: the run is `lost`.
  */
 export class ScheduledRunRecorder {
   private readonly store: ScheduledRunStore;
   private readonly now: () => number;
   private readonly isShuttingDown: () => boolean;
   private readonly onChanged: (change: ScheduledRunsChange) => void;
-  private readonly emitEvent: NonNullable<ScheduledRunRecorderDeps["emit"]>;
+  private readonly onRunStarted: NonNullable<ScheduledRunRecorderDeps["onRunStarted"]>;
+  private readonly onRunEnded: NonNullable<ScheduledRunRecorderDeps["onRunEnded"]>;
   private readonly logWarn: (message: string, error?: unknown) => void;
   /**
-   * Terminals of runs launched in this lifetime: every fact for another
-   * terminal is skipped without a read. Runs from an earlier lifetime were
-   * settled as interrupted before any of these were added.
+   * The incarnation each terminal of a run launched in this lifetime was first
+   * seen spawning, null until then. Held here rather than read back, so a
+   * write that failed can't let a later incarnation take the run. Facts for
+   * any other terminal are skipped without a read: runs from an earlier
+   * lifetime were settled as interrupted before any of these were added.
    */
-  private readonly terminals = new Set<string>();
+  private readonly incarnations = new Map<string, number | null>();
 
   constructor(deps: ScheduledRunRecorderDeps) {
     this.store = deps.store;
     this.now = deps.now ?? Date.now;
     this.isShuttingDown = deps.isShuttingDown ?? (() => false);
     this.onChanged = deps.onChanged ?? (() => {});
-    this.emitEvent = deps.emit ?? (() => {});
+    this.onRunStarted = deps.onRunStarted ?? (() => {});
+    this.onRunEnded = deps.onRunEnded ?? (() => {});
     this.logWarn = deps.logWarn ?? console.warn;
   }
 
@@ -170,15 +176,17 @@ export class ScheduledRunRecorder {
       this.store.insert(run);
       this.store.prune(run.scheduleId);
     });
-    this.terminals.add(input.terminalId);
+    if (!this.incarnations.has(input.terminalId)) this.incarnations.set(input.terminalId, null);
     this.changed([run]);
-    this.emitSafely("scheduled-run:started", {
-      runId: run.id,
-      scheduleId: run.scheduleId,
-      projectId: run.projectId,
-      terminalId: input.terminalId,
-      timestamp,
-    });
+    this.notify(() =>
+      this.onRunStarted({
+        runId: run.id,
+        scheduleId: run.scheduleId,
+        projectId: run.projectId,
+        terminalId: input.terminalId,
+        timestamp,
+      })
+    );
     return run;
   }
 
@@ -215,42 +223,64 @@ export class ScheduledRunRecorder {
   /**
    * Settles an open run on a fact another service saw: a handback, a launch
    * error, a cancel or a replacement. Returns the settled run, or null when
-   * it's gone or was already settled, which never changes.
+   * it's gone or was already settled, which never changes. Its terminal's
+   * facts are still recorded on it afterwards.
    */
   settle(runId: string, evidence: ScheduledRunEvidence): ScheduledRun | null {
     const run = this.store.get(runId);
     if (!run || run.settlement.state !== "open") return null;
     const settled = this.withSettlement(run, evidence, this.now());
-    if (!this.write(settled)) return null;
-    this.changed([settled]);
-    this.ended(settled);
-    return settled;
+    return this.commit(settled, true) ? settled : null;
   }
 
-  /** A spawn of `terminalId` answered. Only a run still waiting for its first spawn takes it. */
+  /** A spawn of `terminalId` answered. */
   handleSpawnResult(terminalId: string, result: ScheduledRunSpawnFact): void {
-    if (!this.terminals.has(terminalId)) return;
-    for (const run of this.store.findByTerminal(terminalId)) {
-      if (!this.awaitingSpawn(run)) continue;
-      if (result.success) {
-        if (typeof result.spawnedAt !== "number") {
-          this.logWarn(`[ScheduledRuns] Spawn of run ${run.id} carried no incarnation`);
-          continue;
-        }
-        const spawned: ScheduledRun = {
-          ...run,
-          terminalSpawnedAt: result.spawnedAt,
-          process: { ...run.process, pty: { state: "running", startedAt: result.spawnedAt } },
-        };
-        if (this.write(spawned)) this.changed([spawned]);
-      } else {
-        const message = result.error?.message ?? "The terminal couldn't start";
-        const failed = this.withSettlement(run, { kind: "launch-error", message }, this.now());
-        if (this.write(failed)) {
-          this.changed([failed]);
-          this.ended(failed);
-        }
+    if (!this.incarnations.has(terminalId)) return;
+    const claimed = this.incarnations.get(terminalId) ?? null;
+    if (!result.success) {
+      // Refused before the terminal ever started, it is the run's launch
+      // failing; after, it is some later attempt under the id.
+      if (claimed !== null) return;
+      const message = result.error?.message ?? "The terminal couldn't start";
+      for (const run of this.store.findByTerminal(terminalId)) {
+        if (run.settlement.state !== "open" || run.process.pty.state !== "not-started") continue;
+        this.commit(this.withSettlement(run, { kind: "launch-error", message }, this.now()), true);
       }
+      return;
+    }
+    const spawnedAt = result.spawnedAt;
+    if (typeof spawnedAt !== "number") {
+      this.logWarn(`[ScheduledRuns] A spawn of terminal ${terminalId} carried no incarnation`);
+      return;
+    }
+    if (claimed === null) this.incarnations.set(terminalId, spawnedAt);
+    if (claimed === null || claimed === spawnedAt) {
+      // Also retries a binding whose earlier write failed.
+      for (const run of this.store.findByTerminal(terminalId)) {
+        if (run.terminalSpawnedAt !== null || run.process.pty.state !== "not-started") continue;
+        this.commit({
+          ...run,
+          terminalSpawnedAt: spawnedAt,
+          process: { ...run.process, pty: { state: "running", startedAt: spawnedAt } },
+        });
+      }
+      return;
+    }
+    // A later incarnation under the run's terminal id.
+    const at = this.now();
+    for (const run of this.store.findByTerminal(terminalId)) {
+      if (run.process.pty.state === "exited") continue;
+      let next: ScheduledRun = {
+        ...run,
+        terminalSpawnedAt: claimed,
+        process: {
+          ...run.process,
+          pty: exitedProcess(run.process.pty, at, null, null, claimed),
+        },
+      };
+      const settles = next.settlement.state === "open" && !this.isShuttingDown();
+      if (settles) next = this.withSettlement(next, { kind: "lost" }, at);
+      this.commit(next, settles);
     }
   }
 
@@ -259,20 +289,17 @@ export class ScheduledRunRecorder {
    * the run when the run is still open, unless Daintree is quitting.
    */
   handleExit(fact: ScheduledRunExitFact): void {
-    if (!this.terminals.has(fact.terminalId)) return;
+    const spawnedAt = fact.spawnedAt;
+    if (typeof spawnedAt !== "number" || !this.incarnations.has(fact.terminalId)) return;
+    const claimed = this.incarnations.get(fact.terminalId) ?? null;
+    // An exit can arrive before its spawn answer; it is then the first incarnation seen.
+    if (claimed === null) this.incarnations.set(fact.terminalId, spawnedAt);
+    else if (claimed !== spawnedAt) return;
     const exitedAt = this.now();
     const signal = normalizeSignal(fact.signal);
     const exitCode = fact.exitCode;
     for (const run of this.store.findByTerminal(fact.terminalId)) {
-      const spawnedAt = fact.spawnedAt;
-      if (typeof spawnedAt !== "number") continue;
-      // An exit can reach a run before its spawn answer does; it is then the
-      // run's first incarnation, which only a run still waiting may take.
-      const bound =
-        run.terminalSpawnedAt === null
-          ? this.awaitingSpawn(run)
-          : run.terminalSpawnedAt === spawnedAt;
-      if (!bound || run.process.pty.state === "exited") continue;
+      if (run.process.pty.state === "exited") continue;
       let next: ScheduledRun = {
         ...run,
         terminalSpawnedAt: spawnedAt,
@@ -289,9 +316,7 @@ export class ScheduledRunRecorder {
           exitedAt
         );
       }
-      if (!this.write(next)) continue;
-      this.changed([next]);
-      if (settles) this.ended(next);
+      this.commit(next, settles);
     }
   }
 
@@ -303,9 +328,9 @@ export class ScheduledRunRecorder {
   handleSessionCaptured(fact: ScheduledRunSessionFact): void {
     const { record } = fact;
     const terminal = record.terminal;
-    if (!terminal || !this.terminals.has(terminal.id)) return;
+    if (!terminal || this.incarnations.get(terminal.id) !== terminal.spawnedAt) return;
     for (const run of this.store.findByTerminal(terminal.id)) {
-      if (run.terminalSpawnedAt !== terminal.spawnedAt) continue;
+      if (run.terminalSpawnedAt !== null && run.terminalSpawnedAt !== terminal.spawnedAt) continue;
       if (!run.resume || run.resume.agentId !== record.agentId) continue;
       if (record.projectId !== null && record.projectId !== run.projectId) continue;
       if (run.resume.agentSessionId !== null) {
@@ -314,11 +339,11 @@ export class ScheduledRunRecorder {
         }
         continue;
       }
-      const next: ScheduledRun = {
+      this.commit({
         ...run,
+        terminalSpawnedAt: terminal.spawnedAt,
         resume: { ...run.resume, agentSessionId: record.sessionId },
-      };
-      if (this.write(next)) this.changed([next]);
+      });
     }
   }
 
@@ -374,14 +399,6 @@ export class ScheduledRunRecorder {
     for (const projectId of projectIds) this.onChanged({ projectId, scheduleIds: [scheduleId] });
   }
 
-  private awaitingSpawn(run: ScheduledRun): boolean {
-    return (
-      run.terminalSpawnedAt === null &&
-      run.settlement.state === "open" &&
-      run.process.pty.state === "not-started"
-    );
-  }
-
   private withSettlement(
     run: ScheduledRun,
     evidence: ScheduledRunEvidence,
@@ -393,18 +410,28 @@ export class ScheduledRunRecorder {
     };
   }
 
-  // A settled run past the history limit can go once it's no longer live.
-  private write(run: ScheduledRun): boolean {
+  /**
+   * Writes a changed run and tells its project's views; `ended` when this
+   * write settled it. A settled run past the history limit goes once it's no
+   * longer live. Returns false when nothing was written: the run is gone, or
+   * the write failed.
+   */
+  private commit(run: ScheduledRun, ended = false): boolean {
+    let written: boolean;
     try {
-      return this.store.transaction(() => {
-        const written = this.store.update(run);
-        if (written && run.settlement.state === "settled") this.store.prune(run.scheduleId);
-        return written;
+      written = this.store.transaction(() => {
+        const updated = this.store.update(run);
+        if (updated && run.settlement.state === "settled") this.store.prune(run.scheduleId);
+        return updated;
       });
     } catch (error) {
       this.logWarn(`[ScheduledRuns] Couldn't record a fact on run ${run.id}`, error);
       return false;
     }
+    if (!written) return false;
+    this.changed([run]);
+    if (ended) this.ended(run);
+    return true;
   }
 
   private changed(runs: readonly ScheduledRun[]): void {
@@ -424,23 +451,26 @@ export class ScheduledRunRecorder {
   }
 
   private ended(run: ScheduledRun): void {
-    if (run.settlement.state !== "settled") return;
-    this.emitSafely("scheduled-run:ended", {
-      runId: run.id,
-      scheduleId: run.scheduleId,
-      projectId: run.projectId,
-      terminalId: run.terminalId,
-      outcome: run.settlement.outcome,
-      timestamp: run.settlement.settledAt,
-    });
+    const { settlement } = run;
+    if (settlement.state !== "settled") return;
+    this.notify(() =>
+      this.onRunEnded({
+        runId: run.id,
+        scheduleId: run.scheduleId,
+        projectId: run.projectId,
+        terminalId: run.terminalId,
+        outcome: settlement.outcome,
+        timestamp: settlement.settledAt,
+      })
+    );
   }
 
   // Listeners follow a run that is already committed; one that throws can't undo it.
-  private emitSafely<K extends RunEventName>(name: K, payload: DaintreeEventMap[K]): void {
+  private notify(send: () => void): void {
     try {
-      this.emitEvent(name, payload);
+      send();
     } catch (error) {
-      this.logWarn(`[ScheduledRuns] A ${name} listener threw`, error);
+      this.logWarn("[ScheduledRuns] A run listener threw", error);
     }
   }
 }

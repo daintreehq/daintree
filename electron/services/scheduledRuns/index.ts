@@ -44,7 +44,8 @@ export function getScheduledRunRecorder(): Promise<ScheduledRunRecorder | null> 
       store: new ScheduledRunStore(sqlite),
       isShuttingDown: () => getActiveShutdown() !== null,
       onChanged: pushScheduledRunsChanged,
-      emit: (name, payload) => events.emit(name, payload),
+      onRunStarted: (payload) => events.emit("scheduled-run:started", payload),
+      onRunEnded: (payload) => events.emit("scheduled-run:ended", payload),
     });
     created.reconcileInterrupted();
     recorder = created;

@@ -43,7 +43,8 @@ function lifetime(): ScheduledRunRecorder {
     now: () => now,
     isShuttingDown: () => shuttingDown,
     onChanged: (change) => changes.push(change),
-    emit: (name, payload) => emitted.push({ name, payload }),
+    onRunStarted: (payload) => emitted.push({ name: "scheduled-run:started", payload }),
+    onRunEnded: (payload) => emitted.push({ name: "scheduled-run:ended", payload }),
     logWarn: () => {},
   });
 }
@@ -108,8 +109,26 @@ const capture = (sessionId: string, spawnedAt: number, agentId = "codex") => ({
 
 describe("ScheduledRunRecorder", () => {
   it("commits a run before its terminal spawns, and says it started", () => {
-    const recorder = lifetime();
+    // Every listener reads the run through another connection: it is
+    // committed before anyone hears of it.
+    const reader = openDb(dbPath, migrationsFolder).sqlite;
+    const seen: unknown[] = [];
+    const readBack = () => seen.push(new ScheduledRunStore(reader).get("run-1")?.settlement);
+    const recorder = new ScheduledRunRecorder({
+      store: new ScheduledRunStore(sqlite),
+      now: () => now,
+      onChanged: (change) => {
+        changes.push(change);
+        readBack();
+      },
+      onRunStarted: (payload) => {
+        emitted.push({ name: "scheduled-run:started", payload });
+        readBack();
+      },
+    });
     const registered = recorder.registerLaunch(launch());
+    reader.close();
+    expect(seen).toEqual([{ state: "open" }, { state: "open" }]);
 
     // What a launcher reads back between registering and spawning.
     const stored = new ScheduledRunStore(sqlite).get("run-1");
@@ -164,27 +183,104 @@ describe("ScheduledRunRecorder", () => {
     recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT });
 
     const run = recorder.get("run-1");
+    expect(run?.terminalSpawnedAt).toBe(SPAWNED_AT);
     expect(run?.process.pty).toMatchObject({ state: "exited", exitCode: 0, signal: null });
     expect(run?.settlement).toMatchObject({ state: "settled", outcome: "done" });
+    expect(emitted.filter((e) => e.name === "scheduled-run:ended")).toHaveLength(1);
   });
 
-  it("ignores another incarnation of its terminal", () => {
+  it("ignores the facts of another incarnation of its terminal", () => {
     const recorder = lifetime();
     recorder.registerLaunch(launch());
     recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT });
-    // A restart under the same id spawns, exits, and has a session captured.
-    recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT + 500 });
     recorder.handleExit({ terminalId: "terminal-1", spawnedAt: SPAWNED_AT + 500, exitCode: 1 });
     recorder.handleSessionCaptured(capture("someone-else", SPAWNED_AT + 500));
+    // An exit with no incarnation can't be matched at all.
+    recorder.handleExit({ terminalId: "terminal-1", exitCode: 0 });
 
     const run = recorder.get("run-1");
     expect(run?.terminalSpawnedAt).toBe(SPAWNED_AT);
     expect(run?.process.pty).toEqual({ state: "running", startedAt: SPAWNED_AT });
     expect(run?.settlement).toEqual({ state: "open" });
     expect(run?.resume?.agentSessionId).toBeNull();
-    // An exit with no incarnation can't be matched at all.
-    recorder.handleExit({ terminalId: "terminal-1", exitCode: 0 });
-    expect(recorder.get("run-1")?.settlement).toEqual({ state: "open" });
+  });
+
+  it("is lost when another incarnation spawns under its terminal before its exit arrives", () => {
+    const recorder = lifetime();
+    recorder.registerLaunch(launch());
+    recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT });
+    // A restart (or a crashed host's replay) spawns the id again; the host
+    // dropped the first incarnation's exit.
+    now = SPAWNED_AT + 900;
+    recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT + 500 });
+    recorder.handleExit({ terminalId: "terminal-1", spawnedAt: SPAWNED_AT + 500, exitCode: 0 });
+
+    const run = recorder.get("run-1");
+    expect(run?.terminalSpawnedAt).toBe(SPAWNED_AT);
+    expect(run?.settlement).toMatchObject({ outcome: "lost", evidence: { kind: "lost" } });
+    expect(run?.process.pty).toEqual({
+      state: "exited",
+      startedAt: SPAWNED_AT,
+      exitedAt: SPAWNED_AT + 900,
+      exitCode: null,
+      signal: null,
+    });
+    expect(emitted.filter((e) => e.name === "scheduled-run:ended")).toHaveLength(1);
+    // The first incarnation's session can still be captured afterwards.
+    recorder.handleSessionCaptured(capture("codex-session", SPAWNED_AT));
+    expect(recorder.get("run-1")?.resume?.agentSessionId).toBe("codex-session");
+  });
+
+  it("keeps the incarnation it saw first when writing it failed", () => {
+    const store = new ScheduledRunStore(sqlite);
+    const recorder = new ScheduledRunRecorder({ store, now: () => now, logWarn: () => {} });
+    recorder.registerLaunch(launch());
+    const update = vi.spyOn(store, "update").mockImplementationOnce(() => {
+      throw new Error("SQLITE_FULL");
+    });
+    recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT });
+    update.mockRestore();
+    expect(recorder.get("run-1")?.terminalSpawnedAt).toBeNull();
+
+    // The same incarnation's exit binds it once the database takes writes again.
+    recorder.handleExit({ terminalId: "terminal-1", spawnedAt: SPAWNED_AT, exitCode: 0 });
+    expect(recorder.get("run-1")?.terminalSpawnedAt).toBe(SPAWNED_AT);
+    expect(recorder.get("run-1")?.settlement).toMatchObject({ outcome: "done" });
+  });
+
+  it("doesn't let a later incarnation take a run whose first binding failed", () => {
+    const store = new ScheduledRunStore(sqlite);
+    const recorder = new ScheduledRunRecorder({ store, now: () => now, logWarn: () => {} });
+    recorder.registerLaunch(launch());
+    vi.spyOn(store, "update").mockImplementationOnce(() => {
+      throw new Error("SQLITE_FULL");
+    });
+    recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT });
+    recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT + 500 });
+    recorder.handleExit({ terminalId: "terminal-1", spawnedAt: SPAWNED_AT + 500, exitCode: 0 });
+
+    const run = recorder.get("run-1");
+    expect(run?.terminalSpawnedAt).toBe(SPAWNED_AT);
+    expect(run?.settlement).toMatchObject({ outcome: "lost" });
+  });
+
+  it("records the spawn and exit of a run settled before its spawn answered", () => {
+    const recorder = lifetime();
+    recorder.registerLaunch(launch());
+    recorder.settle("run-1", { kind: "cancel" });
+    recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT });
+    recorder.handleExit({
+      terminalId: "terminal-1",
+      spawnedAt: SPAWNED_AT,
+      exitCode: 0,
+      signal: 15,
+    });
+
+    const run = recorder.get("run-1");
+    expect(run?.terminalSpawnedAt).toBe(SPAWNED_AT);
+    expect(run?.process.pty).toMatchObject({ state: "exited", startedAt: SPAWNED_AT, signal: 15 });
+    expect(run?.settlement).toMatchObject({ outcome: "cancelled" });
+    expect(emitted.filter((e) => e.name === "scheduled-run:ended")).toHaveLength(1);
   });
 
   it("fills the session id captured after the exit, leaving the settlement alone", () => {
@@ -195,6 +291,9 @@ describe("ScheduledRunRecorder", () => {
     const settled = recorder.get("run-1")?.settlement;
 
     recorder.handleSessionCaptured(capture("codex-session", SPAWNED_AT, "claude"));
+    recorder.handleSessionCaptured({
+      record: { ...capture("elsewhere", SPAWNED_AT).record, projectId: "project-2" },
+    });
     expect(recorder.get("run-1")?.resume?.agentSessionId).toBeNull();
 
     recorder.handleSessionCaptured(capture("codex-session", SPAWNED_AT));
@@ -228,6 +327,9 @@ describe("ScheduledRunRecorder", () => {
       evidence: { kind: "launch-error", message: "spawn zsh ENOENT" },
     });
     expect(run?.process.pty).toEqual({ state: "not-started" });
+    recorder.handleSpawnResult("terminal-1", { success: false, error: { message: "again" } });
+    expect(recorder.get("run-1")?.settlement).toEqual(run?.settlement);
+    expect(emitted.filter((e) => e.name === "scheduled-run:ended")).toHaveLength(1);
   });
 
   it("records a skipped occurrence with its reason, and neither starts nor ends it", () => {
@@ -262,6 +364,7 @@ describe("ScheduledRunRecorder", () => {
     });
     expect(recorder.settle("run-1", { kind: "handback", report: "done" })).toBeNull();
     expect(recorder.get("run-1")?.settlement).toMatchObject({ outcome: "cancelled" });
+    expect(emitted.filter((e) => e.name === "scheduled-run:ended")).toHaveLength(1);
   });
 
   describe("across a quit or crash", () => {
@@ -273,6 +376,13 @@ describe("ScheduledRunRecorder", () => {
       first.registerLaunch(launch({ id: "run-3", terminalId: "terminal-3" }));
       first.handleSpawnResult("terminal-3", { success: true, spawnedAt: SPAWNED_AT });
       first.settle("run-3", { kind: "handback", report: "done" });
+      // A settled run whose agent was last seen running, as a later producer records it.
+      const store = new ScheduledRunStore(sqlite);
+      const settled = store.get("run-3")!;
+      store.update({
+        ...settled,
+        process: { ...settled.process, agent: { state: "running", startedAt: SPAWNED_AT } },
+      });
 
       now = T0 + 60_000;
       emitted = [];
@@ -298,6 +408,13 @@ describe("ScheduledRunRecorder", () => {
       // Already settled: the settlement stays, the process is no longer running.
       expect(second.get("run-3")?.settlement).toMatchObject({ outcome: "done" });
       expect(second.get("run-3")?.process.pty).toMatchObject({ state: "exited", exitCode: null });
+      expect(second.get("run-3")?.process.agent).toEqual({
+        state: "exited",
+        startedAt: SPAWNED_AT,
+        exitedAt: now,
+        exitCode: null,
+        signal: null,
+      });
       expect(emitted.map((e) => [e.name, e.payload.runId])).toEqual([
         ["scheduled-run:ended", "run-1"],
         ["scheduled-run:ended", "run-2"],
@@ -337,19 +454,22 @@ describe("ScheduledRunRecorder", () => {
       });
     }
     recorder.registerLaunch(launch({ id: "other", scheduleId: "schedule-2", terminalId: "t-2" }));
+    now += 1;
+    recorder.registerLaunch(launch({ id: "newest", terminalId: "t-newest" }));
 
     const ids = recorder.listBySchedule("schedule-1").map((r) => r.id);
     // The open run is past the limit but still live, so it stays until it's over.
     expect(ids).toHaveLength(SCHEDULED_RUN_HISTORY_LIMIT + 1);
-    expect(ids[0]).toBe(`skip-${SCHEDULED_RUN_HISTORY_LIMIT + 4}`);
-    expect(ids).not.toContain("skip-4");
-    expect(ids).toContain("skip-5");
+    expect(ids[0]).toBe("newest");
+    expect(ids).not.toContain("skip-5");
+    expect(ids).toContain("skip-6");
     expect(ids.at(-1)).toBe("kept-open");
     expect(recorder.listBySchedule("schedule-2")).toHaveLength(1);
 
     recorder.settle("kept-open", { kind: "cancel" });
     expect(recorder.listBySchedule("schedule-1")).toHaveLength(SCHEDULED_RUN_HISTORY_LIMIT);
     expect(recorder.get("kept-open")).toBeNull();
+    expect(recorder.get("newest")).not.toBeNull();
   });
 
   it("deletes a schedule's history with it, and a late fact doesn't bring it back", () => {

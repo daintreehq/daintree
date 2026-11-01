@@ -1731,6 +1731,17 @@ describe("ProjectStore.onProjectRegistryChanged", () => {
     expect(left).toEqual(["alpha-run"]);
   });
 
+  it("keeps the project when its run history can't be removed with it", async () => {
+    const beta = await store.addProject(betaDir);
+    const heard = vi.fn();
+    store.onProjectRegistryChanged(heard);
+    sqlite.exec("DROP TABLE scheduled_runs");
+
+    await expect(store.removeProject(beta.id)).rejects.toThrow(/scheduled_runs/);
+    expect(store.getProjectById(beta.id)).not.toBeNull();
+    expect(heard).not.toHaveBeenCalled();
+  });
+
   it("fires for a change to where a project is or what it is called, never for its status or ranking", () => {
     const heard = vi.fn();
     store.onProjectRegistryChanged(heard);

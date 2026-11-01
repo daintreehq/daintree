@@ -106,8 +106,12 @@ describe("scheduled-run history wiring", () => {
     const ended = vi.fn();
     const offEnded = events.on("scheduled-run:ended", ended);
 
-    const recorder = await getScheduledRunRecorder();
+    const [recorder, concurrent] = await Promise.all([
+      getScheduledRunRecorder(),
+      getScheduledRunRecorder(),
+    ]);
     offEnded();
+    expect(concurrent).toBe(recorder);
 
     expect(recorder?.get("run-1")?.settlement).toMatchObject({ outcome: "interrupted" });
     expect(ended).toHaveBeenCalledWith(expect.objectContaining({ runId: "run-1" }));
@@ -128,6 +132,7 @@ describe("scheduled-run history wiring", () => {
     recorder.registerLaunch(launch);
 
     source.emit("spawn-result", "terminal-1", { success: true, id: "terminal-1", spawnedAt: 50 });
+    expect(recorder.get("run-1")?.process.pty).toEqual({ state: "running", startedAt: 50 });
     source.emit("incarnation-exit", {
       terminalId: "terminal-1",
       spawnedAt: 50,
@@ -155,13 +160,33 @@ describe("scheduled-run history wiring", () => {
   it("stops following facts once stopped", async () => {
     const recorder = (await getScheduledRunRecorder())!;
     recorder.registerLaunch(launch);
+    source.emit("spawn-result", "terminal-1", { success: true, id: "terminal-1", spawnedAt: 50 });
     stop();
     stop = () => {};
 
-    source.emit("spawn-result", "terminal-1", { success: true, id: "terminal-1", spawnedAt: 50 });
+    source.emit("incarnation-exit", {
+      terminalId: "terminal-1",
+      spawnedAt: 50,
+      exitCode: 0,
+      signal: null,
+    });
+    events.emit("agent-session:captured", {
+      terminalId: "terminal-1",
+      boundary: "exit",
+      record: {
+        sessionId: "codex-session",
+        agentId: "codex",
+        worktreeId: null,
+        title: null,
+        projectId: "project-1",
+        terminal: { id: "terminal-1", spawnedAt: 50 },
+      },
+    });
     expect(source.listenerCount("spawn-result")).toBe(0);
     expect(source.listenerCount("incarnation-exit")).toBe(0);
-    expect(recorder.get("run-1")?.terminalSpawnedAt).toBeNull();
+    const run = recorder.get("run-1");
+    expect(run?.settlement).toEqual({ state: "open" });
+    expect(run?.resume?.agentSessionId).toBeNull();
   });
 
   it("doesn't open the history once Daintree is quitting", async () => {
