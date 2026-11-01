@@ -4,11 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
-import type {
-  InjectionIntent,
-  OutboxItem,
-  QuestionOrigin,
-  QuestionRow,
+import {
+  parseAnswers,
+  serializeAnswers,
+  type AnswerEntry,
+  type InjectionIntent,
+  type OutboxItem,
+  type QuestionOrigin,
+  type QuestionRow,
 } from "@daintreehq/decisions-client";
 
 vi.mock("electron", () => ({
@@ -141,13 +144,60 @@ function countCommits(db: Database.Database): () => number {
   return () => outer;
 }
 
+const answer = (revision: number, over: Partial<AnswerEntry> = {}): AnswerEntry => ({
+  entry_id: `a${revision}`,
+  kind: "answer",
+  action: "answer",
+  revision,
+  source: "human",
+  correction: revision > 1,
+  created_at: "2026-11-01T00:00:00.000Z",
+  deliver: true,
+  delivered: false,
+  sealed: `{"sealed":${revision}}`,
+  ...over,
+});
+
+/** The answers delivery would still type: the library's own rule (`deliver && !delivered`). */
+function pendingRevisions(q: QuestionRow): number[] {
+  return parseAnswers(q.answers_json)
+    .filter((e) => e.deliver && !e.delivered)
+    .map((e) => e.revision);
+}
+
+/** Makes `sql`'s statements throw `error` on their next read, once. */
+function failNextRead(db: Database.Database, sql: string, error: Error): void {
+  const original = db.prepare.bind(db);
+  let failed = false;
+  vi.spyOn(db, "prepare").mockImplementation(((source: string) => {
+    const statement = original(source);
+    if (!source.includes(sql)) return statement;
+    const get = statement.get.bind(statement);
+    statement.get = ((...args: unknown[]) => {
+      if (!failed) {
+        failed = true;
+        throw error;
+      }
+      return get(...args);
+    }) as typeof statement.get;
+    return statement;
+  }) as typeof db.prepare);
+}
+
+function sqliteError(code: string): Error {
+  return Object.assign(new Error(code), { code });
+}
+
 function count(db: Database.Database, table: string): number {
   return (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
 }
 
 describe("DaintreeLocalStore", () => {
   it("keeps every question, undelivered answer, intent and the event log across a restart", async () => {
-    const answered = JSON.stringify([{ entry_id: "a1", kind: "answer", revision: 1, sealed: "x" }]);
+    const answered = serializeAnswers([
+      answer(1, { delivered: true, injection_id: "i0" }),
+      answer(2),
+    ]);
     const first = new DaintreeLocalStore(sqlite);
     expect(await first.nextAlias()).toBe(1);
     await first.commitNewQuestion(
@@ -171,6 +221,10 @@ describe("DaintreeLocalStore", () => {
 
     sqlite = openDb(dbPath, migrationsFolder).sqlite;
     const second = new DaintreeLocalStore(sqlite);
+    // Delivery finds what to type by listing questions and their pending answers.
+    const listed = await second.listQuestions();
+    expect(listed.map((q) => q.question_id)).toEqual(["q1"]);
+    expect(pendingRevisions(listed[0])).toEqual([2]);
     const question = (await second.getQuestion("q1"))!;
     expect(question).toMatchObject({
       local_status: "human-answered",
@@ -425,6 +479,186 @@ describe("DaintreeLocalStore", () => {
     setWritesSuppressed(true);
 
     expect(() => eraseDecisionsData(sqlite)).toThrow(DecisionsStoreUnavailableError);
+    expect(count(sqlite, "decisions_questions")).toBe(1);
+  });
+});
+
+describe("DaintreeLocalStore ordering and failures", () => {
+  it("lets a read made behind a queued write see that write", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+
+    const writing = store.setMeta("k", "v");
+    const read = store.getMeta("k");
+
+    await writing;
+    expect(await read).toBe("v");
+  });
+
+  it("gives other work a turn between batches of a long burst", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const commits = countCommits(sqlite);
+    const writes = Array.from({ length: DECISIONS_STORE_MAX_BATCH + 1 }, (_, i) =>
+      store.insertEvent(event(i + 1))
+    );
+    const between = new Promise<number>((resolve) => setImmediate(() => resolve(commits())));
+
+    expect(await between).toBe(1);
+    await Promise.all(writes);
+    expect(commits()).toBe(2);
+  });
+
+  it("commits every queued batch before close resolves", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const total = DECISIONS_STORE_MAX_BATCH * 2 + 1;
+    const writes = Array.from({ length: total }, (_, i) => store.insertEvent(event(i + 1)));
+
+    await store.close();
+
+    expect(count(sqlite, "decisions_inbound_events")).toBe(total);
+    expect((await Promise.all(writes)).every(Boolean)).toBe(true);
+  });
+
+  it("refuses every call in a batch whose commit fails, and stores none of it", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    // A deferred foreign key is only checked at COMMIT, after every call ran.
+    sqlite.exec(`
+      CREATE TABLE commit_probe_parent (id INTEGER PRIMARY KEY);
+      CREATE TABLE commit_probe_child (
+        parent INTEGER REFERENCES commit_probe_parent(id) DEFERRABLE INITIALLY DEFERRED
+      );
+      CREATE TRIGGER commit_probe AFTER INSERT ON decisions_audit
+        BEGIN INSERT INTO commit_probe_child VALUES (999); END;
+    `);
+
+    const results = await Promise.allSettled([
+      store.setMeta("k", "v"),
+      store.appendAudit({ at: "a", event: "x" }),
+    ]);
+
+    expect(results.map((r) => r.status)).toEqual(["rejected", "rejected"]);
+    expect(count(sqlite, "decisions_audit")).toBe(0);
+    expect(count(sqlite, "decisions_meta")).toBe(0);
+    expect(store.isFaulted()).toBe(true);
+  });
+
+  it("refuses the writes after a storage error in the same batch, with the rest still committing", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    sqlite.function("refuse_with_io_error", () => {
+      throw sqliteError("SQLITE_IOERR_WRITE");
+    });
+    sqlite.exec(`CREATE TRIGGER io_probe BEFORE INSERT ON decisions_meta
+      WHEN NEW.key = 'broken' BEGIN SELECT refuse_with_io_error(); END`);
+    await store.setMeta("before", "1");
+
+    const results = await Promise.allSettled([
+      store.getMeta("before"),
+      store.setMeta("broken", "1"),
+      store.getMeta("before"),
+      store.setMeta("after", "1"),
+    ]);
+
+    expect(results.map((r) => r.status)).toEqual([
+      "fulfilled",
+      "rejected",
+      "fulfilled",
+      "rejected",
+    ]);
+    expect(results[1]).toMatchObject({ reason: { reason: "storage-fault" } });
+    expect(await store.getMeta("after")).toBeNull();
+    expect(store.isFaulted()).toBe(true);
+  });
+
+  it("stops writing after a question can't be read, so its event can't be marked processed", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    await store.commitNewQuestion(row("q1", 1), item("o1", "q1"));
+    await store.insertEvent(event(1));
+    failNextRead(
+      sqlite,
+      "FROM decisions_questions WHERE question_id",
+      sqliteError("SQLITE_IOERR_READ")
+    );
+
+    // The library's inbox: apply fails on the read, then it audits the error
+    // and marks the event processed.
+    await expect(store.getQuestion("q1")).rejects.toMatchObject({ reason: "storage-fault" });
+    await expect(store.appendAudit({ at: "a", event: "event.error" })).rejects.toMatchObject({
+      reason: "storage-fault",
+    });
+    await expect(store.markEventProcessed(1, 5)).rejects.toMatchObject({
+      reason: "storage-fault",
+    });
+
+    expect((await store.unprocessedEvents(10)).map((e) => e.seq)).toEqual([1]);
+    expect((await store.getQuestion("q1"))!.question_id).toBe("q1");
+  });
+
+  it("stores patches, intents and audit records as given, whatever the caller changes afterwards", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    await store.commitNewQuestion(row("q1", 1), item("o1", "q1"));
+    const patch: Partial<QuestionRow> = { local_status: "open", origin: origin({ pane_id: "p2" }) };
+    const stored = intent("i1", "q1");
+    const entry = { at: "a", event: "x", detail: { n: 1 } };
+
+    const writes = [
+      store.updateQuestion("q1", patch),
+      store.putIntent(stored),
+      store.appendAudit(entry),
+    ];
+    patch.local_status = "cancelled";
+    patch.origin!.pane_id = "p3";
+    stored.state = "abandoned";
+    entry.detail.n = 2;
+    await Promise.all(writes);
+
+    expect(await store.getQuestion("q1")).toMatchObject({
+      local_status: "open",
+      origin: { pane_id: "p2" },
+    });
+    expect((await store.getIntent("i1"))!.state).toBe("intent");
+    expect((await store.listAudit(1))[0].detail).toEqual({ n: 1 });
+  });
+
+  it("replaces a queued outbox item's payload and due time, keeping its attempts", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    await store.commitNewQuestion(row("q1", 1), item("o1", "q1", 10));
+    await store.recordOutboxFailure("o1", "network_error", 20);
+
+    await store.putOutbox({ ...item("o1", "q1", 10), payload: { n: 2 }, next_attempt_at: 5 });
+    await store.putOutbox(item("o2", "q1", 30));
+
+    expect(await store.outboxFor("q1")).toEqual([
+      {
+        ...item("o1", "q1", 10),
+        payload: { n: 2 },
+        next_attempt_at: 5,
+        attempts: 1,
+        last_error: "network_error",
+      },
+      item("o2", "q1", 30),
+    ]);
+  });
+
+  it("refuses a new question carrying plaintext content", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+
+    await expect(
+      store.commitNewQuestion(row("q1", 1, { legacy_content_json: '{"q":1}' }), item("o1", "q1"))
+    ).rejects.toThrow("sealed");
+    expect(count(sqlite, "decisions_questions")).toBe(0);
+    expect(count(sqlite, "decisions_outbox")).toBe(0);
+  });
+
+  it("erases all or nothing", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    await store.commitNewQuestion(row("q1", 1), item("o1", "q1"));
+    await store.setMeta("k", "v");
+    await store.close();
+    sqlite.exec(`CREATE TRIGGER erase_probe BEFORE DELETE ON decisions_meta
+      BEGIN SELECT RAISE(ABORT, 'refused'); END`);
+
+    expect(() => eraseDecisionsData(sqlite)).toThrow("refused");
+
+    expect(count(sqlite, "decisions_outbox")).toBe(1);
     expect(count(sqlite, "decisions_questions")).toBe(1);
   });
 });

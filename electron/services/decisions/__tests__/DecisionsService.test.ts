@@ -233,10 +233,17 @@ describe("DecisionsService store", () => {
     expect(service.getStore()).toBe(store);
   });
 
-  it("closes a store that finishes opening after dispose, and never keeps it", async () => {
+  it("closes a store that finishes opening after dispose before that start settles, and never keeps it", async () => {
     let finishOpen!: () => void;
+    let finishClose!: () => void;
     let cancelled: (() => boolean) | null = null;
     const store = fakeStore();
+    store.close.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishClose = resolve;
+        })
+    );
     const service = make(async (isCancelled) => {
       cancelled = isCancelled;
       await new Promise<void>((resolve) => {
@@ -251,11 +258,42 @@ describe("DecisionsService store", () => {
     const disposing = service.dispose();
     expect(cancelled!()).toBe(true);
 
+    let started = false;
+    void starting.then(() => {
+      started = true;
+    });
     finishOpen();
+    await vi.waitFor(() => expect(store.close).toHaveBeenCalledTimes(1));
+    expect(service.getStore()).toBeNull();
+    expect(started).toBe(false);
+
+    finishClose();
     await Promise.all([starting, disposing]);
 
     expect(store.close).toHaveBeenCalledTimes(1);
     expect(service.getStore()).toBeNull();
     expect(service.getStatus().state).toBe("off");
+  });
+
+  it("reports off only once the store has finished closing", async () => {
+    let finishClose!: () => void;
+    const store = fakeStore();
+    store.close.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishClose = resolve;
+        })
+    );
+    const service = make(async () => store);
+    const states = recordStates(service);
+    await service.start(on());
+
+    const stopping = service.stop();
+    await vi.waitFor(() => expect(store.close).toHaveBeenCalledTimes(1));
+    expect(service.getStatus().state).toBe("not-connected");
+
+    finishClose();
+    await stopping;
+    expect(states).toEqual(["not-connected", "off"]);
   });
 });

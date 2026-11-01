@@ -620,7 +620,7 @@ export class DaintreeLocalStore implements LocalStore {
       try {
         return Promise.resolve(run());
       } catch (error) {
-        return Promise.reject(error);
+        return Promise.reject(isStorageFault(error) ? this.latch(error) : error);
       }
     }
     return new Promise<T>((resolve, reject) => {
@@ -678,11 +678,11 @@ export class DaintreeLocalStore implements LocalStore {
       runnable.forEach((opIndex, j) => {
         outcomes[opIndex] = results[j];
       });
-      if (fault) this.fault ??= this.storageFault(fault);
+      if (fault) this.latch(fault);
     } catch (error) {
-      // The batch rolled back whole: nothing in it was stored.
-      const refused = writes ? this.storageFault(error) : error;
-      if (writes) this.fault ??= refused as DecisionsStoreUnavailableError;
+      // The batch rolled back whole, so nothing in it was stored; only the
+      // database itself (begin, commit, an I/O error) fails a whole batch.
+      const refused = this.latch(error);
       for (const i of runnable) outcomes[i] = { ok: false, error: refused };
     }
     return outcomes;
@@ -725,6 +725,17 @@ export class DaintreeLocalStore implements LocalStore {
         console.warn("[Decisions] Couldn't restore the database's commit level:", error);
       }
     }
+  }
+
+  /**
+   * Stops this store writing. A failed read counts too: the library treats a
+   * question it couldn't read as an event it couldn't apply, and would mark
+   * that event processed with its next write.
+   */
+  private latch(cause: unknown): DecisionsStoreUnavailableError {
+    const fault = this.storageFault(cause);
+    this.fault ??= fault;
+    return fault;
   }
 
   private storageFault(cause: unknown): DecisionsStoreUnavailableError {
