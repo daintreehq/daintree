@@ -466,14 +466,24 @@ describe("agentPresetMutationFingerprint", () => {
     );
     expect(print(fewerPicks)).not.toBe(print(shown));
 
-    const patch = { agentId: "codex", presetId: WORK.id, name: "Renamed" };
-    const edit = plan("agent.updatePreset", patch, sources({ customPresets: [WORK] }));
-    const editOfChanged = plan(
+    // Different stored presets patched to the same result, and the same stored
+    // preset patched to different results, each tell apart: the approval
+    // covers what was overwritten as well as what is written.
+    const recolour = { agentId: "codex", presetId: WORK.id, color: "#123" };
+    const fromBlue = plan("agent.updatePreset", recolour, sources({ customPresets: [WORK] }));
+    const fromRed = plan(
       "agent.updatePreset",
-      patch,
-      sources({ customPresets: [{ ...WORK, customFlags: "--other" }] })
+      recolour,
+      sources({ customPresets: [{ ...WORK, color: "#f00" }] })
     );
-    expect(print(editOfChanged)).not.toBe(print(edit));
+    expect(updated(fromRed)).toEqual(updated(fromBlue));
+    expect(print(fromRed)).not.toBe(print(fromBlue));
+    const toGreen = plan(
+      "agent.updatePreset",
+      { ...recolour, color: "#0f0" },
+      sources({ customPresets: [WORK] })
+    );
+    expect(print(toGreen)).not.toBe(print(fromBlue));
 
     // A renamed fallback preset changes what the preview showed.
     const chain = { agentId: "codex", presetId: WORK.id, fallbacks: [OTHER.id] };

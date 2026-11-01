@@ -1031,6 +1031,40 @@ describe("ActionService", () => {
         );
       });
 
+      // The preset half (#16047): the change a confirm showed, which a preset
+      // write holds its final plan to. Options only, like the push.
+      it("stamps ctx.hostApprovedPresetWrite from the dispatch options, and never from a contextOverride", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(confirmAction(mockRun));
+        const options = { source: "agent", confirmed: true } as const;
+
+        await service.dispatch("actions.list", undefined, {
+          ...options,
+          hostApprovedPresetWrite: "shown",
+        });
+        await service.dispatch("actions.list", undefined, {
+          ...options,
+          contextOverride: { hostApprovedPresetWrite: "forged" },
+        });
+        await service.dispatch("actions.list", undefined, {
+          ...options,
+          hostApprovedPresetWrite: "shown",
+          contextOverride: { hostApprovedPresetWrite: "forged" },
+        });
+
+        for (const [call, expected] of [
+          [1, "shown"],
+          [2, undefined],
+          [3, "shown"],
+        ] as const) {
+          expect(mockRun).toHaveBeenNthCalledWith(
+            call,
+            undefined,
+            expect.objectContaining({ hostApprovedPresetWrite: expected })
+          );
+        }
+      });
+
       // The scheduled run (#15977) is what marks a launch `spawnedBy:
       // "schedule"`, so only the host's own dispatch options may carry it.
       it("stamps ctx.scheduledRun from the dispatch options, and never from a contextOverride", async () => {
