@@ -160,17 +160,20 @@ describe("electron-builder config — files inside kept packages (#15671)", () =
     ).createFilter();
 
   /**
-   * Whether a node_modules path survives the copy. The copier walks each
-   * package from its root and never descends into a directory the filter
-   * rejects, so every directory between the package and the file has to pass
-   * as well as the file.
+   * Whether the `files` patterns let a node_modules path through. The copier
+   * walks each package from its own root (a nested dependency is a package of
+   * its own) and never descends into a directory the filter rejects, so every
+   * directory below that root has to pass as well as the file. This covers the
+   * patterns only: electron-builder's default excludes (`binding.gyp`, `.cc`)
+   * are not modelled, so no fixture below relies on one.
    */
   const ships = (filter, relativePath) => {
-    const segments = relativePath.split("/");
-    for (let depth = 2; depth <= segments.length; depth++) {
-      const isDirectory = depth < segments.length;
+    const packageRoot = relativePath.match(/^(.*node_modules\/(?:@[^/]+\/)?[^/]+)\//)[1];
+    const below = relativePath.slice(packageRoot.length + 1).split("/");
+    for (let depth = 1; depth <= below.length; depth++) {
+      const isDirectory = depth < below.length;
       const stat = {
-        moduleFullFilePath: segments.slice(0, depth).join("/"),
+        moduleFullFilePath: [packageRoot, ...below.slice(0, depth)].join("/"),
         isDirectory: () => isDirectory,
       };
       if (!filter(path.join(repoRoot, stat.moduleFullFilePath), stat)) return false;
@@ -196,7 +199,10 @@ describe("electron-builder config — files inside kept packages (#15671)", () =
     "node_modules/@parcel/watcher/node_modules/node-addon-api/napi-inl.h",
     "node_modules/node-addon-api/napi.h",
     "node_modules/posix-pty-reaper/src/supervisor.c",
-    "node_modules/win-job-object/binding.gyp",
+    // Both ship only `.cc` sources and `binding.gyp` today, which electron-builder
+    // already drops; a header added later is the case the scope covers.
+    "node_modules/win-job-object/src/win_job_object.h",
+    "node_modules/mac-phys-footprint/src/mac_phys_footprint.h",
   ];
 
   // What the loaders resolve at runtime, plus the manifests and licenses that

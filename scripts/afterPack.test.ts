@@ -1086,25 +1086,23 @@ describe("afterPack", () => {
       expect(mockExistsSync).toHaveBeenCalledWith(path.join(unpackedBase, AVR_VAD_V5_MODEL));
     });
 
-    it("throws when the v5 model is missing even though avr-vad and its root copy ship", async () => {
-      // The files allowlist drops the package-root copy, so a release that
-      // moved the model there must not pass on the package directory alone.
-      const model = path.join(unpackedBase, AVR_VAD_V5_MODEL);
-      mockExistsSync.mockImplementation((p) => String(p) !== model);
+    // The files allowlist drops the package-root copy, so a release that moved
+    // the model there must not pass on the package directory alone, on any OS.
+    it.each([
+      ["darwin", "/build/mac", unpackedBase],
+      ["win32", "C:/build/win", "C:/build/win/resources/app.asar.unpacked"],
+      ["linux", "/build/linux", "/build/linux/resources/app.asar.unpacked"],
+    ])(
+      "throws on %s when the v5 model is missing even though avr-vad ships",
+      async (platform, appOutDir, unpacked) => {
+        const model = path.join(unpacked, AVR_VAD_V5_MODEL);
+        mockExistsSync.mockImplementation((p) => String(p) !== model);
 
-      await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(
-        /Silero v5 model not found/
-      );
-    });
-
-    it("checks the model in a Windows package's resources", async () => {
-      const model = path.join("C:/build/win/resources/app.asar.unpacked", AVR_VAD_V5_MODEL);
-      mockExistsSync.mockImplementation((p) => String(p) !== model);
-
-      await expect(afterPack(createContext("win32", "C:/build/win"))).rejects.toThrow(
-        /Silero v5 model not found/
-      );
-    });
+        await expect(afterPack(createContext(platform, appOutDir))).rejects.toThrow(
+          /Silero v5 model not found/
+        );
+      }
+    );
   });
 });
 
