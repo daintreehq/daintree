@@ -19,6 +19,11 @@ export {
 export { minimalDocChange } from "@/lib/textRangeMapping";
 export { createCaretTracker } from "./caretTracker";
 export {
+  completionBoundary,
+  completionBoundaryAt,
+  completionBoundaryField,
+} from "./completionBoundary";
+export {
   dictationFollow,
   dictationFollowField,
   revealDictationStart,

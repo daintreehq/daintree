@@ -32,6 +32,7 @@ import {
   dictationFollow,
   voiceCaret,
   createCaretTracker,
+  completionBoundary,
   pendingAIField,
   voiceRewriteTracker,
   createAutoSize,
@@ -197,6 +198,7 @@ export function useEditorFactory({
         dictationFollow,
         voiceCaret,
         createCaretTracker(() => draftKeyRef.current),
+        completionBoundary,
         pendingAIField,
         voiceRewriteTracker,
         createCorrectionReview({

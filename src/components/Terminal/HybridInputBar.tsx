@@ -20,6 +20,8 @@ import { useFileAutocomplete } from "@/hooks/useFileAutocomplete";
 import { useSlashCommandAutocomplete } from "@/hooks/useSlashCommandAutocomplete";
 import { useSlashCommandList } from "@/hooks/useSlashCommandList";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { useDictationRangeStore } from "@/store/dictationRangeStore";
+import type { TextChange } from "@/lib/textRangeMapping";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { AutocompleteMenu, getComboboxState, type AutocompleteItem } from "./AutocompleteMenu";
 import {
@@ -360,7 +362,13 @@ interface HybridInputE2EController {
 
 type ApplyEditorValue = (
   nextValue: string,
-  options?: { selection?: EditorSelection; focus?: boolean; resetHistory?: boolean }
+  options?: {
+    selection?: EditorSelection;
+    focus?: boolean;
+    resetHistory?: boolean;
+    /** The one edit that turns the current draft into `nextValue`, applied as just that. */
+    change?: TextChange;
+  }
 ) => void;
 
 const EMPTY_STALE_KEYS: ReadonlySet<string> = new Set<string>();
@@ -1068,14 +1076,34 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         if (options?.focus) view.focus();
         return;
       }
+      const change = options?.change;
+      const exact =
+        shouldChangeDoc &&
+        change !== undefined &&
+        current.slice(0, change.from) + change.insert + current.slice(change.to) === nextValue
+          ? change
+          : null;
       if (shouldChangeDoc) isApplyingExternalValueRef.current = true;
       view.dispatch({
         ...(shouldChangeDoc
-          ? { changes: { from: 0, to: view.state.doc.length, insert: nextValue } }
+          ? { changes: exact ?? { from: 0, to: view.state.doc.length, insert: nextValue } }
           : {}),
         ...(shouldChangeSelection ? { selection: options?.selection } : {}),
         scrollIntoView: true,
       });
+      // Written through now and spelled out: a diff of the two drafts can put
+      // a completion's text inside the dictated words it was typed against,
+      // which would read as an edit to them (#15872). Only while this composer
+      // owns the draft and the store still holds what the edit was made on.
+      if (exact && !followsDriver && !isFleetFollower) {
+        const inputStore = useTerminalInputStore.getState();
+        if (inputStore.getDraftInput(terminalId, projectId) === current) {
+          useDictationRangeStore
+            .getState()
+            .expectDraftChange(terminalId, projectId, current, nextValue, exact);
+          inputStore.setDraftInput(terminalId, nextValue, projectId);
+        }
+      }
       if (options?.resetHistory) clearComposerHistory(view);
       if (options?.focus) view.focus();
     };

@@ -159,11 +159,17 @@ function activeTrigger(
  * token (the `/` in `@src/App.tsx`). A repeated instance of the SAME trigger in
  * the query rejects it (`//help`, `$$foo`, `@@x`, `## Heading`, and slash-path
  * `/usr/bin`).
+ *
+ * `typedAgainst` is where text typed in front of a word meets that word
+ * (`completionBoundaryAt`): a token typed there ends at it, so completing it
+ * leaves the word alone. Without one the token runs to the next whitespace,
+ * which is what re-completing a whole token the caret was moved into needs.
  */
 export function getActiveCompletionContext(
   text: string,
   caret: number,
-  activeTriggers: ReadonlySet<ComposerTrigger>
+  activeTriggers: ReadonlySet<ComposerTrigger>,
+  typedAgainst?: number
 ): ActiveCompletionContext | null {
   if (caret < 0 || caret > text.length) return null;
 
@@ -181,6 +187,9 @@ export function getActiveCompletionContext(
 
   let tokenEnd = caret;
   while (tokenEnd < text.length && !/\s/.test(text[tokenEnd]!)) tokenEnd++;
+  if (typedAgainst !== undefined && typedAgainst >= caret && typedAgainst < tokenEnd) {
+    tokenEnd = typedAgainst;
+  }
 
   return { triggerChar, start, tokenEnd, query };
 }

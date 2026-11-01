@@ -1,8 +1,10 @@
 import { useCallback } from "react";
 import { EditorSelection } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
+import type { TextChange } from "@/lib/textRangeMapping";
 import type { AutocompleteItem } from "../AutocompleteMenu";
 import { getActiveCompletionContext, type ActiveCompletionContext } from "../hybridInputParsing";
+import { completionBoundaryAt } from "../inputEditorExtensions/completionBoundary";
 import type { DraftSpan } from "../promptTemplateCompletion";
 
 interface LatestRefShape {
@@ -15,9 +17,10 @@ interface UseAutocompleteApplyParams {
   editorViewRef: React.RefObject<EditorView | null>;
   latestRef: React.RefObject<LatestRefShape | null>;
   lastQueryRef: React.RefObject<string>;
+  /** `change` is the one edit that turns the current draft into `nextValue`. */
   applyEditorValue: (
     nextValue: string,
-    options?: { selection?: EditorSelection; focus?: boolean }
+    options?: { selection?: EditorSelection; focus?: boolean; change?: TextChange }
   ) => void;
   /** Runs an execute row's completed draft; where it goes is the host's call. */
   onExecute: (text: string) => void;
@@ -55,7 +58,8 @@ function applyAutocompleteItem(
   const ctx = getActiveCompletionContext(
     currentValue,
     caret,
-    new Set([latest.activeCompletionContext.triggerChar])
+    new Set([latest.activeCompletionContext.triggerChar]),
+    completionBoundaryAt(view.state, caret)
   );
   if (!ctx) return;
 
@@ -78,7 +82,10 @@ function applyAutocompleteItem(
   const before = currentValue.slice(0, ctx.start);
   const after = currentValue.slice(ctx.tokenEnd);
   const hasLeadingSpace = after.startsWith(" ");
-  const shouldAppendSpace = action === "insert" && !hasLeadingSpace;
+  // The word the token was typed against stays a word of its own, even in a
+  // command that runs straight away.
+  const joinsWord = after !== "" && !/^\s/.test(after);
+  const shouldAppendSpace = joinsWord || (action === "insert" && !hasLeadingSpace);
   const token = shouldAppendSpace ? `${item.insertText} ` : item.insertText;
   const nextValue = `${before}${token}${after}`;
 
@@ -92,6 +99,7 @@ function applyAutocompleteItem(
   applyEditorValue(nextValue, {
     selection: EditorSelection.create([EditorSelection.cursor(nextCaret)]),
     focus: true,
+    change: { from: ctx.start, to: ctx.tokenEnd, insert: token },
   });
   clear();
 }

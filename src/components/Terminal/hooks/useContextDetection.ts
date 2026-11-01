@@ -5,7 +5,11 @@ import {
   type ActiveCompletionContext,
   type ComposerTrigger,
 } from "../hybridInputParsing";
-import { chipPendingDeleteField, isOwnedByAttachmentChip } from "../inputEditorExtensions";
+import {
+  chipPendingDeleteField,
+  completionBoundaryAt,
+  isOwnedByAttachmentChip,
+} from "../inputEditorExtensions";
 import { with as withTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
 interface LatestRefShape {
@@ -147,9 +151,15 @@ export function useContextDetection({
         const line = update.state.doc.lineAt(caret);
         // A chip staged for deletion is its own moment: Backspace has just
         // selected it, and a menu offering to complete it says the opposite.
+        const typedAgainst = completionBoundaryAt(update.state, caret);
         const local = update.state.field(chipPendingDeleteField, false)
           ? null
-          : getActiveCompletionContext(line.text, caret - line.from, activeTriggersRef.current);
+          : getActiveCompletionContext(
+              line.text,
+              caret - line.from,
+              activeTriggersRef.current,
+              typedAgainst === undefined ? undefined : typedAgainst - line.from
+            );
         const start = local ? local.start + line.from : 0;
         const tokenEnd = local ? local.tokenEnd + line.from : 0;
         // A dropped file's `@path` spells a file query too, but it is an
