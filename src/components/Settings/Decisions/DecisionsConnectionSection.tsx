@@ -21,8 +21,32 @@ function relayHost(origin: string | undefined): string | null {
   }
 }
 
+/**
+ * A next attempt as a wall clock reading ("3:45:20 PM"): it stays true
+ * without being redrawn, so nothing here needs a ticking timer.
+ */
+function clockTime(epochMs: number): string {
+  return new Date(epochMs).toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+const PROBLEM_DETAIL: Record<NonNullable<DecisionsStatus["problem"]>, string> = {
+  keys: "This computer's Decisions keys couldn't be read, or they belong to another relay. Disconnect to set it up again",
+  storage:
+    "Daintree couldn't keep what the relay sends, because the local Decisions database isn't accepting writes. Turn Decisions off and on to try again",
+  "other-relay":
+    "This computer's Decisions data came from another relay identity, so Daintree won't sync it with this one",
+};
+
 /** What was observed about the relay, in words; never what it implies about agents. */
-function describeConnection(status: DecisionsStatus): { label: string; detail?: string } {
+function describeConnection(status: DecisionsStatus): {
+  label: string;
+  detail?: string;
+  severity?: "warning";
+} {
   const host = relayHost(status.relayOrigin);
   switch (status.state) {
     case "connected":
@@ -32,12 +56,39 @@ function describeConnection(status: DecisionsStatus): { label: string; detail?: 
         label: host ? `Connecting to ${host}` : "Connecting",
         detail: "Waiting for the relay to answer",
       };
+    case "reconnecting":
+      return {
+        label: host ? `Reconnecting to ${host}` : "Reconnecting",
+        detail:
+          status.nextAttemptAt !== undefined
+            ? `The connection closed. Next attempt at ${clockTime(status.nextAttemptAt)}`
+            : "The connection closed",
+      };
+    case "replaced":
+      return {
+        label: "Replaced by another connection",
+        detail: `The relay closed this connection for a newer one with this computer's identity, most likely another copy of Daintree using the same keys.${
+          status.nextAttemptAt !== undefined
+            ? ` Daintree tries again at ${clockTime(status.nextAttemptAt)}`
+            : ""
+        }`,
+        severity: "warning",
+      };
     case "revoked":
       return {
-        label: host ? `Refused by ${host}` : "Refused by the relay",
-        detail: "The relay no longer accepts this computer, so Daintree won't reconnect to it",
+        label: host ? `Revoked by ${host}` : "Revoked by the relay",
+        detail:
+          "The relay revoked this computer, so Daintree won't reconnect to it. Disconnect to remove its keys",
+        severity: "warning",
       };
     default:
+      if (status.problem) {
+        return {
+          label: "Not connected",
+          detail: PROBLEM_DETAIL[status.problem],
+          severity: "warning",
+        };
+      }
       return {
         label: "Not connected",
         detail: host ? `Set up with ${host}` : "No relay is set up on this computer yet",
@@ -66,7 +117,7 @@ export function DecisionsConnectionSection({
    */
   onChanged?: (status: DecisionsStatus | null) => void;
 }) {
-  const { label, detail } = describeConnection(status);
+  const { label, detail, severity } = describeConnection(status);
   const savedOrigin = status.relayOrigin ?? null;
   const connected = status.state === "connected";
   const keysStored = status.keysStored === true;
@@ -154,8 +205,8 @@ export function DecisionsConnectionSection({
           id="decisions-connection-status"
           label={label}
           accessory={
-            status.state === "revoked" ? (
-              <SeverityMark severity="warning" label="Refused" className="h-3.5 w-3.5" decorative />
+            severity ? (
+              <SeverityMark severity={severity} label={label} className="h-3.5 w-3.5" decorative />
             ) : undefined
           }
           description={detail}

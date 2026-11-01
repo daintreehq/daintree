@@ -318,3 +318,67 @@ describe("DecisionsConnectionSection relay check", () => {
     expect(screen.getByText("It didn't answer in time")).toBeTruthy();
   });
 });
+
+describe("DecisionsConnectionSection connection state", () => {
+  beforeEach(() => {
+    checkRelay.mockReset();
+    checkRelay.mockReturnValue(new Promise(() => {}));
+    Object.defineProperty(window, "electron", {
+      value: { decisions: { checkRelay } },
+      configurable: true,
+      writable: true,
+    });
+  });
+  afterEach(() => {
+    cleanup();
+  });
+
+  function statusLine(): string {
+    return screen.getAllByRole("status")[0]!.textContent ?? "";
+  }
+
+  it("names the next attempt's time while reconnecting", () => {
+    const nextAttemptAt = new Date(2026, 10, 2, 14, 5, 9).getTime();
+    renderSection({ state: "reconnecting", relayOrigin: ORIGIN, nextAttemptAt });
+
+    const clock = new Date(nextAttemptAt).toLocaleTimeString(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+    expect(screen.getByText("Reconnecting to decisions.example.workers.dev")).toBeTruthy();
+    expect(statusLine()).toContain(`Next attempt at ${clock}`);
+  });
+
+  it("warns that another connection replaced this one, with when it tries again", () => {
+    const nextAttemptAt = new Date(2026, 10, 2, 14, 9, 0).getTime();
+    renderSection({ state: "replaced", relayOrigin: ORIGIN, nextAttemptAt });
+
+    expect(screen.getByText("Replaced by another connection")).toBeTruthy();
+    expect(statusLine()).toContain("another copy of Daintree using the same keys");
+    expect(statusLine()).toContain(
+      new Date(nextAttemptAt).toLocaleTimeString(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+        second: "2-digit",
+      })
+    );
+  });
+
+  it("says revoked, and offers the disconnect that removes the keys", () => {
+    renderSection({ state: "revoked", relayOrigin: ORIGIN });
+
+    expect(screen.getByText("Revoked by decisions.example.workers.dev")).toBeTruthy();
+    expect(statusLine()).toContain("won't reconnect");
+    expect(screen.getByRole("button", { name: "Disconnect relay" })).toBeTruthy();
+  });
+
+  it("says why a relay that's set up isn't being connected to", () => {
+    renderSection({ state: "not-connected", relayOrigin: ORIGIN, problem: "other-relay" });
+    expect(statusLine()).toContain("came from another relay identity");
+    cleanup();
+
+    renderSection({ state: "not-connected", relayOrigin: ORIGIN, problem: "keys" });
+    expect(statusLine()).toContain("keys couldn't be read");
+  });
+});
