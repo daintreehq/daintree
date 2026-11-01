@@ -435,9 +435,9 @@ describe("Canopy refinements", () => {
   });
 
   it("puts an unread ask in needs-you only at a stop that could be asking", () => {
-    const askable = new Set(
-      ASKING_STOPS.map((stop) => `${stop.agentState}:${stop.waitingReason ?? ""}`)
-    );
+    const keyOf = (state: Pick<FleetRunRow, "agentState" | "waitingReason">) =>
+      `${state.agentState}:${state.waitingReason ?? ""}`;
+    const askable = new Set(ASKING_STOPS.map(keyOf));
     for (const state of [
       ...ASKING_STOPS,
       { agentState: "waiting", waitingReason: "error" },
@@ -446,7 +446,7 @@ describe("Canopy refinements", () => {
       { agentState: "idle" },
       { agentState: "exited" },
     ] as const) {
-      const key = `${state.agentState}:${"waitingReason" in state ? state.waitingReason : ""}`;
+      const key = keyOf(state);
       const band = bandForRun(run({ ...state, canopy: ASKED }));
       expect(band === "needs-you", key).toBe(askable.has(key));
     }
