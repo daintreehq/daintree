@@ -1,5 +1,5 @@
 import type { FleetRunRow, RunCanopyRefinement } from "../types/ipc/fleet.js";
-import { isHandBackStop, isHandBackUnseen } from "./runHandBack.js";
+import { isHandBackStop, isHandBackUnseen, isWaitUnseen } from "./runHandBack.js";
 import { canopyPlacement } from "./canopyRefinement.js";
 
 /**
@@ -58,8 +58,15 @@ export type FleetBand = (typeof FLEET_BANDS)[number];
  * the user's look at this run rather than a workspace-wide watermark. A stop
  * main never saw work before — a restored session, a flicker under the work
  * bar, a shell sitting at its prompt — has handed nothing back and reads as
- * `idle`, not as the agent asking for something. Only a wait that names what
- * it wants (an approval, a question, an error) is a demand.
+ * `idle`, not as the agent asking for something.
+ *
+ * `needs-you` is Canopy's alone: a reading of the run's current turn that says
+ * it asks the user something, which the user hasn't had in front of them
+ * since. Looking answers nothing, but an ask already seen is no longer news,
+ * and it lands where an idle run does — never `done`, since the run hasn't
+ * finished. Without a reading, an approval or question wait is the patterns'
+ * guess: unread (`review`) until looked at, then idle, and never a demand. An
+ * error wait is `blocked` either way.
  *
  * A park beats every state, including `blocked`. Parking is the user saying
  * "this one does not need me until further notice", and an attention model
@@ -76,11 +83,11 @@ export function bandForRun(run: FleetRunRow): FleetBand {
   // — the stronger, indefinite decision wins, matching FLEET_BANDS' order.
   if (run.snooze !== undefined) return "snoozed";
   // Canopy's reading refines the free rules below and sits under the user's
-  // own decisions above. Seeing a question answers nothing, so an ask holds
-  // whatever the hand-back's seen state says — the seen mark itself is left
-  // alone, and comes back into force the moment the turn moves on.
+  // own decisions above. Whether an ask was seen is Canopy's read mark for its
+  // turn, not the hand-back's: a hand-back record is about a stop, and the ask
+  // may be a later one. Seen, it is still unanswered, so never `done`.
   const canopy = runCanopyPlacement(run);
-  if (canopy?.kind === "asked") return "needs-you";
+  if (canopy?.kind === "asked") return canopy.seen ? "idle" : "needs-you";
   if (canopy?.kind === "not-asking") {
     // A question wait is never recorded as a hand-back, so the run's record is
     // from an earlier stop and says nothing about this one. The wait is the
@@ -97,7 +104,10 @@ export function bandForRun(run: FleetRunRow): FleetBand {
   }
   switch (run.agentState) {
     case "waiting":
-      return run.waitingReason === "error" ? "blocked" : "needs-you";
+      // What is left is an approval or question wait no reading placed: news
+      // until looked at, then nothing more than an idle run.
+      if (run.waitingReason === "error") return "blocked";
+      return isWaitUnseen(run.wait) ? "review" : "idle";
     case "working":
     case "directing":
       // Presence alone, like the park and snooze records above: main only puts

@@ -1,5 +1,5 @@
 import type { AgentState, WaitingReason } from "../types/agent.js";
-import type { RunHandBackRecord } from "../types/ipc/fleet.js";
+import type { RunHandBackRecord, RunWaitRecord } from "../types/ipc/fleet.js";
 
 /**
  * How long a stint of work must be watched before its stop is a hand-back: a
@@ -34,4 +34,21 @@ export function isHandBackUnseen(record: RunHandBackRecord | undefined): boolean
 export function isHandBackStop(state: AgentState, waitingReason?: WaitingReason): boolean {
   if (state === "completed") return true;
   return state === "waiting" && (waitingReason === undefined || waitingReason === "prompt");
+}
+
+/**
+ * A wait the patterns filed as asking the user something: an approval or a
+ * question. A guess at what the screen shows, so on its own it is news, never
+ * a demand.
+ */
+export function isObservedAskWait(state: AgentState, waitingReason?: WaitingReason): boolean {
+  return state === "waiting" && (waitingReason === "approval" || waitingReason === "question");
+}
+
+/**
+ * The user has not had the wait in front of them since it began. No record is
+ * unseen: a wait nobody here watched start is still news to whoever looks.
+ */
+export function isWaitUnseen(record: RunWaitRecord | undefined): boolean {
+  return record?.seenAt === undefined;
 }

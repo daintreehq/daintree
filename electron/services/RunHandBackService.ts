@@ -1,12 +1,13 @@
 import { events } from "./events.js";
 import type { AgentState } from "../../shared/types/agent.js";
-import type { RunHandBackRecord } from "../../shared/types/ipc/fleet.js";
+import type { RunHandBackRecord, RunWaitRecord } from "../../shared/types/ipc/fleet.js";
 import {
   HAND_BACK_LOOK_LEASE_MS,
   HAND_BACK_MIN_WORK_MS,
   HAND_BACK_SEEN_DWELL_MS,
   isHandBackStop,
   isHandBackUnseen,
+  isObservedAskWait,
 } from "../../shared/utils/runHandBack.js";
 
 const BUSY_STATES: ReadonlySet<AgentState> = new Set(["working", "directing"]);
@@ -23,6 +24,8 @@ interface RunTrack {
   incarnation: number | undefined;
   /** When anything was last observed of the run, so a fleet read begun before it cannot prune it. */
   touchedAt: number;
+  /** When a state of the run was last heard, so an inventory read begun before it cannot overrule it. */
+  stateAt: number | null;
   /** When the busy stint Daintree is watching began; null while stopped or never seen working. */
   workSince: number | null;
   record: RunHandBackRecord | null;
@@ -32,9 +35,12 @@ interface RunTrack {
    * asking, not handing back, and puts this one back.
    */
   replaced: RunHandBackRecord | null | undefined;
+  /** The approval or question wait of the stop the run is in; null when it has none. */
+  wait: RunWaitRecord | null;
   /** Each view showing the run now: when its look began, and when it was last told. */
   lookers: Map<string, { since: number; renewedAt: number }>;
   timer: ReturnType<typeof setTimeout> | null;
+  waitTimer: ReturnType<typeof setTimeout> | null;
 }
 
 export interface RunHandBackDeps {
@@ -60,6 +66,12 @@ export interface RunHandBackDeps {
  * the dwell past it. A user's "mark unread" holds against any look begun before
  * it, so the pane they marked it from doesn't read it straight back.
  *
+ * Beside each hand-back, and never as one, the approval or question wait the
+ * run's current stop includes (`getWait`), seen by the same looks and dwell. A
+ * wait needs no watched work: one first seen at startup is still news to
+ * whoever looks. The stop's slides between waits, prompts and `completed` keep
+ * it; work Daintree watched, an error, an exit or another agent ends it.
+ *
  * In memory only, and process-wide: project view eviction drops a view's looks,
  * never what was seen. Records are replaced, never mutated, so the fleet's row
  * comparison sees every change.
@@ -67,6 +79,7 @@ export interface RunHandBackDeps {
 export class RunHandBackService {
   private tracks = new Map<string, RunTrack>();
   private unsubscribers: Array<() => void> = [];
+  private waitListeners = new Set<() => void>();
   private now: () => number;
   private isQuitting: () => boolean;
   private disposed = false;
@@ -105,6 +118,48 @@ export class RunHandBackService {
     return track.record;
   }
 
+  /**
+   * The run's approval or question wait, when its current stop has one. A wait
+   * from before the terminal last spawned belongs to a process that is gone.
+   */
+  getWait(runId: string, spawnedAt?: number): RunWaitRecord | undefined {
+    const track = this.tracks.get(runId);
+    if (!track?.wait) return undefined;
+    if (spawnedAt !== undefined && track.wait.stoppedAt < spawnedAt) {
+      this.endWait(track);
+      return undefined;
+    }
+    return track.wait;
+  }
+
+  /**
+   * A complete inventory, read from `readStartedAt`, shows the run in an
+   * approval or question wait since `stoppedAt`. A wait no state was heard
+   * for — a run already waiting when main started — begins here; a state heard
+   * since the read began is newer than it, and stands.
+   */
+  noteInventoryWait(runId: string, stoppedAt: number, readStartedAt: number): void {
+    if (this.disposed || this.isQuitting()) return;
+    let track = this.tracks.get(runId);
+    if (track?.wait) return;
+    if (track && track.stateAt !== null && track.stateAt >= readStartedAt) return;
+    if (!track) {
+      if (this.tracks.size >= MAX_TRACKED_RUNS) return;
+      track = newTrack(this.now());
+      this.tracks.set(runId, track);
+    }
+    track.wait = { stoppedAt };
+    this.checkWaitSeen(runId, track);
+  }
+
+  /** Be told each time a run's wait begins, is seen or ends. Returns the unsubscribe. */
+  onWaitChanged(listener: () => void): () => void {
+    this.waitListeners.add(listener);
+    return () => {
+      this.waitListeners.delete(listener);
+    };
+  }
+
   /** Runs whose hand-back is unseen, as recorded; reading never expires or marks one. */
   listUnseenRunIds(): string[] {
     const ids: string[] = [];
@@ -122,6 +177,7 @@ export class RunHandBackService {
     for (const [runId, track] of this.tracks) {
       if (liveRunIds.has(runId) || track.touchedAt >= readStartedAt) continue;
       this.clearTimer(track);
+      this.clearWaitTimer(track);
       this.tracks.delete(runId);
     }
   }
@@ -138,9 +194,9 @@ export class RunHandBackService {
       if (!track?.lookers.has(viewer)) return;
       // A look that lasted the dwell reads the run as it ends, even when its
       // timer has not fired yet.
-      this.checkSeen(runId, track);
+      this.checkLooks(runId, track);
       track.lookers.delete(viewer);
-      this.checkSeen(runId, track);
+      this.checkLooks(runId, track);
       return;
     }
     if (!track) {
@@ -155,14 +211,14 @@ export class RunHandBackService {
     } else {
       track.lookers.set(viewer, { since: now, renewedAt: now });
     }
-    this.checkSeen(runId, track);
+    this.checkLooks(runId, track);
   }
 
   /** A view went away: whatever it showed is no longer in front of anyone. */
   forgetViewer(viewer: string): void {
     for (const [runId, track] of this.tracks) {
       if (!track.lookers.delete(viewer)) continue;
-      this.checkSeen(runId, track);
+      this.checkLooks(runId, track);
     }
   }
 
@@ -208,6 +264,7 @@ export class RunHandBackService {
     let track = this.tracks.get(runId);
     if (track) {
       track.touchedAt = this.now();
+      track.stateAt = track.touchedAt;
       if (
         incarnation !== undefined &&
         track.incarnation !== undefined &&
@@ -221,6 +278,7 @@ export class RunHandBackService {
         track.workSince = null;
         this.clearTimer(track);
         if (had) this.announce(runId, null);
+        if (this.endWait(track)) this.announceWait();
       }
       if (incarnation !== undefined) track.incarnation = incarnation;
     }
@@ -230,18 +288,27 @@ export class RunHandBackService {
         if (this.tracks.size >= MAX_TRACKED_RUNS) return;
         track = newTrack(this.now());
         track.incarnation = incarnation;
+        track.stateAt = track.touchedAt;
         this.tracks.set(runId, track);
       }
       track.replaced = undefined;
       if (track.workSince === null) track.workSince = at;
       return;
     }
-    if (!track) return;
+    if (!track) {
+      // A wait is news whether or not any work was watched before it.
+      if (!isObservedAskWait(state, waitingReason) || this.tracks.size >= MAX_TRACKED_RUNS) return;
+      track = newTrack(this.now());
+      track.incarnation = incarnation;
+      track.stateAt = track.touchedAt;
+      this.tracks.set(runId, track);
+    }
 
     const replaced = track.replaced;
     track.replaced = undefined;
     const workSince = track.workSince;
     track.workSince = null;
+    this.observeWait(runId, track, state, waitingReason, at, workSince);
 
     if (state === "waiting" && !isHandBackStop(state, waitingReason)) {
       // The agent finished only to ask something: the stop it just made was not
@@ -266,6 +333,67 @@ export class RunHandBackService {
   }
 
   /**
+   * The stop's wait as the run's new state leaves it. Work watched past the
+   * flicker bar ends the stop it belonged to, and so do an error, an exit or
+   * idling; a slide to `completed` or a prompt is the same stop, and one wait
+   * after another in it keeps the first's seen mark — without a reading, two
+   * asks with no work between can't be told apart.
+   */
+  private observeWait(
+    runId: string,
+    track: RunTrack,
+    state: AgentState,
+    waitingReason: Parameters<typeof isHandBackStop>[1],
+    at: number,
+    workSince: number | null
+  ): void {
+    let changed = false;
+    if (workSince !== null && at - workSince >= HAND_BACK_MIN_WORK_MS) changed = this.endWait(track);
+    if (isObservedAskWait(state, waitingReason)) {
+      if (track.wait === null) {
+        track.wait = { stoppedAt: at };
+        changed = true;
+      }
+    } else if (!isHandBackStop(state, waitingReason)) {
+      changed = this.endWait(track) || changed;
+    }
+    if (!changed) return;
+    this.announceWait();
+    this.checkWaitSeen(runId, track);
+  }
+
+  /** Ends the run's wait, if it has one. True when it had. */
+  private endWait(track: RunTrack): boolean {
+    this.clearWaitTimer(track);
+    if (track.wait === null) return false;
+    track.wait = null;
+    return true;
+  }
+
+  private checkLooks(runId: string, track: RunTrack): void {
+    this.checkSeen(runId, track);
+    this.checkWaitSeen(runId, track);
+  }
+
+  /**
+   * When the longest look still going began, of those that may read a record
+   * the user marked unread at `markedUnreadAt`. Looks not renewed within the
+   * lease are dropped as ended. Null when there is none.
+   */
+  private lookingSince(track: RunTrack, now: number, markedUnreadAt?: number): number | null {
+    let since: number | null = null;
+    for (const [viewer, look] of track.lookers) {
+      if (now - look.renewedAt > HAND_BACK_LOOK_LEASE_MS) {
+        track.lookers.delete(viewer);
+        continue;
+      }
+      if (markedUnreadAt !== undefined && look.since <= markedUnreadAt) continue;
+      if (since === null || look.since < since) since = look.since;
+    }
+    return since;
+  }
+
+  /**
    * Reads the hand-back once a look has lasted the dwell past the stop, or arms
    * a timer for when one will have. Looks begun before a "mark unread" do not
    * count; looks not renewed within the lease are dropped as ended.
@@ -275,15 +403,7 @@ export class RunHandBackService {
     const record = track.record;
     if (this.disposed || !record || !isHandBackUnseen(record)) return;
     const now = this.now();
-    let since: number | null = null;
-    for (const [viewer, look] of track.lookers) {
-      if (now - look.renewedAt > HAND_BACK_LOOK_LEASE_MS) {
-        track.lookers.delete(viewer);
-        continue;
-      }
-      if (record.markedUnreadAt !== undefined && look.since <= record.markedUnreadAt) continue;
-      if (since === null || look.since < since) since = look.since;
-    }
+    const since = this.lookingSince(track, now, record.markedUnreadAt);
     if (since === null) return;
     const due = Math.max(since, record.stoppedAt) + HAND_BACK_SEEN_DWELL_MS;
     if (now >= due) {
@@ -298,10 +418,47 @@ export class RunHandBackService {
     }, due - now);
   }
 
+  /** The same for the run's wait: seen once a look has lasted the dwell past its stop. */
+  private checkWaitSeen(runId: string, track: RunTrack): void {
+    this.clearWaitTimer(track);
+    const wait = track.wait;
+    if (this.disposed || wait === null || wait.seenAt !== undefined) return;
+    const now = this.now();
+    const since = this.lookingSince(track, now);
+    if (since === null) return;
+    const due = Math.max(since, wait.stoppedAt) + HAND_BACK_SEEN_DWELL_MS;
+    if (now >= due) {
+      if (this.isQuitting()) return;
+      track.wait = { stoppedAt: wait.stoppedAt, seenAt: now };
+      this.announceWait();
+      return;
+    }
+    track.waitTimer = setTimeout(() => {
+      track.waitTimer = null;
+      if (this.tracks.get(runId) === track) this.checkWaitSeen(runId, track);
+    }, due - now);
+  }
+
   private clearTimer(track: RunTrack): void {
     if (track.timer === null) return;
     clearTimeout(track.timer);
     track.timer = null;
+  }
+
+  private clearWaitTimer(track: RunTrack): void {
+    if (track.waitTimer === null) return;
+    clearTimeout(track.waitTimer);
+    track.waitTimer = null;
+  }
+
+  private announceWait(): void {
+    for (const listener of [...this.waitListeners]) {
+      try {
+        listener();
+      } catch (error) {
+        console.error("[RunHandBackService] Wait listener failed:", error);
+      }
+    }
   }
 
   private announce(runId: string, record: RunHandBackRecord | null, fromUser = false): void {
@@ -317,7 +474,11 @@ export class RunHandBackService {
     this.disposed = true;
     for (const unsubscribe of this.unsubscribers) unsubscribe();
     this.unsubscribers = [];
-    for (const track of this.tracks.values()) this.clearTimer(track);
+    this.waitListeners.clear();
+    for (const track of this.tracks.values()) {
+      this.clearTimer(track);
+      this.clearWaitTimer(track);
+    }
     this.tracks.clear();
   }
 }
@@ -326,10 +487,13 @@ function newTrack(now: number): RunTrack {
   return {
     incarnation: undefined,
     touchedAt: now,
+    stateAt: null,
     workSince: null,
     record: null,
     replaced: undefined,
+    wait: null,
     lookers: new Map(),
     timer: null,
+    waitTimer: null,
   };
 }

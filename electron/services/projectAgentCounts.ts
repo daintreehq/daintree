@@ -588,7 +588,10 @@ export function computeProjectAgentCounts(
         // An ask Canopy read on a hand-back is as old as the stop it was asked at,
         // as the fleet dates it, not the slide from `completed` into a prompt.
         const askedAt =
-          asked && terminal.id !== undefined
+          asked &&
+          terminal.id !== undefined &&
+          terminal.agentState !== undefined &&
+          isHandBackStop(terminal.agentState, terminal.waitingReason)
             ? handBackFor?.(terminal.id, terminal.spawnedAt)?.stoppedAt
             : undefined;
         const since = askedAt ?? terminal.lastStateChange;
