@@ -206,9 +206,12 @@ describe("remoteHostsStore", () => {
     const other: HostListEntry = { ...host, descriptor: { ...host.descriptor, id: "bigbox" } };
     const invalidators = [
       () => useRemoteHostsStore.getState().applyEvent({ type: "hosts-changed", hosts: [] }),
+      () => useRemoteHostsStore.getState().setHosts([]),
       () => useRemoteHostsStore.getState().reset(),
     ];
     for (const invalidate of invalidators) {
+      // Run once first, so an invalidator that rewound the epoch would hand the later read the stale one's.
+      invalidate();
       const early = deferred<HostListEntry[]>();
       const loading = useRemoteHostsStore.getState().loadHosts(() => early.promise);
       invalidate();
