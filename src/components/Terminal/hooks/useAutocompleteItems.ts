@@ -135,21 +135,30 @@ export function useAutocompleteItems({
     (): AutocompleteItem[] =>
       // Basename first, directory as the dimmed description — scannable in a
       // dense list and disambiguates duplicate filenames across directories.
-      autocompleteFiles.map((file) => {
-        const sep = Math.max(file.lastIndexOf("/"), file.lastIndexOf("\\"));
-        const base = sep >= 0 ? file.slice(sep + 1) : file;
-        const dir = sep >= 0 ? file.slice(0, sep) : "";
-        return {
-          key: file,
-          label: base || file,
-          insertText: formatAtFileToken(file),
-          description: dir || undefined,
-          descriptionKind: "path",
-          enterAction: "insert",
-          insert: "literal",
-        };
-      }),
-    [autocompleteFiles]
+      autocompleteFiles
+        // A query ending in a separator has opened that directory to pick
+        // inside it: the directory itself, already typed, is not a match.
+        .filter((file) => !(/[\\/]$/.test(query) && file === query))
+        .map((file) => {
+          // A directory (`src/auth/`) is named by its last segment, slash kept,
+          // under its parent, the same as a file: split past the trailing slash,
+          // or the row repeats its own path as its description.
+          const trailing = /[\\/]$/.test(file) ? 1 : 0;
+          const body = file.slice(0, file.length - trailing);
+          const sep = Math.max(body.lastIndexOf("/"), body.lastIndexOf("\\"));
+          const base = sep >= 0 ? file.slice(sep + 1) : file;
+          const dir = sep >= 0 ? body.slice(0, sep) : "";
+          return {
+            key: file,
+            label: base || file,
+            insertText: formatAtFileToken(file),
+            description: dir || undefined,
+            descriptionKind: "path",
+            enterAction: "insert",
+            insert: "literal",
+          };
+        }),
+    [autocompleteFiles, query]
   );
 
   const isReferenceQuery = activeCompletionContext?.triggerChar === "#";

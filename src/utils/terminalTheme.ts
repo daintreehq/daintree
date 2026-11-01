@@ -36,6 +36,12 @@ export interface InputBarColors {
    */
   shellSelectedBg: string;
   shellBorderSelected: string;
+  /** The editor's scrollbar thumb, fitted to 3:1 against the shell's fills. */
+  scrollThumb: string;
+  /** The typing caret: the terminal's cursor, leaned to 3:1 where it cannot reach it. */
+  caretInk: string;
+  /** A staged chip's contour, fitted to 3:1 against the shell's fills. */
+  chipStagedBorder: string;
   /** The keyboard-focus outline: accent, mixed into the background no further than 3:1 allows. */
   shellFocusRing: string;
   /** The `❯` marker, at rest and on the selected composer. */
@@ -107,9 +113,13 @@ export interface InputBarColors {
   isDark: boolean;
 }
 
-/** A pill chip's wash, and its fill once staged for delete (`base.ts`). */
+/**
+ * A pill chip's wash, and its fill once staged for delete (`base.ts`). The
+ * staged fill is opaque over the shell; at 16 it landed on the same value as
+ * the translucent wash, so only the contour said which chip was staged.
+ */
 export const CHIP_WASH_MIX = 10;
-export const CHIP_STAGED_MIX = 16;
+export const CHIP_STAGED_MIX = 22;
 
 /** How much accent the listening shell's fill carries (`HybridInputBar`). */
 export const VOICE_LISTENING_FILL_MIX = 12;
@@ -282,6 +292,10 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
   let textInk = fgCss;
   let chipText = fgCss;
   let chipControlPct = 72;
+  let borderSelectedPct = 24;
+  let scrollThumbPct = 40;
+  let caretInk = accent;
+  let stagedBorderPct = 55;
   if (fg && bg) {
     const rest = mixOklab(bg, BLACK, restDim);
     const hover = mixOklab(bg, BLACK, hoverDim);
@@ -300,6 +314,13 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
       textInk = toHex(ink);
     }
     placeholderPct = fitMix(ink, bg, 48, 4.6, [rest, hover]) ?? 100;
+    // The selected edge is what finds the selected composer among several;
+    // 24% is the look, with a floor for palettes whose foreground sits close
+    // to the background, measured against both fills it divides.
+    borderSelectedPct = fitMix(fg, bg, 24, 1.8, [bg, selected]) ?? 24;
+    // The editor's scrollbar thumb at the height cap: a control, so 3:1 against
+    // every fill the shell takes.
+    scrollThumbPct = fitMix(fg, bg, 28, 3.1, shells) ?? 100;
     // The controls mix toward the shell's own fill (`--ib-bg`), which is the
     // selected fill on the selected composer, so each fill is fitted with its
     // own mix; a hovered shell keeps the resting mix under a lighter fill.
@@ -320,6 +341,9 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
     // (`chipStyle`), and the opaque fill of a chip staged by Backspace.
     const staged = mixOklab(fg, rest, CHIP_STAGED_MIX / 100);
     const pills = [...shells.map((s) => over(fg, s, CHIP_WASH_MIX / 100)), staged];
+    // A staged chip's contour is what says which chip Backspace will take (the
+    // caret hides while one is staged): 3:1 against the shell around it.
+    stagedBorderPct = fitMix(fg, rest, 55, 3.1, shells) ?? 100;
     let label = ink;
     if (!pills.every((s) => contrast(ink, s) >= 4.6)) {
       const pole = isDark ? WHITE : BLACK;
@@ -383,6 +407,11 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
         ringPct !== null
           ? mix(acInk.css, ringPct, background)
           : mix(fgCss, fitMix(fg, acInk.rgb, 0, 3.1, [bg]) ?? 100, acInk.css);
+      // The typing caret and drop cursor take the same lean against the shell's
+      // fills, so the one mark that says where typing goes never fades out.
+      if (!shells.every((s) => contrast(acInk.rgb, s) >= 3.1)) {
+        caretInk = mix(fgCss, fitMix(fg, acInk.rgb, 0, 3.1, shells) ?? 100, acInk.css);
+      }
       // The disc is the foreground at low alpha over the listening fill, and
       // the dot is the signal at its quietest opacity over the disc: fit what
       // the compositor actually paints, not the opaque inks.
@@ -432,10 +461,15 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
     shellShadow: isDark ? "0 1px 3px rgba(0,0,0,0.15)" : "0 1px 3px rgba(0,0,0,0.05)",
     shellHoverBg: mix(background, hoverDim * 100, "black"),
     shellSelectedBg: mix(fgCss, 3, background),
-    shellBorderSelected: mix(fgCss, 24, background),
+    shellBorderSelected: mix(fgCss, borderSelectedPct, background),
     shellFocusRing: focusRing,
-    marker: "color-mix(in oklab, var(--ib-fg) 72%, var(--ib-bg))",
-    markerSelected: "color-mix(in oklab, var(--ib-fg) 90%, var(--ib-bg))",
+    // The resting `❯` wears the control ink, fitted to 3:1 like the controls;
+    // the selected one stays a clear step above it.
+    marker: `color-mix(in oklab, var(--ib-fg) ${controlPct}%, var(--ib-bg))`,
+    markerSelected: `color-mix(in oklab, var(--ib-fg) ${Math.min(100, Math.max(90, controlPct + 12))}%, var(--ib-bg))`,
+    scrollThumb: mix(fgCss, scrollThumbPct, background),
+    caretInk,
+    chipStagedBorder: mix(fgCss, stagedBorderPct, mix(background, restDim * 100, "black")),
     textInk,
     controlMix: `${controlPct}%`,
     referenceInk,
