@@ -48,8 +48,8 @@ function git(cwd: string, args: string[]): void {
     timeout: 10_000,
     env: {
       ...process.env,
-      GIT_CONFIG_GLOBAL: os.devNull,
-      GIT_CONFIG_SYSTEM: os.devNull,
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_SYSTEM: "/dev/null",
       GIT_TERMINAL_PROMPT: "0",
     },
   });
@@ -72,7 +72,7 @@ function bytesOf(side: DiffMediaWireSide): Buffer {
 describe("diffMedia readFileVersions against a real repository", () => {
   let root: string;
   let repo: string;
-  let cleanup: () => void;
+  let cleanup: (() => void) | undefined;
 
   function write(relativePath: string, content: Buffer): void {
     const absolute = path.join(repo, relativePath);
@@ -87,6 +87,7 @@ describe("diffMedia readFileVersions against a real repository", () => {
 
   beforeEach(() => {
     ipcHandlers.clear();
+    cleanup = undefined;
     _resetRateLimitQueuesForTest();
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "daintree-diff-media-index-")));
     repo = path.join(root, "repo");
@@ -100,7 +101,7 @@ describe("diffMedia readFileVersions against a real repository", () => {
   });
 
   afterEach(() => {
-    cleanup();
+    cleanup?.();
     gitServiceCache.clear();
     fs.rmSync(root, { recursive: true, force: true });
   });

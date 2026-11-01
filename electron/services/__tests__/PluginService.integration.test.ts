@@ -625,7 +625,7 @@ describe("PluginService integration — menu item contributions", () => {
 });
 
 describe("PluginService integration — forge provider contributions", () => {
-  it("registers a manifest forgeProviders entry and unregisters it on unload", async () => {
+  it("lists an installed forge provider as unavailable and unregisters it on unload", async () => {
     await writePlugin("acme.forge-plugin", {
       name: "acme.forge-plugin",
       version: "1.0.0",
@@ -648,6 +648,7 @@ describe("PluginService integration — forge provider contributions", () => {
     expect(registered).toHaveLength(1);
     expect(registered[0]).toEqual({
       pluginId: "acme.forge-plugin",
+      unavailableReason: expect.stringContaining("built-in plugins"),
       contribution: {
         id: "github",
         name: "GitHub",

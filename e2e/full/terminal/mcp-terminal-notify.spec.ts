@@ -194,6 +194,15 @@ function noticesFor(binDir: string, paneId: string): string[] {
     .filter((line) => line.startsWith("Daintree:"));
 }
 
+function idleNoticePattern(terminalId: string, note?: string): RegExp {
+  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const body = escape(
+    `Daintree: terminal ${terminalId} stopped working, now waiting at its prompt`
+  );
+  const suffix = note ? escape(` Your note: "${note}".`) : "";
+  return new RegExp(`^${body} \\(lastTransitionAt [1-9]\\d*\\)\\.${suffix}$`);
+}
+
 let ctx: AppContext;
 let page: Page;
 let binDir: string;
@@ -346,7 +355,7 @@ test.describe.serial("MCP: terminal notices reach the pane that asked", () => {
     await sendFakeAgentCommand(binDir, "idle", T_MEDIUM, workerId);
     await expect
       .poll(() => noticesFor(binDir, assistantId), { timeout: T_NOTICE, intervals: [500, 1000] })
-      .toEqual([`Daintree: terminal ${workerId} stopped working, now waiting at its prompt.`]);
+      .toEqual([expect.stringMatching(idleNoticePattern(workerId))]);
     expect(noticesFor(binDir, otherLaneId)).toEqual([]);
     expect(noticesFor(binDir, workerId)).toEqual([]);
   });
@@ -369,8 +378,8 @@ test.describe.serial("MCP: terminal notices reach the pane that asked", () => {
         intervals: [500, 1000],
       })
       .toBe(2);
-    expect(noticesFor(binDir, assistantId)[1]).toBe(
-      `Daintree: terminal ${workerId} stopped working, now waiting at its prompt. Your note: "run the reviewer next".`
+    expect(noticesFor(binDir, assistantId)[1]).toMatch(
+      idleNoticePattern(workerId, "run the reviewer next")
     );
 
     // A terminal that is not working answers at once and arms nothing.
@@ -404,9 +413,7 @@ test.describe.serial("MCP: terminal notices reach the pane that asked", () => {
         intervals: [500, 1000],
       })
       .toBe(3);
-    expect(noticesFor(binDir, assistantId)[2]).toBe(
-      `Daintree: terminal ${workerId} stopped working, now waiting at its prompt.`
-    );
+    expect(noticesFor(binDir, assistantId)[2]).toMatch(idleNoticePattern(workerId));
 
     // A terminal in the project now on screen is not one the assistant may
     // ask about: it gets the same answer as an id that does not exist.
@@ -548,12 +555,10 @@ test.describe.serial("MCP: terminal notices reach the pane that asked", () => {
       .toEqual(["working", "working"]);
 
     // Each worker stops in turn: one line for it, typed into the orchestrator.
-    const noticeLine = (id: string) =>
-      `Daintree: terminal ${id} stopped working, now waiting at its prompt.`;
-    const expected: string[] = [];
+    const expected: ReturnType<typeof expect.stringMatching>[] = [];
     for (const worker of workers) {
       await sendFakeAgentCommand(binDir, "idle", T_MEDIUM, worker.id);
-      expected.push(noticeLine(worker.id));
+      expected.push(expect.stringMatching(idleNoticePattern(worker.id)));
       await expect
         .poll(() => noticesFor(binDir, orchestratorId), {
           timeout: T_NOTICE,

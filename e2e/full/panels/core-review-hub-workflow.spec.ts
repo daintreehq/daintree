@@ -523,7 +523,7 @@ test.describe("Core: Review Hub Workflow", () => {
       // Worktree card aria-label should no longer contain "has uncommitted changes"
       const mainCard = window.locator(SEL.worktree.mainCard);
       await expect
-        .poll(() => mainCard.getAttribute("aria-label"), {
+        .poll(() => mainCard.locator(SEL.worktree.selectButton).getAttribute("aria-label"), {
           timeout: T_LONG,
           message: "Main card should no longer indicate uncommitted changes",
         })

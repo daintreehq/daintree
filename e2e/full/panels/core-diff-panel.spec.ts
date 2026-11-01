@@ -179,7 +179,7 @@ test.describe.serial("Core: diff panel", () => {
   test("a file on the worktree card opens git's hunks, and Unified redraws the same lines", async () => {
     const card = page.locator(SEL.worktree.card("main"));
     // A fresh card opens with its details folded; the file list lives inside.
-    await card.getByRole("button", { name: "Show details" }).click({ timeout: T_LONG });
+    await card.getByRole("button", { name: /^Details for worktree/ }).click({ timeout: T_LONG });
     const row = card.getByRole("button", { name: `Open ${TEXT_FILE}`, exact: true });
     await expect(row).toBeVisible({ timeout: T_LONG });
     await row.click();

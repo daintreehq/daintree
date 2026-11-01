@@ -199,10 +199,14 @@ test.describe.serial("Multi-window isolation", () => {
 
     // Both cards start clean.
     await expect
-      .poll(() => main1.getAttribute("aria-label"), { timeout: T_LONG })
+      .poll(() => main1.locator(SEL.worktree.selectButton).getAttribute("aria-label"), {
+        timeout: T_LONG,
+      })
       .not.toContain("has uncommitted changes");
     await expect
-      .poll(() => main2.getAttribute("aria-label"), { timeout: T_LONG })
+      .poll(() => main2.locator(SEL.worktree.selectButton).getAttribute("aria-label"), {
+        timeout: T_LONG,
+      })
       .not.toContain("has uncommitted changes");
 
     // timer: GIT_WATCH_SELF_TRIGGER_COOLDOWN_MS (1000ms) — a write inside it is swallowed.
@@ -212,7 +216,7 @@ test.describe.serial("Multi-window isolation", () => {
     writeFileSync(path.join(fixtures[0].dir, "isolation-marker.txt"), "scoped\n");
 
     await expect
-      .poll(() => main1.getAttribute("aria-label"), {
+      .poll(() => main1.locator(SEL.worktree.selectButton).getAttribute("aria-label"), {
         timeout: T_LONG,
         message: "Window 1's main card should detect the external change",
       })
@@ -226,7 +230,9 @@ test.describe.serial("Multi-window isolation", () => {
     // snapshot-assert after the dwell.
     // timer: negative-assertion dwell for a cross-routed watcher event
     await window2Page.waitForTimeout(T_MEDIUM);
-    expect(await main2.getAttribute("aria-label")).not.toContain("has uncommitted changes");
+    expect(await main2.locator(SEL.worktree.selectButton).getAttribute("aria-label")).not.toContain(
+      "has uncommitted changes"
+    );
   });
 
   test("closing one window leaves the other fully functional", async () => {
@@ -276,7 +282,7 @@ test.describe.serial("Multi-window isolation", () => {
     await window2Page.waitForTimeout(1500);
     writeFileSync(path.join(fixtures[1].dir, "post-close-marker.txt"), "alive\n");
     await expect
-      .poll(() => main2.getAttribute("aria-label"), {
+      .poll(() => main2.locator(SEL.worktree.selectButton).getAttribute("aria-label"), {
         timeout: T_LONG,
         message: "Window 2's worktree port must still deliver updates after window 1 closes",
       })

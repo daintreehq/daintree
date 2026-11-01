@@ -107,6 +107,7 @@ export const SEL = {
     card: (branch: string) => `[data-worktree-branch="${branch}"]`,
     row: (branch: string) => `[data-worktree-row]:has([data-worktree-branch="${branch}"])`,
     mainCard: '[data-worktree-is-main="true"]',
+    selectButton: "[data-card-select-overlay]",
     mainRow: '[data-worktree-row]:has([data-worktree-is-main="true"])',
     actionsMenu: '[data-testid="worktree-actions-menu"]',
     newDialog: '[data-testid="new-worktree-dialog"]',
@@ -190,7 +191,7 @@ export const SEL = {
   projectSwitcher: {
     palette: '[data-testid="project-switcher-palette"]',
     addButton: '[data-testid="project-add-button"]',
-    projectSettings: 'button:has(:text-is("Project settings…"))',
+    projectSettings: '[data-testid="project-settings-button"]',
     closeButton: '[aria-label="Close project"]',
   },
   trash: {

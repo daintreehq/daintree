@@ -421,7 +421,9 @@ describe("importLegacyAuditRings — merge", () => {
     (ring) => {
       const make = fixtures[ring];
       const cap = CAPS[ring];
-      for (let i = 0; i < cap - 2; i++) insertRow(ring, make(`e${i}`, 10_000 + i));
+      harness.db!.transaction(() => {
+        for (let i = 0; i < cap - 2; i++) insertRow(ring, make(`e${i}`, 10_000 + i));
+      })();
       const config = makeConfig(
         configWith(ring, [make("l1", 1), make("l2", 2), make("l3", 3), make("l4", 4)])
       );
@@ -438,7 +440,9 @@ describe("importLegacyAuditRings — merge", () => {
   it("leaves a full ring untouched", () => {
     const ring = "pluginMcpAuditLog";
     const make = fixtures[ring];
-    for (let i = 0; i < CAPS[ring]; i++) insertRow(ring, make(`e${i}`, 10_000 + i));
+    harness.db!.transaction(() => {
+      for (let i = 0; i < CAPS[ring]; i++) insertRow(ring, make(`e${i}`, 10_000 + i));
+    })();
     const before = ids(ring);
     const config = makeConfig(configWith(ring, [make("legacy", 1)]));
 
@@ -487,7 +491,9 @@ describe("importLegacyAuditRings — retries", () => {
   it("does not bring back legacy records that fell off the cap, after a clear", () => {
     const ring = "runHistoryRecords";
     const make = fixtures[ring];
-    for (let i = 0; i < CAPS[ring]; i++) insertRow(ring, make(`e${i}`, 10_000 + i));
+    harness.db!.transaction(() => {
+      for (let i = 0; i < CAPS[ring]; i++) insertRow(ring, make(`e${i}`, 10_000 + i));
+    })();
     const original = configWith(ring, [make("l1", 1), make("l2", 2)]);
     const config = makeConfig(original);
     importLegacyAuditRings(deps(config));

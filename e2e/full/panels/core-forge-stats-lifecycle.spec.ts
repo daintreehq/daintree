@@ -7,6 +7,7 @@ import { openPluginManager, closePluginManager } from "../../helpers/plugins";
 import { clearAllFaults } from "../../helpers/ipcFaults";
 import {
   connectGitHub,
+  clickForgeStat,
   clearGitHubToken,
   refreshGitHubConfig,
   pushRateLimitBlocked,
@@ -44,14 +45,13 @@ async function expectForgeSegmentRegistered(
 
 async function openIssuesDropdown(window: Page): Promise<void> {
   const pill = window.locator(SEL.github.statPillIssues);
-  await expect(pill).toBeVisible({ timeout: T_MEDIUM });
+  await expect(pill).toHaveCount(1, { timeout: T_MEDIUM });
   // A token-error pill routes clicks to Settings instead of opening the
   // dropdown (#10347), and `isTokenError` only clears once the stats hook
   // re-fetches with the freshly seeded token — wait out that propagation
   // window before clicking.
-  await expect(pill).not.toHaveAccessibleName(/Configure/, { timeout: T_MEDIUM });
-  await pill.scrollIntoViewIfNeeded();
-  await pill.click();
+  await expect(pill).not.toHaveAttribute("aria-label", /Configure/, { timeout: T_MEDIUM });
+  await clickForgeStat(window, "issues");
 }
 
 async function expectAlignedColumn(items: Locator, count: number): Promise<void> {
@@ -211,7 +211,7 @@ test.describe.serial("Panels: Forge stats pill lifecycle", () => {
       // (ForgeStatsToolbarButton onClick, #10347 forge-neutral rework). Pin the
       // stats state to a token error so the routing decision is deterministic.
       const pill = window.locator(SEL.github.statPillIssues);
-      await expect(pill).toBeVisible({ timeout: T_MEDIUM });
+      await expect(pill).toHaveCount(1, { timeout: T_MEDIUM });
       await stubRepoStats(
         ctx!.app,
         {
@@ -221,8 +221,8 @@ test.describe.serial("Panels: Forge stats pill lifecycle", () => {
         },
         window
       );
-      await expect(pill).toHaveAccessibleName(/Configure/, { timeout: T_MEDIUM });
-      await pill.click();
+      await expect(pill).toHaveAttribute("aria-label", /Configure/, { timeout: T_MEDIUM });
+      await clickForgeStat(window, "issues");
 
       await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
       await expect(window.locator(SEL.github.tokenBlock)).toBeVisible({ timeout: T_MEDIUM });
@@ -372,11 +372,10 @@ test.describe.serial("Panels: Forge stats pill lifecycle", () => {
       await stubRepoStats(ctx!.app, { issueCount: 3, prCount: 2, commitCount: 5 }, window);
 
       const pill = window.locator(SEL.github.statPillPrs);
-      await expect(pill).toBeVisible({ timeout: T_MEDIUM });
+      await expect(pill).toHaveCount(1, { timeout: T_MEDIUM });
       // Same token-error propagation wait as openIssuesDropdown.
-      await expect(pill).not.toHaveAccessibleName(/Configure/, { timeout: T_MEDIUM });
-      await pill.scrollIntoViewIfNeeded();
-      await pill.click();
+      await expect(pill).not.toHaveAttribute("aria-label", /Configure/, { timeout: T_MEDIUM });
+      await clickForgeStat(window, "prs");
 
       await expect(window.locator(SEL.github.searchPrs)).toBeVisible({ timeout: T_MEDIUM });
     });

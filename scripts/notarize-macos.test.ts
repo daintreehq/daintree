@@ -117,6 +117,7 @@ describe("notarize-macos", () => {
     Module.prototype.require = function (id: string) {
       if (id === "fs") return mockFs();
       if (id === "os") return mockOs();
+      if (id === "path") return path.posix;
       if (id === "child_process")
         return { execFileSync: mockExecFileSync, spawnSync: mockSpawnSync };
       // Helper re-signing (#9775) is exercised by its own test; no-op it here so

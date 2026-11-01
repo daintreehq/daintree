@@ -5,6 +5,7 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
+import { switchWorktree } from "../../helpers/workflows";
 import { openSettings, selectSettingsScope } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
@@ -235,8 +236,7 @@ test.describe.serial("Full: Resource Settings Persistence", () => {
 
     // Trigger status check via action palette
     await ensureWindowFocused(ctx.app);
-    await newCard.click({ position: { x: 10, y: 10 } });
-    await window.waitForTimeout(T_SETTLE);
+    await switchWorktree(window, BRANCH);
 
     await window.keyboard.press(`${mod}+Shift+P`);
     const palette = window.locator(SEL.actionPalette.dialog);

@@ -16,6 +16,7 @@ import {
 import { injectFault, clearAllFaults } from "../../helpers/ipcFaults";
 import {
   seedGitHubToken,
+  clickForgeStat,
   clearGitHubToken,
   refreshGitHubConfig,
   stubRepoStats,
@@ -552,8 +553,8 @@ test.describe.serial("Core: Error surfaces", () => {
     await injectFault(ctx.app, "forge:list-issues", "E2E_INJECTED_ERROR");
 
     const issuesButton = ctx.window.locator('button[aria-label*="open issues"]');
-    await expect(issuesButton).toBeVisible({ timeout: T_MEDIUM });
-    await issuesButton.click();
+    await expect(issuesButton).toHaveCount(1, { timeout: T_MEDIUM });
+    await clickForgeStat(ctx.window, "issues");
 
     const retryButton = ctx.window.locator('button:has-text("Retry")');
     await expect(retryButton).toBeVisible({ timeout: T_MEDIUM });

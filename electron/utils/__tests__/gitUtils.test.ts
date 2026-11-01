@@ -16,6 +16,12 @@ vi.mock("child_process", () => ({
   execFile: execFileMock,
 }));
 
+// Executable discovery is separate from git resolution and must not use the
+// real filesystem while these tests stall fs calls or freeze timers.
+vi.mock("../windowsExecutable.js", () => ({
+  resolveExecutableForSpawn: vi.fn(async (name: string) => name),
+}));
+
 import {
   getGitBranch,
   getGitDir,
@@ -23,7 +29,6 @@ import {
   clearGitDirCache,
   clearGitCommonDirCache,
 } from "../gitUtils.js";
-import { executableForSpawn } from "../windowsExecutable.js";
 
 type ExecCallback = (error: Error | null, stdout: string, stderr: string) => void;
 
@@ -110,8 +115,7 @@ describe("getGitBranch", () => {
     await getGitBranch("/repo/path", { timeout: 1234 });
     expect(execFileMock).toHaveBeenCalledTimes(1);
     const [file, args, opts] = execFileMock.mock.calls[0];
-    // On Windows git is spawned by its absolute PATH location.
-    expect(file).toBe(executableForSpawn("git"));
+    expect(file).toBe("git");
     expect(args).toEqual(["rev-parse", "--abbrev-ref", "HEAD"]);
     expect(opts).toMatchObject({ cwd: "/repo/path", timeout: 1234 });
   });

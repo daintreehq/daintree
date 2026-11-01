@@ -20,7 +20,6 @@ import {
   triggerTerminalLink,
   waitForTerminalReady,
   waitForTerminalText,
-  waitForTerminalTextIgnoringLineBreaks,
 } from "../../helpers/terminal";
 import {
   copyFullContextFromToolbar,
@@ -1324,7 +1323,7 @@ test.describe("Core: Terminal pane", () => {
       expect(content).not.toContain(".git\\");
     });
 
-    test("injecting context writes content to terminal buffer", async () => {
+    test("context injection refuses a plain shell without writing the bundle", async () => {
       const { window } = ctx;
       const wtId = await getActiveWorktreeId(window);
 
@@ -1361,13 +1360,10 @@ test.describe("Core: Terminal pane", () => {
           },
         { terminalId: panelId, worktreeId: wtId }
       );
-      expect(injectResult?.error).toBeFalsy();
-
-      await waitForTerminalTextIgnoringLineBreaks(
-        getPanelById(window, panelId),
-        "index.ts",
-        T_LONG
-      );
+      expect(injectResult?.error).toContain("running agent, not a shell");
+      await runTerminalCommand(window, panel, "echo INJECTION_SHELL_STILL_READY");
+      await waitForTerminalText(panel, "INJECTION_SHELL_STILL_READY", T_LONG);
+      expect(await getTerminalText(panel)).not.toContain("index.ts");
     });
   });
 

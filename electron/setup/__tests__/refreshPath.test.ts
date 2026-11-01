@@ -1255,7 +1255,10 @@ describe("refreshPath — login shell lifecycle (#15565)", () => {
         new Promise((resolve) =>
           setTimeout(
             () =>
-              resolve({ PATH: "/slow/bin:/usr/bin:/slow/bin", CLAUDE_CONFIG_DIR: "/slow/claude" }),
+              resolve({
+                PATH: ["/slow/bin", "/usr/bin", "/slow/bin"].join(path.delimiter),
+                CLAUDE_CONFIG_DIR: "/slow/claude",
+              }),
             9_500
           )
         )
@@ -1267,7 +1270,7 @@ describe("refreshPath — login shell lifecycle (#15565)", () => {
     await vi.advanceTimersByTimeAsync(9_500);
     await refresh;
 
-    expect(process.env.PATH).toBe("/slow/bin:/usr/bin");
+    expect(process.env.PATH).toBe(["/slow/bin", "/usr/bin"].join(path.delimiter));
     expect(getShellEnvironmentObservation()).toEqual({
       shell: "/bin/zsh",
       env: { CLAUDE_CONFIG_DIR: "/slow/claude" },

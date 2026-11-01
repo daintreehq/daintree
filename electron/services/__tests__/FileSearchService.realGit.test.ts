@@ -153,7 +153,7 @@ describe("FileSearchService against real git", () => {
     // Only git hides this, so seeing it missing proves the inner repository's
     // listing answered rather than the walker.
     writeFile(path.join(inner, "src", "debug.log"));
-    expect(git(inner, "rev-parse", "--show-toplevel").trim()).toBe(inner);
+    expect(path.normalize(git(inner, "rev-parse", "--show-toplevel").trim())).toBe(inner);
 
     const service = await createService();
     const files = await service.listFiles(inner);

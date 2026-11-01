@@ -1,7 +1,9 @@
-import type { ElectronApplication, Page } from "@playwright/test";
+import { expect, type ElectronApplication, type Page } from "@playwright/test";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../../shared/utils/forgeProviderIds";
 import type { Issue, Page as ForgePage } from "../../shared/types/forge";
 import { activateE2EPlugin } from "./plugins";
+import { SEL } from "./selectors";
+import { T_MEDIUM } from "./timeouts";
 
 /**
  * GitHub E2E helpers. All state is injected through the same fault-mode hooks
@@ -21,6 +23,29 @@ import { activateE2EPlugin } from "./plugins";
 
 /** A throwaway token shaped like a classic PAT. Never validated against GitHub. */
 export const E2E_GITHUB_TOKEN = "ghp_e2e_fake_token_0000000000000000000000";
+
+/** The stats capsule can live in overflow on constrained CI displays. */
+export async function clickForgeStat(window: Page, stat: "issues" | "prs"): Promise<void> {
+  const pill = window.locator(
+    stat === "issues" ? SEL.github.statPillIssues : SEL.github.statPillPrs
+  );
+  await expect(pill).toHaveCount(1, { timeout: T_MEDIUM });
+  if (await pill.isVisible()) {
+    await pill.click();
+    return;
+  }
+
+  const overflow = window
+    .getByRole("toolbar", { name: "Main toolbar" })
+    .getByRole("group", { name: "Tools and settings" })
+    .locator("[data-toolbar-overflow-trigger]");
+  await overflow.click();
+  const name =
+    stat === "issues"
+      ? /^(?:Issues(?:,|$)|Open issues unavailable$)/
+      : /^(?:Pull requests(?:,|$)|Open pull requests unavailable$)/;
+  await window.getByRole("menuitem", { name }).click();
+}
 
 /** Provider registration order can make another forge the initial settings selection. */
 export async function selectGitHubSettingsProvider(window: Page): Promise<void> {

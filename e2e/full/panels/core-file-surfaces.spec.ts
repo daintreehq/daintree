@@ -138,13 +138,14 @@ async function resetSurfaces(page: Page) {
 }
 
 /**
- * Title of the rendered-HTML guest whose URL contains `pathFragment`, read in
+ * Title of the rendered-HTML guest at the mounted webview's URL, read in
  * main. Only a guest in the preview session counts, so a preview that lands
  * anywhere else (an app iframe, another partition) is never found.
  */
-async function previewGuestTitle(pathFragment: string): Promise<string | null> {
+async function previewGuestTitle(): Promise<string | null> {
+  const src = await ctx.window.locator('[data-testid="html-preview-frame"]').getAttribute("src");
   return ctx.app.evaluate(
-    ({ webContents, session }, { pathFragment, partition }) => {
+    ({ webContents, session }, { src, partition }) => {
       const previewSession = session.fromPartition(partition);
       const guest = webContents
         .getAllWebContents()
@@ -152,17 +153,29 @@ async function previewGuestTitle(pathFragment: string): Promise<string | null> {
           (wc) =>
             wc.getType() === "webview" &&
             wc.session === previewSession &&
-            wc.getURL().includes(pathFragment) &&
+            wc.getURL() === src &&
             !wc.isLoading()
         );
-      return guest ? guest.getTitle() : null;
+      if (!guest) {
+        const contents = webContents.getAllWebContents().map((wc) => ({
+          type: wc.getType(),
+          url: wc.getURL(),
+          title: wc.getTitle(),
+          previewSession: wc.session === previewSession,
+          loading: wc.isLoading(),
+        }));
+        return `Waiting for preview guest ${src}: ${JSON.stringify(contents)}`;
+      }
+      return guest.getTitle();
     },
-    { pathFragment, partition: HTML_PREVIEW_PARTITION }
+    { src, partition: HTML_PREVIEW_PARTITION }
   );
 }
 
 function parseTitleJson(prefix: string, title: string | null): unknown {
-  if (!title?.startsWith(prefix)) return null;
+  if (!title?.startsWith(prefix)) {
+    return { waitingFor: prefix, title };
+  }
   try {
     return JSON.parse(title.slice(prefix.length));
   } catch {
@@ -865,10 +878,10 @@ test.describe("Core: File surfaces", () => {
       await expect(frameEl).toHaveAttribute("partition", HTML_PREVIEW_PARTITION);
 
       await expect
-        .poll(
-          async () => parseTitleJson("report:", await previewGuestTitle("/html-report/index.html")),
-          { timeout: T_LONG, message: "the preview guest published its script and asset results" }
-        )
+        .poll(async () => parseTitleJson("report:", await previewGuestTitle()), {
+          timeout: T_LONG,
+          message: "the preview guest published its script and asset results",
+        })
         .toEqual({
           inline: "yes",
           external: "yes",
@@ -909,11 +922,10 @@ test.describe("Core: File surfaces", () => {
         // that threw, or a child that never ran, would leave the sinks silent
         // for the wrong reason.
         await expect
-          .poll(
-            async () =>
-              parseTitleJson("webrtc:", await previewGuestTitle("/webrtc-probe/index.html")),
-            { timeout: T_LONG, message: "the probe finished ICE gathering in the page and child" }
-          )
+          .poll(async () => parseTitleJson("webrtc:", await previewGuestTitle()), {
+            timeout: T_LONG,
+            message: "the probe finished ICE gathering in the page and child",
+          })
           .toEqual({
             direct: { offered: true, complete: true },
             child: { offered: true, complete: true },

@@ -81,7 +81,7 @@ test.describe.serial("Core: External Git and Worktree Detection", () => {
 
     await expect(mainCard).toBeVisible({ timeout: T_LONG });
     await expect
-      .poll(() => mainCard.getAttribute("aria-label"), {
+      .poll(() => mainCard.locator(SEL.worktree.selectButton).getAttribute("aria-label"), {
         timeout: T_LONG,
         message: "Main card should not have uncommitted changes",
       })
@@ -97,7 +97,7 @@ test.describe.serial("Core: External Git and Worktree Detection", () => {
     writeFileSync(path.join(fixtureDir, "external-change.txt"), "hello\n");
 
     await expect
-      .poll(() => mainCard.getAttribute("aria-label"), {
+      .poll(() => mainCard.locator(SEL.worktree.selectButton).getAttribute("aria-label"), {
         timeout: T_LONG,
         message: "Main card should detect uncommitted changes from external file",
       })
@@ -116,7 +116,7 @@ test.describe.serial("Core: External Git and Worktree Detection", () => {
     await expect(mainCard).toContainText("external-commit", { timeout: T_LONG });
 
     await expect
-      .poll(() => mainCard.getAttribute("aria-label"), {
+      .poll(() => mainCard.locator(SEL.worktree.selectButton).getAttribute("aria-label"), {
         timeout: T_LONG,
         message: "Card should be clean after committing all changes",
       })
