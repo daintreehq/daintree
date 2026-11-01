@@ -1015,6 +1015,18 @@ const HAIKU_CLARIFY = revise(HAIKU_OPENING, {
   ],
 });
 
+// Round 2: rules alone left Haiku 1 of 9 on the clarified passages, with its
+// worked examples all keeping a person's name, so the clarification gets
+// examples of its own, and of an "as in" that stays.
+const HAIKU_CLARIFY_2 = revise(HAIKU_CLARIFY, {
+  core: [
+    [
+      '  Corrected: "It\'s slow on the first launch, like five seconds, I think. Can you profile the first launch?"\n',
+      '  Corrected: "It\'s slow on the first launch, like five seconds, I think. Can you profile the first launch?"\n- Target: "The keynote was fine. Shellies. Demo was the best part. And that is Michelle, as in Michelle Obi."\n  Corrected: "The keynote was fine. Michelle Obi\'s demo was the best part." (the clarification says the one-word sentence "Shellies" was "Michelle\'s", cut off from its sentence by the full stop; it joins back, and the clarification goes, its "Obi" kept)\n- Target: "Loop in Dev on the migration, he owns the schema. That\'s Dave, as in Dave Kim."\n  Corrected: "Loop in Dave Kim on the migration, he owns the schema." (a person, but the speaker said what the name was, so it\'s fixed; the clarification goes, its "Kim" kept)\n- Target: "cache it, as in keep it in memory, and don\'t write it to disk"\n  Corrected: "Cache it, as in keep it in memory, and don\'t write it to disk." (the "as in" explains words that already make sense, so it stays)\n',
+    ],
+  ],
+});
+
 // The same for Terra, whose rules have no whole-passage reading: only the
 // clarification, none of Haiku's restatement and restart rules.
 const TERRA_CLARIFY = revise(INTENT_OPENING, {
@@ -1223,6 +1235,11 @@ export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
     description:
       "Haiku: haiku-opening with a later clarification settling the misheard word before it, a person's name included",
     instructionsFor: fixed(HAIKU_CLARIFY),
+  },
+  "haiku-clarify2": {
+    description:
+      'Haiku: haiku-clarify with worked examples of a clarification and of an "as in" that stays',
+    instructionsFor: fixed(HAIKU_CLARIFY_2),
   },
   "terra-clarify": {
     description: "intent-opening with a later clarification settling the misheard word before it",

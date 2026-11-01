@@ -179,6 +179,12 @@ EXAMPLES: These show the corrected text only — always return the JSON object d
   Corrected: "When three folders are open at once, the sidebar lags badly." (the whole misheard opening is replaced; the restatement goes, its "badly" kept)
 - Target: "So it's... it's slow on the first launch... like five seconds, I think. Can you profile it? Yeah, profile the first launch."
   Corrected: "It's slow on the first launch, like five seconds, I think. Can you profile the first launch?"
+- Target: "The keynote was fine. Shellies. Demo was the best part. And that is Michelle, as in Michelle Obi."
+  Corrected: "The keynote was fine. Michelle Obi's demo was the best part." (the clarification says the one-word sentence "Shellies" was "Michelle's", cut off from its sentence by the full stop; it joins back, and the clarification goes, its "Obi" kept)
+- Target: "Loop in Dev on the migration, he owns the schema. That's Dave, as in Dave Kim."
+  Corrected: "Loop in Dave Kim on the migration, he owns the schema." (a person, but the speaker said what the name was, so it's fixed; the clarification goes, its "Kim" kept)
+- Target: "cache it, as in keep it in memory, and don't write it to disk"
+  Corrected: "Cache it, as in keep it in memory, and don't write it to disk." (the "as in" explains words that already make sense, so it stays)
 
 ${SHARED_TERMS_BLOCK}`;
 

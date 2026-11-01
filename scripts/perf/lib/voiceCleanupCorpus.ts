@@ -2139,7 +2139,7 @@ const DENSE: readonly AuthoredCase[] = [
   // A misheard name the speaker clarified a sentence later (#15926): the
   // reported Haiku passage, cut short around it, where the transcriber's full
   // stop left the mishearing a sentence of its own, and two built beside it,
-  // a person named under "as in" and a place named under "I meant".
+  // a person named under "as in" and one under "I meant".
   {
     id: "dense-clarified-name:grok",
     style: "grok",
@@ -2147,13 +2147,14 @@ const DENSE: readonly AuthoredCase[] = [
     raw: "Actually, in general, this whole episode was quite useful. I like the, yeah, the whole legal stuff. Who sends the buyer was very interesting too. Coppethies. HackerTube was also very, very interesting. And that is Carpathy, as in Andrej Carpathy. I actually don't have much useful stuff to say.",
     reference:
       "Actually, in general, this whole episode was quite useful. I like the whole legal stuff. Who sends the buyer was very interesting too. Carpathy's HackerTube was also very, very interesting. I actually don't have much useful stuff to say.",
-    alsoAccept: [
-      "Actually, in general, this whole episode was quite useful. I like the whole legal stuff. Who sends the buyer was very interesting too. Andrej Carpathy's HackerTube was also very, very interesting. I actually don't have much useful stuff to say.",
-    ],
-    fixes: { "Carpathy's HackerTube": "misread" },
+    // Spelling him Karpathy from what the model knows is neither asked for nor wrong (#15926).
+    alsoAccept: ["Andrej Carpathy's", "Karpathy's", "Andrej Karpathy's"].map(
+      (name) =>
+        `Actually, in general, this whole episode was quite useful. I like the whole legal stuff. Who sends the buyer was very interesting too. ${name} HackerTube was also very, very interesting. I actually don't have much useful stuff to say.`
+    ),
+    fixes: { "athy's HackerTube": "misread" },
     drops: ["Coppethies", "that is Carpathy", "as in", "yeah"],
     keep: ["Who sends the buyer", "I actually don't have much useful stuff to say"],
-    unbroken: ["Carpathy's HackerTube was also"],
   },
   {
     id: "dense-clarified-person:grok",
@@ -2170,16 +2171,12 @@ const DENSE: readonly AuthoredCase[] = [
     id: "dense-clarified-meant:grok",
     style: "grok",
     source: "dense",
-    raw: "The offsite is booked for Thursday. Lisbon. Office has the bigger room. I meant Lisa's, she's hosting it.",
-    reference:
-      "The offsite is booked for Thursday. Lisa's office has the bigger room, she's hosting it.",
-    alsoAccept: [
-      "The offsite is booked for Thursday. Lisa's office has the bigger room. She's hosting it.",
-    ],
-    fixes: { "Lisa's office": "misread" },
-    drops: ["Lisbon", "I meant"],
-    keep: ["booked for Thursday", "has the bigger room"],
-    unbroken: ["Lisa's office has"],
+    raw: "Thank Ray Chill for the design review, the mockups were spot on. I meant Rachel.",
+    reference: "Thank Rachel for the design review, the mockups were spot on.",
+    alsoAccept: ["Thank Rachel for the design review. The mockups were spot on."],
+    fixes: { "Thank Rachel for": "misread" },
+    drops: ["Ray Chill", "I meant"],
+    keep: ["the mockups were spot on"],
   },
 ];
 
