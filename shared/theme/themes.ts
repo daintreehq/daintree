@@ -792,7 +792,11 @@ export function deriveActivityTextInks(
   >) {
     const ink = tokens[source];
     if (typeof ink !== "string") continue;
-    inks[key] = liftToContrast(ink, backdrops, ACTIVITY_TEXT_DERIVATION_TARGET, type);
+    let lifted = liftToContrast(ink, backdrops, ACTIVITY_TEXT_DERIVATION_TARGET, type);
+    // A custom surface can leave room for the floor but not the headroom over it;
+    // the floor still holds, and the gate would otherwise reject a repairable ink.
+    if (lifted === ink) lifted = liftToContrast(ink, backdrops, ACTIVITY_TEXT_MIN_CONTRAST, type);
+    inks[key] = lifted;
   }
   return inks;
 }

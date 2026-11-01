@@ -450,6 +450,7 @@ describe("applyColorVisionMode activity text inks", () => {
         expect(ink, text).toBe(scheme.tokens[text]);
         return false;
       }
+      expect(ink, text).not.toBe(scheme.tokens[text]);
       const lifted = hexToOklch(ink)!;
       const source = hexToOklch(hue)!;
       if (source.c < 0.005) {
@@ -466,7 +467,7 @@ describe("applyColorVisionMode activity text inks", () => {
       }
       return true;
     });
-    expect(recoloured).toHaveLength(1);
+    expect(recoloured.length).toBeGreaterThan(0);
   });
 
   it("returning to default restores the theme's own inks", () => {
@@ -474,7 +475,13 @@ describe("applyColorVisionMode activity text inks", () => {
     const root = document.createElement("div");
     applyAppThemeToRoot(root, scheme);
     applyColorVisionMode(root, "red-green", scheme);
+    expect(root.style.getPropertyValue("--theme-activity-working-text")).not.toBe(
+      scheme.tokens["activity-working-text"]
+    );
     applyColorVisionMode(root, "blue-yellow", scheme);
+    expect(root.style.getPropertyValue("--theme-activity-waiting-text")).not.toBe(
+      scheme.tokens["activity-waiting-text"]
+    );
     applyColorVisionMode(root, "default", scheme);
 
     for (const text of Object.values(ACTIVITY_TEXT_INKS)) {

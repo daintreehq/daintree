@@ -40,11 +40,10 @@ export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
   // warning of a wait and the success-green of a healthy process. Never danger
   // — completion is the desired outcome, not a fault.
   review: "text-activity-completed-text",
-  // Mark-only today: `working` is what a row draws when liveness has claimed a
-  // mark demand had no use for, and such a row has no sentence to colour. The
-  // entry stays because the map is total over the union — a tone must not be
-  // able to ship without an answer here — and because a surface with room for a
-  // "running" sentence should draw it in this hue rather than inventing one.
+  // No demand sentence ever takes this tone: `working` is what a row's mark
+  // draws when liveness has claimed a slot demand had no use for. The row's
+  // running count ("2 running") is drawn in it instead, so a run reads in the
+  // same green on the line as in the mark.
   working: "text-activity-working-text",
   running: "text-text-secondary",
   // Muted like the other settled states, and deliberately NOT the accent: a

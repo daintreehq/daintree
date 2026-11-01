@@ -205,11 +205,11 @@ function wedgePath(share: number): string {
  * the ring tones keep their borders. The pie is reached only by a row that
  * genuinely has something to divide.
  *
- * The cost of dropping the notch is that two hues sitting close together — as
- * `review` and `working` do in palettes where both are greens — make a split
- * mark read as one disc. That is a legible mark stating one of its two facts;
- * the notch was an illegible mark stating both, and the row's line carries the
- * counts in words either way.
+ * The cost of dropping the notch is that two hues sitting close together make a
+ * split mark read as one disc. Every built-in keeps `review` and `working` apart
+ * for that reason (#15866); a custom palette that doesn't gets a legible mark
+ * stating one of its two facts, where the notch was an illegible mark stating
+ * both, and the row's line carries the counts in words either way.
  *
  * `aria-hidden`, like every mark in this list: the row's own line states both
  * counts in words, and a mark that also announced itself would have a reader

@@ -490,7 +490,7 @@ Import and add to `shared/theme/builtInThemes/index.ts`.
 | Accent | 9 (6 primary + 3 secondary) |
 | Focus | 1 (`focus-ring`) |
 | Status | 8 (4 colors + 4 `*-surface` washes) |
-| Activity | 5 |
+| Activity | 8 (5 inks + 3 `*-text` twins) |
 | Overlay | 12 (base + 5 ladder + hover/active/selected/elevated/raised/highlight) |
 | Filter-selected | 2 |
 | Wash | 3 |
@@ -506,7 +506,7 @@ Import and add to `shared/theme/builtInThemes/index.ts`.
 | UI Utility | 15 (4 scrollbar + 3 panel-state + 2 state-chip + 2 label-pill + 2 grain + focus-ring-offset + chrome-noise-texture) |
 | Form | 2 (`knob-base` + `state-modified`) |
 | Diff | 10 |
-| **Total** | **159** |
+| **Total** | **162** |
 
 This must equal `APP_THEME_TOKEN_KEYS.length` in `shared/theme/types.ts`, which is the contract — if the two disagree, the array wins and this table is stale.
 

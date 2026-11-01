@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+  differenceEuclidean,
+  filterDeficiencyDeuter,
+  filterDeficiencyProt,
+  modeOklab,
+  parse,
+  useMode,
+} from "culori";
+import {
   ACTIVITY_TEXT_INKS,
   ACTIVITY_TEXT_MIN_CONTRAST,
+  blendOverBackground,
   contrastRatio,
   deltaEOK,
   getThemeContrastWarnings,
+  parseRgba,
   resolveActivityTextBackdrops,
   resolveDiffTextBackdrops,
   resolvePaletteRowBackdrops,
@@ -20,9 +30,21 @@ import type { AppThemeTokenKey } from "../types.js";
 
 const INKS = Object.entries(ACTIVITY_TEXT_INKS) as Array<[AppThemeTokenKey, AppThemeTokenKey]>;
 
-// The floor under which a two-tone mark of working and completed reads as one
-// disc: the closest built-in pair that still visibly splits is movile's, ΔE 0.029.
+// eslint-disable-next-line react-hooks/rules-of-hooks -- culori config, not a React hook
+useMode(modeOklab);
+
+const oklabDistance = differenceEuclidean("oklab");
+
+const RED_GREEN_FILTERS = [
+  ["protanopia", filterDeficiencyProt(1)],
+  ["deuteranopia", filterDeficiencyDeuter(1)],
+] as const;
+
+// The floors under which a two-tone mark of working and completed reads as one
+// disc. The closest built-in pair that still visibly splits is movile's: ΔE 0.029,
+// and 0.017 under deuteranopia.
 const WORKING_COMPLETED_MIN_DELTA_E = 0.025;
+const WORKING_COMPLETED_MIN_CVD_DELTA_E = 0.015;
 
 function hueDistance(a: number, b: number): number {
   const d = Math.abs(a - b) % 360;
@@ -74,28 +96,74 @@ describe("activity sentence inks (#15866)", () => {
       const working = scheme.tokens["activity-working"];
       const completed = scheme.tokens["activity-completed"];
       expect(deltaEOK(working, completed)).toBeGreaterThanOrEqual(WORKING_COMPLETED_MIN_DELTA_E);
+      // A red-green reader loses most of the chroma between two greens, so the
+      // split has to survive on what's left, which is mostly lightness.
+      for (const [deficiency, filter] of RED_GREEN_FILTERS) {
+        const seen = oklabDistance(filter(parse(working)!), filter(parse(completed)!));
+        expect(seen, `${deficiency} ΔE`).toBeGreaterThanOrEqual(WORKING_COMPLETED_MIN_CVD_DELTA_E);
+      }
       // Both halves stay visible as a mark on the row they sit on.
       for (const row of resolvePaletteRowBackdrops(scheme.tokens, scheme.type)) {
-        expect(
-          contrastRatio(completed, row.hex),
-          `completed on ${row.label}`
-        ).toBeGreaterThanOrEqual(3);
+        for (const [half, ink] of [
+          ["working", working],
+          ["completed", completed],
+        ] as const) {
+          expect(contrastRatio(ink, row.hex), `${half} on ${row.label}`).toBeGreaterThanOrEqual(3);
+        }
       }
     }
   );
 
-  it("measures the switcher's rows, which can fail where every display surface passes", () => {
+  it("measures the switcher's rows, translucent dark palette included", () => {
     // Dark palettes float at 94% over the plane beneath, so the switcher's row is a
-    // colour no display surface spells. An ink lifted only against the shared rows
-    // is measured against this one too.
+    // colour no display surface spells; each one is measured at rest and under the
+    // highlight.
     const daintree = getAppThemeById("daintree")!;
-    const rows = resolvePaletteRowBackdrops(daintree.tokens, "dark");
-    const shared = resolveDiffTextBackdrops(daintree.tokens);
-    const sharedHexes = new Set(shared.map((b) => b.hex));
-    expect(rows.some((row) => !sharedHexes.has(row.hex))).toBe(true);
-    expect(resolveActivityTextBackdrops(daintree.tokens, "dark")).toHaveLength(
-      shared.length + rows.length
-    );
+    const t = daintree.tokens;
+    const highlight = parseRgba(t["overlay-highlight"])!;
+    const rows = new Set(resolvePaletteRowBackdrops(t, "dark").map((row) => row.hex));
+    for (const plane of [
+      "surface-grid",
+      "surface-canvas",
+      "surface-panel",
+      "surface-panel-elevated",
+    ] as const) {
+      const palette = blendOverBackground(t["surface-sidebar"], t[plane], 0.94);
+      expect(rows.has(palette), `palette over ${plane}`).toBe(true);
+      const highlighted = blendOverBackground(highlight.hex, palette, highlight.opacity);
+      expect(rows.has(highlighted), `highlighted over ${plane}`).toBe(true);
+    }
+    const all = new Set(resolveActivityTextBackdrops(t, "dark").map((b) => b.hex));
+    for (const row of rows) expect(all.has(row)).toBe(true);
+  });
+
+  it("settles for the floor where a surface leaves no room for the headroom", () => {
+    // White on #767676 is 4.54:1: AA, but under the 4.55:1 the derivation aims for.
+    const daintree = getAppThemeById("daintree")!;
+    const tokens = { ...daintree.tokens, tint: "#000000", "activity-working": "#808080" };
+    for (const key of [
+      "surface-grid",
+      "surface-sidebar",
+      "surface-canvas",
+      "surface-panel",
+      "surface-panel-elevated",
+    ] as const) {
+      tokens[key] = "#767676";
+    }
+    for (const key of [
+      "overlay-subtle",
+      "overlay-soft",
+      "overlay-highlight",
+      "overlay-selected",
+    ] as const) {
+      tokens[key] = "rgba(0, 0, 0, 0)";
+    }
+    const ink = deriveActivityTextInks(tokens, "dark")["activity-working-text"]!;
+    for (const backdrop of resolveActivityTextBackdrops(tokens, "dark")) {
+      expect(contrastRatio(ink, backdrop.hex), backdrop.label).toBeGreaterThanOrEqual(
+        ACTIVITY_TEXT_MIN_CONTRAST
+      );
+    }
   });
 
   it("gates a theme whose sentence inks are the bare activity inks", () => {
@@ -124,15 +192,19 @@ describe("activity sentence inks (#15866)", () => {
   });
 
   it("re-lifts from an imported theme's own activity ink and surfaces", () => {
+    // A plum nowhere near the green of the theme it is normalised over, on a
+    // sidebar it can't read on, so the twin has to come from this import.
+    const plum = "#4a3a5e";
     const scheme = normalizeAppColorScheme({
-      id: "dim-moss",
-      name: "Dim moss",
+      id: "dim-plum",
+      name: "Dim plum",
       type: "dark",
-      tokens: { "activity-completed": "#3f5a44", "surface-sidebar": "#2a2a2a" },
+      tokens: { "activity-completed": plum, "surface-sidebar": "#3a3a3a" },
     });
+    expect(contrastRatio(plum, "#3a3a3a")).toBeLessThan(ACTIVITY_TEXT_MIN_CONTRAST);
     const ink = scheme.tokens["activity-completed-text"];
-    expect(ink).not.toBe("#3f5a44");
-    expect(hueDistance(hexToOklch(ink)!.h, hexToOklch("#3f5a44")!.h)).toBeLessThan(1.5);
+    expect(ink).not.toBe(plum);
+    expect(hueDistance(hexToOklch(ink)!.h, hexToOklch(plum)!.h)).toBeLessThan(1.5);
     for (const backdrop of resolveActivityTextBackdrops(scheme.tokens, "dark")) {
       expect(contrastRatio(ink, backdrop.hex), backdrop.label).toBeGreaterThanOrEqual(
         ACTIVITY_TEXT_MIN_CONTRAST

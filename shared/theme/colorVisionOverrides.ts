@@ -220,7 +220,7 @@ const COLOR_VISION_OVERRIDES: Partial<Record<ColorVisionMode, Record<string, str
   "blue-yellow": BLUE_YELLOW_OVERRIDES,
 };
 
-// Each text ink lifted from a status ink, beside the status ink it follows.
+// Each text ink lifted from a status or activity ink, beside the ink it follows.
 const LIFTED_TEXT_INKS: ReadonlyArray<readonly [AppThemeTokenKey, AppThemeTokenKey]> = [
   ["diff-text-insert", "status-success"],
   ["diff-text-delete", "status-danger"],
