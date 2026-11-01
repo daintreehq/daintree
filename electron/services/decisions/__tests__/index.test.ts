@@ -3,6 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const saved = vi.hoisted(() => ({ value: undefined as unknown }));
 const loads = vi.hoisted(() => ({ constructed: 0, failNextConstruct: false, failNextOpen: false }));
 const broadcast = vi.hoisted(() => vi.fn());
+// The relay check's network: Chromium's, which tests answer by hand.
+const netFetch = vi.hoisted(() => vi.fn<(url: string, init: RequestInit) => Promise<Response>>());
+
+vi.mock("electron", () => ({ net: { fetch: netFetch }, app: {}, safeStorage: {} }));
 
 vi.mock("../../../ipc/utils.js", () => ({ broadcastToProjectRenderers: broadcast }));
 
@@ -46,8 +50,13 @@ import { store } from "../../../store.js";
 import { CHANNELS } from "../../../ipc/channels.js";
 import { outstandingRows, row } from "./questionRows.js";
 import { defaultDecisionsSettings } from "../decisionsSettings.js";
+import { RelayCheckCancelledError } from "../relayCheck.js";
+
+/** What the renderer recognises: an AppError by name, and its code. */
+const CANCELLED = { name: "AppError", code: "CANCELLED" };
 import {
   _resetDecisionsForTesting,
+  checkRelay,
   getDecisionsPaneState,
   getDecisionsService,
   getDecisionsStatus,
@@ -71,6 +80,7 @@ describe("Decisions entry", () => {
     loads.failNextOpen = false;
     vi.mocked(store.set).mockClear();
     broadcast.mockClear();
+    netFetch.mockReset();
     _resetDecisionsForTesting();
   });
 
@@ -344,5 +354,91 @@ describe("Decisions entry", () => {
 
     await setDecisionsEnabled(true);
     expect(peekDecisionsService()?.getStore()).not.toBeNull();
+  });
+
+  describe("relay check", () => {
+    /** A fetch that never answers until its request is aborted. */
+    function hangingFetch() {
+      netFetch.mockImplementation(
+        (_url, init) =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+          })
+      );
+    }
+
+    it("refuses while Decisions is off, sending nothing", async () => {
+      for (const value of [undefined, { enabled: false }]) {
+        saved.value = value;
+
+        await expect(checkRelay("https://relay.example.com")).rejects.toMatchObject(CANCELLED);
+      }
+      expect(netFetch).not.toHaveBeenCalled();
+    });
+
+    it("checks through Chromium's network without making a service or writing the setting", async () => {
+      saved.value = { enabled: true };
+      netFetch.mockImplementation(async (url) =>
+        url.endsWith("/health")
+          ? Response.json({ ok: true })
+          : new Response("not found", { status: 404 })
+      );
+
+      await expect(checkRelay("relay.example.com/some/path")).resolves.toMatchObject({
+        result: "not-a-relay",
+        origin: "https://relay.example.com",
+        endpoint: "info",
+        status: 404,
+      });
+      expect(netFetch.mock.calls.map(([url]) => url)).toEqual([
+        "https://relay.example.com/health",
+        "https://relay.example.com/api/v1/info",
+      ]);
+      expect(peekDecisionsService()).toBeNull();
+      expect(store.set).not.toHaveBeenCalled();
+    });
+
+    it("is cancelled by turning off, which doesn't wait for it", async () => {
+      saved.value = { enabled: true };
+      await startDecisionsIfEnabled();
+      hangingFetch();
+
+      const check = checkRelay("https://relay.example.com");
+      await vi.waitFor(() => expect(netFetch).toHaveBeenCalled());
+      await setDecisionsEnabled(false);
+
+      await expect(check).rejects.toBeInstanceOf(RelayCheckCancelledError);
+      await expect(check).rejects.toMatchObject(CANCELLED);
+    });
+
+    it("is cancelled by quit", async () => {
+      saved.value = { enabled: true };
+      hangingFetch();
+
+      const check = checkRelay("https://relay.example.com");
+      await vi.waitFor(() => expect(netFetch).toHaveBeenCalled());
+      await stopDecisions();
+
+      await expect(check).rejects.toBeInstanceOf(RelayCheckCancelledError);
+      await expect(check).rejects.toMatchObject(CANCELLED);
+      await expect(checkRelay("https://relay.example.com")).rejects.toBeInstanceOf(
+        RelayCheckCancelledError
+      );
+      expect(netFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("isn't cancelled by turning on again", async () => {
+      saved.value = { enabled: true, consentedAt: 1 };
+      let answer!: (response: Response) => void;
+      netFetch.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+      netFetch.mockImplementation(async () => new Response("gone", { status: 410 }));
+
+      const check = checkRelay("https://relay.example.com");
+      await vi.waitFor(() => expect(netFetch).toHaveBeenCalled());
+      await setDecisionsEnabled(true);
+      answer(Response.json({ ok: true }));
+
+      await expect(check).resolves.toMatchObject({ result: "not-a-relay", status: 410 });
+    });
   });
 });

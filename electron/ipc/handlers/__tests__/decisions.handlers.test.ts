@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  DecisionsRelayCheck,
   DecisionsStatus,
   PaneDecisionState,
   SetDecisionsEnabledPayload,
@@ -22,6 +23,10 @@ const decisionsEntry = vi.hoisted(() => ({
   setDecisionsEnabled: vi.fn(async (enabled: boolean): Promise<DecisionsStatus> => ({
     state: enabled ? "not-connected" : "off",
   })),
+  checkRelay: vi.fn(async (): Promise<DecisionsRelayCheck> => ({
+    result: "invalid-url",
+    reason: "not-https",
+  })),
 }));
 
 vi.mock("electron", () => ({ ipcMain: ipcMainMock }));
@@ -37,6 +42,7 @@ vi.mock("../../../services/decisions/index.js", () => {
     getDecisionsStatus: decisionsEntry.getDecisionsStatus,
     getDecisionsPaneState: decisionsEntry.getDecisionsPaneState,
     setDecisionsEnabled: decisionsEntry.setDecisionsEnabled,
+    checkRelay: decisionsEntry.checkRelay,
   };
 });
 vi.mock("@daintreehq/decisions-protocol", () => {
@@ -73,10 +79,15 @@ const setEnabled = decisionsNamespace.ops.setEnabled.handler as unknown as (
   payload: SetDecisionsEnabledPayload
 ) => Promise<DecisionsStatus>;
 
+const checkRelay = decisionsNamespace.ops.checkRelay.handler as unknown as (
+  url: string
+) => Promise<DecisionsRelayCheck>;
+
 const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_GET_STATUS,
   CHANNELS.DECISIONS_GET_PANE_STATE,
   CHANNELS.DECISIONS_SET_ENABLED,
+  CHANNELS.DECISIONS_CHECK_RELAY,
 ];
 
 describe("decisions IPC", () => {
@@ -86,6 +97,7 @@ describe("decisions IPC", () => {
     decisionsEntry.getDecisionsStatus.mockClear();
     decisionsEntry.getDecisionsPaneState.mockClear();
     decisionsEntry.setDecisionsEnabled.mockClear();
+    decisionsEntry.checkRelay.mockClear();
     vi.mocked(store.set).mockClear();
   });
   afterEach(() => {
@@ -180,6 +192,31 @@ describe("decisions IPC", () => {
     expect(store.set).not.toHaveBeenCalled();
   });
 
+  it("refuses to check a relay while off, loading none of Decisions", async () => {
+    for (const value of [undefined, { enabled: false }, { enabled: "true" }]) {
+      saved.value = value;
+
+      await expect(checkRelay("https://relay.example.com")).rejects.toMatchObject({
+        code: "PERMISSION",
+      });
+    }
+
+    expect(decisionsEntry.evaluated).toBe(0);
+    expect(decisionsEntry.libraries).toBe(0);
+  });
+
+  it("refuses to check a relay once quit has sealed the loader, without loading it", async () => {
+    saved.value = { enabled: true };
+    sealDecisionsModule();
+
+    await expect(checkRelay("https://relay.example.com")).rejects.toMatchObject({
+      code: "CANCELLED",
+    });
+
+    expect(decisionsEntry.evaluated).toBe(0);
+    expect(decisionsEntry.checkRelay).not.toHaveBeenCalled();
+  });
+
   it("answers off once quit has sealed the loader, without loading it", async () => {
     saved.value = { enabled: true };
     sealDecisionsModule();
@@ -218,6 +255,33 @@ describe("decisions IPC", () => {
     await expect(getPaneState("pane-b")).resolves.toBeNull();
 
     expect(decisionsEntry.getDecisionsPaneState.mock.calls).toEqual([["pane-a"], ["pane-b"]]);
+  });
+
+  it("checks a relay through Decisions itself once the setting is on", async () => {
+    saved.value = { enabled: true };
+    const observed: DecisionsRelayCheck = {
+      result: "unreachable",
+      origin: "https://relay.example.com",
+      endpoint: "health",
+      reason: "dns",
+    };
+    decisionsEntry.checkRelay.mockResolvedValueOnce(observed);
+
+    await expect(checkRelay("relay.example.com")).resolves.toBe(observed);
+
+    expect(decisionsEntry.checkRelay).toHaveBeenCalledExactlyOnceWith("relay.example.com");
+    expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("takes only a bounded string as the relay URL", () => {
+    const schema = decisionsNamespace.ops.checkRelay.schema as {
+      safeParse(value: unknown): { success: boolean };
+    };
+
+    expect(schema.safeParse("https://relay.example.com").success).toBe(true);
+    for (const value of [undefined, 42, { url: "https://relay.example.com" }, "x".repeat(2049)]) {
+      expect(schema.safeParse(value).success).toBe(false);
+    }
   });
 
   it("turns on with consent through Decisions itself, recording the consent", async () => {

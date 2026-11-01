@@ -218,6 +218,7 @@ export const CHANNEL_LOCALITY = {
   "crash-recovery:get-pending": "shell",
   "crash-recovery:resolve": "shell",
   "crash-recovery:set-config": "shell",
+  "decisions:check-relay": "shell",
   "decisions:get-pane-state": "host",
   "decisions:get-status": "shell",
   "decisions:set-enabled": "shell",

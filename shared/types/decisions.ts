@@ -67,6 +67,71 @@ export interface SetDecisionsEnabledPayload {
 
 export type DecisionsStatusEvent = { type: "status-changed"; status: DecisionsStatus };
 
+/** A protocol range and relay release, as one side of the compatibility check reports them. */
+export interface DecisionsRelayVersions {
+  protocolMin: number;
+  protocolMax: number;
+  workerVersion: string;
+}
+
+/**
+ * The relay's versions beside Daintree's own: the protocol range it speaks and
+ * the relay release its Decisions libraries came with. `diverges` is whether
+ * any of the three differ, compatible or not. Daintree never updates a relay;
+ * it only says so.
+ */
+export interface DecisionsRelayCompatibility {
+  relay: DecisionsRelayVersions;
+  daintree: DecisionsRelayVersions;
+  diverges: boolean;
+}
+
+/** Which of the relay's two unsigned reads an observation came from. */
+export type DecisionsRelayEndpoint = "health" | "info";
+
+/** Why a request to the relay got no answer. Never the request's own error text. */
+export type DecisionsRelayUnreachableReason =
+  "timeout" | "dns" | "refused" | "certificate" | "network";
+
+/**
+ * What main observed checking a relay URL, through its unsigned `/health`
+ * then `/api/v1/info` (#16005). Only the normalised origin is ever echoed
+ * back, never what was typed, so a token pasted into a URL goes no further.
+ *
+ * - `invalid-url`: not an `https://` address, or one carrying a user name or
+ *   password; nothing was sent.
+ * - `unreachable`: no HTTP answer at all.
+ * - `http-error`: a server error or rate limit (`status`), as a failing relay would answer.
+ * - `not-a-relay`: an answer, but not a Decisions relay's: a redirect elsewhere,
+ *   another error status (a 404, say), or a body that isn't the relay's.
+ * - `incompatible`: a Decisions relay whose protocol range doesn't overlap Daintree's.
+ * - `claim-not-configured`: unclaimed, with no claim secret set on the relay, so it can't be claimed yet.
+ * - `unclaimed`: ready to be claimed with its claim secret.
+ * - `claimed`: an owner has already claimed it.
+ */
+export type DecisionsRelayCheck =
+  | { result: "invalid-url"; reason: "unparsable" | "not-https" | "credentials" }
+  | {
+      result: "unreachable";
+      origin: string;
+      endpoint: DecisionsRelayEndpoint;
+      reason: DecisionsRelayUnreachableReason;
+    }
+  | { result: "http-error"; origin: string; endpoint: DecisionsRelayEndpoint; status: number }
+  | {
+      result: "not-a-relay";
+      origin: string;
+      endpoint: DecisionsRelayEndpoint;
+      answered: "redirect" | "status" | "body";
+      /** The status when it `answered` one. */
+      status: number | null;
+    }
+  | {
+      result: "incompatible" | "claim-not-configured" | "unclaimed" | "claimed";
+      origin: string;
+      compatibility: DecisionsRelayCompatibility;
+    };
+
 /**
  * How far an answer has got on its way into the terminal, as the client
  * library records it per question. Mirrors its `LocalDeliveryStatus`.

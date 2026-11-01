@@ -16,6 +16,7 @@ import type {
   SetDeviceAnswerPayload,
 } from "../../../shared/types/ipc/deviceAnswer.js";
 import type {
+  DecisionsRelayCheck,
   DecisionsStatus,
   PaneDecisionState,
   SetDecisionsEnabledPayload,
@@ -165,6 +166,23 @@ export const decisionsNamespace = defineIpcNamespace({
         return decisions.setDecisionsEnabled(payload.enabled, {
           consent: payload.consent === true,
         });
+      }
+    ),
+    // A relay URL's unsigned check (#16005). The requests go from here, never
+    // the renderer. Only while on: checking loads Decisions, and turning it
+    // off or quitting cancels a check in flight.
+    checkRelay: opValidated(
+      CHANNELS.DECISIONS_CHECK_RELAY,
+      z.string().max(2048),
+      async (url: string): Promise<DecisionsRelayCheck> => {
+        if (!decisionsOn()) {
+          throw new AppError({ code: "PERMISSION", message: "Turn on Decisions to check a relay" });
+        }
+        const decisions = await loadDecisions();
+        if (!decisions) {
+          throw new AppError({ code: "CANCELLED", message: "The relay check was cancelled" });
+        }
+        return decisions.checkRelay(url);
       }
     ),
   },
