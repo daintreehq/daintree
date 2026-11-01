@@ -470,9 +470,12 @@ describe("computeProjectAgentCounts — snooze", () => {
   });
 
   it("does not let a snoozed wait contribute an age", () => {
-    const counts = countAsked([agent({ id: "t1", agentState: "waiting", lastStateChange: 1_000 })], {
-      snoozes: snoozes("t1"),
-    });
+    const counts = countAsked(
+      [agent({ id: "t1", agentState: "waiting", lastStateChange: 1_000 })],
+      {
+        snoozes: snoozes("t1"),
+      }
+    );
 
     expect(counts.get("p1")!.oldestWaitingSince).toBeNull();
   });
@@ -540,11 +543,14 @@ describe("computeProjectAgentCounts — snooze", () => {
   });
 
   it("counts a snoozed completed agent as completed but not as unacknowledged", () => {
-    const counts = countAsked([agent({ id: "t1", agentState: "completed", lastStateChange: 5_000 })], {
-      asked: [],
-      snoozes: snoozes("t1"),
-      records: { t1: { stoppedAt: 5_000 } },
-    });
+    const counts = countAsked(
+      [agent({ id: "t1", agentState: "completed", lastStateChange: 5_000 })],
+      {
+        asked: [],
+        snoozes: snoozes("t1"),
+        records: { t1: { stoppedAt: 5_000 } },
+      }
+    );
 
     const p1 = counts.get("p1")!;
     expect(p1.completed).toBe(1);
@@ -1210,10 +1216,26 @@ describe("computeProjectAgentCounts — waits no reading placed (#16058)", () =>
     computeProjectAgentCounts(
       ["p1"],
       [
-        agent({ id: "a", detectedAgentId: "claude", agentState: "waiting", waitingReason: "question", spawnedAt: 42 }),
-        agent({ id: "b", detectedAgentId: "claude", agentState: "waiting", waitingReason: "prompt" }),
+        agent({
+          id: "a",
+          detectedAgentId: "claude",
+          agentState: "waiting",
+          waitingReason: "question",
+          spawnedAt: 42,
+        }),
+        agent({
+          id: "b",
+          detectedAgentId: "claude",
+          agentState: "waiting",
+          waitingReason: "prompt",
+        }),
         agent({ id: "c", detectedAgentId: "claude", agentState: "completed" }),
-        agent({ id: "d", detectedAgentId: "claude", agentState: "waiting", waitingReason: "error" }),
+        agent({
+          id: "d",
+          detectedAgentId: "claude",
+          agentState: "waiting",
+          waitingReason: "error",
+        }),
       ],
       undefined,
       undefined,

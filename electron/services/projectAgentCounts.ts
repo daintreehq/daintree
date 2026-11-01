@@ -585,7 +585,8 @@ export function computeProjectAgentCounts(
       // recorded one yet still count toward `waiting` but can't contribute an age.
       // An ask Canopy read on a hand-back is as old as the stop it was asked at,
       // as the fleet dates it, not the slide from `completed` into a prompt.
-      const since = usableTimestamp(handBack?.stoppedAt) || usableTimestamp(terminal.lastStateChange);
+      const since =
+        usableTimestamp(handBack?.stoppedAt) || usableTimestamp(terminal.lastStateChange);
       if (since > 0) {
         entry.oldestWaitingSince =
           entry.oldestWaitingSince === null ? since : Math.min(entry.oldestWaitingSince, since);

@@ -296,7 +296,11 @@ export class HostMetricsSampler {
       cpuPerformancePercent: clusterPercent.performance,
       cpuEfficiencyPercent: clusterPercent.efficiency,
       ...resources.memory,
-      agentsObserved: agents && { working: agents.working, waiting: agents.waiting, idle: agents.idle },
+      agentsObserved: agents && {
+        working: agents.working,
+        waiting: agents.waiting,
+        idle: agents.idle,
+      },
       ...(agents?.attention ? { agentAttention: agents.attention } : {}),
       projectCount: projects.projectCount,
       worktreeCount: projects.worktreeCount,

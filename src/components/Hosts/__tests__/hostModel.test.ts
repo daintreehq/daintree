@@ -162,9 +162,9 @@ describe("describeHostRowStatus", () => {
     };
     // Three agents at their prompts, one of them blocked on an error.
     const observed = { working: 0, waiting: 3, idle: 0 };
-    expect(status({ agentsObserved: observed, agentAttention: { waiting: 0, blocked: 1, idle: 2 } })).toBe(
-      "1 project · 1 blocked (observed)"
-    );
+    expect(
+      status({ agentsObserved: observed, agentAttention: { waiting: 0, blocked: 1, idle: 2 } })
+    ).toBe("1 project · 1 blocked (observed)");
     // A host too old to band its runs says nothing about them rather than guess.
     expect(status({ agentsObserved: observed, agentAttention: undefined })).toBe("1 project");
   });
