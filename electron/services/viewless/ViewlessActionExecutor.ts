@@ -102,6 +102,8 @@ export interface ViewlessTerminalRecord {
   worktreeId?: string;
   launchAgentId?: string;
   detectedAgentId?: string;
+  /** The conversation the agent was launched or resumed with, as the spawn recorded it. */
+  agentSessionId?: string;
   agentState?: AgentState | string;
   waitingReason?: WaitingReason;
   everDetectedAgent?: boolean;
