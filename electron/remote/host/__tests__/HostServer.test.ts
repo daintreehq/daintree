@@ -1132,7 +1132,9 @@ describe("HostServer session resume", () => {
 
 describe("HostServer and a Shell that gives up on a resume handshake (#15877)", () => {
   /** A connected Shell loses its link, and its redial, asking to resume, reaches a stalled host. */
-  async function resumeIntoAStall(overrides: Partial<ConstructorParameters<typeof LinkClient>[0]> = {}) {
+  async function resumeIntoAStall(
+    overrides: Partial<ConstructorParameters<typeof LinkClient>[0]> = {}
+  ) {
     const server = await startServer({ resumeGraceMs: 60_000 });
     const seen: HostSessionContext[] = [];
     const detached: string[] = [];
