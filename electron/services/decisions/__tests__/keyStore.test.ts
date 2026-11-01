@@ -160,14 +160,57 @@ describe("SealedKeyStore", () => {
     await expect(stat(join(dir, "decisions"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("refuses what isn't a stored identity and writes nothing", async () => {
+  it.each([
+    ["the format version", (id: Record<string, unknown>) => (id.v = 2)],
+    [
+      "the relay origin",
+      (id: Record<string, unknown>) => delete (id.config as Record<string, unknown>).relayOrigin,
+    ],
+    [
+      "the installation id",
+      (id: Record<string, unknown>) => delete (id.config as Record<string, unknown>).installationId,
+    ],
+    [
+      "the device id",
+      (id: Record<string, unknown>) => delete (id.config as Record<string, unknown>).deviceId,
+    ],
+    [
+      "the signing private key",
+      (id: Record<string, unknown>) =>
+        delete (id.keys as Record<string, unknown>).signing_private_pkcs8,
+    ],
+    [
+      "the signing public key",
+      (id: Record<string, unknown>) => delete (id.keys as Record<string, unknown>).signing_public,
+    ],
+    [
+      "the exchange private key",
+      (id: Record<string, unknown>) =>
+        delete (id.keys as Record<string, unknown>).exchange_private_pkcs8,
+    ],
+    [
+      "the exchange public key",
+      (id: Record<string, unknown>) => delete (id.keys as Record<string, unknown>).exchange_public,
+    ],
+    [
+      "an epoch number",
+      (id: Record<string, unknown>) =>
+        ((id.epochs as Array<Record<string, unknown>>)[1]!.epoch = "2"),
+    ],
+    [
+      "an epoch key",
+      (id: Record<string, unknown>) => delete (id.epochs as Array<Record<string, unknown>>)[0]!.raw,
+    ],
+    ["the current epoch", (id: Record<string, unknown>) => (id.currentEpoch = 1.5)],
+  ])("refuses an identity missing %s and writes nothing", async (_label, breakIt) => {
     keyed("v10");
-    const store = new SealedKeyStore(file);
-    const broken = { ...identity(), keys: { signing_public: "only-public" } };
+    const broken = identity() as unknown as Record<string, unknown>;
+    breakIt(broken);
 
-    const error = await refusal(store.save(broken as unknown as StoredIdentity));
+    const error = await refusal(new SealedKeyStore(file).save(broken as unknown as StoredIdentity));
 
     expect(error.kind).toBe("invalid-identity");
+    expect(safeStorageMock.encryptStringAsync).not.toHaveBeenCalled();
     await expect(stat(file)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
@@ -202,8 +245,11 @@ describe("SealedKeyStore", () => {
     });
 
     it("stores under the fixed key once confirmed, and the file carries that consent forward", async () => {
-      safeStorageMock.getSelectedStorageBackend.mockReturnValue("basic_text");
+      // The session already learned the keyring gave no key; a weak seal mustn't forget it.
+      safeStorageMock.getSelectedStorageBackend.mockReturnValue("gnome_libsecret");
       keyed("v10");
+      expect((await new SealedKeyStore(file).check()).kind).toBe("locked");
+      safeStorageMock.getSelectedStorageBackend.mockReturnValue("basic_text");
       const confirmed = new SealedKeyStore(file);
       confirmed.confirmWeakStorage();
 
@@ -215,7 +261,7 @@ describe("SealedKeyStore", () => {
       await later.save(identity({ currentEpoch: 1 }));
       await expect(later.load()).resolves.toMatchObject({ currentEpoch: 1 });
       // A weak seal asks no keychain, so it doesn't clear what the session learned about one.
-      expect(keychainSessionFailure()).toBeNull();
+      expect(keychainSessionFailure()).toBe("locked");
     });
 
     it("moves fixed-key storage up to the keyring on the next save once one answers", async () => {
@@ -238,18 +284,21 @@ describe("SealedKeyStore", () => {
       expect(JSON.parse(await readFile(file, "utf8")).protection).toBe("keychain");
     });
 
-    it("treats a keyring answering with the fixed-key fallback as locked, confirmed or not", async () => {
-      safeStorageMock.getSelectedStorageBackend.mockReturnValue("gnome_libsecret");
-      keyed("v10");
-      const store = new SealedKeyStore(file);
-      store.confirmWeakStorage();
+    it.each([false, true])(
+      "treats a keyring answering with the fixed-key fallback as locked (weak storage confirmed: %s)",
+      async (confirmed) => {
+        safeStorageMock.getSelectedStorageBackend.mockReturnValue("gnome_libsecret");
+        keyed("v10");
+        const store = new SealedKeyStore(file);
+        if (confirmed) store.confirmWeakStorage();
 
-      const error = await refusal(store.save(identity()));
+        const error = await refusal(store.save(identity()));
 
-      expect(error.kind).toBe("locked");
-      expect(error.message).toMatch(/keyring wasn't available this session/);
-      await expect(stat(file)).rejects.toMatchObject({ code: "ENOENT" });
-    });
+        expect(error.kind).toBe("locked");
+        expect(error.message).toMatch(/keyring wasn't available this session/);
+        await expect(stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    );
 
     it("reports an unknown backend as unavailable", async () => {
       safeStorageMock.getSelectedStorageBackend.mockReturnValue("unknown");
@@ -370,6 +419,28 @@ describe("SealedKeyStore", () => {
       expect((await refusal(new SealedKeyStore(file).load())).kind).toBe("unreadable");
     });
 
+    it.each([
+      ["text that isn't JSON", "not json"],
+      ["an envelope without ciphertext", JSON.stringify({ v: 1, protection: "keychain" })],
+      ["an unknown protection", JSON.stringify({ v: 1, protection: "plain", ciphertext: "AAAA" })],
+      [
+        "sealed base64 with a stray character, which a lenient decoder would accept",
+        JSON.stringify({
+          v: 1,
+          protection: "keychain",
+          ciphertext: `${sealed("v10", JSON.stringify({ v: 1, protection: "keychain", identity: identity() })).toString("base64")}!`,
+        }),
+      ],
+    ])("refuses %s before asking the keychain anything", async (_label, contents) => {
+      keyed("v10");
+      await mkdir(join(dir, "decisions"), { recursive: true });
+      await writeFile(file, contents);
+
+      expect((await refusal(new SealedKeyStore(file).load())).kind).toBe("unreadable");
+      expect(safeStorageMock.decryptStringAsync).not.toHaveBeenCalled();
+      expect(safeStorageMock.encryptStringAsync).not.toHaveBeenCalled();
+    });
+
     it("leaves a file from another format version alone", async () => {
       keyed("v10");
       await mkdir(join(dir, "decisions"), { recursive: true });
@@ -383,18 +454,30 @@ describe("SealedKeyStore", () => {
     });
   });
 
-  it("gives up on a keychain that doesn't answer, without calling it locked or writing", async () => {
+  it("gives up on a keychain that doesn't answer at its deadline, without calling it locked or writing", async () => {
     keyed("v10");
     await new SealedKeyStore(file).save(identity());
     const before = await readFile(file);
+    let entered!: () => void;
+    const asked = new Promise<void>((resolve) => (entered = resolve));
+    safeStorageMock.decryptStringAsync.mockImplementation(() => {
+      entered();
+      return new Promise(() => {});
+    });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    safeStorageMock.decryptStringAsync.mockReturnValue(new Promise(() => {}));
     const store = new SealedKeyStore(file);
 
-    const saving = refusal(store.save(identity({ currentEpoch: 1 })));
-    await vi.waitFor(() => expect(safeStorageMock.decryptStringAsync).toHaveBeenCalled());
-    await vi.advanceTimersByTimeAsync(SECRET_STORAGE_TIMEOUT_MS);
-    const error = await saving;
+    let settled = false;
+    const saving = store.save(identity({ currentEpoch: 1 }));
+    saving.then(
+      () => (settled = true),
+      () => (settled = true)
+    );
+    await asked;
+    await vi.advanceTimersByTimeAsync(SECRET_STORAGE_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    const error = await refusal(saving);
 
     expect(error.kind).toBe("timeout");
     expect(keychainSessionFailure()).toBeNull();
@@ -424,15 +507,33 @@ describe("SealedKeyStore", () => {
     expect((await refusal(store.save(identity()))).kind).toBe("weak-storage-unconfirmed");
   });
 
-  it("finishes what is running when closed and refuses anything after", async () => {
+  it("waits on close for what was asked before, and refuses anything after", async () => {
     keyed("v10");
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let entered!: () => void;
+    const asked = new Promise<void>((resolve) => (entered = resolve));
+    safeStorageMock.encryptStringAsync.mockImplementation(async (plaintext) => {
+      entered();
+      await held;
+      return sealed("v10", plaintext);
+    });
     const store = new SealedKeyStore(file);
+
     const saving = store.save(identity());
+    const clearing = store.clear();
+    let closed = false;
+    const closing = store.close().then(() => (closed = true));
+    await asked;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(closed).toBe(false);
 
-    await store.close();
-    await saving;
+    release();
+    await Promise.all([saving, clearing, closing]);
 
+    // The clear asked after the save ran after it, so nothing is left behind.
+    await expect(stat(file)).rejects.toMatchObject({ code: "ENOENT" });
     expect((await refusal(store.load())).kind).toBe("closed");
-    await expect(new SealedKeyStore(file).load()).resolves.toEqual(identity());
+    expect((await refusal(store.check())).kind).toBe("closed");
   });
 });

@@ -480,7 +480,7 @@ describe("secretScrubber", () => {
       {
         name: "decisions-claim-secret-env",
         input: `DECISIONS_CLAIM_SECRET="${"k".repeat(24)}" decisions setup`,
-        expected: `DECISIONS_CLAIM_SECRET="${REDACTED}" decisions setup`,
+        expected: `DECISIONS_CLAIM_SECRET=${REDACTED} decisions setup`,
       },
       {
         name: "decisions-claim-secret-flag",
@@ -488,9 +488,34 @@ describe("secretScrubber", () => {
         expected: `decisions setup --claim-secret=${REDACTED} --url https://relay.example`,
       },
       {
+        name: "decisions-claim-secret-json",
+        input: '{"claimSecret":"a horse with no name","ok":true}',
+        expected: `{"claimSecret":${REDACTED},"ok":true}`,
+      },
+      {
         name: "decisions-recovery-passphrase",
-        input: "recovery passphrase: correct horse battery staple\nnext line",
-        expected: `recovery passphrase: ${REDACTED}\nnext line`,
+        input: "recovery passphrase: correct horse battery staple\r\nnext line",
+        expected: `recovery passphrase: ${REDACTED}\r\nnext line`,
+      },
+      {
+        name: "decisions-recovery-passphrase-json",
+        input: '{"recoveryPassphrase":"correct horse","status":"ok"}',
+        expected: `{"recoveryPassphrase":${REDACTED},"status":"ok"}`,
+      },
+      {
+        name: "decisions-recovery-passphrase-long",
+        input: `RECOVERY_PASSPHRASE=${"a".repeat(600)}`,
+        expected: `RECOVERY_PASSPHRASE=${REDACTED}`,
+      },
+      {
+        name: "cloudflare-api-token-assignment",
+        input: `export CLOUDFLARE_API_TOKEN=${"a1B2".repeat(10)} && wrangler deploy`,
+        expected: `export CLOUDFLARE_API_TOKEN=${REDACTED} && wrangler deploy`,
+      },
+      {
+        name: "cloudflare-global-key-assignment",
+        input: `CF_API_KEY: "${"0123456789abcdef".repeat(2)}12345"`,
+        expected: `CF_API_KEY: "${REDACTED}"`,
       },
     ];
 
@@ -538,7 +563,9 @@ describe("secretScrubber", () => {
     it("leaves a claim secret's file path and the words about it alone", () => {
       const text = [
         "decisions setup --claim-secret-file /home/me/claim-secret.txt",
+        "decisions setup --claim-secret-file=/home/me/claim-secret.txt",
         "This computer claimed the relay, so the claim secret has been used and is not needed again.",
+        "See claim secret troubleshooting-guide.md for details",
       ].join("\n");
       expect(scrubSecrets(text)).toBe(text);
     });
@@ -552,6 +579,11 @@ describe("secretScrubber", () => {
       // A value the logger already redacted by its key keeps its quotes.
       const keyed = '"recoveryPassphrase": "[redacted]",';
       expect(scrubSecrets(keyed)).toBe(keyed);
+    });
+
+    it("finds a legacy Cloudflare token by the name it is assigned to", () => {
+      expect(findSecretInValue(`CLOUDFLARE_API_TOKEN=${"a1B2".repeat(10)}`)).toBeDefined();
+      expect(findSecretInValue("CLOUDFLARE_API_TOKEN=short")).toBeUndefined();
     });
 
     it("leaves an empty string unchanged", () => {

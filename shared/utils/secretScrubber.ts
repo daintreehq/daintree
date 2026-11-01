@@ -207,6 +207,14 @@ export const PATTERNS: readonly SecretPattern[] = [
     replacement: REDACTED,
   },
   {
+    name: "cloudflare-api-token-assignment",
+    // A Cloudflare token or global key from before the `cf…_` prefixes, known only
+    // by the name it is assigned to: `CLOUDFLARE_API_TOKEN=…`, `CF_API_KEY: …`.
+    regex:
+      /(^|[^A-Za-z0-9])((?:cloudflare|cf)[_-]?api[_-]?(?:token|key)["']?[ \t]{0,4}[:=][ \t]{0,4}["']?)[A-Za-z0-9_-]{32,128}/gi,
+    replacement: `$1$2${REDACTED}`,
+  },
+  {
     name: "supabase-key",
     regex: /\bsb_(?:publishable|secret)_[A-Za-z0-9_]{32,64}\b/g,
     probe: String.raw`\bsb_(?:publishable|secret)_`,
@@ -475,17 +483,19 @@ export const PATTERNS: readonly SecretPattern[] = [
   {
     name: "decisions-claim-secret",
     // The one-time secret that claims a Decisions relay: `CLAIM_SECRET=…`,
-    // `--claim-secret …`, and the deploy CLI's `Claim secret  <value>` line.
-    // A separator is required, so `--claim-secret-file <path>` names a file and stays.
+    // `"claimSecret": "…"`, `--claim-secret …`, and the deploy CLI's
+    // `Claim secret  <value>` (two spaces or more, so prose that mentions one
+    // stays). `--claim-secret-file <path>` names a file and stays too.
     regex:
-      /(^|[^A-Za-z0-9])(claim[_ -]?secret["']?(?:[ \t]{0,4}[:=][ \t]{0,4}|[ \t]{1,16})["']?)[^\s"'`]{16,256}/gi,
+      /(^|[^A-Za-z0-9])(claim[_ -]?secret["']?(?:[ \t]{0,4}[:=][ \t]{0,4}|[ \t]{2,16})|-claim-secret[ \t]{1,4})(?:"[^"\r\n]{16,256}"|'[^'\r\n]{16,256}'|[^\s"'`]{16,256})/gi,
     replacement: `$1$2${REDACTED}`,
   },
   {
     name: "decisions-recovery-passphrase",
-    // A labelled Decisions recovery passphrase, to the end of its line: it may hold spaces.
+    // A labelled Decisions recovery passphrase: a quoted one whole, an unquoted
+    // one to the end of its line, since it may hold spaces.
     regex:
-      /(^|[^A-Za-z0-9])(recovery[_ -]?passphrase["']?[ \t]{0,4}[:=][ \t]{0,4})(?![ \t]{0,4}["']?\[REDACTED\])[^\n]{1,512}/gi,
+      /(^|[^A-Za-z0-9])(recovery[_ -]?passphrase["']?[ \t]{0,4}[:=][ \t]{0,4})(?![ \t]{0,4}["']?\[REDACTED\])(?:"[^"\r\n]{1,4096}"|'[^'\r\n]{1,4096}'|[^\r\n]{1,4096})/gi,
     replacement: `$1$2${REDACTED}`,
   },
   {

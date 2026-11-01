@@ -295,18 +295,20 @@ export class SealedKeyStore implements KeyStore {
    * What `save` would seal with right now. May show the OS keychain's prompt;
    * reads no file. `weak` means saving needs `confirmWeakStorage` first.
    */
-  async check(): Promise<KeyStorageCheck> {
-    if (weakBackend()) return { kind: "weak", reason: WEAK_REASON };
-    try {
-      if (await keychainCall(keychainKeyed)) return { kind: "keychain" };
-    } catch (error) {
-      if (error instanceof DecisionsKeyStoreError && error.kind === "timeout") {
-        return { kind: "timeout", reason: error.message };
+  check(): Promise<KeyStorageCheck> {
+    return this.enqueue(async () => {
+      if (weakBackend()) return { kind: "weak", reason: WEAK_REASON };
+      try {
+        if (await keychainCall(keychainKeyed)) return { kind: "keychain" };
+      } catch (error) {
+        if (error instanceof DecisionsKeyStoreError && error.kind === "timeout") {
+          return { kind: "timeout", reason: error.message };
+        }
+        throw error;
       }
-      throw error;
-    }
-    const failure = keychainError("check");
-    return { kind: failure.kind as "locked" | "unavailable", reason: failure.message };
+      const failure = keychainError("check");
+      return { kind: failure.kind as "locked" | "unavailable", reason: failure.message };
+    });
   }
 
   /** The person accepted the fixed-key storage for new keys. Lasts for this store, until `clear`. */

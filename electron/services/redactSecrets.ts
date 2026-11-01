@@ -17,9 +17,9 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
   // Cloudflare's scannable tokens: `cfat_` (account), `cfut_` (user), `cfk_` (global key).
   /\bcf(?:at|ut|k)_[A-Za-z0-9]{40}[0-9a-f]{8}\b/g,
-  // A Decisions relay's claim secret as its deploy CLI prints it, `Claim secret  <value>`,
-  // with no `=` or `:` for an assignment to find.
-  /\b(claim[ _-]?secret[ \t]{1,16})(?!\[redacted\])[^\s"'`]{16,256}/gi,
+  // A Decisions relay's claim secret as its deploy CLI prints it, on a line of its own:
+  // `  Claim secret  <value>`, with no `=` or `:` for an assignment to find.
+  /^([ \t]*claim[ _-]?secret[ \t]{2,16})(?!\[redacted\])[^\r\n]{16,}/gim,
   /\bAIza[0-9A-Za-z_-]{30,}\b/g,
   /\bya29\.[A-Za-z0-9_-]{20,}/g,
   /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
@@ -62,7 +62,7 @@ const BARE_VALUE = /[^\s"',}]+/y;
 /** A YAML block scalar's indicator: the value is on the indented lines below. */
 const BLOCK_VALUE = /^[|>][-+]?$/;
 const INDENTED_LINES = /(?:\n[ \t]+[^\n]*)+/y;
-const REST_OF_LINE = /[^\n]*/y;
+const REST_OF_LINE = /[^\r\n]*/y;
 /** A value that says there is none. */
 const EMPTY_VALUE = /^(?:undefined|null|nil|none|true|false|n\/a)$/i;
 
@@ -186,18 +186,25 @@ function redactAssignments(text: string): string {
     } else {
       BARE_VALUE.lastIndex = valueAt;
       const bare = BARE_VALUE.exec(text)?.[0];
-      if (bare === undefined || bare === "[redacted]" || EMPTY_VALUE.test(bare)) continue;
-      end = valueAt + bare.length;
-      if (BLOCK_VALUE.test(bare)) {
-        INDENTED_LINES.lastIndex = end;
-        end += INDENTED_LINES.exec(text)?.[0].length ?? 0;
-      } else if (/passphrase/i.test(name)) {
-        // A passphrase may be several words, so the rest of its line goes with it.
-        REST_OF_LINE.lastIndex = end;
-        end += REST_OF_LINE.exec(text)?.[0].length ?? 0;
-      } else if (bare.length < 6 && !/pass(?:word|wd|phrase)/i.test(name)) {
-        // A password however short: `password: abc` is still a password.
-        continue;
+      if (bare === undefined) continue;
+      if (/passphrase/i.test(name) && !separator.includes("\n") && !BLOCK_VALUE.test(bare)) {
+        // A passphrase may be several words, so the rest of its line goes with it,
+        // unless the whole of it says there is none or was already replaced.
+        REST_OF_LINE.lastIndex = valueAt;
+        const rest = REST_OF_LINE.exec(text)?.[0] ?? "";
+        const whole = rest.trim();
+        if (whole === "[redacted]" || EMPTY_VALUE.test(whole)) continue;
+        end = valueAt + rest.length;
+      } else {
+        if (bare === "[redacted]" || EMPTY_VALUE.test(bare)) continue;
+        end = valueAt + bare.length;
+        if (BLOCK_VALUE.test(bare)) {
+          INDENTED_LINES.lastIndex = end;
+          end += INDENTED_LINES.exec(text)?.[0].length ?? 0;
+        } else if (bare.length < 6 && !/pass(?:word|wd|phrase)/i.test(name)) {
+          // A password however short: `password: abc` is still a password.
+          continue;
+        }
       }
     }
     out += `${text.slice(from, match.index)}${quote}${name}${quote}${separator}[redacted]`;
