@@ -387,19 +387,11 @@ async function findPaneHoldingSession(
     );
   }
 
-  // The saved pane names the session a run resumed by hand (#15994), which
-  // the pty-host's own record only ever names for the launched run.
   const state = await deps.getProjectState(projectId).catch(() => null);
   const savedPanes = new Map((state?.terminals ?? []).map((pane) => [pane.id, pane]));
-  const launchedRunHolds = (terminal: ViewlessTerminalRecord) =>
-    terminal.agentSessionId === sessionId &&
-    // Not once another agent has taken the PTY over (#12535).
-    (terminal.agentIncarnation ?? 0) === 0 &&
-    (terminal.detectedAgentId === undefined || terminal.detectedAgentId === terminal.launchAgentId);
-  const holders = terminals.filter(
+  const live = terminals.filter(
     (terminal): terminal is ViewlessTerminalRecord & { id: string } =>
       typeof terminal.id === "string" &&
-      (launchedRunHolds(terminal) || savedPanes.get(terminal.id)?.agentSessionId === sessionId) &&
       (terminal.worktreeId ?? null) === worktreeId &&
       terminal.isTrashed !== true &&
       terminal.isExited !== true &&
@@ -409,22 +401,43 @@ async function findPaneHoldingSession(
       terminal.isAssistantTerminal !== true &&
       (terminal.projectId ?? pty.getTerminalProjectId(terminal.id)) === projectId
   );
-  if (holders.length === 0) return { status: "none" };
+  const launchedRunHolds = (terminal: ViewlessTerminalRecord) =>
+    terminal.agentSessionId === sessionId &&
+    // Not once another agent has taken the PTY over (#12535).
+    (terminal.agentIncarnation ?? 0) === 0 &&
+    (terminal.detectedAgentId === undefined || terminal.detectedAgentId === terminal.launchAgentId);
+  const shown = (terminalId: string) => {
+    const location = savedPanes.get(terminalId)?.location;
+    return location !== "trash" && location !== "dialog";
+  };
 
   const started = new Set(hostStartedTerminals(projectId).map((terminal) => terminal.id));
   let unplaced = false;
-  for (const holder of holders) {
-    const saved = savedPanes.get(holder.id);
-    if (saved) {
-      if (saved.location === "trash" || saved.location === "dialog") continue;
-      return { status: "found", terminalId: holder.id };
+  for (const holder of live.filter(launchedRunHolds)) {
+    if (savedPanes.has(holder.id)) {
+      if (shown(holder.id)) return { status: "found", terminalId: holder.id };
+      continue;
     }
     if (started.has(holder.id)) return { status: "found", terminalId: holder.id };
     unplaced = true;
   }
-  return unplaced
+  if (unplaced) {
+    return unavailable(
+      "A terminal already holds this session, but no saved pane places it yet. Try again once its window has saved."
+    );
+  }
+  // A run resumed by hand names its session only on the saved pane (#15994),
+  // which keeps naming it after that run quits and another starts there, so
+  // the pane is neither handed back nor launched beside.
+  const claimed = live.some(
+    (terminal) =>
+      !launchedRunHolds(terminal) &&
+      savedPanes.get(terminal.id)?.agentSessionId === sessionId &&
+      shown(terminal.id)
+  );
+  return claimed
     ? unavailable(
-        "A terminal already holds this session, but no saved pane places it yet. Try again once its window has saved."
+        "A pane's saved record names this session, but whether the agent running there now is that session can't be confirmed."
       )
     : { status: "none" };
 }
