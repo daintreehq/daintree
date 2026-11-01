@@ -84,6 +84,7 @@ import {
   useTabOverflow,
 } from "@/hooks";
 import { TerminalHostSuffix } from "@/components/Terminal/TerminalHostSuffix";
+import { TerminalScheduleChip } from "@/components/Terminal/TerminalScheduleChip";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { usePanelStore } from "@/store/panelStore";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
@@ -1347,6 +1348,8 @@ function PanelHeaderComponent({
 
             {hasPty && <TerminalHostSuffix />}
 
+            {hasPty && <TerminalScheduleChip terminalId={id} />}
+
             {hasDangerousFlags && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -1541,6 +1544,10 @@ function PanelHeaderComponent({
               under, by the user's own choice (#11840). */}
           </div>
         )}
+
+        {/* A tab group's titles are in the strip; the active pane's schedule
+            follows it, ahead of that pane's metadata. */}
+        {hasTabs && hasPty && <TerminalScheduleChip terminalId={id} />}
 
         {headerContent != null && (
           // Keeps its full width until it would take more than half the region,

@@ -5,7 +5,12 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePaletteStore, type PaletteId } from "@/store/paletteStore";
 import { useAgentSessionRecords } from "@/hooks/useAgentSessionRecords";
-import { buildResumeSessionItems, type ResumeSessionItem } from "@/services/resumeSessionItems";
+import {
+  buildResumeSessionItems,
+  labelResumeSessionSchedules,
+  type ResumeSessionItem,
+} from "@/services/resumeSessionItems";
+import { readScheduleName, scheduleNameLabel, useScheduleNames } from "@/store/scheduleNamesStore";
 import type { WorktreeSnapshot } from "@shared/types";
 
 const RESUME_PALETTE_ID: PaletteId = "resume-sessions";
@@ -52,10 +57,29 @@ export function useResumeSessionsPalette() {
   const currentProjectId = useProjectStore((state) => state.currentProject?.id ?? null);
   const { sessions, isLoading, failed: loadFailed, reload } = useAgentSessionRecords(isOpen);
 
-  const items = useMemo(
+  const projectItems = useMemo(
     () => buildResumeSessionItems(sessions, { currentProjectId, worktrees }),
     [sessions, currentProjectId, worktrees]
   );
+  // Read only when one of this project's sessions came from a schedule: the
+  // journal is unscoped, so another project's runs must not start the read.
+  const hasScheduledSessions = useMemo(
+    () => projectItems.some((item) => item.schedule !== undefined),
+    [projectItems]
+  );
+  const { status: scheduleNamesStatus, names: scheduleNames } = useScheduleNames(
+    isOpen && hasScheduledSessions
+  );
+  const items = useMemo(() => {
+    if (!hasScheduledSessions) return projectItems;
+    return labelResumeSessionSchedules(projectItems, (scheduleId) => {
+      const reading = readScheduleName(scheduleId, scheduleNamesStatus, scheduleNames);
+      return {
+        label: scheduleNameLabel(reading),
+        name: reading.kind === "named" ? reading.name : null,
+      };
+    });
+  }, [projectItems, hasScheduledSessions, scheduleNamesStatus, scheduleNames]);
 
   const palette = useSearchablePalette<ResumeSessionItem>({
     items,
