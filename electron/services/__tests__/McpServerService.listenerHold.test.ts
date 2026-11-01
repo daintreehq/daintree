@@ -214,13 +214,14 @@ function recordingWake(id: string): { wake: LaneWake; outcomes: LaneWakeOutcome[
  * reach `away`: a bind that falls through to the next port never lands back on it.
  */
 async function freePort(away: number): Promise<number> {
-  for (;;) {
+  for (let attempt = 0; attempt < 50; attempt++) {
     const probe = http.createServer();
     await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
     const port = (probe.address() as { port: number }).port;
     await new Promise<void>((resolve) => probe.close(() => resolve()));
     if (away < port || away > port + MAX_PORT_RETRIES) return port;
   }
+  throw new Error(`No free port found clear of ${away}`);
 }
 
 describe("McpServerService listener holds (#15999)", () => {

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import type { TerminalHandback } from "../../../../shared/types/handback.js";
 import {
@@ -2946,7 +2946,8 @@ describe("wake scopes (#15999)", () => {
       throwScope.release();
       throw new Error("reservation store gone");
     };
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    onTestFinished(() => errorSpy.mockRestore());
     recheckScope.enqueueWake(PANE, PROJECT, rechecked.wake);
     reserveScope.enqueueWake(PANE, PROJECT, reserved.wake);
     throwScope.enqueueWake(PANE, PROJECT, thrown.wake);
