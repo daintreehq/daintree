@@ -2,7 +2,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
-import type { PanelInstance } from "@shared/types/panel";
+import type { PtyPanelData } from "@shared/types/panel";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useGridGroupAmbientState } from "../useGridGroupAmbientState";
 
@@ -21,8 +21,17 @@ function fleet(runs: Array<Partial<FleetRunRow> & { runId: string }>) {
   );
 }
 
-function tab(id: string, fields: Record<string, unknown> = {}): PanelInstance {
-  return { id, kind: "terminal", title: id, location: "grid", ...fields } as PanelInstance;
+function tab(id: string, fields: Partial<PtyPanelData> = {}): PtyPanelData {
+  return {
+    id,
+    kind: "terminal",
+    title: id,
+    location: "grid",
+    cols: 80,
+    rows: 24,
+    cwd: "/repo",
+    ...fields,
+  };
 }
 
 afterEach(() => {
@@ -83,7 +92,12 @@ describe("useGridGroupAmbientState", () => {
 
   it("drops a hidden ask whose tab is restarting or has exited", () => {
     fleet([{ runId: "hidden", agentState: "waiting", waitingReason: "question", canopy: ask }]);
-    for (const fields of [{ isRestarting: true }, { exitCode: 0 }, { runtimeStatus: "exited" }]) {
+    const staleFields: Partial<PtyPanelData>[] = [
+      { isRestarting: true },
+      { exitCode: 0 },
+      { runtimeStatus: "exited" },
+    ];
+    for (const fields of staleFields) {
       const stale = [panels[0]!, tab("hidden", { agentState: "waiting", ...fields })];
       const { result, unmount } = renderHook(() => useGridGroupAmbientState(stale, "shown"));
       expect(result.current, JSON.stringify(fields)).toBeUndefined();

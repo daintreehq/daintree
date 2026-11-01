@@ -572,6 +572,7 @@ describe("ContentPanel selection chrome", () => {
     isMaximized?: boolean;
     isVoiceArming?: boolean;
     agentState?: AgentState;
+    ambientAgentState?: AgentState;
     location?: "grid" | "dock" | "dialog";
     className?: string;
   }
@@ -593,7 +594,11 @@ describe("ContentPanel selection chrome", () => {
     );
   }
 
-  /** The fleet reads an unread Canopy ask on t-1: the one thing pane chrome draws amber for. */
+  /**
+   * The fleet reads an unread Canopy ask on t-1: the one thing pane chrome
+   * draws amber for. An asking pane is stopped, so the work it competes with in
+   * these cases comes from a hidden tab (`ambientAgentState`).
+   */
   function askFromFleet() {
     mockState.headerAgentState = "waiting";
     useFleetSnapshotStore.setState({
@@ -771,7 +776,11 @@ describe("ContentPanel selection chrome", () => {
     it("keeps the waiting edge over the selected fill and ranks selection above working", () => {
       mockState.showGridAgentHighlights = true;
       askFromFleet();
-      const asking = renderPanel({ isMultiPanelGrid: true, agentState: "working" });
+      const asking = renderPanel({
+        isMultiPanelGrid: true,
+        agentState: "waiting",
+        ambientAgentState: "working",
+      });
       expect(chromeOf(asking.container)).toBe("selected+waiting");
       asking.unmount();
       clearAsk();
@@ -785,7 +794,8 @@ describe("ContentPanel selection chrome", () => {
       const { container } = renderPanel({
         isMultiPanelGrid: true,
         isFocused: false,
-        agentState: "working",
+        agentState: "waiting",
+        ambientAgentState: "working",
       });
       expect(chromeOf(container)).toBe("waiting");
     });
@@ -813,7 +823,8 @@ describe("ContentPanel selection chrome", () => {
       const asking = renderPanel({
         isMultiPanelGrid: true,
         isFocused: false,
-        agentState: "working",
+        agentState: "waiting",
+        ambientAgentState: "working",
       });
       expect(chromeOf(asking.container)).toBe("waiting");
     });
@@ -827,7 +838,8 @@ describe("ContentPanel selection chrome", () => {
         isMultiPanelGrid: false,
         isFocused: false,
         isVoiceArming: true,
-        agentState: "working",
+        agentState: "waiting",
+        ambientAgentState: "working",
       });
       expect(chromeOf(container)).toBe("none");
     });
