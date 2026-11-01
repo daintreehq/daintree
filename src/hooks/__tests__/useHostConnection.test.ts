@@ -3,6 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { renderHook } from "@testing-library/react";
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
 import type { DriveLeaseEvent, DriveLeaseView } from "@shared/types/ipc/driveLease";
+import type { HostProjectRehydrateOptions } from "@/store/hostProjectRehydrate";
 import type {
   DriveLeaseHolder,
   HostConnectionState,
@@ -21,7 +22,7 @@ const {
   applyNavigation,
   reporters,
 } = vi.hoisted(() => ({
-  rehydrate: vi.fn(async (_projectId: string, _options: unknown) => undefined),
+  rehydrate: vi.fn(async (_projectId: string, _options: HostProjectRehydrateOptions) => undefined),
   applyNavigation: vi.fn(async (_navigation: unknown, _isCurrent: () => boolean) => undefined),
   reporters: [] as Array<{
     mayReport: () => boolean;
@@ -407,13 +408,13 @@ describe("host connection sync", () => {
     bindView("studio-01");
     const heard: HostResync[] = [];
     const offResync = onHostResync((resync) => heard.push(resync));
-    const settings = {
+    const settings: HydratedSettings = {
       terminalConfig: { scrollbackLines: 5000 },
       agentSettings: { agents: {} },
       agentDefaults: { defaultAgent: "codex" },
-    } as unknown as HydratedSettings;
+    };
     rehydrate.mockImplementationOnce(async (_projectId, options) => {
-      (options as { onHydrated?: (settings: HydratedSettings) => void }).onHydrated?.(settings);
+      options.onHydrated?.(settings);
       return undefined;
     });
 

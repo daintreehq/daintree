@@ -251,11 +251,7 @@ describe("initAgentDefaultsSync (#13345)", () => {
     dispose = initAgentDefaultsSync();
     await settle();
     const hydrated = (agentDefaults: AgentDefaultsSnapshot | undefined) => ({
-      hydrated: Promise.resolve({
-        terminalConfig: undefined,
-        agentSettings: undefined,
-        agentDefaults,
-      }),
+      hydrated: Promise.resolve({ agentDefaults }),
     });
 
     notifyHostResync(hydrated({ assistantAgentId: "codex", defaultAgent: "gemini" }));
@@ -274,10 +270,11 @@ describe("initAgentDefaultsSync (#13345)", () => {
     boot({ assistantAgentId: "claude" });
     dispose = initAgentDefaultsSync();
     await settle();
+    // A read of its own would land "claude": only the hydrate answer counts here.
+    clientMock.get.mockResolvedValue({ assistantAgentId: "claude", defaultAgent: "claude" });
     let answer: (agentDefaults: AgentDefaultsSnapshot) => void = () => {};
     const hydrated = new Promise<HydratedSettings>((resolve) => {
-      answer = (agentDefaults) =>
-        resolve({ terminalConfig: undefined, agentSettings: undefined, agentDefaults });
+      answer = (agentDefaults) => resolve({ agentDefaults });
     });
 
     notifyHostResync({ hydrated });
@@ -286,6 +283,7 @@ describe("initAgentDefaultsSync (#13345)", () => {
     await settle();
 
     expect(useAgentPreferencesStore.getState().defaultAgent).toBe("codex");
+    expect(clientMock.get).not.toHaveBeenCalled();
   });
 
   it("does nothing without the agent defaults bridge", () => {

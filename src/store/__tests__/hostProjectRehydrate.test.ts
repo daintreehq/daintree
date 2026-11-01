@@ -202,13 +202,20 @@ describe("rehydrateHostProjectState", () => {
       authoritative: false,
       onHydrated,
     });
-    hydrate.mockResolvedValue(hostSaved(settings));
+    // Overtaken while the answer was on its way.
+    let live = true;
+    hydrate.mockImplementationOnce(async () => {
+      live = false;
+      return hostSaved(settings);
+    });
     await rehydrateHostProjectState("proj-1", {
-      isCurrent: () => false,
+      isCurrent: () => live,
       authoritative: false,
       onHydrated,
     });
     expect(onHydrated).not.toHaveBeenCalled();
+
+    hydrate.mockResolvedValue(hostSaved(settings));
 
     await rehydrateHostProjectState("proj-1", {
       isCurrent: current,

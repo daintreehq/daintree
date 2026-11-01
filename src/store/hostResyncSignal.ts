@@ -1,14 +1,15 @@
+import type { AgentDefaultsSnapshot, AgentSettings, TerminalConfig } from "@shared/types";
 import type { HydrateResult } from "@shared/types/ipc/app";
 import { logWarn } from "@/utils/logger";
 import { PLUGIN_VIEW_RESYNC_EVENT } from "@shared/utils/pluginProjectPresence";
 
 /** The settings an `app:hydrate` answer carries alongside the project's state. */
 export interface HydratedSettings {
-  terminalConfig: HydrateResult["terminalConfig"] | undefined;
+  terminalConfig?: Partial<TerminalConfig>;
   /** Undefined where the host has never saved any, as its own read reports it. */
-  agentSettings: HydrateResult["agentSettings"] | undefined;
+  agentSettings?: AgentSettings;
   /** Absent from an older host. */
-  agentDefaults: HydrateResult["agentDefaults"];
+  agentDefaults?: AgentDefaultsSnapshot;
 }
 
 export function hydratedSettingsOf(hydrate: HydrateResult): HydratedSettings {

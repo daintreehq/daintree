@@ -278,9 +278,7 @@ describe("terminalConfigSync (#14699)", () => {
     notifyHostResync({ hydrated: hydrated.promise });
     client.push(host({ resourceMonitoringEnabled: true }));
     hydrated.resolve({
-      terminalConfig: { scrollbackLines: 3000, resourceMonitoringEnabled: false } as TerminalConfig,
-      agentSettings: undefined,
-      agentDefaults: undefined,
+      terminalConfig: { scrollbackLines: 3000, resourceMonitoringEnabled: false },
     });
     await settle();
 

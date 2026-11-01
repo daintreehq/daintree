@@ -17,7 +17,10 @@ const lifecycle = vi.hoisted(() => {
 });
 vi.mock("@/lib/viewCacheState", () => lifecycle);
 
-const store = vi.hoisted(() => ({ applySaved: vi.fn(), refresh: vi.fn() }));
+const store = vi.hoisted(() => ({
+  applySaved: vi.fn(),
+  refresh: vi.fn(async (_read?: () => Promise<AgentSettings | undefined>) => undefined),
+}));
 vi.mock("@/store/agentSettingsStore", () => ({
   useAgentSettingsStore: { getState: () => store },
 }));
@@ -90,20 +93,14 @@ describe("initAgentSettingsSync (#14700)", () => {
   it("reads through a fresh session's hydrate answer, and through the host without one", async () => {
     dispose = initAgentSettingsSync();
     const hydrated = (agentSettings: AgentSettings | undefined) => ({
-      hydrated: Promise.resolve({
-        terminalConfig: undefined,
-        agentSettings,
-        agentDefaults: undefined,
-      }),
+      hydrated: Promise.resolve({ agentSettings }),
     });
 
     notifyHostResync(hydrated(saved));
     // A host that never saved any answers none, as its own read would.
     notifyHostResync(hydrated(undefined));
     notifyHostResync({ hydrated: Promise.resolve(null) });
-    const reads = store.refresh.mock.calls.map(
-      ([read]) => read as () => Promise<AgentSettings | undefined>
-    );
+    const reads = store.refresh.mock.calls.map(([read]) => read);
 
     await expect(reads[0]!()).resolves.toBe(saved);
     await expect(reads[1]!()).resolves.toEqual(DEFAULT_AGENT_SETTINGS);

@@ -639,10 +639,17 @@ describe("applySaved (#14700)", () => {
       "--from-another-view"
     );
 
+    // Two resyncs' answers, the older landing last: it must not undo the newer.
+    let older: (value: AgentSettings) => void = () => {};
+    const olderRead = useAgentSettingsStore
+      .getState()
+      .refresh(() => new Promise((resolve) => (older = resolve)));
     await useAgentSettingsStore.getState().refresh(async () => ({
       settingsVersion: 3,
       agents: { claude: { customFlags: "--hydrated" } },
     }));
+    older({ settingsVersion: 3, agents: { claude: { customFlags: "--hydrated-older" } } });
+    await olderRead;
     expect(useAgentSettingsStore.getState().settings?.agents.claude?.customFlags).toBe(
       "--hydrated"
     );

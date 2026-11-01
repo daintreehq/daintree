@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentDefaultsSnapshot, AgentSettings, TerminalConfig } from "@shared/types";
-import type { HydrateResult } from "@shared/types/ipc/app";
 import type { DriveLeaseView } from "@shared/types/ipc/driveLease";
+import type { HydratedSettings } from "@/store/hostResyncSignal";
 
 const bootMock = vi.hoisted(() => ({ getSafeBootPromise: vi.fn() }));
 vi.mock("@/lib/bootPromise", () => bootMock);
@@ -58,21 +57,21 @@ const LEASE: DriveLeaseView = {
 };
 
 const BOOT_SETTINGS = {
-  terminalConfig: { scrollbackLines: 1000 } as TerminalConfig,
-  agentDefaults: { defaultAgent: "claude" } as AgentDefaultsSnapshot,
-};
+  terminalConfig: { scrollbackLines: 1000 },
+  agentDefaults: { defaultAgent: "claude" },
+} satisfies HydratedSettings;
 
 const HYDRATED = {
-  terminalConfig: { scrollbackLines: 5000 } as TerminalConfig,
-  agentSettings: { agents: { claude: { customFlags: "--hydrated" } } } as AgentSettings,
-  agentDefaults: { defaultAgent: "codex" } as AgentDefaultsSnapshot,
-};
+  terminalConfig: { scrollbackLines: 5000 },
+  agentSettings: { agents: { claude: { customFlags: "--hydrated" } } },
+  agentDefaults: { defaultAgent: "codex" },
+} satisfies HydratedSettings;
 
 const READ = {
-  terminalConfig: { scrollbackLines: 3000 } as TerminalConfig,
-  agentSettings: { agents: { claude: { customFlags: "--read" } } } as AgentSettings,
-  agentDefaults: { defaultAgent: "gemini" } as AgentDefaultsSnapshot,
-};
+  terminalConfig: { scrollbackLines: 3000 },
+  agentSettings: { agents: { claude: { customFlags: "--read" } } },
+  agentDefaults: { defaultAgent: "gemini" },
+} satisfies HydratedSettings;
 
 function settingsBridge<T>(value: T) {
   return { get: vi.fn(async () => value), onChanged: vi.fn(() => () => {}) };
@@ -91,16 +90,13 @@ function installElectron() {
       reconnectBulk: vi.fn(async () => ({})),
     },
     app: {
-      hydrate: vi.fn(
-        async () =>
-          ({
-            ...HYDRATED,
-            appState: { terminals: [] },
-            project: { id: "proj-1", path: "/repo" },
-            workspaceId: "proj-1",
-            draftInputs: {},
-          }) as unknown as HydrateResult
-      ),
+      hydrate: vi.fn(async (): Promise<unknown> => ({
+        ...HYDRATED,
+        appState: { terminals: [] },
+        project: { id: "proj-1", path: "/repo" },
+        workspaceId: "proj-1",
+        draftInputs: {},
+      })),
     },
     terminalConfig: settingsBridge(READ.terminalConfig),
     agentSettings: settingsBridge(READ.agentSettings),
