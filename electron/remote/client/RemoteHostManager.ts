@@ -553,7 +553,11 @@ export class HostConnection {
    * down, drops mid-call or sends something unreadable rejects instead, so a
    * blip is never reported as the project being gone.
    */
-  async describeProject(projectId: string): Promise<ProjectDescription | null> {
+  async describeProject(
+    projectId: string,
+    /** How long the host gets to answer: a switch's bound, or null for the link's own. */
+    timeoutMs: number | null = HOST_PROJECT_LOOKUP_TIMEOUT_MS
+  ): Promise<ProjectDescription | null> {
     const session = this.session;
     if (!session || !session.isOpen) {
       throw new AppError({
@@ -565,7 +569,7 @@ export class HostConnection {
     const answer = await session.call(
       LinkMethod.DESCRIBE_PROJECT,
       { projectId },
-      { timeoutMs: HOST_PROJECT_LOOKUP_TIMEOUT_MS }
+      timeoutMs === null ? {} : { timeoutMs }
     );
     if (answer === null) return null;
     const parsed = ProjectDescriptionSchema.safeParse(answer);

@@ -887,7 +887,9 @@ export class RemoteHostsClient {
 
     let description: Awaited<ReturnType<typeof connection.describeProject>>;
     try {
-      description = await connection.describeProject(projectId);
+      // Nothing waits on a background restore, and one that fails on a link
+      // that stays up isn't tried again until it reconnects: the link's own deadline.
+      description = await connection.describeProject(projectId, null);
     } catch (error) {
       const staleFailure = stale();
       if (staleFailure) return staleFailure;
@@ -1541,11 +1543,16 @@ export class RemoteHostsClient {
         this.options.windows.claimProject?.(hostId, targetProjectId, windowId) ?? releaseClaim;
       const previousHost = this.options.bindings.get(windowId);
       // Where a switch to a project the host turns out not to have goes back to,
-      // for as long as nothing newer has moved the window.
+      // for as long as nothing newer has moved the window. A new window has no
+      // ticket of its own: it takes one, so any navigation there after this one
+      // (a local one too) shows as newer. One some request already took there
+      // is newer than this switch, which then never moves the window back.
       const previousKey = newWindow
         ? null
         : (this.options.windows.shownProjectKey?.(windowId) ?? null);
-      const landedSeq = this.switchTickets.get(windowId)?.seq;
+      const landedTicket =
+        ticket ??
+        (unconfirmed && !this.switchTickets.has(windowId) ? this.takeSwitchTicket(windowId) : null);
       const nextHost = remote ? hostId : LOCAL_HOST_ID;
       this.options.bindings.set(windowId, nextHost);
       this.watchClosing(windowId);
@@ -1593,7 +1600,7 @@ export class RemoteHostsClient {
           hostId,
           projectId: targetProjectId,
           previousKey,
-          landedSeq,
+          ticket: landedTicket,
           epoch,
         });
       }
@@ -1624,12 +1631,12 @@ export class RemoteHostsClient {
       projectId: string;
       /** What the window showed before the switch; null for nothing, or a new window. */
       previousKey: string | null;
-      /** The window's newest switch request as the view went up. */
-      landedSeq: number | undefined;
+      /** Current until anything newer is asked of the window; null when something already was. */
+      ticket: SwitchTicket | null;
       epoch: number;
     }
   ): void {
-    const { windowId, hostId, projectId, previousKey, landedSeq, epoch } = landed;
+    const { windowId, hostId, projectId, previousKey, ticket, epoch } = landed;
     const key = toHostScopedKey(hostId, projectId);
     const sameHost = (): boolean =>
       !this.retiring.has(hostId) &&
@@ -1645,7 +1652,7 @@ export class RemoteHostsClient {
           // A window that was already showing it moved nowhere, so it stays.
           if (
             previousKey === key ||
-            this.switchTickets.get(windowId)?.seq !== landedSeq ||
+            ticket?.isCurrent() !== true ||
             !this.watchedWindows.has(windowId) ||
             this.options.bindings.get(windowId) !== hostId ||
             this.options.windows.shownProjectKey?.(windowId) !== key
@@ -1677,17 +1684,24 @@ export class RemoteHostsClient {
     let returned = false;
     if (previousKey !== null) {
       const previous = parseHostScopedKey(previousKey);
-      const result = await this.switchWindow(
+      const switching = this.switchWindow(
         windowId,
         { hostId: previous.hostId, newWindow: false, projectId: previous.projectId },
         undefined,
         { exempt: true }
-      ).catch((error: unknown) => {
+      );
+      // The switch back's own request, taken as it was asked for.
+      const backSeq = this.switchTickets.get(windowId)?.seq;
+      const result = await switching.catch((error: unknown) => {
         logger.warn("Couldn't take a window back off a host project that is gone", { error });
         return null;
       });
-      // A newer navigation in the window won: it is where the person put it.
-      if (result?.outcome === "superseded") return;
+      // Leaving it recorded it as the window's previous project.
+      discardFromAllProjectHistories((workspaceId) => workspaceId === key);
+      // A newer navigation in the window won, or is on its way: the window is the person's.
+      if (result?.outcome === "superseded" || this.switchTickets.get(windowId)?.seq !== backSeq) {
+        return;
+      }
       returned = result?.outcome === "switched";
     }
     let offerIn: number | null = windowId;
