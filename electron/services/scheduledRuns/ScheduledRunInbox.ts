@@ -74,7 +74,10 @@ export class ScheduledRunInbox {
       try {
         schedule = await this.deps.getSchedule(run.projectId, run.scheduleId);
       } catch (error) {
-        this.logWarn(`[ScheduledRuns] Couldn't read schedule ${run.scheduleId} for the inbox`, error);
+        this.logWarn(
+          `[ScheduledRuns] Couldn't read schedule ${run.scheduleId} for the inbox`,
+          error
+        );
       }
       schedules.set(
         run.scheduleId,

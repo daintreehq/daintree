@@ -1057,7 +1057,9 @@ describe("ScheduledRunRecorder", () => {
     it("waits on every settlement: a handback, a launch error, a loss, another service's", () => {
       windowOpen = false;
       const recorder = lifetime();
-      recorder.registerLaunch(launch({ id: "handback", terminalId: "t-1", handbackCode: "k7f3qa" }));
+      recorder.registerLaunch(
+        launch({ id: "handback", terminalId: "t-1", handbackCode: "k7f3qa" })
+      );
       recorder.handleSpawnResult("t-1", { success: true, spawnedAt: SPAWNED_AT });
       recorder.handleHandback({
         terminalId: "t-1",

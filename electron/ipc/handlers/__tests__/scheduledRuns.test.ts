@@ -34,10 +34,7 @@ vi.mock("../../../services/ProjectStore.js", () => ({
 }));
 
 import { CHANNELS } from "../../channels.js";
-import {
-  _resetScheduledRunInboxForTest,
-  registerScheduledRunsHandlers,
-} from "../scheduledRuns.js";
+import { _resetScheduledRunInboxForTest, registerScheduledRunsHandlers } from "../scheduledRuns.js";
 
 function handlerFor(channel: string): (...args: unknown[]) => Promise<unknown> {
   const call = (ipcMainMock.handle as Mock).mock.calls.find(([name]) => name === channel);

@@ -14,7 +14,11 @@ function setup(pending: ScheduledRun[]) {
     listInboxPending: vi.fn(() => [...waiting]),
     clearInboxPending: vi.fn((ids: readonly string[]) => {
       const cleared = waiting.filter((r) => ids.includes(r.id)).map((r) => r.id);
-      for (const id of cleared) waiting.splice(waiting.findIndex((r) => r.id === id), 1);
+      for (const id of cleared)
+        waiting.splice(
+          waiting.findIndex((r) => r.id === id),
+          1
+        );
       return cleared;
     }),
   };
@@ -96,8 +100,7 @@ describe("ScheduledRunInbox", () => {
     getSchedule.mockImplementationOnce(
       () =>
         new Promise<Schedule>((resolve) => {
-          release = () =>
-            resolve({ name: "Late", cadence: { timeZone: "UTC" } } as Schedule);
+          release = () => resolve({ name: "Late", cadence: { timeZone: "UTC" } } as Schedule);
         })
     );
 
