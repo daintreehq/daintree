@@ -1257,6 +1257,8 @@ describe("DecisionsService deleting local data", () => {
       writeFileSync(t.keyFile, KEYS);
       await t.service.start(on(RELAY));
       t.log.length = 0;
+      // Another identity: its connection waits on the first to settle, and must not start mid-deletion.
+      t.service.updateSettings(on({ ...RELAY, deviceId: "dev_87654321" }));
 
       const erasing = t.service.eraseLocalData();
       await new Promise((resolve) => setImmediate(resolve));
