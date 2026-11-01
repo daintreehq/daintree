@@ -17,6 +17,7 @@ import {
   type DecisionsPairingDeclineResult,
   type DecisionsPairingStartResult,
   type DecisionsPairingState,
+  type DecisionsPolicy,
   type DecisionsRelayCheck,
   type DecisionsRelayDeleteResult,
   type DecisionsRelayRequestFailure,
@@ -49,6 +50,7 @@ import {
   type RelaySetupOutcome,
   type SetupKeyStore,
 } from "./relayIdentity.js";
+import { decisionsPolicyOf } from "./workflowGates.js";
 
 /**
  * Nothing imports this module until the saved setting reads as on (the boot
@@ -543,6 +545,26 @@ export async function approvePairing(
 export async function declinePairing(pairingId: string): Promise<DecisionsPairingDeclineResult> {
   const devices = await ownerDevicesFor();
   return devices instanceof OwnerDevices ? devices.decline(pairingId) : devices;
+}
+
+/** The rules questions are asked under (#16013): the trusted gates, and the proxy allowlist as saved. */
+export function getDecisionsPolicy(): DecisionsPolicy {
+  return decisionsPolicyOf(readDecisionsSettings(store));
+}
+
+/**
+ * Lets questions with no workflow gate accept a proxy answer, or stops them.
+ * The running lifetime's policy changes in place, so the next question is
+ * asked under it; questions already asked keep the level they were asked with.
+ */
+export function setDecisionsProxyAllowlisted(allowed: boolean): Promise<DecisionsPolicy> {
+  return serialize(async () => {
+    const current = readDecisionsSettings(store);
+    if (shutDown || !current.enabled) throw setupRefused();
+    const saved = writeDecisionsSettings(store, { ...current, proxyAllowlisted: allowed });
+    service?.updateSettings(saved);
+    return decisionsPolicyOf(saved);
+  });
 }
 
 /** Boot: starts the service only if the saved setting, sanitised, is on. */

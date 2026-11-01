@@ -27,6 +27,7 @@ import type {
   DecisionsPairingDeclineResult,
   DecisionsPairingStartResult,
   DecisionsPairingState,
+  DecisionsPolicy,
   DecisionsRelayCheck,
   DecisionsRelayDeleteResult,
   DecisionsStatus,
@@ -369,6 +370,25 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) throw setupCancelled();
         return decisions.deleteLocalData();
+      }
+    ),
+    // The trusted gates and the proxy allowlist (#16013). Read and changed
+    // only while on: Settings shows them behind the switch, and reading them
+    // loads Decisions. No op registers or edits a gate.
+    getPolicy: op(CHANNELS.DECISIONS_GET_POLICY, async (): Promise<DecisionsPolicy> => {
+      refuseWhileOff("read its policy");
+      const decisions = await loadDecisions();
+      if (!decisions) throw setupCancelled();
+      return decisions.getDecisionsPolicy();
+    }),
+    setProxyAllowlisted: opValidated(
+      CHANNELS.DECISIONS_SET_PROXY_ALLOWLISTED,
+      z.boolean(),
+      async (allowed: boolean): Promise<DecisionsPolicy> => {
+        refuseWhileOff("change who may answer");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.setDecisionsProxyAllowlisted(allowed);
       }
     ),
   },

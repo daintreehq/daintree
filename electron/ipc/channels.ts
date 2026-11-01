@@ -1529,6 +1529,9 @@ export const CHANNELS = {
   DECISIONS_EXPORT_DATA: "decisions:export-data",
   DECISIONS_DELETE_RELAY_DATA: "decisions:delete-relay-data",
   DECISIONS_DELETE_LOCAL_DATA: "decisions:delete-local-data",
+  // The trusted workflow gates, read-only, and the proxy allowlist (#16013).
+  DECISIONS_GET_POLICY: "decisions:get-policy",
+  DECISIONS_SET_PROXY_ALLOWLISTED: "decisions:set-proxy-allowlisted",
 
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",

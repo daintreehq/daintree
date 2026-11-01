@@ -642,6 +642,10 @@ export interface GeneratedIpcInvokeMap {
     args: [terminalId: string];
     result: import("../decisions.js").PaneDecisionState | null;
   };
+  "decisions:get-policy": {
+    args: [];
+    result: import("../decisions.js").DecisionsPolicy;
+  };
   "decisions:get-status": {
     args: [];
     result: import("../decisions.js").DecisionsStatus;
@@ -657,6 +661,10 @@ export interface GeneratedIpcInvokeMap {
   "decisions:set-enabled": {
     args: [payload: import("../decisions.js").SetDecisionsEnabledPayload];
     result: import("../decisions.js").DecisionsStatus;
+  };
+  "decisions:set-proxy-allowlisted": {
+    args: [allowed: boolean];
+    result: import("../decisions.js").DecisionsPolicy;
   };
   "decisions:start-pairing": {
     args: [];
