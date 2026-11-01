@@ -2416,21 +2416,18 @@ describe("VoiceRecordingService — the key with no agent focused (#15550)", () 
     it.each([
       ["neither was focused", false],
       ["the Assistant was used since", true],
-    ])(
-      "still says to focus an agent with two on screen when %s",
-      async (_name, assistantUsed) => {
-        const arranged = await arrange({
-          panels: [agent("agent-a"), agent("agent-b"), assistantPanel()],
-        });
-        const help = await runAssistant();
-        if (assistantUsed) usedAssistantBefore();
+    ])("still says to focus an agent with two on screen when %s", async (_name, assistantUsed) => {
+      const arranged = await arrange({
+        panels: [agent("agent-a"), agent("agent-b"), assistantPanel()],
+      });
+      const help = await runAssistant();
+      if (assistantUsed) usedAssistantBefore();
 
-        await arranged.voiceRecordingService.toggleFocusedPanel();
+      await arranged.voiceRecordingService.toggleFocusedPanel();
 
-        expectUnavailable(arranged);
-        expectAssistantLeftAlone(help);
-      }
-    );
+      expectUnavailable(arranged);
+      expectAssistantLeftAlone(help);
+    });
 
     it("never launches an Assistant that hasn't been started", async () => {
       const arranged = await arrange({ panels: [shell("zsh")] });
@@ -2521,9 +2518,7 @@ describe("VoiceRecordingService — the key with no agent focused (#15550)", () 
     it("leaves the focused Assistant's own start as it was", async () => {
       const arranged = await arrange({ panels: [agent("agent-a"), assistantPanel()] });
       const help = await runAssistant();
-      vi.mocked((await import("@/store/macroFocusStore")).isAssistantFocused).mockReturnValue(
-        true
-      );
+      vi.mocked((await import("@/store/macroFocusStore")).isAssistantFocused).mockReturnValue(true);
 
       await arranged.voiceRecordingService.toggleFocusedPanel();
 

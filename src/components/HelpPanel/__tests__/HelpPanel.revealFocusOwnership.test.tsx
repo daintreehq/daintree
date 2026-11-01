@@ -751,9 +751,7 @@ describe("HelpPanel — reveal focus ownership (#11472)", () => {
 
       expect(hybridHandle.focusForDictation).toHaveBeenCalledTimes(1);
       expect(focusMock).toHaveBeenCalledWith("t-1");
-      expect(document.activeElement).toBe(
-        document.querySelector("[data-testid=xterm-textarea]")
-      );
+      expect(document.activeElement).toBe(document.querySelector("[data-testid=xterm-textarea]"));
     });
 
     it("routes to xterm when the assistant input is locked", () => {
