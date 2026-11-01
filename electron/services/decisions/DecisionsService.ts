@@ -98,6 +98,12 @@ export class DecisionsService {
   private connectionKey: string | null = null;
   /** The store didn't open for this lifetime; the next start tries it again. */
   private storeFailed = false;
+  /**
+   * The identity a connection saw revoked. Held until the settings name
+   * another relay or none, so a start that carries settings read before the
+   * revocation was recorded can't connect with it again.
+   */
+  private revokedKey: string | null = null;
 
   constructor(options: DecisionsServiceOptions = {}) {
     this.openStore = options.openStore ?? openDecisionsLocalStore;
@@ -280,13 +286,16 @@ export class DecisionsService {
   private reconcileConnection(): void {
     const settings = this.settings;
     const relay = this.disposed ? null : relayBindingOf(settings);
-    const wanted =
-      relay !== null && settings?.revokedAt === null && this.store !== null ? relay : null;
-    const key = wanted ? bindingKey(wanted) : null;
+    const relayKey = relay ? bindingKey(relay) : null;
+    if (settings !== null && relayKey !== this.revokedKey) this.revokedKey = null;
+    const revoked =
+      relay !== null && (settings?.revokedAt !== null || relayKey === this.revokedKey);
+    const wanted = relay !== null && !revoked && this.store !== null ? relay : null;
+    const key = wanted ? relayKey : null;
     if (this.connectionKey !== key) this.dropConnection();
     if (wanted === null || key === null) {
       if (this.disposed || settings === null) return;
-      if (relay !== null && settings.revokedAt !== null) this.setStatus({ state: "revoked" });
+      if (revoked) this.setStatus({ state: "revoked" });
       else if (relay !== null && this.storeFailed) {
         this.setStatus({ state: "not-connected", problem: "storage" });
       } else this.setStatus({ state: "not-connected" });
@@ -304,7 +313,11 @@ export class DecisionsService {
         if (this.connection === connection) this.setStatus(status);
       },
       onRevoked: () => {
-        if (this.connection === connection) this.onRelayRevoked(wanted);
+        if (this.connection !== connection) return;
+        this.revokedKey = key;
+        this.onRelayRevoked(wanted);
+        // Revoked whether or not the setting recorded it.
+        this.reconcileConnection();
       },
     });
     this.connection = connection;

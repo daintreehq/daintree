@@ -586,11 +586,24 @@ describe("DecisionsService relay connection", () => {
     expect(revoked).toEqual([]);
   });
 
-  it("passes on a revocation with the identity it was for", async () => {
+  it("passes on a revocation with the identity it was for, and stops connecting with it", async () => {
     const { service, made, revoked } = connected();
     await service.start(on(RELAY));
     made[0]!.options.onRevoked();
     expect(revoked).toEqual([RELAY]);
+    expect(made[0]!.stopped).toBe(true);
+    expect(service.getStatus()).toEqual({ state: "revoked" });
+
+    // Settings read before the revocation was recorded don't bring it back.
+    await service.start(on(RELAY));
+    service.updateSettings(on({ ...RELAY, proxyAllowlisted: true }));
+    expect(made).toHaveLength(1);
+    expect(service.getStatus()).toEqual({ state: "revoked" });
+
+    // Another identity, or none, is a fresh start.
+    service.updateSettings(on());
+    service.updateSettings(on(RELAY));
+    expect(made).toHaveLength(2);
   });
 
   it("is revoked, connecting nothing, for an identity the relay revoked", async () => {

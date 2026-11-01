@@ -16,6 +16,7 @@ import type { RelayFetch } from "./relayCheck.js";
 import { relayRequests } from "./relayIdentity.js";
 import {
   ObservedSocket,
+  RetiredAttemptError,
   chromiumWebSocket,
   holdingTerminalSink,
   isRelaySocketUrl,
@@ -271,7 +272,7 @@ export class RelayConnection {
       const retired = () => attempt.retired;
       bridge = new DecisionsBridge({
         identity,
-        keyStore: retireable(this.keys, retired),
+        keyStore: this.bridgeKeys(retireable(this.keys, retired)),
         store: retireable(this.store, retired),
         sink: this.o.sink ?? holdingTerminalSink,
         // The outbox keeps its own retry times, so a request is tried once per pass.
@@ -298,6 +299,33 @@ export class RelayConnection {
       // Retired while it was starting: start carries on past a stop, so stop it again.
       if (attempt.retired && bridge) void bridge.stop().catch(() => {});
     }
+  }
+
+  /**
+   * The keys as a bridge reloads them after a key rotation. The library's
+   * inbox takes a failed reload as final for the event that needed it, and
+   * marks that event processed, so an answer would be lost to a keychain that
+   * was only locked. A failed reload stops the connection first, which
+   * refuses the mark: the event stays stored for the next lifetime.
+   */
+  private bridgeKeys(keys: KeyStore): KeyStore {
+    const unusable = () => this.halt({ state: "not-connected", problem: "keys" });
+    return {
+      load: () =>
+        keys.load().then(
+          (stored) => {
+            // Gone or unfinished keys fail the library's reload all the same.
+            if (stored === null || stored.claimed === false) unusable();
+            return stored;
+          },
+          (error: unknown) => {
+            if (!(error instanceof RetiredAttemptError)) unusable();
+            throw error;
+          }
+        ),
+      save: (identity) => keys.save(identity),
+      clear: () => keys.clear(),
+    };
   }
 
   private openSocket(attempt: Attempt, url: string): WebSocketLike {

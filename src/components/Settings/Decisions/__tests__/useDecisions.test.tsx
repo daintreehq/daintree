@@ -100,6 +100,27 @@ describe("useDecisions", () => {
     expect(result.current.status).toEqual({ state: "connected", revision: 6 });
   });
 
+  it("keeps a push over a setup's answer that was read before it", async () => {
+    getStatus.mockResolvedValue({ state: "not-connected", revision: 2 });
+    const { result } = renderHook(() => useDecisions());
+    await act(async () => {});
+
+    push({ state: "connected", relayOrigin: "https://relay.example.com", revision: 4 });
+    act(() => {
+      result.current.applyStatus({
+        state: "connecting",
+        relayOrigin: "https://relay.example.com",
+        revision: 3,
+      });
+    });
+    expect(result.current.status?.state).toBe("connected");
+
+    act(() => {
+      result.current.applyStatus({ state: "connected", keysStored: true, revision: 4 });
+    });
+    expect(result.current.status).toEqual({ state: "connected", keysStored: true, revision: 4 });
+  });
+
   it("takes a status with no revision before anything newer has been seen", async () => {
     getStatus.mockResolvedValue({ state: "off" });
     const { result } = renderHook(() => useDecisions());

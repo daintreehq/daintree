@@ -33,6 +33,11 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
  * its options (to report a status or a revocation as the real one would) and
  * how often it was started and stopped.
  */
+/** The revocation hook the entry hands each service it makes. */
+const entryHooks = vi.hoisted(() => ({
+  onRelayRevoked: null as ((relay: import("../relayConnection.js").RelayBinding) => void) | null,
+}));
+
 const connections = vi.hoisted(
   () =>
     [] as Array<{
@@ -63,6 +68,7 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
       }
       // A store that holds nothing, so starting never reaches the app database;
       // `failNextOpen` makes the next open fail, once.
+      entryHooks.onRelayRevoked = options.onRelayRevoked ?? null;
       super({
         ...options,
         keyFilePath: () => keyFile.path,
@@ -782,16 +788,25 @@ describe("Decisions entry", () => {
       expect(connections).toHaveLength(1);
     });
 
-    it("ignores a revocation from a connection that was already replaced", async () => {
+    it("records a revocation only against the identity the setting now holds", async () => {
       saved.value = { enabled: true, consentedAt: 5, ...RELAY };
       await startDecisionsIfEnabled();
-      const [old] = connections;
-      writeFileSync(keyFile.path, "sealed");
-      await disconnectRelay();
 
-      old!.options.onRevoked();
+      entryHooks.onRelayRevoked!({
+        relayOrigin: RELAY.relayOrigin,
+        installationId: RELAY.installationId,
+        deviceId: "dev_87654321",
+      });
+      expect((saved.value as { revokedAt?: unknown }).revokedAt ?? null).toBeNull();
+      expect(connections[0]!.stopped).toBe(0);
 
-      expect((saved.value as { revokedAt?: unknown }).revokedAt).toBeNull();
+      entryHooks.onRelayRevoked!({
+        relayOrigin: RELAY.relayOrigin,
+        installationId: RELAY.installationId,
+        deviceId: RELAY.deviceId,
+      });
+      expect(saved.value).toMatchObject({ revokedAt: expect.any(Number) });
+      expect(connections[0]!.stopped).toBe(1);
     });
 
     it("stops the connection before it removes the keys it runs on", async () => {
@@ -807,16 +822,55 @@ describe("Decisions entry", () => {
       expect(connections).toHaveLength(1);
     });
 
-    it("connects with a claimed identity, clearing an earlier revocation", async () => {
-      saved.value = { enabled: true, consentedAt: 5, revokedAt: 99 };
+    it("connects again after a revoked identity is disconnected and a relay claimed", async () => {
+      saved.value = { enabled: true, consentedAt: 5, ...RELAY, revokedAt: 99 };
       await startDecisionsIfEnabled();
-      setupRuns.claim.mockResolvedValue({ identity: CLAIMED });
+      expect((await getDecisionsStatus()).state).toBe("revoked");
+      expect(connections).toHaveLength(0);
 
+      writeFileSync(keyFile.path, "sealed");
+      await disconnectRelay();
+      setupRuns.claim.mockResolvedValue({ identity: CLAIMED });
       await claimRelay({ url: "relay.example.com", claimSecret: SECRET });
 
       expect(saved.value).toMatchObject({ revokedAt: null, deviceId: CLAIMED.deviceId });
       expect(connections).toHaveLength(1);
       expect(connections[0]!.started).toBe(1);
+    });
+
+    it("pushes the status after a setup that failed, since it may have kept keys", async () => {
+      saved.value = { enabled: true, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      await vi.waitFor(() => expect(pushedStatuses().length).toBeGreaterThan(0));
+      const before = pushedStatuses().at(-1)!.revision as number;
+      setupRuns.claim.mockImplementation(async () => {
+        writeFileSync(keyFile.path, "staged");
+        return {
+          failure: { result: "unreachable", origin: CLAIMED.relayOrigin, reason: "timeout", kept: true },
+        };
+      });
+
+      await claimRelay({ url: "relay.example.com", claimSecret: SECRET });
+
+      await vi.waitFor(() => expect(pushedStatuses().at(-1)?.keysStored).toBe(true));
+      expect(pushedStatuses().at(-1)!.revision as number).toBeGreaterThan(before);
+    });
+
+    it("keeps pushes in order when changes overlap, the last carrying the newest status", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startDecisionsIfEnabled();
+      const [connection] = connections;
+
+      connection!.options.onStatus({ state: "connecting" });
+      connection!.options.onStatus({ state: "reconnecting", nextAttemptAt: 9_000 });
+      connection!.options.onStatus({ state: "connected" });
+
+      await vi.waitFor(() => expect(pushedStatuses().at(-1)?.state).toBe("connected"));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const revisions = pushedStatuses().map((status) => status.revision as number);
+      expect([...revisions].sort((a, b) => a - b)).toEqual(revisions);
+      expect(pushedStatuses().at(-1)).toMatchObject({ state: "connected" });
+      expect((await getDecisionsStatus()).revision).toBe(revisions.at(-1));
     });
 
     it("stops the connection when turned off, and pushes nothing at quit", async () => {

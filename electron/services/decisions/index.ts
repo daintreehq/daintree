@@ -256,10 +256,11 @@ function runSetup(run: SetupRun): Promise<DecisionsConnectResult> {
       const outcome = await run({ keys, signal: controller.signal });
       if ("failure" in outcome) return outcome.failure;
       recordIdentity(running, outcome.identity);
-      publishStatus();
       return { result: "saved", status: await getDecisionsStatus() };
     } finally {
       setups.delete(controller);
+      // A setup that failed can still have kept staged keys, which the status shows.
+      publishStatus();
     }
   });
 }
@@ -294,19 +295,24 @@ export function disconnectRelay(): Promise<DecisionsStatus> {
       await keys.clear();
     } catch (error) {
       running.resumeConnection();
+      publishStatus();
       throw error;
     }
-    const current = readDecisionsSettings(store);
-    const saved = writeDecisionsSettings(store, {
-      ...current,
-      relayOrigin: null,
-      installationId: null,
-      deviceId: null,
-      hostId: null,
-      revokedAt: null,
-    });
-    running.updateSettings(saved);
-    publishStatus();
+    try {
+      const current = readDecisionsSettings(store);
+      const saved = writeDecisionsSettings(store, {
+        ...current,
+        relayOrigin: null,
+        installationId: null,
+        deviceId: null,
+        hostId: null,
+        revokedAt: null,
+      });
+      running.updateSettings(saved);
+    } finally {
+      // The keys are gone even if the setting didn't save.
+      publishStatus();
+    }
     return getDecisionsStatus();
   });
 }

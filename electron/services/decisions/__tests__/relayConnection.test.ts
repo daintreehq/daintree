@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import {
   MemoryKeyStore,
   MemoryLocalStore,
+  type KeyStore,
   type StoredIdentity,
   type WebSocketLike,
 } from "@daintreehq/decisions-client";
@@ -214,6 +215,8 @@ interface Harness {
   watching(): number;
   /** Resolves once the connection reports `state`, now or later. */
   status(state: RelayConnectionStatus["state"]): Promise<RelayConnectionStatus>;
+  /** Resolves the next time the connection reports `state`, never with one already reported. */
+  next(state: RelayConnectionStatus["state"]): Promise<RelayConnectionStatus>;
 }
 
 let identity: StoredIdentity;
@@ -237,14 +240,15 @@ async function harness(
     stored?: StoredIdentity | null;
     rand?: () => number;
     wrapFetch?: (fetchImpl: RelayFetch) => RelayFetch;
+    keys?: KeyStore;
     overrides?: Partial<RelayConnectionOptions>;
   } = {}
 ): Promise<Harness> {
   const relay = fakeRelay();
   const store = options.store ?? new MemoryLocalStore();
-  const keys = new MemoryKeyStore();
+  const keys = options.keys ?? new MemoryKeyStore();
   const stored = options.stored === undefined ? identity : options.stored;
-  if (stored) await keys.save(stored);
+  if (stored && !options.keys) await keys.save(stored);
   const statuses: RelayConnectionStatus[] = [];
   const waiters: Array<{ state: string; resolve: (status: RelayConnectionStatus) => void }> = [];
   const resumes = new Set<() => void>();
@@ -291,6 +295,7 @@ async function harness(
       if (last?.state === state) return Promise.resolve(last);
       return new Promise((resolve) => waiters.push({ state, resolve }));
     },
+    next: (state) => new Promise((resolve) => waiters.push({ state, resolve })),
   };
 }
 
@@ -426,14 +431,15 @@ describe("RelayConnection", () => {
 
     const delays: number[] = [];
     let startedAt = Date.now();
-    let waiting = { nextAttemptAt: 0 };
+    let waiting = (await h.status("reconnecting")) as { nextAttemptAt: number };
     for (let failure = 0; failure < 11; failure += 1) {
-      waiting = (await h.status("reconnecting")) as { nextAttemptAt: number };
       delays.push(waiting.nextAttemptAt - startedAt);
       if (failure === 10) break;
+      // Listening before time moves, so a failure that lands within the advance is still seen.
+      const next = h.next("reconnecting");
       await vi.advanceTimersByTimeAsync(waiting.nextAttemptAt - Date.now());
-      await h.status("connecting");
-      startedAt = Date.now();
+      startedAt = waiting.nextAttemptAt;
+      waiting = (await next) as { nextAttemptAt: number };
     }
     for (let i = 0; i < delays.length; i += 1) {
       expect(delays[i]).toBe(
@@ -638,6 +644,88 @@ describe("RelayConnection", () => {
     await vi.advanceTimersByTimeAsync(RECONNECT_CAP_MS);
     expect(h.relay.tickets).toHaveLength(1);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("lets a write in flight at a stop finish, and refuses the stopped attempt everything after it", async () => {
+    const store = new MemoryLocalStore();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const insert = store.insertEvent.bind(store);
+    let inserting!: () => void;
+    const insertStarted = new Promise<void>((resolve) => {
+      inserting = resolve;
+    });
+    store.insertEvent = async (event) => {
+      inserting();
+      await held;
+      return insert(event);
+    };
+    const advance = vi.spyOn(store, "advanceCursor");
+    const processed = vi.spyOn(store, "markEventProcessed");
+    const h = await harness({ store });
+    h.connection.start();
+    const socket = await connectLive(h);
+    advance.mockClear();
+
+    socket.event(1);
+    await insertStarted;
+    h.connection.stop();
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+
+    // The insert was already handed on, so it lands; nothing after it does.
+    expect((await store.unprocessedEvents(10)).map((event) => event.seq)).toEqual([1]);
+    expect(advance).not.toHaveBeenCalled();
+    expect(processed).not.toHaveBeenCalled();
+    expect(await store.getCursor()).toBe(0);
+    expect(socket.frames().some((frame) => frame.t === "ack" && frame.seq === 1)).toBe(false);
+  });
+
+  it("keeps an event whose key reload failed for the next lifetime, rather than marking it done", async () => {
+    let loads = 0;
+    const real = new MemoryKeyStore();
+    await real.save(identity);
+    const keys: KeyStore = {
+      load: async () => {
+        loads += 1;
+        if (loads > 1) throw new Error("keychain locked");
+        return real.load();
+      },
+      save: (stored) => real.save(stored),
+      clear: () => real.clear(),
+    };
+    const store = new MemoryLocalStore();
+    const processed = vi.spyOn(store, "markEventProcessed");
+    const h = await harness({ store, keys });
+    h.connection.start();
+    const socket = await connectLive(h);
+
+    // A rotation past the epoch held makes the bridge reload its keys.
+    socket.onmessage?.({
+      data: JSON.stringify({
+        t: "event",
+        event: {
+          protocol_version: 1,
+          seq: 1,
+          event_id: "evt_00000001",
+          event_type: "device.key_rotated",
+          occurred_at: new Date().toISOString(),
+          question_id: null,
+          question_revision: null,
+          origin_device_id: null,
+          data: { key_epoch: 2 },
+        },
+      }),
+    });
+
+    expect(await h.status("not-connected")).toEqual({ state: "not-connected", problem: "keys" });
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    expect(loads).toBe(2);
+    expect(processed).not.toHaveBeenCalled();
+    expect((await store.unprocessedEvents(10)).map((event) => event.seq)).toEqual([1]);
   });
 
   it("opens no socket for a ticket that answers after a stop", async () => {
