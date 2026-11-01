@@ -672,32 +672,12 @@ describe("LinkClient session start", () => {
 });
 
 describe("LinkClient stop", () => {
-  it("lets its GOODBYE reach the host before letting go of a slow transport", async () => {
-    const dir = await makeTempDir();
-    const socketPath = path.join(dir, "h.sock");
-    const seen: number[] = [];
-    const server = net.createServer((socket) => {
-      const decoder = new FrameDecoder();
-      socket.on("data", (chunk: Buffer) => {
-        for (const frame of decoder.push(chunk)) {
-          seen.push(frame.kind);
-          if (frame.kind === ControlKind.HELLO) {
-            const welcome: LinkMessage = {
-              lane: Lane.CONTROL,
-              kind: ControlKind.WELCOME,
-              body: { handshake: TEST_HANDSHAKE, hostName: "h", sessionId: "s1", resumed: false },
-            };
-            socket.write(encodeFrame(messageToFrame(welcome)));
-          }
-          // A host ends the link on a GOODBYE, as HostServer does.
-          if (frame.kind === ControlKind.GOODBYE) socket.end();
-        }
-      });
-    });
-    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
-    // Every write leaves a moment late, so the GOODBYE is still queued when
-    // the stop disposes the transport, which destroys its socket at once.
-    const slow: LinkTransport = {
+  /**
+   * Every write leaves a moment late, so a GOODBYE is still queued when a
+   * stop disposes the transport, which destroys its socket at once.
+   */
+  function slowTransport(socketPath: string): LinkTransport {
+    return {
       async open() {
         const raw = net.connect(socketPath);
         await new Promise<void>((resolve, reject) => {
@@ -722,9 +702,34 @@ describe("LinkClient stop", () => {
         return { socket, token: "t", dispose: async () => void socket.destroy() };
       },
     };
+  }
+
+  it("lets its GOODBYE reach the host before letting go of a slow transport", async () => {
+    const dir = await makeTempDir();
+    const socketPath = path.join(dir, "h.sock");
+    const seen: number[] = [];
+    const server = net.createServer((socket) => {
+      const decoder = new FrameDecoder();
+      socket.on("data", (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) {
+          seen.push(frame.kind);
+          if (frame.kind === ControlKind.HELLO) {
+            const welcome: LinkMessage = {
+              lane: Lane.CONTROL,
+              kind: ControlKind.WELCOME,
+              body: { handshake: TEST_HANDSHAKE, hostName: "h", sessionId: "s1", resumed: false },
+            };
+            socket.write(encodeFrame(messageToFrame(welcome)));
+          }
+          // A host ends the link on a GOODBYE, as HostServer does.
+          if (frame.kind === ControlKind.GOODBYE) socket.end();
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
     try {
       client = new LinkClient({
-        transport: slow,
+        transport: slowTransport(socketPath),
         handshake: TEST_HANDSHAKE,
         client: { clientId: "c", clientName: "n", platform: "linux" },
         session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
@@ -733,7 +738,43 @@ describe("LinkClient stop", () => {
       await waitFor(() => client!.getState().status === "connected");
       await client.stop();
       client = null;
-      await waitFor(() => seen.includes(ControlKind.GOODBYE));
+      // A stop that has returned has let its GOODBYE reach the host.
+      expect(seen).toContain(ControlKind.GOODBYE);
+    } finally {
+      server.close();
+      await removeTempDir(dir);
+    }
+  });
+
+  it("lets its GOODBYE reach the host before letting go of a slow transport, stopped mid-handshake (#15877)", async () => {
+    const dir = await makeTempDir();
+    const socketPath = path.join(dir, "h.sock");
+    // A host that may already have resumed a session on the HELLO, and hasn't answered yet.
+    const seen: number[] = [];
+    const server = net.createServer((socket) => {
+      const decoder = new FrameDecoder();
+      socket.on("data", (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) {
+          seen.push(frame.kind);
+          if (frame.kind === ControlKind.GOODBYE) socket.end();
+        }
+      });
+      socket.on("error", () => {});
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    try {
+      client = new LinkClient({
+        transport: slowTransport(socketPath),
+        handshake: TEST_HANDSHAKE,
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+      });
+      client.start();
+      await waitFor(() => seen.includes(ControlKind.HELLO));
+      await client.stop();
+      client = null;
+      // A stop that has returned has let its GOODBYE reach the host.
+      expect(seen).toContain(ControlKind.GOODBYE);
     } finally {
       server.close();
       await removeTempDir(dir);
@@ -1243,11 +1284,16 @@ describe("LinkClient retry during an attempt (#13926)", () => {
     // A host that reads HELLO and never answers it.
     const accepted: net.Socket[] = [];
     let hellos = 0;
+    const goodbyes: number[] = [];
     const server = net.createServer((socket) => {
-      accepted.push(socket);
+      const index = accepted.push(socket) - 1;
+      goodbyes[index] = 0;
       const decoder = new FrameDecoder();
       socket.on("data", (chunk: Buffer) => {
-        for (const frame of decoder.push(chunk)) if (frame.kind === ControlKind.HELLO) hellos++;
+        for (const frame of decoder.push(chunk)) {
+          if (frame.kind === ControlKind.HELLO) hellos++;
+          if (frame.kind === ControlKind.GOODBYE) goodbyes[index]!++;
+        }
       });
       socket.on("error", () => {});
     });
@@ -1291,6 +1337,10 @@ describe("LinkClient retry during an attempt (#13926)", () => {
       // Late enough for the abandoned handshakes to have settled and let go too.
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(disposes).toEqual([1, 1]);
+      // The host may have resumed a session on either HELLO: the restart leaves
+      // it for the next dial, and only the stop ends it (#15877).
+      await waitFor(() => goodbyes[1] === 1);
+      expect(goodbyes).toEqual([0, 1]);
     } finally {
       await client?.stop();
       for (const socket of accepted) socket.destroy();

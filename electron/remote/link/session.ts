@@ -273,7 +273,12 @@ export class LinkSession {
     const handshakeTimeout = options.handshakeTimeoutMs ?? 10_000;
     if (handshakeTimeout > 0) {
       this.handshakeTimer = setTimeout(() => {
-        if (this.state === "handshake") this.close("handshake timed out");
+        if (this.state !== "handshake") return;
+        // A host that is only stalled reads the client's HELLO when it catches
+        // up and resumes the session it named; a GOODBYE behind it would end
+        // that session for good, so the client gives up without one.
+        if (this.role === "client") this.drop("handshake timed out");
+        else this.close("handshake timed out");
       }, handshakeTimeout);
       this.handshakeTimer.unref?.();
     }
@@ -558,11 +563,12 @@ export class LinkSession {
   }
 
   /**
-   * End a link presumed dead without a GOODBYE: it would most likely go
-   * nowhere, and a peer it did reach would take it as leaving for good and
-   * give up a session that could still be resumed.
+   * End the link without a GOODBYE: a link presumed dead, or a handshake given
+   * up on. A GOODBYE would most likely go nowhere, and a peer it did reach
+   * would take it as leaving for good and give up a session that could still
+   * be resumed.
    */
-  private drop(reason: string): void {
+  drop(reason: string): void {
     this.shutdown({ reason, by: "local" }, false);
   }
 

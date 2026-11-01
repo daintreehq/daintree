@@ -221,6 +221,8 @@ export class LinkClient {
   private generation = 0;
   private readonly releasing = new Set<Promise<void>>();
   private readonly released = new WeakMap<LinkTransportConnection, Promise<void>>();
+  /** A stop's GOODBYE on its way out, which letting go of the connection waits for. */
+  private readonly goodbyes = new WeakMap<LinkTransportConnection, Promise<void>>();
   private readonly stateListeners = new Set<(state: LinkClientState) => void>();
   private readonly sessionListeners = new Set<(established: LinkSessionEstablished) => void>();
   private readonly now: () => number;
@@ -326,13 +328,7 @@ export class LinkClient {
     const session = this.current;
     this.current = null;
     const connection = this.connection;
-    // Watched before the GOODBYE goes out: disposing the transport destroys
-    // its socket, and done at once it can cut the GOODBYE off, so the host
-    // holds the session for a resume nobody makes. The session itself
-    // destroys the socket once its end grace is out.
-    const goodbye = session?.isOpen === true && connection ? socketClosed(connection.socket) : null;
-    session?.close("client stopped");
-    await goodbye;
+    if (session) this.closeForStop(session, connection);
     if (connection) void this.release(connection);
     await Promise.all([...this.releasing]);
     this.failures = 0;
@@ -396,14 +392,14 @@ export class LinkClient {
     this.connection = connection;
 
     const session = new LinkSession(connection.socket, { ...this.options.session, role: "client" });
-    // Past the transport, the signal reaches nothing: close the session the handshake waits on.
-    const abandon = () => session.close("client stopped");
+    // Past the transport, the signal reaches nothing: end the session the handshake waits on.
+    const abandon = () => this.endAttempt(session, connection);
     abort.signal.addEventListener("abort", abandon, { once: true });
     const outcome = await this.handshake(session, connection.token);
     abort.signal.removeEventListener("abort", abandon);
     if (this.attemptAbort === abort) this.attemptAbort = null;
     if (stale()) {
-      session.close("client stopped");
+      this.endAttempt(session, connection);
       await this.release(connection);
       return;
     }
@@ -447,6 +443,31 @@ export class LinkClient {
       return;
     }
     this.fail(outcome.reason);
+  }
+
+  /**
+   * End an attempt this link no longer wants. The host may already have
+   * resumed the session its HELLO named, and takes a GOODBYE as the Shell
+   * leaving for good: only a stop says one. An attempt given up for another
+   * leaves the session parked for that one to resume (#15877).
+   */
+  private endAttempt(session: LinkSession, connection: LinkTransportConnection): void {
+    if (this.running) session.drop("attempt abandoned");
+    else this.closeForStop(session, connection);
+  }
+
+  /**
+   * Close with the GOODBYE that ends the session on the host, watched before
+   * it goes out: disposing the transport destroys its socket, and done at
+   * once it can cut the GOODBYE off, so the host holds the session for a
+   * resume nobody makes. {@link release} waits for it; the session itself
+   * destroys the socket once its end grace is out.
+   */
+  private closeForStop(session: LinkSession, connection: LinkTransportConnection | null): void {
+    if (connection && !session.isClosed) {
+      this.goodbyes.set(connection, socketClosed(connection.socket));
+    }
+    session.close("client stopped");
   }
 
   private noteClose(info: LinkCloseInfo): void {
@@ -677,7 +698,10 @@ export class LinkClient {
     if (this.connection === connection) this.connection = null;
     const pending = this.released.get(connection);
     if (pending) return pending;
-    const done = connection.dispose().catch(() => {});
+    const goodbye = this.goodbyes.get(connection);
+    const done = (goodbye ? goodbye.then(() => connection.dispose()) : connection.dispose()).catch(
+      () => {}
+    );
     this.released.set(connection, done);
     this.releasing.add(done);
     void done.finally(() => this.releasing.delete(done));
