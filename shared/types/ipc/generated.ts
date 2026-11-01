@@ -4193,6 +4193,7 @@ export interface GeneratedIpcInvokeMap {
         isEphemeral?: boolean | undefined;
         agentLaunchFlags?: string[] | undefined;
         agentModelId?: string | undefined;
+        scheduledRun?: { scheduleId: string; runId: string } | undefined;
         agentSessionId?: string | undefined;
         worktreeId?: string | undefined;
         agentPresetId?: string | undefined;
