@@ -14,6 +14,7 @@ vi.mock("@/lib/trustedTypesPolicy", () => ({
   },
 }));
 
+import { startTransition } from "react";
 import { act, cleanup, render } from "@testing-library/react";
 import { EditorView, runScopeHandlers } from "@codemirror/view";
 import type { PtyPanelData } from "@shared/types/panel";
@@ -526,5 +527,71 @@ describe("HybridInputBar after Escape cancels a dictation over a selection (#148
 
     expect(view.state.doc.toString()).toBe("Keep old text.");
     expect(selection(view)).toEqual({ from: 5, to: 8 });
+  });
+});
+
+describe("HybridInputBar when a correction lands while a keystroke is on its way to the draft (#15873)", () => {
+  const TYPED = "/review ";
+
+  /**
+   * A correction reply as `requestCorrection` lands it: its passage placed in
+   * the stored draft, the draft swapped, the landing recorded, the revision bumped.
+   */
+  function replyWithCorrection(): void {
+    const inputs = useTerminalInputStore.getState();
+    const before = inputs.getDraftInput("term-1");
+    const from = before.indexOf(RAW.slice(FROM));
+    if (from < 0) return;
+    const to = from + RAW.length - FROM;
+    const insert = CORRECTED.slice(FROM);
+    const after = before.slice(0, from) + insert + before.slice(to);
+    inputs.setDraftInput("term-1", after);
+    recordCorrectionLanded("term-1", undefined, {
+      from,
+      rawText: before.slice(from, to),
+      correctedText: insert,
+      baseline: null,
+      sessionId: "session-1",
+      write: { before, after, changes: [{ from, to, insert }] },
+    });
+    inputs.bumpExternalDraftRevision({ keepsSelection: true });
+  }
+
+  function typeAtStart(view: EditorView): void {
+    view.dispatch({
+      changes: { from: 0, insert: TYPED },
+      selection: { anchor: TYPED.length },
+      userEvent: "input.type",
+    });
+  }
+
+  it("keeps the keystroke when the composer writes its value back after the correction", async () => {
+    const { view } = await mount();
+    await writeDraft(RAW);
+
+    // One render takes both: the write-back effect runs before the sync.
+    await act(async () => {
+      typeAtStart(view);
+      replyWithCorrection();
+    });
+
+    expect(draft()).toBe(TYPED + CORRECTED);
+    expect(view.state.doc.toString()).toBe(TYPED + CORRECTED);
+    expect(view.state.selection.main.head).toBe(TYPED.length);
+  });
+
+  it("keeps the keystroke when the correction syncs into the editor before the write-back", async () => {
+    const { view } = await mount();
+    await writeDraft(RAW);
+
+    // The keystroke's render waits behind the store's: the sync runs alone first.
+    await act(async () => {
+      startTransition(() => typeAtStart(view));
+      replyWithCorrection();
+    });
+
+    expect(draft()).toBe(TYPED + CORRECTED);
+    expect(view.state.doc.toString()).toBe(TYPED + CORRECTED);
+    expect(view.state.selection.main.head).toBe(TYPED.length);
   });
 });
