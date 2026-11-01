@@ -649,7 +649,7 @@ describe("a relaunch of the Shell against a host that stays up (integration harn
   );
 
   it(
-    "relaunch: a view open before Remote Hosts start hears the saved hosts once the client is up, with nothing dialled (#15887)",
+    "relaunch: a view open before Remote Hosts start hears the saved hosts once the client is up, with no connection event (#15887)",
     async () => {
       const { r } = await harness();
       await quitShell(r);
@@ -657,6 +657,7 @@ describe("a relaunch of the Shell against a host that stays up (integration harn
       expect(getRemoteService("remoteHostsClient")).toBeUndefined();
       const early = new FakeView(nextViewId++);
       localAppViews.add(early);
+      cleanups.push(() => early.destroy());
       const heard: Array<{ event: RemoteHostsEvent; listedThen: string[] }> = [];
       const deliver = early.webContents.send;
       early.webContents.send = (channel, ...args) => {
