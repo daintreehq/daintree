@@ -357,6 +357,12 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: false,
     description: "Pty-host captured a resumable session; Main must persist it",
   },
+  "agent-session:observed": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: false,
+    description: "A run's own argv named the session it resumes; Main must record it on the pane",
+  },
   "agent-session:recorded": {
     category: "agent",
     requiresContext: false,
@@ -1037,6 +1043,24 @@ export type DaintreeEventMap = {
       import("../../shared/types/ipc/agentSessionHistory.js").AgentSessionRecord,
       "savedAt"
     >;
+    /** The agent run that ended, for an exit or demotion capture. */
+    run?: import("../../shared/types/pty-host.js").AgentRunToken;
+  };
+
+  /**
+   * Emitted in the pty-host when a run's own argv names the conversation it
+   * resumes (`codex resume <id>` typed into the pane's shell, #15994), once per
+   * observed run, and re-emitted on the Main bus by PtyEventsBridge. Main
+   * records it on the saved pane only: the run is still going, so there is
+   * nothing to journal. Deliberately not buffered for the event inspector:
+   * the id is a resume credential.
+   */
+  "agent-session:observed": {
+    terminalId: string;
+    agentId: string;
+    projectId: string;
+    sessionId: string;
+    run: import("../../shared/types/pty-host.js").AgentRunToken;
   };
 
   /**
@@ -1202,6 +1226,8 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "terminal:snooze-changed",
   "terminal:hand-back-changed",
   "agent-session:captured",
+  // `agent-session:observed` is deliberately absent: its payload is nothing
+  // but a resume credential, and the buffer feeds the event inspector.
   "agent-session:recorded",
   "terminal:activity",
   "terminal:status",
@@ -1210,6 +1236,12 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "terminal:reliability-metric",
   "terminal:exited",
 ];
+
+/** Events whose payload carries a session id: a resume credential, never printed. */
+const CREDENTIAL_PAYLOAD_EVENTS: ReadonlySet<keyof DaintreeEventMap> = new Set([
+  "agent-session:captured",
+  "agent-session:observed",
+]);
 
 export class TypedEventBus {
   private bus = new EventEmitter();
@@ -1242,7 +1274,11 @@ export class TypedEventBus {
     ...args: DaintreeEventMap[K] extends void ? [] : [DaintreeEventMap[K]]
   ) {
     if (this.debugEnabled) {
-      console.log("[events]", event, args[0]);
+      console.log(
+        "[events]",
+        event,
+        CREDENTIAL_PAYLOAD_EVENTS.has(event) ? "[payload withheld: resume credential]" : args[0]
+      );
     }
     this.bus.emit(event, ...(args as any[]));
   }

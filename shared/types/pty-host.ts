@@ -876,6 +876,21 @@ export type PtyHostEvent =
       launchGeneration?: number | null;
       boundary: AgentSessionCaptureBoundary;
       record: Omit<AgentSessionRecord, "savedAt">;
+      /** The agent run that ended, for an exit or demotion capture. */
+      run?: AgentRunToken;
+    }
+  | {
+      /**
+       * A run's own argv named the conversation it resumes (#15994), read once
+       * per observed run. Not a capture: nothing closed, so Main writes the
+       * saved pane and journals nothing.
+       */
+      type: "agent-session-observed";
+      terminalId: string;
+      agentId: string;
+      projectId: string;
+      sessionId: string;
+      run: AgentRunToken;
     }
   // `launchGeneration` binds the PID to the incarnation that owns it, so Main
   // never attributes a predecessor's PID to a same-id respawn.
@@ -1107,6 +1122,17 @@ export type EndTrashGraceStatus = "started" | "not-trashed" | "generation-mismat
  * conversation, and trash expiry belongs to a pane the user already closed.
  */
 export type AgentSessionCaptureBoundary = "exit" | "demotion" | "trash-expiry";
+
+/**
+ * One observed agent run: the PTY launch, then which agent run inside that
+ * shell. A hand-started agent after a demotion is a new run in the same
+ * generation. Counts observed boundaries only, so two runs detection never
+ * told apart share a token.
+ */
+export interface AgentRunToken {
+  launchGeneration: number;
+  agentIncarnation: number;
+}
 
 /** Reply to `finish-session-captures`: whether every observed capture was delivered. */
 export interface AgentSessionCaptureFinishResult {

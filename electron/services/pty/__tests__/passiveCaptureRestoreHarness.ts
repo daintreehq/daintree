@@ -4,6 +4,9 @@ export { ProjectStateManager } from "../../ProjectStateManager.js";
 export { generateProjectId } from "../../projectStorePaths.js";
 export { getLifecycleLedger, disposeLifecycleLedger } from "../lifecycleLedger.js";
 export {
+  acceptObservedAgentSession,
   writeBackCapturedSessionId,
   resetCapturedSessionPersistenceForTests,
 } from "../agentSessionCapturePersistence.js";
+export { offerAgentRunArgvSession } from "../agentRunArgv.js";
+export { events } from "../../events.js";

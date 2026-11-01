@@ -201,6 +201,37 @@ export const config: AgentConfig = {
       perPressTimeoutMs: 1500,
     },
   },
+  // `codex resume <id>` typed into the pane's shell (#15994). Options as
+  // `codex-cli 0.166.0` lists them, global and on `resume` alike. `--last`
+  // turns the positional into a prompt, and `-i` takes several files, so it
+  // can swallow the id: both read as no id. The UUID shape keeps out a
+  // session name, which the CLI also accepts there.
+  resumeArgv: {
+    subcommand: "resume",
+    sessionIdPattern:
+      "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+    optionsWithValue: [
+      "-c",
+      "--config",
+      "--enable",
+      "--disable",
+      "--remote",
+      "--remote-auth-token-env",
+      "-m",
+      "--model",
+      "--local-provider",
+      "-p",
+      "--profile",
+      "-s",
+      "--sandbox",
+      "-C",
+      "--cd",
+      "--add-dir",
+      "-a",
+      "--ask-for-approval",
+    ],
+    excludedFlags: ["--last", "-i", "--image"],
+  },
   help: {
     args: [],
   },

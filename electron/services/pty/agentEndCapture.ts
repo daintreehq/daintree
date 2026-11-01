@@ -229,6 +229,12 @@ function emitCapture(
   // including one a Daintree-initiated close captured. `null` is the journal's
   // explicit fail-open, leaving sessionId dedupe to collapse true duplicates.
   const launchGeneration = boundary === "exit" ? terminal.launchGeneration : null;
+  // The run itself, read now: the branch lookup below yields, and a run
+  // started in the meantime would otherwise claim this farewell.
+  const run =
+    typeof terminal.launchGeneration === "number"
+      ? { launchGeneration: terminal.launchGeneration, agentIncarnation: terminal.agentIncarnation }
+      : undefined;
 
   const delivery = (async () => {
     try {
@@ -242,6 +248,7 @@ function emitCapture(
         launchGeneration,
         boundary,
         record: { ...record, ...(branch ? { branch } : {}) },
+        ...(run ? { run } : {}),
       });
     } catch (error) {
       // `events.emit` fans out synchronously with no per-listener guard, so a

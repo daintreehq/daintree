@@ -1260,6 +1260,18 @@ events.on("agent-session:captured", (payload) => {
     launchGeneration: payload.launchGeneration,
     boundary: payload.boundary,
     record: payload.record,
+    ...(payload.run ? { run: payload.run } : {}),
+  });
+});
+
+events.on("agent-session:observed", (payload) => {
+  sendEvent({
+    type: "agent-session-observed",
+    terminalId: payload.terminalId,
+    agentId: payload.agentId,
+    projectId: payload.projectId,
+    sessionId: payload.sessionId,
+    run: payload.run,
   });
 });
 

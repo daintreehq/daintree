@@ -258,6 +258,17 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         launchGeneration: event.launchGeneration,
         boundary: event.boundary,
         record: event.record,
+        ...(event.run ? { run: event.run } : {}),
+      });
+      return true;
+
+    case "agent-session-observed":
+      events.emit("agent-session:observed", {
+        terminalId: event.terminalId,
+        agentId: event.agentId,
+        projectId: event.projectId,
+        sessionId: event.sessionId,
+        run: event.run,
       });
       return true;
 
