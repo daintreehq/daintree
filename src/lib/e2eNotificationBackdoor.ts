@@ -105,6 +105,12 @@ export interface NotificationsE2EApi {
   setSafeMode: (safeMode: boolean, dismissed?: boolean) => void;
   setRestoreConfirmation: (visible: boolean) => void;
   resetBanners: () => void;
+  /**
+   * Merges fields into one panel's store record, for the pane banners whose
+   * real trigger is a host failure a capture cannot cheaply cause (a lost
+   * reconnect, a restart in flight). Returns false when the panel is unknown.
+   */
+  patchPanel: (panelId: string, patch: Record<string, unknown>) => boolean;
 }
 
 function buildApi(): NotificationsE2EApi {
@@ -198,6 +204,14 @@ function buildApi(): NotificationsE2EApi {
         quarantinedPanels: undefined,
       });
       useRestoreConfirmationStore.setState({ visible: false });
+    },
+    patchPanel: (panelId, patch) => {
+      const current = usePanelStore.getState().panelsById[panelId];
+      if (!current) return false;
+      usePanelStore.setState((state) => ({
+        panelsById: { ...state.panelsById, [panelId]: { ...current, ...patch } },
+      }));
+      return true;
     },
   };
 }

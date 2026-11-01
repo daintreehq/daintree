@@ -35,7 +35,7 @@ describe("BannerSlot", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("renders open at h-auto when visible is true on mount (no entry flicker)", () => {
+  it("renders open at opacity-100 when visible is true on mount (no entry flicker)", () => {
     const { container, getByTestId } = render(
       <BannerSlot visible={true}>
         <div data-testid="banner">payload</div>
@@ -43,13 +43,13 @@ describe("BannerSlot", () => {
     );
     const wrapper = getWrapper(container);
     expect(wrapper).not.toBeNull();
-    expect(wrapper!.className).toContain("h-auto");
+    expect(wrapper!.className).toContain("opacity-100");
     expect(wrapper!.className).toContain("ease-[var(--ease-snappy)]");
     expect(wrapper!.style.transitionDuration).toBe(`${BANNER_ENTER_DURATION}ms`);
     expect(getByTestId("banner")).toBeTruthy();
   });
 
-  it("toggling false → true starts at h-0 and opens after one rAF tick", () => {
+  it("toggling false → true starts at opacity-0 and opens after one rAF tick", () => {
     const { container, rerender } = render(
       <BannerSlot visible={false}>
         <div data-testid="banner">payload</div>
@@ -67,7 +67,7 @@ describe("BannerSlot", () => {
 
     const pre = getWrapper(container);
     expect(pre).not.toBeNull();
-    expect(pre!.className).toContain("h-0");
+    expect(pre!.className).toContain("opacity-0");
     expect(pre!.className).toContain("ease-[var(--ease-exit)]");
     expect(pre!.style.transitionDuration).toBe(`${BANNER_EXIT_DURATION}ms`);
 
@@ -76,7 +76,7 @@ describe("BannerSlot", () => {
     });
 
     const open = getWrapper(container);
-    expect(open!.className).toContain("h-auto");
+    expect(open!.className).toContain("opacity-100");
     expect(open!.className).toContain("ease-[var(--ease-snappy)]");
     expect(open!.style.transitionDuration).toBe(`${BANNER_ENTER_DURATION}ms`);
   });
@@ -99,7 +99,7 @@ describe("BannerSlot", () => {
 
     const exiting = getWrapper(container);
     expect(exiting).not.toBeNull();
-    expect(exiting!.className).toContain("h-0");
+    expect(exiting!.className).toContain("opacity-0");
     expect(exiting!.className).toContain("ease-[var(--ease-exit)]");
     expect(exiting!.style.transitionDuration).toBe(`${BANNER_EXIT_DURATION}ms`);
     expect(queryByTestId("banner")).not.toBeNull();
@@ -124,7 +124,7 @@ describe("BannerSlot", () => {
     });
 
     expect(queryByTestId("cached")).not.toBeNull();
-    expect(getWrapper(container)!.className).toContain("h-0");
+    expect(getWrapper(container)!.className).toContain("opacity-0");
 
     act(() => {
       vi.advanceTimersByTime(BANNER_EXIT_DURATION);
@@ -146,7 +146,7 @@ describe("BannerSlot", () => {
         </BannerSlot>
       );
     });
-    expect(getWrapper(container)!.className).toContain("h-0");
+    expect(getWrapper(container)!.className).toContain("opacity-0");
 
     act(() => {
       vi.advanceTimersByTime(BANNER_EXIT_DURATION / 2);
@@ -169,7 +169,7 @@ describe("BannerSlot", () => {
 
     const wrapper = getWrapper(container);
     expect(wrapper).not.toBeNull();
-    expect(wrapper!.className).toContain("h-auto");
+    expect(wrapper!.className).toContain("opacity-100");
     expect(getByTestId("banner")).toBeTruthy();
   });
 
@@ -187,7 +187,7 @@ describe("BannerSlot", () => {
         </BannerSlot>
       );
     });
-    expect(getWrapper(container)!.className).toContain("h-0");
+    expect(getWrapper(container)!.className).toContain("opacity-0");
 
     act(() => {
       rerender(
@@ -204,13 +204,13 @@ describe("BannerSlot", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("sets aria-hidden while collapsed and clears it while open", () => {
+  it("goes inert while fading out and is interactive while open", () => {
     const { container, rerender } = render(
       <BannerSlot visible={true}>
         <div>payload</div>
       </BannerSlot>
     );
-    expect(getWrapper(container)!.getAttribute("aria-hidden")).toBeNull();
+    expect(getWrapper(container)!.hasAttribute("inert")).toBe(false);
 
     act(() => {
       rerender(
@@ -219,22 +219,25 @@ describe("BannerSlot", () => {
         </BannerSlot>
       );
     });
-    expect(getWrapper(container)!.getAttribute("aria-hidden")).toBe("true");
+    expect(getWrapper(container)!.hasAttribute("inert")).toBe(true);
   });
 
-  it("uses scoped transition-[height], never bare transition", () => {
+  // A height transition resizes the terminal (and its PTY) every frame, so the
+  // slot snaps its height and only fades.
+  it("uses scoped transition-[opacity], never a height or bare transition", () => {
     const { container } = render(
       <BannerSlot visible={true}>
         <div>payload</div>
       </BannerSlot>
     );
     const wrapper = getWrapper(container)!;
-    expect(wrapper.className).toContain("transition-[height]");
+    expect(wrapper.className).toContain("transition-[opacity]");
+    expect(wrapper.className).not.toContain("transition-[height]");
     expect(wrapper.className).not.toContain("transition-all");
     expect(wrapper.className.match(/\btransition\b(?!-)/)).toBeNull();
   });
 
-  it("applies pointer-events-none while collapsed so stale buttons cannot fire", () => {
+  it("applies pointer-events-none while fading out so stale buttons cannot fire", () => {
     const { container, rerender } = render(
       <BannerSlot visible={true}>
         <button type="button">Retry</button>
@@ -252,7 +255,7 @@ describe("BannerSlot", () => {
     expect(getWrapper(container)!.className).toContain("pointer-events-none");
   });
 
-  it("paired slots overlap their height interpolation during a swap (no zero-height frame)", () => {
+  it("paired slots overlap during a swap (no zero-height frame)", () => {
     function Pair({ which }: { which: "a" | "b" }) {
       return (
         <>
@@ -269,15 +272,16 @@ describe("BannerSlot", () => {
     const { container, rerender, queryByTestId } = render(<Pair which="a" />);
     const initialSlots = container.querySelectorAll(".banner-slot");
     expect(initialSlots.length).toBe(1);
-    expect(initialSlots[0]!.className).toContain("h-auto");
+    expect(initialSlots[0]!.className).toContain("opacity-100");
 
     act(() => {
       rerender(<Pair which="b" />);
     });
 
-    // Both slots mounted: A is collapsing (h-0, cached children still there),
-    // B is in its pre-rAF h-0 frame about to expand. Neither has unmounted, so
-    // the xterm pane below sees a continuous height curve instead of a 0-height gap.
+    // Both slots mounted: A is fading out (opacity-0, cached children still
+    // there, holding its height), B is in its pre-rAF opacity-0 frame about to
+    // fade in. Neither has unmounted, so the xterm pane below never sees a
+    // 0-height gap.
     const midSlots = container.querySelectorAll(".banner-slot");
     expect(midSlots.length).toBe(2);
     expect(queryByTestId("banner-a")).not.toBeNull();
@@ -287,12 +291,12 @@ describe("BannerSlot", () => {
       vi.advanceTimersByTime(16);
     });
 
-    // After rAF: B opens to h-auto, A is still collapsing.
+    // After rAF: B fades in, A is still fading out.
     const slotsAfterRaf = Array.from(container.querySelectorAll(".banner-slot"));
     const slotA = slotsAfterRaf.find((el) => el.contains(queryByTestId("banner-a")!))!;
     const slotB = slotsAfterRaf.find((el) => el.contains(queryByTestId("banner-b")!))!;
-    expect(slotA.className).toContain("h-0");
-    expect(slotB.className).toContain("h-auto");
+    expect(slotA.className).toContain("opacity-0");
+    expect(slotB.className).toContain("opacity-100");
 
     act(() => {
       vi.advanceTimersByTime(BANNER_EXIT_DURATION);

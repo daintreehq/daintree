@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { AlertTriangle, Play, RotateCw, XCircle } from "lucide-react";
+import { Play, RotateCw, XCircle } from "lucide-react";
 import { getAgentConfig } from "@/config/agents";
 import { Spinner } from "@/components/ui/Spinner";
 import { InlineStatusBanner } from "./InlineStatusBanner";
@@ -87,8 +87,11 @@ export function TerminalRestartStatusBanner({
       // `trailingSlot` instead of `actions`, exactly what that prop documents
       // itself for — a Popover trigger, not a plain button.
       return (
+        // An acknowledgement: the fresh session already works, so in a stack it
+        // must not outweigh a notice that needs acting on. The glyph keeps the
+        // warning; the band goes neutral.
         <InlineStatusBanner
-          icon={AlertTriangle}
+          quiet
           title={copy.title}
           description={copy.description}
           severity="warning"

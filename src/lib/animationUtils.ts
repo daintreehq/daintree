@@ -244,8 +244,8 @@ export function getUiPaletteTransitionDuration(direction: "enter" | "exit"): num
 export const PANEL_MINIMIZE_DURATION = 120;
 export const PANEL_RESTORE_DURATION = DURATION_200;
 
-export const BANNER_ENTER_DURATION = DURATION_250;
-export const BANNER_EXIT_DURATION = DURATION_200;
+export const BANNER_ENTER_DURATION = DURATION_200;
+export const BANNER_EXIT_DURATION = 120;
 
 /** Screen-reader buffer flush delay for live-region content swaps. When a
  *  `role="status"` / `aria-live` region's text changes synchronously, VoiceOver

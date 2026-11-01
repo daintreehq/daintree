@@ -1,4 +1,4 @@
-import { RotateCw, SendHorizontal } from "lucide-react";
+import { RotateCw } from "lucide-react";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import { actionService } from "@/services/ActionService";
 
@@ -50,7 +50,6 @@ export function TerminalSubmitStatusBanner({
 
   return (
     <InlineStatusBanner
-      icon={SendHorizontal}
       title={copy.title}
       description={copy.description}
       severity="error"

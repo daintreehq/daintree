@@ -1,4 +1,4 @@
-import { Clock, FileX2, History, RotateCcw, type LucideIcon } from "lucide-react";
+import { RotateCcw } from "lucide-react";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import { sanitizeErrorText } from "@/utils/errorText";
 import type { TerminalScrollbackRestoreError } from "@/types";
@@ -14,7 +14,6 @@ export interface ScrollbackRestoreErrorBannerProps {
 
 interface ScrollbackBannerConfig {
   title: string;
-  icon: LucideIcon;
   /** Whether the raw message says anything the title doesn't. */
   showMessage: boolean;
 }
@@ -25,9 +24,9 @@ interface ScrollbackBannerConfig {
 // "error" case, where the title can't name the cause; it goes in the mono
 // detail line rather than the sentence, so the reassurance stays first.
 const SCROLLBACK_BANNER_CONFIG = {
-  timeout: { title: "Scrollback restore timed out", icon: Clock, showMessage: false },
-  parse: { title: "Scrollback couldn't be replayed", icon: FileX2, showMessage: false },
-  error: { title: "Scrollback restore failed", icon: History, showMessage: true },
+  timeout: { title: "Scrollback restore timed out", showMessage: false },
+  parse: { title: "Scrollback couldn't be replayed", showMessage: false },
+  error: { title: "Scrollback restore failed", showMessage: true },
 } as const satisfies Record<TerminalScrollbackRestoreError["type"], ScrollbackBannerConfig>;
 
 const SCROLLBACK_BANNER_DESCRIPTION =
@@ -44,7 +43,6 @@ export function ScrollbackRestoreErrorBanner({
   const config = SCROLLBACK_BANNER_CONFIG[error.type];
   return (
     <InlineStatusBanner
-      icon={config.icon}
       title={config.title}
       description={SCROLLBACK_BANNER_DESCRIPTION}
       // Unbounded: the line is one CSS-clipped row whose tooltip holds the

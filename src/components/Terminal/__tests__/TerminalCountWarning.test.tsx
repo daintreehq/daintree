@@ -131,7 +131,7 @@ describe("TerminalCountWarning", () => {
     expect(panelState.trashPanel).not.toHaveBeenCalled();
   });
 
-  it("waits the full 250ms exit animation before unmounting on dismiss", () => {
+  it("waits the full 200ms exit animation before unmounting on dismiss", () => {
     vi.useFakeTimers();
     try {
       render(<TerminalCountWarning />);
@@ -140,7 +140,7 @@ describe("TerminalCountWarning", () => {
         fireEvent.click(dismissBtn);
       });
       act(() => {
-        vi.advanceTimersByTime(200);
+        vi.advanceTimersByTime(150);
       });
       expect(limitState.dismissSoftWarning).not.toHaveBeenCalled();
       act(() => {

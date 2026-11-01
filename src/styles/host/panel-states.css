@@ -196,11 +196,50 @@ label:focus-within .brand-mark,
 }
 
 /* Panel Agent State Borders — grid panel container state-driven styling */
+/* Waiting (an agent asking for something) and failed (an agent stopped on an
+ * error, a non-zero exit, or a launch, restart or reconnect the host could not
+ * complete) are the two states that always draw. Each is an outer edge plus an
+ * inner ring. The ring is an overlay, not an inset box-shadow: an inset shadow
+ * paints under the pane's opaque header and terminal, so it never showed.
+ * Both keep their edge over the focused fill, so the pane you last typed into
+ * still says when it stops to ask or fails. A failed pane's banner says which
+ * failure it was, so its edge never carries the state by colour alone. */
+.panel-state-waiting,
+.panel-state-failed,
+.panel-state-working {
+  position: relative;
+}
+
+.panel-state-waiting::after,
+.panel-state-failed::after,
+.panel-state-working::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 35;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 var(--panel-state-ring-width, 1px) var(--panel-state-ring);
+}
+
 .panel-state-waiting {
-  border-color: color-mix(in oklab, var(--color-activity-waiting) 75%, transparent);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in oklab, var(--color-activity-waiting) 15%, transparent),
-    0 0 0 1px color-mix(in oklab, var(--color-activity-waiting) 10%, transparent);
+  --panel-state-ring: color-mix(in oklab, var(--color-activity-waiting) 50%, transparent);
+  border-color: color-mix(in oklab, var(--color-activity-waiting) 85%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-activity-waiting) 14%, transparent);
+}
+
+.panel-state-failed {
+  --panel-state-ring: color-mix(in oklab, var(--color-status-error) 50%, transparent);
+  border-color: color-mix(in oklab, var(--color-status-error) 85%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-status-error) 14%, transparent);
+}
+
+.terminal-selected.panel-state-waiting:focus-visible {
+  outline-color: color-mix(in oklab, var(--color-activity-waiting) 85%, transparent);
+}
+
+.terminal-selected.panel-state-failed:focus-visible {
+  outline-color: color-mix(in oklab, var(--color-status-error) 85%, transparent);
 }
 
 /* Compiling state — neutral surface treatment surfacing framework compile
@@ -219,10 +258,16 @@ label:focus-within .brand-mark,
  * (WCAG COGA). Status being a value doesn't justify continuous motion.
  */
 .panel-state-working {
-  border-color: color-mix(in oklab, var(--color-activity-working) 35%, transparent);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in oklab, var(--color-activity-working) 12%, transparent),
-    0 0 0 1px color-mix(in oklab, var(--color-activity-working) 8%, transparent);
+  --panel-state-ring: color-mix(in oklab, var(--color-activity-working) 22%, transparent);
+  border-color: color-mix(in oklab, var(--color-activity-working) 60%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-activity-working) 8%, transparent);
+}
+
+/* A pane whose process exited cleanly recedes on its edge, in the idle ink,
+ * dimmer than every live state. Its text keeps full ink: fading the terminal
+ * took coloured output under 4.5:1. */
+.panel-state-exited {
+  border-color: color-mix(in oklab, var(--color-activity-idle) 60%, transparent);
 }
 
 /* Voice dictation lock — persistent amber border on the pinned dictation
@@ -266,26 +311,54 @@ label:focus-within .brand-mark,
  * the same alphas read too faintly: working (35%) is washed out. On light the eye's luminance discrimination is compressed near white,
  * so a low-alpha mix toward `transparent` admits the bright pane and washes the
  * colored border out. Raise the light alphas so the composited border clears a
- * ~3:1 graphical-indicator floor and the ordering is restored:
- *   prominence = working > waiting.
+ * ~3:1 graphical-indicator floor, in the same order as dark:
+ *   prominence = failed = waiting > working > exited.
  * The inset/outer ring spread is driven by `--panel-state-edge-width` (the
  * previously-dead 2px token) so the state ring is a crisp 2px lift without
  * widening the resting 1px container border (no reflow). Dark inherits the
  * :root definitions above unchanged. */
 .light .panel-state-working {
-  border-color: color-mix(in oklab, var(--color-activity-working) 95%, transparent);
-  box-shadow:
-    inset 0 0 0 var(--panel-state-edge-width)
-      color-mix(in oklab, var(--color-activity-working) 30%, transparent),
-    0 0 0 1px color-mix(in oklab, var(--color-activity-working) 18%, transparent);
+  --panel-state-ring: color-mix(in oklab, var(--color-activity-working) 45%, white);
+  border-color: color-mix(in oklab, var(--color-activity-working) 70%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-activity-working) 12%, transparent);
 }
 
+.light .panel-state-exited {
+  border-color: color-mix(in oklab, var(--color-activity-idle) 55%, transparent);
+}
+
+/* On a light workbench the dark state inks hold 3:1 against the sand gutter
+ * but not against the dark terminal the ring runs over, so the ring is lifted
+ * toward white and drawn 2px; the outer edge keeps the dark ink. */
 .light .panel-state-waiting {
-  border-color: color-mix(in oklab, var(--color-activity-waiting) 80%, transparent);
+  /* Toward a warm yellow, not white: lifted to white, waiting and failed both
+     washed to the same pastel. */
+  --panel-state-ring: color-mix(in oklab, var(--color-activity-waiting) 55%, #ffe580);
+  --panel-state-ring-width: var(--panel-state-edge-width);
+  border-color: color-mix(in oklab, var(--color-activity-waiting) 95%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-activity-waiting) 18%, transparent);
+}
+
+.light .panel-state-failed {
+  /* Toward a coral, not white, so it keeps its hue beside the waiting ring. */
+  --panel-state-ring: color-mix(in oklab, var(--color-status-error) 60%, #ffc4b8);
+  --panel-state-ring-width: var(--panel-state-edge-width);
+  border-color: color-mix(in oklab, var(--color-status-error) 95%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-status-error) 18%, transparent);
+}
+
+/* A focused pane that is waiting or has failed keeps its state edge and wears
+ * focus as a neutral ring outside it, set off by a 1px gap so the two inks do
+ * not run together. Focus then still reads on a pane with no composer and no
+ * cursor to carry it (a failed launch, an exit). After the .light rules, which
+ * would otherwise replace it. */
+.terminal-selected.panel-state-waiting,
+.terminal-selected.panel-state-failed,
+.light .terminal-selected.panel-state-waiting,
+.light .terminal-selected.panel-state-failed {
   box-shadow:
-    inset 0 0 0 var(--panel-state-edge-width)
-      color-mix(in oklab, var(--color-activity-waiting) 24%, transparent),
-    0 0 0 1px color-mix(in oklab, var(--color-activity-waiting) 14%, transparent);
+    0 0 0 1px var(--color-grid-bg),
+    0 0 0 2px color-mix(in oklab, var(--theme-text-primary) 60%, var(--color-grid-bg));
 }
 
 .light .panel-state-compiling {

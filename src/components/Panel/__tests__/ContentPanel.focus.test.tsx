@@ -527,29 +527,41 @@ describe("ContentPanel selection chrome", () => {
   } as const;
 
   /**
-   * The resolver returns exactly one class, so the oracle is "which state won",
-   * not "is this class present". Neutral chrome is expressed as the absence of
-   * every semantic class rather than by pinning the fallback's utility string,
-   * which a purely visual refactor would churn without changing behaviour.
+   * The oracle is "which state won", not "is this class present". The resolver
+   * returns one state, except that waiting and failed keep their edge over the
+   * selected fill: those are the only legal pairs. Neutral chrome is expressed
+   * as the absence of every semantic class rather than by pinning the
+   * fallback's utility string, which a purely visual refactor would churn
+   * without changing behaviour.
    */
   const CHROME_STATES = [
     { state: "arming", className: "panel-state-arming" },
     { state: "selected", className: "terminal-selected" },
     { state: "waiting", className: "panel-state-waiting" },
+    { state: "failed", className: "panel-state-failed" },
     { state: "working", className: "panel-state-working" },
   ] as const;
 
-  type ChromeState = (typeof CHROME_STATES)[number]["state"] | "none";
+  const COMPOSITE_STATES = ["selected+waiting", "selected+failed"] as const;
+
+  type ChromeState =
+    (typeof CHROME_STATES)[number]["state"] | (typeof COMPOSITE_STATES)[number] | "none";
+
+  const KNOWN_CHROME_STATES: readonly ChromeState[] = [
+    ...CHROME_STATES.map(({ state }) => state),
+    ...COMPOSITE_STATES,
+  ];
 
   function chromeOf(container: HTMLElement, id = "t-1"): ChromeState {
     const panel = container.querySelector(`[data-panel-id="${id}"]`);
     expect(panel, `panel ${id} rendered`).not.toBeNull();
     const present = CHROME_STATES.filter(({ className }) => panel?.classList.contains(className));
+    const key = present.map(({ state }) => state).join("+");
     expect(
-      present.length,
-      `expected one chrome state, got [${present.map(({ state }) => state).join(", ")}]`
-    ).toBeLessThan(2);
-    return present[0]?.state ?? "none";
+      present.length < 2 || (COMPOSITE_STATES as readonly string[]).includes(key),
+      `expected one chrome state or a legal pair, got [${key}]`
+    ).toBe(true);
+    return KNOWN_CHROME_STATES.find((state) => state === key) ?? "none";
   }
 
   interface PanelOverrides {
@@ -680,10 +692,14 @@ describe("ContentPanel selection chrome", () => {
       expect(chromeOf(container)).toBe(chrome);
     });
 
-    it("draws nothing with grid highlights off", () => {
+    it("draws a waiting report even with grid highlights off, but not a working one", () => {
       reported("waiting");
-      const { container } = renderPanel({ isFocused: false });
-      expect(chromeOf(container)).toBe("none");
+      const waiting = renderPanel({ isFocused: false });
+      expect(chromeOf(waiting.container)).toBe("waiting");
+      waiting.unmount();
+      reported("working");
+      const working = renderPanel({ isFocused: false });
+      expect(chromeOf(working.container)).toBe("none");
     });
 
     it("yields the border to an agent Daintree observes in the panel", () => {
@@ -694,11 +710,11 @@ describe("ContentPanel selection chrome", () => {
       expect(chromeOf(container)).toBe("working");
     });
 
-    it("never outranks selection", () => {
+    it("keeps its waiting edge over the selected fill", () => {
       mockState.showGridAgentHighlights = true;
       reported("waiting");
       const { container } = renderPanel();
-      expect(chromeOf(container)).toBe("selected");
+      expect(chromeOf(container)).toBe("selected+waiting");
     });
   });
 
@@ -723,11 +739,15 @@ describe("ContentPanel selection chrome", () => {
       expect(chromeOf(container)).toBe("arming");
     });
 
-    it("ranks selection above the waiting and working ambient states", () => {
+    it("keeps the waiting edge over the selected fill and ranks selection above working", () => {
       mockState.showGridAgentHighlights = true;
       mockState.dockBlockedState = "waiting";
-      const { container } = renderPanel({ isMultiPanelGrid: true, agentState: "working" });
-      expect(chromeOf(container)).toBe("selected");
+      const asking = renderPanel({ isMultiPanelGrid: true, agentState: "working" });
+      expect(chromeOf(asking.container)).toBe("selected+waiting");
+      asking.unmount();
+      mockState.dockBlockedState = null;
+      const working = renderPanel({ isMultiPanelGrid: true, agentState: "working" });
+      expect(chromeOf(working.container)).toBe("selected");
     });
 
     it("ranks waiting above working once selection releases", () => {
@@ -751,15 +771,22 @@ describe("ContentPanel selection chrome", () => {
       expect(chromeOf(container)).toBe("working");
     });
 
-    it("suppresses the agent states when the highlight preference is off", () => {
+    it("suppresses working when the highlight preference is off, but never waiting", () => {
       mockState.showGridAgentHighlights = false;
-      mockState.dockBlockedState = "waiting";
-      const { container } = renderPanel({
+      const working = renderPanel({
         isMultiPanelGrid: true,
         isFocused: false,
         agentState: "working",
       });
-      expect(chromeOf(container)).toBe("none");
+      expect(chromeOf(working.container)).toBe("none");
+      working.unmount();
+      mockState.dockBlockedState = "waiting";
+      const asking = renderPanel({
+        isMultiPanelGrid: true,
+        isFocused: false,
+        agentState: "working",
+      });
+      expect(chromeOf(asking.container)).toBe("waiting");
     });
 
     it("withholds every ambient state from a lone pane", () => {
