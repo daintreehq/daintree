@@ -563,14 +563,15 @@ function TerminalPaneComponent({
     void actionService
       .dispatch("agent.launch", args, { source: "user", ...(scheduledRun && { scheduledRun }) })
       .then((result) => {
-      if (!scratchpad || !result.ok) return;
-      const launched: unknown = result.result;
-      if (typeof launched !== "object" || launched === null || !("terminalId" in launched)) return;
-      const launchedId = launched.terminalId;
-      if (typeof launchedId === "string" && launchedId) {
-        usePanelStore.getState().seedScratchpad(launchedId, scratchpad);
-      }
-    });
+        if (!scratchpad || !result.ok) return;
+        const launched: unknown = result.result;
+        if (typeof launched !== "object" || launched === null || !("terminalId" in launched))
+          return;
+        const launchedId = launched.terminalId;
+        if (typeof launchedId === "string" && launchedId) {
+          usePanelStore.getState().seedScratchpad(launchedId, scratchpad);
+        }
+      });
   };
 
   // Fleet arming store for multi-select gestures. Selection treatment is

@@ -269,9 +269,10 @@ describe("agentActions adversarial", () => {
       scheduledRun: { scheduleId: "schedule-2", runId: "run-2" },
     });
 
-    expect(callbacks.onLaunchAgent.mock.calls.map(([, options]) => options.scheduledRun)).toEqual(
-      [run, undefined]
-    );
+    expect(callbacks.onLaunchAgent.mock.calls.map(([, options]) => options.scheduledRun)).toEqual([
+      run,
+      undefined,
+    ]);
   });
 
   it("agent.launch refuses a schedule source in its arguments", () => {

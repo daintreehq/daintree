@@ -118,9 +118,9 @@ describe("serializePtyPanel — spawnedBy", () => {
   // #15977: the schedule source and its run are written together or not at all.
   it("writes a scheduled run's source and ids as a pair", () => {
     const run = { scheduleId: "schedule-1", runId: "run-1" };
-    expect(serializePtyPanel(makePanel({ spawnedBy: "schedule", scheduledRun: run }))).toMatchObject(
-      { spawnedBy: "schedule", scheduledRun: run }
-    );
+    expect(
+      serializePtyPanel(makePanel({ spawnedBy: "schedule", scheduledRun: run }))
+    ).toMatchObject({ spawnedBy: "schedule", scheduledRun: run });
 
     const sourceOnly = serializePtyPanel(makePanel({ spawnedBy: "schedule" }));
     expect("spawnedBy" in sourceOnly).toBe(false);

@@ -441,9 +441,7 @@ export async function runAgentLaunch(
         ...(handbackCode !== undefined ? { handbackCode } : {}),
         ...(firstPrompt !== undefined ? { hasFirstPrompt: true } : {}),
         ...(actionContext !== undefined ? { actionContext } : {}),
-        ...(provenance.scheduledRun !== undefined
-          ? { scheduledRun: provenance.scheduledRun }
-          : {}),
+        ...(provenance.scheduledRun !== undefined ? { scheduledRun: provenance.scheduledRun } : {}),
       },
     ]);
   } catch (err) {
