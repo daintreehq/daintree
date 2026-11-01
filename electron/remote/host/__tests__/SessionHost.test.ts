@@ -8,7 +8,11 @@ vi.mock("electron", () => ({
 
 import { EndpointRegistryImpl } from "../../../ipc/endpointRegistry.js";
 import { DriveLeaseService } from "../../../services/DriveLeaseService.js";
-import type { EndpointInvocation, RemoteSessionExpiryCause } from "../../../ipc/endpoint.js";
+import type {
+  EndpointGroup,
+  EndpointInvocation,
+  RemoteSessionExpiryCause,
+} from "../../../ipc/endpoint.js";
 import { logBuffer } from "../../../services/LogBuffer.js";
 import { wrapSuccess } from "../../../../shared/utils/ipcErrorSerialization.js";
 import type { IpcEnvelope } from "../../../../shared/types/ipc/errors.js";
@@ -531,7 +535,12 @@ describe("SessionHost", () => {
 });
 
 describe("SessionHost: one push for every view of a session (#15902)", () => {
-  const frame = { type: "event" as const, channel: "worktree:update", args: [{ id: "w" }] };
+  // A host-locality channel: a same-build Shell would discard anything else on arrival (#15901).
+  const frame = {
+    type: "event" as const,
+    channel: CHANNELS.WORKTREE_ACTIVATED,
+    args: [{ worktreeId: "w" }],
+  };
   const events = (link: ReturnType<typeof fakeLink>) =>
     link.posted.filter((m) => m.lane === Lane.EVENTS && m.kind === EventKind.EVENT);
   const addressed = (link: ReturnType<typeof fakeLink>) =>
@@ -789,15 +798,23 @@ describe("SessionHost: one push for every view of a session (#15902)", () => {
 });
 
 describe("SessionHost: pushes a Shell would discard by locality (#15901)", () => {
-  /** What a host broadcast does: one event per remote endpoint in the registry. */
+  /** What a host broadcast does: one session-wide event per link session's group. */
   function broadcast(channel: string, args: unknown[]) {
-    for (const endpoint of registry.getRemote()) endpoint.send({ type: "event", channel, args });
+    const frame = { type: "event" as const, channel, args };
+    const groups = new Set<EndpointGroup>();
+    for (const endpoint of registry.getRemote()) {
+      if (!endpoint.group) endpoint.send(frame);
+      else if (!groups.has(endpoint.group)) {
+        groups.add(endpoint.group);
+        endpoint.group.sendToAll(frame);
+      }
+    }
   }
 
   const eventFrames = (link: ReturnType<typeof fakeLink>) =>
     link.posted
       .filter((m) => m.lane === Lane.EVENTS && m.kind === EventKind.EVENT)
-      .map((m) => m.body as { endpointId: string; channel: string; args: unknown[] });
+      .map((m) => m.body as { endpointId: string | null; channel: string; args: unknown[] });
 
   it("sends no EVENT frame for a shell-locality broadcast and still sends a host-locality one", () => {
     const link = fakeLink();
@@ -810,8 +827,21 @@ describe("SessionHost: pushes a Shell would discard by locality (#15901)", () =>
 
     broadcast(CHANNELS.TERMINAL_DATA, ["t1", "hi"]);
     expect(eventFrames(link).map((f) => [f.endpointId, f.channel])).toEqual([
+      [null, CHANNELS.TERMINAL_DATA],
+    ]);
+  });
+
+  it("keeps a shell-locality push addressed to one view off the link too", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+    const endpoint = registry.getForProject("p1")[0]!;
+
+    endpoint.send({ type: "event", channel: CHANNELS.UPDATE_DOWNLOAD_PROGRESS, args: [{}] });
+    endpoint.send({ type: "event", channel: CHANNELS.TERMINAL_DATA, args: ["t1", "hi"] });
+    expect(eventFrames(link).map((f) => [f.endpointId, f.channel])).toEqual([
       ["view-1", CHANNELS.TERMINAL_DATA],
-      ["view-2", CHANNELS.TERMINAL_DATA],
     ]);
   });
 
