@@ -6,9 +6,14 @@ import { occurrenceKeyFor, outcomeForEvidence } from "../utils/scheduledRuns.js"
 // says which child writes each part; records are complete on disk, and defaults
 // are applied only when a schedule is created (`createSchedule`).
 
+// The latest instant `Date` can represent.
+const MAX_EPOCH_MS = 8_640_000_000_000_000;
+
 const IdSchema = z.string().min(1);
-const EpochMsSchema = z.number().int().nonnegative();
+const EpochMsSchema = z.number().int().nonnegative().max(MAX_EPOCH_MS);
 const ExitCodeSchema = z.number().int().nullable();
+/** Null when no signal ended the process; producers map node-pty's 0 to null. */
+const SignalSchema = z.number().int().positive().nullable();
 
 function nonblank(message: string) {
   return z.string().refine((value) => value.trim() !== "", { message });
@@ -26,6 +31,9 @@ export const ScheduleCadenceSchema = z.strictObject({
   timeZone: z.string().superRefine((value, ctx) => {
     const result = validateTimeZone(value);
     if (!result.ok) ctx.addIssue({ code: "custom", message: result.message });
+    else if (value !== value.trim()) {
+      ctx.addIssue({ code: "custom", message: "Remove the spaces around the time zone" });
+    }
   }),
 });
 
@@ -120,7 +128,7 @@ export const ScheduledRunSkipReasonSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("precondition"),
     exitCode: ExitCodeSchema,
-    signal: ExitCodeSchema,
+    signal: SignalSchema,
     error: z.string().nullable(),
   }),
 ]);
@@ -133,7 +141,7 @@ export const ScheduledRunEvidenceSchema = z.discriminatedUnion("kind", [
     kind: z.literal("exit"),
     process: z.enum(["agent", "pty"]),
     exitCode: ExitCodeSchema,
-    signal: ExitCodeSchema,
+    signal: SignalSchema,
   }),
   z.strictObject({ kind: z.literal("skip"), reason: ScheduledRunSkipReasonSchema }),
   z.strictObject({ kind: z.literal("launch-error"), message: z.string() }),
@@ -180,7 +188,7 @@ export const ScheduledRunProcessSchema = z.discriminatedUnion("state", [
     startedAt: EpochMsSchema.nullable(),
     exitedAt: EpochMsSchema,
     exitCode: ExitCodeSchema,
-    signal: ExitCodeSchema,
+    signal: SignalSchema,
   }),
 ]);
 
@@ -212,7 +220,10 @@ export const ScheduledRunSchema = z
     origin: ScheduledRunOriginSchema,
     /** When the run was registered, which is before anything spawns. */
     createdAt: EpochMsSchema,
-    /** Reserved at registration so the launch and the record agree on it. */
+    /**
+     * Reserved before the launch so the launch and the record agree on it. A
+     * run skipped before one was reserved keeps null.
+     */
     terminalId: IdSchema.nullable(),
     settlement: ScheduledRunSettlementSchema,
     process: z.strictObject({
@@ -225,7 +236,15 @@ export const ScheduledRunSchema = z
   })
   .superRefine((run, ctx) => {
     const { origin, settlement } = run;
-    if (origin.dueAt !== null && origin.occurrenceKey !== occurrenceKeyFor(origin.dueAt)) {
+    // A failed number check doesn't stop this refinement, and `toISOString`
+    // throws outside Date's range.
+    const { dueAt } = origin;
+    if (
+      dueAt !== null &&
+      Number.isInteger(dueAt) &&
+      Math.abs(dueAt) <= MAX_EPOCH_MS &&
+      origin.occurrenceKey !== occurrenceKeyFor(dueAt)
+    ) {
       ctx.addIssue({
         code: "custom",
         path: ["origin", "occurrenceKey"],
@@ -252,8 +271,9 @@ export const ScheduledRunSchema = z
       }
       const { evidence } = settlement;
       if (evidence.kind === "skip") {
+        // A reserved terminal id alone isn't a launch: registration can reserve
+        // one before the precondition runs.
         const launched =
-          run.terminalId !== null ||
           run.pane.state !== "none" ||
           run.process.agent.state !== "not-started" ||
           run.process.pty.state !== "not-started";
@@ -262,6 +282,13 @@ export const ScheduledRunSchema = z
             code: "custom",
             path: ["settlement", "evidence"],
             message: "a skipped run never launches",
+          });
+        }
+        if (run.resume !== null) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["resume"],
+            message: "a skipped run has nothing to resume",
           });
         }
         const { reason } = evidence;

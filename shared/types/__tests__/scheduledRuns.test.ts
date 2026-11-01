@@ -58,6 +58,9 @@ describe("ScheduleSchema", () => {
   it("refuses an unknown zone, a blank name or prompt, and unknown policies", () => {
     const base = schedule();
     expect(
+      ScheduleSchema.safeParse({ ...base, cadence: { ...base.cadence, timeZone: " UTC " } }).success
+    ).toBe(false);
+    expect(
       ScheduleSchema.safeParse({ ...base, cadence: { ...base.cadence, timeZone: "Nowhere/Here" } })
         .success
     ).toBe(false);
@@ -138,9 +141,77 @@ describe("ScheduledRunSchema", () => {
       },
     });
     expect(issues(skipped)).toEqual([]);
-    expect(issues({ ...skipped, terminalId: "terminal-1" })).toContain(
-      "a skipped run never launches"
-    );
+    // Registration can reserve a terminal id before the precondition runs.
+    expect(issues({ ...skipped, terminalId: "terminal-1" })).toEqual([]);
+    const launched = "a skipped run never launches";
+    expect(
+      issues({ ...skipped, terminalId: "terminal-1", pane: { state: "open", since: NOW } })
+    ).toContain(launched);
+    expect(
+      issues({
+        ...skipped,
+        process: { ...skipped.process, agent: { state: "running", startedAt: NOW } },
+      })
+    ).toContain(launched);
+    expect(
+      issues({
+        ...skipped,
+        process: { ...skipped.process, pty: { state: "running", startedAt: NOW } },
+      })
+    ).toContain(launched);
+  });
+
+  it("gives a skipped run nothing to resume", () => {
+    const skipped = registered({
+      settlement: {
+        state: "settled",
+        settledAt: NOW,
+        outcome: "skipped",
+        evidence: { kind: "skip", reason: { kind: "overlap", openRunId: "run-0" } },
+      },
+      resume: {
+        agentId: "claude",
+        agentSessionId: "session-1",
+        cwd: "/repo",
+        worktreeId: null,
+        agentLaunchFlags: [],
+        agentModelId: null,
+        agentPresetId: null,
+      },
+    });
+    expect(issues(skipped)).toContain("a skipped run has nothing to resume");
+  });
+
+  it("stores no signal as null, never 0", () => {
+    const run = registered({
+      terminalId: "terminal-1",
+      settlement: {
+        state: "settled",
+        settledAt: NOW,
+        outcome: "done",
+        evidence: { kind: "exit", process: "pty", exitCode: 0, signal: null },
+      },
+    });
+    expect(issues(run)).toEqual([]);
+    expect(
+      ScheduledRunSchema.safeParse({
+        ...run,
+        settlement: {
+          ...run.settlement,
+          evidence: { kind: "exit", process: "pty", exitCode: 0, signal: 0 },
+        },
+      }).success
+    ).toBe(false);
+  });
+
+  it("reports a due time outside Date's range instead of throwing", () => {
+    for (const dueAt of [8_640_000_000_000_001, -8_640_000_000_000_001]) {
+      const run = registered({
+        origin: { trigger: "scheduled", dueAt, occurrenceKey: "x", coalesced: null },
+      });
+      expect(() => ScheduledRunSchema.safeParse(run)).not.toThrow();
+      expect(ScheduledRunSchema.safeParse(run).success).toBe(false);
+    }
   });
 
   it("refuses a precondition skip whose command passed", () => {
@@ -196,9 +267,19 @@ describe("ScheduledRunSchema", () => {
     expect(
       issues({ ...catchUp, origin: { ...catchUp.origin, coalesced: null } }).length
     ).toBeGreaterThan(0);
+    const outside = "dueAt must fall in (after, through]";
     expect(
       issues({ ...catchUp, origin: { ...catchUp.origin, coalesced: { ...window, after: DUE } } })
-    ).toContain("dueAt must fall in (after, through]");
+    ).toContain(outside);
+    expect(
+      issues({
+        ...catchUp,
+        origin: { ...catchUp.origin, coalesced: { ...window, through: DUE - 1 } },
+      })
+    ).toContain(outside);
+    expect(
+      issues({ ...catchUp, origin: { ...catchUp.origin, coalesced: { ...window, through: DUE } } })
+    ).toEqual([]);
   });
 
   it("gives a run-now run no occurrence, and never a missed skip", () => {

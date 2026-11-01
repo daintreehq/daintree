@@ -48,6 +48,9 @@ describe("createSchedule", () => {
     expect(createSchedule({ ...minimal, timeZone: "Asia/Tokyo" }, NOW).cadence.timeZone).toBe(
       "Asia/Tokyo"
     );
+    const spelled = createSchedule({ ...minimal, timeZone: " europe/london " }, NOW);
+    expect(spelled.cadence.timeZone).toBe("Europe/London");
+    expect(ScheduleSchema.safeParse(spelled).success).toBe(true);
   });
 
   it("starts with a cadence that parses and fires", () => {
@@ -117,6 +120,7 @@ describe("outcomeForEvidence", () => {
     [{ kind: "exit", process: "agent", exitCode: 0, signal: null }, "done"],
     [{ kind: "exit", process: "pty", exitCode: 2, signal: null }, "failed"],
     [{ kind: "exit", process: "pty", exitCode: 0, signal: 15 }, "failed"],
+    [{ kind: "exit", process: "pty", exitCode: 0, signal: 0 }, "done"],
     [{ kind: "exit", process: "agent", exitCode: null, signal: null }, "exited"],
     [{ kind: "skip", reason: { kind: "missed" } }, "skipped"],
     [{ kind: "launch-error", message: "spawn ENOENT" }, "failed"],

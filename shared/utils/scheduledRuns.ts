@@ -49,7 +49,7 @@ export function createSchedule(input: NewScheduleInput, now: number = Date.now()
     enabled: input.enabled ?? true,
     cadence: {
       cron: (input.cron ?? DEFAULT_SCHEDULE_CRON).trim(),
-      timeZone: input.timeZone ?? machineTimeZone(),
+      timeZone: resolveZone(input.timeZone ?? machineTimeZone()),
     },
     launch: {
       agentId: input.launch.agentId,
@@ -69,6 +69,13 @@ export function createSchedule(input: NewScheduleInput, now: number = Date.now()
   };
 }
 
+// Stores the name Intl resolves to, so "europe/london" is kept as "Europe/London";
+// an unknown zone is kept as written for the schema to refuse.
+function resolveZone(timeZone: string): string {
+  const result = validateTimeZone(timeZone);
+  return result.ok ? result.timeZone : timeZone;
+}
+
 /** The key that makes an occurrence run at most once: its due instant in UTC ISO form. */
 export function occurrenceKeyFor(dueAt: number): string {
   return new Date(dueAt).toISOString();
@@ -80,7 +87,8 @@ export function outcomeForEvidence(evidence: ScheduledRunEvidence): ScheduledRun
     case "handback":
       return evidence.report;
     case "exit":
-      if (evidence.signal !== null) return "failed";
+      // node-pty reports 0 for "no signal"; the schema stores that as null.
+      if (evidence.signal !== null && evidence.signal > 0) return "failed";
       if (evidence.exitCode === null) return "exited";
       return evidence.exitCode === 0 ? "done" : "failed";
     case "skip":

@@ -271,6 +271,13 @@ const MINUTE_MS = 60_000;
 // The Gregorian calendar repeats every 400 years, weekdays included, so a
 // search this long finds any expression parseCron accepted.
 const SEARCH_HORIZON_DAYS = 146_097;
+// Queries take 1970 through 9999. That keeps a 400-year search on either side
+// clear of the years 0-99, which Date.UTC maps to the 1900s, and of the end of
+// Date's range.
+const LATEST_QUERY_MS = Date.UTC(9999, 11, 31, 23, 59, 59, 999);
+// Each spelling of a zone gets its own formatter; a form typing zones by hand
+// shouldn't grow the cache without bound.
+const FORMATTER_CACHE_LIMIT = 32;
 
 const formatterCache = new Map<string, Intl.DateTimeFormat>();
 
@@ -289,6 +296,7 @@ function formatterFor(timeZone: string): Intl.DateTimeFormat {
       minute: "numeric",
       second: "numeric",
     });
+    if (formatterCache.size >= FORMATTER_CACHE_LIMIT) formatterCache.clear();
     formatterCache.set(timeZone, formatter);
   }
   return formatter;
@@ -404,13 +412,16 @@ function localDay(instant: number, timeZone: string): number {
 }
 
 function assertInstant(name: string, value: number): void {
-  if (!Number.isFinite(value)) throw new RangeError(`${name} must be a finite timestamp`);
+  if (!Number.isFinite(value) || value < 0 || value > LATEST_QUERY_MS) {
+    throw new RangeError(`${name} must be a timestamp from 1970 through 9999`);
+  }
 }
 
 /**
  * The first instant strictly after `afterMs` that `cron` fires at in
- * `timeZone`. Null only when the search horizon runs past the dates `Date` can
- * represent.
+ * `timeZone`. Null only when nothing fires within 400 years, which never
+ * happens for an expression `parseCron` accepted. Throws a RangeError for a
+ * time outside 1970 through 9999.
  */
 export function nextCronOccurrence(
   cron: ParsedCron,
@@ -478,6 +489,7 @@ export function nextCronOccurrences(
   const out: number[] = [];
   let cursor = afterMs;
   while (out.length < count) {
+    if (cursor > LATEST_QUERY_MS) break;
     const next = nextCronOccurrence(cron, timeZone, cursor);
     if (next === null) break;
     out.push(next);

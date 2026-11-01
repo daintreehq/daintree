@@ -26,7 +26,7 @@ A project can run an agent on a schedule (#15973). A due schedule launches its a
 | `id`, `projectId`, `name` | Identity; the name is non-blank | from the caller |
 | `enabled` | Whether it fires | `true`: creating a schedule is the opt-in |
 | `cadence.cron` | Five-field cron expression | `0 9 * * *` |
-| `cadence.timeZone` | IANA zone the expression is read in | the machine's zone, fixed at creation |
+| `cadence.timeZone` | IANA zone the expression is read in | the machine's zone, fixed at creation; a given zone is stored under the name `Intl` resolves it to |
 | `launch.agentId`, `launch.prompt` | The agent and its first turn; the prompt is non-blank and kept verbatim | from the caller |
 | `launch.presetId` | A saved launch preset; `null` launches with no preset, as an explicit `null` does for `agent.launch` | `null` |
 | `launch.worktreeId` | Worktree id (its normalized path); `null` is the project's main checkout, never whichever worktree is active | `null` |
@@ -64,14 +64,14 @@ This departs from Vixie cron, which runs wildcard-hour jobs in both passes of a 
 | `nextCronOccurrences(cron, timeZone, afterMs, count)` | Up to `count` successive instants, for previews |
 | `previousCronOccurrence(cron, timeZone, atMs)` | The last firing instant at or before `atMs`, for catch-up |
 
-In the second pass of a repeated hour, `previousCronOccurrence` can return a minute whose wall clock is later than the one `atMs` shows, because that minute already fired in the first pass. The search walks local calendar dates (skipping those the expression excludes with calendar arithmetic only) and binary-searches each matching date's minutes, which the rules above keep in instant order. The horizon is one 400-year Gregorian cycle, so any expression `parseCron` accepts is found. A wall clock's instant comes from the zone's offsets a day either side, which assumes no zone changes its offset twice within a day of the same minute. A non-finite time or a negative count throws, which is distinct from "no occurrence".
+In the second pass of a repeated hour, `previousCronOccurrence` can return a minute whose wall clock is later than the one `atMs` shows, because that minute already fired in the first pass. The search walks local calendar dates (skipping those the expression excludes with calendar arithmetic only) and binary-searches each matching date's minutes, which the rules above keep in instant order. The horizon is one 400-year Gregorian cycle, so any expression `parseCron` accepts is found. A wall clock's instant comes from the zone's offsets a day either side, which assumes no zone changes its offset twice within a day of the same minute; tzdb's closest pair of transitions is about a week apart. Queries take times from 1970 through 9999, which keeps a 400-year search clear of the years `Date.UTC` remaps and of the end of `Date`'s range. A time outside that, or a negative count, throws, which is distinct from "no occurrence".
 
 ## Run record
 
 `ScheduledRunSchema` is one run of one schedule, written before anything spawns and updated as facts arrive.
 
 - `id`, `scheduleId`, `projectId`, and `createdAt`, the time it was registered.
-- `terminalId`: reserved at registration, so the launch and the record agree on it. Null for a run that never launches.
+- `terminalId`: reserved before the launch, so the launch and the record agree on it. A run skipped before one was reserved keeps null.
 - `origin`: why the run exists.
 - `settlement`, `process` and `pane`: three independent axes, below.
 - `resume`: what a closed run's terminal needs to resume.
@@ -92,7 +92,7 @@ The occurrence key is `occurrenceKeyFor(dueAt)`, the due instant in UTC ISO form
 The three axes keep three events apart: the run settling, the agent or PTY exiting, and the pane closing. Each moves only on its own event.
 
 - **`settlement`** is `open` until a fact settles it, then `settled` with `settledAt`, an `outcome` and the `evidence`. A settled run never changes. Overlap reads this axis: an open run is an unsettled one, so a kept terminal or a conversation the user carries on doesn't hold the next run back.
-- **`process`** holds the agent CLI and the PTY separately, because an agent can exit and leave its shell running. Each is `not-started` (no start seen), `running`, or `exited` with its exit code and signal when known.
+- **`process`** holds the agent CLI and the PTY separately, because an agent can exit and leave its shell running. Each is `not-started` (no start seen), `running`, or `exited` with its exit code and signal when known. A signal is a positive number or null; producers map node-pty's 0 to null.
 - **`pane`** is `none`, `open`, `background` (moved there by the done policy or the user, not merely out of view), or `closed`.
 
 The outcome follows from the evidence (`outcomeForEvidence`), and the schema refuses a record where it doesn't:
@@ -111,11 +111,11 @@ The outcome follows from the evidence (`outcomeForEvidence`), and the schema ref
 
 A `needs-you` run is settled: the schedule's attempt is over and its terminal stays for the user. Only `done` applies the done policy. A restart that hasn't yet reconnected to a run's terminal is not `lost`.
 
-Skip reasons are `missed` (only for an occurrence, never `run-now`), `overlap` with the `openRunId` that was still open, and `precondition` with its exit code, signal, or the error that stopped it running (an exit 0 isn't a skip). A skipped run never launches: no terminal id, no pane, and neither process started.
+Skip reasons are `missed` (only for an occurrence, never `run-now`), `overlap` with the `openRunId` that was still open, and `precondition` with its exit code, signal, or the error that stopped it running (an exit 0 isn't a skip). A skipped run never launches: no pane, neither process started, and no resume snapshot. It may hold a reserved terminal id, since registration can reserve one before the precondition runs.
 
 ### Resume snapshot
 
-`resume` mirrors `AgentSessionRecordSchema`: `agentId`, `agentSessionId`, `cwd`, `worktreeId`, `agentLaunchFlags`, `agentModelId` and `agentPresetId`. `agentSessionId` is null until captured, and capture can land after settlement. A skipped run has no snapshot.
+`resume` mirrors `AgentSessionRecordSchema`: `agentId`, `agentSessionId`, `cwd`, `worktreeId`, `agentLaunchFlags`, `agentModelId` and `agentPresetId`. `agentSessionId` is null until captured, and capture can land after settlement.
 
 ## Who writes what
 

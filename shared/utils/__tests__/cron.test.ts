@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   machineTimeZone,
   nextCronOccurrence,
@@ -238,6 +238,13 @@ describe("nextCronOccurrence across daylight saving", () => {
       "2011-12-30T10:00:00.000Z",
     ]);
   });
+
+  it("finds the jump to the second in a zone whose offset had seconds (Monrovia, 1972)", () => {
+    // Liberia moved from -0:44:30 to UTC, skipping 00:00 to 00:44:30 local.
+    expect(next("30 0 * * *", "Africa/Monrovia", "1972-01-07T00:44:29Z")).toEqual([
+      "1972-01-07T00:44:30.000Z",
+    ]);
+  });
 });
 
 describe("nextCronOccurrence in a named zone", () => {
@@ -264,6 +271,13 @@ describe("previousCronOccurrence", () => {
     );
     expect(previous("45 1 * * *", "America/New_York", "2026-11-01T05:30:00Z")).toBe(
       "2026-10-31T05:45:00.000Z"
+    );
+  });
+
+  it("looks a day ahead when the clocks went back across midnight (St. John's, 2010)", () => {
+    // Midnight on 7 November fired at 02:30Z; at 02:32Z the clock reads 23:02 on the 6th.
+    expect(previous("0 0 * * *", "America/St_Johns", "2010-11-07T02:32:00Z")).toBe(
+      "2010-11-07T02:30:00.000Z"
     );
   });
 
@@ -306,6 +320,17 @@ describe("nextCronOccurrences", () => {
     expect(() => nextCronOccurrences(parsed, "UTC", 0, -1)).toThrow(RangeError);
     expect(() => nextCronOccurrence(parsed, "UTC", Number.NaN)).toThrow(RangeError);
   });
+
+  it("refuses times outside 1970 through 9999 and stops a batch at the end", () => {
+    const parsed = cron("0 0 1 1 *");
+    expect(() => nextCronOccurrence(parsed, "UTC", -1)).toThrow(RangeError);
+    expect(() => previousCronOccurrence(parsed, "UTC", at("+010000-01-01T00:00:00Z"))).toThrow(
+      RangeError
+    );
+    expect(nextCronOccurrences(parsed, "UTC", at("9999-06-01T00:00:00Z"), 3)).toEqual([
+      at("+010000-01-01T00:00:00Z"),
+    ]);
+  });
 });
 
 describe("parseCron validation", () => {
@@ -317,6 +342,7 @@ describe("parseCron validation", () => {
 
   it("asks for an expression when there is none", () => {
     expect(error("   ")).toMatchObject({ field: null });
+    expect(error("").message).toMatch(/^Enter a cron expression/);
   });
 
   it("names the field count when it isn't five", () => {
@@ -374,6 +400,30 @@ describe("parseCron validation", () => {
     expect(error("0 0 31 2 */2").message).toMatch(/never runs/);
   });
 
+  it("accepts named steps, leading zeros, weekday steps and wildcard lists", () => {
+    expect(next("0 0 1 JAN-DEC/3 *", "UTC", "2026-01-01T00:00:00Z", 2)).toEqual([
+      "2026-04-01T00:00:00.000Z",
+      "2026-07-01T00:00:00.000Z",
+    ]);
+    expect(next("07 09 * * *", "UTC", "2026-06-01T00:00:00Z")).toEqual([
+      "2026-06-01T09:07:00.000Z",
+    ]);
+    // Sunday, Tuesday, Thursday, Saturday.
+    expect(next("0 0 * * */2", "UTC", "2026-06-01T00:00:00Z", 2)).toEqual([
+      "2026-06-02T00:00:00.000Z",
+      "2026-06-04T00:00:00.000Z",
+    ]);
+    expect(next("*,30 0 * * *", "UTC", "2026-06-01T00:58:00Z")).toEqual([
+      "2026-06-01T00:59:00.000Z",
+    ]);
+  });
+
+  it("explains trailing commas, huge numbers and non-ASCII digits", () => {
+    expect(error("0 0 1, * *").message).toMatch(/empty list item/);
+    expect(error("99999999999999999999 * * * *").message).toMatch(/out of range/);
+    expect(error("\u0663 * * * *")).toMatchObject({ field: "minute" });
+  });
+
   it("accepts expressions that fire only rarely", () => {
     expect(parseCron("0 0 29 2 *").ok).toBe(true);
     expect(parseCron("0 0 31 2,3 *").ok).toBe(true);
@@ -411,5 +461,34 @@ describe("validateTimeZone", () => {
 
   it("names the machine's zone as one it accepts", () => {
     expect(validateTimeZone(machineTimeZone()).ok).toBe(true);
+  });
+});
+
+describe("machineTimeZone", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function stubMachineZone(timeZone: string | undefined) {
+    const real = Intl.DateTimeFormat.prototype.resolvedOptions;
+    vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockImplementation(function (
+      this: Intl.DateTimeFormat
+    ) {
+      const options = real.call(this);
+      return { ...options, timeZone: timeZone as string };
+    });
+  }
+
+  it("reads the zone the runtime reports", () => {
+    stubMachineZone("Asia/Tokyo");
+    expect(machineTimeZone()).toBe("Asia/Tokyo");
+  });
+
+  it("falls back to UTC when the runtime names no zone or one it can't use", () => {
+    stubMachineZone(undefined);
+    expect(machineTimeZone()).toBe("UTC");
+    vi.restoreAllMocks();
+    stubMachineZone("Not/A_Zone");
+    expect(machineTimeZone()).toBe("UTC");
   });
 });
