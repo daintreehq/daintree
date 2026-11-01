@@ -598,6 +598,16 @@ describe("secretScrubber", () => {
         `CLAIM_SECRET=${REDACTED} next`,
       ],
       [
+        "a claim secret whose quote never closes before a lone backslash",
+        `claim_secret="${"c".repeat(16)}\\`,
+        `claim_secret=${REDACTED}`,
+      ],
+      [
+        "a claim secret whose quote never closes before a backslash and a new line",
+        `claim_secret="${"c".repeat(16)}\\\nnext`,
+        `claim_secret=${REDACTED}\nnext`,
+      ],
+      [
         "a claim secret whose quote never closes",
         `claimSecret: "${"b".repeat(20)} and more`,
         `claimSecret: ${REDACTED}`,

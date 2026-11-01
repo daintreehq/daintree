@@ -489,7 +489,7 @@ export const PATTERNS: readonly SecretPattern[] = [
     // its line when the quote never closes. `--claim-secret-file <path>` names
     // a file and stays.
     regex:
-      /(^|[^A-Za-z0-9])(claim[_ -]?secret["']?(?:[ \t]{0,4}[:=][ \t]{0,4}|[ \t]{2,16})|-claim-secret[ \t]{1,4})(?:"(?:[^"\\\r\n]|\\[^\r\n]){16,4096}(?:"|(?![^\r\n]))|'(?:[^'\\\r\n]|\\[^\r\n]){16,4096}(?:'|(?![^\r\n]))|[^\s"'`]{16,4096})/gi,
+      /(^|[^A-Za-z0-9])(claim[_ -]?secret["']?(?:[ \t]{0,4}[:=][ \t]{0,4}|[ \t]{2,16})|-claim-secret[ \t]{1,4})(?:"(?:[^"\\\r\n]|\\[^\r\n]){16,4096}(?:"|\\?(?![^\r\n]))|'(?:[^'\\\r\n]|\\[^\r\n]){16,4096}(?:'|\\?(?![^\r\n]))|[^\s"'`]{16,4096})/gi,
     replacement: `$1$2${REDACTED}`,
   },
   {
