@@ -1250,9 +1250,6 @@ function beginSync(): () => void {
   if (hostId !== null && remoteHosts) {
     const store = useHostConnectionStore.getState();
     store.bindHost(hostId, null);
-    // Set by an explicit disconnect and kept through the connecting states
-    // that follow it, so the session that eventually comes up still resyncs.
-    let resyncPending = false;
     disposers.push(
       useHostConnectionStore.subscribe((next, prev) => {
         if (
@@ -1268,9 +1265,6 @@ function beginSync(): () => void {
           const wasUp = isHostLinkUp(prev) || prev.connection === null;
           if (wasUp && !isHostLinkUp(next) && next.connection !== null) noteLeaseOutOfSight();
         }
-        if (next.connection?.status === "disconnected" && next.everConnected) {
-          resyncPending = true;
-        }
         if (next.connection?.status === "connected" && prev.connection?.status !== "connected") {
           const { buildMismatch, handshake: remoteBuild } = next.connection;
           if (buildMismatch) {
@@ -1283,11 +1277,10 @@ function beginSync(): () => void {
             );
           }
           const claimOutstanding = projectId !== null && openClaimOutstanding(projectId);
-          if (resyncPending) {
-            resyncPending = false;
-            // After an explicit disconnect the link that comes back is a new session.
-            void resyncFromHost({ freshSession: true });
-          } else if (
+          // A fresh session, including the one after an explicit disconnect, is
+          // resynced when main says so (`resync-required`), never from here too:
+          // a second request would discard the first pass's reads.
+          if (
             !claimOutstanding &&
             (getLeaseInputBlock()?.kind === "lease-unknown" ||
               leaseBeforeGap !== undefined ||
