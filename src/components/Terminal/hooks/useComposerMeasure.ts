@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { EditorView } from "@codemirror/view";
-import { COMPOSER_GEOMETRY_EVENT } from "../inputEditorExtensions";
+import { COMPOSER_DRAFT_RESET_ATTR, COMPOSER_GEOMETRY_EVENT } from "../inputEditorExtensions";
 
 /**
  * Clear space kept between the end of the draft's last row and the first
- * trailing control when they share that row: the gap the shell puts between
- * its other flex items (`gap-x-1.5`), so the controls sit as far from the text
- * as the `❯` does.
+ * trailing control when they share that row: the space between the `❯` and
+ * the text (the shell's `gap-x-0.75` plus the editor's 3px left padding), so
+ * the controls sit as far from the text as the `❯` does.
  */
 const CORNER_GAP_PX = 6;
 
@@ -89,9 +89,10 @@ interface UseComposerMeasureParams {
  *
  * The corner is left for the rail once the last row reaches the controls, or
  * the draft scrolls at the editor's height cap, and the rail then latches: the
- * attribute itself is the latch, and only an empty draft (sent or cleared)
- * releases it. Deleting text, or a pane widening, never moves the controls
- * back, so a draft being typed, pasted or dictated changes its text width at
+ * attribute itself is the latch, and only a new draft releases it: one emptied
+ * (sent or cleared) or replaced whole, as the autosize reports it
+ * (`COMPOSER_DRAFT_RESET_ATTR`) even when no pass saw it empty. Deleting text,
+ * or a pane widening, never moves the controls back, so a draft being typed, pasted or dictated changes its text width at
  * most once instead of rewrapping as one word tips a per-pass rule either way.
  * The text never narrows to make room for the controls, so nothing here
  * rewraps a draft after the one move into the rail.
@@ -155,6 +156,11 @@ export function useComposerMeasure({
     // Canopy) has no corner to claim.
     const content = shell.querySelector<HTMLElement>(".cm-content");
     const scroller = shell.querySelector<HTMLElement>(".cm-scroller");
+    const editor = shell.querySelector<HTMLElement>(".cm-editor");
+    // A draft emptied or replaced whole since the last pass is a new draft,
+    // even if this pass is the first to see it and it already holds text.
+    const draftReset = editor?.hasAttribute(COMPOSER_DRAFT_RESET_ATTR) ?? false;
+    if (draftReset) editor?.removeAttribute(COMPOSER_DRAFT_RESET_ATTR);
     let rail = false;
     if (content && scroller && trailing.offsetWidth > 0) {
       const rowPx = parseFloat(getComputedStyle(content).lineHeight) || 20;
@@ -164,7 +170,7 @@ export function useComposerMeasure({
       // overflows by 2px without scrolling anything.
       const scrolls = scroller.style.overflowY === "auto";
       const empty = EditorView.findFromDOM(content)?.state.doc.length === 0;
-      if (!empty && shell.hasAttribute("data-composer-rail")) {
+      if (!empty && !draftReset && shell.hasAttribute("data-composer-rail")) {
         rail = true;
       } else {
         const end = scrolls ? null : lastRow(content, rowPx);

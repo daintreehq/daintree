@@ -6,6 +6,7 @@ export {
   setPendingAIRanges,
   pendingAIField,
   COMPOSER_GEOMETRY_EVENT,
+  COMPOSER_DRAFT_RESET_ATTR,
   computeAutoSize,
   createAutoSize,
   createCustomKeymap,

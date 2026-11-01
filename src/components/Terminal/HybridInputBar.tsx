@@ -271,6 +271,8 @@ export interface HybridInputBarProps {
   agentState?: AgentState;
   restartKey?: number;
   disabled?: boolean;
+  /** Said by an empty composer while `disabled`, in place of "Ask …". */
+  disabledPlaceholder?: string;
   /**
    * Another screen drives the project: the draft shown is the driver's, read
    * back from the host, so this bar never writes its text to the draft store.
@@ -391,6 +393,9 @@ function editorOwnsDomFocus(view: EditorView): boolean {
  * Editor. Shared so the two drop targets cannot drift apart again (#12570).
  */
 const SEND_HELD_STATUS = "Not sent. The draft is still here.";
+/** The `❯` and trailing controls of an unavailable composer: inactive, one family. */
+const DISABLED_CONTROL_MIX = "45%";
+const DISABLED_CONTROL_INK = "color-mix(in oklab, var(--ib-fg) 45%, var(--ib-bg))";
 const SPOKEN_SEND_TOO_SHORT_CAPTION = "Too short to send by voice · Enter to send";
 const CROSS_HOST_CAPTION: Record<CrossHostRefusal, string> = {
   context: "Not sent · Context can't reach another host",
@@ -457,6 +462,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       restartKey = 0,
       disabled = false,
       followsDriver = false,
+      disabledPlaceholder,
       className,
       isolated = false,
       otherHostId,
@@ -503,7 +509,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // while the Assistant holds the keyboard, though `focusedId` stays pinned.
     // Routing and fleet keep reading `isFocusedTerminal`.
     const isAssistantActive = useMacroFocusStore((s) => s.focusedRegion === "assistant");
-    const showSelectedChrome = selected ?? (isFocusedTerminal && !isAssistantActive);
+    // An unavailable composer never takes the lift: it is not where the
+    // keyboard will go, so it reads as a field at rest with its inks stepped
+    // down (`shellVars`).
+    const showSelectedChrome = !disabled && (selected ?? (isFocusedTerminal && !isAssistantActive));
     const canopyOpen = useCanopyStore((s) => s.isOpen);
     const hasStash = useTerminalInputStore((s) => {
       const key = projectId ? `${projectId}:${terminalId}` : terminalId;
@@ -814,6 +823,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       if (voiceSessionStatus) return voiceSessionStatus;
       // The live meter at the start of the empty draft says it's listening.
       if (isVoiceListeningChrome) return "";
+      if (disabled && disabledPlaceholder) return disabledPlaceholder;
       const agentName = agentId ? getAgentConfig(agentId)?.name : null;
       return agentName ? `Ask ${agentName}` : "Ask anything";
     })();
@@ -1646,6 +1656,19 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       !showSendRefusedCaption &&
       !showScratchRefusalCaption &&
       !showFileReferenceCaption;
+    // A draft hides the placeholder that says why the composer is unavailable,
+    // so the border carries it instead, as it does a voice session's state.
+    const showDisabledCaption =
+      disabled &&
+      !!disabledPlaceholder &&
+      value.length > 0 &&
+      !isVoiceSubmitting &&
+      !isVoiceSubmitPresenting &&
+      !showVoiceSessionCaption &&
+      !showSendReopenedCaption &&
+      !showSendRefusedCaption &&
+      !showScratchRefusalCaption &&
+      !showFileReferenceCaption;
 
     const voiceSlotRef = useRef<HTMLSpanElement>(null);
     const voiceSlotFocusedRef = useRef(false);
@@ -2251,11 +2274,22 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         : inputBarColors.shellHoverBg,
       "--ib-shadow": inputBarColors.shellShadow,
       "--ib-focus-ring": inputBarColors.shellFocusRing,
-      "--ib-marker": showSelectedChrome ? inputBarColors.markerSelected : inputBarColors.marker,
-      "--ib-control-mix": inputBarColors.controlMix,
-      "--ib-placeholder": showSelectedChrome
-        ? inputBarColors.placeholderSelected
-        : inputBarColors.placeholder,
+      // An unavailable composer is dimmed by its inks, not by opacity: an
+      // opacity dim also halved the one line that says why (its reason, or
+      // its draft), which then read under 4.5:1 on every palette. The `❯` and
+      // the controls step down to an inactive ink together, as one family;
+      // the words keep the resting placeholder's fitted ink.
+      "--ib-marker": disabled
+        ? DISABLED_CONTROL_INK
+        : showSelectedChrome
+          ? inputBarColors.markerSelected
+          : inputBarColors.marker,
+      "--ib-control-mix": disabled ? DISABLED_CONTROL_MIX : inputBarColors.controlMix,
+      "--ib-placeholder": disabled
+        ? inputBarColors.placeholder
+        : showSelectedChrome
+          ? inputBarColors.placeholderSelected
+          : inputBarColors.placeholder,
       "--ib-placeholder-more": inputBarColors.placeholderMore,
       "--ib-interim": inputBarColors.interim,
       "--ib-accent": inputBarColors.accent,
@@ -2352,7 +2386,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               // draft length. `data-composer-rail` is one text line of extra
               // foot (`useComposerMeasure`): the row the trailing controls take
               // when the draft's last row leaves them no room beside it.
-              "flex w-full items-end gap-x-1.5 rounded-md border py-2 data-[composer-rail]:pb-7 transition-[border-color,background-color,box-shadow] duration-150 ease-out",
+              "flex w-full items-end gap-x-0.75 rounded-md border py-2 data-[composer-rail]:pb-7 transition-[border-color,background-color,box-shadow] duration-150 ease-out",
               !isSpecialState && [
                 "bg-[var(--ib-bg)] border-[var(--ib-border)] shadow-[var(--ib-shadow)]",
                 "hover:border-[var(--ib-border-hover)] hover:bg-[var(--ib-hover-bg)]",
@@ -2362,12 +2396,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 // control's own ring, not the composer taking the keyboard.
                 !isVoiceSubmitPresenting &&
                   "has-[.cm-content:focus-visible]:outline-2 has-[.cm-content:focus-visible]:outline-offset-2 has-[.cm-content:focus-visible]:outline-[var(--ib-focus-ring)]",
-              ],
-              // The one dim for an unavailable composer. Its controls take
-              // `disabled` and add no opacity of their own: a second dim inside
-              // this one compounds (60% × 50% left the paperclip at 30% beside a
-              // picker at 60%), so the row stops reading as one family.
-              disabled && "opacity-50"
+              ]
             )}
             data-voice-active={isVoiceListeningChrome ? "true" : undefined}
             data-fleet-armed={isFleetPrimary ? "true" : undefined}
@@ -2413,6 +2442,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 className={COMPOSER_BORDER_CAPTION_CLASS}
               >
                 {voiceSessionStatus}
+              </div>
+            )}
+            {showDisabledCaption && (
+              <div data-disabled-caption="" className={COMPOSER_BORDER_CAPTION_CLASS}>
+                {disabledPlaceholder}
               </div>
             )}
             {showSendReopenedCaption && (
@@ -2576,7 +2610,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                       }
                     }}
                     className={cn("w-full min-h-[20px]", disabled && "pointer-events-none")}
-                    style={{ color: inputBarColors.textInk }}
+                    style={{
+                      color: disabled ? inputBarColors.placeholder : inputBarColors.textInk,
+                    }}
                   />
                 </div>
               </ContextMenuTrigger>

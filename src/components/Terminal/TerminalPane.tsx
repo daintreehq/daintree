@@ -643,6 +643,17 @@ function TerminalPaneComponent({
     isRestarting ||
     followsDriver ||
     hostSwitchPending;
+  // What an empty, unavailable composer says in place of its invitation, so a
+  // locked pane does not ask for a prompt it will refuse. A driven or switching
+  // composer keeps it: the driver's draft or the window's notice says why.
+  const hybridInputDisabledPlaceholder =
+    isBackendDisconnected || isBackendRecovering
+      ? "Reconnecting…"
+      : isRestarting
+        ? "Restarting…"
+        : isInputLocked
+          ? "Input locked"
+          : undefined;
   // Focus routing ignores a pending switch: it is brief and window-wide, and
   // moving the keyboard to xterm for it would leave it there once the switch
   // lands or fails, off the composer the user was in.
@@ -1852,6 +1863,7 @@ function TerminalPaneComponent({
                     ref={inputBarRef}
                     terminalId={id}
                     disabled={isHybridInputDisabled}
+                    disabledPlaceholder={hybridInputDisabledPlaceholder}
                     followsDriver={followsDriver}
                     cwd={cwd}
                     agentId={effectiveAgentId}
