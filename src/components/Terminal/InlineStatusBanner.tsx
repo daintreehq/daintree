@@ -1,4 +1,4 @@
-import React, { use, useState, useEffect, useRef, type CSSProperties } from "react";
+import React, { createContext, use, useState, useEffect, useRef, type CSSProperties } from "react";
 import { InsetSurfaceContext } from "@/components/ui/insetSurface";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -22,8 +22,30 @@ const BORDER_PERCENT = "20%";
 /** The least an auto-dismiss gets back after a hold, so it never vanishes the instant the pointer leaves. */
 const AUTO_DISMISS_RESUME_FLOOR_MS = 1_000;
 
+/**
+ * Set by the slot a pane stacks its banners in. Inside it a banner defaults to
+ * the `pane` layout, whose controls trail the text on a wide pane instead of
+ * taking a row of their own (a row is three terminal lines), and draws its band
+ * in the polarity-aware status surface the grid bar uses, which stays distinct
+ * from a light theme's header where a 10% mix toward transparent fused with it.
+ */
+export const PaneBannerSurfaceContext = createContext(false);
+
+const STATUS_SURFACE_CLASS: Record<Exclude<InlineStatusBannerSeverity, "neutral">, string> = {
+  error: "bg-status-error-surface",
+  warning: "bg-status-warning-surface",
+  info: "bg-status-info-surface",
+  success: "bg-status-success-surface",
+};
+
 /** Marks a banner root (see the root's `data-inline-status-banner`), so a stack of sibling banners can find each other. */
 const STACK_MEMBER_ATTR = "data-inline-status-banner";
+
+/**
+ * The pane's banner stack (TerminalPane). Its banners each sit in their own
+ * slot wrapper, so for them the stack is this ancestor, not the parent.
+ */
+const PANE_STACK_SELECTOR = "[data-pane-banners]";
 
 export interface BannerAction {
   id: string;
@@ -111,6 +133,13 @@ interface BaseInlineStatusBannerProps {
    * not rendered.
    */
   layout?: "stacked" | "strip" | "pane" | "inline";
+  /**
+   * Draw the band neutral while keeping the layout: the glyph alone carries
+   * the severity. For an acknowledgement that sits in a stack beside notices
+   * that need acting on, so it never outweighs them, without moving to the
+   * one-row inline tier whose controls follow the sentence.
+   */
+  quiet?: boolean;
   /**
    * A box among inset content rather than a band across a pane's top: full
    * hairline border and the `--radius-md` corner, the `Callout` recipe. Read
@@ -291,10 +320,11 @@ function nearestStackSurvivor(
   above: Element | null
 ): HTMLElement | undefined {
   if (!stack?.isConnected) return undefined;
-  const inStack = candidates.filter(
-    (c) => c.closest(`[${STACK_MEMBER_ATTR}]`)?.parentElement === stack
-  );
-  if (!above?.isConnected || above.parentElement !== stack) return inStack[0];
+  const inStack = candidates.filter((c) => {
+    const member = c.closest(`[${STACK_MEMBER_ATTR}]`);
+    return !!member && (member.parentElement === stack || member.closest(PANE_STACK_SELECTOR) === stack);
+  });
+  if (!above?.isConnected || !stack.contains(above)) return inStack[0];
   return (
     inStack.find(
       (c) =>
@@ -315,13 +345,14 @@ export function InlineStatusBanner({
   className,
   action,
   actions,
-  role = "alert",
+  role: roleProp,
   ariaLive,
   onClose,
   closeAriaLabel = "Dismiss",
   closeTitle,
   closeDisabled,
-  layout = "stacked",
+  layout: layoutProp,
+  quiet = false,
   inset,
   trailingSlot,
   descriptionExtras,
@@ -335,6 +366,10 @@ export function InlineStatusBanner({
   // caption buttons while a banner is up), and report its severity so the
   // native caption strip can be tinted to match. Inline banners get none of
   // this — a banner inside a terminal must never drag the window.
+  // Only a failure interrupts; anything milder is announced politely (WCAG 4.1.3).
+  const role = roleProp ?? (severity === "error" ? "alert" : "status");
+  const inPane = use(PaneBannerSurfaceContext);
+  const layout = layoutProp ?? (inPane ? "pane" : "stacked");
   const reportSeverity = useTitleBarSurface();
   const isTitleBarSurface = reportSeverity !== null;
 
@@ -348,7 +383,9 @@ export function InlineStatusBanner({
   // the instant the severity is reported, and a banner easing in under an
   // already-tinted strip reads as two surfaces disagreeing. Inline banners
   // keep their entrance.
-  const shouldAnimate = animated && !performanceMode && !isTitleBarSurface;
+  // A pane banner's slot already fades it in; sliding it as well doubled the
+  // fade and pushed it over the pane header for the first frames.
+  const shouldAnimate = animated && !performanceMode && !isTitleBarSurface && !inPane;
 
   const [isVisible, setIsVisible] = useState(!shouldAnimate);
   const rafRef = useRef<number | null>(null);
@@ -442,6 +479,7 @@ export function InlineStatusBanner({
   // chrome behind an open dialog. Captured on focus, since the ref is gone by
   // the time the unmount cleanup runs.
   const focusHomeRef = useRef<HTMLElement | null>(null);
+  const focusPaneRef = useRef<HTMLElement | null>(null);
   // The banner's stack and the banner directly above it in that stack, so a
   // banner in a stack hands focus to whatever now stands where it did rather
   // than to the top of its container — the user keeps their place instead of
@@ -455,6 +493,16 @@ export function InlineStatusBanner({
     if (!root || !(e.target instanceof Node) || !root.contains(e.target)) return;
     focusWithinRef.current = true;
     setIsFocusWithin(true);
+    const paneStack = root.closest<HTMLElement>(PANE_STACK_SELECTOR);
+    focusPaneRef.current = paneStack?.closest<HTMLElement>("[data-panel-id]") ?? null;
+    if (paneStack) {
+      // Neighbours are found through the slot wrappers, and when the last
+      // notice goes the keyboard returns to the pane it was about.
+      const members = Array.from(paneStack.querySelectorAll(`[${STACK_MEMBER_ATTR}]`));
+      focusHomeRef.current = paneStack;
+      focusStackRef.current = { stack: paneStack, above: members[members.indexOf(root) - 1] ?? null };
+      return;
+    }
     focusHomeRef.current =
       root.closest<HTMLElement>("[role='dialog'], [role='alertdialog']") ?? root.parentElement;
     let above = root.previousElementSibling;
@@ -498,11 +546,12 @@ export function InlineStatusBanner({
     () => () => {
       if (!focusWithinRef.current) return;
       const home = focusHomeRef.current;
+      const pane = focusPaneRef.current;
       const { stack, above } = focusStackRef.current;
       requestAnimationFrame(() => {
         if (document.activeElement && document.activeElement !== document.body) return;
         const candidates = home?.isConnected ? getVisibleTabbableElements(home) : [];
-        restoreFocusTo(nearestStackSurvivor(candidates, stack, above) ?? candidates[0]);
+        restoreFocusTo(nearestStackSurvivor(candidates, stack, above), candidates[0], pane);
       });
     },
     []
@@ -533,13 +582,14 @@ export function InlineStatusBanner({
   const wrapsControls = isStrip || isPane;
   const insetFromSurface = use(InsetSurfaceContext);
   const isInset = inset ?? insetFromSurface;
-  const isUntinted = isNeutral || (isInline && severity !== "error");
+  const isUntinted = isNeutral || quiet || (isInline && severity !== "error");
+  const usesStatusSurface = inPane && !isInset && !isUntinted && !isTitleBarSurface;
   // A tinted band draws its edge inline, in its severity's colour; an untinted
   // one needs a class. Inset, that edge wraps the whole box; at a pane's top it
   // is the inline layout's bottom rule.
   const edgeClass = isInset
     ? cn("rounded-[var(--radius-md)]", isUntinted && "border border-border-default")
-    : isInline
+    : isInline || quiet
       ? "border-b border-divider"
       : undefined;
 
@@ -699,13 +749,14 @@ export function InlineStatusBanner({
         wrapsControls && "@container/banner flex-wrap gap-y-2",
         // Scoped, not bare: `transition` carries box-shadow, every colour
         // property and filter along with it, and this banner's entry is an
-        // opacity-and-slide. 250ms is BANNER_ENTER_DURATION from the motion
-        // scale, which is what generates this utility; the curve is the shared
-        // entry easing.
+        // opacity-and-slide. 200ms is BANNER_ENTER_DURATION, the entry tier of
+        // the motion scale, which is what generates this utility; the curve is
+        // the shared entry easing.
         shouldAnimate &&
-          "transition-[opacity,translate] duration-250 ease-[var(--ease-spring-critical)] motion-reduce:transition-opacity motion-reduce:translate-none",
+          "transition-[opacity,translate] duration-200 ease-[var(--ease-spring-critical)] motion-reduce:transition-opacity motion-reduce:translate-none",
         shouldAnimate && (isVisible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-2"),
         isUntinted && "bg-overlay-subtle",
+        usesStatusSurface && STATUS_SURFACE_CLASS[severity as keyof typeof STATUS_SURFACE_CLASS],
         edgeClass,
         // The native caption strip is a fixed 48px tall. A shorter banner would
         // let the tint applied to that strip bleed over the toolbar beneath it,
@@ -722,10 +773,14 @@ export function InlineStatusBanner({
                 backgroundColor: `color-mix(in oklab, var(${colorVar}) ${TINT_PERCENT}, transparent)`,
                 border: `1px solid color-mix(in oklab, var(${colorVar}) ${BORDER_PERCENT}, transparent)`,
               }
-            : {
-                backgroundColor: `color-mix(in oklab, var(${colorVar}) ${TINT_PERCENT}, transparent)`,
-                borderBottom: `1px solid color-mix(in oklab, var(${colorVar}) ${BORDER_PERCENT}, transparent)`,
-              }),
+            : usesStatusSurface
+              ? {
+                  borderBottom: `1px solid color-mix(in oklab, var(${colorVar}) 30%, var(--color-surface))`,
+                }
+              : {
+                  backgroundColor: `color-mix(in oklab, var(${colorVar}) ${TINT_PERCENT}, transparent)`,
+                  borderBottom: `1px solid color-mix(in oklab, var(${colorVar}) ${BORDER_PERCENT}, transparent)`,
+                }),
         ...windowControlsInset,
       }}
       role={role}

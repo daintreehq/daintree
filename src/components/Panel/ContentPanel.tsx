@@ -7,6 +7,7 @@ import React, {
   useState,
   type ReactNode,
 } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { PanelHeader } from "./PanelHeader";
 import { useIsDragging } from "@/components/DragDrop";
@@ -35,6 +36,9 @@ import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { tabDomId } from "./TabButton";
 import { usePluginPanelActivity } from "./PluginPanelActivity";
 import { isBuiltInPanelKind, isPtyPanel } from "@shared/types/panel";
+import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
+import { isHandBackWait } from "@/lib/handBackPresentation";
+import { describeExitStatus } from "@/components/Terminal/exitStatus";
 
 /**
  * Base props for all panel types.
@@ -164,28 +168,45 @@ interface GridChromeInputs {
   showSelectedChrome: boolean;
   showGridAgentHighlights: boolean;
   isVoiceArming: boolean;
-  isWaiting: boolean;
+  isFailed: boolean;
+  isAsking: boolean;
   isWorkingState: boolean;
+  isExitedClean: boolean;
 }
 
 /**
- * Resolves the grid pane's container chrome to exactly one class, ordered
- * highest-priority first. Selection is not gated on `showGridAttention`: a
- * lone pane still has to show that it, and not the dock or the Assistant,
- * holds the keystrokes after the user clicks back into it.
+ * Resolves the grid pane's container chrome, ordered highest-priority first.
+ * Selection is not gated on `showGridAttention`: a lone pane still has to show
+ * that it, and not the dock or the Assistant, holds the keystrokes after the
+ * user clicks back into it.
+ *
+ * The two states that need the user — failed and asking — always draw, because
+ * they are rare and they are the reason to look at the grid at all. Working is
+ * the common case, so its edge stays behind the highlights preference: six
+ * busy agents must not paint six frames. Both keep their edge while focused,
+ * over the selected fill: the focused pane is the one last typed into, and
+ * the user may be looking anywhere when it stops to ask or fails.
  */
 function resolveGridPanelChromeClass({
   showGridAttention,
   showSelectedChrome,
   showGridAgentHighlights,
   isVoiceArming,
-  isWaiting,
+  isFailed,
+  isAsking,
   isWorkingState,
+  isExitedClean,
 }: GridChromeInputs): string {
   if (showGridAttention && isVoiceArming) return "panel-state-arming";
+  if (showGridAttention && isFailed) {
+    return showSelectedChrome ? "terminal-selected panel-state-failed" : "panel-state-failed";
+  }
+  if (showGridAttention && isAsking) {
+    return showSelectedChrome ? "terminal-selected panel-state-waiting" : "panel-state-waiting";
+  }
   if (showSelectedChrome) return "terminal-selected";
-  if (showGridAttention && showGridAgentHighlights && isWaiting) return "panel-state-waiting";
   if (showGridAttention && showGridAgentHighlights && isWorkingState) return "panel-state-working";
+  if (showGridAttention && isExitedClean) return "panel-state-exited";
   return "border-overlay hover:border-tint/[0.08]";
 }
 
@@ -439,6 +460,50 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // keeps the dock chip's glyph.
   const reportedActivity = usePluginPanelActivity(id);
   const pluginActivity = headerAgentState || ambientAgentState ? null : reportedActivity;
+  // What the pane observed that needs the user, read straight off its record:
+  // why it is waiting, and whether a launch, restart or reconnect failed.
+  const paneSignals = usePanelStore(
+    useShallow((state) => {
+      const panel = state.panelsById[id];
+      const pty = panel && isPtyPanel(panel) ? panel : undefined;
+      return {
+        waitingReason: pty?.waitingReason,
+        isRestarting: pty?.isRestarting === true,
+        hostFailed:
+          pty?.spawnError !== undefined ||
+          pty?.restartError !== undefined ||
+          (pty?.reconnectError !== undefined && pty.reconnectError.type !== "timeout"),
+      };
+    })
+  );
+  const handBackRunIds = useHandBackRunIds();
+  // The shown tab's own wait is read with its reason; a hidden tab's wait in
+  // a group carries none here, so it reads as asking.
+  const ownBlockedState = useDockBlockedState(ownAgentState);
+  // A restart or an exit is newer than the error wait it ends.
+  const isBlockedWait =
+    ownBlockedState === "waiting" &&
+    paneSignals.waitingReason === "error" &&
+    !paneSignals.isRestarting &&
+    !isExited;
+  const isHandBack = isHandBackWait(handBackRunIds, {
+    id,
+    agentState: ownAgentState,
+    waitingReason: paneSignals.waitingReason,
+  });
+  const hiddenTabAsking =
+    ambientAgentState === "waiting" && ownAgentState !== "waiting" && blockedState === "waiting";
+  // Only a live pane can ask. An error wait is never asking: it is failed
+  // while the run is alive and nothing once a restart or exit replaces it.
+  const ownCanAsk =
+    paneSignals.waitingReason !== "error" && !paneSignals.isRestarting && !isExited;
+  const isAskingWait =
+    (ownBlockedState === "waiting" && ownCanAsk && !isHandBack) ||
+    hiddenTabAsking ||
+    pluginActivity?.shown === "waiting";
+  const exitedFailed = isExited === true && describeExitStatus(exitCode).failed && exitCode !== 130;
+  const isFailed =
+    isBlockedWait || exitedFailed || paneSignals.hostFailed || submitStatus === "failed";
 
   // Auto-construct the terminal header for PTY-backed terminals when no custom
   // headerContent is provided. One gate covers both the metadata and the status
@@ -664,8 +729,12 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
             showSelectedChrome,
             showGridAgentHighlights,
             isVoiceArming,
-            isWaiting: blockedState === "waiting" || pluginActivity?.shown === "waiting",
+            isFailed,
+            isAsking: isAskingWait,
             isWorkingState: isWorkingState || pluginActivity?.shown === "working",
+            // A clean exit recedes on the edge: its text keeps full contrast, and a
+            // failed exit takes failed above.
+            isExitedClean: isExited === true && !exitedFailed,
           }),
         location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",
         // Voice-dictation lock border overrides ambient state colours so the

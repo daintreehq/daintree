@@ -305,25 +305,18 @@ border-bottom: 1px solid var(--theme-border-divider);
 
 ### Panel State Edge
 
-Light themes show a colored left-edge rail on panels to indicate agent state:
+A grid pane's frame carries at most one state, resolved in `ContentPanel.tsx` (`resolveGridPanelChromeClass`) and drawn by `src/styles/host/panel-states.css`. In a grid of two or more panes:
 
-```css
-width: var(--panel-state-edge-width); /* 2px light, 0px dark */
-inset-block: var(--panel-state-edge-inset-block); /* 4px */
-border-radius: var(--panel-state-edge-radius); /* 2px */
-```
+- **Failed** (`panel-state-failed`, error ink): an agent stopped on an error, a non-zero exit, or a launch, restart or reconnect the host could not complete. Always shown, and kept over the focused frame.
+- **Waiting** (`panel-state-waiting`, waiting ink): an agent asking for something. A finished agent handing its turn back is not waiting and gets no edge. Always shown.
+- **Working** (`panel-state-working`): only with the `showGridAgentHighlights` preference on, so a grid of busy agents stays calm.
+- **Exited** (`panel-state-exited`, idle ink): a process that exited cleanly recedes on its edge; its text keeps full ink.
 
-This creates a thin colored bar on the left side of the panel header. The color matches the agent's activity state. Dark themes disable this (`width: 0px`).
+Each failed edge comes with a banner inside the pane that says which failure it was, so the edge never carries the state by colour alone. Light themes draw the waiting and failed rings at `--panel-state-edge-width` (2px).
 
 ### Panel Focus State
 
-When a panel is focused (clicked/selected), it may show a highlighted border:
-
-```css
-border-color: var(--theme-accent-primary);
-```
-
-This is controlled by the `showGridAgentHighlights` preference.
+The focused pane takes `.terminal-selected`: a neutral stepped-up border, the selected background and the header lift. It is deliberately not the accent colour. The pane holding the keyboard is also the only one whose terminal cursor is solid; other panes draw it hollow. `prefers-contrast: more` widens the edge to 2px in a stronger neutral ink, and forced colours repaint it in `Highlight`.
 
 ### Terminal Content
 

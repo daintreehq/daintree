@@ -258,9 +258,22 @@
      terminal holds the keys; once its own composer takes them, the composer's
      ring says so and the pane edge steps down to the system ink, rather than
      two Highlight perimeters nesting. */
-  .terminal-selected:has([data-composer-state] .cm-content:focus-visible) {
-    outline-color: CanvasText;
+  /* With its own composer holding the keys, a pane's edge steps all the way
+     down to the plain system border: a 2px CanvasText outline is what an
+     unfocused waiting pane wears. */
+  .terminal-selected:not(.panel-state-failed, .panel-state-waiting):has(
+      [data-composer-state] .cm-content:focus-visible
+    ) {
+    outline: none;
     border-color: CanvasText;
+  }
+
+  /* The state ring overlay is a box-shadow the UA drops; the outlines below
+     carry the state instead. */
+  .panel-state-waiting::after,
+  .panel-state-failed::after,
+  .panel-state-working::after {
+    display: none;
   }
 
   .assistant-focused:has([data-composer-state] .cm-content:focus-visible) {
@@ -279,13 +292,49 @@
   }
 
   .panel-state-waiting {
+    border-color: CanvasText;
+    outline: 2px solid CanvasText;
+    outline-offset: -2px;
+  }
+
+  .terminal-selected.panel-state-waiting,
+  .terminal-selected.panel-state-waiting:focus-visible {
     border-color: Highlight;
     outline: 2px solid Highlight;
     outline-offset: -2px;
   }
 
-  .panel-state-working {
+  /* State edges are CanvasText, so Highlight still means only "focus here":
+     waiting is solid, failed dashed, so they differ by shape. A focused state
+     pane keeps its line style in Highlight. */
+  .panel-state-failed {
+    border-color: CanvasText;
+    outline: 2px dashed CanvasText;
+    outline-offset: -2px;
+  }
+
+  .terminal-selected.panel-state-failed,
+  .terminal-selected.panel-state-failed:focus-visible {
     border-color: Highlight;
+    outline: 2px dashed Highlight;
+    outline-offset: -2px;
+  }
+
+  /* The global focus ring sets a solid outline with !important; a focused
+     failed root keeps its dashed shape so it never reads as waiting. */
+  .terminal-selected.panel-state-failed:focus-visible {
+    outline-style: dashed !important;
+  }
+
+  .panel-state-exited {
+    border-color: GrayText;
+  }
+
+  /* Highlight is kept for focus; the opt-in working edge is a dotted line. */
+  .panel-state-working {
+    border-color: CanvasText;
+    outline: 1px dotted CanvasText;
+    outline-offset: -2px;
     animation: none;
   }
 

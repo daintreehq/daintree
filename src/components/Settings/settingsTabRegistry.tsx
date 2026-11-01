@@ -564,7 +564,7 @@ export const SETTINGS_REGISTRY = [
         section: "Interface elements",
         title: "Grid panel agent highlights",
         description:
-          "Show waiting and working state borders on grid panels, including plugin-reported activity",
+          "Show working state borders on grid panels, including plugin-reported activity; waiting and failed borders always show",
         keywords: [
           "agent",
           "highlight",

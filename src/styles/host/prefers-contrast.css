@@ -19,9 +19,33 @@
     background-color: color-mix(in oklab, var(--theme-tint) 20%, transparent);
   }
 
+  /* Width alone keeps the default's deliberately quiet ink, so the edge
+     also steps up to a neutral that clears 3:1 against the grid. */
   .terminal-selected,
   .terminal-focused {
     border-width: 2px;
+    border-color: color-mix(in oklab, var(--theme-text-primary) 72%, var(--theme-border-strong));
+  }
+
+  .terminal-selected:focus-visible {
+    outline-color: color-mix(in oklab, var(--theme-text-primary) 72%, var(--theme-border-strong));
+  }
+
+  /* The stronger focus ink above must not repaint a state edge: a focused
+     pane that is waiting or has failed keeps its state ink. */
+  .terminal-selected.panel-state-waiting {
+    border-color: color-mix(in oklab, var(--color-activity-waiting) 85%, transparent);
+  }
+
+  .terminal-selected.panel-state-failed {
+    border-color: color-mix(in oklab, var(--color-status-error) 85%, transparent);
+  }
+
+  .terminal-selected.panel-state-waiting,
+  .terminal-selected.panel-state-failed {
+    box-shadow:
+      0 0 0 1px var(--color-grid-bg),
+      0 0 0 3px color-mix(in oklab, var(--theme-text-primary) 85%, var(--color-grid-bg));
   }
 
   /* The focused root's ring stands in for the border, so it takes the
@@ -82,7 +106,9 @@
 
   .panel-state-compiling,
   .panel-state-waiting,
+  .panel-state-failed,
   .panel-state-working,
+  .panel-state-exited,
   .panel-voice-dictation-locked,
   .panel-state-arming {
     border-width: 2px;

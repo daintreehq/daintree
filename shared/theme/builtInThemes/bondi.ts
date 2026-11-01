@@ -121,6 +121,11 @@ export const theme: BuiltInThemeSource = {
     },
     strategy: {
       shadowStyle: "light",
+      // The cream panel neutralises the engine's default status wash: an
+      // error band rendered the same tint as a neutral strip. Pane banners
+      // carry severity in the band and the glyph alone, so the band has to
+      // read as its hue.
+      statusSurfaceOpacity: 1.85,
       materialBlur: 12,
       materialSaturation: 115,
       // The granular tile replaces the universal photographic noise.

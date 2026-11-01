@@ -35,7 +35,13 @@ export interface TerminalAppearanceConfig {
 export const BASE_TERMINAL_OPTIONS = {
   cursorBlink: true,
   cursorStyle: "block" as const,
-  cursorInactiveStyle: "block" as const,
+  // Hollow in a pane that does not hold the keyboard, the convention terminals
+  // share: a solid block in every pane said they all took typing.
+  cursorInactiveStyle: "outline" as const,
+  // Any colour a theme or a user's scheme paints under 4.5:1 against its cell
+  // is lifted at render, so terminal text owes AA whatever the palette (VS
+  // Code's default). xterm halves the target for SGR 2, so dim still recedes.
+  minimumContrastRatio: 4.5,
   // Exactly 1.0 — a fractional line height makes xterm's DOM renderer leave
   // vertical sub-pixel gaps between stacked box-drawing characters, breaking
   // the box borders that agent TUIs draw. (The WebGL renderer hid this by
