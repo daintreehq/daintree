@@ -34,7 +34,7 @@ const MAX_SUBJECT_CHARS = 80;
  * alone, so they're escaped too.
  */
 function quote(value: string): string {
-  return JSON.stringify(value).replace(/ /g, "\\u2028").replace(/ /g, "\\u2029");
+  return JSON.stringify(value).replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
 }
 
 interface PresetField {
@@ -209,7 +209,7 @@ export function agentPresetPreviewSubject(mutation: AgentPresetMutation): string
   const name = mutation.operation === "update" ? mutation.before.name : mutation.preset.name;
   if (typeof name !== "string") return undefined;
   // eslint-disable-next-line no-control-regex
-  const flat = name.replace(/[\x00-\x1f\x7f  ]+/g, " ").trim();
+  const flat = name.replace(/[\x00-\x1f\x7f\u2028\u2029]+/g, " ").trim();
   if (flat.length === 0) return undefined;
   const points = Array.from(flat);
   return points.length > MAX_SUBJECT_CHARS

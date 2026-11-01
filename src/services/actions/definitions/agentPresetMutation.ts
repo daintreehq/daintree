@@ -88,13 +88,13 @@ interface PresetPatch {
   name?: string;
   envSet?: Record<string, string>;
   envUnset?: string[];
-  args?: string[] | null;
+  args?: string[];
   customFlags?: string | null;
-  dangerousMode?: PresetMode | null;
-  inlineMode?: PresetMode | null;
-  color?: string | null;
-  displayTitle?: string | null;
-  fallbacks?: string[] | null;
+  dangerousMode?: PresetMode;
+  inlineMode?: PresetMode;
+  color?: string;
+  displayTitle?: string;
+  fallbacks?: string[];
   fallbackOnRateLimit?: boolean;
 }
 
@@ -310,9 +310,9 @@ function missingPresetMessage(
 }
 
 /**
- * The patch applied to a copy of `base`. Omitted fields are kept, `null` and
- * the "inherit" modes clear a field, and an empty list clears it, so the result
- * stores nothing the sanitiser would turn into "absent" on read.
+ * The patch applied to a copy of `base`. Omitted fields are kept; an empty
+ * list or string, "inherit", false, or `customFlags: null` clears a field, so
+ * the result stores nothing the sanitiser would turn into "absent" on read.
  */
 function applyPresetPatch(base: AgentPreset, patch: PresetPatch): AgentPreset {
   const next: AgentPreset = { ...base };
@@ -327,7 +327,7 @@ function applyPresetPatch(base: AgentPreset, patch: PresetPatch): AgentPreset {
     else delete next.env;
   }
   if (patch.args !== undefined) {
-    if (patch.args && patch.args.length > 0) next.args = [...patch.args];
+    if (patch.args.length > 0) next.args = [...patch.args];
     else delete next.args;
   }
   if (patch.customFlags !== undefined) {
@@ -336,7 +336,7 @@ function applyPresetPatch(base: AgentPreset, patch: PresetPatch): AgentPreset {
   }
   if (patch.dangerousMode !== undefined) {
     // The legacy boolean mirrors the mode, as Settings' editor writes it.
-    if (patch.dangerousMode === null || patch.dangerousMode === "inherit") {
+    if (patch.dangerousMode === "inherit") {
       delete next.dangerousMode;
       delete next.dangerousEnabled;
     } else {
@@ -345,19 +345,19 @@ function applyPresetPatch(base: AgentPreset, patch: PresetPatch): AgentPreset {
     }
   }
   if (patch.inlineMode !== undefined) {
-    if (patch.inlineMode === null || patch.inlineMode === "inherit") delete next.inlineMode;
+    if (patch.inlineMode === "inherit") delete next.inlineMode;
     else next.inlineMode = patch.inlineMode;
   }
   if (patch.color !== undefined) {
-    if (patch.color === null) delete next.color;
+    if (patch.color === "") delete next.color;
     else next.color = patch.color;
   }
   if (patch.displayTitle !== undefined) {
-    if (patch.displayTitle === null) delete next.displayTitle;
+    if (patch.displayTitle === "") delete next.displayTitle;
     else next.displayTitle = patch.displayTitle;
   }
   if (patch.fallbacks !== undefined) {
-    if (patch.fallbacks && patch.fallbacks.length > 0) next.fallbacks = [...patch.fallbacks];
+    if (patch.fallbacks.length > 0) next.fallbacks = [...patch.fallbacks];
     else delete next.fallbacks;
   }
   if (patch.fallbackOnRateLimit !== undefined) {
@@ -451,7 +451,7 @@ function presetProblems(
       );
     }
   }
-  if (patch.args) {
+  if (patch.args !== undefined) {
     patch.args.forEach((arg, index) => {
       if (probe({ args: [arg] })?.args?.[0] !== arg) {
         problems.push(
@@ -467,18 +467,18 @@ function presetProblems(
       );
     }
   }
-  if (typeof patch.color === "string" && probe({ color: patch.color })?.color !== patch.color) {
+  if (patch.color && probe({ color: patch.color })?.color !== patch.color) {
     problems.push("color: a hex colour of 3, 4, 6 or 8 digits, such as #3b82f6.");
   }
   if (
-    typeof patch.displayTitle === "string" &&
+    patch.displayTitle &&
     probe({ displayTitle: patch.displayTitle })?.displayTitle !== patch.displayTitle
   ) {
     problems.push(
-      "displayTitle: 1–100 characters, no < or >, no control characters, and no leading or trailing spaces; null clears it."
+      'displayTitle: up to 100 characters, no < or >, no control characters, and no leading or trailing spaces; "" clears it.'
     );
   }
-  if (patch.fallbacks && patch.fallbacks.length > 0) {
+  if (patch.fallbacks !== undefined && patch.fallbacks.length > 0) {
     const kept = probe({ fallbacks: patch.fallbacks })?.fallbacks ?? [];
     if (canonical(kept) !== canonical(patch.fallbacks)) {
       problems.push("fallbacks: up to 3 distinct preset ids, not this preset's own.");

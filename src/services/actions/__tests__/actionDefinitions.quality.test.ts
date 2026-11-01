@@ -574,7 +574,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // seven calls, each a check the caller had to remember and order. The prose
   // names the three refusals and that its own panes are closed and waited for
   // first. In-app only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 24_510;
+  // 24_510 → 25_220 for #16047's three user-preset writes, measured at 25_190 B
+  // (+680). Each has to say the user approves the exact change, that a value
+  // Daintree would drop at launch is refused, and that only the user's own
+  // presets can change; the create adds that it doesn't become the default, the
+  // edit how a patch clears a field. In-app only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 25_220;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1439,6 +1444,13 @@ describe("destructive-action danger metadata", () => {
       // schedules.runNow names the schedule to run.
       scheduleId: "schedule-placeholder",
     };
+    // Strict schemas, which the union above can't satisfy: its extra keys are
+    // themselves a VALIDATION_ERROR, so the confirm gate would never be reached.
+    const STRICT_ARGS: Readonly<Record<string, Record<string, unknown>>> = {
+      "agent.createPreset": { agentId: "claude", name: "placeholder" },
+      "agent.updatePreset": { agentId: "claude", presetId: "preset-placeholder", name: "p" },
+      "agent.deletePreset": { agentId: "claude", presetId: "preset-placeholder" },
+    };
 
     // Some listed actions (e.g. worktree.resource.teardown) gate availability
     // via `isEnabled`, which runs *before* the confirm gate. Without a view
@@ -1511,7 +1523,7 @@ describe("destructive-action danger metadata", () => {
     const failures: string[] = [];
     try {
       for (const id of EXPECTED_CONFIRM_DANGER) {
-        const result = await service.dispatch(id, placeholderArgs, {
+        const result = await service.dispatch(id, STRICT_ARGS[id] ?? placeholderArgs, {
           source: "agent",
           contextOverride,
         });
@@ -1618,6 +1630,9 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "host.ensureProject": { hostId: "h-placeholder" },
       "host.settings": { operation: "read", hostIds: ["h-placeholder"] },
       "host.watch": { operation: "list" },
+      "agent.createPreset": { agentId: "claude", name: "p-placeholder" },
+      "agent.updatePreset": { agentId: "claude", presetId: "p-placeholder", name: "p" },
+      "agent.deletePreset": { agentId: "claude", presetId: "p-placeholder" },
     };
 
     const failures: string[] = [];

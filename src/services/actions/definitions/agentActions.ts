@@ -722,12 +722,15 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     argsSchema: AgentCreatePresetArgsSchema,
     examples: [
       {
-        args: { agentId: "codex", name: "Work account", env: { CODEX_HOME: "/Users/me/.codex-work" } },
+        args: {
+          agentId: "codex",
+          name: "Work account",
+          env: { CODEX_HOME: "/Users/me/.codex-work" },
+        },
         description: "A Codex preset that keeps its own login and history",
       },
     ],
     resultSchema: PresetWriteResultSchema,
-    mcpOutputSchema: true,
     run: (args: unknown, ctx: ActionContext) =>
       runAgentAction("agent.createPreset", args, ctx, callbacks),
   }));
@@ -736,7 +739,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.updatePreset",
     title: "Edit launch preset",
     description:
-      "Change one of the user's own launch presets in place, after the user approves the exact change. Pass only what changes: envSet and envUnset touch only the named env vars, and null clears a field. Repository, CCR and built-in presets are read-only.",
+      'Change one of the user\'s own launch presets in place, after the user approves the exact change. Pass only what changes: envSet and envUnset touch only the named env vars; an empty value or "inherit" clears a field. Repository, CCR and built-in presets are read-only.',
     category: "agent",
     kind: "command",
     danger: "confirm",
@@ -747,7 +750,6 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     palette: { mode: "hidden" },
     argsSchema: AgentUpdatePresetArgsSchema,
     resultSchema: PresetWriteResultSchema,
-    mcpOutputSchema: true,
     run: (args: unknown, ctx: ActionContext) =>
       runAgentAction("agent.updatePreset", args, ctx, callbacks),
   }));
@@ -772,7 +774,6 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .boolean()
         .describe("It was the agent's default preset, so the agent now has none."),
     }),
-    mcpOutputSchema: true,
     run: (args: unknown, ctx: ActionContext) =>
       runAgentAction("agent.deletePreset", args, ctx, callbacks),
   }));

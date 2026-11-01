@@ -104,19 +104,20 @@ export const SessionHistoryListArgsSchema = z
 // rather than dropped: the user approves what the preview shows, and a field
 // the caller meant to set but that never reached the preset is a change nobody
 // approved. No transforms (no `.trim()`): `planAgentPresetMutation` reports
-// anything the launch-time sanitiser would change instead of applying it.
+// anything the launch-time sanitiser would change instead of applying it. The
+// agent id is a plain string, unlike `AgentIdSchema`'s launch union: the plan
+// refuses anything but a registered agent, and the union alone would put most
+// of these tools over the wire budget.
+const PresetAgentIdSchema = z.string().min(1).describe("Agent id from the agent listing.");
 const PresetEnvSchema = z.record(z.string(), z.string());
 const PresetModeSchema = z.enum(["inherit", "on", "off"]);
-const PRESET_ARGS_DESCRIPTION = "Argv for the CLI, one argument per entry.";
-const PRESET_FLAGS_DESCRIPTION = "Flag text used instead of the agent's own, as typed in Settings.";
-const PRESET_SKIP_DESCRIPTION = "Skip permissions: on, off, or inherit the agent's.";
-const PRESET_INLINE_DESCRIPTION = "Inline output (on), alt screen (off), or inherit the agent's.";
+const PRESET_ARGS_DESCRIPTION = "CLI argv, one argument each.";
+const PRESET_SKIP_DESCRIPTION = "Skip permissions.";
+const PRESET_INLINE_DESCRIPTION = "on: inline, off: alt screen.";
 const PRESET_COLOR_DESCRIPTION = "Hex colour, e.g. #3b82f6.";
 const PRESET_TITLE_DESCRIPTION = "Panel title; defaults to the name.";
-const PRESET_FALLBACKS_DESCRIPTION =
-  "Up to 3 other preset ids of this agent, tried in order when this one's provider fails.";
-const PRESET_RATE_LIMIT_DESCRIPTION =
-  "Also fall back on a usage limit, which ends the running conversation.";
+const PRESET_FALLBACKS_DESCRIPTION = "Up to 3 of this agent's preset ids, tried if its provider fails.";
+const PRESET_RATE_LIMIT_DESCRIPTION = "Also fall back on usage limits, ending the conversation.";
 
 const PresetIdArgSchema = z
   .string()
@@ -124,11 +125,11 @@ const PresetIdArgSchema = z
   .describe("A user preset's id (source custom) from the preset listing.");
 
 export const AgentCreatePresetArgsSchema = z.strictObject({
-  agentId: AgentIdSchema,
+  agentId: PresetAgentIdSchema,
   name: z.string().describe("Shown in the preset picker."),
   env: PresetEnvSchema.optional().describe("Env vars the agent launches with."),
   args: z.array(z.string()).optional().describe(PRESET_ARGS_DESCRIPTION),
-  customFlags: z.string().optional().describe(PRESET_FLAGS_DESCRIPTION),
+  customFlags: z.string().optional().describe("Flags used instead of the agent's own."),
   dangerousMode: PresetModeSchema.optional().describe(PRESET_SKIP_DESCRIPTION),
   inlineMode: PresetModeSchema.optional().describe(PRESET_INLINE_DESCRIPTION),
   color: z.string().optional().describe(PRESET_COLOR_DESCRIPTION),
@@ -139,24 +140,30 @@ export const AgentCreatePresetArgsSchema = z.strictObject({
 
 // A patch, never a whole preset: the listing returns no env or flags, so a
 // caller could only replace a preset by being handed every value, secrets
-// included. Omitted keeps a field; null clears it.
+// included. Omitted keeps a field; an empty value or "inherit" clears it, and
+// `customFlags: null` hands the flags back to the agent's own (an empty string
+// is a real value there: no flags at all).
 export const AgentUpdatePresetArgsSchema = z.strictObject({
-  agentId: AgentIdSchema,
+  agentId: PresetAgentIdSchema,
   presetId: PresetIdArgSchema,
   name: z.string().optional().describe("New name."),
   envSet: PresetEnvSchema.optional().describe("Env vars to add or replace; the rest are kept."),
   envUnset: z.array(z.string()).optional().describe("Env var names to remove."),
-  args: z.array(z.string()).nullable().optional().describe(PRESET_ARGS_DESCRIPTION),
-  customFlags: z.string().nullable().optional().describe(PRESET_FLAGS_DESCRIPTION),
-  dangerousMode: PresetModeSchema.nullable().optional().describe(PRESET_SKIP_DESCRIPTION),
-  inlineMode: PresetModeSchema.nullable().optional().describe(PRESET_INLINE_DESCRIPTION),
-  color: z.string().nullable().optional().describe(PRESET_COLOR_DESCRIPTION),
-  displayTitle: z.string().nullable().optional().describe(PRESET_TITLE_DESCRIPTION),
-  fallbacks: z.array(z.string()).nullable().optional().describe(PRESET_FALLBACKS_DESCRIPTION),
+  args: z.array(z.string()).optional().describe(PRESET_ARGS_DESCRIPTION),
+  customFlags: z
+    .string()
+    .nullable()
+    .optional()
+    .describe("Flags used instead of the agent's own; null restores them."),
+  dangerousMode: PresetModeSchema.optional().describe(PRESET_SKIP_DESCRIPTION),
+  inlineMode: PresetModeSchema.optional().describe(PRESET_INLINE_DESCRIPTION),
+  color: z.string().optional().describe(PRESET_COLOR_DESCRIPTION),
+  displayTitle: z.string().optional().describe(PRESET_TITLE_DESCRIPTION),
+  fallbacks: z.array(z.string()).optional().describe(PRESET_FALLBACKS_DESCRIPTION),
   fallbackOnRateLimit: z.boolean().optional().describe(PRESET_RATE_LIMIT_DESCRIPTION),
 });
 
 export const AgentDeletePresetArgsSchema = z.strictObject({
-  agentId: AgentIdSchema,
+  agentId: PresetAgentIdSchema,
   presetId: PresetIdArgSchema,
 });

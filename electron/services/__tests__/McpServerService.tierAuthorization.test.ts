@@ -1069,6 +1069,20 @@ describe("McpServerService", () => {
         description: "Respawn an agent this MCP session created on another preset",
         danger: "confirm",
       }),
+      ...(
+        [
+          ["agent.createPreset", "Create Launch Preset"],
+          ["agent.updatePreset", "Edit Launch Preset"],
+          ["agent.deletePreset", "Remove Launch Preset"],
+        ] as const
+      ).map(([id, title]) =>
+        createManifestEntry({
+          id: id as ActionId,
+          title,
+          description: `${title}.`,
+          danger: "confirm",
+        })
+      ),
       createManifestEntry({
         id: "terminal.sendKeysOwned" as ActionId,
         title: "Press Keys in Owned Terminal",
