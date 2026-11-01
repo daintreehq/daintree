@@ -66,6 +66,7 @@ describe("store ownership derived from the settings catalog", () => {
       deviceId: "owner-desktop-01",
       hostId: "owner-host-0001",
       proxyAllowlisted: true,
+      consentedAt: 1_761_955_200_000,
     };
     const hostCopy: DecisionsSettings = {
       enabled: false,
@@ -74,6 +75,7 @@ describe("store ownership derived from the settings catalog", () => {
       deviceId: "host-device-0001",
       hostId: "host-host-00001",
       proxyAllowlisted: false,
+      consentedAt: null,
     };
     expect(mergeByOwnership(owners, hostCopy, DECISIONS_FIELD_OWNERSHIP)).toEqual(owners);
     expect(splitByOwnership(hostCopy, DECISIONS_FIELD_OWNERSHIP)).toEqual({
