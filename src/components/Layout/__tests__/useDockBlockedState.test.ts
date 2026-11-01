@@ -123,19 +123,56 @@ describe("getGroupBlockedAgentState", () => {
 });
 
 describe("getGroupAmbientAgentState", () => {
+  const NONE: ReadonlySet<string> = new Set();
+
   it("returns undefined when all panels are idle or completed", () => {
     const panels = [{ agentState: "idle" as const }, { agentState: "completed" as const }];
-    expect(getGroupAmbientAgentState(panels)).toBe(undefined);
+    expect(getGroupAmbientAgentState(panels, NONE)).toBe(undefined);
   });
 
-  it("returns 'waiting' when any panel is waiting (highest priority)", () => {
-    const panels = [{ agentState: "working" as const }, { agentState: "waiting" as const }];
-    expect(getGroupAmbientAgentState(panels)).toBe("waiting");
+  it("returns 'waiting' for a hidden tab the fleet places in needs-you, over work", () => {
+    const panels = [
+      { id: "shown", agentState: "working" as const },
+      { id: "asking", agentState: "completed" as const },
+    ];
+    expect(getGroupAmbientAgentState(panels, new Set(["asking"]), "shown")).toBe("waiting");
   });
 
-  it("returns 'working' when any panel is working and none blocked", () => {
-    const panels = [{ agentState: "idle" as const }, { agentState: "working" as const }];
-    expect(getGroupAmbientAgentState(panels)).toBe("working");
+  it("takes no wait from a prompt, a hand-back or an unread wait the band doesn't call needs-you", () => {
+    const panels = [
+      { id: "prompt", agentState: "waiting" as const, waitingReason: "prompt" as const },
+      { id: "approval", agentState: "waiting" as const, waitingReason: "approval" as const },
+      { id: "done", agentState: "completed" as const },
+    ];
+    expect(getGroupAmbientAgentState(panels, NONE, "prompt")).toBe(undefined);
+    expect(getGroupAmbientAgentState(panels, new Set(["elsewhere"]), "prompt")).toBe(undefined);
+  });
+
+  it("leaves the shown tab's ask to the pane itself", () => {
+    const panels = [{ id: "shown", agentState: "waiting" as const }];
+    expect(getGroupAmbientAgentState(panels, new Set(["shown"]), "shown")).toBe(undefined);
+  });
+
+  it("drops a needs-you tab its pane has since seen go back to work, exit or error", () => {
+    const asking = new Set(["t"]);
+    for (const panel of [
+      { id: "t", agentState: "exited" as const },
+      { id: "t", agentState: "directing" as const },
+      { id: "t", agentState: "waiting" as const, waitingReason: "error" as const },
+    ]) {
+      expect(getGroupAmbientAgentState([panel], asking)).toBe(undefined);
+    }
+    expect(getGroupAmbientAgentState([{ id: "t", agentState: "working" as const }], asking)).toBe(
+      "working"
+    );
+  });
+
+  it("returns 'working' when any panel is working and none is asking", () => {
+    const panels = [
+      { id: "shown", agentState: "working" as const },
+      { id: "prompt", agentState: "waiting" as const },
+    ];
+    expect(getGroupAmbientAgentState(panels, NONE, "shown")).toBe("working");
   });
 
   it("ignores stale working state when runtime identity is no longer agent", () => {
@@ -146,21 +183,21 @@ describe("getGroupAmbientAgentState", () => {
         runtimeIdentity: undefined,
       },
     ];
-    expect(getGroupAmbientAgentState(panels)).toBe(undefined);
+    expect(getGroupAmbientAgentState(panels, NONE)).toBe(undefined);
   });
 
   it("returns undefined for empty panels", () => {
-    expect(getGroupAmbientAgentState([])).toBe(undefined);
+    expect(getGroupAmbientAgentState([], NONE)).toBe(undefined);
   });
 
   it("returns undefined for undefined agentState panels", () => {
     const panels = [{ agentState: undefined }, { agentState: undefined }];
-    expect(getGroupAmbientAgentState(panels)).toBe(undefined);
+    expect(getGroupAmbientAgentState(panels, NONE)).toBe(undefined);
   });
 
   it("ignores directing state (not in working tier)", () => {
     const panels = [{ agentState: "directing" as const }, { agentState: "idle" as const }];
-    expect(getGroupAmbientAgentState(panels)).toBe(undefined);
+    expect(getGroupAmbientAgentState(panels, NONE)).toBe(undefined);
   });
 });
 

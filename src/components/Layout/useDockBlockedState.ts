@@ -3,6 +3,7 @@ import type { AgentState, WaitingReason } from "@shared/types/agent";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { isHandBackWait } from "@/lib/handBackPresentation";
+import { isNeedsYouPane } from "@/lib/paneSessionPresentation";
 
 type BlockedState = "waiting" | null;
 
@@ -23,6 +24,7 @@ type AgentStateSource = {
   launchAgentId?: string;
   runtimeStatus?: string;
   exitCode?: number | null;
+  isRestarting?: boolean;
 };
 
 function hasRuntimeAgentIdentity(panel: AgentStateSource): boolean {
@@ -138,18 +140,29 @@ export function getGroupBlockedAgentState(
   return undefined;
 }
 
+/**
+ * The state a grid tab group's edge takes from its members. Waiting is a hidden
+ * tab the fleet places in `needs-you` — the shown tab draws its own — and
+ * working is any member at work.
+ */
 export function getGroupAmbientAgentState(
   panels: ReadonlyArray<AgentStateSource>,
-  handBackRunIds: ReadonlySet<string> = NO_HAND_BACKS
+  needsYouRunIds: ReadonlySet<string>,
+  shownPanelId?: string
 ): AgentState | undefined {
   let hasWaiting = false;
   let hasWorking = false;
 
   for (const panel of panels) {
-    if (isGroupHandBack(panel, handBackRunIds)) continue;
-    const state = getDockDisplayAgentState(panel);
-    if (state === "waiting") hasWaiting = true;
-    else if (state === "working") hasWorking = true;
+    if (
+      panel.id !== undefined &&
+      panel.id !== shownPanelId &&
+      isNeedsYouPane(needsYouRunIds, { ...panel, id: panel.id })
+    ) {
+      hasWaiting = true;
+    } else if (getDockDisplayAgentState(panel) === "working") {
+      hasWorking = true;
+    }
   }
 
   if (hasWaiting) return "waiting";

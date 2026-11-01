@@ -36,8 +36,8 @@ import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { tabDomId } from "./TabButton";
 import { usePluginPanelActivity } from "./PluginPanelActivity";
 import { isBuiltInPanelKind, isPtyPanel } from "@shared/types/panel";
-import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
-import { isHandBackWait } from "@/lib/handBackPresentation";
+import { useRunFleetBand } from "@/hooks/useRunFleetBand";
+import { resolvePaneSessionPresentation } from "@/lib/paneSessionPresentation";
 import { describeExitStatus } from "@/components/Terminal/exitStatus";
 
 /**
@@ -451,7 +451,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // ambientAgentState takes priority so tab groups can surface highest-urgency
   // state from hidden live-agent tabs without affecting the active header chip.
   const effectiveAgentState = ambientAgentState ?? ownAgentState;
-  const blockedState = useDockBlockedState(effectiveAgentState);
   const isWorkingState = effectiveAgentState === "working";
   // The owning plugin's own report takes the same borders under the same
   // setting, but only the border: it never becomes this panel's agent state,
@@ -476,9 +475,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
       };
     })
   );
-  const handBackRunIds = useHandBackRunIds();
-  // The shown tab's own wait is read with its reason; a hidden tab's wait in
-  // a group carries none here, so it reads as asking.
+  const ownBand = useRunFleetBand(id);
   const ownBlockedState = useDockBlockedState(ownAgentState);
   // A restart or an exit is newer than the error wait it ends.
   const isBlockedWait =
@@ -486,20 +483,23 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     paneSignals.waitingReason === "error" &&
     !paneSignals.isRestarting &&
     !isExited;
-  const isHandBack = isHandBackWait(handBackRunIds, {
-    id,
-    agentState: ownAgentState,
-    waitingReason: paneSignals.waitingReason,
-  });
-  const hiddenTabAsking =
-    ambientAgentState === "waiting" && ownAgentState !== "waiting" && blockedState === "waiting";
+  // Amber is the fleet band's `needs-you` and nothing else: an unread Canopy
+  // ask. The edge reads it through the header glyph's own resolver, so the two
+  // come and go together. A prompt that asks nothing, a hand-back, and any
+  // pane the fleet hasn't reported draw no amber.
   // Only a live pane can ask. An error wait is never asking: it is failed
   // while the run is alive and nothing once a restart or exit replaces it.
   const ownCanAsk = paneSignals.waitingReason !== "error" && !paneSignals.isRestarting && !isExited;
-  const isAskingWait =
-    (ownBlockedState === "waiting" && ownCanAsk && !isHandBack) ||
-    hiddenTabAsking ||
-    pluginActivity?.shown === "waiting";
+  const ownAsking =
+    ownCanAsk &&
+    resolvePaneSessionPresentation(headerAgentState, ownBand, {
+      agentState: ownAgentState,
+      waitingReason: paneSignals.waitingReason,
+      isRestarting: paneSignals.isRestarting,
+    }) === "waiting";
+  // The group only reports waiting for a hidden tab the band says needs you.
+  const hiddenTabAsking = ambientAgentState === "waiting";
+  const isAskingWait = ownAsking || hiddenTabAsking || pluginActivity?.shown === "waiting";
   const exitedFailed = isExited === true && describeExitStatus(exitCode).failed && exitCode !== 130;
   const isFailed =
     isBlockedWait || exitedFailed || paneSignals.hostFailed || submitStatus === "failed";

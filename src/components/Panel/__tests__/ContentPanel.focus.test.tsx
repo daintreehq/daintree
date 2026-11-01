@@ -88,6 +88,7 @@ import { inlineRenameFieldClassName } from "../inlineRenameField";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 
 describe("ContentPanel focus", () => {
   /**
@@ -571,6 +572,7 @@ describe("ContentPanel selection chrome", () => {
     isMaximized?: boolean;
     isVoiceArming?: boolean;
     agentState?: AgentState;
+    ambientAgentState?: AgentState;
     location?: "grid" | "dock" | "dialog";
     className?: string;
   }
@@ -592,6 +594,37 @@ describe("ContentPanel selection chrome", () => {
     );
   }
 
+  /**
+   * The fleet reads an unread Canopy ask on t-1: the one thing pane chrome
+   * draws amber for. An asking pane is stopped, so the work it competes with in
+   * these cases comes from a hidden tab (`ambientAgentState`).
+   */
+  function askFromFleet() {
+    mockState.headerAgentState = "waiting";
+    useFleetSnapshotStore.setState({
+      snapshot: {
+        runs: [
+          {
+            runId: "t-1",
+            workspaceId: "p1",
+            spawnedAt: 0,
+            cwd: "/repo",
+            agentState: "waiting",
+            canopy: { kind: "asked", quote: "Ship it?", readAt: 0, seen: false },
+          },
+        ],
+        changedAt: 0,
+        degraded: false,
+        lastSuccessfulAt: null,
+      },
+    });
+  }
+
+  function clearAsk() {
+    mockState.headerAgentState = undefined;
+    useFleetSnapshotStore.setState({ snapshot: null });
+  }
+
   function showAssistant(visible: boolean) {
     act(() => {
       useMacroFocusStore.getState().setVisibility("assistant", visible);
@@ -611,6 +644,7 @@ describe("ContentPanel selection chrome", () => {
     mockState.dockBlockedState = null;
     mockState.headerAgentState = undefined;
     mockState.pluginActivity = null;
+    useFleetSnapshotStore.setState({ snapshot: null });
   }
 
   beforeEach(resetStores);
@@ -741,22 +775,27 @@ describe("ContentPanel selection chrome", () => {
 
     it("keeps the waiting edge over the selected fill and ranks selection above working", () => {
       mockState.showGridAgentHighlights = true;
-      mockState.dockBlockedState = "waiting";
-      const asking = renderPanel({ isMultiPanelGrid: true, agentState: "working" });
+      askFromFleet();
+      const asking = renderPanel({
+        isMultiPanelGrid: true,
+        agentState: "waiting",
+        ambientAgentState: "working",
+      });
       expect(chromeOf(asking.container)).toBe("selected+waiting");
       asking.unmount();
-      mockState.dockBlockedState = null;
+      clearAsk();
       const working = renderPanel({ isMultiPanelGrid: true, agentState: "working" });
       expect(chromeOf(working.container)).toBe("selected");
     });
 
     it("ranks waiting above working once selection releases", () => {
       mockState.showGridAgentHighlights = true;
-      mockState.dockBlockedState = "waiting";
+      askFromFleet();
       const { container } = renderPanel({
         isMultiPanelGrid: true,
         isFocused: false,
-        agentState: "working",
+        agentState: "waiting",
+        ambientAgentState: "working",
       });
       expect(chromeOf(container)).toBe("waiting");
     });
@@ -780,11 +819,12 @@ describe("ContentPanel selection chrome", () => {
       });
       expect(chromeOf(working.container)).toBe("none");
       working.unmount();
-      mockState.dockBlockedState = "waiting";
+      askFromFleet();
       const asking = renderPanel({
         isMultiPanelGrid: true,
         isFocused: false,
-        agentState: "working",
+        agentState: "waiting",
+        ambientAgentState: "working",
       });
       expect(chromeOf(asking.container)).toBe("waiting");
     });
@@ -793,12 +833,13 @@ describe("ContentPanel selection chrome", () => {
       // The ambient states are all gated on `showGridAttention`, so a single
       // pane must never reach them — only selection or bare.
       mockState.showGridAgentHighlights = true;
-      mockState.dockBlockedState = "waiting";
+      askFromFleet();
       const { container } = renderPanel({
         isMultiPanelGrid: false,
         isFocused: false,
         isVoiceArming: true,
-        agentState: "working",
+        agentState: "waiting",
+        ambientAgentState: "working",
       });
       expect(chromeOf(container)).toBe("none");
     });
@@ -824,7 +865,7 @@ describe("ContentPanel selection chrome", () => {
       // The docblock's promise: chrome follows the keystrokes, but the ambient
       // panel-state-* borders keep rendering.
       mockState.showGridAgentHighlights = true;
-      mockState.dockBlockedState = "waiting";
+      askFromFleet();
       const { container } = renderPanel({ isMultiPanelGrid: true });
       showAssistant(true);
       focusAssistant(true);

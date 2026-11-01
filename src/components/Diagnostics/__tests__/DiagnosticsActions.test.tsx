@@ -102,6 +102,7 @@ vi.mock("@/components/icons", () => {
     InteractingCircle: stub,
     ExitedCircle: stub,
     UnreadCircle: stub,
+    BlockedCircle: stub,
     DoneCircle: stub,
     IdleCircle: stub,
   };
