@@ -97,6 +97,9 @@ vi.mock("../../../services/ProjectSwitchStatusTiming.js", () => ({
 const activateProjectOnHostMock = vi.hoisted(() =>
   vi.fn(async (_workspace: unknown, _project: unknown, _residentId: number) => undefined)
 );
+const noteRemoteSwitchOnHostMock = vi.hoisted(() => vi.fn());
+// Which project each remote view's handle holds, as the real activation keeps it.
+const hostResidencyMock = vi.hoisted(() => new Map<number, string>());
 
 vi.mock("../../../services/ProjectSwitchService.js", () => ({
   ProjectSwitchService: class MockProjectSwitchService {
@@ -104,7 +107,17 @@ vi.mock("../../../services/ProjectSwitchService.js", () => ({
     switchProject = vi.fn();
     reopenProject = vi.fn();
   },
-  activateProjectOnHost: activateProjectOnHostMock,
+  activateProjectOnHost: (workspace: unknown, project: { id: string }, residentId: number) => {
+    hostResidencyMock.set(residentId, project.id);
+    return activateProjectOnHostMock(workspace, project, residentId);
+  },
+  noteRemoteSwitchOnHost: noteRemoteSwitchOnHostMock,
+  isProjectHeldOnHost: (_workspace: unknown, residentId: number, projectId: string) =>
+    hostResidencyMock.get(residentId) === projectId,
+  getHostResidentProject: (residentId: number) => hostResidencyMock.get(residentId) ?? null,
+  releaseProjectOnHost: (_workspace: unknown, residentId: number) => {
+    hostResidencyMock.delete(residentId);
+  },
 }));
 
 vi.mock("../../../services/RunCommandDetector.js", () => ({
@@ -177,6 +190,7 @@ import {
 import { distributePortsToView } from "../../../window/portDistribution.js";
 import { _resetRemoteServicesForTest, registerRemoteService } from "../../../remote/runtime.js";
 import { createProjectCrudRegistrar } from "./helpers/projectCrudLifecycle.js";
+import { installRemoteProjectResidency } from "../../../remote/hybrid/residency.js";
 import type { HandlerDependencies } from "../../types.js";
 import type {
   WindowRegistry,
@@ -2971,16 +2985,55 @@ describe("project switch/reopen redirects to the window that owns the project (#
 });
 
 describe("project switch/reopen from a view on a remote Shell", () => {
-  const OLD_ID = "b".repeat(64);
-  const PROJECT_ID = "c".repeat(64);
+  const OLD = { id: "b".repeat(64), name: "Old", path: "/home/greg/old" };
+  const NEW = { id: "c".repeat(64), name: "Remote", path: "/home/greg/remote" };
+  const disposers: Array<() => void> = [];
 
   beforeEach(() => {
     vi.clearAllMocks();
+    hostResidencyMock.clear();
+    activateProjectOnHostMock.mockImplementation(async () => undefined);
+    projectStoreMock.getProjectById.mockImplementation((id) =>
+      id === OLD.id ? OLD : id === NEW.id ? NEW : null
+    );
     projectStoreMock.getProjectState.mockResolvedValue(null);
     projectStoreMock.saveProjectState.mockResolvedValue(undefined);
   });
 
-  async function invokeOverLink(channel: string, args: unknown[]) {
+  afterEach(() => {
+    while (disposers.length) disposers.pop()!();
+  });
+
+  /** Settled at teardown if a test fails first, so no detached save is left running. */
+  function deferred() {
+    let resolve!: () => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<void>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    disposers.push(() => resolve());
+    return { promise, resolve, reject };
+  }
+
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  function remoteEndpoint(handle: number, projectId: string) {
+    return {
+      endpointId: `remote:s1:view${handle}`,
+      clientId: "client-1",
+      projectId,
+      kind: "remote-view" as const,
+      handle,
+      send: vi.fn(),
+      request: vi.fn(async () => true),
+      onClose: vi.fn(() => ({ dispose: () => undefined })),
+      isClosed: () => false,
+    };
+  }
+  type RemoteEndpoint = ReturnType<typeof remoteEndpoint>;
+
+  async function overLink() {
     const { getIpcDispatcher, _resetIpcDispatcherForTesting } = await import("../../dispatcher.js");
     const { wrapError, wrapSuccess } =
       await import("../../../../shared/utils/ipcErrorSerialization.js");
@@ -2993,108 +3046,239 @@ describe("project switch/reopen from a view on a remote Shell", () => {
         return wrapError(error);
       }
     });
-    const release = dispatcher.allowHybridOverLink(channel);
+    const releases = [CHANNELS.PROJECT_SWITCH, CHANNELS.PROJECT_REOPEN].map((channel) =>
+      dispatcher.allowHybridOverLink(channel)
+    );
     const pvm = { switchTo: vi.fn(), getProjectIdForWebContents: vi.fn() };
     const worktreeService = {
+      prewarmProject: vi.fn(),
       resumeProject: vi.fn(),
       loadProject: vi.fn(),
       unregisterWindow: vi.fn(),
+      isWindowAttached: vi.fn(() => true),
+      getHostForProject: vi.fn(() => undefined),
+      on: vi.fn(),
+      off: vi.fn(),
     };
-    const deps = {
+    const cleanup = registerProjectCrudHandlers({
       projectViewManager: pvm,
       worktreeService,
-    } as unknown as HandlerDependencies;
-    const cleanup = registerProjectCrudHandlers(deps);
-    const endpoint = {
-      endpointId: "s1:view-1",
-      clientId: "client-1",
-      projectId: OLD_ID,
-      kind: "remote-view" as const,
-      handle: -7,
-      send: vi.fn(),
-      request: vi.fn(),
-      onClose: vi.fn(() => ({ dispose: () => undefined })),
-      isClosed: () => false,
+    } as unknown as HandlerDependencies);
+    disposers.push(() => {
+      releases.forEach((release) => release());
+      cleanup?.();
+      _resetIpcDispatcherForTesting();
+    });
+    return {
+      pvm,
+      worktreeService,
+      invoke: (endpoint: RemoteEndpoint, channel: string, args: unknown[]) =>
+        dispatcher.invokeForEndpoint(
+          { endpoint, client: { clientId: "client-1", kind: "remote" } as never },
+          channel,
+          args
+        ),
     };
-    const envelope = await dispatcher.invokeForEndpoint(
-      { endpoint, client: { clientId: "client-1", kind: "remote" } as never },
-      channel,
-      args
-    );
-    release();
-    cleanup?.();
-    _resetIpcDispatcherForTesting();
-    return { envelope, pvm, worktreeService, endpoint };
   }
 
-  it("saves the layout the view leaves and runs the shared Host activation for the view", async () => {
-    projectStoreMock.getProjectById.mockReturnValue({
-      id: PROJECT_ID,
-      name: "Remote",
-      path: "/home/greg/remote",
+  /** The host's residency sweep over the Shell's views, each holding its project under its own handle. */
+  async function hostViews(workspace: object, endpoints: RemoteEndpoint[]) {
+    const listeners = new Set<() => void>();
+    const stop = installRemoteProjectResidency({
+      registry: {
+        getRemote: () => endpoints as never,
+        onChange: (listener) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
+      workspace: () => workspace as never,
+      broker: () => ({ connectEndpointPort: () => true }),
     });
+    disposers.push(stop);
+    await flush();
+    activateProjectOnHostMock.mockClear();
+    endpoints.forEach((endpoint) => endpoint.send.mockClear());
+    return {
+      open(endpoint: RemoteEndpoint) {
+        endpoints.push(endpoint);
+        listeners.forEach((listener) => listener());
+      },
+    };
+  }
 
-    const { envelope, pvm, worktreeService, endpoint } = await invokeOverLink(
-      CHANNELS.PROJECT_SWITCH,
-      [PROJECT_ID, { activeWorktreeId: "wt-left" }]
-    );
-
-    expect(envelope).toMatchObject({ ok: true, data: { outcome: "switched" } });
-    expect(projectStoreMock.saveProjectState).toHaveBeenCalledWith(
-      OLD_ID,
-      expect.objectContaining({ projectId: OLD_ID, activeWorktreeId: "wt-left" })
-    );
-    expect(activateProjectOnHostMock).toHaveBeenCalledWith(
-      worktreeService,
-      expect.objectContaining({ id: PROJECT_ID, path: "/home/greg/remote" }),
-      -7
-    );
-    expect(endpoint.send).toHaveBeenCalledWith({
-      type: "event",
-      channel: CHANNELS.PROJECT_WORKTREE_LOAD_STATUS,
-      args: [{ projectId: PROJECT_ID, worktreeLoadError: null }],
-    });
-    expect(pvm.switchTo).not.toHaveBeenCalled();
-    expect(projectStoreMock.setCurrentProject).not.toHaveBeenCalled();
-  });
-
-  it("runs the same activation for a reopen", async () => {
-    projectStoreMock.getProjectById.mockReturnValue({
-      id: PROJECT_ID,
-      name: "Remote",
-      path: "/home/greg/remote",
-      status: "background",
-    });
-
-    const { envelope, worktreeService } = await invokeOverLink(CHANNELS.PROJECT_REOPEN, [
-      PROJECT_ID,
+  const holds = () =>
+    activateProjectOnHostMock.mock.calls.map(([, project, handle]) => [
+      (project as { id: string }).id,
+      handle,
     ]);
 
-    expect(envelope).toMatchObject({ ok: true, data: { outcome: "switched" } });
-    expect(activateProjectOnHostMock).toHaveBeenCalledWith(
-      worktreeService,
-      expect.objectContaining({ id: PROJECT_ID }),
-      -7
+  it("answers before the outgoing save and the incoming load finish, holding the project under the incoming view's handle", async () => {
+    const save = deferred();
+    projectStoreMock.saveProjectState.mockReturnValueOnce(save.promise);
+    const load = deferred();
+    activateProjectOnHostMock.mockImplementation(async (_workspace, project) => {
+      if ((project as { id: string }).id === NEW.id) await load.promise;
+    });
+    const link = await overLink();
+    const outgoing = remoteEndpoint(-7, OLD.id);
+    const views = await hostViews(link.worktreeService, [outgoing]);
+    const order: string[] = [];
+    link.worktreeService.prewarmProject.mockImplementation((path: string) =>
+      order.push(`prewarm ${path}`)
     );
+
+    let answered = false;
+    const answer = link
+      .invoke(outgoing, CHANNELS.PROJECT_SWITCH, [NEW.id, { activeWorktreeId: "wt-left" }])
+      .then((envelope) => {
+        answered = true;
+        order.push("answer");
+        return envelope;
+      });
+    await flush();
+
+    expect(answered).toBe(true);
+    await expect(answer).resolves.toMatchObject({
+      ok: true,
+      data: { outcome: "switched", project: NEW },
+    });
+    expect(projectStoreMock.saveProjectState).toHaveBeenCalledWith(
+      OLD.id,
+      expect.objectContaining({ projectId: OLD.id, activeWorktreeId: "wt-left" })
+    );
+    // The incoming project's host starts spawning before the Shell is told to swap.
+    expect(order).toEqual([`prewarm ${NEW.path}`, "answer"]);
+    expect(noteRemoteSwitchOnHostMock).toHaveBeenCalledWith(NEW);
+    expect(holds()).toEqual([]);
+
+    // The Shell swaps views on that answer, and the one it lands on opens its own endpoint.
+    const incoming = remoteEndpoint(-8, NEW.id);
+    views.open(incoming);
+    expect(holds()).toEqual([[NEW.id, -8]]);
+
+    load.resolve();
+    save.resolve();
+    await flush();
+    expect(incoming.send).toHaveBeenCalledWith({
+      type: "event",
+      channel: CHANNELS.PROJECT_WORKTREE_LOAD_STATUS,
+      args: [{ projectId: NEW.id, worktreeLoadError: null }],
+    });
+    // The view being left keeps its own project: never moved off it, never put back.
+    expect(holds()).toEqual([[NEW.id, -8]]);
+    expect(hostResidencyMock.get(-7)).toBe(OLD.id);
+    expect(outgoing.send).not.toHaveBeenCalled();
+    expect(link.pvm.switchTo).not.toHaveBeenCalled();
     expect(projectStoreMock.setCurrentProject).not.toHaveBeenCalled();
   });
 
-  it("forward-fails a workspace load to the view's recovery banner rather than refusing", async () => {
-    projectStoreMock.getProjectById.mockReturnValue({
-      id: PROJECT_ID,
-      name: "Remote",
-      path: "/home/greg/remote",
-    });
-    activateProjectOnHostMock.mockRejectedValueOnce(new Error("spawn failed"));
+  it("foregrounds a project its cached view still holds, without holding it again", async () => {
+    const link = await overLink();
+    const outgoing = remoteEndpoint(-7, OLD.id);
+    const cached = remoteEndpoint(-8, NEW.id);
+    await hostViews(link.worktreeService, [outgoing, cached]);
+    expect(hostResidencyMock.get(-8)).toBe(NEW.id);
 
-    const { envelope, endpoint } = await invokeOverLink(CHANNELS.PROJECT_SWITCH, [PROJECT_ID]);
-
-    expect(envelope).toMatchObject({ ok: true, data: { outcome: "switched" } });
-    expect(endpoint.send).toHaveBeenCalledWith({
-      type: "event",
-      channel: CHANNELS.PROJECT_WORKTREE_LOAD_STATUS,
-      args: [{ projectId: PROJECT_ID, worktreeLoadError: expect.stringContaining("spawn failed") }],
+    await expect(link.invoke(outgoing, CHANNELS.PROJECT_SWITCH, [NEW.id])).resolves.toMatchObject({
+      ok: true,
+      data: { outcome: "switched" },
     });
+    await flush();
+
+    // Backgrounding paused its host under the hold the cached view kept.
+    expect(link.worktreeService.resumeProject).toHaveBeenCalledWith(NEW.path);
+    expect(holds()).toEqual([]);
+    expect(hostResidencyMock.get(-7)).toBe(OLD.id);
+    expect(hostResidencyMock.get(-8)).toBe(NEW.id);
+    expect(outgoing.send).not.toHaveBeenCalled();
+  });
+
+  it("refuses a project whose repository is gone before saving, starting or recording anything", async () => {
+    probeGitMarkerMock.mockResolvedValueOnce("missing");
+    projectStoreMock.classifyGitBacking.mockResolvedValueOnce({ gitBacked: false });
+    const link = await overLink();
+
+    await expect(
+      link.invoke(remoteEndpoint(-7, OLD.id), CHANNELS.PROJECT_SWITCH, [
+        NEW.id,
+        { activeWorktreeId: "wt-left" },
+      ])
+    ).resolves.toMatchObject({ ok: false, error: { code: "NOT_A_GIT_REPO" } });
+    await flush();
+
+    expect(projectStoreMock.saveProjectState).not.toHaveBeenCalled();
+    expect(link.worktreeService.resumeProject).not.toHaveBeenCalled();
+    expect(link.worktreeService.prewarmProject).not.toHaveBeenCalled();
+    expect(noteRemoteSwitchOnHostMock).not.toHaveBeenCalled();
+  });
+
+  it("records a reopen the same way, holding nothing under the asking view's handle", async () => {
+    const background = { ...NEW, status: "background" };
+    projectStoreMock.getProjectById.mockImplementation((id) =>
+      id === NEW.id ? background : id === OLD.id ? OLD : null
+    );
+    const link = await overLink();
+    const outgoing = remoteEndpoint(-7, OLD.id);
+    await hostViews(link.worktreeService, [outgoing]);
+
+    await expect(link.invoke(outgoing, CHANNELS.PROJECT_REOPEN, [NEW.id])).resolves.toMatchObject({
+      ok: true,
+      data: { outcome: "switched" },
+    });
+
+    expect(noteRemoteSwitchOnHostMock).toHaveBeenCalledWith(background);
+    expect(link.worktreeService.prewarmProject).toHaveBeenCalledWith(NEW.path);
+    expect(holds()).toEqual([]);
+    expect(hostResidencyMock.get(-7)).toBe(OLD.id);
+    expect(projectStoreMock.setCurrentProject).not.toHaveBeenCalled();
+  });
+
+  it("holds a switch back until the save of the project it returns to has landed", async () => {
+    const save = deferred();
+    projectStoreMock.saveProjectState.mockReturnValueOnce(save.promise);
+    const link = await overLink();
+    const left = remoteEndpoint(-7, OLD.id);
+    const arrived = remoteEndpoint(-8, NEW.id);
+
+    await link.invoke(left, CHANNELS.PROJECT_SWITCH, [NEW.id, { activeWorktreeId: "wt-left" }]);
+    // Another view leaving the same project with nothing to save doesn't end the wait.
+    await link.invoke(remoteEndpoint(-9, OLD.id), CHANNELS.PROJECT_SWITCH, [NEW.id]);
+    let returned = false;
+    const back = link.invoke(arrived, CHANNELS.PROJECT_SWITCH, [OLD.id]).then((envelope) => {
+      returned = true;
+      return envelope;
+    });
+    await flush();
+    expect(returned).toBe(false);
+
+    save.resolve();
+    await expect(back).resolves.toMatchObject({ ok: true, data: { outcome: "switched" } });
+  });
+
+  it("reports an outgoing save that fails after the answer", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    disposers.push(() => errorSpy.mockRestore());
+    const save = deferred();
+    projectStoreMock.saveProjectState.mockReturnValueOnce(save.promise);
+    const link = await overLink();
+
+    await expect(
+      link.invoke(remoteEndpoint(-7, OLD.id), CHANNELS.PROJECT_SWITCH, [
+        NEW.id,
+        { activeWorktreeId: "wt-left" },
+      ])
+    ).resolves.toMatchObject({ ok: true, data: { outcome: "switched" } });
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    const failure = new Error("disk full");
+    save.reject(failure);
+    await flush();
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[project:switch] Failed to save the layout a remote view left:",
+      failure
+    );
   });
 });
 

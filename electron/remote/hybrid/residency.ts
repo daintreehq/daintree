@@ -35,12 +35,12 @@ export interface RemoteResidencyOptions {
 
 /**
  * Host side: keep each remote view's project resident here for as long as the
- * view shows it. A view names its project when its endpoint opens (a window
- * reopened on a project, a Shell restoring after a reconnect) as well as on a
- * switch, and the switch handler only covers the latter; without this a view
- * that attaches to a cold project would wait on a workspace host nothing
- * starts. Activation is the same shared operation a switch runs, so the two
- * share one load. The view's residency ends when its endpoint closes or it
+ * view shows it, held under that view's own endpoint handle. A view names its
+ * project when its endpoint opens (a window reopened on a project, a Shell
+ * restoring after a reconnect, the view a switch lands on) or rebinds. This is
+ * the only hold: a switch arrives on the endpoint of the view being left, so
+ * it only records the activity and prewarms the host the incoming view
+ * attaches to here. The view's residency ends when its endpoint closes or it
  * unbinds.
  */
 export function installRemoteProjectResidency(options: RemoteResidencyOptions = {}): () => void {
