@@ -191,9 +191,7 @@ const DURABLE_ALLOWLIST = new Set([
 // (`allowlist hygiene > no stale allowlist entries`) fails if an allowlisted
 // file no longer contains any non-focus-ring forbidden utility.
 const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
-  "#5978-5986-pre-existing": [
-    "src/components/Terminal/HybridInputBar.tsx",
-  ],
+  "#5978-5986-pre-existing": ["src/components/Terminal/HybridInputBar.tsx"],
 };
 
 describe("accent guard", () => {
