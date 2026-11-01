@@ -810,6 +810,38 @@ describe("ScheduledRunScheduler", () => {
     }
   );
 
+  it("calls on time a due time that came after its last launch ended, however late it's evaluated", async () => {
+    let finish: () => void = () => {};
+    vi.setSystemTime(at(8, 59, 50));
+    const skipping = schedule({ cron: "* * * * *" });
+    commit("project-1", [{ ...skipping, policies: { ...skipping.policies, missedRuns: "skip" } }]);
+    launchImpl = (input) =>
+      new Promise((resolve) => {
+        finish = () => resolve(registerAtSpawn(input));
+      });
+    await start();
+    await elapse(10_000);
+    expect(launches).toHaveLength(1);
+
+    // The launch ends at 09:00:59; the pass it asks for is held up past 09:01.
+    await elapse(59_000);
+    let openHistory: () => void = () => {};
+    getRecorder.mockImplementationOnce(
+      () => new Promise((resolve) => (openHistory = () => resolve(recorder)))
+    );
+    launchImpl = async (input) => registerAtSpawn(input);
+    finish();
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(2_000);
+    openHistory();
+    await settle();
+
+    expect(origins().map((origin) => [origin.trigger, origin.dueAt])).toEqual([
+      ["scheduled", at(9)],
+      ["scheduled", at(9, 1)],
+    ]);
+  });
+
   it("calls nothing missed for a project that a change restored before its read did", async () => {
     vi.setSystemTime(at(8, 59));
     const base = deps();

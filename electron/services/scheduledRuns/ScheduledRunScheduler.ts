@@ -102,11 +102,11 @@ export class ScheduledRunScheduler {
   /** Where each schedule's timing starts, before which nothing counts as missed. */
   private readonly floors = new Map<string, number>();
   /**
-   * Schedules whose next evaluation finds what came due while nobody watched
-   * them: while their launch was in flight, their project couldn't be read, or
-   * a retry was waited out.
+   * Until when nobody watched each schedule: while its launch was in flight,
+   * its project couldn't be read, or a retry was waited out. An occurrence due
+   * by then, found at its next evaluation, was missed.
    */
-  private readonly unwatched = new Set<string>();
+  private readonly unwatched = new Map<string, number>();
   /**
    * Each schedule's timing, renewed when it's switched on or its cadence
    * changes, so a launch from before then can't leave retry or missed state
@@ -229,7 +229,7 @@ export class ScheduledRunScheduler {
   private holdRead(snapshot: SchedulesSnapshot): boolean {
     const late = this.unread.delete(snapshot.projectId);
     if (!this.hold(snapshot)) return false;
-    if (late) for (const schedule of snapshot.schedules) this.unwatched.add(schedule.id);
+    if (late) for (const schedule of snapshot.schedules) this.markUnwatched(schedule.id);
     return true;
   }
 
@@ -299,23 +299,23 @@ export class ScheduledRunScheduler {
     let nextDueAt: number | null = null;
     for (const [projectId, snapshot] of this.projects) {
       for (const schedule of snapshot.schedules) {
-        if (!schedule.enabled) continue;
-        if (this.launching.has(schedule.id)) {
-          // Whatever comes due before its launch ends was missed, even for a
-          // launch from before a switch-off whose end leaves nothing.
-          this.unwatched.add(schedule.id);
-          continue;
-        }
+        if (!schedule.enabled || this.launching.has(schedule.id)) continue;
         const retryAt = this.retryAfter.get(schedule.id);
         if (retryAt !== undefined) {
           if (retryAt > monotonic) continue;
           this.retryAfter.delete(schedule.id);
         }
-        const unwatched = this.unwatched.delete(schedule.id);
-        const recovering = this.recoverAll || unwatched;
+        const unwatchedThrough = this.unwatched.get(schedule.id) ?? null;
+        this.unwatched.delete(schedule.id);
+        const missedThrough = this.recoverAll ? Number.POSITIVE_INFINITY : unwatchedThrough;
         let decision: Decision;
         try {
-          decision = this.decide(schedule, recorder.evaluationPoint(schedule.id), now, recovering);
+          decision = this.decide(
+            schedule,
+            recorder.evaluationPoint(schedule.id),
+            now,
+            missedThrough
+          );
         } catch (error) {
           this.logWarn(`[ScheduledRuns] Couldn't evaluate schedule ${schedule.id}:`, error);
           continue;
@@ -334,18 +334,21 @@ export class ScheduledRunScheduler {
         if (due !== null && (nextDueAt === null || due < nextDueAt)) nextDueAt = due;
       }
     }
-    // A schedule skipped here needs none of it: one launching, or waiting out
-    // a retry, is unwatched when it's next evaluated.
+    // A schedule passed over here needs none of it: its launch ending, or the
+    // retry it waits out, marks it unwatched through then.
     this.recoverAll = false;
     this.arm(nextDueAt === null ? SCHEDULER_TICK_MS : nextDueAt - now);
   }
 
-  /** What one schedule's window holds at `now`. */
+  /**
+   * What one schedule's window holds at `now`. An occurrence due by
+   * `missedThrough` came while nobody watched, so it isn't on time.
+   */
   private decide(
     schedule: Schedule,
     evaluationPoint: number | null,
     now: number,
-    recovering: boolean
+    missedThrough: number | null
   ): Decision {
     const cron = this.parse(schedule.cadence.cron);
     if (!cron) return { kind: "wait", nextDueAt: null };
@@ -361,7 +364,8 @@ export class ScheduledRunScheduler {
     }
     const occurrence = { dueAt: latest, occurrenceKey: occurrenceKeyFor(latest) };
     const onlyOne = nextCronOccurrence(cron, timeZone, after) === latest;
-    if (!recovering && onlyOne && now - latest < ON_TIME_GRACE_MS) {
+    const unwatched = missedThrough !== null && latest <= missedThrough;
+    if (!unwatched && onlyOne && now - latest < ON_TIME_GRACE_MS) {
       return { kind: "launch", origin: { trigger: "scheduled", ...occurrence, coalesced: null } };
     }
     const origin: ScheduledRunOrigin = {
@@ -412,8 +416,9 @@ export class ScheduledRunScheduler {
       )
       .finally(() => {
         this.launching.delete(scheduleId);
-        // What came due while it launched was missed.
-        if (current()) this.unwatched.add(scheduleId);
+        // Nothing evaluates a schedule while its launch is in flight, one from
+        // before a switch-off included, so what came due by now was missed.
+        if (this.floors.has(scheduleId)) this.markUnwatched(scheduleId);
         this.requestPass();
       });
   }
@@ -450,10 +455,16 @@ export class ScheduledRunScheduler {
     }
   }
 
-  /** Waits a minute before trying the schedule again, and then never calls it on time. */
+  /** Waits a minute before trying the schedule again; what it was trying is missed by then. */
   private deferRetry(scheduleId: string): void {
     this.retryAfter.set(scheduleId, this.monotonicNow() + UNRECORDED_RETRY_MS);
-    this.unwatched.add(scheduleId);
+    this.markUnwatched(scheduleId);
+  }
+
+  private markUnwatched(scheduleId: string): void {
+    const at = this.now();
+    const through = this.unwatched.get(scheduleId);
+    this.unwatched.set(scheduleId, through === undefined ? at : Math.max(through, at));
   }
 
   /** A wall clock that moved apart from monotonic time since the last look jumped, or slept. */
