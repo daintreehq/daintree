@@ -230,7 +230,12 @@ export class ProjectStore {
     this.fileStore = new ProjectFileStore(this.projectsConfigDir);
     this.schedules = new ScheduleStore(
       this.projectsConfigDir,
-      (projectId) => this.getProjectById(projectId) !== null
+      (projectId) => this.getProjectById(projectId) !== null,
+      Date.now,
+      async (_projectId, scheduleId) => {
+        const { getScheduledRunRecorder } = await import("./scheduledRuns/index.js");
+        (await getScheduledRunRecorder())?.deleteForSchedule(scheduleId);
+      }
     );
     this.globalFileStore = new GlobalFileStore(this.globalConfigDir);
     this.identityFiles = new ProjectIdentityFiles();

@@ -42,7 +42,16 @@ export class ScheduleStore {
     private readonly projectsConfigDir: string,
     /** Whether the project is registered; a removed project's schedules can't be written. */
     private readonly projectExists: (projectId: string) => boolean,
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = Date.now,
+    /**
+     * Deletes what a removed schedule leaves behind, its run history (#15976).
+     * Runs in the schedule's turn once its removal is committed; a failure is
+     * logged and never undoes the removal.
+     */
+    private readonly forgetSchedule: (
+      projectId: string,
+      scheduleId: string
+    ) => Promise<void> | void = () => {}
   ) {}
 
   /** Hears every committed change. Returns its unsubscribe. */
@@ -143,7 +152,15 @@ export class ScheduleStore {
       if (schedules.length === current.length) {
         return { status: "removed", snapshot: this.snapshot(projectId, current) };
       }
-      return { status: "removed", snapshot: await this.commit(projectId, schedules) };
+      const snapshot = await this.commit(projectId, schedules);
+      try {
+        await this.forgetSchedule(projectId, scheduleId);
+      } catch (error) {
+        console.error(
+          `[ScheduleStore] Couldn't delete the run history of schedule ${scheduleId}: ${formatErrorMessage(error, "unknown error")}`
+        );
+      }
+      return { status: "removed", snapshot };
     });
   }
 

@@ -173,7 +173,7 @@ A quit kills every terminal, and those exits are the quit's, not the run's: whil
 
 Each schedule keeps its newest 100 runs, newest by registration time. A run that is still open, or whose process was last seen running, is never pruned: a fact still due for it would have nowhere to land. It goes once it's over and the next prune runs. Pruning a run also drops its occurrence key's protection, so an occurrence that old is kept from running again by the scheduler's evaluation point (#15979), not by the history.
 
-Deleting a schedule deletes its history with it: schedule deletion (#15975) calls `deleteForSchedule`. Removing a project removes its runs in the same transaction as its row. A fact that arrives later for a deleted run finds no row and records nothing.
+Deleting a schedule deletes its history with it: `ScheduleStore.remove` calls `deleteForSchedule` in the schedule's turn, once the removal is committed. A history that couldn't be deleted is logged and leaves the removal standing. Removing a project removes its runs in the same transaction as its row. A fact that arrives later for a deleted run finds no row and records nothing.
 
 ### Reading it and following it
 
