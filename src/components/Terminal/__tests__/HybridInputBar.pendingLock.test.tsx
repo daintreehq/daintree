@@ -107,10 +107,12 @@ async function mountPending() {
       insert: PASSAGE,
     });
     inputs.setDraftInput(PANEL, PASSAGE);
-    useDictationRangeStore.getState().recordUtterance(
-      { sessionId: "s1", panelId: PANEL },
-      { insertion: { from: 0, to: PASSAGE.length }, words: { from: 0, to: PASSAGE.length } }
-    );
+    useDictationRangeStore
+      .getState()
+      .recordUtterance(
+        { sessionId: "s1", panelId: PANEL },
+        { insertion: { from: 0, to: PASSAGE.length }, words: { from: 0, to: PASSAGE.length } }
+      );
     inputs.bumpExternalDraftRevision();
   });
   await act(async () => {
@@ -145,7 +147,10 @@ async function mountPending() {
 function passageRecord() {
   const [record] = useDictationRangeStore.getState().listDictations(PANEL, undefined);
   const utterance = record!.utterances[0]!;
-  return { edited: utterance.range.edited, text: draft().slice(utterance.range.from, utterance.range.to) };
+  return {
+    edited: utterance.range.edited,
+    text: draft().slice(utterance.range.from, utterance.range.to),
+  };
 }
 
 const isMac = /Mac/.test(navigator.platform);

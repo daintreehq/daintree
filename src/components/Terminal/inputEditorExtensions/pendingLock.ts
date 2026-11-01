@@ -10,7 +10,13 @@ import {
   type StateCommand,
   type TransactionSpec,
 } from "@codemirror/state";
-import { Decoration, EditorView, ViewPlugin, type Command, type ViewUpdate } from "@codemirror/view";
+import {
+  Decoration,
+  EditorView,
+  ViewPlugin,
+  type Command,
+  type ViewUpdate,
+} from "@codemirror/view";
 import { VOICE_PENDING_REFUSAL_MS } from "@/lib/animationUtils";
 import { setPendingAIRanges } from "./base";
 import { outsideWrite } from "./correctionReview";
@@ -74,7 +80,9 @@ export function refusedBlocks(
     changes.iterChangedRanges((fromA, toA) => {
       if (refuses) return;
       const touches =
-        fromA === toA ? fromA > block.from && fromA < block.to : fromA < block.to && toA > block.from;
+        fromA === toA
+          ? fromA > block.from && fromA < block.to
+          : fromA < block.to && toA > block.from;
       if (!touches) return;
       const takesWhole = fromA <= block.from && toA >= block.to;
       const chosen = selection?.ranges.some(

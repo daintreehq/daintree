@@ -84,9 +84,7 @@ describe("refusedBlocks", () => {
   it("lets an insertion at either edge through and refuses one inside", () => {
     expect(refusedBlocks([BLOCK], changes({ from: FROM, insert: "x" }), null)).toBeNull();
     expect(refusedBlocks([BLOCK], changes({ from: TO, insert: "x" }), null)).toBeNull();
-    expect(refusedBlocks([BLOCK], changes({ from: FROM + 1, insert: "x" }), null)).toEqual([
-      BLOCK,
-    ]);
+    expect(refusedBlocks([BLOCK], changes({ from: FROM + 1, insert: "x" }), null)).toEqual([BLOCK]);
   });
 
   it("refuses a deletion reaching one character into the block from either side", () => {
@@ -170,7 +168,9 @@ describe("pendingLock", () => {
 
     const typed = mount(DOC, [BLOCK]);
     caret(typed, 0, DOC.length);
-    typed.dispatch(typed.state.update(typed.state.replaceSelection("x"), { userEvent: "input.type" }));
+    typed.dispatch(
+      typed.state.update(typed.state.replaceSelection("x"), { userEvent: "input.type" })
+    );
     expect(typed.state.doc.toString()).toBe("x");
     expect(blocks(typed)).toEqual([]);
   });
@@ -195,7 +195,10 @@ describe("pendingLock", () => {
   it("refuses the composer's own user edits, a chip removed or a file pasted", () => {
     const view = mount(DOC, [BLOCK]);
     view.dispatch({ changes: { from: FROM, to: FROM + 4 }, annotations: userEdit.of(true) });
-    view.dispatch({ changes: { from: FROM + 4, insert: "@a.ts " }, annotations: userEdit.of(true) });
+    view.dispatch({
+      changes: { from: FROM + 4, insert: "@a.ts " },
+      annotations: userEdit.of(true),
+    });
     expect(view.state.doc.toString()).toBe(DOC);
   });
 
@@ -289,15 +292,19 @@ describe("pendingLock", () => {
 
   it("announces a refusal once per wash, not once per key", () => {
     const announced: unknown[] = [];
-    const view = mount(DOC, [BLOCK], [
-      EditorView.updateListener.of((update) => {
-        for (const tr of update.transactions) {
-          for (const effect of tr.effects) {
-            if (effect.is(EditorView.announce)) announced.push(effect.value);
+    const view = mount(
+      DOC,
+      [BLOCK],
+      [
+        EditorView.updateListener.of((update) => {
+          for (const tr of update.transactions) {
+            for (const effect of tr.effects) {
+              if (effect.is(EditorView.announce)) announced.push(effect.value);
+            }
           }
-        }
-      }),
-    ]);
+        }),
+      ]
+    );
     typeAt(view, FROM + 1, "x");
     typeAt(view, FROM + 1, "x");
     expect(announced).toEqual(["Still correcting these words"]);
@@ -331,7 +338,11 @@ describe("pendingLock with undo and redo", () => {
 
   it("still undoes typing outside the block", () => {
     const view = mount(DOC, [BLOCK]);
-    view.dispatch({ ...isolate, changes: { from: DOC.length, insert: "!" }, userEvent: "input.type" });
+    view.dispatch({
+      ...isolate,
+      changes: { from: DOC.length, insert: "!" },
+      userEvent: "input.type",
+    });
     view.contentDOM.dispatchEvent(
       new InputEvent("beforeinput", { inputType: "historyUndo", cancelable: true })
     );
