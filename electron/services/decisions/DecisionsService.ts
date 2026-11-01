@@ -318,10 +318,8 @@ export class DecisionsService {
           await opened?.close();
           return;
         }
-        this.store = opened;
         this.storeFailed = false;
-        // Each pane shows what is stored before anything new arrives.
-        await this.feedFrom(opened);
+        await this.adoptStore(opened);
       }
       this.reconcileConnection();
     });
@@ -342,30 +340,36 @@ export class DecisionsService {
         throw new Error("Decisions is off, so its data can't be deleted");
       }
       // The connection goes first: nothing may reach the store or keys once they close.
-      this.dropConnection();
-      void this.feedFrom(null);
-      const store = this.store;
-      const keyStore = this.keyStore;
-      this.store = null;
-      this.keyStore = null;
+      this.paused = true;
+      let outcome: LocalEraseOutcome;
       try {
-        await store?.close();
-      } finally {
-        await keyStore?.close();
-      }
-      const outcome = await eraseLocalDecisionsData(this.eraseDeps());
-      // Every row is gone, so no pane has anything outstanding.
-      if (outcome.result !== "failed") this.panes.clear(true);
-      if (outcome.result !== "incomplete" && !this.disposed && this.settings !== null) {
+        this.dropConnection();
+        // An answer being typed settles before the store stops taking its result.
+        await this.settledConnections();
+        const store = this.detachStore();
+        const keyStore = this.keyStore;
+        this.keyStore = null;
         try {
-          this.store = await this.openStore(() => this.disposed);
-          this.storeFailed = false;
-          await this.feedFrom(this.store);
-        } catch (err) {
-          // The next start tries again; the deletion stands either way.
-          this.storeFailed = true;
-          console.warn("[Decisions] The store didn't reopen after deleting data:", err);
+          await store?.close();
+        } finally {
+          await keyStore?.close();
         }
+        outcome = await eraseLocalDecisionsData(this.eraseDeps());
+        // Every row is gone, so no pane has anything outstanding.
+        if (outcome.result !== "failed") this.panes.clear(true);
+        if (outcome.result !== "incomplete" && !this.disposed && this.settings !== null) {
+          try {
+            const reopened = await this.openStore(() => this.disposed);
+            this.storeFailed = false;
+            await this.adoptStore(reopened);
+          } catch (err) {
+            // The next start tries again; the deletion stands either way.
+            this.storeFailed = true;
+            console.warn("[Decisions] The store didn't reopen after deleting data:", err);
+          }
+        }
+      } finally {
+        this.paused = false;
       }
       // A deletion that changed nothing reconnects; one that forgot the relay has none to.
       if (!this.disposed && this.settings !== null) this.reconcileConnection();
@@ -401,12 +405,10 @@ export class DecisionsService {
     this.dropConnection();
     // An answer being typed settles before the store stops taking its result.
     await this.settledConnections();
-    void this.feedFrom(null);
     // The route lets go of the listener before the lifetime ends.
     await this.questionsClosing;
-    const store = this.store;
+    const store = this.detachStore();
     const keyStore = this.keyStore;
-    this.store = null;
     this.keyStore = null;
     this.settings = null;
     this.policy = null;
@@ -512,9 +514,23 @@ export class DecisionsService {
     this.connectionKey = null;
     this.closeQuestions();
     const stopped = connection?.stop();
-    if (!stopped) return;
+    if (!(stopped instanceof Promise)) return;
     const settling = stopped.catch(() => {}).finally(() => this.stopping.delete(settling));
     this.stopping.add(settling);
+  }
+
+  /** Makes `opened` the lifetime's store, and shows each pane what it holds before anything new arrives. */
+  private async adoptStore(opened: DaintreeLocalStore | null): Promise<void> {
+    this.store = opened;
+    await this.feedFrom(opened);
+  }
+
+  /** Lets go of the lifetime's store, and stops feeding the panes from it; the caller closes it. */
+  private detachStore(): DaintreeLocalStore | null {
+    void this.feedFrom(null);
+    const store = this.store;
+    this.store = null;
+    return store;
   }
 
   /** Resolves once every connection stopped so far has settled. */

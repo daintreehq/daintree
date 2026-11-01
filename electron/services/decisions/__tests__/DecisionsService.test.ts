@@ -17,6 +17,7 @@ import type {
 import { outstandingRows, row } from "./questionRows.js";
 import type { DecisionsRows } from "../localData.js";
 import type { QuestionSource, RelayConnectionOptions } from "../relayConnection.js";
+import type { QuestionRow } from "@daintreehq/decisions-client";
 
 interface FakeStore {
   close: ReturnType<typeof vi.fn>;
@@ -411,6 +412,7 @@ describe("DecisionsService pane state", () => {
     const pushes: PaneDecisionState[] = [];
     const service = new DecisionsService({
       openStore: async () => store,
+      keyFilePath: () => ABSENT_KEY_FILE,
       publishPaneState: (_projectId, state) => pushes.push(state),
     });
 
@@ -1096,6 +1098,8 @@ describe("DecisionsService deleting local data", () => {
       forgetFails?: boolean;
       /** Holds the rows from the deletion until it settles. */
       rowsReady?: Promise<void>;
+      /** A stopped connection settles its deliveries only when this does. */
+      connectionSettled?: Promise<void>;
     } = {}
   ) {
     const dir = mkdtempSync(join(tmpdir(), "decisions-service-erase-"));
@@ -1104,6 +1108,8 @@ describe("DecisionsService deleting local data", () => {
     const rows = { count: options.rows ?? 2 };
     const pushes: PaneDecisionState[] = [];
     const stores: Array<FakeStore & DaintreeLocalStore> = [];
+    /** The question rows every store opened here holds. */
+    const questions: QuestionRow[] = [];
     let forgetFails = options.forgetFails ?? false;
     const decisionRows: DecisionsRows = {
       erase: () => {
@@ -1117,7 +1123,9 @@ describe("DecisionsService deleting local data", () => {
       keyFilePath: () => keyFile,
       openStore: async () => {
         log.push("open store");
-        const store = fakeStore();
+        const store = Object.assign(fakeStore(), {
+          listQuestions: async () => (rows.count > 0 ? [...questions] : []),
+        });
         store.close.mockImplementation(async () => {
           log.push("close store");
         });
@@ -1138,7 +1146,12 @@ describe("DecisionsService deleting local data", () => {
       // Recorded, never run: no socket opens in these tests.
       connect: () => ({
         start: () => log.push("connect"),
-        stop: () => log.push("disconnect"),
+        stop: () => {
+          log.push("disconnect");
+          return options.connectionSettled?.then(() => {
+            log.push("deliveries settled");
+          });
+        },
       }),
     });
     return {
@@ -1149,6 +1162,7 @@ describe("DecisionsService deleting local data", () => {
       rows,
       pushes,
       stores,
+      questions,
       allowForget: () => {
         forgetFails = false;
       },
@@ -1236,12 +1250,32 @@ describe("DecisionsService deleting local data", () => {
     }
   });
 
+  it("closes the store for a deletion only once the connection's deliveries have settled", async () => {
+    let settle!: () => void;
+    const t = setup({ connectionSettled: new Promise<void>((resolve) => (settle = resolve)) });
+    try {
+      writeFileSync(t.keyFile, KEYS);
+      await t.service.start(on(RELAY));
+      t.log.length = 0;
+
+      const erasing = t.service.eraseLocalData();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(t.log).toEqual(["disconnect"]);
+      settle();
+      await erasing;
+      expect(t.log.slice(0, 3)).toEqual(["disconnect", "deliveries settled", "close store"]);
+      expect(t.log.filter((entry) => entry === "connect")).toHaveLength(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it("changes nothing when the rows can't be deleted, and carries on with a store", async () => {
     const t = setup({ failErase: true });
     try {
       writeFileSync(t.keyFile, KEYS);
+      t.questions.push(row(1));
       await t.service.start(on(RELAY));
-      t.service.observeQuestions([row(1)]);
 
       await expect(t.service.eraseLocalData()).resolves.toEqual({
         result: "failed",
