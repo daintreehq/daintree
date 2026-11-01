@@ -11,6 +11,7 @@ import {
   revealWindow,
 } from "./projectOwnership.js";
 import { isViewHydrated, whenViewHydrated } from "./viewHydration.js";
+import { getAppWebContents } from "./webContentsRegistry.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 import { getWindowRegistry } from "./windowRef.js";
 import { isWindowOnRemoteHost } from "./windowHost.js";
@@ -31,8 +32,11 @@ export interface ScheduledRunNotificationTarget {
   terminalId: string | null;
 }
 
-/** How long a window opened for a click may take to hydrate before its landing is dropped. */
+/** How long a view may take to hydrate before a landing waiting on it is dropped. */
 export const SCHEDULED_RUN_LANDING_TIMEOUT_MS = 60_000;
+
+/** How long a window opened for a click may take to open and hydrate before later clicks stop waiting on it. */
+export const SCHEDULED_RUN_OPENING_TIMEOUT_MS = 2 * SCHEDULED_RUN_LANDING_TIMEOUT_MS;
 
 let windowOpener: ScheduledRunWindowOpener | null = null;
 /** Windows being opened for a project, so a second click waits for the first's. */
@@ -89,9 +93,19 @@ function afterHydrated(webContents: WebContents, then: (hydrated: boolean) => vo
   const cancel = whenViewHydrated(webContents, () => finish(true));
 }
 
-function activeWebContents(context: WindowContext): WebContents | null {
+/**
+ * The renderer a window is showing. A window bound to no workspace yet (the
+ * project picker) has no active view, and `orStartup` falls back to the
+ * renderer it started with, which hydrates like any other.
+ */
+function activeWebContents(
+  context: WindowContext,
+  { orStartup = false }: { orStartup?: boolean } = {}
+): WebContents | null {
   try {
-    const webContents = context.services.projectViewManager?.getActiveView()?.webContents;
+    const webContents =
+      context.services.projectViewManager?.getActiveView()?.webContents ??
+      (orStartup ? getAppWebContents(context.browserWindow) : undefined);
     return webContents && !webContents.isDestroyed() ? webContents : null;
   } catch {
     return null;
@@ -133,7 +147,7 @@ function landInOwner(
 /** Resolves with the window once its view has hydrated, or null when it never does. */
 function untilWindowHydrated(windowId: number): Promise<number | null> {
   const context = getWindowRegistry()?.getByWindowId(windowId);
-  const webContents = context ? activeWebContents(context) : null;
+  const webContents = context ? activeWebContents(context, { orStartup: true }) : null;
   if (!webContents) return Promise.resolve(context ? windowId : null);
   return new Promise((resolve) => {
     afterHydrated(webContents, (hydrated) => resolve(hydrated ? windowId : null));
@@ -146,13 +160,27 @@ function openWindowFor(target: ScheduledRunNotificationTarget): void {
     return;
   }
   const { projectId } = target;
-  const pending = windowOpener(projectId)
-    .then((windowId) => (windowId === null ? null : untilWindowHydrated(windowId)))
+  const opened = windowOpener(projectId).then((windowId) =>
+    windowId === null ? null : untilWindowHydrated(windowId)
+  );
+  // Bounded from the start: a window whose setup stalls must not hold every
+  // later click behind it. One that comes up late is left as it is.
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      console.warn("[ScheduledRuns] A window opened for a run's notification didn't come up");
+      resolve(null);
+    }, SCHEDULED_RUN_OPENING_TIMEOUT_MS);
+  });
+  const pending = Promise.race([opened, timedOut])
     .catch((error: unknown) => {
       console.warn("[ScheduledRuns] Couldn't open a window for a run's notification:", error);
       return null;
     })
-    .finally(() => opening.delete(projectId));
+    .finally(() => {
+      clearTimeout(timer);
+      opening.delete(projectId);
+    });
   opening.set(projectId, pending);
   // Routed again once it is up, so the click lands like any other; a window
   // that didn't open or hydrate ends it, rather than opening another.
@@ -204,7 +232,7 @@ export function openScheduledRunFromNotification(target: ScheduledRunNotificatio
       requestProjectSwitchInWindow(context, projectViewManager, project, intent);
     }
   };
-  const webContents = activeWebContents(context);
+  const webContents = activeWebContents(context, { orStartup: true });
   if (!webContents) {
     switchIn();
     return;

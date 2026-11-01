@@ -31,6 +31,9 @@ vi.mock("../windowRef.js", () => ({ getWindowRegistry: () => nav.registry }));
 vi.mock("../windowHost.js", () => ({
   isWindowOnRemoteHost: (id: number) => nav.remoteWindows.has(id),
 }));
+vi.mock("../webContentsRegistry.js", () => ({
+  getAppWebContents: (win: { appWebContents: unknown }) => win.appWebContents,
+}));
 vi.mock("../viewHydration.js", () => ({
   isViewHydrated: (id: number) => nav.hydrated.has(id),
   whenViewHydrated: (wc: { id: number }, then: () => void) => {
@@ -47,6 +50,7 @@ vi.mock("../viewHydration.js", () => ({
 import { CHANNELS } from "../../ipc/channels.js";
 import {
   SCHEDULED_RUN_LANDING_TIMEOUT_MS,
+  SCHEDULED_RUN_OPENING_TIMEOUT_MS,
   _resetScheduledRunNotificationNavigationForTesting,
   openScheduledRunFromNotification,
   setScheduledRunWindowOpener,
@@ -69,6 +73,10 @@ class FakeWebContents extends EventEmitter {
   }
 }
 
+/**
+ * A window showing `projectId`, or with none bound (the project picker), whose
+ * manager has no active view, as the real one, and only its startup renderer.
+ */
 function windowContext(windowId: number, projectId: string | null = "project-1") {
   const webContents = new FakeWebContents(windowId * 10);
   const projectViewManager = {
@@ -76,11 +84,13 @@ function windowContext(windowId: number, projectId: string | null = "project-1")
     getActiveProjectId(): string | null {
       return this.activeProjectId;
     },
-    getActiveView: () => ({ webContents }),
+    getActiveView(): { webContents: FakeWebContents } | null {
+      return this.activeProjectId === null ? null : { webContents };
+    },
   };
   return {
     windowId,
-    browserWindow: { isDestroyed: () => false },
+    browserWindow: { isDestroyed: () => false, appWebContents: webContents },
     services: { projectViewManager },
     webContents,
   };
@@ -345,6 +355,26 @@ describe("openScheduledRunFromNotification", () => {
     openScheduledRunFromNotification(target);
     await vi.waitFor(() => expect(intentsSent(opened)).toEqual([intent]));
     expect(opener).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops holding later clicks behind a window that never comes up", async () => {
+    vi.useFakeTimers();
+    const opener = vi.fn(() => new Promise<number | null>(() => {}));
+    setScheduledRunWindowOpener(opener);
+    openScheduledRunFromNotification(target);
+
+    const healthy = windowContext(3);
+    nav.hydrated.add(healthy.webContents.id);
+    nav.registry = registryOf([healthy]);
+    nav.owner = owner(healthy);
+    openScheduledRunFromNotification({ ...target, runId: "run-2" });
+    await vi.advanceTimersByTimeAsync(SCHEDULED_RUN_OPENING_TIMEOUT_MS - 1);
+    expect(intentsSent(healthy)).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(intentsSent(healthy)).toEqual([{ ...intent, runId: "run-2" }]);
+    expect(opener).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("ends the click when no window opens, without trying again", async () => {

@@ -51,16 +51,17 @@ export interface ScheduledRunLandingTarget {
  * run's pane, trashed or backgrounded panes included, whatever its terminal
  * did since, since its output is what the user came for. With no pane left,
  * the schedule's history opens, where the run's outcome and its Resume are;
- * a schedule deleted since opens the list. With the Schedules view already
- * open, the click lands on the schedule's page in it, where the run's Open
- * brings its pane forward, rather than focusing a pane under the dialog.
+ * a schedule deleted since opens the list. A Schedules view already open is
+ * left as it is: moving it to another page would drop an edit in progress
+ * without asking, and focusing a pane would put it under the dialog.
  * `isSuperseded` says a newer landing took over while the schedules were read.
  */
 export async function landOnScheduledRun(
   target: ScheduledRunLandingTarget,
   isSuperseded: () => boolean
 ): Promise<void> {
-  if (!useSchedulesViewStore.getState().isOpen && holdsRunPane(target.panelId, target.runId)) {
+  if (useSchedulesViewStore.getState().isOpen) return;
+  if (holdsRunPane(target.panelId, target.runId)) {
     revealRunTerminal(target.panelId);
     await actionService.dispatch("panel.focus", { panelId: target.panelId });
     return;

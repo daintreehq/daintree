@@ -168,13 +168,19 @@ describe("landOnScheduledRun", () => {
     expect(dispatch.mock.calls).toEqual([opened({ scheduleId: "schedule-1" })]);
   });
 
-  it("lands on the schedule's page in a Schedules view already open, not on a pane under it", async () => {
-    fake.panels["terminal-1"] = { location: "grid", worktreeId: null, scheduledRun: runRef };
-    fake.schedulesOpen = true;
-    await landOnScheduledRun(target, notSuperseded);
-    expect(dispatch.mock.calls).toEqual([opened({ scheduleId: "schedule-1" })]);
-    expect(fake.calls).toEqual(["schedules.open"]);
-  });
+  it.each([
+    ["the run's pane is here", "terminal-1"],
+    ["the run has no pane", null],
+  ])(
+    "leaves a Schedules view already open as it is when %s, so an edit in it is never lost",
+    async (_name, panelId) => {
+      fake.panels["terminal-1"] = { location: "grid", worktreeId: null, scheduledRun: runRef };
+      fake.schedulesOpen = true;
+      await landOnScheduledRun({ ...target, panelId }, notSuperseded);
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(fake.calls).toEqual([]);
+    }
+  );
 
   it("opens the list for a schedule deleted since, and the schedule when they can't be read", async () => {
     fake.schedules = { schedules: [{ id: "schedule-2" }] };
