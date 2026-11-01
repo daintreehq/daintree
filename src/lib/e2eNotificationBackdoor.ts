@@ -30,6 +30,7 @@ import { usePanelStore, type BackendStatus, type WatchdogStatus } from "@/store/
 import { useUIStore } from "@/store/uiStore";
 import { useSafeModeStore } from "@/store/safeModeStore";
 import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
+import { setHostPlatformInfo } from "@/hooks/useHostPlatform";
 
 export interface E2EToastInput {
   type: NotificationType;
@@ -111,6 +112,12 @@ export interface NotificationsE2EApi {
    * reconnect, a restart in flight). Returns false when the panel is unknown.
    */
   patchPanel: (panelId: string, patch: Record<string, unknown>) => boolean;
+  /**
+   * Names the host this view's project lives on, as a remote window's
+   * hydrate does, so a capture can show the copy a pane on another machine
+   * gets without a second machine. Null is this machine again.
+   */
+  setHostName: (hostName: string | null) => void;
 }
 
 function buildApi(): NotificationsE2EApi {
@@ -213,6 +220,7 @@ function buildApi(): NotificationsE2EApi {
       }));
       return true;
     },
+    setHostName: (hostName) => setHostPlatformInfo({ hostName }),
   };
 }
 

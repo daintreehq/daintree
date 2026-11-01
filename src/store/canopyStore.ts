@@ -104,6 +104,34 @@ interface CanopyState {
   readingOfferDismissed: boolean;
   dismissReadingOffer: () => void;
   /**
+   * The offer an agent pane makes while its agent is stopped on a question or
+   * an approval and Canopy is off was put away: for good, on every host and
+   * across launches. The panel's own offers stay.
+   */
+  paneOfferDismissed: boolean;
+  dismissPaneOffer: () => void;
+  /**
+   * The one pane making that offer: the first asking pane to claim it holds it
+   * until its agent moves on, so the offer never shows in several panes at
+   * once and never jumps between them while one is still asking.
+   */
+  paneOfferHolder: string | null;
+  claimPaneOffer: (panelId: string) => void;
+  releasePaneOffer: (panelId: string) => void;
+  /**
+   * Turning Canopy on from a pane's offer, under way or refused: the offer
+   * stays in that pane until it is settled, whatever its agent does meanwhile.
+   */
+  paneOfferAttempt: { panelId: string; status: "pending" | "failed" } | null;
+  startPaneOfferAttempt: (panelId: string) => void;
+  /** Settles the pane's attempt, if it is still that pane's: a closed pane hears nothing. */
+  finishPaneOfferAttempt: (panelId: string, turnedOn: boolean) => void;
+  /** The pane whose offer turned Canopy on: it says so, briefly, where the offer was. */
+  paneOfferTurnedOn: string | null;
+  closePaneOfferTurnedOn: () => void;
+  /** The pane closed: nothing it started is reported anywhere. */
+  forgetPaneOffer: (panelId: string) => void;
+  /**
    * The inbox list's width in px, as the user last dragged or stepped it: for
    * every project view and across launches. Null keeps the default, which
    * follows the window.
@@ -158,6 +186,7 @@ export const CANOPY_ACKNOWLEDGED_STORAGE_KEY = "daintree-canopy-acknowledged";
 export const CANOPY_ROLE_STORAGE_KEY = "daintree-canopy-role";
 const HANDBACKS_SEEN_STORAGE_KEY = "daintree-canopy-assistant-handbacks";
 const READING_OFFER_DISMISSED_STORAGE_KEY = "daintree-canopy-reading-offer-dismissed";
+const PANE_OFFER_DISMISSED_STORAGE_KEY = "daintree-canopy-pane-offer-dismissed";
 const LIST_WIDTH_STORAGE_KEY = "daintree-canopy-list-width";
 /** Assistants whose seen handback is kept at most, the oldest seen dropped first: as many as one directory names. */
 const MAX_HANDBACKS_SEEN = AGENT_DIRECTORY_ENTRIES_MAX;
@@ -281,6 +310,22 @@ function saveReadingOfferDismissed(): void {
     window.localStorage.setItem(READING_OFFER_DISMISSED_STORAGE_KEY, "1");
   } catch {
     // Best effort: the callout still stays away for this session.
+  }
+}
+
+function loadPaneOfferDismissed(): boolean {
+  try {
+    return window.localStorage.getItem(PANE_OFFER_DISMISSED_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function savePaneOfferDismissed(): void {
+  try {
+    window.localStorage.setItem(PANE_OFFER_DISMISSED_STORAGE_KEY, "1");
+  } catch {
+    // Best effort: the offer still stays away for this session.
   }
 }
 
@@ -563,6 +608,32 @@ export const useCanopyStore = create<CanopyState>((set, get) => ({
     saveReadingOfferDismissed();
     set({ readingOfferDismissed: true });
   },
+  paneOfferDismissed: loadPaneOfferDismissed(),
+  dismissPaneOffer: () => {
+    savePaneOfferDismissed();
+    set({ paneOfferDismissed: true, paneOfferHolder: null, paneOfferAttempt: null });
+  },
+  paneOfferHolder: null,
+  claimPaneOffer: (panelId) =>
+    set((state) => (state.paneOfferHolder === null ? { paneOfferHolder: panelId } : state)),
+  releasePaneOffer: (panelId) =>
+    set((state) => (state.paneOfferHolder === panelId ? { paneOfferHolder: null } : state)),
+  paneOfferAttempt: null,
+  startPaneOfferAttempt: (panelId) => set({ paneOfferAttempt: { panelId, status: "pending" } }),
+  finishPaneOfferAttempt: (panelId, turnedOn) =>
+    set((state) => {
+      if (state.paneOfferAttempt?.panelId !== panelId) return state;
+      return turnedOn
+        ? { paneOfferAttempt: null, paneOfferTurnedOn: panelId }
+        : { paneOfferAttempt: { panelId, status: "failed" } };
+    }),
+  paneOfferTurnedOn: null,
+  closePaneOfferTurnedOn: () => set({ paneOfferTurnedOn: null }),
+  forgetPaneOffer: (panelId) =>
+    set((state) => ({
+      paneOfferAttempt: state.paneOfferAttempt?.panelId === panelId ? null : state.paneOfferAttempt,
+      paneOfferTurnedOn: state.paneOfferTurnedOn === panelId ? null : state.paneOfferTurnedOn,
+    })),
   listWidth: loadListWidth(),
   setListWidth: (width) => {
     const next = width === null ? null : clampCanopyListWidth(width);
@@ -619,19 +690,26 @@ export const useCanopyStore = create<CanopyState>((set, get) => ({
         return state;
       }
       const mode = snapshot.mode;
+      // A pane's refused turn-on stops mattering once Canopy is on or hidden
+      // some other way: Settings, another view, the panel.
+      const paneOfferAttempt =
+        state.paneOfferAttempt?.status === "failed" && mode !== "unset"
+          ? null
+          : state.paneOfferAttempt;
       // Hidden from another view, or from Settings: a panel this view held open goes too.
       if (mode === "hidden") {
         return {
           snapshot,
           mode,
           outdatedHost: outdated,
+          paneOfferAttempt,
           isOpen: false,
           workOf: null,
           resume: null,
           replyReveal: null,
         };
       }
-      return { snapshot, mode, outdatedHost: outdated };
+      return { snapshot, mode, outdatedHost: outdated, paneOfferAttempt };
     }),
 }));
 
@@ -650,6 +728,17 @@ if (typeof window !== "undefined") {
     }
     if (event.key === READING_OFFER_DISMISSED_STORAGE_KEY) {
       if (loadReadingOfferDismissed()) useCanopyStore.setState({ readingOfferDismissed: true });
+      return;
+    }
+    // Put away in a sibling project view: it goes from this one's panes too.
+    if (event.key === PANE_OFFER_DISMISSED_STORAGE_KEY) {
+      if (loadPaneOfferDismissed()) {
+        useCanopyStore.setState({
+          paneOfferDismissed: true,
+          paneOfferHolder: null,
+          paneOfferAttempt: null,
+        });
+      }
       return;
     }
     if (event.key === LIST_WIDTH_STORAGE_KEY) {
