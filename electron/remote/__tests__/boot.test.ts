@@ -1425,6 +1425,25 @@ describe("startRemoteHosts", () => {
     expect(m.server.close).toHaveBeenCalled();
   });
 
+  it("starts no listener when a stop lands while the Host role is still loading (#15888)", async () => {
+    const init = m.initRemoteHostsClient.getMockImplementation()!;
+    let stopping: Promise<void> | undefined;
+    m.initRemoteHostsClient.mockImplementationOnce((hooks) => {
+      // After the Shell is up, before the Host role's module has loaded.
+      queueMicrotask(() => {
+        stopping = stopRemoteHosts();
+      });
+      return init(hooks);
+    });
+
+    await startRemoteHosts({ hostMode: true });
+    await stopping;
+
+    expect(stopping).toBeDefined();
+    expect(m.server.listen).not.toHaveBeenCalled();
+    expect(getRemoteService("hostMode")).toBeUndefined();
+  });
+
   it("undoes what host setup registered when a later step throws", async () => {
     m.initRemoteHostsHost.mockImplementationOnce(() => {
       throw new Error("session host failed");

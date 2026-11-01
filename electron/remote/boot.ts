@@ -430,6 +430,8 @@ export async function startRemoteHosts(options: StartRemoteHostsOptions): Promis
   startClient(options);
   if (__DAINTREE_REMOTE_HOST_ROLE__ && isRemoteHostSupported()) {
     const { startHostRole } = await import("./hostBoot.js");
+    // A stop during the load already drained the ledger: nothing would tear a listener down.
+    if (!started) return;
     const host = ownedBy("host");
     const listenError = await startHostRole(options, (teardown) => host.push(teardown));
     if (listenError) throw new HostModeListenError(listenError.error);
