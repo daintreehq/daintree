@@ -35,6 +35,11 @@ const launchMock = vi.hoisted(() => vi.fn());
 vi.mock("../../../services/scheduledRuns/scheduledRunLaunchLive.js", () => ({
   runScheduleNowLive: launchMock,
 }));
+const osJobMock = vi.hoisted(() => ({
+  scheduleOsJobStatus: vi.fn(),
+  repairScheduleOsJob: vi.fn(),
+}));
+vi.mock("../../../services/scheduledRuns/scheduleOsJobLive.js", () => osJobMock);
 
 import { CHANNELS } from "../../channels.js";
 import { registerSchedulesHandlers, schedulesNamespace } from "../schedules.js";
@@ -46,6 +51,7 @@ import { toHostScopedKey } from "../../../../shared/types/remoteHosts.js";
 import type {
   ScheduleCreateInput,
   ScheduleCreateOutcome,
+  ScheduleOsJobStatus,
   ScheduleRemoveOutcome,
   ScheduleRunNowOptions,
   ScheduleRunNowOutcome,
@@ -88,6 +94,9 @@ const update = schedulesNamespace.ops.update.handler as unknown as UpdateHandler
 const setEnabled = schedulesNamespace.ops.setEnabled.handler as unknown as SetEnabledHandler;
 const remove = schedulesNamespace.ops.remove.handler as unknown as RemoveHandler;
 const runNow = schedulesNamespace.ops.runNow.handler as unknown as RunNowHandler;
+type OsJobHandler = (ctx: IpcContext) => Promise<ScheduleOsJobStatus>;
+const osJobStatus = schedulesNamespace.ops.osJobStatus.handler as unknown as OsJobHandler;
+const repairOsJob = schedulesNamespace.ops.repairOsJob.handler as unknown as OsJobHandler;
 
 const input: ScheduleCreateInput = {
   name: "Fix tests",
@@ -254,6 +263,38 @@ describe("schedules handlers", () => {
         runNow(ctx(PROJECT), { id: "schedule-1" } as unknown as string)
       ).rejects.toMatchObject({ code: "VALIDATION" });
       expect(launchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("the OS job (#15990)", () => {
+    const status: ScheduleOsJobStatus = {
+      context: { kind: "launch-agent", systemTimeZone: "UTC" },
+      unavailable: null,
+      state: "current",
+      error: null,
+      excluded: [],
+    };
+
+    it("reports and repairs the job for the sender's own project", async () => {
+      osJobMock.scheduleOsJobStatus.mockResolvedValue(status);
+      osJobMock.repairScheduleOsJob.mockResolvedValue({ ...status, state: "stale" });
+
+      await expect(osJobStatus(ctx(PROJECT))).resolves.toEqual(status);
+      await expect(repairOsJob(ctx(PROJECT))).resolves.toMatchObject({ state: "stale" });
+      await osJobStatus(ctx(OTHER));
+      await repairOsJob(ctx(OTHER));
+      expect(osJobMock.scheduleOsJobStatus.mock.calls).toEqual([[PROJECT], [OTHER]]);
+      expect(osJobMock.repairScheduleOsJob.mock.calls).toEqual([[PROJECT], [OTHER]]);
+    });
+
+    it.each([
+      ["no project", ctx(null), "VALIDATION"],
+      ["a view attached over a link", ctx(PROJECT, "remote-view"), "UNSUPPORTED"],
+    ])("answers nothing to %s", async (_name, context, code) => {
+      await expect(osJobStatus(context)).rejects.toMatchObject({ code });
+      await expect(repairOsJob(context)).rejects.toMatchObject({ code });
+      expect(osJobMock.scheduleOsJobStatus).not.toHaveBeenCalled();
+      expect(osJobMock.repairScheduleOsJob).not.toHaveBeenCalled();
     });
   });
 

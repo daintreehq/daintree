@@ -27,6 +27,8 @@ import { logError } from "@/utils/logger";
 import { ScheduleList, scheduleRowSelector, NEW_SCHEDULE_SELECTOR } from "./ScheduleList";
 import { ScheduleEditor, type EditorLeaveState, type WorktreeChoice } from "./ScheduleEditor";
 import { useProjectSchedules } from "./useProjectSchedules";
+import { useScheduleOsJob } from "./useScheduleOsJob";
+import { ScheduleOsJobStatus } from "./ScheduleOsJobStatus";
 import { useLastRuns } from "./useLastRuns";
 import { ScheduleRuns } from "./ScheduleRuns";
 import { useScheduleRuns } from "./useScheduleRuns";
@@ -119,6 +121,7 @@ export function SchedulesDialog({ isOpen, onClose }: SchedulesDialogProps) {
   }
 
   const { state, retry, accept } = useProjectSchedules(isOpen);
+  const osJob = useScheduleOsJob(isOpen, state.snapshot?.revision ?? null);
   const { lastRuns, retryLastRuns } = useLastRuns(
     isOpen ? (state.snapshot?.projectId ?? null) : null
   );
@@ -426,6 +429,13 @@ export function SchedulesDialog({ isOpen, onClose }: SchedulesDialogProps) {
 
       {page.kind === "list" && (
         <AppDialog.Body>
+          <ScheduleOsJobStatus
+            status={osJob.status}
+            schedules={state.snapshot?.schedules ?? []}
+            repairing={osJob.repairing}
+            error={osJob.error}
+            onRepair={osJob.repair}
+          />
           <ScheduleList
             state={state}
             now={now}
@@ -449,6 +459,7 @@ export function SchedulesDialog({ isOpen, onClose }: SchedulesDialogProps) {
           defaultAgentId={agents[0]?.id ?? ""}
           worktrees={worktreeChoices}
           now={now}
+          osJobContext={osJob.status?.context ?? null}
           leaveStateRef={leaveStateRef}
           onSaved={handleSaved}
           onDeleted={handleDeleted}
@@ -490,6 +501,7 @@ export function SchedulesDialog({ isOpen, onClose }: SchedulesDialogProps) {
           defaultAgentId={shown.launch.agentId}
           worktrees={worktreeChoices}
           now={now}
+          osJobContext={osJob.status?.context ?? null}
           leaveStateRef={leaveStateRef}
           onSaved={handleSaved}
           onDeleted={handleDeleted}

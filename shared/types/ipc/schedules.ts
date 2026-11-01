@@ -6,6 +6,7 @@ import type {
   ScheduledRunSkipReason,
 } from "../scheduledRuns.js";
 import type { ScheduleIssue } from "../../utils/scheduleValidation.js";
+import type { ScheduleOsJobContext } from "../../utils/scheduleOsJob.js";
 import type { ScheduledRunRef } from "../scheduledRunRef.js";
 
 /** The sender project's schedules (#15975), as this machine stores them. */
@@ -62,6 +63,34 @@ export type ScheduleUpdateOutcome =
 export type ScheduleSetEnabledOutcome =
   | { status: "saved"; schedule: Schedule; snapshot: SchedulesSnapshot }
   | { status: "not-found"; snapshot: SchedulesSnapshot };
+
+/**
+ * The OS job that starts Daintree for schedules set to run when it isn't
+ * running (#15990). It is one job for the whole machine; `excluded` names only
+ * the sender project's schedules.
+ */
+export interface ScheduleOsJobStatus {
+  /** What main judges the option by, for the editor to judge it the same way. */
+  context: ScheduleOsJobContext;
+  /** Why this copy of Daintree can't install the job at all, or null. */
+  unavailable: string | null;
+  /**
+   * `none`: no schedule needs it and none is installed. `current`: installed,
+   * loaded, and matching every opted-in schedule. `stale`: anything else, such
+   * as a job left from an app that has moved, one that couldn't be written or
+   * loaded, or one no schedule needs that couldn't be removed.
+   */
+  state: "none" | "current" | "stale";
+  /** The last install, rewrite or removal that failed, or null. */
+  error: string | null;
+  /** The sender project's switched-on, opted-in schedules the job can't start, and why. */
+  excluded: ScheduleOsJobExclusion[];
+}
+
+export interface ScheduleOsJobExclusion {
+  scheduleId: string;
+  reason: string;
+}
 
 /** Also the answer when the schedule was already gone. */
 export interface ScheduleRemoveOutcome {

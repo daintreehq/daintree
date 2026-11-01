@@ -1670,9 +1670,15 @@ export interface GeneratedElectronAPI {
     list(
       ...args: IpcInvokeMap["schedules:list"]["args"]
     ): Promise<IpcInvokeMap["schedules:list"]["result"]>;
+    osJobStatus(
+      ...args: IpcInvokeMap["schedules:os-job-status"]["args"]
+    ): Promise<IpcInvokeMap["schedules:os-job-status"]["result"]>;
     remove(
       ...args: IpcInvokeMap["schedules:remove"]["args"]
     ): Promise<IpcInvokeMap["schedules:remove"]["result"]>;
+    repairOsJob(
+      ...args: IpcInvokeMap["schedules:repair-os-job"]["args"]
+    ): Promise<IpcInvokeMap["schedules:repair-os-job"]["result"]>;
     runNow(
       ...args: IpcInvokeMap["schedules:run-now"]["args"]
     ): Promise<IpcInvokeMap["schedules:run-now"]["result"]>;

@@ -7,6 +7,8 @@ export const SCHEDULES_METHOD_CHANNELS = {
   setEnabled: "schedules:set-enabled",
   remove: "schedules:remove",
   runNow: "schedules:run-now",
+  osJobStatus: "schedules:os-job-status",
+  repairOsJob: "schedules:repair-os-job",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof SCHEDULES_METHOD_CHANNELS;

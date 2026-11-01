@@ -45,6 +45,7 @@ import { ProjectFileStore } from "./ProjectFileStore.js";
 import { ScheduleStore } from "./ScheduleStore.js";
 import { events } from "./events.js";
 import { cancelScheduledLaunches } from "./scheduledRuns/scheduledRunAdmission.js";
+import { runWhenClosedWriteIssues } from "./scheduledRuns/scheduleOsJobContext.js";
 import { ProjectRecipeSynchronizer } from "./ProjectRecipeSynchronizer.js";
 import type {
   CopyTreeHistoryAppendInput,
@@ -239,7 +240,8 @@ export class ProjectStore {
         cancelScheduledLaunches({ scheduleId });
         const { getScheduledRunRecorder } = await import("./scheduledRuns/index.js");
         (await getScheduledRunRecorder())?.deleteForSchedule(scheduleId);
-      }
+      },
+      runWhenClosedWriteIssues
     );
     this.globalFileStore = new GlobalFileStore(this.globalConfigDir);
     this.identityFiles = new ProjectIdentityFiles();

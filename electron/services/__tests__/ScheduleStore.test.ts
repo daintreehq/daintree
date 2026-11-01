@@ -329,6 +329,50 @@ describe("ScheduleStore", () => {
     expect((await newStore().get(PROJECT, created.id))?.policies).toEqual(policies);
   });
 
+  it("asks the machine's own check of a write the schema accepts, and never of a read", async () => {
+    const writeIssues = vi.fn((schedule: Schedule) =>
+      schedule.policies.runWhenClosed
+        ? [{ path: "policies.runWhenClosed", cronField: null, message: "Not on this Mac" }]
+        : []
+    );
+    const store = new ScheduleStore(
+      root,
+      (id) => registered.has(id),
+      () => clock,
+      () => {},
+      writeIssues
+    );
+
+    expect(await store.create(PROJECT, { ...input, policies: { runWhenClosed: true } })).toEqual({
+      status: "invalid",
+      issues: [{ path: "policies.runWhenClosed", cronField: null, message: "Not on this Mac" }],
+    });
+    expect((await store.list(PROJECT)).schedules).toEqual([]);
+
+    const created = saved(await store.create(PROJECT, input)).schedule;
+    const refused = await store.update(PROJECT, created.id, created.updatedAt, {
+      policies: { ...created.policies, runWhenClosed: true },
+    });
+    expect(refused.status).toBe("invalid");
+    expect((await store.get(PROJECT, created.id))?.policies.runWhenClosed).toBe(false);
+
+    // A schema refusal is reported alone: the machine isn't asked about a record it can't store.
+    writeIssues.mockClear();
+    const blank = await store.update(PROJECT, created.id, created.updatedAt, { name: " " });
+    expect(blank).toMatchObject({ status: "invalid", issues: [{ path: "name" }] });
+    expect(writeIssues).not.toHaveBeenCalled();
+
+    // A stored opt-in the machine would now refuse still loads and still switches.
+    const stored = { ...created, policies: { ...created.policies, runWhenClosed: true } };
+    fs.writeFileSync(schedulesFile(), encodeSchedulesFile([stored]));
+    writeIssues.mockClear();
+    expect((await store.list(PROJECT)).schedules).toEqual([stored]);
+    expect((await store.setEnabled(PROJECT, created.id, false)).status).toBe("saved");
+    expect((await store.setEnabled(PROJECT, created.id, true)).status).toBe("saved");
+    expect((await newStore().get(PROJECT, created.id))?.enabled).toBe(true);
+    expect(writeIssues).not.toHaveBeenCalled();
+  });
+
   it("keeps a failing listener from stopping the write or the other listeners", async () => {
     const store = newStore();
     vi.spyOn(console, "error").mockImplementation(() => {});

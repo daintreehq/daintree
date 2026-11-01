@@ -1066,6 +1066,16 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         console.warn("[MAIN] Scheduled-run scheduler stop failed:", error);
       }
 
+      // A rewrite of the schedules' OS job under way finishes, so an edit made
+      // just before quitting holds once Daintree is gone (#15990).
+      try {
+        const { stopScheduleOsJob } =
+          await import("../services/scheduledRuns/scheduleOsJobLive.js");
+        await stopScheduleOsJob();
+      } catch (error) {
+        console.warn("[MAIN] Schedule OS job stop failed:", error);
+      }
+
       try {
         const { getPluginUpdateCheckService } =
           await import("../services/PluginUpdateCheckService.js");

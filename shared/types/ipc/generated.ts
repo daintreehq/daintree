@@ -3847,9 +3847,17 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./schedules.js").SchedulesSnapshot | null;
   };
+  "schedules:os-job-status": {
+    args: [];
+    result: import("./schedules.js").ScheduleOsJobStatus;
+  };
   "schedules:remove": {
     args: [scheduleId: string];
     result: import("./schedules.js").ScheduleRemoveOutcome;
+  };
+  "schedules:repair-os-job": {
+    args: [];
+    result: import("./schedules.js").ScheduleOsJobStatus;
   };
   "schedules:run-now": {
     args: [
