@@ -50,6 +50,7 @@ vi.mock("../HelpSessionService.js", () => ({ helpSessionService: helpSessionMock
 
 import { ProjectStatsService } from "../ProjectStatsService.js";
 import { FleetSnapshotService } from "../FleetSnapshotService.js";
+import { setCanopyRefinementSource } from "../canopy/canopyRefinementSource.js";
 import {
   ASSISTANT_PROJECTION_PARITY,
   PARITY_ASSISTANT_TERMINAL,
@@ -99,8 +100,18 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setCanopyRefinementSource(null);
   vi.useRealTimers();
 });
+
+/**
+ * Canopy reading every run's turn as an unseen ask: the one thing short of an
+ * error that counts a run as waiting (#16058). Runs need an id and a spawn
+ * time for a reading to reach them.
+ */
+function readEveryTurnAsAsking(): void {
+  setCanopyRefinementSource(() => ({ kind: "asked", quote: "Ship it?", readAt: 1, seen: false }));
+}
 
 describe("ProjectStatsService adversarial", () => {
   it("debounce timer is cleared on stop — no compute fires after shutdown", async () => {
@@ -174,7 +185,14 @@ describe("ProjectStatsService adversarial", () => {
       { projectId: "p1", kind: "dev-preview", agentState: "working" },
       { projectId: "p1", hasPty: false, kind: "terminal", agentState: "working" },
       { projectId: "p1", kind: "terminal", agentState: "working" }, // no launchAgentId/detectedAgentId → skip
-      { projectId: "p1", kind: "terminal", launchAgentId: "x", agentState: "waiting" }, // counts (waiting)
+      {
+        id: "w1",
+        spawnedAt: 1,
+        projectId: "p1",
+        kind: "terminal",
+        launchAgentId: "x",
+        agentState: "waiting",
+      }, // counts (waiting)
       { projectId: "p1", kind: "terminal", launchAgentId: "x", agentState: "working" }, // counts (active)
       { projectId: "p1", kind: "terminal", launchAgentId: "x", agentState: "working" }, // counts (active)
       { projectId: "p1", kind: "terminal", launchAgentId: "x", agentState: "idle" }, // counts neither
@@ -183,6 +201,7 @@ describe("ProjectStatsService adversarial", () => {
       projectId: "p1",
       terminalCount: 8,
     });
+    readEveryTurnAsAsking();
 
     const svc = new ProjectStatsService(ptyClient as never);
     svc.refresh();
@@ -211,6 +230,8 @@ describe("ProjectStatsService adversarial", () => {
         lastStateChange: 1_000,
       },
       {
+        id: "w1",
+        spawnedAt: 1,
         projectId: "p1",
         kind: "terminal",
         launchAgentId: "x",
@@ -226,6 +247,7 @@ describe("ProjectStatsService adversarial", () => {
         lastStateChange: 10,
       },
     ]);
+    readEveryTurnAsAsking();
 
     const svc = new ProjectStatsService(ptyClient as never);
     svc.refresh();
@@ -253,8 +275,16 @@ describe("ProjectStatsService adversarial", () => {
     const ptyClient = makePtyClient();
     projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
-      { projectId: "p1", kind: "terminal", launchAgentId: "x", agentState: "waiting" },
+      {
+        id: "w1",
+        spawnedAt: 1,
+        projectId: "p1",
+        kind: "terminal",
+        launchAgentId: "x",
+        agentState: "waiting",
+      },
     ]);
+    readEveryTurnAsAsking();
 
     const svc = new ProjectStatsService(ptyClient as never);
     svc.refresh();
@@ -278,6 +308,8 @@ describe("ProjectStatsService adversarial", () => {
     projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
     const waiting = (waitingReason: string) => [
       {
+        id: "w1",
+        spawnedAt: 1,
         projectId: "p1",
         kind: "terminal",
         launchAgentId: "x",
@@ -287,6 +319,7 @@ describe("ProjectStatsService adversarial", () => {
       },
     ];
     ptyClient.getAllTerminalsAsync.mockResolvedValue(waiting("prompt"));
+    readEveryTurnAsAsking();
 
     const svc = new ProjectStatsService(ptyClient as never);
     svc.refresh();
@@ -312,6 +345,8 @@ describe("ProjectStatsService adversarial", () => {
     projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
     const waitingSince = (lastStateChange: number) => [
       {
+        id: "w1",
+        spawnedAt: 1,
         projectId: "p1",
         kind: "terminal",
         launchAgentId: "x",
@@ -321,6 +356,7 @@ describe("ProjectStatsService adversarial", () => {
       },
     ];
     ptyClient.getAllTerminalsAsync.mockResolvedValue(waitingSince(1_000));
+    readEveryTurnAsAsking();
 
     const svc = new ProjectStatsService(ptyClient as never);
     svc.refresh();
@@ -515,6 +551,8 @@ describe("ProjectStatsService adversarial", () => {
       },
       // Plain terminal, no stored agentId, runtime-detected — counts (waiting)
       {
+        id: "w1",
+        spawnedAt: 1,
         projectId: "p1",
         kind: "terminal",
         detectedAgentId: "claude",
@@ -536,6 +574,7 @@ describe("ProjectStatsService adversarial", () => {
       projectId: "p1",
       terminalCount: 4,
     });
+    readEveryTurnAsAsking();
 
     const svc = new ProjectStatsService(ptyClient as never);
     svc.refresh();
@@ -825,9 +864,10 @@ describe("ProjectStatsService scratch workspaces", () => {
     scratchStoreMock.getAllScratches.mockReturnValue([{ id: SCRATCH_ID }]);
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
       agentTerminal("p1", "working"),
-      agentTerminal(SCRATCH_ID, "waiting"),
-      agentTerminal(SCRATCH_ID, "waiting"),
+      agentTerminal(SCRATCH_ID, "waiting", { id: "w1", spawnedAt: 1 }),
+      agentTerminal(SCRATCH_ID, "waiting", { id: "w2", spawnedAt: 1 }),
     ]);
+    readEveryTurnAsAsking();
 
     const svc = new ProjectStatsService(ptyClient as never);
     svc.refresh();
@@ -862,7 +902,7 @@ describe("ProjectStatsService scratch workspaces", () => {
     expect(payload[SCRATCH_ID]!.activeAgentCount).toBe(1);
   });
 
-  it("splits completed from unacknowledged using the scratch's own watermark", async () => {
+  it("offers the scratch's own watermark its completions, and never counts them unread", async () => {
     const ptyClient = makePtyClient();
     projectStoreMock.getAllProjects.mockReturnValue([]);
     scratchStoreMock.getAllScratches.mockReturnValue([
@@ -881,9 +921,11 @@ describe("ProjectStatsService scratch workspaces", () => {
       string,
       Record<string, { completedAgentCount: number; unacknowledgedCompletedAgentCount: number }>,
     ];
-    // Both finished; only the one after the watermark is still unseen.
+    // Both finished before main watched them, so idle in the fleet and never
+    // unread (#16058); the watermark is offered only the one after it.
     expect(payload[SCRATCH_ID]!.completedAgentCount).toBe(2);
-    expect(payload[SCRATCH_ID]!.unacknowledgedCompletedAgentCount).toBe(1);
+    expect(payload[SCRATCH_ID]!.unacknowledgedCompletedAgentCount).toBe(0);
+    expect(svc.getAcknowledgeableCompletionAt(SCRATCH_ID)).toBe(2_000);
   });
 
   it("drops a deleted scratch's entry on the next compute", async () => {
@@ -1223,6 +1265,7 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
         projectId: "p1",
         kind: "terminal",
         agentState: "waiting",
+        waitingReason: "error",
         launchAgentId: "claude",
       },
     ]);
@@ -1242,7 +1285,7 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
     fleet.stop();
   });
 
-  it("counts a watched hand-back as finished, and recomputes when the user sees it (#13238)", async () => {
+  it("counts a watched hand-back and an unread wait as finished, and recomputes when the user sees each", async () => {
     const ptyClient = makePtyClient();
     projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
@@ -1262,11 +1305,21 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
         detectedAgentId: "claude",
         agentState: "waiting",
         waitingReason: "approval",
+        spawnedAt: 20,
       },
     ]);
     ptyClient.getProjectStats.mockResolvedValue({ projectId: "p1", terminalCount: 2 });
     const record: { stoppedAt: number; seenAt?: number } = { stoppedAt: 100 };
-    const handBack = { getRecord: vi.fn((id: string) => (id === "t1" ? record : undefined)) };
+    const wait: { stoppedAt: number; seenAt?: number } = { stoppedAt: 150 };
+    const waitListeners = new Set<() => void>();
+    const handBack = {
+      getRecord: vi.fn((id: string) => (id === "t1" ? record : undefined)),
+      getWait: vi.fn((id: string) => (id === "t2" ? wait : undefined)),
+      onWaitChanged: vi.fn((listener: () => void) => {
+        waitListeners.add(listener);
+        return () => waitListeners.delete(listener);
+      }),
+    };
 
     const svc = new ProjectStatsService(ptyClient as never, null, handBack as never);
     svc.start();
@@ -1276,15 +1329,23 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
     type Entry = { waitingAgentCount: number; unacknowledgedCompletedAgentCount: number };
     const latest = () => (broadcastMock.mock.calls.at(-1) as [string, { p1: Entry }])[1].p1;
     expect(handBack.getRecord).toHaveBeenCalledWith("t1", 10);
-    expect(latest()).toMatchObject({ waitingAgentCount: 1, unacknowledgedCompletedAgentCount: 1 });
+    expect(handBack.getWait).toHaveBeenCalledWith("t2", 20);
+    // The approval has no reading, so it is news, never a wait (#16058).
+    expect(latest()).toMatchObject({ waitingAgentCount: 0, unacknowledgedCompletedAgentCount: 2 });
     // Seen per run, so the project acknowledger is offered nothing to stamp.
     expect(svc.getAcknowledgeableCompletionAt("p1")).toBeUndefined();
 
     record.seenAt = 200;
     eventEmitter.emit("terminal:hand-back-changed", { id: "t1", unseen: false, timestamp: 200 });
     await vi.runOnlyPendingTimersAsync();
+    expect(latest()).toMatchObject({ waitingAgentCount: 0, unacknowledgedCompletedAgentCount: 1 });
 
-    expect(latest()).toMatchObject({ waitingAgentCount: 1, unacknowledgedCompletedAgentCount: 0 });
+    wait.seenAt = 250;
+    for (const listener of waitListeners) listener();
+    await vi.runOnlyPendingTimersAsync();
+    expect(latest()).toMatchObject({ waitingAgentCount: 0, unacknowledgedCompletedAgentCount: 0 });
+
     svc.stop();
+    expect(waitListeners.size).toBe(0);
   });
 });

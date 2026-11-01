@@ -26,8 +26,9 @@ export interface ProjectAgentCounts {
   oldestWaitingSince: number | null;
   /**
    * Agents that handed work back: settled in `completed`, or stopped at a plain
-   * prompt after work main watched. Seen or not — this is presence, and
-   * {@link unacknowledgedCompleted} is the part that asks for attention.
+   * prompt after work main watched, seen or not — plus any wait while it is
+   * unread, so {@link unacknowledgedCompleted}, the part that asks for
+   * attention, stays a subset of this presence.
    */
   completed: number;
   /**

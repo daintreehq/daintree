@@ -166,6 +166,7 @@ import {
   updatePowerObservations,
 } from "../../../window/powerPolicy.js";
 import { getAgentAvailabilityStore } from "../../../services/AgentAvailabilityStore.js";
+import { setCanopyRefinementSource } from "../../../services/canopy/canopyRefinementSource.js";
 import {
   ASSISTANT_PROJECTION_PARITY,
   PARITY_ASSISTANT_TERMINAL,
@@ -236,6 +237,14 @@ describe("handleProjectGetBulkStats", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
+
+  afterEach(() => {
+    setCanopyRefinementSource(null);
+  });
+
+  /** Canopy reading every turn as an unseen ask: what makes a stop count as waiting (#16058). */
+  const readEveryTurnAsAsking = () =>
+    setCanopyRefinementSource(() => ({ kind: "asked", quote: "Ship it?", readAt: 1, seen: false }));
 
   it("calls getAllTerminalsAsync once instead of per-terminal getTerminalAsync", async () => {
     const ptyClient = makePtyClient({
@@ -310,6 +319,14 @@ describe("handleProjectGetBulkStats", () => {
     registerProjectCrudHandlers(makeDeps(ptyClient));
     const handler = getBulkStatsHandler();
 
+    // No reading: the prompt wait has asked nothing.
+    const unread = (await handler(fakeEvent, ["proj-a"])) as Record<
+      string,
+      { activeAgentCount: number; waitingAgentCount: number }
+    >;
+    expect(unread["proj-a"].waitingAgentCount).toBe(0);
+
+    readEveryTurnAsAsking();
     const result = (await handler(fakeEvent, ["proj-a"])) as Record<
       string,
       { activeAgentCount: number; waitingAgentCount: number }
@@ -519,6 +536,7 @@ describe("handleProjectGetBulkStats", () => {
     });
     registerProjectCrudHandlers(makeDeps(ptyClient));
     const handler = getBulkStatsHandler();
+    readEveryTurnAsAsking();
 
     const result = (await handler(fakeEvent, ["proj-a", "proj-b"])) as Record<
       string,

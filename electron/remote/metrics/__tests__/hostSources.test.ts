@@ -27,11 +27,24 @@ const profile = vi.hoisted(() => ({
   service: null as null | { getSnapshot: () => { thermalState: string } },
 }));
 
+const runs = vi.hoisted(() => ({
+  handBacks: null as null | {
+    getRecord: (id: string) => { stoppedAt: number; seenAt?: number } | undefined;
+    getWait: (id: string) => { stoppedAt: number; seenAt?: number } | undefined;
+  },
+  attention: null as null | {
+    getActiveSnoozes: () => Map<string, { snoozedUntil?: number }>;
+    getAll: () => Map<string, unknown>;
+  },
+}));
+
 vi.mock("../../../window/serviceRefs.js", () => ({
   getPtyClient: () => pty.client,
   getAgentVersionService: () => null,
   getCliAvailabilityServiceRef: () => cli.service,
   getResourceProfileService: () => profile.service,
+  getRunAttentionServiceRef: () => runs.attention,
+  getRunHandBackServiceRef: () => runs.handBacks,
   getWorkspaceClientRef: () => workspace.client,
 }));
 const store = vi.hoisted(() => ({
@@ -84,28 +97,26 @@ vi.mock("../../../services/DriveLeaseService.js", () => ({
         }
       : null,
 }));
-const computeProjectAgentCounts = vi.hoisted(() =>
-  vi.fn(
-    (_ids: string[], terminals: Array<{ agentState?: string }>) =>
-      new Map([
-        [
-          "p1",
-          {
-            active: terminals.filter((t) => t.agentState === "working").length,
-            waiting: terminals.filter((t) => t.agentState === "waiting").length,
-          },
-        ],
-      ])
-  )
-);
-vi.mock("../../../services/projectAgentCounts.js", () => ({
-  classifyRun: () => null,
-  computeProjectAgentCounts,
-}));
+// The real tallies, watched: a host's summary is only as right as the counts
+// the switcher reads, so they are never stood in for here.
+vi.mock("../../../services/projectAgentCounts.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../../services/projectAgentCounts.js")>();
+  return { ...real, computeProjectAgentCounts: vi.fn(real.computeProjectAgentCounts) };
+});
 
 import { createHostSampleSources, observeAgents } from "../hostSources.js";
+import { computeProjectAgentCounts } from "../../../services/projectAgentCounts.js";
+import { setCanopyRefinementSource } from "../../../services/canopy/canopyRefinementSource.js";
 
-const WORKING = { id: "t1", projectId: "p1", agentState: "working" };
+const WORKING = {
+  id: "t1",
+  projectId: "p1",
+  kind: "terminal",
+  detectedAgentId: "claude",
+  agentState: "working",
+  spawnedAt: 1,
+};
+const NOTHING_ASKED = { waiting: 0, blocked: 0, idle: 0 };
 
 beforeEach(() => {
   store.projects = DEFAULT_PROJECTS;
@@ -114,7 +125,10 @@ beforeEach(() => {
   lease.holders = null;
   lease.away.clear();
   scratches.list = [];
-  computeProjectAgentCounts.mockClear();
+  vi.mocked(computeProjectAgentCounts).mockClear();
+  runs.handBacks = null;
+  runs.attention = null;
+  setCanopyRefinementSource(null);
   workspace.client = null;
   pty.client = {
     getAllTerminalsWithCompletenessAsync: vi.fn(async () => ({
@@ -129,7 +143,61 @@ beforeEach(() => {
 
 describe("observeAgents", () => {
   it("counts what every shard reported", async () => {
-    await expect(observeAgents()).resolves.toEqual({ working: 1, waiting: 0, idle: 0 });
+    await expect(observeAgents()).resolves.toEqual({
+      working: 1,
+      waiting: 0,
+      idle: 0,
+      attention: NOTHING_ASKED,
+    });
+  });
+
+  it("bands its runs as its own panes do, beside what its FSM observed (#16058)", async () => {
+    const run = (id: string, over: object) => ({
+      id,
+      projectId: "p1",
+      kind: "terminal",
+      detectedAgentId: "claude",
+      spawnedAt: 1,
+      ...over,
+    });
+    const terminals = [
+      // At its prompt, no reading: observed waiting, asking nothing.
+      run("prompt", { agentState: "waiting", waitingReason: "prompt" }),
+      // A question Canopy read as an ask the user hasn't seen.
+      run("asked", { agentState: "waiting", waitingReason: "question" }),
+      // The same ask, seen.
+      run("seen", { agentState: "waiting", waitingReason: "question" }),
+      // An approval the patterns saw, already looked at.
+      run("approval", { agentState: "waiting", waitingReason: "approval" }),
+      run("error", { agentState: "waiting", waitingReason: "error" }),
+      // Parked while Canopy reads an ask: the park wins.
+      run("parked", { agentState: "waiting", waitingReason: "question" }),
+      run("done", { agentState: "completed" }),
+      WORKING,
+    ];
+    pty.client!.getAllTerminalsWithCompletenessAsync.mockResolvedValue({
+      terminals,
+      degraded: false,
+      shardsTotal: 1,
+      shardsFailed: 0,
+    });
+    setCanopyRefinementSource((id) =>
+      id === "asked" || id === "seen" || id === "parked"
+        ? { kind: "asked", quote: "Ship it?", readAt: 2, seen: id === "seen" }
+        : undefined
+    );
+    runs.handBacks = {
+      getRecord: () => undefined,
+      getWait: (id) => (id === "approval" ? { stoppedAt: 2, seenAt: 3 } : undefined),
+    };
+    runs.attention = { getActiveSnoozes: () => new Map(), getAll: () => new Map([["parked", {}]]) };
+
+    await expect(observeAgents()).resolves.toEqual({
+      working: 1,
+      waiting: 6,
+      idle: 1,
+      attention: { waiting: 1, blocked: 1, idle: 5 },
+    });
   });
 
   it("is unknown when a shard didn't answer, rather than a partial count", async () => {
@@ -329,14 +397,19 @@ describe("one host-summary sample", () => {
     scratches.list = [{ id: "s1" }];
     lease.holders = { p2: holder(5), p3: holder(9) };
     await expect(sampleOnce()).resolves.toEqual({
-      agents: { working: 1, waiting: 0, idle: 0 },
+      agents: { working: 1, waiting: 0, idle: 0, attention: NOTHING_ASKED },
       projects: { projectCount: 2, worktreeCount: null },
       // A closed project's lease still counts, as it did when each reader listed its own.
       driver: holder(9),
     });
     expect(getAllProjects).toHaveBeenCalledTimes(1);
     // Every registered project and scratch, not only the open ones.
-    expect(computeProjectAgentCounts.mock.calls[0]![0]).toEqual(["p1", "p2", "p3", "s1"]);
+    expect(vi.mocked(computeProjectAgentCounts).mock.calls[0]![0]).toEqual([
+      "p1",
+      "p2",
+      "p3",
+      "s1",
+    ]);
   });
 
   it("names every driven project it lists, newest control first, away holders included", async () => {
@@ -373,7 +446,7 @@ describe("one host-summary sample", () => {
       projects: { projectCount: 1 },
     });
     expect(getAllProjects).toHaveBeenCalledTimes(2);
-    expect(computeProjectAgentCounts.mock.calls[1]![0]).toEqual(["p1"]);
+    expect(vi.mocked(computeProjectAgentCounts).mock.calls[1]![0]).toEqual(["p1"]);
   });
 
   it("is unknown everywhere the list was needed when the store fails, and asks once", async () => {
@@ -406,7 +479,7 @@ describe("one host-summary sample", () => {
     await expect(sampleOnce()).resolves.toMatchObject({
       agents: { working: 0, waiting: 0, idle: 0 },
     });
-    await expect(observeAgents()).resolves.toEqual({ working: 1, waiting: 0, idle: 0 });
+    await expect(observeAgents()).resolves.toMatchObject({ working: 1, waiting: 0, idle: 0 });
     expect(pty.client!.getAllTerminalsWithCompletenessAsync).toHaveBeenCalledTimes(2);
 
     pty.client!.getAllTerminalsWithCompletenessAsync.mockResolvedValueOnce({

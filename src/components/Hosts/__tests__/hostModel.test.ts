@@ -62,6 +62,7 @@ function summary(hostId: string, extra: Partial<HostMetricsSummary> = {}): HostM
     thermal: null,
     cpuPressure: null,
     agentsObserved: { working: 6, waiting: 1, idle: 2 },
+    agentAttention: { waiting: 1, blocked: 0, idle: 2 },
     projectCount: 2,
     worktreeCount: 3,
     driver: null,
@@ -146,9 +147,26 @@ describe("describeHostRowStatus", () => {
     const quiet = summary("h1", {
       projectCount: 1,
       agentsObserved: { working: 0, waiting: 0, idle: 4 },
+      agentAttention: { waiting: 0, blocked: 0, idle: 4 },
     });
     const [, row] = rowsFor([entry("h1", "studio-01", CONNECTED, quiet)]);
     expect(describeHostRowStatus(row!, now)).toBe("1 project");
+  });
+
+  it("says waiting and blocked from the host's bands, never its raw waits (#16058)", () => {
+    const status = (extra: Partial<HostMetricsSummary>) => {
+      const [, row] = rowsFor([
+        entry("h1", "studio-01", CONNECTED, summary("h1", { projectCount: 1, ...extra })),
+      ]);
+      return describeHostRowStatus(row!, now);
+    };
+    // Three agents at their prompts, one of them blocked on an error.
+    const observed = { working: 0, waiting: 3, idle: 0 };
+    expect(status({ agentsObserved: observed, agentAttention: { waiting: 0, blocked: 1, idle: 2 } })).toBe(
+      "1 project · 1 blocked (observed)"
+    );
+    // A host too old to band its runs says nothing about them rather than guess.
+    expect(status({ agentsObserved: observed, agentAttention: undefined })).toBe("1 project");
   });
 
   it("says unreachable with when it was last seen, never why", () => {

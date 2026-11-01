@@ -1,6 +1,6 @@
 import type { HostMetricsSummary } from "@shared/types/remoteHosts";
 import { cn } from "@/lib/utils";
-import { HollowCircle, SpinnerCircle } from "@/components/icons";
+import { BlockedCircle, HollowCircle, SpinnerCircle } from "@/components/icons";
 
 /** A reading the host didn't give: a dash, said in full to a screen reader. */
 export function MetricDash({ label, align }: { label: string; align?: "right" }) {
@@ -55,7 +55,7 @@ export function AgentCounts({
           {/* Rare, and the louder fact, so it takes room only when there is one. */}
           {blocked > 0 && (
             <span aria-hidden="true" className="flex w-7 items-center gap-1">
-              <HollowCircle className="h-3 w-3 shrink-0 text-status-danger-text" />
+              <BlockedCircle className="h-3 w-3 shrink-0 text-status-danger" />
               {blocked}
             </span>
           )}
