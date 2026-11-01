@@ -139,8 +139,8 @@ function deps(): ScheduledRunSchedulerDeps {
   };
 }
 
-async function start(): Promise<ScheduledRunScheduler> {
-  scheduler = new ScheduledRunScheduler(deps());
+async function start(osLaunchAt: number | null = null): Promise<ScheduledRunScheduler> {
+  scheduler = new ScheduledRunScheduler({ ...deps(), osLaunchAt });
   await scheduler.start();
   await scheduler.idle();
   return scheduler;
@@ -903,6 +903,122 @@ describe("ScheduledRunScheduler", () => {
     await elapse(HOUR);
     expect(launches).toEqual([]);
     expect(listeners.size).toBe(0);
+  });
+
+  describe("after an OS job launched Daintree", () => {
+    const daily = (overrides: Partial<Schedule> = {}) =>
+      schedule({ cron: "0 9 * * *", updatedAt: at(8), ...overrides });
+    const skipping = (overrides: Partial<Schedule> = {}) => {
+      const base = daily(overrides);
+      return { ...base, policies: { ...base.policies, missedRuns: "skip" as const } };
+    };
+
+    it("runs the occurrence it fired for on time, even when missed runs are skipped", async () => {
+      setClock(at(9, 0, 20));
+      commit("project-1", [skipping()]);
+      await start(at(9));
+
+      expect(origins()).toEqual([
+        {
+          trigger: "os-launch",
+          dueAt: at(9),
+          occurrenceKey: occurrenceKeyFor(at(9)),
+          coalesced: null,
+        },
+      ]);
+    });
+
+    it("counts an occurrence that came due while Daintree started as on time", async () => {
+      setClock(at(9, 0, 30));
+      commit("project-1", [daily()]);
+      await start(at(8, 59, 58));
+
+      expect(origins()).toEqual([
+        expect.objectContaining({ trigger: "os-launch", dueAt: at(9), coalesced: null }),
+      ]);
+    });
+
+    it("applies the missed-run policy to a job the OS ran late", async () => {
+      // launchd runs a job the machine slept through when it wakes.
+      setClock(at(13, 0, 10));
+      commit("project-1", [daily()]);
+      await start(at(13));
+
+      expect(origins()).toEqual([
+        {
+          trigger: "os-launch",
+          dueAt: at(9),
+          occurrenceKey: occurrenceKeyFor(at(9)),
+          coalesced: { after: at(8), through: at(13, 0, 10) },
+        },
+      ]);
+    });
+
+    it("records a late job's occurrence as skipped when missed runs are skipped", async () => {
+      setClock(at(13, 0, 10));
+      commit("project-1", [skipping()]);
+      await start(at(13));
+
+      expect(launches).toEqual([]);
+      expect(recorder.listBySchedule("schedule-1")).toEqual([
+        expect.objectContaining({
+          origin: expect.objectContaining({ trigger: "os-launch", dueAt: at(9) }),
+          settlement: expect.objectContaining({ outcome: "skipped" }),
+        }),
+      ]);
+    });
+
+    it("gives every schedule that pass finds the OS launch's trigger", async () => {
+      setClock(at(9, 0, 10));
+      const hourly = schedule({ id: "schedule-2", cron: "0 * * * *", updatedAt: at(5) });
+      commit("project-1", [daily(), hourly]);
+      await start(at(9));
+
+      expect(
+        launches.map((launch) => [launch.scheduleId, launch.origin.trigger, launch.origin.coalesced])
+      ).toEqual([
+        ["schedule-1", "os-launch", null],
+        ["schedule-2", "os-launch", { after: at(5), through: at(9, 0, 10) }],
+      ]);
+    });
+
+    it("leaves later due times to the usual rules", async () => {
+      setClock(at(9, 0, 10));
+      commit("project-1", [schedule({ updatedAt: at(8, 30) })]);
+      await start(at(9));
+      await elapse(HOUR);
+
+      expect(origins().map((origin) => [origin.trigger, origin.dueAt])).toEqual([
+        ["os-launch", at(9)],
+        ["scheduled", at(10)],
+      ]);
+    });
+
+    it("calls the occurrence late when the machine slept before the first look", async () => {
+      setClock(at(9, 0, 5));
+      commit("project-1", [daily()]);
+      scheduler = new ScheduledRunScheduler({ ...deps(), osLaunchAt: at(9) });
+      scheduler.suspend();
+      sleepFor(4 * HOUR);
+      await scheduler.start();
+      await scheduler.idle();
+
+      expect(origins()).toEqual([
+        expect.objectContaining({ trigger: "catch-up", dueAt: at(9) }),
+      ]);
+    });
+  });
+
+  it("looks again at once when an OS job reaches a running Daintree", async () => {
+    commit("project-1", [schedule({ updatedAt: at(8) })]);
+    await start();
+
+    // Its timers held back (App Nap), not asleep: both clocks moved, no timer ran.
+    vi.setSystemTime(at(9, 0, 5));
+    scheduler!.check();
+    await scheduler!.idle();
+
+    expect(origins()).toEqual([expect.objectContaining({ trigger: "scheduled", dueAt: at(9) })]);
   });
 
   it("launches and records nothing once Daintree is quitting", async () => {

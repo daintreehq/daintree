@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => {
     suspend: ReturnType<typeof vi.fn>;
     resume: ReturnType<typeof vi.fn>;
     unlock: ReturnType<typeof vi.fn>;
+    check: ReturnType<typeof vi.fn>;
     dispose: ReturnType<typeof vi.fn>;
   }> = [];
   return {
@@ -62,6 +63,7 @@ vi.mock("../ScheduledRunScheduler.js", () => ({
     suspend = vi.fn();
     resume = vi.fn();
     unlock = vi.fn();
+    check = vi.fn();
     dispose = vi.fn(async () => {});
     constructor(deps: Record<string, unknown>) {
       this.deps = deps;
@@ -72,11 +74,14 @@ vi.mock("../ScheduledRunScheduler.js", () => ({
 
 import { powerMonitor } from "electron";
 import {
+  checkDueSchedules,
   startScheduledRunScheduler,
   stopScheduledRunScheduler,
 } from "../scheduledRunSchedulerLive.js";
 
 const power = powerMonitor as unknown as EventEmitter;
+
+const originalArgv = process.argv;
 
 beforeEach(() => {
   mocks.instances.length = 0;
@@ -84,6 +89,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  process.argv = originalArgv;
   await stopScheduledRunScheduler();
 });
 
@@ -161,6 +167,31 @@ describe("scheduledRunSchedulerLive", () => {
     expect(power.listenerCount("suspend")).toBe(0);
     expect(power.listenerCount("resume")).toBe(0);
     expect(power.listenerCount("unlock-screen")).toBe(0);
+  });
+
+  it("treats a process an OS job started as watched from its start", () => {
+    process.argv = [...originalArgv, "--run-due-schedules"];
+    startScheduledRunScheduler();
+
+    const osLaunchAt = mocks.instances[0]!.deps.osLaunchAt as number;
+    expect(osLaunchAt).toBe(Math.round(performance.timeOrigin));
+    expect(osLaunchAt).toBeLessThanOrEqual(Date.now());
+  });
+
+  it("treats any other launch as unwatched until its first look", () => {
+    startScheduledRunScheduler();
+
+    expect(mocks.instances[0]!.deps.osLaunchAt).toBeNull();
+  });
+
+  it("asks a running scheduler to look at once, and does nothing before it starts", () => {
+    checkDueSchedules();
+    startScheduledRunScheduler();
+    const scheduler = mocks.instances[0]!;
+    expect(scheduler.check).not.toHaveBeenCalled();
+
+    checkDueSchedules();
+    expect(scheduler.check).toHaveBeenCalledTimes(1);
   });
 
   it("starts nothing once shutdown has begun", () => {

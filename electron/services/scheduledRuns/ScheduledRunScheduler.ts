@@ -53,6 +53,12 @@ export interface ScheduledRunSchedulerDeps {
   readonly cancelLaunches: (scheduleId: string) => void;
   readonly newId: () => string;
   readonly isShuttingDown?: () => boolean;
+  /**
+   * When an OS job started this process to run due schedules (#15989). The job
+   * watched while Daintree wasn't running, so the startup pass doesn't call
+   * the occurrence it fired for missed, and launches with trigger `os-launch`.
+   */
+  readonly osLaunchAt?: number | null;
   readonly now?: () => number;
   readonly monotonicNow?: () => number;
   readonly logInfo?: (message: string) => void;
@@ -125,6 +131,8 @@ export class ScheduledRunScheduler {
    */
   private recoverAll = true;
   private passRequested = false;
+  /** Set until the startup pass after an OS launch has evaluated every schedule. */
+  private osLaunchAt: number | null;
   private draining: Promise<void> | null = null;
   private lastLook: { readonly wall: number; readonly monotonic: number } | null = null;
 
@@ -135,6 +143,7 @@ export class ScheduledRunScheduler {
     this.isShuttingDown = deps.isShuttingDown ?? (() => false);
     this.logInfo = deps.logInfo ?? console.log;
     this.logWarn = deps.logWarn ?? console.warn;
+    this.osLaunchAt = deps.osLaunchAt ?? null;
   }
 
   /** Reads every project's schedules, then evaluates them; the first pass catches up. */
@@ -160,6 +169,8 @@ export class ScheduledRunScheduler {
   /** What came due while the machine slept is missed, whichever event reports the wake first. */
   suspend(): void {
     this.recoverAll = true;
+    // A sleep between the OS job's launch and the first look: what it fired for is late now.
+    this.osLaunchAt = null;
   }
 
   resume(): void {
@@ -169,6 +180,15 @@ export class ScheduledRunScheduler {
 
   /** A locked screen keeps running, so nothing is missed; the due times are looked at again. */
   unlock(): void {
+    this.requestPass();
+  }
+
+  /**
+   * Looks at every schedule at once: an OS job's launch reaching a Daintree
+   * that is already running. That Daintree was watching, so nothing changes
+   * what counts as on time.
+   */
+  check(): void {
     this.requestPass();
   }
 
@@ -282,6 +302,7 @@ export class ScheduledRunScheduler {
       // No history opened, and no timer unless a project is still to be read:
       // nothing can come due.
       this.recoverAll = false;
+      this.osLaunchAt = null;
       this.unwatched.clear();
       if (this.unread.size > 0) this.arm(SCHEDULER_TICK_MS);
       return;
@@ -296,6 +317,7 @@ export class ScheduledRunScheduler {
     this.noteClock(); // The clock may have jumped during the awaits.
     const now = this.now();
     const monotonic = this.monotonicNow();
+    const osLaunchAt = this.osLaunchAt;
     let nextDueAt: number | null = null;
     for (const [projectId, snapshot] of this.projects) {
       for (const schedule of snapshot.schedules) {
@@ -314,7 +336,8 @@ export class ScheduledRunScheduler {
             schedule,
             recorder.evaluationPoint(schedule.id),
             now,
-            missedThrough
+            missedThrough,
+            osLaunchAt
           );
         } catch (error) {
           this.logWarn(`[ScheduledRuns] Couldn't evaluate schedule ${schedule.id}:`, error);
@@ -337,18 +360,22 @@ export class ScheduledRunScheduler {
     // A schedule passed over here needs none of it: its launch ending, or the
     // retry it waits out, marks it unwatched through then.
     this.recoverAll = false;
+    this.osLaunchAt = null;
     this.arm(nextDueAt === null ? SCHEDULER_TICK_MS : nextDueAt - now);
   }
 
   /**
    * What one schedule's window holds at `now`. An occurrence due by
-   * `missedThrough` came while nobody watched, so it isn't on time.
+   * `missedThrough` came while nobody watched, so it isn't on time, unless an
+   * OS job launched Daintree for it: one due within a minute before
+   * `osLaunchAt`, or after it while Daintree started.
    */
   private decide(
     schedule: Schedule,
     evaluationPoint: number | null,
     now: number,
-    missedThrough: number | null
+    missedThrough: number | null,
+    osLaunchAt: number | null
   ): Decision {
     const cron = this.parse(schedule.cadence.cron);
     if (!cron) return { kind: "wait", nextDueAt: null };
@@ -364,12 +391,18 @@ export class ScheduledRunScheduler {
     }
     const occurrence = { dueAt: latest, occurrenceKey: occurrenceKeyFor(latest) };
     const onlyOne = nextCronOccurrence(cron, timeZone, after) === latest;
-    const unwatched = missedThrough !== null && latest <= missedThrough;
-    if (!unwatched && onlyOne && now - latest < ON_TIME_GRACE_MS) {
-      return { kind: "launch", origin: { trigger: "scheduled", ...occurrence, coalesced: null } };
+    if (osLaunchAt !== null) {
+      if (onlyOne && osLaunchAt - latest < ON_TIME_GRACE_MS) {
+        return { kind: "launch", origin: { trigger: "os-launch", ...occurrence, coalesced: null } };
+      }
+    } else {
+      const unwatched = missedThrough !== null && latest <= missedThrough;
+      if (!unwatched && onlyOne && now - latest < ON_TIME_GRACE_MS) {
+        return { kind: "launch", origin: { trigger: "scheduled", ...occurrence, coalesced: null } };
+      }
     }
     const origin: ScheduledRunOrigin = {
-      trigger: "catch-up",
+      trigger: osLaunchAt === null ? "catch-up" : "os-launch",
       ...occurrence,
       coalesced: { after, through: now },
     };

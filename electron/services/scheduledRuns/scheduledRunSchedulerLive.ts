@@ -1,5 +1,6 @@
 import { powerMonitor } from "electron";
 import { randomUUID } from "node:crypto";
+import { isDueScheduleCheckRequested } from "../../boot/dueScheduleLaunch.js";
 import { getActiveShutdown } from "../../lifecycle/shutdownCoordinator.js";
 import { projectStore } from "../ProjectStore.js";
 import { getScheduledRunRecorder } from "./index.js";
@@ -11,8 +12,8 @@ let stopPowerEvents: (() => void) | null = null;
 
 /**
  * Starts firing due schedules for the life of the process (#15979), with or
- * without a window: the windowed and the windowless Host boot both start it
- * from the deferred queue. Once only; never after shutdown has begun.
+ * without a window: the windowed and the windowless boots start it from the
+ * deferred queue. Once only; never after shutdown has begun.
  */
 export function startScheduledRunScheduler(): void {
   if (scheduler || getActiveShutdown() !== null) return;
@@ -29,6 +30,10 @@ export function startScheduledRunScheduler(): void {
     cancelLaunches: (scheduleId) => cancelScheduledLaunches({ scheduleId, automaticOnly: true }),
     newId: randomUUID,
     isShuttingDown: () => getActiveShutdown() !== null,
+    // An OS job started this process (#15989); it began watching then.
+    osLaunchAt: isDueScheduleCheckRequested(process.argv)
+      ? Math.round(performance.timeOrigin)
+      : null,
   });
   scheduler = created;
 
@@ -50,6 +55,15 @@ export function startScheduledRunScheduler(): void {
   void created.start().catch((error: unknown) => {
     console.warn("[ScheduledRuns] The scheduler couldn't start:", error);
   });
+}
+
+/**
+ * An OS job's launch reached this running Daintree (#15989): every schedule is
+ * looked at now. Before the scheduler starts there's nothing to do, since its
+ * first pass is still to come.
+ */
+export function checkDueSchedules(): void {
+  scheduler?.check();
 }
 
 /** Cancels its timers and listeners at shutdown, before the database closes. */
