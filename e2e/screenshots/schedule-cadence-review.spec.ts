@@ -159,6 +159,8 @@ async function openSchedule(page: Page, scheduleId: string): Promise<void> {
   const result = await dispatchAction(page, "schedules.open", { scheduleId }, { source: "user" });
   if (!result.ok) throw new Error(`schedules.open failed: ${JSON.stringify(result)}`);
   await page.locator(DIALOG).waitFor({ state: "visible", timeout: 8000 });
+  // A schedule opens on its runs (#15986); the cadence is on its editor.
+  await page.locator(DIALOG).getByRole("button", { name: "Edit schedule" }).click();
   await showCadence(page);
 }
 

@@ -10,13 +10,13 @@ import { TimeAgo } from "@/components/ui/TimeAgo";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { resolveAgentIcon } from "@/config/agentIcons";
 import { getBrandColorHex } from "@/lib/colorUtils";
-import { SEVERITY_GLYPH, type StatusSeverity } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import type { Schedule, ScheduledRun } from "@shared/types/scheduledRuns";
 import type { ProjectSchedulesState } from "./useProjectSchedules";
 import type { LastRunsState } from "./useLastRuns";
 import { lastRunWords } from "./lastRunWords";
+import { RunGlyph } from "./RunGlyph";
 import { cadenceWords, formatNextRunRelative, formatRunInstant, nextRunAt } from "./scheduleWords";
 
 interface ScheduleListProps {
@@ -34,13 +34,6 @@ interface ScheduleListProps {
   onSetEnabled: (schedule: Schedule, enabled: boolean) => void;
   onRetry: () => void;
 }
-
-const SEVERITY_TONE: Record<StatusSeverity, string> = {
-  success: "text-status-success",
-  warning: "text-status-warning",
-  error: "text-status-error",
-  info: "text-status-info",
-};
 
 /** The last run as the history recorded it; colour never carries it alone. */
 function LastRunCell({
@@ -60,16 +53,10 @@ function LastRunCell({
     );
   }
   const words = lastRunWords(run);
-  const Glyph = words.severity ? SEVERITY_GLYPH[words.severity] : null;
   return (
     <>
       <p className="flex min-w-0 items-center gap-1.5 text-sm text-text-primary">
-        {Glyph && words.severity && (
-          <Glyph
-            className={cn("h-3.5 w-3.5 shrink-0", SEVERITY_TONE[words.severity])}
-            aria-hidden="true"
-          />
-        )}
+        <RunGlyph run={run} className="h-3.5 w-3.5" />
         <TruncatedTooltip content={words.label} focusable={false}>
           <span className="truncate">{words.label}</span>
         </TruncatedTooltip>
@@ -101,7 +88,7 @@ export function scheduleRowSelector(id: string): string {
 }
 export const NEW_SCHEDULE_SELECTOR = "[data-schedules-new]";
 
-function AgentMark({ agentId }: { agentId: string }) {
+export function AgentMark({ agentId }: { agentId: string }) {
   const config = getEffectiveAgentConfig(agentId);
   const Icon = resolveAgentIcon(config?.iconId ?? agentId);
   return (
