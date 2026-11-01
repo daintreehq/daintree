@@ -112,7 +112,7 @@ const PATCH_FIELDS = [
   "fallbackOnRateLimit",
 ] as const satisfies readonly (keyof PresetPatch)[];
 
-const SHELL_METACHARS = '; | & > < $( ${ ` \\';
+const SHELL_METACHARS = "; | & > < $( ${ ` \\";
 
 const SOURCE_LABELS: Record<Exclude<AgentPresetSource, "custom">, string> = {
   project: "repository",
@@ -253,11 +253,15 @@ function parseArgs(
   const invalid = (error: z.ZodError) => refuse(`Invalid arguments: ${z.prettifyError(error)}`);
   if (actionId === "agent.createPreset") {
     const result = AgentCreatePresetArgsSchema.safeParse(args);
-    return result.success ? { ok: true, action: actionId, data: result.data } : invalid(result.error);
+    return result.success
+      ? { ok: true, action: actionId, data: result.data }
+      : invalid(result.error);
   }
   if (actionId === "agent.updatePreset") {
     const result = AgentUpdatePresetArgsSchema.safeParse(args);
-    return result.success ? { ok: true, action: actionId, data: result.data } : invalid(result.error);
+    return result.success
+      ? { ok: true, action: actionId, data: result.data }
+      : invalid(result.error);
   }
   const result = AgentDeletePresetArgsSchema.safeParse(args);
   return result.success ? { ok: true, action: actionId, data: result.data } : invalid(result.error);
@@ -421,7 +425,9 @@ function presetProblems(
 ): string[] {
   // Only a stored preset can carry an id launches refuse; a create's is minted.
   if (sanitizePreset({ id: preset.id, name: "id" }) === null) {
-    return ["This preset's stored id can't be used at launch, so it can't be edited; remove it instead."];
+    return [
+      "This preset's stored id can't be used at launch, so it can't be edited; remove it instead.",
+    ];
   }
   const problems: string[] = [];
   const probe = (fields: Partial<AgentPreset>) =>

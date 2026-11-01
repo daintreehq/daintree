@@ -1476,7 +1476,10 @@ export function useMcpBridge(): void {
               const refusal = await presetWriteRefusal(actionId, args, context);
               if (disposed) return;
               if (refusal) {
-                window.electron.mcpBridge.sendDispatchActionResponse({ requestId, result: refusal });
+                window.electron.mcpBridge.sendDispatchActionResponse({
+                  requestId,
+                  result: refusal,
+                });
                 return;
               }
             }

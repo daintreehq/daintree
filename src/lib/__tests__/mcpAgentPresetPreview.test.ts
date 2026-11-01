@@ -8,7 +8,10 @@ const TOKEN = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789";
 
 const base = { agentId: "codex", agentName: "Codex", customPresets: [], presetNames: {} };
 
-function create(preset: AgentPreset, presetNames: Record<string, string> = {}): AgentPresetMutation {
+function create(
+  preset: AgentPreset,
+  presetNames: Record<string, string> = {}
+): AgentPresetMutation {
   return { ...base, presetNames, operation: "create", preset };
 }
 

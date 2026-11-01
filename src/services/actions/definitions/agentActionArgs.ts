@@ -116,7 +116,8 @@ const PRESET_SKIP_DESCRIPTION = "Skip permissions.";
 const PRESET_INLINE_DESCRIPTION = "on: inline, off: alt screen.";
 const PRESET_COLOR_DESCRIPTION = "Hex colour, e.g. #3b82f6.";
 const PRESET_TITLE_DESCRIPTION = "Panel title; defaults to the name.";
-const PRESET_FALLBACKS_DESCRIPTION = "Up to 3 of this agent's preset ids, tried if its provider fails.";
+const PRESET_FALLBACKS_DESCRIPTION =
+  "Up to 3 of this agent's preset ids, tried if its provider fails.";
 const PRESET_RATE_LIMIT_DESCRIPTION = "Also fall back on usage limits, ending the conversation.";
 
 const PresetIdArgSchema = z

@@ -34,7 +34,9 @@ const MAX_SUBJECT_CHARS = 80;
  * alone, so they're escaped too.
  */
 function quote(value: string): string {
-  return JSON.stringify(value).replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
+  return JSON.stringify(value)
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
 }
 
 interface PresetField {
@@ -48,7 +50,8 @@ interface PresetField {
 const PRESET_FIELDS: readonly PresetField[] = [
   {
     label: "Arguments",
-    read: (p) => (Array.isArray(p.args) && p.args.length > 0 ? p.args.map(quote).join(" ") : undefined),
+    read: (p) =>
+      Array.isArray(p.args) && p.args.length > 0 ? p.args.map(quote).join(" ") : undefined,
     unset: "none",
   },
   {
@@ -152,10 +155,7 @@ function presetChangeLines(
     const was = oldEnv.get(key);
     const now = newEnv.get(key);
     if (was === now) continue;
-    const secret = isSecretEnvEntry(
-      key,
-      ...[was, now].filter((v): v is string => v !== undefined)
-    );
+    const secret = isSecretEnvEntry(key, ...[was, now].filter((v): v is string => v !== undefined));
     const from = was === undefined ? "not set" : envValue(was, secret);
     const to = now === undefined ? "removed" : envValue(now, secret);
     envLines.push(`${INDENT}${envKey(key)}: ${from} → ${to}`);
