@@ -268,7 +268,7 @@ describe("schedules handlers", () => {
 
   describe("the OS job (#15990)", () => {
     const status: ScheduleOsJobStatus = {
-      context: { kind: "launch-agent", systemTimeZone: "UTC" },
+      context: { kind: "launch-agent", systemTimeZone: "UTC", unavailable: null },
       unavailable: null,
       state: "current",
       error: null,

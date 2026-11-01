@@ -35,13 +35,52 @@ export function readSystemTimeZone(
   }
 }
 
+/**
+ * Why a Microsoft Store (AppX/MSIX) build can't install the job: Windows
+ * won't start an app inside `WindowsApps` by its path, and that path changes
+ * with every update.
+ */
+export const MICROSOFT_STORE_UNAVAILABLE =
+  "Windows can't start the Microsoft Store version of Daintree from a scheduled task. Install Daintree from daintree.org/download to run schedules while it isn't running";
+
+/**
+ * The zone Task Scheduler reads its triggers in: Windows' own, which the
+ * runtime's `Intl` zone follows unless a `TZ` in the environment Daintree was
+ * started from moves it. With one set, the PC's zone is taken as unknown
+ * rather than guessed.
+ */
+export function readWindowsTimeZone(
+  tz: string | undefined = process.env.TZ,
+  runtimeZone: () => string | undefined = () => Intl.DateTimeFormat().resolvedOptions().timeZone
+): string | null {
+  if (tz !== undefined && tz.trim() !== "") return null;
+  try {
+    const zone = validateTimeZone(runtimeZone() ?? "");
+    return zone.ok ? zone.timeZone : null;
+  } catch {
+    return null;
+  }
+}
+
 /** This machine's OS job, read fresh each time: the system zone can change while Daintree runs. */
 export function scheduleOsJobContext(
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = process.platform,
+  windowsStore: boolean = process.windowsStore === true
 ): ScheduleOsJobContext {
-  if (platform === "darwin") return { kind: "launch-agent", systemTimeZone: readSystemTimeZone() };
-  if (platform === "linux") return { kind: "systemd-timer", systemTimeZone: readSystemTimeZone() };
-  return { kind: null, systemTimeZone: null };
+  if (platform === "darwin") {
+    return { kind: "launch-agent", systemTimeZone: readSystemTimeZone(), unavailable: null };
+  }
+  if (platform === "linux") {
+    return { kind: "systemd-timer", systemTimeZone: readSystemTimeZone(), unavailable: null };
+  }
+  if (platform === "win32") {
+    return {
+      kind: "task-scheduler",
+      systemTimeZone: readWindowsTimeZone(),
+      unavailable: windowsStore ? MICROSOFT_STORE_UNAVAILABLE : null,
+    };
+  }
+  return { kind: null, systemTimeZone: null, unavailable: null };
 }
 
 /** The store's check on a schedule about to be written with the option on. */

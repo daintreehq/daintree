@@ -22,7 +22,11 @@ vi.mock("@/components/Worktree/hooks/useFirstAgentOptions", () => ({
 vi.mock("../useScheduleLaunchOptions", () => ({
   useScheduleLaunchOptions: () => ({ presets: [], preset: undefined, stopsAtPrompts: false }),
 }));
-const platformMock = vi.hoisted(() => ({ isMac: vi.fn(() => true), isLinux: vi.fn(() => false) }));
+const platformMock = vi.hoisted(() => ({
+  isMac: vi.fn(() => true),
+  isLinux: vi.fn(() => false),
+  isWindows: vi.fn(() => false),
+}));
 vi.mock("@/lib/platform", async (importActual) => ({
   ...(await importActual<object>()),
   ...platformMock,
@@ -33,8 +37,16 @@ import { ScheduleEditor, type EditorLeaveState } from "../ScheduleEditor";
 const LABEL = "Run when Daintree isn't running";
 const NOW = Date.UTC(2027, 0, 4, 8);
 
-const LONDON: ScheduleOsJobContext = { kind: "launch-agent", systemTimeZone: "Europe/London" };
-const LINUX: ScheduleOsJobContext = { kind: "systemd-timer", systemTimeZone: "Europe/London" };
+const LONDON: ScheduleOsJobContext = {
+  kind: "launch-agent",
+  systemTimeZone: "Europe/London",
+  unavailable: null,
+};
+const LINUX: ScheduleOsJobContext = {
+  kind: "systemd-timer",
+  systemTimeZone: "Europe/London",
+  unavailable: null,
+};
 /** No preset writes a day-of-month range, so it opens as a custom expression. */
 const CUSTOM_CRON = "0 9 1-7 * *";
 /** Days that must be both odd dates and Mondays: launchd can't AND them. */
@@ -99,6 +111,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   platformMock.isMac.mockReturnValue(true);
   platformMock.isLinux.mockReturnValue(false);
+  platformMock.isWindows.mockReturnValue(false);
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -122,7 +135,7 @@ describe("ScheduleEditor: Run when Daintree isn't running (#15990)", () => {
       schedule: existing({ runWhenClosed: true }, zone),
       snapshot: { projectId: "p1", schedules: [], revision: 1 },
     });
-    renderEditor(null, { kind: "launch-agent", systemTimeZone: zone });
+    renderEditor(null, { kind: "launch-agent", systemTimeZone: zone, unavailable: null });
 
     expect(option()?.getAttribute("aria-checked")).toBe("false");
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Nightly" } });
@@ -168,6 +181,7 @@ describe("ScheduleEditor: Run when Daintree isn't running (#15990)", () => {
     renderEditor(existing({ runWhenClosed: false }, "Asia/Tokyo"), {
       kind: "launch-agent",
       systemTimeZone: "Europe/London",
+      unavailable: null,
     });
 
     expect(option()?.hasAttribute("disabled")).toBe(true);
@@ -183,7 +197,11 @@ describe("ScheduleEditor: Run when Daintree isn't running (#15990)", () => {
       schedule,
       snapshot: { projectId: "p1", schedules: [], revision: 2 },
     });
-    renderEditor(schedule, { kind: "launch-agent", systemTimeZone: "Europe/London" });
+    renderEditor(schedule, {
+      kind: "launch-agent",
+      systemTimeZone: "Europe/London",
+      unavailable: null,
+    });
 
     expect(option()?.hasAttribute("disabled")).toBe(false);
     expect(optionRow().textContent).toMatch(/runs on Asia\/Tokyo time/);
@@ -217,7 +235,7 @@ describe("ScheduleEditor: Run when Daintree isn't running (#15990)", () => {
     expect(optionRow().textContent).not.toContain("Not on this Mac");
   });
 
-  it("is offered on a Mac or on Linux before main has answered, and nowhere else", () => {
+  it("is offered on a Mac, on Linux or on a Windows PC before main has answered, and nowhere else", () => {
     renderEditor(existing({ runWhenClosed: false }), null);
     expect(optionRow().textContent).toMatch(/^.*macOS starts Daintree/);
     cleanup();
@@ -229,6 +247,12 @@ describe("ScheduleEditor: Run when Daintree isn't running (#15990)", () => {
     cleanup();
 
     platformMock.isLinux.mockReturnValue(false);
+    platformMock.isWindows.mockReturnValue(true);
+    renderEditor(existing({ runWhenClosed: false }), null);
+    expect(optionRow().textContent).toContain("Windows starts Daintree");
+    cleanup();
+
+    platformMock.isWindows.mockReturnValue(false);
     renderEditor(existing({ runWhenClosed: false }), null);
     expect(option()).toBeNull();
   });
@@ -249,12 +273,68 @@ describe("ScheduleEditor: Run when Daintree isn't running (#15990)", () => {
   });
 
   it("isn't offered where there's no OS job, unless a schedule already has it on", () => {
-    renderEditor(existing({ runWhenClosed: false }), { kind: null, systemTimeZone: null });
+    renderEditor(existing({ runWhenClosed: false }), {
+      kind: null,
+      systemTimeZone: null,
+      unavailable: null,
+    });
     expect(option()).toBeNull();
     cleanup();
 
-    renderEditor(existing({ runWhenClosed: true }), { kind: null, systemTimeZone: null });
+    renderEditor(existing({ runWhenClosed: true }), {
+      kind: null,
+      systemTimeZone: null,
+      unavailable: null,
+    });
     expect(option()?.getAttribute("aria-checked")).toBe("true");
     expect(optionRow().textContent).toMatch(/isn't available on this platform/);
+  });
+});
+
+describe("ScheduleEditor: Run when Daintree isn't running on Windows (#15993)", () => {
+  const PC: ScheduleOsJobContext = {
+    kind: "task-scheduler",
+    systemTimeZone: "Europe/London",
+    unavailable: null,
+  };
+
+  beforeEach(() => {
+    platformMock.isMac.mockReturnValue(false);
+    platformMock.isWindows.mockReturnValue(true);
+  });
+
+  it("says what Windows does, judged by main's context", () => {
+    renderEditor(existing({ runWhenClosed: false }), PC);
+    expect(option()?.hasAttribute("disabled")).toBe(false);
+    expect(optionRow().textContent).toMatch(/Windows starts Daintree.*signed in.*wake timers/);
+  });
+
+  it("can't be turned on for a cadence Windows' task can't hold, and says why in its words", () => {
+    renderEditor(existing({ runWhenClosed: false }, "Asia/Tokyo"), PC);
+    expect(option()?.hasAttribute("disabled")).toBe(true);
+    expect(optionRow().textContent).toContain(
+      "Windows can only start Daintree on this PC's time (Europe/London), and this schedule runs on Asia/Tokyo time"
+    );
+  });
+
+  it("shows the option unavailable on a Store build, with the reason, and lets one already on be turned off", () => {
+    const store = { ...PC, unavailable: "The Store build can't register tasks" };
+    renderEditor(existing({ runWhenClosed: false }), store);
+    expect(option()?.hasAttribute("disabled")).toBe(true);
+    expect(optionRow().textContent).toContain("The Store build can't register tasks");
+    cleanup();
+
+    renderEditor(existing({ runWhenClosed: true }), store);
+    expect(option()?.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(option()!);
+    expect(option()?.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("keeps a Store build's reason while the cadence isn't valid yet", () => {
+    const store = { ...PC, unavailable: "The Store build can't register tasks" };
+    renderEditor(existing({ runWhenClosed: false }, "Europe/London", CUSTOM_CRON), store);
+    typeCron("not a cron");
+    expect(option()?.hasAttribute("disabled")).toBe(true);
+    expect(optionRow().textContent).toContain("The Store build can't register tasks");
   });
 });
