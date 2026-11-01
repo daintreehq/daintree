@@ -5,7 +5,7 @@ import { load as parseYaml } from "js-yaml";
 import { parse as parseToml } from "smol-toml";
 import type { VoiceCommandEntry } from "../../shared/utils/voiceAgentCommands.js";
 import { holdsCredential, isSecretShaped } from "./voiceKeytermSecrets.js";
-import { withTimeout } from "../utils/withTimeout.js";
+import { timeoutSignal } from "../utils/withTimeout.js";
 
 /**
  * What cleanup is shown about the one command a prompt opens with, beyond its
@@ -48,22 +48,24 @@ interface CommandFileText {
 // take every worker in the pool.
 const inFlightReads = new Map<string, Promise<string | null>>();
 
-async function readPrefixOnce(filePath: string, deadline: number): Promise<string | null> {
+async function readPrefixOnce(filePath: string, budget: AbortSignal): Promise<string | null> {
   for (;;) {
     const pending = inFlightReads.get(filePath);
     if (pending) return pending;
     if (inFlightReads.size < MAX_PENDING_READS) break;
-    // Its own deadline races too, so a waiter behind reads that never settle
+    if (budget.aborted) return null;
+    // The caller's budget races too, so a waiter behind reads that never settle
     // ends with its caller rather than staying suspended.
-    let timer: NodeJS.Timeout | undefined;
+    let onExpired!: () => void;
     const expired = new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, Math.max(0, deadline - performance.now()));
-      timer.unref();
+      onExpired = () => resolve();
+      budget.addEventListener("abort", onExpired, { once: true });
     });
     await Promise.race([...inFlightReads.values(), expired]);
-    clearTimeout(timer);
-    // A turn that comes after the caller gave up starts no read: none would wait for it.
-    if (performance.now() >= deadline) return null;
+    budget.removeEventListener("abort", onExpired);
+    // A turn that comes after the caller gave up starts no read: none would wait
+    // for it. The caller's own signal says so, not a clock its timer doesn't read.
+    if (budget.aborted) return null;
   }
   const started = readPrefix(filePath).finally(() => {
     if (inFlightReads.get(filePath) === started) inFlightReads.delete(filePath);
@@ -93,14 +95,16 @@ async function readPrefix(filePath: string): Promise<string | null> {
 }
 
 async function readWithinBudget(filePath: string): Promise<string | null> {
+  const budget = timeoutSignal(READ_BUDGET_MS);
+  const gaveUp = new Promise<null>((resolve) =>
+    budget.signal.addEventListener("abort", () => resolve(null), { once: true })
+  );
   try {
-    return await withTimeout(
-      readPrefixOnce(filePath, performance.now() + READ_BUDGET_MS),
-      READ_BUDGET_MS,
-      "Timed out reading a command file"
-    );
+    return await Promise.race([readPrefixOnce(filePath, budget.signal), gaveUp]);
   } catch {
     return null;
+  } finally {
+    budget.dispose();
   }
 }
 

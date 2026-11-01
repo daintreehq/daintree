@@ -437,6 +437,32 @@ describe("readVoiceOpeningCommand", () => {
     expect(fsp.open).toHaveBeenCalledTimes(2);
   });
 
+  it("starts no read for a caller that gave up, whatever the clock reads when its turn comes", async () => {
+    const hung = hungOpen();
+    const names = ["g", "h", "i"];
+    const entries = entriesFor(
+      "claude",
+      names.map((name) =>
+        discovered("claude", `/cap-${name}`, path.join(root, `claude/skills/cap-${name}/SKILL.md`))
+      )
+    );
+    // Timers and performance.now() read different clocks (a coarse one on
+    // Linux), so a timer can fire while the precise clock is still short of it.
+    const now = performance.now.bind(performance);
+    let lag = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now() - lag);
+
+    const pending = Promise.all(
+      names.map((name) => readVoiceOpeningCommand(entries, `/cap-${name}`))
+    );
+    lag = 1_000;
+    const reads = await pending;
+
+    expect(reads.map((read) => read?.excerpt)).toEqual([undefined, undefined, undefined]);
+    await hung.release();
+    expect(fsp.open).toHaveBeenCalledTimes(2);
+  });
+
   it("gives a third file its turn once a read settles, within its budget", async () => {
     const names = ["d", "e", "f"];
     for (const name of names) {
