@@ -201,6 +201,14 @@ export interface ProjectAddOptions {
    * payload carrying only `gitBacked` would be discarded silently.
    */
   identity?: ProjectCreationIdentity;
+  /**
+   * The {@link ProjectGroup} a creation dialog chose to file the project under.
+   * Like {@link ProjectAddOptions.identity} it applies only where a brand-new
+   * row is minted, and it is its own key so a bad id never discards a good
+   * identity. An id that names no group by the time the row is written lands
+   * the project ungrouped rather than pointing at a missing group.
+   */
+  groupId?: string;
 }
 
 /**

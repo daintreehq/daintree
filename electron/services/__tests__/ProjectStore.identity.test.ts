@@ -81,10 +81,13 @@ vi.mock("electron", () => ({
 // Repository root normally IS the path handed in; set this to model the case
 // where the requested folder sits inside an existing repository.
 let repositoryRootOverride: string | null = null;
+// Runs inside the add's first await, to change the world while it is in flight.
+let duringRepositoryLookup: (() => void) | null = null;
 
 vi.mock("../GitService.js", () => ({
   GitService: class {
     async getRepositoryRoot(p: string): Promise<string> {
+      duringRepositoryLookup?.();
       return repositoryRootOverride ?? p;
     }
     repairWorktrees(...args: string[][]) {
@@ -126,12 +129,33 @@ vi.mock("../projectQuarantineCleanup.js", () => ({
 import { ProjectStore } from "../ProjectStore.js";
 import { mintProjectId, isValidProjectId, generateProjectId } from "../projectStorePaths.js";
 import { ProjectIdentityFiles } from "../ProjectIdentityFiles.js";
+import { readProjectGroups, writeProjectGroups } from "../projectGroupsDocument.js";
 
 /** Creates a real directory and returns its canonicalized path. */
 async function makeDir(name: string): Promise<string> {
   const dir = path.join(tmpRoot, name);
   await fs.promises.mkdir(dir, { recursive: true });
   return fs.promises.realpath(dir);
+}
+
+function seedGroups(...ids: string[]): void {
+  writeProjectGroups(
+    ids.map((id, position) => ({
+      id,
+      name: `Group ${id}`,
+      position,
+      sortMode: "mostUsed" as const,
+      createdAt: position,
+    }))
+  );
+}
+
+function storedGroupId(projectId: string): unknown {
+  return (
+    sqlite.prepare("SELECT group_id FROM projects WHERE id = ?").get(projectId) as {
+      group_id: unknown;
+    }
+  ).group_id;
 }
 
 async function writeAnchor(projectPath: string, id: string): Promise<void> {
@@ -159,6 +183,7 @@ describe("project identity across folder moves", () => {
     rewriteHibernationProjectPath.mockClear();
     repairMovedSubmodulePaths.mockClear();
     repositoryRootOverride = null;
+    duringRepositoryLookup = null;
     store = new ProjectStore();
   });
 
@@ -303,6 +328,109 @@ describe("project identity across folder moves", () => {
       expect(created.path).toBe(root);
       expect(created.name).toBe(path.basename(root));
       expect(created.emoji).toBe("🌲");
+    });
+  });
+
+  describe("creation group", () => {
+    it("files a newly minted project under the chosen group", async () => {
+      seedGroups("g1", "g2");
+      const dir = await makeDir("fresh");
+
+      const created = await store.addProject(dir, { groupId: "g2" });
+
+      expect(created.groupId).toBe("g2");
+      expect(storedGroupId(created.id)).toBe("g2");
+      expect(store.getProjectById(created.id)?.groupId).toBe("g2");
+    });
+
+    it("applies the group alongside the identity without either displacing the other", async () => {
+      seedGroups("g1");
+      const dir = await makeDir("fresh");
+
+      const created = await store.addProject(dir, {
+        identity: { name: "Chosen", emoji: "🚀" },
+        groupId: "g1",
+      });
+
+      expect(created).toMatchObject({ name: "Chosen", emoji: "🚀", groupId: "g1" });
+    });
+
+    it("cannot refile an already-registered project by re-adding it", async () => {
+      seedGroups("g1", "g2");
+      const dir = await makeDir("existing");
+      const first = await store.addProject(dir, { groupId: "g1" });
+
+      const second = await store.addProject(dir, { groupId: "g2" });
+
+      expect(second.id).toBe(first.id);
+      expect(second.groupId).toBe("g1");
+      expect(storedGroupId(first.id)).toBe("g1");
+    });
+
+    it("leaves an ungrouped registered project ungrouped when it is re-added with a group", async () => {
+      seedGroups("g1");
+      const dir = await makeDir("existing");
+      const first = await store.addProject(dir);
+
+      const second = await store.addProject(dir, { groupId: "g1" });
+
+      expect(second.id).toBe(first.id);
+      expect(second.groupId).toBeUndefined();
+      expect(storedGroupId(first.id)).toBeNull();
+    });
+
+    it("cannot refile an adopted moved project by supplying a group", async () => {
+      seedGroups("g1", "g2");
+      const original = await makeDir("original");
+      const registered = await store.addProject(original, { groupId: "g1" });
+      await writeAnchor(original, registered.id);
+
+      const moved = path.join(tmpRoot, "renamed");
+      await fs.promises.rename(original, moved);
+      const canonicalMoved = await fs.promises.realpath(moved);
+
+      const reopened = await store.addProject(canonicalMoved, { groupId: "g2" });
+
+      expect(reopened.id).toBe(registered.id);
+      expect(storedGroupId(registered.id)).toBe("g1");
+    });
+
+    it("lands the project ungrouped when the id names no group", async () => {
+      seedGroups("g1");
+      const dir = await makeDir("fresh");
+
+      const created = await store.addProject(dir, { groupId: "gone" });
+
+      expect(created.groupId).toBeUndefined();
+      expect(storedGroupId(created.id)).toBeNull();
+    });
+
+    it("lands the project ungrouped when its group is deleted while the add is in flight", async () => {
+      // The group exists when the add starts; checking it there instead of at
+      // the insert would file the project under an id no group carries.
+      seedGroups("g1", "g2");
+      duringRepositoryLookup = () => {
+        writeProjectGroups(readProjectGroups().filter((group) => group.id !== "g1"));
+      };
+      const dir = await makeDir("fresh");
+
+      const created = await store.addProject(dir, { groupId: "g1" });
+
+      expect(created.groupId).toBeUndefined();
+      expect(storedGroupId(created.id)).toBeNull();
+    });
+
+    it("does not file a child folder's ancestor repository under the child's group", async () => {
+      seedGroups("g1");
+      const root = await makeDir("repo-root");
+      const child = await makeDir("repo-root/child");
+      repositoryRootOverride = root;
+
+      const created = await store.addProject(child, { groupId: "g1" });
+
+      expect(created.path).toBe(root);
+      expect(created.groupId).toBeUndefined();
+      expect(storedGroupId(created.id)).toBeNull();
     });
   });
 

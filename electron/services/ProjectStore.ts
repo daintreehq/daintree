@@ -61,9 +61,21 @@ import { rewriteProjectStatePaths } from "./projectPathStateRewrite.js";
 import { rewriteAgentSessionPathsForProject } from "./pty/agentSessionHistory.js";
 import { getPendingHelpHibernationStore } from "./PendingHelpHibernationStore.js";
 import { repairMovedSubmodulePaths } from "./git/submodulePathRepair.js";
+import { readProjectGroups } from "./projectGroupsDocument.js";
 
 export { DEFAULT_PROJECT_EMOJI } from "../../shared/utils/projectEmoji.js";
 import { DEFAULT_PROJECT_EMOJI } from "../../shared/utils/projectEmoji.js";
+
+/**
+ * The group a creation dialog chose, while that group still exists. Called
+ * with no await between it and the insert it feeds, so a group deleted while
+ * the dialog was open, or during the add's own awaits, files the new project
+ * nowhere rather than under an id no group carries.
+ */
+function resolveCreationGroupId(candidate: string | undefined): string | undefined {
+  if (!candidate) return undefined;
+  return readProjectGroups().some((group) => group.id === candidate) ? candidate : undefined;
+}
 
 /** A fresh project (one cloned from another machine) asked for a folder a project is registered at. */
 function freshFolderTaken(): AppError {
@@ -587,11 +599,12 @@ export class ProjectStore {
   }
 
   /**
-   * `options.identity` is the name/emoji chosen in a creation dialog. It is
-   * consulted only where a brand-new row is minted below — every earlier return
+   * `options.identity` is the name/emoji chosen in a creation dialog, and
+   * `options.groupId` the group it files the project under. Both are consulted
+   * only where a brand-new row is minted below — every earlier return
    * (already-registered path, adopted move, lost insert race) keeps the
-   * identity it already has, so re-adding a folder can never rename it.
-   * In-repo `.daintree/project.json` still wins field-wise.
+   * identity and membership it already has, so re-adding a folder can never
+   * rename or refile it. In-repo `.daintree/project.json` still wins field-wise.
    *
    * `options.gitBacked === false` adopts a folder that has no repository at
    * all; anything else keeps the strict git-root requirement. The two options
@@ -637,7 +650,7 @@ export class ProjectStore {
             return this.touchExistingProject(existing, { gitBacked: false });
           }
         } else if (options?.gitBacked === false) {
-          return this.insertLightweightProject(lightweight);
+          return this.insertLightweightProject(lightweight, options.groupId);
         }
       }
 
@@ -655,18 +668,16 @@ export class ProjectStore {
 
     // The registered project is the git ROOT, which is not always the path the
     // caller handed us: creating `/repo/child` inside an existing repository
-    // resolves back to `/repo`. Identity chosen for the child must not be
-    // stamped onto the ancestor, so it only survives when the two agree.
+    // resolves back to `/repo`. Identity and group chosen for the child must not
+    // be stamped onto the ancestor, so they only survive when the two agree.
     //
     // Both sides are canonicalized the same way (`normalizedPath` already comes
     // from a realpath'd git root). A lexical-only comparison here would treat a
     // symlinked path, a trailing separator, or different casing on a
     // case-insensitive volume as a mismatch and silently discard an identity
     // the user actually chose.
-    const mintIdentity =
-      (await this.canonicalizeForCompare(projectPath)) === normalizedPath
-        ? creationIdentity
-        : undefined;
+    const mintsRequestedPath = (await this.canonicalizeForCompare(projectPath)) === normalizedPath;
+    const mintIdentity = mintsRequestedPath ? creationIdentity : undefined;
 
     const existing = await this.getProjectByPath(normalizedPath);
     // A folder from another machine never takes over a project row: that
@@ -701,6 +712,7 @@ export class ProjectStore {
       return raced;
     }
 
+    const groupId = mintsRequestedPath ? resolveCreationGroupId(options?.groupId) : undefined;
     const now = Date.now();
     const project: Project = {
       id: options?.fresh
@@ -715,6 +727,7 @@ export class ProjectStore {
       lastAccessedAt: now,
       ...(inRepo.color ? { color: inRepo.color } : {}),
       ...(inRepo.found ? { daintreeConfigPresent: true } : {}),
+      ...(groupId ? { groupId } : {}),
     };
 
     const db = getSharedDb();
@@ -731,6 +744,7 @@ export class ProjectStore {
         inRepoSettings: project.inRepoSettings ?? null,
         frecencyScore: FRECENCY_COLD_START,
         lastAccessedAt: now,
+        groupId: project.groupId ?? null,
       })
       .run();
     this.notifyRegistryListeners();
@@ -803,7 +817,8 @@ export class ProjectStore {
    * {@link tryAdoptMovedProject}, take over that project's id and inherit its
    * panels, settings and Assistant history.
    */
-  private insertLightweightProject(normalizedPath: string): Project {
+  private insertLightweightProject(normalizedPath: string, groupCandidate?: string): Project {
+    const groupId = resolveCreationGroupId(groupCandidate);
     const now = Date.now();
     const project: Project = {
       id: mintProjectId(normalizedPath, (candidate) => this.isProjectIdTaken(candidate)),
@@ -815,6 +830,7 @@ export class ProjectStore {
       frecencyScore: FRECENCY_COLD_START,
       lastAccessedAt: now,
       gitBacked: false,
+      ...(groupId ? { groupId } : {}),
     };
 
     getSharedDb()
@@ -829,6 +845,7 @@ export class ProjectStore {
         frecencyScore: FRECENCY_COLD_START,
         lastAccessedAt: now,
         gitBacked: false,
+        groupId: project.groupId ?? null,
       })
       .run();
     this.notifyRegistryListeners();
