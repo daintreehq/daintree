@@ -719,7 +719,7 @@ export const terminalScenarios: PerfScenario[] = [
     name: "Agent Output Forwarding - Fleet to Main",
     description:
       "How much raw agent output the PTY host hands to Main as agent:output (#15667). Twelve " +
-      "agent terminals stream answers in 1-4 KiB chunks at 32 KiB/s and a thirteenth floods a " +
+      "agent terminals stream answers in 1-4 K-character chunks at 32 KiB/s and a thirteenth floods a " +
       "test log at 1 MiB/s in exact 2 KiB chunks, none of them the Daintree Assistant; one " +
       "Assistant terminal of each shape runs beside them as the bound control. Every terminal " +
       "goes through the real PtyDataPipeline into a real AgentOutputForwarder on one virtual " +
@@ -727,10 +727,11 @@ export const terminalScenarios: PerfScenario[] = [
       "and every emit on the real event bus is one message pty-host.ts sends to Main. Reported " +
       "per cohort as messages, messages per MiB of PTY output and forwarded UTF-8 bytes per MiB; " +
       "the fleet figures are the issue's workload. Counts, not time: they compare across " +
-      "machines. Graded on what must not change: every chunk still reaches the renderer, the " +
-      "host-local output ring still holds the tail, an Assistant terminal forwards exactly its " +
-      "PTY output in order, any other terminal forwards all of its output or none of it, and " +
-      "every payload names the right terminal and agent.",
+      "machines. Graded on what must not change: every chunk still reaches the renderer with " +
+      "its answered colour queries stripped, the host-local output ring still holds the tail, an " +
+      "Assistant terminal forwards exactly its raw PTY output in order before any teardown flush, " +
+      "any other terminal forwards all of its output or none of it, and every payload names the " +
+      "right terminal and agent.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 2, ci: 3, nightly: 5 },
@@ -742,6 +743,9 @@ export const terminalScenarios: PerfScenario[] = [
       "unboundPayloadMisses",
       "attributionMisses",
     ],
+    // Counts per MiB hold at any size, but the raw counts are the issue's
+    // fleet: twelve streaming agents and a flood, at the volume declared here.
+    workloadFloors: { terminalCount: 15, fleetPtyBytes: 1_500_000 },
     async run() {
       const plan = forwardingFleet();
       const observed = await runForwardingFleet(plan);

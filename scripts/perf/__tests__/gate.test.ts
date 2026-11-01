@@ -759,6 +759,7 @@ describe("workload floors", () => {
     expect(declaring.map((scenario) => scenario.id).sort()).toEqual([
       "PERF-034",
       "PERF-036",
+      "PERF-037",
       "PERF-108",
       "PERF-109",
       "PERF-113",

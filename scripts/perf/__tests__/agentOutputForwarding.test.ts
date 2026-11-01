@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { OSC_11_QUERY } from "../lib/ptyOutputPipelineFixture";
 import {
   buildForwardingFleet,
   cohortCounts,
@@ -36,7 +37,7 @@ function indexOf(plan: ForwardingFleetPlan, cohort: string): number {
 }
 
 describe("PERF-037 fleet plan", () => {
-  it("floods in exact 2 KiB chunks and streams in 1-4 KiB chunks, in arrival order", () => {
+  it("floods in exact 2 KiB chunks and streams in 1-4 K-character chunks, in arrival order", () => {
     const plan = smallFleet();
     const flood = plan.terminals[indexOf(plan, "unboundFlood")]!;
     expect(flood.frames.length).toBe(32);
@@ -51,9 +52,20 @@ describe("PERF-037 fleet plan", () => {
 
     const stream = plan.terminals[indexOf(plan, "unboundStream")]!;
     for (const frame of stream.frames.slice(0, -1)) {
-      expect(frame.text.length).toBeGreaterThanOrEqual(1024);
-      expect(frame.text.length).toBeLessThanOrEqual(4096);
+      const text = frame.expectsOscResponse ? frame.text.slice(OSC_11_QUERY.length) : frame.text;
+      expect(text.length).toBeGreaterThanOrEqual(1024);
+      expect(text.length).toBeLessThanOrEqual(4096);
     }
+    // Answered queries ride the raw stream and leave the renderer's copy.
+    const queries = stream.frames.filter((frame) => frame.expectsOscResponse).length;
+    expect(queries).toBeGreaterThan(0);
+    expect(stream.rendererChars).toBe(stream.stream.length - queries * OSC_11_QUERY.length);
+  });
+
+  it("gives every terminal output no other terminal in the fleet produces", () => {
+    const plan = smallFleet();
+    const streams = plan.terminals.map((terminal) => terminal.stream);
+    expect(new Set(streams).size).toBe(streams.length);
   });
 
   it("marks only the bound cohorts as Assistant terminals", () => {
@@ -90,9 +102,10 @@ describe("PERF-037 run", () => {
 
     const boundStream = plan.terminals[indexOf(plan, "boundStream")]!;
     const boundStreamCounts = cohortCounts(plan, observed, ["boundStream"]);
-    // A streamed chunk arrives after the previous one's 50 ms window closed.
-    expect(boundStreamCounts.messages).toBe(boundStream.frames.length);
-    expect(boundStreamCounts.bytesPerMiB).toBe(1024 * 1024);
+    // Batching never splits a chunk, and the raw stream arrives whole.
+    expect(boundStreamCounts.messages).toBeGreaterThan(0);
+    expect(boundStreamCounts.messages).toBeLessThanOrEqual(boundStream.frames.length);
+    expect(boundStreamCounts.forwardedBytes).toBe(boundStream.ptyBytes);
   });
 
   it("restores the real clock even when the run throws", async () => {
@@ -127,6 +140,25 @@ describe("PERF-037 predicates notice a broken path", () => {
     const duplicated = clone(observed);
     duplicated.terminals[bound]!.forwarded = [frames[0], ...frames].join("");
     expect(forwardingMisses(plan, duplicated).boundPayloadMisses).toBe(1);
+
+    // The renderer's copy, with the answered colour queries stripped.
+    const rendererCopy = clone(observed);
+    rendererCopy.terminals[bound]!.forwarded = frames.join("").split(OSC_11_QUERY).join("");
+    expect(forwardingMisses(plan, rendererCopy).boundPayloadMisses).toBe(1);
+  });
+
+  it("fails output emitted under another fleet terminal's id", async () => {
+    const [plan, observed] = await baseline();
+    const first = plan.terminals.findIndex((terminal) => terminal.cohort === "unboundStream");
+    const second = plan.terminals.findIndex(
+      (terminal, index) => index > first && terminal.cohort === "unboundStream"
+    );
+
+    // Each forwarding all of its output, but under the other's id.
+    const swapped = clone(observed);
+    swapped.terminals[first]!.forwarded = plan.terminals[second]!.stream;
+    swapped.terminals[second]!.forwarded = plan.terminals[first]!.stream;
+    expect(forwardingMisses(plan, swapped).unboundPayloadMisses).toBe(2);
   });
 
   it("accepts an ordinary terminal forwarding all of its output or none, and nothing between", async () => {

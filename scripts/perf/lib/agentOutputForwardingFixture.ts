@@ -5,6 +5,7 @@ import { VirtualClock } from "./agentAnalysisSim";
 import {
   createPipelineHarness,
   EXPECTED_LIVE_AGENT_ID,
+  OSC_11_QUERY,
   type PipelineFrame,
   type PipelineHarness,
 } from "./ptyOutputPipelineFixture";
@@ -27,7 +28,7 @@ import {
 
 const MIB = 1024 * 1024;
 
-/** An agent streaming an answer: node-pty hands over 1-4 KiB at a time. */
+/** An agent streaming an answer: node-pty hands over 1-4 K characters at a time. */
 const STREAM_CHUNK_CHARS = [1024, 1536, 2048, 3072, 4096] as const;
 const STREAM_BYTES_PER_SECOND = 32 * 1024;
 /** A test run or build log at 1 MiB/s, in the 2 KiB chunks the flow-control scenarios model. */
@@ -37,6 +38,12 @@ const FLOOD_BYTES_PER_SECOND = MIB;
 const START_STAGGER_MS = 7;
 /** Past every coalescing window, so the last pending batch flushes on its own timer. */
 const SETTLE_MS = 500;
+/**
+ * Every fifth streamed chunk opens with an OSC 11 colour query, which the
+ * pipeline answers and strips from the renderer's copy. Main must get the raw
+ * chunk, so forwarding the renderer copy instead shows up as a payload miss.
+ */
+const STREAM_OSC_EVERY = 5;
 
 /**
  * Agent-style lines, box-drawing included because TUI output is. None ends in
@@ -80,6 +87,8 @@ export interface ForwardingTerminalPlan {
   /** Virtual arrival time of each frame, relative to the fleet's start. */
   arrivalsMs: number[];
   stream: string;
+  /** The stream minus the colour queries the pipeline answers and strips. */
+  rendererChars: number;
   ptyBytes: number;
 }
 
@@ -117,24 +126,31 @@ function buildTerminal(
   seed: number
 ): ForwardingTerminalPlan {
   const isFlood = shape === "flood";
-  const text = composeText(isFlood ? FLOOD_LINES : STREAM_LINES, targetBytes, seed);
+  // A first line naming the terminal makes every stream unique, so output
+  // emitted under another fleet terminal's id cannot match by coincidence.
+  const marker = isFlood ? ` RUN   ${terminalId}` : `│ session ${terminalId}`;
+  const text = `${marker}\r\n${composeText(isFlood ? FLOOD_LINES : STREAM_LINES, targetBytes, seed)}`;
   const bytesPerMs = (isFlood ? FLOOD_BYTES_PER_SECOND : STREAM_BYTES_PER_SECOND) / 1000;
   const frames: PipelineFrame[] = [];
   const arrivalsMs: number[] = [];
   let offset = 0;
   let sentBytes = 0;
   let chunkIndex = 0;
+  let oscQueries = 0;
   // Stop at the target so a flood is a whole number of exact 2 KiB chunks.
   while (offset < text.length && sentBytes < targetBytes) {
     const size = isFlood
       ? FLOOD_CHUNK_CHARS
       : STREAM_CHUNK_CHARS[(seed + chunkIndex) % STREAM_CHUNK_CHARS.length]!;
-    const chunk = text.slice(offset, offset + size);
+    const slice = text.slice(offset, offset + size);
+    const query = !isFlood && chunkIndex % STREAM_OSC_EVERY === STREAM_OSC_EVERY - 1;
+    const chunk = query ? `${OSC_11_QUERY}${slice}` : slice;
+    if (query) oscQueries += 1;
     // A chunk lands once the stream has produced every byte up to its end.
     sentBytes += utf8Bytes(chunk);
     arrivalsMs.push(startMs + Math.floor(sentBytes / bytesPerMs));
-    frames.push({ text: chunk });
-    offset += chunk.length;
+    frames.push(query ? { text: chunk, expectsOscResponse: true } : { text: chunk });
+    offset += slice.length;
     chunkIndex += 1;
   }
   const stream = frames.map((frame) => frame.text).join("");
@@ -145,6 +161,7 @@ function buildTerminal(
     frames,
     arrivalsMs,
     stream,
+    rendererChars: stream.length - oscQueries * OSC_11_QUERY.length,
     ptyBytes: utf8Bytes(stream),
   };
 }
@@ -251,7 +268,6 @@ export async function runForwardingFleet(
     if (payload.agentId !== EXPECTED_LIVE_AGENT_ID) observed.agentIdMisses += 1;
   });
 
-  const forwarders: AgentOutputForwarder[] = [];
   const harnesses: PipelineHarness[] = [];
   clock.install();
   try {
@@ -261,7 +277,6 @@ export async function runForwardingFleet(
         terminalId: terminal.terminalId,
         traceId: undefined,
       });
-      forwarders.push(forwarder);
       harnesses.push(
         createPipelineHarness(terminal.terminalId, {
           isAssistantTerminal: terminal.isAssistantTerminal,
@@ -275,9 +290,9 @@ export async function runForwardingFleet(
       if (wait > 0) await clock.tick(wait);
       harnesses[arrival.terminal]!.feed(plan.terminals[arrival.terminal]!.frames[arrival.frame]!);
     }
+    // Graded here, before any teardown flush: the forwarder's own timer must
+    // have delivered every byte, so one that held output until teardown misses.
     await clock.tick(SETTLE_MS);
-    // Teardown flushes whatever is still pending, as TerminalProcess.dispose does.
-    for (const forwarder of forwarders) forwarder.flush();
 
     plan.terminals.forEach((terminal, index) => {
       const finished = harnesses[index]!.finish();
@@ -304,7 +319,10 @@ export interface ForwardingMisses {
   rendererDeliveryMisses: number;
   /** The host-local 2,000-char agent output ring does not hold the stream's tail. */
   outputRingMisses: number;
-  /** An Assistant terminal whose forwarded output is not its PTY output, byte for byte, in order. */
+  /**
+   * An Assistant terminal whose forwarded output, once the coalescing window
+   * has closed, is not its raw PTY output byte for byte and in order.
+   */
   boundPayloadMisses: number;
   /**
    * Any other terminal that forwarded part of its output. Forwarding all of it
@@ -331,7 +349,7 @@ export function forwardingMisses(
     const seen = observed.terminals[index]!;
     if (seen.chunksFed !== terminal.frames.length) misses.rendererDeliveryMisses += 1;
     if (seen.emitCalls !== terminal.frames.length) misses.rendererDeliveryMisses += 1;
-    if (seen.emittedChars !== terminal.stream.length) misses.rendererDeliveryMisses += 1;
+    if (seen.emittedChars !== terminal.rendererChars) misses.rendererDeliveryMisses += 1;
     if (seen.outputTail !== terminal.stream.slice(-OUTPUT_BUFFER_SIZE)) {
       misses.outputRingMisses += 1;
     }

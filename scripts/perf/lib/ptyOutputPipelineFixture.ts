@@ -144,7 +144,7 @@ const OUTPUT_LINES = [
   "  \x1b[2mtrace\x1b[0m worker pool drained, 4 idle threads",
 ] as const;
 
-const OSC_11_QUERY = "\x1b]11;?\x07";
+export const OSC_11_QUERY = "\x1b]11;?\x07";
 /** OSC 12 (cursor colour) — passes the `\x1b]1` gate, is not a colour query. */
 const OSC_12_DECOY = "\x1b]12;?\x07";
 
