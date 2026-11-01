@@ -367,6 +367,53 @@ interface HybridInputE2EController {
   getText: () => string;
 }
 
+/** The editor's changes from the draft `before` to the draft `after`. */
+interface EditorEdits {
+  before: string;
+  after: string;
+  changes: ChangeSet;
+}
+
+/**
+ * `edits` carried through `update`: started again from the draft the store
+ * holds while the editor shows it, extended while the editor is ahead of it,
+ * and lost when they no longer join up.
+ */
+function nextEditorEdits(
+  edits: EditorEdits | null,
+  stored: string,
+  update: ViewUpdate,
+  next: string
+): EditorEdits | null {
+  const start = update.startState.doc.toString();
+  if (stored === start) return { before: start, after: next, changes: update.changes };
+  if (edits?.after !== start) return null;
+  return { before: edits.before, after: next, changes: edits.changes.compose(update.changes) };
+}
+
+/**
+ * Spells `edits` out to the range store just ahead of the composer writing
+ * `draft` over `stored`, when they are the changes between the two. A diff of
+ * the drafts places text typed in front of dictated words inside them when it
+ * starts with their first letter (`/f` before `fix`), and the passage would
+ * read as edited, dropping its correction (#15874). Declared at the write, as
+ * every draft write elsewhere clears what was declared before it.
+ */
+function expectEditorEdits(
+  edits: EditorEdits | null,
+  panelId: string,
+  projectId: string | undefined,
+  stored: string,
+  draft: string
+): void {
+  if (!edits || stored === draft || edits.before !== stored || edits.after !== draft) return;
+  const changes: TextChange[] = [];
+  edits.changes.iterChanges((from, to, _fromB, _toB, inserted) => {
+    changes.push({ from, to, insert: inserted.toString() });
+  });
+  useDictationRangeStore.getState().expectDraftChange(panelId, projectId, stored, draft, changes);
+}
+
 type ApplyEditorValue = (
   nextValue: string,
   options?: {
@@ -558,6 +605,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // editor to it. A store reading otherwise holds an outside write the editor
     // hasn't shown yet (#15873).
     const syncedDraftRef = useRef<string>(value);
+    // The editor's changes since it last showed what the store holds (#15874).
+    const editsSinceStoredRef = useRef<EditorEdits | null>(null);
     const focusGenerationRef = useRef(0);
     const [activeCompletionContext, setActiveCompletionContext] =
       useState<ActiveCompletionContext | null>(null);
@@ -815,6 +864,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       ) {
         return;
       }
+      expectEditorEdits(
+        editsSinceStoredRef.current,
+        terminalId,
+        projectId,
+        useTerminalInputStore.getState().getDraftInput(terminalId, projectId),
+        value
+      );
       setDraftInput(terminalId, value, projectId);
       syncedDraftRef.current = value;
     }, [terminalId, value, projectId, setDraftInput, followsDriver, isFleetFollower]);
@@ -1113,38 +1169,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       inputStore.setDraftInput(terminalId, after, projectId);
     };
 
-    // Typing reaches the store a render later, through the write-back, as a
-    // whole draft. Its changes go ahead of it, spelled out, so text typed
-    // against dictated words lands where it was typed, never inside them by a
-    // diff of the two drafts (#15874). Keystrokes ahead of one write-back are
-    // composed into one change.
-    const typedSinceSyncRef = useRef<{
-      before: string;
-      after: string;
-      changes: ChangeSet;
-    } | null>(null);
-    const expectTypedChange = (update: ViewUpdate, next: string) => {
-      if (followsDriver || isFleetFollower) return;
-      const stored = useTerminalInputStore.getState().getDraftInput(terminalId, projectId);
-      const start = update.startState.doc.toString();
-      const typed = typedSinceSyncRef.current;
-      const since =
-        typed && typed.after === start && typed.before === stored
-          ? { before: stored, after: next, changes: typed.changes.compose(update.changes) }
-          : stored === start
-            ? { before: start, after: next, changes: update.changes }
-            : null;
-      typedSinceSyncRef.current = since;
-      if (!since) return;
-      const edits: TextChange[] = [];
-      since.changes.iterChanges((from, to, _fromB, _toB, inserted) => {
-        edits.push({ from, to, insert: inserted.toString() });
-      });
-      useDictationRangeStore
-        .getState()
-        .expectDraftChange(terminalId, projectId, since.before, since.after, edits);
-    };
-
     const applyEditorValue: ApplyEditorValue = (nextValue, options) => {
       if (lastEmittedValueRef.current !== nextValue) {
         lastEmittedValueRef.current = nextValue;
@@ -1263,6 +1287,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           // Ahead by typing only over the draft this composer left: anything
           // else is an outside write the editor is behind.
           if (shown === stored || stored !== syncedDraftRef.current) return;
+          expectEditorEdits(editsSinceStoredRef.current, terminalId, projectId, stored, shown);
           inputs.setDraftInput(terminalId, shown, projectId);
           syncedDraftRef.current = shown;
         }),
@@ -2220,8 +2245,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         dropSendRefusal(
           next.trim() !== "" && update.transactions.every((tr) => tr.annotation(dictationWrite))
         );
+        // Every change the editor makes, a completion included: the composer
+        // writing them later says where they were made.
+        editsSinceStoredRef.current = nextEditorEdits(
+          editsSinceStoredRef.current,
+          useTerminalInputStore.getState().getDraftInput(terminalId, projectId),
+          update,
+          next
+        );
         if (next === lastEmittedValueRef.current) return false;
-        expectTypedChange(update, next);
         lastEmittedValueRef.current = next;
         setValue(next);
         return true;

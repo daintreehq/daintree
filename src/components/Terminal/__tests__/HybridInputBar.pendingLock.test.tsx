@@ -177,6 +177,40 @@ describe("HybridInputBar while a dictated passage's correction is pending", () =
     expect(passageRecord()).toEqual({ edited: false, text: PASSAGE });
   });
 
+  // One write-back for both: a diff of the two drafts would replace the whole
+  // passage, from the slash command's start to the letter after it.
+  it("keeps keystrokes at both edges out of it when they reach the store together", async () => {
+    const { view, doc } = await mountPending();
+    await act(async () => {
+      for (const [at, char] of [
+        [0, "/"],
+        [1, "f"],
+        [2, " "],
+        [3 + PASSAGE.length, "s"],
+      ] as const) {
+        view.dispatch({ changes: { from: at, insert: char }, userEvent: "input.type" });
+      }
+      expect(draft()).toBe(PASSAGE);
+    });
+
+    expect(doc()).toBe(`/f ${PASSAGE}s`);
+    expect(draft()).toBe(`/f ${PASSAGE}s`);
+    expect(passageRecord()).toEqual({ edited: false, text: PASSAGE });
+  });
+
+  it("keeps a keystroke out of it when another draft is written before it reaches the store", async () => {
+    const { caretAt, type, view } = await mountPending();
+    await caretAt(0);
+    await type("/");
+    await act(async () => {
+      view.dispatch({ changes: { from: 1, insert: "f" }, userEvent: "input.type" });
+      useTerminalInputStore.getState().setDraftInput("term-2", "elsewhere");
+    });
+
+    expect(draft()).toBe(`/f${PASSAGE}`);
+    expect(passageRecord()).toEqual({ edited: false, text: PASSAGE });
+  });
+
   it("refuses typing inside it, in the editor and the draft", async () => {
     const { caretAt, type, doc } = await mountPending();
     await caretAt(4);

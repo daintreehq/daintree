@@ -223,13 +223,18 @@ describe("pendingLock", () => {
     );
   });
 
-  it("lets text in between two passages that touch", () => {
+  it("lets text in between two passages that touch, and keeps it out of both", () => {
     const view = mount("onetwo", [
       { from: 0, to: 3 },
       { from: 3, to: 6 },
     ]);
     typeAt(view, 3, " ");
-    expect(view.state.doc.toString()).toBe("one two");
+    typeAt(view, 4, " ");
+    expect(view.state.doc.toString()).toBe("one  two");
+    expect(blocks(view)).toEqual([
+      { from: 0, to: 3 },
+      { from: 5, to: 8 },
+    ]);
   });
 
   it("lets the caret and selection move through the block", () => {
@@ -260,11 +265,32 @@ describe("pendingLock", () => {
     expect(view.state.doc.toString()).toBe("now fixx the bug please");
   });
 
-  it("refuses typing that reaches the editor through its DOM, and redraws the words", () => {
+  // CodeMirror reads a change from the DOM when its mutation observer reports
+  // it, a microtask after the text node changed.
+  const domFlushed = () => new Promise((resolve) => setTimeout(resolve, 0));
+  function pendingText(view: EditorView): Text {
+    const node = view.contentDOM.querySelector(".cm-voice-pending-ai")?.firstChild;
+    if (!(node instanceof Text)) throw new Error("no pending text node");
+    return node;
+  }
+
+  it("refuses typing that reaches the editor through its DOM, and redraws the words", async () => {
     const view = mount(DOC, [BLOCK]);
-    const text = view.contentDOM.querySelector(".cm-voice-pending-ai")!.firstChild as Text;
-    text.nodeValue = "fiXx the bug";
-    (view as unknown as { observer: { flush(): boolean } }).observer.flush();
+    pendingText(view).nodeValue = "fiXx the bug";
+    await domFlushed();
+
+    expect(view.state.doc.toString()).toBe(DOC);
+    expect(view.contentDOM.textContent).toBe(DOC);
+    expect(washed(view)).toEqual([PASSAGE]);
+  });
+
+  it("refuses an IME composition inside the words, and redraws them once it ends", async () => {
+    const view = mount(DOC, [BLOCK]);
+    view.contentDOM.dispatchEvent(new CompositionEvent("compositionstart", { data: "" }));
+    pendingText(view).nodeValue = "fix the かbug";
+    await domFlushed();
+    view.contentDOM.dispatchEvent(new CompositionEvent("compositionend", { data: "か" }));
+    await domFlushed();
 
     expect(view.state.doc.toString()).toBe(DOC);
     expect(view.contentDOM.textContent).toBe(DOC);
@@ -281,6 +307,7 @@ describe("pendingLock", () => {
 
     vi.advanceTimersByTime(1);
     expect(washed(view)).toEqual([]);
+    expect(view.state.doc.toString()).toBe(DOC);
   });
 
   it("takes the wash away with the block when its correction settles", () => {
@@ -305,15 +332,22 @@ describe("pendingLock", () => {
         }),
       ]
     );
+    vi.useFakeTimers();
     typeAt(view, FROM + 1, "x");
     typeAt(view, FROM + 1, "x");
     expect(announced).toEqual(["Still correcting these words"]);
+
+    vi.advanceTimersByTime(VOICE_PENDING_REFUSAL_MS);
+    typeAt(view, FROM + 1, "x");
+    expect(announced).toHaveLength(2);
   });
 });
 
 describe("pendingLock with undo and redo", () => {
-  /** A pause longer than the grouping delay: the next edit starts its own undo step. */
+  /** The next edit starts its own undo step. */
   const isolate = { annotations: isolateHistory.of("full") };
+  const nativeHistory = (view: EditorView, inputType: "historyUndo" | "historyRedo") =>
+    view.contentDOM.dispatchEvent(new InputEvent("beforeinput", { inputType, cancelable: true }));
 
   it("can't take back the dictation that wrote the pending words", () => {
     const view = mount("now ", []);
@@ -350,17 +384,29 @@ describe("pendingLock with undo and redo", () => {
     expect(washed(view)).toEqual([]);
   });
 
-  it("can't redo a step back into the pending words", () => {
+  it("can't redo a step that takes the pending words out, until they unlock", () => {
     const view = mount(DOC, []);
     view.dispatch({ ...isolate, changes: { from: FROM, to: TO }, userEvent: "delete" });
-    view.contentDOM.dispatchEvent(
-      new InputEvent("beforeinput", { inputType: "historyUndo", cancelable: true })
-    );
+    nativeHistory(view, "historyUndo");
     view.dispatch({ effects: setPendingAIRanges.of([BLOCK]) });
-    view.contentDOM.dispatchEvent(
-      new InputEvent("beforeinput", { inputType: "historyRedo", cancelable: true })
-    );
+    nativeHistory(view, "historyRedo");
     expect(view.state.doc.toString()).toBe(DOC);
+
+    view.dispatch({ effects: setPendingAIRanges.of([]) });
+    nativeHistory(view, "historyRedo");
+    expect(view.state.doc.toString()).toBe("now  please");
+  });
+
+  it("still redoes typing outside the block", () => {
+    const view = mount(DOC, [BLOCK]);
+    view.dispatch({
+      ...isolate,
+      changes: { from: DOC.length, insert: "!" },
+      userEvent: "input.type",
+    });
+    nativeHistory(view, "historyUndo");
+    nativeHistory(view, "historyRedo");
+    expect(view.state.doc.toString()).toBe(`${DOC}!`);
   });
 
   it("leaves history unguarded by an editor without the lock", () => {
