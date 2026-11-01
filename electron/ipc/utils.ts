@@ -27,7 +27,7 @@ import {
 import { AppError } from "../utils/errorTypes.js";
 import { assertIpcSecurityReady } from "./ipcGuard.js";
 import { isE2EFaultMode } from "../setup/runtimeFlags.js";
-import type { ClientEndpoint } from "./endpoint.js";
+import type { ClientEndpoint, EndpointGroup, HostFrame } from "./endpoint.js";
 import { getIpcDispatcher } from "./dispatcher.js";
 import { getEndpointRegistry } from "./endpointRegistry.js";
 import { getLocalClientRef, getLocalEndpoint } from "./localEndpoint.js";
@@ -401,14 +401,31 @@ function sendToEndpoints(
   }
 }
 
-function broadcastToRemoteEndpoints(
-  exclude: ReadonlySet<number> | null,
-  channel: string,
-  args: unknown[]
-): void {
+/**
+ * Pushes to every remote view. A link session's views share a group, so the
+ * session gets one copy for all of them; project-scoped and excluding pushes
+ * still address each endpoint, since a group can't leave any of its views out.
+ */
+export function broadcastToRemoteEndpoints(channel: string, args: unknown[]): void {
   const registry = getEndpointRegistry();
   if (!registry.hasRemote()) return;
-  sendToEndpoints(registry.getRemote(), exclude, channel, args);
+  const frame: HostFrame = { type: "event", channel, args };
+  let pushed: Set<EndpointGroup> | null = null;
+  for (const endpoint of registry.getRemote()) {
+    if (endpoint.kind !== "remote-view" || endpoint.isClosed()) continue;
+    const group = endpoint.group;
+    if (group) {
+      pushed ??= new Set();
+      if (pushed.has(group)) continue;
+      pushed.add(group);
+    }
+    try {
+      if (group) group.sendToAll(frame);
+      else endpoint.send(frame);
+    } catch {
+      // A closing link must not break delivery to the remaining endpoints.
+    }
+  }
 }
 
 /**
@@ -458,7 +475,7 @@ export function broadcastToRenderer(channel: string, ...args: unknown[]): void {
       }
     }
   }
-  broadcastToRemoteEndpoints(null, channel, args);
+  broadcastToRemoteEndpoints(channel, args);
 }
 
 /**
@@ -718,7 +735,7 @@ export function broadcastToVisibleRenderers(channel: string, ...args: unknown[])
       }
     }
   }
-  broadcastToRemoteEndpoints(null, channel, args);
+  broadcastToRemoteEndpoints(channel, args);
 }
 
 const singleTargetByChannel = new Map<string, number>();
@@ -838,7 +855,7 @@ export function sendToOneVisibleRenderer(channel: string, ...args: unknown[]): b
     break;
   }
   if (!delivered) singleTargetByChannel.delete(channel);
-  broadcastToRemoteEndpoints(null, channel, args);
+  broadcastToRemoteEndpoints(channel, args);
   return delivered;
 }
 
@@ -1144,7 +1161,7 @@ export function typedBroadcast<K extends keyof IpcEventMap>(
       }
     }
   }
-  broadcastToRemoteEndpoints(null, channel as string, [payload]);
+  broadcastToRemoteEndpoints(channel as string, [payload]);
 }
 
 export function typedSend<K extends keyof IpcEventMap>(

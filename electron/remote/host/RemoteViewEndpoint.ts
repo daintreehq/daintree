@@ -1,6 +1,7 @@
 import type {
   ClientEndpoint,
   Disposable,
+  EndpointGroup,
   EndpointRequestOptions,
   HostFrame,
   RemoteEndpointCloseCause,
@@ -46,6 +47,8 @@ export class RemoteViewEndpoint implements ClientEndpoint {
   projectId: string | null;
   /** The Shell's name for this open of `clientEndpointId`; null from a Shell that names none. */
   readonly openId: string | null;
+  /** Every endpoint of the same link session shares it. */
+  readonly group: EndpointGroup | undefined;
   /** Bumped on every rebind; answers to requests made under an older binding are stale. */
   generation = 0;
   private closed = false;
@@ -62,6 +65,7 @@ export class RemoteViewEndpoint implements ClientEndpoint {
       projectId: string | null;
       openId?: string | null;
       handle?: number;
+      group?: EndpointGroup;
     },
     private readonly transport: RemoteEndpointTransport
   ) {
@@ -71,6 +75,7 @@ export class RemoteViewEndpoint implements ClientEndpoint {
     this.linkSessionId = params.linkSessionId;
     this.projectId = params.projectId;
     this.openId = params.openId ?? null;
+    this.group = params.group;
     this.handle = params.handle ?? allocateRemoteHandle();
   }
 
