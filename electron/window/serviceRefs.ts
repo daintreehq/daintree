@@ -19,6 +19,8 @@ import type { agentNotificationService as AgentNotificationServiceType } from ".
 import type { windowsStoreNotifierService as WindowsStoreNotifierServiceType } from "../services/WindowsStoreNotifierService.js";
 import type { mcpServerService as McpServerServiceType } from "../services/McpServerService.js";
 import type { FleetSnapshotService } from "../services/FleetSnapshotService.js";
+import type { RunAttentionService } from "../services/RunAttentionService.js";
+import type { RunHandBackService } from "../services/RunHandBackService.js";
 import type * as DecisionsModule from "../services/decisions/index.js";
 
 // Guard: process.argv CLI path should only be consumed by the first window
@@ -56,6 +58,10 @@ let ccrConfigService: CcrConfigService | null = null;
 // Owned by the project stats handlers, which create and stop it; held here so
 // the plugin host can read the fleet without importing the IPC handler graph.
 let fleetSnapshotService: FleetSnapshotService | null = null;
+// Owned by the same handlers; held here so the host's summary can band its runs
+// as the fleet does without importing the IPC handler graph either.
+let runAttentionService: RunAttentionService | null = null;
+let runHandBackService: RunHandBackService | null = null;
 
 // Singletons resolved by deferred tasks. Held here so dispose paths can clean
 // them up safely if the task ran. If the window closes before the task runs
@@ -90,6 +96,18 @@ export function getFleetSnapshotServiceRef(): FleetSnapshotService | null {
 }
 export function setFleetSnapshotServiceRef(v: FleetSnapshotService | null): void {
   fleetSnapshotService = v;
+}
+export function getRunAttentionServiceRef(): RunAttentionService | null {
+  return runAttentionService;
+}
+export function setRunAttentionServiceRef(v: RunAttentionService | null): void {
+  runAttentionService = v;
+}
+export function getRunHandBackServiceRef(): RunHandBackService | null {
+  return runHandBackService;
+}
+export function setRunHandBackServiceRef(v: RunHandBackService | null): void {
+  runHandBackService = v;
 }
 export function getMainProcessWatchdogClientRef(): MainProcessWatchdogClient | null {
   return mainProcessWatchdogClient;

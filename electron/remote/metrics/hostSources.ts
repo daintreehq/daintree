@@ -11,11 +11,14 @@ import { scratchStore } from "../../services/ScratchStore.js";
 import type { PtyClient } from "../../services/PtyClient.js";
 import { getSharedTerminalSnapshot } from "../../services/sharedTerminalSnapshot.js";
 import { classifyRun, computeProjectAgentCounts } from "../../services/projectAgentCounts.js";
+import { canopyRefinementFor } from "../../services/canopy/canopyRefinementSource.js";
 import {
   getAgentVersionService,
   getCliAvailabilityServiceRef,
   getPtyClient,
   getResourceProfileService,
+  getRunAttentionServiceRef,
+  getRunHandBackServiceRef,
   getWorkspaceClientRef,
 } from "../../window/serviceRefs.js";
 import { executableForSpawn } from "../../utils/windowsExecutable.js";
@@ -71,9 +74,10 @@ export function openProjects(projects: ProjectInventory = projectStore.getAllPro
 }
 
 /**
- * What this host's agents are doing, as its FSM observed them: the same
- * per-project tallies the project switcher shows, summed across projects.
- * Idle counts agent runs that are neither working nor waiting.
+ * What this host's agents are doing, as its FSM observed them, and what they
+ * ask of the user, as its fleet bands them: the same per-project tallies the
+ * project switcher shows, summed across projects. Observed idle counts agent
+ * runs that are idle or finished.
  *
  * Null when the terminals can't all be seen — no PTY client, or a shard that
  * didn't answer. The updater's restart guard reads these counts, and a tally
@@ -100,29 +104,47 @@ export async function observeAgents(
     ? options.readTerminals(pty)
     : pty.getAllTerminalsWithCompletenessAsync());
   if (degraded) return null;
+
+  const availability = getAgentAvailabilityStore();
+  const known = new Set(projectIds);
+  let working = 0;
+  let waiting = 0;
+  let idle = 0;
+  for (const terminal of terminals) {
+    if (!terminal.projectId || !known.has(terminal.projectId)) continue;
+    if (classifyRun(terminal, (id) => availability.isHelpTerminal(id)) !== null) continue;
+    if (terminal.agentState === "working") working += 1;
+    else if (terminal.agentState === "waiting") waiting += 1;
+    else if (terminal.agentState === "idle" || terminal.agentState === "completed") idle += 1;
+  }
+
+  // The same sources the switcher's counts read, so a host's summary and its
+  // own panes agree about who needs the user (#16058).
+  const handBacks = getRunHandBackServiceRef();
+  const shelves = getRunAttentionServiceRef();
   const counts = computeProjectAgentCounts(
     projectIds,
     terminals,
     undefined,
-    undefined,
+    shelves?.getActiveSnoozes(),
     (id) => helpSessionService.isPanelVisible(id),
-    (terminalId) => helpSessionService.getSlotForTerminal(terminalId)
+    (terminalId) => helpSessionService.getSlotForTerminal(terminalId),
+    handBacks ? (id, spawnedAt) => handBacks.getRecord(id, spawnedAt) : undefined,
+    shelves?.getAll(),
+    canopyRefinementFor,
+    handBacks ? (id, spawnedAt) => handBacks.getWait(id, spawnedAt) : undefined
   );
-  let working = 0;
-  let waiting = 0;
+  let asking = 0;
+  let blocked = 0;
   for (const entry of counts.values()) {
-    working += entry.active;
-    waiting += entry.waiting;
+    asking += entry.waiting - entry.blocked;
+    blocked += entry.blocked;
   }
-  const availability = getAgentAvailabilityStore();
-  let idle = 0;
-  const known = new Set(projectIds);
-  for (const terminal of terminals) {
-    if (!terminal.projectId || !known.has(terminal.projectId)) continue;
-    if (classifyRun(terminal, (id) => availability.isHelpTerminal(id)) !== null) continue;
-    if (terminal.agentState === "idle" || terminal.agentState === "completed") idle += 1;
-  }
-  return { working, waiting, idle };
+  // Every run counted as asking or blocked is an idle, finished or waiting one,
+  // so the rest of those are the host's settled runs: a prompt with no reading
+  // among them.
+  const settled = Math.max(0, idle + waiting - asking - blocked);
+  return { working, waiting, idle, attention: { waiting: asking, blocked, idle: settled } };
 }
 
 /**

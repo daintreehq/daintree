@@ -1,5 +1,6 @@
 import type {
   DriveLeaseHolder,
+  HostAgentAttention,
   HostDriverObservation,
   HostForgeObservation,
   HostMetricsSummary,
@@ -40,6 +41,8 @@ export interface ObservedAgents {
   working: number;
   waiting: number;
   idle: number;
+  /** The same runs as the fleet bands them; see `HostMetricsSummary.agentAttention`. */
+  attention?: HostAgentAttention;
 }
 
 /** Where the sampler reads from; faked in tests, real in {@link createHostSampleSources}. */
@@ -293,7 +296,8 @@ export class HostMetricsSampler {
       cpuPerformancePercent: clusterPercent.performance,
       cpuEfficiencyPercent: clusterPercent.efficiency,
       ...resources.memory,
-      agentsObserved: agents,
+      agentsObserved: agents && { working: agents.working, waiting: agents.waiting, idle: agents.idle },
+      ...(agents?.attention ? { agentAttention: agents.attention } : {}),
       projectCount: projects.projectCount,
       worktreeCount: projects.worktreeCount,
       driver,

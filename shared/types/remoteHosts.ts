@@ -435,6 +435,18 @@ export interface HostDriverObservation extends DriveLeaseObservation {
 /** Projects a summary names drivers for: the overview's line, not an inventory. */
 export const MAX_HOST_SUMMARY_DRIVERS = 32;
 
+/**
+ * A Host's agents by attention band. `waiting` is the runs a Canopy reading
+ * found asking the user that the user hasn't seen (`needs-you`) — a stop with
+ * no reading is never one; `blocked` the error waits; `idle` every other idle,
+ * finished or waiting run.
+ */
+export interface HostAgentAttention {
+  waiting: number;
+  blocked: number;
+  idle: number;
+}
+
 /** Summary frame each host streams every few seconds to every connected client. */
 export interface HostMetricsSummary {
   hostId: HostId;
@@ -502,6 +514,12 @@ export interface HostMetricsSummary {
    * tally must never pass for "nothing working".
    */
   agentsObserved: { working: number; waiting: number; idle: number } | null;
+  /**
+   * The same runs as the Host's fleet bands them, which is what a summary
+   * draws as asking: absent from older hosts and whenever
+   * {@link agentsObserved} is null.
+   */
+  agentAttention?: HostAgentAttention;
   /** Open projects; null when the read failed. */
   projectCount: number | null;
   /** Worktrees across open projects; null when the read failed. */

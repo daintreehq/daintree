@@ -173,11 +173,19 @@ export function describeThermal(summary: HostMetricsSummary): string | null {
   return summary.temperatureZone ? `${reading} · ${summary.temperatureZone}` : reading;
 }
 
-/** Observed agent counts, always labelled as observations; a failed read says so, never 0. */
+/**
+ * Observed agent counts, always labelled as observations; a failed read says
+ * so, never 0. Waiting and blocked are the host's fleet bands, so a run at its
+ * prompt with no reading is idle here; a host too old to band its runs gives
+ * no waiting figure rather than its raw waits.
+ */
 export function describeObservedAgents(summary: HostMetricsSummary): string {
   if (!summary.agentsObserved) return "Agent activity unknown";
-  const { working, waiting, idle } = summary.agentsObserved;
-  return `${working} working · ${waiting} waiting · ${idle} idle (observed)`;
+  const { working, idle } = summary.agentsObserved;
+  const attention = summary.agentAttention;
+  if (!attention) return `${working} working · ${idle} idle (observed)`;
+  const blocked = attention.blocked > 0 ? ` · ${attention.blocked} blocked` : "";
+  return `${working} working · ${attention.waiting} waiting${blocked} · ${attention.idle} idle (observed)`;
 }
 
 /** "2 open · 5 worktrees", with whichever count failed to read shown as unknown, never 0. */
