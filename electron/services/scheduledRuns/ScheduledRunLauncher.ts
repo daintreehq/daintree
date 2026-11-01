@@ -4,6 +4,7 @@ import type { ScheduleRunNowOutcome } from "../../../shared/types/ipc/schedules.
 import type { Schedule, ScheduledRunOrigin } from "../../../shared/types/scheduledRuns.js";
 import type { ScheduledRunRef } from "../../../shared/types/scheduledRunRef.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { pathComparisonKey } from "../../../shared/utils/path.js";
 import type { ScheduledRunRecorder } from "./ScheduledRunRecorder.js";
 import { reserveScheduledLaunch } from "./scheduledRunAdmission.js";
 
@@ -61,6 +62,8 @@ export interface ScheduledRunLauncherDeps<View> {
   newId: () => string;
   /** How long a launch that answered to have started waits for its spawn. */
   spawnTimeoutMs?: number;
+  /** How long main's own launch, with no view, may take before it's given up. */
+  answerTimeoutMs?: number;
   logWarn?: (message: string, error?: unknown) => void;
 }
 
@@ -73,6 +76,24 @@ export interface ScheduledRunLaunchInput {
 }
 
 const DEFAULT_SPAWN_TIMEOUT_MS = 60_000;
+const DEFAULT_ANSWER_TIMEOUT_MS = 60_000;
+
+const CASE_INSENSITIVE_PATHS = process.platform === "darwin" || process.platform === "win32";
+
+function samePath(a: string, b: string): boolean {
+  const options = { caseInsensitive: CASE_INSENSITIVE_PATHS };
+  return pathComparisonKey(a, options) === pathComparisonKey(b, options);
+}
+
+function withDeadline<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise,
+    new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new ScheduledLaunchUnansweredError(message)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
 
 const DECLINE_REASONS: Record<string, string> = {
   "panel-limit": "The project already has as many panels as it can hold.",
@@ -133,35 +154,16 @@ export async function launchScheduledRun<View>(
     return null;
   });
   if (!schedule) return { status: "not-found" };
-
-  const runId = deps.newId();
-  const terminalId = `terminal-${deps.newId()}`;
-  const failed = (message: string, reserved: string | null = terminalId): ScheduleRunNowOutcome => {
-    try {
-      recorder.registerRefusedLaunch({
-        id: runId,
-        scheduleId,
-        projectId,
-        origin,
-        terminalId: reserved,
-        message,
-      });
-      return { status: "failed", runId, message };
-    } catch (error) {
-      logWarn(`[ScheduledRuns] Couldn't record run ${runId}'s refused launch:`, error);
-      return { status: "failed", runId: null, message };
-    }
-  };
-
   // Removing a project removes its schedules and their history with them.
   const project = deps.getProject(projectId);
   if (!project) return { status: "not-found" };
-  if (project.status === "missing" || !(await deps.folderExists(project.path))) {
-    return failed("The project's folder is missing.", null);
-  }
-  if (deps.isProjectSleeping(projectId)) return failed("The project was going to sleep.", null);
 
+  const runId = deps.newId();
+  const terminalId = `terminal-${deps.newId()}`;
   const { launch } = schedule;
+  const target = launch.worktreeId ?? project.path;
+  // Reserved in the same turn the schedule was read, so a removal of the
+  // schedule or project from here on cancels it (`cancelScheduledLaunches`).
   const reserved = reserveScheduledLaunch({
     runId,
     scheduleId,
@@ -169,14 +171,21 @@ export async function launchScheduledRun<View>(
     terminalId,
     agentId: launch.agentId,
     admit: (resume) => {
-      // A launcher falls back from a preset it can't find, and the spawn
-      // handler from a worktree that isn't the project's; a run that would
+      // A launcher falls back from a preset it can't find, and a launch with
+      // no worktree list from a worktree it can't place; a run that would
       // start differently from its schedule doesn't start.
       if (launch.presetId !== null && resume.agentPresetId !== launch.presetId) {
         throw new Error("The schedule's preset isn't available any more.");
       }
       if (launch.worktreeId !== null && resume.worktreeId !== launch.worktreeId) {
         throw new Error("The schedule's worktree isn't part of the project any more.");
+      }
+      if (!samePath(resume.cwd, target)) {
+        throw new Error(
+          launch.worktreeId !== null
+            ? "The schedule's worktree couldn't be found."
+            : "The project's folder couldn't be found."
+        );
       }
       if (deps.isProjectSleeping(projectId)) throw new Error("The project was going to sleep.");
       recorder.registerLaunch({ id: runId, scheduleId, projectId, origin, terminalId, resume });
@@ -187,6 +196,42 @@ export async function launchScheduledRun<View>(
       }
     },
   });
+
+  const failed = (
+    message: string,
+    reservedId: string | null = terminalId
+  ): ScheduleRunNowOutcome => {
+    // A removed schedule or project has no history left to write into.
+    if (reserved.state().kind === "cancelled" || !deps.getProject(projectId)) {
+      return { status: "not-found" };
+    }
+    try {
+      recorder.registerRefusedLaunch({
+        id: runId,
+        scheduleId,
+        projectId,
+        origin,
+        terminalId: reservedId,
+        message,
+      });
+      return { status: "failed", runId, message };
+    } catch (error) {
+      logWarn(`[ScheduledRuns] Couldn't record run ${runId}'s refused launch:`, error);
+      return { status: "failed", runId: null, message };
+    }
+  };
+  // Nothing was asked for yet, so no spawn can come for it.
+  const refuseBeforeLaunch = (message: string): ScheduleRunNowOutcome => {
+    reserved.withdraw();
+    return failed(message, null);
+  };
+
+  if (project.status === "missing" || !(await deps.folderExists(project.path))) {
+    return refuseBeforeLaunch("The project's folder is missing.");
+  }
+  if (deps.isProjectSleeping(projectId))
+    return refuseBeforeLaunch("The project was going to sleep.");
+  if (reserved.state().kind !== "pending") return { status: "not-found" };
 
   const request: ScheduledLaunchRequest = {
     args: {
@@ -206,9 +251,15 @@ export async function launchScheduledRun<View>(
   let unanswered: string | null = null;
   const view = deps.findView(projectId, input.preferredWebContentsId);
   try {
+    // A view's bridge keeps its own deadline; main's launch waits on the
+    // workspace host, which nothing else bounds.
     result = view
       ? await deps.launchInView(view, request)
-      : await deps.launchWithoutView(project, request);
+      : await withDeadline(
+          deps.launchWithoutView(project, request),
+          deps.answerTimeoutMs ?? DEFAULT_ANSWER_TIMEOUT_MS,
+          "The launch didn't finish in time."
+        );
   } catch (error) {
     unanswered = formatErrorMessage(error, "The launch didn't answer.");
   }
@@ -227,6 +278,7 @@ export async function launchScheduledRun<View>(
   }
 
   const state = reserved.state();
+  if (state.kind === "cancelled") return { status: "not-found" };
   if (state.kind === "refused") return failed(state.message);
   if (state.kind === "pending") {
     reserved.giveUp();
@@ -242,6 +294,12 @@ export async function launchScheduledRun<View>(
       recorder.settle(runId, { kind: "launch-error", message });
     }
     return { status: "failed", runId, message };
+  }
+  // The PTY host can refuse a spawn as it's sent (too many terminals), which
+  // the history has already settled while the launch still answers started.
+  const settlement = recorder.get(runId)?.settlement;
+  if (settlement?.state === "settled" && settlement.evidence.kind === "launch-error") {
+    return { status: "failed", runId, message: settlement.evidence.message };
   }
   return { status: "started", runId, terminalId };
 }

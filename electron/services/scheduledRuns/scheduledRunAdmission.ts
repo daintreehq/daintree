@@ -12,8 +12,8 @@ import type { ScheduledRunRef } from "../../../shared/types/scheduledRunRef.js";
  * The launcher reserves the run's ids here before it asks for the launch. The
  * first spawn naming a reserved run takes the reservation and registers the
  * run; a later spawn naming it (a restart, held-pane recovery, a crash replay)
- * finds none and spawns as any pane does. Leaf module: the spawn handler
- * imports it, so it carries no services of its own.
+ * finds none and spawns as any pane does. Leaf module: the spawn handler and
+ * the project store import it, so it carries no services of its own.
  */
 
 /** What the spawn handler is about to start, in the terms a reservation checks. */
@@ -22,6 +22,9 @@ export interface ScheduledSpawn {
   readonly projectId: string | undefined;
   readonly scheduledRun: ScheduledRunRef | undefined;
   readonly launchAgentId: string | undefined;
+  /** The directory the launcher asked for, before the spawn handler's fallback. */
+  readonly requestedCwd: string | undefined;
+  /** The directory it will start in. */
   readonly cwd: string;
   readonly worktreeId: string | undefined;
   readonly agentLaunchFlags: readonly string[] | undefined;
@@ -44,40 +47,55 @@ export interface ScheduledLaunchReservation {
   readonly admit: (resume: ScheduledRunResume) => void;
 }
 
-interface Pending {
-  readonly reservation: ScheduledLaunchReservation;
-  readonly resolve: () => void;
-  readonly reject: (error: Error) => void;
-}
-
-const GIVEN_UP_MESSAGE = "given up";
-
-const pending = new Map<string, Pending>();
-
-/**
- * Runs given up on before their terminal spawned. Their first late spawn is
- * refused: the history already says the run failed, and an agent running
- * unattended behind that record is the one thing it can't be allowed to do.
- * Only the first, so a pane the user restarts by hand still restarts.
- */
-const givenUp = new Set<string>();
-const MAX_GIVEN_UP = 64;
-
 /** Where a reservation stands. */
 export type ScheduledAdmissionState =
   | { readonly kind: "pending" }
   | { readonly kind: "registered" }
   /** A spawn took it and was refused, or the launcher gave it up. */
-  | { readonly kind: "refused"; readonly message: string };
+  | { readonly kind: "refused"; readonly message: string }
+  /** Its schedule or project was removed before it spawned; there's no history to write. */
+  | { readonly kind: "cancelled" };
+
+interface Pending {
+  readonly reservation: ScheduledLaunchReservation;
+  readonly settle: (state: Exclude<ScheduledAdmissionState, { kind: "pending" }>) => void;
+}
+
+const pending = new Map<string, Pending>();
+
+/**
+ * Runs given up on after their launch was asked for, before their terminal
+ * spawned. Their first late spawn is refused: the history already says the
+ * run failed (or has no run at all), and an agent running unattended behind
+ * that is the one thing it can't be allowed to do. Only the first, so a pane
+ * the user restarts by hand still restarts.
+ *
+ * Kept for the life of the process: a view frozen mid-launch can spawn days
+ * later. Only a launch that went unanswered or never spawned lands here, so
+ * the bound is a backstop against a runaway, not a working limit.
+ */
+const givenUp = new Set<string>();
+const MAX_GIVEN_UP = 4096;
+
+function tombstone(runId: string): void {
+  givenUp.add(runId);
+  while (givenUp.size > MAX_GIVEN_UP) givenUp.delete(givenUp.values().next().value!);
+}
 
 export interface ReservedLaunch {
-  /** Settles when a spawn takes the reservation: resolved once registered, rejected when refused. */
+  /** Settles when the reservation does: resolved once registered, rejected otherwise. */
   readonly admitted: Promise<void>;
   readonly state: () => ScheduledAdmissionState;
   /**
-   * Gives the reservation up, as the launcher does when no spawn came in
-   * time. True when it was still pending, so nothing registered the run and
-   * its first late spawn will be refused; false when a spawn already took it.
+   * Withdraws a reservation no launch was asked for yet. True when it was
+   * still pending; false when it was already cancelled.
+   */
+  readonly withdraw: () => boolean;
+  /**
+   * Gives up on a launch that was asked for and hasn't spawned, as the
+   * launcher does when no answer or no spawn came in time. True when it was
+   * still pending, so nothing registered the run and its first late spawn
+   * will be refused; false when a spawn already took it or it was cancelled.
    */
   readonly giveUp: () => boolean;
 }
@@ -95,27 +113,32 @@ export function reserveScheduledLaunch(reservation: ScheduledLaunchReservation):
   });
   // A launcher that gave up no longer waits on it.
   admitted.catch(() => {});
-  pending.set(reservation.runId, {
+  const entry: Pending = {
     reservation,
-    resolve: () => {
-      state = { kind: "registered" };
-      resolveAdmitted();
+    settle: (next) => {
+      state = next;
+      if (next.kind === "registered") resolveAdmitted();
+      else rejectAdmitted(new Error(next.kind === "refused" ? next.message : next.kind));
     },
-    reject: (error) => {
-      state = { kind: "refused", message: error.message };
-      rejectAdmitted(error);
-    },
-  });
+  };
+  pending.set(reservation.runId, entry);
+  const release = (): boolean => {
+    if (pending.get(reservation.runId) !== entry) return false;
+    pending.delete(reservation.runId);
+    return true;
+  };
   return {
     admitted,
     state: () => state,
+    withdraw: () => {
+      if (!release()) return false;
+      entry.settle({ kind: "refused", message: "withdrawn" });
+      return true;
+    },
     giveUp: () => {
-      const entry = pending.get(reservation.runId);
-      if (entry?.reservation !== reservation) return false;
-      pending.delete(reservation.runId);
-      givenUp.add(reservation.runId);
-      while (givenUp.size > MAX_GIVEN_UP) givenUp.delete(givenUp.values().next().value!);
-      entry.reject(new Error(GIVEN_UP_MESSAGE));
+      if (!release()) return false;
+      tombstone(reservation.runId);
+      entry.settle({ kind: "refused", message: "given up" });
       return true;
     },
   };
@@ -145,6 +168,11 @@ export function admitScheduledSpawn(spawn: ScheduledSpawn): void {
     ) {
       throw new Error("The terminal that started isn't the one this scheduled run reserved");
     }
+    // The spawn handler falls back to the project root or home from a folder
+    // that's gone; an unattended run doesn't start somewhere it wasn't asked to.
+    if (spawn.requestedCwd !== undefined && spawn.requestedCwd !== spawn.cwd) {
+      throw new Error("The run's working directory is missing.");
+    }
     reservation.admit({
       agentId: reservation.agentId,
       agentSessionId: spawn.agentSessionId ?? null,
@@ -156,13 +184,29 @@ export function admitScheduledSpawn(spawn: ScheduledSpawn): void {
     });
   } catch (error) {
     const refusal = error instanceof Error ? error : new Error(String(error));
-    entry.reject(refusal);
+    entry.settle({ kind: "refused", message: refusal.message });
     throw refusal;
   }
-  entry.resolve();
+  entry.settle({ kind: "registered" });
 }
 
-/** Projects with a launch reserved and not yet spawned; automatic sleep waits for them too. */
+/**
+ * Cancels the launches reserved for a schedule or a project being removed,
+ * synchronously with the removal, so none registers a run whose history was
+ * just deleted. Their first spawn is refused.
+ */
+export function cancelScheduledLaunches(match: { projectId?: string; scheduleId?: string }): void {
+  for (const [runId, entry] of [...pending]) {
+    const { reservation } = entry;
+    if (match.projectId !== undefined && reservation.projectId !== match.projectId) continue;
+    if (match.scheduleId !== undefined && reservation.scheduleId !== match.scheduleId) continue;
+    pending.delete(runId);
+    tombstone(runId);
+    entry.settle({ kind: "cancelled" });
+  }
+}
+
+/** Whether a launch is reserved in the project and not yet spawned; automatic sleep waits for it too. */
 export function hasPendingScheduledLaunch(projectId: string): boolean {
   for (const { reservation } of pending.values()) {
     if (reservation.projectId === projectId) return true;

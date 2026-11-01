@@ -1261,6 +1261,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         projectId,
         scheduledRun: validatedOptions.scheduledRun,
         launchAgentId,
+        requestedCwd: validatedOptions.cwd || undefined,
         cwd,
         worktreeId: spawnWorktreeId,
         agentLaunchFlags: validatedOptions.agentLaunchFlags,

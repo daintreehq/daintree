@@ -1042,12 +1042,12 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
       expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
     });
 
-    it("records the working directory it actually starts in", async () => {
+    it("refuses to start a run anywhere but the directory it asked for", async () => {
+      mockRevokePaneConfig.mockResolvedValue(undefined);
       registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
       const handler = getSpawnHandler();
-      const os = await import("os");
       const admit = vi.fn();
-      reserveScheduledLaunch({
+      const reserved = reserveScheduledLaunch({
         runId: "run-1",
         scheduleId: "schedule-1",
         projectId: "project-1",
@@ -1056,9 +1056,13 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
         admit,
       });
 
-      await handler({} as Electron.IpcMainInvokeEvent, scheduledSpawn("/nonexistent/path"));
-
-      expect(admit).toHaveBeenCalledWith(expect.objectContaining({ cwd: os.homedir() }));
+      // The handler would fall back to home from a worktree folder that's gone.
+      await expect(
+        handler({} as Electron.IpcMainInvokeEvent, scheduledSpawn("/nonexistent/path"))
+      ).rejects.toThrow("Failed to spawn terminal: The run's working directory is missing.");
+      expect(admit).not.toHaveBeenCalled();
+      expect(ptyClient.spawn).not.toHaveBeenCalled();
+      expect(reserved.state().kind).toBe("refused");
     });
 
     it("fails the spawn when the run's registration refuses it", async () => {

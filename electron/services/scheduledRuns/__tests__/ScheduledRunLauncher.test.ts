@@ -13,6 +13,7 @@ import type { ScheduledRunRecorder } from "../ScheduledRunRecorder.js";
 import {
   _resetScheduledRunAdmissionForTest,
   admitScheduledSpawn,
+  cancelScheduledLaunches,
   hasPendingScheduledLaunch,
 } from "../scheduledRunAdmission.js";
 
@@ -38,14 +39,16 @@ function launched(terminalId = "terminal-id-2"): ActionDispatchResult {
   return { ok: true, result: { launched: true, terminalId, spawnStatus: null } };
 }
 
-/** What the spawn handler does when the launch reaches it. */
+/** What the spawn handler does when the launch reaches it: starts in the worktree, else the root. */
 function spawnFor(request: ScheduledLaunchRequest, overrides: Record<string, unknown> = {}): void {
+  const cwd = request.args.worktreeId || "/repo";
   admitScheduledSpawn({
     terminalId: request.args.requestedId,
     projectId: "project-1",
     scheduledRun: request.scheduledRun,
     launchAgentId: request.args.agentId,
-    cwd: "/repo",
+    requestedCwd: cwd,
+    cwd,
     worktreeId: request.args.worktreeId || undefined,
     agentLaunchFlags: ["--model", "opus"],
     agentModelId: "opus",
@@ -291,6 +294,82 @@ describe("launchScheduledRun", () => {
 
     await expect(run()).resolves.toMatchObject({ status: "failed" });
     expect(recorder.registerLaunch).not.toHaveBeenCalled();
+  });
+
+  it("refuses a run that would start in the project root instead of its worktree", async () => {
+    schedule = { ...schedule, launch: { ...schedule.launch, worktreeId: "/wt" } };
+    deps.findView = () => null;
+    // With no worktree list, main's launch keeps the id and starts in the root.
+    deps.launchWithoutView = async (_project, request) => {
+      expect(() => spawnFor(request, { requestedCwd: "/repo", cwd: "/repo" })).toThrow(
+        /worktree couldn't be found/
+      );
+      return { ok: true, result: { launched: false, spawnStatus: "spawn-failed" } };
+    };
+
+    await expect(run()).resolves.toMatchObject({
+      status: "failed",
+      message: "The schedule's worktree couldn't be found.",
+    });
+    expect(recorder.registerLaunch).not.toHaveBeenCalled();
+  });
+
+  it("records nothing for a launch whose schedule was removed while it ran", async () => {
+    let sent: ScheduledLaunchRequest | undefined;
+    deps.launchInView = async (_view, request) => {
+      sent = request;
+      cancelScheduledLaunches({ scheduleId: "schedule-1" });
+      return launched(request.args.requestedId);
+    };
+
+    await expect(run()).resolves.toEqual({ status: "not-found" });
+    expect(() => spawnFor(sent!)).toThrow(/given up/);
+    expect(recorder.registerLaunch).not.toHaveBeenCalled();
+    expect(recorder.registerRefusedLaunch).not.toHaveBeenCalled();
+  });
+
+  it("records nothing when the project is removed before anything was asked for", async () => {
+    deps.folderExists = async () => {
+      deps.getProject = () => null;
+      return false;
+    };
+
+    await expect(run()).resolves.toEqual({ status: "not-found" });
+    expect(recorder.registerRefusedLaunch).not.toHaveBeenCalled();
+    expect(hasPendingScheduledLaunch("project-1")).toBe(false);
+  });
+
+  it("gives up on main's own launch when it doesn't finish in time", async () => {
+    deps.findView = () => null;
+    deps.answerTimeoutMs = 10;
+    let sent: ScheduledLaunchRequest | undefined;
+    deps.launchWithoutView = (_project, request) => {
+      sent = request;
+      return new Promise(() => {});
+    };
+
+    await expect(run()).resolves.toMatchObject({
+      status: "failed",
+      message: "The launch didn't finish in time.",
+    });
+    expect(() => spawnFor(sent!)).toThrow(/given up/);
+  });
+
+  it("reports a spawn the PTY host refused as it was sent as failed, not started", async () => {
+    recorder.get.mockReturnValue({
+      settlement: {
+        state: "settled",
+        settledAt: 1,
+        outcome: "failed",
+        evidence: { kind: "launch-error", message: "Too many terminals" },
+      },
+    } as unknown as ScheduledRun);
+
+    await expect(run()).resolves.toEqual({
+      status: "failed",
+      runId: "id-1",
+      message: "Too many terminals",
+    });
   });
 
   it("settles a registered run whose terminal then failed to start", async () => {

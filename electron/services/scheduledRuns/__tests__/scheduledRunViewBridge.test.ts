@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type Listener = (event: { sender: { id: number } }, payload: unknown) => void;
 
-const { listeners, destroyedCallbacks } = vi.hoisted(() => ({
+const { listeners, destroyedCallbacks, thaw } = vi.hoisted(() => ({
   listeners: new Map<string, Listener>(),
   destroyedCallbacks: new Map<number, () => void>(),
+  /** Each send waits on the view's thaw, as the real `thawThenSend` does. */
+  thaw: { done: Promise.resolve() as Promise<void> },
 }));
 
 vi.mock("electron", () => ({
@@ -16,7 +18,9 @@ vi.mock("electron", () => ({
 
 vi.mock("../../../utils/thawThenSend.js", () => ({
   thawThenSend: (_wc: unknown, isStillPending: () => boolean, send: () => void) => {
-    if (isStillPending()) send();
+    void thaw.done.then(() => {
+      if (isStillPending()) send();
+    });
   },
 }));
 
@@ -63,7 +67,11 @@ function answer(senderId: number, payload: unknown): void {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  thaw.done = Promise.resolve();
 });
+
+/** Lets the thaw, and the send behind it, run. */
+const thawed = () => vi.advanceTimersByTimeAsync(0);
 
 afterEach(() => {
   _resetScheduledRunViewBridgeForTest();
@@ -73,8 +81,15 @@ afterEach(() => {
 describe("requestScheduledLaunchInView", () => {
   it("asks the view to launch the run and resolves with its answer", async () => {
     const wc = view(7);
+    let finishThaw: () => void = () => {};
+    thaw.done = new Promise((resolve) => (finishThaw = resolve));
     const pending = requestScheduledLaunchInView(wc, request);
 
+    // A frozen view never answers, so nothing is sent until it's thawed.
+    await thawed();
+    expect(wc.send).not.toHaveBeenCalled();
+    finishThaw();
+    await thawed();
     expect(wc.send).toHaveBeenCalledWith(CHANNELS.SCHEDULES_LAUNCH_REQUEST, {
       requestId: expect.any(String),
       args: request.args,
@@ -93,22 +108,32 @@ describe("requestScheduledLaunchInView", () => {
   it("reads an answer it can't make sense of as a failure", async () => {
     const wc = view(7);
     const pending = requestScheduledLaunchInView(wc, request);
+    await thawed();
     const { requestId } = wc.send.mock.calls[0][1] as { requestId: string };
     answer(7, { requestId, result: "launched" });
 
     await expect(pending).resolves.toMatchObject({ ok: false });
   });
 
-  it("gives up when the view doesn't answer in time", async () => {
-    const pending = requestScheduledLaunchInView(view(7), request, 1_000);
+  it("gives up when the view doesn't answer in time, and asks nothing once it has", async () => {
+    const wc = view(7);
+    let finishThaw: () => void = () => {};
+    thaw.done = new Promise((resolve) => (finishThaw = resolve));
+    const pending = requestScheduledLaunchInView(wc, request, 1_000);
     const settled = expect(pending).rejects.toBeInstanceOf(ScheduledLaunchUnansweredError);
     await vi.advanceTimersByTimeAsync(1_000);
     await settled;
+
+    finishThaw();
+    await thawed();
+    expect(wc.send).not.toHaveBeenCalled();
+    expect(destroyedCallbacks.has(7)).toBe(false);
   });
 
   it("gives up when the view closes, and ignores an answer after that", async () => {
     const wc = view(7);
     const pending = requestScheduledLaunchInView(wc, request);
+    await thawed();
     const { requestId } = wc.send.mock.calls[0][1] as { requestId: string };
 
     destroyedCallbacks.get(7)?.();
@@ -121,6 +146,9 @@ describe("requestScheduledLaunchInView", () => {
     wc.send.mockImplementation(() => {
       throw new Error("Render frame was disposed");
     });
-    await expect(requestScheduledLaunchInView(wc, request)).rejects.toThrow(/disposed/);
+    const pending = requestScheduledLaunchInView(wc, request);
+    const settled = expect(pending).rejects.toThrow(/disposed/);
+    await thawed();
+    await settled;
   });
 });

@@ -423,6 +423,8 @@ describe("ScheduledRunRecorder", () => {
     expect(run).toMatchObject({
       terminalId: "terminal-3",
       resume: null,
+      pane: { state: "none" },
+      process: { agent: { state: "not-started" }, pty: { state: "not-started" } },
       settlement: {
         state: "settled",
         outcome: "failed",
@@ -433,6 +435,7 @@ describe("ScheduledRunRecorder", () => {
       },
     });
     expect(emitted).toEqual([]);
+    expect(changes).toEqual([{ projectId: "project-1", scheduleIds: ["schedule-1"] }]);
     expect(recorder.hasOpenRun("project-1")).toBe(false);
     // Its terminal never spawned under the run, so a late spawn of the id isn't the run's.
     recorder.handleSpawnResult("terminal-3", { success: true, spawnedAt: SPAWNED_AT });

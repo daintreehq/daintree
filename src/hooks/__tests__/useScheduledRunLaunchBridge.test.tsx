@@ -67,7 +67,7 @@ describe("useScheduledRunLaunchBridge", () => {
       confirmed: true,
       scheduledRun: request.scheduledRun,
     });
-    expect(dispatch.mock.calls[0][1]).not.toHaveProperty("scheduledRun");
+    expect(dispatch.mock.calls[0]![1]).not.toHaveProperty("scheduledRun");
   });
 
   it("answers a launch that threw as a failure carrying the reason", async () => {
@@ -77,7 +77,7 @@ describe("useScheduledRunLaunchBridge", () => {
     requestLaunch?.(request);
 
     await vi.waitFor(() => expect(sendLaunchResponse).toHaveBeenCalledTimes(1));
-    expect(sendLaunchResponse.mock.calls[0][0]).toMatchObject({
+    expect(sendLaunchResponse.mock.calls[0]![0]).toMatchObject({
       requestId: "request-1",
       result: { ok: false, error: { message: expect.stringContaining("No project in scope") } },
     });

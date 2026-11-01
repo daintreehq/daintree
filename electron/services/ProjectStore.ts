@@ -44,6 +44,7 @@ import { invalidatePrefetchCache } from "./prefetchHydrateCache.js";
 import { ProjectFileStore } from "./ProjectFileStore.js";
 import { ScheduleStore } from "./ScheduleStore.js";
 import { events } from "./events.js";
+import { cancelScheduledLaunches } from "./scheduledRuns/scheduledRunAdmission.js";
 import { ProjectRecipeSynchronizer } from "./ProjectRecipeSynchronizer.js";
 import type {
   CopyTreeHistoryAppendInput,
@@ -234,6 +235,8 @@ export class ProjectStore {
       (projectId) => this.getProjectById(projectId) !== null,
       Date.now,
       async (_projectId, scheduleId) => {
+        // A launch still waiting to spawn would register a run whose history is going.
+        cancelScheduledLaunches({ scheduleId });
         const { getScheduledRunRecorder } = await import("./scheduledRuns/index.js");
         (await getScheduledRunRecorder())?.deleteForSchedule(scheduleId);
       }
@@ -983,6 +986,8 @@ export class ProjectStore {
       { behavior: "immediate" }
     );
     if (removed.changes > 0) this.notifyRegistryListeners();
+    // A launch still waiting to spawn would register a run for a project that's gone.
+    cancelScheduledLaunches({ projectId });
     // Those runs, open ones included, will never end now.
     if (runsRemoved > 0) {
       events.emit("scheduled-runs:deleted", { projectId, scheduleId: null, timestamp: Date.now() });

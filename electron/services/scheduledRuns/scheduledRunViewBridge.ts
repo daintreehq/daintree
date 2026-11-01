@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { CHANNELS } from "../../ipc/channels.js";
 import { thawThenSend } from "../../utils/thawThenSend.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
 import type { ScheduledLaunchViewRequest } from "../../../shared/types/ipc/schedules.js";
 import {
@@ -119,7 +120,7 @@ export function requestScheduledLaunchInView(
         } catch (error) {
           take(requestId)?.reject(
             new ScheduledLaunchUnansweredError(
-              error instanceof Error ? error.message : "The window couldn't be asked."
+              formatErrorMessage(error, "The window couldn't be asked.")
             )
           );
         }
