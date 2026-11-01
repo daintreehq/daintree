@@ -425,10 +425,7 @@ async function runSleep(
  * read counts as a dispatch that can't be ruled out: the only caller that
  * asks is a policy, and a policy can always try again next sweep.
  */
-function viewRefusal(
-  projectId: string,
-  provider: ProjectViewManagersProvider
-): ViewRefusal | null {
+function viewRefusal(projectId: string, provider: ProjectViewManagersProvider): ViewRefusal | null {
   let managers;
   try {
     managers = provider();
