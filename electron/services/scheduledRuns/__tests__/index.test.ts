@@ -41,6 +41,12 @@ vi.mock("../../../ipc/endpointRegistry.js", () => ({
   getEndpointRegistry: () => ({ hasRemote: () => false }),
 }));
 
+const keepAwake = vi.hoisted(() => ({ getService: vi.fn() }));
+
+vi.mock("../../PowerSaveBlockerService.js", () => ({
+  getPowerSaveBlockerService: keepAwake.getService,
+}));
+
 import { openDb } from "../../persistence/db.js";
 import { events } from "../../events.js";
 import { ScheduledRunStore } from "../ScheduledRunStore.js";
@@ -64,6 +70,7 @@ beforeEach(() => {
   state.sqlite = openDb(path.join(dir, "app.db"), migrationsFolder).sqlite;
   state.shutdown = null;
   state.sent = [];
+  keepAwake.getService.mockReset();
   _resetScheduledRunRecorderForTest();
   source = new EventEmitter();
   stop = startScheduledRunFacts(source as unknown as ScheduledRunFactSource);
@@ -125,6 +132,50 @@ describe("scheduled-run history wiring", () => {
       },
     ]);
     expect(await getScheduledRunRecorder()).toBe(recorder);
+  });
+
+  it("has the keep-awake service listening before a run's start goes out", async () => {
+    const order: string[] = [];
+    keepAwake.getService.mockImplementation(() => order.push("keep-awake"));
+    const offStarted = events.on("scheduled-run:started", (payload) =>
+      order.push(`started ${payload.runId}`)
+    );
+
+    (await getScheduledRunRecorder())!.registerLaunch(launch);
+    offStarted();
+
+    expect(order).toEqual(["keep-awake", "started run-1"]);
+  });
+
+  it("still announces a run's start when keep-awake has been shut down", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    keepAwake.getService.mockImplementation(() => {
+      throw new Error("Keep-awake is unavailable while Daintree shuts down");
+    });
+    const started = vi.fn();
+    const offStarted = events.on("scheduled-run:started", started);
+
+    (await getScheduledRunRecorder())!.registerLaunch(launch);
+    offStarted();
+    warn.mockRestore();
+
+    expect(started).toHaveBeenCalledWith(expect.objectContaining({ runId: "run-1" }));
+  });
+
+  it("announces a schedule's deleted history on the main bus", async () => {
+    const deleted = vi.fn();
+    const offDeleted = events.on("scheduled-runs:deleted", deleted);
+    const recorder = (await getScheduledRunRecorder())!;
+    recorder.registerLaunch(launch);
+
+    recorder.deleteForSchedule("schedule-1");
+    offDeleted();
+
+    expect(deleted).toHaveBeenCalledWith({
+      projectId: "project-1",
+      scheduleId: "schedule-1",
+      timestamp: expect.any(Number),
+    });
   });
 
   it("records the PTY and session facts of a launched run", async () => {
@@ -207,5 +258,37 @@ describe("scheduled-run history wiring", () => {
   it("doesn't open the history once Daintree is quitting", async () => {
     state.shutdown = { initiator: "app-quit", phase: "cleaning" };
     expect(await getScheduledRunRecorder()).toBeNull();
+  });
+
+  it("opens the history and announces starts when keep-awake can't load", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.resetModules();
+    vi.doMock("../../PowerSaveBlockerService.js", () => {
+      throw new Error("keep-awake failed to load");
+    });
+    try {
+      const fresh = await import("../index.js");
+      const { events: freshEvents } = await import("../../events.js");
+      const started = vi.fn();
+      const offStarted = freshEvents.on("scheduled-run:started", started);
+
+      const recorder = await fresh.getScheduledRunRecorder();
+      recorder?.registerLaunch(launch);
+      offStarted();
+      fresh._resetScheduledRunRecorderForTest();
+
+      expect(recorder).not.toBeNull();
+      expect(started).toHaveBeenCalledWith(expect.objectContaining({ runId: "run-1" }));
+      expect(warn).toHaveBeenCalledWith(
+        "[ScheduledRuns] Keep-awake couldn't load:",
+        expect.anything()
+      );
+    } finally {
+      vi.doMock("../../PowerSaveBlockerService.js", () => ({
+        getPowerSaveBlockerService: keepAwake.getService,
+      }));
+      vi.resetModules();
+      warn.mockRestore();
+    }
   });
 });

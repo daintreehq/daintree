@@ -305,6 +305,7 @@ export const SECTION_LABELS: Record<string, string> = {
   memoryTrends: "Memory trends",
   memoryAttribution: "Memory by project",
   resourceState: "Resource limits",
+  keepAwake: "Keep awake",
   workerGovernance: "Background workers",
   whySlow: "Slowness snapshot",
   counts: "Open projects and views",

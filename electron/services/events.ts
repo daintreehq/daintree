@@ -381,6 +381,12 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "A schedule's run settled",
   },
+  "scheduled-runs:deleted": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A schedule's or a project's run history was deleted",
+  },
   "terminal:activity": {
     category: "agent",
     requiresContext: false,
@@ -1116,6 +1122,18 @@ export type DaintreeEventMap = {
   };
 
   /**
+   * Run history was deleted with its schedule or its project (#15981). Its
+   * runs, open ones included, are gone without settling, so none of them will
+   * ever send `scheduled-run:ended`. Their processes aren't touched.
+   */
+  "scheduled-runs:deleted": {
+    projectId: string;
+    /** The schedule whose runs went; null when every run of the project did. */
+    scheduleId: string | null;
+    timestamp: number;
+  };
+
+  /**
    * Emitted when a terminal's activity state changes (busy/idle).
    * For shell terminals, this uses process tree inspection for accuracy.
    * For agent terminals, this includes human-readable status headlines.
@@ -1270,6 +1288,7 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "agent-session:recorded",
   "scheduled-run:started",
   "scheduled-run:ended",
+  "scheduled-runs:deleted",
   "terminal:activity",
   "terminal:status",
   "terminal:backgrounded",

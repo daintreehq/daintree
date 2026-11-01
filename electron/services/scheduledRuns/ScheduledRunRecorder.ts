@@ -84,6 +84,8 @@ export interface ScheduledRunRecorderDeps {
   readonly onRunStarted?: (payload: DaintreeEventMap["scheduled-run:started"]) => void;
   /** A run settled, once; for other main-side services. */
   readonly onRunEnded?: (payload: DaintreeEventMap["scheduled-run:ended"]) => void;
+  /** A schedule's history was deleted, and its runs with it will never end. */
+  readonly onRunsDeleted?: (payload: DaintreeEventMap["scheduled-runs:deleted"]) => void;
   readonly logWarn?: (message: string, error?: unknown) => void;
 }
 
@@ -146,6 +148,7 @@ export class ScheduledRunRecorder {
   private readonly onChanged: (change: ScheduledRunsChange) => void;
   private readonly onRunStarted: NonNullable<ScheduledRunRecorderDeps["onRunStarted"]>;
   private readonly onRunEnded: NonNullable<ScheduledRunRecorderDeps["onRunEnded"]>;
+  private readonly onRunsDeleted: NonNullable<ScheduledRunRecorderDeps["onRunsDeleted"]>;
   private readonly logWarn: (message: string, error?: unknown) => void;
   /**
    * The incarnation each terminal of a run launched in this lifetime was first
@@ -163,6 +166,7 @@ export class ScheduledRunRecorder {
     this.onChanged = deps.onChanged ?? (() => {});
     this.onRunStarted = deps.onRunStarted ?? (() => {});
     this.onRunEnded = deps.onRunEnded ?? (() => {});
+    this.onRunsDeleted = deps.onRunsDeleted ?? (() => {});
     this.logWarn = deps.logWarn ?? console.warn;
   }
 
@@ -429,10 +433,17 @@ export class ScheduledRunRecorder {
 
   /**
    * Deletes a schedule's history with it. A fact arriving later for one of its
-   * runs finds no row and records nothing.
+   * runs finds no row and records nothing, so none of them ends: other
+   * services hear of the deletion instead.
    */
   deleteForSchedule(scheduleId: string): void {
     const projectIds = this.store.deleteForSchedule(scheduleId);
+    const timestamp = this.now();
+    // Before the views hear of it: a view listener that throws must not keep
+    // a deleted run holding anything.
+    for (const projectId of projectIds) {
+      this.notify(() => this.onRunsDeleted({ projectId, scheduleId, timestamp }));
+    }
     for (const projectId of projectIds) this.onChanged({ projectId, scheduleIds: [scheduleId] });
   }
 

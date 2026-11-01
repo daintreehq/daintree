@@ -27,9 +27,16 @@ import { useKeepAwakeStore } from "@/store/keepAwakeStore";
 function makeState(
   config: Partial<KeepAwakeConfig> = {},
   isBlocking = false,
-  revision = 1
+  revision = 1,
+  scheduledRunIds: string[] = []
 ): KeepAwakeState {
-  return { config: { enabled: true, onBattery: false, ...config }, isBlocking, revision };
+  return {
+    config: { enabled: true, onBattery: false, ...config },
+    isBlocking,
+    isDisplayBlocking: isBlocking && scheduledRunIds.length > 0,
+    scheduledRunIds,
+    revision,
+  };
 }
 
 function switchFor(container: HTMLElement, label: string): HTMLButtonElement {
@@ -103,6 +110,21 @@ describe("KeepAwakeSection", () => {
       useKeepAwakeStore.getState().applyState(makeState({}, false, 2));
     });
     expect(container.textContent).toContain("Daintree isn't keeping this machine awake right now");
+  });
+
+  it("names the display while a scheduled run holds it, and not a run the policy suspends", () => {
+    useKeepAwakeStore.setState({ state: makeState({}, true, 1, ["run-1"]) });
+    const { container } = render(<KeepAwakeSection />);
+    expect(container.textContent).toContain(
+      "Daintree is keeping this machine and its display awake for a scheduled run"
+    );
+
+    // On battery the run is still asking, but nothing holds the display.
+    act(() => {
+      useKeepAwakeStore.getState().applyState(makeState({}, false, 2, ["run-1"]));
+    });
+    expect(container.textContent).toContain("Daintree isn't keeping this machine awake right now");
+    expect(container.textContent).not.toContain("its display");
   });
 
   it("sends only the toggled field and applies the state main returns", async () => {

@@ -30,12 +30,21 @@ export function getScheduledRunRecorder(): Promise<ScheduledRunRecorder | null> 
   if (recorder) return Promise.resolve(recorder);
   if (getActiveShutdown() !== null) return Promise.resolve(null);
   creating ??= (async () => {
-    const [{ getSharedDb, getSharedSqlite }, { ScheduledRunStore }, { ScheduledRunRecorder }] =
-      await Promise.all([
-        import("../persistence/db.js"),
-        import("./ScheduledRunStore.js"),
-        import("./ScheduledRunRecorder.js"),
-      ]);
+    const [
+      { getSharedDb, getSharedSqlite },
+      { ScheduledRunStore },
+      { ScheduledRunRecorder },
+      keepAwake,
+    ] = await Promise.all([
+      import("../persistence/db.js"),
+      import("./ScheduledRunStore.js"),
+      import("./ScheduledRunRecorder.js"),
+      // Keep-awake failing to load must not keep the history closed.
+      import("../PowerSaveBlockerService.js").catch((error: unknown) => {
+        console.warn("[ScheduledRuns] Keep-awake couldn't load:", error);
+        return null;
+      }),
+    ]);
     getSharedDb();
     const sqlite = getSharedSqlite();
     if (!sqlite) {
@@ -46,8 +55,19 @@ export function getScheduledRunRecorder(): Promise<ScheduledRunRecorder | null> 
       store: new ScheduledRunStore(sqlite),
       isShuttingDown: () => getActiveShutdown() !== null,
       onChanged: pushScheduledRunsChanged,
-      onRunStarted: (payload) => events.emit("scheduled-run:started", payload),
+      onRunStarted: (payload) => {
+        // The keep-awake hold (#15981) is taken on this event, so its service
+        // is listening before it fires, whichever boot path launched the run.
+        // It refuses only once shutdown has disposed it.
+        try {
+          keepAwake?.getPowerSaveBlockerService();
+        } catch (error) {
+          console.warn("[ScheduledRuns] Keep-awake is unavailable for a run:", error);
+        }
+        events.emit("scheduled-run:started", payload);
+      },
       onRunEnded: (payload) => events.emit("scheduled-run:ended", payload),
+      onRunsDeleted: (payload) => events.emit("scheduled-runs:deleted", payload),
     });
     created.reconcileInterrupted();
     recorder = created;

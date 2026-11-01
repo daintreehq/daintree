@@ -35,6 +35,27 @@ const MAX_RENEWALS = 2;
  */
 export type TerminalRegistry = Pick<PtyClient, "hasTerminal">;
 
+/** Where a held run's record lives, so deleting that history drops its hold. */
+interface ScheduledRunHolder {
+  projectId: string;
+  scheduleId: string;
+}
+
+/** What holds the machine awake, for the diagnostics snapshot. */
+export interface KeepAwakeDiagnostics extends KeepAwakeState {
+  /** Agents reported working, a heuristic that holds on a renewal budget. */
+  workingAgentCount: number;
+  attachedFrontendCount: number;
+}
+
+interface PublishedFields {
+  enabled: boolean;
+  onBattery: boolean;
+  isBlocking: boolean;
+  isDisplayBlocking: boolean;
+  scheduledRunIds: string[];
+}
+
 /**
  * The budget of one run of reported work: from a `working` event taking the
  * count off zero until it returns to zero or the safety cap releases it.
@@ -72,6 +93,13 @@ function readOnBattery(fallback: boolean): boolean {
 export class PowerSaveBlockerService {
   private terminalStates = new Map<string, AgentState>();
   private blockerId: number | null = null;
+  /**
+   * Scheduled runs from registration until the run history records them ended
+   * (#15981). They hold the display blocker, which also keeps the system awake,
+   * and on facts rather than heuristics, so they run on no budget.
+   */
+  private scheduledRuns = new Map<string, ScheduledRunHolder>();
+  private displayBlockerId: number | null = null;
   private safetyTimer: ReturnType<typeof setTimeout> | null = null;
   private checkpointAt: number | null = null;
   private episode: Episode | null = null;
@@ -81,7 +109,7 @@ export class PowerSaveBlockerService {
   private config: KeepAwakeConfig = readStoredConfig();
   private onBatteryPower = readOnBattery(false);
   private revision = 0;
-  private published: { enabled: boolean; onBattery: boolean; isBlocking: boolean } | null = null;
+  private published: PublishedFields | null = null;
 
   constructor() {
     this.unsubscribers.push(
@@ -116,6 +144,50 @@ export class PowerSaveBlockerService {
       events.on("agent:exited", (payload) => {
         this.terminalStates.delete(payload.terminalId);
         this.recompute("agent-exited");
+      })
+    );
+
+    this.unsubscribers.push(
+      events.on("scheduled-run:started", (payload) => {
+        if (this.scheduledRuns.has(payload.runId)) return;
+        this.scheduledRuns.set(payload.runId, {
+          projectId: payload.projectId,
+          scheduleId: payload.scheduleId,
+        });
+        console.log(
+          `[PowerSaveBlocker] Holding for scheduled run ${payload.runId} (schedule ${payload.scheduleId}), scheduled runs: ${this.scheduledRuns.size}`
+        );
+        this.recompute("scheduled-run-started");
+      })
+    );
+
+    // A run from an earlier lifetime ends at startup without having started in
+    // this one, and holds nothing here.
+    this.unsubscribers.push(
+      events.on("scheduled-run:ended", (payload) => {
+        if (!this.scheduledRuns.delete(payload.runId)) return;
+        console.log(
+          `[PowerSaveBlocker] Scheduled run ${payload.runId} ended (${payload.outcome}), scheduled runs: ${this.scheduledRuns.size}`
+        );
+        this.recompute("scheduled-run-ended");
+      })
+    );
+
+    // Deleted history never ends: no settlement will come for its runs.
+    this.unsubscribers.push(
+      events.on("scheduled-runs:deleted", (payload) => {
+        const dropped: string[] = [];
+        for (const [runId, holder] of this.scheduledRuns) {
+          if (holder.projectId !== payload.projectId) continue;
+          if (payload.scheduleId !== null && holder.scheduleId !== payload.scheduleId) continue;
+          this.scheduledRuns.delete(runId);
+          dropped.push(runId);
+        }
+        if (dropped.length === 0) return;
+        console.log(
+          `[PowerSaveBlocker] Scheduled run history deleted for ${dropped.join(", ")}, scheduled runs: ${this.scheduledRuns.size}`
+        );
+        this.recompute("scheduled-runs-deleted");
       })
     );
 
@@ -193,7 +265,39 @@ export class PowerSaveBlockerService {
       }
     }
 
+    this.recomputeDisplay(reason);
     this.publish();
+  }
+
+  /**
+   * The scheduled runs' hold. Electron merges every blocker into one wake lock
+   * of the strongest type, so while this one is held the OS is asked to keep
+   * the display on, which holds the system awake with it, and the agents'
+   * blocker carries on underneath unchanged.
+   */
+  private recomputeDisplay(reason: string): void {
+    const wanted = this.scheduledRuns.size > 0 && this.isAllowedByPolicy();
+    if (wanted && this.displayBlockerId === null) {
+      this.displayBlockerId = powerSaveBlocker.start("prevent-display-sleep");
+      console.log(
+        `[PowerSaveBlocker] Started display blocker (id=${this.displayBlockerId}, reason=${reason}) for scheduled runs: ${[...this.scheduledRuns.keys()].join(", ")}`
+      );
+    } else if (!wanted && this.displayBlockerId !== null) {
+      this.stopDisplayBlocker(
+        this.scheduledRuns.size === 0 ? "no-scheduled-runs" : this.releaseReason()
+      );
+    }
+  }
+
+  private stopDisplayBlocker(reason: string): void {
+    if (this.displayBlockerId === null) return;
+    if (powerSaveBlocker.isStarted(this.displayBlockerId)) {
+      powerSaveBlocker.stop(this.displayBlockerId);
+    }
+    console.log(
+      `[PowerSaveBlocker] Stopped display blocker (id=${this.displayBlockerId}, reason=${reason}), scheduled runs: ${this.scheduledRuns.size}`
+    );
+    this.displayBlockerId = null;
   }
 
   private startBlocker(reason: string): void {
@@ -287,11 +391,13 @@ export class PowerSaveBlockerService {
     }
   }
 
-  private snapshotFields(): { enabled: boolean; onBattery: boolean; isBlocking: boolean } {
+  private snapshotFields(): PublishedFields {
     return {
       enabled: this.config.enabled,
       onBattery: this.config.onBattery,
-      isBlocking: this.blockerId !== null,
+      isBlocking: this.isBlocking(),
+      isDisplayBlocking: this.displayBlockerId !== null,
+      scheduledRunIds: [...this.scheduledRuns.keys()],
     };
   }
 
@@ -302,7 +408,10 @@ export class PowerSaveBlockerService {
       prev !== null &&
       prev.enabled === next.enabled &&
       prev.onBattery === next.onBattery &&
-      prev.isBlocking === next.isBlocking
+      prev.isBlocking === next.isBlocking &&
+      prev.isDisplayBlocking === next.isDisplayBlocking &&
+      prev.scheduledRunIds.length === next.scheduledRunIds.length &&
+      prev.scheduledRunIds.every((runId, index) => next.scheduledRunIds[index] === runId)
     ) {
       return;
     }
@@ -340,13 +449,15 @@ export class PowerSaveBlockerService {
   }
 
   isBlocking(): boolean {
-    return this.blockerId !== null;
+    return this.blockerId !== null || this.displayBlockerId !== null;
   }
 
   getState(): KeepAwakeState {
     return {
       config: { ...this.config },
-      isBlocking: this.blockerId !== null,
+      isBlocking: this.isBlocking(),
+      isDisplayBlocking: this.displayBlockerId !== null,
+      scheduledRunIds: [...this.scheduledRuns.keys()],
       revision: this.revision,
     };
   }
@@ -370,11 +481,13 @@ export class PowerSaveBlockerService {
 
   dispose(): void {
     this.stopBlocker("dispose");
+    this.stopDisplayBlocker("dispose");
     for (const unsubscribe of this.unsubscribers) {
       unsubscribe();
     }
     this.unsubscribers = [];
     this.terminalStates.clear();
+    this.scheduledRuns.clear();
     this.episode = null;
     this.terminalRegistry = null;
     this.attachedFrontendCount = 0;
@@ -456,6 +569,19 @@ export function setAttachedFrontendCount(count: number): void {
     return;
   }
   instance.setAttachedFrontendCount(count);
+}
+
+/**
+ * For the diagnostics snapshot, which reads what is there: null while no
+ * service exists, and collecting never builds one.
+ */
+export function getKeepAwakeDiagnostics(): KeepAwakeDiagnostics | null {
+  if (!instance) return null;
+  return {
+    ...instance.getState(),
+    workingAgentCount: instance.getActiveCount(),
+    attachedFrontendCount: instance.getAttachedFrontendCount(),
+  };
 }
 
 export function disposePowerSaveBlockerService(): void {

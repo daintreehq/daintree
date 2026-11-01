@@ -107,6 +107,12 @@ vi.mock("child_process", () => ({
   ) => shared.execFileHandler(file, args, options, callback),
 }));
 
+const keepAwake = vi.hoisted(() => ({ diagnostics: null as unknown }));
+
+vi.mock("../PowerSaveBlockerService.js", () => ({
+  getKeepAwakeDiagnostics: () => keepAwake.diagnostics,
+}));
+
 vi.mock("../TelemetryService.js", () => ({
   sanitizePath: vi.fn((value: string) => value.replace(/\/Users\/[^/]+/g, "/Users/<redacted>")),
 }));
@@ -186,6 +192,7 @@ describe("DiagnosticsCollector adversarial", () => {
     vi.clearAllMocks();
     shared.logEntries = [];
     shared.terminals = [];
+    keepAwake.diagnostics = null;
     shared.storeValues.clear();
     shared.storeValues.set("appState", { recentProject: "/Users/alice/project" });
     renderer.blink = new Map();
@@ -235,6 +242,28 @@ describe("DiagnosticsCollector adversarial", () => {
     expect(payload.terminals[1]).toMatchObject({ id: "t2", isExited: true });
     // Path sanitized via the TelemetryService mock.
     expect(payload.terminals[0].cwd).toBe("/Users/<redacted>/p");
+  });
+
+  it("KEEP_AWAKE_SECTION_NAMES_SCHEDULED_RUN_HOLDERS (#15981)", async () => {
+    const empty = (await diagnostics.collectDiagnostics(createDeps())) as { keepAwake: unknown };
+    expect(empty.keepAwake).toBeNull();
+
+    keepAwake.diagnostics = {
+      config: { enabled: true, onBattery: false },
+      isBlocking: true,
+      isDisplayBlocking: true,
+      scheduledRunIds: ["run-1"],
+      revision: 3,
+      workingAgentCount: 0,
+      attachedFrontendCount: 0,
+    };
+    const { payload, sectionKeys } = await diagnostics.collectDiagnosticsWithKeys(createDeps());
+
+    expect(sectionKeys).toContain("keepAwake");
+    expect(payload.keepAwake).toMatchObject({
+      isDisplayBlocking: true,
+      scheduledRunIds: ["run-1"],
+    });
   });
 
   it("TERMINALS_EMPTY_WHEN_PTY_CLIENT_ABSENT (#10054)", async () => {

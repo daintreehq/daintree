@@ -128,8 +128,8 @@ export interface StoreSchema {
    */
   windowOpening: WindowOpeningConfig;
   /**
-   * Whether the power save blocker is held while agents work, and whether that
-   * extends to battery power (#12516). `PowerSaveBlockerService` is the sole
+   * Whether the power save blocker is held while agents work or a scheduled
+   * run is live, and whether that extends to battery power (#12516, #15981). `PowerSaveBlockerService` is the sole
    * reader and writer.
    */
   keepAwake: {
