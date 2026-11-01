@@ -2,10 +2,22 @@ import { describe, expect, it, vi } from "vitest";
 import type { QuestionRow } from "@daintreehq/decisions-client";
 import { PaneDecisionStates, projectPaneDecisionStates } from "../paneDecisionState.js";
 import type { PaneDecisionState } from "../../../../shared/types/decisions.js";
-import { SECRET, answers, row } from "./questionRows.js";
+import {
+  LEGACY_ANSWER,
+  SECRET,
+  answers,
+  askedAt,
+  outstandingRows,
+  qid,
+  row,
+} from "./questionRows.js";
 
 function only(rows: QuestionRow[], paneId = "pane-a") {
   return projectPaneDecisionStates(rows).get(paneId)?.content;
+}
+
+function empty(terminalId: string) {
+  return { terminalId, openQuestions: [], waitingAnswers: [], needsAttention: [] };
 }
 
 describe("projectPaneDecisionStates", () => {
@@ -18,18 +30,12 @@ describe("projectPaneDecisionStates", () => {
     expect(state).toEqual({
       terminalId: "pane-a",
       openQuestions: [
+        { questionId: qid(1), alias: 1, status: "queued", askedAt: askedAt(1), expiresAt: null },
         {
-          questionId: "qid-1",
-          alias: 1,
-          status: "queued",
-          askedAt: "2026-11-01T10:01:00.000Z",
-          expiresAt: null,
-        },
-        {
-          questionId: "qid-2",
+          questionId: qid(2),
           alias: 2,
           status: "open",
-          askedAt: "2026-11-01T10:02:00.000Z",
+          askedAt: askedAt(2),
           expiresAt: "2026-11-02T10:00:00.000Z",
         },
       ],
@@ -60,8 +66,8 @@ describe("projectPaneDecisionStates", () => {
     ]);
 
     expect(state?.waitingAnswers).toEqual([
-      { questionId: "qid-1", alias: 1, kind: "answer", deliveryStatus: "desktop-received" },
-      { questionId: "qid-2", alias: 2, kind: "answer", deliveryStatus: "pending-host" },
+      { questionId: qid(1), alias: 1, kind: "answer", deliveryStatus: "desktop-received" },
+      { questionId: qid(2), alias: 2, kind: "answer", deliveryStatus: "pending-host" },
     ]);
     expect(state?.openQuestions).toEqual([]);
     expect(state?.needsAttention).toEqual([]);
@@ -132,9 +138,9 @@ describe("projectPaneDecisionStates", () => {
     ]);
 
     expect(state?.needsAttention).toEqual([
-      { questionId: "qid-1", alias: 1, deliveryStatus: "needs-attention", reason: "pane_gone" },
+      { questionId: qid(1), alias: 1, deliveryStatus: "needs-attention", reason: "pane_gone" },
       {
-        questionId: "qid-2",
+        questionId: qid(2),
         alias: 2,
         deliveryStatus: "delivery-uncertain",
         reason: "crash_unreconciled",
@@ -151,7 +157,7 @@ describe("projectPaneDecisionStates", () => {
     expect(state?.openQuestions.map((q) => q.alias)).toEqual([1]);
     expect(state?.needsAttention).toEqual([
       {
-        questionId: "qid-1",
+        questionId: qid(1),
         alias: 1,
         deliveryStatus: "needs-attention",
         reason: "choice_required",
@@ -187,10 +193,14 @@ describe("projectPaneDecisionStates", () => {
     expect(state?.waitingAnswers.map((w) => w.alias)).toEqual([1]);
   });
 
-  it("leaves out imported history, settled questions and unreadable answers", () => {
+  it("leaves out imported history, delivered answers and unreadable answers", () => {
     const panes = projectPaneDecisionStates([
       row(1, { history_only: true }),
-      row(2, { local_status: "human-answered", delivery_status: "terminal-delivered" }),
+      row(2, {
+        local_status: "human-answered",
+        delivery_status: "terminal-delivered",
+        answers_json: answers({ delivered: true }),
+      }),
       row(3, { local_status: "human-answered", answers_json: "not json" }),
       row(4, { local_status: "human-answered", answers_json: '{"not":"a list"}' }),
     ]);
@@ -198,18 +208,19 @@ describe("projectPaneDecisionStates", () => {
     expect(panes.size).toBe(0);
   });
 
-  it("keeps panes apart, in question order whatever order the rows arrive in", () => {
+  it("keeps panes apart, each in alias order, whatever order the rows, ids and times are in", () => {
+    const paneB = { pane_id: "pane-b", project_id: "project-2" };
     const panes = projectPaneDecisionStates([
-      row(7, { origin: { pane_id: "pane-b", project_id: "project-2" } }),
-      row(5),
-      row(3),
-      row(6, { origin: { pane_id: "pane-b", project_id: "project-2" } }),
+      row(30, { origin: paneB }),
+      row(10),
+      row(2),
+      row(9, { origin: paneB }),
     ]);
 
     expect(panes.get("pane-a")?.projectId).toBe("project-1");
-    expect(panes.get("pane-a")?.content.openQuestions.map((q) => q.alias)).toEqual([3, 5]);
+    expect(panes.get("pane-a")?.content.openQuestions.map((q) => q.alias)).toEqual([2, 10]);
     expect(panes.get("pane-b")?.projectId).toBe("project-2");
-    expect(panes.get("pane-b")?.content.openQuestions.map((q) => q.alias)).toEqual([6, 7]);
+    expect(panes.get("pane-b")?.content.openQuestions.map((q) => q.alias)).toEqual([9, 30]);
   });
 
   it("keeps an earlier run's questions on the pane id that asked them", () => {
@@ -218,41 +229,68 @@ describe("projectPaneDecisionStates", () => {
     expect(state?.openQuestions.map((q) => q.alias)).toEqual([1, 2]);
   });
 
-  it("puts a pane in the project of its newest question", () => {
+  it("puts a pane in the project of its newest question by alias", () => {
     const panes = projectPaneDecisionStates([
-      row(2, { origin: { project_id: "project-2" } }),
-      row(1),
+      row(10, { origin: { project_id: "project-2" } }),
+      row(2),
     ]);
 
     expect(panes.get("pane-a")?.projectId).toBe("project-2");
   });
 
-  it("never carries question, answer, origin or attachment text", () => {
+  it("keeps a pane in its newest question's project after that question settles", () => {
+    const panes = projectPaneDecisionStates([
+      row(1),
+      row(2, {
+        origin: { project_id: "project-2" },
+        local_status: "human-answered",
+        delivery_status: "terminal-delivered",
+        answers_json: answers({ delivered: true }),
+      }),
+    ]);
+
+    expect(panes.get("pane-a")?.projectId).toBe("project-2");
+    expect(panes.get("pane-a")?.content.openQuestions.map((q) => q.alias)).toEqual([1]);
+  });
+
+  it("never carries question, answer, option, origin or attachment text", () => {
     const panes = projectPaneDecisionStates([
       row(1),
       row(2, {
         local_status: "human-answered",
         delivery_status: "desktop-received",
-        answers_json: answers({ text: SECRET }),
+        answers_json: answers(LEGACY_ANSWER),
       }),
       row(3, {
         local_status: "human-answered",
         delivery_status: "needs-attention",
         error_code: SECRET,
+        answers_json: answers(LEGACY_ANSWER),
       }),
     ]);
 
-    const serialised = JSON.stringify([...panes.values()]);
-    expect(serialised).not.toContain("SECRET");
-    expect(serialised).not.toContain("principal");
-    expect(serialised).not.toContain("worktree");
-    expect(serialised).not.toContain("session-1");
+    expect(panes.get("pane-a")?.content).toEqual({
+      terminalId: "pane-a",
+      openQuestions: [
+        { questionId: qid(1), alias: 1, status: "open", askedAt: askedAt(1), expiresAt: null },
+      ],
+      waitingAnswers: [
+        { questionId: qid(2), alias: 2, kind: "answer", deliveryStatus: "desktop-received" },
+      ],
+      needsAttention: [
+        { questionId: qid(3), alias: 3, deliveryStatus: "needs-attention", reason: "unspecified" },
+      ],
+    });
+    expect(JSON.stringify([...panes.values()])).not.toContain("SECRET");
   });
 });
 
-function recorder() {
+function recorder(now = () => 0) {
   const pushes: Array<{ projectId: string; state: PaneDecisionState }> = [];
-  const states = new PaneDecisionStates((projectId, state) => pushes.push({ projectId, state }));
+  const states = new PaneDecisionStates(
+    (projectId, state) => pushes.push({ projectId, state }),
+    now
+  );
   return { pushes, states };
 }
 
@@ -286,55 +324,74 @@ describe("PaneDecisionStates", () => {
     expect(pushes).toHaveLength(1);
   });
 
-  it("sends one empty state to a pane with nothing left, then lets it go", () => {
+  it("sends one fully empty state to a pane with nothing left, then lets it go", () => {
     const { pushes, states } = recorder();
 
-    states.replace([row(1)]);
-    states.replace([row(1, { local_status: "cancelled" })]);
+    states.replace(outstandingRows());
     states.replace([]);
 
-    expect(pushes.map(({ state }) => state)).toEqual([
-      expect.objectContaining({ terminalId: "pane-a", revision: 1 }),
-      {
-        terminalId: "pane-a",
-        openQuestions: [],
-        waitingAnswers: [],
-        needsAttention: [],
-        revision: 2,
-      },
+    expect(pushes[0]?.state.waitingAnswers).toHaveLength(1);
+    expect(pushes[0]?.state.needsAttention).toHaveLength(1);
+    expect(pushes.map(({ projectId, state }) => [projectId, state])).toEqual([
+      ["project-1", expect.objectContaining({ revision: 1 })],
+      ["project-1", { ...empty("pane-a"), revision: 2 }],
     ]);
     expect(states.get("pane-a")).toBeNull();
   });
 
-  it("clears a pane from the project it left before showing it in the new one", () => {
+  it("clears a pane fully from the project it left before showing it in the new one", () => {
     const { pushes, states } = recorder();
 
-    states.replace([row(1)]);
-    states.replace([row(1), row(2, { origin: { project_id: "project-2" } })]);
+    states.replace(outstandingRows());
+    states.replace([...outstandingRows(), row(4, { origin: { project_id: "project-2" } })]);
 
-    expect(pushes.map(({ projectId, state }) => [projectId, state.openQuestions.length])).toEqual([
-      ["project-1", 1],
-      ["project-1", 0],
-      ["project-2", 2],
+    expect(pushes.slice(1).map(({ projectId, state }) => [projectId, state])).toEqual([
+      ["project-1", { ...empty("pane-a"), revision: 2 }],
+      [
+        "project-2",
+        expect.objectContaining({
+          terminalId: "pane-a",
+          openQuestions: [
+            expect.objectContaining({ alias: 1 }),
+            expect.objectContaining({ alias: 4 }),
+          ],
+          revision: 3,
+        }),
+      ],
     ]);
   });
 
-  it("clears every pane on a stop, quietly at quit, and keeps counting revisions after", () => {
+  it("clears every pane fully on a stop, quietly at quit, and keeps counting revisions after", () => {
     const { pushes, states } = recorder();
 
-    states.replace([row(1), row(2, { origin: { pane_id: "pane-b" } })]);
+    states.replace([...outstandingRows(), ...outstandingRows({ pane_id: "pane-b" }, [4, 5, 6])]);
     states.clear(true);
-    expect(pushes.slice(2).map(({ state }) => [state.terminalId, state.revision])).toEqual([
-      ["pane-a", 3],
-      ["pane-b", 4],
+    expect(pushes.slice(2).map(({ state }) => state)).toEqual([
+      { ...empty("pane-a"), revision: 3 },
+      { ...empty("pane-b"), revision: 4 },
     ]);
-    expect(pushes.slice(2).every(({ state }) => state.openQuestions.length === 0)).toBe(true);
     expect(states.get("pane-a")).toBeNull();
 
     states.replace([row(1)]);
     states.clear(false);
     expect(pushes.map(({ state }) => state.revision)).toEqual([1, 2, 3, 4, 5]);
     expect(states.get("pane-a")).toBeNull();
+  });
+
+  it("never falls behind the wall clock, so a restarted process outranks its last run", () => {
+    let clock = 1_000;
+    const before = recorder(() => clock);
+    before.states.replace([row(1)]);
+    before.states.replace([row(1), row(2)]);
+    clock = 900;
+    before.states.replace([row(1)]);
+
+    clock = 5_000;
+    const after = recorder(() => clock);
+    after.states.replace([row(1)]);
+
+    expect(before.pushes.map(({ state }) => state.revision)).toEqual([1_000, 1_001, 1_002]);
+    expect(after.pushes.map(({ state }) => state.revision)).toEqual([5_000]);
   });
 
   it("keeps its own state when a push throws", () => {

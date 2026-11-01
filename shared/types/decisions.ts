@@ -104,6 +104,10 @@ export interface PaneDecisionState {
   openQuestions: PaneDecisionQuestion[];
   waitingAnswers: PaneDecisionWaiting[];
   needsAttention: PaneDecisionAttention[];
-  /** Increases with every change, so a late snapshot never overwrites a newer push. */
+  /**
+   * Increases with every change, so a late snapshot never overwrites a newer
+   * push. Never behind the sender's wall clock in ms, so a restarted Host's
+   * pushes outrank its previous run's.
+   */
   revision: number;
 }

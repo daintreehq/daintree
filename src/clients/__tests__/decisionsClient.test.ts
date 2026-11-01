@@ -11,6 +11,10 @@ let resolveRead: (state: PaneDecisionState | null) => void;
 let rejectRead: (err: Error) => void;
 const order: string[] = [];
 
+function emptyState(revision: number, terminalId = "pane-a"): PaneDecisionState {
+  return { terminalId, openQuestions: [], waitingAnswers: [], needsAttention: [], revision };
+}
+
 function state(revision: number, terminalId = "pane-a"): PaneDecisionState {
   return {
     terminalId,
@@ -72,19 +76,45 @@ describe("decisionsClient.watchPaneState", () => {
     expect(seen.map((s) => s.revision)).toEqual([3]);
   });
 
-  it("keeps a push that beat the read, and drops the older read", async () => {
+  it.each([
+    ["older", 4, [5]],
+    ["the same", 5, [5]],
+    ["newer", 6, [5, 6]],
+  ])("after a push, takes a read with %s revision only if it is newer", async (_l, read, want) => {
     const seen: PaneDecisionState[] = [];
     decisionsClient.watchPaneState("pane-a", (s) => seen.push(s));
 
     push(state(5));
-    resolveRead(state(4));
+    resolveRead(state(read));
     await Promise.resolve();
-    push(state(6));
 
-    expect(seen.map((s) => s.revision)).toEqual([5, 6]);
+    expect(seen.map((s) => s.revision)).toEqual(want);
   });
 
-  it("keeps a push when the read finds nothing or fails", async () => {
+  it("calls nothing for a repeated push", () => {
+    const seen: PaneDecisionState[] = [];
+    decisionsClient.watchPaneState("pane-a", (s) => seen.push(s));
+
+    push(state(5));
+    push(state(5));
+
+    expect(seen.map((s) => s.revision)).toEqual([5]);
+  });
+
+  it("shows the empty state Decisions sends when turned off, then what follows when it is back on", async () => {
+    const seen: PaneDecisionState[] = [];
+    decisionsClient.watchPaneState("pane-a", (s) => seen.push(s));
+
+    push(state(1));
+    push(emptyState(2));
+    resolveRead(state(1));
+    await Promise.resolve();
+    push(state(3));
+
+    expect(seen).toEqual([state(1), emptyState(2), state(3)]);
+  });
+
+  it("keeps a push when the read finds nothing", async () => {
     const seen: PaneDecisionState[] = [];
     decisionsClient.watchPaneState("pane-a", (s) => seen.push(s));
 
@@ -93,20 +123,30 @@ describe("decisionsClient.watchPaneState", () => {
     await Promise.resolve();
 
     expect(seen.map((s) => s.revision)).toEqual([2]);
-
-    decisionsClient.watchPaneState("pane-a", (s) => seen.push(s));
-    rejectRead(new Error("host gone"));
-    await Promise.resolve();
-    expect(seen.map((s) => s.revision)).toEqual([2]);
   });
 
-  it("ignores other panes' pushes", () => {
+  it("keeps watching when the read fails", async () => {
+    const seen: PaneDecisionState[] = [];
+    decisionsClient.watchPaneState("pane-a", (s) => seen.push(s));
+
+    push(state(2));
+    rejectRead(new Error("host gone"));
+    await Promise.resolve();
+    await Promise.resolve();
+    push(state(3));
+
+    expect(seen.map((s) => s.revision)).toEqual([2, 3]);
+    expect(unsubscribe).not.toHaveBeenCalled();
+  });
+
+  it("ignores other panes' pushes, and their revisions", () => {
     const seen: PaneDecisionState[] = [];
     decisionsClient.watchPaneState("pane-a", (s) => seen.push(s));
 
     push(state(9, "pane-b"));
+    push(state(1));
 
-    expect(seen).toEqual([]);
+    expect(seen.map((s) => [s.terminalId, s.revision])).toEqual([["pane-a", 1]]);
   });
 
   it("stops listening, and ignores a read still in flight, once stopped", async () => {

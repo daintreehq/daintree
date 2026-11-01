@@ -7,7 +7,7 @@ import type {
   DecisionsStatusEvent,
   PaneDecisionState,
 } from "../../../../shared/types/decisions.js";
-import { row } from "./questionRows.js";
+import { outstandingRows, row } from "./questionRows.js";
 
 interface FakeStore {
   close: ReturnType<typeof vi.fn>;
@@ -398,19 +398,27 @@ describe("DecisionsService pane state", () => {
     expect(pushes).toHaveLength(1);
   });
 
-  it("clears each pane's views once on stop, then pushes nothing while off", async () => {
+  it("clears each pane's views fully once on stop, then pushes nothing while off", async () => {
     const { pushes, service } = withPushes();
     await service.start(on());
-    service.observeQuestions([row(1)]);
+    service.observeQuestions(outstandingRows());
 
     await service.stop();
     await service.stop();
-    service.observeQuestions([row(2)]);
+    service.observeQuestions([row(4)]);
 
-    expect(pushes.map(({ state }) => [state.revision, state.openQuestions.length])).toEqual([
-      [1, 1],
-      [2, 0],
-    ]);
+    expect(pushes).toHaveLength(2);
+    expect(pushes[1]).toEqual({
+      projectId: "project-1",
+      state: {
+        terminalId: "pane-a",
+        openQuestions: [],
+        waitingAnswers: [],
+        needsAttention: [],
+        revision: expect.any(Number),
+      },
+    });
+    expect(pushes[1]!.state.revision).toBeGreaterThan(pushes[0]!.state.revision);
     expect(service.getPaneState("pane-a")).toBeNull();
   });
 
@@ -423,16 +431,21 @@ describe("DecisionsService pane state", () => {
     await service.start(on());
     service.observeQuestions([row(1)]);
 
-    expect(pushes.map(({ state }) => state.revision)).toEqual([1, 2, 3]);
+    const revisions = pushes.map(({ state }) => state.revision);
+    expect(revisions).toHaveLength(3);
+    expect(revisions).toEqual([...revisions].sort((a, b) => a - b));
+    expect(new Set(revisions).size).toBe(3);
   });
 
-  it("pushes nothing at quit, and nothing after", async () => {
+  it("pushes nothing from the moment quit begins, and nothing after", async () => {
     const { pushes, service } = withPushes();
     await service.start(on());
     service.observeQuestions([row(1)]);
 
-    await service.dispose();
-    service.observeQuestions([row(2)]);
+    const disposing = service.dispose();
+    service.observeQuestions([row(1), row(2)]);
+    await disposing;
+    service.observeQuestions([row(3)]);
 
     expect(pushes).toHaveLength(1);
     expect(service.getPaneState("pane-a")).toBeNull();

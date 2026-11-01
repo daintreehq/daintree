@@ -49,15 +49,22 @@ function byAlias(a: QuestionRow, b: QuestionRow): number {
  *   yet delivered, the same test the delivery engine uses.
  *
  * Imported history is never delivered and shows nowhere. Rows are taken in
- * question order, and a pane belongs to the project of its newest question.
+ * question order, and a pane belongs to the project of its newest question,
+ * settled or not, so settling that question never moves the pane back.
  */
 export function projectPaneDecisionStates(
   rows: readonly QuestionRow[]
 ): Map<string, ProjectedPane> {
+  const sorted = [...rows].filter((row) => !row.history_only).sort(byAlias);
+  const projectOf = new Map<string, string>();
+  for (const { origin } of sorted) {
+    if (origin.pane_id && origin.project_id) projectOf.set(origin.pane_id, origin.project_id);
+  }
+
   const panes = new Map<string, ProjectedPane>();
-  for (const row of [...rows].sort(byAlias)) {
-    if (row.history_only) continue;
-    const { pane_id: paneId, project_id: projectId } = row.origin;
+  for (const row of sorted) {
+    const paneId = row.origin.pane_id;
+    const projectId = projectOf.get(paneId);
     if (!paneId || !projectId) continue;
 
     const deliveryStatus: DecisionDeliveryStatus = row.delivery_status;
@@ -69,13 +76,8 @@ export function projectPaneDecisionStates(
     if (!open && !attention && pending.length === 0) continue;
 
     let pane = panes.get(paneId);
-    if (pane) {
-      pane.projectId = projectId;
-    } else {
-      pane = {
-        projectId,
-        content: { terminalId: paneId, openQuestions: [], waitingAnswers: [], needsAttention: [] },
-      };
+    if (!pane) {
+      pane = { projectId, content: emptyContent(paneId) };
       panes.set(paneId, pane);
     }
 
@@ -121,14 +123,22 @@ interface HeldPane {
 /**
  * Each pane's last published state, for one Decisions service. A pane is held
  * only while it has something outstanding; when it has nothing left its
- * views get one empty state and it is let go. The revision counter outlives
- * `clear`, so a later lifetime's pushes always outrank a view's old snapshot.
+ * views get one empty state and it is let go.
+ *
+ * Revisions only rise: the counter outlives `clear`, so a later lifetime
+ * outranks a view's old snapshot, and it never falls behind the wall clock,
+ * so a restarted process outranks its previous run too. A Shell's views
+ * outlive a Remote Host's restart, and would otherwise refuse the new run's
+ * pushes until it caught up with the old one's count.
  */
 export class PaneDecisionStates {
   private readonly panes = new Map<string, HeldPane>();
   private revision = 0;
 
-  constructor(private readonly publish: PaneDecisionStatePublisher) {}
+  constructor(
+    private readonly publish: PaneDecisionStatePublisher,
+    private readonly now: () => number = Date.now
+  ) {}
 
   get(terminalId: string): PaneDecisionState | null {
     return this.panes.get(terminalId)?.state ?? null;
@@ -159,7 +169,8 @@ export class PaneDecisionStates {
 
   /** Pane chrome is best effort: a failed push must never unwind a store write that caused it. */
   private send(projectId: string, content: PaneContent): PaneDecisionState {
-    const state: PaneDecisionState = { ...content, revision: ++this.revision };
+    this.revision = Math.max(this.revision + 1, this.now());
+    const state: PaneDecisionState = { ...content, revision: this.revision };
     try {
       this.publish(projectId, state);
     } catch (err) {
