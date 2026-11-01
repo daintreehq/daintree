@@ -1367,8 +1367,8 @@ function TerminalPaneComponent({
     if (!isBlockedWait) setBlockedBannerDismissed(false);
   }, [isBlockedWait]);
 
-  // The current worktree's changed-file count drives the review strip and
-  // the zero-change pill. We prefer the explicit `worktreeId` prop (matches
+  // The current worktree's changed-file count drives the zero-change pill.
+  // We prefer the explicit `worktreeId` prop (matches
   // `worktree.id` in WorktreeCard) over `cwd` so a user-initiated `cd` away
   // from the worktree root doesn't break the lookup.
   const reviewWorktreeId = worktreeId ?? cwd;
