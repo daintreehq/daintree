@@ -521,7 +521,10 @@ export class LinkClient {
           // Open synchronously so frames that follow WELCOME in the same read
           // are accepted, not treated as pre-handshake traffic. They are held
           // until the session listeners have attached their handlers.
-          session.open({ holdInbound: true });
+          session.open({
+            holdInbound: true,
+            peerReadsFragments: message.body.messageFragments === true,
+          });
           settle({ kind: "welcome", welcome: message.body });
         } else if (message.kind === ControlKind.REJECT) {
           settle({ kind: "reject", reject: message.body });
@@ -539,6 +542,7 @@ export class LinkClient {
             client: this.options.client,
             resumeSessionId: this.sessionId,
             resumeSecret: this.sessionId === null ? null : this.resumeSecret,
+            messageFragments: true,
           },
         });
       } catch (err) {

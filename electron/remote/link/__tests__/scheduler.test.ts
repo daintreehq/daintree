@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Lane, type LinkFrame } from "../frames.js";
 import { FRAME_HEADER_BYTES } from "../frames.js";
+import { MESSAGE_FRAGMENT_BYTES, fragmentFrame } from "../messageFragments.js";
 import {
   INTERACTIVE_BURST_BYTES,
   INTERACTIVE_BURST_FRAMES,
@@ -322,5 +323,84 @@ describe("LaneScheduler endpoint closes (#15881)", () => {
     s.written(s.next()!);
     s.enqueue(tagged(Lane.CONTROL, 3), undefined, { closes: "e1" });
     expect(drain(s)).toEqual([3]);
+  });
+});
+
+describe("LaneScheduler fragmented messages (#15892)", () => {
+  const BIG = 3 * MESSAGE_FRAGMENT_BYTES;
+  let nextId = 1;
+  const message = (lane: Lane, size: number, kind = 3): LinkFrame[] =>
+    fragmentFrame({ lane, kind, streamId: 0, payload: new Uint8Array(size) }, nextId++);
+  /** Which message each frame belongs to, by its id (0 for whole frames). */
+  const drain = (s: LaneScheduler): number[] => {
+    const ids: number[] = [];
+    for (let fr = s.next(); fr; fr = s.next()) ids.push(fr.streamId);
+    return ids;
+  };
+
+  it("queues all of a message's fragments or none of them", () => {
+    const lanes = (cap: LaneLimits) => ({ 0: cap, 1: cap, 2: cap, 3: cap, 4: cap });
+    // Room for one small frame and a three-fragment message, to the byte.
+    const bytes = new LaneScheduler(
+      lanes({ highWaterBytes: BIG, hardCapBytes: 1 + H + BIG + 3 * H, maxFrames: 100 })
+    );
+    bytes.enqueue(f(Lane.RPC, 1));
+    expect(bytes.enqueueMessage(message(Lane.RPC, BIG + 1))).toBe("refused");
+    expect(bytes.queuedBytes(Lane.RPC)).toBe(1 + H);
+    expect(bytes.enqueueMessage(message(Lane.RPC, BIG))).toBe("over-high-water");
+    expect(bytes.queuedBytes(Lane.RPC)).toBe(1 + H + BIG + 3 * H);
+
+    const frames = new LaneScheduler(
+      lanes({ highWaterBytes: 2 * BIG, hardCapBytes: 4 * BIG, maxFrames: 3 })
+    );
+    expect(frames.enqueueMessage(message(Lane.RPC, BIG + 1))).toBe("refused");
+    expect(frames.isEmpty).toBe(true);
+    expect(frames.enqueueMessage(message(Lane.RPC, BIG))).toBe("queued");
+  });
+
+  it("lets other flows' whole frames take turns between a message's fragments", () => {
+    const s = new LaneScheduler();
+    const reset = message(Lane.INTERACTIVE, BIG);
+    s.enqueueMessage(reset, "t1");
+    s.enqueue({ ...f(Lane.INTERACTIVE), streamId: 0 }, "t2");
+    s.enqueue({ ...f(Lane.INTERACTIVE), streamId: 0 }, "t2");
+    const id = reset[0]!.streamId;
+    expect(drain(s)).toEqual([id, 0, id, 0, id]);
+  });
+
+  it("begins one fragmented message per lane at a time, without reordering any flow", () => {
+    const s = new LaneScheduler();
+    const first = message(Lane.INTERACTIVE, BIG);
+    const second = message(Lane.INTERACTIVE, BIG);
+    s.enqueueMessage(first, "t1");
+    s.enqueueMessage(second, "t2");
+    // Behind t2's message in its own flow: it must not jump ahead of it.
+    s.enqueue(f(Lane.INTERACTIVE), "t2");
+    s.enqueue(f(Lane.INTERACTIVE), "t3");
+    const a = first[0]!.streamId;
+    const b = second[0]!.streamId;
+    expect(drain(s)).toEqual([a, 0, a, a, b, b, b, 0]);
+  });
+
+  it("keeps lanes independent: a message under way in one doesn't hold another lane's", () => {
+    const s = new LaneScheduler();
+    const answer = message(Lane.RPC, BIG);
+    const event = message(Lane.EVENTS, BIG);
+    s.enqueueMessage(answer);
+    s.enqueueMessage(event);
+    const order: Array<[Lane, number]> = [];
+    for (let fr = s.next(); fr; fr = s.next()) order.push([fr.lane, fr.streamId]);
+    expect(order.filter(([lane]) => lane === Lane.RPC)).toHaveLength(3);
+    expect(order.filter(([lane]) => lane === Lane.EVENTS)).toHaveLength(3);
+  });
+
+  it("forgets a message under way when cleared", () => {
+    const s = new LaneScheduler();
+    s.enqueueMessage(message(Lane.INTERACTIVE, BIG), "t1");
+    s.next();
+    s.clear();
+    const next = message(Lane.INTERACTIVE, BIG);
+    s.enqueueMessage(next, "t2");
+    expect(drain(s)).toEqual([next[0]!.streamId, next[0]!.streamId, next[0]!.streamId]);
   });
 });

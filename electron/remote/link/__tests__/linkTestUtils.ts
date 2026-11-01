@@ -129,7 +129,8 @@ export async function conditionedSocketPair(
 type Extra = Omit<LinkSessionOptions, "role">;
 
 /**
- * A host and client session over a real socket, opened without a handshake;
+ * A host and client session over a real socket, opened without a handshake
+ * but as one would leave them (each reading the other's message fragments);
  * over an emulated link when `conditions` are given.
  */
 export async function openSessionPair(
@@ -153,8 +154,8 @@ export async function openSessionPair(
     ...clientOptions,
     role: "client",
   });
-  host.open();
-  client.open();
+  host.open({ peerReadsFragments: true });
+  client.open({ peerReadsFragments: true });
   return { host, client };
 }
 

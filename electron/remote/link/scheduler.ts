@@ -1,4 +1,5 @@
 import { FRAME_HEADER_BYTES, LANE_COUNT, LANE_PRIORITY, Lane, type LinkFrame } from "./frames.js";
+import { continuesMessage } from "./messageFragments.js";
 
 /**
  * Per-lane outbound queues drained in priority order.
@@ -23,16 +24,25 @@ import { FRAME_HEADER_BYTES, LANE_COUNT, LANE_PRIORITY, Lane, type LinkFrame } f
  * queued. Frames with no key share one flow, so a lane that never names one is
  * plain FIFO.
  *
+A message too large for one frame is enqueued as its fragments, all or none,
+ * and takes turns a fragment at a time like any other frame. Once a lane has
+ * begun one fragmented message, another flow whose next frame would begin a
+ * second one waits until the first ends, while flows with whole frames keep
+ * their turns: the peer then holds at most one partial message per lane.
+ *
  * Lane priority must not reorder one endpoint's traffic around its close: a
  * close posted on the control lane waits until every frame enqueued before it
  * for that endpoint has been written, so the peer never drops a view's last
  * calls as addressed to an endpoint already gone. Unrelated control frames go
  * on past it, and the endpoint's later frames on the close's lane (a reopen
- * under the same id) wait behind it.
+ * under the same id) wait behind it. A fragmented message counts as written
+ * once its last fragment is, since that is when the peer can act on it.
  *
  * A frame normally waits in its own lane's queue, but a producer may name a
  * higher one: the frame keeps its lane on the wire and is counted, capped,
- * drained and ordered as the queue it waits in.
+ * drained and ordered as the queue it waits in. Only a whole message may: a
+ * fragmented one waits in its own lane, so the peer still sees at most one
+ * partial message per lane.
  */
 export interface LaneLimits {
   highWaterBytes: number;
@@ -87,10 +97,14 @@ interface LaneQueue {
   /** Frames in `flows`, ready to be served. */
   ready: number;
   wasOverHighWater: boolean;
+  /** The flow whose fragmented message has begun and not yet ended. */
+  active: string | null;
+  /** Flows whose next frame begins another fragmented message, out of turn until `active` ends. */
+  parked: string[];
 }
 
-interface HeldFrame {
-  frame: LinkFrame;
+interface HeldMessage {
+  frames: readonly LinkFrame[];
   flow: string;
   /** The queue it waits in, which its limits were counted against. */
   lane: Lane;
@@ -110,6 +124,8 @@ function emptyLane(): LaneQueue {
     bytes: 0,
     ready: 0,
     wasOverHighWater: false,
+    active: null,
+    parked: [],
   };
 }
 
@@ -131,7 +147,7 @@ export class LaneScheduler {
   /** Each endpoint's unwritten frames by enqueue order, oldest first. */
   private readonly unwrittenByEndpoint = new Map<string, Set<number>>();
   /** Each endpoint's frames held behind its close, in order. */
-  private readonly held = new Map<string, HeldFrame[]>();
+  private readonly held = new Map<string, HeldMessage[]>();
 
   constructor(private readonly limits: Record<Lane, LaneLimits> = DEFAULT_LANE_LIMITS) {
     this.lanes = Array.from({ length: LANE_COUNT }, emptyLane);
@@ -149,13 +165,40 @@ export class LaneScheduler {
     order?: EndpointOrder,
     queue: Lane = frame.lane
   ): EnqueueResult {
+    return this.enqueueMessage([frame], flow, order, queue);
+  }
+
+  /**
+   * Queue the frames of one message (its fragments, or the one frame of a
+   * whole message) together: all of them, or none when they would take the
+   * queue past its hard cap.
+   */
+  enqueueMessage(
+    frames: readonly LinkFrame[],
+    flow: string = SHARED_FLOW,
+    order?: EndpointOrder,
+    queue: Lane | undefined = frames[0]?.lane
+  ): EnqueueResult {
+    const lane = frames[0]?.lane;
+    if (lane === undefined || queue === undefined) return "queued";
+    if (frames.length > 1 && queue !== lane) {
+      throw new Error("a fragmented message waits in its own lane");
+    }
     const q = this.lanes[queue]!;
-    const cost = frameCost(frame);
+    let cost = 0;
+    for (const frame of frames) {
+      if (frame.lane !== lane) throw new Error("one message's frames share a lane");
+      cost += frameCost(frame);
+    }
     const { highWaterBytes, hardCapBytes, maxFrames } = this.limits[queue];
-    if (q.bytes + cost > hardCapBytes || q.frameCount >= maxFrames) return "refused";
-    q.frameCount++;
+    if (q.bytes + cost > hardCapBytes || q.frameCount + frames.length > maxFrames) {
+      return "refused";
+    }
+    q.frameCount += frames.length;
     q.bytes += cost;
-    if (!order || !this.holdBack(frame, flow, order, queue)) this.push(q, frame, flow);
+    if (!order || !this.holdBack(frames, flow, order, queue)) {
+      for (const frame of frames) this.push(q, frame, flow);
+    }
     if (q.bytes > highWaterBytes) {
       q.wasOverHighWater = true;
       return "over-high-water";
@@ -188,18 +231,23 @@ export class LaneScheduler {
     q.ready++;
   }
 
-  /** Records the frame against its endpoints; true when it waits behind a close. */
-  private holdBack(frame: LinkFrame, flow: string, order: EndpointOrder, lane: Lane): boolean {
+  /** Records the message against its endpoints; true when it waits behind a close. */
+  private holdBack(
+    frames: readonly LinkFrame[],
+    flow: string,
+    order: EndpointOrder,
+    lane: Lane
+  ): boolean {
     const closes = "closes" in order ? order.closes : undefined;
     const endpointIds = "closes" in order ? [order.closes] : order.endpointIds;
     const seq = ++this.seq;
-    this.unwritten.set(frame, { seq, endpointIds });
+    this.unwritten.set(frames[frames.length - 1]!, { seq, endpointIds });
     for (const endpointId of endpointIds) {
       const seqs = this.unwrittenByEndpoint.get(endpointId);
       if (seqs) seqs.add(seq);
       else this.unwrittenByEndpoint.set(endpointId, new Set([seq]));
     }
-    const held: HeldFrame = { frame, flow, lane, seq, closes };
+    const held: HeldMessage = { frames, flow, lane, seq, closes };
     for (const endpointId of endpointIds) {
       const queue = this.held.get(endpointId);
       if (queue && queue[0]!.lane === lane) {
@@ -219,7 +267,8 @@ export class LaneScheduler {
       const next = queue[0]!;
       if (next.closes !== undefined && this.oldestUnwritten(next.closes) !== next.seq) break;
       queue.shift();
-      this.push(this.lanes[next.lane]!, next.frame, next.flow);
+      const q = this.lanes[next.lane]!;
+      for (const frame of next.frames) this.push(q, frame, next.flow);
     }
     if (queue.length === 0) this.held.delete(endpointId);
   }
@@ -272,17 +321,32 @@ export class LaneScheduler {
 
   private shift(lane: Lane): LinkFrame {
     const q = this.lanes[lane]!;
-    const flow = q.turns[q.turnsHead]!;
-    q.turnsHead++;
+    // The active message's own flow is always in turn, so this ends.
+    let flow = q.turns[q.turnsHead++]!;
+    let fq = q.flows.get(flow)!;
+    // Any other flow's fragment that continues a message would begin a second one.
+    while (q.active !== null && q.active !== flow && continuesMessage(fq.frames[fq.head]!)) {
+      q.parked.push(flow);
+      flow = q.turns[q.turnsHead++]!;
+      fq = q.flows.get(flow)!;
+    }
     if (q.turnsHead > 1024 && q.turnsHead * 2 > q.turns.length) {
       q.turns = q.turns.slice(q.turnsHead);
       q.turnsHead = 0;
     }
-    const fq = q.flows.get(flow)!;
     const frame = fq.frames[fq.head]!;
     fq.frames[fq.head] = undefined as unknown as LinkFrame;
     fq.head++;
     fq.bytes -= frameCost(frame);
+    if (continuesMessage(frame)) {
+      q.active = flow;
+    } else if (q.active === flow) {
+      // Its last fragment: flows held back for it take their turns again,
+      // ahead of the one that just finished.
+      q.active = null;
+      for (const parked of q.parked) q.turns.push(parked);
+      q.parked = [];
+    }
     if (fq.head === fq.frames.length) {
       // Drained: the flow gives up its turn until it has frames again.
       q.flows.delete(flow);

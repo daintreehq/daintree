@@ -31,7 +31,14 @@ import {
   type EnqueueResult,
   type LaneLimits,
 } from "./scheduler.js";
-import { assertOutboundMessage, parseInboundFrame } from "./schemas.js";
+import {
+  FRAGMENT_MORE,
+  MessageAssembler,
+  MessageIds,
+  fragmentFrame,
+  isMessageFragment,
+} from "./messageFragments.js";
+import { assertOutboundMessage, isStructuredKind, parseInboundFrame } from "./schemas.js";
 import {
   appErrorEnvelope,
   hostDisconnectedEnvelope,
@@ -164,8 +171,10 @@ const MAX_HELD_MESSAGES = 4096;
 
 /**
  * The scheduler flow a message takes turns in: each terminal's output is its
- * own, so one terminal's backlog never sits in front of another's echo.
- * Everything else keeps its lane's single order.
+ * own, so one terminal's backlog never sits in front of another's echo, and
+ * each RPC answer is its own, so a small one never waits for a large one ahead
+ * of it (callers match answers by request id, not by order). Everything else
+ * keeps its lane's single order: a SEND still goes before the INVOKE behind it.
  */
 function flowOf(message: LinkMessage): string | undefined {
   if (
@@ -178,6 +187,14 @@ function flowOf(message: LinkMessage): string | undefined {
   // One stream per viewer, so it takes turns as one more terminal.
   if (message.lane === Lane.INTERACTIVE && message.kind === InteractiveKind.CANOPY_TERMINAL) {
     return message.body.endpointId;
+  }
+  if (
+    message.lane === Lane.RPC &&
+    (message.kind === RpcKind.INVOKE_RESULT ||
+      message.kind === RpcKind.CALL_RESULT ||
+      message.kind === RpcKind.REVERSE_RESULT)
+  ) {
+    return `\0${message.kind}\0${message.body.requestId}`;
   }
   return undefined;
 }
@@ -253,6 +270,7 @@ export class LinkSession {
 
   private state: "handshake" | "open" | "closed" = "handshake";
   private readonly decoder: FrameDecoder;
+  private readonly assembler: MessageAssembler;
   private readonly scheduler: LaneScheduler;
   private readonly maxFrameBytes: number;
   private readonly encodingLimits: EncodingLimits | undefined;
@@ -261,6 +279,9 @@ export class LinkSession {
 
   private flushScheduled = false;
   private waitingForDrain = false;
+  /** The peer said in its handshake that it reads message fragments. */
+  private fragmentOutbound = false;
+  private readonly messageIds = new MessageIds();
   private readonly tickListeners = new Set<() => void>();
 
   private nextRequestId = 1;
@@ -270,6 +291,7 @@ export class LinkSession {
     [RpcKind.REVERSE_REQUEST, new Map()],
   ]);
   private pendingCount = 0;
+  /** Every frame of a request, its fragments included, to the request it carries. */
   private readonly requestFrames = new WeakMap<LinkFrame, Pending>();
   private inboundInFlight = 0;
   private held: LinkMessage[] | null = null;
@@ -313,6 +335,7 @@ export class LinkSession {
         ? Math.min(HANDSHAKE_MAX_FRAME_BYTES, this.maxFrameBytes)
         : this.maxFrameBytes
     );
+    this.assembler = new MessageAssembler(this.maxFrameBytes);
     this.scheduler = new LaneScheduler(options.laneLimits ?? DEFAULT_LANE_LIMITS);
     this._lastReceivedAt = this.now();
     this.transfers = new LinkTransfers(
@@ -401,10 +424,17 @@ export class LinkSession {
    * {@link LinkSession.releaseInbound} are queued rather than dispatched, so
    * frames the peer sent right behind its WELCOME are not dropped (or answered
    * UNSUPPORTED) before the owner has attached its subscribers and handlers.
+   *
+   * `peerReadsFragments` says the peer's handshake offered `messageFragments`:
+   * from then on a message larger than one fragment goes as fragments, so it
+   * never holds the link for longer than one. A peer that didn't offer it (an
+   * older build) gets whole frames, as before. Fragments from the peer are
+   * read either way.
    */
-  open(options: { holdInbound?: boolean } = {}): void {
+  open(options: { holdInbound?: boolean; peerReadsFragments?: boolean } = {}): void {
     if (this.state !== "handshake") return;
     this.state = "open";
+    this.fragmentOutbound = options.peerReadsFragments === true;
     this.decoder.setMaxFrameBytes(this.maxFrameBytes);
     if (options.holdInbound) this.held = [];
     this.clearHandshakeTimer();
@@ -552,24 +582,33 @@ export class LinkSession {
     return this.enqueue(message).result;
   }
 
-  private enqueue(message: LinkMessage): { result: EnqueueResult; frame: LinkFrame | null } {
-    if (this.state === "closed") return { result: "refused", frame: null };
+  private enqueue(message: LinkMessage): { result: EnqueueResult; frames: readonly LinkFrame[] } {
+    if (this.state === "closed") return { result: "refused", frames: [] };
     if (this.state === "handshake" && message.lane !== Lane.CONTROL) {
-      return { result: "refused", frame: null };
+      return { result: "refused", frames: [] };
     }
     // Anything the peer would reject as malformed would end the session, so
     // catch it here and fail only this message.
     assertOutboundMessage(message);
     const frame = messageToFrame(message, this.encodingLimits);
     this.assertFrameSize(frame);
-    const result = this.scheduler.enqueue(
-      frame,
+    const queue = queueOf(message);
+    // What waits in the control queue stays whole: control frames are small
+    // by schema, the handshake ones must be, control is written ahead of
+    // everything else anyway, and a fragment queued apart from its own lane
+    // could begin a second partial message there.
+    const frames =
+      this.fragmentOutbound && queue !== Lane.CONTROL
+        ? fragmentFrame(frame, this.messageIds.take())
+        : [frame];
+    const result = this.scheduler.enqueueMessage(
+      frames,
       flowOf(message),
       endpointOrderOf(message),
-      queueOf(message)
+      queue
     );
     if (result !== "refused") this.scheduleFlush();
-    return { result, frame };
+    return { result, frames };
   }
 
   invoke(
@@ -710,7 +749,7 @@ export class LinkSession {
         );
       }
       signal?.addEventListener("abort", onAbort, { once: true });
-      let queued: { result: EnqueueResult; frame: LinkFrame | null };
+      let queued: { result: EnqueueResult; frames: readonly LinkFrame[] };
       try {
         queued = this.enqueue(build(requestId));
       } catch (err) {
@@ -719,8 +758,8 @@ export class LinkSession {
       }
       if (queued.result === "refused") {
         settle(appErrorEnvelope("RATE_LIMITED", "Link send queue is full"));
-      } else if (queued.frame) {
-        this.requestFrames.set(queued.frame, entry);
+      } else {
+        for (const frame of queued.frames) this.requestFrames.set(frame, entry);
       }
     });
   }
@@ -756,8 +795,10 @@ export class LinkSession {
     for (let frame = this.scheduler.next(); frame; frame = this.scheduler.next()) {
       const request = frame.lane === Lane.RPC ? this.requestFrames.get(frame) : undefined;
       // Timed out or aborted while queued: its caller has moved on, and the
-      // peer running it now would act on a call nobody is waiting for.
-      if (request?.settled) {
+      // peer running it now would act on a call nobody is waiting for. Once
+      // one fragment has gone the rest follow, or the peer would hold half a
+      // message for the rest of the session.
+      if (request?.settled && !request.written) {
         // Dropped rather than sent, but gone all the same: a close held behind
         // it must still go.
         this.scheduler.written(frame);
@@ -791,20 +832,24 @@ export class LinkSession {
       this.protocolError(formatErrorMessage(err, "bad frame"));
       return;
     }
-    for (const frame of frames) {
+    for (const wire of frames) {
       if (this.isClosed) return;
       this._lastReceivedAt = this.now();
       if (this.state === "open") this._framesSinceOpen++;
       // During the handshake, only its own kinds are worth decoding at all.
       if (
         this.state === "handshake" &&
-        (frame.lane !== Lane.CONTROL || !HANDSHAKE_KINDS[this.role].has(frame.kind))
+        (wire.lane !== Lane.CONTROL || !HANDSHAKE_KINDS[this.role].has(wire.kind))
       ) {
         this.protocolError("message before handshake");
         return;
       }
+      let frame: LinkFrame | null;
       let message: LinkMessage;
       try {
+        // Handshake frames are whole, and one carrying a stream id fails its parse below.
+        frame = this.state === "open" ? this.assemble(wire) : wire;
+        if (!frame) continue;
         message = parseInboundFrame(frame, this.encodingLimits);
       } catch (err) {
         this.protocolError(formatErrorMessage(err, "invalid message"));
@@ -819,6 +864,19 @@ export class LinkSession {
         this.held.push(message);
       } else this.dispatch(message);
     }
+  }
+
+  /** A whole message, or null while a fragmented one is still arriving. */
+  private assemble(wire: LinkFrame): LinkFrame | null {
+    // Nothing of a message no one can read is held: an unknown kind ends the
+    // session at its first fragment, not after megabytes of it.
+    if (isMessageFragment(wire)) {
+      const kind = wire.kind & ~FRAGMENT_MORE;
+      if (!isStructuredKind(wire.lane, kind)) {
+        throw new FrameProtocolError(`unknown message ${wire.lane}/${kind}`);
+      }
+    }
+    return this.assembler.push(wire);
   }
 
   private dispatchHandshake(message: LinkMessage): void {
@@ -1034,6 +1092,7 @@ export class LinkSession {
     this.pingTimer = this.idleTimer = null;
     this.sentPings.clear();
     this.scheduler.clear();
+    this.assembler.clear();
     this.tickListeners.clear();
     this.held = null;
     const disconnected = hostDisconnectedEnvelope(info.reason);
