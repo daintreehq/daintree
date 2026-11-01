@@ -1928,7 +1928,9 @@ describe("re-reading the host only when the project changed hands (#15900)", () 
 
     await resyncFromHost();
 
-    await vi.waitFor(() => expect(followCalls()).toHaveLength(2));
+    // The resync and its follow pass load the terminal resync's lazy modules in
+    // the same tick; the module runner holds the second load past waitFor's default.
+    await vi.waitFor(() => expect(followCalls()).toHaveLength(2), { timeout: 5_000 });
     await flush();
     expect(stands(followCalls()[1]!)).toBe(true);
     // The resync's own read of the terminals, and the follow pass's.
@@ -1946,7 +1948,8 @@ describe("re-reading the host only when the project changed hands (#15900)", () 
 
     const resync = resyncFromHost();
     emitLease({ type: "panels-changed", projectId: "proj-1" });
-    await vi.waitFor(() => expect(followCalls()).toHaveLength(2));
+    // Same lazy-module load as the resync's: see above.
+    await vi.waitFor(() => expect(followCalls()).toHaveLength(2), { timeout: 5_000 });
     const meanwhile = followCalls()[1]!;
     answerLease(leaseView(holder(), false));
     await resync;
