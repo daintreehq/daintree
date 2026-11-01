@@ -21,7 +21,8 @@ import { worktreeDisplayName } from "@/utils/recipeScope";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { Schedule, ScheduledRun } from "@shared/types/scheduledRuns";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
-import type { SchedulesSnapshot } from "@shared/types/ipc/schedules";
+import type { ScheduleRunNowOutcome, SchedulesSnapshot } from "@shared/types/ipc/schedules";
+import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { ScheduleList, scheduleRowSelector, NEW_SCHEDULE_SELECTOR } from "./ScheduleList";
 import { ScheduleEditor, type EditorLeaveState, type WorktreeChoice } from "./ScheduleEditor";
@@ -198,14 +199,28 @@ export function SchedulesDialog({ isOpen, onClose }: SchedulesDialogProps) {
     setRequestedRunIds(new Set());
   }
 
-  // The history announces a run starting or failing, and shows a recorded refusal
-  // as its newest row; the page speaks only for a failure the history couldn't record.
+  // Through the action, so the overlap policy's confirmation (#15980) asks first.
+  // The history announces a run starting, skipping or failing, and shows a
+  // recorded one as its newest row; the page speaks only for a failure the
+  // history couldn't record. Backing out of the confirmation runs nothing.
   const runNow = async (schedule: Schedule) => {
     if (runNowPending) return;
     setRunNowPending(true);
     try {
-      const outcome = await schedulesClient.runNow(schedule.id);
-      const runId = outcome.status === "not-found" ? null : outcome.runId;
+      const dispatched = await actionService.dispatch<ScheduleRunNowOutcome>(
+        "schedules.runNow",
+        { scheduleId: schedule.id },
+        { source: "user" }
+      );
+      if (!dispatched.ok) {
+        setRunNowError(dispatched.error.message);
+        return;
+      }
+      const outcome = dispatched.result;
+      const runId =
+        outcome.status === "started" || outcome.status === "skipped" || outcome.status === "failed"
+          ? outcome.runId
+          : null;
       if (runId !== null) setRequestedRunIds((prev) => new Set(prev).add(runId));
       setRunNowError(
         outcome.status === "failed" && outcome.runId === null ? outcome.message : null

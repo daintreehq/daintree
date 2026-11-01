@@ -830,7 +830,14 @@ test("schedules view review — every state, per theme", async () => {
       await openView(page, ids.first);
       await page.getByText("react-router 8 drops the loader API").waitFor({ timeout: 8000 });
       await page.getByText("react-router 8 drops the loader API").hover();
-      const again = await page.evaluate((id) => window.electron.schedules.runNow(id), ids.first);
+      // The first run is still open, so the overlap policy asks first; the answer starts another.
+      const again = await page.evaluate(async (id) => {
+        const asked = await window.electron.schedules.runNow(id);
+        if (asked.status !== "confirm-overlap") return asked;
+        return window.electron.schedules.runNow(id, {
+          overlap: { policy: asked.policy, openRunIds: asked.openRunIds },
+        });
+      }, ids.first);
       if (again.status !== "started") throw new Error(`Second Run now: ${JSON.stringify(again)}`);
       await page.getByRole("button", { name: "Show 1 new run" }).waitFor({ timeout: 15_000 });
       await snap(page, theme, "17-held-arrival", `${DIALOG} >> text=Show 1 new run`);
