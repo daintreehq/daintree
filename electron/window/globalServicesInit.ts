@@ -1191,6 +1191,17 @@ export async function initGlobalServices(
     },
   });
 
+  // Fires due schedules for the life of the process, with or without a window
+  // (#15979). Its first pass catches up what came due while Daintree was quit.
+  registerDeferredTask({
+    name: "scheduled-run-scheduler",
+    run: async () => {
+      const { startScheduledRunScheduler } =
+        await import("../services/scheduledRuns/scheduledRunSchedulerLive.js");
+      startScheduledRunScheduler();
+    },
+  });
+
   // Worker governance — providers for every persistent worker subsystem, so
   // diagnostics can report a bounded resource story and the efficiency profile
   // can request safe trims. Registered BEFORE resource-profile-service so the

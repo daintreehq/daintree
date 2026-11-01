@@ -915,6 +915,7 @@ describe("initGlobalServices task ordering", () => {
       "windows-store-notifier",
       "ccr-config",
       "idle-terminal-notification-service",
+      "scheduled-run-scheduler",
       "resource-profile-service",
       "plugin-service",
       "plugin-cli-server",

@@ -1056,6 +1056,16 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
 
       // Stop the opt-in plugin update checker and drain any in-flight pass
       // (#10893) — its timers/wake listeners must not survive teardown.
+      // Pending schedule timers and power listeners (#15979). No pass launches
+      // or records once shutdown began; this stops them looking.
+      try {
+        const { stopScheduledRunScheduler } =
+          await import("../services/scheduledRuns/scheduledRunSchedulerLive.js");
+        await stopScheduledRunScheduler();
+      } catch (error) {
+        console.warn("[MAIN] Scheduled-run scheduler stop failed:", error);
+      }
+
       try {
         const { getPluginUpdateCheckService } =
           await import("../services/PluginUpdateCheckService.js");
