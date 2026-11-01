@@ -131,6 +131,7 @@ import { registerProjectPresentationHandlers } from "./handlers/projectPresentat
 import { registerProjectThemeHandlers } from "./handlers/projectTheme.js";
 import { registerWorktreeTitlesHandlers } from "./handlers/worktreeTitles.js";
 import { registerReviewMarksHandlers } from "./handlers/reviewMarks.js";
+import { registerSchedulesHandlers } from "./handlers/schedules.js";
 import { registerScratchHandlers } from "./handlers/scratch/index.js";
 import { events } from "../services/events.js";
 import {
@@ -294,6 +295,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerProjectThemeHandlers());
     register(() => registerWorktreeTitlesHandlers());
     register(() => registerReviewMarksHandlers(deps));
+    register(() => registerSchedulesHandlers());
     register(() => registerScratchHandlers(deps));
 
     // Remote Hosts: macOS and Linux only. Windows builds register none of it.

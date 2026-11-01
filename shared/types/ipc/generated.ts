@@ -3599,6 +3599,30 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./runHistory.js").RunHistoryRecord[];
   };
+  "schedules:create": {
+    args: [input: import("./schedules.js").ScheduleCreateInput];
+    result: import("./schedules.js").ScheduleCreateOutcome;
+  };
+  "schedules:list": {
+    args: [];
+    result: import("./schedules.js").SchedulesSnapshot | null;
+  };
+  "schedules:remove": {
+    args: [scheduleId: string];
+    result: import("./schedules.js").ScheduleRemoveOutcome;
+  };
+  "schedules:set-enabled": {
+    args: [scheduleId: string, enabled: boolean];
+    result: import("./schedules.js").ScheduleSetEnabledOutcome;
+  };
+  "schedules:update": {
+    args: [
+      scheduleId: string,
+      expectedUpdatedAt: number,
+      patch: import("./schedules.js").ScheduleUpdatePatch,
+    ];
+    result: import("./schedules.js").ScheduleUpdateOutcome;
+  };
   "scratch:create": {
     args: [name?: string | undefined];
     result: import("../scratch.js").Scratch;

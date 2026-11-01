@@ -47,10 +47,10 @@ export function createSchedule(input: NewScheduleInput, now: number = Date.now()
     projectId: input.projectId,
     name: input.name.trim(),
     enabled: input.enabled ?? true,
-    cadence: {
-      cron: (input.cron ?? DEFAULT_SCHEDULE_CRON).trim(),
-      timeZone: resolveZone(input.timeZone ?? machineTimeZone()),
-    },
+    cadence: normalizeCadence({
+      cron: input.cron ?? DEFAULT_SCHEDULE_CRON,
+      timeZone: input.timeZone ?? machineTimeZone(),
+    }),
     launch: {
       agentId: input.launch.agentId,
       presetId: input.launch.presetId ?? null,
@@ -69,11 +69,15 @@ export function createSchedule(input: NewScheduleInput, now: number = Date.now()
   };
 }
 
-// Stores the name Intl resolves to, so "europe/london" is kept as "Europe/London";
-// an unknown zone is kept as written for the schema to refuse.
-function resolveZone(timeZone: string): string {
-  const result = validateTimeZone(timeZone);
-  return result.ok ? result.timeZone : timeZone;
+/**
+ * A cadence as it is stored: the expression trimmed, and the zone under the
+ * name Intl resolves it to, so "europe/london" is kept as "Europe/London". An
+ * unknown zone is kept as written for the schema to refuse. Creating and
+ * editing a schedule both store through it.
+ */
+export function normalizeCadence(cadence: ScheduleCadence): ScheduleCadence {
+  const zone = validateTimeZone(cadence.timeZone);
+  return { cron: cadence.cron.trim(), timeZone: zone.ok ? zone.timeZone : cadence.timeZone };
 }
 
 /** The key that makes an occurrence run at most once: its due instant in UTC ISO form. */

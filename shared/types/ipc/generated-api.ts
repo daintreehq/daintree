@@ -1635,6 +1635,23 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["run-history:get-records"]["args"]
     ): Promise<IpcInvokeMap["run-history:get-records"]["result"]>;
   };
+  schedules: {
+    create(
+      ...args: IpcInvokeMap["schedules:create"]["args"]
+    ): Promise<IpcInvokeMap["schedules:create"]["result"]>;
+    list(
+      ...args: IpcInvokeMap["schedules:list"]["args"]
+    ): Promise<IpcInvokeMap["schedules:list"]["result"]>;
+    remove(
+      ...args: IpcInvokeMap["schedules:remove"]["args"]
+    ): Promise<IpcInvokeMap["schedules:remove"]["result"]>;
+    setEnabled(
+      ...args: IpcInvokeMap["schedules:set-enabled"]["args"]
+    ): Promise<IpcInvokeMap["schedules:set-enabled"]["result"]>;
+    update(
+      ...args: IpcInvokeMap["schedules:update"]["args"]
+    ): Promise<IpcInvokeMap["schedules:update"]["result"]>;
+  };
   sentry: {
     getConsentState(
       ...args: IpcInvokeMap["sentry:get-consent-state"]["args"]

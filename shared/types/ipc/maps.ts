@@ -1728,6 +1728,9 @@ export interface IpcEventMap {
   // The sender project's review marks changed (#14584); main sends them to every view of that project.
   "review-marks:changed": import("./reviewMarks.js").ReviewMarksSnapshot;
 
+  // The sender project's schedules changed (#15975); main sends them to every local view of that project.
+  "schedules:changed": import("./schedules.js").SchedulesSnapshot;
+
   /**
    * MCP server runtime-state transition. Distinct from
    * `connectivity:service-changed` because the renderer needs the derived

@@ -42,6 +42,7 @@ import { ProjectSettingsManager } from "./ProjectSettingsManager.js";
 import { ProjectStateManager, type ProjectStateReadResult } from "./ProjectStateManager.js";
 import { invalidatePrefetchCache } from "./prefetchHydrateCache.js";
 import { ProjectFileStore } from "./ProjectFileStore.js";
+import { ScheduleStore } from "./ScheduleStore.js";
 import { ProjectRecipeSynchronizer } from "./ProjectRecipeSynchronizer.js";
 import type {
   CopyTreeHistoryAppendInput,
@@ -198,6 +199,8 @@ export class ProjectStore {
   private settingsManager: ProjectSettingsManager;
   private stateManager: ProjectStateManager;
   private fileStore: ProjectFileStore;
+  /** Each project's schedules (#15975), kept on this machine only. */
+  readonly schedules: ScheduleStore;
   private globalFileStore: GlobalFileStore;
   private identityFiles: ProjectIdentityFiles;
 
@@ -225,6 +228,10 @@ export class ProjectStore {
     this.settingsManager = new ProjectSettingsManager(this.projectsConfigDir, store);
     this.stateManager = new ProjectStateManager(this.projectsConfigDir);
     this.fileStore = new ProjectFileStore(this.projectsConfigDir);
+    this.schedules = new ScheduleStore(
+      this.projectsConfigDir,
+      (projectId) => this.getProjectById(projectId) !== null
+    );
     this.globalFileStore = new GlobalFileStore(this.globalConfigDir);
     this.identityFiles = new ProjectIdentityFiles();
     this.recipeSynchronizer = new ProjectRecipeSynchronizer(this.identityFiles, this.fileStore);
@@ -964,6 +971,14 @@ export class ProjectStore {
 
     if (project) {
       this.recipeSynchronizer.pruneInRepoRecipeHashes(project.path);
+    }
+
+    // After the row is gone, so no schedule edit can write the file again, and
+    // before the directory goes, so one still finishing can't recreate it.
+    try {
+      await this.schedules.removeProject(projectId);
+    } catch (error) {
+      logError(`Failed to remove schedules for ${projectId}`, error);
     }
 
     try {

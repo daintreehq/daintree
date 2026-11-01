@@ -1151,6 +1151,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (snapshot: import("./reviewMarks.js").ReviewMarksSnapshot) => void
     ): () => void;
   };
+  // list / create / update / setEnabled / remove come from GeneratedElectronAPI; onChanged is a renderer-only subscription.
+  schedules: GeneratedElectronAPI["schedules"] & {
+    onChanged(callback: (snapshot: import("./schedules.js").SchedulesSnapshot) => void): () => void;
+  };
   // ensure / restart / stop / getState etc. come from GeneratedElectronAPI;
   // onStateChanged is a renderer-only subscription.
   devPreview: GeneratedElectronAPI["devPreview"] & {
