@@ -233,6 +233,25 @@ interface TerminalInfoResponse {
  * are orphaned. On the confirmed path `sessions` holds one entry per terminal
  * (agentSessionId null for non-agents / unresumable terminals).
  */
+/**
+ * One PTY incarnation ended, as the host reported it. Unlike the public `exit`,
+ * emitted for a same-id respawn's predecessor too, whether main or the host
+ * saw it replaced; `spawnedAt` names the incarnation (absent only from a host
+ * that didn't send it).
+ */
+export interface PtyIncarnationExit {
+  terminalId: string;
+  spawnedAt?: number;
+  exitCode: number;
+  signal: number | null;
+}
+
+/** One incarnation died with its pty-host, and its terminal is being replayed as a new one. */
+export interface PtyIncarnationLost {
+  terminalId: string;
+  launchGeneration: number;
+}
+
 export interface GracefulKillByProjectOutcome {
   confirmed: boolean;
   sessions: Array<{ id: string; agentSessionId: string | null }>;
@@ -599,6 +618,10 @@ export class PtyClient extends EventEmitter {
       trackRetiringHost: (exit) => this.trackRetiringHost(exit),
       dropShardSignals: (shardKey) => this.dropShardSignals(shardKey),
       terminalLost: (id) => this.emit("terminal-lost", id),
+      incarnationLost: (id, launchGeneration) => {
+        const fact: PtyIncarnationLost = { terminalId: id, launchGeneration };
+        this.emit("incarnation-lost", fact);
+      },
       logWarn,
     });
 
@@ -838,7 +861,7 @@ export class PtyClient extends EventEmitter {
         // Lifecycle-ledger bookkeeping. Exits carry the host-adopted
         // launchGeneration so a stale exit arriving after a same-id respawn
         // closes its own incarnation, never the successor.
-        onTerminalExit: (id, exitCode, launchGeneration, signal) => {
+        onTerminalExit: (id, exitCode, launchGeneration, signal, spawnedAt) => {
           terminalCrashReapService.detachTerminal(id, launchGeneration);
           const ledger = getLifecycleLedger();
           const generation = launchGeneration ?? ledger.currentGeneration(id);
@@ -851,6 +874,11 @@ export class PtyClient extends EventEmitter {
             exitCode,
             signal,
           });
+          // Main-only, and for every incarnation: the public `exit` drops one a
+          // same-id respawn superseded, but that exit still ends its own run.
+          const fact: PtyIncarnationExit = { terminalId: id, exitCode, signal: signal ?? null };
+          if (spawnedAt !== undefined) fact.spawnedAt = spawnedAt;
+          this.emit("incarnation-exit", fact);
         },
         // Per-terminal captures streamed while a graceful kill is still
         // running (#12180). Recorded only while a call for that project is in

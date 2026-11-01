@@ -584,8 +584,18 @@ export class PtyManager extends EventEmitter {
             this.streamOffsets.get(id) ??
             Math.max(this.streamOffsetOrigin, this.retiredStreamHighWater),
           onExit: (termId, exitCode, signal) => {
-            // Guard against stale exit events from previous terminal with same ID
+            // Guard against stale exit events from previous terminal with same ID.
+            // The replaced incarnation's facts still go out on their own event,
+            // with none of the per-id cleanup an exit does to the successor.
             if (this.registry.get(termId) !== terminalProcess) {
+              this.emit(
+                "superseded-exit",
+                termId,
+                exitCode,
+                signal,
+                options.launchGeneration,
+                terminalProcess.getInfo().spawnedAt
+              );
               return;
             }
             this.emit(
@@ -594,7 +604,8 @@ export class PtyManager extends EventEmitter {
               exitCode,
               signal,
               options.launchGeneration,
-              this.sessionPreservingTeardowns.has(terminalProcess) || undefined
+              this.sessionPreservingTeardowns.has(terminalProcess) || undefined,
+              terminalProcess.getInfo().spawnedAt
             );
             if (!terminalProcess.shouldPreserveOnExit(exitCode)) {
               this.registry.delete(termId);

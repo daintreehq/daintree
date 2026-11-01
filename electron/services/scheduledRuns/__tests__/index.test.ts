@@ -1,0 +1,211 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import type Database from "better-sqlite3";
+
+const state = vi.hoisted(() => ({
+  sqlite: null as Database.Database | null,
+  shutdown: null as { initiator: string; phase: string } | null,
+  sent: [] as Array<{ channel: string; event: unknown }>,
+}));
+
+vi.mock("electron", () => ({
+  app: {
+    getPath: () => "/fake/userData",
+    isPackaged: false,
+    getAppPath: () => "/fake/appPath",
+  },
+}));
+
+vi.mock("../../persistence/db.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../persistence/db.js")>()),
+  getSharedDb: vi.fn(),
+  getSharedSqlite: () => state.sqlite,
+}));
+
+vi.mock("../../../lifecycle/shutdownCoordinator.js", () => ({
+  getActiveShutdown: () => state.shutdown,
+}));
+
+vi.mock("../../../window/webContentsRegistry.js", () => ({
+  getWebContentsForProject: (projectId: string) =>
+    projectId === "project-1"
+      ? [{ send: (channel: string, event: unknown) => state.sent.push({ channel, event }) }]
+      : [],
+}));
+
+vi.mock("../../../ipc/endpointRegistry.js", () => ({
+  getEndpointRegistry: () => ({ hasRemote: () => false }),
+}));
+
+import { openDb } from "../../persistence/db.js";
+import { events } from "../../events.js";
+import { ScheduledRunStore } from "../ScheduledRunStore.js";
+import type { RegisterScheduledLaunchInput } from "../ScheduledRunRecorder.js";
+import {
+  _resetScheduledRunRecorderForTest,
+  getScheduledRunRecorder,
+  startScheduledRunFacts,
+  type ScheduledRunFactSource,
+} from "../index.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const migrationsFolder = path.resolve(__dirname, "../../persistence/migrations");
+
+let dir: string;
+let source: EventEmitter;
+let stop: () => void;
+
+beforeEach(() => {
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-scheduled-wiring-"));
+  state.sqlite = openDb(path.join(dir, "app.db"), migrationsFolder).sqlite;
+  state.shutdown = null;
+  state.sent = [];
+  _resetScheduledRunRecorderForTest();
+  source = new EventEmitter();
+  stop = startScheduledRunFacts(source as unknown as ScheduledRunFactSource);
+});
+
+afterEach(() => {
+  stop();
+  _resetScheduledRunRecorderForTest();
+  state.sqlite?.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+const launch: RegisterScheduledLaunchInput = {
+  id: "run-1",
+  scheduleId: "schedule-1",
+  projectId: "project-1",
+  origin: { trigger: "run-now", dueAt: null, occurrenceKey: null, coalesced: null },
+  terminalId: "terminal-1",
+  resume: {
+    agentId: "codex",
+    agentSessionId: null,
+    cwd: "/repo",
+    worktreeId: null,
+    agentLaunchFlags: [],
+    agentModelId: null,
+    agentPresetId: null,
+  },
+};
+
+describe("scheduled-run history wiring", () => {
+  it("settles an earlier lifetime's open runs when it opens, and tells the project's views", async () => {
+    new ScheduledRunStore(state.sqlite!).insert({
+      ...launch,
+      createdAt: 1,
+      terminalSpawnedAt: null,
+      settlement: { state: "open" },
+      process: { agent: { state: "not-started" }, pty: { state: "not-started" } },
+      pane: { state: "none" },
+    });
+    const ended = vi.fn();
+    const offEnded = events.on("scheduled-run:ended", ended);
+
+    const [recorder, concurrent] = await Promise.all([
+      getScheduledRunRecorder(),
+      getScheduledRunRecorder(),
+    ]);
+    offEnded();
+    expect(concurrent).toBe(recorder);
+
+    expect(recorder?.get("run-1")?.settlement).toMatchObject({ outcome: "interrupted" });
+    expect(ended).toHaveBeenCalledWith(expect.objectContaining({ runId: "run-1" }));
+    expect(state.sent).toEqual([
+      {
+        channel: "events:push",
+        event: {
+          name: "scheduled-runs:changed",
+          payload: { projectId: "project-1", scheduleIds: ["schedule-1"] },
+        },
+      },
+    ]);
+    expect(await getScheduledRunRecorder()).toBe(recorder);
+  });
+
+  it("records the PTY and session facts of a launched run", async () => {
+    const recorder = (await getScheduledRunRecorder())!;
+    recorder.registerLaunch(launch);
+
+    source.emit("spawn-result", "terminal-1", { success: true, id: "terminal-1", spawnedAt: 50 });
+    expect(recorder.get("run-1")?.process.pty).toEqual({ state: "running", startedAt: 50 });
+    source.emit("incarnation-exit", {
+      terminalId: "terminal-1",
+      spawnedAt: 50,
+      exitCode: 0,
+      signal: null,
+    });
+    events.emit("agent-session:captured", {
+      terminalId: "terminal-1",
+      boundary: "exit",
+      record: {
+        sessionId: "codex-session",
+        agentId: "codex",
+        worktreeId: null,
+        title: null,
+        projectId: "project-1",
+        terminal: { id: "terminal-1", spawnedAt: 50 },
+      },
+    });
+
+    const run = recorder.get("run-1");
+    expect(run?.settlement).toMatchObject({ outcome: "done" });
+    expect(run?.resume?.agentSessionId).toBe("codex-session");
+  });
+
+  it("settles a run lost when its pty-host dies with its incarnation", async () => {
+    const recorder = (await getScheduledRunRecorder())!;
+    recorder.registerLaunch(launch);
+    source.emit("spawn-result", "terminal-1", {
+      success: true,
+      id: "terminal-1",
+      spawnedAt: 50,
+      launchGeneration: 7,
+    });
+    source.emit("incarnation-lost", { terminalId: "terminal-1", launchGeneration: 7 });
+
+    expect(recorder.get("run-1")?.settlement).toMatchObject({ outcome: "lost" });
+  });
+
+  it("stops following facts once stopped", async () => {
+    const recorder = (await getScheduledRunRecorder())!;
+    recorder.registerLaunch(launch);
+    source.emit("spawn-result", "terminal-1", { success: true, id: "terminal-1", spawnedAt: 50 });
+    stop();
+    stop = () => {};
+
+    source.emit("incarnation-exit", {
+      terminalId: "terminal-1",
+      spawnedAt: 50,
+      exitCode: 0,
+      signal: null,
+    });
+    events.emit("agent-session:captured", {
+      terminalId: "terminal-1",
+      boundary: "exit",
+      record: {
+        sessionId: "codex-session",
+        agentId: "codex",
+        worktreeId: null,
+        title: null,
+        projectId: "project-1",
+        terminal: { id: "terminal-1", spawnedAt: 50 },
+      },
+    });
+    expect(source.listenerCount("spawn-result")).toBe(0);
+    expect(source.listenerCount("incarnation-exit")).toBe(0);
+    expect(source.listenerCount("incarnation-lost")).toBe(0);
+    const run = recorder.get("run-1");
+    expect(run?.settlement).toEqual({ state: "open" });
+    expect(run?.resume?.agentSessionId).toBeNull();
+  });
+
+  it("doesn't open the history once Daintree is quitting", async () => {
+    state.shutdown = { initiator: "app-quit", phase: "cleaning" };
+    expect(await getScheduledRunRecorder()).toBeNull();
+  });
+});

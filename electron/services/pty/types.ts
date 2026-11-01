@@ -304,7 +304,20 @@ export interface PtyManagerEvents {
     exitCode: number,
     signal?: number,
     launchGeneration?: number,
-    preserveSession?: boolean
+    preserveSession?: boolean,
+    /** The exiting incarnation's `TerminalInfo.spawnedAt`. */
+    spawnedAt?: number
+  ) => void;
+  /**
+   * The exit of an incarnation a same-id respawn already replaced: its facts
+   * only. Nothing keyed by the id may act on it, since the id is the successor's.
+   */
+  "superseded-exit": (
+    id: string,
+    exitCode: number,
+    signal: number | undefined,
+    launchGeneration: number | undefined,
+    spawnedAt: number
   ) => void;
   error: (id: string, error: string) => void;
   "resize-result": (id: string, result: TerminalResizeResult) => void;

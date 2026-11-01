@@ -205,6 +205,24 @@ describe("PtyClient lifecycle ledger", () => {
     expect(ledger.recordJournal("t1", 2, "sess-after-crash").accepted).toBe(true);
   });
 
+  it("reports the incarnation a crashed host took with it before replaying the terminal (#15976)", () => {
+    const client = createReadyClient();
+    const lost = vi.fn();
+    client.on("incarnation-lost", lost);
+    client.spawn("t1", baseOptions);
+
+    const restartedChild = createMockChild();
+    shared.forkMock.mockReturnValue(restartedChild);
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(200);
+    expect(lost).not.toHaveBeenCalled();
+    restartedChild.emit("message", { type: "ready" });
+
+    expect(lost).toHaveBeenCalledExactlyOnceWith({ terminalId: "t1", launchGeneration: 1 });
+    expect(spawnMessages(restartedChild)[0]?.options.launchGeneration).toBe(2);
+  });
+
   it("re-injects postSpawnInput on crash respawn so wrapper-less shells resume (#11339)", () => {
     const client = createReadyClient();
     // A command launch on a shell that can't host a startup wrapper (fish,
@@ -347,6 +365,37 @@ describe("PtyClient lifecycle ledger", () => {
     mockChild.emit("message", { type: "exit", id: "t1", exitCode: 3, launchGeneration: 2 });
     expect(client.hasTerminal("t1")).toBe(false);
     expect(client.recentExits.find("t1", 2)?.exitCode).toBe(3);
+  });
+
+  it("reports every incarnation's exit by its spawn time, a superseded one's included (#15976)", () => {
+    const client = createReadyClient();
+    const facts = vi.fn();
+    client.on("incarnation-exit", facts);
+
+    client.spawn("t1", baseOptions);
+    client.kill("t1");
+    client.spawn("t1", baseOptions);
+    mockChild.emit("message", {
+      type: "exit",
+      id: "t1",
+      exitCode: 0,
+      signal: 15,
+      launchGeneration: 1,
+      spawnedAt: 1_000,
+    });
+    mockChild.emit("message", {
+      type: "exit",
+      id: "t1",
+      exitCode: 2,
+      signal: 0,
+      launchGeneration: 2,
+      spawnedAt: 2_000,
+    });
+
+    expect(facts.mock.calls).toEqual([
+      [{ terminalId: "t1", spawnedAt: 1_000, exitCode: 0, signal: 15 }],
+      [{ terminalId: "t1", spawnedAt: 2_000, exitCode: 2, signal: 0 }],
+    ]);
   });
 
   it("asks the host to end one incarnation's trash grace and answers what it did (#15728)", async () => {

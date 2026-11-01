@@ -1635,6 +1635,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["run-history:get-records"]["args"]
     ): Promise<IpcInvokeMap["run-history:get-records"]["result"]>;
   };
+  scheduledRuns: {
+    listByProject(
+      ...args: IpcInvokeMap["scheduled-runs:list-by-project"]["args"]
+    ): Promise<IpcInvokeMap["scheduled-runs:list-by-project"]["result"]>;
+    listBySchedule(
+      ...args: IpcInvokeMap["scheduled-runs:list-by-schedule"]["args"]
+    ): Promise<IpcInvokeMap["scheduled-runs:list-by-schedule"]["result"]>;
+  };
   schedules: {
     create(
       ...args: IpcInvokeMap["schedules:create"]["args"]

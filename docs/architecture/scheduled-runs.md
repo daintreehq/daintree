@@ -10,6 +10,8 @@ A project can run an agent on a schedule (#15973). A due schedule launches its a
 | Field-level reasons a schedule can't be stored | `shared/utils/scheduleValidation.ts` |
 | A project's stored schedules and their change listeners | `electron/services/ScheduleStore.ts`, `electron/services/schedulesCodec.ts` |
 | Editing them from a view (`window.electron.schedules`) | `electron/ipc/handlers/schedules.ts`, `shared/types/ipc/schedules.ts` |
+| Run history: the `scheduled_runs` table, registration, recorded facts | `electron/services/scheduledRuns/` |
+| Run history over `window.electron.scheduledRuns` | `electron/ipc/handlers/scheduledRuns.ts` |
 
 ## Boundaries
 
@@ -90,6 +92,7 @@ In the second pass of a repeated hour, `previousCronOccurrence` can return a min
 
 - `id`, `scheduleId`, `projectId`, and `createdAt`, the time it was registered.
 - `terminalId`: reserved before the launch, so the launch and the record agree on it. A run skipped before one was reserved keeps null.
+- `terminalSpawnedAt`: the spawn incarnation of `terminalId` the run was matched to, the PTY host's `spawnedAt`; null until the terminal first spawns.
 - `origin`: why the run exists.
 - `settlement`, `process` and `pane`: three independent axes, below.
 - `resume`: what a closed run's terminal needs to resume.
@@ -109,7 +112,7 @@ The occurrence key is `occurrenceKeyFor(dueAt)`, the due instant in UTC ISO form
 
 The three axes keep three events apart: the run settling, the agent or PTY exiting, and the pane closing. Each moves only on its own event.
 
-- **`settlement`** is `open` until a fact settles it, then `settled` with `settledAt`, an `outcome` and the `evidence`. A settled run never changes. Overlap reads this axis: an open run is an unsettled one, so a kept terminal or a conversation the user carries on doesn't hold the next run back.
+- **`settlement`** is `open` until a fact settles it, then `settled` with `settledAt`, an `outcome` and the `evidence`. A settlement never changes once made; the process axes and the resume snapshot's session id can still be filled in after it. Overlap reads this axis: an open run is an unsettled one, so a kept terminal or a conversation the user carries on doesn't hold the next run back.
 - **`process`** holds the agent CLI and the PTY separately, because an agent can exit and leave its shell running. Each is `not-started` (no start seen), `running`, or `exited` with its exit code and signal when known. A signal is a positive number or null; producers map node-pty's 0 to null.
 - **`pane`** is `none`, `open`, `background` (moved there by the done policy or the user, not merely out of view), or `closed`.
 
@@ -126,14 +129,63 @@ The outcome follows from the evidence (`outcomeForEvidence`), and the schema ref
 | `cancel`: the user stopped the run                                    | `cancelled`          |
 | `replace`: the overlap policy put `replacedByRunId` in its place      | `replaced`           |
 | `lost`: the PTY host confirmed the terminal is gone with no exit seen | `lost`               |
+| `interrupted`: Daintree quit or crashed while the run was open        | `interrupted`        |
 
-A `needs-you` run is settled: the schedule's attempt is over and its terminal stays for the user. Only `done` applies the done policy. A restart that hasn't yet reconnected to a run's terminal is not `lost`.
+A `needs-you` run is settled: the schedule's attempt is over and its terminal stays for the user. Only `done` applies the done policy. A restart that hasn't yet reconnected to a run's terminal is not `lost`. A run Daintree's quit or crash left open is `interrupted`, settled at the next startup.
 
 Skip reasons are `missed` (only for an occurrence, never `run-now`), `overlap` with the `openRunId` that was still open, and `precondition` with its exit code, signal, or the error that stopped it running (an exit 0 isn't a skip). A skipped run never launches: no pane, neither process started, and no resume snapshot. It may hold a reserved terminal id, since registration can reserve one before the precondition runs.
 
 ### Resume snapshot
 
 `resume` mirrors `AgentSessionRecordSchema`: `agentId`, `agentSessionId`, `cwd`, `worktreeId`, `agentLaunchFlags`, `agentModelId` and `agentPresetId`. `agentSessionId` is null until captured, and capture can land after settlement.
+
+## Run history
+
+`ScheduledRunRecorder` keeps every run in the `scheduled_runs` table of Daintree's SQLite database (migration 0020): each row is a validated record as JSON beside the columns its queries read. Writes are synchronous, so a write has committed before anyone hears of it. It is opened on first use (`getScheduledRunRecorder()`), and opening it settles what an earlier lifetime left open before any run of this one can be registered.
+
+### Registration
+
+- **`registerLaunch`** records a run about to launch, with its reserved terminal id and its resume snapshot, and commits before it returns, so the launcher spawns only after. Claude's session id is assigned at launch, so it can be in the snapshot from the start. A second run for an occurrence the schedule already has a run for throws `ScheduledRunConflictError` and must not launch; `run-now` runs carry no occurrence.
+- **`registerSkip`** records a skipped occurrence, settled at once with its reason. It never launches.
+- **`settle`** settles an open run on a fact another service saw: a handback, a launch error, a cancel, a replacement. A settled run is left as it is.
+
+### Facts the history records itself
+
+A run is matched to its terminal by incarnation, `{terminalId, spawnedAt}`, as session records are. It takes the first incarnation its reserved terminal spawns, held in memory as well as on the record, so a write that failed can't let a later incarnation take the run. A restart under the same id, or a pty-host crash replaying the spawn, is another incarnation, and its facts aren't the run's. A reserved terminal id belongs to one run: registering another run under it is refused.
+
+The host stamps `spawnedAt` on its spawn result and on the exit. `PtyClient` emits a main-only `incarnation-exit` for every incarnation, including one a same-id respawn replaced: main drops that one's public `exit`, and the host, which keeps nothing for a replaced terminal, sends it as a `superseded-exit` carrying the facts alone. When a pty-host dies and its terminals are replayed, `PtyClient` emits `incarnation-lost` with each old generation.
+
+| Fact | Recorded as |
+| --- | --- |
+| The spawn succeeded | `terminalSpawnedAt`, and `process.pty` running |
+| The spawn failed | settled on `launch-error` |
+| The PTY exited | `process.pty` exited with its code and signal; settles an open run on `exit` |
+| `incarnation-lost`: the run's incarnation died with its pty-host | `process.pty` exited with no code or signal; settles an open run as `lost` |
+| `agent-session:captured` for the incarnation | `resume.agentSessionId`, when it has none yet; settled or not |
+
+An exit can reach the history before its spawn answer does; the run then takes that incarnation from the exit, and the late answer changes nothing. A run settled before its spawn answered (a cancel, say) still records its process. A captured id never replaces one already there, and a capture for another agent or project is ignored. The agent axis (`process.agent`) has no producer yet: today's agent-exit observation is a heuristic, which never settles a run.
+
+### Quitting and crashing
+
+A quit kills every terminal, and those exits are the quit's, not the run's: while Daintree is quitting, an exit lands on `process.pty` and the run stays open. At the next startup every run still open is settled as `interrupted`, and a process last seen running is marked exited with no code or signal, at the time the startup found it gone. A crash leaves the same state and reaches the same end. A pty-host crash while Daintree keeps running loses the run's incarnation, so the run settles `lost`; the replay that follows is another incarnation, and whether a run's terminal is replayed at all is the launcher's (#15978) to decide.
+
+### Retention and deletion
+
+Each schedule keeps its newest 100 runs, newest by registration time. A run that is still open, or whose process was last seen running, is never pruned: a fact still due for it would have nowhere to land. It goes once it's over and the next prune runs. Pruning a run also drops its occurrence key's protection, so an occurrence that old is kept from running again by the scheduler's evaluation point (#15979), not by the history.
+
+Deleting a schedule deletes its history with it: `ScheduleStore.remove` calls `deleteForSchedule` in the schedule's turn, once the removal is committed. A history that couldn't be deleted is logged and leaves the removal standing. Removing a project removes its runs in the same transaction as its row. A fact that arrives later for a deleted run finds no row and records nothing.
+
+### Reading it and following it
+
+| Surface | What |
+| --- | --- |
+| `window.electron.scheduledRuns.listByProject({ projectId })` | The project's runs, newest first |
+| `window.electron.scheduledRuns.listBySchedule({ scheduleId })` | The schedule's runs, newest first |
+| `scheduled-runs:changed` on `events:push` | `{ projectId, scheduleIds }` after a committed change, sent only to views of the project; a view reads the runs again |
+| `scheduled-run:started` on the main event bus | A run was registered to launch, just before its terminal spawns |
+| `scheduled-run:ended` on the main event bus | A run settled, once, with its outcome. A run that starts ends, at the next startup if Daintree quits first; a skipped run neither starts nor ends |
+
+The IPC surface is read-only: main registers runs and records their facts, so no view can write one.
 
 ## Who writes what
 

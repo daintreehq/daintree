@@ -941,7 +941,8 @@ ptyManager.on(
     exitCode: number,
     signal?: number,
     launchGeneration?: number,
-    preserveSession?: boolean
+    preserveSession?: boolean,
+    spawnedAt?: number
   ) => {
     // Release all pause holds and remove coordinator for this terminal
     const coordinator = pauseCoordinators.get(id);
@@ -1002,8 +1003,23 @@ ptyManager.on(
       exitCode,
       signal,
       launchGeneration,
+      ...(spawnedAt !== undefined && { spawnedAt }),
       ...(preserveSession && { preserveSession }),
     });
+  }
+);
+
+// A replaced incarnation's exit: no per-id cleanup here, the id is its successor's.
+ptyManager.on(
+  "superseded-exit",
+  (
+    id: string,
+    exitCode: number,
+    signal: number | undefined,
+    launchGeneration: number | undefined,
+    spawnedAt: number
+  ) => {
+    sendEvent({ type: "superseded-exit", id, exitCode, signal, launchGeneration, spawnedAt });
   }
 );
 

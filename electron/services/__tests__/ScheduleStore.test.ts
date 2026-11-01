@@ -218,6 +218,44 @@ describe("ScheduleStore", () => {
     expect((await newStore().list(PROJECT)).schedules).toEqual([b]);
   });
 
+  it("deletes a removed schedule's run history once the removal is committed (#15976)", async () => {
+    const forgotten: Array<{ projectId: string; scheduleId: string; stored: string[] }> = [];
+    const store = new ScheduleStore(
+      root,
+      (id) => registered.has(id),
+      () => clock,
+      async (projectId, scheduleId) => {
+        const { schedules } = await new ScheduleStore(root, () => true).list(projectId);
+        forgotten.push({ projectId, scheduleId, stored: schedules.map((s) => s.id) });
+      }
+    );
+    const a = saved(await store.create(PROJECT, input)).schedule;
+    const b = saved(await store.create(PROJECT, { ...input, name: "B" })).schedule;
+
+    await store.remove(PROJECT, a.id);
+    await store.remove(PROJECT, a.id);
+
+    expect(forgotten).toEqual([{ projectId: PROJECT, scheduleId: a.id, stored: [b.id] }]);
+  });
+
+  it("keeps a removal whose run history couldn't be deleted", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const store = new ScheduleStore(
+      root,
+      (id) => registered.has(id),
+      () => clock,
+      () => {
+        throw new Error("database is locked");
+      }
+    );
+    const a = saved(await store.create(PROJECT, input)).schedule;
+
+    const removed = await store.remove(PROJECT, a.id);
+
+    expect(removed).toMatchObject({ status: "removed", snapshot: { schedules: [] } });
+    expect((await newStore().list(PROJECT)).schedules).toEqual([]);
+  });
+
   it("keeps both of two creates sent at once", async () => {
     const store = newStore();
 

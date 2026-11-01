@@ -14,6 +14,7 @@ import { distributePortsToView, releaseAllTerminalWorkerPorts } from "./portDist
 import { resolveInitialCanvasBackgroundColor } from "./skeletonCss.js";
 import { PtyClient } from "../services/PtyClient.js";
 import { startTerminalLifecycleObserver } from "../services/pty/TerminalLifecycleObserver.js";
+import { startScheduledRunFacts } from "../services/scheduledRuns/index.js";
 import type { MainProcessWatchdogClient } from "../services/MainProcessWatchdogClient.js";
 import { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import { AgentVersionService } from "../services/AgentVersionService.js";
@@ -397,6 +398,9 @@ export function ensureCriticalServices(windowRegistry: WindowRegistry | undefine
   // plugin's terminal-lifecycle feed (#13814) can attribute each terminal's
   // exit, trash and restore to the project it launched in.
   startTerminalLifecycleObserver(ptyClient);
+  // Before any spawn, so a scheduled run that exits within milliseconds of
+  // spawning still has its exit recorded (#15976).
+  startScheduledRunFacts(ptyClient);
   // The host's memory-leak policy decides restarts itself, with or without a
   // view on the project (#14703).
   void import("../services/memoryLeakAutoRestartLive.js")

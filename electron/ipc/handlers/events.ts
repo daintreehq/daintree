@@ -143,6 +143,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "project-groups:update": "external",
   "run-history:update": "external",
   "copy-tree-history:update": "external",
+  "scheduled-runs:changed": "external",
   "plugin:deep-link": "external",
   "plugin:archive-install-intent": "external",
   "terminal:exit": "external",

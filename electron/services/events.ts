@@ -369,6 +369,18 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "A close path journaled a resumable agent session",
   },
+  "scheduled-run:started": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A schedule's run was registered to launch",
+  },
+  "scheduled-run:ended": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A schedule's run settled",
+  },
   "terminal:activity": {
     category: "agent",
     requiresContext: false,
@@ -1077,6 +1089,33 @@ export type DaintreeEventMap = {
   };
 
   /**
+   * A schedule's run was registered to launch, just before its terminal
+   * spawns (#15976). A run that starts ends with `scheduled-run:ended`, at the
+   * next startup if Daintree quits first; a skipped run neither starts nor ends.
+   */
+  "scheduled-run:started": {
+    runId: string;
+    scheduleId: string;
+    projectId: string;
+    terminalId: string;
+    timestamp: number;
+  };
+
+  /**
+   * A schedule's run settled. Fires once per run. A run left open when
+   * Daintree quit or crashed ends at the next startup, as `interrupted`,
+   * with no `scheduled-run:started` in that lifetime.
+   */
+  "scheduled-run:ended": {
+    runId: string;
+    scheduleId: string;
+    projectId: string;
+    terminalId: string | null;
+    outcome: import("../../shared/types/scheduledRuns.js").ScheduledRunOutcome;
+    timestamp: number;
+  };
+
+  /**
    * Emitted when a terminal's activity state changes (busy/idle).
    * For shell terminals, this uses process tree inspection for accuracy.
    * For agent terminals, this includes human-readable status headlines.
@@ -1229,6 +1268,8 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   // `agent-session:observed` is deliberately absent: its payload is nothing
   // but a resume credential, and the buffer feeds the event inspector.
   "agent-session:recorded",
+  "scheduled-run:started",
+  "scheduled-run:ended",
   "terminal:activity",
   "terminal:status",
   "terminal:backgrounded",

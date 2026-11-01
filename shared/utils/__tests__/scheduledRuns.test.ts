@@ -127,6 +127,7 @@ describe("outcomeForEvidence", () => {
     [{ kind: "cancel" }, "cancelled"],
     [{ kind: "replace", replacedByRunId: "run-2" }, "replaced"],
     [{ kind: "lost" }, "lost"],
+    [{ kind: "interrupted" }, "interrupted"],
   ];
 
   it.each(cases)("reads %j as %s", (evidence, outcome) => {

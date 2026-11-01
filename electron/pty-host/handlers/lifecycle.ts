@@ -75,16 +75,18 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
           pauseCoordinators.delete(msg.id);
         }
 
+        const terminalInfo = ptyManager.getTerminal(msg.id);
+        const spawnedAt = terminalInfo?.spawnedAt;
         spawnResult = {
           success: true,
           id: msg.id,
           launchGeneration: msg.options.launchGeneration,
+          ...(spawnedAt !== undefined ? { spawnedAt } : {}),
         };
 
         // Eagerly create coordinator so all subsystems can pause from the start
         getOrCreatePauseCoordinator(msg.id);
 
-        const terminalInfo = ptyManager.getTerminal(msg.id);
         const pid = terminalInfo?.ptyProcess?.pid;
         if (isValidPid(pid)) {
           sendEvent(

@@ -707,6 +707,7 @@ export type PtyHostEvent =
     }
   // `launchGeneration` attributes the exit to one terminal incarnation so a
   // stale exit arriving after a same-id respawn can't close the successor.
+  // `spawnedAt` names that incarnation as session records do (#15976).
   // `preserveSession` marks an exit a session-preserving project teardown
   // caused, so the renderer keeps the pane in the layout (#13841).
   | {
@@ -715,7 +716,19 @@ export type PtyHostEvent =
       exitCode: number;
       signal?: number;
       launchGeneration?: number;
+      spawnedAt?: number;
       preserveSession?: boolean;
+    }
+  // The exit of an incarnation a same-id respawn already replaced in the host
+  // (#15976). The host keeps nothing for it any more, so this is the facts
+  // alone, for main's record of that incarnation, and never a terminal's exit.
+  | {
+      type: "superseded-exit";
+      id: string;
+      exitCode: number;
+      signal?: number;
+      launchGeneration?: number;
+      spawnedAt: number;
     }
   | { type: "error"; id: string; error: string }
   // Typed submit-lane status (#11875). Deliberately NOT folded into the `error`
@@ -1371,6 +1384,11 @@ export interface SpawnResult {
    * spawn entry or mis-record its ledger resolution.
    */
   launchGeneration?: number;
+  /**
+   * A successful spawn's start time, `TerminalInfo.spawnedAt`: with the id it
+   * names the incarnation, as session records and exits do.
+   */
+  spawnedAt?: number;
   error?: SpawnError;
 }
 

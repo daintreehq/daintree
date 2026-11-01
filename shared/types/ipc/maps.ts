@@ -2546,6 +2546,11 @@ export interface IpcEventMap {
     records: import("./copyTreeHistory.js").CopyTreeHistoryRecord[];
   };
 
+  // Scheduled-run history changed (main → renderer, #15976). Sent only to views
+  // bound to `projectId`; carries which schedules changed, and the view reads
+  // their runs again.
+  "scheduled-runs:changed": import("./scheduledRuns.js").ScheduledRunsChangedPayload;
+
   // `daintree://` deep-link intent (main → renderer, #9559). Delivered to the
   // primary window once it has painted; the renderer opens the Plugin Manager
   // (URL pre-filled for install, or scrolled to the plugin for open). Routing
@@ -2728,6 +2733,8 @@ export type IpcEventBusMap = Pick<
   | "run-history:update"
   // Copy-tree run history changed (project-scoped send)
   | "copy-tree-history:update"
+  // Scheduled-run history changed (project-scoped send)
+  | "scheduled-runs:changed"
   // Plugin deep-link intent (targeted at the primary window)
   | "plugin:deep-link"
   // Double-clicked `.dntr` archive awaiting confirmation (targeted at the primary window)

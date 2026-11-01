@@ -3599,6 +3599,212 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./runHistory.js").RunHistoryRecord[];
   };
+  "scheduled-runs:list-by-project": {
+    args: [payload: import("./scheduledRuns.js").ScheduledRunsListByProjectPayload];
+    result: {
+      id: string;
+      scheduleId: string;
+      projectId: string;
+      origin:
+        | { coalesced: null; dueAt: number; occurrenceKey: string; trigger: "scheduled" }
+        | {
+            coalesced: { after: number; through: number };
+            dueAt: number;
+            occurrenceKey: string;
+            trigger: "catch-up";
+          }
+        | {
+            coalesced: { after: number; through: number } | null;
+            dueAt: number;
+            occurrenceKey: string;
+            trigger: "os-launch";
+          }
+        | { trigger: "run-now"; dueAt: null; occurrenceKey: null; coalesced: null };
+      createdAt: number;
+      terminalId: string | null;
+      terminalSpawnedAt: number | null;
+      settlement:
+        | { state: "open" }
+        | {
+            state: "settled";
+            settledAt: number;
+            outcome:
+              | "failed"
+              | "skipped"
+              | "cancelled"
+              | "exited"
+              | "done"
+              | "needs-you"
+              | "replaced"
+              | "lost"
+              | "interrupted";
+            evidence:
+              | { kind: "handback"; report: "done" | "needs-you" }
+              | {
+                  kind: "exit";
+                  process: "pty" | "agent";
+                  exitCode: number | null;
+                  signal: number | null;
+                }
+              | {
+                  kind: "skip";
+                  reason:
+                    | { kind: "missed" }
+                    | { kind: "overlap"; openRunId: string }
+                    | {
+                        kind: "precondition";
+                        exitCode: number | null;
+                        signal: number | null;
+                        error: string | null;
+                      };
+                }
+              | { kind: "launch-error"; message: string }
+              | { kind: "cancel" }
+              | { kind: "replace"; replacedByRunId: string }
+              | { kind: "lost" }
+              | { kind: "interrupted" };
+          };
+      process: {
+        agent:
+          | { state: "not-started" }
+          | { state: "running"; startedAt: number }
+          | {
+              state: "exited";
+              startedAt: number | null;
+              exitedAt: number;
+              exitCode: number | null;
+              signal: number | null;
+            };
+        pty:
+          | { state: "not-started" }
+          | { state: "running"; startedAt: number }
+          | {
+              state: "exited";
+              startedAt: number | null;
+              exitedAt: number;
+              exitCode: number | null;
+              signal: number | null;
+            };
+      };
+      pane:
+        | { state: "none" }
+        | { state: "open"; since: number }
+        | { state: "background"; since: number }
+        | { state: "closed"; closedAt: number };
+      resume: {
+        agentId: string;
+        agentSessionId: string | null;
+        cwd: string;
+        worktreeId: string | null;
+        agentLaunchFlags: string[];
+        agentModelId: string | null;
+        agentPresetId: string | null;
+      } | null;
+    }[];
+  };
+  "scheduled-runs:list-by-schedule": {
+    args: [payload: import("./scheduledRuns.js").ScheduledRunsListBySchedulePayload];
+    result: {
+      id: string;
+      scheduleId: string;
+      projectId: string;
+      origin:
+        | { coalesced: null; dueAt: number; occurrenceKey: string; trigger: "scheduled" }
+        | {
+            coalesced: { after: number; through: number };
+            dueAt: number;
+            occurrenceKey: string;
+            trigger: "catch-up";
+          }
+        | {
+            coalesced: { after: number; through: number } | null;
+            dueAt: number;
+            occurrenceKey: string;
+            trigger: "os-launch";
+          }
+        | { trigger: "run-now"; dueAt: null; occurrenceKey: null; coalesced: null };
+      createdAt: number;
+      terminalId: string | null;
+      terminalSpawnedAt: number | null;
+      settlement:
+        | { state: "open" }
+        | {
+            state: "settled";
+            settledAt: number;
+            outcome:
+              | "failed"
+              | "skipped"
+              | "cancelled"
+              | "exited"
+              | "done"
+              | "needs-you"
+              | "replaced"
+              | "lost"
+              | "interrupted";
+            evidence:
+              | { kind: "handback"; report: "done" | "needs-you" }
+              | {
+                  kind: "exit";
+                  process: "pty" | "agent";
+                  exitCode: number | null;
+                  signal: number | null;
+                }
+              | {
+                  kind: "skip";
+                  reason:
+                    | { kind: "missed" }
+                    | { kind: "overlap"; openRunId: string }
+                    | {
+                        kind: "precondition";
+                        exitCode: number | null;
+                        signal: number | null;
+                        error: string | null;
+                      };
+                }
+              | { kind: "launch-error"; message: string }
+              | { kind: "cancel" }
+              | { kind: "replace"; replacedByRunId: string }
+              | { kind: "lost" }
+              | { kind: "interrupted" };
+          };
+      process: {
+        agent:
+          | { state: "not-started" }
+          | { state: "running"; startedAt: number }
+          | {
+              state: "exited";
+              startedAt: number | null;
+              exitedAt: number;
+              exitCode: number | null;
+              signal: number | null;
+            };
+        pty:
+          | { state: "not-started" }
+          | { state: "running"; startedAt: number }
+          | {
+              state: "exited";
+              startedAt: number | null;
+              exitedAt: number;
+              exitCode: number | null;
+              signal: number | null;
+            };
+      };
+      pane:
+        | { state: "none" }
+        | { state: "open"; since: number }
+        | { state: "background"; since: number }
+        | { state: "closed"; closedAt: number };
+      resume: {
+        agentId: string;
+        agentSessionId: string | null;
+        cwd: string;
+        worktreeId: string | null;
+        agentLaunchFlags: string[];
+        agentModelId: string | null;
+        agentPresetId: string | null;
+      } | null;
+    }[];
+  };
   "schedules:create": {
     args: [input: import("./schedules.js").ScheduleCreateInput];
     result: import("./schedules.js").ScheduleCreateOutcome;
@@ -4014,7 +4220,7 @@ export interface GeneratedIpcInvokeMap {
               scratchName?: string | undefined;
               scratchPath?: string | undefined;
               dispatchSource?:
-                "user" | "menu" | "keybinding" | "agent" | "context-menu" | "plugin" | undefined;
+                "user" | "menu" | "agent" | "keybinding" | "context-menu" | "plugin" | undefined;
             }
           | undefined;
         requiredPluginTools?: string[] | undefined;
@@ -4048,7 +4254,7 @@ export interface GeneratedIpcInvokeMap {
         heardAs?: string[] | undefined;
         source?: "manual" | "learned" | "imported" | undefined;
         addedAt?: number | undefined;
-        heardAsConflict?: "reject" | "skip" | "move" | undefined;
+        heardAsConflict?: "skip" | "reject" | "move" | undefined;
       },
     ];
     result: import("./api.js").VoiceDictionaryChange;
@@ -4060,7 +4266,7 @@ export interface GeneratedIpcInvokeMap {
         term: string;
         source?: "manual" | "learned" | "imported" | undefined;
         addedAt?: number | undefined;
-        heardAsConflict?: "reject" | "skip" | "move" | undefined;
+        heardAsConflict?: "skip" | "reject" | "move" | undefined;
         heardAs?: string[] | undefined;
       },
     ];

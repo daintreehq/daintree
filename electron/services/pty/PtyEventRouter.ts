@@ -68,15 +68,17 @@ export interface PtyEventRouterCallbacks {
    */
   onTerminalPid?: (id: string, pid: number, launchGeneration?: number) => void;
   /**
-   * Optional. Fires on every `exit` event so the lifecycle ledger can record
-   * the close against the exiting incarnation's generation, and main can keep
-   * the exit past the host's record of the terminal. Pure side effect.
+   * Optional. Fires on every `exit` event, a superseded incarnation's
+   * included, so the lifecycle ledger can record the close against the
+   * exiting incarnation's generation, and main can keep the exit past the
+   * host's record of the terminal. Pure side effect.
    */
   onTerminalExit?: (
     id: string,
     exitCode: number,
     launchGeneration?: number,
-    signal?: number
+    signal?: number,
+    spawnedAt?: number
   ) => void;
   /**
    * Optional. Fires for each terminal a `graceful-kill-by-project` captures, as
@@ -231,7 +233,13 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       if (!superseded) state.terminalPids.delete(event.id);
       if (callbacks.onTerminalExit) {
         try {
-          callbacks.onTerminalExit(event.id, event.exitCode, event.launchGeneration, event.signal);
+          callbacks.onTerminalExit(
+            event.id,
+            event.exitCode,
+            event.launchGeneration,
+            event.signal,
+            event.spawnedAt
+          );
         } catch (err) {
           deps.logWarn(`[PtyClient] onTerminalExit threw for ${event.id}: ${String(err)}`);
         }
@@ -244,6 +252,16 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       emitter.emit("exit", event.id, event.exitCode, event.signal, event.preserveSession);
       return true;
     }
+
+    // Facts only: the id belongs to the successor, so nothing keyed by it moves.
+    case "superseded-exit":
+      emitter.emit("incarnation-exit", {
+        terminalId: event.id,
+        spawnedAt: event.spawnedAt,
+        exitCode: event.exitCode,
+        signal: event.signal ?? null,
+      });
+      return true;
 
     case "error":
       emitter.emit("error", event.id, event.error);

@@ -325,6 +325,20 @@ describe("lifecycle spawn — terminal-pid gating and deferred retry (#10787)", 
     return ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>;
   }
 
+  it("names the incarnation that spawned on its spawn result (#15976)", () => {
+    const ctx = makeCtx();
+    getMock(ctx).mockReturnValue({ ...termInfo(1234), spawnedAt: 5_000 });
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: { launchGeneration: 3 } });
+
+    expect(ctx.sendEvent).toHaveBeenCalledWith({
+      type: "spawn-result",
+      id: "t1",
+      result: { success: true, id: "t1", launchGeneration: 3, spawnedAt: 5_000 },
+    });
+  });
+
   it("emits terminal-pid immediately when the PID is valid (no retry)", () => {
     const ctx = makeCtx();
     getMock(ctx).mockReturnValue(termInfo(1234));
