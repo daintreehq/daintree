@@ -529,6 +529,21 @@ describe("ScheduledRunRecorder", () => {
       expect(replacement.finish("run-2")?.settlement).toMatchObject({ outcome: "replaced" });
     });
 
+    it("settles a held loss as lost when the replacement doesn't go through", async () => {
+      const recorder = lifetime();
+      spawned(recorder);
+      const replacement = recorder.beginReplacement("run-1")!;
+      recorder.handleIncarnationLost({ terminalId: "terminal-1", launchGeneration: 3 });
+      await replacement.gone;
+
+      expect(replacement.finish(null)?.settlement).toMatchObject({
+        outcome: "lost",
+        evidence: { kind: "lost" },
+      });
+      expect(recorder.get("run-1")?.process.pty).toMatchObject({ state: "exited", exitCode: null });
+      expect(ended()).toHaveLength(1);
+    });
+
     it("settles on its own exit when the replacement doesn't go through", () => {
       const recorder = lifetime();
       spawned(recorder);

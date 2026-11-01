@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
 import type { ActionDispatchResult } from "@shared/types/actions";
+import { isPtyPanel } from "@shared/types/panel";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 /**
@@ -53,7 +54,7 @@ export function useScheduledRunLaunchBridge(): void {
     const cleanupClosed = schedules.onRunClosed?.(({ runId, terminalId }) => {
       const panels = usePanelStore.getState();
       const panel = panels.panelsById[terminalId];
-      if (!panel || panel.scheduledRun?.runId !== runId) return;
+      if (!panel || !isPtyPanel(panel) || panel.scheduledRun?.runId !== runId) return;
       panels.removePanel(terminalId, { backendAlreadyClosed: true });
     });
     return () => {

@@ -98,7 +98,13 @@ export type ScheduleRunNowOutcome =
    * {@link ScheduleRunNowOptions.overlap} runs alongside them (`skip`) or
    * replaces them (`replace`).
    */
-  | { status: "confirm-overlap"; policy: "skip" | "replace"; openRunIds: string[] }
+  | {
+      status: "confirm-overlap";
+      policy: "skip" | "replace";
+      openRunIds: string[];
+      /** The schedule's name, for the question. */
+      scheduleName: string;
+    }
   /**
    * Nothing started. `runId` names the failed run the history recorded with
    * this reason, or is null when the history couldn't record one.

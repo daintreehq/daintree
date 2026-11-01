@@ -284,7 +284,9 @@ async function launchInScheduleTurn<View>(
       const confirmed = input.overlapConfirmed;
       const agreed =
         confirmed?.policy === policy && openRunIds.every((id) => confirmed.openRunIds.includes(id));
-      if (!agreed) return { status: "confirm-overlap", policy, openRunIds };
+      if (!agreed) {
+        return { status: "confirm-overlap", policy, openRunIds, scheduleName: schedule.name };
+      }
       // Agreeing to a skip is running anyway, alongside.
       if (policy === "replace") replacing = openRuns;
     } else if (policy === "skip") {
@@ -552,10 +554,16 @@ async function replaceOpenRuns<View>(
     } finally {
       if (!replaced) replacement.finish(null);
     }
+    // Its terminal is closed either way, so its pane goes.
     try {
       await deps.removeRunPane(open);
     } catch (error) {
       logWarn(`[ScheduledRuns] Couldn't take replaced run ${open.id}'s pane out:`, error);
+    }
+    // Another service settling it first is fine; a write that failed leaves it
+    // open, and an open run is still the next run's overlap.
+    if (recorder.get(open.id)?.settlement.state === "open") {
+      return "The open run's replacement couldn't be recorded, so the new run didn't start.";
     }
   }
   return null;

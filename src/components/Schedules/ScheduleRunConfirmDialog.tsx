@@ -7,9 +7,8 @@ import {
 
 /**
  * Singleton dialog for a Run now that found the schedule's earlier runs still
- * open (#15980). Nothing starts until the user picks: back out, or run under
- * the schedule's overlap policy, alongside the open runs (skip) or in their
- * place (replace).
+ * open (#15980). Nothing starts until the user picks: back out, or run
+ * anyway, alongside the open runs (skip) or in their place (replace).
  */
 export function ScheduleRunConfirmDialog() {
   const current = useScheduleRunConfirmStore((state) => state.current);
@@ -19,7 +18,7 @@ export function ScheduleRunConfirmDialog() {
       <ConfirmDialog
         isOpen={false}
         title=""
-        confirmLabel="Run anyway"
+        confirmLabel="Start another run"
         onConfirm={() => {}}
         variant="default"
       />
@@ -59,8 +58,8 @@ export function ScheduleRunConfirmDialog() {
     <ConfirmDialog
       {...shared}
       title={`Run '${scheduleName}' alongside its open ${runs}?`}
-      description={`This schedule skips a run while an earlier one is open. Running anyway starts another agent beside ${single ? "it" : "them"}.`}
-      confirmLabel="Run anyway"
+      description={`This schedule skips a run while an earlier one is open. Running now starts another agent beside ${single ? "it" : "them"}.`}
+      confirmLabel="Start another run"
       variant="default"
     />
   );

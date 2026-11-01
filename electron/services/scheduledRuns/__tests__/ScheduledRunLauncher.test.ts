@@ -560,8 +560,12 @@ function recordedRun(id: string, settled = false): ScheduledRun {
   };
 }
 
-/** A replacement the recorder hands out; the run's PTY is gone once `markGone` is called. */
-function fakeReplacement() {
+/**
+ * A replacement the recorder hands out; the run's PTY is gone once `markGone`
+ * is called. Finishing with a successor settles `runId` in the history, as the
+ * recorder's write would; with no `runId` that write fails and it stays open.
+ */
+function fakeReplacement(runId?: string) {
   let resolveGone!: () => void;
   let gone = false;
   return {
@@ -569,7 +573,23 @@ function fakeReplacement() {
       resolveGone = resolve;
     }),
     isGone: () => gone,
-    finish: vi.fn(() => null),
+    finish: vi.fn((successorId: string | null) => {
+      if (successorId === null || runId === undefined) return null;
+      history = history.map((recorded) =>
+        recorded.id === runId
+          ? {
+              ...recorded,
+              settlement: {
+                state: "settled",
+                settledAt: 10,
+                outcome: "replaced",
+                evidence: { kind: "replace", replacedByRunId: successorId },
+              },
+            }
+          : recorded
+      );
+      return null;
+    }),
     markGone: () => {
       gone = true;
       resolveGone();
@@ -625,8 +645,9 @@ describe("launchScheduledRun's overlap policy and precondition", () => {
 
   it("replaces an open run: checks the precondition, closes the run, then launches", async () => {
     withPolicies({ overlap: "replace", precondition: { command: "test -f ready" } });
-    history = [recordedRun("run-a")];
-    const replacement = fakeReplacement();
+    const open = recordedRun("run-a");
+    history = [open];
+    const replacement = fakeReplacement("run-a");
     recorder.beginReplacement.mockReturnValue(replacement);
     const order: string[] = [];
     deps.runPrecondition = vi.fn(async () => {
@@ -653,7 +674,7 @@ describe("launchScheduledRun's overlap policy and precondition", () => {
     });
     expect(order).toEqual(["precondition", "close", "remove pane", "launch"]);
     expect(recorder.beginReplacement).toHaveBeenCalledWith("run-a");
-    expect(deps.closeRunTerminal).toHaveBeenCalledWith(history[0]);
+    expect(deps.closeRunTerminal).toHaveBeenCalledWith(open);
     expect(replacement.finish).toHaveBeenCalledExactlyOnceWith("id-1");
     // The id the close captured reaches the run's resume snapshot.
     expect(recorder.handleSessionCaptured).toHaveBeenCalledWith({
@@ -664,6 +685,98 @@ describe("launchScheduledRun's overlap policy and precondition", () => {
         terminal: { id: "terminal-of-run-a", spawnedAt: 5 },
       },
     });
+  });
+
+  it("waits for the closed run's PTY to be gone before replacing it and launching", async () => {
+    withPolicies({ overlap: "replace" });
+    history = [recordedRun("run-a")];
+    const replacement = fakeReplacement("run-a");
+    recorder.beginReplacement.mockReturnValue(replacement);
+    deps.replaceExitTimeoutMs = 5_000;
+    let closed!: () => void;
+    const answered = new Promise<void>((resolve) => {
+      closed = resolve;
+    });
+    deps.closeRunTerminal = vi.fn(async () => {
+      closed();
+      return null;
+    });
+
+    const launching = launchWith(SCHEDULED);
+    await answered;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(replacement.finish).not.toHaveBeenCalled();
+    expect(deps.removeRunPane).not.toHaveBeenCalled();
+    expect(deps.launchInView).not.toHaveBeenCalled();
+
+    replacement.markGone();
+    await expect(launching).resolves.toMatchObject({ status: "started", runId: "id-1" });
+    expect(replacement.finish).toHaveBeenCalledExactlyOnceWith("id-1");
+    expect(deps.removeRunPane).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces every open run, and stops at the first that won't close", async () => {
+    withPolicies({ overlap: "replace" });
+    history = [recordedRun("run-c"), recordedRun("run-b"), recordedRun("run-a")];
+    const replacements = new Map(history.map((open) => [open.id, fakeReplacement(open.id)]));
+    recorder.beginReplacement.mockImplementation((runId: string) => replacements.get(runId));
+    deps.closeRunTerminal = vi.fn(async (open: ScheduledRun) => {
+      replacements.get(open.id)!.markGone();
+      return null;
+    });
+
+    await expect(launchWith(SCHEDULED)).resolves.toMatchObject({ status: "started" });
+    for (const id of ["run-c", "run-b", "run-a"]) {
+      expect(replacements.get(id)!.finish).toHaveBeenCalledExactlyOnceWith("id-1");
+    }
+    expect(vi.mocked(deps.removeRunPane).mock.calls.map(([open]) => open.id)).toEqual([
+      "run-c",
+      "run-b",
+      "run-a",
+    ]);
+
+    // Again, with the middle one refusing to close.
+    history = [recordedRun("run-c"), recordedRun("run-b"), recordedRun("run-a")];
+    const second = new Map(history.map((open) => [open.id, fakeReplacement(open.id)]));
+    recorder.beginReplacement.mockClear();
+    recorder.beginReplacement.mockImplementation((runId: string) => second.get(runId));
+    vi.mocked(deps.removeRunPane).mockClear();
+    deps.launchInView = vi.fn();
+    deps.closeRunTerminal = vi.fn(async (open: ScheduledRun) => {
+      if (open.id === "run-b") throw new Error("host gone");
+      second.get(open.id)!.markGone();
+      return null;
+    });
+
+    await expect(launchWith(SCHEDULED)).resolves.toMatchObject({ status: "failed" });
+    expect(second.get("run-c")!.finish).toHaveBeenCalledExactlyOnceWith("id-3");
+    expect(second.get("run-b")!.finish).toHaveBeenCalledExactlyOnceWith(null);
+    expect(recorder.beginReplacement).not.toHaveBeenCalledWith("run-a");
+    expect(vi.mocked(deps.closeRunTerminal).mock.calls.map(([open]) => open.id)).toEqual([
+      "run-c",
+      "run-b",
+    ]);
+    expect(deps.launchInView).not.toHaveBeenCalled();
+  });
+
+  it("starts nothing when the replacement couldn't be recorded, though the pane goes", async () => {
+    withPolicies({ overlap: "replace" });
+    history = [recordedRun("run-a")];
+    const replacement = fakeReplacement();
+    recorder.beginReplacement.mockReturnValue(replacement);
+    deps.closeRunTerminal = vi.fn(async () => {
+      replacement.markGone();
+      return null;
+    });
+
+    // The settlement write fails: the history still reads the run as open.
+    await expect(launchWith(SCHEDULED)).resolves.toMatchObject({
+      status: "failed",
+      message: expect.stringMatching(/couldn't be recorded/),
+    });
+    expect(replacement.finish).toHaveBeenCalledExactlyOnceWith("id-1");
+    expect(deps.removeRunPane).toHaveBeenCalledTimes(1);
+    expect(deps.launchInView).not.toHaveBeenCalled();
   });
 
   it("closes nothing when the precondition skips the run", async () => {
@@ -735,6 +848,7 @@ describe("launchScheduledRun's overlap policy and precondition", () => {
         status: "confirm-overlap",
         policy: "skip",
         openRunIds: ["run-b", "run-a"],
+        scheduleName: "Nightly triage",
       });
       expect(recorder.registerSkip).not.toHaveBeenCalled();
       expect(recorder.registerRefusedLaunch).not.toHaveBeenCalled();
@@ -770,7 +884,7 @@ describe("launchScheduledRun's overlap policy and precondition", () => {
     it("replaces under the replace policy once the user agreed", async () => {
       withPolicies({ overlap: "replace" });
       history = [recordedRun("run-a")];
-      const replacement = fakeReplacement();
+      const replacement = fakeReplacement("run-a");
       recorder.beginReplacement.mockReturnValue(replacement);
       deps.closeRunTerminal = vi.fn(async () => {
         replacement.markGone();
@@ -781,6 +895,7 @@ describe("launchScheduledRun's overlap policy and precondition", () => {
         status: "confirm-overlap",
         policy: "replace",
         openRunIds: ["run-a"],
+        scheduleName: "Nightly triage",
       });
       expect(deps.closeRunTerminal).not.toHaveBeenCalled();
 
@@ -881,9 +996,11 @@ describe("launchScheduledRun's overlap policy and precondition", () => {
 
   it("judges a second trigger against the run the first one started", async () => {
     withPolicies({ precondition: { command: "test -f ready" } });
-    recorder.registerLaunch.mockImplementation((input: { id: string }) => {
-      history = [recordedRun(input.id), ...history];
-    });
+    recorder.registerLaunch.mockImplementation(
+      (input: { id: string; origin: ScheduledRunOrigin }) => {
+        history = [{ ...recordedRun(input.id), origin: input.origin }, ...history];
+      }
+    );
     let pass!: () => void;
     deps.runPrecondition = vi.fn(
       () =>
@@ -905,6 +1022,13 @@ describe("launchScheduledRun's overlap policy and precondition", () => {
       status: "confirm-overlap",
       policy: "skip",
       openRunIds: ["id-1"],
+      scheduleName: "Nightly triage",
+    });
+    // The first trigger's occurrence is recorded; replaying it does nothing.
+    expect(history[0]?.origin).toEqual(CATCH_UP);
+    await expect(launchWith(CATCH_UP)).resolves.toEqual({
+      status: "already-recorded",
+      runId: "id-1",
     });
     expect(deps.runPrecondition).toHaveBeenCalledTimes(1);
   });

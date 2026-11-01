@@ -4,7 +4,6 @@ import type { ScheduleRunNowOutcome } from "@shared/types/ipc/schedules";
 
 const client = vi.hoisted(() => ({
   runNow: vi.fn(),
-  list: vi.fn(),
 }));
 
 vi.mock("@/clients/schedulesClient", () => ({ schedulesClient: client }));
@@ -20,30 +19,30 @@ import { registerScheduleActions } from "../scheduleActions";
 
 const ctx: ActionContext = { projectId: "project-1" };
 
-function runNow(): Promise<ScheduleRunNowOutcome> {
+async function runNow(): Promise<unknown> {
   const actions: ActionRegistry = new Map();
   registerScheduleActions(actions);
   const definition = actions.get("schedules.runNow")?.();
   if (!definition) throw new Error("schedules.runNow is not registered");
-  return definition.run({ scheduleId: "schedule-1" }, ctx) as Promise<ScheduleRunNowOutcome>;
+  const outcome: unknown = await definition.run({ scheduleId: "schedule-1" }, ctx);
+  return outcome;
 }
 
 const confirmOverlap = (
   openRunIds: string[],
   policy: "skip" | "replace" = "skip"
-): ScheduleRunNowOutcome => ({ status: "confirm-overlap", policy, openRunIds });
+): ScheduleRunNowOutcome => ({
+  status: "confirm-overlap",
+  policy,
+  openRunIds,
+  scheduleName: "Nightly triage",
+});
 const started: ScheduleRunNowOutcome = { status: "started", runId: "run-3", terminalId: "t-3" };
 
 const pending = () => useScheduleRunConfirmStore.getState().current;
 
 beforeEach(() => {
   client.runNow.mockReset();
-  client.list.mockReset();
-  client.list.mockResolvedValue({
-    projectId: "project-1",
-    revision: 1,
-    schedules: [{ id: "schedule-1", name: "Nightly triage" }],
-  });
 });
 
 afterEach(() => {
@@ -109,15 +108,14 @@ describe("schedules.runNow (#15980)", () => {
     });
   });
 
-  it("names the schedule generically when it can't be read", async () => {
-    client.list.mockRejectedValue(new Error("gone"));
+  it("backs out when the dialog can't ask", async () => {
     client.runNow.mockResolvedValue(confirmOverlap(["run-1"]));
 
     const result = runNow();
     await vi.waitFor(() => expect(pending()).not.toBeNull());
-    expect(pending()?.scheduleName).toBe("this schedule");
     cancelScheduleRunConfirmations();
     await expect(result).resolves.toMatchObject({ status: "confirm-overlap" });
+    expect(client.runNow).toHaveBeenCalledTimes(1);
   });
 
   it("is a confirm action, closed to plugins and hidden from MCP", () => {

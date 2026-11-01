@@ -18,7 +18,7 @@ vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 const panels = vi.hoisted(() => ({
   panelsById: {} as Record<
     string,
-    { id: string; scheduledRun?: { scheduleId: string; runId: string } }
+    { id: string; kind?: string; scheduledRun?: { scheduleId: string; runId: string } }
   >,
   removePanel: vi.fn(),
 }));
@@ -132,6 +132,11 @@ describe("useScheduledRunLaunchBridge", () => {
         scheduledRun: { scheduleId: "schedule-1", runId: "run-2" },
       },
       "terminal-3": { id: "terminal-3" },
+      "browser-1": {
+        id: "browser-1",
+        kind: "browser",
+        scheduledRun: { scheduleId: "schedule-1", runId: "run-1" },
+      },
     };
     renderHook(() => useScheduledRunLaunchBridge());
 
@@ -140,6 +145,7 @@ describe("useScheduledRunLaunchBridge", () => {
     runClosed?.({ runId: "run-1", terminalId: "terminal-2" });
     runClosed?.({ runId: "run-1", terminalId: "terminal-3" });
     runClosed?.({ runId: "run-1", terminalId: "terminal-gone" });
+    runClosed?.({ runId: "run-1", terminalId: "browser-1" });
 
     expect(panels.removePanel).toHaveBeenCalledExactlyOnceWith("terminal-1", {
       backendAlreadyClosed: true,

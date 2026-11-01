@@ -59,12 +59,29 @@ function markProjectRunning(projectId: string): void {
 }
 
 /**
+ * The incarnation running under a terminal id now, or null when none is. A
+ * host that doesn't answer in time throws rather than reading as gone.
+ */
+async function liveIncarnation(terminalId: string): Promise<number | null> {
+  const { getPtyClient } = await import("../../window/serviceRefs.js");
+  const pty = getPtyClient();
+  if (!pty) return null;
+  const info = await pty.getTerminalAsync(terminalId, undefined, { strict: true });
+  return info && info.isExited !== true ? info.spawnedAt : null;
+}
+
+/**
  * Closes a run's terminal through the same handler a view's graceful kill
  * reaches: the agent is asked to quit, its session captured and journaled
- * for resuming, then the PTY killed.
+ * for resuming, then the PTY killed. A terminal restarted since the run's
+ * incarnation is the user's now, and isn't closed.
  */
 async function closeRunTerminal(run: ScheduledRun): Promise<string | null> {
   if (run.terminalId === null) return null;
+  const live = await liveIncarnation(run.terminalId);
+  if (live !== null && run.terminalSpawnedAt !== null && live !== run.terminalSpawnedAt) {
+    throw new Error("The run's terminal was restarted.");
+  }
   const { invokeHostChannel } = await import("../viewless/viewlessInvoke.js");
   return invokeHostChannel<string | null>(run.projectId, CHANNELS.TERMINAL_GRACEFUL_KILL, [
     run.terminalId,
@@ -72,21 +89,18 @@ async function closeRunTerminal(run: ScheduledRun): Promise<string | null> {
 }
 
 /**
- * A view showing the project owns its layout, so each one drops the pane and
- * its persistence saves that; with none, the saved layout forgets it, or the
- * next window to open the project would bring the closed run back.
+ * Takes a closed run's pane out. The saved layout forgets it whoever drives
+ * the project, or the next window to open it would bring the closed run back,
+ * and each local view showing the project drops it from its grid. Left alone
+ * when the id is running again: a restart made it the user's terminal.
  */
 async function removeRunPane(run: ScheduledRun): Promise<void> {
   const { terminalId } = run;
   if (terminalId === null) return;
-  const views = getWebContentsForProject(run.projectId);
-  if (views.length === 0) {
-    const { forgetViewlessTerminal } = await import("../viewless/projectStateAuthoring.js");
-    await forgetViewlessTerminal(projectStore, run.projectId, terminalId);
-    return;
-  }
+  const live = await liveIncarnation(terminalId).catch(() => null);
+  if (live !== null && live !== run.terminalSpawnedAt) return;
   const push: ScheduledRunClosedPush = { runId: run.id, terminalId };
-  for (const view of views) {
+  for (const view of getWebContentsForProject(run.projectId)) {
     // A cached view may be frozen; it drops the pane when thawed.
     thawThenSend(
       view,
@@ -100,6 +114,10 @@ async function removeRunPane(run: ScheduledRun): Promise<void> {
       }
     );
   }
+  // A no-op for a layout that never held it, so a view's own save racing
+  // this can't lose anything else.
+  const { forgetViewlessTerminal } = await import("../viewless/projectStateAuthoring.js");
+  await forgetViewlessTerminal(projectStore, run.projectId, terminalId);
 }
 
 async function liveDeps(): Promise<ScheduledRunLauncherDeps<Electron.WebContents>> {

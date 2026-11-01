@@ -22,11 +22,8 @@ async function runScheduleNow(scheduleId: string): Promise<ScheduleRunNowOutcome
   let outcome = await schedulesClient.runNow(scheduleId);
   for (let asked = 0; outcome.status === "confirm-overlap"; asked++) {
     if (asked >= MAX_OVERLAP_CONFIRMATIONS) return outcome;
-    const snapshot = await schedulesClient.list().catch(() => null);
-    const scheduleName =
-      snapshot?.schedules.find((schedule) => schedule.id === scheduleId)?.name ?? "this schedule";
     const approved = await requestScheduleRunConfirmation({
-      scheduleName,
+      scheduleName: outcome.scheduleName,
       policy: outcome.policy,
       openRunCount: outcome.openRunIds.length,
     });

@@ -38,34 +38,40 @@ describe.runIf(posix)("runSchedulePrecondition", () => {
     await expect(check(`test -f ready && [ "$(pwd -P)" = '${dir}' ]`)).resolves.toBeNull();
   });
 
-  it("skips with any other exit code", async () => {
-    await expect(check("exit 3")).resolves.toEqual({
+  it.each([1, 3, 127])("skips with exit code %i", async (code) => {
+    await expect(check(`exit ${code}`)).resolves.toEqual({
       kind: "precondition",
-      exitCode: 3,
+      exitCode: code,
       signal: null,
       error: null,
     });
   });
 
-  it("skips with the signal that ended it", async () => {
-    await expect(check("kill -TERM $$")).resolves.toMatchObject({
-      kind: "precondition",
-      signal: os.constants.signals.SIGTERM,
-      error: null,
-    });
-  });
+  it.each(["TERM", "KILL"] as const)(
+    "skips with the signal that ended it (SIG%s)",
+    async (name) => {
+      await expect(check(`kill -${name} $$`)).resolves.toMatchObject({
+        kind: "precondition",
+        signal: os.constants.signals[`SIG${name}`],
+        error: null,
+      });
+    }
+  );
 
-  it("skips one that runs past its time limit, ending its process tree", async () => {
+  it("skips one that runs past its time limit, ending its whole process tree", async () => {
+    // A descendant of its own, which a kill of the shell alone would leave running.
     const marker = path.join(dir, "late");
     const started = Date.now();
-    await expect(check(`sleep 5; touch '${marker}'`, { timeoutMs: 200 })).resolves.toEqual({
+    await expect(
+      check(`(sleep 1; touch '${marker}') & sleep 5`, { timeoutMs: 200 })
+    ).resolves.toEqual({
       kind: "precondition",
       exitCode: null,
       signal: null,
       error: "Timed out after 0 seconds.",
     });
     expect(Date.now() - started).toBeLessThan(3_000);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
     expect(fs.existsSync(marker)).toBe(false);
   });
 
@@ -80,18 +86,28 @@ describe.runIf(posix)("runSchedulePrecondition", () => {
     expect(outcome?.error).not.toContain("secret-token");
   });
 
-  it("stops when asked to", async () => {
+  it("stops when asked to, ending what it ran", async () => {
+    const marker = path.join(dir, "late");
     const controller = new AbortController();
-    const pending = check("sleep 5", { signal: controller.signal });
+    const started = Date.now();
+    const pending = check(`(sleep 1; touch '${marker}') & sleep 5`, { signal: controller.signal });
     setTimeout(() => controller.abort(), 50);
     await expect(pending).resolves.toMatchObject({ error: "Stopped before it finished." });
+    expect(Date.now() - started).toBeLessThan(3_000);
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(fs.existsSync(marker)).toBe(false);
   });
 
-  it("kills what's still running at quit, and starts nothing after", async () => {
-    const pending = check("sleep 5");
-    await new Promise((resolve) => setTimeout(resolve, 100));
+  it("kills what's still running at quit at once, even what ignores SIGTERM", async () => {
+    const ready = path.join(dir, "ready");
+    // An ignored signal stays ignored across exec, so sleep ignores SIGTERM too.
+    const pending = check(`trap '' TERM; touch '${ready}'; sleep 5`);
+    await vi.waitFor(() => expect(fs.existsSync(ready)).toBe(true));
+    const started = Date.now();
     disposeSchedulePreconditions();
     await expect(pending).resolves.toMatchObject({ kind: "precondition", exitCode: null });
+    // A polite SIGTERM would have waited out the 5 s escalation.
+    expect(Date.now() - started).toBeLessThan(2_500);
     await expect(check("true")).resolves.toMatchObject({ error: "Daintree was quitting." });
   });
 });

@@ -199,17 +199,36 @@ describe("schedules handlers", () => {
       });
     });
 
-    it("passes on the user's answer to open runs (#15980)", async () => {
-      launchMock.mockResolvedValue({ status: "not-found" });
-      const overlap = { policy: "replace" as const, openRunIds: ["run-1", "run-2"] };
+    it("passes on the user's answer to open runs, and main's reply (#15980)", async () => {
+      const asked: ScheduleRunNowOutcome = {
+        status: "confirm-overlap",
+        policy: "skip",
+        openRunIds: ["run-1"],
+        scheduleName: "Nightly",
+      };
+      const skipped: ScheduleRunNowOutcome = {
+        status: "skipped",
+        runId: "run-2",
+        reason: { kind: "precondition", exitCode: 1, signal: null, error: null },
+      };
+      launchMock.mockResolvedValueOnce(asked).mockResolvedValueOnce(skipped);
 
-      await runNow(ctx(PROJECT), "schedule-1", { overlap });
-      expect(launchMock).toHaveBeenCalledWith({
+      await expect(runNow(ctx(PROJECT), "schedule-1")).resolves.toEqual(asked);
+      const overlap = { policy: "skip" as const, openRunIds: ["run-1"] };
+      await expect(runNow(ctx(PROJECT), "schedule-1", { overlap })).resolves.toEqual(skipped);
+      expect(launchMock).toHaveBeenLastCalledWith({
         projectId: PROJECT,
         scheduleId: "schedule-1",
         preferredWebContentsId: 41,
         overlapConfirmed: overlap,
       });
+
+      launchMock.mockResolvedValue({ status: "not-found" });
+      const replace = { policy: "replace" as const, openRunIds: ["run-1", "run-2"] };
+      await runNow(ctx(PROJECT), "schedule-1", { overlap: replace });
+      expect(launchMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ overlapConfirmed: replace })
+      );
 
       for (const bad of [
         { overlap: { policy: "start-another", openRunIds: [] } },
@@ -221,7 +240,7 @@ describe("schedules handlers", () => {
           runNow(ctx(PROJECT), "schedule-1", bad as unknown as ScheduleRunNowOptions)
         ).rejects.toMatchObject({ code: "VALIDATION" });
       }
-      expect(launchMock).toHaveBeenCalledTimes(1);
+      expect(launchMock).toHaveBeenCalledTimes(3);
     });
 
     it("runs nothing for a view that can't have schedules or a request of the wrong shape", async () => {

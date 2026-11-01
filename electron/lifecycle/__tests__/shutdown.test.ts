@@ -1596,6 +1596,10 @@ describe("registerShutdownHandler", () => {
       expect(projectCheckServiceMock.dispose).toHaveBeenCalledTimes(1);
       expect(projectCommandServiceMock.dispose).toHaveBeenCalledTimes(1);
       expect(schedulePreconditionsMock.disposeSchedulePreconditions).toHaveBeenCalledTimes(1);
+      // Before the exit: nothing runs after it to reap a precondition's group.
+      expect(
+        schedulePreconditionsMock.disposeSchedulePreconditions.mock.invocationCallOrder[0]
+      ).toBeLessThan(appMock.exit.mock.invocationCallOrder[0]!);
     });
 
     it("waits for the plugin-spawned children to be killed before exiting (#12216)", async () => {
@@ -2774,6 +2778,9 @@ describe("registerShutdownHandler", () => {
       expect(projectCheckServiceMock.dispose).toHaveBeenCalled();
       expect(projectCommandServiceMock.dispose).toHaveBeenCalled();
       expect(schedulePreconditionsMock.disposeSchedulePreconditions).toHaveBeenCalled();
+      expect(
+        schedulePreconditionsMock.disposeSchedulePreconditions.mock.invocationCallOrder[0]
+      ).toBeLessThan(appMock.exit.mock.invocationCallOrder[0]!);
       expect(signalShutdownMock.clearSafetyBeltTimer).toHaveBeenCalled();
       // None of the chain's awaited work had been reached.
       expect(closeSharedDbMock.closeSharedDb).not.toHaveBeenCalled();
