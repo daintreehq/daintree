@@ -74,8 +74,13 @@ beforeEach(() => {
   mermaidMock.initialize.mockReset();
   stages.parse.mockReset().mockResolvedValue(undefined);
   stages.draw.mockReset().mockImplementation(async (id, text) => ({ svg: svgFor(id, text) }));
-  mermaidMock.parse.mockReset().mockImplementation(async (text) => {
-    await stages.parse(text);
+  mermaidMock.parse.mockReset().mockImplementation(async (text, options) => {
+    try {
+      await stages.parse(text);
+    } catch (error) {
+      if (options?.suppressErrors) return false;
+      throw error;
+    }
     return { diagramType: "flowchart-v2" };
   });
   mermaidMock.render.mockReset().mockImplementation(async (id, text) => {
