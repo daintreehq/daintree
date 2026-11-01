@@ -166,7 +166,7 @@ describe("scheduled run admission", () => {
   it("keeps refusing the late spawn however many other launches are given up meanwhile", () => {
     const reserved = reserveScheduledLaunch(reservation());
     reserved.giveUp();
-    for (let i = 0; i < 200; i++) {
+    for (let i = 0; i < 5_000; i++) {
       reserveScheduledLaunch({ ...reservation(), runId: `run-other-${i}` }).giveUp();
     }
 
@@ -213,6 +213,28 @@ describe("scheduled run admission", () => {
     expect(hasPendingScheduledLaunch("project-2")).toBe(true);
     expect(ofSchedule.giveUp()).toBe(false);
     expect(admit).not.toHaveBeenCalled();
+  });
+
+  it("marks a launch removed until its launcher has finished writing its outcome", () => {
+    const refusedAtSpawn = reserveScheduledLaunch(
+      reservation(() => {
+        throw new Error("The schedule's preset isn't available any more.");
+      })
+    );
+    const finished = reserveScheduledLaunch({
+      ...reservation(),
+      runId: "run-2",
+      terminalId: "terminal-2",
+    });
+    expect(() => admitScheduledSpawn(spawn())).toThrow(/preset/);
+    finished.finish();
+
+    cancelScheduledLaunches({ scheduleId: "schedule-1" });
+
+    // Refused at the spawn but not yet recorded: the record must not be written.
+    expect(refusedAtSpawn.removed()).toBe(true);
+    expect(refusedAtSpawn.state().kind).toBe("refused");
+    expect(finished.removed()).toBe(false);
   });
 
   it("refuses a second reservation of the same run", () => {

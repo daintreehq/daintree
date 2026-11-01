@@ -64,22 +64,32 @@ interface Pending {
 const pending = new Map<string, Pending>();
 
 /**
+ * Every launch from its reservation until its launcher has finished writing
+ * its outcome, with whether its schedule or project was removed meanwhile. A
+ * launch refused at the spawn is no longer pending but still about to record
+ * its refusal, which a removal must stop as surely as a registration.
+ */
+const removedWhileLaunching = new Map<
+  string,
+  { reservation: ScheduledLaunchReservation; removed: boolean }
+>();
+
+/**
  * Runs given up on after their launch was asked for, before their terminal
  * spawned. Their first late spawn is refused: the history already says the
  * run failed (or has no run at all), and an agent running unattended behind
  * that is the one thing it can't be allowed to do. Only the first, so a pane
  * the user restarts by hand still restarts.
  *
- * Kept for the life of the process: a view frozen mid-launch can spawn days
- * later. Only a launch that went unanswered or never spawned lands here, so
- * the bound is a backstop against a runaway, not a working limit.
+ * Kept until that spawn comes, for the life of the process: a view frozen
+ * mid-launch can spawn days later, and forgetting one would fail open. Only a
+ * launch that went unanswered, never spawned or was cancelled lands here, each
+ * after a minute's wait or a removal, so it stays small.
  */
 const givenUp = new Set<string>();
-const MAX_GIVEN_UP = 4096;
 
 function tombstone(runId: string): void {
   givenUp.add(runId);
-  while (givenUp.size > MAX_GIVEN_UP) givenUp.delete(givenUp.values().next().value!);
 }
 
 export interface ReservedLaunch {
@@ -98,6 +108,14 @@ export interface ReservedLaunch {
    * will be refused; false when a spawn already took it or it was cancelled.
    */
   readonly giveUp: () => boolean;
+  /**
+   * Whether the schedule or project was removed since the reservation, at any
+   * point until {@link finish}. Read right before writing the outcome: a
+   * removed schedule has no history left to write into.
+   */
+  readonly removed: () => boolean;
+  /** The launcher has written its outcome; a removal from here on is the history's own. */
+  readonly finish: () => void;
 }
 
 export function reserveScheduledLaunch(reservation: ScheduledLaunchReservation): ReservedLaunch {
@@ -122,6 +140,8 @@ export function reserveScheduledLaunch(reservation: ScheduledLaunchReservation):
     },
   };
   pending.set(reservation.runId, entry);
+  const launching = { reservation, removed: false };
+  removedWhileLaunching.set(reservation.runId, launching);
   const release = (): boolean => {
     if (pending.get(reservation.runId) !== entry) return false;
     pending.delete(reservation.runId);
@@ -140,6 +160,12 @@ export function reserveScheduledLaunch(reservation: ScheduledLaunchReservation):
       tombstone(reservation.runId);
       entry.settle({ kind: "refused", message: "given up" });
       return true;
+    },
+    removed: () => launching.removed,
+    finish: () => {
+      if (removedWhileLaunching.get(reservation.runId) === launching) {
+        removedWhileLaunching.delete(reservation.runId);
+      }
     },
   };
 }
@@ -196,10 +222,14 @@ export function admitScheduledSpawn(spawn: ScheduledSpawn): void {
  * just deleted. Their first spawn is refused.
  */
 export function cancelScheduledLaunches(match: { projectId?: string; scheduleId?: string }): void {
+  const matches = (reservation: ScheduledLaunchReservation): boolean =>
+    (match.projectId === undefined || reservation.projectId === match.projectId) &&
+    (match.scheduleId === undefined || reservation.scheduleId === match.scheduleId);
+  for (const launching of removedWhileLaunching.values()) {
+    if (matches(launching.reservation)) launching.removed = true;
+  }
   for (const [runId, entry] of [...pending]) {
-    const { reservation } = entry;
-    if (match.projectId !== undefined && reservation.projectId !== match.projectId) continue;
-    if (match.scheduleId !== undefined && reservation.scheduleId !== match.scheduleId) continue;
+    if (!matches(entry.reservation)) continue;
     pending.delete(runId);
     tombstone(runId);
     entry.settle({ kind: "cancelled" });
@@ -217,5 +247,6 @@ export function hasPendingScheduledLaunch(projectId: string): boolean {
 /** @internal Tests only. */
 export function _resetScheduledRunAdmissionForTest(): void {
   pending.clear();
+  removedWhileLaunching.clear();
   givenUp.clear();
 }

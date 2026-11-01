@@ -197,109 +197,115 @@ export async function launchScheduledRun<View>(
     },
   });
 
-  const failed = (
-    message: string,
-    reservedId: string | null = terminalId
-  ): ScheduleRunNowOutcome => {
-    // A removed schedule or project has no history left to write into.
-    if (reserved.state().kind === "cancelled" || !deps.getProject(projectId)) {
-      return { status: "not-found" };
+  const launchReserved = async (): Promise<ScheduleRunNowOutcome> => {
+    const failed = (
+      message: string,
+      reservedId: string | null = terminalId
+    ): ScheduleRunNowOutcome => {
+      // A removed schedule or project has no history left to write into.
+      if (reserved.removed() || !deps.getProject(projectId)) return { status: "not-found" };
+      try {
+        recorder.registerRefusedLaunch({
+          id: runId,
+          scheduleId,
+          projectId,
+          origin,
+          terminalId: reservedId,
+          message,
+        });
+        return { status: "failed", runId, message };
+      } catch (error) {
+        logWarn(`[ScheduledRuns] Couldn't record run ${runId}'s refused launch:`, error);
+        return { status: "failed", runId: null, message };
+      }
+    };
+    // Nothing was asked for yet, so no spawn can come for it.
+    const refuseBeforeLaunch = (message: string): ScheduleRunNowOutcome => {
+      reserved.withdraw();
+      return failed(message, null);
+    };
+
+    if (project.status === "missing" || !(await deps.folderExists(project.path))) {
+      return refuseBeforeLaunch("The project's folder is missing.");
     }
+    if (deps.isProjectSleeping(projectId))
+      return refuseBeforeLaunch("The project was going to sleep.");
+    if (reserved.state().kind !== "pending") return { status: "not-found" };
+
+    const request: ScheduledLaunchRequest = {
+      args: {
+        agentId: launch.agentId,
+        prompt: launch.prompt,
+        handback: true,
+        presetId: launch.presetId,
+        worktreeId: launch.worktreeId ?? "",
+        location: "grid",
+        focusPolicy: "preserve",
+        requestedId: terminalId,
+      },
+      scheduledRun: { scheduleId, runId },
+    };
+
+    let result: ActionDispatchResult | null = null;
+    let unanswered: string | null = null;
+    const view = deps.findView(projectId, input.preferredWebContentsId);
     try {
-      recorder.registerRefusedLaunch({
-        id: runId,
-        scheduleId,
-        projectId,
-        origin,
-        terminalId: reservedId,
-        message,
-      });
-      return { status: "failed", runId, message };
+      // A view's bridge keeps its own deadline; main's launch waits on the
+      // workspace host, which nothing else bounds.
+      result = view
+        ? await deps.launchInView(view, request)
+        : await withDeadline(
+            deps.launchWithoutView(project, request),
+            deps.answerTimeoutMs ?? DEFAULT_ANSWER_TIMEOUT_MS,
+            "The launch didn't finish in time."
+          );
     } catch (error) {
-      logWarn(`[ScheduledRuns] Couldn't record run ${runId}'s refused launch:`, error);
-      return { status: "failed", runId: null, message };
+      unanswered = formatErrorMessage(error, "The launch didn't answer.");
     }
-  };
-  // Nothing was asked for yet, so no spawn can come for it.
-  const refuseBeforeLaunch = (message: string): ScheduleRunNowOutcome => {
-    reserved.withdraw();
-    return failed(message, null);
+
+    // A view answers once its pane is committed, which can be before the
+    // terminal's spawn reaches main; the run is registered only then.
+    if (result !== null && launchedTerminal(result) && reserved.state().kind === "pending") {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        reserved.admitted.catch(() => {}),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, deps.spawnTimeoutMs ?? DEFAULT_SPAWN_TIMEOUT_MS);
+        }),
+      ]);
+      clearTimeout(timer);
+    }
+
+    const state = reserved.state();
+    if (state.kind === "cancelled") return { status: "not-found" };
+    if (state.kind === "refused") return failed(state.message);
+    if (state.kind === "pending") {
+      reserved.giveUp();
+      if (unanswered !== null) return failed(unanswered);
+      if (result !== null && !launchedTerminal(result)) return failed(declineReason(result));
+      return failed("The agent's terminal didn't start in time.");
+    }
+    if (result !== null && !launchedTerminal(result)) {
+      // Registered, then the launch failed: the spawn threw after its admission.
+      const message = declineReason(result);
+      const run = recorder.get(runId);
+      if (run?.process.pty.state === "not-started") {
+        recorder.settle(runId, { kind: "launch-error", message });
+      }
+      return { status: "failed", runId, message };
+    }
+    // The PTY host can refuse a spawn as it's sent (too many terminals), which
+    // the history has already settled while the launch still answers started.
+    const settlement = recorder.get(runId)?.settlement;
+    if (settlement?.state === "settled" && settlement.evidence.kind === "launch-error") {
+      return { status: "failed", runId, message: settlement.evidence.message };
+    }
+    return { status: "started", runId, terminalId };
   };
 
-  if (project.status === "missing" || !(await deps.folderExists(project.path))) {
-    return refuseBeforeLaunch("The project's folder is missing.");
-  }
-  if (deps.isProjectSleeping(projectId))
-    return refuseBeforeLaunch("The project was going to sleep.");
-  if (reserved.state().kind !== "pending") return { status: "not-found" };
-
-  const request: ScheduledLaunchRequest = {
-    args: {
-      agentId: launch.agentId,
-      prompt: launch.prompt,
-      handback: true,
-      presetId: launch.presetId,
-      worktreeId: launch.worktreeId ?? "",
-      location: "grid",
-      focusPolicy: "preserve",
-      requestedId: terminalId,
-    },
-    scheduledRun: { scheduleId, runId },
-  };
-
-  let result: ActionDispatchResult | null = null;
-  let unanswered: string | null = null;
-  const view = deps.findView(projectId, input.preferredWebContentsId);
   try {
-    // A view's bridge keeps its own deadline; main's launch waits on the
-    // workspace host, which nothing else bounds.
-    result = view
-      ? await deps.launchInView(view, request)
-      : await withDeadline(
-          deps.launchWithoutView(project, request),
-          deps.answerTimeoutMs ?? DEFAULT_ANSWER_TIMEOUT_MS,
-          "The launch didn't finish in time."
-        );
-  } catch (error) {
-    unanswered = formatErrorMessage(error, "The launch didn't answer.");
+    return await launchReserved();
+  } finally {
+    reserved.finish();
   }
-
-  // A view answers once its pane is committed, which can be before the
-  // terminal's spawn reaches main; the run is registered only then.
-  if (result !== null && launchedTerminal(result) && reserved.state().kind === "pending") {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    await Promise.race([
-      reserved.admitted.catch(() => {}),
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, deps.spawnTimeoutMs ?? DEFAULT_SPAWN_TIMEOUT_MS);
-      }),
-    ]);
-    clearTimeout(timer);
-  }
-
-  const state = reserved.state();
-  if (state.kind === "cancelled") return { status: "not-found" };
-  if (state.kind === "refused") return failed(state.message);
-  if (state.kind === "pending") {
-    reserved.giveUp();
-    if (unanswered !== null) return failed(unanswered);
-    if (result !== null && !launchedTerminal(result)) return failed(declineReason(result));
-    return failed("The agent's terminal didn't start in time.");
-  }
-  if (result !== null && !launchedTerminal(result)) {
-    // Registered, then the launch failed: the spawn threw after its admission.
-    const message = declineReason(result);
-    const run = recorder.get(runId);
-    if (run?.process.pty.state === "not-started") {
-      recorder.settle(runId, { kind: "launch-error", message });
-    }
-    return { status: "failed", runId, message };
-  }
-  // The PTY host can refuse a spawn as it's sent (too many terminals), which
-  // the history has already settled while the launch still answers started.
-  const settlement = recorder.get(runId)?.settlement;
-  if (settlement?.state === "settled" && settlement.evidence.kind === "launch-error") {
-    return { status: "failed", runId, message: settlement.evidence.message };
-  }
-  return { status: "started", runId, terminalId };
 }

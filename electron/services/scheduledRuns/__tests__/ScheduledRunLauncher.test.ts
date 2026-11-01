@@ -328,6 +328,18 @@ describe("launchScheduledRun", () => {
     expect(recorder.registerRefusedLaunch).not.toHaveBeenCalled();
   });
 
+  it("records nothing for a launch refused at the spawn whose schedule was then removed", async () => {
+    schedule = { ...schedule, launch: { ...schedule.launch, presetId: "deleted" } };
+    deps.launchInView = async (_view, request) => {
+      expect(() => spawnFor(request, { agentPresetId: "default" })).toThrow(/preset/);
+      cancelScheduledLaunches({ scheduleId: "schedule-1" });
+      return launched(request.args.requestedId);
+    };
+
+    await expect(run()).resolves.toEqual({ status: "not-found" });
+    expect(recorder.registerRefusedLaunch).not.toHaveBeenCalled();
+  });
+
   it("records nothing when the project is removed before anything was asked for", async () => {
     deps.folderExists = async () => {
       deps.getProject = () => null;

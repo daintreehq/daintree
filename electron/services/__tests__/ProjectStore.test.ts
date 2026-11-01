@@ -245,6 +245,10 @@ vi.mock("../projectQuarantineCleanup.js", () => ({
 }));
 
 import { ProjectStore } from "../ProjectStore.js";
+import {
+  _resetScheduledRunAdmissionForTest,
+  reserveScheduledLaunch,
+} from "../scheduledRuns/scheduledRunAdmission.js";
 import { setWritesSuppressed, resetWritesSuppressedForTesting } from "../diskPressureState.js";
 import { getMruProjects } from "../../../shared/utils/projectMru.js";
 import { events } from "../events.js";
@@ -1833,6 +1837,32 @@ describe("ProjectStore schedules (#15975)", () => {
     if (!stateDir) throw new Error("expected a state directory");
     return path.join(stateDir, "schedules.json");
   }
+
+  it("cancels a scheduled launch still waiting to spawn when its schedule or project goes (#15978)", async () => {
+    const input = { name: "Nightly", launch: { agentId: "claude", prompt: "Go." } };
+    const first = await store.schedules.create(projectId, input);
+    const second = await store.schedules.create(projectId, input);
+    if (first.status !== "saved" || second.status !== "saved") throw new Error("expected saved");
+    const reserve = (scheduleId: string, runId: string) =>
+      reserveScheduledLaunch({
+        runId,
+        scheduleId,
+        projectId,
+        terminalId: `terminal-${runId}`,
+        agentId: "claude",
+        admit: () => {},
+      });
+    const ofFirst = reserve(first.schedule.id, "run-1");
+    const ofSecond = reserve(second.schedule.id, "run-2");
+
+    await store.schedules.remove(projectId, first.schedule.id);
+    expect(ofFirst.state()).toEqual({ kind: "cancelled" });
+    expect(ofSecond.state().kind).toBe("pending");
+
+    await store.removeProject(projectId);
+    expect(ofSecond.state()).toEqual({ kind: "cancelled" });
+    _resetScheduledRunAdmissionForTest();
+  });
 
   it("removing a project deletes its schedules, tells listeners, and refuses later writes", async () => {
     const input = { name: "Nightly", launch: { agentId: "claude", prompt: "Go." } };
