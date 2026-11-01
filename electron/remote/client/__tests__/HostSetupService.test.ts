@@ -508,19 +508,27 @@ describe("HostSetupService", () => {
     });
 
     it("probes again once the answer is ten minutes old, or the clock moved back past it", async () => {
+      const HOLD = 10 * 60_000;
       let clock = 1_000_000;
       const { run, scripts } = recording([MAC_QUIT()]);
       const { setup } = service("", { run, now: () => clock });
       await setup.ensureHostRunning(studio);
-      clock += 9 * 60_000;
+      clock += HOLD - 1;
       await setup.ensureHostRunning(studio);
       expect(probes(scripts)).toBe(1);
-      clock += 2 * 60_000;
+      clock += 1;
       await setup.ensureHostRunning(studio);
       expect(probes(scripts)).toBe(2);
-      clock -= 60 * 60_000;
+      // That probe's answer holds for ten minutes of its own.
+      clock += HOLD - 1;
+      await setup.ensureHostRunning(studio);
+      expect(probes(scripts)).toBe(2);
+      clock += 1;
       await setup.ensureHostRunning(studio);
       expect(probes(scripts)).toBe(3);
+      clock -= 60 * 60_000;
+      await setup.ensureHostRunning(studio);
+      expect(probes(scripts)).toBe(4);
       expect(started(scripts)).toBe(false);
     });
 

@@ -22,11 +22,31 @@ describe("HostStarts", () => {
       });
       const ensuring = starts.ensureRunning("studio-01", studio, signal());
       expect(starts.isStarting("studio-01")).toBe(false);
+      expect(starts.isAttempting("studio-01")).toBe(true);
       answer();
       await expect(ensuring).resolves.toBe(outcome === "listening");
       expect(starts.isStarting("studio-01")).toBe(false);
+      expect(starts.isAttempting("studio-01")).toBe(false);
       expect(changes).toEqual([]);
     }
+  });
+
+  it("stops attempting when a check fails before any start", async () => {
+    const changes: string[] = [];
+    const starts = new HostStarts({
+      setup: {
+        ensureHostRunning: async () => {
+          throw new Error("ssh went away");
+        },
+      },
+      onChange: (hostId) => changes.push(hostId),
+    });
+    await expect(starts.ensureRunning("studio-01", studio, signal())).rejects.toBeInstanceOf(
+      TransportError
+    );
+    expect(starts.isAttempting("studio-01")).toBe(false);
+    expect(starts.isStarting("studio-01")).toBe(false);
+    expect(changes).toEqual([]);
   });
 
   it("counts as attempting while only checking on the host, and as starting only from the start", async () => {
@@ -112,6 +132,7 @@ describe("HostStarts", () => {
         expect(error).toMatchObject({ detail: "Log in on studio" });
       }
       expect(starts.isStarting("studio-01")).toBe(false);
+      expect(starts.isAttempting("studio-01")).toBe(false);
       expect(seen).toEqual([true, false]);
     }
   });

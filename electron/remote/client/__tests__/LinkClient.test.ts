@@ -438,17 +438,22 @@ describe("LinkClient backoff", () => {
       client.start();
       await failed(1);
       expect(client.restartAnnounced).toBe(true);
-      for (let dial = 2; dial <= 4; dial++) {
+      // The restart's own one-second retries may dial in between: every one is held back too.
+      for (let retry = 0; retry < 3; retry++) {
+        const dialled = mayStart.length;
         client.retryNow();
-        await failed(dial);
+        await failed(dialled + 1);
       }
-      expect(mayStart).toEqual([true, false, false, false]);
+      expect(mayStart[0]).toBe(true);
+      expect(mayStart.length).toBeGreaterThanOrEqual(4);
+      expect(mayStart.slice(1).every((value) => value === false)).toBe(true);
 
       // Not back within the grace: whatever is there now may be started.
       offset = 2 * 60_000;
+      const before = mayStart.length;
       client.retryNow();
-      await failed(5);
-      expect(mayStart[4]).toBe(true);
+      await failed(before + 1);
+      expect(mayStart[before]).toBe(true);
     } finally {
       await client?.stop();
       client = null;

@@ -268,7 +268,8 @@ const DEFAULT_READY_TIMEOUT_MS = 20_000;
 const DEFAULT_COPY_LOOKUP_TIMEOUT_MS = 3_000;
 /**
  * The longest a wait for the link goes on while the host's Daintree is being
- * started: its launch is given 30 s and its listener a minute.
+ * checked on to start it, or started: the check is given 30 s, the launch
+ * 30 s and the listener a minute.
  */
 const STARTING_TIMEOUT_MS = 120_000;
 
