@@ -839,6 +839,42 @@ describe("DecisionsService relay connection", () => {
     expect(made[1]!.relay.deviceId).toBe("dev_87654321");
   });
 
+  it.each([
+    ["a stop", (service: DecisionsService) => service.stop()],
+    ["a suspension", (service: DecisionsService) => service.suspendConnection()],
+  ] as const)(
+    "starts no replacement still waiting on a settling connection after %s",
+    async (_label, end) => {
+      const settles: Array<() => void> = [];
+      const made: RelayConnectionOptions[] = [];
+      const stopped: number[] = [];
+      const service = new DecisionsService({
+        openStore: async () => fakeStore(),
+        keyFilePath: () => "/nonexistent/keys.bin",
+        connect: (options) => {
+          made.push(options);
+          const n = made.length;
+          return {
+            start: () => {},
+            stop: () => {
+              stopped.push(n);
+              return new Promise<void>((resolve) => settles.push(resolve));
+            },
+          };
+        },
+      });
+      await service.start(on(RELAY));
+      service.updateSettings(on({ ...RELAY, deviceId: "dev_87654321" }));
+
+      const ending = end(service);
+      settles[0]!();
+      await ending;
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(made).toHaveLength(1);
+      expect(stopped).toEqual([1]);
+    }
+  );
+
   it("resolves a suspension only once its connection has settled, so the keys can go", async () => {
     let settle!: () => void;
     const service = new DecisionsService({

@@ -50,6 +50,7 @@ import {
   AnswerDelivery,
   DELIVERY_CHECK_INTERVAL_MS,
   DELIVERY_SETTLE_MS,
+  RECOVERY_RETRIES,
   type PaneSignal,
 } from "../answerDelivery.js";
 
@@ -87,6 +88,8 @@ class FakePtyClient implements TerminalNotifyPtyClient, DecisionSinkPtyClient {
   readonly phases = new Map<string, "queued" | "pty_written">();
   /** Strict reads that fail before one answers, as a host that is slow to start. */
   failStrictReads = 0;
+  /** Screen reads that come back empty, as the client answers one that timed out. */
+  failScreenReads = 0;
 
   async getTerminalAsync(id: string, submissionToken?: string, options?: { strict?: boolean }) {
     if (options?.strict === true && this.failStrictReads > 0) {
@@ -117,6 +120,10 @@ class FakePtyClient implements TerminalNotifyPtyClient, DecisionSinkPtyClient {
   withdrawGuardedSubmission() {}
 
   async getSerializedStateAsync(id: string) {
+    if (this.failScreenReads > 0) {
+      this.failScreenReads -= 1;
+      return null;
+    }
     const data = this.screens.get(id);
     return data === undefined ? null : { data };
   }
@@ -805,6 +812,40 @@ describe("AnswerDelivery", () => {
 
     h.signal("appeared");
     await until(async () => (await h.question(Q1))?.delivery_status === "terminal-delivered");
+    expect(h.client.submitted).toEqual([]);
+  });
+
+  it("reads a crashed injection's screen again after a read that failed, rather than calling it uncertain", async () => {
+    const h = setup();
+    await answered(h.store, Q1, 1, "approve");
+    await h.store.putIntent(intent(CRASHED, Q1));
+    h.client.screens.set(PANE, `${markerFor(CRASHED)}\r\n`);
+    h.client.failScreenReads = 1;
+
+    h.delivery.start();
+    await advance(5_000);
+    expect((await h.store.getIntent(CRASHED))?.state).toBe("intent");
+
+    h.signal("appeared");
+    await until(async () => (await h.question(Q1))?.delivery_status === "terminal-delivered");
+    expect(h.client.submitted).toEqual([]);
+  });
+
+  it("calls a crashed injection uncertain once its run's screen stays unreadable past the retries", async () => {
+    const h = setup();
+    await answered(h.store, Q1, 1, "approve");
+    await h.store.putIntent(intent(CRASHED, Q1));
+    h.client.screens.set(PANE, `${markerFor(CRASHED)}\r\n`);
+    h.client.failScreenReads = Number.MAX_SAFE_INTEGER;
+
+    h.delivery.start();
+    for (let i = 0; i < RECOVERY_RETRIES - 1; i += 1) {
+      h.signal("appeared");
+      await advance(2_000);
+    }
+    expect((await h.store.getIntent(CRASHED))?.state).toBe("intent");
+    h.signal("appeared");
+    await until(async () => (await h.question(Q1))?.delivery_status === "delivery-uncertain");
     expect(h.client.submitted).toEqual([]);
   });
 

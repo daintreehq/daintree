@@ -7,7 +7,10 @@ import {
   type InjectionIntent,
   type KeyStore,
   type LocalStore,
+  type LocateResult,
+  type QuestionOrigin,
   type RelayClient,
+  type TerminalSink,
 } from "@daintreehq/decisions-client";
 import { NOTIFY_SETTLE_GRACE_MS } from "../../../shared/types/terminalNotify.js";
 import type { LaneWake, OwnPane } from "../mcp-server/terminalNotify.js";
@@ -59,20 +62,49 @@ const SETTLED_RECHECK_MS = NOTIFY_SETTLE_GRACE_MS + 250;
 /** How long a stop waits for an answer being typed to settle before the store stops taking its result. */
 export const DELIVERY_SETTLE_MS = 3_000;
 
-/** The store with only intents still in state `intent`: what crash recovery has to reconcile. */
-function untypedIntentsOnly<T extends LocalStore>(store: T): T {
+/** Attempts an interrupted injection whose run couldn't be read waits, before recovery takes it as not found. */
+export const RECOVERY_RETRIES = 5;
+
+/** The store with only the untyped intents in `include`: what this recovery reconciles. */
+function intentsOnly<T extends LocalStore>(store: T, include: ReadonlySet<string>): T {
   return new Proxy(store, {
     get(object, property) {
       const value: unknown = Reflect.get(object, property, object);
       if (property === "openIntents") {
         return async (): Promise<InjectionIntent[]> =>
-          (await object.openIntents()).filter((intent) => intent.state === "intent");
+          (await object.openIntents()).filter(
+            (intent) => intent.state === "intent" && include.has(intent.injection_id)
+          );
       }
       return typeof value === "function"
         ? (value as (...args: unknown[]) => unknown).bind(object)
         : value;
     },
   });
+}
+
+/** The run an intent was typed into, as the library's recovery looks for it. */
+function typedIntoOf(origin: QuestionOrigin, intent: InjectionIntent): QuestionOrigin {
+  return {
+    ...origin,
+    host_id: intent.host_id,
+    pane_id: intent.pane_id,
+    terminal_generation: intent.terminal_generation,
+    ownership_principal: intent.ownership_principal,
+    agent_incarnation: intent.agent_incarnation,
+  };
+}
+
+function runKey(o: QuestionOrigin): string {
+  return JSON.stringify([
+    o.host_id,
+    o.pane_id,
+    o.terminal_generation,
+    o.ownership_principal,
+    o.agent_incarnation,
+    o.agent_session_id,
+    o.worktree_id,
+  ]);
 }
 
 /**
@@ -108,6 +140,8 @@ export class AnswerDelivery {
   /** No more writes: set once a stop has settled, or at once when the keys failed. */
   private retired = false;
   private recovered = false;
+  /** Recoveries that left an unreadable run's injection for later. */
+  private recoveryDeferrals = 0;
   private requested = false;
   private running: Promise<void> | null = null;
   private settled: Promise<void> | null = null;
@@ -279,31 +313,72 @@ export class AnswerDelivery {
   private async recover(): Promise<boolean> {
     await this.repairRecorded();
     if (this.stopped) return false;
-    // A host that didn't answer is not a marker that isn't there.
-    if (!(await this.ptyHostAnswers())) return false;
-    const ctx = { ...this.owner.ctx, store: untypedIntentsOnly(this.store) };
-    await new DeliveryEngine(ctx, { sink: this.sink }).recover();
-    return true;
+    const probe = await this.probeInterrupted();
+    if (this.stopped) return false;
+    const ctx = { ...this.owner.ctx, store: intentsOnly(this.store, probe.include) };
+    await new DeliveryEngine(ctx, { sink: probe.sink }).recover();
+    return probe.complete;
   }
 
-  /** Whether the pty host answers for every pane on this host an untyped intent names. */
-  private async ptyHostAnswers(): Promise<boolean> {
+  /**
+   * Reads each interrupted injection's run once, and hands the library a sink
+   * that answers with exactly what was read, so a second read that fails
+   * can't turn into "not found". A run on this host that couldn't be read
+   * (the host slow to answer, its screen unreadable, the run changing under
+   * the read) proves nothing either way: that injection is left for a later
+   * attempt, up to `RECOVERY_RETRIES` of them, and then taken as not found.
+   * A run that isn't there, or is no longer the one typed into, is read as
+   * it is: never found.
+   */
+  private async probeInterrupted(): Promise<{
+    include: Set<string>;
+    complete: boolean;
+    sink: TerminalSink;
+  }> {
+    const giveUp = this.recoveryDeferrals >= RECOVERY_RETRIES;
     const hostId = this.o.deps.hostId();
-    const panes = new Set(
-      (await this.store.openIntents())
-        .filter((intent) => intent.state === "intent" && intent.host_id === hostId)
-        .map((intent) => intent.pane_id)
-    );
-    const client = this.o.deps.getPtyClient();
-    if (panes.size === 0) return true;
-    if (client === null) return false;
-    try {
-      for (const paneId of panes)
-        await client.getTerminalAsync(paneId, undefined, { strict: true });
-      return true;
-    } catch {
-      return false;
+    const include = new Set<string>();
+    const located = new Map<string, LocateResult>();
+    const markers = new Map<string, boolean>();
+    let complete = true;
+    for (const intent of await this.store.openIntents()) {
+      if (intent.state !== "intent") continue;
+      if (this.stopped) {
+        complete = false;
+        break;
+      }
+      const row = await this.store.getQuestion(intent.question_id);
+      if (!row) {
+        // The library abandons an intent with no question behind it.
+        include.add(intent.injection_id);
+        continue;
+      }
+      const typedInto = typedIntoOf(row.origin, intent);
+      const key = runKey(typedInto);
+      const where = located.get(key) ?? (await this.sink.locate(typedInto));
+      if (where.state === "host-offline" && intent.host_id === hostId && !giveUp) {
+        complete = false;
+        continue;
+      }
+      located.set(key, where);
+      if (where.state === "alive" && where.target) {
+        const found = await this.sink.readMarker(where.target, intent.injection_id);
+        if (found === null && !giveUp) {
+          complete = false;
+          continue;
+        }
+        markers.set(intent.injection_id, found === true);
+      }
+      include.add(intent.injection_id);
     }
+    if (!complete) this.recoveryDeferrals += 1;
+    const sink: TerminalSink = {
+      locate: async (origin) => located.get(runKey(origin)) ?? { state: "gone" },
+      isIdle: async () => false,
+      inject: async () => ({ outcome: "held", reason: "recovery" }),
+      hasMarker: async (_target, injectionId) => markers.get(injectionId) === true,
+    };
+    return { include, complete, sink };
   }
 
   /**

@@ -145,6 +145,12 @@ export class DecisionsService {
   private offCommit: (() => void) | null = null;
   /** Connections stopped but still settling: the store closes only after them. */
   private readonly stopping = new Set<Promise<void>>();
+  /**
+   * No connection may start: a suspension until the next settings change or
+   * resume, a stop until the next start. Set synchronously, so a reconcile
+   * deferred behind a settling connection can't start one meanwhile.
+   */
+  private paused = false;
   /** The store didn't open for this lifetime; the next start tries it again. */
   private storeFailed = false;
   /**
@@ -216,6 +222,7 @@ export class DecisionsService {
     if (this.disposed || this.settings === null || !settings.enabled) return;
     this.settings = settings;
     this.applyPolicy(settings);
+    this.paused = false;
     this.reconcileConnection();
   }
 
@@ -226,6 +233,7 @@ export class DecisionsService {
    * store: an answer being typed settles first.
    */
   suspendConnection(): Promise<void> {
+    this.paused = true;
     this.dropConnection();
     if (this.settings !== null && !this.disposed) this.setStatus({ state: "not-connected" });
     return this.settledConnections();
@@ -233,7 +241,9 @@ export class DecisionsService {
 
   /** Connects again after `suspendConnection`, if the settings still want it. */
   resumeConnection(): void {
-    if (this.settings !== null && !this.disposed) this.reconcileConnection();
+    if (this.settings === null || this.disposed) return;
+    this.paused = false;
+    this.reconcileConnection();
   }
 
   /** Where this lifetime's sealed keys live, read or not. */
@@ -287,6 +297,7 @@ export class DecisionsService {
       if (this.disposed || !settings.enabled) return;
       this.settings = settings;
       this.applyPolicy(settings);
+      this.paused = false;
       // There is no relay identity until a relay is claimed or restored, and no
       // socket until one opens, so on is honestly "not connected" for now.
       if (this.state === "off") this.setStatus({ state: "not-connected" });
@@ -386,6 +397,7 @@ export class DecisionsService {
    */
   private async release(clearViews: boolean): Promise<void> {
     // The connection goes first: nothing may reach the store or keys once they close.
+    this.paused = true;
     this.dropConnection();
     // An answer being typed settles before the store stops taking its result.
     await this.settledConnections();
@@ -421,7 +433,7 @@ export class DecisionsService {
     if (settings !== null && relayKey !== this.revokedKey) this.revokedKey = null;
     const revoked =
       relay !== null && (settings?.revokedAt !== null || relayKey === this.revokedKey);
-    const wanted = relay !== null && !revoked && this.store !== null ? relay : null;
+    const wanted = relay !== null && !revoked && this.store !== null && !this.paused ? relay : null;
     const key = wanted ? relayKey : null;
     if (this.connectionKey !== key) this.dropConnection();
     if (wanted === null || key === null) {

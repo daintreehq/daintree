@@ -548,7 +548,8 @@ export class RelayConnection {
     this.clearRetry();
     for (const off of this.watchers.splice(0)) off();
     // Reports to the relay stop now: a stalled one must not hold up the local
-    // record of an answer being typed, and each is sent again next lifetime.
+    // record of an answer being typed. A delivery's report is sent again next
+    // lifetime; a failure's is best effort, as the library makes it.
     this.lifetime.abort();
     const delivery = this.delivery;
     this.delivery = null;
