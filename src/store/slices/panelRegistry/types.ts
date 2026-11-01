@@ -162,6 +162,12 @@ export interface PanelRegistrySlice {
     sessionCost?: number,
     sessionTokens?: number
   ) => void;
+  /**
+   * Record a state the host reported without showing it: the pane keeps an
+   * overlay (directing) on screen, but the report still bounds what may follow
+   * and is what the next restore calls last seen.
+   */
+  noteAgentObservation: (id: string, agentState: AgentState, at: number) => void;
   updateActivity: (
     id: string,
     headline: string,

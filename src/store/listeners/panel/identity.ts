@@ -123,21 +123,7 @@ export function setupIdentityListeners(): DisposableStore {
         if (terminal.agentState === "directing" && state === "waiting") {
           // Directing stays on screen, but the host did report this, and a
           // resync record older than it must not be taken over it later.
-          if (terminal.lastAgentObservation?.agentState !== state) {
-            usePanelStore.setState((st) => {
-              const panel = st.panelsById[terminalId];
-              if (!panel || !isPtyPanel(panel)) return st;
-              return {
-                panelsById: {
-                  ...st.panelsById,
-                  [terminalId]: {
-                    ...panel,
-                    lastAgentObservation: { agentState: state, at: timestamp },
-                  },
-                },
-              };
-            });
-          }
+          usePanelStore.getState().noteAgentObservation(terminalId, state, timestamp);
           return;
         }
 

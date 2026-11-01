@@ -7,6 +7,7 @@ const { store, setAgentState, reportLost, fetchAndRestore } = vi.hoisted(() => {
     panelIds: [] as string[],
     watchedPanels: new Set<string>(),
     updateAgentState: vi.fn(),
+    noteAgentObservation: vi.fn(),
     addPanel: vi.fn(async (args: { existingId?: string }) => args.existingId ?? null),
     setRuntimeStatus: vi.fn(),
     removePanel: vi.fn(),
@@ -140,6 +141,8 @@ describe("resyncHostTerminals", () => {
 
     // The controller still learns the canonical state; only the store write is held back.
     expect(setAgentState).toHaveBeenCalledWith("t-draft", "waiting");
+    // The report still bounds what may follow (#16062).
+    expect(store.noteAgentObservation).toHaveBeenCalledWith("t-draft", "waiting", 200);
     expect(store.updateAgentState.mock.calls.map((call) => call[0])).toEqual(["t-run"]);
     expect(store.updateAgentState).toHaveBeenCalledWith(
       "t-run",

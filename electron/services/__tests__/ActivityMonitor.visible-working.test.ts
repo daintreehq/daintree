@@ -173,24 +173,28 @@ describe("ActivityMonitor visible working screen (#16062)", () => {
     }
 
     expect(monitor.getState()).toBe("idle");
+    expect(onStateChange).not.toHaveBeenCalled();
     monitor.dispose();
   });
 
-  it("doesn't read a single repaint of a working screen as work", () => {
-    const onStateChange = vi.fn<StateChange>();
-    const viewport = new Viewport(claudeWaitingScreen());
-    const monitor = createIdleClaudeMonitor("single-repaint", onStateChange, viewport);
-    monitor.setPollingInterval(500);
-    monitor.startPolling();
-    vi.advanceTimersByTime(500);
+  it.each([50, 200, 500])(
+    "doesn't read a single repaint of a working screen as work (%ims polling)",
+    (pollingMs) => {
+      const onStateChange = vi.fn<StateChange>();
+      const viewport = new Viewport(claudeWaitingScreen());
+      const monitor = createIdleClaudeMonitor("single-repaint", onStateChange, viewport);
+      monitor.setPollingInterval(pollingMs);
+      monitor.startPolling();
+      vi.advanceTimersByTime(500);
 
-    viewport.content = claudeWorkingScreen(48);
-    monitor.onData(fullRepaint(viewport.content));
-    vi.advanceTimersByTime(10_000);
+      viewport.content = claudeWorkingScreen(48);
+      monitor.onData(fullRepaint(viewport.content));
+      vi.advanceTimersByTime(10_000);
 
-    expect(monitor.getState()).toBe("idle");
-    monitor.dispose();
-  });
+      expect(onStateChange).not.toHaveBeenCalled();
+      monitor.dispose();
+    }
+  );
 
   it("needs the interrupt hint, not just a spinner line, to read a sparse screen as working", () => {
     const onStateChange = vi.fn<StateChange>();
@@ -203,6 +207,7 @@ describe("ActivityMonitor visible working screen (#16062)", () => {
     tickSeconds(monitor, viewport, 48, 8, false);
 
     expect(monitor.getState()).toBe("idle");
+    expect(onStateChange).not.toHaveBeenCalled();
     monitor.dispose();
   });
 
@@ -218,6 +223,7 @@ describe("ActivityMonitor visible working screen (#16062)", () => {
     }
 
     expect(monitor.getState()).toBe("idle");
+    expect(onStateChange).not.toHaveBeenCalled();
     monitor.dispose();
   });
 
@@ -232,7 +238,7 @@ describe("ActivityMonitor visible working screen (#16062)", () => {
     monitor.onData(fullRepaint(viewport.content));
     tickSeconds(monitor, viewport, 48, 1);
     vi.advanceTimersByTime(900);
-    expect(monitor.getState()).toBe("idle");
+    expect(onStateChange).not.toHaveBeenCalled();
 
     tickSeconds(monitor, viewport, 49, 4);
     expect(monitor.getState()).toBe("busy");

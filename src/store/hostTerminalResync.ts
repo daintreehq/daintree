@@ -130,7 +130,7 @@ type HostAgentStateRecord = Pick<
 export function takeHostAgentState(
   id: string,
   record: HostAgentStateRecord,
-  store: Pick<PanelState, "panelsById" | "updateAgentState">,
+  store: Pick<PanelState, "panelsById" | "updateAgentState" | "noteAgentObservation">,
   instances: { setAgentState: (id: string, state: AgentState) => void },
   overGuess = false
 ): void {
@@ -151,6 +151,7 @@ export function takeHostAgentState(
   // the renderer's directing, which the controller only writes on entry and
   // so could not restore on later keystrokes.
   if (!newIncarnation && panel.agentState === "directing" && record.agentState === "waiting") {
+    store.noteAgentObservation(id, record.agentState, record.lastStateChange);
     return;
   }
   store.updateAgentState(
