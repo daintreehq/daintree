@@ -975,7 +975,20 @@ export async function waitForActiveProject(
  * (project open, onboarding, empty-grid transition, etc.).
  * If the page hasn't changed, this is a no-op that just confirms readiness.
  */
-export async function refreshActiveWindow(app: ElectronApplication, oldPage?: Page): Promise<Page> {
+export interface RefreshActiveWindowOptions {
+  /**
+   * `false` skips the window `focus()` and CDP `bringToFront()` steps, for
+   * capture harnesses that must never raise a window over the developer's
+   * screen. Page-level focus (the click and key warm-up) still runs.
+   */
+  takeFocus?: boolean;
+}
+
+export async function refreshActiveWindow(
+  app: ElectronApplication,
+  oldPage?: Page,
+  options: RefreshActiveWindowOptions = {}
+): Promise<Page> {
   // After a project op (open/onboard/switch) the new project WebContentsView
   // may take a moment to load its URL. Wait for the project view rather than
   // returning the welcome page early.
@@ -1049,7 +1062,7 @@ export async function refreshActiveWindow(app: ElectronApplication, oldPage?: Pa
         return typeof initialProject?.id === "string" ? initialProject.id : null;
       })
       .catch(() => null);
-    if (projectId) {
+    if (projectId && options.takeFocus !== false) {
       await app.evaluate(
         async ({ BrowserWindow }, payload) => {
           const win = BrowserWindow.getAllWindows()[0];
@@ -1079,7 +1092,7 @@ export async function refreshActiveWindow(app: ElectronApplication, oldPage?: Pa
 
     // 2. Bring the Playwright CDP target for this page to the front so that
     // `Input.dispatchKeyEvent` events are routed to this WebContents.
-    await newWindow.bringToFront().catch(() => {});
+    if (options.takeFocus !== false) await newWindow.bringToFront().catch(() => {});
 
     // 3. Click inside the document to give the browser keyboard focus to a
     // real node, then poll `document.hasFocus()` and retry a few times if

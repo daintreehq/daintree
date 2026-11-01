@@ -1,4 +1,4 @@
-import { RefreshCw, XCircle } from "lucide-react";
+import { Plus, RefreshCw, XCircle } from "lucide-react";
 import { useRecipeRunner, type SpawnFailureSummary } from "./useRecipeRunner";
 import { RecipeRunnerGrid } from "./RecipeRunnerGrid";
 import { RecipeRunnerList } from "./RecipeRunnerList";
@@ -135,16 +135,25 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
           onPin={runner.handlePin}
           onUnpin={runner.handleUnpin}
           onDelete={runner.handleDelete}
-          onCreate={runner.handleCreate}
           setFocusedIndex={runner.setFocusedIndex}
         />
       )}
-      {/* The canvas launches; the manager is where every recipe's other
+      {/* The band's two housekeeping actions share one footer line under the
+          cards, at one size, on the column's edges: creating at the start,
+          managing at the end. They used to be two centred lines at two sizes,
+          with Create inside the cards' listbox, so Tab skipped a control that
+          looked separate and the band ended in a stack of loose links.
+
+          The canvas launches; the manager is where every recipe's other
           actions live. Right-click reaches a few of them here, but a context
           menu is not a visible path, so the band names the one that is. */}
       {!runner.showSearch && (
-        <div className="mt-1 flex justify-center">
-          <Button variant="ghost" size="xs" onClick={runner.handleManage} className="px-2 text-xs">
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <Button variant="ghost" size="sm" onClick={runner.handleCreate}>
+            <Plus aria-hidden />
+            Create new recipe…
+          </Button>
+          <Button variant="ghost" size="sm" onClick={runner.handleManage}>
             Manage recipes
           </Button>
         </div>

@@ -126,7 +126,11 @@
       color var(--duration-150) ease-out;
   }
 
-  button.search-field:hover {
+  /* Keyboard focus lifts the label exactly as hover does. Without it the
+     focus-visible state changed only the 1px edge, which on dark themes is a
+     small step, while the pointer state got the brighter label too. */
+  button.search-field:hover,
+  button.search-field:focus-visible {
     color: var(--theme-text-primary);
   }
 

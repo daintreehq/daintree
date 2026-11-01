@@ -71,8 +71,14 @@ function MiniRibbon({ cells }: { cells: HeatCell[] }) {
           <span
             key={cell.date}
             className={cn(
-              "pulse-heat-cell relative overflow-hidden rounded-[1px] shrink-0",
-              !active && "border border-border-strong bg-transparent"
+              "pulse-heat-cell relative overflow-hidden rounded-none shrink-0",
+              // Not `border-border-strong`: that measured 1.46:1 (daintree) and
+              // 1.53:1 (bondi) against the canvas, so the quiet days that carry
+              // the gaps in the run were near-invisible and the track read as
+              // loose clusters again. Mixed from `text-secondary` so it tracks
+              // each theme's own ink while staying quieter than an active day.
+              !active &&
+                "border border-[color-mix(in_oklab,var(--color-text-secondary)_65%,transparent)] bg-transparent"
             )}
             data-heat-level={active ? ribbonLevel(cell.level) : undefined}
             style={{
@@ -174,7 +180,9 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
           ref={collapseButtonRef}
           type="button"
           onClick={collapse}
-          className="inline-flex items-center gap-1 self-start rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-secondary transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+          // `px-3`, the strip's own inset, so the chevron lands on the glyph
+          // line the strip it replaced was drawn on.
+          className="inline-flex h-8 items-center gap-1 self-start rounded-[var(--radius-md)] px-3 text-xs text-text-secondary transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
           aria-expanded={true}
         >
           <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
@@ -219,15 +227,25 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
       // surface — so the two now share a visual language instead of each having
       // their own. Both accessibility media modes still draw their own button
       // boundary, so nothing is lost where a boundary is load-bearing.
-      className="group flex w-full items-center gap-3 rounded-[var(--radius-md)] px-3 py-2 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+      className="group flex h-8 w-full min-w-0 items-center gap-3 rounded-[var(--radius-md)] px-3 text-left transition-colors hover:bg-overlay-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
     >
       <Activity className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
       <span className="shrink-0 text-xs font-medium text-text-secondary">Project pulse</span>
-      {pulse && miniCells.length > 0 && <MiniRibbon cells={miniCells} />}
-      <span className="ml-auto flex shrink-0 items-center gap-2.5">
+      {/* A narrowing column sheds detail in reverse priority: the streak goes
+          first, then the ribbon, and the counts and the chevron stay. Every
+          part used to be `shrink-0`, so below ~35rem the strip ran past the
+          column, clipped its own streak mid-word, pushed the chevron out of
+          view and gave the whole canvas home a horizontal scrollbar. The
+          accessible name above still carries all of it. */}
+      {pulse && miniCells.length > 0 && (
+        <span className="contents @max-[26rem]/launcher:hidden">
+          <MiniRibbon cells={miniCells} />
+        </span>
+      )}
+      <span className="ml-auto flex min-w-0 shrink-0 items-center gap-2.5">
         {pulse ? (
           <>
-            <span className="font-mono text-xs text-text-secondary">
+            <span className="text-xs tabular-nums text-text-secondary">
               {/* Scoped to its window, the same "47/60 active days" the card's
                   summary prints — a bare "47 active days" beside an 18-day
                   ribbon and a 250-day streak left the reader to guess which
@@ -235,7 +253,7 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
               {pulse.activeDays}/{pulse.projectAgeDays} active days
             </span>
             {hasStreak && (
-              <span className="flex items-center gap-1 font-mono text-xs text-text-secondary">
+              <span className="flex items-center gap-1 text-xs tabular-nums text-text-secondary @max-[34rem]/launcher:hidden">
                 <StreakFlame streakDays={pulse.currentStreakDays!} size={12} />
                 {pulse.currentStreakDays} day streak
               </span>

@@ -55,9 +55,17 @@ function QuickAction({
       onKeyDown={onKeyDown}
       tabIndex={tabIndex}
       aria-keyshortcuts={ariaKeyshortcuts}
-      className="group inline-flex items-center gap-2 text-sm text-text-secondary hover:text-text-primary"
+      // Primary ink on the label, secondary on the glyph and chord. The chips
+      // are the most likely one-press action on the surface; drawn in the same
+      // grey as their own chords and the hints around them, they ranked below
+      // the recipe titles further down, which print in primary.
+      //
+      // `--radius-md`, the palette's radius, not the card family's `lg`: a
+      // single-line control sitting under the palette reads as its sibling,
+      // and the larger radius on the smaller box read as a different family.
+      className="group inline-flex items-center gap-2 rounded-[var(--radius-md)] text-sm text-text-primary contrast-more:border-text-secondary"
     >
-      <span className="shrink-0">{icon}</span>
+      <span className="shrink-0 text-text-secondary">{icon}</span>
       <span className="truncate">{label}</span>
       {/* Decorative chip — the binding is exposed to AT via aria-keyshortcuts
           above, so the sr-only chord text stays out of the button's name

@@ -29,8 +29,10 @@
  *   DAINTREE_SHOT_TAG    optional suffix to keep before/after rounds side by side
  *   DAINTREE_SHOT_ONLY   comma-separated step filter (see STEPS below)
  *   DAINTREE_SCREENSHOT_SCALE  device scale factor (default 2)
+ *   DAINTREE_SHOT_DIR    optional output root, outside the repo (default below)
  *
- * Output: artifacts/canvas-home-shots/<theme>/<NN-slug>[-tag].png (gitignored).
+ * Output: artifacts/canvas-home-shots/<theme>/<NN-slug>[-tag].png (gitignored),
+ * or <DAINTREE_SHOT_DIR>/<theme>/ when that is set.
  */
 
 import { expect, test, type Page } from "@playwright/test";
@@ -59,13 +61,55 @@ import { T_LONG } from "../helpers/timeouts";
 const THEME = process.env.DAINTREE_SHOT_THEME ?? "";
 const TAG = process.env.DAINTREE_SHOT_TAG ? `-${process.env.DAINTREE_SHOT_TAG}` : "";
 const SCALE = process.env.DAINTREE_SCREENSHOT_SCALE ?? "2";
-const OUTPUT_DIR = path.resolve(process.cwd(), "artifacts", "canvas-home-shots", THEME || "unset");
+const OUTPUT_DIR = path.resolve(
+  process.env.DAINTREE_SHOT_DIR ?? path.join(process.cwd(), "artifacts", "canvas-home-shots"),
+  THEME || "unset"
+);
 
 const CANVAS = "#panel-grid";
 const PALETTE_SEARCH = 'button:has-text("Search agents")';
 const PULSE_STRIP = 'button[aria-label^="Project pulse"]';
 
 const WIDE = { width: 1680, height: 1050 };
+const ULTRAWIDE = { width: 2560, height: 1440 };
+
+// The quick-launch row mirrors the toolbar's agent buttons, so its width is a
+// function of how many agents the user pinned. Seeded explicitly rather than
+// left to whichever CLIs happen to be on the capturing machine's PATH, or the
+// same harness photographs a different surface on every machine.
+const ALL_AGENTS = [
+  "claude",
+  "opencode",
+  "aider",
+  "gemini",
+  "antigravity",
+  "codex",
+  "grok",
+  "cursor",
+  "copilot",
+  "goose",
+  "amp",
+  "crush",
+  "qwen",
+  "kimi",
+  "interpreter",
+  "mistral",
+  "kiro",
+];
+const TYPICAL_AGENTS = ["claude", "antigravity", "codex", "grok"];
+const ONE_AGENT = ["claude"];
+const MANY_AGENTS = [
+  "claude",
+  "antigravity",
+  "codex",
+  "grok",
+  "gemini",
+  "copilot",
+  "cursor",
+  "opencode",
+  "kimi",
+  "qwen",
+];
 
 /**
  * Every shot this harness owes, in capture order. Kept as data rather than
@@ -87,6 +131,11 @@ const STEPS = [
   { name: "quietest", slug: "11-quietest" },
   { name: "long-identity", slug: "12-long-identity" },
   { name: "scratch", slug: "13-scratch" },
+  { name: "one-recipe", slug: "14-one-recipe" },
+  { name: "no-resume", slug: "15-no-resume" },
+  { name: "agents-one", slug: "16-agents-one" },
+  { name: "agents-many", slug: "17-agents-many" },
+  { name: "ultrawide", slug: "18-ultrawide" },
 ] as const;
 
 // Freeze animations and hide carets so captures are deterministic. Every
@@ -295,6 +344,36 @@ async function reload(page: Page): Promise<void> {
 }
 
 /**
+ * Put exactly these agents on the toolbar, and so on the canvas's quick-launch
+ * row. Pinned explicitly so availability on this machine cannot add or drop
+ * one; only `leftButtons` is written, so the right side keeps its defaults.
+ */
+async function seedAgents(page: Page, agents: string[]): Promise<void> {
+  await page.evaluate(
+    async ({ ids, every }) => {
+      // Every other built-in agent is pinned OFF, not merely left out of the
+      // layout: an installed agent with no explicit pin is re-placed on the
+      // toolbar at hydration, and a pin set by an earlier step persists in main.
+      for (const id of every) await window.electron.agentToolbarPins.set(id, ids.includes(id));
+      localStorage.setItem(
+        "daintree-toolbar-preferences",
+        JSON.stringify({
+          state: {
+            layout: {
+              leftButtons: ["launcher", ...ids, "terminal", "file-browser"],
+              pinnedButtons: {},
+            },
+          },
+          version: 14,
+        })
+      );
+    },
+    { ids: agents, every: ALL_AGENTS }
+  );
+  await reload(page);
+}
+
+/**
  * Clip to the canvas itself — the box `ContentGridEmptyState` is handed and has
  * to compose within. Its height is what decides whether the primary launch
  * affordance sits above the fold, so a full-page or element-tight crop would
@@ -343,6 +422,11 @@ test("canvas home review — every state of the empty grid", async () => {
     description: "DAINTREE_SHOT_THEME is required for the canvas-home-review capture",
   });
   test.skip(!THEME, "Set DAINTREE_SHOT_THEME to run the canvas-home-review capture");
+  // Captures run while the developer keeps working, so no window may ever take
+  // over the screen: background windows (transparent, click-through, never
+  // activated) exist only on macOS, and nothing below focuses, shows, raises,
+  // maximizes or fullscreens a window.
+  test.skip(process.platform !== "darwin", "canvas-home-review needs macOS background windows");
 
   mkdirSync(OUTPUT_DIR, { recursive: true });
   const repo = createRepo();
@@ -357,6 +441,7 @@ test("canvas home review — every state of the empty grid", async () => {
       userDataDir,
       screenshotScale: SCALE,
       windowSize: WIDE,
+      headed: false,
       env: fakeAgentEnv(fakeBinDir),
       extraArgs: ["--disable-gpu", "--in-process-gpu", "--disable-breakpad", "--noerrdialogs"],
     });
@@ -371,7 +456,9 @@ test("canvas home review — every state of the empty grid", async () => {
     // no worktree and the resume line silently renders nothing.
     seedSessionHistory(userDataPath, realpathSync(repo.dir));
 
-    let page = await openAndOnboardProject(ctx.app, ctx.window, repo.dir, "Helios Dashboard");
+    let page = await openAndOnboardProject(ctx.app, ctx.window, repo.dir, "Helios Dashboard", {
+      takeFocus: false,
+    });
     await page.evaluate(async () => {
       const cur = await window.electron.project.getCurrent();
       if (cur?.id)
@@ -386,6 +473,7 @@ test("canvas home review — every state of the empty grid", async () => {
       .catch(() => {});
     await waitForCanvasHome(page);
     await dismissBlockingPalette(page);
+    await seedAgents(page, TYPICAL_AGENTS);
 
     // 1. The returning-user rest state: identity, recipes, resume, quick
     // actions and the pulse strip, with no teaching tip yet (no agent has been
@@ -499,6 +587,15 @@ test("canvas home review — every state of the empty grid", async () => {
       await snapCanvas(page, "09-recipes-many");
     });
 
+    // 14. A single recipe — the common fresh-project case, where the grid
+    // gives the one card the full measure.
+    await step("one-recipe", async () => {
+      clearRecipes(repo.dir);
+      writeRecipes(repo.dir, BASE_RECIPES.slice(0, 1));
+      await reload(page);
+      await snapCanvas(page, "14-one-recipe");
+    });
+
     // 10. No recipes at all — `RecipeRunnerEmpty`, which is what a project
     // that has never made one shows in the band's place.
     await step("no-recipes", async () => {
@@ -517,6 +614,14 @@ test("canvas home review — every state of the empty grid", async () => {
       await snapCanvas(page, "11-quietest");
     });
 
+    // 15. Recipes but nothing to resume: the resume row's slot collapses and
+    // the recipe band moves up under the quick-launch row.
+    await step("no-resume", async () => {
+      writeRecipes(repo.dir, BASE_RECIPES);
+      await reload(page);
+      await snapCanvas(page, "15-no-resume");
+    });
+
     // 12. Extreme identity density — a long project name, a long branch and a
     // deep path, all competing for the same centered width.
     await step("long-identity", async () => {
@@ -532,6 +637,29 @@ test("canvas home review — every state of the empty grid", async () => {
       await snapCanvas(page, "12-long-identity");
     });
 
+    // 16-17. The agent roster at its two extremes: one pinned agent, and
+    // ten, which wraps the quick-launch row onto several lines.
+    await step("agents-one", async () => {
+      await seedAgents(page, ONE_AGENT);
+      await snapCanvas(page, "16-agents-one");
+    });
+
+    await step("agents-many", async () => {
+      await seedAgents(page, MANY_AGENTS);
+      await snapCanvas(page, "17-agents-many");
+    });
+
+    // 18. A very wide canvas, where the column's fixed measure leaves the most
+    // air on either side.
+    await step("ultrawide", async () => {
+      await seedAgents(page, TYPICAL_AGENTS);
+      await page.setViewportSize(ULTRAWIDE);
+      await settle(page, 900);
+      await snapCanvas(page, "18-ultrawide");
+      await page.setViewportSize(WIDE);
+      await settle(page, 600);
+    });
+
     // 13. A scratch workspace: a launch target with no worktree, no branch, no
     // recipes, no pulse and no project settings — the same component with half
     // its sections gone.
@@ -544,7 +672,7 @@ test("canvas home review — every state of the empty grid", async () => {
       // re-render the page this handle points at — it strands it on the view
       // the workspace just left. Re-acquire, or the next capture photographs
       // the previous workspace and looks perfectly plausible.
-      page = await refreshActiveWindow(ctx!.app, page);
+      page = await refreshActiveWindow(ctx!.app, page, { takeFocus: false });
       await page.addStyleTag({ content: POLISH_CSS }).catch(() => {});
       await dismissBlockingPalette(page);
       await waitForCanvasHome(page);
@@ -564,7 +692,7 @@ test("canvas home review — every state of the empty grid", async () => {
     // PNG of the state before it, which is the worst artifact a capture
     // harness can produce. Same-viewport states only: a resize changes every
     // pixel, so cross-size pairs can never collide and would only add noise.
-    const SAME_VIEWPORT = new Set(expected.filter((f) => !/0[56]-/.test(f)));
+    const SAME_VIEWPORT = new Set(expected.filter((f) => !/^(05|06|18)-/.test(f)));
     const byHash = new Map<string, string[]>();
     for (const file of SAME_VIEWPORT) {
       if (!present.has(file)) continue;
