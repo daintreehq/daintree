@@ -116,7 +116,10 @@ describe("pluginServerKeysFor", () => {
   });
 
   it("never names a plugin daintree-decisions, the server agents ask the person through", () => {
-    const keys = pluginServerKeysFor([installed("acme.decisions"), installed("zeta.notes", "decisions")]);
+    const keys = pluginServerKeysFor([
+      installed("acme.decisions"),
+      installed("zeta.notes", "decisions"),
+    ]);
 
     expect(keys.get("acme.decisions")).toBe(`daintree-decisio-${hash("global\0acme.decisions")}`);
     expect(keys.get("zeta.notes")).toBe(`daintree-decisio-${hash("global\0zeta.notes")}`);

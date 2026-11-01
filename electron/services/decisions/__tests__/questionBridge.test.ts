@@ -117,7 +117,10 @@ describe("QuestionBridge", () => {
     await b.getDecision("q_live", pane);
     await b.cancelQuestion("q_live", pane);
 
-    expect(live.registerQuestion).toHaveBeenCalledWith({ origin: ORIGIN, input: { question: "Now?" } });
+    expect(live.registerQuestion).toHaveBeenCalledWith({
+      origin: ORIGIN,
+      input: { question: "Now?" },
+    });
     expect(live.getDecision).toHaveBeenCalledWith("q_live", pane);
     expect(live.cancelQuestion).toHaveBeenCalledWith("q_live", pane);
     expect(await store.listQuestions()).toEqual([]);
@@ -153,9 +156,9 @@ describe("QuestionBridge", () => {
   it("never falls back to itself once the connection has ended, as after a revocation", async () => {
     const b = bridge();
     identity = null;
-    await expect(b.registerQuestion({ origin: ORIGIN, input: { question: "Still?" } })).rejects.toThrow(
-      BridgeError
-    );
+    await expect(
+      b.registerQuestion({ origin: ORIGIN, input: { question: "Still?" } })
+    ).rejects.toThrow(BridgeError);
     await expect(b.getDecision("q_any", paneIdentityOf(ORIGIN))).rejects.toMatchObject({
       code: "forbidden",
     });
@@ -166,9 +169,9 @@ describe("QuestionBridge", () => {
     const b = bridge();
     live = liveBridge();
     current = false;
-    await expect(b.registerQuestion({ origin: ORIGIN, input: { question: "Mine?" } })).rejects.toMatchObject(
-      { code: "forbidden" }
-    );
+    await expect(
+      b.registerQuestion({ origin: ORIGIN, input: { question: "Mine?" } })
+    ).rejects.toMatchObject({ code: "forbidden" });
     await expect(b.cancelQuestion("q_live", paneIdentityOf(ORIGIN))).rejects.toMatchObject({
       code: "forbidden",
     });

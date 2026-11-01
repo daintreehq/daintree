@@ -308,8 +308,9 @@ describe("/mcp/decisions (#16011)", () => {
     expect(JSON.parse(init.body).result.serverInfo.name).toBe("daintree-decisions");
 
     const list = await rpc(port, "pane-token-pane-a", "tools/list");
-    const tools = (JSON.parse(list.body) as { result: { tools: Array<{ name: string; description: string }> } })
-      .result.tools;
+    const tools = (
+      JSON.parse(list.body) as { result: { tools: Array<{ name: string; description: string }> } }
+    ).result.tools;
     expect(tools.map((tool) => tool.name).sort()).toEqual([
       "ask_human",
       "cancel_question",
@@ -394,7 +395,9 @@ describe("/mcp/decisions (#16011)", () => {
     expect((await rpc(port, "pane-token-pane-a", "tools/list")).status).toBe(200);
 
     // A revoked bearer is refused on its next request: nothing keeps a session for it.
-    const askedBefore = await call(port, "pane-token-pane-a", "ask_human", { question: "Keep it?" });
+    const askedBefore = await call(port, "pane-token-pane-a", "ask_human", {
+      question: "Keep it?",
+    });
     panes.delete("pane-a");
     expect((await rpc(port, "pane-token-pane-a", "tools/list")).status).toBe(401);
     // Its question stays, bound to the run that asked.
@@ -409,12 +412,12 @@ describe("/mcp/decisions (#16011)", () => {
     const port = await openRoute();
     const token = "pane-token-pane-a";
 
-    expect((await rpc(port, token, "tools/list", {}, { Host: `evil.example:${port}` })).status).toBe(
-      403
-    );
-    expect((await rpc(port, token, "tools/list", {}, { Host: `127.0.0.1:${port + 1}` })).status).toBe(
-      403
-    );
+    expect(
+      (await rpc(port, token, "tools/list", {}, { Host: `evil.example:${port}` })).status
+    ).toBe(403);
+    expect(
+      (await rpc(port, token, "tools/list", {}, { Host: `127.0.0.1:${port + 1}` })).status
+    ).toBe(403);
     expect(
       (await rpc(port, token, "tools/list", {}, { Origin: "https://evil.example" })).status
     ).toBe(403);
@@ -492,15 +495,18 @@ describe("/mcp/decisions (#16011)", () => {
     expect(own.isError).toBeUndefined();
     expect(own.structuredContent).toMatchObject({ question_id: questionId, status: "queued" });
 
-    const other = await call(port, "pane-token-pane-b", "get_decision", { question_id: questionId });
+    const other = await call(port, "pane-token-pane-b", "get_decision", {
+      question_id: questionId,
+    });
     const unknown = await call(port, "pane-token-pane-b", "get_decision", {
       question_id: "q_doesnotexist",
     });
     expect(other.isError).toBe(true);
     expect(other.structuredContent).toEqual(unknown.structuredContent);
-    expect((await call(port, "pane-token-pane-b", "cancel_question", { question_id: questionId })).isError).toBe(
-      true
-    );
+    expect(
+      (await call(port, "pane-token-pane-b", "cancel_question", { question_id: questionId }))
+        .isError
+    ).toBe(true);
 
     // The same pane relaunched is another run: a new bearer and generation.
     panes.set("pane-a", {
@@ -560,10 +566,12 @@ describe("/mcp/decisions (#16011)", () => {
     for (const token of [null, API_KEY, HELP_TOKEN, "pane-token-pane-a"]) {
       expect((await rpc(port, token, "tools/list")).status, String(token)).toBe(404);
       expect(
-        (await request(port, `${DECISIONS_MCP_PATH}/anything`, {
-          method: "POST",
-          headers: token === null ? {} : { Authorization: `Bearer ${token}` },
-        })).status
+        (
+          await request(port, `${DECISIONS_MCP_PATH}/anything`, {
+            method: "POST",
+            headers: token === null ? {} : { Authorization: `Bearer ${token}` },
+          })
+        ).status
       ).toBe(404);
     }
     expect(service.getAuditStats(false).auth401Count).toBe(0);

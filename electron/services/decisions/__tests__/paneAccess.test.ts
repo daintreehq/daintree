@@ -133,10 +133,14 @@ describe("createPaneAccess", () => {
   it("throws rather than refuses when the pane can't be read, so a slow host isn't a bad credential", async () => {
     const slow = world();
     slow.readFails = true;
-    await expect(createPaneAccess(sources(slow)).authenticator.authenticate(TOKEN)).rejects.toThrow();
+    await expect(
+      createPaneAccess(sources(slow)).authenticator.authenticate(TOKEN)
+    ).rejects.toThrow();
     const none = world();
     none.noClient = true;
-    await expect(createPaneAccess(sources(none)).authenticator.authenticate(TOKEN)).rejects.toThrow();
+    await expect(
+      createPaneAccess(sources(none)).authenticator.authenticate(TOKEN)
+    ).rejects.toThrow();
   });
 
   it("holds a pane current only while host, principal and generation are still the ones it asked with", async () => {
