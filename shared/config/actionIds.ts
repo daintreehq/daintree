@@ -664,6 +664,8 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "project.runCheck",
   // Runs a shell command the caller names; held to Daintree's own assistants.
   "project.runCommand",
+  // Launches an agent with a schedule's preset, which a plugin's launch may not choose (#15978).
+  "schedule.runNow",
   // Reloading a project's plugins unloads and re-runs every one of them,
   // including whichever plugin made the call. Nothing a plugin declares grants
   // it authority over its siblings, and self-unloading mid-dispatch is not a

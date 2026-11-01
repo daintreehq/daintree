@@ -76,6 +76,12 @@ vi.mock("@/clients", () => ({
   terminalClient: { getHostAgentLimit: () => getHostAgentLimit() },
 }));
 
+const getCurrentLaunchCliDetail = vi.hoisted(() => vi.fn());
+vi.mock("@/utils/agentLaunchCommand", async (importActual) => ({
+  ...(await importActual<object>()),
+  getCurrentLaunchCliDetail: (id: string) => getCurrentLaunchCliDetail(id),
+}));
+
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
   logWarn: vi.fn(),
@@ -100,6 +106,8 @@ function setElectron(available: boolean): void {
 describe("useAgentLauncher — declined launches name their reason (#13382)", () => {
   beforeEach(() => {
     addPanel.mockReset();
+    getCurrentLaunchCliDetail.mockReset();
+    getCurrentLaunchCliDetail.mockResolvedValue(undefined);
     setElectron(true);
   });
 
@@ -154,6 +162,25 @@ describe("useAgentLauncher — declined launches name their reason (#13382)", ()
       reason: "panel-limit",
       panelLimit: SNAPSHOT,
     });
+  });
+
+  it("declines a scheduled run whose agent CLI can't launch, opening no setup pane (#15978)", async () => {
+    getCurrentLaunchCliDetail.mockResolvedValue({ state: "missing" });
+    const onDecline = vi.fn();
+    const { result } = renderHook(() => useAgentLauncher());
+
+    let launched: unknown;
+    await act(async () => {
+      launched = await result.current.launchAgent("claude", {
+        prompt: "Triage.",
+        scheduledRun: { scheduleId: "schedule-1", runId: "run-1" },
+        onDecline,
+      });
+    });
+
+    expect(launched).toBeNull();
+    expect(onDecline).toHaveBeenCalledExactlyOnceWith({ reason: "missing-cli", panelLimit: null });
+    expect(addPanel).not.toHaveBeenCalled();
   });
 
   it("reports spawn-failed when addPanel declines for any other reason", async () => {

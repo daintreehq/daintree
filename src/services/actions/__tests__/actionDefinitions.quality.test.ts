@@ -1560,8 +1560,8 @@ describe("plugin-dispatch injection guard (#10558)", () => {
     // take terminalIds or a watchId; plugin.reloadPanel a panelId;
     // plugin.backupDatabases a pluginId; plugin.setNotificationsSilenced a
     // pluginId and a flag; agentSettings.set an agentId and settings;
-    // worktree.retireOwned a worktreeId). Schemas are non-strict, so the union
-    // satisfies every denied action.
+    // worktree.retireOwned a worktreeId; schedule.runNow a scheduleId). Schemas
+    // are non-strict, so the union satisfies every denied action.
     const args = {
       terminalId: "t-placeholder",
       panelId: "p-placeholder",
@@ -1576,6 +1576,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       settings: {},
       silenced: true,
       worktreeId: "/wt/placeholder",
+      scheduleId: "s-placeholder",
     };
     // ...except where a schema is strict, which the union above cannot satisfy:
     // the extra keys are themselves a VALIDATION_ERROR, so dispatch would never

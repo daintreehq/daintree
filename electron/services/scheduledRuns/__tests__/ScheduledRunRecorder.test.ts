@@ -408,6 +408,52 @@ describe("ScheduledRunRecorder", () => {
     expect(changes).toEqual([{ projectId: "project-1", scheduleIds: ["schedule-1"] }]);
   });
 
+  it("records a refused launch as failed with its reason, holding its reserved terminal id", () => {
+    const recorder = lifetime();
+    recorder.registerRefusedLaunch({
+      id: "run-3",
+      scheduleId: "schedule-1",
+      projectId: "project-1",
+      origin: launch().origin,
+      terminalId: "terminal-3",
+      message: "The project already has as many panels as it can hold.",
+    });
+
+    const run = recorder.get("run-3");
+    expect(run).toMatchObject({
+      terminalId: "terminal-3",
+      resume: null,
+      settlement: {
+        state: "settled",
+        outcome: "failed",
+        evidence: {
+          kind: "launch-error",
+          message: "The project already has as many panels as it can hold.",
+        },
+      },
+    });
+    expect(emitted).toEqual([]);
+    expect(recorder.hasOpenRun("project-1")).toBe(false);
+    // Its terminal never spawned under the run, so a late spawn of the id isn't the run's.
+    recorder.handleSpawnResult("terminal-3", { success: true, spawnedAt: SPAWNED_AT });
+    expect(recorder.get("run-3")).toEqual(run);
+    expect(() => recorder.registerLaunch(launch({ terminalId: "terminal-3" }))).toThrow(
+      /already reserved/
+    );
+  });
+
+  it("has an open run in a project only until the run settles", () => {
+    const recorder = lifetime();
+    expect(recorder.hasOpenRun("project-1")).toBe(false);
+    recorder.registerLaunch(launch());
+    expect(recorder.hasOpenRun("project-1")).toBe(true);
+    expect(recorder.hasOpenRun("project-2")).toBe(false);
+
+    recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT });
+    recorder.handleExit({ terminalId: "terminal-1", spawnedAt: SPAWNED_AT, exitCode: 0 });
+    expect(recorder.hasOpenRun("project-1")).toBe(false);
+  });
+
   it("settles a run another service saw end, once", () => {
     const recorder = lifetime();
     recorder.registerLaunch(launch());

@@ -15,6 +15,9 @@ A project can run an agent on a schedule (#15973). A due schedule launches its a
 | Schedule provenance on terminals, snapshots and session records | `shared/utils/scheduledRunProvenance.ts` |
 | A cadence in words | `shared/utils/cronDescription.ts` |
 | The Schedules view and the `schedules.open` action | `src/components/Schedules/`, `src/services/actions/definitions/scheduleActions.ts` |
+| Launching a run, routing it to a view or main, refusals | `electron/services/scheduledRuns/ScheduledRunLauncher.ts`, `scheduledRunLaunchLive.ts`, `scheduledRunViewBridge.ts`, `src/hooks/useScheduledRunLaunchBridge.ts` |
+| Registering a run at its terminal's spawn | `electron/services/scheduledRuns/scheduledRunAdmission.ts`, called from `electron/ipc/handlers/terminal/lifecycle.ts` |
+| Run now (`window.electron.schedules.runNow`, `schedule.runNow`) | `electron/ipc/handlers/schedules.ts`, `src/services/actions/definitions/scheduleActions.ts` |
 
 ## Boundaries
 
@@ -159,6 +162,7 @@ Skip reasons are `missed` (only for an occurrence, never `run-now`), `overlap` w
 
 - **`registerLaunch`** records a run about to launch, with its reserved terminal id and its resume snapshot, and commits before it returns, so the launcher spawns only after. Claude's session id is assigned at launch, so it can be in the snapshot from the start. A second run for an occurrence the schedule already has a run for throws `ScheduledRunConflictError` and must not launch; `run-now` runs carry no occurrence.
 - **`registerSkip`** records a skipped occurrence, settled at once with its reason. It never launches.
+- **`registerRefusedLaunch`** records a run whose launch was refused before its terminal spawned, settled at once as failed (`launch-error`) with the reason and no resume snapshot. Like a skip it neither starts nor ends.
 - **`settle`** settles an open run on a fact another service saw: a handback, a launch error, a cancel, a replacement. A settled run is left as it is.
 
 ### Facts the history records itself
@@ -216,7 +220,20 @@ Only Daintree's scheduler can set it, by one of two entries, and neither reads i
 - **A window driving the project**: `ActionService.dispatch("agent.launch", args, { scheduledRun })`. The dispatch option is stamped onto `ActionContext.scheduledRun`, never from a `contextOverride`, and `agent.launch` hands it to the launcher. The MCP and plugin bridges build their own dispatch options and never set it.
 - **Main with no view**: `runAgentLaunch(request, project, deps, { scheduledRun })`. The generic viewless executor, which serves MCP, never passes the fourth argument.
 
-`agent.launch` and the other spawn actions validate `spawnedBy` against `TerminalSpawnSourceSchema`, which leaves `"schedule"` out, so an MCP or plugin caller can't claim it in arguments either. A terminal launched any other way carries no `scheduledRun`. Choosing the route and reaching the view from main belong to the launcher (#15978).
+`agent.launch` and the other spawn actions validate `spawnedBy` against `TerminalSpawnSourceSchema`, which leaves `"schedule"` out, so an MCP or plugin caller can't claim it in arguments either. A terminal launched any other way carries no `scheduledRun`.
+
+## Launching a run
+
+`launchScheduledRun` (#15978) launches a schedule's agent as an ordinary agent terminal of its project: the schedule's agent, its preset (`null` is none, never the agent's default), its prompt as written followed by Daintree's handback instruction (`handback: true`), and its worktree (`null` is the main checkout), in the grid without taking focus. Every trigger goes through it: Run now today, the scheduler (#15979) with its own origins.
+
+- **Where it launches.** In the local view showing the project, preferring the view that asked: main sends it `schedules:launch-request` and the view dispatches `agent.launch` with the run as host-stamped provenance (`source: "agent"`, `confirmed: true`, so it never becomes the action Repeat Last replays), so the pane appears in that window's grid at once and that view's persistence saves it. A cached view is thawed first, never shown. With no local view, main runs `runAgentLaunch`, which records the pane in the saved layout for the next window that opens the project. A project driven only from another machine's Shell launches in main; that Shell sees the pane when it next reads the project.
+- **Registered at the spawn.** The launcher reserves the run's id and terminal id, then asks for the launch. The terminal spawn handler calls `admitScheduledSpawn` immediately before it starts the PTY, with no await between: the first spawn naming a reserved run registers it from the values the terminal actually starts with (cwd after any fallback, the worktree it kept, flags, model, preset, and Claude's assigned session id), so the resume snapshot is what ran. A later spawn naming the run (a restart, held-pane recovery, a crash replay) finds no reservation and spawns as any pane does, so a crash replay re-runs the launch as it does for every agent pane, as another incarnation that isn't the run's.
+- **What it refuses.** A spawn that fell back from the schedule's preset, lost its worktree, or reached a project that is going to sleep is refused at the spawn. Before anything launches, a project whose folder is missing or that is going to sleep is refused. A launch that declined (panel limit, an agent CLI that can't start, presets that couldn't be read, another launch of the agent still starting) or failed (an unknown worktree or agent) is recorded through `registerRefusedLaunch` with the reason. A view's own launcher declines a scheduled run whose CLI can't start rather than opening its setup pane, as main does.
+- **Waiting.** A view answers once its pane is committed, which can be before the spawn reaches main, so a launch that answered to have started waits up to a minute for its spawn. A view that closes or doesn't answer in a minute, or a spawn that never comes, gives the reservation up and records the run as failed; the run's first late spawn is then refused, so no agent runs behind a failed record. Only the first: the user restarting that pane by hand still gets a terminal.
+- **The history must be able to record it.** With the run history unavailable nothing launches, and Run now answers `failed` with no run id. A schedule, or a project, that is gone answers `not-found`: removing a project removes its schedules and history.
+- **Sleep and status.** While a run is reserved or open, automatic sleep (idle auto-close, idle shells, memory pressure) holds the project as a `scheduled-run` coordination hold; a user's Sleep still goes through and the run's terminal exits with it. A run that spawns in a project that read `closed` moves it to `background`, so it doesn't read as closed while the run is in it.
+
+Run now is `window.electron.schedules.runNow(scheduleId)`, sender-scoped like the other schedule channels, answering `ScheduleRunNowOutcome`: `started` with the run and terminal ids, `failed` with the reason and the failed run's id, or `not-found`. It runs whether or not the schedule is enabled. The `schedule.runNow` action calls it; it is on no MCP tier, hidden from `tools/list`, and closed to plugins, which may give an agent a task but not launch one with a schedule's preset.
 
 ## Keeping the machine awake
 

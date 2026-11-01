@@ -163,6 +163,7 @@ describe("leaf preload namespace bindings", () => {
       await bindings.update("s1", 42, patch);
       await bindings.setEnabled("s1", false);
       await bindings.remove("s1");
+      await bindings.runNow("s1");
 
       expect(invoke.mock.calls).toEqual([
         ["schedules:list"],
@@ -170,6 +171,7 @@ describe("leaf preload namespace bindings", () => {
         ["schedules:update", "s1", 42, patch],
         ["schedules:set-enabled", "s1", false],
         ["schedules:remove", "s1"],
+        ["schedules:run-now", "s1"],
       ]);
     });
   });
