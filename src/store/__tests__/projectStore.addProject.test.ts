@@ -98,6 +98,7 @@ describe("projectStore addProject", () => {
       gitInitDialogOpen: false,
       gitInitDirectoryPath: null,
       gitInitIdentity: null,
+      gitInitGroupId: null,
       gitInitDisposition: "default",
       // A happy-path switch in one case never clears these (the outgoing view
       // is replaced in production), so they'd leak into the next.
@@ -252,6 +253,106 @@ describe("projectStore addProject", () => {
 
     expect(useProjectStore.getState().gitInitDirectoryPath).toBeNull();
     expect(useProjectStore.getState().gitInitIdentity).toBeNull();
+  });
+
+  describe("creation group (#15966)", () => {
+    const lastAddOptions = () => projectClientMock.add.mock.calls.at(-1)?.[1];
+
+    it("forwards the clone dialog's group beside its identity", async () => {
+      projectClientMock.add.mockResolvedValueOnce({ id: "p1", path: "/tmp/cloned" });
+
+      await useProjectStore
+        .getState()
+        .handleCloneSuccess("/tmp/cloned", { name: "cloned", emoji: "📦" }, { groupId: "g1" });
+
+      expect(projectClientMock.add).toHaveBeenCalledWith("/tmp/cloned", {
+        identity: { name: "cloned", emoji: "📦" },
+        groupId: "g1",
+      });
+    });
+
+    it("carries the create dialog's group through the git-init prompt it chains into", async () => {
+      projectClientMock.createFolder.mockResolvedValueOnce("/tmp/new-folder");
+      projectClientMock.add.mockRejectedValueOnce(
+        new Error("Not a git repository: /tmp/new-folder")
+      );
+
+      await useProjectStore
+        .getState()
+        .createProjectFolder("/tmp", "new-folder", "🚀", { groupId: "g1" });
+
+      expect(lastAddOptions()).toEqual({
+        identity: { name: "new-folder", emoji: "🚀" },
+        groupId: "g1",
+      });
+      expect(useProjectStore.getState().gitInitGroupId).toBe("g1");
+
+      projectClientMock.add.mockResolvedValueOnce({ id: "p-folder", path: "/tmp/new-folder" });
+      await useProjectStore.getState().handleGitInitSuccess();
+
+      expect(lastAddOptions()).toEqual({
+        identity: { name: "new-folder", emoji: "🚀" },
+        groupId: "g1",
+      });
+      expect(useProjectStore.getState().gitInitGroupId).toBeNull();
+    });
+
+    it("takes the group the git-init dialog answers with over the carried one", async () => {
+      useProjectStore.getState().openGitInitDialog("/tmp/repo", { groupId: "g1" });
+      projectClientMock.add.mockResolvedValueOnce({ id: "p1", path: "/tmp/repo" });
+
+      await useProjectStore.getState().handleGitInitSuccess({ name: "Repo", emoji: "🚀" }, "g2");
+
+      expect(lastAddOptions()).toEqual({ identity: { name: "Repo", emoji: "🚀" }, groupId: "g2" });
+    });
+
+    it("files nowhere when the git-init dialog cleared the carried group", async () => {
+      useProjectStore.getState().openGitInitDialog("/tmp/repo", { groupId: "g1" });
+      projectClientMock.add.mockResolvedValueOnce({ id: "p1", path: "/tmp/repo" });
+
+      await useProjectStore.getState().handleGitInitSuccess({ name: "Repo", emoji: "🚀" }, null);
+
+      expect(lastAddOptions()).toEqual({ identity: { name: "Repo", emoji: "🚀" } });
+    });
+
+    it("keeps the carried group when the user opens the folder without git", async () => {
+      useProjectStore.getState().openGitInitDialog("/tmp/downloads", { groupId: "g1" });
+      projectClientMock.add.mockResolvedValueOnce({ id: "p-light", path: "/tmp/downloads" });
+
+      await useProjectStore.getState().openWithoutGit();
+
+      expect(projectClientMock.add).toHaveBeenCalledWith("/tmp/downloads", {
+        gitBacked: false,
+        groupId: "g1",
+      });
+    });
+
+    it("keeps the group on the retry a failed open offers", async () => {
+      projectClientMock.add.mockRejectedValueOnce(new Error("[AppError|UNKNOWN] blip"));
+
+      await useProjectStore.getState().addProjectByPath("/tmp/repo", { groupId: "g1" });
+
+      const toast: unknown = notifyMock.mock.calls.at(-1)?.[0];
+      const actions: unknown =
+        typeof toast === "object" && toast !== null ? Reflect.get(toast, "actions") : undefined;
+      const retry: unknown = Array.isArray(actions)
+        ? Reflect.get(actions[0], "onClick")
+        : undefined;
+      if (typeof retry !== "function") throw new Error("expected a retry action");
+      projectClientMock.add.mockResolvedValueOnce({ id: "p1", path: "/tmp/repo" });
+      Reflect.apply(retry, undefined, []);
+
+      await vi.waitFor(() => expect(lastAddOptions()).toEqual({ groupId: "g1" }));
+      expect(projectClientMock.add).toHaveBeenCalledTimes(2);
+    });
+
+    it("clears the carried group together with the path on close", () => {
+      useProjectStore.getState().openGitInitDialog("/tmp/repo", { groupId: "g1" });
+
+      useProjectStore.getState().closeGitInitDialog();
+
+      expect(useProjectStore.getState().gitInitGroupId).toBeNull();
+    });
   });
 
   describe("opening in a new window (#12594)", () => {

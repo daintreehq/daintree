@@ -173,5 +173,39 @@ describe("project:add options", () => {
     const options = forwardedOptions();
     expect(options?.gitBacked).toBeUndefined();
     expect(options?.identity).toBeUndefined();
+    expect(options?.groupId).toBeUndefined();
+  });
+
+  it.each(["9b2f6a1e-4c3d-4e5f-8a7b-6c5d4e3f2a1b", "group-1"])(
+    "carries creation group %s through beside the identity",
+    async (groupId) => {
+      await handler(EVENT, "/tmp/repo", { identity: { name: "Chosen", emoji: "🚀" }, groupId });
+
+      expect(forwardedOptions()).toMatchObject({
+        identity: { name: "Chosen", emoji: "🚀" },
+        groupId,
+      });
+    }
+  );
+
+  it("keeps the group when the identity alongside it is malformed", async () => {
+    await handler(EVENT, "/tmp/repo", { identity: { name: "Only half" }, groupId: "group-2" });
+
+    const options = forwardedOptions();
+    expect(options?.groupId).toBe("group-2");
+    expect(options?.identity).toBeUndefined();
+  });
+
+  it.each([
+    ["a number", 42],
+    ["an empty string", ""],
+    ["an object", { id: "group-1" }],
+    ["an over-long string", "g".repeat(129)],
+  ])("drops a group id that is %s without taking the identity with it", async (_label, groupId) => {
+    await handler(EVENT, "/tmp/repo", { identity: { name: "Chosen", emoji: "🚀" }, groupId });
+
+    const options = forwardedOptions();
+    expect(options?.groupId).toBeUndefined();
+    expect(options?.identity).toEqual({ name: "Chosen", emoji: "🚀" });
   });
 });
