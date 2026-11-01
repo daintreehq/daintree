@@ -102,11 +102,19 @@ function relayWith(devices: Phone[], epoch = 1): RelayState {
 }
 
 function list(state: RelayState): DevicesResponse {
-  return { key_epoch: state.epoch, devices: state.devices.map((d) => ({ ...d })) } as DevicesResponse;
+  return {
+    key_epoch: state.epoch,
+    devices: state.devices.map((d) => ({ ...d })),
+  } as DevicesResponse;
 }
 
 /** Takes a rotation as the relay does: exactly current + 1, grants for every remaining device. */
-function commit(state: RelayState, revoke: string | null, epoch: number, grants: EpochGrant[]): void {
+function commit(
+  state: RelayState,
+  revoke: string | null,
+  epoch: number,
+  grants: EpochGrant[]
+): void {
   if (epoch !== state.epoch + 1) throw new RelayError("validation_error", "stale epoch", 400);
   if (revoke !== null) {
     const target = state.devices.find((d) => d.device_id === revoke);
@@ -493,7 +501,8 @@ describe("KeyRotations", () => {
     } as StoredIdentity;
 
     expect(pendingRotationOf(damaged)).toBeNull();
-    expect(pendingRotationOf({ ...damaged, epochs: [...damaged.epochs, { epoch: 2, raw: "x" }] }))
-      .toEqual({ epoch: 2, revoke: null });
+    expect(
+      pendingRotationOf({ ...damaged, epochs: [...damaged.epochs, { epoch: 2, raw: "x" }] })
+    ).toEqual({ epoch: 2, revoke: null });
   });
 });
