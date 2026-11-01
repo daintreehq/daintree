@@ -207,6 +207,18 @@ export const SETTING_CATALOG = {
       hostMode: device,
       // This machine's own listener and the devices paired to it.
       deviceAnswer: device,
+      // Decisions: the switch and the relay are the owner's, so a remote window
+      // edits this machine's, and a Host never holds its own (#15996). Each field
+      // declares its owner so a field added later has to choose one.
+      decisions: {
+        fields: {
+          enabled: device,
+          relayOrigin: device,
+          installationId: device,
+          deviceId: device,
+          hostId: device,
+        },
+      },
       remoteHostsPreferences: device,
       // What this machine lets a host's plugins do with its clipboard.
       remoteHostPluginClipboardGrants: devicePerHost,

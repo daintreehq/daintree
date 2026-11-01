@@ -51,6 +51,10 @@ export const APP_STATE_FIELD_OWNERSHIP = exactlyOver<keyof StoreSchema["appState
   declaredOwners(config.appState.fields)
 );
 
+export const DECISIONS_FIELD_OWNERSHIP = exactlyOver<
+  keyof NonNullable<StoreSchema["decisions"]>
+>()(declaredOwners(config.decisions.fields));
+
 export const WINDOW_STATES_STORE_OWNERSHIP = exactlyOver<keyof WindowStatesStoreSchema>()(
   declaredOwners(SETTING_CATALOG["window-states"].entries)
 );
