@@ -1209,8 +1209,7 @@ export async function initGlobalServices(
     name: "schedule-os-job",
     run: async () => {
       if (process.platform !== "darwin") return;
-      const { startScheduleOsJob } =
-        await import("../services/scheduledRuns/scheduleOsJobLive.js");
+      const { startScheduleOsJob } = await import("../services/scheduledRuns/scheduleOsJobLive.js");
       startScheduleOsJob();
     },
   });

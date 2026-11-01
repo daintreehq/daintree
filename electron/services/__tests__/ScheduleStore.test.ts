@@ -343,9 +343,7 @@ describe("ScheduleStore", () => {
       writeIssues
     );
 
-    expect(
-      await store.create(PROJECT, { ...input, policies: { runWhenClosed: true } })
-    ).toEqual({
+    expect(await store.create(PROJECT, { ...input, policies: { runWhenClosed: true } })).toEqual({
       status: "invalid",
       issues: [{ path: "policies.runWhenClosed", cronField: null, message: "Not on this Mac" }],
     });

@@ -48,8 +48,7 @@ export interface LaunchAgentTarget {
 }
 
 export type LaunchAgentTargetResult =
-  | { ok: true; target: LaunchAgentTarget }
-  | { ok: false; unavailable: string };
+  { ok: true; target: LaunchAgentTarget } | { ok: false; unavailable: string };
 
 /** Where this running Daintree's app bundle is, or why a job can't point at it. */
 export function launchAgentTargetFor(input: {

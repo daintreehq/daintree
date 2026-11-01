@@ -15,7 +15,9 @@ const LOCALTIME = "/etc/localtime";
  * environment Daintree was started from can move. Null when neither names a
  * zone, never UTC by default.
  */
-export function readSystemTimeZone(readLink: (file: string) => string = readlinkSync): string | null {
+export function readSystemTimeZone(
+  readLink: (file: string) => string = readlinkSync
+): string | null {
   try {
     const match = /\/zoneinfo\/(.+)$/.exec(readLink(LOCALTIME));
     if (match) {
@@ -34,7 +36,9 @@ export function readSystemTimeZone(readLink: (file: string) => string = readlink
 }
 
 /** This machine's OS job, read fresh each time: the system zone can change while Daintree runs. */
-export function scheduleOsJobContext(platform: NodeJS.Platform = process.platform): ScheduleOsJobContext {
+export function scheduleOsJobContext(
+  platform: NodeJS.Platform = process.platform
+): ScheduleOsJobContext {
   if (platform !== "darwin") return { kind: null, systemTimeZone: null };
   return { kind: "launch-agent", systemTimeZone: readSystemTimeZone() };
 }

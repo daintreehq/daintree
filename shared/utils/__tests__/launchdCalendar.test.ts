@@ -50,7 +50,7 @@ function cronFirings(expression: string, from: number, days: number): number[] {
   if (!parsed.ok) throw new Error(parsed.error.message);
   const end = from + days * DAY_MS;
   const out: number[] = [];
-  for (let at = nextCronOccurrence(parsed.cron, "UTC", from - 1); at !== null && at < end; ) {
+  for (let at = nextCronOccurrence(parsed.cron, "UTC", from - 1); at !== null && at < end;) {
     out.push(at);
     at = nextCronOccurrence(parsed.cron, "UTC", at);
   }

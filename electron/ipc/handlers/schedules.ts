@@ -207,16 +207,14 @@ async function handleRunNow(
  */
 async function handleOsJobStatus(ctx: IpcContext): Promise<ScheduleOsJobStatus> {
   const projectId = requireSenderProjectId(ctx);
-  const { scheduleOsJobStatus } =
-    await import("../../services/scheduledRuns/scheduleOsJobLive.js");
+  const { scheduleOsJobStatus } = await import("../../services/scheduledRuns/scheduleOsJobLive.js");
   return scheduleOsJobStatus(projectId);
 }
 
 /** Rewrites and reloads the job from the saved schedules. It saves nothing and runs nothing. */
 async function handleRepairOsJob(ctx: IpcContext): Promise<ScheduleOsJobStatus> {
   const projectId = requireSenderProjectId(ctx);
-  const { repairScheduleOsJob } =
-    await import("../../services/scheduledRuns/scheduleOsJobLive.js");
+  const { repairScheduleOsJob } = await import("../../services/scheduledRuns/scheduleOsJobLive.js");
   return repairScheduleOsJob(projectId);
 }
 

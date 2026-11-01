@@ -61,7 +61,11 @@ describe("ScheduleOsJobStatus (#15990)", () => {
   });
 
   it("counts the schedules a current job starts", () => {
-    const { text } = show(CURRENT, [schedule("a"), schedule("b"), schedule("c", { enabled: false })]);
+    const { text } = show(CURRENT, [
+      schedule("a"),
+      schedule("b"),
+      schedule("c", { enabled: false }),
+    ]);
     expect(text()).toContain("for 2 schedules here");
     expect(screen.queryByRole("button", { name: "Repair" })).toBeNull();
   });

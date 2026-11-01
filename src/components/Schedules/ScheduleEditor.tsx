@@ -171,7 +171,10 @@ function runWhenClosedReason(
 }
 
 /** The same reasons main gives, checked here so a field says what's wrong before Save. */
-function localIssues(draft: Draft, runWhenClosed: string | null): Partial<Record<FieldKey, string>> {
+function localIssues(
+  draft: Draft,
+  runWhenClosed: string | null
+): Partial<Record<FieldKey, string>> {
   const issues: Partial<Record<FieldKey, string>> = {};
   if (draft.name.trim() === "") issues.name = "Name the schedule";
   if (draft.agentId === "") issues.agentId = "Choose an agent";
@@ -352,8 +355,7 @@ export function ScheduleEditor({
   const agentName = getEffectiveAgentConfig(draft.agentId)?.name ?? "This agent";
   // Shown where an OS job exists, and wherever the option is already on so it can be turned off.
   const showRunWhenClosed =
-    draft.runWhenClosed ||
-    (osJobContext ? osJobContext.kind !== null : isMac());
+    draft.runWhenClosed || (osJobContext ? osJobContext.kind !== null : isMac());
 
   const save = async () => {
     setAttempted(true);

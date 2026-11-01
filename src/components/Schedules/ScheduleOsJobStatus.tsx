@@ -63,8 +63,8 @@ export function ScheduleOsJobStatus({
   } else if (status.state === "current" && started > 0) {
     job = (
       <Callout severity="neutral" size="compact" icon={CalendarClock}>
-        macOS starts Daintree without a window for {pluralize(started, "schedule")} here when
-        it isn&apos;t running.
+        macOS starts Daintree without a window for {pluralize(started, "schedule")} here when it
+        isn&apos;t running.
       </Callout>
     );
   }

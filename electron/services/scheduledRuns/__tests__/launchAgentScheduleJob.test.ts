@@ -326,9 +326,9 @@ describe("createLaunchAgentScheduleJob", () => {
     const launchctl = fakeLaunchctl({ loaded: true, bootoutSticks: true });
     const files = memoryFs({ [FILE]: "old" });
 
-    await expect(job(launchctl, files).sync([], "Europe/London", { reload: false })).rejects.toThrow(
-      /Couldn't unload/
-    );
+    await expect(
+      job(launchctl, files).sync([], "Europe/London", { reload: false })
+    ).rejects.toThrow(/Couldn't unload/);
     expect(files.files.has(FILE)).toBe(false);
   });
 
@@ -385,14 +385,12 @@ describe("createLaunchAgentScheduleJob", () => {
 
   it("reads a launchctl that couldn't answer as unknown, not unloaded", async () => {
     const files = memoryFs();
-    const run = vi.fn(
-      async (): Promise<CommandResult> => ({
-        code: null,
-        stdout: "",
-        stderr: "",
-        failure: "timeout",
-      })
-    );
+    const run = vi.fn(async (): Promise<CommandResult> => ({
+      code: null,
+      stdout: "",
+      stderr: "",
+      failure: "timeout",
+    }));
     const adapter = createLaunchAgentScheduleJob({
       homeDir: HOME,
       uid: 501,
