@@ -674,3 +674,39 @@ describe("LinkSession lane priority", () => {
     );
   });
 });
+
+describe("LinkSession endpoint closes (#15881)", () => {
+  it("writes what an endpoint queued before its close ahead of it, and other control frames past it", async () => {
+    const { host, client } = await pair();
+    const arrived: string[] = [];
+    host.setSendHandler((body) => arrived.push(`send:${body.channel}`));
+    host.on(Lane.INTERACTIVE, InteractiveKind.TERMINAL_IN, () => arrived.push("input"));
+    host.on(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, (body) =>
+      arrived.push(`close:${body.endpointId}`)
+    );
+    host.on(Lane.CONTROL, ControlKind.ENDPOINT_OPEN, (body) =>
+      arrived.push(`open:${body.endpointId}`)
+    );
+
+    // All before one flush, where the control lane would otherwise go first.
+    client.send("e1", "commit", []);
+    client.post({
+      lane: Lane.INTERACTIVE,
+      kind: InteractiveKind.TERMINAL_IN,
+      body: { endpointId: "e1", message: { type: "write", data: "q" } },
+    });
+    client.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.ENDPOINT_CLOSE,
+      body: { endpointId: "e1" },
+    });
+    client.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.ENDPOINT_OPEN,
+      body: { endpointId: "e2", projectId: "p", openId: "o" },
+    });
+
+    await waitFor(() => arrived.length === 4);
+    expect(arrived).toEqual(["open:e2", "input", "send:commit", "close:e1"]);
+  });
+});

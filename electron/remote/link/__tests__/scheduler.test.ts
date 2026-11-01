@@ -184,3 +184,87 @@ describe("LaneScheduler", () => {
     expect((rpcAt - 1) * (big + H)).toBeLessThan(INTERACTIVE_BURST_BYTES);
   });
 });
+
+describe("LaneScheduler endpoint closes (#15881)", () => {
+  /** A frame told apart by its stream id. */
+  const tagged = (lane: Lane, tag: number): LinkFrame => ({
+    lane,
+    kind: 1,
+    streamId: tag,
+    payload: new Uint8Array(1),
+  });
+
+  /** Serves everything ready, reporting each frame written as the session does. */
+  function drain(s: LaneScheduler): number[] {
+    const order: number[] = [];
+    for (let fr = s.next(); fr; fr = s.next()) {
+      order.push(fr.streamId);
+      s.written(fr);
+    }
+    return order;
+  }
+
+  it("holds a close until its endpoint's earlier frames on every lane are written", () => {
+    const s = new LaneScheduler();
+    s.enqueue(tagged(Lane.RPC, 1), undefined, { endpointIds: ["e1"] });
+    s.enqueue(tagged(Lane.INTERACTIVE, 2), undefined, { endpointIds: ["e1"] });
+    s.enqueue(tagged(Lane.CONTROL, 3), undefined, { closes: "e1" });
+    // Control traffic with no stake in the endpoint still goes first.
+    s.enqueue(tagged(Lane.CONTROL, 4));
+    expect(drain(s)).toEqual([4, 2, 1, 3]);
+    expect(s.isEmpty).toBe(true);
+  });
+
+  it("waits for the transport to take a frame, not for the frame to be served", () => {
+    const s = new LaneScheduler();
+    s.enqueue(tagged(Lane.RPC, 1), undefined, { endpointIds: ["e1"] });
+    s.enqueue(tagged(Lane.CONTROL, 2), undefined, { closes: "e1" });
+    const served = s.next()!;
+    expect(served.streamId).toBe(1);
+    // Taken from the queue but not yet written (a write that threw, a shutdown).
+    expect(s.next()).toBeUndefined();
+    expect(s.isEmpty).toBe(false);
+    s.written(served);
+    expect(s.next()?.streamId).toBe(2);
+  });
+
+  it("closes at once when nothing of its endpoint is waiting, whatever other endpoints have queued", () => {
+    const s = new LaneScheduler();
+    s.enqueue(tagged(Lane.RPC, 1), undefined, { endpointIds: ["e2"] });
+    s.enqueue(tagged(Lane.RPC, 2), undefined, { endpointIds: ["e1"] });
+    s.written(s.next()!);
+    s.written(s.next()!);
+    s.enqueue(tagged(Lane.RPC, 3), undefined, { endpointIds: ["e2"] });
+    s.enqueue(tagged(Lane.CONTROL, 4), undefined, { closes: "e1" });
+    expect(drain(s)).toEqual([4, 3]);
+  });
+
+  it("keeps a reopen behind the held close, and frames after the close never hold it", () => {
+    const s = new LaneScheduler();
+    s.enqueue(tagged(Lane.RPC, 1), undefined, { endpointIds: ["e1"] });
+    s.enqueue(tagged(Lane.CONTROL, 2), undefined, { closes: "e1" });
+    s.enqueue(tagged(Lane.CONTROL, 3), undefined, { endpointIds: ["e1"] });
+    s.enqueue(tagged(Lane.RPC, 4), undefined, { endpointIds: ["e1"] });
+    s.enqueue(tagged(Lane.CONTROL, 5), undefined, { closes: "e1" });
+    expect(drain(s)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("counts a held close against its lane and forgets it on clear", () => {
+    const s = new LaneScheduler(tight);
+    s.enqueue(tagged(Lane.RPC, 1), undefined, { endpointIds: ["e1"] });
+    const fits = Math.floor(limit.hardCapBytes / (1 + H));
+    for (let i = 0; i < fits; i++) {
+      expect(s.enqueue(tagged(Lane.CONTROL, 10 + i), undefined, { closes: "e1" })).not.toBe(
+        "refused"
+      );
+    }
+    expect(s.next()?.streamId).toBe(1);
+    expect(s.enqueue(tagged(Lane.CONTROL, 4))).toBe("refused");
+    expect(s.queuedBytes(Lane.CONTROL)).toBe(fits * (1 + H));
+
+    // The rpc frame was served but never written: a session that closed.
+    s.clear();
+    s.enqueue(tagged(Lane.CONTROL, 5), undefined, { closes: "e1" });
+    expect(drain(s)).toEqual([5]);
+  });
+});
