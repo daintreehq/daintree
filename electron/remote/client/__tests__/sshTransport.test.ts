@@ -790,6 +790,30 @@ describe("SshTransport with an injected ssh", () => {
       );
       expect(ensureRunning).toHaveBeenCalledTimes(1);
       expect(reads.count).toBe(2);
+      // A dial that says the host may be started asks the same way.
+      await expect(
+        transport.open(new AbortController().signal, { mayStart: true })
+      ).rejects.toBeInstanceOf(HostModeOffError);
+      expect(ensureRunning).toHaveBeenCalledTimes(2);
+      expect(reads.count).toBe(4);
+    });
+
+    it("never asks while the dial says the host may not be started (it said it is restarting)", async () => {
+      const reads = { count: 0 };
+      const ensureRunning = vi.fn(async () => true);
+      const transport = new SshTransport({
+        target: "studio",
+        clientDir: path.join(root, "c"),
+        spawn: missingDiscovery(reads),
+        ensureRunning,
+      });
+      for (let dial = 0; dial < 3; dial++) {
+        await expect(
+          transport.open(new AbortController().signal, { mayStart: false })
+        ).rejects.toBeInstanceOf(HostModeOffError);
+      }
+      expect(ensureRunning).not.toHaveBeenCalled();
+      expect(reads.count).toBe(3);
     });
 
     it("never asks when ssh itself couldn't reach the host", async () => {

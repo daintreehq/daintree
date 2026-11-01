@@ -143,6 +143,7 @@ describe("RemoteHostsClient", () => {
   let client: RemoteHostsClient;
   let router: RemoteRouter;
   let onFirstUse: Mock<() => void>;
+  let onRetry: Mock<(hostId: string) => void>;
 
   beforeEach(() => {
     registry = new HostRegistry(memoryStore());
@@ -164,8 +165,10 @@ describe("RemoteHostsClient", () => {
     installRouter = vi.fn<(router: RemoteRouter | null) => void>();
     events = [];
     onFirstUse = vi.fn<() => void>();
+    onRetry = vi.fn<(hostId: string) => void>();
     client = new RemoteHostsClient({
       onFirstUse,
+      onRetry,
       registry,
       manager: manager as unknown as RemoteHostManager,
       bindings,
@@ -1376,6 +1379,35 @@ describe("RemoteHostsClient", () => {
       ).rejects.toMatchObject({ code: "HOST_DISCONNECTED" });
       expect(whenReady).toHaveBeenCalledTimes(1);
       startingClient.dispose();
+    });
+
+    it("keeps waiting while the host is checked on to start it, without saying it is starting", async () => {
+      let attempting = true;
+      const checkingClient = new RemoteHostsClient({
+        registry,
+        manager: manager as unknown as RemoteHostManager,
+        bindings,
+        router,
+        senders: { projectKeyFor: () => null, windowIdFor: (id) => (id === 5 ? 1 : null) },
+        windows,
+        installRouter,
+        emit: () => {},
+        isStarting: () => false,
+        isAttemptingStart: () => attempting,
+      });
+      const whenReady = manager.connect("studio-01").whenReady;
+      let phase: string | undefined;
+      whenReady.mockResolvedValueOnce("timeout").mockImplementationOnce(async () => {
+        phase = checkingClient.getPendingSwitch(ctxFor(5, 1))?.phase;
+        attempting = false;
+        return "ready";
+      });
+      await expect(
+        checkingClient.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+      ).resolves.toEqual({ outcome: "choose-project", hostId: "studio-01" });
+      expect(whenReady).toHaveBeenCalledTimes(2);
+      expect(phase).toBe("connecting");
+      checkingClient.dispose();
     });
 
     it("says at once when the host answered but Daintree there isn't in Host mode", async () => {
@@ -2961,10 +2993,17 @@ describe("RemoteHostsClient", () => {
   it("starts a link over only when a person asks to, never for a caller waiting on it", async () => {
     client.connect({ hostId: "studio-01", restart: true });
     expect(manager.connect).toHaveBeenLastCalledWith("studio-01", { restart: true });
+    // A person's Retry, and only that, has what was last found there looked at again,
+    // before the dial that would go by it.
+    expect(onRetry).toHaveBeenCalledExactlyOnceWith("studio-01");
+    expect(onRetry.mock.invocationCallOrder[0]).toBeLessThan(
+      manager.connect.mock.invocationCallOrder.at(-1)!
+    );
     client.connect({ hostId: "studio-01" });
     expect(manager.connect).toHaveBeenLastCalledWith("studio-01", { restart: false });
     await client.connectAndWait("studio-01", 1_000);
     expect(manager.connect).toHaveBeenLastCalledWith("studio-01");
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
   it("fills each host's summary from the last frame host metrics holds", () => {

@@ -80,6 +80,13 @@ export interface HostSetupDeps {
 /** Per-machine cache key: an ssh host keeps the key of its target alone. */
 /** How long a host started for a connection gets to begin listening. */
 const START_LISTEN_TIMEOUT_MS = 60_000;
+/**
+ * How long a full probe's answer that Daintree can't be started on a host
+ * stands. A host left quit is probed now and then rather than on every
+ * redial, and one a crash or a reboot has since left startable is still
+ * started without anyone pressing Retry.
+ */
+const UNSTARTABLE_HOLD_MS = 10 * 60_000;
 
 function targetKey(connection: HostConnection): string {
   let key: string;
@@ -114,6 +121,16 @@ function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
 export class HostSetupService {
   private readonly operations: OperationRegistry;
   private readonly targets = new Map<OperationId, HostConnection>();
+  /**
+   * When a full probe found Daintree can't be started on a connection (not
+   * installed, Host mode off, quit on purpose, no way to start it), by
+   * {@link connectionKey}. A failed dial there goes by that answer for
+   * {@link UNSTARTABLE_HOLD_MS}, or until {@link recheckStart} says
+   * something changed.
+   */
+  private readonly unstartable = new Map<string, number>();
+  /** Rechecks so far, by connection: a probe under way through one doesn't record what it saw before it. */
+  private readonly rechecks = new Map<string, number>();
 
   constructor(private readonly deps: HostSetupDeps) {
     this.operations = new OperationRegistry({
@@ -189,6 +206,8 @@ export class HostSetupService {
       throw new AppError({ code: "VALIDATION", message: "applyStaged is not valid" });
     }
     if (!this.targets.has(opId)) this.targets.set(opId, connection);
+    // An install changes what is there and starts it itself.
+    this.recheckStart(connection);
     const normalized: InstallHostPayload = {
       opId,
       connection,
@@ -278,13 +297,18 @@ export class HostSetupService {
       throw new AppError({ code: "INTERNAL", message, userMessage: message });
     }
     this.refuseWhileRetiring(connection);
-    return bootstrapHostMode(connection, before, {
-      channel,
-      probe: () => this.probeOutcome(connection, channel),
-      sleep: this.deps.sleep ?? abortableSleep,
-      now: this.deps.now,
-      updateChannel: this.deps.clientBuild().channel,
-    });
+    try {
+      return await bootstrapHostMode(connection, before, {
+        channel,
+        probe: () => this.probeOutcome(connection, channel),
+        sleep: this.deps.sleep ?? abortableSleep,
+        now: this.deps.now,
+        updateChannel: this.deps.clientBuild().channel,
+      });
+    } finally {
+      // Host mode may be on there now, whatever a dial that checked meanwhile saw.
+      this.recheckStart(connection);
+    }
   }
 
   /**
@@ -294,31 +318,52 @@ export class HostSetupService {
    * service, never turns on Host mode or start at login. Consent is what
    * survives a reboot there: a Mac's own Host mode record saying on, a Linux
    * user service that setup installed. Skipped while an install or update for
-   * the host runs (it stops and starts the host itself). Throws why it
+   * the host runs (it stops and starts the host itself), and for a while for
+   * a host the last full probe found can't be started.
+   * `onStart` is called just before the start goes to the host. Throws why it
    * couldn't start (no logged-in session on a Mac, a failed service).
    */
   async ensureHostRunning(
     connection: HostConnection,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onStart?: () => void
   ): Promise<"listening" | "started" | "not-startable"> {
     if (this.isInstallRunning(connection) || this.deps.isRetiring?.(connection)) {
       return "not-startable";
     }
+    const now = this.deps.now ?? Date.now;
+    const key = connectionKey(connection);
+    const refusedAt = this.unstartable.get(key);
+    if (refusedAt !== undefined) {
+      const since = now() - refusedAt;
+      // A time ahead of the clock (it moved back) says nothing about how long ago.
+      if (since >= 0 && since < UNSTARTABLE_HOLD_MS) return "not-startable";
+      this.unstartable.delete(key);
+    }
+    const rechecks = this.rechecks.get(key) ?? 0;
+    const unstartable = (): "not-startable" => {
+      if (rechecks === (this.rechecks.get(key) ?? 0) && !signal?.aborted) {
+        this.unstartable.set(key, now());
+      }
+      return "not-startable";
+    };
     const channel = this.shellFor(connection);
     const outcome = await this.probeOutcome(connection, channel, signal);
     const probe = outcome.result;
-    if (!outcome.parsed || !probe.reachable || !probe.install) return "not-startable";
+    // Nothing was learned: the next failed dial looks again.
+    if (!outcome.parsed || !probe.reachable) return "not-startable";
+    if (!probe.install) return unstartable();
     if (probe.hostModeListening) return "listening";
-    if (probe.hostModeState?.enabled === false) return "not-startable";
+    if (probe.hostModeState?.enabled === false) return unstartable();
     // Quit there on purpose: starting it again would undo that.
-    if (probe.hostModeState?.stopped === true) return "not-startable";
+    if (probe.hostModeState?.stopped === true) return unstartable();
     const script =
       probe.platform === "darwin" && probe.hostModeState?.enabled === true
         ? macStartScript(probe.install.path)
         : probe.platform === "linux" && probe.advice.hostModeUnit === true
           ? LINUX_START_SCRIPT
           : null;
-    if (!script) return "not-startable";
+    if (!script) return unstartable();
     // Last look before changing anything on the host.
     if (
       signal?.aborted ||
@@ -328,6 +373,7 @@ export class HostSetupService {
       return "not-startable";
     }
     const label = formatHostConnection(connection);
+    onStart?.();
     const started = await channel.exec(script, { timeoutMs: 30_000, signal });
     if (started.code !== 0) {
       throw new AppError({
@@ -340,7 +386,6 @@ export class HostSetupService {
       });
     }
     const sleep = this.deps.sleep ?? abortableSleep;
-    const now = this.deps.now ?? Date.now;
     const deadline = now() + START_LISTEN_TIMEOUT_MS;
     while (now() < deadline) {
       if (signal?.aborted) return "not-startable";
@@ -353,6 +398,17 @@ export class HostSetupService {
       message: "The host's Daintree started but never listened",
       userMessage: `Daintree started on ${label} but didn't begin listening within a minute.`,
     });
+  }
+
+  /**
+   * Something changed there that this machine saw (its Daintree answered, a
+   * person asked to try again, setup ran): the next failed dial checks
+   * whether Daintree can be started rather than going by the last answer.
+   */
+  recheckStart(connection: HostConnection): void {
+    const key = connectionKey(connection);
+    this.rechecks.set(key, (this.rechecks.get(key) ?? 0) + 1);
+    this.unstartable.delete(key);
   }
 
   /** The payload's connection, if this platform's Shell can reach hosts that way. */
@@ -385,6 +441,7 @@ export class HostSetupService {
   /** Forgetting a host drops what reaching it left here (an SSH master and control socket) and any cached bundles. */
   async forgetArtifacts(descriptor: Pick<HostDescriptor, "connection">): Promise<void> {
     const { connection } = descriptor;
+    this.recheckStart(connection);
     switch (connection.kind) {
       case "ssh":
         await closeSshMaster(this.deps.run, this.deps.clientDir, connection.target, 10_000);

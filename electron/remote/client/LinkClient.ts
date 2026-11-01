@@ -355,7 +355,9 @@ export class LinkClient {
 
     let connection: LinkTransportConnection;
     try {
-      connection = await this.options.transport.open(abort.signal);
+      connection = await this.options.transport.open(abort.signal, {
+        mayStart: !this.restartAnnounced,
+      });
     } catch (err) {
       if (this.attemptAbort === abort) this.attemptAbort = null;
       if (stale()) return;

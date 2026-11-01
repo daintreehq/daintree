@@ -20,8 +20,18 @@ export interface LinkTransportConnection {
   dispose(): Promise<void>;
 }
 
+export interface LinkOpenOptions {
+  /**
+   * Whether a host reached with no Daintree serving may be checked on and
+   * started (true unless given). False while the host has said it is
+   * restarting: it comes back by itself, and until then its record says it
+   * quit on purpose.
+   */
+  mayStart?: boolean;
+}
+
 export interface LinkTransport {
-  open(signal: AbortSignal): Promise<LinkTransportConnection>;
+  open(signal: AbortSignal, options?: LinkOpenOptions): Promise<LinkTransportConnection>;
 }
 
 /** A failure to reach the host. `detail` is what we observed (ssh's own words), never a guess. */

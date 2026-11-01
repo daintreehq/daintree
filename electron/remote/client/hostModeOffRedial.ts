@@ -24,9 +24,9 @@ interface Watch {
  * because no Daintree was listening there. A host that reboots, or whose
  * Daintree is quit and started again, gives that answer for as long as it
  * takes to come back, and the window should then come back with it. Only
- * ever dials an existing link through its own retry, so nothing is started
- * there (a host that was quit on purpose stays quit) and a host nobody shows
- * stays parked.
+ * ever dials an existing link through its own retry, which starts Daintree
+ * there only as any dial would (a host that was quit on purpose stays quit),
+ * and a host nobody shows stays parked.
  */
 export class HostModeOffRedial {
   private readonly watches = new Map<HostId, Watch>();

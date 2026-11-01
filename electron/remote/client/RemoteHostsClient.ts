@@ -208,11 +208,19 @@ export interface RemoteHostsClientOptions {
   /** How long a switch naming no project waits to hear whether the host has a copy of the window's. */
   copyLookupTimeoutMs?: number;
   /**
-   * Whether this machine is checking on or starting Daintree on the host
-   * right now (a reboot or power cut left it stopped). A wait for the link
-   * goes on while it is, up to {@link STARTING_TIMEOUT_MS}.
+   * Whether this machine is starting Daintree on the host right now (a
+   * reboot or power cut left it stopped): a switch waiting on it says so. A
+   * wait for the link goes on while it is, up to {@link STARTING_TIMEOUT_MS}.
    */
   isStarting?: (hostId: HostId) => boolean;
+  /**
+   * Whether this machine is checking on the host to start Daintree there, or
+   * starting it. A wait for the link goes on through the check too, since it
+   * can end in a start; only the start itself is said as starting.
+   */
+  isAttemptingStart?: (hostId: HostId) => boolean;
+  /** A person asked to try the host again: what was last found there no longer stands. */
+  onRetry?: (hostId: HostId) => void;
   /** How long forgetting a host waits for each of its windows to come back here. */
   forgetSwitchWaitMs?: number;
   /** After a host is forgotten: drop what this machine kept for it (SSH master, cached bundles). */
@@ -260,7 +268,8 @@ const DEFAULT_READY_TIMEOUT_MS = 20_000;
 const DEFAULT_COPY_LOOKUP_TIMEOUT_MS = 3_000;
 /**
  * The longest a wait for the link goes on while the host's Daintree is being
- * started: its launch is given 30 s and its listener a minute.
+ * checked on to start it, or started: the check is given 30 s, the launch
+ * 30 s and the listener a minute.
  */
 const STARTING_TIMEOUT_MS = 120_000;
 
@@ -665,6 +674,7 @@ export class RemoteHostsClient {
     if (this.retiring.has(hostId)) return this.options.manager.connectionState(hostId);
     this.ensureRouter();
     this.disconnectedByPerson.delete(hostId);
+    if (payload.restart === true) this.options.onRetry?.(hostId);
     return this.options.manager.connect(hostId, { restart: payload.restart === true }).state();
   }
 
@@ -1862,8 +1872,9 @@ export class RemoteHostsClient {
 
   /**
    * Wait for calls to reach the host, and keep waiting past the usual bound
-   * while its Daintree is being started: giving up there reported a host
-   * that was coming up as unreachable, and the switch needed another click.
+   * while its Daintree is being checked on to start it, or started: giving up
+   * there reported a host that was coming up as unreachable, and the switch
+   * needed another click.
    */
   private async whenReady(
     connection: { whenReady(timeoutMs: number): Promise<HostReadiness> },
@@ -1879,7 +1890,10 @@ export class RemoteHostsClient {
     const settled = await Promise.race([first, Promise.resolve(NOT_SETTLED)]);
     if (settled === NOT_SETTLED) onWait?.();
     let readiness = settled === NOT_SETTLED ? await first : settled;
-    while (readiness === "timeout" && this.options.isStarting?.(hostId)) {
+    const attempting = () =>
+      this.options.isAttemptingStart?.(hostId) === true ||
+      this.options.isStarting?.(hostId) === true;
+    while (readiness === "timeout" && attempting()) {
       const left = deadline - Date.now();
       if (left <= 0) break;
       onWait?.();
