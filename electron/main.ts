@@ -1118,9 +1118,7 @@ if (!gotTheLock) {
                 // A headless host is here only to listen: exiting lets its unit
                 // restart it, where staying up would leave `systemctl start` a no-op.
                 if (headlessOzone && hostModeLaunch) {
-                  void (remoteHostsLaunch?.stop() ?? Promise.resolve()).finally(() =>
-                    app.exit(1)
-                  );
+                  void (remoteHostsLaunch?.stop() ?? Promise.resolve()).finally(() => app.exit(1));
                 }
               }
             },
