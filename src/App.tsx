@@ -84,6 +84,7 @@ import { UI_TOOLTIP_DELAY_DURATION, UI_TOOLTIP_SKIP_DELAY_DURATION } from "./lib
 import { useE2EBridges } from "./hooks/app/useE2EBridges";
 import { useModalResetKeys } from "./hooks/app/useModalResetKeys";
 import { useAppBootstrap } from "./hooks/app/useAppBootstrap";
+import { useHostConnectionSync } from "./hooks/useHostConnection";
 import { usePaletteWiring } from "./hooks/app/usePaletteWiring";
 
 import {
@@ -367,6 +368,12 @@ function AppInner() {
 
   const electronAvailable = isElectronAvailable();
   const { inject } = useContextInjection();
+
+  // Held here rather than by the layout, which mounts again once hydrated: a
+  // takeover's read-back of the host's state outlives that.
+  useHostConnectionSync(
+    electronAvailable && crashState.status !== "pending" && crashState.status !== "failed"
+  );
 
   // Worktree-sidebar-only toggle (Toolbar button + nav.toggleSidebar). Routed
   // through a dedicated event so AppLayout can read the live sidebar width
