@@ -48,6 +48,51 @@ export function recordCorrectionLanded(
   landed.set(makeDraftKey(panelId, projectId), correction);
 }
 
+// The composers showing each draft, by draft key. A composer writes its text
+// to the store a render after each keystroke, so the store can trail it.
+const draftWriters = new Map<string, Set<() => void>>();
+
+/**
+ * Lets a correction be placed in the text a composer shows, not the store's
+ * copy a render behind it (#15873). `writeThrough` writes typing the store
+ * doesn't hold yet straight to it, and leaves alone a store holding an outside
+ * write the composer hasn't shown.
+ */
+export function registerComposerDraftWriter(
+  panelId: string,
+  projectId: string | undefined,
+  writeThrough: () => void
+): () => void {
+  const key = makeDraftKey(panelId, projectId);
+  let writers = draftWriters.get(key);
+  if (!writers) {
+    writers = new Set();
+    draftWriters.set(key, writers);
+  }
+  writers.add(writeThrough);
+  return () => {
+    const current = draftWriters.get(key);
+    if (!current) return;
+    current.delete(writeThrough);
+    if (current.size === 0) draftWriters.delete(key);
+  };
+}
+
+/** Brings a stored draft up to the typing its composers show, before a correction reads it. */
+export function writeComposerDraftThrough(panelId: string, projectId: string | undefined): void {
+  const writers = draftWriters.get(makeDraftKey(panelId, projectId));
+  if (!writers) return;
+  for (const writeThrough of [...writers]) writeThrough();
+}
+
+/** The correction waiting for this draft's composer, left for it to take. */
+export function peekLandedCorrection(
+  panelId: string,
+  projectId: string | undefined
+): LandedCorrection | null {
+  return landed.get(makeDraftKey(panelId, projectId)) ?? null;
+}
+
 /**
  * The correction waiting for this draft's composer, if `draft` still holds it
  * where it landed. Taken either way: one that no longer matches the draft has
@@ -90,6 +135,29 @@ export function outsideWriteChange(
   const write = landed?.write;
   if (write && write.before === shown && write.after === draft) return write.changes;
   return minimalDocChange(shown, draft);
+}
+
+/**
+ * Whether the composer was typed into after `landed` was placed in the text it
+ * showed (`placedIn`, what it last wrote through). Its passages may have been
+ * typed into, so the composer's text stands and the correction is dropped, as
+ * an edit to a passage drops it (#15873). A composer that was only behind the
+ * draft, typing nothing, still takes the correction.
+ */
+export function typedPastCorrection(
+  shown: string,
+  draft: string,
+  landed: LandedCorrection | null,
+  placedIn: string | null
+): landed is LandedCorrection {
+  const write = landed?.write;
+  return (
+    write !== undefined &&
+    write.after === draft &&
+    write.before === placedIn &&
+    shown !== write.before &&
+    shown !== write.after
+  );
 }
 
 /**

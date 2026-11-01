@@ -511,6 +511,75 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     expect(draft("panel-1")).toBe("my note: the parser");
   });
 
+  // #15873: a composer writes its text to the store a render after each
+  // keystroke, so a reply can arrive with the store a keystroke behind it.
+  it("places a correction in the typing its composer shows, not the store's copy behind it", async () => {
+    const { service, dictate, draft, flush, inputStore } = await setup();
+    const first = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(first.promise);
+    const landing = await import("@/services/voiceCorrectionLanding");
+
+    dictate("panel-1", "fix the parsr");
+    await service.stop();
+    landing.registerComposerDraftWriter("panel-1", undefined, () =>
+      inputStore.getState().setDraftInput("panel-1", "/review fix the parsr")
+    );
+
+    first.resolve({ action: "replace", correctedText: "Fix the parser." });
+    await flush();
+
+    expect(draft("panel-1")).toBe("/review Fix the parser.");
+    const landed = landing.takeLandedCorrection("panel-1", undefined, draft("panel-1"));
+    expect(landed?.write?.before).toBe("/review fix the parsr");
+  });
+
+  it("drops a correction whose passage the composer's typing reached before the store did", async () => {
+    const { service, dictate, draft, flush, inputStore } = await setup();
+    const first = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(first.promise);
+    const landing = await import("@/services/voiceCorrectionLanding");
+
+    dictate("panel-1", "fix the parsr");
+    await service.stop();
+    landing.registerComposerDraftWriter("panel-1", undefined, () =>
+      inputStore.getState().setDraftInput("panel-1", "fix the parser")
+    );
+
+    first.resolve({ action: "replace", correctedText: "Fix the parser." });
+    await flush();
+
+    expect(draft("panel-1")).toBe("fix the parser");
+    expect(service.hasPendingCorrection("panel-1")).toBe(false);
+    expect(landing.takeLandedCorrection("panel-1", undefined, draft("panel-1"))).toBeNull();
+  });
+
+  it("asks only the composers showing the corrected draft to write their typing through", async () => {
+    const { service, dictate, draft, flush } = await setup();
+    const first = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(first.promise);
+    const landing = await import("@/services/voiceCorrectionLanding");
+
+    dictate("panel-1", "fix the parsr");
+    await service.stop();
+    const own = vi.fn();
+    const otherPanel = vi.fn();
+    const otherProject = vi.fn();
+    const gone = vi.fn();
+    landing.registerComposerDraftWriter("panel-1", undefined, own);
+    landing.registerComposerDraftWriter("panel-2", undefined, otherPanel);
+    landing.registerComposerDraftWriter("panel-1", "project-2", otherProject);
+    landing.registerComposerDraftWriter("panel-1", undefined, gone)();
+
+    first.resolve({ action: "replace", correctedText: "Fix the parser." });
+    await flush();
+
+    expect(draft("panel-1")).toBe("Fix the parser.");
+    expect(own).toHaveBeenCalledTimes(1);
+    expect(otherPanel).not.toHaveBeenCalled();
+    expect(otherProject).not.toHaveBeenCalled();
+    expect(gone).not.toHaveBeenCalled();
+  });
+
   it("lands a pending correction when text is typed before it while a restart dictates", async () => {
     const { service, dictate, draft, flush, inputStore } = await setup();
     const first = deferred<CorrectResult>();

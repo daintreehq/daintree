@@ -2,9 +2,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import {
   isLatestDictation,
+  peekLandedCorrection,
   rebaseCorrectionBaseline,
   recordCorrectionLanded,
   takeLandedCorrection,
+  typedPastCorrection,
 } from "../voiceCorrectionLanding";
 
 const correction = {
@@ -57,6 +59,54 @@ describe("landed corrections", () => {
       sessionId: "session-1",
     });
     expect(takeLandedCorrection("term-1", "p1", "same")).toBeNull();
+  });
+});
+
+describe("peekLandedCorrection", () => {
+  beforeEach(() => {
+    takeLandedCorrection("term-1", "p1", "");
+  });
+
+  it("shows the correction waiting for a draft and leaves it for its composer", () => {
+    recordCorrectionLanded("term-1", "p1", correction);
+
+    expect(peekLandedCorrection("term-1", undefined)).toBeNull();
+    expect(peekLandedCorrection("term-1", "p1")).toEqual(correction);
+    expect(takeLandedCorrection("term-1", "p1", draft)).toEqual(correction);
+    expect(peekLandedCorrection("term-1", "p1")).toBeNull();
+  });
+});
+
+describe("typedPastCorrection (#15873)", () => {
+  const before = "/review hello there";
+  const after = "/review Hello, there.";
+  const landed = {
+    ...correction,
+    from: 8,
+    write: { before, after, changes: [{ from: 8, to: 19, insert: "Hello, there." }] },
+  };
+
+  it("holds once the composer was typed into after handing its text to the correction", () => {
+    expect(typedPastCorrection("/review now hello there", after, landed, before)).toBe(true);
+  });
+
+  it("leaves a correction the composer can still take, or already shows", () => {
+    expect(typedPastCorrection(before, after, landed, before)).toBe(false);
+    expect(typedPastCorrection(after, after, landed, before)).toBe(false);
+  });
+
+  it("leaves a correction placed in text the composer didn't hand it", () => {
+    // Only behind the draft: an outside write it hadn't shown yet.
+    expect(typedPastCorrection("hello there", after, landed, null)).toBe(false);
+    expect(typedPastCorrection("hello there", after, landed, "hello there")).toBe(false);
+  });
+
+  it("leaves a draft written to again since the correction landed", () => {
+    expect(typedPastCorrection("/review now hello there", after + " More", landed, before)).toBe(
+      false
+    );
+    expect(typedPastCorrection("/review now hello there", after, null, before)).toBe(false);
+    expect(typedPastCorrection("/review now hello there", after, correction, before)).toBe(false);
   });
 });
 

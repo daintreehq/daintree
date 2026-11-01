@@ -26,7 +26,11 @@ import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useDictationRangeStore } from "@/store/dictationRangeStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
-import { recordCorrectionLanded, takeLandedCorrection } from "@/services/voiceCorrectionLanding";
+import {
+  recordCorrectionLanded,
+  takeLandedCorrection,
+  writeComposerDraftThrough,
+} from "@/services/voiceCorrectionLanding";
 import { recordScratchLanded, takeScratchLanded } from "@/services/voiceScratchCommand";
 import { setPendingComposerSelection } from "@/lib/composerCaret";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
@@ -532,66 +536,157 @@ describe("HybridInputBar after Escape cancels a dictation over a selection (#148
 
 describe("HybridInputBar when a correction lands while a keystroke is on its way to the draft (#15873)", () => {
   const TYPED = "/review ";
+  const PASSAGE = RAW.slice(FROM);
+  const FIXED = CORRECTED.slice(FROM);
 
   /**
-   * A correction reply as `requestCorrection` lands it: its passage placed in
-   * the stored draft, the draft swapped, the landing recorded, the revision bumped.
+   * A correction reply as `requestCorrection` lands it: the composer's typing
+   * written through, its passage placed in the stored draft, the draft
+   * swapped, the landing recorded, the revision bumped.
    */
   function replyWithCorrection(): void {
+    writeComposerDraftThrough("term-1", undefined);
     const inputs = useTerminalInputStore.getState();
     const before = inputs.getDraftInput("term-1");
-    const from = before.indexOf(RAW.slice(FROM));
+    const from = before.indexOf(PASSAGE);
     if (from < 0) return;
-    const to = from + RAW.length - FROM;
-    const insert = CORRECTED.slice(FROM);
-    const after = before.slice(0, from) + insert + before.slice(to);
+    const to = from + PASSAGE.length;
+    const after = before.slice(0, from) + FIXED + before.slice(to);
     inputs.setDraftInput("term-1", after);
     recordCorrectionLanded("term-1", undefined, {
       from,
-      rawText: before.slice(from, to),
-      correctedText: insert,
-      baseline: null,
+      rawText: PASSAGE,
+      correctedText: FIXED,
+      baseline: { raw: PASSAGE, corrected: FIXED },
       sessionId: "session-1",
-      write: { before, after, changes: [{ from, to, insert }] },
+      write: { before, after, changes: [{ from, to, insert: FIXED }] },
     });
+    useVoiceRecordingStore.getState().setSessionCorrectedText("term-1", FIXED);
     inputs.bumpExternalDraftRevision({ keepsSelection: true });
   }
 
-  function typeAtStart(view: EditorView): void {
+  /** A keystroke the editor shows and the draft store doesn't hold yet. */
+  function type(view: EditorView, at: number, text: string): void {
     view.dispatch({
-      changes: { from: 0, insert: TYPED },
-      selection: { anchor: TYPED.length },
+      changes: { from: at, insert: text },
+      selection: { anchor: at + text.length },
       userEvent: "input.type",
     });
   }
 
-  it("keeps the keystroke when the composer writes its value back after the correction", async () => {
+  async function mountWithDictation(): Promise<EditorView> {
     const { view } = await mount();
+    await beginDictation("session-1");
     await writeDraft(RAW);
+    await act(async () => {
+      useVoiceRecordingStore.getState().setSessionCorrectedText("term-1", PASSAGE);
+    });
+    Object.defineProperty(view, "hasFocus", { configurable: true, get: () => true });
+    return view;
+  }
+
+  const marks = (view: EditorView) =>
+    [...view.contentDOM.querySelectorAll(".cm-voice-corrected")].map((el) => el.textContent);
+
+  it("keeps the keystroke when the composer writes its value back after the correction", async () => {
+    const view = await mountWithDictation();
 
     // One render takes both: the write-back effect runs before the sync.
     await act(async () => {
-      typeAtStart(view);
+      type(view, 0, TYPED);
+      expect(view.state.doc.toString()).toBe(TYPED + RAW);
+      expect(draft()).toBe(RAW);
       replyWithCorrection();
     });
 
     expect(draft()).toBe(TYPED + CORRECTED);
     expect(view.state.doc.toString()).toBe(TYPED + CORRECTED);
     expect(view.state.selection.main.head).toBe(TYPED.length);
+    expect(marks(view)).toEqual(["Zustand"]);
+
+    await act(async () => {});
+    expect(draft()).toBe(TYPED + CORRECTED);
+    expect(view.state.doc.toString()).toBe(TYPED + CORRECTED);
+
+    await undo(view);
+    expect(view.state.doc.toString()).toBe(TYPED + RAW);
+    expect(draft()).toBe(TYPED + RAW);
   });
 
   it("keeps the keystroke when the correction syncs into the editor before the write-back", async () => {
-    const { view } = await mount();
-    await writeDraft(RAW);
+    const view = await mountWithDictation();
 
     // The keystroke's render waits behind the store's: the sync runs alone first.
     await act(async () => {
-      startTransition(() => typeAtStart(view));
+      startTransition(() => type(view, 0, TYPED));
+      expect(view.state.doc.toString()).toBe(TYPED + RAW);
+      expect(draft()).toBe(RAW);
       replyWithCorrection();
     });
 
     expect(draft()).toBe(TYPED + CORRECTED);
     expect(view.state.doc.toString()).toBe(TYPED + CORRECTED);
     expect(view.state.selection.main.head).toBe(TYPED.length);
+    expect(marks(view)).toEqual(["Zustand"]);
+
+    await act(async () => {});
+    expect(draft()).toBe(TYPED + CORRECTED);
+    expect(view.state.doc.toString()).toBe(TYPED + CORRECTED);
+
+    await undo(view);
+    expect(view.state.doc.toString()).toBe(TYPED + RAW);
+    expect(draft()).toBe(TYPED + RAW);
+  });
+
+  it("keeps a keystroke typed after the passage", async () => {
+    const view = await mountWithDictation();
+
+    await act(async () => {
+      type(view, RAW.length, " now");
+      replyWithCorrection();
+    });
+
+    expect(draft()).toBe(CORRECTED + " now");
+    expect(view.state.doc.toString()).toBe(CORRECTED + " now");
+    expect(view.state.selection.main.head).toBe(CORRECTED.length + " now".length);
+  });
+
+  it("drops a correction the editor was typed into again before it could show it", async () => {
+    const view = await mountWithDictation();
+
+    await act(async () => {
+      type(view, 0, TYPED);
+      replyWithCorrection();
+      type(view, TYPED.length, "now ");
+    });
+
+    const typed = TYPED + "now " + RAW;
+    expect(view.state.doc.toString()).toBe(typed);
+    expect(draft()).toBe(typed);
+    expect(view.state.selection.main.head).toBe(TYPED.length + "now ".length);
+    expect(reviewing(view)).toBe(false);
+    expect(marks(view)).toEqual([]);
+    expect(useVoiceRecordingStore.getState().panelBuffers["term-1"]?.sessionCorrectedText).not.toBe(
+      FIXED
+    );
+
+    await act(async () => {});
+    expect(view.state.doc.toString()).toBe(typed);
+    expect(draft()).toBe(typed);
+  });
+
+  it("still lands a correction in a composer that was only behind the draft", async () => {
+    const view = await mountWithDictation();
+
+    // A dictated write the editor hasn't shown, then the correction over it.
+    await act(async () => {
+      const inputs = useTerminalInputStore.getState();
+      inputs.setDraftInput("term-1", "Intro. " + RAW);
+      inputs.bumpExternalDraftRevision({ keepsSelection: true });
+      replyWithCorrection();
+    });
+
+    expect(draft()).toBe("Intro. " + CORRECTED);
+    expect(view.state.doc.toString()).toBe("Intro. " + CORRECTED);
   });
 });
