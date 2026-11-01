@@ -84,6 +84,7 @@ import { resolveMcpConfirmRequester } from "@/lib/mcpConfirmRequester";
 import { waitForWorktreeSnapshot } from "@/store/worktreeSnapshotSync";
 import { withReplayedWorktreeDetails } from "@/services/actions/replayedContextWorktree";
 import {
+  agentPresetMutationFingerprint,
   isAgentPresetMutationAction,
   planAgentPresetMutation,
   type AgentPresetMutation,
@@ -335,10 +336,26 @@ export function mcpConfirmPreviewTitle(target: McpConfirmPreviewTarget): string 
 
 /**
  * Stands in for a create's id while it is only being previewed or checked; the
- * run mints the one that is stored. Never offered as a fallback target, since
- * the preset it names doesn't exist yet.
+ * run mints the one that is stored. Fresh each time, so it can't match a real
+ * preset a fallback names and refuse that as the preset naming itself.
  */
-const PREVIEW_PRESET_ID = "user-preview";
+function previewPresetId(): string {
+  return `user-${crypto.randomUUID()}`;
+}
+
+/**
+ * The preset or its defaults changed between the preview and the approval
+ * (#16047). Main reads `CONFIRMATION_REQUIRED` as "ask again", which is what
+ * the caller should do: a fresh call previews the preset as it now stands.
+ */
+const PRESET_CHANGED_RESULT: ActionDispatchResult = {
+  ok: false,
+  error: {
+    code: "CONFIRMATION_REQUIRED",
+    message:
+      "Preset write refused: the preset or its defaults changed while the confirmation was open, so the approval doesn't cover what would be written. Nothing was written. Call again to raise a fresh confirmation.",
+  },
+};
 
 /** Plan a preset write against this view's stores, for its preview or its refusal. */
 function planPresetWriteHere(
@@ -352,7 +369,7 @@ function planPresetWriteHere(
     actionId,
     args,
     readPresetWriteSources(projectId),
-    PREVIEW_PRESET_ID
+    previewPresetId()
   );
 }
 
@@ -1766,6 +1783,33 @@ export function useMcpBridge(): void {
                   confirmationDecision,
                 });
                 return;
+              }
+
+              // A preset write runs only on the change it was shown (#16047).
+              // `run()` plans again against the store it writes, so a preset
+              // edited, removed or made a default in another view while the
+              // dialog was open would otherwise be written on an approval that
+              // described something else. Keyed on the action, like the push
+              // check: with no preview, the approval covers no change.
+              if (isAgentPresetMutationAction(actionId)) {
+                const shown =
+                  previewTarget?.kind === "agentPreset" ? previewTarget.mutation : undefined;
+                const now = planPresetWriteHere(actionId, args, context);
+                const refusal: ActionDispatchResult | undefined = !now.ok
+                  ? { ok: false, error: { code: "VALIDATION_ERROR", message: now.message } }
+                  : shown === undefined ||
+                      agentPresetMutationFingerprint(now.mutation) !==
+                        agentPresetMutationFingerprint(shown)
+                    ? PRESET_CHANGED_RESULT
+                    : undefined;
+                if (refusal !== undefined) {
+                  window.electron.mcpBridge.sendDispatchActionResponse({
+                    requestId,
+                    result: refusal,
+                    confirmationDecision,
+                  });
+                  return;
+                }
               }
             }
           }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentPreset } from "@shared/config/agentRegistry";
 import type { AgentSettings, AgentSettingsEntry } from "@shared/types/agentSettings";
 import {
+  agentPresetMutationFingerprint,
   agentPresetMutationUpdates,
   planAgentPresetMutation,
   type AgentPresetMutation,
@@ -9,35 +10,34 @@ import {
 } from "../agentPresetMutation";
 
 const NEW_ID = "user-new";
+const TOKEN = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789";
+
+type PresetActionId = "agent.createPreset" | "agent.updatePreset" | "agent.deletePreset";
 
 function sources(
-  entry: Partial<AgentSettingsEntry> | undefined,
+  entry: AgentSettingsEntry | undefined,
   extra: Partial<AgentPresetSources> = {}
 ): AgentPresetSources {
-  const settings = {
-    agents: entry ? { codex: entry as AgentSettingsEntry } : {},
-  } as AgentSettings;
+  const settings: AgentSettings = { agents: entry ? { codex: entry } : {} };
   return { settings, ccrPresetsByAgent: {}, projectPresetsByAgent: undefined, ...extra };
 }
 
-function plan(
-  actionId: "agent.createPreset" | "agent.updatePreset" | "agent.deletePreset",
-  args: unknown,
-  from: AgentPresetSources
-): AgentPresetMutation {
+function plan(actionId: PresetActionId, args: unknown, from: AgentPresetSources) {
   const result = planAgentPresetMutation(actionId, args, from, NEW_ID);
   if (!result.ok) throw new Error(`expected a plan, got: ${result.message}`);
   return result.mutation;
 }
 
-function refusal(
-  actionId: "agent.createPreset" | "agent.updatePreset" | "agent.deletePreset",
-  args: unknown,
-  from: AgentPresetSources
-): string {
+function refusal(actionId: PresetActionId, args: unknown, from: AgentPresetSources): string {
   const result = planAgentPresetMutation(actionId, args, from, NEW_ID);
   if (result.ok) throw new Error("expected a refusal");
   return result.message;
+}
+
+function updated(mutation: AgentPresetMutation): AgentPreset {
+  if (mutation.operation !== "update")
+    throw new Error(`expected an update, got ${mutation.operation}`);
+  return mutation.preset;
 }
 
 const WORK: AgentPreset = {
@@ -47,6 +47,7 @@ const WORK: AgentPreset = {
   customFlags: "--search",
   color: "#3b82f6",
 };
+const OTHER: AgentPreset = { id: "user-other", name: "Other" };
 
 describe("agent.createPreset", () => {
   it("appends the preset and never makes it the default", () => {
@@ -65,7 +66,42 @@ describe("agent.createPreset", () => {
     expect("presetId" in updates).toBe(false);
   });
 
-  it("mirrors a skip-permissions choice into the legacy flag, as Settings writes it", () => {
+  it("stores every field Settings edits when each is valid", () => {
+    const mutation = plan(
+      "agent.createPreset",
+      {
+        agentId: "codex",
+        name: "Full",
+        env: { CODEX_HOME: "/x" },
+        args: ["-c", "model_reasoning_effort=high"],
+        customFlags: "--search",
+        dangerousMode: "off",
+        inlineMode: "on",
+        color: "#abc",
+        displayTitle: "Full tab",
+        fallbacks: [WORK.id],
+        fallbackOnRateLimit: true,
+      },
+      sources({ customPresets: [WORK] })
+    );
+    expect(mutation.preset).toEqual({
+      id: NEW_ID,
+      name: "Full",
+      env: { CODEX_HOME: "/x" },
+      args: ["-c", "model_reasoning_effort=high"],
+      customFlags: "--search",
+      // The legacy boolean mirrors the mode, as Settings' editor writes it.
+      dangerousMode: "off",
+      dangerousEnabled: false,
+      inlineMode: "on",
+      color: "#abc",
+      displayTitle: "Full tab",
+      fallbacks: [WORK.id],
+      fallbackOnRateLimit: true,
+    });
+  });
+
+  it("mirrors skip permissions on as true, and stores nothing for inherit or false", () => {
     const on = plan(
       "agent.createPreset",
       { agentId: "codex", name: "Yolo", dangerousMode: "on" },
@@ -91,7 +127,6 @@ describe("agent.createPreset", () => {
         customFlags: "--a && --b",
         color: "blue",
         displayTitle: "<b>",
-        fallbacks: ["user-a", "user-a"],
       },
       sources(undefined)
     );
@@ -106,10 +141,27 @@ describe("agent.createPreset", () => {
     expect(message).toContain("customFlags:");
     expect(message).toContain("color:");
     expect(message).toContain("displayTitle:");
-    expect(message).toContain("fallbacks:");
     // A refused value can be a secret, so it is never echoed back.
     expect(message).not.toContain("/evil");
     expect(message).not.toContain("rm -rf");
+  });
+
+  it("refuses a repeated fallback even when the preset it names exists", () => {
+    const from = sources({ customPresets: [WORK, OTHER] });
+    expect(
+      refusal(
+        "agent.createPreset",
+        { agentId: "codex", name: "C", fallbacks: [WORK.id, WORK.id] },
+        from
+      )
+    ).toContain("distinct preset ids");
+    expect(
+      plan(
+        "agent.createPreset",
+        { agentId: "codex", name: "C", fallbacks: [WORK.id, OTHER.id] },
+        from
+      ).preset.fallbacks
+    ).toEqual([WORK.id, OTHER.id]);
   });
 
   it("refuses a fallback that names no preset of this agent", () => {
@@ -120,6 +172,26 @@ describe("agent.createPreset", () => {
     );
     expect(message).toContain('"user-gone"');
     expect(message).not.toContain(`"${WORK.id}"`);
+  });
+
+  it("counts a repository preset as a fallback only when its snapshot is this project's", () => {
+    const team: AgentPreset = { id: "team", name: "Team" };
+    const args = { agentId: "codex", name: "Chain", fallbacks: ["team"] };
+    expect(
+      plan(
+        "agent.createPreset",
+        args,
+        sources(undefined, { projectPresetsByAgent: { codex: [team] } })
+      ).preset.fallbacks
+    ).toEqual(["team"]);
+    expect(refusal("agent.createPreset", args, sources(undefined))).toContain('"team"');
+  });
+
+  it("refuses a `__proto__` env key, which the schema parse would otherwise drop", () => {
+    const args: unknown = JSON.parse(
+      '{"agentId":"codex","name":"P","env":{"__proto__":"x","SAFE":"ok"}}'
+    );
+    expect(refusal("agent.createPreset", args, sources(undefined))).toContain('env "__proto__"');
   });
 
   it("refuses an unknown field instead of dropping it", () => {
@@ -149,7 +221,11 @@ describe("agent.createPreset", () => {
 
 describe("agent.updatePreset", () => {
   it("changes only the named fields and env keys, keeping everything else", () => {
-    const other: AgentPreset = { id: "user-other", name: "Other" };
+    const stored: AgentPreset = {
+      ...WORK,
+      env: { ...WORK.env, OPENAI_API_KEY: TOKEN, KEEP: "same" },
+    };
+    const snapshot = structuredClone(stored);
     const mutation = plan(
       "agent.updatePreset",
       {
@@ -159,19 +235,24 @@ describe("agent.updatePreset", () => {
         envSet: { CODEX_HOME: "/Users/me/.codex-work-2", NEW_KEY: "1" },
         envUnset: ["OPENAI_BASE_URL"],
       },
-      sources({ customPresets: [other, WORK] })
+      sources({ customPresets: [OTHER, stored] })
     );
-    expect(mutation.operation).toBe("update");
     expect(mutation.customPresets).toEqual([
-      other,
+      OTHER,
       {
         id: WORK.id,
         name: "Work 2",
-        env: { CODEX_HOME: "/Users/me/.codex-work-2", NEW_KEY: "1" },
+        env: {
+          CODEX_HOME: "/Users/me/.codex-work-2",
+          OPENAI_API_KEY: TOKEN,
+          KEEP: "same",
+          NEW_KEY: "1",
+        },
         customFlags: "--search",
         color: "#3b82f6",
       },
     ]);
+    expect(stored).toEqual(snapshot);
   });
 
   it('clears with an empty value or "inherit", and customFlags: null', () => {
@@ -182,7 +263,7 @@ describe("agent.updatePreset", () => {
       dangerousEnabled: true,
       inlineMode: "off",
       displayTitle: "Work tab",
-      fallbacks: ["user-other"],
+      fallbacks: [OTHER.id],
       fallbackOnRateLimit: true,
     };
     const mutation = plan(
@@ -200,12 +281,9 @@ describe("agent.updatePreset", () => {
         fallbackOnRateLimit: false,
         envUnset: ["CODEX_HOME", "OPENAI_BASE_URL"],
       },
-      sources({ customPresets: [stored, { id: "user-other", name: "Other" }] })
+      sources({ customPresets: [stored, OTHER] })
     );
-    expect(mutation.operation === "update" && mutation.preset).toEqual({
-      id: WORK.id,
-      name: "Work",
-    });
+    expect(updated(mutation)).toEqual({ id: WORK.id, name: "Work" });
   });
 
   it("keeps an empty customFlags as a real value: no flags instead of the agent's", () => {
@@ -214,7 +292,7 @@ describe("agent.updatePreset", () => {
       { agentId: "codex", presetId: WORK.id, customFlags: "" },
       sources({ customPresets: [WORK] })
     );
-    expect(mutation.preset.customFlags).toBe("");
+    expect(updated(mutation).customFlags).toBe("");
   });
 
   it("checks only what it touches, so a stored value it doesn't send isn't refused", () => {
@@ -224,7 +302,34 @@ describe("agent.updatePreset", () => {
       { agentId: "codex", presetId: WORK.id, name: "Renamed" },
       sources({ customPresets: [legacy] })
     );
-    expect(mutation.preset).toMatchObject({ name: "Renamed", customFlags: "--a; --b" });
+    expect(updated(mutation)).toMatchObject({ name: "Renamed", customFlags: "--a; --b" });
+  });
+
+  it("asks for a name when the stored one is missing, and accepts the repair", () => {
+    const nameless: AgentPreset = JSON.parse('{"id":"user-a"}');
+    const from = sources({ customPresets: [nameless] });
+    expect(
+      refusal("agent.updatePreset", { agentId: "codex", presetId: "user-a", color: "#abc" }, from)
+    ).toContain("set a new one in the same call");
+    expect(
+      updated(
+        plan(
+          "agent.updatePreset",
+          { agentId: "codex", presetId: "user-a", color: "#abc", name: "Named" },
+          from
+        )
+      )
+    ).toEqual({ id: "user-a", name: "Named", color: "#abc" });
+  });
+
+  it("refuses a fallback that names the preset itself", () => {
+    expect(
+      refusal(
+        "agent.updatePreset",
+        { agentId: "codex", presetId: WORK.id, fallbacks: [WORK.id] },
+        sources({ customPresets: [WORK, OTHER] })
+      )
+    ).toContain("not this preset's own");
   });
 
   it("refuses a no-op, an empty patch, and a key both set and unset", () => {
@@ -247,6 +352,17 @@ describe("agent.updatePreset", () => {
         from
       )
     ).toContain('"CODEX_HOME" is in both');
+  });
+
+  it("refuses an id several stored presets share, rather than guess which launches", () => {
+    const shadowed: AgentPreset = { id: WORK.id, name: "", env: { OPENAI_BASE_URL: "https://x" } };
+    expect(
+      refusal(
+        "agent.updatePreset",
+        { agentId: "codex", presetId: WORK.id, name: "Renamed" },
+        sources({ customPresets: [shadowed, WORK] })
+      )
+    ).toContain(`2 user presets with the id "${WORK.id}"`);
   });
 
   it("refuses a repository preset as read-only, and an id it doesn't know", () => {
@@ -276,17 +392,16 @@ describe("agent.updatePreset", () => {
 
 describe("agent.deletePreset", () => {
   it("removes the preset and clears the agent default only when it named it", () => {
-    const other: AgentPreset = { id: "user-other", name: "Other" };
     const asDefault = plan(
       "agent.deletePreset",
       { agentId: "codex", presetId: WORK.id },
       sources({
-        customPresets: [WORK, other],
+        customPresets: [WORK, OTHER],
         presetId: WORK.id,
-        worktreePresets: { wt1: WORK.id, wt2: other.id, wt3: WORK.id },
+        worktreePresets: { wt1: WORK.id, wt2: OTHER.id, wt3: WORK.id },
       })
     );
-    expect(asDefault.customPresets).toEqual([other]);
+    expect(asDefault.customPresets).toEqual([OTHER]);
     expect(asDefault.operation === "delete" && asDefault.worktreeDefaults).toBe(2);
     const updates = agentPresetMutationUpdates(asDefault);
     expect("presetId" in updates && updates.presetId === undefined).toBe(true);
@@ -294,7 +409,7 @@ describe("agent.deletePreset", () => {
     const notDefault = plan(
       "agent.deletePreset",
       { agentId: "codex", presetId: WORK.id },
-      sources({ customPresets: [WORK, other], presetId: other.id })
+      sources({ customPresets: [WORK, OTHER], presetId: OTHER.id })
     );
     expect("presetId" in agentPresetMutationUpdates(notDefault)).toBe(false);
   });
@@ -307,5 +422,47 @@ describe("agent.deletePreset", () => {
         sources(undefined, { ccrPresetsByAgent: { codex: [{ id: "ccr-route", name: "Router" }] } })
       )
     ).toContain('"Router" is a CCR preset');
+  });
+});
+
+describe("agentPresetMutationFingerprint", () => {
+  it("tells apart what an approval covers, ignoring a create's id and the rest of the list", () => {
+    const args = { agentId: "codex", presetId: WORK.id };
+    const shown = plan("agent.deletePreset", args, sources({ customPresets: [WORK] }));
+    const siblingAdded = plan(
+      "agent.deletePreset",
+      args,
+      sources({ customPresets: [WORK, OTHER] })
+    );
+    const madeDefault = plan(
+      "agent.deletePreset",
+      args,
+      sources({ customPresets: [WORK], presetId: WORK.id })
+    );
+    const edited = plan(
+      "agent.deletePreset",
+      args,
+      sources({ customPresets: [{ ...WORK, customFlags: "--other" }] })
+    );
+    const print = agentPresetMutationFingerprint;
+    expect(print(siblingAdded)).toBe(print(shown));
+    expect(print(madeDefault)).not.toBe(print(shown));
+    expect(print(edited)).not.toBe(print(shown));
+
+    const createArgs = { agentId: "codex", name: "New" };
+    const first = planAgentPresetMutation(
+      "agent.createPreset",
+      createArgs,
+      sources(undefined),
+      "user-1"
+    );
+    const second = planAgentPresetMutation(
+      "agent.createPreset",
+      createArgs,
+      sources(undefined),
+      "user-2"
+    );
+    if (!first.ok || !second.ok) throw new Error("expected plans");
+    expect(print(first.mutation)).toBe(print(second.mutation));
   });
 });

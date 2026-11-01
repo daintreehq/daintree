@@ -33,10 +33,15 @@ const MAX_SUBJECT_CHARS = 80;
  * can't start a line of its own. JSON leaves the two Unicode line separators
  * alone, so they're escaped too.
  */
-function quote(value: string): string {
-  return JSON.stringify(value)
-    .replace(/\u2028/g, "\\u2028")
-    .replace(/\u2029/g, "\\u2029");
+function quote(value: unknown): string {
+  // A stored legacy entry can hold anything; JSON has no text for `undefined`.
+  const text = JSON.stringify(value) ?? String(value);
+  return text.replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
+}
+
+/** A stored preset's name, which can be missing or not a string at all. */
+function nameText(name: unknown): string {
+  return typeof name === "string" ? quote(name) : "none";
 }
 
 interface PresetField {
@@ -94,7 +99,11 @@ const PRESET_FIELDS: readonly PresetField[] = [
     label: "Fallback presets",
     read: (p, names) =>
       Array.isArray(p.fallbacks) && p.fallbacks.length > 0
-        ? p.fallbacks.map((id) => quote(names[id] ?? id)).join(", ")
+        ? p.fallbacks
+            // With its id: two presets can share a name, and a swap between
+            // them would otherwise read as no change at all.
+            .map((id) => (names[id] !== undefined ? `${quote(names[id])} (${id})` : quote(id)))
+            .join(", ")
         : undefined,
     unset: "none",
   },
@@ -147,7 +156,9 @@ function presetChangeLines(
   names: Record<string, string>
 ): string[] {
   const lines: string[] = [];
-  if (before.name !== after.name) lines.push(`Name: ${quote(before.name)} → ${quote(after.name)}`);
+  if (before.name !== after.name) {
+    lines.push(`Name: ${nameText(before.name)} → ${nameText(after.name)}`);
+  }
   const oldEnv = envEntries(before);
   const newEnv = envEntries(after);
   const envLines: string[] = [];
@@ -176,7 +187,7 @@ export function formatAgentPresetPreviewLines(mutation: AgentPresetMutation): st
   if (mutation.operation === "create") {
     return [
       agentLine,
-      `Name: ${quote(mutation.preset.name)}`,
+      `Name: ${nameText(mutation.preset.name)}`,
       ...presetContentLines(mutation.preset, presetNames),
       `${agentName}'s default preset stays as it is.`,
     ];
@@ -184,13 +195,13 @@ export function formatAgentPresetPreviewLines(mutation: AgentPresetMutation): st
   if (mutation.operation === "update") {
     return [
       agentLine,
-      `Preset: ${quote(mutation.before.name)}`,
+      `Preset: ${nameText(mutation.before.name)}`,
       ...presetChangeLines(mutation.before, mutation.preset, presetNames),
     ];
   }
   const lines = [
     agentLine,
-    `Preset: ${quote(mutation.preset.name)}`,
+    `Preset: ${nameText(mutation.preset.name)}`,
     ...presetContentLines(mutation.preset, presetNames),
   ];
   if (mutation.wasAgentDefault) {

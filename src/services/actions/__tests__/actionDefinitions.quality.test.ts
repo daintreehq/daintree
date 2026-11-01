@@ -575,7 +575,7 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // names the three refusals and that its own panes are closed and waited for
   // first. In-app only, off the external surface.
   // 24_510 → 25_220 for #16047's three user-preset writes, measured at 25_190 B
-  // (+680). Each has to say the user approves the exact change, that a value
+  // (+710). Each has to say the user approves the exact change, that a value
   // Daintree would drop at launch is refused, and that only the user's own
   // presets can change; the create adds that it doesn't become the default, the
   // edit how a patch clears a field. In-app only, off the external surface.

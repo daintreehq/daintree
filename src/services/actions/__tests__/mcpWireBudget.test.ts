@@ -942,11 +942,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // call instead of a status read, two listings, a close, a wait and the
   // delete. No output schema, like the owned delete. In-app only, so the
   // external ceiling does not move.
-  // 169_340 → 172_900 for #16047, measured at 172_872 B (+3_532): the user-preset
+  // 169_340 → 172_900 for #16047, measured at 172_872 B (+3_566): the user-preset
   // create, edit and remove join core, so an assistant asked to set a preset up
   // writes it the way Settings does instead of dropping files into a repository.
   // Most of it is the preset's own fields, each described once, which a caller
-  // has to know to write one. No output schemas: each answers two strings. In-app
+  // has to know to write one. No output schemas: each answers an id and a name,
+  // and a removal whether the agent default went with it. In-app
   // only, so the external ceiling does not move.
   const MAX_COHORT_PAYLOAD_BYTES = 172_900;
 

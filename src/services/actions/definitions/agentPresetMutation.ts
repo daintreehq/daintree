@@ -137,6 +137,33 @@ export function agentPresetMutationUpdates(
 }
 
 /**
+ * What an approval of `mutation` covers: the preset as written, what it
+ * replaced or removed, the defaults a removal moves, and the fallback names the
+ * preview showed. Not the rest of the list, which another write may grow
+ * meanwhile, and not a create's id, which only the run mints.
+ */
+export function agentPresetMutationFingerprint(mutation: AgentPresetMutation): string {
+  const { agentId, presetNames } = mutation;
+  if (mutation.operation === "create") {
+    const { id: _id, ...content } = mutation.preset;
+    return canonical({ operation: "create", agentId, presetNames, content });
+  }
+  if (mutation.operation === "update") {
+    const { before, preset } = mutation;
+    return canonical({ operation: "update", agentId, presetNames, before, preset });
+  }
+  const { preset, wasAgentDefault, worktreeDefaults } = mutation;
+  return canonical({
+    operation: "delete",
+    agentId,
+    presetNames,
+    preset,
+    wasAgentDefault,
+    worktreeDefaults,
+  });
+}
+
+/**
  * Plan one preset write against `sources`, or say why it can't be made.
  * `newPresetId` is used only by a create, and only the run's id is ever stored.
  */
@@ -146,6 +173,14 @@ export function planAgentPresetMutation(
   sources: AgentPresetSources,
   newPresetId: string
 ): AgentPresetMutationPlan {
+  // Zod's record parser skips an own `__proto__` key, so a call carrying one
+  // would be written without it rather than refused.
+  for (const field of ["env", "envSet"] as const) {
+    const raw = isRecord(args) ? args[field] : undefined;
+    if (isRecord(raw) && Object.hasOwn(raw, "__proto__")) {
+      return refusePresetProblems([`env "__proto__": not a variable that can be set.`]);
+    }
+  }
   const parsed = parseArgs(actionId, args);
   if (!parsed.ok) return parsed;
   const { agentId } = parsed.data;
@@ -166,8 +201,8 @@ export function planAgentPresetMutation(
   };
   const agents = sources.settings.agents;
   const entry = agents && Object.hasOwn(agents, agentId) ? agents[agentId] : undefined;
-  const stored: unknown = entry?.customPresets;
-  const custom: AgentPreset[] = Array.isArray(stored) ? (stored as AgentPreset[]) : [];
+  const stored = entry?.customPresets;
+  const custom: AgentPreset[] = Array.isArray(stored) ? stored : [];
 
   if (parsed.action === "agent.createPreset") {
     const { agentId: _agent, name, env, ...fields } = parsed.data;
@@ -184,8 +219,16 @@ export function planAgentPresetMutation(
   }
 
   const { presetId } = parsed.data;
-  const target = custom.find((preset) => isRecord(preset) && preset.id === presetId);
+  const matches = custom.filter((preset) => isRecord(preset) && preset.id === presetId);
+  const target = matches[0];
   if (!target) return refuse(missingPresetMessage(agentId, agentName, presetId, custom, layers));
+  // Launches use the first entry the sanitiser keeps, so a write to one of
+  // several could change which one launches without the preview saying so.
+  if (matches.length > 1) {
+    return refuse(
+      `${agentName} has ${matches.length} user presets with the id "${presetId}", so this won't guess which one is meant. Settings can remove them.`
+    );
+  }
 
   if (parsed.action === "agent.deletePreset") {
     const worktreePresets = entry && isRecord(entry.worktreePresets) ? entry.worktreePresets : {};
@@ -215,12 +258,9 @@ export function planAgentPresetMutation(
   }
   const preset = applyPresetPatch(target, patch);
   if (canonical(preset) === canonical(target)) {
-    return refuse(`Nothing to change: "${target.name}" already has these values.`);
+    return refuse(`Nothing to change: ${presetLabel(target)} already has these values.`);
   }
-  // Every preset sharing the id changes, as Settings' edit maps them.
-  const customPresets = custom.map((existing) =>
-    isRecord(existing) && existing.id === presetId ? applyPresetPatch(existing, patch) : existing
-  );
+  const customPresets = custom.map((existing) => (existing === target ? preset : existing));
   const problems = presetProblems(preset, patch, knownPresetIds(agentId, customPresets, layers));
   if (problems.length > 0) return refusePresetProblems(problems);
   const presetNames = fallbackPresetNames(agentId, [custom, customPresets], layers, [
@@ -265,6 +305,13 @@ function parseArgs(
   }
   const result = AgentDeletePresetArgsSchema.safeParse(args);
   return result.success ? { ok: true, action: actionId, data: result.data } : invalid(result.error);
+}
+
+/** A stored preset named for a message; one can be stored without a usable name. */
+function presetLabel(preset: AgentPreset): string {
+  return typeof preset.name === "string" && preset.name.trim() !== ""
+    ? `"${preset.name}"`
+    : `preset "${preset.id}"`;
 }
 
 function refuse(message: string): { ok: false; message: string } {
@@ -436,7 +483,8 @@ function presetProblems(
   // A stored name launches already drop counts too: an edit that leaves it
   // would be approved and then never offered.
   const name = patch.name ?? preset.name;
-  if (sanitizePreset({ id: preset.id, name })?.name !== name) {
+  const keptName = sanitizePreset({ id: preset.id, name })?.name;
+  if (keptName === undefined || keptName !== name) {
     problems.push(
       patch.name !== undefined
         ? "name: 1–200 characters, no < or >, and no leading or trailing spaces."
