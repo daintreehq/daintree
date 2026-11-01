@@ -1661,7 +1661,12 @@ describe("buildPilotGroups — Canopy attribution", () => {
   it("files an ask wait no reading placed as unread, with no attribution, and idle once looked at", () => {
     const [group] = buildPilotGroups(
       [
-        run({ runId: "unseen", agentState: "waiting", waitingReason: "approval", wait: { stoppedAt: NOW } }),
+        run({
+          runId: "unseen",
+          agentState: "waiting",
+          waitingReason: "approval",
+          wait: { stoppedAt: NOW },
+        }),
         run({
           runId: "looked",
           agentState: "waiting",

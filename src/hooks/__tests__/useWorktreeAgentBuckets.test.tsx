@@ -88,7 +88,13 @@ describe("useWorktreeAgentBuckets", () => {
     const { view } = renderCounted({ ids: ["a"], merged: false, worktreeId: "wt-1" });
     expect(view.result.current).toMatchObject({ working: true, attention: false });
 
-    push([run("a", { agentState: "waiting", waitingReason: "approval", canopy: { kind: "asked", quote: "Run the migration?", readAt: 1, seen: false } })]);
+    push([
+      run("a", {
+        agentState: "waiting",
+        waitingReason: "approval",
+        canopy: { kind: "asked", quote: "Run the migration?", readAt: 1, seen: false },
+      }),
+    ]);
 
     expect(view.result.current).toMatchObject({ working: false, attention: true });
   });

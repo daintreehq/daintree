@@ -462,17 +462,18 @@ export class FleetSnapshotService {
    * and a row carrying it then would be news to no band. A wait this inventory
    * shows that no state was heard for begins here.
    */
-  private waitFor(
-    terminal: InventoryTerminal,
-    readStartedAt: number
-  ): RunWaitRecord | undefined {
+  private waitFor(terminal: InventoryTerminal, readStartedAt: number): RunWaitRecord | undefined {
     if (!this.handBacks || terminal.agentState === undefined) return undefined;
     if (!isObservedAskWait(terminal.agentState, terminal.waitingReason)) return undefined;
     const since =
       typeof terminal.lastStateChange === "number" && terminal.lastStateChange > 0
         ? terminal.lastStateChange
         : Date.now();
-    this.handBacks.noteInventoryWait(terminal.id, Math.max(since, terminal.spawnedAt), readStartedAt);
+    this.handBacks.noteInventoryWait(
+      terminal.id,
+      Math.max(since, terminal.spawnedAt),
+      readStartedAt
+    );
     return this.handBacks.getWait(terminal.id, terminal.spawnedAt);
   }
 

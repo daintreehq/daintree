@@ -127,9 +127,13 @@ describe("refinementOf", () => {
 
     it("is not taken from an unsure reading", () => {
       const observed = run({ agentState: "waiting", waitingReason: "approval" });
-      const unsure = entry(observed, { classified: reading({ category: "approval", confidence: 0.49 }) });
+      const unsure = entry(observed, {
+        classified: reading({ category: "approval", confidence: 0.49 }),
+      });
       expect(refinementOf(unsure, observed, null, 2_000)).toBeNull();
-      const sure = entry(observed, { classified: reading({ category: "approval", confidence: 0.5 }) });
+      const sure = entry(observed, {
+        classified: reading({ category: "approval", confidence: 0.5 }),
+      });
       expect(refinementOf(sure, observed, null, 2_000)).toMatchObject({ kind: "asked" });
     });
 

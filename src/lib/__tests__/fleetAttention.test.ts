@@ -429,9 +429,9 @@ describe("Canopy refinements", () => {
       }
     }
     // A new ask on a later turn is unread again, and amber again.
-    expect(bandForRun(run({ agentState: "waiting", waitingReason: "approval", canopy: ASKED }))).toBe(
-      "needs-you"
-    );
+    expect(
+      bandForRun(run({ agentState: "waiting", waitingReason: "approval", canopy: ASKED }))
+    ).toBe("needs-you");
   });
 
   it("only ever puts a run in needs-you on an unread Canopy ask", () => {

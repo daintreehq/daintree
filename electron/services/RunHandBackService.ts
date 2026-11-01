@@ -348,7 +348,8 @@ export class RunHandBackService {
     workSince: number | null
   ): void {
     let changed = false;
-    if (workSince !== null && at - workSince >= HAND_BACK_MIN_WORK_MS) changed = this.endWait(track);
+    if (workSince !== null && at - workSince >= HAND_BACK_MIN_WORK_MS)
+      changed = this.endWait(track);
     if (isObservedAskWait(state, waitingReason)) {
       if (track.wait === null) {
         track.wait = { stoppedAt: at };

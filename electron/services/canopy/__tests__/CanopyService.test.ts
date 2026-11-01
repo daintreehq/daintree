@@ -4329,7 +4329,8 @@ describe("CanopyService refining attention", () => {
   });
 
   it("reads an ask at an approval or question wait the patterns named, as either kind", async () => {
-    const APPROVAL_SCREEN = "Bash command\n\n  npm test\n\nDo you want to proceed?\n❯ 1. Yes\n  2. No";
+    const APPROVAL_SCREEN =
+      "Bash command\n\n  npm test\n\nDo you want to proceed?\n❯ 1. Yes\n  2. No";
     const h = await makeHarness({
       classify: async (input) =>
         input.screen.includes("proceed?")
