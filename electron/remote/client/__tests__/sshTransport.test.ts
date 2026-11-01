@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -30,6 +30,7 @@ import {
   exitStaleSshMasters,
   isForwardablePath,
   isValidSshTarget,
+  parseDiscoveryRead,
   parseProbeOutput,
   type SshChild,
   type SshSpawner,
@@ -128,18 +129,16 @@ describe("ssh argument construction", () => {
       "studio",
       PROBE_COMMAND,
     ]);
-    expect(
-      buildCatArgs(
-        "greg@studio",
-        "/cp/cm-%C",
-        "/Users/g/Library/Application Support/Daintree/host.json"
-      )
-    ).toEqual([
-      ...COMMON,
-      "--",
+    const read = buildCatArgs(
       "greg@studio",
-      "cat -- '/Users/g/Library/Application Support/Daintree/host.json'",
-    ]);
+      "/cp/cm-%C",
+      "/Users/g/Library/Application Support/Daintree/host.json"
+    );
+    expect(read.slice(0, -1)).toEqual([...COMMON, "--", "greg@studio"]);
+    // One quoted script with no quote of its own, and the path as its argument.
+    expect(read.at(-1)).toMatch(
+      /^sh -c '[^']*' sh '\/Users\/g\/Library\/Application Support\/Daintree\/host\.json'$/
+    );
     expect(
       buildMuxForwardArgs("studio", "/cp/cm-%C", "/l/l.sock", "/run/user/1/daintree/host.sock")
     ).toEqual([
@@ -180,8 +179,8 @@ describe("ssh argument construction", () => {
   });
 
   it("single-quotes the remote path and refuses ones it cannot quote portably", () => {
-    expect(buildCatArgs("s", "/cp", "/home/o'brien/$(x)").at(-1)).toBe(
-      "cat -- '/home/o'\\''brien/$(x)'"
+    expect(buildCatArgs("s", "/cp", "/home/o'brien/$(x)").at(-1)).toMatch(
+      / sh '\/home\/o'\\''brien\/\$\(x\)'$/
     );
     expect(() => buildCatArgs("s", "/cp", "relative/x")).toThrow(TransportError);
     expect(() => buildCatArgs("s", "/cp", "/a\\b")).toThrow(TransportError);
@@ -255,6 +254,34 @@ describe("probe parsing", () => {
   });
 });
 
+describe("discovery read parsing", () => {
+  const info = {
+    version: 1,
+    socketPath: "/run/user/1000/daintree/host.sock",
+    token: "a".repeat(64),
+    pid: 7,
+  };
+  const framed = `\n@@dt:discovery\n${JSON.stringify(info)}\n@@dt:discovery-end\n`;
+
+  it("reads the file between its markers, whatever the shell printed around them", () => {
+    expect(parseDiscoveryRead(framed)).toEqual(info);
+    expect(parseDiscoveryRead(`Welcome to studio\r\nloaded .zshenv\n${framed}`)).toEqual(info);
+    expect(parseDiscoveryRead(`no newline after this${framed}`)).toEqual(info);
+    expect(parseDiscoveryRead(`${framed}logout: bye\n`)).toEqual(info);
+  });
+
+  it("rejects a read that didn't arrive whole between its markers", () => {
+    expect(parseDiscoveryRead("")).toBeNull();
+    expect(parseDiscoveryRead(JSON.stringify(info))).toBeNull();
+    expect(parseDiscoveryRead(framed.slice(0, framed.indexOf("\n@@dt:discovery-end")))).toBeNull();
+    expect(
+      parseDiscoveryRead(`\n@@dt:discovery-end\n${JSON.stringify(info)}\n@@dt:discovery\n`)
+    ).toBeNull();
+    expect(parseDiscoveryRead("\n@@dt:discovery\n\n@@dt:discovery-end\n")).toBeNull();
+    expect(parseDiscoveryRead('\n@@dt:discovery\n{"version":1}\n@@dt:discovery-end\n')).toBeNull();
+  });
+});
+
 /**
  * Where the client expects each fake host's socket, from what its probe
  * answers. The test servers listen in a temp dir; the fake forward maps the
@@ -306,6 +333,16 @@ class FakeChild extends EventEmitter implements SshChild {
       this.emit("exit", code, null);
     });
   }
+}
+
+/** The discovery read: the one command that names the host's discovery file. */
+function isDiscoveryRead(command: string | undefined): boolean {
+  return command?.startsWith("sh -c ") === true && command.endsWith("host.json'");
+}
+
+/** What the read prints for a discovery file holding `info`: the file between its markers. */
+function discoveryReply(info: object): string {
+  return `\n@@dt:discovery\n${JSON.stringify(info)}\n@@dt:discovery-end\n`;
 }
 
 let root: string;
@@ -377,11 +414,11 @@ describe("SshTransport with an injected ssh", () => {
       const command = args.at(-1)!;
       if (command === PROBE_COMMAND) {
         child.finish(0, "Linux\n4242\n/home/greg\n");
-      } else if (command.startsWith("cat -- ")) {
-        expect(command).toBe("cat -- '/run/user/4242/daintree/host.json'");
+      } else if (isDiscoveryRead(command)) {
+        expect(command.endsWith(" sh '/run/user/4242/daintree/host.json'")).toBe(true);
         child.finish(
           0,
-          JSON.stringify({
+          discoveryReply({
             version: 1,
             socketPath: LINUX_SOCKET,
             token: server!.token,
@@ -468,10 +505,10 @@ describe("SshTransport with an injected ssh", () => {
       children.push(child);
       const command = args.at(-1)!;
       if (command === PROBE_COMMAND) child.finish(0, "Darwin\n501\n/Users/g\n");
-      else if (command.startsWith("cat -- "))
+      else if (isDiscoveryRead(command))
         child.finish(
           0,
-          JSON.stringify({
+          discoveryReply({
             version: 1,
             socketPath: DARWIN_SOCKET,
             token: server!.token,
@@ -506,10 +543,10 @@ describe("SshTransport with an injected ssh", () => {
       const child = new FakeChild();
       const command = args.at(-1)!;
       if (command === PROBE_COMMAND) child.finish(0, "Darwin\n501\n/Users/g\n");
-      else if (command.startsWith("cat -- "))
+      else if (isDiscoveryRead(command))
         child.finish(
           0,
-          JSON.stringify({ version: 1, socketPath: DARWIN_SOCKET, token: "a".repeat(64), pid: 1 })
+          discoveryReply({ version: 1, socketPath: DARWIN_SOCKET, token: "a".repeat(64), pid: 1 })
         );
       // The master takes the forward; its answer never reaches the abandoned attempt.
       else if (args.includes("forward")) setImmediate(() => abort.abort());
@@ -558,10 +595,10 @@ describe("SshTransport with an injected ssh", () => {
       const child = new FakeChild();
       const command = args.at(-1)!;
       if (command === PROBE_COMMAND) child.finish(0, "Darwin\n501\n/Users/g\n");
-      else if (command.startsWith("cat -- "))
+      else if (isDiscoveryRead(command))
         child.finish(
           0,
-          JSON.stringify({ version: 1, socketPath: DARWIN_SOCKET, token: "a".repeat(64), pid: 1 })
+          discoveryReply({ version: 1, socketPath: DARWIN_SOCKET, token: "a".repeat(64), pid: 1 })
         );
       else if (args.includes("forward"))
         child.finish(255, "", "Control socket connect(/c/cm): No such file or directory\n");
@@ -593,10 +630,10 @@ describe("SshTransport with an injected ssh", () => {
         const child = new FakeChild();
         const command = args.at(-1)!;
         if (command === PROBE_COMMAND) child.finish(0, `Darwin\n501\n${home}\n`);
-        else if (command.startsWith("cat -- "))
+        else if (isDiscoveryRead(command))
           child.finish(
             0,
-            JSON.stringify({
+            discoveryReply({
               version: 1,
               socketPath,
               token: "a".repeat(64),
@@ -672,12 +709,16 @@ describe("SshTransport with an injected ssh", () => {
     expect(isForwardablePath(socket)).toBe(true);
   });
 
-  it("reports a missing discovery file as Daintree not hosting there, not as cat's error", async () => {
+  it("reports a missing discovery file as Daintree not hosting there, whatever the host says", async () => {
     const spawner: SshSpawner = (args) => {
       const child = new FakeChild();
       if (args.at(-1) === PROBE_COMMAND) child.finish(0, "Linux\n1000\n/home/g\n");
       else
-        child.finish(1, "", "cat: /run/user/1000/daintree/host.json: No such file or directory\n");
+        child.finish(
+          3,
+          "Welcome to studio\n",
+          "bash: Warnung: setlocale: LC_ALL: Kann die Locale nicht ändern (de_DE.UTF-8)\n"
+        );
       return child;
     };
     const transport = new SshTransport({
@@ -692,15 +733,44 @@ describe("SshTransport with an injected ssh", () => {
     });
   });
 
+  it("takes neither cat's nor ssh's words for a missing file", async () => {
+    const failedRead = (code: number, stderr: string) =>
+      new SshTransport({
+        target: "studio",
+        clientDir: path.join(root, "c"),
+        spawn: (args) => {
+          const child = new FakeChild();
+          if (args.at(-1) === PROBE_COMMAND) child.finish(0, "Linux\n1000\n/home/g\n");
+          else child.finish(code, "", stderr);
+          return child;
+        },
+      })
+        .open(new AbortController().signal)
+        .catch((e: unknown) => e);
+    // The file went between the check and the read: the next attempt sees it missing.
+    const vanished = await failedRead(
+      1,
+      "cat: /run/user/1000/daintree/host.json: No such file or directory\n"
+    );
+    const sshItself = await failedRead(
+      255,
+      "Control socket connect(/c/cm): No such file or directory\n"
+    );
+    for (const error of [vanished, sshItself]) {
+      expect(error).toBeInstanceOf(TransportError);
+      expect(error).not.toBeInstanceOf(HostModeOffError);
+    }
+  });
+
   describe("a host whose Daintree isn't running", () => {
     const missingDiscovery =
       (reads: { count: number }): SshSpawner =>
       (args) => {
         const child = new FakeChild();
         if (args.at(-1) === PROBE_COMMAND) child.finish(0, "Darwin\n501\n/Users/g\n");
-        else if (args.at(-1)?.startsWith("cat -- ")) {
+        else if (isDiscoveryRead(args.at(-1))) {
           reads.count++;
-          child.finish(1, "", "cat: host.json: No such file or directory\n");
+          child.finish(3);
         } else child.finish(0);
         return child;
       };
@@ -836,10 +906,29 @@ describe.skipIf(process.platform === "win32")(
       };
     };
 
+    it.each(SHELLS)("probes through %s when it prints at startup", (shell) => {
+      const startup = path.join(root, "startup");
+      mkdirSync(startup);
+      const probe = spawnSync(shell, ["-c", PROBE_COMMAND], {
+        env: { ...process.env, ...printsAtStartup(startup) },
+        stdio: ["ignore", "pipe", "pipe"],
+        encoding: "utf8",
+      });
+      expect(probe.status, probe.stderr).toBe(0);
+      expect(parseProbeOutput(probe.stdout)).toEqual({
+        platform: process.platform === "darwin" ? "darwin" : "linux",
+        uid: process.getuid!(),
+        home: startup,
+      });
+    });
+
     it.each(SHELLS)(
       "reads the file when %s prints at startup, from a home that needs quoting",
       async (shell) => {
-        const hostLoc = hostSocketLocation({ platform: "darwin", userDataDir: path.join(root, "h") });
+        const hostLoc = hostSocketLocation({
+          platform: "darwin",
+          userDataDir: path.join(root, "h"),
+        });
         server = new HostServer({ location: hostLoc, handshake: TEST_HANDSHAKE, hostName: TARGET });
         await server.listen();
         const remoteHome = path.join(root, "o'brien $(x)");
@@ -957,10 +1046,10 @@ describe("when the ssh server refuses socket forwarding", () => {
       const child = new FakeChild();
       const command = args.at(-1)!;
       if (command === PROBE_COMMAND) child.finish(0, "Darwin\n501\n/Users/g\n");
-      else if (command.startsWith("cat -- "))
+      else if (isDiscoveryRead(command))
         child.finish(
           0,
-          JSON.stringify({
+          discoveryReply({
             version: 1,
             socketPath: DARWIN_SOCKET,
             token: server!.token,

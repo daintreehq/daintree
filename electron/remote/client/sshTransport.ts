@@ -35,9 +35,10 @@ const logger = createLogger("main:sshTransport");
  * or agent settings. One ControlMaster connection per host is shared by the
  * probe, the discovery read and the socket forward.
  *
- *   1. `ssh <target> 'uname -s; id -u; echo "$HOME"'` to derive where the
- *      host's discovery file lives on that machine.
- *   2. `ssh <target> cat <discovery file>` for the socket path and token.
+ *   1. `ssh <target> 'echo; uname -s; id -u; echo "$HOME"'` to derive where
+ *      the host's discovery file lives on that machine.
+ *   2. `ssh <target> sh -c '...cat...' sh <discovery file>` for the socket
+ *      path and token, framed by markers.
  *   3. `ssh -O forward -L <local.sock>:<remote.sock> <target>` through that
  *      master (or, with no master, a dedicated `ssh -N -L`), then dial
  *      local.sock.
@@ -288,11 +289,24 @@ export function sshCommonArgs(controlPath: string, controlPersist = "10m"): stri
   ];
 }
 
-export const PROBE_COMMAND = 'uname -s; id -u; echo "$HOME"';
+/** The leading newline keeps a startup file's unterminated output off `uname`'s line. */
+export const PROBE_COMMAND = 'echo; uname -s; id -u; echo "$HOME"';
 
 export function buildProbeArgs(target: string, controlPath: string, persist?: string): string[] {
   return [...sshCommonArgs(controlPath, persist), "--", target, PROBE_COMMAND];
 }
+
+const DISCOVERY_START = "@@dt:discovery";
+const DISCOVERY_END = "@@dt:discovery-end";
+/** The read's status for a missing file: cat's message for it is in the host's locale. */
+const NO_DISCOVERY_FILE_EXIT = 3;
+
+/**
+ * Prints the file between marker lines, so whatever the user's shell startup
+ * files print around it is left out. The path arrives as `$1`, never spliced
+ * into the script, so it is quoted once for the login shell, whichever it is.
+ */
+const DISCOVERY_READ_SCRIPT = `if [ -e "$1" ]; then echo; echo ${DISCOVERY_START}; cat -- "$1" || exit 1; echo; echo ${DISCOVERY_END}; else exit ${NO_DISCOVERY_FILE_EXIT}; fi`;
 
 export function buildCatArgs(
   target: string,
@@ -303,7 +317,23 @@ export function buildCatArgs(
   if (!isSafeRemotePath(filePath)) {
     throw new TransportError(`Refusing to read an unusual remote path: ${filePath}`, null);
   }
-  return [...sshCommonArgs(controlPath, persist), "--", target, `cat -- ${shellQuote(filePath)}`];
+  return [
+    ...sshCommonArgs(controlPath, persist),
+    "--",
+    target,
+    `sh -c ${shellQuote(DISCOVERY_READ_SCRIPT)} sh ${shellQuote(filePath)}`,
+  ];
+}
+
+/** The discovery file from the read's output; null unless it arrived whole between its markers. */
+export function parseDiscoveryRead(stdout: string): HostDiscoveryInfo | null {
+  const startMarker = `\n${DISCOVERY_START}\n`;
+  const start = stdout.lastIndexOf(startMarker);
+  if (start === -1) return null;
+  const from = start + startMarker.length;
+  const end = stdout.indexOf(`\n${DISCOVERY_END}\n`, from);
+  if (end === -1) return null;
+  return parseDiscoveryInfo(stdout.slice(from, end));
 }
 
 /** `ssh -G` prints the control path with its `%` tokens expanded. */
@@ -641,6 +671,16 @@ function collect(stream: Readable | null, cap: number, keepTail: boolean): () =>
   };
 }
 
+/** ssh exited non-zero: `code` is the remote command's status, or 255 when ssh itself failed. */
+class SshExitError extends TransportError {
+  constructor(
+    readonly code: number | null,
+    detail: string
+  ) {
+    super("ssh failed", detail);
+  }
+}
+
 function stderrDetail(stderr: string, fallback: string): string {
   const trimmed = stderr.trim();
   return trimmed.length > 0 ? trimmed : fallback;
@@ -733,14 +773,14 @@ export class SshTransport implements LinkTransport {
       signal
     ).catch((error: unknown) => {
       // The host answered, and Daintree writes this file while it listens: none there is no Host mode.
-      if (error instanceof TransportError && /No such file or directory/.test(error.detail ?? "")) {
+      if (error instanceof SshExitError && error.code === NO_DISCOVERY_FILE_EXIT) {
         throw new HostModeOffError(
           `Daintree isn't running in Host mode there (no ${path.posix.basename(location.discoveryPath)}).`
         );
       }
       throw error;
     });
-    const info = parseDiscoveryInfo(cat.stdout);
+    const info = parseDiscoveryRead(cat.stdout);
     if (!info) throw new TransportError("Host discovery file is not valid", null);
     // The host writes its socket beside the discovery file, so anything else
     // is a path the host chose for us to hand to ssh: refuse it.
@@ -973,8 +1013,8 @@ export class SshTransport implements LinkTransport {
             if (code === 0) resolve({ code, stdout: stdout(), stderr: stderr() });
             else {
               reject(
-                new TransportError(
-                  "ssh failed",
+                new SshExitError(
+                  code,
                   stderrDetail(stderr(), `ssh exited with code ${String(code)}`)
                 )
               );
