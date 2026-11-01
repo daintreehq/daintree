@@ -57,14 +57,6 @@ vi.mock("@/lib/worktreeFilters", async (importOriginal) => {
   };
 });
 
-// Called exactly once per menu body render, so it doubles as the render count.
-vi.mock("@/hooks/useIsHibernated", () => ({
-  useIsHibernated: () => {
-    counters.bodyRenders += 1;
-    return false;
-  },
-}));
-
 vi.mock("@/services/ActionService", () => ({
   actionService: {
     dispatch: vi.fn(() => Promise.resolve({ ok: true })),
@@ -79,7 +71,13 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     getSelection: () => "",
   }),
 }));
-vi.mock("@/hooks/usePluginContextMenuItems", () => ({ usePluginContextMenuItems: () => [] }));
+// Runs once per menu body render, so it counts them.
+vi.mock("@/hooks/usePluginContextMenuItems", () => ({
+  usePluginContextMenuItems: () => {
+    counters.bodyRenders += 1;
+    return [];
+  },
+}));
 vi.mock("@/store/voiceRecordingStore", () => ({
   useVoiceRecordingStore: (selector: (s: unknown) => unknown) =>
     selector({ lockedTarget: null, recentTargets: [] }),

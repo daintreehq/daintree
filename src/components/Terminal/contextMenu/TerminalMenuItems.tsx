@@ -351,7 +351,6 @@ export function TerminalSessionMenuItems({
   terminalId,
   terminalPty,
   hasPty,
-  isHibernated,
   isPaused,
   isInputLocked,
   isVoiceLockedHere,
@@ -365,7 +364,6 @@ export function TerminalSessionMenuItems({
   terminalId: string;
   terminalPty: PtyPanelData | undefined;
   hasPty: boolean;
-  isHibernated: boolean;
   isPaused: boolean;
   isInputLocked: boolean | undefined;
   isVoiceLockedHere: boolean;
@@ -398,7 +396,7 @@ export function TerminalSessionMenuItems({
         </ContextMenuSubTrigger>
         <ContextMenuSubContent>
           {hasPty && (
-            <ContextMenuItem disabled={isHibernated} onSelect={() => onAction("redraw")}>
+            <ContextMenuItem onSelect={() => onAction("redraw")}>
               <RefreshCw className={ICON_CLASS} aria-hidden="true" />
               Redraw terminal
             </ContextMenuItem>

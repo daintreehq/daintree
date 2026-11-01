@@ -134,15 +134,10 @@ export interface ContentPanelProps extends BasePanelProps {
   // looking up at the fleet ribbon.
   isFleetFollower?: boolean;
 
-  // True when this pane's PTY is hibernated — the renderer is released but
-  // the process is preserved. Drives the panel-state-hibernated border cue
-  // and the Moon icon in the header.
-  isHibernated?: boolean;
-
   // True when voice dictation is in its pre-audio arming window targeting
   // this pane. Drives the panel-state-arming border cue (single load-bearing
   // signal during the ~200ms before the mic opens and recording chrome takes
-  // over). Outranks waiting/working/hibernated because it is user-initiated
+  // over). Outranks waiting/working because it is user-initiated
   // and time-bounded.
   isVoiceArming?: boolean;
 
@@ -171,7 +166,6 @@ interface GridChromeInputs {
   isVoiceArming: boolean;
   isWaiting: boolean;
   isWorkingState: boolean;
-  isHibernated: boolean;
 }
 
 /**
@@ -187,13 +181,11 @@ function resolveGridPanelChromeClass({
   isVoiceArming,
   isWaiting,
   isWorkingState,
-  isHibernated,
 }: GridChromeInputs): string {
   if (showGridAttention && isVoiceArming) return "panel-state-arming";
   if (showSelectedChrome) return "terminal-selected";
   if (showGridAttention && showGridAgentHighlights && isWaiting) return "panel-state-waiting";
   if (showGridAttention && showGridAgentHighlights && isWorkingState) return "panel-state-working";
-  if (showGridAttention && isHibernated) return "panel-state-hibernated";
   return "border-overlay hover:border-tint/[0.08]";
 }
 
@@ -252,7 +244,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     isSelected = false,
     isFleetFollower = false,
     compactTitle,
-    isHibernated = false,
     isVoiceArming = false,
     tabs,
     groupId,
@@ -471,7 +462,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           exitCode={exitCode}
           queueCount={queueCount}
           completedWithNoChanges={completedWithNoChanges}
-          isHibernated={isHibernated}
         />
       );
     }
@@ -488,7 +478,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     exitCode,
     queueCount,
     completedWithNoChanges,
-    isHibernated,
   ]);
 
   // A mixed tab group keeps both trailing boxes (empty, `null`) while a
@@ -648,7 +637,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
       data-runtime-kind={terminalChrome.runtimeKind}
       data-runtime-icon-id={terminalChrome.iconId || undefined}
       data-selected={isSelected || undefined}
-      data-hibernated={isHibernated || undefined}
       data-fleet-dimmed={isFleetDimmed || undefined}
       style={{ contain: "content" }}
       className={cn(
@@ -678,7 +666,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
             isVoiceArming,
             isWaiting: blockedState === "waiting" || pluginActivity?.shown === "waiting",
             isWorkingState: isWorkingState || pluginActivity?.shown === "working",
-            isHibernated,
           }),
         location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",
         // Voice-dictation lock border overrides ambient state colours so the

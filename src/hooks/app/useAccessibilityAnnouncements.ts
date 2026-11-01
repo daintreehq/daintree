@@ -1,7 +1,6 @@
 import { useEffect, useRef } from "react";
 import { usePanelStore } from "@/store";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
-import { subscribeWhenReady } from "@/services/terminal/terminalInstanceServiceAccessor";
 import type { AgentState, WaitingReason } from "@shared/types/agent";
 import { describeWaiting } from "@shared/utils/waitingReasonDisplay";
 import { isPtyPanel } from "@shared/types/panel";
@@ -133,11 +132,6 @@ function basePanelId(debounceKey: string): string {
 export function useAccessibilityAnnouncements() {
   const previousStatesRef = useRef<Map<string, TerminalStateSnapshot>>(new Map());
   const debounceTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  // Per-terminal hibernation subscriptions. Hibernation lives on the terminal
-  // instance service, not in panelStore — so we observe transitions through
-  // its subscribe-and-snapshot pair.
-  const hibernationUnsubsRef = useRef<Map<string, () => void>>(new Map());
-  const hibernationStateRef = useRef<Map<string, boolean>>(new Map());
 
   // This hook renders nothing — every consumer below is an effect. It
   // observes the store with a transient subscription instead of reactive
@@ -178,7 +172,7 @@ export function useAccessibilityAnnouncements() {
         location: terminal.location,
       };
 
-      // PTY-only badge state (agent state, flow, queue, exit, hibernation).
+      // PTY-only badge state (agent state, flow, queue, exit).
       // Non-PTY panels have none of these fields, so the whole block is gated.
       if (isPtyPanel(terminal)) {
         nextSnapshot.agentState = terminal.agentState;
@@ -280,29 +274,6 @@ export function useAccessibilityAnnouncements() {
             debounceTimersRef.current.set(key, timer);
           }
         }
-
-        // Hibernation: subscribe once per panel; the listener fires on
-        // hibernate/unhibernate. Snapshot is read inline so the cb sees the
-        // current value without closure staleness. An empty view has no
-        // service yet, so the listener attaches once it is ready.
-        if (!hibernationUnsubsRef.current.has(terminal.id)) {
-          const panelId = terminal.id;
-          const unsubscribe = subscribeWhenReady((service) => {
-            // Seed initial state so the first event reflects a true transition.
-            hibernationStateRef.current.set(panelId, service.isHibernated(panelId));
-            return service.subscribeHibernation(panelId, () => {
-              const prevHib = hibernationStateRef.current.get(panelId) ?? false;
-              const nextHib = service.isHibernated(panelId);
-              if (prevHib === nextHib) return;
-              hibernationStateRef.current.set(panelId, nextHib);
-              const current = usePanelStore.getState().panelsById[panelId];
-              const title = current?.title ?? "Terminal";
-              const msg = nextHib ? `${title}: hibernated` : `${title}: woke up`;
-              useAnnouncerStore.getState().announce(msg, "polite");
-            });
-          });
-          hibernationUnsubsRef.current.set(panelId, unsubscribe);
-        }
       }
 
       // Location transitions (grid ↔ dock) for all panel kinds. These are
@@ -396,15 +367,6 @@ export function useAccessibilityAnnouncements() {
 
       cancelOrphanedTimers(newStates);
 
-      // Tear down hibernation subscriptions for removed panels.
-      for (const [id, unsubscribe] of hibernationUnsubsRef.current) {
-        if (!newStates.has(id)) {
-          unsubscribe();
-          hibernationUnsubsRef.current.delete(id);
-          hibernationStateRef.current.delete(id);
-        }
-      }
-
       previousStatesRef.current = newStates;
     };
 
@@ -440,8 +402,7 @@ export function useAccessibilityAnnouncements() {
 
     // Seed the diff baselines from the mount-time state without announcing —
     // matches the old effects' first-render behavior (prev === undefined
-    // suppressed every announcement path; hibernation subscriptions were
-    // still established).
+    // suppressed every announcement path).
     diffPanels(usePanelStore.getState());
 
     // Synchronous per-notification processing keeps the documented
@@ -461,19 +422,12 @@ export function useAccessibilityAnnouncements() {
     });
 
     const timers = debounceTimersRef.current;
-    const hibUnsubs = hibernationUnsubsRef.current;
-    const hibStates = hibernationStateRef.current;
     return () => {
       unsubscribe();
       for (const timer of timers.values()) {
         clearTimeout(timer);
       }
       timers.clear();
-      for (const unsub of hibUnsubs.values()) {
-        unsub();
-      }
-      hibUnsubs.clear();
-      hibStates.clear();
     };
   }, []);
 }

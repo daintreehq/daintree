@@ -519,7 +519,7 @@ describe("ContentPanel selection chrome", () => {
    * A lone grid pane wears the same `terminal-selected` frame as a pane in a
    * multi-pane grid: after the user clicks away and back, the pane that holds
    * the keystrokes has to be visible even with nothing beside it. The ambient
-   * states (arming, agent state, hibernation) stay multi-pane only.
+   * states (arming, agent state) stay multi-pane only.
    */
   const MACRO_FOCUS_DEFAULTS = {
     focusedRegion: null,
@@ -537,7 +537,6 @@ describe("ContentPanel selection chrome", () => {
     { state: "selected", className: "terminal-selected" },
     { state: "waiting", className: "panel-state-waiting" },
     { state: "working", className: "panel-state-working" },
-    { state: "hibernated", className: "panel-state-hibernated" },
   ] as const;
 
   type ChromeState = (typeof CHROME_STATES)[number]["state"] | "none";
@@ -558,7 +557,6 @@ describe("ContentPanel selection chrome", () => {
     isSelected?: boolean;
     isMultiPanelGrid?: boolean;
     isMaximized?: boolean;
-    isHibernated?: boolean;
     isVoiceArming?: boolean;
     agentState?: AgentState;
     location?: "grid" | "dock" | "dialog";
@@ -764,36 +762,6 @@ describe("ContentPanel selection chrome", () => {
       expect(chromeOf(container)).toBe("none");
     });
 
-    it("ranks working above hibernation", () => {
-      // The adjacent pair the waiting-vs-hibernated case below does not reach —
-      // without this, swapping the working and hibernated branches passes.
-      mockState.showGridAgentHighlights = true;
-      const { container } = renderPanel({
-        isMultiPanelGrid: true,
-        isFocused: false,
-        isHibernated: true,
-        agentState: "working",
-      });
-      expect(chromeOf(container)).toBe("working");
-    });
-
-    it("ranks hibernation below the agent states but above bare", () => {
-      mockState.showGridAgentHighlights = true;
-      const { container } = renderPanel({
-        isMultiPanelGrid: true,
-        isFocused: false,
-        isHibernated: true,
-      });
-      expect(chromeOf(container)).toBe("hibernated");
-
-      mockState.dockBlockedState = "waiting";
-      const { container: waiting } = renderPanel(
-        { isMultiPanelGrid: true, isFocused: false, isHibernated: true },
-        "t-2"
-      );
-      expect(chromeOf(waiting, "t-2")).toBe("waiting");
-    });
-
     it("withholds every ambient state from a lone pane", () => {
       // The ambient states are all gated on `showGridAttention`, so a single
       // pane must never reach them — only selection or bare.
@@ -803,7 +771,6 @@ describe("ContentPanel selection chrome", () => {
         isMultiPanelGrid: false,
         isFocused: false,
         isVoiceArming: true,
-        isHibernated: true,
         agentState: "working",
       });
       expect(chromeOf(container)).toBe("none");

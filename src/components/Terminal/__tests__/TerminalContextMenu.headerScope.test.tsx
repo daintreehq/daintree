@@ -14,7 +14,6 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn(), get: () => undefined, list: () => [] },
 }));
 vi.mock("@/hooks/useSidebarWorktreeOrder", () => ({ useSidebarWorktreeOrder: () => [] }));
-vi.mock("@/hooks/useIsHibernated", () => ({ useIsHibernated: () => false }));
 vi.mock("@/hooks/usePluginContextMenuItems", () => ({ usePluginContextMenuItems: () => [] }));
 vi.mock("@/store/voiceRecordingStore", () => ({
   useVoiceRecordingStore: (selector: (s: unknown) => unknown) =>

@@ -22,7 +22,6 @@ The lowest tier. A grid panel's border colour encodes its agent state — no `no
 
 - `panel-state-waiting` — agent waiting for input (`--color-activity-waiting`)
 - `panel-state-working` — agent working (static border; the old 4s breathe was removed as a WCAG-COGA fatigue trigger, see CSS comment at `src/index.css`)
-- `panel-state-hibernated` — passive, user-uninitiated (`--color-activity-idle`)
 - `panel-state-compiling` — framework compile activity, neutral `--color-border-subtle` (accent-restraint)
 - `panel-state-arming` — voice-dictation pre-audio window, the one panel-state class that uses the accent token because it is the single load-bearing focus signal for ~200ms
 

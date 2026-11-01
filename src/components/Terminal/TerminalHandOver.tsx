@@ -324,8 +324,8 @@ function PaneName({ name, fallback }: { name: string | null; fallback: string })
 
 /**
  * Ambient header pill on a handed-over terminal, naming the pane driving it.
- * A status signal, not an accent: the same neutral chip the hibernated badge
- * uses, focusable so the tooltip's way back reaches keyboard users, and silent
+ * A status signal, not an accent: the same neutral chip the other header
+ * badges use, focusable so the tooltip's way back reaches keyboard users, and silent
  * to screen readers until focused, like the rest of the row.
  */
 export function TerminalDrivenByBadge({ terminalId }: { terminalId: string }) {

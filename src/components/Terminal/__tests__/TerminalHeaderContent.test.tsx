@@ -692,13 +692,7 @@ describe("TerminalHeaderContent — per-pane badges silence implicit live region
     mockResourceEnabled = true;
     mockResourceState = { cpuPercent: 12, memoryKb: 2048, cpuHistory: [1, 2], breakdown: [] };
     const { container } = render(
-      <TerminalHeaderContent
-        id="t1"
-        isExited={true}
-        exitCode={1}
-        queueCount={3}
-        isHibernated={true}
-      />
+      <TerminalHeaderContent id="t1" isExited={true} exitCode={1} queueCount={3} />
     );
     expect(container.querySelectorAll('[aria-live="polite"]').length).toBe(0);
     expect(container.querySelectorAll('[role="status"]:not([aria-live="off"])').length).toBe(0);
@@ -706,9 +700,8 @@ describe("TerminalHeaderContent — per-pane badges silence implicit live region
 });
 
 // #9814 — chip row vocabulary calibration. The agent glyph is not in this row
-// at all (PanelHeader keeps it past the close button), the hibernated pill is
-// `rounded-full` + `border-dashed` so its silhouette reads apart from the other
-// metadata chips, and the resource sparkline trails as ambient telemetry.
+// at all (PanelHeader keeps it past the close button), and the resource sparkline
+// trails as ambient telemetry.
 // Transient flow status left this row for TerminalStatusSlot's reserved box in
 // #12374.
 describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
@@ -757,7 +750,7 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
     ).toBeTruthy();
   });
 
-  it("combined render: telemetry trails the ambient hibernated cue", () => {
+  it("combined render: telemetry trails the exit badge", () => {
     mockTerminal = { id: "t1", isInputLocked: true };
     mockResourceEnabled = true;
     mockResourceState = {
@@ -773,7 +766,6 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
         agentState="working"
         isExited={true}
         exitCode={1}
-        isHibernated={true}
         queueCount={2}
       />
     );
@@ -782,10 +774,10 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
     // exit badge.
     const resource = screen.getByTestId("terminal-resource-badge");
     expect(allStatuses[0]).not.toBe(resource);
-    const hibernated = screen.getByTestId("terminal-hibernated-badge");
     expect(resource).toBeTruthy();
+    const exitBadge = allStatuses[0]!;
     expect(
-      hibernated.compareDocumentPosition(resource!) & Node.DOCUMENT_POSITION_FOLLOWING
+      exitBadge.compareDocumentPosition(resource) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
   });
 });

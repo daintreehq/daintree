@@ -56,57 +56,8 @@ vi.mock("@shared/types/panel", async () => {
   };
 });
 
-const hibernationState = new Map<string, boolean>();
-const hibernationListeners = new Map<string, Set<() => void>>();
-
-function setHibernated(id: string, value: boolean) {
-  hibernationState.set(id, value);
-  const ls = hibernationListeners.get(id);
-  if (!ls) return;
-  for (const l of ls) l();
-}
-
-vi.mock("@/services/TerminalInstanceService", () => {
-  const terminalInstanceService = {
-    isHibernated: (id: string) => hibernationState.get(id) ?? false,
-    subscribeHibernation: (id: string, listener: () => void) => {
-      let set = hibernationListeners.get(id);
-      if (!set) {
-        set = new Set();
-        hibernationListeners.set(id, set);
-      }
-      set.add(listener);
-      return () => {
-        const current = hibernationListeners.get(id);
-        if (!current) return;
-        current.delete(listener);
-        if (current.size === 0) hibernationListeners.delete(id);
-      };
-    },
-  };
-  return {
-    createTerminalPaintPlane: () => terminalInstanceService,
-  };
-});
-
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useAccessibilityAnnouncements } from "../useAccessibilityAnnouncements";
-import { createTerminalPaintPlane } from "@/services/TerminalInstanceService";
-import {
-  __testing as terminalServiceTesting,
-  register as registerTerminalService,
-} from "@/services/terminal/terminalInstanceServiceAccessor";
-
-const terminalInstanceService = createTerminalPaintPlane();
-
-const terminalService = terminalInstanceService;
-
-// The service mock never evaluates the real module, so nothing registers it.
-beforeEach(() => {
-  terminalServiceTesting.reset();
-  registerTerminalService(terminalService);
-});
-
 function setPanels(panels: Terminal[], queueCounts: Record<string, number> = {}) {
   panelMockStore.setState({
     focusedId: null,
@@ -130,8 +81,6 @@ describe("useAccessibilityAnnouncements — agent-state announcements (#8937)", 
       panelIds: [],
       commandQueueCountById: {},
     });
-    hibernationState.clear();
-    hibernationListeners.clear();
   });
 
   afterEach(() => {
@@ -271,7 +220,7 @@ describe("useAccessibilityAnnouncements — agent-state announcements (#8937)", 
 });
 
 // #9204 — per-pane state badges (exit-code, queue-count, paused-backpressure,
-// paused-resource-governor, suspended, hibernated) used to each carry their
+// paused-resource-governor, suspended) used to each carry their
 // own `aria-live="polite"` region. In a multi-pane fleet that produced
 // competing live regions. They're now silenced (aria-live="off") and routed
 // through the single global announcer with a pane-title prefix.
@@ -285,8 +234,6 @@ describe("useAccessibilityAnnouncements — badge-state announcements (#9204)", 
       panelIds: [],
       commandQueueCountById: {},
     });
-    hibernationState.clear();
-    hibernationListeners.clear();
   });
 
   afterEach(() => {
@@ -683,46 +630,6 @@ describe("useAccessibilityAnnouncements — badge-state announcements (#9204)", 
     expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A: exited with code 0");
   });
 
-  it("subscribes to hibernation and announces 'hibernated' / 'woke up' transitions", () => {
-    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
-
-    act(() => {
-      setPanels([{ id: "t1", title: "Pane A" }]);
-    });
-    rerender();
-
-    // Hibernation announcements bypass the 300ms debounce — they fire
-    // synchronously from the subscription callback.
-    useAnnouncerStore.setState({ polite: null, assertive: null });
-    act(() => {
-      setHibernated("t1", true);
-    });
-    expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A: hibernated");
-
-    useAnnouncerStore.setState({ polite: null, assertive: null });
-    act(() => {
-      setHibernated("t1", false);
-    });
-    expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A: woke up");
-  });
-
-  it("tears down hibernation subscription when panel leaves panelIds", () => {
-    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
-
-    act(() => {
-      setPanels([{ id: "t1", title: "Pane A" }]);
-    });
-    rerender();
-    expect(hibernationListeners.get("t1")?.size ?? 0).toBe(1);
-
-    act(() => {
-      setPanels([]);
-    });
-    rerender();
-
-    expect(hibernationListeners.has("t1")).toBe(false);
-  });
-
   it("cancels per-badge debounce timers when panel is removed", () => {
     const { rerender } = renderHook(() => useAccessibilityAnnouncements());
 
@@ -773,8 +680,6 @@ describe("useAccessibilityAnnouncements — location and maximize announcements 
       commandQueueCountById: {},
       maximizedId: null,
     });
-    hibernationState.clear();
-    hibernationListeners.clear();
   });
 
   afterEach(() => {
@@ -1025,8 +930,6 @@ describe("useAccessibilityAnnouncements — stable-membership record writes", ()
       commandQueueCountById: {},
       maximizedId: null,
     });
-    hibernationState.clear();
-    hibernationListeners.clear();
   });
 
   afterEach(() => {
@@ -1145,68 +1048,5 @@ describe("useAccessibilityAnnouncements — stable-membership record writes", ()
     });
 
     expect(useAnnouncerStore.getState().polite).toBeNull();
-  });
-});
-
-describe("useAccessibilityAnnouncements — before the terminal service loads", () => {
-  beforeEach(() => {
-    useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
-    panelMockStore.setState({
-      focusedId: null,
-      panelsById: {},
-      panelIds: [],
-      commandQueueCountById: {},
-    });
-    hibernationState.clear();
-    hibernationListeners.clear();
-    terminalServiceTesting.reset();
-  });
-
-  it("attaches the hibernation listener once the service is ready", () => {
-    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
-    act(() => {
-      setPanels([{ id: "t1", title: "Pane A" }]);
-    });
-    rerender();
-    expect(hibernationListeners.has("t1")).toBe(false);
-
-    // Seeded silently: becoming ready is not a hibernation transition.
-    hibernationState.set("t1", true);
-    useAnnouncerStore.setState({ polite: null, assertive: null });
-    act(() => registerTerminalService(terminalService));
-    expect(hibernationListeners.get("t1")?.size).toBe(1);
-    expect(useAnnouncerStore.getState().polite).toBeNull();
-
-    act(() => {
-      setHibernated("t1", false);
-    });
-    expect(useAnnouncerStore.getState().polite?.msg).toBe("Pane A: woke up");
-  });
-
-  it("leaves no listener behind for a panel removed before ready", () => {
-    const { rerender } = renderHook(() => useAccessibilityAnnouncements());
-    act(() => {
-      setPanels([{ id: "t1", title: "Pane A" }]);
-    });
-    rerender();
-    act(() => {
-      setPanels([]);
-    });
-    rerender();
-
-    registerTerminalService(terminalService);
-    expect(hibernationListeners.has("t1")).toBe(false);
-  });
-
-  it("leaves no listener behind when unmounted before ready", () => {
-    const { rerender, unmount } = renderHook(() => useAccessibilityAnnouncements());
-    act(() => {
-      setPanels([{ id: "t1", title: "Pane A" }]);
-    });
-    rerender();
-    unmount();
-
-    registerTerminalService(terminalService);
-    expect(hibernationListeners.has("t1")).toBe(false);
   });
 });

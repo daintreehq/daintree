@@ -83,7 +83,6 @@ import {
   useEffectiveCombo,
   useTabOverflow,
 } from "@/hooks";
-import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { TerminalHostSuffix } from "@/components/Terminal/TerminalHostSuffix";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { usePanelStore } from "@/store/panelStore";
@@ -428,7 +427,6 @@ function PanelHeaderComponent({
   const collapseScratchpad = usePanelStore((state) => state.collapseScratchpad);
   const scratchpadToggleLabel =
     scratchpadState === "collapsed" ? "Show scratchpad" : "Hide scratchpad";
-  const isHibernated = useIsHibernated(id);
 
   // Read from the subscribed snapshot, not the registry helpers: a plugin
   // registering, dropping or re-flagging its kind has to reach this header.
@@ -1601,7 +1599,6 @@ function PanelHeaderComponent({
                   {/* Session group */}
                   {hasPty && (
                     <DropdownMenuItem
-                      disabled={isHibernated}
                       onSelect={() =>
                         void actionService.dispatch(
                           "terminal.redraw",

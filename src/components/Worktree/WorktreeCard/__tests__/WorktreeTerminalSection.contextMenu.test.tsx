@@ -46,7 +46,6 @@ vi.mock("@/services/TerminalInstanceService", () => {
   };
 });
 vi.mock("@/hooks/useSidebarWorktreeOrder", () => ({ useSidebarWorktreeOrder: () => [] }));
-vi.mock("@/hooks/useIsHibernated", () => ({ useIsHibernated: () => false }));
 vi.mock("@/hooks/usePluginContextMenuItems", () => ({ usePluginContextMenuItems: () => [] }));
 vi.mock("@/store/voiceRecordingStore", () => ({
   useVoiceRecordingStore: (selector: (s: unknown) => unknown) =>

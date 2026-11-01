@@ -89,7 +89,6 @@ import { selectHomeFocusTarget } from "@/store/terminalInputStore";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { selectMicNoticeForPanel, useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
-import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { errorsClient } from "@/clients";
 import type { AgentState } from "@/types";
 import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
@@ -648,8 +647,6 @@ function TerminalPaneComponent({
   // moving the keyboard to xterm for it would leave it there once the switch
   // lands or fails, off the composer the user was in.
   const isHybridInputDisabledForFocus = isHybridInputDisabled && !hostSwitchPending;
-
-  const isHibernated = useIsHibernated(id);
 
   // Pre-audio confirmation cue. Follows the pending target rather than the
   // session's, so it also shows while a new start waits behind a session that
@@ -1496,7 +1493,6 @@ function TerminalPaneComponent({
       ambientAgentState={ambientAgentState}
       isSelected={isSelected}
       isFleetFollower={isFleetFollower}
-      isHibernated={isHibernated}
       isVoiceArming={isVoiceArming}
       tabs={tabs}
       onTabClick={onTabClick}
