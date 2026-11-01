@@ -83,7 +83,7 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
             onChanged={(next) => (next ? decisions.applyStatus(next) : void decisions.reload())}
             onClose={onClose}
           />
-          <DecisionsDevicesSection />
+          <DecisionsDevicesSection status={status} locked={pending !== null} />
           <DecisionsQuestionsSection />
           <DecisionsPolicySection />
           <DecisionsVoiceSection />

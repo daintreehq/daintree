@@ -332,3 +332,121 @@ export interface PaneDecisionState {
    */
   revision: number;
 }
+
+/** Why a signed request to the relay didn't go through. Nothing changed on the relay for any of them. */
+export type DecisionsRelayRequestFailure =
+  /** No relay is set up on this computer, or its keys aren't an owner's. */
+  | { result: "not-set-up" }
+  /** No answer from the relay (`server-error`: it answered with a failure). */
+  | {
+      result: "unreachable";
+      origin: string;
+      reason: DecisionsRelayUnreachableReason | "server-error";
+    }
+  /**
+   * The relay refused this computer's request: it no longer accepts this
+   * device (`not-recognised`), or it is limiting requests (`rate-limited`).
+   */
+  | { result: "refused"; origin: string; reason: "not-recognised" | "rate-limited" }
+  | { result: "key-storage"; kind: DecisionsKeyStorageFailure; reason: string };
+
+/** A role on the relay, as the device's owner-signed certificate states it. */
+export type DecisionsDeviceRole = "owner-desktop" | "desktop-host" | "phone" | "tablet";
+
+/**
+ * A device paired with this computer's relay identity, as the relay listed it
+ * and its owner-signed certificate verified (#16009). Revoked devices and this
+ * computer itself aren't listed.
+ */
+export interface DecisionsDevice {
+  deviceId: string;
+  /** The name the device gave itself when it paired, as its certificate signs it. */
+  label: string;
+  role: DecisionsDeviceRole;
+  /** When the relay registered it, ISO 8601. */
+  pairedAt: string;
+  /** The relay's last authenticated request from it, ISO 8601; null if none since pairing. */
+  lastSeenAt: string | null;
+  /**
+   * The relay holds an enabled push subscription for it. It turns a
+   * subscription off when the push service refuses it for good.
+   */
+  pushEnabled: boolean;
+}
+
+export type DecisionsDevicesResult =
+  { result: "listed"; devices: DecisionsDevice[] } | DecisionsRelayRequestFailure;
+
+/** A one-time invitation for a phone to pair (#16009). Its secret is in `url`'s fragment. */
+export interface DecisionsPairingInvitation {
+  pairingId: string;
+  /** `https://<relay>/pair#<payload>`: what the QR code holds, and the link shown as text. */
+  url: string;
+  /** Epoch ms. The relay refuses the invitation after this. */
+  expiresAt: number;
+}
+
+/**
+ * Making an invitation. `full`: the relay holds as many devices as it allows.
+ * `busy`: it has too many invitations open; one frees within five minutes.
+ */
+export type DecisionsPairingStartResult =
+  | { result: "started"; invitation: DecisionsPairingInvitation }
+  | { result: "full" }
+  | { result: "busy" }
+  | DecisionsRelayRequestFailure;
+
+/**
+ * An invitation as main last read it from the relay.
+ *
+ * - `waiting`: no phone has answered it yet.
+ * - `responded`: a phone answered. `code` is computed here from the keys the
+ *   phone sent, never taken from the relay, so the person compares what this
+ *   computer would approve with what the phone shows.
+ * - `paired`: the phone that answered is now a device on the relay; read
+ *   when an approval's answer was lost on the way back.
+ * - `expired`: it lapsed with no approval.
+ * - `unknown`: this computer didn't make it, or forgot it (Decisions turned
+ *   off, the relay was disconnected).
+ */
+export type DecisionsPairingState =
+  | { state: "waiting"; expiresAt: number }
+  | {
+      state: "responded";
+      expiresAt: number;
+      /** Six digits, ungrouped. */
+      code: string;
+      /** The name the phone gave itself. */
+      label: string;
+      role: "phone" | "tablet";
+    }
+  | { state: "paired"; label: string }
+  | { state: "expired" }
+  | { state: "unknown" }
+  | DecisionsRelayRequestFailure;
+
+/** Approving the phone that answered an invitation, once the person saw `code` on both screens. */
+export interface ApproveDecisionsPairingPayload {
+  pairingId: string;
+  /** The code the person was shown and compared. Main approves only the keys it was computed from. */
+  code: string;
+}
+
+/**
+ * - `paired`: the relay registered the phone, with a certificate and this
+ *   epoch's key sealed to it.
+ * - `expired`: the invitation lapsed first.
+ * - `changed`: what the relay holds isn't what was shown (another answer, or
+ *   already settled), or the relay's own code disagreed with the phone's keys.
+ *   Nothing was approved.
+ * - `full`: the relay holds as many devices as it allows.
+ */
+export type DecisionsPairingApproveResult =
+  | { result: "paired"; label: string }
+  | { result: "expired" }
+  | { result: "changed" }
+  | { result: "full" }
+  | DecisionsRelayRequestFailure;
+
+/** Declining: the relay rejects the invitation, so the phone can't use it. */
+export type DecisionsPairingDeclineResult = { result: "declined" } | DecisionsRelayRequestFailure;

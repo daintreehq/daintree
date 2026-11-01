@@ -184,16 +184,24 @@ function failed(failure: DecisionsConnectFailure): RelaySetupOutcome {
   return { failure };
 }
 
-function keyStorageFailure(error: unknown, kept = false): DecisionsConnectFailure | null {
+/** A key-store refusal a person can act on, as its observation; null for anything else. */
+export function keyStorageObservation(
+  error: unknown
+): { result: "key-storage"; kind: DecisionsKeyStorageFailure; reason: string } | null {
   if (error instanceof DecisionsKeyStoreError && KEY_STORAGE_FAILURES.has(error.kind)) {
     return {
       result: "key-storage",
       kind: error.kind as DecisionsKeyStorageFailure,
       reason: error.message,
-      ...(kept ? { kept: true as const } : {}),
     };
   }
   return null;
+}
+
+function keyStorageFailure(error: unknown, kept = false): DecisionsConnectFailure | null {
+  const observation = keyStorageObservation(error);
+  if (!observation) return null;
+  return kept ? { ...observation, kept: true } : observation;
 }
 
 /** Runs a key-store call, turning the refusals a person can act on into their observation. */
