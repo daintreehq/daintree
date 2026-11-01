@@ -2325,7 +2325,9 @@ export class TerminalNotifyService {
     // The last word on each wake: nothing is awaited between this and the submit.
     const wakes = this.sweepWakes(owner).filter((entry) => this.reserveWake(owner, entry));
     // With the server off only a scope's wakes may go; notices wait for nothing.
-    const entries = this.deps.isEnabled() ? owner.fired.filter((entry) => isDeliverable(entry)) : [];
+    const entries = this.deps.isEnabled()
+      ? owner.fired.filter((entry) => isDeliverable(entry))
+      : [];
     if (entries.length === 0 && wakes.length === 0) {
       // Only wakes, all waiting on the lane: the wake timer comes back for them.
       this.setDelivery(owner, { status: owner.wakes.size > 0 ? "scheduled" : "idle" });
