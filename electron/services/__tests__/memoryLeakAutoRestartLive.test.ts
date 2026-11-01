@@ -24,7 +24,14 @@ const leasesMock = vi.hoisted(() => ({
 vi.mock("../DriveLeaseService.js", () => ({ getDriveLeaseService: () => leasesMock }));
 
 const viewlessMock = vi.hoisted(() => ({
-  restartTerminalWithoutViewLive: vi.fn(async () => "restarted"),
+  restartTerminalWithoutViewLive: vi.fn(
+    async (
+      _projectId: string,
+      _terminalId: string,
+      _isCurrent: () => boolean,
+      _beforeChange?: () => void
+    ) => "restarted"
+  ),
 }));
 vi.mock("../viewless/index.js", () => viewlessMock);
 
@@ -92,11 +99,12 @@ describe("memory-leak auto-restart run by the host itself (#15918)", () => {
     await expect(serviceMock.deps!.restartOnHost("proj-1", "t1", isCurrent)).resolves.toBe(
       "restarted"
     );
-    const [, , passedCurrent, beforeChange] = viewlessMock.restartTerminalWithoutViewLive.mock
-      .calls[0] as [string, string, () => boolean, () => void];
+    const [projectId, , passedCurrent, beforeChange] =
+      viewlessMock.restartTerminalWithoutViewLive.mock.calls[0]!;
+    expect(projectId).toBe("proj-1");
     expect(passedCurrent).toBe(isCurrent);
     expect(leasesMock.noteSessionChange).not.toHaveBeenCalled();
-    beforeChange();
+    beforeChange?.();
     expect(leasesMock.noteSessionChange).toHaveBeenCalledWith("proj-1", null);
   });
 });
