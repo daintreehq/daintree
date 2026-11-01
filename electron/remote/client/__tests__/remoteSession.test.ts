@@ -393,10 +393,15 @@ describe("remote session wiring", () => {
     await startHarness();
     const sink = await connectOlderShell();
     await invoke(HOST_CHANNEL, VIEW_A, {});
+    const crossed: string[] = [];
+    sink.manager
+      .get(HOST_ID)!
+      .currentSession!.on(Lane.EVENTS, EventKind.EVENT, (body) => crossed.push(body.channel));
 
     broadcastToRenderer("accessibility:support-changed", true);
     broadcastToRenderer(EVENT_CHANNEL, "term-all", "hi");
     await waitFor(() => (sink.delivered.get(VIEW_A)?.length ?? 0) === 1);
+    expect(crossed).toEqual(["accessibility:support-changed", EVENT_CHANNEL]);
     expect(sink.delivered.get(VIEW_A)).toEqual([
       { channel: EVENT_CHANNEL, args: ["term-all", "hi"] },
     ]);
@@ -743,7 +748,7 @@ describe("remote session wiring", () => {
     );
     older.connect(HOST_ID);
     await waitFor(() => older.connectionState(HOST_ID).status === "connected");
-    return sink;
+    return { ...sink, manager: older };
   }
 
   it("names the host and both builds when a host on another build doesn't have a channel (#13918)", async () => {

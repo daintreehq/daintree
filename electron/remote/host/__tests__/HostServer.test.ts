@@ -702,12 +702,22 @@ describe("HostServer session resume", () => {
       sessionId: seen[0]!.sessionId,
       buildMismatch: { kind: "version", local: TEST_HANDSHAKE.version, remote: "0.9.0" },
     });
-    expect(seen[0]!.buildMismatch).toEqual({
-      kind: "version",
-      local: TEST_HANDSHAKE.version,
-      remote: "0.9.0",
-    });
   });
+
+  it.each([
+    ["version", { version: "0.9.0" }, "version", TEST_HANDSHAKE.version, "0.9.0"],
+    ["commit", { commit: "0ther" }, "commit", TEST_HANDSHAKE.commit, "0ther"],
+  ] as const)(
+    "tells the session a Shell on another %s which way the builds differ",
+    async (_name, shellDiffers, kind, local, remote) => {
+      const server = await startServer();
+      const seen: HostSessionContext[] = [];
+      server.onSession((ctx) => seen.push(ctx));
+      const client = startClient(server, { handshake: { ...TEST_HANDSHAKE, ...shellDiffers } });
+      await waitFor(() => seen.length === 1 && client.getState().status === "connected");
+      expect(seen[0]!.buildMismatch).toEqual({ kind, local, remote });
+    }
+  );
 
   it("logs a link's life on both ends with the session id, and never a credential", async () => {
     const server = await startServer({ resumeGraceMs: 60_000 });

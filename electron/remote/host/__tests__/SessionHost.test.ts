@@ -865,6 +865,22 @@ describe("SessionHost: pushes a Shell would discard by locality (#15901)", () =>
     expect(link.calls).toEqual([]);
   });
 
+  it("owes no resync for a discarded push that met a closing link", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+
+    // Closed but not yet reported closed: drop() would mark every endpoint stale itself.
+    link.isOpen = false;
+    broadcast(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, [{ percent: 40 }]);
+    link.isOpen = true;
+    link.tick();
+    expect(link.calls).toEqual([]);
+
+    broadcast(CHANNELS.TERMINAL_DATA, ["t1", "hi"]);
+    expect(eventFrames(link).map((f) => f.channel)).toEqual([CHANNELS.TERMINAL_DATA]);
+  });
+
   it("follows the build of the Shell's latest attach across resumes", () => {
     const mismatch: HandshakeMismatch = { kind: "version", local: "1.2.3", remote: "1.2.4" };
     const sent = (link: ReturnType<typeof fakeLink>) => {
