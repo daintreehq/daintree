@@ -529,6 +529,27 @@ describe("createSystemdScheduleJob", () => {
   });
 
   it.each([
+    ["launcher", LAUNCHER],
+    ["Daintree's unit", APP],
+  ])("rewrites a %s an older copy wrote, that systemd also holds", async (_name, unit) => {
+    const { files: initial, loaded } = installed();
+    const old = "[Service]\nExecStart=/old\n";
+    const files = memoryFs({ ...initial, [`${UNIT_DIR}/${unit}`]: old });
+    const systemd = fakeSystemd(files.files, { loaded: { ...loaded, [unit]: old }, active: true });
+    const adapter = job({ files, systemd });
+    expect(await adapter.observe([NINE], "Europe/London")).toMatchObject({ current: false });
+
+    await adapter.sync([NINE], "Europe/London", { reload: false });
+
+    expect(files.files.get(`${UNIT_DIR}/${unit}`)).toBe(initial[`${UNIT_DIR}/${unit}`]);
+    expect(await adapter.observe([NINE], "Europe/London")).toEqual({
+      installed: true,
+      current: true,
+      loaded: true,
+    });
+  });
+
+  it.each([
     ["masked", LAUNCHER],
     ["bad-setting", APP],
   ])("never reads a %s unit as a timer that can start Daintree", async (loadState, unit) => {

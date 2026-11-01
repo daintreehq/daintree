@@ -14,6 +14,12 @@ const mocks = vi.hoisted(() => ({
   followAppImageMove: vi.fn(),
   schedules: [] as Schedule[],
   adapters: [] as Array<{ sync: ReturnType<typeof vi.fn> }>,
+  spawnSync: vi.fn(),
+}));
+
+vi.mock("node:child_process", async (importActual) => ({
+  ...(await importActual<object>()),
+  spawnSync: mocks.spawnSync,
 }));
 
 vi.mock("node:fs", async (importActual) => {
@@ -214,6 +220,38 @@ describe("scheduleOsJobLive", () => {
     };
     mocks.relocationHandlers[0]!(relocation);
     expect(mocks.followAppImageMove).toHaveBeenCalledWith(relocation);
+  });
+
+  it("reloads systemd for a move, once more if the first reload fails, and says when both do", async () => {
+    onPlatform("linux");
+    const { scheduleOsJobStatus } = await live();
+    await scheduleOsJobStatus("p1");
+    const reloadSync = mocks.systemdDeps[0]!.reloadSync as () => void;
+    const answers = (...results: object[]) => {
+      mocks.spawnSync.mockReset();
+      for (const result of results) mocks.spawnSync.mockReturnValueOnce(result);
+    };
+
+    answers({ status: 0 });
+    reloadSync();
+    expect(mocks.spawnSync).toHaveBeenCalledTimes(1);
+    expect(mocks.spawnSync).toHaveBeenCalledWith(
+      "systemctl",
+      ["--user", "daemon-reload"],
+      expect.objectContaining({ timeout: expect.any(Number) })
+    );
+
+    answers({ status: 1 }, { status: 0 });
+    reloadSync();
+    expect(mocks.spawnSync).toHaveBeenCalledTimes(2);
+
+    answers(
+      { status: null, signal: "SIGTERM" },
+      { error: new Error("spawnSync systemctl ETIMEDOUT") }
+    );
+    expect(reloadSync).toThrow(
+      "systemctl --user daemon-reload failed: spawnSync systemctl ETIMEDOUT"
+    );
   });
 
   it("follows no move for a Daintree that isn't an AppImage", async () => {
