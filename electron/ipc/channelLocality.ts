@@ -203,6 +203,9 @@ export const CHANNEL_LOCALITY = {
   "copy-tree-history:get-records": "host",
   "scheduled-runs:list-by-project": "host",
   "scheduled-runs:list-by-schedule": "host",
+  // This machine's notification inbox, whichever host a window drives (#15983).
+  "scheduled-runs:take-inbox": "shell",
+  "scheduled-runs:ack-inbox": "shell",
   "copytree:available": "host",
   "copytree:cancel": "host",
   "copytree:generate": "host",

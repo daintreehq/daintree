@@ -419,6 +419,14 @@ interface NotificationHistoryState {
   snoozedThreads: Record<string, number>;
   addEntry: (entry: AddEntryInput) => string;
   /**
+   * Adds entries that arrive whole, each under the id its source gave it, so
+   * the same record arriving twice is one entry: an id already held, read or
+   * archived, is skipped, and sibling views merge by id when they persist.
+   * They keep their own timestamps and take their place by them, under the
+   * same retention and cap as any entry.
+   */
+  importEntries: (entries: readonly NotificationHistoryEntry[]) => void;
+  /**
    * Replaces the `message` text on an existing entry without bumping
    * `timestamp` or any read/archived state. Used by the rate-limit overflow
    * path to refresh an in-place summary row ("{N} more events") as more
@@ -492,6 +500,18 @@ interface NotificationHistoryState {
   clearExpiredSnoozes: (now?: number) => void;
 }
 
+const notificationHistoryStorage = createDebouncedSafeJSONStorage<unknown>(300, {
+  mergeOnWrite: mergeNotificationHistoryPersistedWrite,
+});
+
+/**
+ * Writes the inbox's pending persist now rather than after its debounce, for a
+ * caller that must know it reached storage before telling its source so.
+ */
+export function flushNotificationHistory(): void {
+  notificationHistoryStorage.flush(NOTIFICATION_HISTORY_STORAGE_KEY);
+}
+
 export const useNotificationHistoryStore = create<NotificationHistoryState>()(
   persist(
     (set, get) => ({
@@ -550,6 +570,23 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
           };
         });
         return newEntry.id;
+      },
+      importEntries: (incoming) => {
+        const state = get();
+        const held = new Set(state.entries.map((e) => e.id));
+        const added = incoming.filter((e) => {
+          if (held.has(e.id)) return false;
+          held.add(e.id);
+          return true;
+        });
+        if (added.length === 0) return;
+        const now = Date.now();
+        const candidate = [...added, ...state.entries].sort((a, b) => b.timestamp - a.timestamp);
+        const updated = pruneNotificationEntries(candidate, now);
+        set({
+          entries: updated,
+          unreadCount: computeUnreadCount(updated, state.snoozedThreads, now),
+        });
       },
       updateEntryMessage: (id, message) => {
         const state = get();
@@ -774,9 +811,7 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
       // because `migrate` can return a pre-v2 blob shape; the persist
       // middleware then funnels that through `merge`, which does its own
       // defensive coercion.
-      storage: createDebouncedSafeJSONStorage<unknown>(300, {
-        mergeOnWrite: mergeNotificationHistoryPersistedWrite,
-      }),
+      storage: notificationHistoryStorage,
       // Only persist entries + snoozedThreads — unreadCount is recomputed on
       // hydration, and evictedToInboxCount is a session-only discoverability
       // counter that resets to 0 on every fresh load.

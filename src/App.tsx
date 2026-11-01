@@ -42,6 +42,7 @@ import { useMcpBridge } from "./hooks/useMcpBridge";
 import { usePluginBridge } from "./hooks/usePluginBridge";
 import { useScheduledRunLaunchBridge } from "./hooks/useScheduledRunLaunchBridge";
 import { useScheduledRunFinishBridge } from "./hooks/useScheduledRunFinishBridge";
+import { useScheduledRunInboxBridge } from "./hooks/useScheduledRunInboxBridge";
 import { usePluginPromptBridge } from "./hooks/usePluginPromptBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
 import { notifyViewPainted } from "./utils/removeStartupSkeleton";
@@ -323,6 +324,7 @@ function AppInner() {
     pluginDeepLink,
     gettingStarted,
   } = useAppBootstrap();
+  useScheduledRunInboxBridge(isStateLoaded);
 
   const { emptyContent, workspaceId } = useEmptyCanvasContent(gettingStarted);
 

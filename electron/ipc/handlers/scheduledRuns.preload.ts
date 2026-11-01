@@ -3,6 +3,8 @@ import type { IpcInvokeMap } from "../../types/index.js";
 export const SCHEDULED_RUNS_METHOD_CHANNELS = {
   listByProject: "scheduled-runs:list-by-project",
   listBySchedule: "scheduled-runs:list-by-schedule",
+  takeInbox: "scheduled-runs:take-inbox",
+  ackInbox: "scheduled-runs:ack-inbox",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof SCHEDULED_RUNS_METHOD_CHANNELS;

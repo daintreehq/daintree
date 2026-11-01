@@ -49,6 +49,17 @@ function isUniqueViolation(error: unknown): boolean {
 }
 
 /**
+ * Whether any run waits for the notification inbox, read straight from the
+ * table so a view loading with no run waiting never opens the history.
+ */
+export function hasInboxPendingRun(sqlite: Database.Database): boolean {
+  return (
+    sqlite.prepare("SELECT 1 FROM scheduled_runs WHERE inbox_pending = 1 LIMIT 1").pluck().get() !==
+    undefined
+  );
+}
+
+/**
  * The `scheduled_runs` table: each row is one validated {@link ScheduledRun}
  * beside the columns its queries read. Synchronous, so a registration has
  * committed before the caller goes on to spawn.
@@ -67,18 +78,19 @@ export class ScheduledRunStore {
   /**
    * A run for an occurrence also moves its schedule's evaluation point up to
    * that occurrence, in the same transaction, so neither commits alone.
+   * `inboxPending` inserts it already waiting for the notification inbox.
    *
    * @throws {ScheduledRunConflictError} when the occurrence already has a run.
    */
-  insert(run: ScheduledRun): void {
+  insert(run: ScheduledRun, options: { inboxPending?: boolean } = {}): void {
     const record = ScheduledRunSchema.parse(run);
     try {
       this.transaction(() => {
         this.sqlite
           .prepare(
             `INSERT INTO scheduled_runs
-               (id, project_id, schedule_id, occurrence_key, terminal_id, live, created_at, record)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+               (id, project_id, schedule_id, occurrence_key, terminal_id, live, created_at, record, inbox_pending)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
           )
           .run(
             record.id,
@@ -88,7 +100,8 @@ export class ScheduledRunStore {
             record.terminalId,
             isLive(record) ? 1 : 0,
             record.createdAt,
-            JSON.stringify(record)
+            JSON.stringify(record),
+            options.inboxPending ? 1 : 0
           );
         const evaluated = evaluatedThrough(record);
         if (evaluated !== null) {
@@ -195,6 +208,44 @@ export class ScheduledRunStore {
          )`
       )
       .run({ scheduleId, limit }).changes;
+  }
+
+  /**
+   * Marks a run as waiting for the notification inbox (#15983): it settled
+   * with no window open. Rewriting the record leaves the mark alone, and
+   * pruning or deleting the run takes it away with the row.
+   */
+  markInboxPending(id: string): boolean {
+    return (
+      this.sqlite.prepare("UPDATE scheduled_runs SET inbox_pending = 1 WHERE id = ?").run(id)
+        .changes > 0
+    );
+  }
+
+  /** Runs waiting for the notification inbox, oldest first. */
+  listInboxPending(): ScheduledRun[] {
+    return this.decodeAll(
+      this.sqlite
+        .prepare(
+          "SELECT id, record FROM scheduled_runs WHERE inbox_pending = 1 ORDER BY created_at, rowid"
+        )
+        .all() as RunRow[]
+    );
+  }
+
+  /** Clears the inbox mark of these runs; returns the ids that held one. */
+  clearInboxPending(ids: readonly string[]): string[] {
+    const cleared: string[] = [];
+    if (ids.length === 0) return cleared;
+    const clear = this.sqlite.prepare(
+      "UPDATE scheduled_runs SET inbox_pending = 0 WHERE id = ? AND inbox_pending = 1"
+    );
+    this.transaction(() => {
+      for (const id of new Set(ids)) {
+        if (clear.run(id).changes > 0) cleared.push(id);
+      }
+    });
+    return cleared;
   }
 
   /** Returns the projects whose history changed. */

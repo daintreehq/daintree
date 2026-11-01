@@ -3611,6 +3611,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./runHistory.js").RunHistoryRecord[];
   };
+  "scheduled-runs:ack-inbox": {
+    args: [payload: import("./scheduledRuns.js").ScheduledRunsAckInboxPayload];
+    result: void;
+  };
   "scheduled-runs:list-by-project": {
     args: [payload: import("./scheduledRuns.js").ScheduledRunsListByProjectPayload];
     result: {
@@ -3826,6 +3830,10 @@ export interface GeneratedIpcInvokeMap {
         agentPresetId: string | null;
       } | null;
     }[];
+  };
+  "scheduled-runs:take-inbox": {
+    args: [];
+    result: import("./scheduledRuns.js").ScheduledRunInboxItem[];
   };
   "schedules:create": {
     args: [input: import("./schedules.js").ScheduleCreateInput];

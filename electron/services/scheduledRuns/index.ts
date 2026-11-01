@@ -2,6 +2,7 @@ import { CHANNELS } from "../../ipc/channels.js";
 import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { getActiveShutdown } from "../../lifecycle/shutdownCoordinator.js";
 import { getWebContentsForProject } from "../../window/webContentsRegistry.js";
+import { getWindowRegistry } from "../../window/windowRef.js";
 import { events } from "../events.js";
 import type { PtyIncarnationExit, PtyIncarnationLost } from "../PtyClient.js";
 import type { SpawnResult } from "../../../shared/types/pty-host.js";
@@ -56,6 +57,7 @@ export function getScheduledRunRecorder(): Promise<ScheduledRunRecorder | null> 
     const created = new ScheduledRunRecorder({
       store: new ScheduledRunStore(sqlite),
       isShuttingDown: () => getActiveShutdown() !== null,
+      hasOpenWindow: hasOpenAppWindow,
       onChanged: pushScheduledRunsChanged,
       onRunStarted: (payload) => {
         // The keep-awake hold (#15981) is taken on this event, so its service
@@ -115,6 +117,28 @@ export function peekScheduledRunRecorder(): ScheduledRunRecorder | null {
 }
 
 /**
+ * The run history for the notification inbox (#15983), opened only when a run
+ * is waiting for it: every view asks as it loads, and one with nothing waiting
+ * must not open the history for a user with no schedules.
+ */
+export async function getScheduledRunRecorderForInbox(): Promise<ScheduledRunRecorder | null> {
+  if (recorder) return recorder;
+  const [{ getSharedSqlite }, { hasInboxPendingRun }] = await Promise.all([
+    import("../persistence/db.js"),
+    import("./ScheduledRunStore.js"),
+  ]);
+  const sqlite = getSharedSqlite();
+  if (!sqlite) return null;
+  try {
+    if (!hasInboxPendingRun(sqlite)) return null;
+  } catch (error) {
+    console.warn("[ScheduledRuns] Couldn't read the runs waiting for the inbox:", error);
+    return null;
+  }
+  return getScheduledRunRecorder();
+}
+
+/**
  * Follows the PTY and session facts a run records, for the life of the
  * process. Until the history is opened no run of this lifetime exists, so a
  * fact that arrives before then has no run to land on.
@@ -154,6 +178,17 @@ export function startScheduledRunFacts(source: ScheduledRunFactSource): () => vo
     offCaptured();
     offHandback();
   };
+}
+
+/**
+ * Whether any Daintree window is open on this machine, minimised or hidden
+ * included. A cached project view isn't a window, and neither is another
+ * machine's Shell driving this one.
+ */
+function hasOpenAppWindow(): boolean {
+  const registry = getWindowRegistry();
+  if (!registry) return false;
+  return registry.all().some((ctx) => !ctx.browserWindow.isDestroyed());
 }
 
 /**
