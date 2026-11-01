@@ -43,6 +43,7 @@ import {
   type ResolvedTheme,
 } from "../lib/themeFixture";
 import {
+  PLAIN_DATA_VIOLATIONS_SOURCE,
   instrumentThemeSource,
   instrumentationMisses,
   loadBuiltInSchemeSnapshot,
@@ -434,47 +435,80 @@ describe("PERF-305 brand ink oracle", () => {
 describe("PERF-306 theme module oracle", () => {
   const recorded = loadBuiltInSchemeSnapshot();
   const clone = (): ThemeModuleOutput => structuredClone(recorded);
+  const misses = (output: ThemeModuleOutput, shapeViolations = 0) =>
+    themeModuleOutputMisses({ output, shapeViolations }, recorded);
+  const plainDataViolations = new Function(
+    `${PLAIN_DATA_VIOLATIONS_SOURCE}; return plainDataViolations;`
+  )() as (value: unknown) => number;
 
   it("records every built-in and the light fallback", () => {
     expect(recorded.schemes.map((scheme) => (scheme as AppColorScheme).id)).toEqual(
       BUILT_IN_APP_SCHEMES.map((scheme) => scheme.id)
     );
     expect((recorded.fallback as AppColorScheme).type).toBe("light");
-    expect(themeModuleOutputMisses(clone(), recorded)).toBe(0);
+    expect(misses(clone())).toBe(0);
   });
 
   it("scores one token derived differently", () => {
     const drifted = clone();
     const tokens = (drifted.schemes[3] as AppColorScheme).tokens;
     tokens["status-success-text"] = tokens["status-success"];
-    expect(themeModuleOutputMisses(drifted, recorded)).toBe(1);
+    expect(misses(drifted)).toBe(1);
   });
 
   it("scores a dropped, a reordered and an extension-less cohort", () => {
     const dropped = clone();
     dropped.schemes.pop();
-    expect(themeModuleOutputMisses(dropped, recorded)).toBeGreaterThan(0);
+    expect(misses(dropped)).toBeGreaterThan(0);
 
     const reordered = clone();
     reordered.schemes.reverse();
-    expect(themeModuleOutputMisses(reordered, recorded)).toBeGreaterThan(0);
+    expect(misses(reordered)).toBeGreaterThan(0);
 
     const bare = clone();
     for (const scheme of bare.schemes) delete (scheme as AppColorScheme).extensions;
-    expect(themeModuleOutputMisses(bare, recorded)).toBe(recorded.schemes.length);
+    expect(misses(bare)).toBe(recorded.schemes.length);
   });
 
   it("scores a fallback that went missing or drifted", () => {
-    expect(themeModuleOutputMisses({ ...clone(), fallback: undefined }, recorded)).toBe(1);
+    expect(misses({ ...clone(), fallback: undefined })).toBe(1);
     const drifted = clone();
     (drifted.fallback as AppColorScheme).tokens["destructive-fill"] = "#000000";
-    expect(themeModuleOutputMisses(drifted, recorded)).toBe(1);
+    expect(misses(drifted)).toBe(1);
+  });
+
+  it("scores exports that only look right once serialised", () => {
+    expect(plainDataViolations(clone())).toBe(0);
+    expect(misses(clone(), 2)).toBe(2);
+
+    // A getter that would derive on read: counted, and never invoked.
+    let derivedOnRead = 0;
+    const lazy = clone();
+    const tokens = (lazy.schemes[0] as AppColorScheme).tokens;
+    Object.defineProperty(lazy.schemes[0], "tokens", {
+      enumerable: true,
+      get: () => {
+        derivedOnRead += 1;
+        return tokens;
+      },
+    });
+    expect(plainDataViolations(lazy)).toBe(1);
+    expect(derivedOnRead).toBe(0);
+
+    const stand = clone();
+    expect(plainDataViolations({ ...stand, schemes: { toJSON: () => stand.schemes } })).toBe(1);
+    expect(plainDataViolations({ ...stand, fallback: undefined })).toBe(1);
+    const odd = clone();
+    Object.assign(odd.schemes[1] as object, { extra: undefined, nan: Number.NaN, fn: () => 0 });
+    expect(plainDataViolations(odd)).toBe(3);
+    expect(plainDataViolations({ ...clone(), fallback: new Map() })).toBe(1);
   });
 
   it("scores a counter that measured nothing, too much, or ran in the timed arm", () => {
     const evaluation = (linearisations: number, probe: number) => ({
       parseMs: 1,
       executeMs: 1,
+      shapeViolations: 0,
       linearisations,
       probeLinearisations: probe,
       output: recorded,

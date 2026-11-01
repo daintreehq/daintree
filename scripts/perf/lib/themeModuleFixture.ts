@@ -28,16 +28,17 @@ import { createPerfTempRoot } from "./tempRoots";
  * The oracle is the engine's recorded output, the file snapshot that
  * `shared/theme/__tests__/builtInSchemeOutput.test.ts` owns and regenerates.
  * A theme module that evaluated quickly by deriving less, or differently, scores
- * against it.
+ * against it, and so does one whose exports are anything but plain data: a
+ * getter could defer the derivation past the timed bracket and run it during
+ * serialisation, where neither the clock nor the counter sees it.
  */
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = pathResolve(HERE, "../../..");
 const THEME_ENTRY = join(REPO_ROOT, "shared/theme/index.ts");
-export const BUILT_IN_SCHEME_SNAPSHOT_PATH = join(
-  REPO_ROOT,
-  "shared/theme/__tests__/__snapshots__/builtInSchemeOutput.json"
-);
+// Under scripts/perf so the oracle is part of the apparatus both harness
+// hashes cover: regenerating it around changed output changes the hash.
+export const BUILT_IN_SCHEME_SNAPSHOT_PATH = join(HERE, "../fixtures/builtInSchemeOutput.json");
 
 const COUNTER = "__daintreePerfLinearisations";
 const FALLBACK_EXPORT = "__perfLightFallbackScheme";
@@ -78,6 +79,8 @@ export interface ThemeModuleOutput {
 export interface ThemeModuleEvaluation {
   parseMs: number;
   executeMs: number;
+  /** Accessors, functions, undefined, non-finite or non-plain values in the raw exports. */
+  shapeViolations: number;
   /** Linearisations the module body made while evaluating. */
   linearisations: number;
   /** Linearisations one `relativeLuminance` call made, after the module loaded. */
@@ -174,9 +177,50 @@ export function loadThemeModuleBundles(): Promise<ThemeModuleBundles> {
   return bundlesPromise;
 }
 
+/**
+ * Plain JavaScript, because it runs in the child against the raw exports before
+ * JSON transport would invoke getters, drop undefined and call toJSON. Counts
+ * every value JSON could not carry faithfully, without reading through an
+ * accessor.
+ */
+export const PLAIN_DATA_VIOLATIONS_SOURCE = `function plainDataViolations(root) {
+  let violations = 0;
+  const seen = new Set();
+  const visit = (node) => {
+    if (node === null || typeof node === "string" || typeof node === "boolean") return;
+    if (typeof node === "number") {
+      if (!Number.isFinite(node)) violations += 1;
+      return;
+    }
+    if (typeof node !== "object") {
+      violations += 1;
+      return;
+    }
+    if (seen.has(node)) return;
+    seen.add(node);
+    const proto = Object.getPrototypeOf(node);
+    const array = Array.isArray(node);
+    if (array ? proto !== Array.prototype : proto !== Object.prototype && proto !== null) {
+      violations += 1;
+    }
+    for (const key of Reflect.ownKeys(node)) {
+      if (array && key === "length") continue;
+      const descriptor = Object.getOwnPropertyDescriptor(node, key);
+      if (typeof key === "symbol" || !descriptor.enumerable || !("value" in descriptor)) {
+        violations += 1;
+        continue;
+      }
+      visit(descriptor.value);
+    }
+  };
+  visit(root);
+  return violations;
+}`;
+
 // Runs in the child: reads the bundle it is pointed at, evaluates it as a
 // CommonJS module, and writes the readings and the derived schemes to stdout.
 const CHILD_SCRIPT = `
+${PLAIN_DATA_VIOLATIONS_SOURCE}
 const { performance } = require("node:perf_hooks");
 const code = require("node:fs").readFileSync(process.argv[1], "utf8");
 globalThis.${COUNTER} = 0;
@@ -187,28 +231,46 @@ const t1 = performance.now();
 evaluate(mod, mod.exports, require);
 const t2 = performance.now();
 const linearisations = globalThis.${COUNTER};
+const output = { schemes: mod.exports.BUILT_IN_APP_SCHEMES, fallback: mod.exports.${FALLBACK_EXPORT} };
+const shapeViolations = plainDataViolations(output);
 mod.exports.relativeLuminance("#808080");
 const probeLinearisations = globalThis.${COUNTER} - linearisations;
 process.stdout.write(JSON.stringify({
   parseMs: t1 - t0,
   executeMs: t2 - t1,
+  shapeViolations,
   linearisations,
   probeLinearisations,
-  output: { schemes: mod.exports.BUILT_IN_APP_SCHEMES, fallback: mod.exports.${FALLBACK_EXPORT} },
+  output,
 }));
 `;
+
+// Far above any real evaluation (tens of milliseconds) and below the liveness
+// guard's per-scenario limit, so a hung child fails this run with its arm named
+// instead of outliving the driver.
+const CHILD_TIMEOUT_MS = 60_000;
 
 /** Evaluate one bundle file in a fresh Node process. */
 export function evaluateThemeModule(bundlePath: string): ThemeModuleEvaluation {
   const env = { ...process.env };
-  // A plain Node child: no loader inherited from the tsx process driving the run.
-  delete env.NODE_OPTIONS;
-  const stdout = execFileSync(process.execPath, ["-e", CHILD_SCRIPT, bundlePath], {
-    stdio: ["ignore", "pipe", "pipe"],
-    env,
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-  });
+  // A plain Node child: no loader inherited from the tsx process driving the
+  // run. Windows reads the variable case-insensitively, so every spelling goes.
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase() === "NODE_OPTIONS") delete env[key];
+  }
+  let stdout: string;
+  try {
+    stdout = execFileSync(process.execPath, ["-e", CHILD_SCRIPT, bundlePath], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+      timeout: CHILD_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+    });
+  } catch (error) {
+    throw new Error(`PERF-306: evaluating ${bundlePath} failed`, { cause: error });
+  }
   return JSON.parse(stdout) as ThemeModuleEvaluation;
 }
 
@@ -223,13 +285,15 @@ export function loadBuiltInSchemeSnapshot(): ThemeModuleOutput {
 
 /**
  * Schemes that differ from the recorded engine output, the fallback counted as
- * one more, plus any scheme missing or extra. Compared after a JSON round trip
- * on both sides, which is the form the snapshot records.
+ * one more, plus any scheme missing or extra, plus every value the child found
+ * that isn't plain data. Compared after a JSON round trip on both sides, which
+ * is the form the snapshot records; the shape check is what JSON can't see.
  */
 export function themeModuleOutputMisses(
-  output: ThemeModuleOutput,
+  evaluation: Pick<ThemeModuleEvaluation, "output" | "shapeViolations">,
   recorded: ThemeModuleOutput
 ): number {
+  const { output } = evaluation;
   const schemes = Array.isArray(output.schemes) ? output.schemes : [];
   let misses = Math.abs(schemes.length - recorded.schemes.length);
   const shared = Math.min(schemes.length, recorded.schemes.length);
@@ -237,7 +301,7 @@ export function themeModuleOutputMisses(
     if (!isDeepStrictEqual(schemes[i], recorded.schemes[i])) misses += 1;
   }
   if (!isDeepStrictEqual(output.fallback, recorded.fallback)) misses += 1;
-  return misses;
+  return misses + evaluation.shapeViolations;
 }
 
 /**

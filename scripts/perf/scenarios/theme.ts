@@ -316,7 +316,8 @@ export const themeScenarios: PerfScenario[] = [
       "the evaluation made (three per luminance or OKLab conversion), read from a separately " +
       "instrumented bundle in its own process so the counter never runs in the timed one. " +
       "outputMisses grades every derived scheme and the fallback against the engine's " +
-      "recorded output (shared/theme/__tests__/__snapshots__/builtInSchemeOutput.json), " +
+      "recorded output (scripts/perf/fixtures/builtInSchemeOutput.json) and requires the raw " +
+      "exports to be plain data, so a getter can't defer the derivation past the clock; " +
       "countedOutputMisses does the same for the instrumented bundle, and " +
       "instrumentationMisses proves the counter is wired to the real conversions.",
     tier: "heavy",
@@ -339,8 +340,8 @@ export const themeScenarios: PerfScenario[] = [
           linearisationCount: counted.linearisations,
           bundleBytes: bundles.plainBytes,
           schemeCount: plain.output.schemes.length + 1,
-          outputMisses: themeModuleOutputMisses(plain.output, recorded),
-          countedOutputMisses: themeModuleOutputMisses(counted.output, recorded),
+          outputMisses: themeModuleOutputMisses(plain, recorded),
+          countedOutputMisses: themeModuleOutputMisses(counted, recorded),
           instrumentationMisses: instrumentationMisses(plain, counted),
         },
       };

@@ -486,7 +486,7 @@ const FAMILIES: readonly Family[] = [
     kind: "mechanism",
     fidelity: withFidelity({ entryPoint: "public-api", processTopology: "partial" }),
     claim:
-      "The real theme module evaluated cold in a fresh Node process, as main and each renderer evaluate it at boot. Node, not Electron: no Vite chunk, no renderer scheduling, and the parse is of an unminified bundle that carries zod, so a faster number is the derivation getting cheaper, not first paint arriving sooner.",
+      "The real theme module compiled and executed cold in a fresh Node process, as main and each renderer evaluate it at boot. Node, not Electron: no Vite chunk, no renderer scheduling, and the duration includes parsing an unminified bundle that carries zod, so linearisationCount, not the duration, is the reading that speaks for the derivation alone. A faster number is not first paint arriving sooner.",
   },
   {
     label: "notifications",

@@ -828,11 +828,14 @@ function followActivityForText(
   }
 }
 
-type DestructiveKey =
-  | "destructive-fill"
-  | "destructive-fill-hover"
-  | "destructive-fill-active"
-  | "destructive-foreground";
+const DESTRUCTIVE_KEYS = [
+  "destructive-fill",
+  "destructive-fill-hover",
+  "destructive-fill-active",
+  "destructive-foreground",
+] as const;
+
+type DestructiveKey = (typeof DESTRUCTIVE_KEYS)[number];
 
 /**
  * The destructive Button's fills and label. The label is the near-white end of
@@ -917,14 +920,27 @@ function followDangerForDestructive(
   }
 }
 
+// Every token the contrast follow-ups write.
+const CONTRAST_FOLLOW_KEYS: readonly AppThemeTokenKey[] = [
+  ...DIFF_TEXT_SOURCES.map(([key]) => key),
+  ...Object.values(STATUS_TEXT_INKS),
+  ...Object.values(ACTIVITY_TEXT_INKS),
+  ...DESTRUCTIVE_KEYS,
+];
+
 function createThemeFromSource(source: BuiltInThemeSource): AppColorScheme {
   // With overrides, the follow-ups below rewrite every ink the compile's own
   // contrast pass lifts, so that pass would be thrown away (#15673). A blank
-  // override is the exception: normalisation drops it but the follow-ups still
-  // defer to it, leaving the compile's lift in place.
+  // override of one of those inks is the exception: normalisation drops it but
+  // the follow-ups still defer to it, leaving the compile's lift in place. Read
+  // by key, as both of them read it, so an inherited blank counts too.
+  const overrides = source.tokens as Record<string, unknown> | undefined;
   const followsReplaceLifts =
-    source.tokens !== undefined &&
-    !Object.values(source.tokens).some((value) => typeof value === "string" && !value.trim());
+    overrides !== undefined &&
+    !CONTRAST_FOLLOW_KEYS.some((key) => {
+      const value = overrides[key];
+      return typeof value === "string" && !value.trim();
+    });
   const compiledTokens = compilePaletteToTokens(source.palette, {
     contrastFollows: !followsReplaceLifts,
   });
