@@ -15,6 +15,11 @@ import { checkRemoteWorktreePortRequest, requiresDriving } from "./requestSchema
  * There is no replay here. A dropped link closes the renderer's port, which
  * fails its pending requests and runs its disconnect handling; the port
  * posted after the next connect runs its ready handling, which refetches.
+ *
+ * While the view holds no port (a cached view, a reload), the Shell tells the
+ * host with a {@link ViewPortStateSchema} message and the host stops sending
+ * it events; the view refetches when its next port arrives. An older host
+ * fails the message's request check without an id and ignores it.
  */
 
 const requestId = z.union([z.string().min(1).max(256), z.number().int().min(0)]);
@@ -29,6 +34,12 @@ const WorktreePortReplySchema = z.union([
   z.looseObject({ id: requestId }),
   z.looseObject({ type: z.literal("event"), event: z.looseObject({ type: z.string().max(256) }) }),
 ]);
+
+/** Shell → host: whether the view holds a worktree port. Never reaches the workspace host. */
+const ViewPortStateSchema = z.strictObject({
+  type: z.literal("view-port"),
+  open: z.boolean(),
+});
 
 const HOST_UNAVAILABLE = "Worktree host is not connected";
 
@@ -82,6 +93,8 @@ export class WorktreePortHostBridge {
   private sessionCleanup: (() => void)[] = [];
   private opened = false;
   private disposed = false;
+  /** Starts true on every session, so a Shell that never reports gets every event. */
+  private viewHasPort = true;
 
   constructor(options: WorktreePortHostBridgeOptions) {
     this.opts = options;
@@ -103,6 +116,7 @@ export class WorktreePortHostBridge {
     port.onMessage((message) => {
       if (this.port !== port) return;
       if (!WorktreePortReplySchema.safeParse(message).success) return;
+      if (!this.viewHasPort && (message as { type?: unknown }).type === "event") return;
       postWorktree(this.session, this.endpointId, message);
     });
     port.onClose(() => {
@@ -121,6 +135,7 @@ export class WorktreePortHostBridge {
     if (this.disposed || this.session === session) return;
     this.detach();
     this.session = session;
+    this.viewHasPort = true;
     this.sessionCleanup = [
       session.on(Lane.INTERACTIVE, InteractiveKind.WORKTREE_PORT, (body) => {
         if (body.endpointId === this.endpointId) this.onClientMessage(body.message);
@@ -165,6 +180,14 @@ export class WorktreePortHostBridge {
   }
 
   private onClientMessage(raw: unknown): void {
+    const viewPort = ViewPortStateSchema.safeParse(raw);
+    if (viewPort.success) {
+      this.viewHasPort = viewPort.data.open;
+      return;
+    }
+    // Only a port the view holds sends requests, so one also undoes a pause
+    // whose resume the Shell's queue refused.
+    this.viewHasPort = true;
     // The far end is another machine: nothing reaches the trusted workspace
     // port unless it is a protocol request aimed at this endpoint's project.
     const projectRoot =
@@ -212,6 +235,8 @@ export class WorktreePortClientRelay {
   private session: LinkSession | null = null;
   private sessionCleanup: (() => void)[] = [];
   private disposed = false;
+  /** What the host was last told, as the host bridge assumes at each session's start. */
+  private hostSeesPort = true;
 
   constructor(options: WorktreePortClientRelayOptions) {
     this.opts = options;
@@ -234,9 +259,13 @@ export class WorktreePortClientRelay {
       if (this.port === port) this.onRendererMessage(message);
     });
     port.onClose(() => {
-      if (this.port === port) this.port = null;
+      if (this.port !== port) return;
+      this.port = null;
+      this.reportPort(false);
     });
     previous?.close();
+    // Before the view holds its end, so the host resumes ahead of its first request.
+    this.reportPort(true);
   }
 
   attach(session: LinkSession): void {
@@ -253,7 +282,9 @@ export class WorktreePortClientRelay {
         if (this.session === session) this.detach();
       }),
     ];
+    this.hostSeesPort = true;
     this.opts.deliver();
+    if (this.port === null) this.reportPort(false);
   }
 
   detach(): void {
@@ -261,6 +292,11 @@ export class WorktreePortClientRelay {
     this.session = null;
     for (const cleanup of this.sessionCleanup.splice(0)) cleanup();
     this.opts.close();
+    // The view's port went with it; a late close event must not stand in for
+    // the next session's delivery.
+    const port = this.port;
+    this.port = null;
+    port?.close();
   }
 
   dispose(): void {
@@ -272,10 +308,21 @@ export class WorktreePortClientRelay {
     port?.close();
   }
 
+  private reportPort(open: boolean): void {
+    if (!this.session || this.hostSeesPort === open) return;
+    // A refused report leaves the host as it was: sending everything, or
+    // paused until this view's next request.
+    if (postWorktree(this.session, this.endpointId, { type: "view-port", open })) {
+      this.hostSeesPort = open;
+    }
+  }
+
   private onRendererMessage(raw: unknown): void {
     const parsed = WorktreePortRequestSchema.safeParse(raw);
     if (!parsed.success) return;
-    if (!postWorktree(this.session, this.endpointId, parsed.data)) {
+    if (postWorktree(this.session, this.endpointId, parsed.data)) {
+      this.hostSeesPort = true;
+    } else {
       safePost(this.port, { id: parsed.data.id, error: HOST_UNAVAILABLE });
     }
   }
