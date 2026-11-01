@@ -414,6 +414,16 @@ describe("agent.deletePreset", () => {
     expect("presetId" in agentPresetMutationUpdates(notDefault)).toBe(false);
   });
 
+  it("refuses an id several stored presets share", () => {
+    expect(
+      refusal(
+        "agent.deletePreset",
+        { agentId: "codex", presetId: WORK.id },
+        sources({ customPresets: [WORK, { ...WORK, name: "Twin" }] })
+      )
+    ).toContain(`2 user presets with the id "${WORK.id}"`);
+  });
+
   it("refuses a CCR preset as read-only", () => {
     expect(
       refusal(
@@ -448,6 +458,32 @@ describe("agentPresetMutationFingerprint", () => {
     expect(print(siblingAdded)).toBe(print(shown));
     expect(print(madeDefault)).not.toBe(print(shown));
     expect(print(edited)).not.toBe(print(shown));
+
+    const fewerPicks = plan(
+      "agent.deletePreset",
+      args,
+      sources({ customPresets: [WORK], worktreePresets: { wt1: WORK.id } })
+    );
+    expect(print(fewerPicks)).not.toBe(print(shown));
+
+    const patch = { agentId: "codex", presetId: WORK.id, name: "Renamed" };
+    const edit = plan("agent.updatePreset", patch, sources({ customPresets: [WORK] }));
+    const editOfChanged = plan(
+      "agent.updatePreset",
+      patch,
+      sources({ customPresets: [{ ...WORK, customFlags: "--other" }] })
+    );
+    expect(print(editOfChanged)).not.toBe(print(edit));
+
+    // A renamed fallback preset changes what the preview showed.
+    const chain = { agentId: "codex", presetId: WORK.id, fallbacks: [OTHER.id] };
+    const named = plan("agent.updatePreset", chain, sources({ customPresets: [WORK, OTHER] }));
+    const renamed = plan(
+      "agent.updatePreset",
+      chain,
+      sources({ customPresets: [WORK, { ...OTHER, name: "Renamed other" }] })
+    );
+    expect(print(renamed)).not.toBe(print(named));
 
     const createArgs = { agentId: "codex", name: "New" };
     const first = planAgentPresetMutation(

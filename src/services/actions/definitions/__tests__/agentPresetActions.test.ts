@@ -4,6 +4,7 @@ import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../..
 import type { ActionContext } from "@shared/types/actions";
 import type { AgentSettings } from "@shared/types/agentSettings";
 import { UnactionableTargetError } from "../../unactionableTarget";
+import { agentPresetMutationFingerprint, planAgentPresetMutation } from "../agentPresetMutation";
 
 const store = vi.hoisted(() => ({
   settings: null as AgentSettings | null,
@@ -40,9 +41,13 @@ function definition(id: string): AnyActionDefinition {
   return factory() as AnyActionDefinition;
 }
 
-async function run(id: string, args: unknown): Promise<unknown> {
+async function run(
+  id: string,
+  args: unknown,
+  extra: Partial<ActionContext> = {}
+): Promise<unknown> {
   const def = definition(id);
-  const ctx: ActionContext = { dispatchSource: "agent" };
+  const ctx: ActionContext = { dispatchSource: "agent", ...extra };
   const result = await def.run(args, ctx);
   // What dispatch returns: the run's answer parsed through its own schema.
   return def.resultSchema ? def.resultSchema.parse(result) : result;
@@ -95,9 +100,16 @@ describe("user-preset write runs (#16047)", () => {
 
   it("plans against the settings as they stand once loading finishes", async () => {
     store.settings = null;
-    store.initialize.mockImplementation(async () => {
-      store.settings = workSettings("--latest");
-    });
+    // Lands a turn later, so a run that didn't wait would plan against nothing.
+    store.initialize.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          setTimeout(() => {
+            store.settings = workSettings("--latest");
+            resolve();
+          }, 0);
+        })
+    );
     await run("agent.updatePreset", { agentId: "codex", presetId: "user-work", color: "#def" });
     expect(store.updateAgent).toHaveBeenCalledWith("codex", {
       customPresets: [{ id: "user-work", name: "Work", customFlags: "--latest", color: "#def" }],
@@ -111,6 +123,29 @@ describe("user-preset write runs (#16047)", () => {
     await expect(
       run("agent.updatePreset", { agentId: "codex", presetId: "user-work", color: "#def" })
     ).rejects.toBeInstanceOf(UnactionableTargetError);
+    expect(store.updateAgent).not.toHaveBeenCalled();
+  });
+
+  it("writes a dialog-approved change only while it still matches what was approved", async () => {
+    const args = { agentId: "codex", presetId: "user-work", color: "#def" };
+    const sources = {
+      settings: store.settings,
+      ccrPresetsByAgent: {},
+      projectPresetsByAgent: undefined,
+    };
+    const shown = planAgentPresetMutation("agent.updatePreset", args, sources, "user-x");
+    if (!shown.ok) throw new Error(shown.message);
+    const approved = agentPresetMutationFingerprint(shown.mutation);
+
+    await run("agent.updatePreset", args, { hostApprovedPresetWrite: approved });
+    expect(store.updateAgent).toHaveBeenCalledTimes(1);
+
+    // Another view edits the preset after the approval, before the write.
+    store.updateAgent.mockClear();
+    store.settings = workSettings("--edited");
+    await expect(
+      run("agent.updatePreset", args, { hostApprovedPresetWrite: approved })
+    ).rejects.toThrow("changed after the user approved");
     expect(store.updateAgent).not.toHaveBeenCalled();
   });
 

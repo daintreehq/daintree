@@ -161,15 +161,37 @@ describe("user-preset writes through the MCP bridge (#16047)", () => {
     await dispatched;
 
     // No spawn provenance or focus policy: the strict schema would refuse them.
+    // The approval travels with it, for the run to hold its final plan to.
     expect(mocks.dispatch).toHaveBeenCalledTimes(1);
     expect(mocks.dispatch).toHaveBeenCalledWith(
       "agent.createPreset",
       { agentId: "codex", name: "Work 2", env: { CODEX_HOME: "/b", OPENAI_API_KEY: TOKEN } },
-      expect.objectContaining({ source: "agent", confirmed: true })
+      expect.objectContaining({
+        source: "agent",
+        confirmed: true,
+        hostApprovedPresetWrite: expect.stringContaining('"Work 2"'),
+      })
     );
     expect(sendDispatchActionResponse).toHaveBeenCalledWith(
       expect.objectContaining({ requestId: "req", confirmationDecision: "approved" })
     );
+  });
+
+  it("previews a create whose fallback is a preset with the id a fixed placeholder would use", async () => {
+    seedSettings({
+      agents: { codex: { customPresets: [{ id: "user-preview", name: "Spare" }] } },
+    });
+    const { dispatched } = await openDialog("agent.createPreset", {
+      agentId: "codex",
+      name: "Chain",
+      fallbacks: ["user-preview"],
+    });
+    expect(sendDispatchActionResponse).not.toHaveBeenCalled();
+    expect((useMcpConfirmStore.getState().current?.preview ?? []).join("\n")).toContain(
+      'Fallback presets: "Spare" (user-preview)'
+    );
+    useMcpConfirmStore.getState().resolveCurrent("rejected");
+    await dispatched;
   });
 
   it("writes nothing when the user rejects", async () => {

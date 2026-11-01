@@ -39,6 +39,7 @@ import { isAgentInstalled } from "@shared/utils/agentAvailability";
 import { hasSystemPromptOverride, resolveSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
 import {
+  agentPresetMutationFingerprint,
   agentPresetMutationUpdates,
   planAgentPresetMutation,
   type AgentPresetMutationActionId,
@@ -298,9 +299,10 @@ const readAgentPresetSources = async (
 /**
  * Plan and write one user-preset change (#16047) through the store and
  * `updateAgent` Settings uses, so a preset made from a chat is stored exactly
- * as one made by hand. Planned again here rather than reusing the preview's
- * plan: a patch applies to the preset as it stands now, and a preset removed
- * while the dialog was open is refused rather than written back.
+ * as one made by hand. Planned again here, after every await, rather than
+ * reusing the preview's plan: a preset removed meanwhile is refused, and a
+ * dialog-approved write whose plan no longer matches what the dialog showed
+ * (`ctx.hostApprovedPresetWrite`) is refused rather than written.
  */
 async function runPresetWrite(
   actionId: AgentPresetMutationActionId,
@@ -320,6 +322,16 @@ async function runPresetWrite(
   );
   if (!plan.ok) throw new UnactionableTargetError(plan.message);
   const { mutation } = plan;
+  // Planned after every await above, so this is what would be written; an
+  // approval for a change that has since moved doesn't cover it.
+  if (
+    ctx.hostApprovedPresetWrite !== undefined &&
+    agentPresetMutationFingerprint(mutation) !== ctx.hostApprovedPresetWrite
+  ) {
+    throw new Error(
+      "Preset write refused: the preset or its defaults changed after the user approved the change, so the approval doesn't cover what would be written. Nothing was written. Call again to raise a fresh confirmation."
+    );
+  }
   await useAgentSettingsStore
     .getState()
     .updateAgent(mutation.agentId, agentPresetMutationUpdates(mutation));

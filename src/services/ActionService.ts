@@ -751,6 +751,9 @@ export class ActionService {
         // human was shown. Unconditional for the same reason, so an injected
         // `contextOverride` cannot pin a push to a review nobody saw.
         hostApprovedPush: options?.hostApprovedPush,
+        // And the preset half (#16047): the change a human was shown, so an
+        // injected `contextOverride` cannot claim an approval for another.
+        hostApprovedPresetWrite: options?.hostApprovedPresetWrite,
         // Same unconditional stamp (#15648): an action that waits on a person
         // gives up at this deadline, so a `contextOverride` must not be able
         // to stretch or plant one.

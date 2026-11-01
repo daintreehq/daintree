@@ -1408,6 +1408,9 @@ export function useMcpBridge(): void {
         // undefined for a pre-granted dispatch, which previews nothing and so
         // keeps pushing the worktree as it stands.
         let approvedPush: HostApprovedPush | undefined;
+        // The preset half (#16047): the fingerprint of the change the dialog
+        // showed, so the write can refuse a plan that moved after this check.
+        let approvedPresetWrite: string | undefined;
         try {
           let effectiveConfirmed = confirmed;
 
@@ -1810,6 +1813,10 @@ export function useMcpBridge(): void {
                   });
                   return;
                 }
+                // The run still loads its chunk and the settings before it
+                // writes, so it compares its own final plan with this too.
+                if (shown !== undefined)
+                  approvedPresetWrite = agentPresetMutationFingerprint(shown);
               }
             }
           }
@@ -1866,6 +1873,7 @@ export function useMcpBridge(): void {
                 ...(hostApprovedTargets ? { hostApprovedTargets } : {}),
                 ...(approvedRecipeRun ? { hostApprovedRecipeRun: approvedRecipeRun } : {}),
                 ...(approvedPush ? { hostApprovedPush: approvedPush } : {}),
+                ...(approvedPresetWrite ? { hostApprovedPresetWrite: approvedPresetWrite } : {}),
                 // An approval's run budget replaces the deadline main first
                 // sent; a dispatch nobody was asked about keeps that one. An
                 // action that waits on a person gives up at it (#15648).
