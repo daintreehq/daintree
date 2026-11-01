@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { SettingsGroup } from "@/components/Settings/SettingsGroup";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
@@ -11,6 +11,7 @@ import { DecisionsPolicySection } from "./DecisionsPolicySection";
 import { DecisionsVoiceSection } from "./DecisionsVoiceSection";
 import { DecisionsDataSection } from "./DecisionsDataSection";
 import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
+import { holdRelayUrlRequests } from "./relayUrlRequest";
 
 /**
  * Settings → Integrations → Decisions: one switch, consent the first time it
@@ -19,6 +20,8 @@ import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
  */
 export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose } = {}) {
   const decisions = useDecisions();
+  // A deploy pane's request for the URL field lasts as long as this opening.
+  useEffect(() => holdRelayUrlRequests(), []);
   const { status, pending, saveFailure } = decisions;
   const [consentOpen, setConsentOpen] = useState(false);
 

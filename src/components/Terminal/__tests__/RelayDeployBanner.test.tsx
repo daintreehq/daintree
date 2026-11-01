@@ -27,7 +27,8 @@ describe("RelayDeployBanner", () => {
 
     expect(dispatch).toHaveBeenCalledExactlyOnceWith(
       "app.settings.openTab",
-      { tab: "decisions" },
+      // The section keeps the dialog's search from taking focus first.
+      { tab: "decisions", sectionId: "decisions-relay-url" },
       { source: "user" }
     );
     expect(takePendingRelayUrlRequest()).toBe(true);
