@@ -6,8 +6,8 @@ import { selectInPreview, selectedElement } from "../helpers/previewDriver";
 
 /**
  * The Element Picker on a Nuxt 4 site: Vue rendered on the server and
- * hydrated. Tracing waits on #13888 as it does for plain Vue, and reaches the
- * component's file without a line.
+ * hydrated. As with plain Vue, a pick traces to the component's file without a
+ * line.
  */
 const projectDir = registerFixtureProject(() => createSiteProject(NUXT));
 
@@ -25,7 +25,7 @@ test.describe.serial("Element Picker on a Nuxt dev server", () => {
     await selectInPreview(session(), "h1", "h1");
   });
 
-  test.fixme("a heading traces to its component's file, with no line (#13888)", async () => {
+  test("a heading traces to its component's file, with no line", async () => {
     const ctx = session();
     await selectInPreview(ctx, "h1", APP_FILE);
     await expect(selectedElement(ctx.window)).not.toContainText(`${APP_FILE}:`);

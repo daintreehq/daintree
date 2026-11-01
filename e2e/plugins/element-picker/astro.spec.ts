@@ -6,9 +6,8 @@ import { selectInPreview } from "../helpers/previewDriver";
 
 /**
  * The Element Picker on an Astro site with no UI framework. Astro's dev
- * toolbar stamps every element with the file and line that wrote it; reading
- * those stamps waits on #13888, which adds Astro's extractor to the core
- * catalog.
+ * toolbar stamps every element with the file and line that wrote it, and the
+ * host checks the stamp against the page's source.
  */
 const projectDir = registerFixtureProject(() => createSiteProject(ASTRO));
 
@@ -25,7 +24,7 @@ test.describe.serial("Element Picker on an Astro dev server", () => {
     await selectInPreview(session(), "h1", "h1");
   });
 
-  test.fixme("a heading traces to the line of the page that wrote it (#13888)", async () => {
+  test("a heading traces to the line of the page that wrote it", async () => {
     await selectInPreview(session(), "h1", ASTRO_HEADING);
   });
 });

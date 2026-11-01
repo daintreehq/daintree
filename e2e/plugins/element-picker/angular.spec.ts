@@ -9,8 +9,7 @@ import {
 import { pressInPreview, selectInPreview, selectedElement } from "../helpers/previewDriver";
 
 /**
- * The Element Picker on an Angular 22 app. Tracing waits on #13888, which adds
- * Angular's extractor to the core catalog. A stock dev build then names each
+ * The Element Picker on an Angular 22 app. A stock dev build names each
  * component and its class's file; a template line needs a compiler option this
  * site leaves off, so nothing here asks for one.
  */
@@ -30,7 +29,7 @@ test.describe.serial("Element Picker on an Angular dev server", () => {
     await selectInPreview(session(), "h1", "h1");
   });
 
-  test.fixme("Option+Up selects the component and names its class's file (#13888)", async () => {
+  test("Option+Up selects the component and names its class's file", async () => {
     const ctx = session();
     await selectInPreview(ctx, "h1", "h1");
     await pressInPreview(ctx.app, "Up", ["alt"]);
