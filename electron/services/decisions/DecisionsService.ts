@@ -290,14 +290,7 @@ export class DecisionsService {
         }
         this.store = opened;
         this.storeFailed = false;
-        if (opened) {
-          // The panes show what the store holds from the start, then after every write.
-          this.feed = new QuestionRowsFeed(
-            () => opened.listQuestions(),
-            (rows) => this.observeQuestions(rows)
-          );
-          this.feed.refresh();
-        }
+        this.feedFrom(opened);
       }
       this.reconcileConnection();
     });
@@ -319,6 +312,7 @@ export class DecisionsService {
       }
       // The connection goes first: nothing may reach the store or keys once they close.
       this.dropConnection();
+      this.feedFrom(null);
       const store = this.store;
       const keyStore = this.keyStore;
       this.store = null;
@@ -335,6 +329,7 @@ export class DecisionsService {
         try {
           this.store = await this.openStore(() => this.disposed);
           this.storeFailed = false;
+          this.feedFrom(this.store);
         } catch (err) {
           // The next start tries again; the deletion stands either way.
           this.storeFailed = true;
@@ -372,8 +367,7 @@ export class DecisionsService {
   private async release(clearViews: boolean): Promise<void> {
     // The connection goes first: nothing may reach the store or keys once they close.
     this.dropConnection();
-    this.feed?.stop();
-    this.feed = null;
+    this.feedFrom(null);
     // The route lets go of the listener before the lifetime ends.
     await this.questionsClosing;
     const store = this.store;
@@ -482,6 +476,22 @@ export class DecisionsService {
         if (this.settings !== null && saved.enabled) this.settings = saved;
       },
     };
+  }
+
+  /**
+   * The panes show what `store` holds from now on, read once now and again
+   * after every question write; null feeds them nothing, as while the store
+   * is closed.
+   */
+  private feedFrom(store: DaintreeLocalStore | null): void {
+    this.feed?.stop();
+    this.feed = null;
+    if (store === null) return;
+    this.feed = new QuestionRowsFeed(
+      () => store.listQuestions(),
+      (rows) => this.observeQuestions(rows)
+    );
+    this.feed.refresh();
   }
 
   /** Refuses agents' questions at once; the listener hold goes when the route has let go. */

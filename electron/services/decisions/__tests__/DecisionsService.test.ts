@@ -962,6 +962,52 @@ describe("DecisionsService deleting local data", () => {
     };
   }
 
+  it("feeds the panes from the store a deletion reopens, never the one it closed", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "decisions-service-erase-feed-"));
+    try {
+      const stores: Array<
+        FakeStore & DaintreeLocalStore & { listQuestions: ReturnType<typeof vi.fn> }
+      > = [];
+      const connections: RelayConnectionOptions[] = [];
+      const service = new DecisionsService({
+        keyFilePath: () => join(dir, "keys.bin"),
+        openStore: async () => {
+          const store = Object.assign(fakeStore(), {
+            listQuestions: vi.fn(async () => []),
+            updateQuestion: vi.fn(async () => null),
+          });
+          stores.push(store);
+          return store;
+        },
+        openRows: async () => ({
+          erase: () => {
+            throw new Error("database is locked");
+          },
+          exist: () => true,
+        }),
+        forgetIdentity: () => on(RELAY),
+        connect: (options) => {
+          connections.push(options);
+          return { start: () => {}, stop: () => {} };
+        },
+      });
+      await service.start(on(RELAY));
+      await vi.waitFor(() => expect(stores[0]!.listQuestions).toHaveBeenCalledTimes(1));
+
+      await service.eraseLocalData();
+      expect(service.getStore()).toBe(stores[1]);
+      expect(connections).toHaveLength(2);
+      await vi.waitFor(() => expect(stores[1]!.listQuestions).toHaveBeenCalledTimes(1));
+
+      await connections[1]!.store.updateQuestion("q_1", { local_status: "open" });
+      await vi.waitFor(() => expect(stores[1]!.listQuestions).toHaveBeenCalledTimes(2));
+      expect(stores[0]!.listQuestions).toHaveBeenCalledTimes(1);
+      await service.stop();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("closes the store and keys first, deletes everything, then opens an empty store", async () => {
     const t = setup();
     try {
