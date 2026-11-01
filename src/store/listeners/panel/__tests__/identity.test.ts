@@ -606,6 +606,28 @@ describe("identity listener — a host whose clock runs behind this machine's (#
     d.dispose();
   });
 
+  it("records a waiting report it keeps off a directing pane, so nothing older follows it", () => {
+    const hostNow = Date.now() - HOST_LAG_MS;
+    setupPanel({ agentState: "directing" });
+    const d = setupIdentityListeners();
+
+    emitState(
+      makePayload({ state: "waiting", previousState: "working", timestamp: hostNow + 10_000 })
+    );
+    expect(usePanelStore.getState().panelsById["term-1"]).toMatchObject({
+      agentState: "directing",
+      lastAgentObservation: { agentState: "waiting", at: hostNow + 10_000 },
+    });
+
+    emitState(
+      makePayload({ state: "working", previousState: "waiting", timestamp: hostNow + 5_000 })
+    );
+    expect(usePanelStore.getState().panelsById["term-1"]).toMatchObject({
+      agentState: "directing",
+    });
+    d.dispose();
+  });
+
   it("still drops a report from before the state the host last reported", () => {
     const hostNow = Date.now() - HOST_LAG_MS;
     setupPanel();

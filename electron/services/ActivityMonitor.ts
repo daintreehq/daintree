@@ -132,6 +132,10 @@ export interface ActivityMonitorOptions {
   bootCompletePatterns?: RegExp[];
   patternBufferSize?: number;
   getVisibleLines?: (n: number) => string[];
+  // The last n non-empty viewport rows. `getVisibleLines` reads the bottom n
+  // physical rows, which are blank below an inline TUI that hasn't reached the
+  // bottom of a tall pane, so a working pattern is read here when given.
+  getLastTextLines?: (n: number) => string[];
   getVisibleContentSnapshot?: (n: number) => VisibleContentSnapshot | undefined;
   getCursorLine?: () => string | null;
   initialState?: "busy" | "idle";
@@ -239,7 +243,10 @@ export class ActivityMonitor {
   // Idle→busy from a working pattern read off the screen (#16062). Its own
   // debouncer because the polling cycle reports this signal every tick, which
   // would zero the data path's sustained pattern signal between chunks.
-  private readonly visibleWorkingDebouncer: WorkingSignalDebouncer;
+  private readonly visibleWorkingDebouncer = new WorkingSignalDebouncer(SPINNER_ACTIVE_MS);
+  // When the visible content last changed; 0 until it ever has, so a screen
+  // restored already showing a working line can't read as freshly changed.
+  private lastVisibleChangeAt = 0;
   private visibleWorkingScannedAt = 0;
   private visibleWorkingMatch: PatternDetectionResult | undefined;
   private readonly lineRewriteDetector: LineRewriteDetector;
@@ -279,6 +286,7 @@ export class ActivityMonitor {
   private patternDetector?: AgentPatternDetector;
   private lastPatternResult?: PatternDetectionResult;
   private readonly getVisibleLines?: (n: number) => string[];
+  private readonly getLastTextLines?: (n: number) => string[];
   private readonly getVisibleContentSnapshot?: (n: number) => VisibleContentSnapshot | undefined;
   private readonly getCursorLine?: () => string | null;
   private pollingInterval?: ReturnType<typeof setInterval>;
@@ -378,9 +386,6 @@ export class ActivityMonitor {
     this.structuralRecoveryDebouncer = new WorkingSignalDebouncer(
       options?.workingRecoveryDelayMs ?? 1500
     );
-    this.visibleWorkingDebouncer = new WorkingSignalDebouncer(
-      options?.workingRecoveryDelayMs ?? 1500
-    );
 
     // Snapshot tier-aware recovery thresholds. Active value defaults to the
     // debouncer-instantiation value so the active-tier path is identical to
@@ -403,6 +408,7 @@ export class ActivityMonitor {
       this.patternDetector = new AgentPatternDetector(options.agentId, options.patternConfig);
     }
     this.getVisibleLines = options?.getVisibleLines;
+    this.getLastTextLines = options?.getLastTextLines;
     this.getVisibleContentSnapshot = options?.getVisibleContentSnapshot;
     this.getCursorLine = options?.getCursorLine;
 
@@ -497,7 +503,6 @@ export class ActivityMonitor {
     this.workingSignalDebouncer.setDelay(delay);
     this.cosmeticRecoveryDebouncer.setDelay(delay);
     this.structuralRecoveryDebouncer.setDelay(delay);
-    this.visibleWorkingDebouncer.setDelay(delay);
   }
 
   /**
@@ -1002,12 +1007,16 @@ export class ActivityMonitor {
   // the elapsed-time digits, once a second — so the raw-stream pattern tier
   // never sees the text that matches, and changes that sparse never satisfy
   // the temperature's sustained-change gate. Only a primary pattern counts
-  // (fallback tiers also match transcript lines), and only while output keeps
-  // arriving: a working line left frozen on screen is not work.
+  // (fallback tiers also match transcript lines), and only while the screen
+  // keeps changing: a working line left frozen on screen, or one beside bytes
+  // that move nothing visible, is not work. The sustain spans the freshness
+  // window, so it takes at least two visible changes, never one repaint.
   private recoverFromVisibleWorking(now: number): void {
-    if (!this.patternDetector || !this.getVisibleLines) return;
+    const readLines = this.getLastTextLines ?? this.getVisibleLines;
+    if (!this.patternDetector || !readLines) return;
     const live =
-      now - this.lastDataTimestamp < SPINNER_ACTIVE_MS &&
+      this.lastVisibleChangeAt > 0 &&
+      now - this.lastVisibleChangeAt < SPINNER_ACTIVE_MS &&
       !this.isResizeSuppressed(now) &&
       !this.isFocusSuppressed(now) &&
       !this.inputTracker.isRecentUserInput(now);
@@ -1020,7 +1029,7 @@ export class ActivityMonitor {
     if (now - this.visibleWorkingScannedAt >= SIMPLE_SNAPSHOT_MIN_INTERVAL_MS) {
       this.visibleWorkingScannedAt = now;
       this.visibleWorkingMatch = this.patternDetector.detectFromLines(
-        this.getVisibleLines(AGENT_OUTPUT_ACTIVITY_LINE_COUNT)
+        readLines(AGENT_OUTPUT_ACTIVITY_LINE_COUNT)
       );
     }
     const match = this.visibleWorkingMatch;
@@ -1051,6 +1060,7 @@ export class ActivityMonitor {
     if (result.changed) {
       this.lastActivityTimestamp = now;
       this.lastDataTimestamp = now;
+      this.lastVisibleChangeAt = now;
     }
 
     if (this.state === "busy" && result.changed) {
@@ -1154,6 +1164,7 @@ export class ActivityMonitor {
     this.lastStatusRewriteAt = 0;
     this.lastWorkingIndicatorTimestamp = 0;
     this.promptStableSince = 0;
+    this.lastVisibleChangeAt = 0;
   }
 
   getLastPatternResult(): PatternDetectionResult | undefined {

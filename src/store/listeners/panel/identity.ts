@@ -98,7 +98,7 @@ export function setupIdentityListeners(): DisposableStore {
         // terminal id against a fresh record starting at zero, and a panel that
         // refused to follow it down would go on naming a session that no longer
         // exists while the replacement climbed back towards it. Out-of-order
-        // events are already dropped above by `lastStateChange`, so following
+        // events are already dropped above by the host's last observation, so following
         // the host is the safer of the two ways to be wrong: a count that
         // disagrees refuses the delivery, a count that lies permits it.
         const observedIncarnation = data.agentIncarnation;
@@ -121,6 +121,23 @@ export function setupIdentityListeners(): DisposableStore {
         withTerminalService((service) => service.setAgentState(terminalId, state), terminalId);
 
         if (terminal.agentState === "directing" && state === "waiting") {
+          // Directing stays on screen, but the host did report this, and a
+          // resync record older than it must not be taken over it later.
+          if (terminal.lastAgentObservation?.agentState !== state) {
+            usePanelStore.setState((st) => {
+              const panel = st.panelsById[terminalId];
+              if (!panel || !isPtyPanel(panel)) return st;
+              return {
+                panelsById: {
+                  ...st.panelsById,
+                  [terminalId]: {
+                    ...panel,
+                    lastAgentObservation: { agentState: state, at: timestamp },
+                  },
+                },
+              };
+            });
+          }
           return;
         }
 
