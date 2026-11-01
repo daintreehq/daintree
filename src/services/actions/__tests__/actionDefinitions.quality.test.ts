@@ -1427,6 +1427,8 @@ describe("destructive-action danger metadata", () => {
       // base-branch default resolved inside a destructive submit is exactly the
       // silent fallback the D-tier rules call a review blocker.
       baseBranch: "develop",
+      // schedules.runNow names the schedule to run.
+      scheduleId: "schedule-placeholder",
     };
 
     // Some listed actions (e.g. worktree.resource.teardown) gate availability

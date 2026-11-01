@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionDispatchResult } from "../../../../shared/types/actions.js";
 import type { Project } from "../../../../shared/types/project.js";
-import type { Schedule, ScheduledRun } from "../../../../shared/types/scheduledRuns.js";
-import { createSchedule } from "../../../../shared/utils/scheduledRuns.js";
+import type {
+  Schedule,
+  ScheduledRun,
+  ScheduledRunOrigin,
+} from "../../../../shared/types/scheduledRuns.js";
+import { createSchedule, occurrenceKeyFor } from "../../../../shared/utils/scheduledRuns.js";
 import {
   launchScheduledRun,
   ScheduledLaunchUnansweredError,
@@ -28,9 +32,15 @@ let ids: number;
 let recorder: {
   registerLaunch: ReturnType<typeof vi.fn>;
   registerRefusedLaunch: ReturnType<typeof vi.fn>;
+  registerSkip: ReturnType<typeof vi.fn>;
   get: ReturnType<typeof vi.fn>;
   settle: ReturnType<typeof vi.fn>;
+  listBySchedule: ReturnType<typeof vi.fn>;
+  beginReplacement: ReturnType<typeof vi.fn>;
+  handleSessionCaptured: ReturnType<typeof vi.fn>;
 };
+/** The schedule's recorded runs, newest first, as the history lists them. */
+let history: ScheduledRun[];
 let schedule: Schedule;
 let project: Project;
 let deps: ScheduledRunLauncherDeps<FakeView>;
@@ -61,11 +71,16 @@ function spawnFor(request: ScheduledLaunchRequest, overrides: Record<string, unk
 
 beforeEach(() => {
   ids = 0;
+  history = [];
   recorder = {
     registerLaunch: vi.fn(),
     registerRefusedLaunch: vi.fn(),
-    get: vi.fn(),
+    registerSkip: vi.fn(),
+    get: vi.fn((runId: string) => history.find((recorded) => recorded.id === runId) ?? null),
     settle: vi.fn(),
+    listBySchedule: vi.fn(() => history),
+    beginReplacement: vi.fn(() => null),
+    handleSessionCaptured: vi.fn(),
   };
   schedule = createSchedule(
     {
@@ -93,6 +108,9 @@ beforeEach(() => {
       spawnFor(request);
       return launched(request.args.requestedId);
     }),
+    runPrecondition: vi.fn(async () => null),
+    closeRunTerminal: vi.fn(async () => null),
+    removeRunPane: vi.fn(async () => {}),
     newId: () => `id-${++ids}`,
     spawnTimeoutMs: 20,
     logWarn: () => {},
@@ -493,5 +511,427 @@ describe("launchScheduledRun", () => {
 
     await expect(run()).resolves.toMatchObject({ status: "failed", runId: null });
     expect(deps.launchInView).not.toHaveBeenCalled();
+  });
+});
+
+const DUE_AT = Date.UTC(2026, 10, 2, 9);
+const SCHEDULED: ScheduledRunOrigin = {
+  trigger: "scheduled",
+  dueAt: DUE_AT,
+  occurrenceKey: occurrenceKeyFor(DUE_AT),
+  coalesced: null,
+};
+const CATCH_UP: ScheduledRunOrigin = {
+  trigger: "catch-up",
+  dueAt: DUE_AT,
+  occurrenceKey: occurrenceKeyFor(DUE_AT),
+  coalesced: { after: DUE_AT - 86_400_000, through: DUE_AT + 60_000 },
+};
+
+/** A run of the schedule as the history holds it: open unless settled. */
+function recordedRun(id: string, settled = false): ScheduledRun {
+  return {
+    id,
+    scheduleId: "schedule-1",
+    projectId: "project-1",
+    origin: RUN_NOW,
+    createdAt: 1,
+    terminalId: `terminal-of-${id}`,
+    terminalSpawnedAt: 5,
+    settlement: settled
+      ? {
+          state: "settled",
+          settledAt: 9,
+          outcome: "done",
+          evidence: { kind: "handback", report: "done", summary: null, truncated: false },
+        }
+      : { state: "open" },
+    process: { agent: { state: "not-started" }, pty: { state: "running", startedAt: 5 } },
+    pane: { state: "open", since: 5 },
+    resume: {
+      agentId: "codex",
+      agentSessionId: null,
+      cwd: "/repo",
+      worktreeId: null,
+      agentLaunchFlags: [],
+      agentModelId: null,
+      agentPresetId: null,
+    },
+  };
+}
+
+/** A replacement the recorder hands out; the run's PTY is gone once `markGone` is called. */
+function fakeReplacement() {
+  let resolveGone!: () => void;
+  let gone = false;
+  return {
+    gone: new Promise<void>((resolve) => {
+      resolveGone = resolve;
+    }),
+    isGone: () => gone,
+    finish: vi.fn(() => null),
+    markGone: () => {
+      gone = true;
+      resolveGone();
+    },
+  };
+}
+
+function withPolicies(policies: Partial<Schedule["policies"]>): void {
+  schedule = { ...schedule, policies: { ...schedule.policies, ...policies } };
+}
+
+const launchWith = (origin: ScheduledRunOrigin, extra: Record<string, unknown> = {}) =>
+  launchScheduledRun({ projectId: "project-1", scheduleId: "schedule-1", origin, ...extra }, deps);
+
+describe("launchScheduledRun's overlap policy and precondition", () => {
+  it("skips an occurrence while an earlier run is open, linked to the newest, running nothing", async () => {
+    withPolicies({ precondition: { command: "test -f ready" } });
+    history = [recordedRun("run-b"), recordedRun("run-a")];
+
+    await expect(launchWith(SCHEDULED)).resolves.toEqual({
+      status: "skipped",
+      runId: "id-1",
+      reason: { kind: "overlap", openRunId: "run-b" },
+    });
+    expect(recorder.registerSkip).toHaveBeenCalledWith({
+      id: "id-1",
+      scheduleId: "schedule-1",
+      projectId: "project-1",
+      origin: SCHEDULED,
+      reason: { kind: "overlap", openRunId: "run-b" },
+      terminalId: null,
+    });
+    expect(deps.runPrecondition).not.toHaveBeenCalled();
+    expect(deps.launchInView).not.toHaveBeenCalled();
+    expect(hasPendingScheduledLaunch("project-1")).toBe(false);
+  });
+
+  it("isn't held back by a settled run whose terminal is still running", async () => {
+    history = [recordedRun("run-a", true)];
+
+    await expect(launchWith(SCHEDULED)).resolves.toMatchObject({ status: "started" });
+    expect(recorder.registerSkip).not.toHaveBeenCalled();
+  });
+
+  it("starts another alongside an open run under start-another", async () => {
+    withPolicies({ overlap: "start-another" });
+    history = [recordedRun("run-a")];
+
+    await expect(launchWith(SCHEDULED)).resolves.toMatchObject({ status: "started" });
+    await expect(run()).resolves.toMatchObject({ status: "started" });
+    expect(deps.closeRunTerminal).not.toHaveBeenCalled();
+  });
+
+  it("replaces an open run: checks the precondition, closes the run, then launches", async () => {
+    withPolicies({ overlap: "replace", precondition: { command: "test -f ready" } });
+    history = [recordedRun("run-a")];
+    const replacement = fakeReplacement();
+    recorder.beginReplacement.mockReturnValue(replacement);
+    const order: string[] = [];
+    deps.runPrecondition = vi.fn(async () => {
+      order.push("precondition");
+      return null;
+    });
+    deps.closeRunTerminal = vi.fn(async () => {
+      order.push("close");
+      replacement.markGone();
+      return "codex-session";
+    });
+    deps.removeRunPane = vi.fn(async () => {
+      order.push("remove pane");
+    });
+    deps.launchInView = vi.fn(async (_view, request) => {
+      order.push("launch");
+      spawnFor(request);
+      return launched(request.args.requestedId);
+    });
+
+    await expect(launchWith(SCHEDULED)).resolves.toMatchObject({
+      status: "started",
+      runId: "id-1",
+    });
+    expect(order).toEqual(["precondition", "close", "remove pane", "launch"]);
+    expect(recorder.beginReplacement).toHaveBeenCalledWith("run-a");
+    expect(deps.closeRunTerminal).toHaveBeenCalledWith(history[0]);
+    expect(replacement.finish).toHaveBeenCalledExactlyOnceWith("id-1");
+    // The id the close captured reaches the run's resume snapshot.
+    expect(recorder.handleSessionCaptured).toHaveBeenCalledWith({
+      record: {
+        sessionId: "codex-session",
+        agentId: "codex",
+        projectId: "project-1",
+        terminal: { id: "terminal-of-run-a", spawnedAt: 5 },
+      },
+    });
+  });
+
+  it("closes nothing when the precondition skips the run", async () => {
+    withPolicies({ overlap: "replace", precondition: { command: "test -f ready" } });
+    history = [recordedRun("run-a")];
+    const reason = { kind: "precondition", exitCode: 1, signal: null, error: null } as const;
+    deps.runPrecondition = vi.fn(async () => reason);
+
+    await expect(launchWith(SCHEDULED)).resolves.toEqual({
+      status: "skipped",
+      runId: "id-1",
+      reason,
+    });
+    expect(recorder.beginReplacement).not.toHaveBeenCalled();
+    expect(deps.closeRunTerminal).not.toHaveBeenCalled();
+  });
+
+  it("launches nothing when an open run's terminal can't be closed, leaving it open", async () => {
+    withPolicies({ overlap: "replace" });
+    history = [recordedRun("run-a")];
+    const replacement = fakeReplacement();
+    recorder.beginReplacement.mockReturnValue(replacement);
+    deps.closeRunTerminal = vi.fn(async () => {
+      throw new Error("host gone");
+    });
+
+    await expect(launchWith(SCHEDULED)).resolves.toMatchObject({
+      status: "failed",
+      runId: "id-1",
+      message: expect.stringMatching(/couldn't be closed/),
+    });
+    expect(replacement.finish).toHaveBeenCalledExactlyOnceWith(null);
+    expect(deps.removeRunPane).not.toHaveBeenCalled();
+    expect(deps.launchInView).not.toHaveBeenCalled();
+    expect(recorder.registerRefusedLaunch).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "id-1", terminalId: null })
+    );
+  });
+
+  it("launches nothing when the closed run's terminal never exits", async () => {
+    withPolicies({ overlap: "replace" });
+    history = [recordedRun("run-a")];
+    const replacement = fakeReplacement();
+    recorder.beginReplacement.mockReturnValue(replacement);
+    deps.replaceExitTimeoutMs = 10;
+
+    await expect(launchWith(SCHEDULED)).resolves.toMatchObject({
+      status: "failed",
+      message: expect.stringMatching(/didn't close in time/),
+    });
+    expect(replacement.finish).toHaveBeenCalledExactlyOnceWith(null);
+    expect(deps.launchInView).not.toHaveBeenCalled();
+  });
+
+  it("leaves a run alone that settled before it could be replaced", async () => {
+    withPolicies({ overlap: "replace" });
+    history = [recordedRun("run-a")];
+
+    await expect(launchWith(SCHEDULED)).resolves.toMatchObject({ status: "started" });
+    expect(deps.closeRunTerminal).not.toHaveBeenCalled();
+    expect(deps.removeRunPane).not.toHaveBeenCalled();
+  });
+
+  describe("Run now", () => {
+    it("asks before running alongside open runs, recording and reserving nothing", async () => {
+      history = [recordedRun("run-b"), recordedRun("run-a")];
+
+      await expect(run()).resolves.toEqual({
+        status: "confirm-overlap",
+        policy: "skip",
+        openRunIds: ["run-b", "run-a"],
+      });
+      expect(recorder.registerSkip).not.toHaveBeenCalled();
+      expect(recorder.registerRefusedLaunch).not.toHaveBeenCalled();
+      expect(deps.launchInView).not.toHaveBeenCalled();
+      expect(hasPendingScheduledLaunch("project-1")).toBe(false);
+    });
+
+    it("runs alongside once the user agreed to the runs it named", async () => {
+      history = [recordedRun("run-b"), recordedRun("run-a")];
+
+      await expect(
+        launchWith(RUN_NOW, {
+          overlapConfirmed: { policy: "skip", openRunIds: ["run-a", "run-b"] },
+        })
+      ).resolves.toMatchObject({ status: "started" });
+      expect(deps.closeRunTerminal).not.toHaveBeenCalled();
+    });
+
+    it("asks again when a run opened since, or the policy changed", async () => {
+      history = [recordedRun("run-b"), recordedRun("run-a")];
+
+      await expect(
+        launchWith(RUN_NOW, { overlapConfirmed: { policy: "skip", openRunIds: ["run-a"] } })
+      ).resolves.toMatchObject({ status: "confirm-overlap", openRunIds: ["run-b", "run-a"] });
+      await expect(
+        launchWith(RUN_NOW, {
+          overlapConfirmed: { policy: "replace", openRunIds: ["run-a", "run-b"] },
+        })
+      ).resolves.toMatchObject({ status: "confirm-overlap", policy: "skip" });
+      expect(deps.launchInView).not.toHaveBeenCalled();
+    });
+
+    it("replaces under the replace policy once the user agreed", async () => {
+      withPolicies({ overlap: "replace" });
+      history = [recordedRun("run-a")];
+      const replacement = fakeReplacement();
+      recorder.beginReplacement.mockReturnValue(replacement);
+      deps.closeRunTerminal = vi.fn(async () => {
+        replacement.markGone();
+        return null;
+      });
+
+      await expect(run()).resolves.toEqual({
+        status: "confirm-overlap",
+        policy: "replace",
+        openRunIds: ["run-a"],
+      });
+      expect(deps.closeRunTerminal).not.toHaveBeenCalled();
+
+      await expect(
+        launchWith(RUN_NOW, { overlapConfirmed: { policy: "replace", openRunIds: ["run-a"] } })
+      ).resolves.toMatchObject({ status: "started" });
+      expect(replacement.finish).toHaveBeenCalledExactlyOnceWith("id-3");
+      expect(recorder.handleSessionCaptured).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("precondition", () => {
+    it("runs in the schedule's worktree and launches when it passes", async () => {
+      schedule = { ...schedule, launch: { ...schedule.launch, worktreeId: "/wt" } };
+      withPolicies({ precondition: { command: "gh pr list | grep -q ." } });
+
+      await expect(launchWith(SCHEDULED)).resolves.toMatchObject({ status: "started" });
+      expect(deps.runPrecondition).toHaveBeenCalledWith({
+        projectId: "project-1",
+        command: "gh pr list | grep -q .",
+        cwd: "/wt",
+        signal: expect.any(AbortSignal),
+      });
+    });
+
+    it("records its skip with the exit code, holding the reserved terminal id", async () => {
+      withPolicies({ precondition: { command: "exit 3" } });
+      const reason = { kind: "precondition", exitCode: 3, signal: null, error: null } as const;
+      deps.runPrecondition = vi.fn(async () => reason);
+
+      await expect(launchWith(SCHEDULED)).resolves.toEqual({
+        status: "skipped",
+        runId: "id-1",
+        reason,
+      });
+      expect(recorder.registerSkip).toHaveBeenCalledWith({
+        id: "id-1",
+        scheduleId: "schedule-1",
+        projectId: "project-1",
+        origin: SCHEDULED,
+        reason,
+        terminalId: "terminal-id-2",
+      });
+      expect(deps.launchInView).not.toHaveBeenCalled();
+      expect(hasPendingScheduledLaunch("project-1")).toBe(false);
+    });
+
+    it("applies to Run now too", async () => {
+      withPolicies({ precondition: { command: "exit 1" } });
+      const reason = { kind: "precondition", exitCode: 1, signal: null, error: null } as const;
+      deps.runPrecondition = vi.fn(async () => reason);
+
+      await expect(run()).resolves.toMatchObject({ status: "skipped", reason });
+    });
+
+    it("holds the project's sleep while it runs, and stops when the schedule is removed", async () => {
+      withPolicies({ precondition: { command: "sleep 30" } });
+      let aborted = false;
+      deps.runPrecondition = vi.fn(async ({ signal }: { signal: AbortSignal }) => {
+        expect(hasPendingScheduledLaunch("project-1")).toBe(true);
+        cancelScheduledLaunches({ scheduleId: "schedule-1" });
+        await Promise.resolve();
+        aborted = signal.aborted;
+        return { kind: "precondition", exitCode: null, signal: 15, error: null } as const;
+      });
+
+      await expect(launchWith(SCHEDULED)).resolves.toEqual({ status: "not-found" });
+      expect(aborted).toBe(true);
+      expect(recorder.registerSkip).not.toHaveBeenCalled();
+      expect(recorder.registerRefusedLaunch).not.toHaveBeenCalled();
+    });
+
+    it("refuses to run in a worktree that's gone, rather than anywhere else", async () => {
+      schedule = { ...schedule, launch: { ...schedule.launch, worktreeId: "/wt" } };
+      withPolicies({ precondition: { command: "true" } });
+      deps.folderExists = async (path) => path !== "/wt";
+
+      await expect(launchWith(SCHEDULED)).resolves.toMatchObject({
+        status: "failed",
+        message: "The schedule's worktree couldn't be found.",
+      });
+      expect(deps.runPrecondition).not.toHaveBeenCalled();
+    });
+  });
+
+  it("never acts on an occurrence the history already has a run for", async () => {
+    withPolicies({ overlap: "replace", precondition: { command: "true" } });
+    history = [recordedRun("run-a"), { ...recordedRun("run-old", true), origin: SCHEDULED }];
+
+    await expect(launchWith(SCHEDULED)).resolves.toEqual({
+      status: "already-recorded",
+      runId: "run-old",
+    });
+    expect(deps.runPrecondition).not.toHaveBeenCalled();
+    expect(recorder.beginReplacement).not.toHaveBeenCalled();
+    expect(recorder.registerSkip).not.toHaveBeenCalled();
+  });
+
+  it("judges a second trigger against the run the first one started", async () => {
+    withPolicies({ precondition: { command: "test -f ready" } });
+    recorder.registerLaunch.mockImplementation((input: { id: string }) => {
+      history = [recordedRun(input.id), ...history];
+    });
+    let pass!: () => void;
+    deps.runPrecondition = vi.fn(
+      () =>
+        new Promise<null>((resolve) => {
+          pass = () => resolve(null);
+        })
+    );
+
+    const catchUp = launchWith(CATCH_UP);
+    const runNow = run();
+    await vi.waitFor(() => expect(deps.runPrecondition).toHaveBeenCalledTimes(1));
+    // Run now waits its turn rather than finding no open run.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(deps.runPrecondition).toHaveBeenCalledTimes(1);
+    pass();
+
+    await expect(catchUp).resolves.toMatchObject({ status: "started", runId: "id-1" });
+    await expect(runNow).resolves.toEqual({
+      status: "confirm-overlap",
+      policy: "skip",
+      openRunIds: ["id-1"],
+    });
+    expect(deps.runPrecondition).toHaveBeenCalledTimes(1);
+  });
+
+  it("doesn't hold up another schedule", async () => {
+    let pass!: () => void;
+    withPolicies({ precondition: { command: "test -f ready" } });
+    deps.runPrecondition = vi.fn(
+      () =>
+        new Promise<null>((resolve) => {
+          pass = () => resolve(null);
+        })
+    );
+    const first = launchWith(SCHEDULED);
+    await vi.waitFor(() => expect(deps.runPrecondition).toHaveBeenCalledTimes(1));
+
+    const other = { ...schedule, id: "schedule-2", policies: { ...schedule.policies, precondition: null } };
+    deps.getSchedule = async (_projectId, scheduleId) =>
+      scheduleId === "schedule-2" ? other : schedule;
+    await expect(
+      launchScheduledRun(
+        { projectId: "project-1", scheduleId: "schedule-2", origin: RUN_NOW },
+        deps
+      )
+    ).resolves.toMatchObject({ status: "started" });
+
+    pass();
+    await expect(first).resolves.toMatchObject({ status: "started" });
   });
 });

@@ -1,4 +1,5 @@
 import os from "node:os";
+import path from "node:path";
 import { buildCommandLaunchShell } from "../../ipc/handlers/terminal/commandLaunch.js";
 import { runBoundedProcess, type BoundedProcessSlot } from "../boundedProcess.js";
 import { getDefaultShell, waitForWindowsShell } from "../pty/terminalShell.js";
@@ -29,21 +30,26 @@ const active = new Set<BoundedProcessSlot>();
 let disposed = false;
 
 /**
- * The user's shell running `command` and exiting with its status, as a
- * terminal's command launch runs one: a login shell where the shell has one,
- * PowerShell or cmd on Windows. A shell that launch doesn't script for gets
- * the command with `-c`, which every POSIX shell takes.
+ * The user's shell running `command` and exiting with its status. On POSIX
+ * zsh and bash run it as a login shell, so what the profile sets up (PATH,
+ * version managers) is there, but never an interactive one: nobody is at a
+ * prompt to answer what an rc file asks, and an interactive shell ignores the
+ * SIGTERM a timeout sends. Any other shell takes the command with `-c`. On
+ * Windows it runs as a terminal's command launch runs one, in PowerShell or
+ * cmd.
  */
 export function preconditionInvocation(
   command: string,
   shell: string = getDefaultShell()
 ): { file: string; args: string[] } {
-  const built = buildCommandLaunchShell(command, shell, "exit");
-  if (built) return { file: built.shell, args: built.args };
   if (process.platform === "win32") {
+    const built = buildCommandLaunchShell(command, shell, "exit");
+    if (built) return { file: built.shell, args: built.args };
     return { file: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", command] };
   }
-  return { file: shell, args: ["-c", command] };
+  const name = path.basename(shell).toLowerCase();
+  const login = name === "zsh" || name === "bash";
+  return { file: shell, args: login ? ["-l", "-c", command] : ["-c", command] };
 }
 
 function signalNumber(name: string | null): number | null {

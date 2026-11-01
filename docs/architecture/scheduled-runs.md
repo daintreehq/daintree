@@ -21,6 +21,8 @@ A project can run an agent on a schedule (#15973). A due schedule launches its a
 | Run now (`window.electron.schedules.runNow`, `schedules.runNow`) | `electron/ipc/handlers/schedules.ts`, `src/services/actions/definitions/scheduleActions.ts` |
 | The run's handback instruction and its markers | `shared/types/handback.ts`, `shared/utils/handback.ts`, `electron/services/pty/HandbackDetector.ts`, `electron/services/pty/runHandback.ts` |
 | The done policy | `electron/services/scheduledRuns/ScheduledRunDonePolicy.ts`, `scheduledRunDonePolicyLive.ts`, `src/hooks/useScheduledRunFinishBridge.ts` |
+| The overlap policy and the precondition | `electron/services/scheduledRuns/ScheduledRunLauncher.ts`, `scheduledRunPrecondition.ts`, `ScheduledRunRecorder.beginReplacement` |
+| Run now's overlap confirmation | `src/store/scheduleRunConfirmStore.ts`, `src/components/Schedules/ScheduleRunConfirmDialog.tsx` |
 
 ## Boundaries
 
@@ -239,7 +241,31 @@ Only Daintree's scheduler can set it, by one of two entries, and neither reads i
 - **The history must be able to record it.** With the run history unavailable nothing launches, and Run now answers `failed` with no run id. A schedule, or a project, that is gone answers `not-found`: removing a project removes its schedules and history.
 - **Sleep and status.** While a run is reserved or open, automatic sleep (idle auto-close, idle shells, memory pressure) holds the project as a `scheduled-run` coordination hold; a user's Sleep still goes through and the run's terminal exits with it. A run that spawns in a project that read `closed` moves it to `background`, so it doesn't read as closed while the run is in it.
 
-Run now is `window.electron.schedules.runNow(scheduleId)`, sender-scoped like the other schedule channels, answering `ScheduleRunNowOutcome`: `started` with the run and terminal ids, `failed` with the reason and the failed run's id, or `not-found`. It runs whether or not the schedule is enabled. The `schedules.runNow` action calls it; it is on no MCP tier, hidden from `tools/list`, and closed to plugins, which may give an agent a task but not launch one with a schedule's preset.
+Run now is `window.electron.schedules.runNow(scheduleId, options?)`, sender-scoped like the other schedule channels, answering `ScheduleRunNowOutcome`: `started` with the run and terminal ids, `skipped` with the run id and its skip reason, `confirm-overlap` (below), `failed` with the reason and the failed run's id, or `not-found`. It runs whether or not the schedule is enabled. The `schedules.runNow` action calls it; it is on no MCP tier, hidden from `tools/list`, and closed to plugins, which may give an agent a task but not launch one with a schedule's preset. It is `danger: "confirm"` because it can ask before running alongside or replacing open runs.
+
+## Overlap and precondition
+
+Every launch meets the schedule's overlap policy and then its precondition (#15980), inside `launchScheduledRun`, so Run now and the scheduler's triggers are judged alike.
+
+- **One launch of a schedule at a time.** Each launch takes a per-schedule turn from reading the schedule to its outcome, so two triggers arriving together (a catch-up and a Run now) can't both find no open run: the second is judged against the run the first left. Different schedules don't wait on each other.
+- **An occurrence already recorded does nothing.** A trigger naming an occurrence the history already holds answers `already-recorded` before any precondition runs or any run is closed.
+- **Open means unsettled.** Overlap reads the settlement axis, a fact: a run is open until its exit, a handback or another settlement says otherwise. A run settled on a handback whose terminal the done policy kept doesn't hold the next one back.
+- **Skip** (the default) records the occurrence as skipped with `{ kind: "overlap", openRunId }`, naming the newest open run, and runs nothing, not even the precondition.
+- **Start another** goes ahead beside the open runs.
+- **Replace** runs the precondition first, and only once it passes closes every open run: the terminal goes the way a graceful quit closes one, through the `terminal:graceful-kill` handler (the agent asked to quit, its session captured and journaled), and its pane leaves the views showing the project (`schedules:run-closed`) or, with none, the saved layout. While it closes, `beginReplacement` holds back the settlement its own exit or loss would make; once the PTY is seen gone the run settles as `replace` naming the new run, and a session id the close captured fills its resume snapshot. A close that fails, or a PTY not gone within 10 seconds, launches nothing: the run is left as its own facts say, and the new one is recorded as failed. Closing is the commit point, so a replacement whose new run then fails to launch still names it.
+- **Run now asks.** With open runs under `skip` or `replace`, Run now records nothing and answers `confirm-overlap` with the policy and the open run ids. The action asks the user (`ScheduleRunConfirmDialog`: "Run anyway" alongside, or "Replace run"), and the answer goes back as `options.overlap` with the runs it named. Main checks again in a new turn: a run opened since, or a changed policy, is asked about again. Backing out runs and records nothing. Under `start-another` it never asks.
+
+The precondition runs in the schedule's worktree (or the project's folder), never in a fallback: a folder that's gone refuses the launch first. It runs in the user's shell, a login shell for zsh and bash but never an interactive one (nobody is at a prompt, and an interactive shell ignores a timeout's SIGTERM), PowerShell or cmd on Windows as a command launch runs them, with the environment a project command gets (the install allowlist, the SSH agent socket, the user's global and project variables, Daintree's own namespace removed, non-interactive markers set). Its output is discarded, and neither the command nor its output is logged.
+
+| Precondition | Outcome |
+| --- | --- |
+| Exit 0 | The run goes ahead |
+| Any other exit code | Skipped, `{ exitCode }` |
+| Ended by a signal | Skipped, `{ signal }` |
+| Still running after 60 seconds | Its process tree is killed, and it is skipped with `error` saying it timed out |
+| Couldn't start | Skipped, with the `error` |
+
+The run's id and terminal id are reserved before the precondition runs, so a skipped run keeps the reserved terminal id, removing the schedule or project stops the check and records nothing, and automatic sleep holds the project meanwhile. Quitting kills every precondition still running (`disposeSchedulePreconditions`). Run now meets the precondition too: a schedule is run as it would run.
 
 ## Handing back
 
@@ -284,7 +310,7 @@ An unattended run needs the display awake as well as the system: a run under `ca
 | #15977 | Schedule provenance on terminals, snapshots and session records (see Provenance) |
 | #15978 | Launching a schedule's agent as a tracked run (Run now) |
 | #15979 | Firing due schedules across sleep, wake, restarts and clock changes; catch-up windows |
-| #15980 | The overlap policy and the precondition command |
+| #15980 | The overlap policy and the precondition command (see Overlap and precondition) |
 | #15981 | Holding the machine and display awake for a run |
 | #15982 | The done and needs-you handback, and the done policy |
 | #15984, #15985 | The Schedules view and the cadence picker |

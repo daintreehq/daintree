@@ -33,8 +33,7 @@ vi.mock("../../../services/ProjectStore.js", () => ({ projectStore: projectStore
 vi.mock("../../../window/webContentsRegistry.js", () => viewsMock);
 const launchMock = vi.hoisted(() => vi.fn());
 vi.mock("../../../services/scheduledRuns/scheduledRunLaunchLive.js", () => ({
-  RUN_NOW_ORIGIN: { trigger: "run-now", dueAt: null, occurrenceKey: null, coalesced: null },
-  launchScheduledRunLive: launchMock,
+  runScheduleNowLive: launchMock,
 }));
 
 import { CHANNELS } from "../../channels.js";
@@ -48,6 +47,7 @@ import type {
   ScheduleCreateInput,
   ScheduleCreateOutcome,
   ScheduleRemoveOutcome,
+  ScheduleRunNowOptions,
   ScheduleRunNowOutcome,
   ScheduleSetEnabledOutcome,
   ScheduleUpdateOutcome,
@@ -76,7 +76,11 @@ type SetEnabledHandler = (
   enabled: boolean
 ) => Promise<ScheduleSetEnabledOutcome>;
 type RemoveHandler = (ctx: IpcContext, scheduleId: string) => Promise<ScheduleRemoveOutcome>;
-type RunNowHandler = (ctx: IpcContext, scheduleId: string) => Promise<ScheduleRunNowOutcome>;
+type RunNowHandler = (
+  ctx: IpcContext,
+  scheduleId: string,
+  options?: ScheduleRunNowOptions
+) => Promise<ScheduleRunNowOutcome>;
 
 const list = schedulesNamespace.ops.list.handler as unknown as ListHandler;
 const create = schedulesNamespace.ops.create.handler as unknown as CreateHandler;
@@ -191,9 +195,33 @@ describe("schedules handlers", () => {
       expect(launchMock).toHaveBeenCalledWith({
         projectId: PROJECT,
         scheduleId: "schedule-1",
-        origin: { trigger: "run-now", dueAt: null, occurrenceKey: null, coalesced: null },
         preferredWebContentsId: 41,
       });
+    });
+
+    it("passes on the user's answer to open runs (#15980)", async () => {
+      launchMock.mockResolvedValue({ status: "not-found" });
+      const overlap = { policy: "replace" as const, openRunIds: ["run-1", "run-2"] };
+
+      await runNow(ctx(PROJECT), "schedule-1", { overlap });
+      expect(launchMock).toHaveBeenCalledWith({
+        projectId: PROJECT,
+        scheduleId: "schedule-1",
+        preferredWebContentsId: 41,
+        overlapConfirmed: overlap,
+      });
+
+      for (const bad of [
+        { overlap: { policy: "start-another", openRunIds: [] } },
+        { overlap: { policy: "skip", openRunIds: "run-1" } },
+        { overlap: { policy: "skip", openRunIds: [] }, force: true },
+        "yes",
+      ]) {
+        await expect(
+          runNow(ctx(PROJECT), "schedule-1", bad as unknown as ScheduleRunNowOptions)
+        ).rejects.toMatchObject({ code: "VALIDATION" });
+      }
+      expect(launchMock).toHaveBeenCalledTimes(1);
     });
 
     it("runs nothing for a view that can't have schedules or a request of the wrong shape", async () => {

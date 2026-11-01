@@ -477,6 +477,110 @@ describe("ScheduledRunRecorder", () => {
     expect(emitted.filter((e) => e.name === "scheduled-run:ended")).toHaveLength(1);
   });
 
+  describe("while the overlap policy replaces a run", () => {
+    const ended = () => emitted.filter((e) => e.name === "scheduled-run:ended");
+
+    function spawned(recorder: ScheduledRunRecorder): void {
+      recorder.registerLaunch(launch());
+      recorder.handleSpawnResult("terminal-1", {
+        success: true,
+        spawnedAt: SPAWNED_AT,
+        launchGeneration: 3,
+      });
+    }
+
+    it("records the close's exit on the process and settles the run as replaced, once", async () => {
+      const recorder = lifetime();
+      spawned(recorder);
+      const replacement = recorder.beginReplacement("run-1");
+      expect(replacement).not.toBeNull();
+      expect(recorder.beginReplacement("run-1")).toBeNull();
+
+      now = SPAWNED_AT + 500;
+      recorder.handleExit({
+        terminalId: "terminal-1",
+        spawnedAt: SPAWNED_AT,
+        exitCode: null,
+        signal: 15,
+      });
+      await replacement!.gone;
+      expect(replacement!.isGone()).toBe(true);
+      const closed = recorder.get("run-1");
+      expect(closed?.settlement).toEqual({ state: "open" });
+      expect(closed?.process.pty).toMatchObject({ state: "exited", signal: 15 });
+      expect(ended()).toHaveLength(0);
+
+      expect(replacement!.finish("run-2")?.settlement).toMatchObject({
+        outcome: "replaced",
+        evidence: { kind: "replace", replacedByRunId: "run-2" },
+      });
+      expect(replacement!.finish("run-2")).toBeNull();
+      expect(ended()).toHaveLength(1);
+      expect(ended()[0]?.payload).toMatchObject({ runId: "run-1", outcome: "replaced" });
+    });
+
+    it("holds a loss the same way", async () => {
+      const recorder = lifetime();
+      spawned(recorder);
+      const replacement = recorder.beginReplacement("run-1")!;
+      recorder.handleIncarnationLost({ terminalId: "terminal-1", launchGeneration: 3 });
+      await replacement.gone;
+      expect(recorder.get("run-1")?.settlement).toEqual({ state: "open" });
+      expect(replacement.finish("run-2")?.settlement).toMatchObject({ outcome: "replaced" });
+    });
+
+    it("settles on its own exit when the replacement doesn't go through", () => {
+      const recorder = lifetime();
+      spawned(recorder);
+      const replacement = recorder.beginReplacement("run-1")!;
+      recorder.handleExit({ terminalId: "terminal-1", spawnedAt: SPAWNED_AT, exitCode: 0 });
+
+      expect(replacement.finish(null)?.settlement).toMatchObject({
+        outcome: "done",
+        evidence: { kind: "exit", process: "pty", exitCode: 0 },
+      });
+      expect(ended()).toHaveLength(1);
+    });
+
+    it("stays open when nothing ended it and the replacement didn't go through", () => {
+      const recorder = lifetime();
+      spawned(recorder);
+      const replacement = recorder.beginReplacement("run-1")!;
+      expect(replacement.isGone()).toBe(false);
+      expect(replacement.finish(null)).toBeNull();
+      expect(recorder.get("run-1")?.settlement).toEqual({ state: "open" });
+
+      // Released, its own exit settles it again.
+      recorder.handleExit({ terminalId: "terminal-1", spawnedAt: SPAWNED_AT, exitCode: 1 });
+      expect(recorder.get("run-1")?.settlement).toMatchObject({ outcome: "failed" });
+    });
+
+    it("leaves a settlement another service made first", () => {
+      const recorder = lifetime();
+      spawned(recorder);
+      const replacement = recorder.beginReplacement("run-1")!;
+      recorder.settle("run-1", {
+        kind: "handback",
+        report: "done",
+        summary: null,
+        truncated: false,
+      });
+      recorder.handleExit({ terminalId: "terminal-1", spawnedAt: SPAWNED_AT, exitCode: 0 });
+
+      expect(replacement.finish("run-2")).toBeNull();
+      expect(recorder.get("run-1")?.settlement).toMatchObject({ evidence: { kind: "handback" } });
+      expect(ended()).toHaveLength(1);
+    });
+
+    it("can't replace a run that has settled", () => {
+      const recorder = lifetime();
+      spawned(recorder);
+      recorder.handleExit({ terminalId: "terminal-1", spawnedAt: SPAWNED_AT, exitCode: 0 });
+      expect(recorder.beginReplacement("run-1")).toBeNull();
+      expect(recorder.beginReplacement("run-missing")).toBeNull();
+    });
+  });
+
   describe("the agent's handback (#15982)", () => {
     const report = (
       overrides: Partial<ScheduledRunHandbackFact> = {}

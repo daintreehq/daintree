@@ -4785,9 +4785,9 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   },
   {
     "category": "project",
-    "danger": "safe",
-    "dangerRationale": undefined,
-    "description": "Launch a schedule's agent now, with its preset and prompt in its worktree, as a run recorded in the schedule's history. Runs whether or not the schedule is enabled.",
+    "danger": "confirm",
+    "dangerRationale": "With the schedule's earlier runs still open, running starts another agent beside them, or under its replace policy closes their terminals first.",
+    "description": "Launch a schedule's agent now, with its preset and prompt in its worktree, as a run recorded in the schedule's history. Runs whether or not the schedule is enabled, under its overlap policy and precondition.",
     "examples": undefined,
     "id": "schedules.runNow",
     "keywords": [
