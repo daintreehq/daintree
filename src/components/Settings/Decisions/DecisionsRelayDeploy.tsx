@@ -22,8 +22,7 @@ interface DecisionsRelayDeployProps {
 
 /** Where a guided deploy's pane would go, or why it can't go anywhere this window shows. */
 function useDeployPlacement():
-  | { ready: true; cwd: string; worktreeId: string | undefined }
-  | { ready: false; reason?: string } {
+  { ready: true; cwd: string; worktreeId: string | undefined } | { ready: false; reason?: string } {
   const { homeDir } = useHomeDir();
   const hasProject = useProjectStore(
     (state) => selectViewProject(getViewWorkspaceId(), state) !== undefined

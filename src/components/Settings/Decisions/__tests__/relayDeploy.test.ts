@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-const addPanel = vi.hoisted(() => vi.fn<(options: Record<string, unknown>) => Promise<string | null>>());
+const addPanel = vi.hoisted(() =>
+  vi.fn<(options: Record<string, unknown>) => Promise<string | null>>()
+);
 const notify = vi.hoisted(() => vi.fn());
 
 vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: () => ({ addPanel }) } }));
