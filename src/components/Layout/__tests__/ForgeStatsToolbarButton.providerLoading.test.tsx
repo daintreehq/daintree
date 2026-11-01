@@ -11,9 +11,10 @@ import type { ReactNode } from "react";
 import type { ForgeProviderEntry } from "@shared/types/forge";
 import type { Project } from "@shared/types";
 
-const providerState = vi.hoisted(
-  (): { loading: boolean; entry: ForgeProviderEntry | null } => ({ loading: true, entry: null })
-);
+const providerState = vi.hoisted((): { loading: boolean; entry: ForgeProviderEntry | null } => ({
+  loading: true,
+  entry: null,
+}));
 
 vi.mock("@/clients/forgeClient", () => ({
   forgeClient: {
