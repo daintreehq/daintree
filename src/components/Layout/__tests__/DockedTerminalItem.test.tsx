@@ -279,7 +279,8 @@ describe("DockedTerminalItem move-to-grid gesture", () => {
       });
     }
     const ask = { kind: "asked", quote: "Run it?", readAt: 1, seen: false } as const;
-    const chipName = () => screen.getByRole("button", { name: /Click to preview/ }).getAttribute("aria-label");
+    const chipName = () =>
+      screen.getByRole("button", { name: /Click to preview/ }).getAttribute("aria-label");
 
     beforeEach(() => {
       mockDockAgentState = "waiting";

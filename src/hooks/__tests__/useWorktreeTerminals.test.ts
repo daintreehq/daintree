@@ -120,8 +120,9 @@ describe("aggregateAgentStates (#6650)", () => {
       expect(asked.unread).toBe(0);
       expect(asked.blocked).toBe(0);
 
-      const guessed = aggregateAgentStates([agent("guessed", { waitingReason: "approval" })], (id) =>
-        bands.get(id)
+      const guessed = aggregateAgentStates(
+        [agent("guessed", { waitingReason: "approval" })],
+        (id) => bands.get(id)
       );
       expect(guessed.unread).toBe(1);
       expect(guessed.byState.waiting).toBe(0);
