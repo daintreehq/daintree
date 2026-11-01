@@ -485,17 +485,19 @@ export const PATTERNS: readonly SecretPattern[] = [
     // The one-time secret that claims a Decisions relay: `CLAIM_SECRET=…`,
     // `"claimSecret": "…"`, `--claim-secret …`, and the deploy CLI's
     // `Claim secret  <value>` (two spaces or more, so prose that mentions one
-    // stays). `--claim-secret-file <path>` names a file and stays too.
+    // stays). A quoted value is taken whole, escapes included, or to the end of
+    // its line when the quote never closes. `--claim-secret-file <path>` names
+    // a file and stays.
     regex:
-      /(^|[^A-Za-z0-9])(claim[_ -]?secret["']?(?:[ \t]{0,4}[:=][ \t]{0,4}|[ \t]{2,16})|-claim-secret[ \t]{1,4})(?:"[^"\r\n]{16,256}"|'[^'\r\n]{16,256}'|[^\s"'`]{16,256})/gi,
+      /(^|[^A-Za-z0-9])(claim[_ -]?secret["']?(?:[ \t]{0,4}[:=][ \t]{0,4}|[ \t]{2,16})|-claim-secret[ \t]{1,4})(?:"(?:[^"\\\r\n]|\\[^\r\n]){16,4096}(?:"|(?![^\r\n]))|'(?:[^'\\\r\n]|\\[^\r\n]){16,4096}(?:'|(?![^\r\n]))|[^\s"'`]{16,4096})/gi,
     replacement: `$1$2${REDACTED}`,
   },
   {
     name: "decisions-recovery-passphrase",
-    // A labelled Decisions recovery passphrase: a quoted one whole, an unquoted
-    // one to the end of its line, since it may hold spaces.
+    // A labelled Decisions recovery passphrase: a quoted one whole, escapes
+    // included, and an unquoted one to the end of its line, since it may hold spaces.
     regex:
-      /(^|[^A-Za-z0-9])(recovery[_ -]?passphrase["']?[ \t]{0,4}[:=][ \t]{0,4})(?![ \t]{0,4}["']?\[REDACTED\])(?:"[^"\r\n]{1,4096}"|'[^'\r\n]{1,4096}'|[^\r\n]{1,4096})/gi,
+      /(^|[^A-Za-z0-9])(recovery[_ -]?passphrase["']?[ \t]{0,4}[:=][ \t]{0,4})(?![ \t]{0,4}["']?\[REDACTED\])(?:"(?:[^"\\\r\n]|\\[^\r\n]){1,4096}"|'(?:[^'\\\r\n]|\\[^\r\n]){1,4096}'|[^\r\n]{1,4096})/gi,
     replacement: `$1$2${REDACTED}`,
   },
   {

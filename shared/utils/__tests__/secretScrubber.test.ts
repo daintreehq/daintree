@@ -581,6 +581,38 @@ describe("secretScrubber", () => {
       expect(scrubSecrets(keyed)).toBe(keyed);
     });
 
+    it.each([
+      [
+        "a recovery passphrase with escaped quotes",
+        '{"recoveryPassphrase":"correct horse \\"battery\\" staple","status":"ok"}',
+        `{"recoveryPassphrase":${REDACTED},"status":"ok"}`,
+      ],
+      [
+        "a claim secret with escaped quotes",
+        'CLAIM_SECRET="correct horse battery \\"staple\\""',
+        `CLAIM_SECRET=${REDACTED}`,
+      ],
+      [
+        "a quoted claim secret longer than the relay allows",
+        `CLAIM_SECRET="${"a".repeat(300)}" next`,
+        `CLAIM_SECRET=${REDACTED} next`,
+      ],
+      [
+        "a claim secret whose quote never closes",
+        `claimSecret: "${"b".repeat(20)} and more`,
+        `claimSecret: ${REDACTED}`,
+      ],
+    ])("redacts %s whole, and a second pass changes nothing", (_label, input, expected) => {
+      const once = scrubSecrets(input);
+      expect(once).toBe(expected);
+      expect(scrubSecrets(once)).toBe(once);
+    });
+
+    it("leaves a short quoted value and the rest of its line alone", () => {
+      const text = 'CLAIM_SECRET="short" && echo the rest of this line stays';
+      expect(scrubSecrets(text)).toBe(text);
+    });
+
     it("finds a legacy Cloudflare token by the name it is assigned to", () => {
       expect(findSecretInValue(`CLOUDFLARE_API_TOKEN=${"a1B2".repeat(10)}`)).toBeDefined();
       expect(findSecretInValue("CLOUDFLARE_API_TOKEN=short")).toBeUndefined();
