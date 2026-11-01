@@ -642,15 +642,18 @@ describe("scanForbiddenModules", () => {
           "node_modules/@jridgewell/gen-mapping/dist/gen-mapping.mjs",
           "node_modules/@babel/runtime/helpers/esm/extends.js",
           "node_modules/acorn-walk/dist/walk.mjs",
+          // Main loads Decisions on demand, so only its eager list names it.
+          "electron/services/decisions/index.ts",
+          "node_modules/@daintreehq/decisions-client/dist/index.js",
         ],
         ELEMENT_PICKER_FRAMEWORK_PATTERNS
       )
     ).toEqual([]);
   });
 
-  it("catches Decisions' service and libraries wherever they resolve, but not its IPC adapter", () => {
+  it("catches Decisions' service and libraries wherever they resolve, and nothing beside them", () => {
     const found = scanForbiddenModules([
-      "electron/ipc/handlers/decisions.ts",
+      "electron/ipc/handlers/deviceAnswer.ts",
       "electron/services/decisions/index.ts",
       "electron/services/decisions/decisionsSettings.ts",
       "node_modules/@daintreehq/decisions-client/dist/index.js",

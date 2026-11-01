@@ -1,19 +1,15 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { build, type Metafile } from "esbuild";
-import { MAIN_EXTERNAL } from "./main-build-entries.mjs";
-import { mainBundlePlugins } from "./lib/main-bundle.mjs";
+import { mainEsmConfig } from "./build-main.mjs";
 import {
-  EAGER_EDGE_KINDS,
   FORBIDDEN_EAGER_PATTERNS,
   scanForbiddenModules,
   walkEagerGraph,
 } from "./import-budget-lib.mjs";
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const ENTRY = "electron/main.ts";
-const ADAPTER = "electron/ipc/handlers/decisions.ts";
+/** What runs at startup: the bootstrap, then main, which it loads. */
+const STARTUP_ENTRIES = ["electron/bootstrap.ts", "electron/main.ts"];
+const STATUS_READ_HOST = "electron/ipc/handlers/deviceAnswer.ts";
 const LIBRARIES = [
   "decisions-protocol",
   "decisions-crypto",
@@ -22,16 +18,17 @@ const LIBRARIES = [
 ] as const;
 
 /**
- * Decisions costs nothing while it is off (#16001): main's startup graph
- * reaches none of its service or libraries, which load only through the
- * dynamic import its boot task makes once the setting reads as on. The import
- * budget script that would notice otherwise runs on demand, not in CI, so this
- * builds main as the production build does and reads esbuild's own graph,
- * which stops at `dynamic-import` edges: exactly the boundary being asserted.
+ * Decisions costs nothing while it is off (#16001): the startup graph reaches
+ * none of its service or libraries, which load only through the dynamic
+ * import its boot task makes once the setting reads as on. The import budget
+ * script that would notice otherwise runs on demand, not in CI, so this runs
+ * the production build's own config without writing it and reads esbuild's
+ * graph, which stops at `dynamic-import` edges: exactly the boundary being
+ * asserted.
  *
  * It also proves the other half: the libraries are bundled (not left external
- * for the ASAR's node_modules, which drops them), and their code lands only in
- * chunks main loads on demand.
+ * for the ASAR's `node_modules`, which drops them), and their code lands only
+ * in chunks loaded on demand.
  */
 
 const isDecisions = (file: string) =>
@@ -40,29 +37,14 @@ const isDecisions = (file: string) =>
 const libraryOf = (file: string) =>
   /node_modules\/@daintreehq\/(decisions-[a-z]+)\//.exec(file)?.[1] ?? null;
 
-/** Main's static graph from `entry`, never passing through `skip`. */
-function staticGraph(metafile: Metafile, entry: string, skip?: string): Set<string> {
-  const seen = new Set<string>();
-  const stack = [entry];
-  while (stack.length > 0) {
-    const file = stack.pop()!;
-    if (seen.has(file) || file === skip) continue;
-    seen.add(file);
-    for (const edge of metafile.inputs[file]?.imports ?? []) {
-      if (!edge.external && EAGER_EDGE_KINDS.has(edge.kind)) stack.push(edge.path);
-    }
-  }
-  return seen;
-}
-
-/** The output chunks main evaluates at startup: its entry chunk and every chunk statically imported from there. */
+/** Every output chunk evaluated at startup: the startup entries' chunks and whatever they import statically. */
 function startupChunks(metafile: Metafile): Set<string> {
-  const entryChunk = Object.entries(metafile.outputs).find(
-    ([, output]) => output.entryPoint === ENTRY
-  )?.[0];
-  expect(entryChunk, "main's entry chunk").toBeDefined();
+  const entryChunks = Object.entries(metafile.outputs)
+    .filter(([, output]) => output.entryPoint && STARTUP_ENTRIES.includes(output.entryPoint))
+    .map(([chunk]) => chunk);
+  expect(entryChunks, "the startup entries' chunks").toHaveLength(STARTUP_ENTRIES.length);
   const seen = new Set<string>();
-  const stack = [entryChunk!];
+  const stack = [...entryChunks];
   while (stack.length > 0) {
     const chunk = stack.pop()!;
     if (seen.has(chunk)) continue;
@@ -80,31 +62,14 @@ describe("Decisions lazy boundary", () => {
 
   beforeAll(async () => {
     const result = await build({
-      entryPoints: [ENTRY],
-      bundle: true,
+      ...mainEsmConfig({ production: true }),
       write: false,
       metafile: true,
-      platform: "node",
-      target: "node22",
-      format: "esm",
-      splitting: true,
-      outdir: "dist-electron",
-      outbase: ".",
-      chunkNames: "electron/chunks/[name]-[hash]",
-      external: MAIN_EXTERNAL,
-      plugins: mainBundlePlugins({ isProd: true }),
-      absWorkingDir: ROOT,
       logLevel: "silent",
-      define: {
-        "process.env.SENTRY_DSN": JSON.stringify(""),
-        __DAINTREE_REMOTE_HOSTS__: "true",
-        __DAINTREE_REMOTE_HOST_ROLE__: "true",
-        __DAINTREE_BUILD_COMMIT__: JSON.stringify("test"),
-      },
     });
     metafile = result.metafile;
-    eager = walkEagerGraph(metafile, ENTRY);
-  }, 120_000);
+    eager = new Set(STARTUP_ENTRIES.flatMap((entry) => [...walkEagerGraph(metafile, entry)]));
+  }, 180_000);
 
   it("builds the service and every library into main, so their absence below means something", () => {
     const inputs = Object.keys(metafile.inputs);
@@ -124,15 +89,15 @@ describe("Decisions lazy boundary", () => {
     }
   });
 
-  it("reaches no Decisions module from main's startup graph", () => {
+  it("reaches no Decisions module from the startup graph", () => {
+    for (const entry of STARTUP_ENTRIES) expect(eager.has(entry), entry).toBe(true);
     expect([...eager].filter(isDecisions)).toEqual([]);
   });
 
-  it("keeps the IPC adapter as Decisions' only startup module, bringing nothing else with it", () => {
-    expect(eager.has(ADAPTER)).toBe(true);
-    const withoutAdapter = staticGraph(metafile, ENTRY, ADAPTER);
-    const addedByAdapter = [...eager].filter((file) => !withoutAdapter.has(file));
-    expect(addedByAdapter).toEqual([ADAPTER]);
+  it("adds no module of its own to the startup graph", () => {
+    // The status read is declared in a handler module startup loads anyway.
+    expect(eager.has(STATUS_READ_HOST)).toBe(true);
+    expect([...eager].filter((file) => /decisions/i.test(file))).toEqual([]);
   });
 
   it("bundles the code of every library instead of leaving it to node_modules", () => {
@@ -155,9 +120,8 @@ describe("Decisions lazy boundary", () => {
     expect(externalImports).toEqual([]);
   });
 
-  it("emits Decisions code only into chunks main loads on demand", () => {
-    const startup = startupChunks(metafile);
-    const leaked = [...startup].flatMap((chunk) =>
+  it("emits Decisions code only into chunks loaded on demand", () => {
+    const leaked = [...startupChunks(metafile)].flatMap((chunk) =>
       Object.entries(metafile.outputs[chunk].inputs)
         .filter(([file, input]) => isDecisions(file) && input.bytesInOutput > 0)
         .map(([file]) => `${chunk}: ${file}`)

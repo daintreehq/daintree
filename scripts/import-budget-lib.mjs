@@ -181,21 +181,8 @@ export function scanSyncViolations(files, root, readFile) {
  * @param {{ count: number, allowlist: string[], syncViolations: {file:string, line:number, pattern:string}[] }} baseline
  * @param {{ markedFiles?: Set<string> }} [opts] — set of allowlisted files that carry the header marker
  */
-/**
- * Modules that must never be reachable from main's eager import graph, whatever
- * the module count says.
- *
- * This is an invariant, not a ratchet: there is no baseline to refresh and no
- * `--update` that clears it. The Svelte parser is roughly 485 KiB minified
- * and the source model exists to keep it behind an `await import()`; a barrel
- * re-export, a moved type-only import that stops being type-only, or a
- * convenience helper added to the wrong file would pull both onto the startup
- * path silently, and the only symptom would be a slower boot.
- *
- * Matched against esbuild's module paths, so both the workspace source and the
- * resolved `node_modules` copy are caught.
- */
-export const FORBIDDEN_EAGER_PATTERNS = [
+/** Svelte's compiler, runtime and source model, which main never loads at all. */
+const SVELTE_PATTERNS = [
   {
     // Both spellings: the package's `compiler` export, and `src/compiler/`,
     // which is where the files actually resolve to.
@@ -212,10 +199,29 @@ export const FORBIDDEN_EAGER_PATTERNS = [
       file.includes("packages/svelte-source-model/") ||
       /node_modules\/@daintreehq\/svelte-source-model/.test(file),
   },
+];
+
+/**
+ * Modules that must never be reachable from main's eager import graph, whatever
+ * the module count says.
+ *
+ * This is an invariant, not a ratchet: there is no baseline to refresh and no
+ * `--update` that clears it. The Svelte parser is roughly 485 KiB minified
+ * and the source model exists to keep it behind an `await import()`; a barrel
+ * re-export, a moved type-only import that stops being type-only, or a
+ * convenience helper added to the wrong file would pull both onto the startup
+ * path silently, and the only symptom would be a slower boot.
+ *
+ * Matched against esbuild's module paths, so both the workspace source and the
+ * resolved `node_modules` copy are caught.
+ */
+export const FORBIDDEN_EAGER_PATTERNS = [
+  ...SVELTE_PATTERNS,
   {
     // Decisions costs nothing while off (#16001): its service and the libraries
     // it binds load only through the dynamic import its boot task makes once
-    // the setting reads as on. Its IPC adapter lives in electron/ipc/handlers/.
+    // the setting reads as on. Unlike the Svelte modules, main does load them
+    // then, so the Element Picker's list below leaves this one out.
     label: "Decisions",
     test: (file) =>
       /(^|\/)electron\/services\/decisions\//.test(file) ||
@@ -246,7 +252,7 @@ export const ELEMENT_PICKER_FRAMEWORK_PATTERNS = [
         file
       ),
   },
-  ...FORBIDDEN_EAGER_PATTERNS,
+  ...SVELTE_PATTERNS,
   {
     label: "Vue template compiler",
     test: (file) => /(^|\/)node_modules\/@vue\/compiler-[^/]+\//.test(file),

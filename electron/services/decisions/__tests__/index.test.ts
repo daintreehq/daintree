@@ -196,4 +196,33 @@ describe("Decisions entry", () => {
     expect(status).toEqual({ state: "off" });
     expect(peekDecisionsService()).toBeNull();
   });
+
+  it("starts nothing at boot after quit, even with the setting on and no service made yet", async () => {
+    saved.value = { enabled: true };
+    const constructedBefore = loads.constructed;
+    await stopDecisions();
+
+    await startDecisionsIfEnabled();
+
+    expect(peekDecisionsService()).toBeNull();
+    expect(loads.constructed).toBe(constructedBefore);
+  });
+
+  it("makes no new service once quit has run", async () => {
+    await stopDecisions();
+
+    await expect(getDecisionsService()).rejects.toThrow("Decisions has stopped for this run");
+    expect(peekDecisionsService()).toBeNull();
+  });
+
+  it("recovers from a runtime switch that failed, so the next one runs", async () => {
+    saved.value = { enabled: false };
+    loads.failNextConstruct = true;
+
+    await expect(setDecisionsEnabled(true)).rejects.toThrow("construct failed");
+    const status = await setDecisionsEnabled(true);
+
+    expect(status).toEqual({ state: "not-connected" });
+    expect(peekDecisionsService()?.getStatus().state).toBe("not-connected");
+  });
 });

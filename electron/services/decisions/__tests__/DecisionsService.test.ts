@@ -147,4 +147,30 @@ describe("DecisionsService", () => {
     expect(Object.keys(libraries.crypto).length).toBeGreaterThan(0);
     expect(Object.keys(libraries.model).length).toBeGreaterThan(0);
   });
+
+  it("forgets the lifetime's settings on stop and on dispose", async () => {
+    const service = new DecisionsService();
+    await service.start(on());
+    await service.stop();
+    expect(service.getSettings()).toBeNull();
+
+    await service.start(on());
+    await service.dispose();
+    expect(service.getSettings()).toBeNull();
+  });
+
+  it("runs the next transition after one that failed", async () => {
+    const service = new DecisionsService();
+    const unreadable = {
+      ...on(),
+      get enabled(): boolean {
+        throw new Error("unreadable settings");
+      },
+    } as DecisionsSettings;
+
+    await expect(service.start(unreadable)).rejects.toThrow("unreadable settings");
+    await service.start(on());
+
+    expect(service.getStatus().state).toBe("not-connected");
+  });
 });

@@ -118,11 +118,27 @@ const deviceAnswerMock = vi.hoisted(() => ({
 vi.mock("../../services/deviceAnswer/index.js", () => deviceAnswerMock);
 
 // Shutdown must never import Decisions itself: only the load the serviceRefs
-// mock hands back is stopped. A real import of the entry module would count here.
+// mock hands back is stopped. An import of the entry module or a library counts here.
 const decisionsEntryEvaluated = vi.hoisted(() => ({ count: 0 }));
 vi.mock("../../services/decisions/index.js", () => {
   decisionsEntryEvaluated.count += 1;
   return { stopDecisions: vi.fn() };
+});
+vi.mock("@daintreehq/decisions-protocol", () => {
+  decisionsEntryEvaluated.count += 1;
+  return {};
+});
+vi.mock("@daintreehq/decisions-crypto", () => {
+  decisionsEntryEvaluated.count += 1;
+  return {};
+});
+vi.mock("@daintreehq/decisions-client", () => {
+  decisionsEntryEvaluated.count += 1;
+  return {};
+});
+vi.mock("@daintreehq/decisions-model", () => {
+  decisionsEntryEvaluated.count += 1;
+  return {};
 });
 
 // The shutdown chain reaches this module through a dynamic import, so the export
@@ -497,6 +513,8 @@ describe("registerShutdownHandler", () => {
     const order: string[] = [];
     deferredInitQueueMock.haltDeferredQueue.mockImplementationOnce(() => {
       order.push("halt");
+      // Anything awaited between halting and sealing would run this first.
+      queueMicrotask(() => order.push("next-microtask"));
     });
     serviceRefsMock.sealDecisionsModule.mockImplementationOnce(() => {
       order.push("seal");
@@ -510,15 +528,22 @@ describe("registerShutdownHandler", () => {
     await beforeQuitCb(makeEvent());
     await exited;
 
-    expect(order).toEqual(["halt", "seal"]);
+    expect(order.slice(0, 3)).toEqual(["halt", "seal", "next-microtask"]);
   });
 
-  it("stops a Decisions load already under way before any PTY is enumerated", async () => {
+  it("finishes stopping a Decisions load still under way before any PTY is enumerated", async () => {
     const order: string[] = [];
+    const later = () => new Promise<void>((resolve) => setTimeout(resolve, 20));
     const stopDecisions = vi.fn(async () => {
       order.push("decisions-stop");
+      await later();
+      order.push("decisions-stopped");
     });
-    serviceRefsMock.setInitialState({ decisions: Promise.resolve({ stopDecisions }) });
+    // The load and the stop each finish a little later, so a step that didn't
+    // wait for either would let PTY enumeration overtake it.
+    serviceRefsMock.setInitialState({
+      decisions: later().then(() => ({ stopDecisions })),
+    });
     const ptyClient = {
       gracefulKillByProject: vi.fn(async () => []),
       getPartialGracefulKillResults: vi.fn(() => []),
@@ -538,12 +563,31 @@ describe("registerShutdownHandler", () => {
     await exited;
 
     expect(stopDecisions).toHaveBeenCalledOnce();
-    expect(order.indexOf("decisions-stop")).toBeGreaterThanOrEqual(0);
-    expect(order.indexOf("decisions-stop")).toBeLessThan(order.indexOf("pty-enumerate"));
+    expect(order).toEqual(["decisions-stop", "decisions-stopped", "pty-enumerate"]);
     expect(decisionsEntryEvaluated.count).toBe(0);
   });
 
-  it("finishes a clean shutdown when the Decisions load or stop fails", async () => {
+  it("finishes a clean shutdown when the Decisions stop fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const stopDecisions = vi.fn(async () => {
+      throw new Error("socket wedged");
+    });
+    serviceRefsMock.setInitialState({ decisions: Promise.resolve({ stopDecisions }) });
+    const { beforeQuitCb } = await setup();
+    const exited = new Promise<void>((resolve) => {
+      appMock.exit.mockImplementationOnce(() => resolve());
+    });
+
+    await beforeQuitCb(makeEvent());
+    await exited;
+
+    expect(stopDecisions).toHaveBeenCalledOnce();
+    expect(appMock.exit).toHaveBeenCalledWith(0);
+    expect(warn).toHaveBeenCalledWith("[MAIN] Decisions stop failed:", expect.any(Error));
+    warn.mockRestore();
+  });
+
+  it("finishes a clean shutdown when the Decisions load fails", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const failedLoad = Promise.reject(new Error("chunk missing"));
     // Handled here too, so the rejection can't be reported before shutdown awaits it.

@@ -8,9 +8,11 @@ const ipcMainMock = vi.hoisted(() => ({
   removeListener: vi.fn(),
 }));
 const saved = vi.hoisted(() => ({ value: undefined as unknown }));
-// Counts evaluation of Decisions' entry module, which an off read must never load.
+// Counts evaluation of Decisions' entry module and of each library, none of
+// which an off read may load.
 const decisionsEntry = vi.hoisted(() => ({
   evaluated: 0,
+  libraries: 0,
   getDecisionsStatus: vi.fn((): DecisionsStatus => ({ state: "not-connected" })),
 }));
 
@@ -25,10 +27,26 @@ vi.mock("../../../services/decisions/index.js", () => {
   decisionsEntry.evaluated += 1;
   return { getDecisionsStatus: decisionsEntry.getDecisionsStatus };
 });
+vi.mock("@daintreehq/decisions-protocol", () => {
+  decisionsEntry.libraries += 1;
+  return {};
+});
+vi.mock("@daintreehq/decisions-crypto", () => {
+  decisionsEntry.libraries += 1;
+  return {};
+});
+vi.mock("@daintreehq/decisions-client", () => {
+  decisionsEntry.libraries += 1;
+  return {};
+});
+vi.mock("@daintreehq/decisions-model", () => {
+  decisionsEntry.libraries += 1;
+  return {};
+});
 
 import { CHANNELS } from "../../channels.js";
 import { store } from "../../../store.js";
-import { decisionsNamespace, registerDecisionsHandlers } from "../decisions.js";
+import { decisionsNamespace, registerDecisionsHandlers } from "../deviceAnswer.js";
 import {
   _resetDecisionsModuleForTesting,
   sealDecisionsModule,
@@ -59,7 +77,8 @@ describe("decisions IPC", () => {
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith(CHANNELS.DECISIONS_GET_STATUS);
   });
 
-  // These run before the positive control below: a module, once evaluated, stays evaluated.
+  // These run before the positive control below (vitest keeps declared order):
+  // a module, once evaluated, stays evaluated.
   it.each([
     ["absent", undefined],
     ["off", { enabled: false }],
@@ -72,6 +91,7 @@ describe("decisions IPC", () => {
       await expect(getStatus()).resolves.toEqual({ state: "off" });
 
       expect(decisionsEntry.evaluated).toBe(0);
+      expect(decisionsEntry.libraries).toBe(0);
       expect(store.set).not.toHaveBeenCalled();
     }
   );
@@ -83,16 +103,19 @@ describe("decisions IPC", () => {
     await expect(getStatus()).resolves.toEqual({ state: "off" });
 
     expect(decisionsEntry.evaluated).toBe(0);
+    expect(decisionsEntry.libraries).toBe(0);
   });
 
   it("asks Decisions itself once the setting is on, loading its entry once", async () => {
     saved.value = { enabled: true };
+    decisionsEntry.getDecisionsStatus
+      .mockReturnValueOnce({ state: "not-connected" })
+      .mockReturnValueOnce({ state: "revoked" });
 
     await expect(getStatus()).resolves.toEqual({ state: "not-connected" });
-    await getStatus();
+    await expect(getStatus()).resolves.toEqual({ state: "revoked" });
 
     expect(decisionsEntry.evaluated).toBe(1);
-    expect(decisionsEntry.getDecisionsStatus).toHaveBeenCalledTimes(2);
     expect(store.set).not.toHaveBeenCalled();
   });
 });

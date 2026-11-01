@@ -27,6 +27,8 @@ export function peekDecisionsService(): DecisionsService | null {
 
 export function getDecisionsService(): Promise<DecisionsService> {
   if (!creating) {
+    // After quit nothing new is made; one already being made is disposed by the stop.
+    if (shutDown) return Promise.reject(new Error("Decisions has stopped for this run"));
     const made = import("./DecisionsService.js").then(({ DecisionsService }) => {
       service = new DecisionsService();
       return service;

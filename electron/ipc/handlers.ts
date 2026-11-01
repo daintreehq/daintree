@@ -86,7 +86,10 @@ import { registerWebviewNavigationHandlers } from "./handlers/webviewNavigation.
 import { registerWebviewCaptureHandlers } from "./handlers/webviewCapture.js";
 import { registerRemoteHostsHandlers } from "./handlers/remoteHosts.js";
 import { registerHostModeHandlers } from "./handlers/hostMode.js";
-import { registerDeviceAnswerHandlers } from "./handlers/deviceAnswer.js";
+import {
+  registerDecisionsHandlers,
+  registerDeviceAnswerHandlers,
+} from "./handlers/deviceAnswer.js";
 import { registerDriveLeaseHandlers } from "./handlers/driveLease.js";
 import { registerOperationsHandlers } from "./handlers/operations.js";
 import { registerHostFilesHandlers } from "./handlers/hostFiles.js";
@@ -133,7 +136,6 @@ import { registerProjectThemeHandlers } from "./handlers/projectTheme.js";
 import { registerWorktreeTitlesHandlers } from "./handlers/worktreeTitles.js";
 import { registerReviewMarksHandlers } from "./handlers/reviewMarks.js";
 import { registerSchedulesHandlers } from "./handlers/schedules.js";
-import { registerDecisionsHandlers } from "./handlers/decisions.js";
 import { registerScratchHandlers } from "./handlers/scratch/index.js";
 import { events } from "../services/events.js";
 import {

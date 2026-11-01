@@ -393,6 +393,7 @@ const decisionsEvaluated = vi.hoisted(() => ({
   service: 0,
   settings: 0,
   libraries: 0,
+  packages: 0,
   start: vi.fn(async () => {}),
 }));
 vi.mock("../../services/decisions/index.js", () => {
@@ -409,6 +410,22 @@ vi.mock("../../services/decisions/decisionsSettings.js", () => {
 });
 vi.mock("../../services/decisions/libraries.js", () => {
   decisionsEvaluated.libraries += 1;
+  return {};
+});
+vi.mock("@daintreehq/decisions-protocol", () => {
+  decisionsEvaluated.packages += 1;
+  return {};
+});
+vi.mock("@daintreehq/decisions-crypto", () => {
+  decisionsEvaluated.packages += 1;
+  return {};
+});
+vi.mock("@daintreehq/decisions-client", () => {
+  decisionsEvaluated.packages += 1;
+  return {};
+});
+vi.mock("@daintreehq/decisions-model", () => {
+  decisionsEvaluated.packages += 1;
   return {};
 });
 
@@ -1856,7 +1873,17 @@ describe("Decisions boot task (#16001)", () => {
     decisionsEvaluated.index +
     decisionsEvaluated.service +
     decisionsEvaluated.settings +
-    decisionsEvaluated.libraries;
+    decisionsEvaluated.libraries +
+    decisionsEvaluated.packages;
+
+  /** Live resources by type; unrelated work finishing in between only lowers a count. */
+  const resourceCounts = () => {
+    const counts = new Map<string, number>();
+    for (const type of process.getActiveResourcesInfo()) {
+      counts.set(type, (counts.get(type) ?? 0) + 1);
+    }
+    return counts;
+  };
 
   async function decisionsTask(saved: unknown): Promise<() => Promise<unknown>> {
     registeredTaskNames.length = 0;
@@ -1893,7 +1920,7 @@ describe("Decisions boot task (#16001)", () => {
     async (_label, saved) => {
       const run = await decisionsTask(saved);
       const readsBefore = vi.mocked(store.get).mock.calls.length;
-      const resourcesBefore = process.getActiveResourcesInfo().sort();
+      const resourcesBefore = resourceCounts();
       const powerSubscriptionsBefore = vi.mocked(powerMonitor.on).mock.calls.length;
       const handlersBefore = vi.mocked(ipcMain.handle).mock.calls.length;
 
@@ -1906,7 +1933,10 @@ describe("Decisions boot task (#16001)", () => {
         .mock.calls.slice(readsBefore)
         .map(([key]) => key);
       expect(reads).toEqual(["decisions"]);
-      expect(process.getActiveResourcesInfo().sort()).toEqual(resourcesBefore);
+      const grew = [...resourceCounts()].filter(
+        ([type, count]) => count > (resourcesBefore.get(type) ?? 0)
+      );
+      expect(grew).toEqual([]);
       expect(vi.mocked(powerMonitor.on).mock.calls.length).toBe(powerSubscriptionsBefore);
       expect(vi.mocked(ipcMain.handle).mock.calls.length).toBe(handlersBefore);
     }

@@ -25,6 +25,15 @@ describe("Decisions module loader", () => {
     expect(load).toHaveBeenCalledOnce();
   });
 
+  it("keeps a finished load, so a later caller neither loads again nor gets a new promise", async () => {
+    const first = loadDecisionsModule(async () => fakeModule);
+    await first;
+
+    const later = vi.fn(async () => fakeModule);
+    expect(loadDecisionsModule(later)).toBe(first);
+    expect(later).not.toHaveBeenCalled();
+  });
+
   it("forgets a failed load, so the next caller retries", async () => {
     const failing = vi.fn(async (): Promise<DecisionsModule> => {
       throw new Error("chunk missing");
