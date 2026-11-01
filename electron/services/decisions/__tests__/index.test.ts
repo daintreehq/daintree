@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const saved = vi.hoisted(() => ({ value: undefined as unknown }));
-const loads = vi.hoisted(() => ({ constructed: 0, failNextConstruct: false }));
+const loads = vi.hoisted(() => ({ constructed: 0, failNextConstruct: false, failNextOpen: false }));
 
 vi.mock("../../../store.js", () => ({
   store: {
@@ -21,7 +21,17 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
         loads.failNextConstruct = false;
         throw new Error("construct failed");
       }
-      super();
+      // A store that holds nothing, so starting never reaches the app database;
+      // `failNextOpen` makes the next open fail, once.
+      super({
+        openStore: async () => {
+          if (loads.failNextOpen) {
+            loads.failNextOpen = false;
+            throw new Error("store unavailable");
+          }
+          return { close: async () => {} } as never;
+        },
+      });
       loads.constructed += 1;
     }
   }
@@ -51,6 +61,7 @@ describe("Decisions entry", () => {
   beforeEach(() => {
     saved.value = undefined;
     loads.failNextConstruct = false;
+    loads.failNextOpen = false;
     vi.mocked(store.set).mockClear();
     _resetDecisionsForTesting();
   });
@@ -224,5 +235,18 @@ describe("Decisions entry", () => {
 
     expect(status).toEqual({ state: "not-connected" });
     expect(peekDecisionsService()?.getStatus().state).toBe("not-connected");
+  });
+
+  it("keeps the switch on when the store can't open, and the next turn-on opens it", async () => {
+    saved.value = { enabled: false };
+    loads.failNextOpen = true;
+
+    await expect(setDecisionsEnabled(true)).rejects.toThrow("store unavailable");
+    expect((saved.value as { enabled: boolean }).enabled).toBe(true);
+    expect(getDecisionsStatus()).toEqual({ state: "not-connected" });
+    expect(peekDecisionsService()?.getStore()).toBeNull();
+
+    await setDecisionsEnabled(true);
+    expect(peekDecisionsService()?.getStore()).not.toBeNull();
   });
 });
