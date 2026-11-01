@@ -210,13 +210,27 @@ afterEach(async () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-/** Lets the store's real `setImmediate` commits and the fake clock move together. */
+/**
+ * Gives real work its turn: the store's `setImmediate` commits, and WebCrypto,
+ * which opens an answer on the thread pool in real time however the fake
+ * clock stands. A count of turns alone runs out first on a loaded machine.
+ */
+async function yieldReal(): Promise<void> {
+  const until = performance.now() + 2;
+  let turns = 0;
+  while (turns < 4 || performance.now() < until) {
+    await new Promise((resolve) => setImmediate(resolve));
+    turns += 1;
+  }
+}
+
+/** Lets real work and the fake clock move together. */
 async function advance(ms: number, step = 100): Promise<void> {
   for (let elapsed = 0; elapsed < ms; elapsed += step) {
-    for (let i = 0; i < 4; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    await yieldReal();
     await vi.advanceTimersByTimeAsync(Math.min(step, ms - elapsed));
   }
-  for (let i = 0; i < 4; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  await yieldReal();
 }
 
 /** Stops a delivery, moving the clock while a line it submitted settles. */
@@ -519,7 +533,7 @@ describe("AnswerDelivery", () => {
     expect((await h.question(Q1))?.delivery_status).toBe("desktop-received");
 
     h.settles();
-    await until(() => h.client.submitted.length === 1, 5_000);
+    await until(() => h.client.submitted.length === 1);
     expect(typedChoices(h.client.submitted[0].text)).toEqual(["approve"]);
     await stopped(h.delivery);
   });
@@ -572,7 +586,7 @@ describe("AnswerDelivery", () => {
 
     await answered(h.store, Q1, 1, "first");
     h.delivery.request();
-    await until(() => h.client.submitted.length === 1, 10_000);
+    await until(() => h.client.submitted.length === 1);
     const firstAt = h.client.submitted[0].at;
     // The agent takes the first answer and works on it.
     h.works();
@@ -586,7 +600,7 @@ describe("AnswerDelivery", () => {
     h.settles();
     await advance(firstAt + MIN_NOTIFY_INTERVAL_MS - 200 - Date.now());
     expect(h.client.submitted).toHaveLength(1);
-    await until(() => h.client.submitted.length === 2, 15_000);
+    await until(() => h.client.submitted.length === 2);
 
     expect(h.client.submitted.map((s) => typedChoices(s.text))).toEqual([["first"], ["second"]]);
     expect(h.client.submitted[1].at - firstAt).toBeGreaterThanOrEqual(MIN_NOTIFY_INTERVAL_MS);
@@ -604,7 +618,7 @@ describe("AnswerDelivery", () => {
     await advance(5_000);
 
     h.settles();
-    await until(() => h.client.submitted.length === 1, 5_000);
+    await until(() => h.client.submitted.length === 1);
     await advance(10_000);
 
     expect(h.client.submitted).toHaveLength(1);
@@ -747,7 +761,7 @@ describe("AnswerDelivery", () => {
     h.client.holdWrites = true;
     await answered(h.store, Q1, 1, "approve");
     h.delivery.start();
-    await until(() => h.client.submitted.length === 1, 5_000);
+    await until(() => h.client.submitted.length === 1);
 
     let stopped = false;
     const stopping = h.delivery.stop().then(() => {
@@ -769,7 +783,7 @@ describe("AnswerDelivery", () => {
     h.client.holdWrites = true;
     await answered(h.store, Q1, 1, "approve");
     h.delivery.start();
-    await until(() => h.client.submitted.length === 1, 5_000);
+    await until(() => h.client.submitted.length === 1);
 
     let stopped = false;
     void h.delivery.stop().then(() => {
@@ -799,7 +813,7 @@ describe("AnswerDelivery", () => {
       expect(h.client.submitted).toEqual([]);
 
       h.signal("appeared");
-      await until(() => h.client.submitted.length === 1, 5_000);
+      await until(() => h.client.submitted.length === 1);
       expect(h.holds.taken).toBe(2);
     }
   );
