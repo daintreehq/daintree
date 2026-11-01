@@ -1,7 +1,4 @@
-import type {
-  ScheduleRunNowOutcome,
-  SchedulesSnapshot,
-} from "../../../shared/types/ipc/schedules.js";
+import type { SchedulesSnapshot } from "../../../shared/types/ipc/schedules.js";
 import type { Schedule, ScheduledRunOrigin } from "../../../shared/types/scheduledRuns.js";
 import {
   nextCronOccurrence,
@@ -10,6 +7,7 @@ import {
   type ParsedCron,
 } from "../../../shared/utils/cron.js";
 import { occurrenceKeyFor } from "../../../shared/utils/scheduledRuns.js";
+import type { ScheduledRunLaunchOutcome } from "./ScheduledRunLauncher.js";
 import type { RegisterScheduledSkipInput } from "./ScheduledRunRecorder.js";
 
 /**
@@ -50,7 +48,7 @@ export interface ScheduledRunSchedulerDeps {
   readonly subscribeSchedules: (listener: (snapshot: SchedulesSnapshot) => void) => () => void;
   readonly getRecorder: () => Promise<ScheduledRunSchedulerRecorder | null>;
   /** Launches through `launchScheduledRun`, which registers the run at its spawn. */
-  readonly launch: (input: ScheduledRunSchedulerLaunch) => Promise<ScheduleRunNowOutcome>;
+  readonly launch: (input: ScheduledRunSchedulerLaunch) => Promise<ScheduledRunLaunchOutcome>;
   /** Cancels this scheduler's launches of a schedule that haven't spawned yet. */
   readonly cancelLaunches: (scheduleId: string) => void;
   readonly newId: () => string;
@@ -394,7 +392,7 @@ export class ScheduledRunScheduler {
     this.logInfo(
       `[ScheduledRuns] Schedule ${scheduleId} is due: ${origin.trigger} for ${origin.occurrenceKey}`
     );
-    new Promise<ScheduleRunNowOutcome>((resolve) =>
+    new Promise<ScheduledRunLaunchOutcome>((resolve) =>
       resolve(this.deps.launch({ projectId, scheduleId, origin }))
     )
       .then(
