@@ -1,4 +1,4 @@
-import { StateField, type EditorState, type Text } from "@codemirror/state";
+import { StateField, type EditorState } from "@codemirror/state";
 
 /**
  * A completion token typed straight in front of a word (#15872): `from` is
@@ -16,41 +16,27 @@ const TRIGGERS = new Set(["/", "@", "#", "$"]);
 const isNonSpace = (char: string) => char !== "" && !/\s/.test(char);
 
 /**
- * Still one unbroken run from a word start through the first char of the word
- * it was typed against. A space typed anywhere in it, or a deleted space that
- * merges it into the word before, means it no longer marks a token's end.
- */
-function holds(doc: Text, { from, to }: TypedToken): boolean {
-  if (from >= to || to >= doc.length) return false;
-  if (from > 0 && isNonSpace(doc.sliceString(from - 1, from))) return false;
-  return !/\s/.test(doc.sliceString(from, to + 1));
-}
-
-/**
- * Where a completion token the user typed or pasted in front of a word meets
+ * Where completion tokens the user typed or pasted in front of a word meet
  * that word. A completion token is the whole whitespace-delimited run around
  * the caret, so without this `/gith` typed against `I found` would take the
- * `I` with it when a completion replaces the token. Typing at the join stays
- * in front of it. A token the caret was moved into records nothing, so
- * re-completing it still replaces all of it.
+ * `I` with it when a completion replaces the token. A token the caret was
+ * moved into records nothing, so re-completing it still replaces all of it.
  *
- * Undo and redo record by the same rule: undoing an accepted completion puts
- * the typed token back in front of the word, which marks it again.
+ * Both ends follow edits: text typed at the join or ahead of the trigger goes
+ * in front of them, and a completion that replaces the token, undone, maps
+ * them back where they were. One lasts as long as the word it was typed
+ * against, so a space typed at the join and taken out again leaves it as it
+ * was.
  */
 export const completionBoundary = StateField.define<readonly TypedToken[]>({
   create: () => [],
   update(tokens, tr) {
     if (!tr.docChanged) return tokens;
     const next = tokens.map(({ from, to }) => ({
-      from: tr.changes.mapPos(from, -1),
+      from: tr.changes.mapPos(from, 1),
       to: tr.changes.mapPos(to, 1),
     }));
-    if (
-      tr.isUserEvent("input.type") ||
-      tr.isUserEvent("input.paste") ||
-      tr.isUserEvent("undo") ||
-      tr.isUserEvent("redo")
-    ) {
+    if (tr.isUserEvent("input.type") || tr.isUserEvent("input.paste")) {
       const before = tr.startState.doc;
       tr.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
         if (!TRIGGERS.has(inserted.sliceString(0, 1))) return;
@@ -60,18 +46,33 @@ export const completionBoundary = StateField.define<readonly TypedToken[]>({
         }
       });
     }
-    const kept = next.filter((token) => holds(tr.state.doc, token)).sort((a, b) => a.to - b.to);
-    return kept.filter((token, i) => i === 0 || token.to !== kept[i - 1]!.to);
+    const { doc } = tr.state;
+    const kept = next
+      .filter(({ from, to }) => from < to && isNonSpace(doc.sliceString(to, to + 1)))
+      .sort((a, b) => a.to - b.to || a.from - b.from);
+    return kept.filter(
+      (token, i) => i === 0 || token.to !== kept[i - 1]!.to || token.from !== kept[i - 1]!.from
+    );
   },
 });
 
 /**
- * Where the word starts that a token at `caret` was typed against, for
- * `getActiveCompletionContext` to end the token at: the nearest join at or
- * after the caret. Undefined when there is none or the editor doesn't track
- * them.
+ * Where the word starts that the token at `caret` was typed against, for
+ * `getActiveCompletionContext` to end the token at. Only a token whose
+ * trigger still opens the caret's run counts: one merged into a word before
+ * it, or split from the caret by a space, is no longer the token typed.
  */
 export function completionBoundaryAt(state: EditorState, caret: number): number | undefined {
   const tokens = state.field(completionBoundary, false);
-  return tokens?.find((token) => token.to >= caret && token.from < caret)?.to;
+  if (!tokens || tokens.length === 0) return undefined;
+  const line = state.doc.lineAt(caret);
+  let start = caret - line.from;
+  while (start > 0 && isNonSpace(line.text[start - 1]!)) start--;
+  const runStart = line.from + start;
+  return tokens.find(
+    (token) =>
+      token.from === runStart &&
+      token.to >= caret &&
+      !/\s/.test(state.doc.sliceString(caret, token.to))
+  )?.to;
 }

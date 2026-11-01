@@ -296,7 +296,7 @@ describe("HybridInputBar prompt templates in the `/` menu", () => {
             });
           });
         }
-        expect(view.state.doc.toString()).toBe("/boilerFix it");
+        expect(view.state.doc.toString()).toBe(`/boiler${passage}`);
 
         await press("Enter");
 

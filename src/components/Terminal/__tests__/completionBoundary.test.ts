@@ -39,7 +39,8 @@ function editor(doc: string, caret = 0) {
     get state() {
       return state;
     },
-    joins: () => state.field(completionBoundary).map((token) => token.to),
+    /** Where the token at the caret ends, if it was typed against a word. */
+    end: () => completionBoundaryAt(state, state.selection.main.head),
     doc: () => state.doc.toString(),
   };
 }
@@ -48,11 +49,10 @@ describe("completionBoundary", () => {
   it("marks where a token typed in front of a word meets it, and keeps it there as typing goes on", () => {
     const ed = editor("I found an issue");
     ed.type("/");
-    expect(ed.joins()).toEqual([1]);
+    expect(ed.end()).toBe(1);
     ed.type("gith");
     expect(ed.doc()).toBe("/githI found an issue");
-    expect(ed.state.field(completionBoundary)).toEqual([{ from: 0, to: 5 }]);
-    expect(completionBoundaryAt(ed.state, 5)).toBe(5);
+    expect(ed.end()).toBe(5);
     expect(completionBoundaryAt(ed.state, 2)).toBe(5);
     expect(completionBoundaryAt(ed.state, 6)).toBeUndefined();
   });
@@ -60,108 +60,134 @@ describe("completionBoundary", () => {
   it.each(["@", "#", "$"])("marks a %s token too", (trigger) => {
     const ed = editor("see that", "see ".length);
     ed.type(`${trigger}x`);
-    expect(ed.joins()).toEqual([6]);
+    expect(ed.end()).toBe(6);
   });
 
   it("marks a pasted token in front of a word", () => {
     const ed = editor("see that", "see ".length);
-    ed.apply({ changes: { from: 4, insert: "@src" }, userEvent: "input.paste" });
-    expect(ed.joins()).toEqual([8]);
+    ed.apply({
+      changes: { from: 4, insert: "@src" },
+      selection: { anchor: 8 },
+      userEvent: "input.paste",
+    });
+    expect(ed.end()).toBe(8);
   });
 
   it("marks nothing for plain words, typing inside a token, or where no word follows", () => {
     const plain = editor("happy");
     plain.type("un");
-    expect(plain.joins()).toEqual([]);
+    expect(plain.state.field(completionBoundary)).toEqual([]);
 
     const inside = editor("/help /compact", "/help /com".length);
     inside.type("x");
-    expect(inside.joins()).toEqual([]);
+    expect(inside.state.field(completionBoundary)).toEqual([]);
 
     const atEnd = editor("see ", 4);
     atEnd.type("#148");
-    expect(atEnd.joins()).toEqual([]);
+    expect(atEnd.state.field(completionBoundary)).toEqual([]);
 
     const beforeSpace = editor("see  now", 4);
     beforeSpace.type("#148");
-    expect(beforeSpace.joins()).toEqual([]);
+    expect(beforeSpace.state.field(completionBoundary)).toEqual([]);
   });
 
   it("marks nothing for a write that isn't the user's", () => {
     const ed = editor("I found");
-    ed.apply({ changes: { from: 0, insert: "/gith" } });
-    expect(ed.joins()).toEqual([]);
+    ed.apply({ changes: { from: 0, insert: "/gith" }, selection: { anchor: 5 } });
+    expect(ed.state.field(completionBoundary)).toEqual([]);
   });
 
-  it("drops the mark once a space separates the two or splits the token", () => {
-    const after = editor("I found");
-    after.type("/gith ");
-    expect(after.doc()).toBe("/gith I found");
-    expect(after.joins()).toEqual([]);
-
-    const inside = editor("I found");
-    inside.type("/gi");
-    inside.apply({ changes: { from: 2, insert: " " }, userEvent: "input.type" });
-    expect(inside.doc()).toBe("/g iI found");
-    expect(inside.joins()).toEqual([]);
+  it("holds through a space typed at the join and taken out again", () => {
+    const ed = editor("I found");
+    ed.type("/gith ");
+    expect(ed.doc()).toBe("/gith I found");
+    expect(ed.end()).toBeUndefined();
+    ed.apply({
+      changes: { from: 5, to: 6 },
+      selection: { anchor: 5 },
+      userEvent: "delete.backward",
+    });
+    expect(ed.doc()).toBe("/githI found");
+    expect(ed.end()).toBe(5);
   });
 
-  it("drops the mark when either side is deleted", () => {
-    const back = editor("I found");
-    back.type("/g");
-    back.apply({ changes: { from: 0, to: 2 }, userEvent: "delete.backward" });
-    expect(back.doc()).toBe("I found");
-    expect(back.joins()).toEqual([]);
-
-    const forward = editor("I found");
-    forward.type("/g");
-    forward.apply({ changes: { from: 2, to: 3 }, userEvent: "delete.forward" });
-    expect(forward.doc()).toBe("/g found");
-    expect(forward.joins()).toEqual([]);
+  it("holds when a space or a line goes in ahead of the trigger", () => {
+    const ed = editor("I found");
+    ed.type("/gith");
+    ed.apply({ changes: { from: 0, insert: "\n" }, userEvent: "input.type" });
+    expect(ed.doc()).toBe("\n/githI found");
+    expect(completionBoundaryAt(ed.state, 6)).toBe(6);
   });
 
-  it("drops the mark when a deleted space merges the token into the word before it", () => {
+  it("drops the mark when the word or the token is deleted", () => {
+    const word = editor("I found");
+    word.type("/g");
+    word.apply({ changes: { from: 2, to: 3 }, userEvent: "delete.forward" });
+    expect(word.doc()).toBe("/g found");
+    expect(word.state.field(completionBoundary)).toEqual([]);
+
+    const token = editor("I found");
+    token.type("/g");
+    token.apply({
+      changes: { from: 0, to: 2 },
+      selection: { anchor: 0 },
+      userEvent: "delete.backward",
+    });
+    expect(token.doc()).toBe("I found");
+    expect(token.state.field(completionBoundary)).toEqual([]);
+  });
+
+  it("stops counting once a deleted space merges the token into the word before it", () => {
     const ed = editor("@src/ App.tsx", "@src/ ".length);
     ed.type("@New");
-    expect(ed.joins()).toEqual([10]);
+    expect(ed.end()).toBe(10);
     ed.apply({ changes: { from: 5, to: 6 }, userEvent: "delete.backward" });
     expect(ed.doc()).toBe("@src/@NewApp.tsx");
-    expect(ed.joins()).toEqual([]);
     expect(completionBoundaryAt(ed.state, "@src/@New".length)).toBeUndefined();
+  });
+
+  it("marks nothing when undo puts back part of a whole token", () => {
+    const ed = editor("@src/App.tsx now");
+    ed.apply({ changes: { from: 0, to: 5 }, userEvent: "delete.selection" });
+    expect(ed.doc()).toBe("App.tsx now");
+    ed.run(undo);
+    expect(ed.doc()).toBe("@src/App.tsx now");
+    expect(completionBoundaryAt(ed.state, "@sr".length)).toBeUndefined();
   });
 
   it("follows an exact edit elsewhere and drops on a whole-draft replacement", () => {
     const ed = editor("x I found", 2);
     ed.type("/g");
-    expect(ed.joins()).toEqual([4]);
+    expect(ed.end()).toBe(4);
     ed.apply({ changes: { from: 0, insert: "so " } });
-    expect(ed.joins()).toEqual([7]);
+    expect(completionBoundaryAt(ed.state, 7)).toBe(7);
     ed.apply({ changes: { from: 0, to: ed.state.doc.length, insert: ed.doc() } });
-    expect(ed.joins()).toEqual([]);
+    expect(ed.state.field(completionBoundary)).toEqual([]);
   });
 
-  it("comes back when a completion is undone, and goes again on redo", () => {
+  it("is back where it was when a completion is undone, a write outside the history between", () => {
     const ed = editor("I found");
-    ed.type("/gith");
-    // Its own undo step, as a pick made after a pause is.
+    ed.type("/github-create");
+    // Its own undo step, as a pick made after a pause is; shorter than what
+    // was typed, so a position kept from before it would be out of range.
     ed.apply({
-      changes: { from: 0, to: 5, insert: "/github-create-issue " },
+      changes: { from: 0, to: 14, insert: "/help " },
+      selection: { anchor: 6 },
       annotations: isolateHistory.of("full"),
     });
-    expect(ed.doc()).toBe("/github-create-issue I found");
-    expect(ed.joins()).toEqual([]);
-    // A write outside the history in between (a landed correction, a mirror).
+    expect(ed.doc()).toBe("/help I found");
+    expect(ed.end()).toBeUndefined();
     ed.apply({
       changes: { from: ed.state.doc.length, insert: " it" },
       annotations: Transaction.addToHistory.of(false),
     });
 
     ed.run(undo);
-    expect(ed.doc()).toBe("/githI found it");
-    expect(ed.joins()).toEqual([5]);
+    expect(ed.doc()).toBe("/github-createI found it");
+    expect(completionBoundaryAt(ed.state, 14)).toBe(14);
 
     ed.run(redo);
-    expect(ed.doc()).toBe("/github-create-issue I found it");
-    expect(ed.joins()).toEqual([]);
+    expect(ed.doc()).toBe("/help I found it");
+    expect(completionBoundaryAt(ed.state, 5)).toBeUndefined();
   });
 });
