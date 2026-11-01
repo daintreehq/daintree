@@ -160,7 +160,7 @@ export class DecisionsService {
       // Commits what the lifetime left queued; the rows stay until deleted.
       await store?.close();
     } finally {
-      this.panes.clear(clearViews && this.state !== "off");
+      this.panes.clear(clearViews && !this.disposed && this.state !== "off");
       await keyStore?.close();
       this.setState("off");
     }
