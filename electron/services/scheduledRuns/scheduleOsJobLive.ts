@@ -45,6 +45,7 @@ function systemdJob(userDataDir: string): SystemdScheduleJob {
       appPath: process.defaultApp ? app.getAppPath() : null,
       userDataDir,
       appImageExtractAndRun: process.env[APPIMAGE_EXTRACT_AND_RUN_ENV] === "1",
+      devNoSandbox: !app.isPackaged && process.argv.includes("--no-sandbox"),
       // Where systemd is the init system (sd_booted).
       systemdRunning: fs.existsSync("/run/systemd/system"),
     }),
