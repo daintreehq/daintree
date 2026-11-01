@@ -1495,6 +1495,8 @@ export const CHANNELS = {
   // Main asks the view showing a project to launch a scheduled run (#15978)
   SCHEDULES_LAUNCH_REQUEST: "schedules:launch-request",
   SCHEDULES_LAUNCH_RESPONSE: "schedules:launch-response",
+  // Main asks the views holding a run's pane to apply its done policy (#15982)
+  SCHEDULES_FINISH_REQUEST: "schedules:finish-request",
 
   // Decisions, as main observes it (#16001). The owner's machine only.
   DECISIONS_GET_STATUS: "decisions:get-status",

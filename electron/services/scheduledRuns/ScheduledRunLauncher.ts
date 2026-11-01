@@ -7,6 +7,7 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { pathComparisonKey } from "../../../shared/utils/path.js";
 import type { ScheduledRunRecorder } from "./ScheduledRunRecorder.js";
 import { reserveScheduledLaunch } from "./scheduledRunAdmission.js";
+import type { ArmedScheduledRun } from "./ScheduledRunDonePolicy.js";
 
 /** The `agent.launch` arguments a scheduled run launches with; never its provenance. */
 export interface ScheduledLaunchArgs {
@@ -60,6 +61,11 @@ export interface ScheduledRunLauncherDeps<View> {
     request: ScheduledLaunchRequest
   ) => Promise<ActionDispatchResult>;
   newId: () => string;
+  /**
+   * A run started and its launch has finished, pane committed and saved: its
+   * done policy, as this launch read it, can be armed (#15982).
+   */
+  onLaunched?: (run: ArmedScheduledRun) => void;
   /** How long a launch that answered to have started waits for its spawn. */
   spawnTimeoutMs?: number;
   /** How long main's own launch, with no view, may take before it's given up. */
@@ -312,7 +318,21 @@ export async function launchScheduledRun<View>(
   };
 
   try {
-    return await launchReserved();
+    const outcome = await launchReserved();
+    if (outcome.status === "started") {
+      try {
+        deps.onLaunched?.({
+          runId,
+          scheduleId,
+          projectId,
+          terminalId,
+          onDone: schedule.policies.onDone,
+        });
+      } catch (error) {
+        logWarn(`[ScheduledRuns] Couldn't arm run ${runId}'s done policy:`, error);
+      }
+    }
+    return outcome;
   } finally {
     reserved.finish();
   }

@@ -1163,8 +1163,10 @@ export type EndTrashGraceStatus = "started" | "not-trashed" | "generation-mismat
  * `exit` — the PTY incarnation ending for good — identifies a session the
  * saved pane can own; a demotion leaves a live shell that may host another
  * conversation, and trash expiry belongs to a pane the user already closed.
+ * `kill` is Main closing the terminal itself, for a scheduled run's done
+ * policy (#15982): the pane goes with it.
  */
-export type AgentSessionCaptureBoundary = "exit" | "demotion" | "trash-expiry";
+export type AgentSessionCaptureBoundary = "exit" | "demotion" | "trash-expiry" | "kill";
 
 /**
  * One observed agent run: the PTY launch, then which agent run inside that

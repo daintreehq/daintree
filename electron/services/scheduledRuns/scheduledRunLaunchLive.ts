@@ -10,6 +10,7 @@ import { projectStore } from "../ProjectStore.js";
 import type { ScheduleRunNowOutcome } from "../../../shared/types/ipc/schedules.js";
 import type { ScheduledRunOrigin } from "../../../shared/types/scheduledRuns.js";
 import { getScheduledRunRecorder } from "./index.js";
+import { armScheduledRunDonePolicy } from "./scheduledRunDonePolicyLive.js";
 import { launchScheduledRun, type ScheduledRunLauncherDeps } from "./ScheduledRunLauncher.js";
 import { requestScheduledLaunchInView } from "./scheduledRunViewBridge.js";
 
@@ -67,6 +68,7 @@ async function liveDeps(): Promise<ScheduledRunLauncherDeps<Electron.WebContents
     launchInView: (view, request) => requestScheduledLaunchInView(view, request),
     launchWithoutView: (project, request) => runScheduledAgentLaunchLive(project, request),
     newId: randomUUID,
+    onLaunched: armScheduledRunDonePolicy,
   };
 }
 

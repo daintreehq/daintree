@@ -98,3 +98,14 @@ export interface ScheduledLaunchViewResponse {
   requestId: string;
   result: import("../actions.js").ActionDispatchResult;
 }
+
+/**
+ * Main asks the views of a project to apply a run's done policy to its pane
+ * (#15982): move it to the background, or remove it once Main has closed its
+ * terminal and captured its session. A view acts only on a pane of that run.
+ */
+export interface ScheduledRunFinishRequest {
+  runId: string;
+  terminalId: string;
+  action: "background" | "remove";
+}

@@ -3643,7 +3643,12 @@ export interface GeneratedIpcInvokeMap {
               | "lost"
               | "interrupted";
             evidence:
-              | { kind: "handback"; report: "done" | "needs-you" }
+              | {
+                  kind: "handback";
+                  report: "done" | "needs-you";
+                  summary: string | null;
+                  truncated: boolean;
+                }
               | {
                   kind: "exit";
                   process: "pty" | "agent";
@@ -3746,7 +3751,12 @@ export interface GeneratedIpcInvokeMap {
               | "lost"
               | "interrupted";
             evidence:
-              | { kind: "handback"; report: "done" | "needs-you" }
+              | {
+                  kind: "handback";
+                  report: "done" | "needs-you";
+                  summary: string | null;
+                  truncated: boolean;
+                }
               | {
                   kind: "exit";
                   process: "pty" | "agent";
