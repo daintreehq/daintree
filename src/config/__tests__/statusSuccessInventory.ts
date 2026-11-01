@@ -199,6 +199,14 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Ahead-arrow count against the base branch",
     },
   ],
+  "src/components/Schedules/ScheduleList.tsx": [
+    {
+      category: "outcome",
+      signature: "text-status-success",
+      expectedOccurrences: 1,
+      rationale: 'Recorded "done" outcome of a schedule\'s last run, as its run history settled it',
+    },
+  ],
   "src/components/Settings/VoiceInputSettingsTab.tsx": [
     {
       category: "outcome",
@@ -504,5 +512,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 54;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 56;
+export const EXPECTED_STATUS_SUCCESS_SITES = 55;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 57;

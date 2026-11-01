@@ -55,6 +55,7 @@ export function SettingsTextarea({
             aria-labelledby={labelId}
             aria-describedby={descriptionId}
             aria-invalid={isError ? true : undefined}
+            invalid={isError}
             className={className}
             {...props}
           />

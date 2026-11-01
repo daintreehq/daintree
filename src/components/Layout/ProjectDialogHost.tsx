@@ -15,6 +15,7 @@ import { ProjectWorktreeCreateDialog } from "./ProjectWorktreeCreateDialog";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useFleetPickerPaletteStore } from "@/store/fleetPickerPaletteStore";
+import { useSchedulesViewStore } from "@/store/schedulesViewStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useRecipeDialogState } from "./useRecipeDialogState";
 
@@ -33,6 +34,9 @@ const LazyRecipeEditor = lazy(() =>
 );
 const LazyRecipeManager = lazy(() =>
   import("@/components/TerminalRecipe/RecipeManager").then((m) => ({ default: m.RecipeManager }))
+);
+const LazySchedulesDialog = lazy(() =>
+  import("@/components/Schedules/SchedulesDialog").then((m) => ({ default: m.SchedulesDialog }))
 );
 
 /**
@@ -143,6 +147,11 @@ function ProjectDialogHost() {
   // workspace must not bring the palette back with the next one.
   useEffect(() => () => useFleetPickerPaletteStore.getState().close(), []);
 
+  const isSchedulesOpen = useSchedulesViewStore((state) => state.isOpen);
+  const closeSchedules = useSchedulesViewStore((state) => state.close);
+  const shouldMountSchedules = useKeepMounted(isSchedulesOpen);
+  useEffect(() => () => useSchedulesViewStore.getState().close(), []);
+
   return (
     <>
       <ErrorBoundary
@@ -242,6 +251,18 @@ function ProjectDialogHost() {
               selectedPRs={bulkCreateDialog.selectedPRs}
               onComplete={closeBulkCreateDialog}
             />
+          </Suspense>
+        )}
+      </ErrorBoundary>
+
+      <ErrorBoundary
+        variant="component"
+        componentName="SchedulesDialog"
+        resetKeys={[Number(isSchedulesOpen)]}
+      >
+        {shouldMountSchedules && (
+          <Suspense fallback={null}>
+            <LazySchedulesDialog isOpen={isSchedulesOpen} onClose={closeSchedules} />
           </Suspense>
         )}
       </ErrorBoundary>

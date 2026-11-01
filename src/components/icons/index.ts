@@ -27,6 +27,7 @@ export {
   BookmarkPlus, // a worktree with no review mark yet — marking it sets the first one
   Bot, // a commit author that is a bot account (a `[bot]` name) with no picture — shape says machine where initials would say person
   Cable, // a project attachment — a resource the whole project shares (a tunnel, a test device) that one worktree holds at a time
+  CalendarClock, // a project schedule — an agent run set to start on a cadence
   ChartNoAxesColumn, // frecency sort order ("Most used" — decayed access score)
   CheckCheck, // Canopy: the readers think an agent's task is done and Daintree sees it stopped — a suggestion to close it, distinct from the observed finished ring (DoneCircle)
   CircuitBoard, // an infrastructure branch (infra/) — system wiring, kept apart from the host machine's Server

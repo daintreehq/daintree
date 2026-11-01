@@ -13,6 +13,8 @@ A project can run an agent on a schedule (#15973). A due schedule launches its a
 | Run history: the `scheduled_runs` table, registration, recorded facts | `electron/services/scheduledRuns/` |
 | Run history over `window.electron.scheduledRuns` | `electron/ipc/handlers/scheduledRuns.ts` |
 | Schedule provenance on terminals, snapshots and session records | `shared/utils/scheduledRunProvenance.ts` |
+| A cadence in words | `shared/utils/cronDescription.ts` |
+| The Schedules view and the `schedules.open` action | `src/components/Schedules/`, `src/services/actions/definitions/scheduleActions.ts` |
 
 ## Boundaries
 
@@ -59,6 +61,15 @@ A project's schedules live in `schedules.json` in its state directory under user
 `window.electron.schedules` (`list`, `create`, `update`, `setEnabled`, `remove`, `onChanged`) works on the sender's own project, resolved from the view's registration; no op takes a project id. `list` answers null for a view not yet bound to a project. A project on a Remote Host, a view attached over a link, and a scratch are refused: the channels are `shell`, so a remote-bound view is answered on this machine and no link reaches them. They are not actions, so they are on no MCP tier.
 
 Every committed change goes to the store's listeners as a full `SchedulesSnapshot`, in commit order per project. Main code (the scheduler and launcher) reads with `list` and `get` and subscribes with `subscribe`, with no window needed. The IPC registration's listener sends `schedules:changed` to every local view of the project, cached views and the writer included, and to no other window. A snapshot's `revision` rises with each change, so a view keeps the newest of a reply and a push that cross. A file edited by hand is not announced.
+
+## The Schedules view
+
+A project's schedules are seen and edited in one dialog, opened from the project pill's context menu ("Schedules…") and the command palette by `schedules.open`. Other surfaces open it at a schedule with `{ scheduleId }`. The action is in no assistant or external MCP tier and is hidden from tool listings, and it is unavailable in a window driving a Remote Host or a scratch.
+
+- **The list** shows each schedule's name, its cadence in words (`describeCron`, or the expression itself when there's no short reading), the agent and a non-main worktree, the next run relative and absolute in the schedule's zone (the zone is named when it isn't this machine's), the last run as the history records it (its outcome, read from the evidence it settled on, and when, or "Running" while it's open), and a switch that applies at once. A switched-off schedule reads "Paused" instead of a next run. The list reads the project's runs again on `scheduled-runs:changed`.
+- **A schedule's page** is the editor: name, agent, preset, worktree and prompt; the cron field, missed runs and overlap; the precondition and the done policy. It saves explicitly, because a half-typed prompt or cron must never be committed for an unattended run; leaving with unsaved edits asks first, and an edit made from an older version is refused as a conflict with a way to load the latest. A new schedule takes `createSchedule`'s defaults.
+- **The permission warning** shows when the chosen agent and preset would stop at permission prompts, resolved the way a launch resolves it (`resolveSkipPermissions`), because nobody is there to answer them.
+- **Delete** asks first, naming the schedule.
 
 ## Cadence
 
