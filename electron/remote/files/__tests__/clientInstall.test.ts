@@ -1,4 +1,6 @@
+import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({
@@ -11,6 +13,7 @@ vi.mock("electron", () => ({
 }));
 
 import type { FileTransferEvent } from "../../../../shared/types/ipc/fileTransfer.js";
+import type { AppError } from "../../../utils/errorTypes.js";
 import type { ClientFileTransport, DownloadOptions } from "../ClientFileTransport.js";
 import { createHostFileClient } from "../clientInstall.js";
 import type { HostPickerBridge } from "../HostPickerBridge.js";
@@ -114,6 +117,193 @@ describe("createHostFileClient.download", () => {
       { ...payload, opId: "" },
     ]) {
       expect(() => client.download(7, bad)).toThrow();
+    }
+  });
+});
+
+function dropped(): Error {
+  return Object.assign(new Error("Host studio-01 is not connected"), { code: "HOST_DISCONNECTED" });
+}
+
+/** A transport whose attempts play out in order; the last one repeats. */
+function setupDrops(
+  attempts: Array<(options: DownloadOptions) => Promise<{ localPath: string; bytes: number }>>,
+  whenReachable: (
+    hostId: string,
+    webContentsId: number,
+    timeoutMs: number,
+    signal?: AbortSignal
+  ) => Promise<boolean> = async () => true,
+  /** Pruned and locked down for real by a temp download: only ever a folder of the test's own. */
+  tempDir?: string
+) {
+  let bound: string | null = "studio-01";
+  const download = vi.fn(async (_host: string, _path: string, options: DownloadOptions) =>
+    attempts[Math.min(download.mock.calls.length - 1, attempts.length - 1)](options)
+  );
+  const reachable = vi.fn(whenReachable);
+  const client = createHostFileClient({
+    transport: { download, whenReachable: reachable } as unknown as ClientFileTransport,
+    pickers: {} as HostPickerBridge,
+    capabilities: new ViewFileCapabilities(() => () => {}),
+    hostForView: () => bound,
+    sendToView: () => {},
+    downloadsDir: () => "/Users/greg/Downloads",
+    tempDir: () => {
+      if (!tempDir) throw new Error("This test has no temp folder");
+      return tempDir;
+    },
+    reconnectWaitMs: 1_000,
+  });
+  const moveView = (hostId: string | null) => {
+    bound = hostId;
+  };
+  return { client, download, reachable, moveView };
+}
+
+const saved = async (options: DownloadOptions) => ({
+  localPath: `${options.destinationDir}/report.bin`,
+  bytes: 100,
+});
+
+describe("a download its link drops", () => {
+  it("starts over once the view is back on the host, under the caller's one promise", async () => {
+    const { client, download, reachable } = setupDrops([
+      async () => {
+        throw dropped();
+      },
+      saved,
+    ]);
+    await expect(client.download(7, payload)).resolves.toEqual({
+      localPath: "/Users/greg/Downloads/report.bin",
+      bytes: 100,
+    });
+    expect(download).toHaveBeenCalledTimes(2);
+    expect(reachable).toHaveBeenCalledWith("studio-01", 7, 1_000, expect.any(AbortSignal));
+  });
+
+  it("lets a repeat of the same operation join while it waits for the host", async () => {
+    let comeBack!: (reachable: boolean) => void;
+    const { client, download } = setupDrops(
+      [
+        async () => {
+          throw dropped();
+        },
+        saved,
+      ],
+      () =>
+        new Promise((resolve) => {
+          comeBack = resolve;
+        })
+    );
+    const first = client.download(7, payload);
+    await vi.waitFor(() => expect(comeBack).toBeTypeOf("function"));
+    const second = client.download(7, payload);
+    comeBack(true);
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+    expect(download).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails as disconnected, saying the host didn't come back, when the wait runs out", async () => {
+    const { client, download } = setupDrops(
+      [
+        async () => {
+          throw dropped();
+        },
+      ],
+      async () => false
+    );
+    const failure = await client.download(7, payload).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code: "HOST_DISCONNECTED" });
+    expect((failure as AppError).userMessage).toMatch(/didn't reconnect/);
+    expect(download).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops starting over after two restarts on a link that keeps dropping", async () => {
+    const { client, download } = setupDrops([
+      async () => {
+        throw dropped();
+      },
+    ]);
+    const failure = await client.download(7, payload).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code: "HOST_DISCONNECTED" });
+    expect((failure as AppError).userMessage).toMatch(/kept dropping/);
+    expect(download).toHaveBeenCalledTimes(3);
+  });
+
+  it("is cancelled, not restarted, while it waits for the host", async () => {
+    const { client, download, reachable } = setupDrops(
+      [
+        async () => {
+          throw dropped();
+        },
+        saved,
+      ],
+      (_host, _view, _ms, signal) =>
+        new Promise((resolve) => signal?.addEventListener("abort", () => resolve(false)))
+    );
+    const pending = client.download(7, payload);
+    await vi.waitFor(() => expect(reachable).toHaveBeenCalled());
+    expect(client.cancel("op-1", 7)).toBe(true);
+    await expect(pending).rejects.toMatchObject({ code: "CANCELLED" });
+    expect(download).toHaveBeenCalledTimes(1);
+  });
+
+  it("doesn't start over for a view that moved to another host meanwhile", async () => {
+    const harness = setupDrops([
+      async () => {
+        throw dropped();
+      },
+      saved,
+    ]);
+    harness.reachable.mockImplementation(async () => {
+      harness.moveView("studio-02");
+      return true;
+    });
+    await expect(harness.client.download(7, payload)).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+    expect(harness.download).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["a checksum failure", "INTERNAL"],
+    ["a file the host refuses", "NOT_FOUND"],
+    ["a host that didn't answer in time", "OUTCOME_UNKNOWN"],
+  ])("never waits for the host or starts over after %s", async (_name, code) => {
+    const { client, download, reachable } = setupDrops([
+      async () => {
+        throw Object.assign(new Error(code), { code });
+      },
+      saved,
+    ]);
+    await expect(client.download(7, payload)).rejects.toMatchObject({ code });
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(reachable).not.toHaveBeenCalled();
+  });
+
+  it("starts a temp download over too, into the same folder", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "host-files-temp-"));
+    try {
+      const { client, download } = setupDrops(
+        [
+          async () => {
+            throw dropped();
+          },
+          saved,
+        ],
+        undefined,
+        tempDir
+      );
+      await expect(
+        client.downloadToTemp("studio-01", "/srv/app/report.bin", 7)
+      ).resolves.toMatchObject({ bytes: 100 });
+      expect(download.mock.calls.map(([, , options]) => options.destinationDir)).toEqual([
+        tempDir,
+        tempDir,
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
 });
