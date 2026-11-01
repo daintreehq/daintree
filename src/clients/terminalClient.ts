@@ -199,6 +199,13 @@ function handlePortReset(id: string, snapshot: SerializedTerminalSnapshot | null
   portAckGenerations.set(id, currentPortAckGeneration(id) + 1);
   earlyDataBuffer.delete(id);
   earlyDataBufferBytes.delete(id);
+  // Tells the host where its acks for output before the reset end, so it
+  // knows the next ones are for output after it.
+  try {
+    messagePort?.postMessage({ type: "reset-ack", id });
+  } catch {
+    // Port closed: the host falls back to counting acks.
+  }
 
   if (resetCallbacks.size > 0) {
     for (const cb of resetCallbacks) {

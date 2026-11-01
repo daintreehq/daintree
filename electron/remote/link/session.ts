@@ -294,6 +294,7 @@ export class LinkSession {
   private pendingCount = 0;
   /** Every frame of a request, its fragments included, to the request it carries. */
   private readonly requestFrames = new WeakMap<LinkFrame, Pending>();
+  private readonly writeListeners = new WeakMap<LinkFrame, () => void>();
   private inboundInFlight = 0;
   private held: LinkMessage[] | null = null;
 
@@ -578,9 +579,17 @@ export class LinkSession {
    * Queue a message. Returns the scheduler's verdict; "refused" also means the
    * session is not open (or closed). Throws only for a message that could never
    * be sent (unencodable, or larger than a frame).
+   *
+   * `onWritten` runs once the frame has been handed to the transport, past the
+   * lanes and the socket's own buffer; never for a frame the session drops
+   * unsent.
    */
-  post(message: LinkMessage): EnqueueResult {
-    return this.enqueue(message).result;
+  post(message: LinkMessage, onWritten?: () => void): EnqueueResult {
+    const queued = this.enqueue(message);
+    if (onWritten && queued.frame && queued.result !== "refused") {
+      this.writeListeners.set(queued.frame, onWritten);
+    }
+    return queued.result;
   }
 
   private enqueue(message: LinkMessage): { result: EnqueueResult; frames: readonly LinkFrame[] } {
@@ -807,7 +816,13 @@ export class LinkSession {
         this.scheduler.written(frame);
         continue;
       }
-      const written = this.socket.write(encodeFrame(frame, this.maxFrameBytes));
+      const onWritten = this.writeListeners.get(frame);
+      const done = onWritten
+        ? (err?: Error | null) => {
+            if (!err) this.safely(onWritten);
+          }
+        : undefined;
+      const written = this.socket.write(encodeFrame(frame, this.maxFrameBytes), done);
       // A false return still took the bytes; only frames left in the scheduler
       // are known never to have reached the peer.
       this.scheduler.written(frame);

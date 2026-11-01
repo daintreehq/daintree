@@ -862,6 +862,33 @@ describe("terminalClient MessagePort data routing", () => {
       expect(acks).toEqual([9]);
     });
 
+    it("marks where its acks for output before a reset end", async () => {
+      const port = acquirePort();
+      const sent: unknown[] = [];
+      port.addEventListener("message", (event: MessageEvent<unknown>) => {
+        const msg = event.data as { type?: unknown };
+        if (msg?.type === "ack" || msg?.type === "reset-ack") sent.push(msg);
+      });
+      port.start();
+      terminalClient.onData("term-1", () => {});
+
+      port.postMessage({ type: "data", id: "term-1", data: "one", bytes: 3 });
+      await tick();
+      terminalClient.acknowledgePortData("term-1", 0);
+      port.postMessage({ type: "reset", id: "term-1", snapshot: SNAP });
+      port.postMessage({ type: "data", id: "term-1", data: "after", bytes: 5 });
+      await tick();
+      // The repaint's zero entry and the chunk after it, written together.
+      terminalClient.acknowledgePortData("term-1", 0, 2);
+      await tick();
+
+      expect(sent).toEqual([
+        { type: "ack", id: "term-1", bytes: 3 },
+        { type: "reset-ack", id: "term-1" },
+        { type: "ack", id: "term-1", bytes: 5 },
+      ]);
+    });
+
     it("replaces early-buffered output with the repaint when nothing is attached yet", async () => {
       const port = acquirePort();
       port.postMessage({ type: "data", id: "term-1", data: "stale", bytes: 5 });

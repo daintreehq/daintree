@@ -310,6 +310,60 @@ describe("LinkSession request/response", () => {
     });
   });
 
+  describe("telling a poster its frame was written", () => {
+    const BEYOND_SOCKET_BUFFERS = "x".repeat(4 * 1024 * 1024);
+    const peers: net.Socket[] = [];
+
+    afterEach(() => {
+      for (const peer of peers.splice(0)) peer.destroy();
+    });
+
+    const event = (channel: string, args: unknown[] = []) => ({
+      lane: Lane.EVENTS,
+      kind: EventKind.EVENT,
+      body: { endpointId: null, channel, args },
+    });
+
+    /** A client whose peer has stopped reading, so the socket stops taking bytes. */
+    async function stalledClient() {
+      const { a, b } = await socketPair(dir);
+      peers.push(b);
+      const client = new LinkSession(a, { role: "client", pingIntervalMs: 0, idleTimeoutMs: 0 });
+      sessions.push(client);
+      client.open();
+      b.pause();
+      return { client, a, b };
+    }
+
+    it("reports a frame once the transport has taken it, not while it waits in a lane or the socket", async () => {
+      const { client, a, b } = await stalledClient();
+      const written: string[] = [];
+      expect(
+        client.post(event("fill", [BEYOND_SOCKET_BUFFERS]), () => written.push("fill"))
+      ).not.toBe("refused");
+      client.post(event("behind"), () => written.push("behind"));
+      await waitFor(() => a.writableNeedDrain);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(written).toEqual([]);
+      expect(client.queuedBytes(Lane.EVENTS)).toBeGreaterThan(0);
+
+      b.resume();
+      await waitFor(() => written.length === 2);
+      expect(written).toEqual(["fill", "behind"]);
+    });
+
+    it("never reports a frame the session dropped unsent", async () => {
+      const { client, a } = await stalledClient();
+      const written: string[] = [];
+      client.post(event("fill", [BEYOND_SOCKET_BUFFERS]), () => written.push("fill"));
+      await waitFor(() => a.writableNeedDrain);
+      client.post(event("dropped"), () => written.push("dropped"));
+      client.close("gone");
+      await new Promise((r) => setTimeout(r, 20));
+      expect(written).toEqual([]);
+    });
+  });
+
   it("refuses to send a message the peer would reject, without ending the session", async () => {
     const { client } = await pair();
     expect(() =>

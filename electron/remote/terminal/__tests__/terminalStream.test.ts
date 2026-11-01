@@ -38,6 +38,7 @@ import {
   type TerminalStreamBridgeOptions,
 } from "../TerminalStreamBridge.js";
 import type { SerializedTerminalSnapshot } from "../../../../shared/types/terminal.js";
+import { fakeSession } from "./fakeSession.js";
 import { FakePeer, FakePtyHost, decode } from "./streamTestUtils.js";
 
 let dir: string;
@@ -155,6 +156,57 @@ async function setup(overrides: Partial<TerminalStreamBridgeOptions> = {}): Prom
     },
   };
   return h;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Wait until the host has handled everything the renderer posted so far: a
+ * resize behind it travels the same ordered path and reaches the pty-host
+ * after any ack the host passed on for what came before.
+ */
+async function hostCaughtUp(h: Harness, id = "t1"): Promise<void> {
+  const before = h.pty().ofType("resize").length;
+  h.renderer().post({ type: "resize", id, cols: 80, rows: 24 });
+  await waitFor(() => h.pty().ofType("resize").length > before);
+}
+
+/** Have the client ask for a repaint of t1 and wait for the reset to reach its renderer. */
+async function requestRepaint(h: Harness, lastSeq: number): Promise<void> {
+  const resets = h.renderer().ofType("reset").length;
+  await h.client.call(TERMINAL_RESUME_METHOD, {
+    endpointId: ENDPOINT,
+    terminals: [{ id: "t1", incarnation: 1, lastSeq, reset: true }],
+  });
+  await waitFor(() => h.renderer().ofType("reset").length === resets + 1);
+}
+
+/** A bridge on a session the test drives by hand, with a pty-host stand-in. */
+function bareBridge(overrides: Partial<TerminalStreamBridgeOptions> = {}) {
+  const pty = new FakePtyHost(() => ({ data: "SNAP", cols: 80, rows: 24 }));
+  const session = fakeSession();
+  const bridge = new TerminalStreamBridge({
+    endpointId: ENDPOINT,
+    openPort: () => pty.port,
+    releasePort: () => {},
+    getIncarnation: () => 1,
+    ownerOf: () => "project-a",
+    ...overrides,
+  });
+  cleanups.push(() => {
+    bridge.dispose();
+    pty.close();
+  });
+  bridge.setProject("project-a");
+  return {
+    pty,
+    session,
+    bridge,
+    start() {
+      bridge.attach(session);
+      bridge.resume({ endpointId: ENDPOINT, terminals: [] });
+    },
+  };
 }
 
 function rendererData(h: Harness, id?: string): string[] {
@@ -802,6 +854,233 @@ describe("terminal stream over the link", () => {
     await waitFor(() => h.pty().ackedBytes("t1") === produced, 1_000);
     await waitFor(() => h.renderer().ofType("reset").length === 1);
     expect(h.renderer().ofType("reset")[0]!.snapshot).toMatchObject({ data: "LATEST" });
+
+    // Silent after the reset too: nothing is held against the PTY, so there
+    // is no reason to send it another snapshot.
+    const after = h.pty().emit("t1", "more");
+    await waitFor(() => h.pty().ackedBytes("t1") === produced + after);
+    await sleep(150);
+    expect(h.renderer().ofType("reset")).toHaveLength(1);
+  });
+
+  it("resets once, not in a loop, when the client takes longer than the ack timeout to apply a snapshot while output continues", async () => {
+    const h = await setup({ ackTimeoutMs: 40 });
+    h.snapshots.set("t1", "SNAP");
+    await h.connectLink();
+    const first = h.pty().emit("t1", "before");
+    await waitFor(() => rendererData(h).length === 1);
+    h.renderer().post({ type: "ack", id: "t1", bytes: first });
+    await waitFor(() => h.pty().ackedBytes("t1") === first);
+
+    await requestRepaint(h, 1);
+    // The renderer takes the reset, then spends several ack timeouts
+    // restoring it, acking nothing, while the PTY keeps printing.
+    h.renderer().post({ type: "reset-ack", id: "t1" });
+    let during = 0;
+    for (let i = 0; i < 6; i++) {
+      during += h.pty().emit("t1", `during-${i}`);
+      await sleep(30);
+    }
+    await waitFor(() => rendererData(h).filter((d) => d.startsWith("during-")).length === 6);
+    // None of it was held against the PTY meanwhile.
+    await waitFor(() => h.pty().ackedBytes("t1") === first + during);
+    expect(h.renderer().ofType("reset")).toHaveLength(1);
+
+    // Restored: it acks what it deferred, and its acks pace the PTY again.
+    h.renderer().post({ type: "ack", id: "t1", bytes: during });
+    await hostCaughtUp(h);
+    const live = h.pty().emit("t1", "live");
+    await waitFor(() => rendererData(h).includes("live"));
+    await hostCaughtUp(h);
+    expect(h.pty().ackedBytes("t1")).toBe(first + during);
+    h.renderer().post({ type: "ack", id: "t1", bytes: live });
+    await waitFor(() => h.pty().ackedBytes("t1") === first + during + live);
+    await sleep(100);
+    expect(h.renderer().ofType("reset")).toHaveLength(1);
+  });
+
+  it("never lets acks for replayed frames pay down live output", async () => {
+    const h = await setup();
+    await h.connectLink();
+    const seen = h.pty().emit("t1", "seen");
+    await waitFor(() => rendererData(h).length === 1);
+    h.renderer().post({ type: "ack", id: "t1", bytes: seen });
+    await waitFor(() => h.pty().ackedBytes("t1") === seen);
+
+    await h.dropLink();
+    let away = 0;
+    for (let i = 0; i < 3; i++) away += h.pty().emit("t1", `away-${i}`);
+    await waitFor(() => h.pty().ackedBytes("t1") === seen + away);
+    await h.connectLink();
+    await waitFor(() => rendererData(h).length === 4);
+    const live = h.pty().emit("t1", "live output");
+    await waitFor(() => rendererData(h).length === 5);
+
+    // The replay's ack only comes in once the live output is out as well.
+    h.renderer().post({ type: "ack", id: "t1", bytes: away });
+    await hostCaughtUp(h);
+    expect(h.pty().ackedBytes("t1")).toBe(seen + away);
+    h.renderer().post({ type: "ack", id: "t1", bytes: live });
+    await waitFor(() => h.pty().ackedBytes("t1") === seen + away + live);
+  });
+
+  it("never times out output still waiting in the ring for a busy lane", async () => {
+    const h = await setup({ ackTimeoutMs: 40 });
+    await h.connectLink();
+    const real = h.host.queuedBytes.bind(h.host);
+    // The lane is past its busy mark with this terminal's own frames, so its
+    // output waits here rather than join them.
+    h.host.queuedBytes = (_lane, flow) =>
+      flow === undefined ? Number.MAX_SAFE_INTEGER : 64 * 1024;
+    const held = h.pty().emit("t1", "held back");
+    await waitFor(() => h.bridge.position("t1")?.seq === 1);
+    await sleep(150);
+    expect(rendererData(h)).toEqual([]);
+    expect(h.pty().ofType("serialize-fence")).toEqual([]);
+
+    h.host.queuedBytes = real;
+    const next = h.pty().emit("t1", "and on");
+    await waitFor(() => rendererData(h).length === 2);
+    h.renderer().post({ type: "ack", id: "t1", bytes: held + next });
+    await waitFor(() => h.pty().ackedBytes("t1") === held + next);
+    expect(h.renderer().ofType("reset")).toEqual([]);
+  });
+
+  it("starts the ack clock only once the link has written the output", async () => {
+    const { pty, session, start } = bareBridge({ ackTimeoutMs: 40 });
+    const written: (() => void)[] = [];
+    vi.mocked(session.post).mockImplementation((_message, onWritten) => {
+      if (onWritten) written.push(onWritten);
+      return "queued";
+    });
+    start();
+
+    pty.emit("t1", "queued behind other traffic");
+    await waitFor(() => written.length === 1);
+    await sleep(150);
+    expect(pty.ofType("serialize-fence")).toEqual([]);
+
+    // Once it has left, a client that never acks it is still resynced.
+    written[0]!();
+    await waitFor(() => pty.ofType("serialize-fence").length === 1, 1_000);
+  });
+
+  it("posts a reset the link refused again as it is, without taking another snapshot", async () => {
+    const { pty, session, bridge, start } = bareBridge({ maxOutstandingBytes: 10 });
+    let writable: () => void = () => {};
+    let refuse = true;
+    const resets: unknown[] = [];
+    vi.mocked(session.onWritable).mockImplementation((listener) => {
+      writable = listener;
+      return () => {};
+    });
+    const isReset = (message: Parameters<LinkSession["post"]>[0]) =>
+      message.lane === Lane.INTERACTIVE && message.kind === InteractiveKind.TERMINAL_RESET;
+    vi.mocked(session.post).mockImplementation((message) => {
+      if (!isReset(message)) return "queued";
+      if (refuse) return "refused";
+      resets.push(message.body);
+      return "queued";
+    });
+    start();
+
+    const over = pty.emit("t1", "0123456789ABC");
+    await waitFor(() => vi.mocked(session.post).mock.calls.some(([message]) => isReset(message)));
+    writable();
+    writable();
+    const more = pty.emit("t1", "more");
+    await waitFor(() => bridge.position("t1")?.seq === 2);
+    await sleep(30);
+    refuse = false;
+    writable();
+
+    expect(resets).toEqual([
+      expect.objectContaining({
+        terminalId: "t1",
+        seq: 1,
+        snapshot: { data: "SNAP", cols: 80, rows: 24 },
+      }),
+    ]);
+    expect(pty.ofType("serialize-fence")).toHaveLength(1);
+    // What arrived while it waited was settled, and follows it.
+    await waitFor(() => pty.ackedBytes("t1") === over + more);
+    const out = vi
+      .mocked(session.post)
+      .mock.calls.map(([message]) => message)
+      .filter((message) => message.lane === Lane.INTERACTIVE);
+    expect(out.slice(-2).map((message) => message.kind)).toEqual([
+      InteractiveKind.TERMINAL_RESET,
+      InteractiveKind.TERMINAL_OUT,
+    ]);
+  });
+
+  it("holds output past a window while the client restores a snapshot, and sends it once it acks", async () => {
+    const h = await setup({ maxOutstandingBytes: 20 });
+    h.snapshots.set("t1", "SNAP");
+    await h.connectLink();
+    h.pty().emit("t1", "a");
+    await waitFor(() => rendererData(h).length === 1);
+    h.renderer().post({ type: "ack", id: "t1", bytes: 1 });
+    await requestRepaint(h, 1);
+
+    for (let i = 0; i < 3; i++) h.pty().emit("t1", String(i).repeat(10));
+    await waitFor(() => h.bridge.position("t1")?.seq === 4);
+    await sleep(30);
+    expect(rendererData(h).slice(1)).toEqual(["0".repeat(10), "1".repeat(10)]);
+
+    h.renderer().post({ type: "reset-ack", id: "t1" });
+    h.renderer().post({ type: "ack", id: "t1", bytes: 10 });
+    await waitFor(() => rendererData(h).length === 4);
+    expect(rendererData(h)[3]).toBe("2".repeat(10));
+  });
+
+  it("falls back to counting acks for a client that never confirms a reset", async () => {
+    const h = await setup();
+    h.snapshots.set("t1", "SNAP");
+    await h.connectLink();
+    // Its renderer drops the ack for this when it takes the reset.
+    const pre = h.pty().emit("t1", "unacked");
+    await waitFor(() => rendererData(h).length === 1);
+    await requestRepaint(h, 1);
+
+    const during = h.pty().emit("t1", "output after the reset");
+    await waitFor(() => rendererData(h).length === 2);
+    // An older renderer sends no reset-ack, only the ack once it has restored.
+    h.renderer().post({ type: "ack", id: "t1", bytes: during });
+    await hostCaughtUp(h);
+    const live = h.pty().emit("t1", "live");
+    await waitFor(() => rendererData(h).length === 3);
+    await hostCaughtUp(h);
+    expect(h.pty().ackedBytes("t1")).toBe(pre + during);
+    h.renderer().post({ type: "ack", id: "t1", bytes: live });
+    await waitFor(() => h.pty().ackedBytes("t1") === pre + during + live);
+    expect(h.renderer().ofType("reset")).toHaveLength(1);
+  });
+
+  it("keeps settling output after a reset when a late ack for output from before it arrives", async () => {
+    const h = await setup();
+    h.snapshots.set("t1", "SNAP");
+    await h.connectLink();
+    const pre = h.pty().emit("t1", "written before the reset");
+    await waitFor(() => rendererData(h).length === 1);
+    await requestRepaint(h, 1);
+
+    // Its write finished before the renderer took the reset, so its ack
+    // comes in after the reset went out. It says nothing about the restore.
+    h.renderer().post({ type: "ack", id: "t1", bytes: pre });
+    await hostCaughtUp(h);
+    const during = h.pty().emit("t1", "still restoring");
+    await waitFor(() => h.pty().ackedBytes("t1") === pre + during);
+
+    h.renderer().post({ type: "reset-ack", id: "t1" });
+    h.renderer().post({ type: "ack", id: "t1", bytes: during });
+    await hostCaughtUp(h);
+    const live = h.pty().emit("t1", "live");
+    await waitFor(() => rendererData(h).includes("live"));
+    await hostCaughtUp(h);
+    expect(h.pty().ackedBytes("t1")).toBe(pre + during);
+    h.renderer().post({ type: "ack", id: "t1", bytes: live });
+    await waitFor(() => h.pty().ackedBytes("t1") === pre + during + live);
   });
 
   it("resyncs the busiest terminal when the endpoint's total unacked output grows too large", async () => {
