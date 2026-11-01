@@ -18,6 +18,13 @@ export interface LinkTransportConnection {
   token: string;
   /** Release whatever the transport started (ssh forward, local socket file). */
   dispose(): Promise<void>;
+  /**
+   * Opened from what an earlier connection learned about the host, without
+   * asking it again. A handshake that fails on it may be that knowledge
+   * gone stale (the host relaunched with a new token): dial again with
+   * `fresh` before taking the failure as the host's answer.
+   */
+  remembered?: true;
 }
 
 export interface LinkOpenOptions {
@@ -28,6 +35,8 @@ export interface LinkOpenOptions {
    * quit on purpose.
    */
   mayStart?: boolean;
+  /** Forget what earlier connections learned and ask the host for all of it again. */
+  fresh?: boolean;
 }
 
 export interface LinkTransport {

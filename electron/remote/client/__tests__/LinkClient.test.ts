@@ -1518,3 +1518,189 @@ describe("LinkClient retry during an attempt (#13926)", () => {
     }
   });
 });
+
+describe("LinkClient connections opened from what earlier links learned (#15895)", () => {
+  type Answer = "welcome" | "unauthorized" | "busy" | "close";
+
+  /**
+   * A host that answers each HELLO with the next of `answers` (the last one
+   * repeats), reached by a transport whose opens are `remembered` unless the
+   * dial asks for `fresh`. `holdFresh` keeps a fresh open waiting until its
+   * dial is cancelled.
+   */
+  async function rememberingHost(answers: Answer[], options: { holdFresh?: boolean } = {}) {
+    const dir = await makeTempDir();
+    const socketPath = path.join(dir, "k.sock");
+    let hellos = 0;
+    const server = net.createServer((socket) => {
+      const decoder = new FrameDecoder();
+      socket.on("data", (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) {
+          if (frame.kind !== ControlKind.HELLO) continue;
+          const answer = answers[Math.min(hellos, answers.length - 1)]!;
+          hellos++;
+          if (answer === "close") {
+            socket.destroy();
+            return;
+          }
+          const message: LinkMessage =
+            answer === "welcome"
+              ? {
+                  lane: Lane.CONTROL,
+                  kind: ControlKind.WELCOME,
+                  body: {
+                    handshake: TEST_HANDSHAKE,
+                    hostName: "h",
+                    sessionId: "s1",
+                    resumed: false,
+                  },
+                }
+              : {
+                  lane: Lane.CONTROL,
+                  kind: ControlKind.REJECT,
+                  body: { reason: answer, handshake: null, detail: null },
+                };
+          socket.write(encodeFrame(messageToFrame(message)));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    const direct = createDirectTransport({ socketPath, token: "t" });
+    const opens: boolean[] = [];
+    const transport: LinkTransport = {
+      async open(signal, openOptions) {
+        const fresh = openOptions?.fresh === true;
+        opens.push(fresh);
+        if (fresh && options.holdFresh) {
+          await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+          throw new TransportError("Connection cancelled", null);
+        }
+        const connection = await direct.open(signal);
+        return fresh ? connection : { ...connection, remembered: true as const };
+      },
+    };
+    return {
+      transport,
+      opens,
+      hellos: () => hellos,
+      async close() {
+        server.close();
+        await removeTempDir(dir);
+      },
+    };
+  }
+
+  const linkOver = (transport: LinkTransport, states: LinkClientState[]) => {
+    const link = new LinkClient({
+      transport,
+      handshake: TEST_HANDSHAKE,
+      client: { clientId: "c", clientName: "n", platform: "linux" },
+      session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+      backoff: { initialMs: 60_000, maxMs: 60_000, jitter: 0 },
+      now: () => 1_000,
+      quietAfterMs: 0,
+    });
+    link.onStateChange((state) => states.push(state));
+    return link;
+  };
+
+  it("dials afresh within the same attempt when the host refuses the token it remembered", async () => {
+    const host = await rememberingHost(["unauthorized", "welcome"]);
+    const states: LinkClientState[] = [];
+    try {
+      client = linkOver(host.transport, states);
+      client.start();
+      await waitFor(() => client!.getState().status === "connected");
+      expect(host.opens).toEqual([false, true]);
+      // No failure in between, and no second attempt either.
+      expect(states.some((state) => state.status === "unreachable")).toBe(false);
+      expect(states.filter((state) => state.status === "connecting")).toEqual([
+        { status: "connecting", attempt: 1 },
+      ]);
+    } finally {
+      await client?.stop();
+      client = null;
+      await host.close();
+    }
+  });
+
+  it("dials afresh once when a remembered link closes unanswered, then backs off as before", async () => {
+    for (const answers of [["close"], ["unauthorized"]] as Answer[][]) {
+      const host = await rememberingHost(answers);
+      const states: LinkClientState[] = [];
+      try {
+        client = linkOver(host.transport, states);
+        client.start();
+        await waitFor(() => client!.getState().status === "unreachable");
+        expect(host.opens).toEqual([false, true]);
+        expect(client.getState()).toMatchObject({ retryAt: 61_000 });
+        if (answers[0] === "unauthorized") {
+          expect(client.getState()).toMatchObject({
+            detail: "Host refused the connection: unauthorized",
+          });
+        }
+      } finally {
+        await client?.stop();
+        client = null;
+        await host.close();
+      }
+    }
+  });
+
+  it("takes any other refusal as the host's own answer", async () => {
+    const host = await rememberingHost(["busy"]);
+    const states: LinkClientState[] = [];
+    try {
+      client = linkOver(host.transport, states);
+      client.start();
+      await waitFor(() => client!.getState().status === "unreachable");
+      expect(host.opens).toEqual([false]);
+      expect(client.getState()).toMatchObject({ detail: "Host refused the connection: busy" });
+    } finally {
+      await client?.stop();
+      client = null;
+      await host.close();
+    }
+  });
+
+  it("ends the attempt when stopped during the fresh dial", async () => {
+    const host = await rememberingHost(["unauthorized"], { holdFresh: true });
+    const states: LinkClientState[] = [];
+    try {
+      client = linkOver(host.transport, states);
+      client.start();
+      await waitFor(() => host.opens.length === 2);
+      await client.stop();
+      expect(client.getState()).toEqual({ status: "disconnected" });
+      expect(host.opens).toEqual([false, true]);
+      expect(states.some((state) => state.status === "unreachable")).toBe(false);
+    } finally {
+      await client?.stop();
+      client = null;
+      await host.close();
+    }
+  });
+
+  it("dials afresh on a person's Retry, and only then", async () => {
+    const fresh: Array<boolean | undefined> = [];
+    const transport: LinkTransport = {
+      async open(_signal, options) {
+        fresh.push(options?.fresh);
+        throw new TransportError("unreachable", "Connection timed out");
+      },
+    };
+    client = new LinkClient({
+      transport,
+      handshake: TEST_HANDSHAKE,
+      client: { clientId: "c", clientName: "n", platform: "linux" },
+      backoff: { initialMs: 60_000, maxMs: 60_000, jitter: 0 },
+    });
+    client.start();
+    await waitFor(() => fresh.length === 1 && client!.getState().status === "unreachable");
+    client.retryNow({ restart: true });
+    await waitFor(() => fresh.length === 2 && client!.getState().status === "unreachable");
+    client.retryNow();
+    await waitFor(() => fresh.length === 3 && client!.getState().status === "unreachable");
+    expect(fresh).toEqual([undefined, true, undefined]);
+  });
+});

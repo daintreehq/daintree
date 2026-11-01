@@ -1103,7 +1103,12 @@ describe("reconnecting to a host the transport already knows", () => {
     expect(redial.filter(isResolve)).toEqual([]);
     // Through the master by the path `ssh -G` gave the first time.
     const forward = redial.find(isMuxForward)!;
-    expect(forward.slice(0, 4)).toEqual(["-F", "/dev/null", "-o", 'ControlPath="/cp/cm3-resolved"']);
+    expect(forward.slice(0, 4)).toEqual([
+      "-F",
+      "/dev/null",
+      "-o",
+      'ControlPath="/cp/cm3-resolved"',
+    ]);
     expect(transport.route).toBe("forward");
 
     await client.stop();
@@ -1209,6 +1214,63 @@ describe("reconnecting to a host the transport already knows", () => {
     ]);
     second.socket.destroy();
     await second.dispose();
+    host.closeProxies();
+  });
+
+  it("asks the host for everything again when the dial says fresh", async () => {
+    const host = await knownHost();
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: host.spawner,
+    });
+    const first = await transport.open(new AbortController().signal);
+    expect(first.remembered).toBeUndefined();
+    await first.dispose();
+    const second = await transport.open(new AbortController().signal);
+    expect(second.remembered).toBe(true);
+    await second.dispose();
+
+    const before = host.calls.length;
+    const third = await transport.open(new AbortController().signal, { fresh: true });
+    expect(third.remembered).toBeUndefined();
+    const redial = host.calls.slice(before);
+    expect(redial.filter(isProbe)).toHaveLength(1);
+    expect(redial.filter(isRead)).toHaveLength(1);
+    expect(redial.filter(isResolve)).toHaveLength(1);
+    // The server's answer on socket forwarding is asked again too.
+    expect(redial.filter((args) => args.includes("-W"))).toHaveLength(1);
+    await third.dispose();
+    host.closeProxies();
+  });
+
+  it("starts no fresh dial for a remembered one that was cancelled", async () => {
+    const host = await knownHost();
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: (args) => {
+        // The master never answers this forward; the dial is cancelled meanwhile.
+        if (isMuxForward(args) && host.calls.some(isMuxForward)) {
+          host.calls.push(args);
+          setImmediate(() => abort.abort());
+          return new FakeChild();
+        }
+        return host.spawner(args);
+      },
+    });
+    const first = await transport.open(new AbortController().signal);
+    await first.dispose();
+    const abort = new AbortController();
+    const before = host.calls.length;
+    await expect(transport.open(abort.signal)).rejects.toThrow("Connection cancelled");
+    const redial = host.calls.slice(before);
+    expect(redial.filter(isProbe)).toEqual([]);
+    expect(redial.filter(isRead)).toEqual([]);
+    // The forward the master may have taken is cancelled all the same.
+    const forward = redial.find(isMuxForward)!;
+    const cancel = redial.find((args) => args.includes("cancel"));
+    expect(cancel?.at(-3)).toBe(forward.at(-3));
     host.closeProxies();
   });
 });
@@ -1368,8 +1430,10 @@ describe("when the ssh server refuses socket forwarding", () => {
     });
     const first = await transport.open(new AbortController().signal);
     expect(transport.route).toBe("attach-stdio");
+    // The bridge's close is what sends the next dial back to the check.
+    const closed = new Promise((resolve) => first.socket.once("close", resolve));
     first.socket.destroy();
-    await waitFor(() => first.socket.destroyed);
+    await closed;
     const second = await transport.open(new AbortController().signal);
     expect(transport.route).toBe("forward");
     expect(checks).toBe(2);

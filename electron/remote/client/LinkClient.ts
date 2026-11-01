@@ -192,6 +192,17 @@ type HandshakeOutcome =
   | { kind: "reject"; reject: RejectMessage }
   | { kind: "closed"; reason: string };
 
+/**
+ * A failed handshake that knowledge gone stale would explain: the host
+ * refused the token (it relaunched with a new one), or the link closed with
+ * no word from the host (nothing listens on that socket any more). A host
+ * that answered otherwise (busy, shutting down, another build) said so itself.
+ */
+function staleKnowledgeMayExplain(outcome: HandshakeOutcome, session: LinkSession): boolean {
+  if (outcome.kind === "reject") return outcome.reject.reason === "unauthorized";
+  return outcome.kind === "closed" && session.closedWith?.by !== "remote";
+}
+
 export class LinkClient {
   private state: LinkClientState = { status: "disconnected" };
   private running = false;
@@ -199,6 +210,8 @@ export class LinkClient {
   private attempt = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private attemptAbort: AbortController | null = null;
+  /** The next dial asks the host for everything again: a person's Retry. */
+  private dialFresh = false;
   private connection: LinkTransportConnection | null = null;
   private current: LinkSession | null = null;
   private sessionId: string | null = null;
@@ -301,6 +314,8 @@ export class LinkClient {
       this.attemptAbort.abort();
       this.attemptAbort = null;
     }
+    // Rather than trusting what earlier links learned about the host.
+    if (options.restart === true) this.dialFresh = true;
     this.clearRetry();
     void this.connect();
   }
@@ -352,99 +367,123 @@ export class LinkClient {
     this.setState(this.connecting(this.attempt));
     const abort = new AbortController();
     this.attemptAbort = abort;
+    let fresh = this.dialFresh;
+    this.dialFresh = false;
 
-    let connection: LinkTransportConnection;
-    try {
-      connection = await this.options.transport.open(abort.signal, {
-        mayStart: !this.restartAnnounced,
-      });
-    } catch (err) {
-      if (this.attemptAbort === abort) this.attemptAbort = null;
-      if (stale()) return;
-      const hostModeOff = err instanceof HostModeOffError;
-      // A host heard from moments ago that now says host mode is off is most
-      // likely restarting: it removes host.json on the way down and writes it
-      // again on the way up, so that window is worth retrying through. A time
-      // ahead of the clock (it moved back) says nothing about a restart.
-      const heard = this.lastHeard();
-      const sinceHeard = heard === null ? null : this.now() - heard;
-      const restarting =
-        hostModeOff &&
-        (this.restartAnnounced ||
-          (sinceHeard !== null && sinceHeard >= 0 && sinceHeard < HOST_RESTART_GRACE_MS));
-      this.restartSeen = restarting;
-      this.fail(err instanceof TransportError ? err.detail : formatErrorMessage(err, "failed"), {
-        hostModeOff,
-        // Otherwise nothing a later attempt does differently would change these.
-        parked:
-          (hostModeOff && !restarting) ||
-          err instanceof SshAccessError ||
-          err instanceof UnusableConnectionError,
-        // The transport's own words for what failed; its detail is often null.
-        ...(err instanceof TransportError ? { failure: err.message } : {}),
-      });
-      return;
-    }
-    if (stale()) {
-      await this.release(connection);
-      return;
-    }
-    // Something is listening there again, whatever its handshake says.
-    this.restartSeen = false;
-    this.connection = connection;
-
-    const session = new LinkSession(connection.socket, { ...this.options.session, role: "client" });
-    // Past the transport, the signal reaches nothing: end the session the handshake waits on.
-    const abandon = () => this.endAttempt(session, connection);
-    abort.signal.addEventListener("abort", abandon, { once: true });
-    const outcome = await this.handshake(session, connection.token);
-    abort.signal.removeEventListener("abort", abandon);
-    if (this.attemptAbort === abort) this.attemptAbort = null;
-    if (stale()) {
-      this.endAttempt(session, connection);
-      await this.release(connection);
-      return;
-    }
-
-    if (outcome.kind === "welcome") {
-      const mismatch = compareHandshake(this.options.handshake, outcome.welcome.handshake);
-      if (mismatch && isBlockingMismatch(mismatch)) {
-        session.close("version mismatch");
-        await this.release(connection);
+    // At most twice: a connection opened from what earlier links learned gets
+    // one fresh dial, in this same attempt, when its handshake fails in a way
+    // stale knowledge would explain.
+    for (;;) {
+      let connection: LinkTransportConnection;
+      try {
+        connection = await this.options.transport.open(abort.signal, {
+          mayStart: !this.restartAnnounced,
+          ...(fresh ? { fresh: true } : {}),
+        });
+      } catch (err) {
+        if (this.attemptAbort === abort) this.attemptAbort = null;
         if (stale()) return;
-        this.mismatch(mismatch, outcome.welcome.handshake, null);
+        const hostModeOff = err instanceof HostModeOffError;
+        // A host heard from moments ago that now says host mode is off is most
+        // likely restarting: it removes host.json on the way down and writes it
+        // again on the way up, so that window is worth retrying through. A time
+        // ahead of the clock (it moved back) says nothing about a restart.
+        const heard = this.lastHeard();
+        const sinceHeard = heard === null ? null : this.now() - heard;
+        const restarting =
+          hostModeOff &&
+          (this.restartAnnounced ||
+            (sinceHeard !== null && sinceHeard >= 0 && sinceHeard < HOST_RESTART_GRACE_MS));
+        this.restartSeen = restarting;
+        this.fail(err instanceof TransportError ? err.detail : formatErrorMessage(err, "failed"), {
+          hostModeOff,
+          // Otherwise nothing a later attempt does differently would change these.
+          parked:
+            (hostModeOff && !restarting) ||
+            err instanceof SshAccessError ||
+            err instanceof UnusableConnectionError,
+          // The transport's own words for what failed; its detail is often null.
+          ...(err instanceof TransportError ? { failure: err.message } : {}),
+        });
         return;
       }
-      this.established(session, connection, outcome.welcome, mismatch);
-      return;
-    }
+      if (stale()) {
+        await this.release(connection);
+        return;
+      }
+      // Something is listening there again, whatever its handshake says.
+      this.restartSeen = false;
+      this.connection = connection;
 
-    // Heard before the release, which can take as long as a stalled transport:
-    // the restart's grace runs from when the host said it.
-    if (outcome.kind === "reject") {
-      if (outcome.reject.reason === "shutting-down") this.heardShutdown();
-    } else if (session.closedWith) {
-      // A GOODBYE in place of the WELCOME, from a host already on its way down.
-      this.noteClose(session.closedWith);
-    }
-    await this.release(connection);
-    // Another attempt (a retryNow while this one was releasing) owns the link now.
-    if (stale()) return;
-    if (outcome.kind === "reject") {
-      const { reject } = outcome;
-      const mismatch = reject.handshake
-        ? compareHandshake(this.options.handshake, reject.handshake)
-        : null;
-      if (mismatch && reject.handshake) {
-        this.mismatch(mismatch, reject.handshake, reject.observed ?? null);
+      const session = new LinkSession(connection.socket, {
+        ...this.options.session,
+        role: "client",
+      });
+      // Past the transport, the signal reaches nothing: end the session the handshake waits on.
+      const abandon = () => this.endAttempt(session, connection);
+      abort.signal.addEventListener("abort", abandon, { once: true });
+      const outcome = await this.handshake(session, connection.token);
+      abort.signal.removeEventListener("abort", abandon);
+      const refresh =
+        !fresh && connection.remembered === true && staleKnowledgeMayExplain(outcome, session);
+      // Held through the fresh dial, so a retryNow can't start another attempt beside it.
+      if (!refresh && this.attemptAbort === abort) this.attemptAbort = null;
+      if (stale()) {
+        this.endAttempt(session, connection);
+        await this.release(connection);
         return;
       }
-      this.fail(
-        `Host refused the connection: ${reject.reason}${reject.detail ? ` (${reject.detail})` : ""}`
-      );
+
+      if (outcome.kind === "welcome") {
+        const mismatch = compareHandshake(this.options.handshake, outcome.welcome.handshake);
+        if (mismatch && isBlockingMismatch(mismatch)) {
+          session.close("version mismatch");
+          await this.release(connection);
+          if (stale()) return;
+          this.mismatch(mismatch, outcome.welcome.handshake, null);
+          return;
+        }
+        this.established(session, connection, outcome.welcome, mismatch);
+        return;
+      }
+
+      // Heard before the release, which can take as long as a stalled transport:
+      // the restart's grace runs from when the host said it.
+      if (outcome.kind === "reject") {
+        if (outcome.reject.reason === "shutting-down") this.heardShutdown();
+      } else if (session.closedWith) {
+        // A GOODBYE in place of the WELCOME, from a host already on its way down.
+        this.noteClose(session.closedWith);
+      }
+      await this.release(connection);
+      // Another attempt (a retryNow while this one was releasing) owns the link now.
+      if (stale()) return;
+      if (refresh) {
+        logger.debug("Dialling the remote host afresh: what the last link learned didn't hold", {
+          hostId: this.options.hostId ?? null,
+          attempt: this.attempt,
+          outcome: outcome.kind === "reject" ? outcome.reject.reason : "closed",
+        });
+        fresh = true;
+        continue;
+      }
+      if (outcome.kind === "reject") {
+        const { reject } = outcome;
+        const mismatch = reject.handshake
+          ? compareHandshake(this.options.handshake, reject.handshake)
+          : null;
+        if (mismatch && reject.handshake) {
+          this.mismatch(mismatch, reject.handshake, reject.observed ?? null);
+          return;
+        }
+        this.fail(
+          `Host refused the connection: ${reject.reason}${reject.detail ? ` (${reject.detail})` : ""}`
+        );
+        return;
+      }
+      this.fail(outcome.reason);
       return;
     }
-    this.fail(outcome.reason);
   }
 
   /**
