@@ -18,7 +18,7 @@ import { useResourceMonitoringStore } from "./resourceMonitoringStore";
 import { useVoiceRecordingStore } from "./voiceRecordingStore";
 import { subscribeDictationRangeTracking } from "./dictationRangeStore";
 import { subscribeRecentDictationsSync } from "@/services/recentDictations";
-import { trackComposerSurface } from "@/lib/composerSurface";
+import { forgetComposerSurfacePane, trackComposerSurface } from "@/lib/composerSurface";
 import { usePluginPanelBadgeStore } from "./pluginPanelBadgeStore";
 import { usePluginPanelActivityStore } from "./pluginPanelActivityStore";
 import { usePluginPanelAttentionStore } from "./pluginPanelAttentionStore";
@@ -487,6 +487,7 @@ export function initStoreOrchestrator(): () => void {
             useVoiceRecordingStore.getState().clearLockedTarget(removedId);
             unregisterInputController(removedId);
             forgetPanelActivity(removedId);
+            forgetComposerSurfacePane(removedId);
             // Drop the renderer-side artifact store entry so content strings
             // don't pin the dead panel's heap for the rest of the renderer
             // lifetime (#10023). The hook listener Set is owned by each

@@ -46,6 +46,7 @@ const { focusMock, helpPanelState, panelStoreState, terminalInputState, hybridHa
       conversationTouched: false,
       hibernateSessions: {} as Record<string, unknown>,
       focusRequest: 0,
+      dictationFocusRequest: null as number | null,
       figures: [] as unknown[],
       markConversationStarted: vi.fn(),
       setWidth: vi.fn(),
@@ -75,6 +76,7 @@ const { focusMock, helpPanelState, panelStoreState, terminalInputState, hybridHa
       scheduled: 0,
       editor: null as HTMLElement | null,
       focusWithCursorAtEnd: vi.fn(),
+      focusForDictation: vi.fn(),
       cancelPendingFocus: vi.fn(),
     },
   })
@@ -374,6 +376,7 @@ function churnPanelIdentity(id: string): void {
 function clearFocusSpies(): void {
   focusMock.mockClear();
   hybridHandle.focusWithCursorAtEnd.mockClear();
+  hybridHandle.focusForDictation.mockClear();
   hybridHandle.cancelPendingFocus.mockClear();
   hybridHandle.scheduled = 0;
 }
@@ -407,6 +410,10 @@ beforeEach(() => {
     });
     return true;
   });
+  // The real one focuses at once, caret parked where dictation writes.
+  hybridHandle.focusForDictation.mockImplementation(() => {
+    hybridHandle.editor?.focus();
+  });
   hybridHandle.cancelPendingFocus.mockImplementation(() => {
     hybridHandle.generation += 1;
   });
@@ -431,6 +438,7 @@ beforeEach(() => {
   helpPanelState.preferredAgentId = null;
   helpPanelState.conversationTouched = false;
   helpPanelState.focusRequest = 0;
+  helpPanelState.dictationFocusRequest = null;
   terminalInputState.hybridInputAutoFocus = true;
   setPanel("t-1");
 
@@ -689,6 +697,88 @@ describe("HelpPanel — reveal focus ownership (#11472)", () => {
       // authorized open request with focus still in the other pane.
       expect(hybridHandle.focusWithCursorAtEnd).not.toHaveBeenCalled();
       expect(focusMock).toHaveBeenCalledWith("t-1");
+    });
+
+    it("focuses the input bar a dictation asked for though home is the terminal (#15870)", () => {
+      terminalInputState.hybridInputAutoFocus = false;
+      helpPanelState.isOpen = false;
+      const { rerender } = render(<HelpPanel width={380} />);
+      focusForeignEditor();
+      clearFocusSpies();
+
+      helpPanelState.isOpen = true;
+      helpPanelState.focusRequest = 1;
+      helpPanelState.dictationFocusRequest = 1;
+      rerender(<HelpPanel width={380} />);
+      act(() => flushFrame());
+
+      expect(focusMock).not.toHaveBeenCalled();
+      expect(hybridHandle.focusWithCursorAtEnd).not.toHaveBeenCalled();
+      expect(hybridHandle.focusForDictation).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).toBe(hybridHandle.editor);
+    });
+
+    it("keeps a terminal home for a later request that wasn't dictation's", () => {
+      terminalInputState.hybridInputAutoFocus = false;
+      helpPanelState.isOpen = false;
+      const { rerender } = render(<HelpPanel width={380} />);
+      focusForeignEditor();
+      clearFocusSpies();
+
+      helpPanelState.isOpen = true;
+      helpPanelState.focusRequest = 2;
+      helpPanelState.dictationFocusRequest = 1;
+      rerender(<HelpPanel width={380} />);
+      act(() => flushFrame());
+      act(() => flushFrame());
+
+      expect(hybridHandle.focusForDictation).not.toHaveBeenCalled();
+      expect(focusMock).toHaveBeenCalledWith("t-1");
+    });
+
+    it("keeps a structural re-run of a dictation's request on home", () => {
+      helpPanelState.isOpen = false;
+      const { rerender } = render(<HelpPanel width={380} />);
+      focusForeignEditor();
+      clearFocusSpies();
+
+      helpPanelState.isOpen = true;
+      helpPanelState.focusRequest = 1;
+      helpPanelState.dictationFocusRequest = 1;
+      rerender(<HelpPanel width={380} />);
+      act(() => flushFrame());
+      expect(hybridHandle.focusForDictation).toHaveBeenCalledTimes(1);
+
+      // Still the Assistant's keyboard, on neither typing surface, so a
+      // structural re-run may place it, by home alone.
+      terminalInputState.hybridInputAutoFocus = false;
+      act(() => document.getElementById("daintree-assistant-panel")!.focus());
+      clearFocusSpies();
+      setPanel("t-1", "spawning");
+      rerender(<HelpPanel width={380} />);
+      act(() => flushFrame());
+      act(() => flushFrame());
+
+      expect(hybridHandle.focusForDictation).not.toHaveBeenCalled();
+      expect(focusMock).toHaveBeenCalledWith("t-1");
+    });
+
+    it("falls back to xterm when the dictation's composer hasn't mounted", () => {
+      helpPanelState.isOpen = false;
+      const { rerender } = render(<HelpPanel width={380} />);
+      focusForeignEditor();
+      clearFocusSpies();
+      hybridHandle.focusForDictation.mockImplementation(() => {});
+
+      helpPanelState.isOpen = true;
+      helpPanelState.focusRequest = 1;
+      helpPanelState.dictationFocusRequest = 1;
+      rerender(<HelpPanel width={380} />);
+      act(() => flushFrame());
+
+      expect(hybridHandle.focusForDictation).toHaveBeenCalledTimes(1);
+      expect(focusMock).toHaveBeenCalledWith("t-1");
+      expect(document.activeElement).toBe(document.querySelector("[data-testid=xterm-textarea]"));
     });
 
     it("routes to xterm when the assistant input is locked", () => {

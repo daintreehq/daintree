@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { trackComposerSurface, wasAssistantLastFocused } from "../composerSurface";
+import {
+  forgetComposerSurfacePane,
+  trackComposerSurface,
+  wasAssistantLastFocused,
+  wasAssistantUsedAfter,
+} from "../composerSurface";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 
 function field(parent: HTMLElement, wrapperRole?: string): HTMLInputElement {
@@ -10,6 +15,17 @@ function field(parent: HTMLElement, wrapperRole?: string): HTMLInputElement {
   host.append(input);
   parent.append(host);
   return input;
+}
+
+function pane(parent: HTMLElement, id: string): HTMLElement {
+  const root = document.createElement("div");
+  root.setAttribute("data-panel-id", id);
+  parent.append(root);
+  return root;
+}
+
+function press(el: Element): void {
+  el.dispatchEvent(new Event("pointerdown", { bubbles: true }));
 }
 
 describe("composerSurface", () => {
@@ -51,5 +67,104 @@ describe("composerSurface", () => {
     field(assistant).focus();
 
     expect(wasAssistantLastFocused()).toBe(false);
+  });
+
+  describe("the Assistant against the panes (#15870)", () => {
+    it("ranks the Assistant ahead of a pane the person left for it, past the toolbar", () => {
+      field(pane(document.body, "agent-a")).focus();
+      field(assistant).focus();
+      field(document.body, "toolbar").focus();
+      press(document.body);
+
+      expect(wasAssistantUsedAfter(["agent-a"])).toBe(true);
+    });
+
+    it("ranks a pane the keyboard went back to ahead of the Assistant", () => {
+      field(assistant).focus();
+      field(pane(document.body, "agent-a")).focus();
+      field(document.body, "toolbar").focus();
+
+      expect(wasAssistantUsedAfter(["agent-a"])).toBe(false);
+      expect(wasAssistantUsedAfter(["agent-b"])).toBe(true);
+      expect(wasAssistantUsedAfter(["agent-b", "agent-a"])).toBe(false);
+    });
+
+    it("counts a press in a pane where focus doesn't move", () => {
+      const chrome = document.createElement("div");
+      pane(document.body, "agent-a").append(chrome);
+      field(assistant).focus();
+      press(chrome);
+
+      expect(wasAssistantUsedAfter(["agent-a"])).toBe(false);
+    });
+
+    it("takes a return to the Assistant over the panes used before it", () => {
+      field(assistant).focus();
+      field(pane(document.body, "agent-a")).focus();
+      field(assistant).focus();
+      field(document.body, "toolbar").focus();
+
+      expect(wasAssistantUsedAfter(["agent-a"])).toBe(true);
+    });
+
+    it("counts a pane's own toolbar as the pane", () => {
+      const toolbar = document.createElement("div");
+      toolbar.setAttribute("role", "toolbar");
+      pane(document.body, "agent-a").append(toolbar);
+      const button = document.createElement("button");
+      toolbar.append(button);
+
+      field(assistant).focus();
+      press(button);
+      expect(wasAssistantUsedAfter(["agent-a"])).toBe(false);
+
+      field(assistant).focus();
+      button.focus();
+      expect(wasAssistantUsedAfter(["agent-a"])).toBe(false);
+    });
+
+    it("takes the Assistant's own terminal for the Assistant, never a pane", () => {
+      field(assistant).focus();
+      press(pane(assistant, "assistant-1"));
+      expect(wasAssistantUsedAfter(["assistant-1"])).toBe(true);
+
+      field(pane(assistant, "assistant-1")).focus();
+      expect(wasAssistantUsedAfter(["assistant-1"])).toBe(true);
+    });
+
+    it("says nothing until the person has been in the Assistant", () => {
+      field(pane(document.body, "agent-a")).focus();
+
+      expect(wasAssistantUsedAfter([])).toBe(false);
+      expect(wasAssistantUsedAfter(["agent-b"])).toBe(false);
+    });
+
+    it("reads an Assistant registered after tracking began", () => {
+      const replacement = document.createElement("aside");
+      document.body.append(replacement);
+      useMacroFocusStore.getState().setRegionRef("assistant", replacement);
+      field(replacement).focus();
+
+      expect(wasAssistantUsedAfter([])).toBe(true);
+    });
+
+    it("forgets a pane that closed, and only that one", () => {
+      field(assistant).focus();
+      field(pane(document.body, "agent-a")).focus();
+      field(pane(document.body, "agent-b")).focus();
+      forgetComposerSurfacePane("agent-a");
+
+      expect(wasAssistantUsedAfter(["agent-a"])).toBe(true);
+      expect(wasAssistantUsedAfter(["agent-b"])).toBe(false);
+    });
+
+    it("forgets everything and stops listening when stopped", () => {
+      field(assistant).focus();
+      stop();
+      expect(wasAssistantUsedAfter([])).toBe(false);
+
+      field(assistant).focus();
+      expect(wasAssistantUsedAfter([])).toBe(false);
+    });
   });
 });
