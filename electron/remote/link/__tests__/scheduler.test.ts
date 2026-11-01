@@ -394,6 +394,27 @@ describe("LaneScheduler fragmented messages (#15892)", () => {
     expect(order.filter(([lane]) => lane === Lane.EVENTS)).toHaveLength(3);
   });
 
+  it("holds an endpoint's close until the last fragment of its message is written (#15881)", () => {
+    const s = new LaneScheduler();
+    const call = message(Lane.RPC, BIG);
+    s.enqueueMessage(call, undefined, { endpointIds: ["e1"] });
+    s.enqueue({ lane: Lane.CONTROL, kind: 8, streamId: 0, payload: new Uint8Array(1) }, undefined, {
+      closes: "e1",
+    });
+    const order: Array<[Lane, number]> = [];
+    for (let fr = s.next(); fr; fr = s.next()) {
+      order.push([fr.lane, fr.kind]);
+      s.written(fr);
+    }
+    const id = call[0]!;
+    expect(order).toEqual([
+      [Lane.RPC, id.kind],
+      [Lane.RPC, id.kind],
+      [Lane.RPC, call[2]!.kind],
+      [Lane.CONTROL, 8],
+    ]);
+  });
+
   it("forgets a message under way when cleared", () => {
     const s = new LaneScheduler();
     s.enqueueMessage(message(Lane.INTERACTIVE, BIG), "t1");
