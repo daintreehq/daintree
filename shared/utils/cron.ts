@@ -486,6 +486,7 @@ export function nextCronOccurrences(
   if (!Number.isInteger(count) || count < 0) {
     throw new RangeError("count must be a non-negative integer");
   }
+  assertInstant("afterMs", afterMs);
   const out: number[] = [];
   let cursor = afterMs;
   while (out.length < count) {

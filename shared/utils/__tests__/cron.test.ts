@@ -319,6 +319,9 @@ describe("nextCronOccurrences", () => {
     expect(nextCronOccurrences(parsed, "UTC", 0, 0)).toEqual([]);
     expect(() => nextCronOccurrences(parsed, "UTC", 0, -1)).toThrow(RangeError);
     expect(() => nextCronOccurrence(parsed, "UTC", Number.NaN)).toThrow(RangeError);
+    expect(() => nextCronOccurrences(parsed, "UTC", Number.POSITIVE_INFINITY, 1)).toThrow(
+      RangeError
+    );
   });
 
   it("refuses times outside 1970 through 9999 and stops a batch at the end", () => {
