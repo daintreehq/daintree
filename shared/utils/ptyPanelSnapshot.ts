@@ -44,6 +44,9 @@ export type PtySnapshotSource = Pick<
   | "firstPrompt"
   | "agentState"
   | "lastStateChange"
+  | "runtimeStatus"
+  | "exitCode"
+  | "sessionPreservingExit"
 >;
 
 export function serializePtyPanel(t: PtySnapshotSource): Partial<PanelSnapshot> {
@@ -61,6 +64,13 @@ export function serializePtyPanel(t: PtySnapshotSource): Partial<PanelSnapshot> 
   // stale session id or agent state would let the next restore launch what the
   // hold is keeping back (#12434).
   const held = t.restoreRecovery !== undefined;
+  // Only an exit the pane still shows (#15941). A session-preserving teardown
+  // is restored with a new process, and an exit with no code was never seen.
+  const shownExit =
+    t.runtimeStatus === "exited" &&
+    t.sessionPreservingExit !== true &&
+    !held &&
+    Number.isInteger(t.exitCode);
   return {
     launchAgentId: t.launchAgentId,
     cwd: t.cwd,
@@ -101,5 +111,6 @@ export function serializePtyPanel(t: PtySnapshotSource): Partial<PanelSnapshot> 
     // indicator on the next reload (issue #5832).
     ...(t.agentState && t.agentState !== "directing" && !held && { agentState: t.agentState }),
     ...(t.lastStateChange !== undefined && !held && { lastStateChange: t.lastStateChange }),
+    ...(shownExit && { exitCode: t.exitCode }),
   };
 }

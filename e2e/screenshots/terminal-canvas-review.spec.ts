@@ -609,19 +609,10 @@ const SPAWN_ERROR = {
 };
 
 /**
- * The pane's exit lives in its component state, which a theme switch remounts
- * away, so a pane that has forgotten its exit is restarted and exited again.
+ * The exited pane keeps its exit across a theme switch, including the reload
+ * the switch falls back to (#15941), so it is checked rather than re-exited.
  */
-async function ensureExited(page: Page, id: string): Promise<void> {
-  const shows = async () =>
-    ((await readPanes(page)).find((p) => p.panelId === id)?.banners ?? []).some((b) =>
-      /code 3/.test(b.text)
-    );
-  if (await shows()) return;
-  await act(page, "terminal.restart", { terminalId: id });
-  await page.waitForTimeout(1500);
-  await waitForPrompt(page, id);
-  await ptyWrite(page, id, "exit 3\r");
+async function expectExited(page: Page, id: string): Promise<void> {
   await expectBanner(page, id, /code 3/);
 }
 
@@ -630,7 +621,7 @@ async function applyFailures(
   page: Page,
   ids: { spawnFailed?: string; reconnect?: string; exited?: string }
 ): Promise<void> {
-  if (ids.exited) await ensureExited(page, ids.exited);
+  if (ids.exited) await expectExited(page, ids.exited);
   if (ids.spawnFailed) {
     await patchPanel(page, ids.spawnFailed, {
       spawnError: SPAWN_ERROR,

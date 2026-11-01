@@ -299,3 +299,49 @@ describe("serializePtyPanel — first prompt (#14592)", () => {
     expect("firstPrompt" in serializePtyPanel(makePanel())).toBe(false);
   });
 });
+
+describe("serializePtyPanel — shown exit (#15941)", () => {
+  it("writes the code of an exit the pane still shows", () => {
+    const snapshot = serializePtyPanel(makePanel({ runtimeStatus: "exited", exitCode: 3 }));
+    expect(snapshot.exitCode).toBe(3);
+  });
+
+  it("writes a clean exit too, since zero is a code", () => {
+    const snapshot = serializePtyPanel(makePanel({ runtimeStatus: "exited", exitCode: 0 }));
+    expect(snapshot.exitCode).toBe(0);
+  });
+
+  it("omits a code the pane no longer shows", () => {
+    // A restart clears the code first and the status only once the new PTY is up.
+    expect(
+      "exitCode" in serializePtyPanel(makePanel({ runtimeStatus: "running", exitCode: 3 }))
+    ).toBe(false);
+    expect("exitCode" in serializePtyPanel(makePanel({ runtimeStatus: "exited" }))).toBe(false);
+  });
+
+  it("omits a value that was never an exit code", () => {
+    for (const exitCode of [1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(
+        "exitCode" in serializePtyPanel(makePanel({ runtimeStatus: "exited", exitCode }))
+      ).toBe(false);
+    }
+  });
+
+  it("omits an exit from a session-preserving teardown, which restores a new process", () => {
+    const snapshot = serializePtyPanel(
+      makePanel({ runtimeStatus: "exited", exitCode: 0, sessionPreservingExit: true })
+    );
+    expect("exitCode" in snapshot).toBe(false);
+  });
+
+  it("omits a held pane's exit along with the rest of its process state", () => {
+    const snapshot = serializePtyPanel(
+      makePanel({
+        runtimeStatus: "exited",
+        exitCode: 3,
+        restoreRecovery: { reason: "sibling-owns-resume-latest-slot" },
+      })
+    );
+    expect("exitCode" in snapshot).toBe(false);
+  });
+});

@@ -196,6 +196,8 @@ export interface TerminalState {
   launchedByPluginId?: string;
   /** The launching plugin asked restore to hold the pane (#14017). Untrusted until sanitized. */
   holdOnRestart?: true;
+  /** The exit the pane still showed when saved (#15941). Untrusted until sanitized. */
+  exitCode?: number;
   /**
    * Extension ID of the plugin that registered this panel's kind, if applicable.
    * Preserved across save/restore so the placeholder can name the missing plugin

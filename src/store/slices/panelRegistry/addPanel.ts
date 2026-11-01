@@ -189,6 +189,13 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
     // like any other pane and stops there — no startup slot, no ledger launch,
     // no prewarm, no spawn.
     const isRecoveryHold = options.restoreRecovery !== undefined && !isReconnect;
+    // Restored as its process's own exit left it (#15941): the pane commits
+    // exited and stops there, as a pane does when its PTY ends — no startup
+    // slot, no spawn, until the user restarts it. A reconnect to a host record
+    // whose process is gone takes the exit too, and spawns nothing anyway.
+    const restoredExitCode = isRecoveryHold ? undefined : options.restoredExitCode;
+    const restoresExit = restoredExitCode !== undefined;
+    const isRestoredExit = restoresExit && !isReconnect;
 
     // Checked after the last await before the commit: the pane may have been
     // closed, or already launched by another click, while this call waited, and
@@ -242,7 +249,26 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
     // merge below would clobber it). Generation 0 = "persisted snapshot,
     // predates every launch this session", so the rejection lands in the
     // anomaly ring for diagnostics.
-    if (isReconnect) {
+    // A replayed snapshot finds the pane as that exit left it, or moved on:
+    // restarting, running again, or exited since with another code. Only the
+    // former is committed again; a newer launch that exited with the same code
+    // is caught by the ledger guard below.
+    if (isRestoredExit) {
+      const existing = get().panelsById[id];
+      if (
+        existing !== undefined &&
+        !(
+          isPtyPanel(existing) &&
+          !existing.isRestarting &&
+          existing.runtimeStatus === "exited" &&
+          existing.exitCode === restoredExitCode
+        )
+      ) {
+        logWarn("[TerminalStore] Kept a pane that moved on over a restored exit", { id });
+        return id;
+      }
+    }
+    if (isReconnect || isRestoredExit) {
       const preexisting = get().panelsById[id];
       const ledgerEntry = preexisting ? agentLifecycleLedger.getEntry(id) : undefined;
       if (
@@ -270,13 +296,11 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
     const ptyExtensionStateVersion =
       options.extensionStateVersion ??
       (options.extensionState !== undefined ? ptyKindConfig?.stateVersion : undefined);
-    // Reconnects don't go through a fresh spawn — mark them "ready" directly. A
-    // held pane has no spawn at all; `restoreRecovery` drives its rendering.
-    const spawnStatus: "spawning" | "ready" | undefined = isReconnect
-      ? "ready"
-      : isRecoveryHold
-        ? undefined
-        : "spawning";
+    // Reconnects don't go through a fresh spawn — mark them "ready" directly,
+    // as is a pane restored exited, whose spawn ran long ago. A held pane has
+    // no spawn at all; `restoreRecovery` drives its rendering.
+    const spawnStatus: "spawning" | "ready" | undefined =
+      isReconnect || isRestoredExit ? "ready" : isRecoveryHold ? undefined : "spawning";
 
     // Overlay terminals boot at ~their real grid instead of the 80×24 spawn
     // default so the assistant CLI never paints its startup banner at a width
@@ -310,12 +334,13 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
     const eagerAttach =
       !isReconnect &&
       !isRecoveryHold &&
+      !isRestoredExit &&
       location === "grid" &&
       isInActiveWorktree &&
       terminalStartupQueue.isIdle;
-    // Every non-reconnect, non-held PTY panel reaches the enqueue below (prewarm
-    // and dock-wake failures are caught), so each reserve pairs with one enqueue.
-    if (!isReconnect && !isRecoveryHold) terminalStartupQueue.reserve();
+    // Every PTY panel that spawns reaches the enqueue below (prewarm and
+    // dock-wake failures are caught), so each reserve pairs with one enqueue.
+    if (!isReconnect && !isRecoveryHold && !isRestoredExit) terminalStartupQueue.reserve();
 
     const terminal = {
       id,
@@ -342,7 +367,8 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
       // Initialize grid terminals as visible to avoid initial under-throttling
       // IntersectionObserver will update this once mounted
       isVisible: location === "grid" ? true : false,
-      runtimeStatus: isRecoveryHold ? undefined : runtimeStatus,
+      runtimeStatus: isRecoveryHold ? undefined : restoresExit ? "exited" : runtimeStatus,
+      ...(restoresExit && { exitCode: restoredExitCode }),
       isInputLocked: options.isInputLocked,
       exitBehavior: options.exitBehavior,
       agentSessionId: options.agentSessionId,
@@ -455,7 +481,7 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
     // A launch of this id supersedes any earlier one still waiting for control.
     cancelDriveLeaseHold(id);
     clearPanelDriveLeaseMark(id);
-    if (isReconnect) {
+    if (isReconnect || isRestoredExit) {
       // Mark this generation as restore-born so the stale-restore guard above
       // can tell an idempotent re-merge from a clobbering one.
       agentLifecycleLedger.recordRestoreApplied(id, launchGeneration);
@@ -467,7 +493,11 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
     // global env under project env under the caller's launch env. The
     // promise never rejects (every branch resolves a fallback), so an
     // early-returning startup task cannot leave an unhandled rejection.
-    const spawnEnvPromise = startSpawnEnvFetch(options, isReconnect, capturedProjectId);
+    const spawnEnvPromise = startSpawnEnvFetch(
+      options,
+      isReconnect || isRestoredExit,
+      capturedProjectId
+    );
 
     // Prewarm renderer-side xterm immediately so we never drop startup output/ANSI while hidden.
     // earlyDataBuffer in terminalClient buffers any data that arrives before the
@@ -629,6 +659,7 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
       logDebug("[TerminalStore] Reconnecting to existing terminal", { id });
       return id;
     }
+    if (isRestoredExit) return id;
 
     // A fresh agent the user will see, during an open memory episode, raises the
     // episode's figures above the grid once (#14309). Never waited on: it is a

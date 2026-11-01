@@ -89,6 +89,12 @@ import { notify } from "@/lib/notify";
 import { flushPanelStatusBuffer, enqueueFlowStatusUpdate } from "@/store/panelStatusBuffer";
 import { isPtyPanel } from "@shared/types/panel";
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+import { panelPersistence } from "@/store/persistence/panelPersistence";
+import {
+  beginBatch,
+  resetBatchState,
+  takeDeferredPersist,
+} from "@/store/slices/panelRegistry/hydrationBatch";
 
 const terminalInstanceService = await loadTerminalService();
 
@@ -1316,6 +1322,81 @@ describe("onExit — session-preserving teardown (#13841)", () => {
 
     onExit("shell", 0);
     expect(getShell()?.sessionPreservingExit).toBeUndefined();
+  });
+});
+
+describe("onExit — the shown exit is saved with the layout (#15941)", () => {
+  function getExitHandler(): ExitHandler {
+    exitHandlers.length = 0;
+    setupLifecycleListeners();
+    const handler = exitHandlers.at(-1);
+    if (!handler) throw new Error("onExit handler was not registered");
+    return handler;
+  }
+
+  function savedShell(save: ReturnType<typeof vi.spyOn>) {
+    const terminals = save.mock.lastCall?.[0] as Array<Record<string, unknown>> | undefined;
+    return terminals?.find((t) => t.id === "shell");
+  }
+
+  function setupShell(overrides: Record<string, unknown> = {}) {
+    usePanelStore.setState({
+      panelsById: {
+        shell: {
+          id: "shell",
+          kind: "terminal",
+          title: "Shell",
+          cwd: "/tmp",
+          cols: 80,
+          rows: 24,
+          location: "grid" as const,
+          ...overrides,
+        },
+      },
+      panelIds: ["shell"],
+    });
+  }
+
+  it("saves a kept pane with its exit, so a reload restores the exit", () => {
+    const save = vi.spyOn(panelPersistence, "save").mockImplementation(() => {});
+    try {
+      setupShell();
+
+      getExitHandler()("shell", 3);
+
+      expect(savedShell(save)).toMatchObject({ runtimeStatus: "exited", exitCode: 3 });
+    } finally {
+      save.mockRestore();
+    }
+  });
+
+  it("leaves the save to the end of a hydration batch, whose panel list is still partial", () => {
+    const save = vi.spyOn(panelPersistence, "save").mockImplementation(() => {});
+    beginBatch();
+    try {
+      setupShell();
+
+      getExitHandler()("shell", 3);
+
+      expect(save).not.toHaveBeenCalled();
+      expect(takeDeferredPersist()).toBe(true);
+    } finally {
+      resetBatchState();
+      save.mockRestore();
+    }
+  });
+
+  it("saves nothing for a session-preserving teardown, which restores a new process", () => {
+    const save = vi.spyOn(panelPersistence, "save").mockImplementation(() => {});
+    try {
+      setupShell();
+
+      getExitHandler()("shell", 1, { preserveSession: true });
+
+      expect(save).not.toHaveBeenCalled();
+    } finally {
+      save.mockRestore();
+    }
   });
 });
 
