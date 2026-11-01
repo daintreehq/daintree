@@ -37,6 +37,7 @@ import type { ResourceProfile } from "../../../shared/types/resourceProfile.js";
 import { deriveAgentObservationLevel } from "../../../shared/types/powerPolicy.js";
 import { getPowerPolicy } from "../../window/powerPolicy.js";
 import { isHostThrowawayTerminalId } from "../../../shared/config/hostThrowaway.js";
+import { isDecisionsDeployTerminalId } from "../../../shared/config/terminalScreenPersistence.js";
 
 /**
  * Stamp main's current PATH onto a Windows spawn message.
@@ -312,12 +313,16 @@ export class ShardRecoveryCoordinator {
 
   /**
    * A host's throwaway runs (#14447) never come back from a crash: a replay
-   * would start a fresh agent nobody launched. Dropped before any replay, and
-   * reported lost so their inventory lets them go.
+   * would start a fresh agent nobody launched. Nor does a Decisions relay
+   * deploy (#16023): its shell outlives the deploy, so a replay would run it
+   * again under the same Worker name, updating that Worker or giving it a new
+   * claim secret. Dropped before any replay, and reported lost so their panes
+   * and inventory let them go.
    */
-  private dropThrowawaySpawns(shard: PtyShard): void {
+  private dropNeverReplayedSpawns(shard: PtyShard): void {
     for (const id of [...this.deps.pendingSpawns.keys()]) {
-      if (!isHostThrowawayTerminalId(id) || this.deps.ownerKey(id) !== shard.key) continue;
+      const neverReplayed = isHostThrowawayTerminalId(id) || isDecisionsDeployTerminalId(id);
+      if (!neverReplayed || this.deps.ownerKey(id) !== shard.key) continue;
       this.deps.pendingSpawns.delete(id);
       this.deps.displacedSpawns.delete(id);
       this.deps.restartExitSuppression.delete(id);
@@ -326,7 +331,7 @@ export class ShardRecoveryCoordinator {
   }
 
   private respawnPendingForShard(shard: PtyShard): void {
-    this.dropThrowawaySpawns(shard);
+    this.dropNeverReplayedSpawns(shard);
     // Kills sent to the crashed shard will never receive "exit" events, so
     // its pendingKillCount entries are permanently stale. Unlike pendingSpawns
     // (replayed below to recreate terminals on the new host), they are
@@ -469,7 +474,7 @@ export class ShardRecoveryCoordinator {
       `[PtyClient] PTY shard '${shard.key}' exceeded its crash budget (code ${code}); migrating its terminals to the default shard`
     );
     // Read before the shard is retired, while its terminals still route to it.
-    this.dropThrowawaySpawns(shard);
+    this.dropNeverReplayedSpawns(shard);
     shard.retired = true;
     this.deps.shards.delete(shard.key);
     this.deps.cancelShardRetirement(shard.key);

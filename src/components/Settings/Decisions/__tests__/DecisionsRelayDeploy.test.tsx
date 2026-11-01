@@ -43,6 +43,7 @@ vi.mock("../relayDeploy", async (importOriginal) => ({
 
 import { DecisionsConnectionSection } from "../DecisionsConnectionSection";
 import { DEPLOY_TO_CLOUDFLARE_URL } from "../relayDeploy";
+import { requestRelayUrl, takePendingRelayUrlRequest } from "../relayUrlRequest";
 
 const NOT_CONNECTED: DecisionsStatus = { state: "not-connected" };
 
@@ -86,6 +87,7 @@ describe("Decisions relay deploy offer", () => {
   });
   afterEach(() => {
     cleanup();
+    takePendingRelayUrlRequest();
   });
 
   it("offers both routes, with the cost and what they create, only while no relay is set up", () => {
@@ -146,7 +148,7 @@ describe("Decisions relay deploy offer", () => {
   });
 
   it("closes Settings first, then opens the deploy pane from home in the active worktree", async () => {
-    let afterClose: (() => void) | undefined;
+    let afterClose: ((closed: boolean) => void) | undefined;
     const onClose = vi.fn<SettingsTabClose>(async (next) => {
       afterClose = next;
       return true;
@@ -159,11 +161,30 @@ describe("Decisions relay deploy offer", () => {
 
     expect(onClose).toHaveBeenCalledOnce();
     expect(openRelayDeployTerminal).not.toHaveBeenCalled();
-    afterClose!();
+    afterClose!(true);
     expect(openRelayDeployTerminal).toHaveBeenCalledExactlyOnceWith({
       cwd: "/home/me",
       worktreeId: "wt-1",
     });
+  });
+
+  it("starts nothing and can be asked again when Settings opens before it had gone", async () => {
+    let afterClose: ((closed: boolean) => void) | undefined;
+    const onClose = vi.fn<SettingsTabClose>(async (next) => {
+      afterClose = next;
+      return true;
+    });
+    renderSection(NOT_CONNECTED, onClose);
+    await act(async () => {
+      fireEvent.click(button("Guided deploy"));
+    });
+    expect(button("Guided deploy").getAttribute("aria-busy")).toBe("true");
+
+    act(() => afterClose!(false));
+
+    expect(openRelayDeployTerminal).not.toHaveBeenCalled();
+    expect(button("Guided deploy").getAttribute("aria-busy")).toBeNull();
+    expect(button("Guided deploy").disabled).toBe(false);
   });
 
   it("starts nothing when unsaved settings hold the close, and can be asked again", async () => {
@@ -230,5 +251,34 @@ describe("Decisions relay deploy offer", () => {
     Object.assign(view, { homeDir: "/home/me", activeWorktreeId: null });
     renderSection();
     expect(button("Guided deploy").disabled).toBe(true);
+  });
+  it("lands on the URL field asked for before Connection rendered", () => {
+    requestRelayUrl();
+    renderSection();
+
+    expect(document.activeElement).toBe(
+      screen.getByPlaceholderText("https://decisions.example.workers.dev")
+    );
+    expect(takePendingRelayUrlRequest()).toBe(false);
+  });
+
+  it("lands on the URL field asked for while Connection is showing", () => {
+    renderSection();
+    expect(document.activeElement).not.toBe(
+      screen.getByPlaceholderText("https://decisions.example.workers.dev")
+    );
+
+    act(() => requestRelayUrl());
+
+    expect(document.activeElement).toBe(
+      screen.getByPlaceholderText("https://decisions.example.workers.dev")
+    );
+  });
+
+  it("lands on a saved relay's row, its check", () => {
+    requestRelayUrl();
+    renderSection({ state: "not-connected", relayOrigin: "https://relay.example.workers.dev" });
+
+    expect(document.activeElement).toBe(button("Check"));
   });
 });

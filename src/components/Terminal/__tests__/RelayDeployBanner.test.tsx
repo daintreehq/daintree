@@ -7,6 +7,7 @@ const dispatch = vi.hoisted(() => vi.fn());
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 
 import { RelayDeployBanner } from "../RelayDeployBanner";
+import { takePendingRelayUrlRequest } from "@/components/Settings/Decisions/relayUrlRequest";
 
 describe("RelayDeployBanner", () => {
   afterEach(() => {
@@ -14,7 +15,7 @@ describe("RelayDeployBanner", () => {
     dispatch.mockReset();
   });
 
-  it("opens Decisions settings on the relay URL field", () => {
+  it("opens Decisions settings, asking for the relay URL field once it shows", () => {
     const onDismiss = vi.fn();
     render(
       <TooltipProvider>
@@ -26,9 +27,10 @@ describe("RelayDeployBanner", () => {
 
     expect(dispatch).toHaveBeenCalledExactlyOnceWith(
       "app.settings.openTab",
-      { tab: "decisions", sectionId: "decisions-relay-url" },
+      { tab: "decisions" },
       { source: "user" }
     );
+    expect(takePendingRelayUrlRequest()).toBe(true);
     // The way back leaves the pane, and its banner, as they are.
     expect(onDismiss).not.toHaveBeenCalled();
   });
@@ -45,5 +47,6 @@ describe("RelayDeployBanner", () => {
 
     expect(onDismiss).toHaveBeenCalledOnce();
     expect(dispatch).not.toHaveBeenCalled();
+    expect(takePendingRelayUrlRequest()).toBe(false);
   });
 });

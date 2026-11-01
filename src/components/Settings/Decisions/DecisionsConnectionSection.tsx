@@ -13,6 +13,8 @@ import { DecisionsRelaySetup } from "./DecisionsRelaySetup";
 import { DecisionsDisconnectDialog } from "./DecisionsDisconnectDialog";
 import { DecisionsRelayDeploy } from "./DecisionsRelayDeploy";
 import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
+import { landOnSettingsElement } from "@/components/Settings/settingsLanding";
+import { onRelayUrlRequest, takePendingRelayUrlRequest } from "./relayUrlRequest";
 
 function relayHost(origin: string | undefined): string | null {
   if (!origin) return null;
@@ -91,6 +93,15 @@ export function DecisionsConnectionSection({
   useEffect(() => {
     forget();
   }, [savedOrigin]);
+  // A finished guided deploy asks for the URL field (#16023), which exists only now.
+  const landOnRelayUrl = useEffectEvent(() => {
+    const row = document.getElementById("decisions-relay-url");
+    if (row) landOnSettingsElement(row);
+  });
+  useEffect(() => {
+    if (takePendingRelayUrlRequest()) landOnRelayUrl();
+    return onRelayUrlRequest(() => landOnRelayUrl());
+  }, []);
   // Not while the switch is changing; unlocked, it runs then.
   useEffect(() => {
     if (connected && savedOrigin && !locked) checkSaved(savedOrigin);

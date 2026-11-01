@@ -92,9 +92,10 @@ export function DecisionsRelayDeploy({
     }
     setStarting(true);
     // Settings goes first, so the pane is in view and keeps the focus it takes.
-    onClose(open).then(
-      (closed) => {
-        if (!closed) setStarting(false);
+    // Reopened before it had gone, it starts nothing and can be asked again.
+    onClose((closed) => (closed ? open() : setStarting(false))).then(
+      (closing) => {
+        if (!closing) setStarting(false);
       },
       () => setStarting(false)
     );
@@ -129,7 +130,7 @@ export function DecisionsRelayDeploy({
         <SettingsRow
           id="decisions-deploy-next"
           label="Then connect it here"
-          description="When Cloudflare has deployed it, enter the Worker URL above and check it, then claim the relay with your CLAIM_SECRET."
+          description="When Cloudflare has deployed it, enter the Worker URL above and check it, then claim the relay with your CLAIM_SECRET"
         />
       )}
       <SettingsRow

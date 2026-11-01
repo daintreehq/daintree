@@ -62,6 +62,15 @@ beforeEach(() => {
   });
 });
 
+// Comfortably past the dialog's exit animation, so a close that would complete has.
+const EXIT_SETTLED_MS = 400;
+
+function waitPastExit() {
+  return act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, EXIT_SETTLED_MS));
+  });
+}
+
 function closeButton() {
   return screen.findByRole("button", { name: "Close, then open something" });
 }
@@ -85,7 +94,12 @@ async function goToDecisions() {
 }
 
 describe("a tab's close with a follow-up", () => {
-  it("runs the follow-up once the dialog has gone, and only then", async () => {
+  it("runs the follow-up once the dialog has gone and handed focus back, and only then", async () => {
+    // The follow-up's focus has to outlast the dialog's own restore to its opener.
+    const opener = document.body.appendChild(document.createElement("button"));
+    const opened = document.body.appendChild(document.createElement("button"));
+    opener.focus();
+    afterClose.mockImplementation(() => opened.focus());
     const onClose = vi.fn();
     const { rerender } = await openEnvironment(onClose);
     await goToDecisions();
@@ -99,12 +113,15 @@ describe("a tab's close with a follow-up", () => {
     expect(afterClose).not.toHaveBeenCalled();
 
     rerender(dialog(false, onClose));
-    await waitFor(() => expect(afterClose).toHaveBeenCalledOnce());
+    await waitFor(() => expect(afterClose).toHaveBeenCalledExactlyOnceWith(true));
+    expect(document.activeElement).toBe(opened);
+    opener.remove();
+    opened.remove();
   });
 
   it("runs nothing and answers false when an unsaved setting holds the close", async () => {
     const onClose = vi.fn();
-    await openEnvironment(onClose);
+    const { rerender } = await openEnvironment(onClose);
     fireEvent.click(screen.getByRole("button", { name: /add variable/i }));
     fireEvent.change(screen.getAllByLabelText(/^Name of variable \d+$/)[1]!, {
       target: { value: "1BAD" },
@@ -117,10 +134,20 @@ describe("a tab's close with a follow-up", () => {
 
     expect(answers).toEqual([false]);
     expect(onClose).not.toHaveBeenCalled();
+
+    // A close that goes through later, by another route, still runs nothing of the held one.
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    await act(async () => {
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    });
+    expect(onClose).toHaveBeenCalledOnce();
+    rerender(dialog(false, onClose));
+    await waitPastExit();
+
     expect(afterClose).not.toHaveBeenCalled();
   });
 
-  it("drops the follow-up when the dialog opens again before the close finished", async () => {
+  it("tells the follow-up the close didn't happen when the dialog opens again first", async () => {
     const onClose = vi.fn();
     const { rerender } = await openEnvironment(onClose);
     await goToDecisions();
@@ -130,11 +157,11 @@ describe("a tab's close with a follow-up", () => {
 
     rerender(dialog(false, onClose));
     rerender(dialog(true, onClose));
-    rerender(dialog(false, onClose));
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 400));
-    });
+    expect(afterClose).toHaveBeenCalledExactlyOnceWith(false);
 
-    expect(afterClose).not.toHaveBeenCalled();
+    // Nor does the next close, which is no follow-up's, run it again.
+    rerender(dialog(false, onClose));
+    await waitPastExit();
+    expect(afterClose).toHaveBeenCalledOnce();
   });
 });

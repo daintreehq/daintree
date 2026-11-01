@@ -1,10 +1,12 @@
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import { actionService } from "@/services/ActionService";
+import { requestRelayUrl } from "@/components/Settings/Decisions/relayUrlRequest";
 
 /**
  * Above a guided Decisions relay deploy (#16023): the way back to Settings,
  * landing on the relay URL field, for the Worker URL and claim secret the
- * deploy shows. Nothing here reads what the terminal printed.
+ * deploy shows. The landing waits for Connection to render, so it isn't the
+ * dialog's own section target. Nothing here reads what the terminal printed.
  */
 export function RelayDeployBanner({ onDismiss }: { onDismiss: () => void }) {
   return (
@@ -15,12 +17,14 @@ export function RelayDeployBanner({ onDismiss }: { onDismiss: () => void }) {
       action={{
         id: "connect-decisions-relay",
         label: "Connect relay…",
-        onClick: () =>
+        onClick: () => {
+          requestRelayUrl();
           void actionService.dispatch(
             "app.settings.openTab",
-            { tab: "decisions", sectionId: "decisions-relay-url" },
+            { tab: "decisions" },
             { source: "user" }
-          ),
+          );
+        },
       }}
       onClose={onDismiss}
     />

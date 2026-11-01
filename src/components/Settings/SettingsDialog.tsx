@@ -281,10 +281,14 @@ function SettingsDialogInner({
   const isOpenRef = useRef(isOpen);
   useEffect(() => {
     isOpenRef.current = isOpen;
-    // Reopened before the exit finished: that close's follow-up no longer applies.
-    if (isOpen) afterCloseRef.current = null;
+    // Reopened before the exit finished: that close's follow-up hears it didn't close.
+    if (isOpen) {
+      const cancelled = afterCloseRef.current;
+      afterCloseRef.current = null;
+      cancelled?.(false);
+    }
   }, [isOpen]);
-  const afterCloseRef = useRef<(() => void) | null>(null);
+  const afterCloseRef = useRef<((closed: boolean) => void) | null>(null);
 
   const hasProject = !!projectId;
 
@@ -686,9 +690,9 @@ function SettingsDialogInner({
 
   // Handed to tab content via the registry's `needsOnClose` flag. That route
   // never passes through onBeforeClose, so it keeps its own flush, or a caller
-  // would close without persisting. `afterClose` runs once the dialog has gone
+  // would close without persisting. `afterClose` hears once the dialog has gone
   // and handed focus back, so what it opens can take focus; a held close runs
-  // nothing and answers false.
+  // nothing and answers false (`SettingsTabClose`).
   const handleClose: SettingsTabClose = async (afterClose) => {
     if (!(await flushBeforeClose())) return false;
     afterCloseRef.current = afterClose ?? null;
@@ -967,7 +971,7 @@ function SettingsDialogInner({
         setCloseHeldBy(null);
         const afterClose = afterCloseRef.current;
         afterCloseRef.current = null;
-        afterClose?.();
+        afterClose?.(true);
       }}
       size="4xl"
       // Search owns first focus (below), not the first tabbable — which was the scope

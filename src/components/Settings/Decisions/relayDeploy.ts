@@ -1,6 +1,7 @@
 import { usePanelStore } from "@/store/panelStore";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
+import { isWindows } from "@/lib/platform";
 import { DECISIONS_DEPLOY_TERMINAL_PREFIX } from "@shared/config/terminalScreenPersistence";
 
 /** Where the Decisions README's Deploy to Cloudflare button goes. */
@@ -32,10 +33,13 @@ export function freshRelayName(): string {
 /**
  * What the pane runs, in full and in view. No token, account or claim flag:
  * Wrangler signs in through the browser, and the relay is claimed afterwards
- * in Settings, with this computer's own keys.
+ * in Settings, with this computer's own keys. On Windows it names npm's batch
+ * shim, since PowerShell would otherwise pick `npx.ps1`, which its default
+ * execution policy refuses to run.
  */
-export function relayDeployCommand(name: string): string {
-  return `npx --yes @daintreehq/decisions-cli@${DECISIONS_CLI_VERSION} deploy --name ${name} --bucket ${name}`;
+export function relayDeployCommand(name: string, windows: boolean): string {
+  const npx = windows ? "npx.cmd" : "npx";
+  return `${npx} --yes @daintreehq/decisions-cli@${DECISIONS_CLI_VERSION} deploy --name ${name} --bucket ${name}`;
 }
 
 export interface RelayDeployPlacement {
@@ -64,7 +68,8 @@ export async function openRelayDeployTerminal(
       cwd: placement.cwd,
       worktreeId: placement.worktreeId,
       location: "grid",
-      command: relayDeployCommand(name),
+      // Only a local window offers the guided deploy, so this machine is the PTY's.
+      command: relayDeployCommand(name, isWindows()),
       focusPolicy: "take",
     });
   } catch (error) {
@@ -74,6 +79,7 @@ export async function openRelayDeployTerminal(
       priority: "high",
       title: "Couldn't open the deploy terminal",
       message: "The guided deploy didn't start. Deploy to Cloudflare in Settings works without it.",
+      context: { eventKind: "settings" },
       action: {
         label: "Try again",
         onClick: () => void openRelayDeployTerminal(placement),
