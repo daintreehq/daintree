@@ -165,6 +165,12 @@ interface ProjectLease {
   awayUntil: number | null;
 }
 
+/** The last holder of a project nobody holds now, whose tenure its client takes back. */
+interface VacatedTenure {
+  clientId: string;
+  tenureId: string;
+}
+
 /**
  * Who MCP dispatch should reach for a project. `reserved` is a holder that is
  * away (its link dropped, its view closed or moved) inside its grace window:
@@ -194,6 +200,12 @@ export class DriveLeaseService {
   private readonly isHostScreenInUse: (endpoint: ClientEndpoint) => boolean;
   private savedReservations = "";
   private readonly leases = new Map<string, ProjectLease>();
+  /**
+   * Projects whose grace ran out with nobody there, kept for their last
+   * holder's client until anyone else could have driven them: a Shell back
+   * from a long outage still finds the project as it left it.
+   */
+  private readonly vacatedTenures = new Map<string, VacatedTenure>();
   private readonly clients = new Map<string, ClientRef>();
   /** Remote endpoints whose link is down: kept by the session, but nobody is there. */
   private readonly detached = new Set<string>();
@@ -463,6 +475,9 @@ export class DriveLeaseService {
    */
   projectsDrivenElsewhere(endpoint: DriveStanding): Map<string, DriveLeaseHolder> {
     const out = new Map<string, DriveLeaseHolder>();
+    // The call may change a project nobody holds, which only a window of
+    // the client that last held it may do without ending that tenure.
+    for (const projectId of [...this.vacatedTenures.keys()]) this.settleVacatedTenure(projectId);
     const projects = new Set([...this.leases.keys(), ...this.attachedProjects()]);
     for (const projectId of projects) {
       const holder = this.getHolder(projectId);
@@ -614,6 +629,7 @@ export class DriveLeaseService {
       if (lease.releaseTimer) clearTimeout(lease.releaseTimer);
     }
     this.leases.clear();
+    this.vacatedTenures.clear();
     this.clients.clear();
     this.detached.clear();
     this.listeners.clear();
@@ -645,6 +661,9 @@ export class DriveLeaseService {
     const projects = new Set(this.leases.keys());
     for (const projectId of this.attachedProjects()) projects.add(projectId);
     for (const projectId of projects) this.reconcileProject(projectId);
+    // A project only this machine's windows show is never reconciled, and
+    // they drive it while nobody holds it.
+    for (const projectId of [...this.vacatedTenures.keys()]) this.settleVacatedTenure(projectId);
     // A remote view joining or leaving a locally held project changes whether
     // the pty-host must arbitrate it, with no holder change to publish.
     this.publishDriveLeases();
@@ -739,6 +758,7 @@ export class DriveLeaseService {
     if (this.disposed) return;
     const lease = this.leases.get(projectId);
     if (!lease) {
+      this.settleVacatedTenure(projectId);
       if (!mayGrant) return;
       const next = this.successor(projectId, null);
       if (next) this.grant(projectId, next, "vacant");
@@ -809,8 +829,35 @@ export class DriveLeaseService {
       return;
     }
     this.leases.delete(projectId);
+    if (lease.holder.tenureId) {
+      this.vacatedTenures.set(projectId, {
+        clientId: lease.holder.clientId,
+        tenureId: lease.holder.tenureId,
+      });
+    }
     logger.info("Drive lease released", holderContext(projectId, lease.holder));
     this.publish(projectId, null);
+  }
+
+  /**
+   * End the tenure kept for a project nobody holds once a window of another
+   * client is on it: with nobody holding it, that window drives it.
+   */
+  private settleVacatedTenure(projectId: string): void {
+    const vacated = this.vacatedTenures.get(projectId);
+    if (!vacated) return;
+    const other = this.presentFor(projectId).find(
+      (endpoint) => endpoint.clientId !== vacated.clientId
+    );
+    if (!other) return;
+    this.vacatedTenures.delete(projectId);
+    logger.info("Drive lease tenure ended while nobody held the project", {
+      projectId,
+      tenureId: vacated.tenureId,
+      clientId: vacated.clientId,
+      byEndpointId: other.endpointId,
+      byClientId: other.clientId,
+    });
   }
 
   private grant(
@@ -820,12 +867,15 @@ export class DriveLeaseService {
   ): DriveLeaseHolder {
     const previous = this.leases.get(projectId);
     if (previous?.releaseTimer) clearTimeout(previous.releaseTimer);
+    if (!previous) this.settleVacatedTenure(projectId);
+    const last = previous?.holder ?? this.vacatedTenures.get(projectId);
+    this.vacatedTenures.delete(projectId);
     const client = this.clientOf(endpoint);
     // The project stays with one client, so nobody else drove it in between.
-    const sameClient = previous?.holder.clientId === endpoint.clientId;
+    const sameClient = last?.clientId === endpoint.clientId;
     const holder: DriveLeaseHolder = {
       leaseId: this.nextLeaseId++,
-      tenureId: (sameClient ? previous?.holder.tenureId : undefined) ?? randomUUID(),
+      tenureId: (sameClient ? last?.tenureId : undefined) ?? randomUUID(),
       endpointId: endpoint.endpointId,
       clientId: endpoint.clientId,
       clientName: client?.clientName ?? endpoint.clientId,
