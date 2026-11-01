@@ -938,7 +938,7 @@ export class HttpLifecycle {
     this.lastError = null;
     if (hadPriorFailure) this.deps.emitRuntimeStateChange();
 
-    this.startPromise = (async () => {
+    return this.trackStart(false, async () => {
       try {
         if (!this.apiKey) {
           const persisted = this.getConfig().apiKey;
@@ -980,12 +980,24 @@ export class HttpLifecycle {
         this.lastError = formatErrorMessage(err, "MCP server failed to start");
         this.deps.emitRuntimeStateChange();
         throw err;
-      } finally {
-        this.startPromise = null;
       }
-    })();
+    });
+  }
 
-    return this.startPromise;
+  /**
+   * Record `run` as the start in flight until it settles. Cleared after the
+   * field is set, never from inside `run`: a run with nothing to await settles
+   * before the assignment, and would leave a settled promise in flight forever.
+   */
+  private trackStart(forHolds: boolean, run: () => Promise<void>): Promise<void> {
+    const promise: Promise<void> = run().finally(() => {
+      if (this.startPromise !== promise) return;
+      this.startPromise = null;
+      this.startForHolds = false;
+    });
+    this.startPromise = promise;
+    this.startForHolds = forHolds;
+    return promise;
   }
 
   /**
@@ -1039,31 +1051,24 @@ export class HttpLifecycle {
 
   /** Bind the listener as {@link start} does, for the held routes alone. */
   private openForHolds(): Promise<void> {
-    this.startForHolds = true;
-    this.startPromise = (async () => {
-      try {
-        const server = this.createServer();
-        const configuredPort = this.getConfig().port ?? DEFAULT_PORT;
-        const boundPort = await this.listenWithRetry(server, configuredPort);
-        if (boundPort === null) {
-          throw new Error(
-            `Failed to bind the MCP listener: ports ${configuredPort}–${configuredPort + MAX_PORT_RETRIES} all in use`
-          );
-        }
-        this.port = boundPort;
-        this.httpServer = server;
-        this.holdsOnly = true;
-        this.attachServerSupervision(server);
-        this.armStableTimer();
-        console.log(
-          `[MCP] Listener open on 127.0.0.1:${boundPort} for held routes; the MCP server is off`
+    return this.trackStart(true, async () => {
+      const server = this.createServer();
+      const configuredPort = this.getConfig().port ?? DEFAULT_PORT;
+      const boundPort = await this.listenWithRetry(server, configuredPort);
+      if (boundPort === null) {
+        throw new Error(
+          `Failed to bind the MCP listener: ports ${configuredPort}–${configuredPort + MAX_PORT_RETRIES} all in use`
         );
-      } finally {
-        this.startForHolds = false;
-        this.startPromise = null;
       }
-    })();
-    return this.startPromise;
+      this.port = boundPort;
+      this.httpServer = server;
+      this.holdsOnly = true;
+      this.attachServerSupervision(server);
+      this.armStableTimer();
+      console.log(
+        `[MCP] Listener open on 127.0.0.1:${boundPort} for held routes; the MCP server is off`
+      );
+    });
   }
 
   /** End a hold; the last one to go closes a listener it alone kept open. */
@@ -1250,7 +1255,7 @@ export class HttpLifecycle {
     this.restartAttempts = 0;
     this.intentionalStop = true;
 
-    this.stopPromise = (async () => {
+    const promise: Promise<void> = (async () => {
       try {
         if (this.startPromise) {
           try {
@@ -1310,7 +1315,9 @@ export class HttpLifecycle {
         this.lastError = null;
 
         console.log(
-          keepListener ? "[MCP] Server stopped; the listener stays open for its holds" : "[MCP] Server stopped"
+          keepListener
+            ? "[MCP] Server stopped; the listener stays open for its holds"
+            : "[MCP] Server stopped"
         );
         if (wasRunning) {
           this.deps.emitStatusChange();
@@ -1319,11 +1326,13 @@ export class HttpLifecycle {
         }
       } finally {
         this.intentionalStop = false;
-        this.stopPromise = null;
       }
-    })();
-
-    return this.stopPromise;
+    })().finally(() => {
+      // After the assignment below, for the reason {@link trackStart} gives.
+      if (this.stopPromise === promise) this.stopPromise = null;
+    });
+    this.stopPromise = promise;
+    return promise;
   }
 
   private async listenWithRetry(server: http.Server, startPort: number): Promise<number | null> {

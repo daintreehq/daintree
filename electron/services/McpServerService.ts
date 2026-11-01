@@ -1161,7 +1161,7 @@ export class McpServerService {
    */
   async holdListener(id: string, route: ListenerRoute): Promise<McpListenerHold> {
     const listener = await this.httpLifecycle.holdListener(id, route);
-    const wakes = this.terminalNotify.holdWakes();
+    const wakes = this.terminalNotify.openWakeScope();
     const endWakes = () => wakes.release();
     this.heldWakeScopes.add(endWakes);
     return {

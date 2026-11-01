@@ -947,7 +947,7 @@ export class TerminalNotifyService {
   }
 
   /** A scope for one feature's wakes, which go on with the server off; see {@link WakeScope}. */
-  holdWakes(): WakeScope {
+  openWakeScope(): WakeScope {
     const scope: WakeScopeRecord = { id: randomUUID(), released: false };
     this.wakeScopes.add(scope);
     return {
