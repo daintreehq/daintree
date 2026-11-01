@@ -47,7 +47,8 @@ interface Result {
   loadError?: string;
   plugin?: {
     resolved: Record<string, string>;
-    required: { records: unknown; sameInstance: boolean };
+    loaded: Record<string, true | string>;
+    required: { records: unknown; fromCommonJs: boolean; fromCreateRequire: boolean };
     values: Record<string, unknown>;
     refused: Record<string, Refusal | null>;
   };
@@ -81,7 +82,9 @@ globalThis.__sdkProbeResult.plugin = await plugin.probe();
 
 // A zero-build plugin: hand-written ESM importing every served entry, with
 // nothing installed. The CommonJS module comes first, so its require() is the
-// one that evaluates the data entry.
+// one that evaluates the data entry. createRequire asks for a different entry:
+// the same request from the same directory would be answered from CommonJS's
+// path cache without reaching the hook.
 const PLUGIN_INDEX = `
 import legacy from "./legacy.cjs";
 import { createRequire } from "node:module";
@@ -94,6 +97,14 @@ const require = createRequire(import.meta.url);
 const SERVED = ${JSON.stringify(Object.keys(HOST_SERVED_SDK_ENTRIES))};
 
 export async function probe() {
+  const loaded = {};
+  for (const specifier of SERVED) {
+    try {
+      loaded[specifier] = Object.keys(await import(specifier)).length > 0 || "no exports";
+    } catch (error) {
+      loaded[specifier] = error.code + ": " + error.message;
+    }
+  }
   const refused = {};
   for (const entry of ["react", "testing"]) {
     try {
@@ -105,11 +116,12 @@ export async function probe() {
   }
   return {
     resolved: Object.fromEntries(SERVED.map((specifier) => [specifier, import.meta.resolve(specifier)])),
+    loaded,
     required: {
       records: legacy.parseJsonl('{"a":1}\\n').records,
-      sameInstance:
-        legacy.parseJsonl === parseJsonl &&
-        require("@daintreehq/plugin-sdk/data").parseJsonl === parseJsonl,
+      fromCommonJs: legacy.parseJsonl === parseJsonl,
+      fromCreateRequire:
+        require("@daintreehq/plugin-sdk/files").getFileTypeCategory === getFileTypeCategory,
     },
     values: {
       channel: typeof PLUGIN_PROCESS_STREAM_CHANNEL,
@@ -209,10 +221,18 @@ describe("the worker SDK fallback under Electron's embedded Node", () => {
         killSignal: "SIGKILL",
       }));
     } catch (error) {
-      const failed = error as { stdout?: string; stderr?: string; message: string };
+      const failed = error as {
+        stdout?: string;
+        stderr?: string;
+        message: string;
+        signal?: string | null;
+        killed?: boolean;
+      };
       stdout = failed.stdout ?? "";
       stderr = failed.stderr ?? "";
-      exitFailure = failed.message;
+      exitFailure = failed.killed
+        ? `killed with ${failed.signal ?? "a signal"} after the 30s deadline: ${failed.message}`
+        : failed.message;
     }
     runtimeRecord = readRecord<Runtime>(stdout, RUNTIME_MARK);
     result = readRecord<Result>(stdout, RESULT_MARK);
@@ -249,13 +269,14 @@ describe("the worker SDK fallback under Electron's embedded Node", () => {
 
   it("serves every host-served entry from the app's copy to a plugin with no node_modules", () => {
     const probe = plugin();
+    const served = Object.entries(HOST_SERVED_SDK_ENTRIES);
     expect(probe.resolved, runtime).toEqual(
       Object.fromEntries(
-        Object.entries(HOST_SERVED_SDK_ENTRIES).map(([specifier, file]) => [
-          specifier,
-          pathToFileURL(path.join(sdkDir, file)).href,
-        ])
+        served.map(([specifier, file]) => [specifier, pathToFileURL(path.join(sdkDir, file)).href])
       )
+    );
+    expect(probe.loaded, runtime).toEqual(
+      Object.fromEntries(served.map(([specifier]) => [specifier, true]))
     );
     expect(probe.values, runtime).toEqual({
       channel: "string",
@@ -267,7 +288,11 @@ describe("the worker SDK fallback under Electron's embedded Node", () => {
   });
 
   it("serves require() of an entry, from CommonJS and from createRequire", () => {
-    expect(plugin().required, runtime).toEqual({ records: [{ a: 1 }], sameInstance: true });
+    expect(plugin().required, runtime).toEqual({
+      records: [{ a: 1 }],
+      fromCommonJs: true,
+      fromCreateRequire: true,
+    });
   });
 
   it("refuses the /react and /testing entries by name", () => {
