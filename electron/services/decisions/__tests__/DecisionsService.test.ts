@@ -423,18 +423,22 @@ describe("DecisionsService pane state", () => {
   });
 
   it("outranks the last lifetime's pushes after it starts again", async () => {
-    const { pushes, service } = withPushes();
-    await service.start(on());
-    service.observeQuestions([row(1)]);
-    await service.stop();
+    // A still clock, so only the service's own counter can order the pushes.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(0);
+    try {
+      const { pushes, service } = withPushes();
+      await service.start(on());
+      service.observeQuestions([row(1)]);
+      await service.stop();
 
-    await service.start(on());
-    service.observeQuestions([row(1)]);
+      await service.start(on());
+      service.observeQuestions([row(1)]);
 
-    const revisions = pushes.map(({ state }) => state.revision);
-    expect(revisions).toHaveLength(3);
-    expect(revisions).toEqual([...revisions].sort((a, b) => a - b));
-    expect(new Set(revisions).size).toBe(3);
+      expect(pushes.map(({ state }) => state.revision)).toEqual([1, 2, 3]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("pushes nothing from the moment quit begins, and nothing after", async () => {

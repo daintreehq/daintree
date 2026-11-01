@@ -253,6 +253,12 @@ describe("projectPaneDecisionStates", () => {
     expect(panes.get("pane-a")?.content.openQuestions.map((q) => q.alias)).toEqual([1]);
   });
 
+  it("shows a pane nowhere when its newest question names no project", () => {
+    const panes = projectPaneDecisionStates([row(1), row(2, { origin: { project_id: "" } })]);
+
+    expect(panes.size).toBe(0);
+  });
+
   it("never carries question, answer, option, origin or attachment text", () => {
     const panes = projectPaneDecisionStates([
       row(1),

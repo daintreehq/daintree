@@ -57,8 +57,10 @@ export function projectPaneDecisionStates(
 ): Map<string, ProjectedPane> {
   const sorted = [...rows].filter((row) => !row.history_only).sort(byAlias);
   const projectOf = new Map<string, string>();
+  // The newest row decides even when its project is missing: the pane then
+  // shows nowhere rather than in a project an older question named.
   for (const { origin } of sorted) {
-    if (origin.pane_id && origin.project_id) projectOf.set(origin.pane_id, origin.project_id);
+    if (origin.pane_id) projectOf.set(origin.pane_id, origin.project_id);
   }
 
   const panes = new Map<string, ProjectedPane>();
