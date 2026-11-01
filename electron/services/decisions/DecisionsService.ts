@@ -1,5 +1,5 @@
 import { stat } from "node:fs/promises";
-import type { QuestionRow } from "@daintreehq/decisions-client";
+import type { PolicyRegistry, QuestionRow } from "@daintreehq/decisions-client";
 import type {
   DecisionsSettings,
   DecisionsStatus,
@@ -23,6 +23,7 @@ import {
   type RelayBinding,
   type RelayConnectionOptions,
 } from "./relayConnection.js";
+import { createTrustedPolicy } from "./workflowGates.js";
 
 export type DecisionsStatusListener = (event: DecisionsStatusEvent) => void;
 
@@ -110,6 +111,12 @@ export class DecisionsService {
   private readonly onRelayRevoked: (relay: RelayBinding) => void;
   private connection: DecisionsRelayConnection | null = null;
   private connectionKey: string | null = null;
+  /**
+   * The trusted policy for this enabled lifetime. One registry serves every
+   * bridge the lifetime runs, attempt after attempt, so a change to the proxy
+   * allowlist reaches the running bridge without a reconnect.
+   */
+  private policy: PolicyRegistry | null = null;
   /** The store didn't open for this lifetime; the next start tries it again. */
   private storeFailed = false;
   /**
@@ -148,6 +155,11 @@ export class DecisionsService {
     return this.settings;
   }
 
+  /** The policy this lifetime asks questions under; null while stopped. */
+  getPolicy(): PolicyRegistry | null {
+    return this.policy;
+  }
+
   /** The running lifetime's store; null while stopped, or while it couldn't be opened. */
   getStore(): DaintreeLocalStore | null {
     return this.store;
@@ -173,6 +185,7 @@ export class DecisionsService {
   updateSettings(settings: DecisionsSettings): void {
     if (this.disposed || this.settings === null || !settings.enabled) return;
     this.settings = settings;
+    this.applyPolicy(settings);
     this.reconcileConnection();
   }
 
@@ -236,6 +249,7 @@ export class DecisionsService {
     return this.enqueue(async () => {
       if (this.disposed || !settings.enabled) return;
       this.settings = settings;
+      this.applyPolicy(settings);
       // There is no relay identity until a relay is claimed or restored, and no
       // socket until one opens, so on is honestly "not connected" for now.
       if (this.state === "off") this.setStatus({ state: "not-connected" });
@@ -337,6 +351,7 @@ export class DecisionsService {
     this.store = null;
     this.keyStore = null;
     this.settings = null;
+    this.policy = null;
     this.storeFailed = false;
     try {
       // Commits what the lifetime left queued; the rows stay until deleted.
@@ -373,12 +388,14 @@ export class DecisionsService {
     }
     if (this.connection) return;
     const store = this.store;
-    if (!store) return;
+    const policy = this.policy;
+    if (!store || !policy) return;
     let connection: DecisionsRelayConnection | null = null;
     connection = this.connect({
       relay: wanted,
       store,
       keys: this.getKeyStore(),
+      policy,
       onStatus: (status) => {
         if (this.connection === connection) this.setStatus(status);
       },
@@ -393,6 +410,16 @@ export class DecisionsService {
     this.connection = connection;
     this.connectionKey = key;
     connection.start();
+  }
+
+  /**
+   * The lifetime's policy, made on its first start and updated in place after
+   * that: replacing it would leave the running bridge on the old one. Already
+   * asked questions keep the level they were asked with.
+   */
+  private applyPolicy(settings: DecisionsSettings): void {
+    if (this.policy) this.policy.proxyAllowlisted = settings.proxyAllowlisted;
+    else this.policy = createTrustedPolicy(settings);
   }
 
   private dropConnection(): void {

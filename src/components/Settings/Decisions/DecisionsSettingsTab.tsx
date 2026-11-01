@@ -3,6 +3,7 @@ import { SettingsGroup } from "@/components/Settings/SettingsGroup";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { useDecisions } from "./useDecisions";
+import { useDecisionsPolicy } from "./useDecisionsPolicy";
 import { DecisionsConsentDialog } from "./DecisionsConsentDialog";
 import { DecisionsConnectionSection } from "./DecisionsConnectionSection";
 import { DecisionsDevicesSection } from "./DecisionsDevicesSection";
@@ -26,6 +27,8 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
   const [consentOpen, setConsentOpen] = useState(false);
 
   const on = status !== null && status.state !== "off";
+  // One read for the two sections it feeds, so one Retry recovers both.
+  const policy = useDecisionsPolicy(on);
   const enabled = pending?.enabled ?? on;
   const locked = status === null || pending !== null;
 
@@ -84,8 +87,8 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
             onClose={onClose}
           />
           <DecisionsDevicesSection status={status} locked={pending !== null} />
-          <DecisionsQuestionsSection />
-          <DecisionsPolicySection />
+          <DecisionsQuestionsSection policy={policy} />
+          <DecisionsPolicySection policy={policy} />
           <DecisionsVoiceSection />
           <DecisionsDataSection
             status={status}

@@ -5,6 +5,7 @@ import {
   type Identity,
   type KeyStore,
   type LocalStore,
+  type PolicyRegistry,
   type SocketState,
   type TerminalSink,
   type WebSocketLike,
@@ -47,6 +48,12 @@ export interface RelayConnectionOptions {
   relay: RelayBinding;
   store: RelayConnectionStore;
   keys: KeyStore;
+  /**
+   * The trusted gates and proxy allowlist every attempt's bridge asks and
+   * answers questions under. Shared, never copied, so a change reaches the
+   * bridge that is running.
+   */
+  policy: PolicyRegistry;
   onStatus(status: RelayConnectionStatus): void;
   /** The relay revoked this identity. Called once, after which nothing reconnects. */
   onRevoked(): void;
@@ -275,6 +282,7 @@ export class RelayConnection {
         keyStore: this.bridgeKeys(attempt, retireable(this.keys, retired)),
         store: retireable(this.store, retired),
         sink: this.o.sink ?? holdingTerminalSink,
+        policy: this.o.policy,
         // The outbox keeps its own retry times, so a request is tried once per pass.
         client: new RelayClient({ identity, fetch: requests.fetch, maxRetries: 0 }),
         webSocket: (url) => this.openSocket(attempt, url),

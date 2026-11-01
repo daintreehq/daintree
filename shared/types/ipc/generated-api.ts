@@ -322,6 +322,9 @@ export interface GeneratedElectronAPI {
     getPaneState(
       ...args: IpcInvokeMap["decisions:get-pane-state"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-pane-state"]["result"]>;
+    getPolicy(
+      ...args: IpcInvokeMap["decisions:get-policy"]["args"]
+    ): Promise<IpcInvokeMap["decisions:get-policy"]["result"]>;
     getStatus(
       ...args: IpcInvokeMap["decisions:get-status"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-status"]["result"]>;
@@ -334,6 +337,9 @@ export interface GeneratedElectronAPI {
     setEnabled(
       ...args: IpcInvokeMap["decisions:set-enabled"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-enabled"]["result"]>;
+    setProxyAllowlisted(
+      ...args: IpcInvokeMap["decisions:set-proxy-allowlisted"]["args"]
+    ): Promise<IpcInvokeMap["decisions:set-proxy-allowlisted"]["result"]>;
     startPairing(
       ...args: IpcInvokeMap["decisions:start-pairing"]["args"]
     ): Promise<IpcInvokeMap["decisions:start-pairing"]["result"]>;

@@ -580,6 +580,45 @@ describe("DecisionsService relay connection", () => {
     expect(service.getStatus()).toEqual({ state: "not-connected", problem: "keys" });
   });
 
+  it("hands every connection of a lifetime the same trusted policy, and changes it in place", async () => {
+    const { service, made } = connected();
+    await service.start(on(RELAY));
+    const policy = service.getPolicy();
+    expect(policy?.get("design-review/final")?.minRequirement).toBe("human-required");
+    expect(made[0]!.options.policy).toBe(policy);
+    expect(policy?.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+
+    service.updateSettings(on({ ...RELAY, proxyAllowlisted: true }));
+    expect(service.getPolicy()).toBe(policy);
+    expect(policy?.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
+
+    // Another relay identity gets a new connection on the same policy.
+    service.updateSettings(on({ ...RELAY, proxyAllowlisted: true, deviceId: "dev_87654321" }));
+    expect(made).toHaveLength(2);
+    expect(made[1]!.options.policy).toBe(policy);
+
+    await service.start(on({ ...RELAY, proxyAllowlisted: false, deviceId: "dev_87654321" }));
+    expect(service.getPolicy()).toBe(policy);
+    expect(policy?.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+  });
+
+  it("drops the policy with the lifetime, and the next lifetime starts from the saved settings", async () => {
+    const { service } = connected();
+    await service.start(on({ ...RELAY, proxyAllowlisted: true }));
+    const first = service.getPolicy();
+    await service.stop();
+    expect(service.getPolicy()).toBeNull();
+
+    // A change to stopped settings changes nothing, and the next start takes what it is given.
+    service.updateSettings(on({ ...RELAY, proxyAllowlisted: true }));
+    expect(service.getPolicy()).toBeNull();
+    await service.start(on(RELAY));
+    const second = service.getPolicy();
+    expect(second).not.toBe(first);
+    expect(second?.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+    expect(second?.get("design-review/final")).toBeDefined();
+  });
+
   it("stops the connection before the store closes", async () => {
     const { service, events } = connected();
     await service.start(on(RELAY));

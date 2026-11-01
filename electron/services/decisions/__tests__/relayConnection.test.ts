@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  DecisionsBridge,
   MemoryKeyStore,
   MemoryLocalStore,
   type KeyStore,
@@ -42,6 +43,7 @@ import {
 import type { RelayFetch } from "../relayCheck.js";
 import { openDb } from "../../persistence/db.js";
 import { DaintreeLocalStore } from "../daintreeLocalStore.js";
+import { createTrustedPolicy } from "../workflowGates.js";
 
 const RELAY: RelayBinding = {
   relayOrigin: "https://decisions.example.workers.dev",
@@ -258,6 +260,7 @@ async function harness(
     relay: RELAY,
     store,
     keys,
+    policy: createTrustedPolicy({ proxyAllowlisted: false }),
     onStatus: (status) => {
       statuses.push(status);
       for (const waiter of [...waiters]) {
@@ -420,6 +423,28 @@ describe("RelayConnection", () => {
     await vi.advanceTimersByTimeAsync(RECONNECT_CAP_MS);
     expect(h.relay.tickets).toHaveLength(2);
     h.connection.stop();
+  });
+
+  it("asks every attempt's bridge to apply the one policy it was given, never a fresh one", async () => {
+    const policy = createTrustedPolicy({ proxyAllowlisted: false });
+    const used: unknown[] = [];
+    const start = vi.spyOn(DecisionsBridge.prototype, "start").mockImplementation(async function (
+      this: DecisionsBridge
+    ) {
+      used.push(this.ctx.policy);
+      throw new Error("no relay in this test");
+    });
+    const h = await harness({ rand: () => 0.5, overrides: { policy } });
+    h.connection.start();
+    await h.status("reconnecting");
+    const retried = h.next("reconnecting");
+    await vi.advanceTimersByTimeAsync(RECONNECT_BASE_MS);
+    await retried;
+    h.connection.stop();
+    start.mockRestore();
+
+    expect(used.length).toBeGreaterThanOrEqual(2);
+    for (const seen of used) expect(seen).toBe(policy);
   });
 
   it("doubles the backoff window per failure up to five minutes, and resets after a hello", async () => {

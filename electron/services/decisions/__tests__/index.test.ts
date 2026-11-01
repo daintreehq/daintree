@@ -4,7 +4,13 @@ import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const saved = vi.hoisted(() => ({ value: undefined as unknown }));
-const loads = vi.hoisted(() => ({ constructed: 0, failNextConstruct: false, failNextOpen: false }));
+const loads = vi.hoisted(() => ({
+  constructed: 0,
+  failNextConstruct: false,
+  failNextOpen: false,
+  // While set, closing a store waits for it, holding the service's transitions.
+  closing: null as Promise<void> | null,
+}));
 const broadcast = vi.hoisted(() => vi.fn());
 // The relay check's network: Chromium's, which tests answer by hand.
 const netFetch = vi.hoisted(() => vi.fn<(url: string, init: RequestInit) => Promise<Response>>());
@@ -130,7 +136,7 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
             loads.failNextOpen = false;
             throw new Error("store unavailable");
           }
-          return { close: async () => {} } as never;
+          return { close: () => loads.closing ?? Promise.resolve() } as never;
         },
       });
       loads.constructed += 1;
@@ -172,11 +178,13 @@ import {
   disconnectRelay,
   exportData,
   getDecisionsPaneState,
+  getDecisionsPolicy,
   getDecisionsService,
   getDecisionsStatus,
   peekDecisionsService,
   restoreIdentity,
   setDecisionsEnabled,
+  setDecisionsProxyAllowlisted,
   startDecisionsIfEnabled,
   stopDecisions,
 } from "../index.js";
@@ -210,6 +218,7 @@ describe("Decisions entry", () => {
     saved.value = undefined;
     loads.failNextConstruct = false;
     loads.failNextOpen = false;
+    loads.closing = null;
     vi.mocked(store.set).mockClear();
     broadcast.mockClear();
     netFetch.mockReset();
@@ -492,6 +501,98 @@ describe("Decisions entry", () => {
 
     await setDecisionsEnabled(true);
     expect(peekDecisionsService()?.getStore()).not.toBeNull();
+  });
+
+  describe("policy", () => {
+    it("reads the trusted gates and the proxy allowlist as saved", () => {
+      saved.value = { enabled: true, proxyAllowlisted: true };
+      const policy = getDecisionsPolicy();
+      expect(policy.proxyAllowlisted).toBe(true);
+      expect(policy.gates.map((gate) => gate.id)).toContain("design-review/final");
+      expect(policy.defaultQuestionExpiryMs).toBeGreaterThan(0);
+    });
+
+    it("saves the proxy allowlist, keeping every other field, and the running policy follows it", async () => {
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      const running = peekDecisionsService()!.getPolicy()!;
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+
+      const policy = await setDecisionsProxyAllowlisted(true);
+
+      expect(policy.proxyAllowlisted).toBe(true);
+      expect(saved.value).toEqual({
+        ...defaultDecisionsSettings(),
+        enabled: true,
+        ...RELAY,
+        consentedAt: 5,
+        proxyAllowlisted: true,
+      });
+      expect(peekDecisionsService()!.getPolicy()).toBe(running);
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
+      expect(connections).toHaveLength(1);
+      expect(connections[0]!.stopped).toBe(0);
+
+      expect((await setDecisionsProxyAllowlisted(false)).proxyAllowlisted).toBe(false);
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+    });
+
+    it("moves the revision with each save, and tells every window to read it again", async () => {
+      saved.value = { enabled: true };
+      await startDecisionsIfEnabled();
+      const before = getDecisionsPolicy().revision;
+      const pushedAfter = async (revision: number) =>
+        vi.waitFor(() =>
+          expect(pushedStatuses().at(-1)?.revision as number).toBeGreaterThan(revision)
+        );
+
+      let status = (await getDecisionsStatus()).revision ?? 0;
+      const saved1 = await setDecisionsProxyAllowlisted(true);
+      expect(saved1.revision).toBeGreaterThan(before);
+      expect(getDecisionsPolicy()).toEqual(saved1);
+      await pushedAfter(status);
+
+      status = (await getDecisionsStatus()).revision ?? 0;
+      const saved2 = await setDecisionsProxyAllowlisted(false);
+      expect(saved2.revision).toBeGreaterThan(saved1.revision);
+      await pushedAfter(status);
+    });
+
+    it("waits for a switch-on under way, so the starting lifetime can't keep the old allowlist", async () => {
+      saved.value = { enabled: true, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      // A stop still closing the store holds the service, so the switch-on
+      // below waits there with the settings it read.
+      let closed!: () => void;
+      loads.closing = new Promise<void>((resolve) => (closed = resolve));
+      const stopping = service.stop();
+      const enabling = setDecisionsEnabled(true);
+      await vi.waitFor(() => expect(store.set).toHaveBeenCalledTimes(1));
+
+      let allowed = false;
+      const allowing = setDecisionsProxyAllowlisted(true).then((policy) => {
+        allowed = true;
+        return policy;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      // Queued behind the switch-on: nothing saved, nothing answered yet.
+      expect(allowed).toBe(false);
+      expect(saved.value).toMatchObject({ proxyAllowlisted: false });
+
+      closed();
+      await Promise.all([stopping, enabling, allowing]);
+      expect(saved.value).toMatchObject({ enabled: true, proxyAllowlisted: true });
+      const running = service.getPolicy()!;
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
+    });
+
+    it("refuses to change the allowlist while off, and saves nothing", async () => {
+      saved.value = { enabled: false };
+      await expect(setDecisionsProxyAllowlisted(true)).rejects.toMatchObject(CANCELLED);
+      expect(store.set).not.toHaveBeenCalled();
+      expect(peekDecisionsService()).toBeNull();
+    });
   });
 
   describe("relay check", () => {

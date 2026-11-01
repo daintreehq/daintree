@@ -16,6 +16,8 @@ export const DECISIONS_METHOD_CHANNELS = {
   exportData: "decisions:export-data",
   deleteRelayData: "decisions:delete-relay-data",
   deleteLocalData: "decisions:delete-local-data",
+  getPolicy: "decisions:get-policy",
+  setProxyAllowlisted: "decisions:set-proxy-allowlisted",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof DECISIONS_METHOD_CHANNELS;

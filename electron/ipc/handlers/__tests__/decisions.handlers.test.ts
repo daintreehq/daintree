@@ -4,6 +4,7 @@ import type {
   DecisionsConnectResult,
   DecisionsExportResult,
   DecisionsLocalDeleteResult,
+  DecisionsPolicy,
   DecisionsRelayCheck,
   DecisionsRelayDeleteResult,
   DecisionsStatus,
@@ -64,6 +65,20 @@ const decisionsEntry = vi.hoisted(() => ({
     result: "deleted",
     status: { state: "not-connected" },
   })),
+  getDecisionsPolicy: vi.fn((): DecisionsPolicy => ({
+    gates: [],
+    proxyAllowlisted: false,
+    defaultQuestionExpiryMs: 1,
+    maxQuestionExpiryMs: 2,
+    revision: 0,
+  })),
+  setDecisionsProxyAllowlisted: vi.fn(async (allowed: boolean): Promise<DecisionsPolicy> => ({
+    gates: [],
+    proxyAllowlisted: allowed,
+    defaultQuestionExpiryMs: 1,
+    maxQuestionExpiryMs: 2,
+    revision: 1,
+  })),
 }));
 const dialogMock = vi.hoisted(() => ({
   showSaveDialog: vi.fn<(...args: unknown[]) => Promise<{ canceled: boolean; filePath?: string }>>(
@@ -91,6 +106,8 @@ vi.mock("../../../services/decisions/index.js", () => {
     exportData: decisionsEntry.exportData,
     deleteRelayData: decisionsEntry.deleteRelayData,
     deleteLocalData: decisionsEntry.deleteLocalData,
+    getDecisionsPolicy: decisionsEntry.getDecisionsPolicy,
+    setDecisionsProxyAllowlisted: decisionsEntry.setDecisionsProxyAllowlisted,
   };
 });
 vi.mock("@daintreehq/decisions-protocol", () => {
@@ -139,6 +156,11 @@ const restoreIdentity = decisionsNamespace.ops.restoreIdentity.handler as unknow
 ) => Promise<DecisionsConnectResult>;
 const disconnectRelay = decisionsNamespace.ops.disconnectRelay
   .handler as unknown as () => Promise<DecisionsStatus>;
+const getPolicy = decisionsNamespace.ops.getPolicy
+  .handler as unknown as () => Promise<DecisionsPolicy>;
+const setProxyAllowlisted = decisionsNamespace.ops.setProxyAllowlisted.handler as unknown as (
+  allowed: boolean
+) => Promise<DecisionsPolicy>;
 
 type ExportHandler = (
   ctx: { senderWindow: unknown },
@@ -175,6 +197,8 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_EXPORT_DATA,
   CHANNELS.DECISIONS_DELETE_RELAY_DATA,
   CHANNELS.DECISIONS_DELETE_LOCAL_DATA,
+  CHANNELS.DECISIONS_GET_POLICY,
+  CHANNELS.DECISIONS_SET_PROXY_ALLOWLISTED,
 ];
 
 describe("decisions IPC", () => {
@@ -192,6 +216,8 @@ describe("decisions IPC", () => {
     decisionsEntry.deleteRelayData.mockClear();
     decisionsEntry.deleteLocalData.mockClear();
     dialogMock.showSaveDialog.mockClear();
+    decisionsEntry.getDecisionsPolicy.mockClear();
+    decisionsEntry.setDecisionsProxyAllowlisted.mockClear();
     vi.mocked(store.set).mockClear();
   });
   afterEach(() => {
@@ -322,6 +348,19 @@ describe("decisions IPC", () => {
 
     expect(decisionsEntry.evaluated).toBe(0);
     expect(decisionsEntry.libraries).toBe(0);
+  });
+
+  it("refuses to read the policy or change the allowlist while off, loading none of Decisions", async () => {
+    for (const value of [undefined, { enabled: false }, { enabled: "true" }]) {
+      saved.value = value;
+
+      await expect(getPolicy()).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(setProxyAllowlisted(true)).rejects.toMatchObject({ code: "PERMISSION" });
+    }
+
+    expect(decisionsEntry.evaluated).toBe(0);
+    expect(decisionsEntry.libraries).toBe(0);
+    expect(store.set).not.toHaveBeenCalled();
   });
 
   it("refuses to claim, restore or disconnect once quit has sealed the loader", async () => {
@@ -530,6 +569,27 @@ describe("decisions IPC", () => {
       {},
     ]) {
       expect(deleteSchema.safeParse(value).success).toBe(false);
+    }
+  });
+
+  it("reads the policy and changes the allowlist through Decisions itself once on", async () => {
+    saved.value = { enabled: true };
+
+    await expect(getPolicy()).resolves.toMatchObject({ proxyAllowlisted: false });
+    await expect(setProxyAllowlisted(true)).resolves.toMatchObject({ proxyAllowlisted: true });
+
+    expect(decisionsEntry.getDecisionsPolicy).toHaveBeenCalledOnce();
+    expect(decisionsEntry.setDecisionsProxyAllowlisted).toHaveBeenCalledExactlyOnceWith(true);
+    expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("takes only a boolean for the allowlist, and nothing that could carry a gate", () => {
+    const schema = decisionsNamespace.ops.setProxyAllowlisted.schema as SafeParse;
+
+    expect(schema.safeParse(true).success).toBe(true);
+    expect(schema.safeParse(false).success).toBe(true);
+    for (const value of [undefined, "true", 1, { proxyAllowlisted: true }, { gates: [] }]) {
+      expect(schema.safeParse(value).success).toBe(false);
     }
   });
 

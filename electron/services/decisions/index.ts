@@ -17,6 +17,7 @@ import {
   type DecisionsPairingDeclineResult,
   type DecisionsPairingStartResult,
   type DecisionsPairingState,
+  type DecisionsPolicy,
   type DecisionsRelayCheck,
   type DecisionsRelayDeleteResult,
   type DecisionsRelayRequestFailure,
@@ -49,6 +50,7 @@ import {
   type RelaySetupOutcome,
   type SetupKeyStore,
 } from "./relayIdentity.js";
+import { decisionsPolicyOf } from "./workflowGates.js";
 
 /**
  * Nothing imports this module until the saved setting reads as on (the boot
@@ -83,6 +85,8 @@ function forgetOwnerDevices(): void {
   ownerDevices?.dispose();
   ownerDevices = null;
 }
+/** Counts policy changes, so a policy read that lands after a newer change can't roll it back. */
+let policyRevision = 0;
 
 function publishPaneState(projectId: string, state: PaneDecisionState): void {
   broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
@@ -545,6 +549,30 @@ export async function declinePairing(pairingId: string): Promise<DecisionsPairin
   return devices instanceof OwnerDevices ? devices.decline(pairingId) : devices;
 }
 
+/** The rules questions are asked under (#16013): the trusted gates, and the proxy allowlist as saved. */
+export function getDecisionsPolicy(): DecisionsPolicy {
+  return decisionsPolicyOf(readDecisionsSettings(store), policyRevision);
+}
+
+/**
+ * Lets questions with no workflow gate accept a proxy answer, or stops them.
+ * The running lifetime's policy changes in place, so the next question is
+ * asked under it; questions already asked keep the level they were asked with.
+ */
+export function setDecisionsProxyAllowlisted(allowed: boolean): Promise<DecisionsPolicy> {
+  return serialize(async () => {
+    const current = readDecisionsSettings(store);
+    if (shutDown || !current.enabled) throw setupRefused();
+    const saved = writeDecisionsSettings(store, { ...current, proxyAllowlisted: allowed });
+    policyRevision += 1;
+    service?.updateSettings(saved);
+    // The policy has no push of its own: Settings in other windows reads it
+    // again on a status change, so one goes out with every save.
+    publishStatus();
+    return decisionsPolicyOf(saved, policyRevision);
+  });
+}
+
 /** Boot: starts the service only if the saved setting, sanitised, is on. */
 export function startDecisionsIfEnabled(): Promise<void> {
   return serialize(async () => {
@@ -611,4 +639,5 @@ export function _resetDecisionsForTesting(): void {
   transitions = Promise.resolve();
   statusRevision = 0;
   statusPushes = Promise.resolve();
+  policyRevision = 0;
 }

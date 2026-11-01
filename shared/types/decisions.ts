@@ -103,6 +103,51 @@ export interface DecisionsStatus {
   revision?: number;
 }
 
+/** How strictly a question needs a person: only a person, or a proxy answer may do. */
+export type DecisionsRequirement = "human-required" | "proxy-ok" | "proxy-first";
+
+/**
+ * A trusted workflow gate as Daintree registers it (#16013), for Settings to
+ * show. Daintree defines every gate; nothing an agent sends can add, change
+ * or loosen one, and Settings only reads them.
+ */
+export interface DecisionsWorkflowGate {
+  /** The id a question names in `workflow_gate_id`. */
+  id: string;
+  /** The least strict a question under it can be; an agent can only ask for stricter. */
+  requirement: DecisionsRequirement;
+  /** The only answers it accepts. Empty when the gate leaves the options to the agent. */
+  choices: { id: string; label: string }[];
+  /** Whether an answer may carry free text. */
+  allowsText: boolean;
+  /**
+   * Whether an answer binds to the question's attached images: the question
+   * must carry them, and `get_decision` reports whether the person's answer
+   * came from a phone that showed exactly those.
+   */
+  bindsAttachments: boolean;
+}
+
+/** The rules questions are asked under on this computer, as main applies them. */
+export interface DecisionsPolicy {
+  gates: DecisionsWorkflowGate[];
+  /** Whether a question without a registered gate may accept a proxy answer, when its agent allows one. */
+  proxyAllowlisted: boolean;
+  /**
+   * How long a question with no origin gate waits when its agent sets no
+   * expiry, in ms, or null for no expiry. The client library's own rule,
+   * read from it; Daintree has no way to change it yet.
+   */
+  defaultQuestionExpiryMs: number | null;
+  /** The latest expiry such a question's agent can ask for, in ms after asking; null for no limit. */
+  maxQuestionExpiryMs: number | null;
+  /**
+   * Increases with each change main saves, so a read that lands after a
+   * newer change can't roll it back.
+   */
+  revision: number;
+}
+
 /**
  * Turning Decisions on or off from Settings. `consent` is the person agreeing,
  * in the consent dialog, to what leaves the machine; turning it on is refused

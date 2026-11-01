@@ -2146,11 +2146,30 @@ export const SETTINGS_REGISTRY = [
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
       {
+        id: "decisions-questions",
+        section: "Questions",
+        title: "Question expiry",
+        description:
+          "How long a question waits for your answer, and what an expired one authorises",
+        keywords: ["expiry", "expire", "expires", "timeout", "wait", "question", "authorise"],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
         id: "decisions-policy",
         section: "Policy",
-        title: "Who answers",
-        description: "Every question waits for your own answer",
-        keywords: ["policy", "proxy", "gate", "human", "required"],
+        title: "Workflow gates",
+        description:
+          "The gates Daintree sets, such as design-review/final, which only you can answer",
+        keywords: ["policy", "gate", "workflow", "design review", "human", "required", "approve"],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-proxy-allowlist",
+        section: "Policy",
+        title: "Allow proxy answers",
+        description:
+          "Whether a question without a registered workflow gate may accept a decision model's answer",
+        keywords: ["proxy", "allowlist", "decision model", "automatic", "answer", "policy"],
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
       {
