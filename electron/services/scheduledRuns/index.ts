@@ -139,6 +139,34 @@ export async function getScheduledRunRecorderForInbox(): Promise<ScheduledRunRec
 }
 
 /**
+ * Whether a run of this lifetime is open, without opening the history to find
+ * out. A history that can't be read counts as none, so a last window closing
+ * quits as it always did.
+ */
+export function hasOpenScheduledRun(): boolean {
+  if (!recorder) return false;
+  try {
+    return recorder.hasAnyOpenRun();
+  } catch (error) {
+    console.warn("[ScheduledRuns] Couldn't read which runs are open:", error);
+    return false;
+  }
+}
+
+/**
+ * Calls back whenever a run ends or a schedule's or project's run history is
+ * deleted (those runs never end), until the returned function is called.
+ */
+export function onScheduledRunClosed(listener: () => void): () => void {
+  const offEnded = events.on("scheduled-run:ended", listener);
+  const offDeleted = events.on("scheduled-runs:deleted", listener);
+  return () => {
+    offEnded();
+    offDeleted();
+  };
+}
+
+/**
  * Follows the PTY and session facts a run records, for the life of the
  * process. Until the history is opened no run of this lifetime exists, so a
  * fact that arrives before then has no run to land on.
