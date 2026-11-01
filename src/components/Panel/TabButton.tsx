@@ -8,7 +8,7 @@ import React, {
 } from "react";
 import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
 import { m, AnimatePresence } from "framer-motion";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, ShieldAlert } from "lucide-react";
 import type { PanelKind, AgentState, PanelLocation } from "@/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -456,10 +456,16 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
               {hasDangerousFlags && (
                 <Tooltip>
                   <TooltipTrigger asChild>
+                    {/* The pane header's mark, smaller: a dot here meant
+                        "dangerous flags" while the same dot on the header
+                        means a failed broadcast. */}
                     <span
-                      className="status-mark w-2 h-2 rounded-full bg-status-danger shrink-0"
+                      role="img"
+                      className="inline-flex h-3 w-3 shrink-0 items-center justify-center text-status-danger"
                       aria-label="Launched with dangerous permissions"
-                    />
+                    >
+                      <ShieldAlert className="h-3 w-3" aria-hidden="true" />
+                    </span>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
                     Launched with dangerous permissions — agent can modify files without prompting

@@ -322,7 +322,7 @@ export function TerminalHeaderContent({
             )}
             {sessionCost != null && (
               <span className="shrink-0 whitespace-pre" aria-hidden="true">
-                {noChanges && "· "}
+                {noChanges && <span className="mr-1">·</span>}
                 {formatSessionCost(sessionCost)}
               </span>
             )}
@@ -334,7 +334,9 @@ export function TerminalHeaderContent({
                 )}
                 aria-hidden="true"
               >
-                {(noChanges || sessionCost != null) && "· "}
+                {/* The chip's gap sits before the dot and mr-1 after it, so the
+                    dot is centred rather than clinging to the value. */}
+                {(noChanges || sessionCost != null) && <span className="mr-1">·</span>}
                 {formatTokenCount(sessionTokens)} tokens
               </span>
             )}
@@ -374,13 +376,14 @@ export function TerminalHeaderContent({
       {/* Exit code badge — aria-live="off" overrides role="status"'s implicit
           polite live region. The global announcer in useAccessibilityAnnouncements
           routes the transition once with a pane-title prefix, avoiding competing
-          live regions across a multi-pane fleet (#9204). Set at the row's 11px
-          step; a failure is marked in shape ahead of the reading, which keeps
+          live regions across a multi-pane fleet (#9204). In the row's shared
+          chip box, so the ended session's cost and exit read as one kind of
+          fact; a failure is marked in shape ahead of the reading, which keeps
           secondary ink because the error hue on 11px text falls under 4.5:1 on
           several light headers. */}
       {exitStatus && (
         <span
-          className="inline-flex shrink-0 items-center gap-1 text-2xs leading-4 font-mono tabular-nums text-text-secondary"
+          className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE, "font-mono tabular-nums")}
           role="status"
           aria-live="off"
           aria-label={exitStatus.failed ? `${exitStatus.badge}, failed` : undefined}
@@ -425,13 +428,14 @@ export function TerminalHeaderContent({
       {queueCount > 0 && (
         <Tooltip>
           <TooltipTrigger asChild>
+            {/* One run of text like every other count in the bar, not a mono
+                digit a flex gap away from its noun. */}
             <div
-              className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE)}
+              className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE, "tabular-nums")}
               role="status"
               aria-live="off"
             >
-              <span className="font-mono tabular-nums">{queueCount}</span>
-              <span>queued</span>
+              {queueCount} queued
             </div>
           </TooltipTrigger>
           <TooltipContent side="bottom">
@@ -455,8 +459,19 @@ export function TerminalHeaderContent({
       {isInputLocked && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <div className="flex items-center text-text-secondary shrink-0" role="status">
-              <Lock className="w-3.5 h-3.5" aria-hidden="true" />
+            {/* Focusable like the row's other tooltip-bearing marks, so the
+                reason the pane ignores keystrokes reaches the keyboard too. */}
+            <div
+              className={cn(
+                "flex shrink-0 items-center rounded-sm p-0.5 text-text-secondary",
+                HEADER_CHIP_FOCUS_CLASS
+              )}
+              role="status"
+              aria-live="off"
+              aria-label="Input locked (read-only monitor mode)"
+              tabIndex={0}
+            >
+              <Lock className="w-3 h-3" aria-hidden="true" />
             </div>
           </TooltipTrigger>
           <TooltipContent side="bottom">Input locked (read-only monitor mode)</TooltipContent>

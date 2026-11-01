@@ -152,6 +152,8 @@ function PluginPanelToolbarRow({
       aria-orientation="horizontal"
       onKeyDown={handleKeyDown}
       data-testid="panel-header-plugin-toolbar"
+      // A box the maximized readout in PanelHeader must stand clear of.
+      data-readout-obstacle=""
       className="ml-1.5 flex min-w-0 shrink items-center gap-1"
     >
       {buttons.map((button) => (
