@@ -89,15 +89,25 @@ vi.mock("../../../window/serviceRefs.js", async (importOriginal) => ({
 
 // What each opened route was handed.
 const openedRoutes = vi.hoisted(
-  () => [] as Array<{ sources: import("../mcpRoute.js").DecisionsMcpRouteSources }>
+  () =>
+    [] as Array<{
+      sources: import("../mcpRoute.js").DecisionsMcpRouteSources;
+      after: Promise<void> | undefined;
+      letGo: () => void;
+    }>
 );
 vi.mock("../mcpRoute.js", () => ({
   openDecisionsMcpRoute: (
     _source: unknown,
-    sources: import("../mcpRoute.js").DecisionsMcpRouteSources
+    sources: import("../mcpRoute.js").DecisionsMcpRouteSources,
+    after?: Promise<void>
   ) => {
-    openedRoutes.push({ sources });
-    return { close: async () => {} };
+    let letGo!: () => void;
+    const closed = new Promise<void>((resolve) => {
+      letGo = resolve;
+    });
+    openedRoutes.push({ sources, after, letGo });
+    return { close: () => closed };
   },
 }));
 
@@ -956,6 +966,22 @@ describe("Decisions entry", () => {
       await sources.holdListener("decisions", route);
       expect(mcpRefs.holdListener).toHaveBeenCalledWith("decisions", route);
 
+      // A replacement takes the listener only once this route has let go of it.
+      connections[0]!.options.onQuestionsReady!({
+        identity: () => null,
+        live: () => null,
+        store: {} as never,
+      });
+      let replaced = false;
+      void openedRoutes[1]!.after!.then(() => {
+        replaced = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(replaced).toBe(false);
+      openedRoutes[0]!.letGo();
+      await vi.waitFor(() => expect(replaced).toBe(true));
+
+      openedRoutes[1]!.letGo();
       await stopDecisions();
       expect(sources.hostId()).toBeNull();
     });

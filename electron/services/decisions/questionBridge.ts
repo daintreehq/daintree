@@ -96,7 +96,8 @@ export class QuestionBridge extends DecisionsBridge {
    * and would send it even after the library's cancel drops it as never
    * published, bringing the question back. So a cancel while an attempt runs
    * keeps the create, marked as possibly published, and the library queues a
-   * real cancel to follow it.
+   * real cancel to follow it. Attachment uploads (#16014) rewrite the create
+   * from the flush's own copy, so they will need this mark kept across them.
    */
   private async keepCreate(questionId: string): Promise<void> {
     const store = this.question.source.store;
