@@ -1248,9 +1248,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           // Written through at once: a send waiting on the rewrite reads the
           // draft store, which would otherwise catch up only on the next render.
           return view
-            ? captureRewriteSelection(view, (doc) =>
-                useTerminalInputStore.getState().setDraftInput(terminalId, doc, projectId)
-              )
+            ? captureRewriteSelection(view, (doc) => {
+                const inputs = useTerminalInputStore.getState();
+                const stored = inputs.getDraftInput(terminalId, projectId);
+                expectEditorEdits(editsSinceStoredRef.current, terminalId, projectId, stored, doc);
+                inputs.setDraftInput(terminalId, doc, projectId);
+              })
             : null;
         },
       });

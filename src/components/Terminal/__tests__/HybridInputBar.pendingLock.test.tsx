@@ -28,6 +28,8 @@ import {
   useDictationRangeStore,
 } from "@/store/dictationRangeStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
+import { findRewriteComposer } from "@/services/voiceRewriteSelection";
+import { writeComposerDraftThrough } from "@/services/voiceCorrectionLanding";
 import { HybridInputBar } from "../HybridInputBar";
 
 const WT_ID = "/repo/wt";
@@ -205,6 +207,38 @@ describe("HybridInputBar while a dictated passage's correction is pending", () =
     await act(async () => {
       view.dispatch({ changes: { from: 1, insert: "f" }, userEvent: "input.type" });
       useTerminalInputStore.getState().setDraftInput("term-2", "elsewhere");
+    });
+
+    expect(draft()).toBe(`/f${PASSAGE}`);
+    expect(passageRecord()).toEqual({ edited: false, text: PASSAGE });
+  });
+
+  // A correction landing first writes through the typing the composer hasn't
+  // written back yet (#15873).
+  it("keeps a keystroke out of it when a correction writes it through", async () => {
+    const { caretAt, type, view } = await mountPending();
+    await caretAt(0);
+    await type("/");
+    await act(async () => {
+      view.dispatch({ changes: { from: 1, insert: "f" }, userEvent: "input.type" });
+      writeComposerDraftThrough(PANEL, undefined);
+      expect(draft()).toBe(`/f${PASSAGE}`);
+    });
+
+    expect(passageRecord()).toEqual({ edited: false, text: PASSAGE });
+  });
+
+  // Written through at once, so the store never sees the change as typing.
+  it("keeps a spoken rewrite of the text in front of it out of the passage", async () => {
+    const { caretAt, type, view } = await mountPending();
+    await caretAt(0);
+    await type("/");
+    await act(async () => {
+      view.dispatch({ selection: { anchor: 0, head: 1 }, userEvent: "select" });
+    });
+    const selection = findRewriteComposer(PANEL)!.captureSelection()!;
+    await act(async () => {
+      expect(selection.apply("/f")).toBe(true);
     });
 
     expect(draft()).toBe(`/f${PASSAGE}`);
