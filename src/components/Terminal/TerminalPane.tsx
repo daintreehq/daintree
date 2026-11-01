@@ -145,6 +145,7 @@ import {
   usePaneInputNotice,
 } from "./TerminalInputBlockBanner";
 import { WorktreeMoveBanner } from "./WorktreeMoveBanner";
+import { CanopyPaneOffer, useCanopyPaneOffer } from "@/components/Canopy/CanopyPaneOffer";
 import { VoiceMicNoticeBanner } from "./VoiceMicNoticeBanner";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 
@@ -1348,11 +1349,19 @@ function TerminalPaneComponent({
   // arrive together and a momentary wait never flashes either.
   // A restart or an exit is the newer observation: the dead run's error wait
   // no longer describes the pane.
+  const debouncedWait = useDockBlockedState(agentState);
   const isBlockedWait =
-    useDockBlockedState(agentState) === "waiting" &&
-    waitingReason === "error" &&
+    debouncedWait === "waiting" && waitingReason === "error" && !isRestarting && !isExited;
+  // Stopped on what Daintree read as a question or an approval: where Canopy's
+  // reading would have told an ask from a finished turn, so its offer lives here.
+  const askedOn =
+    debouncedWait === "waiting" &&
     !isRestarting &&
-    !isExited;
+    !isExited &&
+    (waitingReason === "question" || waitingReason === "approval")
+      ? waitingReason
+      : null;
+  const canopyOffer = useCanopyPaneOffer(id, askedOn !== null);
   const [blockedBannerDismissed, setBlockedBannerDismissed] = useState(false);
   // Folding and unfolding swap the control the keyboard is on; hand focus to
   // its counterpart once the swap has painted, unless it already moved on.
@@ -1809,6 +1818,17 @@ function TerminalPaneComponent({
               ) : undefined
             }
           />
+        </BannerSlot>
+
+        <BannerSlot visible={canopyOffer !== null}>
+          {canopyOffer && (
+            <CanopyPaneOffer
+              panelId={id}
+              state={canopyOffer}
+              agentName={blockedAgentName}
+              reason={askedOn ?? "question"}
+            />
+          )}
         </BannerSlot>
       </div>
 

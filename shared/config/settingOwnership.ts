@@ -280,6 +280,7 @@ export const SETTING_CATALOG = {
       "daintree-canopy-role": device,
       "daintree-canopy-assistant-handbacks": device,
       "daintree-canopy-reading-offer-dismissed": device,
+      "daintree-canopy-pane-offer-dismissed": device,
       "daintree-canopy-list-width": device,
       "daintree:cliAvailability:v3": device,
       "daintree:fleet-selection-hint-dismissed": device,
