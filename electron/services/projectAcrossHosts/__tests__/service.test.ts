@@ -1092,9 +1092,7 @@ describe("remote reads across lookups", () => {
     host.addProject(kept);
     host.addProject(changed);
     const payload = { remoteUrls: [URL], committedProjectId: null };
-    expect((await service.find(payload)).map((m) => m.path).sort()).toEqual(
-      [kept, changed].sort()
-    );
+    expect((await service.find(payload)).map((m) => m.path).sort()).toEqual([kept, changed].sort());
 
     git(changed, ["remote", "set-url", "origin", OTHER_URL]);
     reads.length = 0;
