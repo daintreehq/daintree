@@ -514,6 +514,7 @@ describe("HostCallRuntime host.call to a throwaway target (#14446)", () => {
         .mockResolvedValueOnce({ status: "unknown" })
         .mockResolvedValueOnce({ status: "conflict" });
       for (let i = 0; i < 4; i++) {
+        advance(60_000);
         await runtime.call("a", { ...LONG_LAUNCH, callId: "mine-1" }, { tier: "core" });
         expect(held()).toBe(true);
       }
@@ -522,23 +523,45 @@ describe("HostCallRuntime host.call to a throwaway target (#14446)", () => {
           .slice(1)
           .every(({ resend }) => resend)
       ).toBe(true);
-      // Still the first send's bound.
-      advance(TEN_MINUTES + allowanceMs);
+      // Still the first send's bound: no resend moved it.
+      advance(TEN_MINUTES + allowanceMs - 4 * 60_000 - 1);
+      expect(held()).toBe(true);
+      advance(1);
       expect(held()).toBe(false);
     });
 
-    it("holds a run from a host before time limits until it's seen over or its session ends", async () => {
-      throwawayCall.mockResolvedValueOnce(LAUNCHED);
-      await runtime.call("a", LAUNCH, { tier: "core" });
-      advance(60 * 60_000);
-      expect(held()).toBe(true);
-      throwawayCall.mockResolvedValueOnce({
+    describe("from a host before time limits", () => {
+      const legacy = (
+        fields: Partial<HostThrowawayRun> & { ageMs: number }
+      ): ThrowawayCallAnswer => ({
         status: "done",
-        result: { tool: "throwaway.status", run: { ...RUN, ageMs: 9_000 } },
+        result: { tool: "throwaway.status", run: { ...RUN, ...fields } },
       });
-      await runtime.call("a", status(), { tier: "core" });
-      runtime.endHelpSession("a");
-      expect(held()).toBe(false);
+
+      it("holds its run until its session ends", async () => {
+        throwawayCall.mockResolvedValueOnce(LAUNCHED);
+        await runtime.call("a", LAUNCH, { tier: "core" });
+        advance(60 * 60_000);
+        expect(held()).toBe(true);
+        runtime.endHelpSession("a");
+        expect(held()).toBe(false);
+      });
+
+      it("lets go of its run once seen over, for good", async () => {
+        throwawayCall.mockResolvedValueOnce(LAUNCHED);
+        await runtime.call("a", LAUNCH, { tier: "core" });
+        throwawayCall.mockResolvedValueOnce(legacy({ ageMs: 9_000 }));
+        await runtime.call("a", { ...status(), newCallId: "old-read" }, { tier: "core" });
+        expect(held()).toBe(true);
+        throwawayCall.mockResolvedValueOnce(
+          legacy({ ageMs: 9_000, state: "exited", endedAt: 10_000, endReason: "exit" })
+        );
+        await runtime.call("a", status(), { tier: "core" });
+        expect(held()).toBe(false);
+        throwawayCall.mockResolvedValueOnce(legacy({ ageMs: 9_000 }));
+        await runtime.call("a", { ...status(), callId: "old-read" }, { tier: "core" });
+        expect(held()).toBe(false);
+      });
     });
 
     it("never lets go early when the wall clock steps forward", async () => {
