@@ -1,6 +1,7 @@
 import type {
   ScheduleCreateInput,
   ScheduleCreateOutcome,
+  ScheduleOsJobStatus,
   ScheduleRemoveOutcome,
   ScheduleRunNowOptions,
   ScheduleRunNowOutcome,
@@ -33,6 +34,10 @@ export const schedulesClient = {
    */
   runNow: (id: string, options?: ScheduleRunNowOptions): Promise<ScheduleRunNowOutcome> =>
     options ? window.electron.schedules.runNow(id, options) : window.electron.schedules.runNow(id),
+  /** The OS job that starts Daintree for schedules when it isn't running (#15990). */
+  osJobStatus: (): Promise<ScheduleOsJobStatus> => window.electron.schedules.osJobStatus(),
+  /** Rewrites and reloads that job from the saved schedules. */
+  repairOsJob: (): Promise<ScheduleOsJobStatus> => window.electron.schedules.repairOsJob(),
   onChanged: (callback: (snapshot: SchedulesSnapshot) => void): (() => void) =>
     window.electron.schedules.onChanged(callback),
   /** The project's recorded runs, newest first (#15976). */

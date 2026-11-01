@@ -105,7 +105,7 @@ export function launchdCalendarFor(
   if (!systemZone.ok || scheduleZone.timeZone !== systemZone.timeZone) {
     return {
       ok: false,
-      reason: `macOS starts it on this Mac's time zone (${machineZone}), and this schedule runs on ${cadence.timeZone} time`,
+      reason: `macOS can only start Daintree on this Mac's time (${machineZone}), and this schedule runs on ${cadence.timeZone} time`,
     };
   }
   const cron = parsed.cron;
@@ -114,7 +114,7 @@ export function launchdCalendarFor(
     return {
       ok: false,
       reason:
-        "macOS can't start it only on days that match both the day of the month and the weekday",
+        "macOS can't start Daintree only on days that match both the day of the month and the weekday",
     };
   }
 
@@ -132,7 +132,7 @@ export function launchdCalendarFor(
   if (count > MAX_LAUNCHD_INTERVALS_PER_SCHEDULE) {
     return {
       ok: false,
-      reason: `macOS would need ${count} start times for this cadence, more than the ${MAX_LAUNCHD_INTERVALS_PER_SCHEDULE} a schedule can use`,
+      reason: `macOS would need ${count} start times for this cadence, more than the ${MAX_LAUNCHD_INTERVALS_PER_SCHEDULE} one schedule can have`,
     };
   }
 

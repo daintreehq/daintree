@@ -27,7 +27,13 @@ import type {
   ScheduleOverlapPolicy,
 } from "@shared/types/scheduledRuns";
 import type { ScheduleIssue } from "@shared/utils/scheduleValidation";
+import {
+  RUN_WHEN_CLOSED_PATH,
+  runWhenClosedIssue,
+  type ScheduleOsJobContext,
+} from "@shared/utils/scheduleOsJob";
 import type { SchedulesSnapshot } from "@shared/types/ipc/schedules";
+import { isMac } from "@/lib/platform";
 import { logError } from "@/utils/logger";
 import { useFirstAgentOptions } from "@/components/Worktree/hooks/useFirstAgentOptions";
 import { useScheduleLaunchOptions } from "./useScheduleLaunchOptions";
@@ -70,6 +76,7 @@ interface Draft {
   checkFirst: boolean;
   checkCommand: string;
   onDone: ScheduleDonePolicy;
+  runWhenClosed: boolean;
 }
 
 function draftFrom(schedule: Schedule): Draft {
@@ -85,6 +92,7 @@ function draftFrom(schedule: Schedule): Draft {
     checkFirst: schedule.policies.precondition !== null,
     checkCommand: schedule.policies.precondition?.command ?? "",
     onDone: schedule.policies.onDone,
+    runWhenClosed: schedule.policies.runWhenClosed,
   };
 }
 
@@ -107,6 +115,7 @@ const DRAFT_KEYS: readonly (keyof Draft)[] = [
   "checkFirst",
   "checkCommand",
   "onDone",
+  "runWhenClosed",
 ];
 
 /** The cadence counts by the expression it saves, not by which picker state wrote it. */
@@ -116,16 +125,24 @@ function sameDraft(a: Draft, b: Draft): boolean {
   );
 }
 
-type FieldKey = "name" | "agentId" | "prompt" | "cron" | "checkCommand";
+type FieldKey = "name" | "agentId" | "prompt" | "cron" | "runWhenClosed" | "checkCommand";
 
 /** Form order, so a failed save lands on the first problem a reader would reach. */
-const FIELD_ORDER: readonly FieldKey[] = ["name", "agentId", "prompt", "cron", "checkCommand"];
+const FIELD_ORDER: readonly FieldKey[] = [
+  "name",
+  "agentId",
+  "prompt",
+  "cron",
+  "runWhenClosed",
+  "checkCommand",
+];
 
 const FIELD_ROW: Record<FieldKey, string> = {
   name: "schedule-field-name",
   agentId: "schedule-field-agent",
   prompt: "schedule-field-prompt",
   cron: "schedule-field-cadence",
+  runWhenClosed: "schedule-field-run-when-closed",
   checkCommand: "schedule-field-check-command",
 };
 
@@ -135,10 +152,26 @@ const ISSUE_FIELD: Record<string, FieldKey> = {
   "launch.agentId": "agentId",
   "cadence.cron": "cron",
   "policies.precondition.command": "checkCommand",
+  [RUN_WHEN_CLOSED_PATH]: "runWhenClosed",
 };
 
+/**
+ * Why this machine's OS job can't start Daintree for the draft's cadence, or
+ * null when it can or the cadence isn't valid yet (its own field says so).
+ * Without main's context yet, nothing is judged here; main still refuses.
+ */
+function runWhenClosedReason(
+  draft: Draft,
+  timeZone: string,
+  context: ScheduleOsJobContext | null
+): string | null {
+  if (!context || choiceIssue(draft.cadence) !== null) return null;
+  if (!validateCadence({ cron: draft.cadence.cron, timeZone }).ok) return null;
+  return runWhenClosedIssue({ cron: draft.cadence.cron, timeZone }, context);
+}
+
 /** The same reasons main gives, checked here so a field says what's wrong before Save. */
-function localIssues(draft: Draft): Partial<Record<FieldKey, string>> {
+function localIssues(draft: Draft, runWhenClosed: string | null): Partial<Record<FieldKey, string>> {
   const issues: Partial<Record<FieldKey, string>> = {};
   if (draft.name.trim() === "") issues.name = "Name the schedule";
   if (draft.agentId === "") issues.agentId = "Choose an agent";
@@ -147,15 +180,22 @@ function localIssues(draft: Draft): Partial<Record<FieldKey, string>> {
   const cron = validateCadence({ cron: draft.cadence.cron, timeZone: "UTC" });
   if (incomplete) issues.cron = incomplete;
   else if (!cron.ok) issues.cron = cron.error.message;
+  if (draft.runWhenClosed && runWhenClosed !== null) issues.runWhenClosed = runWhenClosed;
   if (draft.checkFirst && draft.checkCommand.trim() === "") {
     issues.checkCommand = "Enter a command, or turn the check off";
   }
   return issues;
 }
 
+const CONTROL_SELECTOR = "input, textarea, button";
+
 function focusField(key: FieldKey): void {
+  // A checkbox's id is on the control itself; every other field's is on its row.
   const row = document.getElementById(FIELD_ROW[key]);
-  row?.querySelector<HTMLElement>("input, textarea, button")?.focus();
+  const control = row?.matches(CONTROL_SELECTOR)
+    ? row
+    : row?.querySelector<HTMLElement>(CONTROL_SELECTOR);
+  control?.focus();
 }
 
 interface ScheduleEditorProps {
@@ -164,6 +204,8 @@ interface ScheduleEditorProps {
   defaultAgentId: string;
   worktrees: readonly WorktreeChoice[];
   now: number;
+  /** What main judges "Run when Daintree isn't running" by; null until it has answered. */
+  osJobContext: ScheduleOsJobContext | null;
   /** Kept current every render, so the dialog can guard Back, Cancel and dismissal. */
   leaveStateRef: RefObject<EditorLeaveState | null>;
   onSaved: (snapshot: SchedulesSnapshot, scheduleId: string) => void;
@@ -172,6 +214,8 @@ interface ScheduleEditorProps {
 }
 
 const MAIN_CHECKOUT_VALUE = "__main__";
+const RUN_WHEN_CLOSED_DESCRIPTION =
+  "macOS starts Daintree without a window when a run is due. A run missed while the Mac slept happens when it wakes";
 const PREVIEW_RUNS = 3;
 /** How long the cadence must sit still before its words or error are read out. */
 const CADENCE_ANNOUNCE_SETTLE_MS = 600;
@@ -182,6 +226,7 @@ export function ScheduleEditor({
   defaultAgentId,
   worktrees,
   now,
+  osJobContext,
   leaveStateRef,
   onSaved,
   onDeleted,
@@ -213,7 +258,9 @@ export function ScheduleEditor({
 
   const isNew = base === null;
   const dirty = !sameDraft(draft, initial);
-  const issues = localIssues(draft);
+  const timeZone = base?.cadence.timeZone ?? machineTimeZone();
+  const runWhenClosedRefusal = runWhenClosedReason(draft, timeZone, osJobContext);
+  const issues = localIssues(draft, runWhenClosedRefusal);
 
   useEffect(() => {
     leaveStateRef.current = { dirty, saving, isNew, name: base?.name ?? draft.name };
@@ -231,13 +278,15 @@ export function ScheduleEditor({
   const markTouched = (key: FieldKey) => setTouched((prev) => ({ ...prev, [key]: true }));
   const update = <K extends keyof Draft>(key: K, value: Draft[K]) => {
     setDraft((prev) => ({ ...prev, [key]: value }));
-    const field = key === "cadence" ? "cron" : key;
-    setServerIssues((prev) => prev.filter((issue) => ISSUE_FIELD[issue.path] !== field));
+    // The option is judged by the cadence too, so a new cadence clears its refusal.
+    const fields: readonly string[] = key === "cadence" ? ["cron", "runWhenClosed"] : [key];
+    setServerIssues((prev) =>
+      prev.filter((issue) => !fields.includes(ISSUE_FIELD[issue.path] ?? ""))
+    );
     setSaveError(null);
     setSubmitSummary("");
   };
 
-  const timeZone = base?.cadence.timeZone ?? machineTimeZone();
   const cadence =
     choiceIssue(draft.cadence) === null
       ? validateCadence({ cron: draft.cadence.cron, timeZone })
@@ -301,6 +350,10 @@ export function ScheduleEditor({
   }
 
   const agentName = getEffectiveAgentConfig(draft.agentId)?.name ?? "This agent";
+  // Shown where an OS job exists, and wherever the option is already on so it can be turned off.
+  const showRunWhenClosed =
+    draft.runWhenClosed ||
+    (osJobContext ? osJobContext.kind !== null : isMac());
 
   const save = async () => {
     setAttempted(true);
@@ -320,6 +373,7 @@ export function ScheduleEditor({
       overlap: draft.overlap,
       precondition: draft.checkFirst ? { command: draft.checkCommand } : null,
       onDone: draft.onDone,
+      runWhenClosed: draft.runWhenClosed,
     };
     const launch = {
       agentId: draft.agentId,
@@ -341,6 +395,8 @@ export function ScheduleEditor({
           name: draft.name,
           launch,
           cron: draft.cadence.cron,
+          // The zone the preview and the option's check used, so the schedule is stored in it.
+          timeZone,
           policies,
         });
         if (outcome.status === "invalid") refused(outcome.issues);
@@ -350,7 +406,7 @@ export function ScheduleEditor({
           name: draft.name,
           cadence: { cron: draft.cadence.cron, timeZone: base.cadence.timeZone },
           launch,
-          policies: { ...policies, runWhenClosed: base.policies.runWhenClosed },
+          policies,
         });
         switch (outcome.status) {
           case "saved":
@@ -568,6 +624,29 @@ export function ScheduleEditor({
                 onChange={(value) => update("overlap", value)}
               />
             </SettingsGroup>
+            {showRunWhenClosed && (
+              <SettingsGroup>
+                <SettingsCheckbox
+                  id={FIELD_ROW.runWhenClosed}
+                  label="Run when Daintree isn't running"
+                  description={
+                    !draft.runWhenClosed && runWhenClosedRefusal !== null
+                      ? runWhenClosedRefusal
+                      : RUN_WHEN_CLOSED_DESCRIPTION
+                  }
+                  checked={draft.runWhenClosed}
+                  onChange={(value) => update("runWhenClosed", value)}
+                  // Never locked on: an option main would refuse can always be turned off.
+                  disabled={!draft.runWhenClosed && runWhenClosedRefusal !== null}
+                  // Said at once: the box was just ticked, or the cadence just moved under it.
+                  error={
+                    draft.runWhenClosed
+                      ? (serverError("runWhenClosed") ?? issues.runWhenClosed)
+                      : undefined
+                  }
+                />
+              </SettingsGroup>
+            )}
           </SettingsSection>
 
           <SettingsSection title="Before and after each run">

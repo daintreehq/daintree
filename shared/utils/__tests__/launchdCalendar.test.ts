@@ -114,7 +114,7 @@ describe("launchdCalendarFor", () => {
 
   it("refuses a schedule in a zone other than this Mac's", () => {
     expect(refusal("0 9 * * *", "America/New_York", "Europe/London")).toBe(
-      "macOS starts it on this Mac's time zone (Europe/London), and this schedule runs on America/New_York time"
+      "macOS can only start Daintree on this Mac's time (Europe/London), and this schedule runs on America/New_York time"
     );
     expect(
       launchdCalendarFor({ cron: "0 9 * * *", timeZone: "Europe/London" }, "Europe/London").ok
@@ -124,7 +124,7 @@ describe("launchdCalendarFor", () => {
   it("refuses a cadence past the per-schedule limit, naming the count", () => {
     // 12 minutes x 9 hours x 5 weekdays.
     expect(refusal("*/5 9-17 * * 1-5")).toBe(
-      `macOS would need 540 start times for this cadence, more than the ${MAX_LAUNCHD_INTERVALS_PER_SCHEDULE} a schedule can use`
+      `macOS would need 540 start times for this cadence, more than the ${MAX_LAUNCHD_INTERVALS_PER_SCHEDULE} one schedule can have`
     );
     expect(intervals("*/15 9-17 * * 1-5")).toHaveLength(180);
   });
