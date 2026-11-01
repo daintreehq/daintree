@@ -61,6 +61,8 @@ describe("HostFleetTargets", () => {
     await act(async () => {});
 
     expect(document.querySelector('[class*="text-state-waiting"]')).toBeNull();
-    expect(document.querySelector(".text-state-working")).not.toBeNull();
+    const ring = (title: string) => screen.getByText(title).closest("label")?.lastElementChild;
+    expect(ring("waits")?.getAttribute("class")).toContain("text-text-secondary");
+    expect(ring("works")?.getAttribute("class")).toContain("text-state-working");
   });
 });

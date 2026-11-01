@@ -147,7 +147,9 @@ describe("AssistantPicker", () => {
     ]);
     for (const option of options()) {
       expect(option.querySelector('[class*="text-state-waiting"]')).toBeNull();
-      expect(option.querySelector('[class*="text-text-primary"]')).not.toBeNull();
+      // The state glyph alone: the unread mark, in the tone a review wears.
+      const glyph = option.querySelector('[aria-hidden="true"]')?.firstElementChild;
+      expect(glyph?.getAttribute("class")).toContain("text-text-primary");
     }
   });
 
