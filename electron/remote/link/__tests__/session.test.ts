@@ -12,6 +12,7 @@ import {
   frameToMessage,
   messageToFrame,
 } from "../messages.js";
+import { continuesMessage } from "../messageFragments.js";
 import { LinkSession } from "../session.js";
 import { bytesTransferSource } from "../transfer.js";
 import {
@@ -307,6 +308,109 @@ describe("LinkSession request/response", () => {
           (f) => f.lane === Lane.CONTROL && frameToMessage(f).kind === ControlKind.ENDPOINT_CLOSE
         )
       ).toBe(true);
+    });
+  });
+
+  describe("telling a poster its frame was written", () => {
+    const BEYOND_SOCKET_BUFFERS = "x".repeat(4 * 1024 * 1024);
+    const peers: net.Socket[] = [];
+
+    afterEach(() => {
+      for (const peer of peers.splice(0)) peer.destroy();
+    });
+
+    const event = (channel: string, args: unknown[] = []) => ({
+      lane: Lane.EVENTS,
+      kind: EventKind.EVENT,
+      body: { endpointId: null, channel, args },
+    });
+
+    /** A client whose peer has stopped reading, so the socket stops taking bytes. */
+    async function stalledClient() {
+      const { a, b } = await socketPair(dir);
+      peers.push(b);
+      const client = new LinkSession(a, { role: "client", pingIntervalMs: 0, idleTimeoutMs: 0 });
+      sessions.push(client);
+      client.open();
+      b.pause();
+      return { client, a, b };
+    }
+
+    it("reports a frame once the transport has taken it, not while it waits in a lane or the socket", async () => {
+      const { client, a, b } = await stalledClient();
+      const written: string[] = [];
+      expect(
+        client.post(event("fill", [BEYOND_SOCKET_BUFFERS]), () => written.push("fill"))
+      ).not.toBe("refused");
+      client.post(event("behind"), () => written.push("behind"));
+      await waitFor(() => a.writableNeedDrain);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(written).toEqual([]);
+      expect(client.queuedBytes(Lane.EVENTS)).toBeGreaterThan(0);
+
+      b.resume();
+      await waitFor(() => written.length === 2);
+      expect(written).toEqual(["fill", "behind"]);
+    });
+
+    it("never reports a frame the session dropped unsent, or one the socket failed to take", async () => {
+      const { client, a, b } = await stalledClient();
+      const written: string[] = [];
+      client.post(event("fill", [BEYOND_SOCKET_BUFFERS]), () => written.push("fill"));
+      await waitFor(() => a.writableNeedDrain);
+      client.post(event("dropped"), () => written.push("dropped"));
+      const closed = closedPromise(client);
+      const socketClosed = new Promise((resolve) => a.once("close", resolve));
+      b.destroy();
+      await closed;
+      await socketClosed;
+      await new Promise((r) => setImmediate(r));
+      expect(written).toEqual([]);
+    });
+
+    it("reports a fragmented message once, after its last fragment, and never one cut off partway", async () => {
+      const { a, b } = await socketPair(dir);
+      peers.push(b);
+      const client = new LinkSession(a, { role: "client", pingIntervalMs: 0, idleTimeoutMs: 0 });
+      sessions.push(client);
+      client.open({ peerReadsFragments: true });
+      b.pause();
+      const frames = recordFrames(b);
+      const written: string[] = [];
+      client.post(event("fragmented", [BEYOND_SOCKET_BUFFERS]), () => written.push("fragmented"));
+      await waitFor(() => a.writableNeedDrain);
+      // Early fragments have reached the socket by now; the message has not.
+      await new Promise((r) => setTimeout(r, 20));
+      expect(written).toEqual([]);
+
+      b.resume();
+      await waitFor(() => written.length === 1);
+      await waitFor(() => frames.some((f) => f.lane === Lane.EVENTS && !continuesMessage(f)));
+      expect(frames.filter((f) => f.lane === Lane.EVENTS).length).toBeGreaterThan(1);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(written).toEqual(["fragmented"]);
+
+      b.pause();
+      client.post(event("cut off", [BEYOND_SOCKET_BUFFERS]), () => written.push("cut off"));
+      await waitFor(() => a.writableNeedDrain);
+      const closed = closedPromise(client);
+      b.destroy();
+      await closed;
+      await new Promise((r) => setImmediate(r));
+      expect(written).toEqual(["fragmented"]);
+    });
+
+    it("reports a control frame the session writes on its way out", async () => {
+      const { client, b } = await stalledClient();
+      const frames = recordFrames(b);
+      const written: string[] = [];
+      client.post({ lane: Lane.CONTROL, kind: ControlKind.PING, body: { sentAt: 1 } }, () =>
+        written.push("ping")
+      );
+      client.close("gone");
+      b.resume();
+      await waitFor(() => written.length === 1);
+      expect(frames.some((f) => f.lane === Lane.CONTROL)).toBe(true);
     });
   });
 
