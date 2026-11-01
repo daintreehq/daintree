@@ -184,6 +184,25 @@ describe("a scheduled run's done policy, applied (#15982)", () => {
     );
   });
 
+  it("leaves a restart asked for while the agent was leaving, and its pane", async () => {
+    state.ptyClient.getTerminalAsync.mockResolvedValue(terminalInfo({ isExited: true }));
+    state.ptyClient.gracefulKill.mockImplementation(async () => {
+      state.generation = 5;
+      return null;
+    });
+    state.views = [view(1)];
+    state.runs.set("run-1", settledRun());
+
+    arm("close");
+
+    await vi.waitFor(() => expect(state.ptyClient.gracefulKill).toHaveBeenCalled());
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(state.ptyClient.kill).not.toHaveBeenCalled();
+    expect(state.views[0]!.send).not.toHaveBeenCalled();
+    expect(state.forget).not.toHaveBeenCalled();
+  });
+
   it("closes nothing when a restart was asked for while the host answered", async () => {
     state.generation = 5;
     state.runs.set("run-1", settledRun());

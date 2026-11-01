@@ -74,8 +74,13 @@ async function closeRunTerminal(target: ArmedScheduledRun, run: ScheduledRun): P
     return false;
   }
   const sessionId = await ptyClient.gracefulKill(target.terminalId);
+  // A restart asked for while the agent was leaving is the user's: its
+  // terminal and pane stay. Checked again with no await before acting.
+  const restarted = getLifecycleLedger().currentGeneration(target.terminalId) !== launchGeneration;
   // A terminal whose agent had already exited isn't killed by a graceful close.
-  if (info.isExited === true) ptyClient.kill(target.terminalId, "scheduled-run-done");
+  if (info.isExited === true && !restarted) {
+    ptyClient.kill(target.terminalId, "scheduled-run-done");
+  }
   if (sessionId && info.launchAgentId && info.isAssistantTerminal !== true) {
     events.emit("agent-session:captured", {
       terminalId: target.terminalId,
@@ -96,7 +101,7 @@ async function closeRunTerminal(target: ArmedScheduledRun, run: ScheduledRun): P
       },
     });
   }
-  return true;
+  return !restarted;
 }
 
 async function applyDonePolicy(
