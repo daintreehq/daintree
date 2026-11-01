@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createSchedule } from "@shared/utils/scheduledRuns";
 import { machineTimeZone } from "@shared/utils/cron";
 import type { Schedule } from "@shared/types/scheduledRuns";
@@ -33,14 +33,24 @@ import { ScheduleEditor, type EditorLeaveState } from "../ScheduleEditor";
 const LABEL = "Run when Daintree isn't running";
 const NOW = Date.UTC(2027, 0, 4, 8);
 
-function existing(policies: Partial<Schedule["policies"]>, timeZone = "Europe/London"): Schedule {
+const LONDON: ScheduleOsJobContext = { kind: "launch-agent", systemTimeZone: "Europe/London" };
+/** No preset writes a day-of-month range, so it opens as a custom expression. */
+const CUSTOM_CRON = "0 9 1-7 * *";
+/** Days that must be both odd dates and Mondays: launchd can't AND them. */
+const BOTH_DAYS_CRON = "0 0 */2 * MON";
+
+function existing(
+  policies: Partial<Schedule["policies"]>,
+  timeZone = "Europe/London",
+  cron = "0 9 * * *"
+): Schedule {
   return createSchedule(
     {
       id: "s1",
       projectId: "p1",
       name: "Nightly",
       launch: { agentId: "claude", prompt: "Go." },
-      cron: "0 9 * * *",
+      cron,
       timeZone,
       policies,
     },
@@ -71,13 +81,17 @@ function option(): HTMLElement | null {
 }
 
 function optionRow(): HTMLElement {
-  const box = option();
-  if (!box) throw new Error("no option");
-  return box.closest("[data-settings-reset-scope]") as HTMLElement;
+  const row = option()?.closest<HTMLElement>("[data-settings-reset-scope]");
+  if (!row) throw new Error("no option");
+  return row;
 }
 
-function button(name: string): HTMLButtonElement {
-  return screen.getByRole("button", { name }) as HTMLButtonElement;
+function button(name: string): HTMLElement {
+  return screen.getByRole("button", { name });
+}
+
+function typeCron(cron: string): void {
+  fireEvent.change(screen.getByLabelText("Expression"), { target: { value: cron } });
 }
 
 beforeEach(() => {
@@ -124,6 +138,30 @@ describe("ScheduleEditor: Run when Daintree isn't running (#15990)", () => {
     );
   });
 
+  it("can't be turned on for days launchd can't require both of, in the Mac's own zone", () => {
+    renderEditor(existing({ runWhenClosed: false }, "Europe/London", BOTH_DAYS_CRON), LONDON);
+
+    expect(option()?.hasAttribute("disabled")).toBe(true);
+    expect(optionRow().textContent).toMatch(/both the day of the month and the weekday/);
+  });
+
+  it("follows the cadence as it's edited between ones the job can and can't hold", () => {
+    renderEditor(existing({ runWhenClosed: false }, "Europe/London", CUSTOM_CRON), LONDON);
+    expect(option()?.hasAttribute("disabled")).toBe(false);
+
+    typeCron(BOTH_DAYS_CRON);
+    expect(option()?.hasAttribute("disabled")).toBe(true);
+
+    typeCron(CUSTOM_CRON);
+    expect(option()?.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(option()!);
+    typeCron(BOTH_DAYS_CRON);
+    // Turned on and no longer holdable: it stays on, says why, and can be turned off.
+    expect(option()?.getAttribute("aria-checked")).toBe("true");
+    expect(option()?.hasAttribute("disabled")).toBe(false);
+    expect(optionRow().textContent).toMatch(/both the day of the month and the weekday/);
+  });
+
   it("can't be turned on for a cadence the Mac's job can't hold, and says why", () => {
     renderEditor(existing({ runWhenClosed: false }, "Asia/Tokyo"), {
       kind: "launch-agent",
@@ -160,17 +198,31 @@ describe("ScheduleEditor: Run when Daintree isn't running (#15990)", () => {
     );
   });
 
-  it("shows main's refusal under the option", async () => {
+  it("shows main's refusal under the option, focuses it, and drops it once the cadence changes", async () => {
     clientMock.update.mockResolvedValue({
       status: "invalid",
       issues: [{ path: "policies.runWhenClosed", cronField: null, message: "Not on this Mac" }],
     });
-    renderEditor(existing({ runWhenClosed: false }), null);
+    renderEditor(existing({ runWhenClosed: false }, "Europe/London", CUSTOM_CRON), null);
 
     fireEvent.click(option()!);
     await act(async () => fireEvent.click(button("Save changes")));
 
     expect(optionRow().textContent).toContain("Not on this Mac");
+    await waitFor(() => expect(document.activeElement).toBe(option()));
+
+    typeCron("0 10 1-7 * *");
+    expect(optionRow().textContent).not.toContain("Not on this Mac");
+  });
+
+  it("is offered on a Mac before main has answered, and nowhere else", () => {
+    renderEditor(existing({ runWhenClosed: false }), null);
+    expect(option()).not.toBeNull();
+    cleanup();
+
+    platformMock.isMac.mockReturnValue(false);
+    renderEditor(existing({ runWhenClosed: false }), null);
+    expect(option()).toBeNull();
   });
 
   it("isn't offered where there's no OS job, unless a schedule already has it on", () => {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { CommandResult } from "../../../remote/host/hostCommands.js";
 import type { StartAtLoginFs } from "../../../remote/host/startAtLogin.js";
@@ -27,7 +28,7 @@ const TARGET: LaunchAgentTargetResult = launchAgentTargetFor({
 const NINE = { cron: "0 9 * * *", timeZone: "Europe/London" };
 const HOURLY = { cron: "30 * * * *", timeZone: "Europe/London" };
 
-function memoryFs(initial: Record<string, string> = {}) {
+function memoryFs(initial: Record<string, string> = {}, events: string[] = []) {
   const files = new Map(Object.entries(initial));
   const touched: string[] = [];
   const fs: StartAtLoginFs = {
@@ -37,14 +38,16 @@ function memoryFs(initial: Record<string, string> = {}) {
     }),
     writeFile: vi.fn(async (file: string, content: string) => {
       touched.push(file);
+      events.push("write");
       files.set(file, content);
     }),
     remove: vi.fn(async (file: string) => {
       touched.push(file);
+      events.push("remove");
       files.delete(file);
     }),
   };
-  return { fs, files, touched };
+  return { fs, files, touched, events };
 }
 
 const ok = (stdout = ""): CommandResult => ({ code: 0, stdout, stderr: "" });
@@ -54,31 +57,69 @@ const notFound: CommandResult = {
   stderr: 'Could not find service "x" in domain for user gui: 501',
 };
 
-/** A launchd that loads on bootstrap and unloads on bootout, unless told otherwise. */
+const unanswered: CommandResult = { code: null, stdout: "", stderr: "", failure: "timeout" };
+
+/**
+ * A launchd that loads on bootstrap and unloads on bootout, unless told
+ * otherwise. Bootstrap loads only a file that names the job's label and runs
+ * `open`, as launchd refuses a plist it can't read.
+ */
 function fakeLaunchctl(options: {
   loaded?: boolean;
   bootoutSticks?: boolean;
+  /** Status reads that still list the job after a bootout that answered 0. */
+  listedAfterBootout?: number;
+  /** Status reads after the bootout that launchctl doesn't answer. */
+  unansweredAfterBootout?: boolean;
   bootstrapFailures?: number;
+  /** Bootstrap answers 0 and loads nothing. */
+  bootstrapLoadsNothing?: boolean;
+  files?: Map<string, string>;
+  events?: string[];
 }) {
   let loaded = options.loaded ?? false;
   let bootstrapFailures = options.bootstrapFailures ?? 0;
+  let stillListed = 0;
+  let bootedOut = false;
   const calls: string[][] = [];
   const run = vi.fn(async (file: string, args: readonly string[]): Promise<CommandResult> => {
     expect(file).toBe("/bin/launchctl");
     calls.push([...args]);
+    options.events?.push(args[0]!);
     switch (args[0]) {
       case "print":
+        if (bootedOut && options.unansweredAfterBootout) return unanswered;
+        if (stillListed > 0) {
+          stillListed -= 1;
+          return ok();
+        }
         return loaded ? ok() : notFound;
       case "bootout":
-        if (!options.bootoutSticks) loaded = false;
-        return options.bootoutSticks ? { code: 5, stdout: "", stderr: "Boot-out failed: 5" } : ok();
-      case "bootstrap":
+        bootedOut = true;
+        if (options.bootoutSticks) return { code: 5, stdout: "", stderr: "Boot-out failed: 5" };
+        loaded = false;
+        stillListed = options.listedAfterBootout ?? 0;
+        return ok();
+      case "bootstrap": {
         if (bootstrapFailures > 0) {
           bootstrapFailures -= 1;
           return { code: 5, stdout: "", stderr: "Bootstrap failed: 5: Input/output error" };
         }
-        loaded = true;
+        const content = options.files?.get(args[2]!);
+        if (
+          options.files &&
+          !(
+            content?.includes(`\t<key>Label</key>\n\t<string>${LABEL}</string>`) &&
+            content.includes(
+              `\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>/usr/bin/open</string>`
+            )
+          )
+        ) {
+          return { code: 5, stdout: "", stderr: "Bootstrap failed: 5: unreadable plist" };
+        }
+        if (!options.bootstrapLoadsNothing) loaded = true;
         return ok();
+      }
       default:
         throw new Error(`unexpected launchctl ${args.join(" ")}`);
     }
@@ -141,10 +182,10 @@ describe("launchAgentTargetFor", () => {
 });
 
 describe("scheduleLaunchAgentLabel", () => {
-  it("gives each profile its own label and keeps it stable", () => {
-    expect(scheduleLaunchAgentLabel(USER_DATA)).toBe(LABEL);
+  it("names the job by twelve hex digits of its profile's path", () => {
+    const digest = createHash("sha256").update(USER_DATA).digest("hex");
+    expect(LABEL).toBe(`org.daintree.app.schedules.${digest.slice(0, 12)}`);
     expect(scheduleLaunchAgentLabel("/tmp/other-profile")).not.toBe(LABEL);
-    expect(LABEL.startsWith("org.daintree.app.schedules.")).toBe(true);
   });
 });
 
@@ -183,14 +224,68 @@ describe("scheduleLaunchAgentArguments", () => {
 });
 
 describe("buildScheduleLaunchAgentPlist", () => {
+  it("writes the whole job: label, program, calendar, session and owner", () => {
+    expect(
+      buildScheduleLaunchAgentPlist({
+        label: "org.example.job",
+        programArguments: ["/usr/bin/open", "-a", "/Applications/Example.app"],
+        calendar: [{ Minute: 30 }, { Month: 2, Day: 29, Hour: 9, Minute: 0 }],
+        bundleId: "org.example.app",
+      })
+    ).toBe(
+      [
+        `<?xml version="1.0" encoding="UTF-8"?>`,
+        `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">`,
+        `<plist version="1.0">`,
+        `<dict>`,
+        `\t<key>Label</key>`,
+        `\t<string>org.example.job</string>`,
+        `\t<key>ProgramArguments</key>`,
+        `\t<array>`,
+        `\t\t<string>/usr/bin/open</string>`,
+        `\t\t<string>-a</string>`,
+        `\t\t<string>/Applications/Example.app</string>`,
+        `\t</array>`,
+        `\t<key>StartCalendarInterval</key>`,
+        `\t<array>`,
+        `\t\t<dict>`,
+        `\t\t\t<key>Minute</key>`,
+        `\t\t\t<integer>30</integer>`,
+        `\t\t</dict>`,
+        `\t\t<dict>`,
+        `\t\t\t<key>Month</key>`,
+        `\t\t\t<integer>2</integer>`,
+        `\t\t\t<key>Day</key>`,
+        `\t\t\t<integer>29</integer>`,
+        `\t\t\t<key>Hour</key>`,
+        `\t\t\t<integer>9</integer>`,
+        `\t\t\t<key>Minute</key>`,
+        `\t\t\t<integer>0</integer>`,
+        `\t\t</dict>`,
+        `\t</array>`,
+        `\t<key>LimitLoadToSessionType</key>`,
+        `\t<string>Aqua</string>`,
+        `\t<key>AssociatedBundleIdentifiers</key>`,
+        `\t<array>`,
+        `\t\t<string>org.example.app</string>`,
+        `\t</array>`,
+        `</dict>`,
+        `</plist>`,
+        ``,
+      ].join("\n")
+    );
+  });
+
   it("escapes every value and never starts at load", () => {
     const plist = buildScheduleLaunchAgentPlist({
-      label: LABEL,
+      label: 'a&b<"c">',
       programArguments: ["/usr/bin/open", "-a", "/Apps/R&D <x>.app"],
       calendar: [{ Weekday: 1, Hour: 9, Minute: 0 }],
-      bundleId: "org.daintree.app",
+      bundleId: 'org.r&d<"x">',
     });
     expect(plist).toContain("<string>/Apps/R&amp;D &lt;x&gt;.app</string>");
+    expect(plist).toContain("<string>a&amp;b&lt;&quot;c&quot;&gt;</string>");
+    expect(plist).toContain("<string>org.r&amp;d&lt;&quot;x&quot;&gt;</string>");
     expect(plist).not.toContain("RunAtLoad");
     expect(plist).not.toContain("KeepAlive");
     expect(plist).toContain(
@@ -225,11 +320,21 @@ describe("scheduleJobCalendar", () => {
   });
 });
 
+/** A launchd and a file system that write to one log, so the order between them shows. */
+function machine(
+  options: Omit<Parameters<typeof fakeLaunchctl>[0], "files" | "events"> = {},
+  initial: Record<string, string> = {}
+) {
+  const events: string[] = [];
+  const files = memoryFs(initial, events);
+  const launchctl = fakeLaunchctl({ ...options, files: files.files, events });
+  return { files, launchctl, events, adapter: job(launchctl, files) };
+}
+
 describe("createLaunchAgentScheduleJob", () => {
   it("installs and loads a job for the first opted-in schedule", async () => {
-    const launchctl = fakeLaunchctl({});
-    const files = memoryFs();
-    await job(launchctl, files).sync([NINE], "Europe/London", { reload: false });
+    const { files, launchctl, adapter } = machine();
+    await adapter.sync([NINE], "Europe/London", { reload: false });
 
     expect(files.files.get(FILE)).toContain("<key>StartCalendarInterval</key>");
     expect(launchctl.calls).toEqual([
@@ -241,9 +346,7 @@ describe("createLaunchAgentScheduleJob", () => {
   });
 
   it("leaves a loaded job that already reads current alone", async () => {
-    const launchctl = fakeLaunchctl({});
-    const files = memoryFs();
-    const adapter = job(launchctl, files);
+    const { files, launchctl, adapter } = machine();
     await adapter.sync([NINE], "Europe/London", { reload: false });
     launchctl.calls.length = 0;
     vi.mocked(files.fs.writeFile).mockClear();
@@ -254,23 +357,29 @@ describe("createLaunchAgentScheduleJob", () => {
     expect(commands(launchctl)).toEqual(["print"]);
   });
 
-  it("unloads the old job before writing a new calendar, then loads it", async () => {
-    const launchctl = fakeLaunchctl({});
-    const files = memoryFs();
-    const adapter = job(launchctl, files);
+  it("rewrites the file only once launchd no longer lists the old job, then loads it", async () => {
+    const { files, adapter, events } = machine({ listedAfterBootout: 3 });
     await adapter.sync([NINE], "Europe/London", { reload: false });
-    launchctl.calls.length = 0;
+    events.length = 0;
 
     await adapter.sync([NINE, HOURLY], "Europe/London", { reload: false });
 
-    expect(commands(launchctl)).toEqual(["print", "bootout", "print", "bootstrap", "print"]);
+    expect(events).toEqual([
+      "print",
+      "bootout",
+      "print",
+      "print",
+      "print",
+      "print",
+      "write",
+      "bootstrap",
+      "print",
+    ]);
     expect(files.files.get(FILE)).toContain("<integer>30</integer>");
   });
 
   it("reloads a current job when asked to", async () => {
-    const launchctl = fakeLaunchctl({});
-    const files = memoryFs();
-    const adapter = job(launchctl, files);
+    const { launchctl, adapter } = machine();
     await adapter.sync([NINE], "Europe/London", { reload: false });
     launchctl.calls.length = 0;
 
@@ -280,42 +389,62 @@ describe("createLaunchAgentScheduleJob", () => {
   });
 
   it("keeps the old file when the old job won't unload, so it never reads current", async () => {
-    const launchctl = fakeLaunchctl({ loaded: true, bootoutSticks: true });
-    const files = memoryFs({ [FILE]: "old" });
+    const { files, launchctl, adapter } = machine(
+      { loaded: true, bootoutSticks: true },
+      { [FILE]: "old" }
+    );
 
-    await expect(
-      job(launchctl, files).sync([NINE], "Europe/London", { reload: false })
-    ).rejects.toThrow(/Couldn't unload the old macOS job \(launchctl exited 5\)/);
+    await expect(adapter.sync([NINE], "Europe/London", { reload: false })).rejects.toThrow(
+      /Couldn't unload the old macOS job \(launchctl exited 5\)/
+    );
 
     expect(files.files.get(FILE)).toBe("old");
     expect(commands(launchctl)).not.toContain("bootstrap");
   });
 
-  it("tries loading again before giving up, naming launchctl's answer", async () => {
-    const retried = fakeLaunchctl({ bootstrapFailures: 2 });
-    await job(retried, memoryFs()).sync([NINE], "Europe/London", { reload: false });
-    expect(commands(retried).filter((command) => command === "bootstrap")).toHaveLength(3);
-    expect(retried.isLoaded()).toBe(true);
+  it("stops waiting for an unload once launchctl stops answering", async () => {
+    const { files, launchctl, adapter } = machine(
+      { loaded: true, unansweredAfterBootout: true },
+      { [FILE]: "old" }
+    );
 
-    const failing = fakeLaunchctl({ bootstrapFailures: 3 });
-    await expect(
-      job(failing, memoryFs()).sync([NINE], "Europe/London", { reload: false })
-    ).rejects.toThrow(
+    await expect(adapter.sync([NINE], "Europe/London", { reload: false })).rejects.toThrow(
+      /Couldn't unload/
+    );
+    expect(commands(launchctl)).toEqual(["print", "bootout", "print"]);
+    expect(files.files.get(FILE)).toBe("old");
+  });
+
+  it("tries loading again before giving up, naming launchctl's answer", async () => {
+    const retried = machine({ bootstrapFailures: 2 });
+    await retried.adapter.sync([NINE], "Europe/London", { reload: false });
+    expect(commands(retried.launchctl).filter((command) => command === "bootstrap")).toHaveLength(
+      3
+    );
+    expect(retried.launchctl.isLoaded()).toBe(true);
+
+    const failing = machine({ bootstrapFailures: 3 });
+    await expect(failing.adapter.sync([NINE], "Europe/London", { reload: false })).rejects.toThrow(
       "Couldn't load the macOS job (launchctl exited 5): Bootstrap failed: 5: Input/output error"
     );
   });
 
-  it("removes the job when no schedule needs it", async () => {
-    const launchctl = fakeLaunchctl({});
-    const files = memoryFs();
-    const adapter = job(launchctl, files);
+  it("fails a load launchctl answered but launchd doesn't list", async () => {
+    const { adapter } = machine({ bootstrapLoadsNothing: true });
+    await expect(adapter.sync([NINE], "Europe/London", { reload: false })).rejects.toThrow(
+      /Couldn't load the macOS job/
+    );
+  });
+
+  it("removes the job's file first when no schedule needs it, then unloads it", async () => {
+    const { files, launchctl, adapter, events } = machine();
     await adapter.sync([NINE], "Europe/London", { reload: false });
-    launchctl.calls.length = 0;
+    events.length = 0;
 
     await adapter.sync([], "Europe/London", { reload: false });
 
     expect(files.files.has(FILE)).toBe(false);
-    expect(commands(launchctl)).toEqual(["print", "bootout", "print"]);
+    expect(events).toEqual(["print", "remove", "bootout", "print"]);
 
     launchctl.calls.length = 0;
     await adapter.sync([], "Europe/London", { reload: false });
@@ -323,12 +452,11 @@ describe("createLaunchAgentScheduleJob", () => {
   });
 
   it("removes the file even when the job won't unload, and says so", async () => {
-    const launchctl = fakeLaunchctl({ loaded: true, bootoutSticks: true });
-    const files = memoryFs({ [FILE]: "old" });
+    const { files, adapter } = machine({ loaded: true, bootoutSticks: true }, { [FILE]: "old" });
 
-    await expect(
-      job(launchctl, files).sync([], "Europe/London", { reload: false })
-    ).rejects.toThrow(/Couldn't unload/);
+    await expect(adapter.sync([], "Europe/London", { reload: false })).rejects.toThrow(
+      /Couldn't unload/
+    );
     expect(files.files.has(FILE)).toBe(false);
   });
 
@@ -347,9 +475,7 @@ describe("createLaunchAgentScheduleJob", () => {
   });
 
   it("touches only its own file and its own service", async () => {
-    const launchctl = fakeLaunchctl({});
-    const files = memoryFs();
-    const adapter = job(launchctl, files);
+    const { files, launchctl, adapter } = machine();
     await adapter.sync([NINE], "Europe/London", { reload: false });
     await adapter.sync([NINE, HOURLY], "Europe/London", { reload: true });
     await adapter.observe([NINE], "Europe/London");
@@ -361,10 +487,8 @@ describe("createLaunchAgentScheduleJob", () => {
     }
   });
 
-  it("observes whether the job is installed, current and loaded", async () => {
-    const launchctl = fakeLaunchctl({});
-    const files = memoryFs();
-    const adapter = job(launchctl, files);
+  it("observes whether the job is installed, current and loaded, each on its own", async () => {
+    const { adapter } = machine();
 
     expect(await adapter.observe([NINE], "Europe/London")).toEqual({
       installed: false,
@@ -381,16 +505,27 @@ describe("createLaunchAgentScheduleJob", () => {
       current: false,
     });
     expect(await adapter.observe([], "Europe/London")).toMatchObject({ current: false });
+
+    const written = machine();
+    await written.adapter.sync([NINE], "Europe/London", { reload: false });
+    const content = written.files.files.get(FILE)!;
+    const unloaded = machine({ loaded: false }, { [FILE]: content });
+    expect(await unloaded.adapter.observe([NINE], "Europe/London")).toEqual({
+      installed: true,
+      current: true,
+      loaded: false,
+    });
+    const fileless = machine({ loaded: true });
+    expect(await fileless.adapter.observe([NINE], "Europe/London")).toEqual({
+      installed: false,
+      current: false,
+      loaded: true,
+    });
   });
 
   it("reads a launchctl that couldn't answer as unknown, not unloaded", async () => {
     const files = memoryFs();
-    const run = vi.fn(async (): Promise<CommandResult> => ({
-      code: null,
-      stdout: "",
-      stderr: "",
-      failure: "timeout",
-    }));
+    const run = vi.fn(async (): Promise<CommandResult> => unanswered);
     const adapter = createLaunchAgentScheduleJob({
       homeDir: HOME,
       uid: 501,

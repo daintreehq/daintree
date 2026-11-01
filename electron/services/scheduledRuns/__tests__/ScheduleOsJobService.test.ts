@@ -50,7 +50,10 @@ function deferred<T = void>() {
 /** Records what each sync was asked for, and reads current when the last one is what's wanted. */
 function fakeAdapter(options: { unavailable?: string | null } = {}) {
   const syncs: { crons: string[]; reload: boolean }[] = [];
+  const zones: string[] = [];
+  const events: string[] = [];
   let installed: string[] | null = null;
+  let unloaded = false;
   let gate: Promise<void> | null = null;
   let failure: Error | null = null;
   const crons = (cadences: readonly { cron: string }[]) =>
@@ -58,24 +61,33 @@ function fakeAdapter(options: { unavailable?: string | null } = {}) {
   const adapter: ScheduleOsJobAdapter = {
     kind: "launch-agent",
     unavailable: options.unavailable ?? null,
-    sync: vi.fn(async (cadences, _zone, { reload }) => {
+    sync: vi.fn(async (cadences, zone, { reload }) => {
       syncs.push({ crons: crons(cadences), reload });
+      zones.push(zone);
       if (gate) await gate;
+      events.push("synced");
       if (failure) throw failure;
       installed = cadences.length > 0 ? crons(cadences) : null;
+      unloaded = false;
     }),
     observe: vi.fn(async (cadences): Promise<ScheduleOsJobObservation> => {
       const wanted = cadences.length > 0 ? crons(cadences) : null;
       return {
         installed: installed !== null,
         current: JSON.stringify(installed) === JSON.stringify(wanted),
-        loaded: installed !== null,
+        loaded: installed !== null && !unloaded,
       };
     }),
   };
   return {
     adapter,
     syncs,
+    zones,
+    events,
+    /** launchd dropped the job; its file still reads current. */
+    unload: () => {
+      unloaded = true;
+    },
     hold: () => {
       const held = deferred();
       gate = held.promise;
@@ -155,6 +167,14 @@ describe("ScheduleOsJobService", () => {
     await service(store, job.adapter).start();
 
     expect(job.syncs).toEqual([{ crons: ["0 9 * * *", "30 * * * *"], reload: false }]);
+    expect(vi.mocked(job.adapter.sync).mock.calls[0]).toEqual([
+      [
+        { cron: "0 9 * * *", timeZone: ZONE },
+        { cron: "30 * * * *", timeZone: ZONE },
+      ],
+      ZONE,
+      { reload: false },
+    ]);
   });
 
   it("rewrites the job after each change, and removes it when none is left", async () => {
@@ -256,10 +276,12 @@ describe("ScheduleOsJobService", () => {
     await svc.start();
     expect(job.syncs.at(-1)?.crons).toEqual(["30 * * * *"]);
 
+    expect(job.zones.at(-1)).toBe("Asia/Tokyo");
     context = MAC;
     const status = await svc.status("a");
     expect(status).toMatchObject({ state: "current", excluded: [] });
     expect(job.syncs.at(-1)?.crons).toEqual(["0 9 * * *"]);
+    expect(job.zones.at(-1)).toBe(ZONE);
     expect((await svc.status("b")).excluded).toEqual([
       { scheduleId: "b1", reason: expect.stringMatching(/Asia\/Tokyo/) },
     ]);
@@ -272,6 +294,17 @@ describe("ScheduleOsJobService", () => {
     await svc.start();
 
     job.drift();
+    expect(await svc.status("a")).toMatchObject({ state: "current" });
+    expect(job.syncs).toHaveLength(2);
+  });
+
+  it("reloads a job launchd dropped though its file still reads current", async () => {
+    const store = fakeStore({ a: [schedule("a1", "a")] });
+    const job = fakeAdapter();
+    const svc = service(store, job.adapter);
+    await svc.start();
+
+    job.unload();
     expect(await svc.status("a")).toMatchObject({ state: "current" });
     expect(job.syncs).toHaveLength(2);
   });
@@ -322,16 +355,35 @@ describe("ScheduleOsJobService", () => {
     const release = job.hold();
     store.commit("a", []);
     await vi.waitFor(() => expect(job.syncs).toHaveLength(2));
-    let disposed = false;
-    const disposing = svc.dispose().then(() => (disposed = true));
-    await Promise.resolve();
-    expect(disposed).toBe(false);
+    const disposing = svc.dispose().then(() => job.events.push("disposed"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(job.events).not.toContain("disposed");
     release();
     await disposing;
 
+    expect(job.events.slice(-2)).toEqual(["synced", "disposed"]);
     expect(store.listenerCount()).toBe(0);
     store.commit("a", [schedule("a1", "a")]);
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(job.syncs).toHaveLength(2);
+  });
+
+  it("writes an edit committed while the first reads are out, even when quitting meanwhile", async () => {
+    const store = fakeStore({ a: [], b: [] });
+    const slow = deferred<SchedulesSnapshot>();
+    store.list.mockImplementation(async (projectId: string) =>
+      projectId === "b" ? slow.promise : { projectId, schedules: [], revision: 0 }
+    );
+    const job = fakeAdapter();
+    const svc = service(store, job.adapter);
+    const started = svc.start();
+    await Promise.resolve();
+
+    store.commit("a", [schedule("a1", "a")]);
+    const disposing = svc.dispose();
+    slow.resolve({ projectId: "b", schedules: [], revision: 0 });
+    await Promise.all([started, disposing]);
+
+    expect(job.syncs).toEqual([{ crons: ["0 9 * * *"], reload: false }]);
   });
 });

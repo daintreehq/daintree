@@ -275,21 +275,24 @@ describe("schedules handlers", () => {
       excluded: [],
     };
 
-    it("reports and repairs the job for the sender's project", async () => {
+    it("reports and repairs the job for the sender's own project", async () => {
       osJobMock.scheduleOsJobStatus.mockResolvedValue(status);
       osJobMock.repairScheduleOsJob.mockResolvedValue({ ...status, state: "stale" });
 
       await expect(osJobStatus(ctx(PROJECT))).resolves.toEqual(status);
       await expect(repairOsJob(ctx(PROJECT))).resolves.toMatchObject({ state: "stale" });
-      expect(osJobMock.scheduleOsJobStatus).toHaveBeenCalledWith(PROJECT);
-      expect(osJobMock.repairScheduleOsJob).toHaveBeenCalledWith(PROJECT);
+      await osJobStatus(ctx(OTHER));
+      await repairOsJob(ctx(OTHER));
+      expect(osJobMock.scheduleOsJobStatus.mock.calls).toEqual([[PROJECT], [OTHER]]);
+      expect(osJobMock.repairScheduleOsJob.mock.calls).toEqual([[PROJECT], [OTHER]]);
     });
 
-    it("answers nothing to a view that can't have schedules", async () => {
-      await expect(osJobStatus(ctx(null))).rejects.toMatchObject({ code: "VALIDATION" });
-      await expect(repairOsJob(ctx(PROJECT, "remote-view"))).rejects.toMatchObject({
-        code: "UNSUPPORTED",
-      });
+    it.each([
+      ["no project", ctx(null), "VALIDATION"],
+      ["a view attached over a link", ctx(PROJECT, "remote-view"), "UNSUPPORTED"],
+    ])("answers nothing to %s", async (_name, context, code) => {
+      await expect(osJobStatus(context)).rejects.toMatchObject({ code });
+      await expect(repairOsJob(context)).rejects.toMatchObject({ code });
       expect(osJobMock.scheduleOsJobStatus).not.toHaveBeenCalled();
       expect(osJobMock.repairScheduleOsJob).not.toHaveBeenCalled();
     });

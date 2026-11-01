@@ -132,17 +132,23 @@ export class ScheduleOsJobService {
     return this.observe(projectId);
   }
 
-  /** Stops following changes, and lets a pass already owed finish, for a bounded time. */
+  /**
+   * Stops following changes, and lets what's already owed finish, for a
+   * bounded time: a pass under way, the one after it, and a startup still
+   * reading, since a change committed during those reads is held but unwritten.
+   */
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
     this.unsubscribe?.();
     this.unsubscribe = null;
-    const pending = this.loop;
-    if (!pending) return;
+    const owed = (async () => {
+      await this.started?.catch(() => {});
+      await this.settled();
+    })();
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
-      pending,
+      owed,
       new Promise<void>((resolve) => {
         timer = setTimeout(resolve, this.deps.drainTimeoutMs ?? DRAIN_TIMEOUT_MS);
       }),
@@ -151,6 +157,7 @@ export class ScheduleOsJobService {
   }
 
   private async begin(): Promise<void> {
+    if (this.disposed) return;
     // Subscribed first, so a change committed while the first reads are out is kept.
     this.unsubscribe = this.deps.subscribeSchedules((snapshot) => {
       if (this.hold(snapshot) && this.ready) void this.request(false);
@@ -166,7 +173,6 @@ export class ScheduleOsJobService {
    * its own, since whoever read it passes next.
    */
   private hold(snapshot: SchedulesSnapshot): boolean {
-    if (this.disposed) return false;
     const held = this.snapshots.get(snapshot.projectId);
     if (held && held.revision > snapshot.revision) return false;
     this.snapshots.set(snapshot.projectId, snapshot);
@@ -205,7 +211,6 @@ export class ScheduleOsJobService {
 
   /** A pass that takes every change made before it ends. */
   private request(reload: boolean): Promise<void> {
-    if (this.disposed && !this.loop) return Promise.resolve();
     this.dirty = true;
     if (reload) this.reloadRequested = true;
     this.loop ??= this.run();

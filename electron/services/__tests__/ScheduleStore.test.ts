@@ -368,6 +368,8 @@ describe("ScheduleStore", () => {
     writeIssues.mockClear();
     expect((await store.list(PROJECT)).schedules).toEqual([stored]);
     expect((await store.setEnabled(PROJECT, created.id, false)).status).toBe("saved");
+    expect((await store.setEnabled(PROJECT, created.id, true)).status).toBe("saved");
+    expect((await newStore().get(PROJECT, created.id))?.enabled).toBe(true);
     expect(writeIssues).not.toHaveBeenCalled();
   });
 

@@ -218,7 +218,7 @@ interface ScheduleEditorProps {
 
 const MAIN_CHECKOUT_VALUE = "__main__";
 const RUN_WHEN_CLOSED_DESCRIPTION =
-  "macOS starts Daintree without a window when a run is due. A run missed while the Mac slept happens when it wakes";
+  "macOS starts Daintree without a window when a run is due. One due while the Mac sleeps follows Missed runs when it wakes";
 const PREVIEW_RUNS = 3;
 /** How long the cadence must sit still before its words or error are read out. */
 const CADENCE_ANNOUNCE_SETTLE_MS = 600;

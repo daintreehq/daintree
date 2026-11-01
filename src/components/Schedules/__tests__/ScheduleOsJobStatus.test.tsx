@@ -81,6 +81,18 @@ describe("ScheduleOsJobStatus (#15990)", () => {
     expect(onRepair).toHaveBeenCalledOnce();
   });
 
+  it("offers a repair when the job couldn't be checked at all", () => {
+    const { text } = show(null, [schedule("a")], { error: "Couldn't check the job" });
+    expect(text()).toContain("Couldn't check the job");
+    expect(screen.getByRole("button", { name: "Repair" })).not.toBeNull();
+  });
+
+  it("says a repair failed even beside a status that last read current", () => {
+    const { text } = show(CURRENT, [schedule("a")], { error: "Couldn't repair the job" });
+    expect(text()).toContain("Couldn't repair the job");
+    expect(text()).not.toContain("schedule here when");
+  });
+
   it("holds the repair while one is under way", () => {
     show({ ...CURRENT, state: "stale" }, [schedule("a")], { repairing: true });
     const button = screen.getByRole("button", { name: "Repairing…" }) as HTMLButtonElement;
@@ -93,13 +105,15 @@ describe("ScheduleOsJobStatus (#15990)", () => {
         ...CURRENT,
         excluded: [
           { scheduleId: "b", reason: "Runs on Asia/Tokyo time" },
+          { scheduleId: "c", reason: "Needs 600 start times" },
           { scheduleId: "gone", reason: "Not in this list" },
         ],
       },
-      [schedule("a"), schedule("b")]
+      [schedule("a"), schedule("b"), schedule("c")]
     );
-    expect(text()).toContain("1 schedule can't start Daintree when it isn't running");
+    expect(text()).toContain("2 schedules can't start Daintree when it isn't running");
     expect(text()).toContain("Schedule b: Runs on Asia/Tokyo time");
+    expect(text()).toContain("Schedule c: Needs 600 start times");
     expect(text()).not.toContain("Not in this list");
     expect(text()).toContain("for 1 schedule here");
   });

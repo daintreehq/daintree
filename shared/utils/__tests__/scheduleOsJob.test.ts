@@ -59,6 +59,10 @@ describe("runWhenClosedIssues", () => {
     expect(runWhenClosedIssues(schedule("0 0 */2 * MON", false, "Asia/Tokyo"), MAC)).toEqual([]);
   });
 
+  it("passes a schedule with the option on that the job can start", () => {
+    expect(runWhenClosedIssues(schedule("0 9 * * 1-5", true), MAC)).toEqual([]);
+  });
+
   it("names the option's field for a schedule the job can't start", () => {
     expect(runWhenClosedIssues(schedule("0 9 * * *", true, "Asia/Tokyo"), MAC)).toEqual([
       { path: RUN_WHEN_CLOSED_PATH, cronField: null, message: expect.stringMatching(/Tokyo/) },

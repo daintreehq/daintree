@@ -73,9 +73,7 @@ describe("launchdCalendarFor", () => {
   });
 
   it("spells out every minute rather than writing an entry with no keys", () => {
-    const every = intervals("* * * * *");
-    expect(every).toHaveLength(60);
-    expect(every.every((entry) => Object.keys(entry).join() === "Minute")).toBe(true);
+    expect(intervals("* * * * *")).toEqual(Array.from({ length: 60 }, (_, Minute) => ({ Minute })));
   });
 
   it("writes one entry per combination of restricted fields", () => {
@@ -121,12 +119,23 @@ describe("launchdCalendarFor", () => {
     ).toBe(true);
   });
 
+  it("compares zones by the name each resolves to", () => {
+    const accepted = (timeZone: string, machineZone: string) =>
+      launchdCalendarFor({ cron: "0 9 * * *", timeZone }, machineZone).ok;
+    expect(accepted("europe/london", "Europe/London")).toBe(true);
+    expect(accepted("US/Eastern", "America/New_York")).toBe(true);
+    expect(accepted("America/Chicago", "America/New_York")).toBe(false);
+    expect(refusal("0 9 * * *", "Not/AZone", "UTC")).toMatch(/isn't a time zone/);
+  });
+
   it("refuses a cadence past the per-schedule limit, naming the count", () => {
     // 12 minutes x 9 hours x 5 weekdays.
     expect(refusal("*/5 9-17 * * 1-5")).toBe(
       `macOS would need 540 start times for this cadence, more than the ${MAX_LAUNCHD_INTERVALS_PER_SCHEDULE} one schedule can have`
     );
     expect(intervals("*/15 9-17 * * 1-5")).toHaveLength(180);
+    // 10 minutes x 10 hours x 5 weekdays: exactly the limit.
+    expect(intervals("0-9 0-9 * * 1-5")).toHaveLength(MAX_LAUNCHD_INTERVALS_PER_SCHEDULE);
   });
 
   it("passes on the cron error for an expression that doesn't parse", () => {
@@ -145,6 +154,9 @@ describe("launchdCalendarFor", () => {
     ["0 12 13 * 5", 400],
     ["0 9 * 3-5,11 SAT,SUN", 400],
     ["0 9 31 * *", 400],
+    ["* * * * *", 2],
+    // Either-day matching inside a restricted month: February's Mondays only.
+    ["0 9 31 2 MON", 800],
   ])("fires launchd at exactly the occurrences of %s", (expression, days) => {
     const from = Date.parse("2027-01-01T00:00:00Z");
     expect(launchdFirings(intervals(expression), from, days)).toEqual(
@@ -158,8 +170,16 @@ describe("launchdIntervalKey", () => {
     expect(launchdIntervalKey({ Minute: 0, Hour: 9 })).toBe(
       launchdIntervalKey({ Hour: 9, Minute: 0 })
     );
-    expect(launchdIntervalKey({ Hour: 9, Minute: 0 })).not.toBe(
-      launchdIntervalKey({ Weekday: 1, Hour: 9, Minute: 0 })
-    );
+  });
+
+  it("tells apart entries that differ in any one key, a missing key from a zero included", () => {
+    const base: LaunchdCalendarInterval = { Month: 1, Day: 1, Weekday: 1, Hour: 1, Minute: 1 };
+    const keys = ["Month", "Day", "Weekday", "Hour", "Minute"] as const;
+    for (const key of keys) {
+      const { [key]: _dropped, ...missing } = base;
+      expect(launchdIntervalKey({ ...base, [key]: 2 }), key).not.toBe(launchdIntervalKey(base));
+      expect(launchdIntervalKey(missing), key).not.toBe(launchdIntervalKey(base));
+      expect(launchdIntervalKey(missing), key).not.toBe(launchdIntervalKey({ ...base, [key]: 0 }));
+    }
   });
 });

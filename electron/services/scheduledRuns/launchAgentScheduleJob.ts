@@ -32,6 +32,8 @@ const OPEN = "/usr/bin/open";
 const LAUNCHCTL = "/bin/launchctl";
 const LABEL_PREFIX = "org.daintree.app.schedules";
 const BUNDLE_SUFFIX = ".app/Contents/MacOS/";
+/** launchctl answers a status read at once; one that doesn't is hung, not slow. */
+const PRINT_TIMEOUT_MS = 2_000;
 const UNLOAD_POLLS = 10;
 const UNLOAD_POLL_MS = 200;
 const BOOTSTRAP_ATTEMPTS = 3;
@@ -223,16 +225,21 @@ export function createLaunchAgentScheduleJob(deps: {
 
   /** Null when launchctl couldn't say. */
   const isLoaded = async (): Promise<boolean | null> => {
-    const result = await deps.run(LAUNCHCTL, ["print", service]);
+    const result = await deps.run(LAUNCHCTL, ["print", service], { timeoutMs: PRINT_TIMEOUT_MS });
     if (result.failure) return null;
     return result.code === 0;
   };
 
-  /** Unloading is asynchronous: launchd can still list the job for a moment. */
+  /**
+   * Unloading is asynchronous: launchd can still list the job for a moment.
+   * A launchctl that can't say ends the wait rather than repeating it.
+   */
   const unload = async (): Promise<void> => {
     const result = await deps.run(LAUNCHCTL, ["bootout", service]);
     for (let poll = 0; poll < UNLOAD_POLLS; poll++) {
-      if ((await isLoaded()) === false) return;
+      const loaded = await isLoaded();
+      if (loaded === false) return;
+      if (loaded === null) break;
       await delay(UNLOAD_POLL_MS);
     }
     throw new Error(describeLaunchctl("Couldn't unload the old macOS job", result));
@@ -259,12 +266,9 @@ export function createLaunchAgentScheduleJob(deps: {
       const desired = desiredContent(cadences, systemTimeZone);
       const [onDisk, loaded] = await Promise.all([files.readFile(file), isLoaded()]);
       if (desired === null) {
-        if (onDisk === null && loaded === false) return;
-        // The file goes even when unloading fails, so the next login can't load it.
-        let failure: unknown = null;
-        if (loaded !== false) await unload().catch((error: unknown) => (failure = error));
-        await files.remove(file);
-        if (failure) throw failure;
+        // The file goes first, so the next login can't load it however unloading goes.
+        if (onDisk !== null) await files.remove(file);
+        if (loaded !== false) await unload();
         return;
       }
       if (!options.reload && onDisk === desired && loaded === true) return;
