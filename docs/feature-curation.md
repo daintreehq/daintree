@@ -244,6 +244,7 @@ Each row is a decision that was actually made, with the issue or PR behind it. W
 | MCP control surface | **APPROVE (budgeted)** | Only what Daintree alone can do, sized to what clients tolerate: the external surface was cut from 100 tools to 23 (#11592), and in-app tiers split into Core and Full (#12839). |
 | Native in-app assistant runtime | **REJECT** | The assistant stays a standard agent CLI; Daintree stays a terminal manager (#10649). A native React surface over a bundled engine was closed in favour of better Claude Code and Codex support (#12189). |
 | Daintree Assistant | **APPROVE** | The user's own agent CLI in the help panel with Daintree's MCP tools, docs and runbooks. Orchestration-aware without a bespoke chat UI. |
+| Scheduled agent runs | **APPROVE (bounded)** | A project schedule launches one agent as an ordinary, visible terminal, records every run (skips included) and resumes like any historic chat, replacing OS jobs that run agents where nobody can see them (#15973). Schedules live in local per-project data, never the repository's `.daintree/`, so a `git pull` can't add an unattended job. Settlement acts on process exits, printed markers and precondition exit codes, never heuristic agent state. No MCP tools, no recipes, no Remote Hosts, and Daintree never wakes a sleeping machine on macOS or Linux. |
 | Voice Input | **APPROVE** | Bridges gap. Hands-free delegation while monitoring other agents. Accessibility value. |
 
 ### Platform
