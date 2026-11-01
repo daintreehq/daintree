@@ -120,9 +120,7 @@ function ResumeSessionRow({
   const scheduleLabel = item.schedule?.label;
   const lead = item.location ?? "";
   const rest = [item.modelName, closedAt].filter(Boolean).join(" · ");
-  const meta = [item.location, scheduleLabel, item.modelName, closedAt]
-    .filter(Boolean)
-    .join(" · ");
+  const meta = [item.location, scheduleLabel, item.modelName, closedAt].filter(Boolean).join(" · ");
   const optionId = `resume-session-option-${item.id}`;
   return (
     <button

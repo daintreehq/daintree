@@ -69,7 +69,10 @@ describe("TerminalScheduleChip", () => {
   it.each([
     ["a pane no schedule launched", { spawnedBy: "palette" }],
     ["a schedule source without its run", { spawnedBy: "schedule" }],
-    ["a run reference on another source", { spawnedBy: "agent", scheduledRun: SCHEDULED.scheduledRun }],
+    [
+      "a run reference on another source",
+      { spawnedBy: "agent", scheduledRun: SCHEDULED.scheduledRun },
+    ],
     ["a panel that isn't a terminal", { kind: "browser", ...SCHEDULED }],
   ])("draws nothing and reads nothing for %s", async (_name, panel) => {
     seedPanel(panel);

@@ -193,9 +193,7 @@ describe("scheduleNamesStore", () => {
 
   it("puts each reading into the words beside the mark", () => {
     expect(scheduleNameLabel({ kind: "named", name: "Nightly" })).toBe("Nightly");
-    expect(scheduleNameLabel({ kind: "deleted" })).not.toBe(
-      scheduleNameLabel({ kind: "unnamed" })
-    );
+    expect(scheduleNameLabel({ kind: "deleted" })).not.toBe(scheduleNameLabel({ kind: "unnamed" }));
     expect(scheduleNameLabel({ kind: "remote" })).toBe(scheduleNameLabel({ kind: "unnamed" }));
   });
 });

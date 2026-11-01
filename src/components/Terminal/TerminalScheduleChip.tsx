@@ -25,7 +25,9 @@ function useTerminalScheduleId(terminalId: string): string | null {
   return usePanelStore((state) => {
     const panel = state.panelsById[terminalId];
     if (!panel || !isPtyPanel(panel)) return null;
-    return readSpawnProvenance(panel.spawnedBy, panel.scheduledRun).scheduledRun?.scheduleId ?? null;
+    return (
+      readSpawnProvenance(panel.spawnedBy, panel.scheduledRun).scheduledRun?.scheduleId ?? null
+    );
   });
 }
 
