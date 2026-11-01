@@ -608,6 +608,24 @@ describe("PtyManager lifecycle ledger", () => {
     });
   });
 
+  it("names a scheduled run's ids on a trash-expiry capture (#15977)", async () => {
+    const run = { scheduleId: "schedule-1", runId: "run-1" };
+    const manager = new PtyManager();
+
+    manager.spawn("t1", spawnOptions({ launchAgentId: "claude" }));
+    shared.created[0]!.sessionId = "sess-1";
+    shared.created[0]!.info.scheduledRun = run;
+
+    manager.trash("t1");
+    shared.trashCallbacks.get("t1")!("t1");
+    await vi.waitFor(() => {
+      expect(shared.eventsEmit).toHaveBeenCalledWith(
+        "agent-session:captured",
+        expect.objectContaining({ record: expect.objectContaining({ scheduledRun: run }) })
+      );
+    });
+  });
+
   it("names the trash a trash-expiry capture left, as the user's close", async () => {
     const manager = new PtyManager();
     manager.spawn("t2", spawnOptions({ launchAgentId: "claude", launchGeneration: 4 }));

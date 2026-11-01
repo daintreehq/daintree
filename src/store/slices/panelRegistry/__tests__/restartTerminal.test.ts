@@ -231,6 +231,27 @@ describe("restartTerminal agent-exited demotion (#5764)", () => {
     expect(payload.agentLaunchFlags).toEqual(["--persisted-flag"]);
   });
 
+  // #15977: a restarted scheduled run's agent is still the run's, so a session
+  // captured when it ends names it; a demoted shell has no session to name.
+  it("hands a restarted scheduled run's ids to the host, and none to a demoted shell", async () => {
+    const run = { scheduleId: "schedule-1", runId: "run-1" };
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      spawnedBy: "schedule" as const,
+      scheduledRun: run,
+    };
+    usePanelStore.setState({ panelsById: { [active.id]: active }, panelIds: [active.id] });
+    await usePanelStore.getState().restartTerminal("test-1");
+    expect(mockSpawn.mock.calls[0]![0].scheduledRun).toEqual(run);
+
+    mockSpawn.mockClear();
+    const demoted = { ...active, agentState: "exited" as const, exitCode: 0 };
+    usePanelStore.setState({ panelsById: { [demoted.id]: demoted }, panelIds: [demoted.id] });
+    await usePanelStore.getState().restartTerminal("test-1");
+    expect(mockSpawn.mock.calls[0]![0].scheduledRun).toBeUndefined();
+  });
+
   it("holds a restart to the pane's required plugin tools, and shows a refusal as the spawn banner (#14096)", async () => {
     const { ClientAppError } = await import("@/utils/clientAppError");
     const tools = [

@@ -588,6 +588,35 @@ describe("passive agent session capture", () => {
       expect(captured[0].record.agentModelId).toBeUndefined();
     });
 
+    // #15977: the record of a scheduled run's agent names the run, read off the
+    // terminal record the spawn options built.
+    it("names the scheduled run the terminal was launched for", async () => {
+      const run = { scheduleId: "schedule-1", runId: "run-1" };
+      const terminal = track(createTerminal({ scheduledRun: { ...run, extra: "dropped" } }));
+      promoteCodex(terminal);
+      mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n`);
+      mockPty(terminal).__emitExit(0);
+
+      await flushCapture();
+      expect(captured[0].record.scheduledRun).toEqual(run);
+    });
+
+    it("omits the scheduled run for an agent Daintree did not launch", async () => {
+      const terminal = track(
+        createTerminal({
+          launchAgentId: "claude",
+          scheduledRun: { scheduleId: "schedule-1", runId: "run-1" },
+        })
+      );
+      promoteCodex(terminal);
+      mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n$ `);
+      demote(terminal);
+
+      await flushCapture();
+      expect(captured[0].record.agentId).toBe("codex");
+      expect(captured[0].record).not.toHaveProperty("scheduledRun");
+    });
+
     it("keeps the user's locked title instead of the observed one", async () => {
       const terminal = track(createTerminal({ titleMode: "user" }));
       promoteCodex(terminal);

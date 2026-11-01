@@ -151,6 +151,8 @@ const PTY_FIELD_CLASSIFICATION = {
   everDetectedAgent: false,
   detectedAgentId: false,
   spawnedBy: true,
+  // Written only beside `spawnedBy: "schedule"` (#15977), as the fixture has it.
+  scheduledRun: true,
   focusPolicy: false,
   excludeFromPersistence: false,
   removeOnExit: false,
@@ -452,7 +454,8 @@ const terminalFixture: PtySerializeInput = {
   agentLaunchFlags: ["--resume", "--effort", "high"],
   callerLaunchFlags: ["--effort", "high"],
   agentModelId: "claude-3-5-sonnet",
-  spawnedBy: "quickrun",
+  spawnedBy: "schedule",
+  scheduledRun: { scheduleId: "schedule-1", runId: "run-1" },
   agentPresetId: "blue-provider",
   agentPresetColor: "#3366ff",
   originalPresetId: "primary-provider",

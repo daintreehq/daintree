@@ -205,6 +205,37 @@ describe("addPanel launch context (#12486)", () => {
     expect(spawnMock).toHaveBeenCalledTimes(1);
     expect(spawnMock.mock.calls[0]![0]!.actionContext).toBeUndefined();
   });
+
+  // #15977: the pane and the host's record both name a scheduled run, and a
+  // run reference never rides another source.
+  it("keeps a scheduled run's ids on the pane and hands them to the host", async () => {
+    const run = { scheduleId: "schedule-1", runId: "run-1" };
+    await usePanelStore.getState().addPanel({
+      requestedId: "claude-run",
+      launchAgentId: "claude",
+      command: "claude",
+      bypassLimits: true,
+      spawnedBy: "schedule",
+      scheduledRun: run,
+    });
+    await usePanelStore.getState().addPanel({
+      requestedId: "claude-mcp",
+      launchAgentId: "claude",
+      command: "claude",
+      bypassLimits: true,
+      spawnedBy: "mcp",
+      scheduledRun: run,
+    });
+    await drainMicrotasks();
+
+    const panels = usePanelStore.getState().panelsById;
+    expect(panels["claude-run"]).toMatchObject({ spawnedBy: "schedule", scheduledRun: run });
+    expect(panels["claude-mcp"]).toMatchObject({ spawnedBy: "mcp" });
+    expect(panels["claude-mcp"]).not.toHaveProperty("scheduledRun");
+    const byId = new Map(spawnMock.mock.calls.map(([options]) => [options.id, options]));
+    expect(byId.get("claude-run")?.scheduledRun).toEqual(run);
+    expect(byId.get("claude-mcp")?.scheduledRun).toBeUndefined();
+  });
 });
 
 const GLOBAL = { TOOL_HOME: "/g", SHARED: "global", ONLY_GLOBAL: "1" };

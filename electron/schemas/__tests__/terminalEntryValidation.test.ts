@@ -214,6 +214,41 @@ describe("Terminal Entry Validation Schemas", () => {
         expect(result.success && result.data.spawnedBy).toBeUndefined();
       });
 
+      // #15977 — a scheduled run's ids ride beside the source; a malformed pair
+      // costs the attribution, never the pane.
+      it("keeps a scheduled run's ids, and drops ones that don't read without failing the entry", () => {
+        const run = { scheduleId: "schedule-1", runId: "run-1" };
+        const kept = TerminalSnapshotSchema.safeParse({
+          ...base,
+          spawnedBy: "schedule",
+          scheduledRun: run,
+        });
+        expect(kept.success && kept.data).toMatchObject({
+          spawnedBy: "schedule",
+          scheduledRun: run,
+        });
+
+        const absent = TerminalSnapshotSchema.safeParse(base);
+        expect(absent.success && "scheduledRun" in absent.data).toBe(false);
+
+        for (const scheduledRun of [{ scheduleId: "schedule-1" }, "run-1", { runId: 7 }]) {
+          const result = TerminalSnapshotSchema.safeParse({
+            ...base,
+            spawnedBy: "schedule",
+            scheduledRun,
+          });
+          expect(result.success).toBe(true);
+          expect(result.success && result.data.scheduledRun).toBeUndefined();
+        }
+
+        const global = AppStateTerminalEntrySchema.safeParse({
+          ...base,
+          spawnedBy: "schedule",
+          scheduledRun: run,
+        });
+        expect(global.success && global.data.scheduledRun).toEqual(run);
+      });
+
       it("normalizes the spawn source on the legacy global entry schema too", () => {
         const globalBase = { id: "g1", title: "Terminal", cwd: "/Users/test", location: "grid" };
         const valid = AppStateTerminalEntrySchema.safeParse({
