@@ -2940,8 +2940,16 @@ describe("wake scopes (#15999)", () => {
       reserveScope.release();
       return true;
     };
+    const throwScope = h.service.openWakeScope();
+    const thrown = fakeWake("decision-3");
+    thrown.wake.beforeType = () => {
+      throwScope.release();
+      throw new Error("reservation store gone");
+    };
+    vi.spyOn(console, "error").mockImplementation(() => {});
     recheckScope.enqueueWake(PANE, PROJECT, rechecked.wake);
     reserveScope.enqueueWake(PANE, PROJECT, reserved.wake);
+    throwScope.enqueueWake(PANE, PROJECT, thrown.wake);
 
     await flushWake();
     expect(h.client.submitted.map((s) => s.text)).toEqual([
@@ -2949,6 +2957,7 @@ describe("wake scopes (#15999)", () => {
     ]);
     expect(rechecked.outcomes).toEqual([{ kind: "unavailable", reason: "stopped" }]);
     expect(reserved.outcomes).toEqual([{ kind: "unavailable", reason: "stopped" }]);
+    expect(thrown.outcomes).toEqual([{ kind: "unavailable", reason: "stopped" }]);
     expect(kept.outcomes).toEqual([{ kind: "delivered" }]);
   });
 
