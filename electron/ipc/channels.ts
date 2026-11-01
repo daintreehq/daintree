@@ -1517,6 +1517,13 @@ export const CHANNELS = {
   DECISIONS_CLAIM_RELAY: "decisions:claim-relay",
   DECISIONS_RESTORE_IDENTITY: "decisions:restore-identity",
   DECISIONS_DISCONNECT_RELAY: "decisions:disconnect-relay",
+  // The devices paired with this computer's relay identity, and pairing a
+  // phone through a one-time invitation and matching digits (#16009).
+  DECISIONS_LIST_DEVICES: "decisions:list-devices",
+  DECISIONS_START_PAIRING: "decisions:start-pairing",
+  DECISIONS_GET_PAIRING: "decisions:get-pairing",
+  DECISIONS_APPROVE_PAIRING: "decisions:approve-pairing",
+  DECISIONS_DECLINE_PAIRING: "decisions:decline-pairing",
 
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",

@@ -5,9 +5,16 @@ import { getAllAppWebContents } from "../../window/webContentsRegistry.js";
 import type { RelayConfig } from "@daintreehq/decisions-client";
 import { newId } from "@daintreehq/decisions-crypto";
 import type {
+  ApproveDecisionsPairingPayload,
   ClaimDecisionsRelayPayload,
   DecisionsConnectResult,
+  DecisionsDevicesResult,
+  DecisionsPairingApproveResult,
+  DecisionsPairingDeclineResult,
+  DecisionsPairingStartResult,
+  DecisionsPairingState,
   DecisionsRelayCheck,
+  DecisionsRelayRequestFailure,
   DecisionsSettings,
   DecisionsStatus,
   PaneDecisionState,
@@ -20,6 +27,7 @@ import {
   writeDecisionsSettings,
 } from "./decisionsSettings.js";
 import type { DecisionsService } from "./DecisionsService.js";
+import { OwnerDevices } from "./pairing.js";
 import type { RelayBinding } from "./relayConnection.js";
 import { RelayCheckCancelledError, checkDecisionsRelay } from "./relayCheck.js";
 import {
@@ -52,6 +60,17 @@ const setups = new Set<AbortController>();
 /** Counts status changes, so a read that lands after a newer push can't roll it back. */
 let statusRevision = 0;
 let statusPushes: Promise<void> = Promise.resolve();
+/**
+ * The owner's devices and pairing invitations for the identity the setting
+ * records (#16009). Forgotten whenever that identity changes or Decisions
+ * stops, which aborts its requests and drops every invitation it held.
+ */
+let ownerDevices: OwnerDevices | null = null;
+
+function forgetOwnerDevices(): void {
+  ownerDevices?.dispose();
+  ownerDevices = null;
+}
 
 function publishPaneState(projectId: string, state: PaneDecisionState): void {
   broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
@@ -238,6 +257,7 @@ function recordIdentity(running: DecisionsService, config: RelayConfig): Decisio
     });
   }
   running.updateSettings(saved);
+  forgetOwnerDevices();
   return saved;
 }
 
@@ -289,6 +309,7 @@ export function restoreIdentity(
 export function disconnectRelay(): Promise<DecisionsStatus> {
   return serialize(async () => {
     const { service: running, keys } = await setupKeys();
+    forgetOwnerDevices();
     // The socket runs on these keys, so it closes before they go.
     running.suspendConnection();
     try {
@@ -317,6 +338,58 @@ export function disconnectRelay(): Promise<DecisionsStatus> {
   });
 }
 
+/**
+ * The owner's devices for the identity the setting records, made on first
+ * use in an enabled lifetime. Nothing set up yet is an observation, not an
+ * error; Decisions off or quitting is refused like a setup.
+ */
+async function ownerDevicesFor(): Promise<OwnerDevices | DecisionsRelayRequestFailure> {
+  const { service: running, keys } = await setupKeys();
+  const settings = running.getSettings() ?? readDecisionsSettings(store);
+  const { relayOrigin, installationId, deviceId } = settings;
+  if (relayOrigin === null || installationId === null || deviceId === null) {
+    return { result: "not-set-up" };
+  }
+  const record = { relayOrigin, installationId, deviceId };
+  if (!ownerDevices?.matches(record)) {
+    ownerDevices?.dispose();
+    ownerDevices = new OwnerDevices({ ...record, keys });
+  }
+  return ownerDevices;
+}
+
+/** The phones and Hosts paired with this computer's relay identity (#16009). */
+export async function listDevices(): Promise<DecisionsDevicesResult> {
+  const devices = await ownerDevicesFor();
+  return devices instanceof OwnerDevices ? devices.list() : devices;
+}
+
+/** Makes a one-time invitation for a phone to pair (#16009). */
+export async function startPairing(): Promise<DecisionsPairingStartResult> {
+  const devices = await ownerDevicesFor();
+  return devices instanceof OwnerDevices ? devices.invite() : devices;
+}
+
+/** Whether a phone has answered an invitation this computer made, and its code. */
+export async function readPairing(pairingId: string): Promise<DecisionsPairingState> {
+  const devices = await ownerDevicesFor();
+  return devices instanceof OwnerDevices ? devices.read(pairingId) : devices;
+}
+
+/** Approves the phone whose code the person saw match on both screens. */
+export async function approvePairing(
+  payload: ApproveDecisionsPairingPayload
+): Promise<DecisionsPairingApproveResult> {
+  const devices = await ownerDevicesFor();
+  return devices instanceof OwnerDevices ? devices.approve(payload) : devices;
+}
+
+/** Rejects an invitation on the relay: a code that didn't match, or a pairing given up. */
+export async function declinePairing(pairingId: string): Promise<DecisionsPairingDeclineResult> {
+  const devices = await ownerDevicesFor();
+  return devices instanceof OwnerDevices ? devices.decline(pairingId) : devices;
+}
+
 /** Boot: starts the service only if the saved setting, sanitised, is on. */
 export function startDecisionsIfEnabled(): Promise<void> {
   return serialize(async () => {
@@ -343,7 +416,10 @@ export function setDecisionsEnabled(
     const current = readDecisionsSettings(store);
     const consentedAt = current.consentedAt ?? (options.consent ? Date.now() : null);
     const saved = writeDecisionsSettings(store, { ...current, enabled, consentedAt });
-    if (!saved.enabled) cancelRelayChecks();
+    if (!saved.enabled) {
+      cancelRelayChecks();
+      forgetOwnerDevices();
+    }
     try {
       if (saved.enabled && !shutDown) {
         const next = await getDecisionsService();
@@ -363,6 +439,7 @@ export function setDecisionsEnabled(
 export async function stopDecisions(): Promise<void> {
   shutDown = true;
   cancelRelayChecks();
+  forgetOwnerDevices();
   for (const controller of setups) controller.abort();
   await (await settledService())?.dispose();
 }
@@ -370,6 +447,7 @@ export async function stopDecisions(): Promise<void> {
 /** @internal Tests only. */
 export function _resetDecisionsForTesting(): void {
   cancelRelayChecks();
+  forgetOwnerDevices();
   for (const controller of setups) controller.abort();
   setups.clear();
   service = null;

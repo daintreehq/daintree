@@ -602,6 +602,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./copyTreeHistory.js").CopyTreeHistoryRecord[];
   };
+  "decisions:approve-pairing": {
+    args: [payload: import("../decisions.js").ApproveDecisionsPairingPayload];
+    result: import("../decisions.js").DecisionsPairingApproveResult;
+  };
   "decisions:check-relay": {
     args: [url: string];
     result: import("../decisions.js").DecisionsRelayCheck;
@@ -610,9 +614,17 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisions.js").ClaimDecisionsRelayPayload];
     result: import("../decisions.js").DecisionsConnectResult;
   };
+  "decisions:decline-pairing": {
+    args: [pairingId: string];
+    result: import("../decisions.js").DecisionsPairingDeclineResult;
+  };
   "decisions:disconnect-relay": {
     args: [];
     result: import("../decisions.js").DecisionsStatus;
+  };
+  "decisions:get-pairing": {
+    args: [pairingId: string];
+    result: import("../decisions.js").DecisionsPairingState;
   };
   "decisions:get-pane-state": {
     args: [terminalId: string];
@@ -622,6 +634,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../decisions.js").DecisionsStatus;
   };
+  "decisions:list-devices": {
+    args: [];
+    result: import("../decisions.js").DecisionsDevicesResult;
+  };
   "decisions:restore-identity": {
     args: [payload: import("../decisions.js").RestoreDecisionsIdentityPayload];
     result: import("../decisions.js").DecisionsConnectResult;
@@ -629,6 +645,10 @@ export interface GeneratedIpcInvokeMap {
   "decisions:set-enabled": {
     args: [payload: import("../decisions.js").SetDecisionsEnabledPayload];
     result: import("../decisions.js").DecisionsStatus;
+  };
+  "decisions:start-pairing": {
+    args: [];
+    result: import("../decisions.js").DecisionsPairingStartResult;
   };
   "demo:annotate": {
     args: [payload: import("./demo.js").DemoAnnotatePayload];

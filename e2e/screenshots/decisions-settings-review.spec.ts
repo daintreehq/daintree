@@ -1,14 +1,15 @@
 /**
- * Settings → Integrations → Decisions visual-review harness (#16004).
+ * Settings → Integrations → Decisions visual-review harness (#16004, #16009).
  *
  * Boots a real project and walks the page the way a person meets it: off, the
  * consent dialog the first switch-on opens, on through the real IPC, and
  * search. States main can't reach yet (a relay connecting, connected or
  * refused, a failed switch, a status that can't be read, what a relay check
- * saw) are its own answers to `decisions:get-status`, `decisions:set-enabled`
- * and `decisions:check-relay` (#16005), put in place in main
- * before the settings dialog is opened again, so the renderer under review
- * reads them through the same seam it always does.
+ * saw, the paired devices and every step of pairing a phone) are its own
+ * answers to `decisions:get-status`, `decisions:set-enabled`,
+ * `decisions:check-relay` (#16005) and the device and pairing ops (#16009),
+ * put in place in main before the settings dialog is opened again, so the
+ * renderer under review reads them through the same seam it always does.
  *
  * Opt-in only:
  *
@@ -21,6 +22,7 @@
  *   DESIGN_CAPTURE_DIR         required — output directory (never the repo)
  *   DAINTREE_SHOT_THEME        comma-separated theme ids (default: daintree)
  *   DAINTREE_SCREENSHOT_SCALE  device scale factor (default 2)
+ *   DAINTREE_SHOT_ONLY         comma-separated state prefixes ("13,14,2") to capture only those
  *
  * Output: <dir>/<NN-state>[--p<slice>]--<theme>.png. Every state asserts what
  * it drove is on screen before it writes, and the run fails at the end with
@@ -36,7 +38,14 @@ import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { openAndOnboardProject } from "../helpers/project";
 import { dismissBlockingPalette } from "../helpers/overlays";
 import { setAppTheme } from "../helpers/theme";
-import type { DecisionsRelayCheck, DecisionsStatus } from "../../shared/types/decisions";
+import type {
+  DecisionsDevicesResult,
+  DecisionsPairingApproveResult,
+  DecisionsPairingStartResult,
+  DecisionsPairingState,
+  DecisionsRelayCheck,
+  DecisionsStatus,
+} from "../../shared/types/decisions";
 
 const ENABLED = !!process.env.DAINTREE_SHOT_DECISIONS;
 const OUTPUT_DIR = process.env.DESIGN_CAPTURE_DIR
@@ -47,12 +56,17 @@ const THEMES = (process.env.DAINTREE_SHOT_THEME ?? "daintree")
   .map((t) => t.trim())
   .filter(Boolean);
 const SCALE = process.env.DAINTREE_SCREENSHOT_SCALE ?? "2";
+const ONLY = (process.env.DAINTREE_SHOT_ONLY ?? "")
+  .split(",")
+  .map((t) => t.trim())
+  .filter(Boolean);
 
 const DIALOG = '[role="dialog"]:has(.settings-sidebar)';
 const CARD = '[role="dialog"]:has(.settings-sidebar) > div';
 const PANEL = "#settings-panel-decisions";
 const CLOSE = '[aria-label="Close settings"]';
 const SWITCH = '[role="switch"][aria-labelledby]';
+const PAIRING = '[data-testid="decisions-pairing-dialog"]';
 const RELAY = "https://decisions.greg-priday.workers.dev";
 const CONSENTED = 1_761_955_200_000;
 
@@ -127,6 +141,38 @@ async function answerRelayCheck(
     ipcMain.removeHandler("decisions:check-relay");
     ipcMain.handle("decisions:check-relay", async () => next);
   }, check);
+}
+
+/** Main answers one Decisions channel with `value` until the run ends. */
+async function answerOp(app: ElectronApplication, channel: string, value: unknown): Promise<void> {
+  await app.evaluate(
+    ({ ipcMain }, [name, next]) => {
+      ipcMain.removeHandler(name as string);
+      ipcMain.handle(name as string, async () => next);
+    },
+    [channel, value] as const
+  );
+}
+
+/**
+ * A pairing link as the library's `createPairingInvite` builds it, at its real
+ * length (about 500 characters): 32-hex ids, a 32-byte secret and a 65-byte
+ * P-256 signing key, base64url JSON in the fragment.
+ */
+function inviteUrl(expiresAt: number): string {
+  const b64 = (bytes: number, fill: number) => Buffer.alloc(bytes, fill).toString("base64url");
+  const payload = {
+    v: 1,
+    o: RELAY,
+    i: "01a19923671277cf8bbb9c5ca7e8e198",
+    p: "7c0e3b4f9a2d4e18b6f05a3c91d2e7f4",
+    s: b64(32, 0x5a),
+    e: expiresAt,
+    k: b64(65, 0x93),
+    d: "c2f8a61e04b94d7fa3e95b0d6c1874aa",
+    r: "phone",
+  };
+  return `${RELAY}/pair#${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;
 }
 
 async function failStatus(app: ElectronApplication, message: string): Promise<void> {
@@ -210,8 +256,70 @@ async function captureWindow(page: Page, state: string, theme: string, expectSel
   verifyWritten(file);
 }
 
+/** One section of the page at the top of the panel's scrollport, so it is read in place. */
+async function captureSection(
+  page: Page,
+  state: string,
+  theme: string,
+  section: string,
+  expectText: string
+) {
+  const target = page.locator(`${PANEL} ${section}`);
+  await expect(target.getByText(expectText, { exact: false }).first()).toBeVisible({
+    timeout: 8000,
+  });
+  await page.evaluate((selector) => {
+    const el = document.querySelector<HTMLElement>(selector);
+    let scroller = el?.parentElement ?? null;
+    while (scroller) {
+      const oy = getComputedStyle(scroller).overflowY;
+      if ((oy === "auto" || oy === "scroll") && scroller.clientHeight > 0) break;
+      scroller = scroller.parentElement;
+    }
+    if (!el || !scroller) throw new Error(`no scroll container above ${selector}`);
+    scroller.scrollTop +=
+      el.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 120;
+  }, `${PANEL} ${section}`);
+  await settle(page, 250);
+  await expect(target.getByText(expectText, { exact: false }).first()).toBeVisible();
+  const file = fileFor(state, theme);
+  await page.locator(CARD).first().screenshot({
+    path: file,
+    type: "png",
+    animations: "disabled",
+    caret: "hide",
+  });
+  verifyWritten(file);
+}
+
+/** The pairing dialog alone, once it shows `expectText`. */
+async function captureDialog(page: Page, state: string, theme: string, expectText: string) {
+  const dialog = page.locator(PAIRING);
+  await expect(dialog.getByText(expectText, { exact: false }).first()).toBeVisible({
+    timeout: 10_000,
+  });
+  await settle(page, 300);
+  await expect(dialog.getByText(expectText, { exact: false }).first()).toBeVisible();
+  const file = fileFor(state, theme);
+  // The test id is on the full-window layer; the card is its one child.
+  await dialog.locator(":scope > div").first().screenshot({
+    path: file,
+    type: "png",
+    animations: "disabled",
+    caret: "hide",
+  });
+  verifyWritten(file);
+}
+
+async function closePairing(page: Page): Promise<void> {
+  await page.keyboard.press("Escape");
+  await page.locator(PAIRING).waitFor({ state: "detached", timeout: 10_000 });
+  await settle(page, 200);
+}
+
 /** Runs one state; a failure is recorded with what the page said instead, and nothing is written. */
 async function step(page: Page, name: string, run: () => Promise<void>): Promise<void> {
+  if (ONLY.length > 0 && !ONLY.some((prefix) => name.startsWith(prefix))) return;
   try {
     await run();
   } catch (error) {
@@ -235,7 +343,7 @@ test("Decisions settings page review — every state, per theme", async () => {
   test.skip(!ENABLED, "Set DAINTREE_SHOT_DECISIONS=1 to run this capture");
   if (!OUTPUT_DIR)
     throw new Error("DESIGN_CAPTURE_DIR must be set to a directory outside the repo");
-  test.setTimeout(12 * 60_000);
+  test.setTimeout(20 * 60_000);
   mkdirSync(OUTPUT_DIR, { recursive: true });
 
   for (const theme of THEMES) {
@@ -410,6 +518,220 @@ test("Decisions settings page review — every state, per theme", async () => {
           await closeSettings(page);
         });
       }
+
+      // 13-20 — Devices and pairing a phone (#16009), on a connected relay.
+      const connected: DecisionsStatus = {
+        state: "connected",
+        relayOrigin: RELAY,
+        consentedAt: CONSENTED,
+      };
+      const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+      const listed: DecisionsDevicesResult = {
+        result: "listed",
+        devices: [
+          {
+            deviceId: "dev_phone_1",
+            label: "Greg's iPhone",
+            role: "phone",
+            pairedAt: minutesAgo(60 * 24 * 40),
+            lastSeenAt: minutesAgo(3),
+            pushEnabled: true,
+          },
+          {
+            deviceId: "dev_phone_2",
+            label: "Pixel 9 Pro",
+            role: "phone",
+            pairedAt: minutesAgo(60 * 24 * 12),
+            lastSeenAt: minutesAgo(60 * 49),
+            pushEnabled: false,
+          },
+          {
+            deviceId: "dev_tablet_1",
+            label: "iPad Air in the studio, mounted beside the second monitor",
+            role: "tablet",
+            pairedAt: minutesAgo(30),
+            lastSeenAt: null,
+            pushEnabled: true,
+          },
+        ],
+      };
+      // 12b — on, with no relay set up yet: Devices says what comes first.
+      await step(page, "12b-devices-no-relay", async () => {
+        await answerStatus(app, { state: "not-connected", consentedAt: CONSENTED });
+        await openDecisions(page);
+        await captureSection(
+          page,
+          "12b-devices-no-relay",
+          theme,
+          "#decisions-devices",
+          "Connect a relay"
+        );
+        await closeSettings(page);
+      });
+
+      const deviceStates: [string, DecisionsDevicesResult, string][] = [
+        ["13-devices-empty", { result: "listed", devices: [] }, "Pair a phone to answer"],
+        ["14-devices-listed", listed, "Pixel 9 Pro"],
+        [
+          "15-devices-unreachable",
+          { result: "unreachable", origin: RELAY, reason: "dns" },
+          "Couldn't read the paired devices",
+        ],
+      ];
+      for (const [state, result, words] of deviceStates) {
+        await step(page, state, async () => {
+          await answerStatus(app, connected);
+          await answerRelayCheck(app, {
+            result: "claimed",
+            origin: RELAY,
+            compatibility: {
+              relay: { protocolMin: 1, protocolMax: 1, workerVersion: "0.1.0" },
+              daintree: { protocolMin: 1, protocolMax: 1, workerVersion: "0.1.0" },
+              diverges: false,
+            },
+          });
+          await answerOp(app, "decisions:list-devices", result);
+          await openDecisions(page);
+          await captureSection(page, state, theme, "#decisions-devices", words);
+          await closeSettings(page);
+        });
+      }
+
+      // 14b — a refresh that fails keeps the rows it had, and says so under them.
+      await step(page, "14b-devices-refresh-failed", async () => {
+        await answerStatus(app, connected);
+        await answerOp(app, "decisions:list-devices", listed);
+        await openDecisions(page);
+        await expect(
+          page.locator(`${PANEL} #decisions-devices`).getByText("Pixel 9 Pro")
+        ).toBeVisible({
+          timeout: 8000,
+        });
+        await answerOp(app, "decisions:list-devices", {
+          result: "unreachable",
+          origin: RELAY,
+          reason: "timeout",
+        });
+        await page
+          .locator(`${PANEL} #decisions-devices`)
+          .getByRole("button", { name: "Refresh devices" })
+          .click();
+        await captureSection(
+          page,
+          "14b-devices-refresh-failed",
+          theme,
+          "#decisions-devices",
+          "Couldn't refresh"
+        );
+        await closeSettings(page);
+      });
+
+      const startPairing = async (expiresInMs: number) => {
+        const expiresAt = Date.now() + expiresInMs;
+        const started: DecisionsPairingStartResult = {
+          result: "started",
+          invitation: {
+            pairingId: "7c0e3b4f9a2d4e18b6f05a3c91d2e7f4",
+            url: inviteUrl(expiresAt),
+            expiresAt,
+          },
+        };
+        await answerOp(app, "decisions:start-pairing", started);
+        await answerOp(app, "decisions:decline-pairing", { result: "declined" });
+      };
+      const openPairing = async () => {
+        await answerStatus(app, connected);
+        await answerOp(app, "decisions:list-devices", listed);
+        await openDecisions(page);
+        await page
+          .locator(`${PANEL} #decisions-devices`)
+          .getByRole("button", { name: "Pair a phone" })
+          .click();
+        await page.locator(PAIRING).waitFor({ state: "visible", timeout: 10_000 });
+      };
+      const waiting: DecisionsPairingState = { state: "waiting", expiresAt: Date.now() + 290_000 };
+      const responded = (expiresAt: number): DecisionsPairingState => ({
+        state: "responded",
+        expiresAt,
+        code: "482913",
+        label: "Greg's iPhone",
+        role: "phone",
+      });
+
+      // 16 — the invitation: QR, its expiry, the link as text, the iPhone caveat.
+      await step(page, "16-pair-waiting", async () => {
+        await startPairing(295_000);
+        await answerOp(app, "decisions:get-pairing", waiting);
+        await openPairing();
+        await expect(page.locator(`${PAIRING} [data-pairing-qr] svg`)).toBeVisible({
+          timeout: 8000,
+        });
+        await captureDialog(page, "16-pair-waiting", theme, "Expires in");
+        await captureWindow(page, "16-pair-waiting-window", theme, PAIRING);
+        await closePairing(page);
+        await closeSettings(page);
+      });
+
+      // 17 — a phone answered: the six digits to compare, Approve and Decline.
+      await step(page, "17-pair-responded", async () => {
+        const expiresAt = Date.now() + 240_000;
+        await startPairing(240_000);
+        await answerOp(app, "decisions:get-pairing", responded(expiresAt));
+        await openPairing();
+        await captureDialog(page, "17-pair-responded", theme, "482 913");
+        await closePairing(page);
+        await closeSettings(page);
+      });
+
+      // 18 — approved.
+      await step(page, "18-pair-paired", async () => {
+        const expiresAt = Date.now() + 240_000;
+        await startPairing(240_000);
+        await answerOp(app, "decisions:get-pairing", responded(expiresAt));
+        const paired: DecisionsPairingApproveResult = { result: "paired", label: "Greg's iPhone" };
+        await answerOp(app, "decisions:approve-pairing", paired);
+        await openPairing();
+        await expect(page.locator(PAIRING).getByText("482 913")).toBeVisible({ timeout: 10_000 });
+        await page.locator(PAIRING).getByRole("button", { name: "Approve" }).click();
+        await captureDialog(page, "18-pair-paired", theme, "is paired");
+        await closePairing(page);
+        await closeSettings(page);
+      });
+
+      // 19 — the code lapsed before a phone answered.
+      await step(page, "19-pair-expired", async () => {
+        await startPairing(2500);
+        await answerOp(app, "decisions:get-pairing", {
+          state: "waiting",
+          expiresAt: Date.now() + 2500,
+        });
+        await openPairing();
+        await captureDialog(page, "19-pair-expired", theme, "expired");
+        await closePairing(page);
+        await closeSettings(page);
+      });
+
+      // 20 — the codes didn't match: declined.
+      await step(page, "20-pair-declined", async () => {
+        const expiresAt = Date.now() + 240_000;
+        await startPairing(240_000);
+        await answerOp(app, "decisions:get-pairing", responded(expiresAt));
+        await openPairing();
+        await expect(page.locator(PAIRING).getByText("482 913")).toBeVisible({ timeout: 10_000 });
+        await page.locator(PAIRING).getByRole("button", { name: "Decline" }).click();
+        await captureDialog(page, "20-pair-declined", theme, "Pairing declined");
+        await closePairing(page);
+        await closeSettings(page);
+      });
+
+      // 21 — the relay wouldn't make an invitation.
+      await step(page, "21-pair-start-failed", async () => {
+        await answerOp(app, "decisions:start-pairing", { result: "busy" });
+        await openPairing();
+        await captureDialog(page, "21-pair-start-failed", theme, "Couldn't make a pairing code");
+        await closePairing(page);
+        await closeSettings(page);
+      });
     } finally {
       if (ctx) await closeApp(ctx.app).catch(() => {});
       for (const target of [repoRoot, userDataDir]) {

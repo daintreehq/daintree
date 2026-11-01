@@ -8,6 +8,11 @@ export const DECISIONS_METHOD_CHANNELS = {
   claimRelay: "decisions:claim-relay",
   restoreIdentity: "decisions:restore-identity",
   disconnectRelay: "decisions:disconnect-relay",
+  listDevices: "decisions:list-devices",
+  startPairing: "decisions:start-pairing",
+  getPairing: "decisions:get-pairing",
+  approvePairing: "decisions:approve-pairing",
+  declinePairing: "decisions:decline-pairing",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof DECISIONS_METHOD_CHANNELS;

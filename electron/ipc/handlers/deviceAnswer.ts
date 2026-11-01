@@ -16,8 +16,14 @@ import type {
   SetDeviceAnswerPayload,
 } from "../../../shared/types/ipc/deviceAnswer.js";
 import type {
+  ApproveDecisionsPairingPayload,
   ClaimDecisionsRelayPayload,
   DecisionsConnectResult,
+  DecisionsDevicesResult,
+  DecisionsPairingApproveResult,
+  DecisionsPairingDeclineResult,
+  DecisionsPairingStartResult,
+  DecisionsPairingState,
   DecisionsRelayCheck,
   DecisionsStatus,
   PaneDecisionState,
@@ -141,6 +147,13 @@ const restoreIdentitySchema = z
   })
   .strict();
 
+// A pairing id is one the relay minted for this computer; a code is the six
+// digits the person compared.
+const pairingIdSchema = z.string().min(1).max(128);
+const approvePairingSchema = z
+  .object({ pairingId: pairingIdSchema, code: z.string().regex(/^\d{6}$/) })
+  .strict();
+
 function refuseWhileOff(action: string): void {
   if (!decisionsOn()) {
     throw new AppError({ code: "PERMISSION", message: `Turn on Decisions to ${action}` });
@@ -253,6 +266,53 @@ export const decisionsNamespace = defineIpcNamespace({
       if (!decisions) throw setupCancelled();
       return decisions.disconnectRelay();
     }),
+    // The paired devices and pairing a phone (#16009). Only while on: each
+    // signs with the identity the running lifetime's key store holds.
+    listDevices: op(CHANNELS.DECISIONS_LIST_DEVICES, async (): Promise<DecisionsDevicesResult> => {
+      refuseWhileOff("list paired devices");
+      const decisions = await loadDecisions();
+      if (!decisions) throw setupCancelled();
+      return decisions.listDevices();
+    }),
+    startPairing: op(
+      CHANNELS.DECISIONS_START_PAIRING,
+      async (): Promise<DecisionsPairingStartResult> => {
+        refuseWhileOff("pair a phone");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.startPairing();
+      }
+    ),
+    getPairing: opValidated(
+      CHANNELS.DECISIONS_GET_PAIRING,
+      pairingIdSchema,
+      async (pairingId: string): Promise<DecisionsPairingState> => {
+        refuseWhileOff("pair a phone");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.readPairing(pairingId);
+      }
+    ),
+    approvePairing: opValidated(
+      CHANNELS.DECISIONS_APPROVE_PAIRING,
+      approvePairingSchema,
+      async (payload: ApproveDecisionsPairingPayload): Promise<DecisionsPairingApproveResult> => {
+        refuseWhileOff("pair a phone");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.approvePairing(payload);
+      }
+    ),
+    declinePairing: opValidated(
+      CHANNELS.DECISIONS_DECLINE_PAIRING,
+      pairingIdSchema,
+      async (pairingId: string): Promise<DecisionsPairingDeclineResult> => {
+        refuseWhileOff("decline a pairing");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.declinePairing(pairingId);
+      }
+    ),
   },
 });
 
