@@ -28,6 +28,7 @@ vi.mock("../AgentAvailabilityStore.js", () => ({
 }));
 
 import { FleetSnapshotService, STALL_QUIET_MS } from "../FleetSnapshotService.js";
+import { SNAPSHOT_TTL_MS } from "../sharedTerminalSnapshot.js";
 import {
   notifyCanopyRefinementsChanged,
   setCanopyRefinementSource,
@@ -706,6 +707,13 @@ describe("FleetSnapshotService", () => {
     const client = makePtyClient([
       terminal({ agentState: "waiting", waitingReason: "approval", lastStateChange: NOW - 5_000 }),
       terminal({ id: "t2", agentState: "waiting", waitingReason: "prompt", lastStateChange: NOW }),
+      // A state change older than the terminal's spawn belongs to no wait of this one.
+      terminal({
+        id: "t3",
+        agentState: "waiting",
+        waitingReason: "question",
+        lastStateChange: NOW - 120_000,
+      }),
     ]);
     let wait: { stoppedAt: number; seenAt?: number } | undefined = { stoppedAt: NOW - 5_000 };
     let onWait: () => void = () => {};
@@ -729,9 +737,20 @@ describe("FleetSnapshotService", () => {
     expect(asking.wait).toEqual({ stoppedAt: NOW - 5_000 });
     // A prompt is no ask wait: it carries no record, and none is begun for it.
     expect(prompt.wait).toBeUndefined();
-    expect(handBacks.noteInventoryWait).toHaveBeenCalledWith("t1", NOW - 5_000, expect.any(Number));
+    // Dated from the oldest the shared inventory can be, so a state heard
+    // since it was read overrules it.
+    expect(handBacks.noteInventoryWait).toHaveBeenCalledWith(
+      "t1",
+      NOW - 5_000,
+      NOW - SNAPSHOT_TTL_MS
+    );
+    expect(handBacks.noteInventoryWait).toHaveBeenCalledWith(
+      "t3",
+      NOW - 60_000,
+      NOW - SNAPSHOT_TTL_MS
+    );
     expect(new Set(handBacks.noteInventoryWait.mock.calls.map(([id]) => id))).toEqual(
-      new Set(["t1"])
+      new Set(["t1", "t3"])
     );
     expect(handBacks.getWait).toHaveBeenCalledWith("t1", NOW - 60_000);
     const published = broadcastMock.mock.calls.length;
@@ -819,6 +838,42 @@ describe("FleetSnapshotService", () => {
       setCanopyRefinementSource(null);
       service.stop();
     }
+  });
+
+  it("tells a degraded fleet a wait was seen without waiting for the host, and begins none from it", async () => {
+    const client = makePtyClient([
+      terminal({ agentState: "waiting", waitingReason: "approval", lastStateChange: NOW }),
+    ]);
+    let wait: { stoppedAt: number; seenAt?: number } | undefined = { stoppedAt: NOW };
+    let onWait: () => void = () => {};
+    const handBacks = {
+      getRecord: () => undefined,
+      retain: vi.fn(),
+      noteInventoryWait: vi.fn(),
+      getWait: () => wait,
+      onWaitChanged: (listener: () => void) => {
+        onWait = listener;
+        return () => {};
+      },
+    };
+    const service = new FleetSnapshotService(client as never, null, handBacks as never);
+    service.start();
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    expect(lastSnapshot().runs[0].wait).toEqual({ stoppedAt: NOW });
+
+    client.setFleet([], true);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    expect(lastSnapshot().degraded).toBe(true);
+    handBacks.noteInventoryWait.mockClear();
+
+    wait = { stoppedAt: NOW, seenAt: NOW + 1 };
+    onWait();
+    expect(lastSnapshot()).toMatchObject({ degraded: true });
+    expect(lastSnapshot().runs[0].wait).toEqual(wait);
+    expect(handBacks.noteInventoryWait).not.toHaveBeenCalled();
+    service.stop();
   });
 
   it("never prunes hand-backs from a degraded read", async () => {

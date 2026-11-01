@@ -283,25 +283,21 @@ export class RunHandBackService {
       if (incarnation !== undefined) track.incarnation = incarnation;
     }
 
-    if (BUSY_STATES.has(state)) {
-      if (!track) {
-        if (this.tracks.size >= MAX_TRACKED_RUNS) return;
-        track = newTrack(this.now());
-        track.incarnation = incarnation;
-        track.stateAt = track.touchedAt;
-        this.tracks.set(runId, track);
-      }
-      track.replaced = undefined;
-      if (track.workSince === null) track.workSince = at;
-      return;
-    }
     if (!track) {
-      // A wait is news whether or not any work was watched before it.
-      if (!isObservedAskWait(state, waitingReason) || this.tracks.size >= MAX_TRACKED_RUNS) return;
+      // Every state heard is tracked, a stop included: a wait is news whether
+      // or not any work was watched before it, and a state heard after an
+      // inventory read began must be there to overrule that read.
+      if (this.tracks.size >= MAX_TRACKED_RUNS) return;
       track = newTrack(this.now());
       track.incarnation = incarnation;
       track.stateAt = track.touchedAt;
       this.tracks.set(runId, track);
+    }
+
+    if (BUSY_STATES.has(state)) {
+      track.replaced = undefined;
+      if (track.workSince === null) track.workSince = at;
+      return;
     }
 
     const replaced = track.replaced;

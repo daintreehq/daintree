@@ -432,7 +432,8 @@ describe("RunHandBackService ask waits", () => {
   it("ends when another agent starts in the same terminal, or the terminal spawns again", () => {
     const service = makeService();
     transition("t1", "idle", "waiting", { waitingReason: "approval", agentIncarnation: 1 });
-    transition("t1", "waiting", "idle", { agentIncarnation: 2 });
+    // At once, and not by the work: a flicker of it alone would keep the wait.
+    transition("t1", "waiting", "working", { agentIncarnation: 2 });
     expect(service.getWait("t1")).toBeUndefined();
 
     transition("t2", "idle", "waiting", { waitingReason: "approval" });
@@ -462,10 +463,31 @@ describe("RunHandBackService ask waits", () => {
     transition("t1", "idle", "working");
     service.noteInventoryWait("t1", readStartedAt - 1_000, readStartedAt);
     expect(service.getWait("t1")).toBeUndefined();
+    // Nor one begun the moment the state was heard.
+    service.noteInventoryWait("t1", readStartedAt - 1_000, Date.now());
+    expect(service.getWait("t1")).toBeUndefined();
     // One read after it stands.
     vi.advanceTimersByTime(10);
     service.noteInventoryWait("t1", readStartedAt - 1_000, Date.now());
     expect(service.getWait("t1")).toBeDefined();
+  });
+
+  it("never lets an inventory read bring back a wait a stop heard since has ended", () => {
+    // Already waiting when main started, so no state was heard for the wait;
+    // the run then stopped on something else before the read came back.
+    for (const [state, waitingReason] of [
+      ["idle", undefined],
+      ["exited", undefined],
+      ["waiting", "error"],
+    ] as const) {
+      const service = makeService();
+      const readStartedAt = Date.now();
+      vi.advanceTimersByTime(10);
+      transition("t1", "waiting", state, waitingReason ? { waitingReason } : {});
+      service.noteInventoryWait("t1", readStartedAt - 1_000, readStartedAt);
+      expect(service.getWait("t1")).toBeUndefined();
+      service.dispose();
+    }
   });
 
   it("forgets waits a complete inventory no longer has, and leaves no timers after dispose", () => {

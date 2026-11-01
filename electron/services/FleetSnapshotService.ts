@@ -125,9 +125,9 @@ export class FleetSnapshotService {
     subscribe("terminal:worktree-changed");
     // A refinement is a decoration, like a park: nothing on the host moved, so
     // the recompute reuses its inventory rather than asking it again.
-    this.eventUnsubscribes.push(onCanopyRefinementsChanged(() => this.onCanopyChanged()));
+    this.eventUnsubscribes.push(onCanopyRefinementsChanged(() => this.onDecorationsChanged()));
     // So is a wait's seen mark: a look moved nothing on the host either.
-    const offWaits = this.handBacks?.onWaitChanged(() => this.debouncedCompute());
+    const offWaits = this.handBacks?.onWaitChanged(() => this.onDecorationsChanged());
     if (offWaits) this.eventUnsubscribes.push(offWaits);
   }
 
@@ -478,19 +478,27 @@ export class FleetSnapshotService {
   }
 
   /**
-   * Canopy's refinements moved. A degraded fleet keeps its last good rows, and
-   * those must not keep a reading Canopy has since withdrawn — turned off, or
-   * the tier lapsed — until the host recovers: the retained rows are decorated
-   * afresh and sent, still marked degraded.
+   * Canopy's refinements, or a wait's seen mark, moved. A degraded fleet keeps
+   * its last good rows, and those must not keep a reading Canopy has since
+   * withdrawn — turned off, or the tier lapsed — nor a wait the user has since
+   * looked at, until the host recovers: the retained rows are decorated afresh
+   * and sent, still marked degraded. No wait begins from them.
    */
-  private onCanopyChanged(): void {
+  private onDecorationsChanged(): void {
     const previous = this.lastBroadcast;
     if (previous?.degraded === true) {
       const runs = previous.runs.map((run) => {
         const canopy = canopyRefinementFor(run.runId, run.spawnedAt);
+        const wait =
+          run.wait === undefined ? undefined : this.handBacks?.getWait(run.runId, run.spawnedAt);
         const rest = { ...run };
         delete rest.canopy;
-        return canopy === undefined ? rest : { ...rest, canopy };
+        delete rest.wait;
+        return {
+          ...rest,
+          ...(wait !== undefined ? { wait } : {}),
+          ...(canopy !== undefined ? { canopy } : {}),
+        };
       });
       if (!this.runsEqual(runs, previous.runs)) {
         this.publish({ ...previous, runs, changedAt: Date.now() });

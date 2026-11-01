@@ -25,7 +25,7 @@ import {
   type CanopyScreenInput,
 } from "../canopyProviders.js";
 import { CANOPY_REFLOW_MS } from "../canopyReflow.js";
-import { CANOPY_TURN_HOLD_MS } from "../canopyReads.js";
+import { CANOPY_READ_DWELL_MS, CANOPY_TURN_HOLD_MS } from "../canopyReads.js";
 
 /** A classifier reading; `blocked` defaults to the attention of an ask, else 0. */
 type Reading = Omit<ClassifierResult, "blocked"> & { blocked?: number };
@@ -4383,6 +4383,48 @@ describe("CanopyService refining attention", () => {
 
     h.service.setRead("a", 1, false);
     expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: false });
+  });
+
+  it("takes an ask out of Needs you once its pane was looked at, panel closed, and a later ask is news again", async () => {
+    let now = 1_000_000;
+    const changed = vi.fn();
+    const h = await makeHarness({
+      classify: readScreen,
+      now: () => now,
+      onRefinementsChanged: changed,
+    });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "question", since: now }));
+    h.screens.set("a", ASK_SCREEN);
+    await h.service.refresh();
+    await vi.waitFor(() =>
+      expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: false })
+    );
+
+    // The panel is closed: only the pane's look is told.
+    h.service.setActive(false);
+    changed.mockClear();
+    h.service.markSeen("a", { viewId: 1, place: "pane", looking: true });
+    now += CANOPY_READ_DWELL_MS;
+    h.service.markSeen("a", { viewId: 1, place: "pane", looking: false });
+    expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: true });
+    await vi.waitFor(() => expect(changed).toHaveBeenCalled());
+
+    h.service.setActive(true);
+    h.runs[0] = run("a", { agentState: "working", since: now });
+    h.screens.set("a", "• Updating the tests (esc to interrupt)");
+    h.service.onFleetChanged();
+    await h.service.refresh();
+    now += CANOPY_TURN_HOLD_MS + 1_000;
+    await h.service.refresh();
+
+    h.runs[0] = run("a", { agentState: "waiting", waitingReason: "question", since: now });
+    h.screens.set("a", "⏺ Tests updated.\n\n  Want me to update the tests too?");
+    h.service.onFleetChanged();
+    now += CANOPY_TURN_HOLD_MS + 1_000;
+    await h.service.refresh();
+    await vi.waitFor(() =>
+      expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: false })
+    );
   });
 
   it("says whether the user has read the question wait it cleared, by that turn's read mark", async () => {

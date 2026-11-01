@@ -434,6 +434,24 @@ describe("Canopy refinements", () => {
     ).toBe("needs-you");
   });
 
+  it("puts an unread ask in needs-you only at a stop that could be asking", () => {
+    const askable = new Set(
+      ASKING_STOPS.map((stop) => `${stop.agentState}:${stop.waitingReason ?? ""}`)
+    );
+    for (const state of [
+      ...ASKING_STOPS,
+      { agentState: "waiting", waitingReason: "error" },
+      { agentState: "working" },
+      { agentState: "directing" },
+      { agentState: "idle" },
+      { agentState: "exited" },
+    ] as const) {
+      const key = `${state.agentState}:${"waitingReason" in state ? state.waitingReason : ""}`;
+      const band = bandForRun(run({ ...state, canopy: ASKED }));
+      expect(band === "needs-you", key).toBe(askable.has(key));
+    }
+  });
+
   it("only ever puts a run in needs-you on an unread Canopy ask", () => {
     const states = [
       ...ASKING_STOPS,

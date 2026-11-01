@@ -250,10 +250,12 @@ describe("observeWorktreeRuns", () => {
     const asked = { kind: "asked", quote: "Run the migration?", readAt: 0, seen: false } as const;
     const seen = observeWorktreeRuns([
       run({ worktreeId: "/w", agentState: "waiting", waitingReason: "approval", canopy: asked }),
+      // An unread hand-back would put it in review: the read ask is what idles it.
       run({
         runId: "t2",
         worktreeId: "/w",
         agentState: "completed",
+        handBack: { stoppedAt: 0 },
         canopy: { ...asked, seen: true },
       }),
     ]);
