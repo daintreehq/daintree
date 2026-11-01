@@ -517,7 +517,10 @@ describe("launchScheduledRun", () => {
     } as const;
 
     await expect(
-      launchScheduledRun({ projectId: "project-1", scheduleId: "schedule-1", origin: scheduled }, deps)
+      launchScheduledRun(
+        { projectId: "project-1", scheduleId: "schedule-1", origin: scheduled },
+        deps
+      )
     ).resolves.toEqual({ status: "not-found" });
     expect(deps.launchInView).not.toHaveBeenCalled();
     expect(recorder.registerRefusedLaunch).not.toHaveBeenCalled();

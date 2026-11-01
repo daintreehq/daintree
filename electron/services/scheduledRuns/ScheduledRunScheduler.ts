@@ -1,4 +1,7 @@
-import type { ScheduleRunNowOutcome, SchedulesSnapshot } from "../../../shared/types/ipc/schedules.js";
+import type {
+  ScheduleRunNowOutcome,
+  SchedulesSnapshot,
+} from "../../../shared/types/ipc/schedules.js";
 import type { Schedule, ScheduledRunOrigin } from "../../../shared/types/scheduledRuns.js";
 import {
   nextCronOccurrence,
@@ -241,11 +244,13 @@ export class ScheduledRunScheduler {
           this.launch(projectId, schedule.id, decision.origin);
           continue;
         }
-        if (decision.kind === "skip" && !this.skip(recorder, projectId, schedule, decision.origin)) {
+        if (
+          decision.kind === "skip" &&
+          !this.skip(recorder, projectId, schedule, decision.origin)
+        ) {
           continue;
         }
-        const due =
-          decision.kind === "wait" ? decision.nextDueAt : this.nextAfter(schedule, now);
+        const due = decision.kind === "wait" ? decision.nextDueAt : this.nextAfter(schedule, now);
         if (due !== null && (nextDueAt === null || due < nextDueAt)) nextDueAt = due;
       }
     }
@@ -339,7 +344,10 @@ export class ScheduledRunScheduler {
       );
       return true;
     } catch (error) {
-      this.logWarn(`[ScheduledRuns] Couldn't record schedule ${schedule.id}'s skipped runs:`, error);
+      this.logWarn(
+        `[ScheduledRuns] Couldn't record schedule ${schedule.id}'s skipped runs:`,
+        error
+      );
       this.deferRetry(schedule.id);
       return false;
     }
@@ -358,7 +366,9 @@ export class ScheduledRunScheduler {
     const drift = look.wall - last.wall - (look.monotonic - last.monotonic);
     if (Math.abs(drift) <= CLOCK_DRIFT_MS) return;
     this.recovering = true;
-    this.logInfo(`[ScheduledRuns] The clock moved ${Math.round(drift / 1000)}s; due times recomputed`);
+    this.logInfo(
+      `[ScheduledRuns] The clock moved ${Math.round(drift / 1000)}s; due times recomputed`
+    );
   }
 
   private hasEnabledSchedule(): boolean {

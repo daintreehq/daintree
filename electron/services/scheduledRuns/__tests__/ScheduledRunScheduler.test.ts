@@ -23,7 +23,10 @@ import {
   type ScheduledRunSchedulerDeps,
   type ScheduledRunSchedulerLaunch,
 } from "../ScheduledRunScheduler.js";
-import type { ScheduleRunNowOutcome, SchedulesSnapshot } from "../../../../shared/types/ipc/schedules.js";
+import type {
+  ScheduleRunNowOutcome,
+  SchedulesSnapshot,
+} from "../../../../shared/types/ipc/schedules.js";
 import type { Schedule, ScheduledRunOrigin } from "../../../../shared/types/scheduledRuns.js";
 import { createSchedule, occurrenceKeyFor } from "../../../../shared/utils/scheduledRuns.js";
 
@@ -208,7 +211,12 @@ describe("ScheduledRunScheduler", () => {
 
     await elapse(30 * MINUTE);
     expect(origins()).toEqual([
-      { trigger: "scheduled", dueAt: at(9), occurrenceKey: occurrenceKeyFor(at(9)), coalesced: null },
+      {
+        trigger: "scheduled",
+        dueAt: at(9),
+        occurrenceKey: occurrenceKeyFor(at(9)),
+        coalesced: null,
+      },
     ]);
     expect(launches[0]).toMatchObject({ projectId: "project-1", scheduleId: "schedule-1" });
 
@@ -281,12 +289,22 @@ describe("ScheduledRunScheduler", () => {
     const runs = recorder.listBySchedule("schedule-1");
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({
-      origin: { trigger: "catch-up", dueAt: at(13), coalesced: { after: at(8), through: at(13, 30) } },
-      settlement: { state: "settled", outcome: "skipped", evidence: { kind: "skip", reason: { kind: "missed" } } },
+      origin: {
+        trigger: "catch-up",
+        dueAt: at(13),
+        coalesced: { after: at(8), through: at(13, 30) },
+      },
+      settlement: {
+        state: "settled",
+        outcome: "skipped",
+        evidence: { kind: "skip", reason: { kind: "missed" } },
+      },
     });
 
     await elapse(30 * MINUTE);
-    expect(origins().map((origin) => [origin.trigger, origin.dueAt])).toEqual([["scheduled", at(14)]]);
+    expect(origins().map((origin) => [origin.trigger, origin.dueAt])).toEqual([
+      ["scheduled", at(14)],
+    ]);
     expect(recorder.listBySchedule("schedule-1")).toHaveLength(2);
   });
 
@@ -300,9 +318,7 @@ describe("ScheduledRunScheduler", () => {
     scheduler!.resume();
     await scheduler!.idle();
 
-    expect(origins()).toEqual([
-      expect.objectContaining({ trigger: "catch-up", dueAt: at(9) }),
-    ]);
+    expect(origins()).toEqual([expect.objectContaining({ trigger: "catch-up", dueAt: at(9) })]);
   });
 
   it("catches up a sleep with no power events from the clock alone", async () => {
@@ -438,7 +454,9 @@ describe("ScheduledRunScheduler", () => {
     commit("project-1", [schedule({ cron: "45 * * * *", updatedAt: at(8, 30) })]);
     await scheduler!.idle();
     await elapse(15 * MINUTE);
-    expect(origins()).toEqual([expect.objectContaining({ trigger: "scheduled", dueAt: at(8, 45) })]);
+    expect(origins()).toEqual([
+      expect.objectContaining({ trigger: "scheduled", dueAt: at(8, 45) }),
+    ]);
 
     await elapse(15 * MINUTE);
     expect(launches).toHaveLength(1);
@@ -513,7 +531,9 @@ describe("ScheduledRunScheduler", () => {
     const machineZone = process.env.TZ;
     try {
       process.env.TZ = "America/Los_Angeles";
-      commit("project-1", [schedule({ cron: "0 9 * * *", timeZone: "Europe/London", updatedAt: at(8) })]);
+      commit("project-1", [
+        schedule({ cron: "0 9 * * *", timeZone: "Europe/London", updatedAt: at(8) }),
+      ]);
       await start();
 
       process.env.TZ = "Asia/Tokyo";

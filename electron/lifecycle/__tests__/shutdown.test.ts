@@ -214,7 +214,10 @@ vi.mock("../../services/persistence/db.js", () => closeSharedDbMock);
 const scheduledRunSchedulerMock = vi.hoisted(() => ({
   stopScheduledRunScheduler: vi.fn(() => Promise.resolve()),
 }));
-vi.mock("../../services/scheduledRuns/scheduledRunSchedulerLive.js", () => scheduledRunSchedulerMock);
+vi.mock(
+  "../../services/scheduledRuns/scheduledRunSchedulerLive.js",
+  () => scheduledRunSchedulerMock
+);
 
 const vadDrainMock = vi.hoisted(() => ({
   waitForRetiringVadProcesses: vi.fn((_budgetMs: number) => Promise.resolve(0)),
