@@ -21,7 +21,8 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
         loads.failNextConstruct = false;
         throw new Error("construct failed");
       }
-      super();
+      // A store that holds nothing, so starting never reaches the app database.
+      super({ openStore: async () => ({ close: async () => {} }) as never });
       loads.constructed += 1;
     }
   }

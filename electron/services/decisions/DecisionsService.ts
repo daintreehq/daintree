@@ -4,9 +4,18 @@ import type {
   DecisionsStatus,
   DecisionsStatusEvent,
 } from "../../../shared/types/decisions.js";
+import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
 import { decisionsLibraries, type DecisionsLibraries } from "./libraries.js";
+import { openDecisionsLocalStore } from "./openLocalStore.js";
 
 export type DecisionsStatusListener = (event: DecisionsStatusEvent) => void;
+
+/** Opens the store for an enabled lifetime; null when `isCancelled` turned true before it opened. */
+export type DecisionsStoreOpener = (isCancelled: () => boolean) => Promise<DaintreeLocalStore | null>;
+
+export interface DecisionsServiceOptions {
+  openStore?: DecisionsStoreOpener;
+}
 
 /**
  * Decisions in main: one per process, made only once the setting is on. An
@@ -22,9 +31,15 @@ export class DecisionsService {
 
   private state: DecisionsState = "off";
   private settings: DecisionsSettings | null = null;
+  private store: DaintreeLocalStore | null = null;
   private disposed = false;
+  private readonly openStore: DecisionsStoreOpener;
   private transitions: Promise<void> = Promise.resolve();
   private readonly listeners = new Set<DecisionsStatusListener>();
+
+  constructor(options: DecisionsServiceOptions = {}) {
+    this.openStore = options.openStore ?? openDecisionsLocalStore;
+  }
 
   getStatus(): DecisionsStatus {
     return { state: this.state };
@@ -35,6 +50,11 @@ export class DecisionsService {
     return this.settings;
   }
 
+  /** The running lifetime's store; null while stopped, or while it couldn't be opened. */
+  getStore(): DaintreeLocalStore | null {
+    return this.store;
+  }
+
   /** Called on every change of state, never for a repeat. Listeners outlive a stop, not a dispose. */
   onStatusChanged(listener: DecisionsStatusListener): () => void {
     this.listeners.add(listener);
@@ -43,18 +63,29 @@ export class DecisionsService {
     };
   }
 
-  /** Begins, or carries on, an enabled lifetime with these settings. Settings that are off start nothing. */
+  /**
+   * Begins, or carries on, an enabled lifetime with these settings. Settings
+   * that are off start nothing. Rejects when the store can't be opened; the
+   * lifetime stays on, and the next start tries the store again.
+   */
   start(settings: DecisionsSettings): Promise<void> {
-    return this.enqueue(() => {
+    return this.enqueue(async () => {
       if (this.disposed || !settings.enabled) return;
       this.settings = settings;
       // There is no relay identity until a relay is claimed or restored, and no
       // socket until one opens, so on is honestly "not connected" for now.
       if (this.state === "off") this.setState("not-connected");
+      if (this.store) return;
+      const opened = await this.openStore(() => this.disposed);
+      if (this.disposed) {
+        await opened?.close();
+        return;
+      }
+      this.store = opened;
     });
   }
 
-  /** Ends the enabled lifetime. Another `start` may follow. */
+  /** Ends the enabled lifetime, keeping everything stored. Another `start` may follow. */
   stop(): Promise<void> {
     return this.enqueue(() => this.release());
   }
@@ -62,15 +93,22 @@ export class DecisionsService {
   /** App shutdown: ends the lifetime for good, and no later start is honoured. */
   dispose(): Promise<void> {
     this.disposed = true;
-    return this.enqueue(() => {
-      this.release();
+    return this.enqueue(async () => {
+      await this.release();
       this.listeners.clear();
     });
   }
 
-  private release(): void {
+  private async release(): Promise<void> {
+    const store = this.store;
+    this.store = null;
     this.settings = null;
-    this.setState("off");
+    try {
+      // Commits what the lifetime left queued; the rows stay until deleted.
+      await store?.close();
+    } finally {
+      this.setState("off");
+    }
   }
 
   private enqueue(step: () => void | Promise<void>): Promise<void> {
