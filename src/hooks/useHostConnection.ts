@@ -1140,11 +1140,12 @@ async function claimUnlessAnotherMachineDrives(projectId: string): Promise<void>
     }
     // Only from the holder just read: another Shell opening the project at
     // the same moment may have taken it since, and isn't taken from in turn.
-    // Nobody holding it, or this client already doing so, hands over nothing
-    // the boot read didn't already show.
+    // Nobody holding it, or this view already doing so, hands over nothing
+    // the boot read didn't show; another of this machine's windows may have
+    // saved since.
     await takeOverDrive(projectId, {
       ifLeaseId: holder?.leaseId ?? null,
-      readBack: holder !== null && !lease.drivingHere && lease.heldByThisClient !== true,
+      readBack: holder !== null && !lease.drivingHere,
     });
     return;
   }
