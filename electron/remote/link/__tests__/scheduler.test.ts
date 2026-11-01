@@ -385,13 +385,30 @@ describe("LaneScheduler fragmented messages (#15892)", () => {
   it("keeps lanes independent: a message under way in one doesn't hold another lane's", () => {
     const s = new LaneScheduler();
     const answer = message(Lane.RPC, BIG);
-    const event = message(Lane.EVENTS, BIG);
     s.enqueueMessage(answer);
-    s.enqueueMessage(event);
-    const order: Array<[Lane, number]> = [];
-    for (let fr = s.next(); fr; fr = s.next()) order.push([fr.lane, fr.streamId]);
-    expect(order.filter(([lane]) => lane === Lane.RPC)).toHaveLength(3);
-    expect(order.filter(([lane]) => lane === Lane.EVENTS)).toHaveLength(3);
+    expect(s.next()!.streamId).toBe(answer[0]!.streamId);
+    const reset = message(Lane.INTERACTIVE, BIG);
+    s.enqueueMessage(reset, "t1");
+    const a = answer[0]!.streamId;
+    const r = reset[0]!.streamId;
+    // The reset begins while the answer is under way; the answer's turn after
+    // two fragments is the interactive byte budget, not a wait for the reset.
+    expect(drain(s)).toEqual([r, r, a, r, a]);
+  });
+
+  it("starts a held-back message before one that arrived while it waited", () => {
+    const s = new LaneScheduler();
+    const first = message(Lane.RPC, BIG);
+    const held = message(Lane.RPC, BIG);
+    s.enqueueMessage(first, "a");
+    s.enqueueMessage(held, "b");
+    s.next();
+    s.next();
+    // Arrives before the message under way ends, behind the one held for it.
+    const later = message(Lane.RPC, BIG);
+    s.enqueueMessage(later, "c");
+    const [f, h, l] = [first, held, later].map((m) => m[0]!.streamId);
+    expect(drain(s)).toEqual([f, h, h, h, l, l, l]);
   });
 
   it("holds an endpoint's close until the last fragment of its message is written (#15881)", () => {

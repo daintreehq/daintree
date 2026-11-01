@@ -341,11 +341,14 @@ export class LaneScheduler {
     if (continuesMessage(frame)) {
       q.active = flow;
     } else if (q.active === flow) {
-      // Its last fragment: flows held back for it take their turns again,
-      // ahead of the one that just finished.
+      // Its last fragment: flows held back for it go next, in the order they
+      // were held, so large messages arriving meanwhile can't keep one waiting.
       q.active = null;
-      for (const parked of q.parked) q.turns.push(parked);
-      q.parked = [];
+      if (q.parked.length > 0) {
+        q.turns = q.parked.concat(q.turns.slice(q.turnsHead));
+        q.turnsHead = 0;
+        q.parked = [];
+      }
     }
     if (fq.head === fq.frames.length) {
       // Drained: the flow gives up its turn until it has frames again.

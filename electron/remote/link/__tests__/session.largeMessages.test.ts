@@ -119,7 +119,7 @@ describe("LinkSession large messages (#15892)", () => {
     const echoAt = frames.findIndex(
       (f) => f.lane === Lane.INTERACTIVE && f.kind === InteractiveKind.TERMINAL_OUT
     );
-    const resultEndsAt = frames.findLastIndex((f) => f.lane === Lane.RPC);
+    const resultEndsAt = frames.reduce((last, f, i) => (f.lane === Lane.RPC ? i : last), -1);
     expect(pingAt).toBeGreaterThanOrEqual(0);
     expect(echoAt).toBeGreaterThanOrEqual(0);
     expect(pingAt).toBeLessThan(resultEndsAt);
