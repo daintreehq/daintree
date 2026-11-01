@@ -684,6 +684,23 @@ describe("FleetPickerContent + useFleetPicker", () => {
       expect(badgeFor("ask")?.textContent).toBe("Idle");
       expect(badgeFor("ask")?.className).not.toContain("text-state-waiting");
     });
+
+    // The band is polled and the pane's state is pushed: an ask whose pane has
+    // since stopped on an error must not keep the hue while the fleet catches up.
+    it("drops a stale ask once the pane itself shows an error wait", async () => {
+      seedTerminals([makeTerminal("ask", { agentState: "waiting", waitingReason: "question" })]);
+      const ask = { kind: "asked", quote: "Ship it?", readAt: 0, seen: false } as const;
+      pushFleet([{ runId: "ask", agentState: "waiting", waitingReason: "question", canopy: ask }]);
+      renderHarness([makeWorktreeSnap("wt-1", "main")], { mode: "add", onCommit: () => {} });
+      await act(async () => {});
+      expect(badgeFor("ask")?.className).toContain("text-state-waiting");
+
+      act(() =>
+        seedTerminals([makeTerminal("ask", { agentState: "waiting", waitingReason: "error" })])
+      );
+      expect(badgeFor("ask")?.className).not.toContain("text-state-waiting");
+      expect(badgeFor("ask")?.textContent).toBe("Last seen waiting");
+    });
   });
 
   describe("empty state", () => {

@@ -13,7 +13,12 @@ import {
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { primeRadix } from "@/components/ui/radix-loader";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { HelpSessionTabs, helpSessionTabId, type HelpSessionTab } from "../HelpSessionTabs";
+import {
+  HelpSessionTabs,
+  TabStateIndicator,
+  helpSessionTabId,
+  type HelpSessionTab,
+} from "../HelpSessionTabs";
 
 function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
   return rtlRender(ui, { wrapper: InstantTooltips, ...options });
@@ -606,6 +611,20 @@ describe("HelpSessionTabs", () => {
   // No Canopy reading ever covers an assistant, so a lane at its prompt asks
   // nothing: no waiting ring and no "waiting" description, whether it is the
   // lane on screen or one in the background (#16059).
+  it("marks only work in flight: working and directing, never a stop", () => {
+    for (const state of ["waiting", "idle", "completed", "exited", undefined] as const) {
+      const { container, unmount } = render(<TabStateIndicator agentState={state} />);
+      expect(container.innerHTML).toBe("");
+      unmount();
+    }
+    const working = render(<TabStateIndicator agentState="working" />);
+    expect(working.container.querySelector(".text-state-working")).not.toBeNull();
+    working.unmount();
+    const directing = render(<TabStateIndicator agentState="directing" />);
+    expect(directing.container.querySelector('[class*="text-category-blue"]')).not.toBeNull();
+    directing.unmount();
+  });
+
   it("draws and says nothing for a lane at its prompt, on screen or not", () => {
     const { container } = renderStrip({
       tabs: [

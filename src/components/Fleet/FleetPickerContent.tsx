@@ -18,6 +18,7 @@ import {
   type UseFleetPickerResult,
 } from "@/hooks/useFleetPicker";
 import type { AgentState, SemanticSearchMatch } from "@shared/types";
+import type { WaitingReason } from "@shared/types/agent";
 import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
 import { describeKeyCap } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
@@ -526,7 +527,7 @@ function TerminalRow({
   testIdPrefix,
 }: TerminalRowProps): ReactElement {
   const band = useRunFleetBand(terminal.id);
-  const stateBadge = renderStateBadge(terminal.agentState, band);
+  const stateBadge = renderStateBadge(terminal.agentState, terminal.waitingReason, band);
   const handleClick = useCallback(
     (e: React.MouseEvent) => onToggleId(terminal.id, e),
     [onToggleId, terminal.id]
@@ -637,10 +638,11 @@ function shortId(id: string): string {
  */
 function renderStateBadge(
   agentState: AgentState | undefined,
+  waitingReason: WaitingReason | undefined,
   band: FleetBand | undefined
 ): ReactElement | null {
   if (agentState !== "waiting" && agentState !== "working") return null;
-  const wait = agentState === "waiting" ? describeWaitBadge(band) : null;
+  const wait = agentState === "waiting" ? describeWaitBadge(band, waitingReason) : null;
   return (
     <Badge
       size="xs"

@@ -2,15 +2,22 @@ import type { FleetBand } from "@/lib/fleetAttention";
 import { openInAssistant, type OpenInAssistantResult } from "@/services/assistantSubject";
 import type { CanopyAssistantItem } from "./canopyAssistants";
 
-/** The band an assistant's glyph wears, from what was observed of it alone. */
+/**
+ * The band an assistant's glyph wears, from what was observed of it alone.
+ *
+ * Amber is for an ask Canopy read, and Canopy never reads an assistant (it
+ * reads fleet runs, and assistants aren't any), so an approval or question
+ * the patterns saw is at most unread. A confirmation is different: Daintree's
+ * own dialog holds the call until the user answers it, which is no guess.
+ */
 export function assistantBand(item: CanopyAssistantItem): FleetBand {
   switch (item.ask) {
     case "error":
       return "blocked";
     case "confirm":
+      return "needs-you";
     case "approval":
     case "question":
-      return "needs-you";
     case "handback":
       return "review";
     default:

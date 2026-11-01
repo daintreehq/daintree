@@ -671,6 +671,37 @@ describe("AgentPicker", () => {
     );
     expect(badge().textContent).toBe("Last seen waiting");
     expect(badge().className).toContain("text-state-waiting");
+
+    // A band the fleet reports that isn't needs-you is no ask: a seen ask lands
+    // idle, an error wait blocked, and neither keeps the hue.
+    for (const run of [
+      {
+        waitingReason: "question" as const,
+        canopy: { kind: "asked" as const, quote: "Ship it?", readAt: 0, seen: true },
+      },
+      { waitingReason: "error" as const },
+    ]) {
+      act(() =>
+        useFleetSnapshotStore.setState({
+          snapshot: {
+            runs: [
+              {
+                runId: "t2",
+                workspaceId: "p1",
+                spawnedAt: 0,
+                cwd: "/repo",
+                agentState: "waiting",
+                ...run,
+              },
+            ],
+            changedAt: 0,
+            degraded: false,
+            lastSuccessfulAt: null,
+          },
+        })
+      );
+      expect(badge().className).not.toContain("text-state-waiting");
+    }
   });
 
   it("lists a pane that can't take a draft, disabled with its reason, and steps past it", () => {

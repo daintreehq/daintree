@@ -382,6 +382,24 @@ describe("ToolbarAssistantButton — agent state pip", () => {
       expect(pip!.className).toMatch(/bg-state-working/);
     });
 
+    // A stop to read outranks work in flight, which outranks the user's own
+    // draft, whichever lane each sits in.
+    it.each([
+      [["waiting", "working", "directing"], "unread"],
+      [["directing", "working", "waiting"], "unread"],
+      [["directing", "working"], "working"],
+      [["working", "directing"], "working"],
+    ] as const)("draws the most demanding of unseen lanes %j as %s", (states, expected) => {
+      const ids = states.map((_, i) => `prio-${i}`);
+      setLanes(false, ids);
+      states.forEach((state, i) => setPanel(ids[i]!, state));
+
+      const { queryByTestId } = render(<ToolbarAssistantButton />);
+      const pip = queryByTestId("assistant-working-pip");
+      expect(pip?.getAttribute("data-visible")).toBe("true");
+      expect(pip!.getAttribute("data-pip")).toBe(expected);
+    });
+
     it("surfaces a second lane that starts waiting after the first was acknowledged", () => {
       setLanes(false, ["lane-a", "lane-b"]);
       setPanel("lane-a", "waiting");
