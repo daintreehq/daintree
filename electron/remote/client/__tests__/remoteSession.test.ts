@@ -1197,7 +1197,6 @@ describe("remote session wiring", () => {
       h.allowConnect.value = true;
       await waitFor(() => connection.unavailableEnvelope() === null);
       await waitFor(() => !connection.hasActiveAgent(VIEW_A) && !connection.hasActiveAgent(VIEW_B));
-      // Each went active once; the resume repeated nothing as a fresh start.
       expect(h.sink.activated).toEqual([VIEW_A, VIEW_B]);
     });
 
@@ -1271,6 +1270,31 @@ describe("remote session wiring", () => {
 
       await say("proj-2", true);
       expect(h.sink.activated).toEqual([VIEW_B, VIEW_B]);
+    });
+
+    it("wakes a view whose agent started during a resumed gap, and only that one", async () => {
+      active.add("proj-1");
+      await startWithAgents({ resumeGraceMs: 10_000 });
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_A, {});
+      await invoke(HOST_CHANNEL, VIEW_B, {});
+      const connection = h.manager.get(HOST_ID)!;
+      await waitFor(() => connection.hasActiveAgent(VIEW_A));
+      const resumed: boolean[] = [];
+      cleanups.push(h.manager.onSessionAttached((_hostId, info) => resumed.push(info.resumed)));
+
+      h.allowConnect.value = false;
+      for (const socket of h.sockets.splice(0)) socket.destroy();
+      await waitFor(() => connection.unavailableEnvelope() !== null);
+      // proj-2's agent starts while nobody is attached to hear; proj-1's runs on.
+      active.add("proj-2");
+      h.sessionHost.refreshAgentActivity();
+      h.allowConnect.value = true;
+      await waitFor(() => connection.hasActiveAgent(VIEW_B));
+
+      expect(resumed).toEqual([true]);
+      expect(connection.hasActiveAgent(VIEW_A)).toBe(true);
+      expect(h.sink.activated).toEqual([VIEW_A, VIEW_B]);
     });
 
     it("hears agents that outlived the session on a fresh one", async () => {
