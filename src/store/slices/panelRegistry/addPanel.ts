@@ -192,8 +192,7 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
     // Restored as its process's own exit left it (#15941): the pane commits
     // exited and stops there, as a pane does when its PTY ends — no startup
     // slot, no spawn, until the user restarts it.
-    const restoredExitCode =
-      isReconnect || isRecoveryHold ? undefined : options.restoredExitCode;
+    const restoredExitCode = isReconnect || isRecoveryHold ? undefined : options.restoredExitCode;
     const isRestoredExit = restoredExitCode !== undefined;
 
     // Checked after the last await before the commit: the pane may have been

@@ -313,9 +313,9 @@ describe("serializePtyPanel — shown exit (#15941)", () => {
 
   it("omits a code the pane no longer shows", () => {
     // A restart clears the code first and the status only once the new PTY is up.
-    expect("exitCode" in serializePtyPanel(makePanel({ runtimeStatus: "running", exitCode: 3 }))).toBe(
-      false
-    );
+    expect(
+      "exitCode" in serializePtyPanel(makePanel({ runtimeStatus: "running", exitCode: 3 }))
+    ).toBe(false);
     expect("exitCode" in serializePtyPanel(makePanel({ runtimeStatus: "exited" }))).toBe(false);
   });
 
