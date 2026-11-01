@@ -97,6 +97,7 @@ beforeAll(async () => {
 const { usePanelLimitStore } = await import("@/store/panelLimitStore");
 const { agentLifecycleLedger } = await import("@/services/terminal/lifecycleLedger");
 const { terminalStartupQueue } = await import("../ptyStartup");
+const { beginBatch, resetBatchState } = await import("../hydrationBatch");
 const { terminalClient } = await import("@/clients");
 const spawn = vi.mocked(terminalClient.spawn);
 const terminalInstanceService = (
@@ -198,6 +199,30 @@ describe("addPanel — a restored exit (#15941)", () => {
     expect(ptyPanel("dev")?.exitCode).toBeUndefined();
   });
 
+  it("never replaces a newer launch that happened to exit with the same code", async () => {
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: "dev",
+      cwd: "/elsewhere",
+      command: "npm test",
+      bypassLimits: true,
+    });
+    await drainMicrotasks();
+    const launched = ptyPanel("dev")!;
+    usePanelStore.setState((state) => ({
+      panelsById: {
+        ...state.panelsById,
+        dev: { ...launched, runtimeStatus: "exited", exitCode: 3 },
+      },
+    }));
+    const before = usePanelStore.getState().panelsById.dev;
+
+    await restoreExited("dev", 3);
+    await drainMicrotasks();
+
+    expect(usePanelStore.getState().panelsById.dev).toBe(before);
+  });
+
   it("commits a replay of the same exit again", async () => {
     await restoreExited("dev", 3);
     await usePanelStore.getState().addPanel({
@@ -249,6 +274,41 @@ describe("addPanel — a restored exit (#15941)", () => {
     expect(ptyPanel("kept")?.spawnStatus).toBe("ready");
     expect(spawn).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["directly", false],
+    ["inside a hydration batch", true],
+  ])(
+    "marks an attached record exited when its process turns out gone, %s",
+    async (_label, batched) => {
+      await usePanelStore.getState().addPanel({
+        kind: "terminal",
+        existingId: "kept",
+        cwd: "/repo",
+        bypassLimits: true,
+      });
+      await drainMicrotasks();
+      expect(ptyPanel("kept")?.runtimeStatus).not.toBe("exited");
+
+      if (batched) beginBatch();
+      try {
+        await usePanelStore.getState().addPanel({
+          kind: "terminal",
+          existingId: "kept",
+          cwd: "/repo",
+          restoredExitCode: 0,
+          bypassLimits: true,
+        });
+        await drainMicrotasks();
+
+        expect(ptyPanel("kept")?.runtimeStatus).toBe("exited");
+        expect(ptyPanel("kept")?.exitCode).toBe(0);
+      } finally {
+        resetBatchState();
+      }
+      expect(spawn).not.toHaveBeenCalled();
+    }
+  );
 
   it("holds a pane held for recovery, whatever exit it carries", async () => {
     await usePanelStore.getState().addPanel({

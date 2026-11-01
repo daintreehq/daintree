@@ -1357,19 +1357,16 @@ describe("onExit — the shown exit is saved with the layout (#15941)", () => {
     });
   }
 
-  it("saves a kept pane with its exit at once, so a reload restores the exit", () => {
+  it("saves a kept pane with its exit, so a reload restores the exit", () => {
     const save = vi.spyOn(panelPersistence, "save").mockImplementation(() => {});
-    const flush = vi.spyOn(panelPersistence, "flushAndSettle").mockResolvedValue(undefined);
     try {
       setupShell();
 
       getExitHandler()("shell", 3);
 
       expect(savedShell(save)).toMatchObject({ runtimeStatus: "exited", exitCode: 3 });
-      expect(flush).toHaveBeenCalled();
     } finally {
       save.mockRestore();
-      flush.mockRestore();
     }
   });
 

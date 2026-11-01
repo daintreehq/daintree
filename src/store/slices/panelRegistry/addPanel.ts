@@ -251,7 +251,8 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
     // anomaly ring for diagnostics.
     // A replayed snapshot finds the pane as that exit left it, or moved on:
     // restarting, running again, or exited since with another code. Only the
-    // former is committed again.
+    // former is committed again; a newer launch that exited with the same code
+    // is caught by the ledger guard below.
     if (isRestoredExit) {
       const existing = get().panelsById[id];
       if (
@@ -267,7 +268,7 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
         return id;
       }
     }
-    if (isReconnect) {
+    if (isReconnect || isRestoredExit) {
       const preexisting = get().panelsById[id];
       const ledgerEntry = preexisting ? agentLifecycleLedger.getEntry(id) : undefined;
       if (

@@ -778,6 +778,7 @@ describe("restore of a pane saved showing its exit (#15941)", () => {
       id: "dev",
       kind: "terminal",
       cwd: "/repo",
+      spawnedAt: 1,
       hasPty: false,
       everDetectedAgent: true,
     };

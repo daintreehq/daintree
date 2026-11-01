@@ -9,7 +9,7 @@ import { isAgentTerminal } from "@/utils/terminalType";
 import { logInfo, logError } from "@/utils/logger";
 import { isTerminalRestarting } from "@/store/restartExitSuppression";
 import { usePanelStore, type PanelGridState } from "@/store/panelStore";
-import { flushPanelPersistence, saveNormalized } from "@/store/slices/panelRegistry/persistence";
+import { saveNormalized } from "@/store/slices/panelRegistry/persistence";
 import {
   deferPersistToBatchEnd,
   isHydrationBatchActive,
@@ -34,9 +34,6 @@ function persistExit(): void {
   }
   const { panelsById, panelIds } = usePanelStore.getState();
   saveNormalized(panelsById, panelIds);
-  // Sent now rather than after the layout debounce: an exit is a single
-  // event, and a reload moments later must find it.
-  void flushPanelPersistence();
 }
 import {
   enqueueFlowStatusUpdate,
