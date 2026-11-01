@@ -30,7 +30,11 @@ function settledOn(evidence: ScheduledRunEvidence): ScheduledRun {
 
 describe("scheduledRunAttention", () => {
   it.each<[string, ScheduledRunEvidence, ScheduledRunAttention | null]>([
-    ["a launch error", { kind: "launch-error", message: "spawn zsh ENOENT" }, { kind: "launch-failed" }],
+    [
+      "a launch error",
+      { kind: "launch-error", message: "spawn zsh ENOENT" },
+      { kind: "launch-failed" },
+    ],
     [
       "a PTY exit with a non-zero code",
       { kind: "exit", process: "pty", exitCode: 1, signal: null },
@@ -47,9 +51,21 @@ describe("scheduledRunAttention", () => {
       { kind: "needs-you" },
     ],
     ["a clean exit", { kind: "exit", process: "pty", exitCode: 0, signal: null }, null],
-    ["an exit ended by a signal alone", { kind: "exit", process: "pty", exitCode: 0, signal: 1 }, null],
-    ["an exit with nothing known", { kind: "exit", process: "pty", exitCode: null, signal: null }, null],
-    ["a done handback", { kind: "handback", report: "done", summary: null, truncated: false }, null],
+    [
+      "an exit ended by a signal alone",
+      { kind: "exit", process: "pty", exitCode: 0, signal: 1 },
+      null,
+    ],
+    [
+      "an exit with nothing known",
+      { kind: "exit", process: "pty", exitCode: null, signal: null },
+      null,
+    ],
+    [
+      "a done handback",
+      { kind: "handback", report: "done", summary: null, truncated: false },
+      null,
+    ],
     ["a skip for overlap", { kind: "skip", reason: { kind: "overlap", openRunId: "run-0" } }, null],
     ["a skip for a missed occurrence", { kind: "skip", reason: { kind: "missed" } }, null],
     [
@@ -66,7 +82,9 @@ describe("scheduledRunAttention", () => {
   });
 
   it("reads nothing from a run still open", () => {
-    expect(scheduledRunAttention({ ...settledOn({ kind: "cancel" }), settlement: { state: "open" } })).toBeNull();
+    expect(
+      scheduledRunAttention({ ...settledOn({ kind: "cancel" }), settlement: { state: "open" } })
+    ).toBeNull();
   });
 });
 
@@ -92,8 +110,10 @@ describe("describeScheduledRunAttention", () => {
 
   it("still reads when the schedule's name couldn't be read", () => {
     expect(
-      describeScheduledRunAttention({ kind: "needs-you" }, { scheduleName: null, agentName: "Codex" })
-        .body
+      describeScheduledRunAttention(
+        { kind: "needs-you" },
+        { scheduleName: null, agentName: "Codex" }
+      ).body
     ).toBe("Codex handed back a scheduled run for you to look at.");
   });
 });

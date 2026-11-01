@@ -12,7 +12,9 @@ const fake = vi.hoisted(() => ({
   schedules: null as { schedules: Array<{ id: string }> } | null,
   listError: null as Error | null,
   onList: null as (() => void) | null,
-  dispatch: vi.fn(async (..._args: unknown[]) => ({ ok: true }) as { ok: boolean; error?: unknown }),
+  dispatch: vi.fn(
+    async (..._args: unknown[]) => ({ ok: true }) as { ok: boolean; error?: unknown }
+  ),
   selectWorktree: vi.fn(),
   calls: [] as string[],
 }));
@@ -72,12 +74,20 @@ beforeEach(() => {
 
 describe("landOnScheduledRun", () => {
   it("brings the run's pane forward in its worktree and focuses it", async () => {
-    fake.panels["terminal-1"] = { location: "grid", worktreeId: "wt-feature", scheduledRun: runRef };
+    fake.panels["terminal-1"] = {
+      location: "grid",
+      worktreeId: "wt-feature",
+      scheduledRun: runRef,
+    };
     await landOnScheduledRun(target, notSuperseded);
 
     expect(fake.selectWorktree).toHaveBeenCalledWith("wt-feature", { source: "user" });
     expect(fake.dispatch).toHaveBeenCalledWith("panel.focus", { panelId: "terminal-1" });
-    expect(fake.dispatch).not.toHaveBeenCalledWith("schedules.open", expect.anything(), expect.anything());
+    expect(fake.dispatch).not.toHaveBeenCalledWith(
+      "schedules.open",
+      expect.anything(),
+      expect.anything()
+    );
   });
 
   it("restores a trashed or backgrounded pane before focusing it", async () => {
@@ -103,7 +113,13 @@ describe("landOnScheduledRun", () => {
     ["the pane is gone", {}],
     [
       "the pane carries another run",
-      { "terminal-1": { location: "grid", worktreeId: null, scheduledRun: { ...runRef, runId: "run-9" } } },
+      {
+        "terminal-1": {
+          location: "grid",
+          worktreeId: null,
+          scheduledRun: { ...runRef, runId: "run-9" },
+        },
+      },
     ],
     ["the pane carries no run", { "terminal-1": { location: "grid", worktreeId: null } }],
     [

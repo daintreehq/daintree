@@ -266,7 +266,9 @@ describe("scheduled-run history wiring", () => {
       message: "The project's folder is missing.",
     });
 
-    await vi.waitFor(() => expect(notifier.notify.mock.calls.map(([run]) => run.id)).toEqual(["run-2", "run-3"]));
+    await vi.waitFor(() =>
+      expect(notifier.notify.mock.calls.map(([run]) => run.id)).toEqual(["run-2", "run-3"])
+    );
     expect(notifier.notify.mock.calls.map(([run, attention]) => [run.id, attention])).toEqual([
       ["run-2", { kind: "exited", process: "pty", exitCode: 2 }],
       ["run-3", { kind: "launch-failed" }],

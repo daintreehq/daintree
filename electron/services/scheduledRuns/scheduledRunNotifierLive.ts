@@ -7,7 +7,10 @@ import { soundService } from "../SoundService.js";
 import type { Schedule, ScheduledRun } from "../../../shared/types/scheduledRuns.js";
 import { getEffectiveRegistry } from "../../../shared/config/agentRegistry.js";
 import { isScheduledQuietNow } from "../../../shared/utils/quietHours.js";
-import { describeScheduledRunAttention, type ScheduledRunAttention } from "./scheduledRunAttention.js";
+import {
+  describeScheduledRunAttention,
+  type ScheduledRunAttention,
+} from "./scheduledRunAttention.js";
 
 async function readSchedule(run: ScheduledRun): Promise<Schedule | null> {
   try {

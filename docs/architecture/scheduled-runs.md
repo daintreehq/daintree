@@ -312,12 +312,12 @@ A run handed back as `done` applies its schedule's `onDone`, as the launch read 
 
 A run that settles needing a person puts up a native notification on this machine (#15988), read from the evidence it settled on (`scheduledRunAttention`):
 
-| Settled on | Notifies |
-| --- | --- |
-| `launch-error`, a refused launch included | "Scheduled run couldn't start" |
-| `exit` with a non-zero code | "Scheduled run failed", with the code |
-| `handback` `needs-you` | "Scheduled run needs you" |
-| Anything else | Nothing |
+| Settled on                                | Notifies                              |
+| ----------------------------------------- | ------------------------------------- |
+| `launch-error`, a refused launch included | "Scheduled run couldn't start"        |
+| `exit` with a non-zero code               | "Scheduled run failed", with the code |
+| `handback` `needs-you`                    | "Scheduled run needs you"             |
+| Anything else                             | Nothing                               |
 
 - **Exits by signal alone stay quiet.** An exit with code 0 and a signal is how Daintree's own kills end a terminal (the trash's expiry, a kill), so it says nothing about the agent's work. A run that went fine, was skipped by its policy, cancelled, replaced, lost or interrupted is in its history and pages nobody.
 - **From the commit, not the bus.** The recorder hands every committed settlement to `onRunSettled`, which `getScheduledRunRecorder` installs before any run can register, so a launch refused at once can't outrun it. The delivery is imported only when a run needs attention, and it never holds up or undoes the settlement.
