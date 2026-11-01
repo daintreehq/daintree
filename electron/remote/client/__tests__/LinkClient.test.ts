@@ -392,6 +392,71 @@ describe("LinkClient backoff", () => {
     }
   });
 
+  it("asks the transport not to start a host that said it is restarting, until the restart's grace is out", async () => {
+    const dir = await makeTempDir();
+    const socketPath = path.join(dir, "m.sock");
+    const server = net.createServer((socket) => {
+      const decoder = new FrameDecoder();
+      socket.on("data", (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) {
+          if (frame.kind !== ControlKind.HELLO) continue;
+          const reject: LinkMessage = {
+            lane: Lane.CONTROL,
+            kind: ControlKind.REJECT,
+            body: { reason: "shutting-down", handshake: null, detail: null },
+          };
+          socket.write(encodeFrame(messageToFrame(reject)));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    const direct = createDirectTransport({ socketPath, token: "t" });
+    const mayStart: Array<boolean | undefined> = [];
+    const transport: LinkTransport = {
+      async open(signal, options) {
+        mayStart.push(options?.mayStart);
+        // On its way down the host removed its discovery file.
+        if (mayStart.length > 1) {
+          throw new HostModeOffError("Daintree isn't running in Host mode there (no host.json).");
+        }
+        return direct.open(signal);
+      },
+    };
+    let offset = 0;
+    const now = () => Date.now() + offset;
+    const failed = (dials: number) =>
+      waitFor(() => mayStart.length >= dials && client!.getState().status === "unreachable");
+    try {
+      client = new LinkClient({
+        transport,
+        handshake: TEST_HANDSHAKE,
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+        backoff: { initialMs: 60_000, maxMs: 60_000, jitter: 0 },
+        now,
+      });
+      client.start();
+      await failed(1);
+      expect(client.restartAnnounced).toBe(true);
+      for (let dial = 2; dial <= 4; dial++) {
+        client.retryNow();
+        await failed(dial);
+      }
+      expect(mayStart).toEqual([true, false, false, false]);
+
+      // Not back within the grace: whatever is there now may be started.
+      offset = 2 * 60_000;
+      client.retryNow();
+      await failed(5);
+      expect(mayStart[4]).toBe(true);
+    } finally {
+      await client?.stop();
+      client = null;
+      server.close();
+      await removeTempDir(dir);
+    }
+  });
+
   it("hears a GOODBYE in place of the WELCOME and keeps retrying a fresh link through Host mode off", async () => {
     const dir = await makeTempDir();
     const socketPath = path.join(dir, "w.sock");

@@ -143,6 +143,7 @@ describe("RemoteHostsClient", () => {
   let client: RemoteHostsClient;
   let router: RemoteRouter;
   let onFirstUse: Mock<() => void>;
+  let onRetry: Mock<(hostId: string) => void>;
 
   beforeEach(() => {
     registry = new HostRegistry(memoryStore());
@@ -164,8 +165,10 @@ describe("RemoteHostsClient", () => {
     installRouter = vi.fn<(router: RemoteRouter | null) => void>();
     events = [];
     onFirstUse = vi.fn<() => void>();
+    onRetry = vi.fn<(hostId: string) => void>();
     client = new RemoteHostsClient({
       onFirstUse,
+      onRetry,
       registry,
       manager: manager as unknown as RemoteHostManager,
       bindings,
@@ -2961,10 +2964,13 @@ describe("RemoteHostsClient", () => {
   it("starts a link over only when a person asks to, never for a caller waiting on it", async () => {
     client.connect({ hostId: "studio-01", restart: true });
     expect(manager.connect).toHaveBeenLastCalledWith("studio-01", { restart: true });
+    // A person's Retry, and only that, has what was last found there looked at again.
+    expect(onRetry).toHaveBeenCalledExactlyOnceWith("studio-01");
     client.connect({ hostId: "studio-01" });
     expect(manager.connect).toHaveBeenLastCalledWith("studio-01", { restart: false });
     await client.connectAndWait("studio-01", 1_000);
     expect(manager.connect).toHaveBeenLastCalledWith("studio-01");
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
   it("fills each host's summary from the last frame host metrics holds", () => {

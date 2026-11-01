@@ -145,6 +145,18 @@ describe("WslTransport", () => {
     await connection.dispose();
   });
 
+  it("starts nothing while the dial says the Host may not be started (it said it is restarting)", async () => {
+    const ensureRunning = vi.fn(async () => true);
+    const { transport, runs, spawns } = setup([result({ code: 3 })], { ensureRunning });
+    await expect(transport.open(signal(), { mayStart: false })).rejects.toBeInstanceOf(
+      HostModeOffError
+    );
+    expect(ensureRunning).not.toHaveBeenCalled();
+    // The one discovery read, and no second look after it.
+    expect(runs).toHaveLength(1);
+    expect(spawns).toHaveLength(0);
+  });
+
   it("says Host mode is off when nothing can start it", async () => {
     const { transport } = setup([result({ code: 3 })], { ensureRunning: async () => false });
     await expect(transport.open(signal())).rejects.toBeInstanceOf(HostModeOffError);
