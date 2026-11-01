@@ -314,9 +314,7 @@ describe("SealedKeyStore", () => {
       setPlatform("win32");
       noKey();
 
-      expect((await refusal(new SealedKeyStore(file).save(identity()))).kind).toBe(
-        "unavailable"
-      );
+      expect((await refusal(new SealedKeyStore(file).save(identity()))).kind).toBe("unavailable");
     });
   });
 

@@ -126,4 +126,3 @@ const PROBE_TEXT = "daintree-secret-probe";
 export async function keychainKeyed(): Promise<boolean> {
   return (await encryptWithKeychain(PROBE_TEXT)) !== null;
 }
-
