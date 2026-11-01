@@ -22,6 +22,8 @@ let mockNotificationUnreadCount = 0;
 let mockAvailability: CliAvailability = {} as CliAvailability;
 let mockOnboardingLoaded = true;
 let mockSeenAgentIds: string[] = [];
+// Runs the fleet places in `needs-you`: unread Canopy asks.
+let mockNeedsYou = new Set<string>();
 
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: (selector: (s: Record<string, unknown>) => unknown) =>
@@ -55,6 +57,10 @@ vi.mock("@/hooks/app/useAgentDiscoveryOnboarding", () => ({
   }),
 }));
 
+vi.mock("@/hooks/useRunFleetBand", () => ({
+  useFleetBandRunIds: () => mockNeedsYou,
+}));
+
 // Real implementations of these — they're pure helpers.
 vi.mock("zustand/react/shallow", () => ({
   useShallow: <T>(selector: T) => selector,
@@ -79,7 +85,10 @@ function makePanel(overrides: {
   agentState?: AgentState;
   worktreeId?: string;
   location?: string;
+  /** The fleet places the run in `needs-you`. */
+  asks?: boolean;
 }) {
+  if (overrides.asks) mockNeedsYou.add(overrides.id);
   return {
     id: overrides.id,
     agentId: overrides.agentId,
@@ -101,6 +110,7 @@ describe("useOverflowBadgeSeverity", () => {
     mockAvailability = {} as CliAvailability;
     mockOnboardingLoaded = true;
     mockSeenAgentIds = [];
+    mockNeedsYou = new Set();
   });
 
   it("returns null for an empty overflow list", () => {
@@ -132,11 +142,36 @@ describe("useOverflowBadgeSeverity", () => {
 
   it("returns waiting when an overflowed agent has a waiting panel", () => {
     mockPanelsById = {
-      "p-1": makePanel({ id: "p-1", agentId: "claude", agentState: "waiting" }),
+      "p-1": makePanel({ id: "p-1", agentId: "claude", agentState: "waiting", asks: true }),
     };
     mockPanelIds = ["p-1"];
     const { result } = renderHook(() => useOverflowBadgeSeverity(["claude"], 0));
     expect(result.current).toBe("waiting");
+  });
+
+  it("gives an overflowed agent at a prompt that asks nothing no dot", () => {
+    // Only an unread Canopy ask is waiting: a prompt, a hand-back or an error
+    // wait with no reading behind it marks nothing.
+    mockPanelsById = {
+      "p-1": makePanel({ id: "p-1", agentId: "claude", agentState: "waiting" }),
+    };
+    mockPanelIds = ["p-1"];
+    expect(renderHook(() => useOverflowBadgeSeverity(["claude"], 0)).result.current).toBeNull();
+    expect(renderHook(() => useOverflowAgentObservations(["claude"])).result.current).toEqual([]);
+  });
+
+  it("marks an ask Canopy read on a finished turn, and drops it once the agent works again", () => {
+    mockPanelsById = {
+      "p-1": makePanel({ id: "p-1", agentId: "claude", agentState: "completed", asks: true }),
+    };
+    mockPanelIds = ["p-1"];
+    expect(renderHook(() => useOverflowBadgeSeverity(["claude"], 0)).result.current).toBe(
+      "waiting"
+    );
+    mockPanelsById = {
+      "p-1": makePanel({ id: "p-1", agentId: "claude", agentState: "working", asks: true }),
+    };
+    expect(renderHook(() => useOverflowBadgeSeverity(["claude"], 0)).result.current).toBeNull();
   });
 
   it("returns info when an overflowed agent is only being directed", () => {
@@ -154,7 +189,7 @@ describe("useOverflowBadgeSeverity", () => {
     // is meant to flag.
     mockPanelsById = {
       "p-1": makePanel({ id: "p-1", agentId: "claude", agentState: "working" }),
-      "p-2": makePanel({ id: "p-2", agentId: "claude", agentState: "waiting" }),
+      "p-2": makePanel({ id: "p-2", agentId: "claude", agentState: "waiting", asks: true }),
     };
     mockPanelIds = ["p-1", "p-2"];
     const { result } = renderHook(() => useOverflowBadgeSeverity(["claude"], 0));
@@ -172,7 +207,7 @@ describe("useOverflowBadgeSeverity", () => {
 
   it("ignores panels for agents that are not overflowed", () => {
     mockPanelsById = {
-      "p-1": makePanel({ id: "p-1", agentId: "codex", agentState: "waiting" }),
+      "p-1": makePanel({ id: "p-1", agentId: "codex", agentState: "waiting", asks: true }),
     };
     mockPanelIds = ["p-1"];
     const { result } = renderHook(() => useOverflowBadgeSeverity(["claude"], 0));
@@ -186,12 +221,14 @@ describe("useOverflowBadgeSeverity", () => {
         agentId: "claude",
         agentState: "waiting",
         location: "trash",
+        asks: true,
       }),
       "p-2": makePanel({
         id: "p-2",
         agentId: "claude",
         agentState: "waiting",
         location: "background",
+        asks: true,
       }),
     };
     mockPanelIds = ["p-1", "p-2"];
@@ -207,6 +244,7 @@ describe("useOverflowBadgeSeverity", () => {
         agentId: "claude",
         agentState: "waiting",
         worktreeId: "wt-2",
+        asks: true,
       }),
     };
     mockPanelIds = ["p-1"];
@@ -257,7 +295,7 @@ describe("useOverflowBadgeSeverity", () => {
 
   it("prefers critical over warning when both are present", () => {
     mockPanelsById = {
-      "p-1": makePanel({ id: "p-1", agentId: "claude", agentState: "waiting" }),
+      "p-1": makePanel({ id: "p-1", agentId: "claude", agentState: "waiting", asks: true }),
     };
     mockPanelIds = ["p-1"];
     const { result } = renderHook(() => useOverflowBadgeSeverity(["problems", "claude"], 4));
@@ -266,7 +304,7 @@ describe("useOverflowBadgeSeverity", () => {
 
   it("prefers waiting over info when both are present", () => {
     mockPanelsById = {
-      "p-1": makePanel({ id: "p-1", agentId: "claude", agentState: "waiting" }),
+      "p-1": makePanel({ id: "p-1", agentId: "claude", agentState: "waiting", asks: true }),
     };
     mockPanelIds = ["p-1"];
     mockNotificationUnreadCount = 2;
@@ -290,12 +328,13 @@ describe("useOverflowAgentObservations — per session, like the badge", () => {
     mockPanelsById = {};
     mockPanelIds = [];
     mockActiveWorktreeId = "wt";
+    mockNeedsYou = new Set();
   });
 
   it("reports the waiting session even when a sibling of the same agent is working", () => {
     mockPanelsById = {
       a: makePanel({ id: "a", agentId: "claude", agentState: "working", worktreeId: "wt" }),
-      b: makePanel({ id: "b", agentId: "claude", agentState: "waiting", worktreeId: "wt" }),
+      b: makePanel({ id: "b", agentId: "claude", agentState: "waiting", worktreeId: "wt", asks: true }),
     };
     mockPanelIds = ["a", "b"];
     const { result } = renderHook(() => useOverflowAgentObservations(["claude"]));
@@ -307,8 +346,8 @@ describe("useOverflowAgentObservations — per session, like the badge", () => {
 
   it("counts sessions, not agent types", () => {
     mockPanelsById = {
-      a: makePanel({ id: "a", agentId: "claude", agentState: "waiting", worktreeId: "wt" }),
-      b: makePanel({ id: "b", agentId: "claude", agentState: "waiting", worktreeId: "wt" }),
+      a: makePanel({ id: "a", agentId: "claude", agentState: "waiting", worktreeId: "wt", asks: true }),
+      b: makePanel({ id: "b", agentId: "claude", agentState: "waiting", worktreeId: "wt", asks: true }),
     };
     mockPanelIds = ["a", "b"];
     const { result } = renderHook(() => useOverflowAgentObservations(["claude"]));
@@ -317,7 +356,7 @@ describe("useOverflowAgentObservations — per session, like the badge", () => {
 
   it("says nothing for an agent that is not overflowed", () => {
     mockPanelsById = {
-      a: makePanel({ id: "a", agentId: "claude", agentState: "waiting", worktreeId: "wt" }),
+      a: makePanel({ id: "a", agentId: "claude", agentState: "waiting", worktreeId: "wt", asks: true }),
     };
     mockPanelIds = ["a"];
     const { result } = renderHook(() => useOverflowAgentObservations(["settings"]));

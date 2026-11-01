@@ -158,12 +158,14 @@ vi.mock("@/components/Worktree/terminalStateConfig", () => ({
   SESSION_LABELS: {},
 }));
 
-// The hand-back join reads the fleet snapshot store; these suites draw the
-// observed state as it is.
-vi.mock("@/hooks/useRunHandBackState", () => ({
-  useSessionPresentation: (_id: string, state: unknown) => state,
-  useRunHandBackState: () => "none",
-  useHandBackRunIds: () => new Set<string>(),
+// The fleet band read and the pane observation read stores this suite doesn't
+// stand up; with no band reported, the chip draws nothing amber.
+vi.mock("@/hooks/useRunFleetBand", () => ({
+  useRunFleetBand: () => undefined,
+  useFleetBandRunIds: () => new Set<string>(),
+}));
+vi.mock("@/hooks/useRunSessionPresentation", () => ({
+  usePaneObservation: () => undefined,
 }));
 
 vi.mock("@/components/Terminal/TerminalContextMenu", () => ({

@@ -1,14 +1,16 @@
 import { describe, it, expect } from "vitest";
-import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
-import {
-  handBackRunKey,
-  handBackStateForRun,
-  isAskingWait,
-  isHandBackWait,
-  resolveSessionPresentation,
-} from "../handBackPresentation";
+import type { AgentState, WaitingReason } from "@shared/types/agent";
+import type { FleetRunRow, FleetSnapshot, RunCanopyRefinement } from "@shared/types/ipc/fleet";
+import { fleetBandForRun, fleetBandRunKey, NEEDS_YOU_BANDS } from "../fleetAttention";
+import { isNeedsYouPane, resolvePaneSessionPresentation } from "../paneSessionPresentation";
+import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
+
+// What every session glyph off the pane resolves: the snapshot's band for the
+// run, the compact display state, and the pane's own observation. These pin
+// the chain end to end, from the fleet row a surface never sees.
 
 const NOW = 1_700_000_000_000;
+const LIVE_AGENT = { isAgent: true, hasExited: false };
 
 function run(overrides: Partial<FleetRunRow> = {}): FleetRunRow {
   return {
@@ -28,116 +30,152 @@ const seen = { stoppedAt: NOW - 10_000, seenAt: NOW - 5_000 };
 const unseen = { stoppedAt: NOW - 10_000 };
 const remarked = { stoppedAt: NOW - 10_000, seenAt: NOW - 5_000, markedUnreadAt: NOW - 1_000 };
 
-describe("handBackStateForRun", () => {
-  it("reads a snapshot not yet delivered as no hand-back", () => {
-    expect(handBackStateForRun(null, "t1")).toBe("none");
+function canopyAsked(seenAsk: boolean): RunCanopyRefinement {
+  return { kind: "asked", quote: "Run the migration?", readAt: NOW - 1_000, seen: seenAsk };
+}
+
+/** The glyph a surface draws for `runId`, observing what the fleet row holds. */
+function glyph(snap: FleetSnapshot | null, runId: string) {
+  const row = snap?.runs.find((r) => r.runId === runId);
+  const state: AgentState | undefined = row?.agentState;
+  const reason: WaitingReason | undefined = row?.waitingReason;
+  return resolvePaneSessionPresentation(
+    getTerminalAgentDisplayState(LIVE_AGENT, state),
+    fleetBandForRun(snap, runId),
+    { agentState: state, waitingReason: reason }
+  );
+}
+
+describe("session glyphs from the fleet band", () => {
+  it("draws nothing for any run before a snapshot is delivered", () => {
+    expect(glyph(null, "t1")).toBeUndefined();
+    expect(
+      resolvePaneSessionPresentation(getTerminalAgentDisplayState(LIVE_AGENT, "waiting"), undefined)
+    ).toBeUndefined();
   });
 
-  it("reads seen, unseen and marked-unread records off a prompt stop", () => {
+  it("draws a seen prompt stop as finished and an unseen or re-marked one as unread", () => {
     const snap = snapshot([
       run({ runId: "a", agentState: "waiting", handBack: seen }),
       run({ runId: "b", agentState: "waiting", waitingReason: "prompt", handBack: unseen }),
       run({ runId: "c", agentState: "completed", handBack: remarked }),
     ]);
-    expect(handBackStateForRun(snap, "a")).toBe("seen");
-    expect(handBackStateForRun(snap, "b")).toBe("unseen");
-    expect(handBackStateForRun(snap, "c")).toBe("unseen");
+    expect(glyph(snap, "a")).toBe("completed");
+    expect(glyph(snap, "b")).toBe("unread");
+    expect(glyph(snap, "c")).toBe("unread");
   });
 
-  it("ignores runs with no record, or whose observed stop is not a hand-back", () => {
+  it("draws nothing for a prompt with no reading and no hand-back on record", () => {
     const snap = snapshot([
-      run({ runId: "none", agentState: "waiting" }),
-      run({ runId: "approval", agentState: "waiting", waitingReason: "approval", handBack: seen }),
-      run({ runId: "working", agentState: "working", handBack: seen }),
-      run({ runId: "nostate", handBack: seen }),
+      run({ runId: "prompt", agentState: "waiting" }),
+      run({ runId: "idle", agentState: "idle" }),
+      run({ runId: "nostate" }),
+      run({ runId: "finished-unwatched", agentState: "completed" }),
     ]);
-    for (const id of ["none", "approval", "working", "nostate", "missing"]) {
-      expect(handBackStateForRun(snap, id)).toBe("none");
+    for (const id of ["prompt", "idle", "nostate", "finished-unwatched", "missing"]) {
+      expect(glyph(snap, id)).toBeUndefined();
     }
+  });
+
+  it("never draws amber for an approval or question wait no reading placed", () => {
+    for (const waitingReason of ["approval", "question"] as const) {
+      const unseenWait = snapshot([run({ agentState: "waiting", waitingReason })]);
+      expect(glyph(unseenWait, "t1")).toBe("unread");
+      const seenWait = snapshot([
+        run({ agentState: "waiting", waitingReason, wait: { stoppedAt: NOW - 5_000, seenAt: NOW } }),
+      ]);
+      expect(glyph(seenWait, "t1")).toBeUndefined();
+    }
+  });
+
+  it("draws an error wait blocked, with a hand-back on record or not", () => {
+    const snap = snapshot([
+      run({ runId: "a", agentState: "waiting", waitingReason: "error" }),
+      run({ runId: "b", agentState: "waiting", waitingReason: "error", handBack: seen }),
+    ]);
+    expect(glyph(snap, "a")).toBe("blocked");
+    expect(glyph(snap, "b")).toBe("blocked");
+  });
+
+  it("draws amber only for an unread Canopy ask, over an older hand-back too", () => {
+    const snap = snapshot([
+      run({ runId: "ask", agentState: "waiting", canopy: canopyAsked(false) }),
+      run({ runId: "over-handback", agentState: "waiting", handBack: seen, canopy: canopyAsked(false) }),
+      run({ runId: "finished-turn", agentState: "completed", canopy: canopyAsked(false) }),
+      run({ runId: "seen-ask", agentState: "waiting", canopy: canopyAsked(true) }),
+    ]);
+    expect(glyph(snap, "ask")).toBe("waiting");
+    expect(glyph(snap, "over-handback")).toBe("waiting");
+    expect(glyph(snap, "finished-turn")).toBe("waiting");
+    // A seen ask is still unanswered: no glyph, and never falsely finished.
+    expect(glyph(snap, "seen-ask")).toBeUndefined();
+  });
+
+  it("keeps live work as observed whatever the band", () => {
+    const snap = snapshot([
+      run({ runId: "w", agentState: "working", handBack: seen }),
+      run({ runId: "d", agentState: "directing" }),
+    ]);
+    expect(glyph(snap, "w")).toBe("working");
+    expect(glyph(snap, "d")).toBe("directing");
+  });
+
+  it("never brings back a glyph the display state suppressed", () => {
+    const snap = snapshot([run({ agentState: "completed", handBack: unseen })]);
+    expect(
+      resolvePaneSessionPresentation(
+        getTerminalAgentDisplayState({ isAgent: true, hasExited: true }, "completed"),
+        fleetBandForRun(snap, "t1")
+      )
+    ).toBeUndefined();
   });
 
   it("follows a replaced snapshot rather than a cached one", () => {
     const first = snapshot([run({ agentState: "waiting", handBack: unseen })]);
-    expect(handBackStateForRun(first, "t1")).toBe("unseen");
+    expect(glyph(first, "t1")).toBe("unread");
     const second = snapshot([run({ agentState: "waiting", handBack: seen })]);
-    expect(handBackStateForRun(second, "t1")).toBe("seen");
+    expect(glyph(second, "t1")).toBe("completed");
   });
 });
 
-describe("resolveSessionPresentation", () => {
-  it("draws a seen prompt stop as completed and an unseen one as unread", () => {
-    expect(resolveSessionPresentation("waiting", "waiting", undefined, "seen")).toBe("completed");
-    expect(resolveSessionPresentation("waiting", "waiting", "prompt", "unseen")).toBe("unread");
-    expect(resolveSessionPresentation("waiting", "completed", undefined, "seen")).toBe("completed");
-  });
+describe("waiting counts from the fleet band", () => {
+  const needsYou = (snap: FleetSnapshot) =>
+    new Set(fleetBandRunKey(snap, NEEDS_YOU_BANDS).split("\n").filter(Boolean));
 
-  it("keeps the amber circle for approval, question and error waits", () => {
-    for (const reason of ["approval", "question", "error"] as const) {
-      expect(resolveSessionPresentation("waiting", "waiting", reason, "seen")).toBe("waiting");
-      expect(resolveSessionPresentation("waiting", "waiting", reason, "unseen")).toBe("waiting");
+  it("counts an unread Canopy ask the pane still shows stopped", () => {
+    const ids = needsYou(snapshot([run({ agentState: "waiting", canopy: canopyAsked(false) })]));
+    for (const agentState of ["waiting", "completed", "idle", undefined] as const) {
+      expect(isNeedsYouPane(ids, { id: "t1", agentState })).toBe(true);
     }
   });
 
-  it("leaves the display state alone without a hand-back or a raw stop", () => {
-    expect(resolveSessionPresentation("waiting", "waiting", undefined, "none")).toBe("waiting");
-    // Idle coerced to waiting by the display helper is not a hand-back stop.
-    expect(resolveSessionPresentation("waiting", "idle", undefined, "seen")).toBe("waiting");
-    expect(resolveSessionPresentation("waiting", undefined, undefined, "seen")).toBe("waiting");
-    expect(resolveSessionPresentation("working", "working", undefined, "seen")).toBe("working");
-  });
-
-  it("never brings back a glyph the display state suppressed", () => {
-    expect(resolveSessionPresentation(undefined, "completed", undefined, "seen")).toBeUndefined();
-  });
-});
-
-describe("handBackRunKey", () => {
-  it("lists every hand-back run, seen or not, in a stable order", () => {
-    const snap = snapshot([
-      run({ runId: "b", agentState: "waiting", handBack: seen }),
-      run({ runId: "a", agentState: "completed", handBack: unseen }),
-      run({ runId: "approval", agentState: "waiting", waitingReason: "approval", handBack: seen }),
-      run({ runId: "none", agentState: "waiting" }),
-    ]);
-    expect(handBackRunKey(snap).split("\n")).toEqual(["a", "b"]);
-  });
-
-  it("is empty before a snapshot arrives, and equal across snapshots with the same set", () => {
-    expect(handBackRunKey(null)).toBe("");
-    const first = snapshot([run({ agentState: "waiting", handBack: unseen })]);
-    const second = snapshot([run({ agentState: "waiting", handBack: seen })]);
-    expect(handBackRunKey(first)).toBe(handBackRunKey(second));
-  });
-});
-
-describe("isHandBackWait / isAskingWait", () => {
-  const ids = new Set(["t1"]);
-
-  it("treats a prompt wait the fleet holds a hand-back for as no wait", () => {
-    for (const waitingReason of [undefined, "prompt"] as const) {
-      const panel = { id: "t1", agentState: "waiting" as const, waitingReason };
-      expect(isHandBackWait(ids, panel)).toBe(true);
-      expect(isAskingWait(ids, panel)).toBe(false);
+  it("counts no prompt, hand-back, observed ask, error wait or seen ask", () => {
+    const ids = needsYou(
+      snapshot([
+        run({ runId: "prompt", agentState: "waiting" }),
+        run({ runId: "handback", agentState: "waiting", handBack: unseen }),
+        run({ runId: "approval", agentState: "waiting", waitingReason: "approval" }),
+        run({ runId: "error", agentState: "waiting", waitingReason: "error" }),
+        run({ runId: "seen-ask", agentState: "waiting", canopy: canopyAsked(true) }),
+      ])
+    );
+    expect(ids.size).toBe(0);
+    for (const id of ["prompt", "handback", "approval", "error", "seen-ask"]) {
+      expect(isNeedsYouPane(ids, { id, agentState: "waiting" })).toBe(false);
     }
   });
 
-  it("keeps an approval, question or error wait asking even with a record", () => {
-    for (const waitingReason of ["approval", "question", "error"] as const) {
-      const panel = { id: "t1", agentState: "waiting" as const, waitingReason };
-      expect(isHandBackWait(ids, panel)).toBe(false);
-      expect(isAskingWait(ids, panel)).toBe(true);
+  it("drops an ask the pane has moved past before the band catches up", () => {
+    const ids = new Set(["t1"]);
+    for (const agentState of ["working", "directing", "exited"] as const) {
+      expect(isNeedsYouPane(ids, { id: "t1", agentState })).toBe(false);
     }
-  });
-
-  it("keeps a prompt wait with no hand-back record asking", () => {
-    const panel = { id: "other", agentState: "waiting" as const };
-    expect(isAskingWait(ids, panel)).toBe(true);
-  });
-
-  it("never calls a state other than waiting a wait", () => {
-    for (const agentState of ["working", "completed", "idle", "exited", "directing"] as const) {
-      expect(isAskingWait(ids, { id: "t1", agentState })).toBe(false);
-      expect(isHandBackWait(ids, { id: "t1", agentState })).toBe(false);
-    }
+    expect(isNeedsYouPane(ids, { id: "t1", agentState: "waiting", waitingReason: "error" })).toBe(
+      false
+    );
+    expect(isNeedsYouPane(ids, { id: "t1", agentState: "waiting", isRestarting: true })).toBe(false);
+    expect(isNeedsYouPane(ids, { id: "t1", agentState: "waiting", runtimeStatus: "exited" })).toBe(
+      false
+    );
   });
 });

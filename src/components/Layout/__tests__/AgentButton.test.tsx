@@ -17,7 +17,7 @@
  *    choices and warrants the picker.
  */
 import { useContext } from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, screen, act } from "@testing-library/react";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 import { MenuActionSourceContext } from "@/components/ui/menu-source";
@@ -99,6 +99,11 @@ vi.mock("@/store/projectPresetsStore", () => ({
 
 let mockPanelsById: Record<string, unknown> = {};
 let mockPanelIds: string[] = [];
+// Runs the fleet places in `needs-you`: unread Canopy asks, the only waits that earn amber.
+let mockNeedsYou: ReadonlySet<string> = new Set();
+vi.mock("@/hooks/useRunFleetBand", () => ({
+  useFleetBandRunIds: () => mockNeedsYou,
+}));
 let mockPanelIdsByWorktreeId: Record<string, string[]> = {};
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: (selector: (s: Record<string, unknown>) => unknown) =>
@@ -1370,6 +1375,48 @@ describe("AgentButton preset UX", () => {
   });
 
   describe("status dot badge", () => {
+    beforeEach(() => {
+      // Every waiting session here is an unread Canopy ask; working ones drop
+      // out of the set by their own observation.
+      mockNeedsYou = new Set(["panel-1", "panel-2"]);
+    });
+
+    afterEach(() => {
+      mockNeedsYou = new Set();
+    });
+
+    it("draws no amber pip for a prompt that asks nothing", () => {
+      mockNeedsYou = new Set();
+      mockSettings = settingsWith({ claude: {} });
+      mockPanelsById = { "panel-1": activePanel("waiting") };
+      mockPanelIds = ["panel-1"];
+      mockPanelIdsByWorktreeId = { "wt-1": ["panel-1"] };
+      mockActiveWorktreeId = "wt-1";
+
+      const { container } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+
+      const badge = container.querySelector('.relative span[aria-hidden="true"]');
+      expect(badge?.getAttribute("data-visible")).not.toBe("true");
+    });
+
+    it("draws the amber pip for an ask Canopy read on a finished turn", () => {
+      mockSettings = settingsWith({ claude: {} });
+      mockPanelsById = { "panel-1": activePanel("completed") };
+      mockPanelIds = ["panel-1"];
+      mockPanelIdsByWorktreeId = { "wt-1": ["panel-1"] };
+      mockActiveWorktreeId = "wt-1";
+
+      const { container } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+
+      const badge = container.querySelector('.relative span[aria-hidden="true"]');
+      expect(badge?.getAttribute("data-visible")).toBe("true");
+      expect(badge!.className).toMatch(/bg-state-waiting/);
+    });
+
     function activePanel(state: string): Record<string, unknown> {
       // `detectedAgentId` is what `getRuntimeOrBootAgentId` reads (via
       // `deriveTerminalChrome`); plain `agentId` on the panel is not used by

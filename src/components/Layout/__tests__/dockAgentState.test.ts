@@ -8,12 +8,14 @@ import {
 } from "../useDockBlockedState";
 
 function agent(overrides: {
+  id?: string;
   launchAgentId?: string;
   detectedAgentId?: string;
   agentState?: AgentState;
   activityStatus?: "working" | "waiting" | "success" | "failure";
 }) {
   return {
+    id: overrides.id,
     launchAgentId: overrides.launchAgentId ?? "claude",
     detectedAgentId: overrides.detectedAgentId,
     agentState: overrides.agentState,
@@ -41,16 +43,23 @@ describe("dock display agent state", () => {
     ).toBe("completed");
   });
 
-  it("uses the same effective state for dock groups and single dock items", () => {
+  it("edges dock and grid groups from the fleet band alone, never an observed wait", () => {
     const panels = [
-      agent({ launchAgentId: "claude", agentState: "working", activityStatus: "waiting" }),
-      agent({ launchAgentId: "codex", agentState: "working" }),
+      agent({ id: "a", launchAgentId: "claude", agentState: "working", activityStatus: "waiting" }),
+      agent({ id: "b", launchAgentId: "codex", agentState: "working" }),
     ];
-
-    expect(getGroupBlockedAgentState(panels)).toBe("waiting");
-    // A grid group's waiting edge is the fleet band's needs-you alone (#16056),
-    // so an observed wait with no band behind it leaves only the work.
+    // Amber is the fleet band's needs-you alone (#16054), so an observed wait
+    // with no band behind it leaves the dock chip plain and the grid edge on
+    // the work.
+    expect(getGroupBlockedAgentState(panels, new Set())).toBeUndefined();
     expect(getGroupAmbientAgentState(panels, new Set())).toBe("working");
+
+    const asking = [
+      agent({ id: "a", launchAgentId: "claude", agentState: "waiting" }),
+      agent({ id: "b", launchAgentId: "codex", agentState: "working" }),
+    ];
+    expect(getGroupBlockedAgentState(asking, new Set(["a"]))).toBe("waiting");
+    expect(getGroupAmbientAgentState(asking, new Set(["a"]))).toBe("waiting");
   });
 
   it("does not deprioritize a group with working activity even before agentState catches up", () => {

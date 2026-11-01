@@ -23,6 +23,8 @@ let mockIsAgent = false;
 let mockPluginActivity: { pluginId: string; shown: string; description: string } | null = null;
 let mockDeprioritized = false;
 let mockShowDockHighlights = false;
+// What the chip's amber edge was asked to debounce: only a `needs-you` glyph.
+let blockedStateArg: string | undefined = undefined;
 let capturedOnOpenChange: ((open: boolean) => void) | null = null;
 let capturedOnOpenAutoFocus: ((event: { preventDefault: () => void }) => void) | null = null;
 let capturedOnFocusOutside: ((event: { preventDefault: () => void }) => void) | null = null;
@@ -110,7 +112,10 @@ vi.mock("../dockPanelPortalContext", () => ({
 }));
 
 vi.mock("../useDockBlockedState", () => ({
-  useDockBlockedState: () => null,
+  useDockBlockedState: (state: string | undefined) => {
+    blockedStateArg = state;
+    return null;
+  },
   getDockDisplayAgentState: () => mockDockAgentState,
   isDockAgentStateDeprioritized: () => mockDeprioritized,
 }));
@@ -134,13 +139,16 @@ vi.mock("@/components/Worktree/terminalStateConfig", () => ({
   SESSION_LABELS: {},
 }));
 
-// The hand-back join reads the fleet snapshot store; these suites draw the
-// observed state as it is.
-vi.mock("@/hooks/useRunHandBackState", () => ({
-  useSessionPresentation: (_id: string, state: unknown) => state,
-  useRunHandBackState: () => "none",
-  useHandBackRunIds: () => new Set<string>(),
-}));
+// The real band read and resolver; the pane observation half reads the real
+// panel store, whose import graph this suite's mocks don't cover.
+vi.mock("@/hooks/useRunSessionPresentation", async () => {
+  const { useRunFleetBand } = await import("@/hooks/useRunFleetBand");
+  const { resolvePaneSessionPresentation } = await import("@/lib/paneSessionPresentation");
+  return {
+    useRunSessionPresentation: (id: string, state: Parameters<typeof resolvePaneSessionPresentation>[0]) =>
+      resolvePaneSessionPresentation(state, useRunFleetBand(id)),
+  };
+});
 
 vi.mock("@/components/Terminal/TerminalContextMenu", () => ({
   TerminalContextMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -210,6 +218,7 @@ import { DragHandleProvider } from "@/components/DragDrop/DragHandleContext";
 import { handleDockFocusOutside } from "../dockPopoverGuard";
 import { createTerminalPaintPlane } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 
 const terminalInstanceService = createTerminalPaintPlane();
 
@@ -234,6 +243,37 @@ describe("DockedTerminalItem move-to-grid gesture", () => {
     mockActiveDockTerminalId = null;
     mockDockAgentState = undefined;
     mockIsAgent = false;
+    blockedStateArg = undefined;
+    useFleetSnapshotStore.setState({ snapshot: null });
+  });
+
+  // Amber is the fleet band's needs-you alone (#16057): a prompt that asks
+  // nothing never edges the chip, and an unread Canopy ask does.
+  it("edges the chip only for an unread Canopy ask, never a bare prompt", () => {
+    mockDockAgentState = "waiting";
+    mockIsAgent = true;
+    const view = render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+    expect(blockedStateArg).toBeUndefined();
+
+    act(() => {
+      useFleetSnapshotStore.getState().applySnapshot({
+        runs: [
+          {
+            runId: "t-1",
+            workspaceId: "p1",
+            spawnedAt: 1,
+            cwd: "/repo",
+            agentState: "waiting",
+            canopy: { kind: "asked", quote: "Run it?", readAt: 1, seen: false },
+          },
+        ],
+        changedAt: 2,
+        degraded: false,
+        lastSuccessfulAt: 2,
+      });
+    });
+    expect(blockedStateArg).toBe("waiting");
+    view.unmount();
   });
 
   // #10024 — the dock chip's state icon is aria-hidden, so the agent state must

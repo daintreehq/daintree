@@ -417,6 +417,7 @@ import { TOOLBAR_CUSTOMIZE_ICON, TOOLBAR_CUSTOMIZE_LABEL } from "../toolbarMenuS
 import type { DockLaunchAgent } from "../DockLaunchMenuItems";
 import { comboToAriaKeyshortcuts, describeChord } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 
 /** Spoken by name ("Alt P" / "Option P"), never as the "Alt+P" string. */
 const PIN_SPOKEN = describeChord("Alt+P", isMac());
@@ -958,7 +959,32 @@ describe("DockLaunchButton", () => {
         },
       });
       try {
+        // A prompt that asks nothing earns no pip, so the row says nothing.
         Object.assign(panelStoreState, { panelsById: session("waiting"), panelIds: ["pty-1"] });
+        const prompt = renderButton();
+        expect(rowByName(prompt.container, "Claude").getAttribute("aria-label")).not.toMatch(
+          /Agent (working|waiting|directing)/
+        );
+        prompt.unmount();
+
+        // An unread Canopy ask is the waiting pip, and the row speaks it.
+        act(() => {
+          useFleetSnapshotStore.getState().applySnapshot({
+            runs: [
+              {
+                runId: "pty-1",
+                workspaceId: "p1",
+                spawnedAt: 1,
+                cwd: "/repo",
+                agentState: "waiting",
+                canopy: { kind: "asked", quote: "Run it?", readAt: 1, seen: false },
+              },
+            ],
+            changedAt: 2,
+            degraded: false,
+            lastSuccessfulAt: 2,
+          });
+        });
         const waiting = renderButton();
         expect(rowByName(waiting.container, "Claude").getAttribute("aria-label")).toContain(
           "Agent waiting"
@@ -972,6 +998,7 @@ describe("DockLaunchButton", () => {
         );
       } finally {
         Object.assign(panelStoreState, saved);
+        useFleetSnapshotStore.setState({ snapshot: null });
       }
     });
 

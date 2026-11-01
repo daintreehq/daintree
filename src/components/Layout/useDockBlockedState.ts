@@ -123,18 +123,17 @@ export function useDockBlockedState(agentState: AgentState | undefined): Blocked
 
 /**
  * The state a docked group's chip edge takes from its members: waiting when
- * any tab is one the fleet places in `needs-you` and its pane still shows
- * stopped. A prompt that asks nothing, a hand-back and an error wait don't
- * edge it.
+ * any agent tab is one the fleet places in `needs-you` and its pane still
+ * shows stopped. A prompt that asks nothing, a hand-back, an error wait and a
+ * terminal demoted from its agent don't edge it.
  */
 export function getGroupBlockedAgentState(
   panels: ReadonlyArray<AgentStateSource>,
   needsYouRunIds: ReadonlySet<string>
 ): AgentState | undefined {
   for (const panel of panels) {
-    if (panel.id !== undefined && isNeedsYouPane(needsYouRunIds, { ...panel, id: panel.id })) {
-      return "waiting";
-    }
+    if (panel.id === undefined || !hasRuntimeAgentIdentity(panel)) continue;
+    if (isNeedsYouPane(needsYouRunIds, { ...panel, id: panel.id })) return "waiting";
   }
   return undefined;
 }

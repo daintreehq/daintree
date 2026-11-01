@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { beforeEach, describe, it, expect } from "vitest";
 import { deriveAgentAttentionStates } from "../agentAttentionStates";
 import type { PanelInstance } from "@shared/types/panel";
 import type { AgentState } from "@shared/types";
@@ -10,6 +10,11 @@ import type { AgentState } from "@shared/types";
  */
 
 let seq = 0;
+let needsYou = new Set<string>();
+beforeEach(() => {
+  needsYou = new Set();
+});
+
 function ptyPanel(over: {
   /** Live detector result — the runtime identity. */
   detectedAgentId?: string;
@@ -18,10 +23,14 @@ function ptyPanel(over: {
   agentState?: AgentState;
   worktreeId?: string;
   location?: string;
+  /** The fleet places the run in `needs-you`: an unread Canopy ask. */
+  asks?: boolean;
 }): PanelInstance {
   seq += 1;
+  const id = `p-${seq}`;
+  if (over.asks) needsYou.add(id);
   return {
-    id: `p-${seq}`,
+    id,
     kind: "terminal",
     title: "t",
     location: over.location ?? "grid",
@@ -37,7 +46,8 @@ function derive(panels: PanelInstance[], activeWorktreeId: string | null = null)
   return deriveAgentAttentionStates(
     panelsById,
     panels.map((p) => p.id),
-    activeWorktreeId
+    activeWorktreeId,
+    needsYou
   );
 }
 
@@ -46,14 +56,14 @@ describe("deriveAgentAttentionStates", () => {
     // A plain shell that starts Claude has to be tracked under Claude, or the
     // dot lands on the wrong launcher row.
     const map = derive([
-      ptyPanel({ launchAgentId: "terminal", detectedAgentId: "claude", agentState: "waiting" }),
+      ptyPanel({ launchAgentId: "terminal", detectedAgentId: "claude", agentState: "waiting", asks: true }),
     ]);
     expect(map.get("claude")).toBe("waiting");
     expect(map.has("terminal")).toBe(false);
   });
 
   it("falls back to launch intent before any detector result commits", () => {
-    const map = derive([ptyPanel({ launchAgentId: "codex", agentState: "waiting" })]);
+    const map = derive([ptyPanel({ launchAgentId: "codex", agentState: "waiting", asks: true })]);
     expect(map.get("codex")).toBe("waiting");
   });
 
@@ -85,8 +95,8 @@ describe("deriveAgentAttentionStates", () => {
   it("counts only the active worktree once one is selected", () => {
     const map = derive(
       [
-        ptyPanel({ detectedAgentId: "claude", agentState: "waiting", worktreeId: "wt-1" }),
-        ptyPanel({ detectedAgentId: "gemini", agentState: "waiting", worktreeId: "wt-2" }),
+        ptyPanel({ detectedAgentId: "claude", agentState: "waiting", worktreeId: "wt-1", asks: true }),
+        ptyPanel({ detectedAgentId: "gemini", agentState: "waiting", worktreeId: "wt-2", asks: true }),
       ],
       "wt-1"
     );
@@ -96,7 +106,7 @@ describe("deriveAgentAttentionStates", () => {
 
   it("counts every worktree when none is selected", () => {
     const map = derive([
-      ptyPanel({ detectedAgentId: "claude", agentState: "waiting", worktreeId: "wt-1" }),
+      ptyPanel({ detectedAgentId: "claude", agentState: "waiting", worktreeId: "wt-1", asks: true }),
       ptyPanel({ detectedAgentId: "gemini", agentState: "directing", worktreeId: "wt-2" }),
     ]);
     expect(map.get("claude")).toBe("waiting");
@@ -106,15 +116,37 @@ describe("deriveAgentAttentionStates", () => {
   it("keeps a waiting session's pip when a sibling of the same agent is working", () => {
     const map = derive([
       ptyPanel({ detectedAgentId: "claude", agentState: "working" }),
-      ptyPanel({ detectedAgentId: "claude", agentState: "waiting" }),
+      ptyPanel({ detectedAgentId: "claude", agentState: "waiting", asks: true }),
     ]);
     expect(map.size).toBe(1);
     expect(map.get("claude")).toBe("waiting");
   });
 
   it("skips ids that are missing from the panel map", () => {
-    const present = ptyPanel({ detectedAgentId: "claude", agentState: "waiting" });
-    const map = deriveAgentAttentionStates({ [present.id]: present }, [present.id, "ghost"], null);
+    const present = ptyPanel({ detectedAgentId: "claude", agentState: "waiting", asks: true });
+    const map = deriveAgentAttentionStates(
+      { [present.id]: present },
+      [present.id, "ghost"],
+      null,
+      needsYou
+    );
     expect(map.get("claude")).toBe("waiting");
+  });
+
+  it("gives a prompt that asks nothing, a hand-back or an error wait no pip", () => {
+    // The run is present, but only an unread Canopy ask earns the amber dot.
+    const map = derive([ptyPanel({ detectedAgentId: "claude", agentState: "waiting" })]);
+    expect(map.has("claude")).toBe(true);
+    expect(map.get("claude")).toBeNull();
+  });
+
+  it("earns the amber pip for an ask Canopy read on a finished turn", () => {
+    const map = derive([ptyPanel({ detectedAgentId: "claude", agentState: "completed", asks: true })]);
+    expect(map.get("claude")).toBe("waiting");
+  });
+
+  it("drops the amber pip once the pane has the agent working again", () => {
+    const map = derive([ptyPanel({ detectedAgentId: "claude", agentState: "working", asks: true })]);
+    expect(map.get("claude")).toBeNull();
   });
 });

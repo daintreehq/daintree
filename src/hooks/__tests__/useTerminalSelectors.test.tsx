@@ -145,6 +145,7 @@ describe("useTerminalSelectors", () => {
     setupTerminals([
       { id: "t-waiting", worktreeId: "wt-1", agentState: "waiting", location: "grid" },
     ]);
+    deliverAsks(["t-waiting"]);
 
     const { result } = renderHook(() => useTerminalNotificationCounts());
     expect(result.current.waitingCount).toBe(1);
@@ -159,6 +160,7 @@ describe("useTerminalSelectors", () => {
         { id: "q1", agentState: "waiting", location: "grid" },
         { id: "idle", agentState: "idle", location: "grid" },
       ]);
+      deliverAsks(["q1"]);
 
       const { result } = renderHook(() => useBackgroundPanelStats("current"));
       expect(result.current.activeCount).toBe(4);
@@ -172,6 +174,7 @@ describe("useTerminalSelectors", () => {
         { id: "dock-working", agentState: "working", location: "dock" },
         { id: "bg-waiting", agentState: "waiting", location: "background" },
       ]);
+      deliverAsks(["bg-waiting"]);
 
       const { result } = renderHook(() => useBackgroundPanelStats("none"));
       expect(result.current.activeCount).toBe(1);
@@ -184,6 +187,7 @@ describe("useTerminalSelectors", () => {
         { id: "term", agentState: "waiting", location: "grid" },
         { id: "browser", agentState: "working", location: "grid", kind: "browser" },
       ]);
+      deliverAsks(["term"]);
 
       const { result } = renderHook(() => useBackgroundPanelStats("none"));
       expect(result.current.activeCount).toBe(2);
@@ -210,6 +214,7 @@ describe("useTerminalSelectors", () => {
           lastStateChange: Date.now() - 1000,
         },
       ]);
+      deliverAsks(["t1"]);
 
       const { result } = renderHook(() => useTerminalNotificationCounts(null));
       expect(result.current.waitingCount).toBe(0);
@@ -226,6 +231,7 @@ describe("useTerminalSelectors", () => {
           lastStateChange: Date.now() - 60_000,
         },
       ]);
+      deliverAsks(["t1"]);
 
       const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
       expect(result.current.waitingCount).toBe(0);
@@ -241,6 +247,7 @@ describe("useTerminalSelectors", () => {
           location: "grid",
         },
       ]);
+      deliverAsks(["t1"]);
 
       const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
       expect(result.current.waitingCount).toBe(0);
@@ -261,6 +268,7 @@ describe("useTerminalSelectors", () => {
           lastStateChange: Date.now() - 10 * 60_000,
         },
       ]);
+      deliverAsks(["t1"]);
 
       const { result } = renderHook(() => useTerminalNotificationCounts());
       expect(result.current.waitingCount).toBe(1);
@@ -277,6 +285,7 @@ describe("useTerminalSelectors", () => {
           lastStateChange: blurTime,
         },
       ]);
+      deliverAsks(["t1"]);
 
       const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
       expect(result.current.waitingCount).toBe(0);
@@ -293,6 +302,7 @@ describe("useTerminalSelectors", () => {
           lastStateChange: blurTime + 1,
         },
       ]);
+      deliverAsks(["t1"]);
 
       const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
       expect(result.current.waitingCount).toBe(1);
@@ -315,6 +325,7 @@ describe("useTerminalSelectors", () => {
           lastStateChange: Date.now() - 10_000,
         },
       ]);
+      deliverAsks(["t1"]);
 
       const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
       expect(result.current.waitingCount).toBe(0);
@@ -680,13 +691,27 @@ describe("hand-backs are not waits", () => {
     expect(stats.result.current.waitingCount).toBe(1);
   });
 
-  it("counts a prompt wait as waiting until the fleet reports it as a hand-back", () => {
+  it("counts a prompt as waiting only while the fleet reports an unread Canopy ask", () => {
     setupBoth([{ id: "t1", agentState: "waiting", location: "grid" }]);
     const { result } = renderHook(() => useTerminalNotificationCounts());
+    const stats = renderHook(() => useBackgroundPanelStats("none", true));
+    // No snapshot yet: a prompt is not a question.
+    expect(result.current.waitingCount).toBe(0);
+    expect(stats.result.current.waitingCount).toBe(0);
+
+    deliverRuns([{ runId: "t1", agentState: "waiting", canopy: ASK }]);
     expect(result.current.waitingCount).toBe(1);
+    expect(stats.result.current.waitingCount).toBe(1);
 
     deliverHandBacks(["t1"], false);
     expect(result.current.waitingCount).toBe(0);
+    expect(stats.result.current.waitingCount).toBe(0);
+  });
+
+  it("drops an unread ask from the counts once the pane has the agent working again", () => {
+    setupBoth([{ id: "t1", agentState: "working", location: "grid" }]);
+    deliverAsks(["t1"]);
+    expect(renderHook(() => useTerminalNotificationCounts()).result.current.waitingCount).toBe(0);
   });
 });
 
@@ -708,8 +733,8 @@ describe("the dock's agent pills read the fleet bands", () => {
     expect(renderHook(() => useWaitingTerminals()).result.current).toEqual([]);
     expect(renderHook(() => useUnreadTerminals()).result.current).toEqual([]);
     expect(renderHook(() => useDemandTerminalCount()).result.current).toBe(0);
-    // The Dock badge and window title still count the ask they can see.
-    expect(renderHook(() => useTerminalNotificationCounts()).result.current.waitingCount).toBe(2);
+    // The Dock badge and window title count only what the band calls an ask.
+    expect(renderHook(() => useTerminalNotificationCounts()).result.current.waitingCount).toBe(0);
   });
 
   it("leaves parked and snoozed agents out of both pills", () => {

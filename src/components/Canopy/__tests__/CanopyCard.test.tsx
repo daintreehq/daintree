@@ -7,6 +7,7 @@ import { useCanopyStore } from "@/store/canopyStore";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import type { CanopyCard as CanopyCardData, CanopyCategory } from "@shared/types/ipc/canopy";
 import { buildPilotGroups } from "@/components/Pilot/pilotRows";
+import { bandForRun } from "@shared/utils/fleetBands";
 import { buildCanopyInbox, type CanopyItem } from "../canopyModel";
 import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voiceRecordingStore";
 import { DICTATION_OWNER_ATTR, canopyReplyVoiceId } from "@/services/canopyReplyDictation";
@@ -1116,9 +1117,11 @@ describe("CanopyCard", () => {
     expect(container.querySelector("button[data-armed]")).toBeNull();
   });
   describe("the pane's state chip", () => {
+    // The row carries the run's band, as the fleet places it, beside the run.
     function withRun(overrides: Partial<FleetRunRow>): CanopyItem {
       const base = itemFor("finished");
-      return { ...base, row: { ...base.row, run: { ...base.row.run, ...overrides } } };
+      const run = { ...base.row.run, ...overrides };
+      return { ...base, row: { ...base.row, run, band: bandForRun(run) } };
     }
     const chip = (container: HTMLElement) =>
       container.querySelector('[role="status"][aria-label^="Agent state"]');
@@ -1137,15 +1140,29 @@ describe("CanopyCard", () => {
       }
     });
 
-    it("keeps an approval wait on the waiting chip whatever the hand-back says", () => {
-      const { container } = renderCard(
+    it("draws an approval wait amber only for an unread Canopy ask, whatever the hand-back says", () => {
+      const approval = {
+        agentState: "waiting",
+        waitingReason: "approval",
+        handBack: { stoppedAt: NOW - 2, seenAt: NOW - 1 },
+      } as const;
+      const asked = renderCard(
         withRun({
-          agentState: "waiting",
-          waitingReason: "approval",
-          handBack: { stoppedAt: NOW - 2, seenAt: NOW - 1 },
+          ...approval,
+          canopy: { kind: "asked", quote: "Run npm test?", readAt: NOW - 1, seen: false },
         })
       );
-      expect(chip(container)?.getAttribute("aria-label")).toBe("Agent state: waiting");
+      expect(chip(asked.container)?.getAttribute("aria-label")).toBe("Agent state: waiting");
+      asked.unmount();
+
+      // With no reading it is the patterns' guess: unread until looked at.
+      const guessed = renderCard(withRun(approval));
+      expect(chip(guessed.container)?.getAttribute("aria-label")).toBe("Agent state: unread");
+    });
+
+    it("draws nothing for a prompt that asks nothing", () => {
+      const { container } = renderCard(withRun({ agentState: "waiting" }));
+      expect(chip(container)).toBeNull();
     });
 
     it("draws nothing for a completion with no hand-back", () => {

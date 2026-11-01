@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
 import type { ReactNode } from "react";
 import {
   WorktreeTerminalSection,
@@ -437,8 +437,8 @@ describe("WorktreeTerminalSection arming click handlers", () => {
 
 // Terminal row state icon: active states (working/waiting/directing) pass
 // through regardless of identity (#6650 boot window). Once the agent chrome is
-// live, the indicator stays visible — idle/missing/completed state coerce to
-// waiting so the activity indicator never silently disappears mid-flight.
+// live, idle/missing/completed state coerce to waiting, and the run's fleet
+// band then decides what that wait draws, as on the pane (#16057).
 describe("WorktreeTerminalSection row state icon", () => {
   beforeEach(() => {
     useFleetArmingStore.setState({
@@ -513,19 +513,28 @@ describe("WorktreeTerminalSection row state icon", () => {
       expect(row.querySelector('[aria-label="unread"]')).not.toBeNull();
     });
 
-    it("keeps a question wait amber", () => {
+    it("draws a question wait amber only for an unread Canopy ask", () => {
       setRun({
         agentState: "waiting",
         waitingReason: "question",
         handBack: { stoppedAt: 1, seenAt: 2 },
+        canopy: { kind: "asked", quote: "Which branch?", readAt: 3, seen: false },
       });
-      const row = rowFor({ waitingReason: "question" });
-      expect(row.querySelector('[aria-label="waiting"]')).not.toBeNull();
+      const asked = rowFor({ waitingReason: "question" });
+      expect(asked.querySelector('[aria-label="waiting"]')).not.toBeNull();
+      cleanup();
+
+      // The same wait with no reading is the patterns' guess: unread, never amber.
+      setRun({ agentState: "waiting", waitingReason: "question" });
+      const guessed = rowFor({ waitingReason: "question" });
+      expect(guessed.querySelector('[aria-label="unread"]')).not.toBeNull();
+      expect(guessed.querySelector('[aria-label="waiting"]')).toBeNull();
     });
 
-    it("stays waiting before the fleet snapshot arrives", () => {
+    it("draws nothing for a prompt before the fleet snapshot arrives", () => {
       const row = rowFor();
-      expect(row.querySelector('[aria-label="waiting"]')).not.toBeNull();
+      expect(row.querySelector('[aria-label="waiting"]')).toBeNull();
+      expect(row.getAttribute("data-terminal-agent-state")).toBe("waiting");
     });
   });
 
@@ -586,13 +595,15 @@ describe("WorktreeTerminalSection row state icon", () => {
       expect(description(row)).not.toContain("Parked:");
     });
 
-    it("leaves the observed state glyph and attribute alone", () => {
-      // Parking is the user's intent, not something the agent did.
+    it("leaves the observed attribute alone and draws no amber for a parked wait", () => {
+      // Parking is the user's intent, not something the agent did: the
+      // attribute keeps the observation, and a parked run asks nothing.
       setRun({ agentState: "waiting", park: { parkedAt: 1 } });
       const row = renderRow()();
 
       expect(row.getAttribute("data-terminal-agent-state")).toBe("waiting");
-      expect(row.querySelector('[aria-label="waiting"]')).not.toBeNull();
+      expect(row.querySelector('[aria-label="waiting"]')).toBeNull();
+      expect(row.querySelector('[data-testid="session-row-parked"]')).not.toBeNull();
     });
 
     it("drops the mark as soon as the snapshot no longer carries the park", () => {
@@ -613,7 +624,7 @@ describe("WorktreeTerminalSection row state icon", () => {
     });
   });
 
-  it("renders waiting icon when agentState='idle' and agent chrome is live", () => {
+  it("draws an idle live agent amber only once the fleet reports an unread Canopy ask", () => {
     const term = makeTerminal({
       id: "idle-1",
       kind: "terminal",
@@ -626,9 +637,33 @@ describe("WorktreeTerminalSection row state icon", () => {
       terminals: [term],
       counts: { ...baseCounts, total: 1 },
     });
-    const row = container.querySelector('[data-terminal-id="idle-1"]');
-    const waitingIcon = row?.querySelector('[aria-label="waiting"]');
-    expect(waitingIcon).not.toBeNull();
+    const row = () => container.querySelector('[data-terminal-id="idle-1"]');
+    expect(row()?.querySelector('[aria-label="waiting"]')).toBeNull();
+
+    try {
+      act(() => {
+        useFleetSnapshotStore.setState({
+          snapshot: {
+            runs: [
+              {
+                runId: "idle-1",
+                workspaceId: "p1",
+                spawnedAt: 0,
+                cwd: "/tmp",
+                agentState: "waiting",
+                canopy: { kind: "asked", quote: "Run it?", readAt: 1, seen: false },
+              },
+            ],
+            changedAt: 0,
+            degraded: false,
+            lastSuccessfulAt: null,
+          } satisfies FleetSnapshot,
+        });
+      });
+      expect(row()?.querySelector('[aria-label="waiting"]')).not.toBeNull();
+    } finally {
+      useFleetSnapshotStore.setState({ snapshot: null });
+    }
   });
 
   it("does not render any state icon during the post-exit IPC race (stale agentState)", () => {
