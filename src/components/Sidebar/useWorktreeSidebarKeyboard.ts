@@ -94,14 +94,6 @@ function retireRowTabStops(grid: HTMLElement, exceptRow: HTMLElement | null): vo
   }
 }
 
-function isFocusVisible(el: HTMLElement): boolean {
-  try {
-    return el.matches(":focus-visible");
-  } catch {
-    return true;
-  }
-}
-
 const PAGE_SIZE_FALLBACK = 10;
 const ESTIMATED_ROW_HEIGHT_PX = 180;
 
@@ -386,9 +378,19 @@ export function useWorktreeSidebarKeyboard({
   useEffect(() => {
     const grid = gridRef.current;
     if (!grid) return;
-    // The grid itself, keyboard-focused: the same condition the cursor's CSS
-    // edge waits for, so a mouse click into a card reveals nothing.
-    const onFocusIn = (e: FocusEvent) => setGridHasFocus(e.target === grid && isFocusVisible(grid));
+    // The grid itself, focused by the keyboard: a focus that a pointer press
+    // caused reveals nothing, so a mouse click into a card pops no marks.
+    // Tracked from the input rather than `:focus-visible`, which a scripted
+    // focus reports inconsistently.
+    let pointerPressed = false;
+    const onPointerDown = () => {
+      pointerPressed = true;
+    };
+    const onKeyDownCapture = () => {
+      pointerPressed = false;
+      if (document.activeElement === grid) setGridHasFocus(true);
+    };
+    const onFocusIn = (e: FocusEvent) => setGridHasFocus(e.target === grid && !pointerPressed);
     const onFocusOut = (e: FocusEvent) => {
       if (!(e.relatedTarget instanceof Node) || !grid.contains(e.relatedTarget)) {
         setGridHasFocus(false);
@@ -400,9 +402,13 @@ export function useWorktreeSidebarKeyboard({
         }
       }
     };
+    grid.addEventListener("pointerdown", onPointerDown, true);
+    grid.addEventListener("keydown", onKeyDownCapture, true);
     grid.addEventListener("focusin", onFocusIn);
     grid.addEventListener("focusout", onFocusOut);
     return () => {
+      grid.removeEventListener("pointerdown", onPointerDown, true);
+      grid.removeEventListener("keydown", onKeyDownCapture, true);
       grid.removeEventListener("focusin", onFocusIn);
       grid.removeEventListener("focusout", onFocusOut);
     };

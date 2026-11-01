@@ -1101,7 +1101,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             />
           )}
         </div>
-        {/* gap-0.5, not gap-1: the four 24px buttons already carry their own
+        {/* gap-0.5, not gap-1: the five 24px buttons already carry their own
             inset, so a 4px gap on top spent width the 200px minimum does not
             have — the cluster crowded the "Worktrees" landmark it sits beside. */}
         {/* The cluster also stays up while the refresh icon is turning, so a
@@ -1234,7 +1234,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           escalatedSince={showReconnectingEscalated ? reconnectingAt : null}
         />
       )}
-      {/* Inline search bar — only when there are non-main worktrees */}
+      {/* Inline search bar — while there are feature worktrees or a filter to clear */}
       {showControlZone && (
         <WorktreeSidebarSearchBar
           inputRef={searchInputRef}

@@ -10,6 +10,7 @@ function params(
   items: ReadonlyArray<{ kind: string; worktreeId?: string }>,
   overrides: {
     attentionWorktreeIds?: ReadonlySet<string>;
+    problemWorktreeTones?: ReadonlyMap<string, "error" | "warning">;
     virtuosoRef?: { current: Pick<VirtuosoHandle, "scrollToIndex"> | null };
     smoothScroll?: boolean;
     bandHeightPx?: number;
@@ -19,6 +20,7 @@ function params(
   return {
     items,
     attentionWorktreeIds: overrides.attentionWorktreeIds ?? NO_WAITING,
+    problemWorktreeTones: overrides.problemWorktreeTones,
     virtuosoRef: overrides.virtuosoRef ?? { current: null },
     smoothScroll: overrides.smoothScroll ?? true,
     bandHeightPx: overrides.bandHeightPx,
@@ -549,6 +551,112 @@ describe("useScrollIndicator attention worktrees and reveal targets", () => {
     const { result, scrollToIndex } = setup(["w9"], false);
     act(() => result.current.revealBelow());
     expect(scrollToIndex).toHaveBeenLastCalledWith(expect.objectContaining({ behavior: "auto" }));
+  });
+});
+
+describe("useScrollIndicator problem worktrees", () => {
+  // Same geometry as above: rows 0-2 hidden above, rows 7-9 hidden below.
+  const rows = Array.from({ length: 10 }, (_, i) => ({ kind: "row", worktreeId: `w${i}` }));
+  const geometry = makeRendered(
+    rows.map((_, index) => ({ index, offset: index * 100, size: 100, kind: "row" as Kind }))
+  );
+
+  function setup(waiting: string[], problems: Array<[string, "error" | "warning"]>) {
+    const scrollToIndex = vi.fn<VirtuosoHandle["scrollToIndex"]>();
+    const virtuosoRef = { current: { scrollToIndex } };
+    const hook = renderHook(
+      ({ tones }: { tones: ReadonlyMap<string, "error" | "warning"> }) =>
+        useScrollIndicator(
+          params(rows, {
+            attentionWorktreeIds: new Set(waiting),
+            problemWorktreeTones: tones,
+            virtuosoRef,
+          })
+        ),
+      { initialProps: { tones: new Map(problems) as ReadonlyMap<string, "error" | "warning"> } }
+    );
+    act(() => {
+      hook.result.current.scrollerRef(makeScroller({ scrollTop: 350, clientHeight: 300 }));
+    });
+    act(() => {
+      hook.result.current.handleItemsRendered(geometry);
+    });
+    return { ...hook, scrollToIndex };
+  }
+
+  it("counts hidden problem rows per direction with the worst tone, ignoring ones on screen", () => {
+    const { result } = setup(
+      [],
+      [
+        ["w0", "warning"],
+        ["w2", "error"],
+        ["w5", "error"],
+        ["w8", "warning"],
+      ]
+    );
+    expect(result.current.hiddenAbove).toEqual({
+      count: 3,
+      attention: 0,
+      problem: 2,
+      problemTone: "error",
+    });
+    expect(result.current.hiddenBelow).toEqual({
+      count: 3,
+      attention: 0,
+      problem: 1,
+      problemTone: "warning",
+    });
+  });
+
+  it("does not count a waiting row a second time as a problem", () => {
+    const { result } = setup(["w8"], [["w8", "error"]]);
+    expect(result.current.hiddenBelow).toEqual({
+      count: 3,
+      attention: 1,
+      problem: 0,
+      problemTone: null,
+    });
+  });
+
+  it("recomputes when a problem appears, without a scroll or a new list", () => {
+    const { result, rerender } = setup([], []);
+    expect(result.current.hiddenBelow.problem).toBe(0);
+    rerender({ tones: new Map([["w9", "error"]]) });
+    expect(result.current.hiddenBelow).toEqual({
+      count: 3,
+      attention: 0,
+      problem: 1,
+      problemTone: "error",
+    });
+  });
+
+  it("reveals the nearest problem when nothing past the edge is waiting", () => {
+    const { result, scrollToIndex } = setup(
+      [],
+      [
+        ["w0", "error"],
+        ["w1", "warning"],
+        ["w8", "warning"],
+        ["w9", "error"],
+      ]
+    );
+    act(() => result.current.revealBelow());
+    expect(scrollToIndex).toHaveBeenLastCalledWith(
+      expect.objectContaining({ index: 8, align: "center" })
+    );
+    act(() => result.current.revealAbove());
+    expect(scrollToIndex).toHaveBeenLastCalledWith(
+      expect.objectContaining({ index: 1, align: "center" })
+    );
+  });
+
+  it("reveals a waiting row ahead of a nearer problem", () => {
+    // The pill says "needs attention" first, so the jump has to land there.
+    const { result, scrollToIndex } = setup(["w9"], [["w7", "error"]]);
+    act(() => result.current.revealBelow());
+    expect(scrollToIndex).toHaveBeenLastCalledWith(
+      expect.objectContaining({ index: 9, align: "center" })
+    );
   });
 });
 

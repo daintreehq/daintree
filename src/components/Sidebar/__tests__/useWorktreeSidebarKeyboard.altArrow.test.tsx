@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
 import { useRef, useState } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
@@ -249,25 +249,8 @@ describe("useWorktreeSidebarKeyboard — pinned rows in navigation", () => {
 });
 
 describe("useWorktreeSidebarKeyboard — keyboard cursor exposure", () => {
-  // The cursor shows only while the grid holds keyboard focus, which the hook
-  // reads from :focus-visible. jsdom's heuristic for that selector carries
-  // state across tests, so each test here says which kind of focus it means.
-  let focusVisible = true;
-  const originalMatches = Element.prototype.matches;
-  beforeEach(() => {
-    focusVisible = true;
-    vi.spyOn(Element.prototype, "matches").mockImplementation(function (
-      this: Element,
-      selector: string
-    ) {
-      if (selector === ":focus-visible") return focusVisible && this === document.activeElement;
-      return originalMatches.call(this, selector);
-    });
-  });
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
+  // The cursor shows only while the grid holds keyboard focus: a focus that a
+  // pointer press caused does not count (see the pointer test below).
   it("exposes keyboardCursorId tracking the active row in list mode", () => {
     const { getByTestId } = render(<Harness items={ITEMS} />);
     const grid = getByTestId("grid");
@@ -289,10 +272,14 @@ describe("useWorktreeSidebarKeyboard — keyboard cursor exposure", () => {
   });
 
   it("shows no cursor when the grid takes focus from the pointer", () => {
-    focusVisible = false;
     const { getByTestId, container } = render(<Harness items={ITEMS} />);
     const grid = getByTestId("grid");
-    act(() => grid.focus());
+    // The hook tells pointer focus from keyboard focus by the press that
+    // preceded it, not by `:focus-visible`.
+    act(() => {
+      fireEvent.pointerDown(grid);
+      grid.focus();
+    });
     expect(grid.getAttribute("data-cursor-id")).toBe("");
     expect(container.querySelectorAll('[data-keyboard-cursor="true"]')).toHaveLength(0);
   });

@@ -502,12 +502,8 @@ export function WorktreeMenuItems({
   const reviewRows = !worktree
     ? []
     : [
-        onOpenReviewHub && (
-          <C.Item key="review-hub" onSelect={onOpenReviewHub}>
-            <GitCommitHorizontal className={ICON} />
-            Review worktree
-          </C.Item>
-        ),
+        // "Review worktree" itself sits at the top of the menu as a direct
+        // item; repeating it here gave the menu two items of one name.
         onOpenChanges && (
           <C.Item
             key="open-changes"
@@ -1384,8 +1380,8 @@ export function WorktreeMenuItems({
   );
 
   // The two things a card's menu is opened for most, one click away rather
-  // than behind a submenu each time. Both stay in their groups below, which
-  // hold the rest of the long tail.
+  // than behind a submenu each time. Launch keeps the full launcher among its
+  // rows; Review drops the hub so the menu never holds two items of one name.
   const directRows = compact(
     onOpenPanelPalette && (
       <C.Item key="new-session" onSelect={() => onOpenPanelPalette(source)}>

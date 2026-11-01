@@ -1365,9 +1365,9 @@ export function WorktreeCard({
               id={getWorktreeSidebarRowId(worktree.id)}
               tabIndex={-1}
               data-card-select-overlay=""
+              // row-select-target: the contrast modes' exemption for a full-row
+              // select button, which would otherwise box every card.
               className={cn(
-                // row-select-target: the contrast modes' exemption for a
-                // full-row select button, which would otherwise box every card.
                 "row-select-target absolute inset-0 z-0 outline-hidden",
                 (isDraggingSort || isWorktreeSortDragging) && "pointer-events-none"
               )}

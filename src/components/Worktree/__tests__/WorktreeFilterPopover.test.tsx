@@ -89,6 +89,16 @@ describe("WorktreeFilterPopover derives its filter state from one snapshot", () 
     expect(screen.queryByText("Clear all filters")).toBeNull();
   });
 
+  it("leaves the quick-state segment out of the trigger's facet count", () => {
+    // The segment is its own visible control beside the search field; counting
+    // it here doubled one filter across two surfaces.
+    useWorktreeFilterStore.getState().setQuickStateFilter("working");
+    useWorktreeFilterStore.getState().toggleStatusFilter("dirty");
+    openPopover();
+    const trigger = screen.getByLabelText(/^Filter and sort worktrees/);
+    expect(trigger.textContent?.trim()).toBe("1");
+  });
+
   it("keeps the trigger's count and its active styling in agreement", () => {
     // One derived number drives both, so the control can never look switched
     // on while showing nothing, or show a number while looking switched off.

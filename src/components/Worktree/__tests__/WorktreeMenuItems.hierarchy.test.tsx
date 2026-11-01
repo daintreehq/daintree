@@ -109,9 +109,11 @@ function fullyPopulated(): Parameters<typeof renderWorktreeMenu>[0] {
 }
 
 describe("WorktreeMenuItems — root hierarchy", () => {
-  it("renders the direct rows, then the twelve intent groups in the specified order", () => {
+  it("leads with the two direct items, then the twelve intent groups in the specified order", () => {
     const { container } = renderWorktreeMenu(fullyPopulated());
 
+    // The redesign put the two things a card menu is opened for most at the
+    // root, ahead of the grouped long tail.
     expect(rootRowLabels(container)).toEqual([
       "New session…",
       "Review worktree",
@@ -130,9 +132,10 @@ describe("WorktreeMenuItems — root hierarchy", () => {
     ]);
   });
 
-  it("separates the five bands with exactly four root separators", () => {
+  it("separates the direct items and the four bands with exactly four root separators", () => {
     const { container } = renderWorktreeMenu(fullyPopulated());
 
+    // The direct-item group is a band of its own, so it adds one separator.
     expect(rootSeparatorCount(container)).toBe(4);
   });
 
@@ -143,11 +146,13 @@ describe("WorktreeMenuItems — root hierarchy", () => {
       onTogglePin: vi.fn(),
     });
 
+    // The hub alone leaves the Review submenu with nothing to hold, so only
+    // the direct "Review worktree" row remains; with no panel palette there
+    // is no "New session…" row either.
     expect(rootRowLabels(container)).toEqual([
       "Review worktree",
       "Launch",
       "Open",
-      "Review",
       "Git",
       "Sessions",
       "Copy",
@@ -156,6 +161,24 @@ describe("WorktreeMenuItems — root hierarchy", () => {
     ]);
     expect(container.lastElementChild?.matches("[data-menu-separator]")).toBe(false);
     expect(container.firstElementChild?.matches("[data-menu-separator]")).toBe(false);
+  });
+
+  it("routes the direct items to their callbacks, the palette through the menu's source", () => {
+    const onOpenPanelPalette = vi.fn();
+    const onOpenReviewHub = vi.fn();
+    renderWorktreeMenu({ onOpenPanelPalette, onOpenReviewHub }, "context-menu");
+
+    fireEvent.click(screen.getByText("New session…"));
+    fireEvent.click(screen.getByText("Review worktree"));
+
+    expect(onOpenPanelPalette).toHaveBeenCalledWith("context-menu");
+    expect(onOpenReviewHub).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers no direct Review row for a workspace root, which has no worktree to review", () => {
+    const { container } = renderWorkspaceRootMenu({ onOpenReviewHub: vi.fn() });
+
+    expect(rootRowLabels(container)).not.toContain("Review worktree");
   });
 
   it("never renders two separators in a row", () => {
@@ -280,11 +303,13 @@ describe("WorktreeMenuItems — quiet git detail", () => {
       "Delete worktree…",
     ]);
     const git = subRows(container, "Git");
+    // The hub is a direct root row now, so it is not folded in a second time.
     expect(git.slice(0, 3)).toEqual([
-      "Review worktree",
       "View uncommitted changes0",
       "Compare with another worktree…",
+      "—",
     ]);
+    expect(git).not.toContain("Review worktree");
     expect(git).toContain("Fetch");
     expect(git).toContain("Force push with lease…");
     expect(git.slice(-6)).toEqual([
@@ -331,23 +356,14 @@ describe("WorktreeMenuItems — quiet git detail", () => {
   });
 
   it("dispatches a folded row exactly as the shown menu does", () => {
-    const onOpenReviewHub = vi.fn();
-    const { container } = renderWorktreeMenu({
-      ...fullyPopulated(),
-      onOpenReviewHub,
-      quietGit: true,
-    });
-    const git = Array.from(container.querySelectorAll("[data-menu-sub]")).find(
-      (node) => node.firstElementChild?.textContent?.trim() === "Git"
-    );
-    const folded = Array.from(
-      git?.querySelector("[data-menu-subcontent]")?.querySelectorAll("[data-menu-item]") ?? []
-    ).find((n) => n.textContent?.trim() === "Review worktree");
-    expect(folded).toBeDefined();
+    // "Review worktree" is a direct root row now, so a review row that really
+    // folds into Git stands in for it.
+    const onCompareDiff = vi.fn();
+    renderWorktreeMenu({ ...fullyPopulated(), onCompareDiff, quietGit: true });
 
-    fireEvent.click(folded!);
+    fireEvent.click(screen.getByText("Compare with another worktree…"));
 
-    expect(onOpenReviewHub).toHaveBeenCalledTimes(1);
+    expect(onCompareDiff).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1494,7 +1510,7 @@ describe("WorktreeMenuItems — View uncommitted changes (#11420)", () => {
     expect(onOpenChanges).toHaveBeenCalledTimes(1);
   });
 
-  it("sits inside Review, after the hub, so the hub reads as the entry point", () => {
+  it("leads the Review submenu, with the hub a direct root row instead of a duplicate inside it", () => {
     const { container } = renderWorktreeMenu({
       onOpenChanges: vi.fn(),
       onOpenReviewHub: vi.fn(),
@@ -1510,11 +1526,8 @@ describe("WorktreeMenuItems — View uncommitted changes (#11420)", () => {
       el.textContent?.replace(/\d+$/, "")
     );
 
-    expect(labels).toEqual([
-      "Review worktree",
-      "View uncommitted changes",
-      "Compare with another worktree…",
-    ]);
+    expect(labels).toEqual(["View uncommitted changes", "Compare with another worktree…"]);
+    expect(rootRowLabels(container)[0]).toBe("Review worktree");
   });
 
   it("carries the changed-file count into the accessible name, not just the muted slot", () => {

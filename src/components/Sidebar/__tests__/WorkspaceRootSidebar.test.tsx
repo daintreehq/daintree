@@ -291,6 +291,8 @@ describe("WorkspaceRootSidebar", () => {
     // menu inert is a bigger lie than the dead toggle this replaces. Asserted as
     // an exact list so a git-shaped group can't be added back unnoticed.
     render(<WorkspaceRootSidebar workspace={SCRATCH} />);
+    // "New session…" is the menu's direct launcher row, which a workspace root
+    // honours like Launch does; "Review worktree" needs a worktree and is absent.
     expect(contextMenuRootRows()).toEqual(["New session…", "Launch", "Open", "Copy"]);
   });
 

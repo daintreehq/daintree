@@ -228,8 +228,8 @@ describe("WorktreeCard row affordances polish (issue #8099)", () => {
 // styling and a tooltip when group-by-type or search is active.
 describe("WorktreeCard disabled drag handle (issue #8395)", () => {
   it("renders the disabled grip at the one unavailable level: 50% and cursor-not-allowed", () => {
-    // Shown only under the pointer, so a search doesn't run a column of dead
-    // grips down every card at rest; when shown, it is at the unavailable level.
+    // Shown where the gesture would be tried, on card hover, not at rest:
+    // during a search every card's dead grip ran down the list.
     expect(cardSource).toContain("cursor-not-allowed opacity-0 group-hover/card:opacity-50");
   });
 
@@ -303,8 +303,7 @@ function openingTagWith(source: string, tag: string, attribute: string): string 
 /** The sidebar select overlay's class string, anchored on its unique attribute. */
 function selectOverlayClasses(): string {
   const tag = openingTagWith(cardSource, "button", 'data-card-select-overlay=""');
-  // Line comments may lead the cn() arguments; the first string literal is the base.
-  const classes = tag.match(/className=\{cn\(\s*(?:\/\/[^\n]*\n\s*)*"([^"]+)"/)?.[1];
+  const classes = tag.match(/className=\{cn\(\s*"([^"]+)"/)?.[1];
   if (classes === undefined) {
     throw new Error("no className={cn(...)} on the [data-card-select-overlay] button");
   }
@@ -389,7 +388,9 @@ describe("collapsed alarm reaches the select overlay", () => {
     // Focus-visible only: a pointer click focuses the overlay too, and a click
     // that selected the row should not also pop the alarm open under it.
     expect(cardSource).toMatch(/handleSelectFocus[\s\S]{0,200}matches\(":focus-visible"\)/);
-    // The grid's keyboard cursor reveals the marks the same way.
+    // The overlay is no longer a tab stop (the grid points at it with
+    // aria-activedescendant), so the grid's keyboard cursor reveals the marks
+    // too; the overlay's own focus still does, for a programmatic focus.
     expect(openingTagWith(cardSource, "WorktreeHeader", "isKeyboardFocused=")).toMatch(
       /isKeyboardFocused=\{isSelectFocusVisible \|\| isKeyboardCursor\}/
     );
