@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  UNCLAIMED_REQUEST_TTL_MS,
   holdRelayUrlRequests,
   onRelayUrlRequest,
   requestRelayUrl,
@@ -12,6 +13,7 @@ function settle() {
 
 describe("relay URL request", () => {
   afterEach(() => {
+    vi.useRealTimers();
     takePendingRelayUrlRequest();
   });
 
@@ -65,5 +67,40 @@ describe("relay URL request", () => {
 
     expect(takePendingRelayUrlRequest()).toBe(true);
     release();
+  });
+  it("keeps a request made after the last page went, for the page it opens", async () => {
+    const release = holdRelayUrlRequests();
+    release();
+    requestRelayUrl();
+    await settle();
+
+    expect(takePendingRelayUrlRequest()).toBe(true);
+  });
+
+  it("lets a request no page claimed in time go, so a later visit doesn't land on it", () => {
+    vi.useFakeTimers();
+    requestRelayUrl();
+    vi.advanceTimersByTime(UNCLAIMED_REQUEST_TTL_MS + 1);
+
+    const release = holdRelayUrlRequests();
+
+    expect(takePendingRelayUrlRequest()).toBe(false);
+    release();
+  });
+
+  it("keeps a claimed request however long Decisions takes to be turned on", async () => {
+    vi.useFakeTimers();
+    const first = holdRelayUrlRequests();
+    requestRelayUrl();
+    first();
+    // The page coming back within the same opening finds it claimed, not stale.
+    const second = holdRelayUrlRequests();
+    vi.advanceTimersByTime(UNCLAIMED_REQUEST_TTL_MS + 1);
+    await settle();
+    const third = holdRelayUrlRequests();
+
+    expect(takePendingRelayUrlRequest()).toBe(true);
+    second();
+    third();
   });
 });
