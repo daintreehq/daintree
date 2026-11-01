@@ -639,12 +639,10 @@ describe("applySaved (#14700)", () => {
       "--from-another-view"
     );
 
-    await useAgentSettingsStore
-      .getState()
-      .refresh(async () => ({
-        settingsVersion: 3,
-        agents: { claude: { customFlags: "--hydrated" } },
-      }));
+    await useAgentSettingsStore.getState().refresh(async () => ({
+      settingsVersion: 3,
+      agents: { claude: { customFlags: "--hydrated" } },
+    }));
     expect(useAgentSettingsStore.getState().settings?.agents.claude?.customFlags).toBe(
       "--hydrated"
     );
