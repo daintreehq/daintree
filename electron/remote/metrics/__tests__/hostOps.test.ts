@@ -209,11 +209,11 @@ describe("observeWorktreeRuns", () => {
   it("lists a worktree's agents most urgent first, each with its terminal and state", () => {
     const seen = observeWorktreeRuns([
       run({ runId: "t1", worktreeId: "/repo/a", agentState: "working" }),
-      run({ runId: "t2", worktreeId: "/repo/a", agentState: "waiting", waitingReason: "question" }),
+      run({ runId: "t2", worktreeId: "/repo/a", agentState: "waiting", waitingReason: "error" }),
       run({ runId: "t3", worktreeId: "/repo/b", agentState: "working" }),
     ]);
     expect(seen.get("p1\n/repo/a")).toEqual([
-      { terminalId: "t2", band: "needs-you", agentState: "waiting" },
+      { terminalId: "t2", band: "blocked", agentState: "waiting" },
       { terminalId: "t1", band: "running", agentState: "working" },
     ]);
     expect(seen.get("p1\n/repo/b")).toEqual([
@@ -246,14 +246,32 @@ describe("observeWorktreeRuns", () => {
     ).toEqual(["t2", "t9"]);
   });
 
-  it("leaves Canopy's reading out: another machine sees what the host observed", () => {
+  it("places a run by this host's own Canopy reading, beside the state it observed", () => {
+    const asked = { kind: "asked", quote: "Run the migration?", readAt: 0, seen: false } as const;
     const seen = observeWorktreeRuns([
+      run({ worktreeId: "/w", agentState: "waiting", waitingReason: "approval", canopy: asked }),
       run({
+        runId: "t2",
         worktreeId: "/w",
         agentState: "completed",
-        canopy: { kind: "asked", quote: "Ship it?", readAt: 0 },
+        canopy: { ...asked, seen: true },
       }),
     ]);
-    expect(seen.get("p1\n/w")?.[0]?.band).toBe("idle");
+    expect(seen.get("p1\n/w")).toEqual([
+      { terminalId: "t1", band: "needs-you", agentState: "waiting" },
+      { terminalId: "t2", band: "idle", agentState: "completed" },
+    ]);
+  });
+
+  it("places an ask wait by the fallback when this host has no reading of it", () => {
+    const wait = { agentState: "waiting", waitingReason: "approval", worktreeId: "/w" } as const;
+    const seen = observeWorktreeRuns([
+      run({ ...wait, wait: { stoppedAt: 0 } }),
+      run({ ...wait, runId: "t2", wait: { stoppedAt: 0, seenAt: 1 } }),
+    ]);
+    expect(seen.get("p1\n/w")).toEqual([
+      { terminalId: "t1", band: "review", agentState: "waiting" },
+      { terminalId: "t2", band: "idle", agentState: "waiting" },
+    ]);
   });
 });

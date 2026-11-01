@@ -309,3 +309,193 @@ describe("RunHandBackService", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+describe("RunHandBackService ask waits", () => {
+  function waitChanges(service: RunHandBackService) {
+    const heard = { count: 0 };
+    service.onWaitChanged(() => heard.count++);
+    return heard;
+  }
+
+  it("begins an unseen wait on an approval or question wait, with no work watched", () => {
+    for (const waitingReason of ["approval", "question"]) {
+      const service = makeService();
+      const heard = waitChanges(service);
+      transition("t1", "idle", "waiting", { waitingReason });
+      expect(service.getWait("t1")).toEqual({ stoppedAt: START });
+      expect(heard.count).toBe(1);
+      // A wait is never a hand-back, and says nothing on the hand-back's event.
+      expect(service.getRecord("t1")).toBeUndefined();
+      expect(changes()).toEqual([]);
+      service.dispose();
+    }
+  });
+
+  it("begins no wait at a prompt, a finish or an error", () => {
+    const service = makeService();
+    transition("t1", "idle", "waiting", { waitingReason: "prompt" });
+    transition("t2", "idle", "completed");
+    transition("t3", "idle", "waiting", { waitingReason: "error" });
+    workThenStop("t4");
+    for (const id of ["t1", "t2", "t3", "t4"]) expect(service.getWait(id)).toBeUndefined();
+  });
+
+  it("is seen once a look has lasted the dwell past the wait's start", () => {
+    const service = makeService();
+    const heard = waitChanges(service);
+    service.noteLook("t1", "view-1", true);
+    vi.advanceTimersByTime(HAND_BACK_SEEN_DWELL_MS * 4);
+    transition("t1", "working", "waiting", { waitingReason: "approval" });
+    const stoppedAt = Date.now();
+
+    vi.advanceTimersByTime(HAND_BACK_SEEN_DWELL_MS - 1);
+    expect(service.getWait("t1")?.seenAt).toBeUndefined();
+    vi.advanceTimersByTime(1);
+    expect(service.getWait("t1")).toEqual({ stoppedAt, seenAt: Date.now() });
+    expect(heard.count).toBe(2);
+    expect(changes()).toEqual([]);
+  });
+
+  it("reads nothing from a look that ends before the dwell, or one its view forgot", () => {
+    const service = makeService();
+    transition("t1", "idle", "waiting", { waitingReason: "question" });
+    service.noteLook("t1", "view-1", true);
+    vi.advanceTimersByTime(HAND_BACK_SEEN_DWELL_MS - 100);
+    service.noteLook("t1", "view-1", false);
+    service.noteLook("t1", "view-2", true);
+    service.forgetViewer("view-2");
+    vi.advanceTimersByTime(HAND_BACK_SEEN_DWELL_MS * 4);
+    expect(service.getWait("t1")?.seenAt).toBeUndefined();
+  });
+
+  it("reads a look that lasted the dwell as it ends, before its timer fires", () => {
+    let now = START;
+    const service = new RunHandBackService({ now: () => now });
+    services.push(service);
+    transition("t1", "idle", "waiting", { waitingReason: "approval", timestamp: START });
+    service.noteLook("t1", "view-1", true);
+    now = START + HAND_BACK_SEEN_DWELL_MS;
+    service.noteLook("t1", "view-1", false);
+    expect(service.getWait("t1")?.seenAt).toBe(now);
+  });
+
+  it("keeps its seen mark through the stop's slides, and through a flicker of work", () => {
+    const service = makeService();
+    transition("t1", "idle", "waiting", { waitingReason: "approval" });
+    service.noteLook("t1", "view-1", true);
+    vi.advanceTimersByTime(HAND_BACK_SEEN_DWELL_MS);
+    service.noteLook("t1", "view-1", false);
+    const seen = service.getWait("t1");
+    expect(seen?.seenAt).toBeDefined();
+
+    transition("t1", "waiting", "waiting", { waitingReason: "question" });
+    transition("t1", "waiting", "completed");
+    transition("t1", "completed", "waiting", { waitingReason: "prompt" });
+    transition("t1", "waiting", "working");
+    vi.advanceTimersByTime(HAND_BACK_MIN_WORK_MS - 1);
+    transition("t1", "working", "waiting", { waitingReason: "approval" });
+    expect(service.getWait("t1")).toEqual(seen);
+  });
+
+  it("ends with work watched past the flicker bar, so the next wait is unseen again", () => {
+    const service = makeService();
+    const heard = waitChanges(service);
+    transition("t1", "idle", "waiting", { waitingReason: "approval" });
+    service.noteLook("t1", "view-1", true);
+    vi.advanceTimersByTime(HAND_BACK_SEEN_DWELL_MS);
+    service.noteLook("t1", "view-1", false);
+    expect(service.getWait("t1")?.seenAt).toBeDefined();
+
+    workThenStop("t1", "waiting", "approval");
+    expect(service.getWait("t1")).toEqual({ stoppedAt: Date.now() });
+    expect(heard.count).toBe(3);
+
+    // Work ending in a finish ends the wait with nothing in its place.
+    workThenStop("t1");
+    expect(service.getWait("t1")).toBeUndefined();
+  });
+
+  it("ends on an error, an exit or idling", () => {
+    const service = makeService();
+    for (const [id, state, waitingReason] of [
+      ["t1", "waiting", "error"],
+      ["t2", "exited", undefined],
+      ["t3", "idle", undefined],
+    ] as const) {
+      transition(id, "idle", "waiting", { waitingReason: "question" });
+      expect(service.getWait(id)).toBeDefined();
+      transition(id, "waiting", state, waitingReason ? { waitingReason } : {});
+      expect(service.getWait(id)).toBeUndefined();
+    }
+  });
+
+  it("ends when another agent starts in the same terminal, or the terminal spawns again", () => {
+    const service = makeService();
+    transition("t1", "idle", "waiting", { waitingReason: "approval", agentIncarnation: 1 });
+    transition("t1", "waiting", "idle", { agentIncarnation: 2 });
+    expect(service.getWait("t1")).toBeUndefined();
+
+    transition("t2", "idle", "waiting", { waitingReason: "approval" });
+    expect(service.getWait("t2", START)).toBeDefined();
+    expect(service.getWait("t2", Date.now() + 1)).toBeUndefined();
+    expect(service.getWait("t2")).toBeUndefined();
+  });
+
+  it("begins a wait a complete inventory shows that no state was heard for", () => {
+    const service = makeService();
+    service.noteInventoryWait("t1", START - 60_000, START);
+    expect(service.getWait("t1")).toEqual({ stoppedAt: START - 60_000 });
+    // The inventory telling it again changes nothing.
+    service.noteInventoryWait("t1", START - 10_000, START);
+    expect(service.getWait("t1")).toEqual({ stoppedAt: START - 60_000 });
+
+    // Looked at like any other.
+    service.noteLook("t1", "view-1", true);
+    vi.advanceTimersByTime(HAND_BACK_SEEN_DWELL_MS);
+    expect(service.getWait("t1")?.seenAt).toBe(Date.now());
+  });
+
+  it("never lets an inventory read begun before a state overrule it", () => {
+    const service = makeService();
+    const readStartedAt = Date.now();
+    vi.advanceTimersByTime(10);
+    transition("t1", "idle", "working");
+    service.noteInventoryWait("t1", readStartedAt - 1_000, readStartedAt);
+    expect(service.getWait("t1")).toBeUndefined();
+    // One read after it stands.
+    vi.advanceTimersByTime(10);
+    service.noteInventoryWait("t1", readStartedAt - 1_000, Date.now());
+    expect(service.getWait("t1")).toBeDefined();
+  });
+
+  it("forgets waits a complete inventory no longer has, and leaves no timers after dispose", () => {
+    const service = makeService();
+    transition("t1", "idle", "waiting", { waitingReason: "approval" });
+    transition("t2", "idle", "waiting", { waitingReason: "approval" });
+    service.noteLook("t1", "view-1", true);
+    service.noteLook("t2", "view-1", true);
+    vi.advanceTimersByTime(1);
+    service.retain(new Set(["t2"]), Date.now() + 1);
+    expect(service.getWait("t1")).toBeUndefined();
+    expect(service.getWait("t2")).toBeDefined();
+    expect(vi.getTimerCount()).toBe(1);
+    service.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("leaves the hand-back's own seen mark alone, and is not read by marking it", () => {
+    const service = makeService();
+    workThenStop("t1", "waiting", "prompt");
+    transition("t1", "waiting", "waiting", { waitingReason: "question" });
+    expect(isHandBackUnseen(service.getRecord("t1"))).toBe(true);
+    expect(service.markRead("t1")).toBe(true);
+    expect(service.getWait("t1")?.seenAt).toBeUndefined();
+  });
+
+  it("begins nothing while the app is shutting down", () => {
+    const service = makeService({ isQuitting: () => true });
+    transition("t1", "idle", "waiting", { waitingReason: "approval" });
+    service.noteInventoryWait("t1", START, START);
+    expect(service.getWait("t1")).toBeUndefined();
+  });
+});

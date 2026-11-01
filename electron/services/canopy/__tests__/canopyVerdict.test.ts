@@ -71,6 +71,88 @@ describe("refinementOf", () => {
       kind: "asked",
       quote: "Which file should I edit?",
       readAt: 1_000,
+      seen: true,
+    });
+  });
+
+  describe("an ask", () => {
+    const stops = [
+      run({ agentState: "completed", waitingReason: undefined }),
+      run({ agentState: "waiting", waitingReason: undefined }),
+      run({ agentState: "waiting", waitingReason: "prompt" }),
+      run({ agentState: "waiting", waitingReason: "question" }),
+      run({ agentState: "waiting", waitingReason: "approval" }),
+    ];
+
+    it("is read at any stop that could be asking, whatever wait the patterns named", () => {
+      for (const observed of stops) {
+        for (const category of ["question", "approval"] as const) {
+          const input = entry(observed, { classified: reading({ category }) });
+          expect(refinementOf(input, observed, null, 2_000)).toEqual({
+            kind: "asked",
+            quote: "Which file should I edit?",
+            readAt: 1_000,
+            seen: true,
+          });
+        }
+      }
+    });
+
+    it("carries whether the user has read its turn", () => {
+      const unread = { ...newReadTrack(), turn: 1, readTurn: 0 };
+      for (const observed of stops) {
+        const input = entry(observed, {
+          reads: unread,
+          evidence: { ...entry(observed).evidence!, turn: 1 },
+        });
+        expect(refinementOf(input, observed, null, 2_000)).toMatchObject({
+          kind: "asked",
+          seen: false,
+        });
+      }
+      const marked = { ...newReadTrack(), markedUnreadAt: 500 };
+      const observed = stops[4]!;
+      expect(refinementOf(entry(observed, { reads: marked }), observed, null, 2_000)).toMatchObject(
+        { seen: false }
+      );
+    });
+
+    it("is never read at an error wait", () => {
+      const observed = run({ agentState: "waiting", waitingReason: "error" });
+      for (const category of ["question", "approval"] as const) {
+        const input = entry(observed, { classified: reading({ category }) });
+        expect(refinementOf(input, observed, null, 2_000)).toBeNull();
+      }
+    });
+
+    it("is not taken from an unsure reading", () => {
+      const observed = run({ agentState: "waiting", waitingReason: "approval" });
+      const unsure = entry(observed, { classified: reading({ category: "approval", confidence: 0.49 }) });
+      expect(refinementOf(unsure, observed, null, 2_000)).toBeNull();
+      const sure = entry(observed, { classified: reading({ category: "approval", confidence: 0.5 }) });
+      expect(refinementOf(sure, observed, null, 2_000)).toMatchObject({ kind: "asked" });
+    });
+
+    it("is not taken from a reading of the run at work", () => {
+      const observed = run({ agentState: "waiting", waitingReason: "approval" });
+      const input = entry(observed, { readState: "working:" });
+      expect(refinementOf(input, observed, null, 2_000)).toBeNull();
+    });
+
+    it("needs the screen's own words for the ask", () => {
+      const observed = run({ agentState: "waiting", waitingReason: "approval" });
+      const input = entry(observed, { classified: reading({ category: "approval" }) });
+      const evidence = { ...input.evidence!, question: "   " };
+      expect(refinementOf({ ...input, evidence }, observed, null, 2_000)).toBeNull();
+    });
+
+    it("leaves an approval wait read as asking nothing to the free rules", () => {
+      const observed = run({ agentState: "waiting", waitingReason: "approval" });
+      const input = entry(observed, {
+        classified: reading({ category: "finished", question: null }),
+        evidence: { ...entry(observed).evidence!, question: null, status: "All tests pass." },
+      });
+      expect(refinementOf(input, observed, null, 2_000)).toBeNull();
     });
   });
 
