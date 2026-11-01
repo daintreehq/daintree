@@ -764,9 +764,7 @@ describe("Decisions entry", () => {
       await expect(exportData({ passphrase: PASSPHRASE }, async () => null)).rejects.toMatchObject(
         CANCELLED
       );
-      await expect(deleteRelayData({ origin: RELAY.relayOrigin })).rejects.toMatchObject(
-        CANCELLED
-      );
+      await expect(deleteRelayData({ origin: RELAY.relayOrigin })).rejects.toMatchObject(CANCELLED);
       await expect(deleteLocalData()).rejects.toMatchObject(CANCELLED);
       expect(peekDecisionsService()).toBeNull();
     });

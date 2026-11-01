@@ -60,17 +60,15 @@ const decisionsEntry = vi.hoisted(() => ({
       origin: "https://relay.example.com",
     })
   ),
-  deleteLocalData: vi.fn(
-    async (): Promise<DecisionsLocalDeleteResult> => ({
-      result: "deleted",
-      status: { state: "not-connected" },
-    })
-  ),
+  deleteLocalData: vi.fn(async (): Promise<DecisionsLocalDeleteResult> => ({
+    result: "deleted",
+    status: { state: "not-connected" },
+  })),
 }));
 const dialogMock = vi.hoisted(() => ({
-  showSaveDialog: vi.fn<
-    (...args: unknown[]) => Promise<{ canceled: boolean; filePath?: string }>
-  >(async () => ({ canceled: true })),
+  showSaveDialog: vi.fn<(...args: unknown[]) => Promise<{ canceled: boolean; filePath?: string }>>(
+    async () => ({ canceled: true })
+  ),
 }));
 
 vi.mock("electron", () => ({ ipcMain: ipcMainMock, dialog: dialogMock }));

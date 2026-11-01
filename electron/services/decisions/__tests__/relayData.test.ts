@@ -114,9 +114,9 @@ describe("deleteDecisionsRelayData", () => {
       result: "changed",
       origin: ORIGIN,
     });
-    await expect(
-      run({ settings: { ...settingsFor(stored), relayOrigin: null } })
-    ).resolves.toEqual({ result: "changed", origin: null });
+    await expect(run({ settings: { ...settingsFor(stored), relayOrigin: null } })).resolves.toEqual(
+      { result: "changed", origin: null }
+    );
 
     expect(relay.fetchImpl).not.toHaveBeenCalled();
   });

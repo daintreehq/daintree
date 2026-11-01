@@ -175,10 +175,7 @@ describe("DecisionsDataSection", () => {
     const status: DecisionsStatus = { state: "not-connected", consentedAt: 5 };
     deleteLocalData.mockResolvedValue({ result: "deleted", status });
     const onChanged = vi.fn();
-    renderSection(
-      { state: "not-connected", relayOrigin: ORIGIN, keysStored: true },
-      { onChanged }
-    );
+    renderSection({ state: "not-connected", relayOrigin: ORIGIN, keysStored: true }, { onChanged });
 
     fireEvent.click(button("Delete local data"));
     const confirmDialog = screen.getByRole("alertdialog");

@@ -268,9 +268,7 @@ export interface DeleteDecisionsRelayDataPayload {
 /** Why the relay refused a deletion. Nothing was deleted for any of them. */
 export type DecisionsRelayDeleteRefusal =
   /** It doesn't accept this computer as its owner. */
-  | "not-recognised"
-  | "rate-limited"
-  | "rejected";
+  "not-recognised" | "rate-limited" | "rejected";
 
 /**
  * What deleting the relay's data observed (#16025). This computer's history,

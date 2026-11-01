@@ -111,7 +111,8 @@ export function describeRelayDeleteResult(result: DecisionsRelayDeleteResult): R
       return {
         severity: "error",
         label: `No owner keys for ${hostOf(result.origin)}`,
-        detail: "Only its owner's keys can sign a deletion, and this computer holds none. Nothing was sent.",
+        detail:
+          "Only its owner's keys can sign a deletion, and this computer holds none. Nothing was sent.",
       };
     case "key-storage":
       return {
