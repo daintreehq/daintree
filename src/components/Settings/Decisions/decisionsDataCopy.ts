@@ -152,9 +152,12 @@ export function describeLocalDeleteResult(result: DecisionsLocalDeleteResult): R
       return {
         severity: "warning",
         label: "Deleting local data didn't finish",
-        detail: result.erased
-          ? "The decision history is deleted, but the keys or the relay record are still to go. Delete again to finish."
-          : "Nothing was deleted, but the keys are still set aside. Restart Daintree to put them back, or delete again to finish.",
+        detail:
+          result.erased === null
+            ? "The stored history couldn't be read to tell whether it's deleted. Delete again to finish."
+            : result.erased
+              ? "The decision history is deleted, but the keys or the relay record are still to go. Delete again to finish."
+              : "Nothing was deleted, but the keys are still set aside. Restart Daintree to put them back, or delete again to finish.",
       };
   }
 }

@@ -6,7 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Every rename and directory sync, in order, beside the rows' own steps.
 const fsFaults = vi.hoisted(() => ({
   rename: null as null | ((src: string) => boolean),
-  syncFails: false,
+  /** Fails the directory syncs whose 1-based call numbers it picks. */
+  syncFailOn: null as null | ((call: number) => boolean),
+  syncCalls: 0,
   log: [] as string[],
 }));
 
@@ -22,7 +24,10 @@ vi.mock("../../../utils/fs.js", async (importOriginal) => {
       fsFaults.log.push(`rename ${src.endsWith(".erasing") ? "back" : "aside"}`);
     },
     syncParentDirectory: async () => {
-      if (fsFaults.syncFails) throw Object.assign(new Error("fsync failed"), { code: "EIO" });
+      fsFaults.syncCalls += 1;
+      if (fsFaults.syncFailOn?.(fsFaults.syncCalls)) {
+        throw Object.assign(new Error("fsync failed"), { code: "EIO" });
+      }
       fsFaults.log.push("sync");
     },
   };
@@ -75,7 +80,8 @@ describe("local Decisions data deletion", () => {
     forgotten = 0;
     forgetFails = false;
     fsFaults.rename = null;
-    fsFaults.syncFails = false;
+    fsFaults.syncFailOn = null;
+    fsFaults.syncCalls = 0;
     fsFaults.log = [];
   });
 
@@ -100,12 +106,51 @@ describe("local Decisions data deletion", () => {
 
     await eraseLocalDecisionsData(deps(fakeRows().rows));
 
-    expect(fsFaults.log).toEqual(["rename aside", "sync", "erase rows", "sync"]);
+    // The first sync makes any earlier deletion's removal durable before this one starts.
+    expect(fsFaults.log).toEqual(["sync", "rename aside", "sync", "erase rows", "sync"]);
+  });
+
+  it("makes an earlier deletion's removal durable before a retry reports deleted", async () => {
+    writeFileSync(keyFile, KEYS);
+    const { rows } = fakeRows();
+    // Calls: the check for an earlier deletion, the move aside, the removal.
+    fsFaults.syncFailOn = (call) => call === 3;
+    await expect(eraseLocalDecisionsData(deps(rows))).resolves.toEqual({
+      result: "incomplete",
+      erased: true,
+    });
+    expect(existsSync(erasingKeyFilePath(keyFile))).toBe(false);
+
+    fsFaults.syncFailOn = () => true;
+    await expect(eraseLocalDecisionsData(deps(rows))).resolves.toEqual({
+      result: "incomplete",
+      erased: true,
+    });
+
+    fsFaults.syncFailOn = null;
+    await expect(eraseLocalDecisionsData(deps(rows))).resolves.toEqual({ result: "deleted" });
+  });
+
+  it("says it can't tell whether the history is gone when the rows can't be read", async () => {
+    writeFileSync(erasingKeyFilePath(keyFile), KEYS);
+    const unreadable: LocalEraseDeps = {
+      ...deps(fakeRows().rows),
+      openRows: async () => {
+        throw new Error("The app database isn't open");
+      },
+    };
+
+    await expect(eraseLocalDecisionsData(unreadable)).resolves.toEqual({
+      result: "incomplete",
+      erased: null,
+    });
+    expect(existsSync(erasingKeyFilePath(keyFile))).toBe(true);
   });
 
   it("puts the keys back, deleting nothing, when their move can't be made durable", async () => {
     writeFileSync(keyFile, KEYS);
-    fsFaults.syncFails = true;
+    // Calls: the check for an earlier deletion, then the move aside.
+    fsFaults.syncFailOn = (call) => call === 2;
     const { rows, state } = fakeRows();
 
     await expect(eraseLocalDecisionsData(deps(rows))).resolves.toEqual({
@@ -117,7 +162,7 @@ describe("local Decisions data deletion", () => {
     expect(readFileSync(keyFile, "utf8")).toBe(KEYS);
     expect(existsSync(erasingKeyFilePath(keyFile))).toBe(false);
 
-    fsFaults.syncFails = false;
+    fsFaults.syncFailOn = null;
     await expect(eraseLocalDecisionsData(deps(rows))).resolves.toEqual({ result: "deleted" });
   });
 

@@ -87,6 +87,9 @@ describe("decisionsDataCopy", () => {
 
     expect(describeLocalDeleteResult(erased).detail).toMatch(/history is deleted/);
     expect(describeLocalDeleteResult(untouched).detail).toMatch(/^Nothing was deleted/);
+    expect(
+      describeLocalDeleteResult({ result: "incomplete", erased: null, status }).detail
+    ).toMatch(/couldn't be read to tell/);
     for (const reason of ["disk-pressure", "storage", "keys"] as const) {
       expect(describeLocalDeleteResult({ result: "failed", reason }).detail).toMatch(
         /Nothing was deleted\.$/

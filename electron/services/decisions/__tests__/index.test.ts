@@ -24,6 +24,25 @@ vi.mock("../relayIdentity.js", () => ({
 const dataRuns = vi.hoisted(() => ({ buildArchive: vi.fn(), deleteRelay: vi.fn() }));
 vi.mock("../dataExport.js", () => ({ buildDecisionsArchive: dataRuns.buildArchive }));
 vi.mock("../relayData.js", () => ({ deleteDecisionsRelayData: dataRuns.deleteRelay }));
+// Atomic writes pass through, held while `writeHeld` is set so a test can act mid-write.
+const writes = vi.hoisted(() => ({ held: null as null | Promise<void>, writing: false }));
+vi.mock("../../../utils/fs.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../utils/fs.js")>();
+  return {
+    ...actual,
+    resilientAtomicWriteFile: async (
+      ...args: Parameters<typeof actual.resilientAtomicWriteFile>
+    ) => {
+      writes.writing = true;
+      await writes.held;
+      try {
+        return await actual.resilientAtomicWriteFile(...args);
+      } finally {
+        writes.writing = false;
+      }
+    },
+  };
+});
 // The stored rows, in memory: `failErase` makes the next erase fail, once.
 const storedRows = vi.hoisted(() => ({ count: 0, failErase: false }));
 
@@ -126,6 +145,7 @@ describe("Decisions entry", () => {
     dataRuns.deleteRelay.mockReset();
     storedRows.count = 0;
     storedRows.failErase = false;
+    writes.held = null;
     rmSync(`${keyFile.path}.erasing`, { force: true });
     saved.value = undefined;
     loads.failNextConstruct = false;
@@ -745,6 +765,27 @@ describe("Decisions entry", () => {
         })
       ).resolves.toEqual({ result: "cancelled" });
       expect(existsSync(exportTarget())).toBe(false);
+    });
+
+    it("holds a local deletion asked for mid-write until the archive is written", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startDecisionsIfEnabled();
+      storedRows.count = 3;
+      dataRuns.buildArchive.mockResolvedValue({ archive: ARCHIVE });
+      let release!: () => void;
+      writes.held = new Promise<void>((resolve) => (release = resolve));
+
+      const exporting = exportData({ passphrase: PASSPHRASE }, async () => exportTarget());
+      await vi.waitFor(() => expect(writes.writing).toBe(true));
+      const deleting = deleteLocalData();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(storedRows.count).toBe(3);
+
+      release();
+      await expect(exporting).resolves.toMatchObject({ result: "saved" });
+      await expect(deleting).resolves.toMatchObject({ result: "deleted" });
+      expect(storedRows.count).toBe(0);
+      rmSync(exportTarget(), { force: true });
     });
 
     it("hands back what stopped the archive being built, opening no dialog", async () => {

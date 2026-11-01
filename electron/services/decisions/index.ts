@@ -301,29 +301,32 @@ export async function exportData(
   if ("failure" in prepared) return prepared.failure;
   const { archive } = prepared;
   const path = await chooseDestination(archive.fileName);
-  // The store it was read from has closed (turned off, even if on again
-  // since; local data deleted; quit): the history it holds may be gone.
-  if (path === null || shutDown || prepared.running.getStore() !== prepared.from) {
-    return { result: "cancelled" };
-  }
-  try {
-    await resilientAtomicWriteFile(path, archive.text, "utf-8", { mode: 0o600 });
-  } catch {
-    // The write can fail after the file is in place (syncing its folder), so
-    // what is there decides what is said.
-    if (!(await fileHolds(path, archive.text))) {
-      throw new AppError({
-        code: "PERSIST_FAILED",
-        message: "The archive couldn't be written there, so nothing was saved. Try another folder.",
-      });
+  if (path === null) return { result: "cancelled" };
+  // Back behind the transitions, so no deletion runs between the check and the write.
+  return serialize(async (): Promise<DecisionsExportResult> => {
+    // The store it was read from has closed (turned off, even if on again
+    // since; local data deleted; quit): the history it holds may be gone.
+    if (shutDown || prepared.running.getStore() !== prepared.from) return { result: "cancelled" };
+    try {
+      await resilientAtomicWriteFile(path, archive.text, "utf-8", { mode: 0o600 });
+    } catch {
+      // The write can fail after the file is in place (syncing its folder), so
+      // what is there decides what is said.
+      if (!(await fileHolds(path, archive.text))) {
+        throw new AppError({
+          code: "PERSIST_FAILED",
+          message:
+            "The archive couldn't be written there, so nothing was saved. Try another folder.",
+        });
+      }
     }
-  }
-  return {
-    result: "saved",
-    path,
-    questions: archive.questions,
-    auditEvents: archive.auditEvents,
-  };
+    return {
+      result: "saved",
+      path,
+      questions: archive.questions,
+      auditEvents: archive.auditEvents,
+    };
+  });
 }
 
 /**

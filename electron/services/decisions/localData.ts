@@ -21,14 +21,14 @@ export interface LocalEraseDeps {
  * - `deleted`: the rows, the keys and the relay record are gone.
  * - `failed`: nothing was deleted.
  * - `incomplete`: a step didn't finish. With `erased`, the rows are gone;
- *   without it, nothing was deleted but the keys are still set aside. The
- *   next deletion finishes or undoes it, and so does the next start whenever
- *   keys were set aside.
+ *   with it false, nothing was deleted but the keys are still set aside; null
+ *   when the rows couldn't be read to tell. The next deletion finishes or
+ *   undoes it, and so does the next start whenever keys were set aside.
  */
 export type LocalEraseOutcome =
   | { result: "deleted" }
   | { result: "failed"; reason: "disk-pressure" | "storage" | "keys" }
-  | { result: "incomplete"; erased: boolean };
+  | { result: "incomplete"; erased: boolean | null };
 
 /**
  * Where the keys wait while their rows are deleted. Its presence is the
@@ -67,11 +67,25 @@ async function durableUnlinkIfPresent(path: string): Promise<void> {
   await syncParentDirectory(path);
 }
 
-async function rowsGone(deps: LocalEraseDeps): Promise<boolean> {
+/** Whether the rows are gone; null when they couldn't be read. */
+async function rowsGone(deps: LocalEraseDeps): Promise<boolean | null> {
   try {
     return !(await deps.openRows()).exist();
   } catch {
-    return false;
+    return null;
+  }
+}
+
+/**
+ * Makes an earlier removal in the keys' directory durable, in case the last
+ * deletion's sync after removing its set-aside keys failed. A directory not
+ * made yet has nothing to sync.
+ */
+async function syncKeyDirectory(keyFilePath: string): Promise<void> {
+  try {
+    await syncParentDirectory(keyFilePath);
+  } catch (error) {
+    if (!isMissing(error)) throw error;
   }
 }
 
@@ -102,7 +116,10 @@ export type EraseRecovery = "none" | "restored" | "finished";
  */
 export async function finishInterruptedErase(deps: LocalEraseDeps): Promise<EraseRecovery> {
   const aside = erasingKeyFilePath(deps.keyFilePath);
-  if (!(await exists(aside))) return "none";
+  if (!(await exists(aside))) {
+    await syncKeyDirectory(deps.keyFilePath);
+    return "none";
+  }
   if (await exists(deps.keyFilePath)) {
     await durableUnlinkIfPresent(aside);
     return "none";
