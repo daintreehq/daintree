@@ -54,7 +54,10 @@ export const SchedulePoliciesSchema = z.strictObject({
 export const ScheduleSchema = z.strictObject({
   id: IdSchema,
   projectId: IdSchema,
-  name: z.string().max(200).refine((value) => value.trim() !== "", { message: "Name the schedule" }),
+  name: z
+    .string()
+    .max(200)
+    .refine((value) => value.trim() !== "", { message: "Name the schedule" }),
   enabled: z.boolean(),
   cadence: ScheduleCadenceSchema,
   launch: ScheduleLaunchSchema,
@@ -284,7 +287,11 @@ export const ScheduledRunSchema = z
       }
     }
     if (run.pane.state !== "none" && run.terminalId === null) {
-      ctx.addIssue({ code: "custom", path: ["terminalId"], message: "a pane needs its terminal id" });
+      ctx.addIssue({
+        code: "custom",
+        path: ["terminalId"],
+        message: "a pane needs its terminal id",
+      });
     }
   });
 

@@ -23,7 +23,12 @@ function registered(overrides: Partial<ScheduledRun> = {}): ScheduledRun {
     id: "run-1",
     scheduleId: "schedule-1",
     projectId: "project-1",
-    origin: { trigger: "scheduled", dueAt: DUE, occurrenceKey: occurrenceKeyFor(DUE), coalesced: null },
+    origin: {
+      trigger: "scheduled",
+      dueAt: DUE,
+      occurrenceKey: occurrenceKeyFor(DUE),
+      coalesced: null,
+    },
     createdAt: NOW,
     terminalId: null,
     settlement: { state: "open" },
@@ -61,7 +66,8 @@ describe("ScheduleSchema", () => {
       ScheduleSchema.safeParse({ ...base, launch: { ...base.launch, prompt: " \n" } }).success
     ).toBe(false);
     expect(
-      ScheduleSchema.safeParse({ ...base, policies: { ...base.policies, overlap: "queue" } }).success
+      ScheduleSchema.safeParse({ ...base, policies: { ...base.policies, overlap: "queue" } })
+        .success
     ).toBe(false);
     expect(
       ScheduleSchema.safeParse({
@@ -179,7 +185,12 @@ describe("ScheduledRunSchema", () => {
   it("requires a catch-up run to name the window it stands for, around its due time", () => {
     const window = { after: DUE - 3 * 86_400_000, through: DUE + 3_600_000 };
     const catchUp = registered({
-      origin: { trigger: "catch-up", dueAt: DUE, occurrenceKey: occurrenceKeyFor(DUE), coalesced: window },
+      origin: {
+        trigger: "catch-up",
+        dueAt: DUE,
+        occurrenceKey: occurrenceKeyFor(DUE),
+        coalesced: window,
+      },
     });
     expect(issues(catchUp)).toEqual([]);
     expect(

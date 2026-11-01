@@ -136,7 +136,11 @@ describe("nextCronOccurrence in UTC", () => {
       const parsed = cron(expression);
       for (const { timeZone, offsetMinutes } of zones) {
         const scanned: number[] = [];
-        for (let t = start + 60_000; scanned.length < 12 && t < start + 40 * 86_400_000; t += 60_000) {
+        for (
+          let t = start + 60_000;
+          scanned.length < 12 && t < start + 40 * 86_400_000;
+          t += 60_000
+        ) {
           const wall = new Date(t + offsetMinutes * 60_000);
           const dayOfMonth = wall.getUTCDate();
           const dayOfWeek = wall.getUTCDay();

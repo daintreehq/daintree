@@ -97,17 +97,17 @@ The three axes keep three events apart: the run settling, the agent or PTY exiti
 
 The outcome follows from the evidence (`outcomeForEvidence`), and the schema refuses a record where it doesn't:
 
-| Evidence | Outcome |
-| --- | --- |
-| `handback`: a marker the agent printed, `done` or `needs-you` | `done` / `needs-you` |
-| `exit` of the agent or PTY with code 0 and no signal | `done` |
-| `exit` with a non-zero code or a signal | `failed` |
-| `exit` with no code or signal known | `exited` |
-| `launch-error` | `failed` |
-| `skip`, with its reason | `skipped` |
-| `cancel`: the user stopped the run | `cancelled` |
-| `replace`: the overlap policy put `replacedByRunId` in its place | `replaced` |
-| `lost`: the PTY host confirmed the terminal is gone with no exit seen | `lost` |
+| Evidence                                                              | Outcome              |
+| --------------------------------------------------------------------- | -------------------- |
+| `handback`: a marker the agent printed, `done` or `needs-you`         | `done` / `needs-you` |
+| `exit` of the agent or PTY with code 0 and no signal                  | `done`               |
+| `exit` with a non-zero code or a signal                               | `failed`             |
+| `exit` with no code or signal known                                   | `exited`             |
+| `launch-error`                                                        | `failed`             |
+| `skip`, with its reason                                               | `skipped`            |
+| `cancel`: the user stopped the run                                    | `cancelled`          |
+| `replace`: the overlap policy put `replacedByRunId` in its place      | `replaced`           |
+| `lost`: the PTY host confirmed the terminal is gone with no exit seen | `lost`               |
 
 A `needs-you` run is settled: the schedule's attempt is over and its terminal stays for the user. Only `done` applies the done policy. A restart that hasn't yet reconnected to a run's terminal is not `lost`.
 

@@ -189,7 +189,8 @@ function selected(values: readonly boolean[]): number[] {
  */
 export function parseCron(expression: string): CronParseResult {
   const trimmed = expression.trim();
-  if (trimmed === "") return { ok: false, error: { field: null, message: "Enter a cron expression" } };
+  if (trimmed === "")
+    return { ok: false, error: { field: null, message: "Enter a cron expression" } };
   if (trimmed.length > MAX_EXPRESSION_LENGTH) {
     return { ok: false, error: { field: null, message: "This expression is too long for cron" } };
   }
@@ -391,7 +392,10 @@ class DateCandidates {
     const perHour = this.cron.minutes.length;
     const hour = this.cron.hours[Math.floor(index / perHour)]!;
     const minute = this.cron.minutes[index % perHour]!;
-    return wallClockToInstant(this.day * DAY_MS + hour * HOUR_MS + minute * MINUTE_MS, this.timeZone);
+    return wallClockToInstant(
+      this.day * DAY_MS + hour * HOUR_MS + minute * MINUTE_MS,
+      this.timeZone
+    );
   }
 }
 
