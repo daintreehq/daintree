@@ -37,18 +37,54 @@ export interface DecisionsSettings {
    * while it is null.
    */
   consentedAt: number | null;
+  /**
+   * When the relay revoked this computer's identity (epoch ms), as observed:
+   * a 4401 close, a refused socket ticket, or the ledger's own revocation of
+   * this device. Null until then. Once set, Decisions never connects with
+   * that identity again; disconnecting clears it with the relay's ids.
+   */
+  revokedAt: number | null;
 }
 
 /**
- * Decisions as main last observed it. `off` until the setting is on;
- * `not-connected` while on with no relay connection; `connecting` and
- * `connected` follow the relay socket (#16008); `revoked` once the relay has
- * refused this device for good, after which nothing reconnects.
+ * Decisions as main last observed it (#16008 follows the relay socket):
+ *
+ * - `off`: the setting is off.
+ * - `not-connected`: on, with no relay set up, or one that can't be used
+ *   (`problem` says why).
+ * - `connecting`: an attempt is under way: a socket ticket, then the socket,
+ *   until the relay's first frame.
+ * - `connected`: the relay's first frame arrived on an open socket.
+ * - `reconnecting`: the last attempt or socket closed; the next attempt is
+ *   at `nextAttemptAt`.
+ * - `replaced`: the relay closed this socket for a newer one with the same
+ *   identity (4409), most likely another Daintree using these keys. Daintree
+ *   waits longer before trying again (`nextAttemptAt`), so the two don't take
+ *   turns knocking each other off.
+ * - `revoked`: the relay revoked this computer; nothing reconnects.
  */
-export type DecisionsState = "off" | "not-connected" | "connecting" | "connected" | "revoked";
+export type DecisionsState =
+  "off" | "not-connected" | "connecting" | "connected" | "reconnecting" | "replaced" | "revoked";
+
+/**
+ * Why a relay that is set up isn't being connected to, while `not-connected`:
+ *
+ * - `keys`: this computer's Decisions keys couldn't be read (a locked or
+ *   refused keychain, a missing or damaged file), or they belong to another
+ *   relay or device than the one recorded.
+ * - `storage`: the local Decisions database couldn't be opened or stopped
+ *   accepting writes, so nothing received could be kept.
+ * - `other-relay`: the local database holds what another relay identity
+ *   sent, and its positions in that relay's ledger can't be reused here.
+ */
+export type DecisionsConnectionProblem = "keys" | "storage" | "other-relay";
 
 export interface DecisionsStatus {
   state: DecisionsState;
+  /** While `reconnecting` or `replaced`: when the next attempt starts (epoch ms). */
+  nextAttemptAt?: number;
+  /** While `not-connected` with a relay set up: why nothing connects. */
+  problem?: DecisionsConnectionProblem;
   /** The relay this computer claimed or restored, as an origin; absent until it has one. */
   relayOrigin?: string;
   /** When the person agreed to what Decisions sends; absent until they have. */
@@ -59,6 +95,12 @@ export interface DecisionsStatus {
    * up, it is the keys of a setup that didn't finish.
    */
   keysStored?: true;
+  /**
+   * Increases with each change main pushes on `decisions:status-changed`, so
+   * a read that lands after a newer push can't roll it back. Absent from an
+   * answer main gave without Decisions loaded, which only an off switch does.
+   */
+  revision?: number;
 }
 
 /**

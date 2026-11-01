@@ -20,6 +20,7 @@ export function defaultDecisionsSettings(): DecisionsSettings {
     hostId: null,
     proxyAllowlisted: false,
     consentedAt: null,
+    revokedAt: null,
   };
 }
 
@@ -42,7 +43,7 @@ export function normalizeRelayOrigin(value: unknown): string | null {
   return url.origin;
 }
 
-/** A consent time is a positive epoch-ms number; anything else is no consent. */
+/** A consent or revocation time is a positive epoch-ms number; anything else is none. */
 export function consentTime(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
@@ -81,6 +82,9 @@ export function sanitizeDecisionsSettings(raw: unknown): DecisionsSettings {
     unreadable(value.installationId, installationId) ||
     unreadable(value.deviceId, deviceId) ||
     unreadable(value.hostId, hostId);
+  // A revocation belongs to the identity it was observed for, so it goes with
+  // the relay's ids; without them there is nothing it could still refer to.
+  const identified = relayOrigin !== null && installationId !== null && deviceId !== null;
   return {
     enabled: value.enabled === true && !damaged,
     relayOrigin,
@@ -89,6 +93,7 @@ export function sanitizeDecisionsSettings(raw: unknown): DecisionsSettings {
     hostId,
     proxyAllowlisted: value.proxyAllowlisted === true,
     consentedAt: consentTime(value.consentedAt),
+    revokedAt: identified ? consentTime(value.revokedAt) : null,
   };
 }
 

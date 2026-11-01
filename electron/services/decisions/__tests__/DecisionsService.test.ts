@@ -8,6 +8,7 @@ import type {
   PaneDecisionState,
 } from "../../../../shared/types/decisions.js";
 import { outstandingRows, row } from "./questionRows.js";
+import type { RelayConnectionOptions } from "../relayConnection.js";
 
 interface FakeStore {
   close: ReturnType<typeof vi.fn>;
@@ -497,5 +498,158 @@ describe("DecisionsService pane state", () => {
 
     expect(pushes).toHaveLength(1);
     expect(service.getPaneState("pane-a")).toBeNull();
+  });
+});
+
+describe("DecisionsService relay connection", () => {
+  const RELAY = {
+    relayOrigin: "https://relay.example.com",
+    installationId: "inst_12345678",
+    deviceId: "dev_12345678",
+  };
+
+  /** A service whose connections are recorded, never run. */
+  function connected(openStore?: DecisionsStoreOpener) {
+    const events: string[] = [];
+    const made: Array<{ options: RelayConnectionOptions; stopped: boolean }> = [];
+    const revoked: unknown[] = [];
+    const service = new DecisionsService({
+      openStore:
+        openStore ??
+        (async () => {
+          const store = fakeStore();
+          store.close.mockImplementation(async () => {
+            events.push("store closed");
+          });
+          return store;
+        }),
+      keyFilePath: () => "/nonexistent/keys.bin",
+      onRelayRevoked: (relay) => revoked.push(relay),
+      connect: (options) => {
+        const record = { options, stopped: false };
+        made.push(record);
+        return {
+          start: () => events.push(`started ${made.length}`),
+          stop: () => {
+            record.stopped = true;
+            events.push(`stopped ${made.indexOf(record) + 1}`);
+          },
+        };
+      },
+    });
+    return { service, events, made, revoked };
+  }
+
+  it("runs no connection without a complete relay identity", async () => {
+    const { service, made } = connected();
+    await service.start(
+      on({ relayOrigin: RELAY.relayOrigin, installationId: RELAY.installationId })
+    );
+    expect(made).toHaveLength(0);
+    expect(service.getStatus()).toEqual({ state: "not-connected" });
+  });
+
+  it("connects once the store is open, with the lifetime's store and keys, and shows what it reports", async () => {
+    const { service, made, events } = connected();
+    await service.start(on(RELAY));
+    await service.start(on({ ...RELAY, proxyAllowlisted: true }));
+
+    expect(made).toHaveLength(1);
+    expect(events).toEqual(["started 1"]);
+    expect(made[0]!.options.relay).toEqual(RELAY);
+    expect(made[0]!.options.store).toBe(service.getStore());
+    expect(made[0]!.options.keys).toBe(service.getKeyStore());
+
+    made[0]!.options.onStatus({ state: "reconnecting", nextAttemptAt: 42 });
+    expect(service.getStatus()).toEqual({ state: "reconnecting", nextAttemptAt: 42 });
+    made[0]!.options.onStatus({ state: "not-connected", problem: "keys" });
+    expect(service.getStatus()).toEqual({ state: "not-connected", problem: "keys" });
+  });
+
+  it("stops the connection before the store closes", async () => {
+    const { service, events } = connected();
+    await service.start(on(RELAY));
+    await service.stop();
+    expect(events).toEqual(["started 1", "stopped 1", "store closed"]);
+    expect(service.getStatus()).toEqual({ state: "off" });
+  });
+
+  it("ignores what a stopped connection reports, and a revocation it reports late", async () => {
+    const { service, made, revoked } = connected();
+    await service.start(on(RELAY));
+    const first = made[0]!;
+    await service.stop();
+
+    first.options.onStatus({ state: "connected" });
+    first.options.onRevoked();
+    expect(service.getStatus()).toEqual({ state: "off" });
+    expect(revoked).toEqual([]);
+  });
+
+  it("passes on a revocation with the identity it was for, and stops connecting with it", async () => {
+    const { service, made, revoked } = connected();
+    await service.start(on(RELAY));
+    made[0]!.options.onRevoked();
+    expect(revoked).toEqual([RELAY]);
+    expect(made[0]!.stopped).toBe(true);
+    expect(service.getStatus()).toEqual({ state: "revoked" });
+
+    // Settings read before the revocation was recorded don't bring it back.
+    await service.start(on(RELAY));
+    service.updateSettings(on({ ...RELAY, proxyAllowlisted: true }));
+    expect(made).toHaveLength(1);
+    expect(service.getStatus()).toEqual({ state: "revoked" });
+
+    // Another identity, or none, is a fresh start.
+    service.updateSettings(on());
+    service.updateSettings(on(RELAY));
+    expect(made).toHaveLength(2);
+  });
+
+  it("is revoked, connecting nothing, for an identity the relay revoked", async () => {
+    const { service, made } = connected();
+    await service.start(on({ ...RELAY, revokedAt: 7 }));
+    expect(made).toHaveLength(0);
+    expect(service.getStatus()).toEqual({ state: "revoked" });
+
+    const { service: running, made: runningMade } = connected();
+    await running.start(on(RELAY));
+    running.updateSettings(on({ ...RELAY, revokedAt: 7 }));
+    expect(runningMade[0]!.stopped).toBe(true);
+    expect(running.getStatus()).toEqual({ state: "revoked" });
+  });
+
+  it("swaps to a fresh connection when the identity changes, and none once it's gone", async () => {
+    const { service, made, events } = connected();
+    await service.start(on(RELAY));
+
+    service.updateSettings(on({ ...RELAY, deviceId: "dev_87654321" }));
+    expect(made).toHaveLength(2);
+    expect(made[1]!.options.relay.deviceId).toBe("dev_87654321");
+
+    service.updateSettings(on());
+    expect(events).toEqual(["started 1", "stopped 1", "started 2", "stopped 2"]);
+    expect(service.getStatus()).toEqual({ state: "not-connected" });
+  });
+
+  it("suspends the connection for a disconnect, and resumes it if that failed", async () => {
+    const { service, made, events } = connected();
+    await service.start(on(RELAY));
+    made[0]!.options.onStatus({ state: "connected" });
+
+    service.suspendConnection();
+    expect(service.getStatus()).toEqual({ state: "not-connected" });
+    service.resumeConnection();
+
+    expect(events).toEqual(["started 1", "stopped 1", "started 2"]);
+  });
+
+  it("names the store as the problem when it can't open for a relay that's set up", async () => {
+    const { service, made } = connected(async () => {
+      throw new Error("database unavailable");
+    });
+    await expect(service.start(on(RELAY))).rejects.toThrow("database unavailable");
+    expect(service.getStatus()).toEqual({ state: "not-connected", problem: "storage" });
+    expect(made).toHaveLength(0);
   });
 });

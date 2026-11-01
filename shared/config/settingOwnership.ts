@@ -219,6 +219,7 @@ export const SETTING_CATALOG = {
           hostId: device,
           proxyAllowlisted: device,
           consentedAt: device,
+          revokedAt: device,
         },
       },
       remoteHostsPreferences: device,

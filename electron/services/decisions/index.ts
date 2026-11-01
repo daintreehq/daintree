@@ -1,6 +1,7 @@
 import { store } from "../../store.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { broadcastToProjectRenderers } from "../../ipc/utils.js";
+import { getAllAppWebContents } from "../../window/webContentsRegistry.js";
 import type { RelayConfig } from "@daintreehq/decisions-client";
 import { newId } from "@daintreehq/decisions-crypto";
 import type {
@@ -19,6 +20,7 @@ import {
   writeDecisionsSettings,
 } from "./decisionsSettings.js";
 import type { DecisionsService } from "./DecisionsService.js";
+import type { RelayBinding } from "./relayConnection.js";
 import { RelayCheckCancelledError, checkDecisionsRelay } from "./relayCheck.js";
 import {
   claimDecisionsRelay,
@@ -47,12 +49,75 @@ const relayChecks = new Set<AbortController>();
  * than cutting a claim off mid-flight. Quitting aborts their requests.
  */
 const setups = new Set<AbortController>();
+/** Counts status changes, so a read that lands after a newer push can't roll it back. */
+let statusRevision = 0;
+let statusPushes: Promise<void> = Promise.resolve();
 
 function publishPaneState(projectId: string, state: PaneDecisionState): void {
   broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
     name: "terminal:decision-state",
     payload: state,
   });
+}
+
+/**
+ * Settings belong to this machine's own windows, never to a remote Shell's,
+ * so the status goes to the local views only.
+ */
+function sendStatus(status: DecisionsStatus): void {
+  for (const wc of getAllAppWebContents()) {
+    if (wc.isDestroyed()) continue;
+    try {
+      wc.send(CHANNELS.EVENTS_PUSH, { name: "decisions:status-changed", payload: status });
+    } catch {
+      // A view mid-teardown.
+    }
+  }
+}
+
+/**
+ * Something the status shows changed: push it to Settings. The revision moves
+ * now and each push reads the status when its turn comes, in order, so the
+ * last push is the newest and changes that come quicker than that arrive as
+ * one. Nothing is pushed once quitting.
+ */
+function publishStatus(): void {
+  if (shutDown) return;
+  statusRevision += 1;
+  statusPushes = statusPushes
+    .then(async () => {
+      if (shutDown) return;
+      const status = await getDecisionsStatus();
+      if (!shutDown) sendStatus(status);
+    })
+    .catch(() => {});
+}
+
+/**
+ * The relay revoked the identity a connection ran on. Recorded against that
+ * identity alone, so a revocation that lands after a disconnect, or after
+ * another relay was set up, changes nothing.
+ */
+function recordRevocation(relay: RelayBinding): void {
+  const current = readDecisionsSettings(store);
+  if (
+    current.relayOrigin !== relay.relayOrigin ||
+    current.installationId !== relay.installationId ||
+    current.deviceId !== relay.deviceId ||
+    current.revokedAt !== null
+  ) {
+    return;
+  }
+  let saved: DecisionsSettings;
+  try {
+    saved = writeDecisionsSettings(store, { ...current, revokedAt: Date.now() });
+  } catch {
+    // Shown as revoked all the same; the next lifetime sees the relay refuse again.
+    console.warn("[Decisions] The relay's revocation couldn't be recorded in settings");
+    return;
+  }
+  service?.updateSettings(saved);
+  publishStatus();
 }
 
 function serialize<T>(step: () => Promise<T>): Promise<T> {
@@ -70,8 +135,10 @@ export function getDecisionsService(): Promise<DecisionsService> {
     // After quit nothing new is made; one already being made is disposed by the stop.
     if (shutDown) return Promise.reject(new Error("Decisions has stopped for this run"));
     const made = import("./DecisionsService.js").then(({ DecisionsService }) => {
-      service = new DecisionsService({ publishPaneState });
-      return service;
+      const next = new DecisionsService({ publishPaneState, onRelayRevoked: recordRevocation });
+      next.onStatusChanged(() => publishStatus());
+      service = next;
+      return next;
     });
     creating = made;
     // A failed load is retried by the next caller rather than remembered.
@@ -91,18 +158,18 @@ async function settledService(): Promise<DecisionsService | null> {
  * the setting implies, with the relay and consent as saved.
  */
 export async function getDecisionsStatus(): Promise<DecisionsStatus> {
+  const revision = statusRevision;
   const settings = readDecisionsSettings(store);
-  const state = service
-    ? service.getStatus().state
-    : !shutDown && settings.enabled
-      ? "not-connected"
-      : "off";
-  const keysStored = state !== "off" && service !== null && (await service.hasKeyFile());
+  const observed = service?.getStatus() ?? {
+    state: !shutDown && settings.enabled ? ("not-connected" as const) : ("off" as const),
+  };
+  const keysStored = observed.state !== "off" && service !== null && (await service.hasKeyFile());
   return {
-    state,
+    ...observed,
     ...(settings.relayOrigin ? { relayOrigin: settings.relayOrigin } : {}),
     ...(settings.consentedAt !== null ? { consentedAt: settings.consentedAt } : {}),
     ...(keysStored ? { keysStored: true } : {}),
+    revision,
   };
 }
 
@@ -160,6 +227,8 @@ function recordIdentity(running: DecisionsService, config: RelayConfig): Decisio
       installationId: config.installationId,
       deviceId: config.deviceId,
       hostId: current.hostId ?? newId(),
+      // A new identity: nothing the relay refused before applies to it.
+      revokedAt: null,
     });
   } catch {
     throw new AppError({
@@ -190,6 +259,8 @@ function runSetup(run: SetupRun): Promise<DecisionsConnectResult> {
       return { result: "saved", status: await getDecisionsStatus() };
     } finally {
       setups.delete(controller);
+      // A setup that failed can still have kept staged keys, which the status shows.
+      publishStatus();
     }
   });
 }
@@ -218,16 +289,30 @@ export function restoreIdentity(
 export function disconnectRelay(): Promise<DecisionsStatus> {
   return serialize(async () => {
     const { service: running, keys } = await setupKeys();
-    await keys.clear();
-    const current = readDecisionsSettings(store);
-    const saved = writeDecisionsSettings(store, {
-      ...current,
-      relayOrigin: null,
-      installationId: null,
-      deviceId: null,
-      hostId: null,
-    });
-    running.updateSettings(saved);
+    // The socket runs on these keys, so it closes before they go.
+    running.suspendConnection();
+    try {
+      await keys.clear();
+    } catch (error) {
+      running.resumeConnection();
+      publishStatus();
+      throw error;
+    }
+    try {
+      const current = readDecisionsSettings(store);
+      const saved = writeDecisionsSettings(store, {
+        ...current,
+        relayOrigin: null,
+        installationId: null,
+        deviceId: null,
+        hostId: null,
+        revokedAt: null,
+      });
+      running.updateSettings(saved);
+    } finally {
+      // The keys are gone even if the setting didn't save.
+      publishStatus();
+    }
     return getDecisionsStatus();
   });
 }
@@ -259,11 +344,16 @@ export function setDecisionsEnabled(
     const consentedAt = current.consentedAt ?? (options.consent ? Date.now() : null);
     const saved = writeDecisionsSettings(store, { ...current, enabled, consentedAt });
     if (!saved.enabled) cancelRelayChecks();
-    if (saved.enabled && !shutDown) {
-      const next = await getDecisionsService();
-      await next.start(saved);
-    } else {
-      await (await settledService())?.stop();
+    try {
+      if (saved.enabled && !shutDown) {
+        const next = await getDecisionsService();
+        await next.start(saved);
+      } else {
+        await (await settledService())?.stop();
+      }
+    } finally {
+      // The setting changed, whatever became of the start.
+      publishStatus();
     }
     return getDecisionsStatus();
   });
@@ -286,4 +376,6 @@ export function _resetDecisionsForTesting(): void {
   creating = null;
   shutDown = false;
   transitions = Promise.resolve();
+  statusRevision = 0;
+  statusPushes = Promise.resolve();
 }

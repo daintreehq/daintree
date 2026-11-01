@@ -1617,6 +1617,8 @@ export interface IpcEventMap {
   "terminal:notify-state": import("../terminalNotify.js").PaneNotifyState;
   // A pane's Decisions questions or answers changed; project-scoped send.
   "terminal:decision-state": import("../decisions.js").PaneDecisionState;
+  // This machine's Decisions status changed, relay connection included; sent to its own windows only.
+  "decisions:status-changed": import("../decisions.js").DecisionsStatus;
   "terminal:reliability-metric": TerminalReliabilityMetricPayload;
   "terminal:resource-metrics": { metrics: TerminalResourceBatchPayload; timestamp: number };
   "terminal:broadcast-write-result": BroadcastWriteResultPayload;
@@ -2775,6 +2777,8 @@ export type IpcEventBusMap = Pick<
   | "terminal:canopy-size-holds-changed"
   | "terminal:notify-state"
   | "terminal:decision-state"
+  // This machine's Decisions status (local windows only)
+  | "decisions:status-changed"
   // Agent session journaled — resume surfaces refetch (global broadcast)
   | "agent-session:recorded"
   // A gated park auto-released — the ready-again hand-back (global broadcast)
