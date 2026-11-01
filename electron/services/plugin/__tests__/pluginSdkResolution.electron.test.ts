@@ -237,13 +237,14 @@ describe("the worker SDK fallback under Electron's embedded Node", () => {
     expect(runtimeRecord!.electron, `${runtime}: not the installed Electron binary`).toBe(
       installedElectron
     );
-    expect(runtimeRecord!.registerHooks, `${runtime} has no module.registerHooks`).toBe(
-      "function"
-    );
+    expect(runtimeRecord!.registerHooks, `${runtime} has no module.registerHooks`).toBe("function");
     expect(stderr, `${runtime}: installing the hook threw in the bootstrap`).not.toContain(
       "SDK resolution fallback unavailable"
     );
-    expect(exitFailure, `${runtime}: the worker process failed; stderr:\n${stderr}`).toBeUndefined();
+    expect(
+      exitFailure,
+      `${runtime}: the worker process failed; stderr:\n${stderr}`
+    ).toBeUndefined();
   });
 
   it("serves every host-served entry from the app's copy to a plugin with no node_modules", () => {
