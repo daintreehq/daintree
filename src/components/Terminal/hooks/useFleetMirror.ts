@@ -98,7 +98,15 @@ export function useFleetMirror({
     }
     // Every step since it was held edited the fleet's draft, not this one.
     clearComposerHistory(view);
-  }, [holdsOwnDraft, externalDraftKey, isolated, editorViewRef, lastEmittedValueRef, setValue]);
+  }, [
+    holdsOwnDraft,
+    externalDraftKey,
+    isolated,
+    editorViewRef,
+    lastEmittedValueRef,
+    syncedDraftRef,
+    setValue,
+  ]);
 
   // Clear resolution preview when not primary or disabled. Per-target
   // overrides (#8691) ride alongside — they're ephemeral per-broadcast and
