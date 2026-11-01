@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
+import { types as utilTypes } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import {
   APP_THEME_TOKEN_KEYS,
@@ -437,9 +438,11 @@ describe("PERF-306 theme module oracle", () => {
   const clone = (): ThemeModuleOutput => structuredClone(recorded);
   const misses = (output: ThemeModuleOutput, shapeViolations = 0) =>
     themeModuleOutputMisses({ output, shapeViolations }, recorded);
-  const plainDataViolations = new Function(
-    `${PLAIN_DATA_VIOLATIONS_SOURCE}; return plainDataViolations;`
-  )() as (value: unknown) => number;
+  const walk = new Function(`${PLAIN_DATA_VIOLATIONS_SOURCE}; return plainDataViolations;`)() as (
+    value: unknown,
+    isProxy: (value: unknown) => boolean
+  ) => number;
+  const plainDataViolations = (value: unknown) => walk(value, utilTypes.isProxy);
 
   it("records every built-in and the light fallback", () => {
     expect(recorded.schemes.map((scheme) => (scheme as AppColorScheme).id)).toEqual(
@@ -502,6 +505,26 @@ describe("PERF-306 theme module oracle", () => {
     Object.assign(odd.schemes[1] as object, { extra: undefined, nan: Number.NaN, fn: () => 0 });
     expect(plainDataViolations(odd)).toBe(3);
     expect(plainDataViolations({ ...clone(), fallback: new Map() })).toBe(1);
+
+    // Arrays JSON would quietly reshape: a stray property, and a hole.
+    const stray = clone();
+    Object.assign(stray.schemes, { extra: "lost" });
+    expect(plainDataViolations(stray)).toBe(1);
+    const holed = clone();
+    holed.schemes.length += 1;
+    expect(plainDataViolations(holed)).toBe(1);
+
+    // A proxy whose reads would do the work after the clock stopped.
+    let trapped = 0;
+    const proxied = clone();
+    proxied.schemes[2] = new Proxy(proxied.schemes[2] as object, {
+      get: (target, key, receiver) => {
+        trapped += 1;
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    expect(plainDataViolations(proxied)).toBe(1);
+    expect(trapped).toBe(0);
   });
 
   it("scores a counter that measured nothing, too much, or ran in the timed arm", () => {

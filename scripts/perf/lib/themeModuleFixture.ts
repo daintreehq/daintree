@@ -179,11 +179,11 @@ export function loadThemeModuleBundles(): Promise<ThemeModuleBundles> {
 
 /**
  * Plain JavaScript, because it runs in the child against the raw exports before
- * JSON transport would invoke getters, drop undefined and call toJSON. Counts
- * every value JSON could not carry faithfully, without reading through an
- * accessor.
+ * JSON transport would invoke getters and proxy traps, drop undefined, holes and
+ * stray array properties, and call toJSON. Counts every value JSON could not
+ * carry faithfully, without reading through an accessor or a proxy.
  */
-export const PLAIN_DATA_VIOLATIONS_SOURCE = `function plainDataViolations(root) {
+export const PLAIN_DATA_VIOLATIONS_SOURCE = `function plainDataViolations(root, isProxy) {
   let violations = 0;
   const seen = new Set();
   const visit = (node) => {
@@ -192,7 +192,7 @@ export const PLAIN_DATA_VIOLATIONS_SOURCE = `function plainDataViolations(root) 
       if (!Number.isFinite(node)) violations += 1;
       return;
     }
-    if (typeof node !== "object") {
+    if (typeof node !== "object" || isProxy(node)) {
       violations += 1;
       return;
     }
@@ -203,15 +203,24 @@ export const PLAIN_DATA_VIOLATIONS_SOURCE = `function plainDataViolations(root) 
     if (array ? proto !== Array.prototype : proto !== Object.prototype && proto !== null) {
       violations += 1;
     }
+    let indices = 0;
     for (const key of Reflect.ownKeys(node)) {
       if (array && key === "length") continue;
+      // JSON keeps an array's indices and nothing else.
+      if (array && !(typeof key === "string" && String(Number(key)) === key)) {
+        violations += 1;
+        continue;
+      }
       const descriptor = Object.getOwnPropertyDescriptor(node, key);
       if (typeof key === "symbol" || !descriptor.enumerable || !("value" in descriptor)) {
         violations += 1;
         continue;
       }
+      if (array) indices += 1;
       visit(descriptor.value);
     }
+    // Holes, which JSON fills with null.
+    if (array) violations += node.length - indices;
   };
   visit(root);
   return violations;
@@ -232,7 +241,7 @@ evaluate(mod, mod.exports, require);
 const t2 = performance.now();
 const linearisations = globalThis.${COUNTER};
 const output = { schemes: mod.exports.BUILT_IN_APP_SCHEMES, fallback: mod.exports.${FALLBACK_EXPORT} };
-const shapeViolations = plainDataViolations(output);
+const shapeViolations = plainDataViolations(output, require("node:util").types.isProxy);
 mod.exports.relativeLuminance("#808080");
 const probeLinearisations = globalThis.${COUNTER} - linearisations;
 process.stdout.write(JSON.stringify({
