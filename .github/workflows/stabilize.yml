@@ -258,6 +258,11 @@ jobs:
         if: matrix.os != 'windows-2022'
         run: node scripts/ci/npm-ci-retry.mjs
 
+      # The binary pluginSdkResolution.electron.test.ts runs under; Electron's
+      # npm package only downloads it on first use.
+      - name: Provision Electron binary
+        run: node scripts/ci/verify-electron-install.mjs
+
       - name: Test (shard)
         if: inputs.test_files == ''
         run: npm run test -- --shard=${{ matrix.shard }}/${{ matrix.shards }}
