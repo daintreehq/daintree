@@ -63,19 +63,44 @@ describe("main.ts due-schedule launch wiring (#15992)", () => {
     }
   });
 
-  it("never exits a launch with the flag before starting", () => {
-    for (const exit of calls(main, "exit")) {
+  it("never exits on the flag, whatever else the condition asks", () => {
+    const exits = calls(main, "exit");
+    expect(exits.length).toBeGreaterThan(0);
+    for (const exit of exits) {
+      for (let node: ts.Node | undefined = exit; node; node = node.parent) {
+        const condition = ts.isIfStatement(node)
+          ? node.expression
+          : ts.isConditionalExpression(node)
+            ? node.condition
+            : null;
+        if (!condition) continue;
+        for (const flag of [
+          "isDueScheduleCheckRequested",
+          "dueScheduleLaunch",
+          "windowsDeferred",
+        ]) {
+          expect(mentions(condition, flag), `${flag} gates an exit`).toBe(false);
+        }
+      }
       expect(mentions(exit, "isDueScheduleCheckRequested")).toBe(false);
     }
-    expect(main.text).not.toContain("DUE_SCHEDULES_UNSUPPORTED_EXIT_CODE");
   });
 
-  it("readies the session-end stand-in before the windowless backend starts", () => {
-    const [standIn] = calls(main, "onStartedWindowless");
+  it("readies the session-end stand-in unconditionally, just before the windowless backend starts", () => {
     const [backend] = calls(main, "startHostRuntime");
-    expect(standIn).toBeDefined();
     expect(backend).toBeDefined();
-    expect(standIn!.getStart()).toBeLessThan(backend!.getStart());
+    let statement: ts.Node = backend!;
+    while (statement.parent && !ts.isBlock(statement.parent)) statement = statement.parent;
+    const block = statement.parent as ts.Block;
+    const index = block.statements.indexOf(statement as ts.Statement);
+    const standIn = block.statements.findIndex(
+      (candidate) =>
+        ts.isExpressionStatement(candidate) &&
+        calls(candidate, "onStartedWindowless").length === 1 &&
+        ts.isCallExpression(candidate.expression)
+    );
+    expect(standIn).toBeGreaterThanOrEqual(0);
+    expect(standIn).toBeLessThan(index);
   });
 
   it("hands the lifecycle the scheduled runs a closed last window waits on", () => {

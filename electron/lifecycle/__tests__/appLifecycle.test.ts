@@ -1179,6 +1179,53 @@ describe("registerAppLifecycleHandlers – a last window closed with scheduled r
     expect(appMock.quit).not.toHaveBeenCalled();
   });
 
+  it("never lets an older notification wait quit past a later run's", async () => {
+    const { scheduledRuns, setOpen, runClosed, closeLastWindow } = await register("linux");
+    let firstSent!: () => void;
+    let bothSent!: () => void;
+    scheduledRuns.notified
+      .mockReturnValueOnce(new Promise<void>((resolve) => (firstSent = resolve)))
+      .mockReturnValueOnce(new Promise<void>((resolve) => (bothSent = resolve)));
+    closeLastWindow();
+    setOpen(false);
+    runClosed();
+    await nextTurn();
+
+    // Another run started and ended while the first one's notification loaded.
+    runClosed();
+    await nextTurn();
+    firstSent();
+    await nextTurn();
+    expect(appMock.quit).not.toHaveBeenCalled();
+
+    bothSent();
+    await nextTurn();
+    expect(appMock.quit).toHaveBeenCalledOnce();
+  });
+
+  it("drops a notification wait from before a window reopened and closed again", async () => {
+    const { scheduledRuns, setOpen, runClosed, closeLastWindow } = await register("linux");
+    let firstSent!: () => void;
+    scheduledRuns.notified
+      .mockReturnValueOnce(new Promise<void>((resolve) => (firstSent = resolve)))
+      .mockReturnValueOnce(new Promise<void>(() => {}));
+    closeLastWindow();
+    setOpen(false);
+    runClosed();
+    await nextTurn();
+
+    announceWindow();
+    setOpen(true);
+    closeLastWindow();
+    setOpen(false);
+    runClosed();
+    await nextTurn();
+    firstSent();
+    await nextTurn();
+
+    expect(appMock.quit).not.toHaveBeenCalled();
+  });
+
   it("waits ten seconds at most for a notification that never goes out", async () => {
     vi.useFakeTimers();
     try {

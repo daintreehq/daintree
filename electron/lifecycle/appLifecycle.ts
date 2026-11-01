@@ -446,7 +446,11 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
   // that close would have made waits until no run is.
   let stopWaitingOnRuns: (() => void) | null = null;
   let runsRecheckQueued = false;
+  // Bumped by every run end and by the wait ending, so only the newest check
+  // waiting on notifications may quit: an older one would drop a later run's.
+  let runsCheck = 0;
   const endWaitOnRuns = (): void => {
+    runsCheck += 1;
     const stop = stopWaitingOnRuns;
     stopWaitingOnRuns = null;
     stop?.();
@@ -472,6 +476,7 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
         });
     });
   const recheckRuns = (): void => {
+    runsCheck += 1;
     // A run ending is heard mid-settlement, before its notification is
     // even set off; the check waits for the rest of it.
     if (runsRecheckQueued) return;
@@ -479,9 +484,10 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
     setImmediate(() => {
       runsRecheckQueued = false;
       if (!runsLetQuit()) return;
+      const check = runsCheck;
       void runNotificationsSent().then(() => {
         // A window, a new run or a quit may have come meanwhile.
-        if (!runsLetQuit()) return;
+        if (check !== runsCheck || !runsLetQuit()) return;
         endWaitOnRuns();
         console.log("[MAIN] The last open scheduled run ended with no window open. Quitting...");
         app.quit();
