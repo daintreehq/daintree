@@ -120,19 +120,27 @@ describe("watchdog:disabled push", () => {
   });
 
   it("crosses each Shell's link once for all of that Shell's views (#15902)", () => {
-    const session: EndpointGroup = { sendToAll: vi.fn() };
-    const views = [remoteEndpoint(-1, session), remoteEndpoint(-2, session)];
-    for (const view of views) getEndpointRegistry().add(view);
+    const studio: EndpointGroup = { sendToAll: vi.fn() };
+    const laptop: EndpointGroup = { sendToAll: vi.fn() };
+    const views = [
+      remoteEndpoint(-1, studio),
+      remoteEndpoint(-2, studio),
+      remoteEndpoint(-3, laptop),
+    ];
+    const loose = remoteEndpoint(-4);
+    for (const view of [...views, loose]) getEndpointRegistry().add(view);
     wireWatchdogDisabledBroadcast(client, undefined);
 
     fire({ reason: "cap" });
 
-    expect(session.sendToAll).toHaveBeenCalledTimes(1);
-    expect(session.sendToAll).toHaveBeenCalledWith({
+    const frame = {
       type: "event",
       channel: CHANNELS.EVENTS_PUSH,
       args: [{ name: "watchdog:disabled", payload: { reason: "cap" } }],
-    });
+    };
+    expect(vi.mocked(studio.sendToAll).mock.calls).toEqual([[frame]]);
+    expect(vi.mocked(laptop.sendToAll).mock.calls).toEqual([[frame]]);
+    expect(vi.mocked(loose.send).mock.calls).toEqual([[frame]]);
     for (const view of views) expect(view.send).not.toHaveBeenCalled();
   });
 

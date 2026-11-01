@@ -497,13 +497,14 @@ describe("remote session wiring", () => {
     broadcastToProjectRenderers("proj-1", EVENT_CHANNEL, "before");
     broadcastToRenderer(EVENT_CHANNEL, "all");
     broadcastToProjectRenderers("proj-1", EVENT_CHANNEL, "after");
-    await waitFor(() => (h.sink.delivered.get(VIEW_A)?.length ?? 0) === 4);
-    expect(h.sink.delivered.get(VIEW_A)!.map((event) => event.args[0])).toEqual([
-      "term-all",
-      "before",
-      "all",
-      "after",
-    ]);
+    const history = (view: number) =>
+      (h.sink.delivered.get(view) ?? []).map((event) => event.args[0]);
+    await waitFor(() => history(VIEW_A).includes("after") && history(VIEW_C).includes("after"));
+    for (const view of [VIEW_A, VIEW_C]) {
+      expect(history(view)).toEqual(["term-all", "before", "all", "after"]);
+    }
+    // proj-2's view hears only the global ones, both ahead of "after" on the lane.
+    expect(history(VIEW_B)).toEqual(["term-all", "all"]);
   });
 
   it("keeps a global broadcast from a view the host turned away at its endpoint cap", async () => {
@@ -513,14 +514,17 @@ describe("remote session wiring", () => {
     await invoke(HOST_CHANNEL, VIEW_A, {});
     await invoke(HOST_CHANNEL, VIEW_B, {});
     const refused = await invoke(HOST_CHANNEL, VIEW_C, {});
-    expect(refused.ok).toBe(false);
+    expect(refused).toMatchObject({ ok: false, error: { code: "NOT_FOUND" } });
 
     broadcastToRenderer(EVENT_CHANNEL, "term-all", "hi");
-    await waitFor(() => (h.sink.delivered.get(VIEW_A)?.length ?? 0) === 1);
-    await waitFor(() => (h.sink.delivered.get(VIEW_B)?.length ?? 0) === 1);
-    // A sentinel behind it, so the broadcast has had its chance to reach view C.
-    broadcastToProjectRenderers("proj-1", EVENT_CHANNEL, "sentinel");
-    await waitFor(() => (h.sink.delivered.get(VIEW_A)?.length ?? 0) === 2);
+    // Behind the broadcast on the same lane, so once it lands the broadcast has had its chance at view C.
+    broadcastToRenderer(EVENT_CHANNEL, "sentinel");
+    const history = (view: number) =>
+      (h.sink.delivered.get(view) ?? []).map((event) => event.args[0]);
+    await waitFor(() => history(VIEW_A).includes("sentinel"));
+    await waitFor(() => history(VIEW_B).includes("sentinel"));
+    expect(history(VIEW_A)).toEqual(["term-all", "sentinel"]);
+    expect(history(VIEW_B)).toEqual(["term-all", "sentinel"]);
     expect(h.sink.delivered.has(VIEW_C)).toBe(false);
   });
 

@@ -72,7 +72,7 @@ vi.mock("../../window/windowRef.js", () => ({
 import { sendToOneVisibleRenderer, setRemoteBoundViewFilter } from "../utils.js";
 import { markViewHydrated, _resetViewHydrationForTesting } from "../../window/viewHydration.js";
 import { getEndpointRegistry, _resetEndpointRegistryForTesting } from "../endpointRegistry.js";
-import type { ClientEndpoint, HostFrame } from "../endpoint.js";
+import type { ClientEndpoint, EndpointGroup, HostFrame } from "../endpoint.js";
 
 let nextId = 1;
 
@@ -139,8 +139,12 @@ function backgroundRestore(win: FakeWindow): FakeView {
   return view;
 }
 
-function remoteEndpoint(handle: number): ClientEndpoint & { send: Mock<(f: HostFrame) => void> } {
+function remoteEndpoint(
+  handle: number,
+  group?: EndpointGroup
+): ClientEndpoint & { send: Mock<(f: HostFrame) => void> } {
   return {
+    ...(group ? { group } : {}),
     endpointId: `remote-view:${handle}`,
     clientId: "client-b",
     projectId: null,
@@ -367,6 +371,28 @@ describe("sendToOneVisibleRenderer", () => {
     const frame = { type: "event", channel, args: [{ soundFile: "ping.wav" }] };
     expect(r1.send).toHaveBeenCalledWith(frame);
     expect(r2.send).toHaveBeenCalledWith(frame);
+  });
+
+  it("sends once to each remote Shell's session, whatever its view count (#15902)", () => {
+    const a = openWindow({ focused: true });
+    const studio = { sendToAll: vi.fn<(frame: HostFrame) => void>() };
+    const laptop = { sendToAll: vi.fn<(frame: HostFrame) => void>() };
+    const views = [
+      remoteEndpoint(301, studio),
+      remoteEndpoint(302, studio),
+      remoteEndpoint(303, laptop),
+    ];
+    const loose = remoteEndpoint(304);
+    for (const endpoint of [...views, loose]) getEndpointRegistry().add(endpoint);
+
+    expect(sendToOneVisibleRenderer(channel, 1)).toBe(true);
+
+    const frame = { type: "event", channel, args: [1] };
+    expect(a.view.send.mock.calls).toEqual([[channel, 1]]);
+    expect(studio.sendToAll.mock.calls).toEqual([[frame]]);
+    expect(laptop.sendToAll.mock.calls).toEqual([[frame]]);
+    expect(loose.send.mock.calls).toEqual([[frame]]);
+    for (const view of views) expect(view.send).not.toHaveBeenCalled();
   });
 
   it("returns false with no eligible local renderer, but still reaches remote endpoints", () => {
