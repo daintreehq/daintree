@@ -732,6 +732,7 @@ describe("lease and reconnect races", () => {
       connection: { status: "connecting", attempt: 1 },
     });
     emitHost({ type: "connection-changed", hostId: "studio-01", connection: connected });
+    expect(electron.worktree.refresh).not.toHaveBeenCalled();
     // Main tells the views it cut off once the new connection takes calls.
     emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
     await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
@@ -785,6 +786,51 @@ describe("host-owned saves held through a reconnect", () => {
     finishRehydrate();
     await vi.waitFor(() => expect(replay).toHaveBeenCalledTimes(1));
     expect(send).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("still waits for the rehydrate when main's word lands after the connection, ahead of the lease's answer", async () => {
+    const { electron, emitHost } = installElectron();
+    electron.driveLease.takeOver.mockImplementationOnce(() => new Promise(() => {}));
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await flush();
+    const connected = { status: "connected", rttMs: 5, handshake: HANDSHAKE } as const;
+    emitHost({ type: "connection-changed", hostId: "studio-01", connection: connected });
+    emitHost({
+      type: "connection-changed",
+      hostId: "studio-01",
+      connection: { status: "disconnected" },
+    });
+    const replay = vi.fn();
+    expect(await sendHostOwnedWrite("app-state:activeWorktreeId", vi.fn(), replay)).toBe(
+      "deferred"
+    );
+
+    // Every lease read on the new connection crosses the link, so it answers
+    // only after main's word, which went out with the connection.
+    let answerLeases!: () => void;
+    const leasesAnswered = new Promise<void>((resolve) => (answerLeases = resolve));
+    const lease = electron.driveLease.get.getMockImplementation()!;
+    electron.driveLease.get.mockImplementation(async () => {
+      await leasesAnswered;
+      return lease();
+    });
+    let finishRehydrate!: () => void;
+    rehydrate.mockImplementationOnce(
+      () => new Promise<undefined>((resolve) => (finishRehydrate = () => resolve(undefined)))
+    );
+    emitHost({ type: "connection-changed", hostId: "studio-01", connection: connected });
+    await flush();
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
+    await flush();
+    answerLeases();
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
+    await flush();
+    expect(replay).not.toHaveBeenCalled();
+
+    finishRehydrate();
+    await vi.waitFor(() => expect(replay).toHaveBeenCalledTimes(1));
     stop();
   });
 
