@@ -457,9 +457,9 @@ export class DaintreeLocalStore implements LocalStore {
   outboxFor(questionId: string): Promise<OutboxItem[]> {
     return this.enqueue("read", () =>
       (
-        this.st(
-          "SELECT * FROM decisions_outbox WHERE question_id = ? ORDER BY created_at ASC"
-        ).all(questionId) as OutboxRecord[]
+        this.st("SELECT * FROM decisions_outbox WHERE question_id = ? ORDER BY created_at ASC").all(
+          questionId
+        ) as OutboxRecord[]
       ).map(outboxFrom)
     );
   }
@@ -744,8 +744,7 @@ export class DaintreeLocalStore implements LocalStore {
 
   private readMeta(key: string): string | null {
     const r = this.st("SELECT value FROM decisions_meta WHERE key = ?").get(key) as
-      | { value: string }
-      | undefined;
+      { value: string } | undefined;
     return r ? r.value : null;
   }
 
@@ -762,8 +761,7 @@ export class DaintreeLocalStore implements LocalStore {
 
   private readQuestion(id: string): QuestionRow | null {
     const r = this.st("SELECT * FROM decisions_questions WHERE question_id = ?").get(id) as
-      | QuestionRecord
-      | undefined;
+      QuestionRecord | undefined;
     return r ? fromRecord(r) : null;
   }
 

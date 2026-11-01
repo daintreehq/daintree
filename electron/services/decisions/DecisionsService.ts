@@ -11,7 +11,9 @@ import { openDecisionsLocalStore } from "./openLocalStore.js";
 export type DecisionsStatusListener = (event: DecisionsStatusEvent) => void;
 
 /** Opens the store for an enabled lifetime; null when `isCancelled` turned true before it opened. */
-export type DecisionsStoreOpener = (isCancelled: () => boolean) => Promise<DaintreeLocalStore | null>;
+export type DecisionsStoreOpener = (
+  isCancelled: () => boolean
+) => Promise<DaintreeLocalStore | null>;
 
 export interface DecisionsServiceOptions {
   openStore?: DecisionsStoreOpener;

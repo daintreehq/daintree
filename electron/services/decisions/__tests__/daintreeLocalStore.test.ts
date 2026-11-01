@@ -20,10 +20,7 @@ vi.mock("electron", () => ({
 }));
 
 import { openDb } from "../../persistence/db.js";
-import {
-  resetWritesSuppressedForTesting,
-  setWritesSuppressed,
-} from "../../diskPressureState.js";
+import { resetWritesSuppressedForTesting, setWritesSuppressed } from "../../diskPressureState.js";
 import {
   DaintreeLocalStore,
   DECISIONS_STORE_MAX_BATCH,
@@ -181,9 +178,7 @@ describe("DaintreeLocalStore", () => {
       delivered_revision: 0,
       answers_json: answered,
     });
-    expect(question.origin).toEqual(
-      origin({ project_label: "Daintree", machine_label: "Studio" })
-    );
+    expect(question.origin).toEqual(origin({ project_label: "Daintree", machine_label: "Studio" }));
     expect(await second.outboxFor("q1")).toEqual([
       { ...item("o1", "q1"), attempts: 1, last_error: "network_error", next_attempt_at: 50 },
     ]);
@@ -246,7 +241,8 @@ describe("DaintreeLocalStore", () => {
     const levels: number[] = [];
     const original = sqlite.transaction.bind(sqlite);
     vi.spyOn(sqlite, "transaction").mockImplementation(((fn: (...args: unknown[]) => unknown) => {
-      if (!sqlite.inTransaction) levels.push(Number(sqlite.pragma("synchronous", { simple: true })));
+      if (!sqlite.inTransaction)
+        levels.push(Number(sqlite.pragma("synchronous", { simple: true })));
       return original(fn);
     }) as typeof sqlite.transaction);
     expect(sqlite.pragma("synchronous", { simple: true })).toBe(SYNCHRONOUS_NORMAL);
