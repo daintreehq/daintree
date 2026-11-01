@@ -1,4 +1,6 @@
+import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({
@@ -131,7 +133,9 @@ function setupDrops(
     webContentsId: number,
     timeoutMs: number,
     signal?: AbortSignal
-  ) => Promise<boolean> = async () => true
+  ) => Promise<boolean> = async () => true,
+  /** Pruned and locked down for real by a temp download: only ever a folder of the test's own. */
+  tempDir?: string
 ) {
   let bound: string | null = "studio-01";
   const download = vi.fn(async (_host: string, _path: string, options: DownloadOptions) =>
@@ -145,7 +149,10 @@ function setupDrops(
     hostForView: () => bound,
     sendToView: () => {},
     downloadsDir: () => "/Users/greg/Downloads",
-    tempDir: () => os.tmpdir(),
+    tempDir: () => {
+      if (!tempDir) throw new Error("This test has no temp folder");
+      return tempDir;
+    },
     reconnectWaitMs: 1_000,
   });
   const moveView = (hostId: string | null) => {
@@ -225,7 +232,7 @@ describe("a download its link drops", () => {
   });
 
   it("is cancelled, not restarted, while it waits for the host", async () => {
-    const { client, download } = setupDrops(
+    const { client, download, reachable } = setupDrops(
       [
         async () => {
           throw dropped();
@@ -236,7 +243,8 @@ describe("a download its link drops", () => {
         new Promise((resolve) => signal?.addEventListener("abort", () => resolve(false)))
     );
     const pending = client.download(7, payload);
-    await vi.waitFor(() => expect(client.cancel("op-1", 7)).toBe(true));
+    await vi.waitFor(() => expect(reachable).toHaveBeenCalled());
+    expect(client.cancel("op-1", 7)).toBe(true);
     await expect(pending).rejects.toMatchObject({ code: "CANCELLED" });
     expect(download).toHaveBeenCalledTimes(1);
   });
@@ -274,20 +282,29 @@ describe("a download its link drops", () => {
     expect(reachable).not.toHaveBeenCalled();
   });
 
-  it("starts a temp download over too", async () => {
-    const { client, download } = setupDrops([
-      async () => {
-        throw dropped();
-      },
-      saved,
-    ]);
-    await expect(
-      client.downloadToTemp("studio-01", "/srv/app/report.bin", 7)
-    ).resolves.toMatchObject({ bytes: 100 });
-    expect(download).toHaveBeenCalledTimes(2);
-    expect(new Set(download.mock.calls.map(([, , options]) => options.destinationDir)).size).toBe(
-      1
-    );
+  it("starts a temp download over too, into the same folder", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "host-files-temp-"));
+    try {
+      const { client, download } = setupDrops(
+        [
+          async () => {
+            throw dropped();
+          },
+          saved,
+        ],
+        undefined,
+        tempDir
+      );
+      await expect(
+        client.downloadToTemp("studio-01", "/srv/app/report.bin", 7)
+      ).resolves.toMatchObject({ bytes: 100 });
+      expect(download.mock.calls.map(([, , options]) => options.destinationDir)).toEqual([
+        tempDir,
+        tempDir,
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 });
 

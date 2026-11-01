@@ -820,6 +820,8 @@ export class ClientFileTransport {
     done.catch(() => {});
 
     let beginTimer: ReturnType<typeof setTimeout> | null = null;
+    /** Why the link closed, once it has: the reason the transfer layer aborts the sink with. */
+    let closedWith: string | null = null;
     const createSink = async (begin: TransferBeginMessage): Promise<TransferSink> => {
       if (signal?.aborted) throw new Error("cancelled");
       await fs.mkdir(options.destinationDir, { recursive: true });
@@ -912,15 +914,16 @@ export class ClientFileTransport {
         },
         async abort(reason) {
           aborted = true;
+          // Decided before cleanup: a link that closes while a failed transfer
+          // is being cleaned up must not turn that failure into a retryable drop.
+          const failure = signal?.aborted
+            ? transferFailure("cancelled")
+            : reason === closedWith
+              ? disconnected(hostId)
+              : transferFailure(reason);
           await close();
           await fs.rm(partPath, { force: true }).catch(() => {});
-          settle.reject(
-            signal?.aborted
-              ? transferFailure("cancelled")
-              : session.isOpen
-                ? transferFailure(reason)
-                : disconnected(hostId)
-          );
+          settle.reject(failure);
         },
       };
     };
@@ -946,7 +949,8 @@ export class ClientFileTransport {
     // Once the host has begun sending, the sink's own commit or abort decides
     // (the transfer layer ends every sink when its link closes), so a file
     // already being placed here is never reported as lost and fetched again.
-    const offClose = session.onClose(() => {
+    const offClose = session.onClose((info) => {
+      closedWith = info.reason;
       if (!begun) {
         settle.reject(disconnected(hostId));
         return;
@@ -971,8 +975,16 @@ export class ClientFileTransport {
           { timeoutMs, signal }
         );
       } catch (error) {
-        // The link closed under the call: its answer is lost, and the close decides.
-        if (!session.isOpen && !signal?.aborted) return await done;
+        // The link closed under the call: its answer is lost, and the close
+        // decides. An answer the host did send (a refusal) still stands.
+        const code = (error as { code?: unknown } | null)?.code;
+        if (
+          closedWith !== null &&
+          !signal?.aborted &&
+          (code === "OUTCOME_UNKNOWN" || code === "HOST_DISCONNECTED")
+        ) {
+          return await done;
+        }
         throw error;
       }
       FileDownloadStartSchema.parse(started);
