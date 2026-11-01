@@ -8,7 +8,9 @@ import {
 } from "../../../../../shared/elementPicker/observation.js";
 import {
   ANCESTRY_LIMIT,
+  BODY_TAIL_LIMIT,
   DETECTION_LIMITS,
+  DOCUMENT_SAMPLE_LIMIT,
   DetectionSet,
   detectAncestry,
   detectExpandos,
@@ -217,7 +219,8 @@ describe("detectMarkup", () => {
 
 describe("sampleDocument", () => {
   it("stops at its limit, so a marker past it goes unseen", () => {
-    document.body.innerHTML = "<p></p>".repeat(20) + '<div data-v-app=""></div>';
+    // Nested, so the body's tail (read separately) does not reach it.
+    document.body.innerHTML = "<p></p>".repeat(20) + '<section><div data-v-app=""></div></section>';
     const bounded = new DetectionSet();
     sampleDocument(document, bounded, { expandos: false, limit: 10 });
     expect(bounded.size).toBe(0);
@@ -227,6 +230,27 @@ describe("sampleDocument", () => {
     expect(full.toArray()).toEqual([
       { framework: "vue", signals: [{ via: "document-sample", name: "data-v-app" }] },
     ]);
+  });
+
+  it("reads the body's last children past the sample, where Astro's dev toolbar is appended", () => {
+    document.body.innerHTML = "<p></p>".repeat(DOCUMENT_SAMPLE_LIMIT);
+    document.body.append(document.createElement("astro-dev-toolbar"));
+    const found = new DetectionSet();
+    sampleDocument(document, found, { expandos: false });
+    expect(found.toArray()).toEqual([
+      { framework: "astro", signals: [{ via: "document-sample", name: "<astro-dev-toolbar>" }] },
+    ]);
+  });
+
+  it("reads only a bounded number of the body's last children", () => {
+    document.body.innerHTML = "<p></p>".repeat(DOCUMENT_SAMPLE_LIMIT);
+    document.body.append(document.createElement("astro-dev-toolbar"));
+    for (let index = 0; index < BODY_TAIL_LIMIT; index += 1) {
+      document.body.append(document.createElement("div"));
+    }
+    const found = new DetectionSet();
+    sampleDocument(document, found, { expandos: false });
+    expect(found.size).toBe(0);
   });
 
   it("reads expandos only when asked to", () => {

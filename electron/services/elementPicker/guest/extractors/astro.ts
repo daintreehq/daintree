@@ -4,9 +4,9 @@
  * into a document's main world once a detection names Astro.
  */
 
-import { astroExtractor } from "../astroExtractor.js";
+import { createAstroExtractor } from "../astroExtractor.js";
 import { installExtractor, type ExtractorHostApi } from "../registry.js";
 
 declare const api: ExtractorHostApi;
 
-installExtractor(api, astroExtractor);
+installExtractor(api, createAstroExtractor(api.served));

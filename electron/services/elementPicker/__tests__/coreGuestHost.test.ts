@@ -62,6 +62,8 @@ class FakeDebugger extends EventEmitter {
   mainWorld = 1;
   /** Runs before the next evaluate into the picker's world, which then fails as a gone world does. */
   beforeIsolatedEvaluate: (() => void) | null = null;
+  /** The document's markup as served, which the browser's cache kept; null when it kept none. */
+  served: string | null = null;
 
   isAttached(): boolean {
     return this.attached;
@@ -108,7 +110,14 @@ class FakeDebugger extends EventEmitter {
         this.announceMainWorld();
         return {};
       case "Page.getFrameTree":
-        return { frameTree: { frame: { id: MAIN_FRAME_ID } } };
+        return {
+          frameTree: {
+            frame: { id: MAIN_FRAME_ID, url: location.href.split("#")[0], mimeType: "text/html" },
+          },
+        };
+      case "Page.getResourceContent":
+        if (this.served === null) throw new Error("Content unavailable. Resource was not cached");
+        return { content: this.served, base64Encoded: false };
       case "Runtime.addBinding": {
         const name = params.name as string;
         // CDP delivers binding calls asynchronously, never inside the evaluate.
@@ -442,6 +451,44 @@ describe("core Element Picker guest loading", () => {
     expect(withAstro!.componentChain.components).toEqual([]);
     expect(withReact!.componentChain.components[0]!.name.value).toBe("FixtureButton");
     expect(withReact!.frameworkEvidence.map((entry) => entry.framework)).toEqual(["astro"]);
+  });
+
+  it("traces an Astro element its dev toolbar took the stamps off, from the markup as served", async () => {
+    const page = "/proj/src/pages/index.astro";
+    const h = makeHarness();
+    h.wc.debugger.served = `<!doctype html><html><head></head><body>
+      <main data-astro-source-file="${page}" data-astro-source-loc="18:5">
+        <h1 id="title" data-astro-source-file="${page}" data-astro-source-loc="19:11">Shop</h1>
+      </main></body></html>`;
+    // All the toolbar leaves: the markup unstamped, and itself, which is all that says Astro.
+    document.body.innerHTML = `
+      <main>
+        <h1 id="title">Shop</h1>
+      </main><astro-dev-toolbar></astro-dev-toolbar>`;
+    await h.bind();
+    await settle();
+    expect(h.wc.debugger.evaluates().filter((entry) => entry.kind === "extractor")).toEqual([
+      { kind: "extractor", framework: "astro" },
+    ]);
+    expect(
+      h.wc.debugger.commands.filter((command) => command.method === "Page.getResourceContent")
+    ).toHaveLength(1);
+
+    (document.getElementById("title") as HTMLElement).click();
+    await settle();
+    const selected = h.pickerEvents("selectionChanged").at(-1)!.event as {
+      observations: SelectionObservation[];
+    };
+    expect(selected.observations[0]!.sourceCandidates).toEqual([
+      expect.objectContaining({
+        kind: "template-location",
+        framework: "astro",
+        extraction: { kind: "attribute", attribute: "data-astro-source-loc" },
+        file: page,
+        location: expect.objectContaining({ line: 19, column: 11 }),
+      }),
+    ]);
+    expect(h.kinds("host-issue")).toHaveLength(0);
   });
 
   it("describes Astro, React and Svelte selections side by side on a page of islands", async () => {

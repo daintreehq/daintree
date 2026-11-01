@@ -8,7 +8,7 @@ import {
   type ElementPickerEvent,
 } from "../../../../../shared/elementPicker/protocol.js";
 import { SourceCandidateSchema } from "../../../../../shared/elementPicker/source.js";
-import { astroExtractor, describeAstro } from "../astroExtractor.js";
+import { astroExtractor, createAstroExtractor, describeAstro } from "../astroExtractor.js";
 import { ANCESTRY_LIMIT } from "../detectors.js";
 import { createPicker, type PickerHandle } from "../picker.js";
 import { installExtractor, type ElementPickerExtractor } from "../registry.js";
@@ -300,6 +300,182 @@ describe("the Astro extractor, toolbar off", () => {
       "data-astro-source-file": "absent",
       "data-astro-source-loc": "absent",
     });
+  });
+});
+
+/**
+ * What Astro's toolbar leaves once its Audit app has run: the markup as
+ * served, with both attributes taken off every element, and the toolbar
+ * appended to the body. The served copy is what the host read back.
+ */
+const SERVED_BODY = `
+    <main id="main" data-astro-source-file="${FILE}" data-astro-source-loc="5:7">
+      <h1 id="title" data-astro-source-file="${FILE}" data-astro-source-loc="6:9">Shop</h1>
+      <p data-astro-source-file="${FILE}" data-astro-source-loc="7:10">First <span>plain</span></p>
+      <p data-astro-source-file="${FILE}" data-astro-source-loc="8:10">Second</p>
+      ${REACT_ISLAND}<button id="buy" data-astro-source-file="${FILE}" data-astro-source-loc="9:9">Buy</button></astro-island>
+    </main>`;
+
+function servedPage(body = SERVED_BODY): { url: string; html: string } {
+  return {
+    url: location.href,
+    html: `<!doctype html><html><head><title>Shop</title></head><body>${body}</body></html>`,
+  };
+}
+
+function strippedPage(): void {
+  document.body.innerHTML = SERVED_BODY;
+  for (const element of document.querySelectorAll("[data-astro-source-file]")) {
+    element.removeAttribute("data-astro-source-file");
+    element.removeAttribute("data-astro-source-loc");
+  }
+  document.body.append(document.createElement("astro-dev-toolbar"));
+}
+
+function paragraphs(): Element[] {
+  return [...document.querySelectorAll("main > p")];
+}
+
+describe("the Astro extractor once the toolbar has taken the stamps off", () => {
+  beforeEach(strippedPage);
+  afterEach(() => {
+    document.head.innerHTML = "";
+    for (const added of document.querySelectorAll("html > daintree-overlay")) added.remove();
+  });
+
+  const select = (extractor: ElementPickerExtractor, element: Element) =>
+    extractor.extract(element, "selection", { ref: () => null }) ?? {};
+
+  it("reads the pair from the element's counterpart in the markup as served", () => {
+    const extractor = createAstroExtractor(servedPage());
+    const title = select(extractor, byId("title"));
+    expectWireShaped(title);
+    expect(title.ownership).toBe("direct");
+    expect(title.sourceCandidates).toEqual([
+      {
+        kind: "template-location",
+        candidateId: "astro-source",
+        framework: "astro",
+        extraction: { kind: "attribute", attribute: "data-astro-source-loc" },
+        file: FILE,
+        location: {
+          ...COORDINATE_CONVENTIONS.astroSourceLoc,
+          columnUnit: "utf16",
+          line: 6,
+          column: 9,
+        },
+      },
+    ]);
+    // The live element's attributes are reported as they are: gone.
+    expect(fields(title)).toEqual({
+      boundary: "page",
+      "data-astro-source-file": "absent",
+      "data-astro-source-loc": "absent",
+      servedDocument: "matched",
+    });
+    const second = select(extractor, paragraphs()[1]!);
+    expect(second.sourceCandidates?.[0]).toMatchObject({ location: { line: 8, column: 10 } });
+  });
+
+  it("is not thrown off by elements of other names that page script added", () => {
+    const extractor = createAstroExtractor(servedPage());
+    document.head.append(document.createElement("style"));
+    byId("main").prepend(document.createElement("div"));
+    document.documentElement.append(document.createElement("daintree-overlay"));
+    expect(select(extractor, paragraphs()[1]!).sourceCandidates?.[0]).toMatchObject({
+      location: { line: 8, column: 10 },
+    });
+  });
+
+  it("refuses a counterpart once page script added or removed an element of the same name beside it", () => {
+    const extractor = createAstroExtractor(servedPage());
+    byId("main").prepend(document.createElement("p"));
+    const shifted = select(extractor, paragraphs()[2]!);
+    expect(shifted.sourceCandidates).toEqual([]);
+    expect(shifted.ownership).toBe("fallback");
+    expect(fields(shifted).servedDocument).toBe("unmatched");
+
+    strippedPage();
+    paragraphs()[0]!.remove();
+    expect(fields(select(extractor, paragraphs()[0]!)).servedDocument).toBe("unmatched");
+  });
+
+  it("refuses a counterpart whose id or own text page script changed", () => {
+    const extractor = createAstroExtractor(servedPage());
+    byId("title").textContent = "Basket";
+    expect(fields(select(extractor, byId("title"))).servedDocument).toBe("unmatched");
+
+    strippedPage();
+    paragraphs()[1]!.id = "second";
+    expect(fields(select(extractor, paragraphs()[1]!)).servedDocument).toBe("unmatched");
+  });
+
+  it("never borrows an ancestor's served stamps for an element the compiler did not stamp", () => {
+    const extractor = createAstroExtractor(servedPage());
+    const span = select(extractor, document.querySelector("main > p > span")!);
+    expect(span.sourceCandidates).toEqual([]);
+    expect(fields(span).servedDocument).toBe("unstamped");
+  });
+
+  it("keeps to the element's own attributes while it still carries either", () => {
+    const extractor = createAstroExtractor(servedPage());
+    const title = byId("title");
+    title.setAttribute("data-astro-source-file", FILE);
+    title.setAttribute("data-astro-source-loc", "16:9");
+    const live = select(extractor, title);
+    expect(live.sourceCandidates?.[0]).toMatchObject({ location: { line: 16, column: 9 } });
+    expect(fields(live)).not.toHaveProperty("servedDocument");
+
+    // Half a pair is still the page's word, not to be completed from older markup.
+    title.removeAttribute("data-astro-source-loc");
+    expect(select(extractor, title).sourceCandidates).toEqual([
+      expect.objectContaining({ kind: "file-hint", file: FILE }),
+    ]);
+  });
+
+  it("leaves an island's interior to its renderer, whatever the served markup stamped there", () => {
+    const extractor = createAstroExtractor(servedPage());
+    const buy = select(extractor, byId("buy"));
+    expect(buy.sourceCandidates).toBeUndefined();
+    expect(fields(buy)).not.toHaveProperty("servedDocument");
+  });
+
+  it("matches nothing in a shadow root, which the served markup does not describe", () => {
+    const extractor = createAstroExtractor(servedPage());
+    const host = document.createElement("section");
+    byId("main").append(host);
+    const inner = document.createElement("h1");
+    host.attachShadow({ mode: "open" }).append(inner);
+    expect(fields(select(extractor, inner)).servedDocument).toBe("unmatched");
+  });
+
+  it("reads nothing from markup served for another URL, or when the host had none to give", () => {
+    const elsewhere = createAstroExtractor({ ...servedPage(), url: "http://elsewhere.localhost/" });
+    expect(fields(select(elsewhere, byId("title"))).servedDocument).toBe("unavailable");
+    for (const served of [null, undefined, { url: location.href }, "<h1></h1>"]) {
+      const title = select(createAstroExtractor(served), byId("title"));
+      expect(title.sourceCandidates).toEqual([]);
+      expect(fields(title).servedDocument).toBe("unavailable");
+    }
+  });
+
+  it("ignores the URL's fragment, which never reaches the server", () => {
+    const served = servedPage();
+    const extractor = createAstroExtractor({ ...served, url: `${served.url}#top` });
+    expect(fields(select(extractor, byId("title"))).servedDocument).toBe("matched");
+  });
+
+  it("lets the parsed copy go with the extractor", () => {
+    const extractor = createAstroExtractor(servedPage());
+    expect(fields(select(extractor, byId("title"))).servedDocument).toBe("matched");
+    extractor.dispose?.();
+    expect(fields(select(extractor, byId("title"))).servedDocument).toBe("unavailable");
+  });
+
+  it("does nothing on hover", () => {
+    const extractor = createAstroExtractor(servedPage());
+    expect(extractor.selectionOnly).toBe(true);
+    expect(extractor.extract(byId("title"), "hover", { ref: () => null })).toBeNull();
   });
 });
 

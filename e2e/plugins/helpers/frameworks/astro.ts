@@ -33,7 +33,8 @@ const features = ${FEATURES_LITERAL};
 /**
  * Astro with no UI framework: server-rendered markup only, served with the
  * source attributes its compiler stamps while the dev toolbar is on, which the
- * toolbar then takes off the elements (#15913).
+ * toolbar then takes off the elements, and no islands or scoped styles to say
+ * Astro once they are gone.
  */
 export const ASTRO: FixtureSite = {
   name: "picker-astro",
