@@ -177,8 +177,8 @@ describe("DecisionsDataSection", () => {
     for (const name of ["Delete relay data", "Delete local data"]) {
       const action = screen
         .getAllByRole("button", { name, hidden: true })
-        .find((element) => element.closest("[role=dialog]") === null) as HTMLButtonElement;
-      expect(action.disabled).toBe(true);
+        .find((element) => element.closest("[role=dialog]") === null);
+      expect(action?.hasAttribute("disabled")).toBe(true);
     }
 
     await act(async () => {
