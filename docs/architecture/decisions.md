@@ -6,7 +6,7 @@ This doc is the contract for the Daintree side, written before any of it is buil
 
 ## Boundaries
 
-- **One global setting.** Decisions is one switch for the user, in Settings → Integrations → Decisions, off by default. There is no per-project opt-in. Remote Hosts are enrolled as devices of the same owner: they are never configured separately, and never get their own relay, relay URL or switch.
+- **One global setting.** Decisions is one switch for the user, in Settings → Integrations → Decisions, off by default. There is no per-project opt-in: turning the switch on, after consent that names it, is the opt-in that adds the Decisions server to every supported launch, the one global exception [Hard Line 2](../feature-curation.md#the-hard-lines) records. Remote Hosts are enrolled as devices of the same owner: they are never configured separately, and never get their own relay, relay URL or switch.
 - **Supported agents are the ones with launch-time MCP.** An agent gets `ask_human` only through the additive launch-time MCP path (`capabilities.launchMcp`). Agents without it are listed as not supported, and Settings offers no manual setup line for them, because the standalone `decisions mcp` server has no pane identity and no way to type into a Daintree terminal, so a question asked through it could never be answered back into that terminal.
 - **User-owned agent config is never modified.** Panes get the Decisions server beside the user's own servers, through the launch-time path only. Workflows that use the design-review gate are documented for users to add to their own skills; Daintree installs nothing into `~/.claude`, `~/.codex` or similar.
 - **Observations, not interpretations.** UI and MCP results say what was observed ("Question q-42 is waiting for an answer"), never "agent is blocked".
@@ -39,7 +39,7 @@ Existing seams the integration extends:
 | Pane push-event precedent | `terminal:notify-state`: produced in `McpServerService.ts`, registered in `electron/ipc/handlers/events.ts`, `shared/types/ipc/maps.ts`, `electron/preload.cts`, `electron/ipc/channelLocality.ts`; read by `usePaneNotifyState` in `src/components/Terminal/TerminalNotifyChip.tsx` |
 | Remote Host link CALL precedent | `electron/remote/deviceAnswer/linkMethods.ts`, `host.ts`, `client.ts` |
 
-New code, all main-process unless noted, all lazily imported:
+New code and extensions of existing modules. Decisions' own modules and the library packages are imported lazily; the setting declaration and the integration seams extend modules that are already loaded:
 
 | Part | New code | Child |
 | --- | --- | --- |
@@ -84,18 +84,18 @@ The service follows the `deviceAnswer` precedent: a memoised lazy singleton, `ge
 
 ## What being off costs
 
-Vanilla Daintree pays nothing for Decisions. With the setting off:
+With the setting off from startup, Decisions costs one setting read in a deferred boot task and nothing else:
 
-- **No Decisions code is loaded.** The boot step reads the setting before importing anything under `electron/services/decisions/` or any `@daintreehq/decisions-*` package. This is stricter than `deviceAnswer`, whose deferred task imports its small index module before checking. The eager import walk (`scripts/check-import-budget.mjs`) must not grow; it runs on demand, not in CI, so the test #16001 adds, proving no Decisions module is imported, is the gate.
-- **No resources.** No listener hold, no `/mcp/decisions` handler (the path answers 404), no socket, timer, file handle, `powerMonitor` subscriber or IPC push, and no renderer subscription or chip.
+- **No Decisions module is imported.** The boot step reads the setting before importing anything under `electron/services/decisions/` or any `@daintreehq/decisions-*` package. This is stricter than `deviceAnswer`, whose deferred task imports its small index module before checking. The eager import walk (`scripts/check-import-budget.mjs`) must not grow; it runs on demand, not in CI, so the test #16001 adds, proving no Decisions module is imported, is the gate.
+- **No resources.** No listener hold, no `/mcp/decisions` handler (the path answers 404 while the MCP server keeps the listener up, and nothing listens otherwise), no socket, timer, file handle, `powerMonitor` subscriber or IPC push, and no renderer subscription or chip.
 - **No change to launches.** Every agent launch is byte-for-byte what it is today (#16012).
-- **Turning it off at runtime** closes the socket, clears the timers, empties the route seam, releases the listener hold and stops delivery. Modules already evaluated stay in memory (ES modules can't be unloaded) but hold nothing. Panes launched while it was on keep their config entry until they relaunch, and their calls get 404. Stored data stays on disk (#16002) until the user deletes it (#16025).
+- **Turning it off at runtime** closes the socket, clears the timers, empties the route seam, releases the listener hold and stops delivery. Modules already evaluated stay in memory (ES modules can't be unloaded) but hold nothing. Panes launched while it was on keep their config entry until they relaunch, and their calls get 404 or find no listener. Stored data stays on disk (#16002) until the user deletes it (#16025).
 
-Rollback for every child is the switch: with `decisions.enabled` false the seams are empty and nothing is loaded.
+Rollback for every child is the switch: with `decisions.enabled` false at startup the seams are empty and no Decisions module is imported.
 
 ## The setting
 
-One `decisions` object in the electron-store schema (`electron/store.ts`, beside `deviceAnswer`), with `enabled` defaulting to false (#15998). It also holds the relay origin, the installation, device and host ids, and the non-secret preferences later children need, shaped so a field can be added later without another breaking migration. Loading sanitises it the way `deviceAnswerSettings.ts` sanitises `deviceAnswer`: a malformed value falls back to off, never a crash. A store migration is added only if one is needed, self-contained and idempotent, after the latest in `electron/services/migrations/` (042 at the time of writing).
+One `decisions` object in the electron-store schema (`electron/store.ts`, beside `deviceAnswer`), with `enabled` defaulting to false (#15998). It also holds the relay origin, the installation, device and host ids, and the non-secret preferences later children need, shaped so a field can be added later without another breaking migration. Loading sanitises it field by field, as `deviceAnswerSettings.ts` does for `deviceAnswer`, and never crashes: a value that isn't a usable object falls back to off. A store migration is added only if one is needed, self-contained and idempotent, after the latest in `electron/services/migrations/` (042 at the time of writing).
 
 Every field is owned by the machine the user sets it on: `device` in `shared/config/settingOwnership.ts`, as `deviceAnswer` is, enforced at compile time through `electron/storeOwnership.ts`. A window bound to a Remote Host therefore never routes it to the Host, and its IPC channels are `shell` in `channelLocality.ts`, like the device-answer channels. No secret is ever stored in this object: not the claim secret, keys, tokens or the recovery passphrase.
 
@@ -119,13 +119,13 @@ A session is bound to the credential that opened it, as core sessions are (`bind
 
 `ask_human`, `get_decision` and `cancel_question`, with the library's input schemas (`AskHumanInput`: question, context, options, attachments, `requested_requirement`, `workflow_gate_id`, `expires_at`, `correlation_id`). Each tool description is under 400 bytes; `mcpWireBudget.test.ts` measures only the action manifest, so #16011 adds its own measurement of these three. They are not actions and sit on no MCP tier, so they don't touch the external-tier budget (`tierAuth.test.ts`).
 
-`ask_human` writes the question and its origin to the local store before any network I/O, then returns at once with `Asked as q-<alias>. End your turn now (or continue with unrelated work); the answer will arrive as a message in this terminal.` The question is published to the relay when connected. The alias `q-N` is a cosmetic per-installation counter; wire ids are full unguessable identifiers. Because the call returns in well under a second, no CLI's tool timeout matters. `get_decision` and `cancel_question` see only the calling pane's questions. A pane holds at most 10 open questions, under a per-pane rate limit.
+`ask_human` writes the question and its origin to the local store before any network I/O, then returns at once with `Asked as q-<alias>. End your turn now (or continue with unrelated work); the answer will arrive as a message in this terminal.` The question is published to the relay when connected. The alias `q-N` is a cosmetic per-installation counter; wire ids are full unguessable identifiers. The call returns once the question is committed locally, without waiting on the relay or the human, so a CLI's tool timeout is never the answer's deadline. `get_decision` and `cancel_question` see only the calling pane's questions. A pane holds at most 10 open questions, under a per-pane rate limit.
 
 The server key `daintree-decisions` joins `RESERVED_PLUGIN_SERVER_KEYS` so a plugin can't claim it; it fits the 25-character key limit, and Claude Code names the tool `mcp__daintree-decisions__ask_human`.
 
 ## Supported agents
 
-Panes get MCP servers through the additive launch-time path: `preparePaneConfig` in `McpPaneConfigService`, called from the agent launch in `electron/ipc/handlers/terminal/lifecycle.ts` and rendered per CLI by `renderLaunchMcp`. A format that needs a file gets one written 0600 under `userData/mcp-pane-configs` and deleted when the PTY exits; bearers travel in that file or the PTY env, never in argv.
+Panes get MCP servers through the additive launch-time path: `preparePaneConfig` in `McpPaneConfigService`, called from the agent launch in `electron/ipc/handlers/terminal/lifecycle.ts` and rendered per CLI by `renderLaunchMcp`. A format that needs a file gets one written 0600 under `userData/mcp-pane-configs`; PTY exit revokes the bearer and deletes the file, best effort. Bearers travel in that file or the PTY env, never in argv.
 
 Today a pane gets no config at all when its project's tier is off and no plugin is granted: `preparePaneConfig` refuses that case, and tier off mints no bearer. Off is the default tier, so most panes would never see `ask_human`. With Decisions on, #16012 gives every launch of an agent with launch-time MCP a `daintree-decisions` entry and its own bearer, whatever the tier. That bearer authorises `/mcp/decisions` only, never the control surface or a plugin route. With the tier off, the pane still gets no `daintree` control-surface entry. With Decisions off, launches are unchanged.
 
@@ -153,13 +153,13 @@ Before anything touches the network, the bridge records the question's origin in
 | `terminal_generation` | the spawn's `launchGeneration` (`PtyClient.getLiveGeneration`, checked with `isLiveGeneration`) | from a per-process ledger: monotonic within a run of the app, not durable across restarts |
 | `ownership_principal` | `getOwnershipPrincipalForToken` | a fresh UUID on every launch; anything keyed by it ends with the run, as `TerminalNotifyService.revokeOwner` relies on |
 | `agent_incarnation` | `agentIncarnation` on the panel | an observation, not proof of process identity |
-| `agent_session_id` | `agentSessionId` | Claude's is assigned at launch (`--session-id`); others are captured passively (`sessionIdCapture.ts`, `agentEndCapture.ts`) and may be unknown when the question is asked |
+| `agent_session_id` | `agentSessionId` | Claude's is assigned at launch (`--session-id`); others are learned passively, from output and teardown (`sessionIdCapture.ts`, `agentEndCapture.ts`), from a resumed run's argv (`agentRunArgv.ts`) or, for Codex, live attribution (`CodexLiveSessionAttribution.ts`). It may be unknown when the question is asked, and can be stale: Claude's own `/clear` and `/resume` switch conversations without telling Daintree |
 | `project_id`, `worktree_id`, worktree root | the pane's launch | local only, never sent to the relay |
 | `project_label`, `machine_label` | the project's and machine's display names | inside the encrypted content only; the phone shows them on every question |
 
 On the wire, `origin_ref` is a salted hash of `(host_id, pane_id)`, used only for per-pane quotas.
 
-**Routing rules.** An answer is typed only if host, pane, generation, ownership principal, agent session and worktree all still match the origin. Otherwise it goes to resume when that is available, or to needs-attention, and is never typed into a guessed same-named pane or project. Every spawn mints a new generation and principal, so an answer for a question asked before a relaunch or an app restart never matches the new run directly; resume can find the restored pane still running the same session and re-target the delivery to it, with the correlation to the original question recorded (#16017, #16019). Each answer carries its own question id and revision, and answers for one pane are delivered in question order.
+**Routing rules.** An answer is typed only if host, pane, generation, ownership principal, observed agent incarnation, recorded agent session and worktree all still match the origin. That is a match against what Daintree observed, not proof of which conversation the CLI has open. Otherwise it goes to resume when that is available, or to needs-attention, and is never typed into a guessed same-named pane or project. Every spawn mints a new generation and principal, so an answer for a question asked before a relaunch or an app restart never matches the new run directly; resume can find the restored pane still running the same session and re-target the delivery to it, with the correlation to the original question recorded (#16017, #16019). Each answer carries its own question id and revision, and answers for one pane are delivered in question order.
 
 ## Policy and attachments
 
@@ -181,7 +181,7 @@ On the wire, `origin_ref` is a salted hash of `(host_id, pane_id)`, used only fo
 Answers are typed through the same wake engine as Daintree's own notices, which waits for the terminal to settle, spaces lines per pane, and aborts if the pane is withdrawn or re-owned (#16015). `LaneWake.kind` has five kinds today (`notice`, `retired`, `lost`, `watch`, `approval`); `decision` is the sixth, with its branch in line assembly. `createDecisionWake`, modelled on `createApprovalWake`, provides:
 
 - **`id`**: `dec-` plus a hash of question id and answer revision, matching `LANE_WAKE_ID_PATTERN`, so duplicates join one queued wake.
-- **`recheck()`**: the pane still exists, `isLiveGeneration(paneId, generation)` holds, the ownership principal is unchanged (a relaunch reports `unavailable` with reason `relaunched`), and the agent session matches.
+- **`recheck()`**: the pane still exists, `isLiveGeneration(paneId, generation)` holds, the ownership principal and observed agent incarnation are unchanged (a relaunch reports `unavailable` with reason `relaunched`), and the recorded agent session matches.
 - **`beforeType()`**: writes the injection intent (`injection_id`, question id, revision) durably and synchronously before anything is typed; false keeps the wake off the line for good.
 - **`report(outcome)`**: maps `delivered`, `held`, `unavailable` and `ambiguous` to the library's `TerminalSink` outcomes.
 
@@ -205,11 +205,11 @@ comment: Proceed with the compact sidebar.
 [END DAINTREE DECISION ANSWER]
 ```
 
-Answer text is sanitised: control and escape sequences stripped, the end delimiter neutralised inside user text, length capped. `source: proxy` is always labelled. The surrounding words are Daintree's own and never interpolated from agent or answer text, as for every existing notice line. Typing goes through `client.submit(terminalId, text, token, undefined, guard, undefined, null)`, where the final `null` keeps the answer from being recorded as the run's first prompt: the multi-line body goes in as one submission, the trailing Enter is dropped if the user typed meanwhile (`abandonEnterOnInput`), and a withdrawn or re-owned pane aborts the write. A line counts as delivered only once the engine has confirmed `pty_written`, which proves the write reached the PTY, not that the agent read it. Lines to one pane are at least `MIN_NOTIFY_INTERVAL_MS` (5 s) apart with one outstanding at a time, and answers batched for the same pane are joined into one paste.
+Answer text is sanitised: control and escape sequences stripped, the end delimiter neutralised inside user text, length capped. `source: proxy` is always labelled. The framing words are Daintree's own, and answer text appears only in the block's labelled fields. Typing goes through `client.submit(terminalId, text, token, undefined, guard, undefined, null)`, where the final `null` keeps the answer from being recorded as the run's first prompt: the multi-line body goes in as one submission, the trailing Enter is dropped if the user typed meanwhile (`abandonEnterOnInput`), and a withdrawn or re-owned pane stops the submission before its Enter, which can leave the text unsent in the composer. A line counts as delivered only once the engine has confirmed `pty_written`, which proves the write reached the PTY, not that the agent read it. Submissions to one pane are at least `MIN_NOTIFY_INTERVAL_MS` (5 s) apart with one outstanding at a time, and answers batched for the same pane are joined into one paste.
 
 ### Durability
 
-Wakes are in-memory attempts: each expires `LANE_WAKE_MAX_PENDING_MS` (10 minutes) after admission, a pane holds at most 32, and they die on relaunch, pane exit, the MCP-off teardown and app restart. Answers can arrive days later, so the durable store is the authority and a wake is only the typing mechanism (#16017):
+Wakes are in-memory attempts: one still waiting expires `LANE_WAKE_MAX_PENDING_MS` (10 minutes) after admission, a pane holds at most 32, and they end on the user's stop, trash, relaunch, bearer revocation, pane exit, the MCP-off teardown and app restart. Answers can arrive days later, so the durable store is the authority and a wake is only the typing mechanism (#16017):
 
 - **When delivery is tried.** On app start, when the owning pane appears, when a pane goes idle, and every minute while anything is pending, which is an indexed query and cheap when nothing is.
 - **Reporting.** A delivered answer is recorded locally first, then reported to the relay as terminal-delivered.
@@ -229,10 +229,10 @@ Wakes are in-memory attempts: each expires `LANE_WAKE_MAX_PENDING_MS` (10 minute
 An agent on a Remote Host keeps its MCP listener, bearer, notices and terminal on that Host, and the Host keeps running agents while the owner's machine sleeps. Forwarding questions from the Host through the owner's machine would fail exactly then, so each Host is its own relay device of the same owner (#16021, #16022):
 
 - **Roles.** The machine where the user ran setup is the `owner-desktop`: it claims the relay, holds the epoch keys and approves phones. Every enrolled Host is a `desktop-host`.
-- **Enrollment.** From the owner's Settings → Decisions → Devices, a connected Host is enrolled over the already authenticated link with a new session CALL, `decisions.enrollHost` (in `electron/remote/decisions/linkMethods.ts`, zod-validated on both ends like `electron/remote/deviceAnswer/linkMethods.ts`, registered with `host` locality). The Host generates its keys and returns only the public halves; the owner signs a device certificate and an epoch grant sealed to the Host's exchange key and registers them with the relay; the Host stores its identity sealed by its own keychain. Private keys never cross the link. A Host too old to know the method answers unsupported, and Settings says it needs updating. (`ClientEndpoint.request` in `electron/ipc/endpoint.ts` is the Host-to-renderer reverse request, not the Shell-to-Host CALL path; enrollment uses session CALLs as the device-answer client does.)
+- **Enrollment.** From the owner's Settings → Decisions → Devices, a connected Host is enrolled over the already authenticated link with a new session CALL, `decisions.enrollHost` (in `electron/remote/decisions/linkMethods.ts`, with a zod schema checked on the Host and a validated result on the Shell, like `electron/remote/deviceAnswer/linkMethods.ts`). The Host generates its keys and returns only the public halves; the owner signs a device certificate and an epoch grant sealed to the Host's exchange key and registers them with the relay; the Host stores its identity sealed by its own keychain. Private keys never cross the link. A Host too old to know the method answers unsupported, and Settings says it needs updating. (`ClientEndpoint.request` in `electron/ipc/endpoint.ts` is the Host-to-renderer reverse request, not the Shell-to-Host CALL path; enrollment uses session CALLs as the device-answer client does.)
 - **An identity, not settings.** The Host has no relay URL field or switch of its own; the relay origin comes with the identity it was given. It runs Decisions for its own panes whenever the owner has Decisions on. When the owner disables Decisions or revokes the Host, the Host stops, removes its delivery credentials and shows the reason; a revocation reaches a Host the Shell isn't connected to through the relay (4401), and how a disable reaches one is #16022's to settle.
 - **Its own work only.** A Host acts only on questions it created and ignores events targeted at other devices. It receives the same ciphertext as every device, which is acceptable because every device belongs to one owner. A Host that was offline catches up through `sync`; pending answers wait in the relay meanwhile.
-- **Topology.** macOS and Linux Hosts are reached over ssh; Windows is a Shell only, driving Linux Hosts inside WSL distros, and a WSL Host enrolls the same way. A WSL distro stops about 15 s after its last `wsl.exe` client exits, and its keeper (`wslKeepalive.ts`) lives only as long as Daintree on Windows, so a WSL Host's agents and its Decisions service keep running with the window closed but not after quitting the app.
+- **Topology.** macOS and Linux Hosts are reached over ssh; Windows is a Shell only, driving Linux Hosts inside WSL distros, and a WSL Host enrolls the same way. A WSL distro stops about 15 s after its last `wsl.exe` client exits, and its keeper (`wslKeepalive.ts`) lives only as long as Daintree on Windows, and closing the last window quits Daintree on Windows (it can't be a Host), so a WSL Host's agents and its Decisions service can stop once Daintree on Windows is closed.
 - **Shell view.** The Shell's Decisions page shows each enrolled Host's connection state as observed. Pane state (`terminal:decision-state`) has `host` locality, so a window on a Host reads its own panes' state from that Host.
 
 ## What is stored where
@@ -243,7 +243,7 @@ An agent on a Remote Host keeps its MCP listener, bearer, notices and terminal o
 | Owner signing key, epoch keys, device keys | one file under the user-data directory, sealed with `safeStorage` | #16003 |
 | Questions and their origins, outbox, inbound event log and cursor, injection intents, audit trail | the app database (better-sqlite3), new tables from the next SQL migration | #16002 |
 | Encrypted attachments waiting to upload | a file spool under the user-data directory, removed once uploaded or cancelled | #16014 |
-| A pane's `daintree-decisions` entry and bearer | the existing pane config (`userData/mcp-pane-configs`, 0600) or the PTY env, gone when the PTY exits | #16012 |
+| A pane's `daintree-decisions` entry and bearer | the existing pane config (`userData/mcp-pane-configs`, 0600) or the PTY env; the bearer is revoked on PTY exit and the file deleted, best effort | #16012 |
 | Decision-model history | the model's own local store, only with learning on | #16026, #16027 |
 | On a Host: its sealed identity and its own store | the Host's own user-data directory | #16021, #16022 |
 | Never on disk, in logs, the audit trail or telemetry | claim secret, recovery passphrase, Cloudflare token, socket ticket URL | #16003, #16006, #16007, #16023 |
@@ -261,7 +261,7 @@ This is what the consent shown on first enable names (#16004), and what [feature
 - **Voice dictation**, if the user turns it on in the phone app, is not end-to-end encrypted. Daintree sends nothing for it.
 - **The decision model** runs on the desktop. History goes to an external model provider only through an adapter the user chose, under its own consent (#16027).
 
-Only what an agent puts into a question leaves the machine; Decisions never reads a terminal to send it. No Daintree-operated server is involved at any point.
+Question content comes only from what an agent puts in a question; Decisions never reads a terminal to send it. Answers, signed events, delivery acknowledgements and routing metadata cross the network as listed above, and decision history reaches a model provider only under its own consent. No Daintree-operated server is involved at any point.
 
 ## The renderer
 
