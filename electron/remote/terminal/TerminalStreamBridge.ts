@@ -1113,15 +1113,13 @@ export class TerminalStreamBridge {
       (seq === undefined || reset.seq === seq);
     let index = ledger.unconfirmedResets.findIndex(matches);
     if (index < 0) return;
-    // Resets that share a seq had nothing posted between them: the last is the one it took.
-    while (
-      index + 1 < ledger.unconfirmedResets.length &&
-      matches(ledger.unconfirmedResets[index + 1]!)
-    ) {
-      index++;
-    }
-    const [reset] = ledger.unconfirmedResets.splice(0, index + 1).slice(-1);
-    ledger.ackedTo = reset!.at;
+    // Resets at the same point had nothing posted between them: the last is the one it took.
+    const first = ledger.unconfirmedResets[index]!;
+    const same = (reset?: { incarnation: number; seq: number; at: number }) =>
+      reset?.incarnation === first.incarnation && reset.seq === first.seq && reset.at === first.at;
+    while (same(ledger.unconfirmedResets[index + 1])) index++;
+    ledger.unconfirmedResets.splice(0, index + 1);
+    ledger.ackedTo = first.at;
     // From here an ack is for output after the reset, so only those count
     // toward the restore window. Before it they can't be told apart from
     // late ones for output before it, and let output through too.

@@ -284,6 +284,11 @@ export class ClientTerminalRelay {
     if (!track) {
       track = { delivered: 0, acked: 0, forwardFrom: 0, resets: [] };
       this.acks.set(id, track);
+      // Records outlive forgotten positions, but no more of them than are tracked.
+      if (this.acks.size > (this.opts.maxTrackedTerminals ?? DEFAULT_MAX_TRACKED_TERMINALS)) {
+        const orphan = [...this.acks.keys()].find((key) => key !== id && !this.positions.has(key));
+        if (orphan !== undefined) this.acks.delete(orphan);
+      }
     }
     return track;
   }
@@ -491,10 +496,8 @@ export class ClientTerminalRelay {
       if (this.session === session) for (const id of wanted) this.resuming.delete(id);
       if (this.session !== session) return;
       if (reset && answered) this.resetOwed = false;
-      for (const id of forget) {
-        this.positions.delete(id);
-        this.acks.delete(id);
-      }
+      // Their ack records stay: the renderer may still ack output the host settled.
+      for (const id of forget) this.positions.delete(id);
       if (forget.length > 0) {
         const suppressedCount = logLimiter.take(`resume-forgot:${this.endpointId}:${answered}`);
         if (suppressedCount !== null) {
