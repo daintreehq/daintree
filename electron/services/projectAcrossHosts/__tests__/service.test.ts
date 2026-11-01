@@ -1100,6 +1100,9 @@ describe("remote reads across lookups", () => {
     reads.length = 0;
     expect((await service.find(payload)).map((m) => m.path)).toEqual([kept]);
     expect(reads).toEqual([changed]);
+    const moved = await service.find({ remoteUrls: [OTHER_URL], committedProjectId: null });
+    expect(moved.map((m) => m.path)).toEqual([changed]);
+    expect(reads).toEqual([changed]);
 
     const added = makeRepo(root, "reads-b-added", URL);
     host.addProject(added);
@@ -1110,5 +1113,20 @@ describe("remote reads across lookups", () => {
     reads.length = 0;
     expect((await service.find(payload)).map((m) => m.path)).toEqual([added]);
     expect(reads).toEqual([added]);
+  });
+
+  it("shares readings between identify and find, while acting on a remote reads it fresh", async () => {
+    const { host, service, reads } = countedHost("reads-c");
+    const repo = makeRepo(root, "reads-c-repo", URL);
+    const project = host.addProject(repo);
+
+    const identity = await service.identify({ projectId: project.id });
+    await service.identify({ projectId: project.id });
+    await service.find({ remoteUrls: [URL], committedProjectId: null });
+    expect(identity.remotes.map((r) => r.url)).toEqual([URL]);
+    expect(reads).toEqual([repo]);
+
+    await service.describeSource({ projectId: project.id, worktreePath: null, skipBranch: true });
+    expect(reads).toEqual([repo, repo]);
   });
 });

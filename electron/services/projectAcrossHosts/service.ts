@@ -67,6 +67,7 @@ import {
   scanRoots,
   type RemoteLister,
 } from "./matcher.js";
+import { RemoteReadCache } from "./remoteReadCache.js";
 import type { ProjectAcrossHostsDeps } from "./types.js";
 
 const BRANCH_FETCH_TIMEOUT_MS = 15_000;
@@ -230,11 +231,19 @@ export class ProjectAcrossHostsService {
    */
   private readonly reservedDestinations = new Set<string>();
 
+  /**
+   * Remotes for `identify` and `find`, which every presence check and host
+   * switch repeats. Everything that acts on a remote reads it fresh.
+   */
+  private readonly lookupRemotes: RemoteReadCache;
+
   constructor(
     private readonly deps: ProjectAcrossHostsDeps,
     private readonly listRemotes: RemoteLister = listRegisteredRemotes
   ) {
-    this.bundles = new BundleStore(() => deps.bundleDir(), deps.now ?? (() => Date.now()));
+    const now = deps.now ?? (() => Date.now());
+    this.bundles = new BundleStore(() => deps.bundleDir(), now);
+    this.lookupRemotes = new RemoteReadCache(listRemotes, { now });
   }
 
   private requireProject(projectId: unknown): Project {
@@ -374,7 +383,7 @@ export class ProjectAcrossHostsService {
   async identify(payload: IdentifyProjectPayload): Promise<ProjectIdentity> {
     const project = this.requireProject(payload?.projectId);
     const remotes = stripRemoteListCredentials(
-      await this.listRemotes(project.path).catch(() => [])
+      await this.lookupRemotes.read(project.path).catch(() => [])
     );
     const git = await this.deps.git.local(project.path);
     const tracked = await tryRaw(git, ["ls-files", "--", ".daintree/project.json"]);
@@ -601,7 +610,7 @@ export class ProjectAcrossHostsService {
           typeof payload?.committedProjectId === "string" ? payload.committedProjectId : null,
       },
       this.deps,
-      this.listRemotes
+      this.lookupRemotes.read
     );
   }
 
