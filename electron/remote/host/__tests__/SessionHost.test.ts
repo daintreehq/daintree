@@ -832,27 +832,75 @@ describe("SessionHost: pushes a Shell would discard by locality (#15901)", () =>
     expect(eventFrames(link)[0]!.args[0]).toMatchObject({ name: "agent-session:recorded" });
   });
 
-  it("owes a resumed Shell no resync for a discarded push it missed while away", () => {
+  it("sends nothing a matching Shell would drop as unclassified, and keeps plugin pushes", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+
+    broadcast("made:up", []);
+    broadcast(CHANNELS.EVENTS_PUSH, [{ name: "made:up", payload: {} }]);
+    broadcast(CHANNELS.EVENTS_PUSH, ["not an envelope"]);
+    broadcast("plugin:acme:status", [{ ok: true }]);
+
+    expect(eventFrames(link).map((f) => f.channel)).toEqual(["plugin:acme:status"]);
+  });
+
+  it("keeps a discarded push off a backed-up lane, so it starts no resync", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+
+    link.postResult = "refused";
+    broadcast(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, [{ percent: 40 }]);
+    link.postResult = "over-high-water";
+    link.queued = 5_000;
+    broadcast(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, [{ percent: 41 }]);
+    vi.advanceTimersByTime(100);
+
+    link.postResult = "queued";
+    link.queued = 0;
+    broadcast(CHANNELS.TERMINAL_DATA, ["t1", "hi"]);
+    link.tick();
+    expect(eventFrames(link).map((f) => f.channel)).toEqual([CHANNELS.TERMINAL_DATA]);
+    expect(link.calls).toEqual([]);
+  });
+
+  it("follows the build of the Shell's latest attach across resumes", () => {
+    const mismatch: HandshakeMismatch = { kind: "version", local: "1.2.3", remote: "1.2.4" };
+    const sent = (link: ReturnType<typeof fakeLink>) => {
+      broadcast(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, [{ percent: 40 }]);
+      return eventFrames(link).length;
+    };
     const first = fakeLink();
     server.attach("s1", first);
     open(first, "view-1", "p1");
-    first.drop();
-    broadcast(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, [{ percent: 40 }]);
+    expect(sent(first)).toBe(0);
 
+    first.drop();
     const second = fakeLink();
-    server.attach("s1", second, true);
-    expect(second.calls).toEqual([]);
+    server.attach("s1", second, true, "c1", mismatch);
+    expect(sent(second)).toBe(1);
+
+    second.drop();
+    const third = fakeLink();
+    server.attach("s1", third, true);
+    expect(sent(third)).toBe(0);
   });
 
-  it("keeps sending everything to a Shell on another build, whose own tables decide", () => {
+  it.each<[string, HandshakeMismatch]>([
+    ["version", { kind: "version", local: "1.2.3", remote: "1.2.4" }],
+    ["commit", { kind: "commit", local: "abc", remote: "def" }],
+  ])("keeps sending everything to a Shell on another %s, whose own tables decide", (_, mismatch) => {
     const link = fakeLink();
-    server.attach("s1", link, false, "c1", { kind: "commit", local: "abc", remote: "def" });
+    server.attach("s1", link, false, "c1", mismatch);
     open(link, "view-1", "p1");
 
     broadcast(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, [{ percent: 40 }]);
+    broadcast(CHANNELS.EVENTS_PUSH, [{ name: "made:up", payload: {} }]);
     broadcast(CHANNELS.TERMINAL_DATA, ["t1", "hi"]);
     expect(eventFrames(link).map((f) => f.channel)).toEqual([
       CHANNELS.UPDATE_DOWNLOAD_PROGRESS,
+      CHANNELS.EVENTS_PUSH,
       CHANNELS.TERMINAL_DATA,
     ]);
   });

@@ -373,6 +373,7 @@ describe("HostServer authentication", () => {
     expect(seen[0]).toMatchObject({
       resumed: false,
       client: { clientId: "client-a", clientName: "greg-mbp" },
+      buildMismatch: null,
     });
 
     seen[0]!.session.setInvokeHandler(async (msg) => ({
@@ -700,6 +701,11 @@ describe("HostServer session resume", () => {
     expect(started?.context).toMatchObject({
       sessionId: seen[0]!.sessionId,
       buildMismatch: { kind: "version", local: TEST_HANDSHAKE.version, remote: "0.9.0" },
+    });
+    expect(seen[0]!.buildMismatch).toEqual({
+      kind: "version",
+      local: TEST_HANDSHAKE.version,
+      remote: "0.9.0",
     });
   });
 

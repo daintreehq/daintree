@@ -42,6 +42,8 @@ export interface HostSessionContext {
   client: LinkClientInfo;
   resumed: boolean;
   session: LinkSession;
+  /** How this link's Shell build differs from this one; null when they match. */
+  buildMismatch: HandshakeMismatch | null;
 }
 
 export interface HostSessionDetached {
@@ -555,7 +557,13 @@ export class HostServer {
     }
     const id = sessionId ?? crypto.randomUUID();
 
-    const ctx: HostSessionContext = { sessionId: id, client: hello.client, resumed, session };
+    const ctx: HostSessionContext = {
+      sessionId: id,
+      client: hello.client,
+      resumed,
+      session,
+      buildMismatch: mismatch,
+    };
     const resumeSecret = crypto.randomBytes(32).toString("base64url");
     // The secret the Shell just resumed with stays good until it is seen to
     // have this one; a new session has nothing before it.

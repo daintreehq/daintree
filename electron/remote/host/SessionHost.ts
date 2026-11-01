@@ -13,6 +13,7 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { createLogger } from "../../utils/logger.js";
 import { toTransportSafeError } from "../../ipc/transportSafeError.js";
+import { acceptHostPush } from "../hybrid/eventsPush.js";
 import { appErrorEnvelope } from "../link/envelopes.js";
 import { Lane } from "../link/frames.js";
 import { ControlKind, EventKind } from "../link/messages.js";
@@ -214,6 +215,11 @@ interface SessionState {
   lastActiveAt: number | null;
   /** Channels already logged as unsendable here, so one that always fails warns once. */
   unsendableChannels: Set<string>;
+  /**
+   * The Shell runs this build, so its locality tables are this one's and a
+   * push it would discard on arrival need not cross the link.
+   */
+  sameBuild: boolean;
 }
 
 /**
@@ -476,6 +482,7 @@ export class SessionHost {
         group: undefined as unknown as EndpointGroup,
         lastActiveAt: null,
         unsendableChannels: new Set(),
+        sameBuild: ctx.buildMismatch === null,
       };
       created.handle = {
         sessionId: created.sessionId,
@@ -486,6 +493,8 @@ export class SessionHost {
       state = created;
       this.states.set(ctx.sessionId, state);
     }
+    // A resume is a new HELLO, which may come from another build.
+    state.sameBuild = ctx.buildMismatch === null;
     const resumed = state.link === null && state.endpoints.size > 0;
     this.bindLink(state, ctx.session);
     if (resumed) this.notifyTransport(state, true);
@@ -802,6 +811,8 @@ export class SessionHost {
     endpoints: readonly RemoteViewEndpoint[],
     frame: HostFrame
   ): void {
+    // A Shell on another build decides by its own tables, which may differ.
+    if (state.sameBuild && !acceptHostPush(frame.channel, frame.args)) return;
     const link = state.link;
     if (!link || !link.isOpen || state.resyncing) {
       for (const endpoint of endpoints) state.stale.add(endpoint.clientEndpointId);

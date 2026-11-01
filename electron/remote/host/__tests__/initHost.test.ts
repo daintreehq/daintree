@@ -109,6 +109,7 @@ function fakeServer() {
           resumed,
           client: { clientId: "c1", clientName: "greg-mbp", platform: "darwin" },
           session: link as unknown as LinkSession,
+          buildMismatch: null,
         });
       }
     },
