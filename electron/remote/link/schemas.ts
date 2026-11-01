@@ -52,6 +52,7 @@ export const HelloSchema = z.object({
   client: ClientInfoSchema,
   resumeSessionId: id.nullable(),
   resumeSecret: z.string().max(256).nullable().optional(),
+  messageFragments: z.boolean().optional(),
 });
 
 const WelcomeSchema = z.object({
@@ -61,6 +62,7 @@ const WelcomeSchema = z.object({
   resumed: z.boolean(),
   resumeSecret: z.string().max(256).optional(),
   hostLaunchId: id.optional(),
+  messageFragments: z.boolean().optional(),
   // One this side cannot read (a cause added after it) is dropped rather than
   // failing the WELCOME: the session matters more than saying why the last one ended.
   previousEnd: z
@@ -316,6 +318,11 @@ const BODY_SCHEMAS: Record<number, Record<number, z.ZodType>> = {
     [BulkKind.TRANSFER_ACK]: TransferAckSchema,
   },
 };
+
+/** Whether a lane carries a structured (encoded) message of this kind. */
+export function isStructuredKind(lane: number, kind: number): boolean {
+  return BODY_SCHEMAS[lane]?.[kind] !== undefined;
+}
 
 export class LinkValidationError extends Error {
   constructor(message: string) {

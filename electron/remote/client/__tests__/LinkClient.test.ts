@@ -13,6 +13,7 @@ import {
   type LinkTransport,
 } from "../transport.js";
 import { FrameDecoder, Lane, encodeFrame, type LinkFrame } from "../../link/frames.js";
+import { fragmentFrame } from "../../link/messageFragments.js";
 import {
   ControlKind,
   EventKind,
@@ -669,6 +670,104 @@ describe("LinkClient session start", () => {
       await removeTempDir(dir);
     }
   });
+});
+
+describe("LinkClient message fragments (#15892)", () => {
+  const BIG = "f".repeat(200_000);
+
+  /**
+   * A host in memory that answers HELLO with WELCOME and a fragmented event in
+   * one push, so the client reads them all in a single chunk, before anything
+   * has attached to the session.
+   */
+  function inMemoryHost(hostOffers: boolean) {
+    const decoder = new FrameDecoder();
+    const received: LinkFrame[] = [];
+    const socket: Duplex = new Duplex({
+      read() {},
+      write(chunk: Buffer, _encoding, callback) {
+        for (const frame of decoder.push(chunk)) {
+          received.push(frame);
+          if (frame.lane !== Lane.CONTROL || frame.kind !== ControlKind.HELLO) continue;
+          const welcome = messageToFrame({
+            lane: Lane.CONTROL,
+            kind: ControlKind.WELCOME,
+            body: {
+              handshake: TEST_HANDSHAKE,
+              hostName: "h",
+              sessionId: "s1",
+              resumed: false,
+              ...(hostOffers ? { messageFragments: true } : {}),
+            },
+          });
+          const event = messageToFrame({
+            lane: Lane.EVENTS,
+            kind: EventKind.EVENT,
+            body: { endpointId: null, channel: "x:big", args: [BIG] },
+          });
+          socket.push(
+            Buffer.concat(
+              [welcome, ...fragmentFrame(event, 1)].map((f) => Buffer.from(encodeFrame(f)))
+            )
+          );
+        }
+        callback();
+      },
+      // Ends when the client does, as a host closing its side would.
+      final(callback) {
+        socket.push(null);
+        callback();
+      },
+    });
+    const transport: LinkTransport = {
+      async open() {
+        return { socket, token: "t", dispose: async () => void socket.destroy() };
+      },
+    };
+    return { transport, received };
+  }
+
+  it.each([
+    ["a host that offers them", true],
+    ["an older host that doesn't", false],
+  ])(
+    "offers them in its HELLO, holds them read with WELCOME, and sends them only to %s",
+    async (_name, hostOffers) => {
+      const host = inMemoryHost(hostOffers);
+      const events: unknown[] = [];
+      client = new LinkClient({
+        transport: host.transport,
+        handshake: TEST_HANDSHAKE,
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+      });
+      client.onSession(({ session }) => {
+        session.on(Lane.EVENTS, EventKind.EVENT, (body) => events.push(body));
+        session.post({
+          lane: Lane.EVENTS,
+          kind: EventKind.EVENT,
+          body: { endpointId: null, channel: "x:reply", args: [BIG] },
+        });
+      });
+      client.start();
+      await waitFor(() => events.length > 0);
+      const hello = host.received.find((f) => f.kind === ControlKind.HELLO)!;
+      expect(frameToMessage(hello).body).toMatchObject({ messageFragments: true });
+      expect(events).toEqual([{ endpointId: null, channel: "x:big", args: [BIG] }]);
+
+      await waitFor(() =>
+        host.received.some((f) => f.lane === Lane.EVENTS && f.kind === EventKind.EVENT)
+      );
+      const sent = host.received.filter((f) => f.lane === Lane.EVENTS);
+      if (hostOffers) {
+        expect(sent.length).toBeGreaterThan(1);
+        expect(sent.every((f) => f.streamId !== 0)).toBe(true);
+      } else {
+        expect(sent).toHaveLength(1);
+        expect(frameToMessage(sent[0]!).body).toMatchObject({ channel: "x:reply" });
+      }
+    }
+  );
 });
 
 describe("LinkClient stop", () => {

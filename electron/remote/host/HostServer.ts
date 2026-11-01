@@ -563,7 +563,7 @@ export class HostServer {
       current: resumeSecret,
       previous: resumed ? presented : null,
     });
-    session.open();
+    session.open({ peerReadsFragments: hello.messageFragments === true });
     session.post({
       lane: Lane.CONTROL,
       kind: ControlKind.WELCOME,
@@ -575,6 +575,7 @@ export class HostServer {
         resumeSecret,
         hostLaunchId: this.options.launchId ?? PROCESS_LAUNCH_ID,
         ...(this.options.previousEnd && { previousEnd: this.options.previousEnd }),
+        messageFragments: true,
       },
     });
     this.live.set(id, ctx);

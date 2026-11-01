@@ -92,6 +92,11 @@ export interface HelloMessage {
    * travels in lease and summary records other Shells see; this never does.
    */
   resumeSecret?: string | null;
+  /**
+   * This Shell reads message fragments (#15892), so the host may cut a large
+   * message into them. Absent from older Shells, which get whole frames.
+   */
+  messageFragments?: boolean;
 }
 
 export interface WelcomeMessage {
@@ -114,6 +119,11 @@ export interface WelcomeMessage {
    * before it.
    */
   previousEnd?: HostPreviousEnd;
+  /**
+   * This host reads message fragments (#15892), so the Shell may cut a large
+   * message into them. Absent from older hosts, which get whole frames.
+   */
+  messageFragments?: boolean;
 }
 
 export type RejectReason =
