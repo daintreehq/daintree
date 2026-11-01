@@ -176,6 +176,10 @@
     "check:renderer-storage": "tsx scripts/ci/check-renderer-storage-owners.ts"
   },
   "dependencies": {
+    "@daintreehq/decisions-client": "0.1.0",
+    "@daintreehq/decisions-crypto": "0.1.0",
+    "@daintreehq/decisions-model": "0.1.0",
+    "@daintreehq/decisions-protocol": "0.1.0",
     "@huggingface/tokenizers": "0.2.0",
     "@parcel/watcher": "2.6.0",
     "@radix-ui/react-select": "^2.4.1",
