@@ -398,13 +398,17 @@ const pendingOutgoingPersists = new Map<string, Promise<void>>();
 
 function trackOutgoingPersist(projectId: string | null, persist: Promise<void>): void {
   if (!projectId) return;
-  pendingOutgoingPersists.set(projectId, persist);
+  // A later leave of the same project, even one with nothing to save, must not
+  // release a switch back from waiting on an earlier save still writing it.
+  const earlier = pendingOutgoingPersists.get(projectId);
+  const tracked = earlier ? Promise.allSettled([earlier, persist]).then(() => undefined) : persist;
+  pendingOutgoingPersists.set(projectId, tracked);
   const cleanup = () => {
-    if (pendingOutgoingPersists.get(projectId) === persist) {
+    if (pendingOutgoingPersists.get(projectId) === tracked) {
       pendingOutgoingPersists.delete(projectId);
     }
   };
-  persist.then(cleanup, cleanup);
+  tracked.then(cleanup, cleanup);
 }
 
 /**
@@ -576,9 +580,11 @@ async function activateForRemoteShell(
       console.error(`[${action}] Failed to save the layout a remote view left:`, error);
     });
   }
-  // Holderless, so a cold host is already spawning while the Shell swaps
-  // views: the incoming endpoint attaches to it, and it reclaims itself if
-  // none ever does.
+  // Foregrounded for a view the Shell kept cached, whose endpoint still holds
+  // a host that backgrounding paused. Otherwise prewarmed, holderless, so a
+  // cold host is already spawning while the Shell swaps views: the incoming
+  // endpoint attaches to it, and it reclaims itself if none ever does.
+  deps.worktreeService?.resumeProject(project.path);
   deps.worktreeService?.prewarmProject(project.path);
   noteRemoteSwitchOnHost(project);
   // A view cold-starting on this project reads its state file, so a save of
