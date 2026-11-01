@@ -58,6 +58,7 @@ import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import { FocusedSubLine } from "./WorktreeCard/FocusedSubLine";
+import { hasTextSelectionWithin, isCardContentEvent } from "./WorktreeCard/cardClickTarget";
 import { selectButtonDescribedBy, worktreeRowDescriptionId } from "./WorktreeCard/rowDescriptions";
 import { isTooltipFocusOpenSuppressed } from "@/lib/tooltipDismissRegistry";
 import { isTooltipSuppressedForElement } from "@/lib/tooltipFocusSuppression";
@@ -184,7 +185,10 @@ export function WorktreeCard({
   "use memo";
   const isMultiSelectEnabled = variant === "grid" && onToggleSelect !== undefined;
 
-  const handleCardClick = (e: React.MouseEvent) => {
+  const handleCardClick = (e: React.MouseEvent<HTMLElement>) => {
+    if (!isCardContentEvent(e) || isDraggingSort) return;
+    // `detail` is 0 for the select button's Enter/Space, which ends no drag.
+    if (e.detail > 0 && hasTextSelectionWithin(e.currentTarget)) return;
     if (isMultiSelectEnabled && (e.metaKey || e.ctrlKey || e.shiftKey)) {
       e.preventDefault();
       e.stopPropagation();
@@ -262,21 +266,13 @@ export function WorktreeCard({
     toggleWorktreeCollapsed(worktree.id);
   };
 
-  const handleDoubleClick = (e: React.MouseEvent) => {
+  const handleDoubleClick = (e: React.MouseEvent<HTMLElement>) => {
     if (!canCollapse) return;
-    // Interactive children stop `click` propagation but `click` and `dblclick`
-    // are separate events, so a double-click on a control (More actions,
-    // Delete, the drag handle, issue/PR badges,
-    // the lifecycle "Show details" <summary>) still bubbles here and would
-    // toggle collapse. Only collapse when the double-click originates on the
-    // inert card body — the full-card select overlay or non-interactive
-    // content — not on a nested control (#10319).
-    const target = e.target;
-    if (!(target instanceof Element)) return;
-    const interactive = target.closest(
-      'button, a, summary, [role="button"], [role="menuitem"], input, select, textarea, [data-worktree-row-drag-handle]'
-    );
-    if (interactive && !interactive.hasAttribute("data-card-select-overlay")) return;
+    // Two quick clicks on a control (More actions, a disclosure, the drag
+    // handle) are two presses of that control, not a request to fold the card
+    // (#10319). The text-selection guard stays off here: a double-click
+    // selects a word on its own.
+    if (!isCardContentEvent(e)) return;
     e.stopPropagation();
     toggleWorktreeCollapsed(worktree.id);
   };
@@ -1128,10 +1124,11 @@ export function WorktreeCard({
     !isBeingDeleted &&
     !restingRowShowsLifecycle;
   const lifecycleAlarmShownInBody = !effectiveIsCollapsed;
-  // On the compact card Details and Sessions share one footer row while both
-  // are closed: two disclosures that each used a full row to say one line.
-  const isSessionsFooterInline =
-    isCompactCard && !isExpanded && !isTerminalsExpanded && terminalCounts.total > 0;
+  // On the compact card Details and Sessions share one footer row while
+  // Details is closed: two disclosures that each used a full row to say one
+  // line. Opening Sessions keeps its trigger in that row and lays the list out
+  // beneath, so the control does not move out from under the click.
+  const isSessionsFooterInline = isCompactCard && !isExpanded && terminalCounts.total > 0;
 
   const ariaStatusParts: string[] = [spineState];
   if (gitStateIndicator) {
@@ -1596,6 +1593,7 @@ export function WorktreeCard({
                   contentId={`worktree-body-${worktree.id}`}
                   branchLabel={branchLabel}
                   customTitle={customTitle}
+                  worktreeLabel={ariaName}
                   sessionStates={terminalCounts.byState}
                   sessionTotal={terminalCounts.total}
                   sessionUnread={terminalCounts.unread}
@@ -1672,7 +1670,7 @@ export function WorktreeCard({
                   <div
                     className={cn(
                       isSessionsFooterInline &&
-                        "flex flex-col @xs/card:flex-row @xs/card:items-center @xs/card:gap-1"
+                        "flex flex-col @xs/card:flex-row @xs/card:flex-wrap @xs/card:items-center @xs/card:gap-x-1"
                     )}
                   >
                     <div className={cn(isSessionsFooterInline && "min-w-0 flex-1")}>
@@ -1689,6 +1687,7 @@ export function WorktreeCard({
                         worktreeErrors={worktreeErrors}
                         isFocused={isFocused}
                         isStale={isStaleCard}
+                        worktreeLabel={ariaName}
                         onToggleExpand={handleToggleExpand}
                         onPathClick={openFileBrowserForThisWorktree}
                         onDismissError={dismissError}
@@ -1700,6 +1699,7 @@ export function WorktreeCard({
                               worktree={worktree}
                               branchLabel={branchLabel}
                               isActive={isActive}
+                              worktreeLabel={ariaName}
                               onOpenIssue={
                                 worktree.issueNumber ? handleOpenIssueExternal : undefined
                               }
@@ -1743,6 +1743,7 @@ export function WorktreeCard({
                       variant={variant}
                       density={cardDensity}
                       worktreeId={worktree.id}
+                      worktreeLabel={ariaName}
                       onStartSession={() => handleOpenPanelPalette("user")}
                       isExpanded={isTerminalsExpanded}
                       inline={isSessionsFooterInline}
@@ -1760,8 +1761,10 @@ export function WorktreeCard({
 
           {(deleteError || issueError) && (
             // Inside the card's own gutter, so a failure reads as belonging to
-            // the card above it rather than as a band between two cards.
-            <div className={cn(variant === "sidebar" && "px-3 pb-2.5")}>
+            // the card above it rather than as a band between two cards. A
+            // control region: its message is there to be read and copied, and
+            // pressing in it is never a request to switch worktrees.
+            <div data-card-control="" className={cn(variant === "sidebar" && "px-3 pb-2.5")}>
               {deleteError && (
                 <WorktreeDeleteErrorBanner
                   message={deleteError}

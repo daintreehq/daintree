@@ -9,8 +9,9 @@ import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Sprout, Pin, BellOff } from "lucide-react";
 import { FolderOutput } from "@/components/icons";
 import type { AggregateCounts } from "./aggregateCounts";
-import { IssueBadge } from "./IssueBadge";
 import { PRBadge } from "./PRBadge";
+import { useColdNumberGap } from "./hooks/useColdNumberGap";
+import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
 import { EnvironmentPopover } from "./EnvironmentPopover";
 import { WorktreeAttachmentChips } from "./WorktreeAttachmentChips";
 import { visibleAttachmentChips } from "./attachmentState";
@@ -62,6 +63,8 @@ export interface WorktreeHeaderProps {
   branchLabel: string;
   /** Normalised custom title (#13409); takes the headline slot when set. */
   customTitle?: string;
+  /** Names the worktree in its controls' accessible names. */
+  worktreeLabel?: string;
   sessionStates?: Record<AgentState, number>;
   sessionTotal?: number;
   /** Unread hand-backs, counted apart from `sessionStates`. */
@@ -122,6 +125,7 @@ export function WorktreeHeader({
   contentId,
   branchLabel,
   customTitle,
+  worktreeLabel,
   sessionStates,
   sessionTotal,
   sessionUnread,
@@ -164,6 +168,16 @@ export function WorktreeHeader({
   const hasDisplayTitle = headline.kind === "pr" || headline.kind === "issue";
   const displayTitle =
     headline.kind === "pr" || headline.kind === "issue" ? headline.title : undefined;
+  // A PR headline can arrive before its title. Its number stands in once the
+  // cold-number window has passed, as it did when the headline was the badge
+  // (#8079), so the card never names itself with nothing.
+  const hideColdPrNumber = useColdNumberGap(
+    headline.kind === "pr" ? headline.number : 0,
+    displayTitle,
+    headline.kind === "pr"
+  );
+  const headlineTitleText =
+    displayTitle || (headline.kind === "pr" && !hideColdPrNumber ? `#${headline.number}` : "");
   const hasPlanFile = Boolean(worktree.hasPlanFile);
   const hasDevServerSignal = !!devServerSession && isLiveDevServerStatus(devServerSession.status);
   const devServerSummary = devServerSession ? summarizeDevServer(devServerSession) : null;
@@ -171,7 +185,6 @@ export function WorktreeHeader({
   const hasAttachmentChips =
     !!onAttachmentAction && visibleAttachmentChips(worktree.attachments).length > 0;
   const pluginStatuses = useWorktreePluginStatuses(worktree.id);
-  const underlineOnHover = variant !== "sidebar" || isActive;
   // `hasBaseName` is the whole mount rule for the base line: the workspace-host
   // sets it only for a non-main worktree on a branch whose base it resolved, so
   // it is exactly "this is a branch, and we know what it is measured against".
@@ -285,6 +298,14 @@ export function WorktreeHeader({
   // yet has no words to keep, so it stays the badge until the title arrives,
   // and so does a PR headline that warns: on a collapsed card nothing else
   // would show that its head moved under an armed merge.
+  const prDetectionPaused = usePRCircuitBreakerStore((s) => s.tripped);
+  const showCollapsedPrReference =
+    !!isCollapsed &&
+    isPrOriginated &&
+    !hasCustomTitle &&
+    headline.kind === "pr" &&
+    isPullRequestWarning(worktree.linked?.pr);
+
   const quietHeadlineTitle =
     quietGit && !hasCustomTitle && !(isPrOriginated && isPullRequestWarning(worktree.linked?.pr))
       ? displayTitle
@@ -355,33 +376,20 @@ export function WorktreeHeader({
               isMuted={isMuted}
             />
           ) : hasDisplayTitle ? (
-            isPrOriginated ? (
-              <PRBadge
-                prNumber={worktree.sourcePrNumber!}
-                prTitle={displayTitle}
-                prState={worktree.linked?.pr?.state}
-                prCiStatus={worktree.linked?.pr?.ciStatus}
-                mergeIntent={worktree.linked?.pr?.mergeIntent}
-                headMovedWhileArmed={worktree.linked?.pr?.headMovedWhileArmed}
-                isSubordinate={false}
-                worktreePath={worktree.path}
-                onOpen={badges.onOpenPR}
-                isHeadline
-                isActive={isActive}
-                underlineOnHover={underlineOnHover}
-              />
-            ) : (
-              <IssueBadge
-                issueNumber={worktree.issueNumber!}
-                issueTitle={displayTitle}
-                provenance={worktree}
-                worktreePath={worktree.path}
-                onOpen={badges.onOpenIssue}
-                isHeadline
-                isActive={isActive}
-                underlineOnHover={underlineOnHover}
-              />
-            )
+            // The issue or PR title, as words: the headline names the
+            // worktree, and a click on it selects the card like any of the
+            // card's content. It used to be the issue/PR badge itself, which
+            // selected an inactive card but opened the browser from the active
+            // one — the same click leaving the app depending on which card
+            // was current (#15864). The reference that opens it is its own
+            // control in the stack below.
+            <CustomTitleHeadline
+              title={headlineTitleText}
+              displaced={[]}
+              isActive={isActive}
+              isMuted={isMuted}
+              testId="worktree-headline-title"
+            />
           ) : isMainStandardLayout && quietGit ? (
             <CustomTitleHeadline
               title={worktree.name}
@@ -412,6 +420,28 @@ export function WorktreeHeader({
             </TruncatedTooltip>
           ) : (
             <BranchLabel label={branchLabel} isActive={isActive} isMuted={isMuted} />
+          )}
+          {/* A collapsed card has no stack for the PR reference to sit in, and
+              the collapsed alarm pill has no word for a head that moved under
+              an armed merge. So a PR headline that warns keeps its reference
+              beside the title, where the warning was before the headline
+              became words. */}
+          {showCollapsedPrReference && (
+            // The title gives way first; the number and its warning do not.
+            <span className="flex shrink-0">
+              <PRBadge
+                prNumber={worktree.sourcePrNumber!}
+                prState={worktree.linked?.pr?.state}
+                prCiStatus={worktree.linked?.pr?.ciStatus}
+                mergeIntent={worktree.linked?.pr?.mergeIntent}
+                headMovedWhileArmed={worktree.linked?.pr?.headMovedWhileArmed}
+                isSubordinate={false}
+                worktreePath={worktree.path}
+                onOpen={badges.onOpenPR}
+                worktreeLabel={worktreeLabel}
+                prDetectionPaused={prDetectionPaused}
+              />
+            </span>
           )}
           {/* The grid keeps the word beside its title; the sidebar draws it as
               a pill in the title row's attention column. */}
@@ -672,7 +702,7 @@ export function WorktreeHeader({
             branchLabel={branchLabel}
             isActive={isActive}
             isMuted={isMuted}
-            underlineOnHover={underlineOnHover}
+            worktreeLabel={worktreeLabel}
             hasUpstreamDelta={hasUpstreamDelta}
             hasAuthFailedSignIn={hasAuthFailedSignIn}
             hasDisplayTitle={hasDisplayTitle}
@@ -708,11 +738,13 @@ function CustomTitleHeadline({
   displaced,
   isActive,
   isMuted,
+  testId = "worktree-custom-title",
 }: {
   title: string;
   displaced: string[];
   isActive: boolean;
   isMuted?: boolean;
+  testId?: string;
 }) {
   const span = (
     <span
@@ -724,7 +756,7 @@ function CustomTitleHeadline({
             ? "text-text-secondary font-normal"
             : "text-text-secondary font-medium"
       )}
-      data-testid="worktree-custom-title"
+      data-testid={testId}
     >
       {title}
     </span>

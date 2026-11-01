@@ -69,6 +69,29 @@ export const SECTION_ROW_BOX =
 export const SECTION_ROW = `worktree-section-button flex w-full items-center text-left ${SECTION_ROW_BOX}`;
 
 /**
+ * The Details and Sessions disclosure control: the row's leading chevron as a
+ * button of its own, not the whole row (#15864). The row is card content and
+ * selects the worktree like the rest of the card; only this toggles.
+ *
+ * It is the same element open and closed, at the same place and with the same
+ * name, so a click never lands on something that moved and keyboard focus
+ * survives the toggle. Open, it also carries the section's label, since that
+ * row has nothing else in it to select.
+ *
+ * The negative left margin cancels the row box's 6px left pad (physical, like
+ * the pad itself), so the chevron centred in a 24px target lands on the pixel
+ * the bare chevron used to, and whatever follows it starts where the row's
+ * text always did. The negative block margin lets the 24px target (SC 2.5.8)
+ * sit in a 16px line without making the row taller. `worktree-section-button`
+ * is the hover plate the whole row used to paint, now bounded to the control.
+ */
+export const DISCLOSURE_BUTTON =
+  "worktree-section-button -my-1 -ml-1.5 flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-text-secondary transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]";
+
+/** The open control's padding once it carries the section label beside its chevron. */
+export const DISCLOSURE_BUTTON_LABELLED = "justify-start gap-1.5 pl-1.5 pr-2";
+
+/**
  * The disclosure well — the only closed contour inside the card. Holds an
  * expanded Details, and holds sessions in every state.
  *

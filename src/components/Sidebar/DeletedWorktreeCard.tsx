@@ -272,6 +272,7 @@ export function DeletedWorktreeCard({
         </div>
         <WorktreeTerminalSection
           worktreeId={worktree.id}
+          worktreeLabel={worktree.title}
           isExpanded={isTerminalsExpanded}
           counts={counts}
           terminals={listedTerminals}

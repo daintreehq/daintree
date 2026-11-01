@@ -460,10 +460,17 @@ describe("sidebar card containment", () => {
     ).toBeTruthy();
     details.unmount();
 
+    // The chevron is the control and the agent glyph beside it is content
+    // (#15864): both on the closed row, only one of them inside the button.
     const terminals = renderTerminals({ variant: "sidebar", isExpanded: false });
+    const sessionsTrigger = terminals.container.querySelector('[aria-expanded="false"]')!;
     expect(
-      terminals.container.querySelector('[aria-expanded="false"]')!.querySelectorAll("svg").length,
-      "collapsed sidebar Active sessions should carry a disclosure chevron beside its own icon"
+      sessionsTrigger.querySelectorAll("svg").length,
+      "collapsed sidebar Active sessions should carry a disclosure chevron"
+    ).toBe(1);
+    expect(
+      sessionsTrigger.parentElement!.querySelectorAll("svg").length,
+      "collapsed sidebar Active sessions should keep its own icon beside the chevron"
     ).toBeGreaterThan(1);
   });
 });

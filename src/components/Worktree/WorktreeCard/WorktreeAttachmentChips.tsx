@@ -100,7 +100,7 @@ function AttachmentChip({
               type="button"
               data-no-dnd
               aria-label={triggerLabel}
-              className="-my-[5px] inline-flex h-6 min-w-0 max-w-28 shrink items-center gap-1 rounded-[var(--radius-sm)] px-1 text-xs text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+              className="-my-[5px] inline-flex h-6 min-w-0 max-w-28 shrink items-center gap-1 rounded-[var(--radius-sm)] px-1 text-xs text-text-secondary transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
             >
               {state.tone === "error" ? (
                 <CircleX className="size-3.5 shrink-0 text-status-error" aria-hidden="true" />

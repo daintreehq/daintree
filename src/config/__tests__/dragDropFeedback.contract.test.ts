@@ -65,6 +65,28 @@ const DROPPABLE_HOOK_FACADES = new Set(["src/pluginUi/dnd.ts"]);
 
 const codeOf = (rel: string) => SOURCES.find((s) => s.rel === rel)?.code ?? "";
 
+/**
+ * A rule's selector list split at its own commas only. A comma inside `:is()`,
+ * `:where()`, `:not()` or `:has()` separates that pseudo-class's arguments, not
+ * the rule's selectors.
+ */
+function topLevelSelectors(selector: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < selector.length; i++) {
+    const ch = selector[i];
+    if (ch === "(") depth++;
+    else if (ch === ")") depth--;
+    else if (ch === "," && depth === 0) {
+      parts.push(selector.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(selector.slice(start));
+  return parts;
+}
+
 describe("drag and drop feedback contract", () => {
   it("frames every droppable container with DROP_TARGET_FRAME", () => {
     const droppables = SOURCES.filter(({ text }) => /\buseDroppable\(/.test(text));
@@ -146,7 +168,9 @@ describe("drag and drop feedback contract", () => {
     expect(outranking.length).toBeGreaterThan(0);
     const offenders = outranking
       .filter(({ selector }) =>
-        selector.split(",").some((part) => !part.includes(':not([data-drop-target="true"])'))
+        topLevelSelectors(selector).some(
+          (part) => !part.includes(':not([data-drop-target="true"])')
+        )
       )
       .map(({ selector }) => selector.replace(/\s+/g, " "));
     expect(offenders).toEqual([]);

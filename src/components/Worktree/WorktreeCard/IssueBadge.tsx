@@ -27,9 +27,8 @@ interface IssueBadgeProps {
   provenance?: IssueProvenance;
   worktreePath: string;
   onOpen?: () => void;
-  isHeadline?: boolean;
-  isActive?: boolean;
-  underlineOnHover?: boolean;
+  /** Names the worktree the issue is linked to in the reference's accessible name. */
+  worktreeLabel?: string;
 }
 
 export function IssueBadge({
@@ -38,22 +37,20 @@ export function IssueBadge({
   provenance,
   worktreePath,
   onOpen,
-  isHeadline,
-  isActive,
-  underlineOnHover,
+  worktreeLabel,
 }: IssueBadgeProps) {
   const { data, loading, error, missingCredential, providerId, fetchTooltip, reset } =
     useIssueTooltip(worktreePath, issueNumber, worktreeIssueLinkTarget(provenance ?? {}));
   // A tracker's own identifier (`ENG-42`) when the link has one; its number
   // alone would read as the code forge's issue.
   const issueLabel = provenance?.issueKey ?? `#${issueNumber}`;
+  const worktreeSuffix = worktreeLabel ? ` for worktree ${worktreeLabel}` : "";
 
   const { isOpen, handleOpenChange, handleClick } = useForgeBadgeTooltip({
     fetchTooltip,
     reset,
     missingCredential,
     providerId,
-    isActive: isActive ?? false,
     onOpen,
   });
 
@@ -91,25 +88,22 @@ export function IssueBadge({
           onClick={handleClick}
           data-no-dnd
           className={cn(
-            "flex items-center gap-1 text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary min-w-0",
-            freshnessClass(freshnessLevel),
-            isHeadline ? "gap-1.5 text-sm leading-[inherit]" : "text-xs"
+            // A bounded control with its own plate, on the text's own x: the
+            // negative margin cancels the padding the plate is drawn on.
+            "-mx-1 flex min-w-0 items-center gap-1 rounded-[var(--radius-sm)] px-1 text-left text-xs cursor-pointer transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
+            freshnessClass(freshnessLevel)
           )}
-          aria-disabled={!isActive || undefined}
           aria-label={
             missingCredential
               ? // Which item, then the action: the badge still names what it's for
                 // even though clicking it now opens Settings.
-                `Issue ${issueLabel}${issueTitle ? `: ${issueTitle}` : ""}. Add a forge access token to see issue details`
-              : issueTitle
-                ? `Open issue ${issueLabel}: ${issueTitle}`
-                : `Open issue ${issueLabel}`
+                `Issue ${issueLabel}${issueTitle ? `: ${issueTitle}` : ""}${worktreeSuffix}. Add a forge access token to see issue details`
+              : `Open issue ${issueLabel}${issueTitle ? `: ${issueTitle}` : ""}${worktreeSuffix}`
           }
         >
           <CircleDot
             className={cn(
-              "shrink-0",
-              isHeadline ? "w-3.5 h-3.5" : "w-3 h-3",
+              "w-3 h-3 shrink-0",
               missingCredential ? "text-text-secondary" : "text-pr-open"
             )}
             aria-hidden="true"
@@ -117,14 +111,7 @@ export function IssueBadge({
           <span
             className={cn(
               "truncate flex-1 min-w-0",
-              underlineOnHover && "hover:underline",
-              missingCredential
-                ? "text-text-secondary"
-                : isHeadline
-                  ? isActive
-                    ? "text-text-primary font-medium"
-                    : "text-text-secondary font-medium"
-                  : "text-text-primary"
+              missingCredential ? "text-text-secondary" : "text-text-primary"
             )}
           >
             {issueTitle ||

@@ -58,14 +58,7 @@ const ciStatus = (state: CIStatusState): CIStatus => ({
 function renderBadge(extra: Partial<Parameters<typeof PRBadge>[0]> = {}) {
   return render(
     <TooltipProvider>
-      <PRBadge
-        prNumber={42}
-        prState="open"
-        isSubordinate={false}
-        worktreePath="/repo"
-        isActive
-        {...extra}
-      />
+      <PRBadge prNumber={42} prState="open" isSubordinate={false} worktreePath="/repo" {...extra} />
     </TooltipProvider>
   );
 }

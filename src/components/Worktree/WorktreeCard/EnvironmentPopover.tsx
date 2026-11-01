@@ -260,7 +260,7 @@ export function EnvironmentPopover({
             <button
               type="button"
               data-no-dnd
-              className="-m-[5px] inline-flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+              className="-m-[5px] inline-flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
               aria-label={triggerLabel}
             >
               {/* A failed environment changes shape, not only hue (WCAG 1.4.1):

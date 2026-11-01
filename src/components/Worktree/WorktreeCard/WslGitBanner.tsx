@@ -200,6 +200,7 @@ export const WslGitBanner = React.memo(function WslGitBanner({
     <div
       ref={setRoot}
       data-testid="wsl-git-banner"
+      data-card-control=""
       data-state={view}
       aria-busy={view === "probing" || rechecking || undefined}
       className="mb-2 flex items-start gap-2 rounded-[var(--radius-lg)] border border-border-default bg-overlay-subtle p-3 text-xs"
