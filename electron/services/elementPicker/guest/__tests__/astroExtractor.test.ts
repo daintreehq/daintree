@@ -445,6 +445,14 @@ describe("the Astro extractor once the toolbar has taken the stamps off", () => 
     expect(fields(select(extractor, title)).servedDocument).toBe("unmatched");
     title.textContent = `${long}end `;
     expect(fields(select(extractor, title)).servedDocument).toBe("unmatched");
+    // The same length, one space become a tab: whitespace is compared too.
+    title.textContent = `${long.replace(" ", "\t")}end`;
+    expect(fields(select(extractor, title)).servedDocument).toBe("unmatched");
+    // Split across text nodes, the text is still the element's own, read whole.
+    title.replaceChildren(long, document.createComment(""), "end");
+    expect(fields(select(extractor, title)).servedDocument).toBe("matched");
+    title.replaceChildren(long, document.createComment(""), "End");
+    expect(fields(select(extractor, title)).servedDocument).toBe("unmatched");
   });
 
   it("gives up on an element with more children than it reads", () => {
