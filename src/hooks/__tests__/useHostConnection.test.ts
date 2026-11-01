@@ -3,6 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { renderHook } from "@testing-library/react";
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
 import type { DriveLeaseEvent, DriveLeaseView } from "@shared/types/ipc/driveLease";
+import type { HostProjectRehydrateOptions } from "@/store/hostProjectRehydrate";
 import type {
   DriveLeaseHolder,
   HostConnectionState,
@@ -21,7 +22,7 @@ const {
   applyNavigation,
   reporters,
 } = vi.hoisted(() => ({
-  rehydrate: vi.fn(async (_projectId: string, _options: unknown) => undefined),
+  rehydrate: vi.fn(async (_projectId: string, _options: HostProjectRehydrateOptions) => undefined),
   applyNavigation: vi.fn(async (_navigation: unknown, _isCurrent: () => boolean) => undefined),
   reporters: [] as Array<{
     mayReport: () => boolean;
@@ -121,7 +122,7 @@ import {
   useHostConnectionSync,
 } from "../useHostConnection";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
-import { onHostResync } from "@/store/hostResyncSignal";
+import { onHostResync, type HostResync, type HydratedSettings } from "@/store/hostResyncSignal";
 import type { resolveUnknownOutcome } from "@/utils/resolveUnknownOutcome";
 import {
   _resetTerminalInputGateForTesting,
@@ -400,6 +401,47 @@ describe("host connection sync", () => {
     expect(resyncListener).toHaveBeenCalledTimes(3);
     offResync();
     stop();
+  });
+
+  it("hands a fresh session's resync listeners the settings its hydrate answer carried", async () => {
+    installElectron();
+    bindView("studio-01");
+    const heard: HostResync[] = [];
+    const offResync = onHostResync((resync) => heard.push(resync));
+    const settings: HydratedSettings = {
+      terminalConfig: { scrollbackLines: 5000 },
+      agentSettings: { agents: {} },
+      agentDefaults: { defaultAgent: "codex" },
+    };
+    rehydrate.mockImplementationOnce(async (_projectId, options) => {
+      options.onHydrated?.(settings);
+      return undefined;
+    });
+
+    await resyncFromHost({ freshSession: true });
+    // A resumed session hydrates nothing, so its listeners read for themselves.
+    await resyncFromHost();
+
+    expect(heard).toHaveLength(2);
+    await expect(heard[0]!.hydrated).resolves.toBe(settings);
+    expect(heard[1]!.hydrated).toBeUndefined();
+    offResync();
+  });
+
+  it("tells the listeners a fresh session's pass hydrated nothing when the view watches", async () => {
+    const { electron } = installElectron();
+    // A watcher reads the host's state back by following the driver instead.
+    electron.driveLease.get.mockResolvedValue(leaseView(holder(), false));
+    bindView("studio-01");
+    const heard: HostResync[] = [];
+    const offResync = onHostResync((resync) => heard.push(resync));
+
+    await resyncFromHost({ freshSession: true });
+
+    expect(heard).toHaveLength(1);
+    await expect(heard[0]!.hydrated).resolves.toBeNull();
+    expect(rehydrate.mock.calls.filter((call) => !optionsOf(call).follow)).toHaveLength(0);
+    offResync();
   });
 
   it("adopts the host's agent states only where they are newer", async () => {

@@ -5,7 +5,7 @@ import type { TerminalColorScheme } from "@/config/terminalColorSchemes";
 import { terminalConfigClient } from "@/clients/terminalConfigClient";
 import { getSafeBootPromise } from "@/lib/bootPromise";
 import { subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
-import { onHostResync } from "@/store/hostResyncSignal";
+import { onHostResync, readSettingOnResync, type HostResync } from "@/store/hostResyncSignal";
 import { useScrollbackStore } from "@/store/scrollbackStore";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
@@ -277,10 +277,14 @@ export function initTerminalConfigSync(): () => void {
     if (!disposed) receiveChange(change);
   });
 
-  const refetch = async (): Promise<void> => {
+  const refetch = async (resync: HostResync = {}): Promise<void> => {
     const read = beginTerminalConfigRead();
     try {
-      const config = await terminalConfigClient.get();
+      const config = await readSettingOnResync(
+        resync,
+        (settings) => settings.terminalConfig,
+        () => terminalConfigClient.get()
+      );
       if (!disposed) read(config);
     } catch (error) {
       // A remote view whose host is unreachable keeps what it had; the
@@ -289,8 +293,8 @@ export function initTerminalConfigSync(): () => void {
     }
   };
 
-  const offResync = onHostResync(() => {
-    if (!disposed) void refetch();
+  const offResync = onHostResync((resync) => {
+    if (!disposed) void refetch(resync);
   });
   const offLifecycle = subscribeProjectViewLifecycle((phase) => {
     if (phase === "active" && !disposed) void refetch();

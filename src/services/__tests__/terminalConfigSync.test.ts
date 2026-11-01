@@ -47,7 +47,7 @@ import {
   beginTerminalConfigRead,
   initTerminalConfigSync,
 } from "../terminalConfigSync";
-import { notifyHostResync } from "@/store/hostResyncSignal";
+import { notifyHostResync, type HydratedSettings } from "@/store/hostResyncSignal";
 import { useScrollbackStore } from "@/store/scrollbackStore";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { selectHomeFocusTarget, useTerminalInputStore } from "@/store/terminalInputStore";
@@ -267,6 +267,36 @@ describe("terminalConfigSync (#14699)", () => {
     await settle();
 
     expect(snapshot()).toMatchObject({ scrollbackLines: 3000, resourceMonitoring: true });
+  });
+
+  it("takes a fresh session's config from the resync's hydrate answer, less a half a push overtook", async () => {
+    boot({});
+    dispose = initTerminalConfigSync();
+    await settle();
+    const hydrated = deferred<HydratedSettings | null>();
+
+    notifyHostResync({ hydrated: hydrated.promise });
+    client.push(host({ resourceMonitoringEnabled: true }));
+    hydrated.resolve({
+      terminalConfig: { scrollbackLines: 3000, resourceMonitoringEnabled: false },
+    });
+    await settle();
+
+    expect(snapshot()).toMatchObject({ scrollbackLines: 3000, resourceMonitoring: true });
+    expect(client.get).not.toHaveBeenCalled();
+  });
+
+  it("reads the config itself when the resync's hydrate came to nothing", async () => {
+    boot({});
+    dispose = initTerminalConfigSync();
+    await settle();
+    client.get.mockResolvedValue({ scrollbackLines: 4000 });
+
+    notifyHostResync({ hydrated: Promise.resolve(null) });
+    await settle();
+
+    expect(client.get).toHaveBeenCalledTimes(1);
+    expect(snapshot().scrollbackLines).toBe(4000);
   });
 
   it("never lets an earlier read that answers late undo a later one", async () => {
