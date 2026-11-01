@@ -491,14 +491,14 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
 
   async function register(overrides?: Partial<AppLifecycleOptions>) {
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
-    const opts = makeOpts({ isHostModeActive: () => true, ...overrides });
+    const opts = makeOpts({ keepsRunningWithoutWindows: () => true, ...overrides });
     const handle = registerAppLifecycleHandlers(opts);
     const call = appMock.on.mock.calls.find(([event]: string[]) => event === "second-instance");
     return { opts, handle, handler: call![1] as SecondInstanceHandler };
   }
 
   it("keeps today's behaviour without Host mode: no window is opened", async () => {
-    const { opts, handler } = await register({ isHostModeActive: () => false });
+    const { opts, handler } = await register({ keepsRunningWithoutWindows: () => false });
 
     handler({}, ["daintree"], "/");
 
@@ -559,6 +559,43 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
     handler({}, ["daintree", "--host-mode"], "/");
     handle.onLaunchSettled();
 
+    expect(onHostModeRequested).toHaveBeenCalledOnce();
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  it("runs due schedules for an OS job's launch without opening, focusing or routing anything", async () => {
+    const onDueScheduleCheckRequested = vi.fn();
+    const win = makeWindow();
+    const { opts, handler } = await register({
+      onDueScheduleCheckRequested,
+      getMainWindow: vi.fn(() => win as unknown as import("electron").BrowserWindow),
+    });
+
+    handler({}, ["/opt/Daintree/daintree", "--run-due-schedules", cliDir], "/home/greg");
+
+    expect(onDueScheduleCheckRequested).toHaveBeenCalledOnce();
+    expect(win.focus).not.toHaveBeenCalled();
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+    expect(dispatchOpenDirPathMock).not.toHaveBeenCalled();
+  });
+
+  it("opens nothing for an OS job's launch with nothing to run the check", async () => {
+    const { opts, handle, handler } = await register({ isLaunchSettled: () => false });
+
+    handler({}, ["daintree", "--run-due-schedules"], "/");
+    handle.onLaunchSettled();
+
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  it("hands over Host mode asked for beside the schedule check", async () => {
+    const onHostModeRequested = vi.fn();
+    const onDueScheduleCheckRequested = vi.fn();
+    const { opts, handler } = await register({ onHostModeRequested, onDueScheduleCheckRequested });
+
+    handler({}, ["daintree", "--host-mode", "--run-due-schedules"], "/");
+
+    expect(onDueScheduleCheckRequested).toHaveBeenCalledOnce();
     expect(onHostModeRequested).toHaveBeenCalledOnce();
     expect(opts.onCreateWindow).not.toHaveBeenCalled();
   });
@@ -723,10 +760,10 @@ describe("registerAppLifecycleHandlers – window-all-closed", () => {
     expect(appMock.quit).toHaveBeenCalledOnce();
   });
 
-  it("keeps running on linux while Host mode is active", async () => {
+  it("keeps running on linux while it runs without windows", async () => {
     Object.defineProperty(process, "platform", { value: "linux" });
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
-    registerAppLifecycleHandlers(makeOpts({ isHostModeActive: () => true }));
+    registerAppLifecycleHandlers(makeOpts({ keepsRunningWithoutWindows: () => true }));
 
     getWindowAllClosedHandler()();
 
@@ -995,7 +1032,7 @@ describe("registerAppLifecycleHandlers – activate", () => {
     let settled = false;
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     const opts = makeOpts({
-      isHostModeActive: () => true,
+      keepsRunningWithoutWindows: () => true,
       isLaunchSettled: () => settled,
     });
     const handle = registerAppLifecycleHandlers(opts);
@@ -1016,7 +1053,7 @@ describe("registerAppLifecycleHandlers – activate", () => {
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     const opts = makeOpts({
       windowRegistry: makeRegistry(0),
-      isHostModeActive: () => false,
+      keepsRunningWithoutWindows: () => false,
       isLaunchSettled: () => false,
     });
     const handle = registerAppLifecycleHandlers(opts);

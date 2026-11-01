@@ -1,3 +1,5 @@
+import { RUN_DUE_SCHEDULES_FLAG } from "../boot/dueScheduleLaunch.js";
+
 /**
  * One answer to "why did this launch happen", read once before the window
  * restore decision (#11492).
@@ -120,8 +122,9 @@ const CLI_PATH_PREFIX = `${CLI_PATH_FLAG}=`;
  * folder" and abandon the fleet they actually had.
  *
  * Deliberately conservative: only the tokens the classifier reads as targeting
- * are dropped, so switches Chromium or the user added — `--disable-gpu`,
- * `--reset-data`, `--e2e` — survive. The in-process `pendingOpenDirPaths` /
+ * are dropped, and the one-shot windowless launch an OS job asks for, so
+ * switches Chromium or the user added — `--disable-gpu`, `--reset-data`,
+ * `--e2e` — survive. The in-process `pendingOpenDirPaths` /
  * `pendingOpenFilePaths` queues need no equivalent: they do not cross a
  * process boundary.
  */
@@ -145,6 +148,9 @@ export function stripLaunchTargets(argv: readonly string[]): string[] {
     // `windowServices` re-extracts them from argv on the next launch. Left in,
     // every app-initiated relaunch would re-open the plugin install prompt.
     if (isDntrToken(arg)) continue;
+    // An OS job's windowless launch for due schedules is one-shot: a restart
+    // once windows are open must bring them back, not start windowless.
+    if (arg === RUN_DUE_SCHEDULES_FLAG) continue;
 
     if (seekingDisplacedOperand) {
       // A switch is not the operand — Chromium injected it into that slot, and

@@ -58,6 +58,8 @@ describe("headless Host takeover", () => {
     expect(wantsDesktopWindow(["daintree"], {})).toBe(false);
     expect(wantsDesktopWindow(["daintree", "--host-mode"], desktop)).toBe(false);
     expect(wantsDesktopWindow(["daintree", "--attach-stdio"], desktop)).toBe(false);
+    // An OS job running due schedules works in the background.
+    expect(wantsDesktopWindow(["daintree", "--run-due-schedules"], desktop)).toBe(false);
     expect(
       wantsDesktopWindow(
         ["daintree", "--host-mode", "--enable-host-mode", "--host-mode-handoff"],

@@ -161,6 +161,13 @@ describe("stripLaunchTargets", () => {
     expect(stripLaunchTargets(argv)).toEqual(argv);
   });
 
+  it("drops the OS job's one-shot windowless launch, displaced or not", () => {
+    expect(stripLaunchTargets(["--run-due-schedules", "--disable-gpu"])).toEqual([
+      "--disable-gpu",
+    ]);
+    expect(stripLaunchTargets(["--cli-path", "--run-due-schedules", "/repos/app"])).toEqual([]);
+  });
+
   it("removes every target when several are present", () => {
     expect(
       stripLaunchTargets(["--cli-path", "/a", "file:///b", "--cli-path=/c", "--keep"])
