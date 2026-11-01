@@ -102,6 +102,7 @@ describe("relayOriginFromInput", () => {
     ["http://127.0.0.1:8787", "not-https"],
     ["ftp://decisions.example.workers.dev", "not-https"],
     ["wss://decisions.example.workers.dev", "not-https"],
+    ["com.example.app://decisions.example.workers.dev", "not-https"],
     ["https://user:hunter2@decisions.example.workers.dev", "credentials"],
     ["https://decisions.example.workers.dev@other.example", "credentials"],
     ["decisions.example.workers.dev:@other.example", "credentials"],

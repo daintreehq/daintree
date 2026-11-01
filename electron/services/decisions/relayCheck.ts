@@ -30,12 +30,14 @@ const REQUEST_TIMEOUT_MS = 10_000;
 /** `/health` and `/info` are a few hundred bytes; anything far bigger isn't a relay. */
 const MAX_BODY_BYTES = 64 * 1024;
 const WORKER_VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/;
+/** A whole `scheme://`, in the URL grammar's full spelling, dots included. */
+const FULL_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
 /**
- * A scheme the person typed, as distinct from a bare `host:port` (a digit
- * after the colon). Dots are left out, so `relay.example.dev:@other` reads as
- * a host with userinfo rather than a scheme no one would type.
+ * A scheme typed without its `//`, as distinct from a bare `host:port` (a
+ * digit after the colon). Dots are left out, so `relay.example.dev:@other`
+ * reads as a host with userinfo rather than a scheme no one would type.
  */
-const SCHEME = /^([A-Za-z][A-Za-z0-9+-]*):(?!\d)/;
+const BARE_SCHEME = /^([A-Za-z][A-Za-z0-9+-]*):(?!\d)/;
 /** Whitespace, control characters and backslashes, which URL parsing would otherwise quietly reinterpret. */
 const UNSAFE_CHARACTERS = /[\s\\\p{Cc}]/u;
 
@@ -80,14 +82,15 @@ export function relayOriginFromInput(
   if (trimmed === "" || UNSAFE_CHARACTERS.test(trimmed)) {
     return { result: "invalid-url", reason: "unparsable" };
   }
-  const scheme = SCHEME.exec(trimmed);
-  if (scheme && !trimmed.startsWith("//", scheme[0].length)) {
+  const explicit = FULL_SCHEME.test(trimmed);
+  const bare = explicit ? null : BARE_SCHEME.exec(trimmed);
+  if (bare) {
     // `https:/relay.example.dev` would otherwise gain a second scheme and
     // check the host "https".
-    const https = scheme[1]!.toLowerCase() === "https";
+    const https = bare[1]!.toLowerCase() === "https";
     return { result: "invalid-url", reason: https ? "unparsable" : "not-https" };
   }
-  const candidate = scheme ? trimmed : `https://${trimmed}`;
+  const candidate = explicit ? trimmed : `https://${trimmed}`;
   const url = URL.parse(candidate);
   if (!url || url.hostname === "") return { result: "invalid-url", reason: "unparsable" };
   if (url.protocol !== "https:") return { result: "invalid-url", reason: "not-https" };
