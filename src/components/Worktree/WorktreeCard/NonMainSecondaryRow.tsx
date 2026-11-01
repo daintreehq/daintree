@@ -49,7 +49,7 @@ interface NonMainSecondaryRowProps {
    * A compact sidebar card lays the stack out tighter: the PR shares the
    * branch's row, and the sync line stays on the card only when it reports a
    * failure (the rest of it is in Details). A comfortable card keeps one line
-   * per fact, as the grid does.
+   * per fact, with an issue and its PR counted as one.
    */
   density?: "comfortable" | "compact";
   badges: {
@@ -192,6 +192,11 @@ export function NonMainSecondaryRow({
   // card that headline's reference is one number, so it rides the identity
   // row's trailing slot beside the PR rather than spending a line.
   const isIssueHeadline = hasDisplayTitle && !isPrOriginated && !hasCustomTitle;
+  // The comfortable card gives a bare issue reference the line its PR takes,
+  // under the branch: an issue and its pull request are one pair, and the
+  // branch between them read as two unrelated facts. Only a reference that
+  // carries a displaced title keeps a line of its own above the branch.
+  const issueSharesLine = isCompact ? isIssueHeadline : isSidebar && !issueBadgeTitle;
   const issueBadge =
     !quietGit && worktree.issueNumber ? (
       <IssueBadge
@@ -201,10 +206,12 @@ export function NonMainSecondaryRow({
         worktreePath={worktree.path}
         onOpen={badges.onOpenIssue}
         worktreeLabel={worktreeLabel}
+        hoverCardSide={issueSharesLine && prBadge ? "top" : "right"}
       />
     ) : null;
   const trailingIssueBadge = isCompact && isIssueHeadline ? issueBadge : null;
-  const stackIssueBadge = trailingIssueBadge ? null : issueBadge;
+  const referenceRowIssue = !isCompact && issueSharesLine ? issueBadge : null;
+  const stackIssueBadge = trailingIssueBadge || referenceRowIssue ? null : issueBadge;
 
   // On the compact card the sync line is ambient: how far a branch has drifted is
   // worth knowing when deciding to rebase, not every time the eye passes the
@@ -317,15 +324,13 @@ export function NonMainSecondaryRow({
                 </div>
               )}
               {(compactDrift || sharedRowPr || trailingIssueBadge) && (
-                <div className="flex shrink-0 items-center gap-3">
+                // Wraps only where the row has stacked below 20rem and the
+                // group has the card's width to itself; beside the branch it
+                // keeps its own width and the branch gives way.
+                <div className="flex max-w-full shrink-0 flex-wrap items-center gap-x-3 gap-y-2">
                   {compactDrift}
                   {trailingIssueBadge}
                   {sharedRowPr}
-                  {/* The word as Comfortable has it, at every width: below
-                      20rem the PR stacks onto a line of its own, with room. */}
-                  {sharedRowPr && worktree.linked?.pr?.ciStatus?.state === "failure" && (
-                    <span className="-ml-1 text-2xs text-text-secondary">CI failed</span>
-                  )}
                 </div>
               )}
             </div>
@@ -340,18 +345,18 @@ export function NonMainSecondaryRow({
           {!quietGit && (hasDisplayTitle || hasCustomTitle) && (
             <BranchLabel label={branchLabel} isActive={isActive} isMuted={isMuted} />
           )}
-          {/* The comfortable card keeps one order, branch → PR → sync, so each
-              fact stays on the line the eye learned for it; urgency goes to the
-              title row's attention column instead of reordering the stack. */}
+          {/* The comfortable card keeps one order, branch → issue and PR → sync,
+              so each fact stays on the line the eye learned for it; urgency goes
+              to the title row's attention column instead of reordering the stack. */}
           {isSidebar
-            ? prBadge && (
-                // A failed run in words beside its glyph: among 15-30 cards the
-                // small X alone took a second look to tell from a check.
-                <div className="flex min-w-0 items-center gap-2">
+            ? (referenceRowIssue || prBadge) && (
+                // Each reference keeps its own target. When the card is too
+                // narrow for both, the PR wraps whole, its marks with it,
+                // rather than either number truncating; the row gap keeps the
+                // targets' vertical extensions from meeting across the wrap.
+                <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+                  {referenceRowIssue}
                   {prBadge}
-                  {worktree.linked?.pr?.ciStatus?.state === "failure" && (
-                    <span className="truncate text-2xs text-text-secondary">CI failed</span>
-                  )}
                 </div>
               )
             : upstreamFirst
