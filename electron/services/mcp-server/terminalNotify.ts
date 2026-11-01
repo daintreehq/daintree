@@ -144,7 +144,13 @@ export interface NotifyTerminalInfo {
   everDetectedAgent?: boolean;
   hasPty?: boolean;
   isTrashed?: boolean;
+  isExited?: boolean;
   submission?: TerminalSubmissionRecord;
+  /** The run identity a decision wake checks before it is typed (#16015). */
+  launchGeneration?: number;
+  agentIncarnation?: number;
+  agentSessionId?: string;
+  worktreeId?: string;
 }
 
 export interface TerminalNotifyPtyClient {
@@ -309,6 +315,12 @@ export type LaneWakeOutcome =
 
 export type LaneWakeCheck = { kind: "ready" } | { kind: "held" | "unavailable"; reason: string };
 
+/** What a `delivered` report stands on: the host's record of the line's write. */
+export interface LaneWakeEvidence {
+  phase: "pty_written";
+  submissionToken: string;
+}
+
 /**
  * A line for an assistant's own pane that no terminal of this machine fired.
  * It rides that pane's notice line, so one writer types into that prompt, and
@@ -325,9 +337,11 @@ export interface LaneWake {
    * notices the run asked it for (#13930), in {@link LaneWake.lostNotices};
    * `watch` says what became of a `host.watch` the run armed (#14463), in
    * {@link LaneWake.hostWatch}; `approval` says the user approved a refused
-   * tool from the panel (#14995), in {@link LaneWake.approval}.
+   * tool from the panel (#14995), in {@link LaneWake.approval}; `decision`
+   * carries a Decisions answer for the pane that asked (#16015), in
+   * {@link LaneWake.decision}.
    */
-  kind: "notice" | "retired" | "lost" | "watch" | "approval";
+  kind: "notice" | "retired" | "lost" | "watch" | "approval" | "decision";
   /**
    * A `notice`'s observation. Only the host's name as this Shell knows it and
    * the host's observations: the line is still Daintree's own wording.
@@ -341,15 +355,26 @@ export interface LaneWake {
   hostWatch?: HostWatchNotice;
   /** An `approval` line's tool or tier. */
   approval?: AssistantApproval;
-  /** Asked synchronously immediately before the line is typed, and while it waits. */
-  recheck(): LaneWakeCheck;
+  /**
+   * A `decision`'s section, rendered by Decisions from the answer it was
+   * handed: Daintree's wording around delimited blocks whose answer text is
+   * sanitised data. Typed only past the stricter `settled-prompt-exact` guard.
+   */
+  decision?: { text: string };
+  /**
+   * Asked synchronously immediately before the line is typed, and while it
+   * waits. `info` is the pane's record as the delivery attempt just read it;
+   * absent on the checks between attempts.
+   */
+  recheck(info?: NotifyTerminalInfo): LaneWakeCheck;
   /**
    * Reserves the attempt durably, synchronously and with nothing awaited
    * before the submit. False keeps the wake off the line for good, with no
    * report: the exchange already holds what became of it.
    */
   beforeType(): boolean;
-  report(outcome: LaneWakeOutcome): void;
+  /** `evidence` comes with `delivered`, which is reported only once the host wrote the line. */
+  report(outcome: LaneWakeOutcome, evidence?: LaneWakeEvidence): void;
 }
 
 export const LANE_WAKE_ID_PATTERN = /^[A-Za-z0-9-]{1,64}$/;
@@ -1497,11 +1522,16 @@ export class TerminalNotifyService {
   }
 
   /** End the wakes a line carried with `outcome`. */
-  private finishWakes(owner: PaneOwner, token: string, outcome: LaneWakeOutcome): void {
+  private finishWakes(
+    owner: PaneOwner,
+    token: string,
+    outcome: LaneWakeOutcome,
+    evidence?: LaneWakeEvidence
+  ): void {
     for (const [id, entry] of owner.wakes) {
       if (entry.token !== token) continue;
       owner.wakes.delete(id);
-      reportWake(entry.wake, outcome);
+      reportWake(entry.wake, outcome, evidence);
     }
   }
 
@@ -1520,9 +1550,10 @@ export class TerminalNotifyService {
 
   /**
    * Recheck the waiting wakes, dropping those that can no longer go out, and
-   * return the ones ready to be typed now.
+   * return the ones ready to be typed now. `info` is the pane's record when a
+   * delivery attempt has just read it.
    */
-  private sweepWakes(owner: PaneOwner): WakeEntry[] {
+  private sweepWakes(owner: PaneOwner, info?: NotifyTerminalInfo): WakeEntry[] {
     const now = this.now();
     const ready: WakeEntry[] = [];
     for (const [id, entry] of owner.wakes) {
@@ -1538,7 +1569,7 @@ export class TerminalNotifyService {
         reportWake(entry.wake, { kind: "unavailable", reason: "expired" });
         continue;
       }
-      const check = recheckWake(entry.wake);
+      const check = recheckWake(entry.wake, info);
       // Its hook may have ended it already, scope or pane, with its outcome.
       if (owner.wakes.get(id) !== entry) continue;
       if (check.kind === "unavailable") {
@@ -2321,15 +2352,19 @@ export class TerminalNotifyService {
       return;
     }
 
-    this.deliver(owner, client);
+    this.deliver(owner, client, info);
   }
 
-  private deliver(owner: PaneOwner, client: TerminalNotifyPtyClient): void {
+  private deliver(
+    owner: PaneOwner,
+    client: TerminalNotifyPtyClient,
+    info: NotifyTerminalInfo
+  ): void {
     // An earlier line the host never finished with would land beside this one;
     // taking it back returns its notices to this line.
     this.withdraw(owner);
     // The last word on each wake: nothing is awaited between this and the submit.
-    const reserved = this.sweepWakes(owner).filter(
+    const reserved = this.sweepWakes(owner, info).filter(
       (entry) => owner.wakes.get(entry.key) === entry && this.reserveWake(owner, entry)
     );
     // A wake's own hooks may have stopped the pane or ended a scope meanwhile.
@@ -2379,6 +2414,9 @@ export class TerminalNotifyService {
           ? [formatAssistantApprovalLine(wake.approval)]
           : []
       ),
+      ...wakes.flatMap(({ wake }) =>
+        wake.kind === "decision" && wake.decision !== undefined ? [wake.decision.text] : []
+      ),
       ...(entries.length > 0
         ? [
             formatNoticeLine(
@@ -2392,19 +2430,23 @@ export class TerminalNotifyService {
     owner.inHost = { token };
     remember(this.lastDeliveryAt, owner.terminalId, deliveredAt);
     owner.delivery = { status: "outstanding", lastDeliveredAt: deliveredAt, token };
+    // A decision answer is never typed into a working pane, even one whose
+    // CLI queues mid-turn input, nor into any run but the one just checked:
+    // the host holds the whole line to that.
+    const guard: TerminalSubmitGuard = wakes.some(({ wake }) => wake.kind === "decision")
+      ? {
+          kind: "settled-prompt-exact",
+          ...(info.agentIncarnation !== undefined
+            ? { agentIncarnation: info.agentIncarnation }
+            : {}),
+          ...(info.agentSessionId !== undefined ? { agentSessionId: info.agentSessionId } : {}),
+        }
+      : "settled-prompt";
     // The host re-checks the gate when the line reaches the lane, and drops
     // its Enter if anyone types before it lands.
     try {
       // A notice is nobody's prompt, so it never becomes the run's first one.
-      client.submit(
-        owner.terminalId,
-        lines.join("\n\n"),
-        token,
-        undefined,
-        "settled-prompt",
-        undefined,
-        null
-      );
+      client.submit(owner.terminalId, lines.join("\n\n"), token, undefined, guard, undefined, null);
     } catch (err) {
       // Whether any of it reached the host is unknown, so this is a failed
       // line like any other: its notices wait for the pane's next turn.
@@ -2449,12 +2491,18 @@ export class TerminalNotifyService {
         info = null;
       }
       if (!stillHeld()) return;
-      const phase = info?.submission?.phase;
+      // Only this line's own record speaks for it.
+      const phase = info?.submission?.token === token ? info.submission.phase : undefined;
       if (phase === "pty_written") {
         logger.info("Notice line written", { pane: owner.terminalId });
         owner.inHost = undefined;
         owner.fired = owner.fired.filter((entry) => entry.wakeToken !== token);
-        this.finishWakes(owner, token, { kind: "delivered" });
+        this.finishWakes(
+          owner,
+          token,
+          { kind: "delivered" },
+          { phase: "pty_written", submissionToken: token }
+        );
         if (owner.delivery.token === token) {
           owner.delivery.confirmed = true;
           if (owner.delivery.settledSinceDelivery === true) {
@@ -2635,9 +2683,9 @@ function gateDiagnostics(info: NotifyTerminalInfo): Record<string, unknown> {
   };
 }
 
-function recheckWake(wake: LaneWake): LaneWakeCheck {
+function recheckWake(wake: LaneWake, info?: NotifyTerminalInfo): LaneWakeCheck {
   try {
-    return wake.recheck();
+    return wake.recheck(info);
   } catch (err) {
     console.error("[MCP] terminal notify: rechecking a lane wake failed:", err);
     return { kind: "unavailable", reason: "recheck-failed" };
@@ -2645,9 +2693,10 @@ function recheckWake(wake: LaneWake): LaneWakeCheck {
 }
 
 /** Recording an outcome must never unwind the line or the pane's state. */
-function reportWake(wake: LaneWake, outcome: LaneWakeOutcome): void {
+function reportWake(wake: LaneWake, outcome: LaneWakeOutcome, evidence?: LaneWakeEvidence): void {
   try {
-    wake.report(outcome);
+    if (evidence === undefined) wake.report(outcome);
+    else wake.report(outcome, evidence);
   } catch (err) {
     console.error("[MCP] terminal notify: recording a lane wake outcome failed:", err);
   }

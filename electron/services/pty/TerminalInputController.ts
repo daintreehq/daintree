@@ -1,10 +1,12 @@
 import { stat } from "fs/promises";
 import type { TerminalInfo } from "./types.js";
-import type { TerminalSubmitGuard } from "../../../shared/types/pty-host.js";
+import type { ExactPromptGuard, TerminalSubmitGuard } from "../../../shared/types/pty-host.js";
 import {
   ASSISTANT_SEND_GATE,
+  EXACT_PROMPT_GATE,
   evaluateWakeGate,
   wakeGateOptionsFor,
+  type WakeGateOptions,
   type WakeGateSnapshot,
 } from "../../../shared/utils/terminalWakeGate.js";
 import type { AnalysisBackend } from "./analysis/AnalysisBackend.js";
@@ -372,7 +374,7 @@ export class TerminalInputController {
 
     const admit =
       guard === "settled-prompt-strict"
-        ? () => this.admitStrict()
+        ? () => this.admitStrict(ASSISTANT_SEND_GATE)
         : guard === "settled-prompt"
           ? () =>
               !this.isInputLocked &&
@@ -380,15 +382,37 @@ export class TerminalInputController {
                 wakeGateSnapshot(this.host.terminalInfo),
                 wakeGateOptionsFor(this.host.terminalInfo.detectedAgentId)
               ).kind === "ready"
-          : undefined;
+          : guard !== undefined
+            ? this.admitExact(guard)
+            : undefined;
     this.host.writeQueue.submit(text, token, onPtyWritten, admit, imagePaths);
   }
 
   /**
-   * Only at a prompt settled since the lane last wrote to it, and never
-   * mid-turn. A prose question is still that prompt (#14475).
+   * The strict check without the prose-question allowance, for the run main
+   * checked the line against: an agent that restarted in this PTY since is
+   * another run, whatever its prompt shows. A session learned since main read
+   * the pane is still that run; a known one that changed is not.
    */
-  private admitStrict(): boolean {
+  private admitExact(run: ExactPromptGuard): () => boolean {
+    // Main always says which incarnation it read; a guard without one pins the run the host holds now.
+    const incarnation = run.agentIncarnation ?? this.host.terminalInfo.agentIncarnation;
+    return () => {
+      const terminal = this.host.terminalInfo;
+      if (terminal.agentIncarnation !== incarnation) return false;
+      if (run.agentSessionId !== undefined && terminal.agentSessionId !== run.agentSessionId) {
+        return false;
+      }
+      return this.admitStrict(EXACT_PROMPT_GATE);
+    };
+  }
+
+  /**
+   * Only at a prompt settled since the lane last wrote to it, and never
+   * mid-turn. `gate` says whether a prose question is still that prompt
+   * (#14475): for an assistant's brief it is, for a Decisions answer it isn't.
+   */
+  private admitStrict(gate: WakeGateOptions): boolean {
     if (this.isInputLocked) return false;
     const terminal = this.host.terminalInfo;
     if (
@@ -397,7 +421,7 @@ export class TerminalInputController {
     ) {
       return false;
     }
-    return evaluateWakeGate(wakeGateSnapshot(terminal), ASSISTANT_SEND_GATE).kind === "ready";
+    return evaluateWakeGate(wakeGateSnapshot(terminal), gate).kind === "ready";
   }
 
   /**

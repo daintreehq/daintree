@@ -20,6 +20,7 @@ import {
   runNotifyWhenIdleTool,
   type LaneWake,
   type LaneWakeCheck,
+  type LaneWakeEvidence,
   type LaneWakeOutcome,
   type NotifyStateChange,
   type NotifyTerminalInfo,
@@ -42,6 +43,7 @@ import type {
   TerminalSubmissionPhase,
   TerminalSubmissionRecord,
 } from "../../../../shared/types/terminalSubmission.js";
+import type { TerminalSubmitGuard } from "../../../../shared/types/pty-host.js";
 
 const PROJECT = "project-1";
 const OTHER_PROJECT = "project-2";
@@ -52,7 +54,7 @@ interface Submitted {
   id: string;
   text: string;
   token?: string;
-  guard?: string;
+  guard?: TerminalSubmitGuard;
   promptAsWritten?: string | null;
 }
 
@@ -81,7 +83,7 @@ class FakePtyClient implements TerminalNotifyPtyClient {
     text: string,
     token?: string,
     _handback?: string,
-    guard?: string,
+    guard?: TerminalSubmitGuard,
     _imagePaths?: readonly string[],
     promptAsWritten?: string | null
   ) {
@@ -2975,5 +2977,110 @@ describe("wake scopes (#15999)", () => {
 
     h.client.exit(OWN);
     expect(second.outcomes).toEqual([{ kind: "unavailable", reason: "stopped" }]);
+  });
+});
+
+describe("decision wakes (#16015)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-01T10:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const flushWake = () => vi.advanceTimersByTimeAsync(NOTIFY_COALESCE_MS + 600);
+
+  function decisionWake(text: string) {
+    const outcomes: Array<{ outcome: LaneWakeOutcome; evidence?: LaneWakeEvidence }> = [];
+    const records: Array<NotifyTerminalInfo | undefined> = [];
+    let check: LaneWakeCheck = { kind: "ready" };
+    const wake: LaneWake = {
+      id: "dec-1",
+      kind: "decision",
+      decision: { text },
+      recheck: (info) => {
+        records.push(info);
+        return check;
+      },
+      beforeType: () => true,
+      report: (outcome, evidence) => outcomes.push({ outcome, evidence }),
+    };
+    return {
+      wake,
+      outcomes,
+      records,
+      setCheck: (next: LaneWakeCheck) => {
+        check = next;
+      },
+    };
+  }
+
+  it("types its section past the exact guard and reports the write it stands on", async () => {
+    const h = setup({ enabled: false });
+    h.client.terminals.set(OWN, {
+      ...atPrompt(Date.now() - 60_000),
+      agentIncarnation: 2,
+      agentSessionId: "session-1",
+    });
+    const scope = h.service.openWakeScope();
+    const decision = decisionWake("Daintree Decisions: section");
+    scope.enqueueWake(PANE, PROJECT, decision.wake);
+
+    await flushWake();
+    expect(h.client.submitted).toEqual([
+      expect.objectContaining({
+        id: OWN,
+        text: "Daintree Decisions: section",
+        guard: { kind: "settled-prompt-exact", agentIncarnation: 2, agentSessionId: "session-1" },
+      }),
+    ]);
+    expect(decision.outcomes).toEqual([
+      {
+        outcome: { kind: "delivered" },
+        evidence: { phase: "pty_written", submissionToken: h.client.submitted[0].token },
+      },
+    ]);
+    // Rechecked once on admission, then against the record the attempt read.
+    expect(decision.records[0]).toBeUndefined();
+    expect(decision.records.at(-1)).toMatchObject({ agentState: "waiting", hasPty: true });
+  });
+
+  it("leaves the rest of the line on the ordinary guard while a decision holds", async () => {
+    const h = setup({ enabled: false });
+    const scope = h.service.openWakeScope();
+    const decision = decisionWake("Daintree Decisions: section");
+    const other = fakeWake("decision-other");
+    scope.enqueueWake(PANE, PROJECT, decision.wake);
+    scope.enqueueWake(PANE, PROJECT, other.wake);
+    decision.setCheck({ kind: "held", reason: "working" });
+
+    await flushWake();
+    expect(h.client.submitted).toEqual([
+      expect.objectContaining({ text: RETIRED_LINE, guard: "settled-prompt" }),
+    ]);
+    expect(other.outcomes).toEqual([{ kind: "delivered" }]);
+    expect(decision.outcomes).toEqual([{ outcome: { kind: "held", reason: "working" } }]);
+  });
+
+  it("never reports delivered on a record that isn't this line's", async () => {
+    const h = setup({ enabled: false });
+    const scope = h.service.openWakeScope();
+    const decision = decisionWake("Daintree Decisions: section");
+    const getTerminal = h.client.getTerminalAsync.bind(h.client);
+    h.client.getTerminalAsync = async (id: string, token?: string) => {
+      const info = await getTerminal(id, token);
+      return token === undefined || info === null
+        ? info
+        : { ...info, submission: { token: "another-line", phase: "pty_written", at: Date.now() } };
+    };
+    scope.enqueueWake(PANE, PROJECT, decision.wake);
+
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(h.client.submitted).toHaveLength(1);
+    expect(decision.outcomes).toEqual([
+      { outcome: { kind: "ambiguous", reason: "unconfirmed" }, evidence: undefined },
+    ]);
   });
 });

@@ -51,6 +51,13 @@ export interface WakeGateOptions {
  */
 export const ASSISTANT_SEND_GATE: WakeGateOptions = { acceptWorking: false, acceptQuestion: true };
 
+/**
+ * The gate a Decisions answer asks (#16015): only an agent waiting at its own
+ * prompt. Never mid-turn, whatever its CLI queues, and never at a question,
+ * which an answer typed there would read as the reply to.
+ */
+export const EXACT_PROMPT_GATE: WakeGateOptions = { acceptWorking: false, acceptQuestion: false };
+
 /** The gate options for the agent running in a terminal. */
 export function wakeGateOptionsFor(agentId: string | undefined): WakeGateOptions {
   if (agentId === undefined) return {};

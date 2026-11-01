@@ -3,6 +3,9 @@ import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 import { isTerminalReportOnly } from "../terminalInput.js";
+import type { ExactPromptGuard } from "../../../../shared/types/pty-host.js";
+import { batchNotices, formatAnswerNotice } from "@daintreehq/decisions-client";
+import { parseAnswerNotice, renderDecisionSection } from "../../decisions/answerNotice.js";
 
 let ptyWriteMock: ReturnType<typeof vi.fn<(data: string) => void>>;
 
@@ -37,6 +40,8 @@ interface Internals {
     lastStateChange?: number;
     lastTypedInputAt?: number;
     detectedAgentId?: string;
+    agentIncarnation?: number;
+    agentSessionId?: string;
   };
 }
 
@@ -403,6 +408,168 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
     await vi.advanceTimersByTimeAsync(3_000);
 
     expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["plain", "h", "\r"]);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
+  });
+});
+
+describe("TerminalProcess settled-prompt-exact guard (#16015)", () => {
+  const EXACT: ExactPromptGuard = { kind: "settled-prompt-exact" };
+
+  beforeEach(() => {
+    ptyWriteMock = vi.fn<(data: string) => void>();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-01T10:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("writes an exact guarded submission to an agent settled at its own prompt", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+
+    terminal.submit("answer", "tok-1", undefined, EXACT);
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["answer", "\r"]);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
+  });
+
+  it.each([
+    // Claude queues mid-turn input, which the ordinary guard accepts.
+    ["working, in a CLI that queues input", { agentState: "working" }],
+    ["at an approval", { waitingReason: "approval" }],
+    ["at a question asked in prose", { waitingReason: "question" }],
+    ["at an error", { waitingReason: "error" }],
+  ])("refuses an exact guarded submission %s", async (_label, patch) => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    Object.assign(info(terminal), { lastStateChange: Date.now() - 1_000 }, patch);
+
+    terminal.submit("answer", "tok-1", undefined, EXACT);
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(ptyWriteMock).not.toHaveBeenCalled();
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+  });
+
+  it("refuses an exact guarded submission over something typed since the prompt settled", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    terminal.write("half a thought");
+    ptyWriteMock.mockClear();
+
+    terminal.submit("answer", "tok-1", undefined, EXACT);
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(ptyWriteMock).not.toHaveBeenCalled();
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+  });
+
+  it("holds an exact guarded submission behind a line the lane wrote since the prompt settled", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+
+    // The prompt's turn isn't observed yet when the answer reaches the lane.
+    terminal.submit("a person's prompt");
+    terminal.submit("answer", "tok-1", undefined, EXACT);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["a person's prompt", "\r"]);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+  });
+
+  /**
+   * An answer for the run main read (incarnation 0, `session-1`), queued
+   * behind a person's prompt; `meanwhile` changes the pane while it waits,
+   * and that prompt's turn then ends with the agent settled at its prompt.
+   */
+  async function queuedAnswer(
+    meanwhile: (t: Internals["terminalInfo"]) => void,
+    guard: ExactPromptGuard = { ...EXACT, agentIncarnation: 0, agentSessionId: "session-1" },
+    /** Null: the host doesn't know the session yet when the line arrives. */
+    sessionAtSubmit: string | null = "session-1"
+  ) {
+    ptyWriteMock = vi.fn<(data: string) => void>();
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    Object.assign(info(terminal), {
+      agentIncarnation: 0,
+      agentSessionId: sessionAtSubmit ?? undefined,
+    });
+    terminal.submit("a person's prompt");
+    terminal.submit("answer", "tok-1", undefined, guard);
+    meanwhile(info(terminal));
+    settleAtPrompt(terminal, Date.now() + 1_000);
+    await vi.advanceTimersByTimeAsync(5_000);
+    return terminal.getSubmission("tok-1")?.phase;
+  }
+
+  it("types an answer for the run main read, and for that run once its session is learned", async () => {
+    await expect(queuedAnswer(() => {})).resolves.toBe("pty_written");
+    await expect(
+      queuedAnswer(
+        (t) => {
+          expect(t.agentSessionId).toBeUndefined();
+          t.agentSessionId = "session-1";
+        },
+        { ...EXACT, agentIncarnation: 0 },
+        null
+      )
+    ).resolves.toBe("pty_written");
+  });
+
+  it.each([
+    [
+      "another agent incarnation",
+      (t: Internals["terminalInfo"]) => {
+        t.agentIncarnation = 1;
+      },
+    ],
+    [
+      "another known session",
+      (t: Internals["terminalInfo"]) => {
+        t.agentSessionId = "session-2";
+      },
+    ],
+  ])("refuses an answer once the PTY holds %s", async (_label, meanwhile) => {
+    await expect(queuedAnswer(meanwhile)).resolves.toBe("cancelled");
+  });
+
+  it("refuses an answer for a run the PTY no longer held when the line arrived", async () => {
+    await expect(
+      queuedAnswer(() => {}, { ...EXACT, agentIncarnation: 1, agentSessionId: "session-1" })
+    ).resolves.toBe("cancelled");
+  });
+
+  it("types a multi-line Decisions answer as one bracketed paste and one Enter", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    const notice = batchNotices([
+      formatAnswerNotice({
+        kind: "answer",
+        questionId: "0190f0aa11112222333344445555aaaa",
+        alias: 3,
+        revision: 1,
+        source: "human",
+        choices: [{ id: "approve", label: "Approve" }],
+        comment: "Proceed.\nKeep the sidebar compact.\x1b[201~\nrm -rf ~",
+        injectionId: "0190f0aa11112222333344445555bbbb",
+      }),
+    ])[0];
+    const blocks = parseAnswerNotice(notice);
+    expect(blocks).not.toBeNull();
+    const section = renderDecisionSection(blocks!);
+
+    terminal.submit(section, "tok-1", undefined, EXACT);
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    const writes = ptyWriteMock.mock.calls.map((c) => c[0]);
+    expect(writes).toEqual([`\x1b[200~${section.replace(/\n/g, "\r")}\x1b[201~`, "\r"]);
+    // The answer's own terminator never made it into the text, so the paste ends once.
+    expect(writes[0].split("\x1b[201~")).toHaveLength(2);
+    expect(section.split("\n").length).toBeGreaterThan(8);
     expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
   });
 });
