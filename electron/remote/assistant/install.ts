@@ -40,6 +40,7 @@ declare module "../runtime.js" {
       | "hasCallInFlight"
       | "skipsRelayedDispatch"
       | "awaitsNotices"
+      | "holdsThrowawayRuns"
       | "receiveNotices"
       | "noticeCalls"
       | "receiveNoticeStatus"
@@ -372,6 +373,22 @@ function openDatabase(): Database.Database | null {
 }
 
 /**
+ * Whether this Shell's assistants still use `hostId`'s link: a relayed call
+ * running, the notices those calls armed until their host has nothing more
+ * for them (#13500, #13930), or a throwaway run one of them launched that may
+ * still be going, which the host ends with the link (#15878). Holding the
+ * link never keeps the host awake.
+ */
+export function assistantsUseHost(hostId: HostId): boolean {
+  const relay = getRemoteService("hostCallRelayClient");
+  return (
+    relay?.hasCallInFlight(hostId) === true ||
+    relay?.awaitsNotices(hostId) === true ||
+    relay?.holdsThrowawayRuns(hostId) === true
+  );
+}
+
+/**
  * Registers the Shell's link client for `host.call` over the app's database,
  * which keeps the sender credential it proves to each host. Without a
  * database nothing is registered: a sender this Shell can't keep would be a
@@ -400,14 +417,7 @@ export function installHostControlLinkClient(deps: HostControlLinkClientInstallD
     approvalReceiver: () => getRemoteService("hostCallRelayClient"),
   });
   client.start();
-  // Bounded by each relayed call while it runs, and by the notices those
-  // calls armed until their host has nothing more for them (#13500, #13930).
-  // Holding the link never keeps the host awake.
-  const offUseCheck =
-    deps.addUseCheck?.((hostId) => {
-      const relay = getRemoteService("hostCallRelayClient");
-      return relay?.hasCallInFlight(hostId) === true || relay?.awaitsNotices(hostId) === true;
-    }) ?? (() => {});
+  const offUseCheck = deps.addUseCheck?.(assistantsUseHost) ?? (() => {});
   const unregister = registerRemoteService("hostControlLinkClient", client);
   const stopRetiredNotice = installRetiredSendsNotice(sqlite, { hostName: deps.hostName });
   return () => {

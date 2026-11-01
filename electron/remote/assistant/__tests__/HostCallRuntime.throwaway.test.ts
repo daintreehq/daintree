@@ -8,6 +8,7 @@ import {
   type ObservedHost,
   type OpenRun,
 } from "../HostCallRuntime.js";
+import { MAX_THROWAWAY_TIME_LIMIT_MS } from "../../../../shared/types/hostThrowaway.js";
 import type { ThrowawayCallAnswer, ThrowawayCallPayload } from "../linkMethods.js";
 import { createLocalMcpRelay, LOCAL_RELAY_SENDER_ID } from "../localMcpRelay.js";
 import type { HostThrowawayExecutor } from "../throwawayRelay.js";
@@ -62,6 +63,8 @@ describe("HostCallRuntime host.call to a throwaway target (#14446)", () => {
     endOwner: ReturnType<typeof vi.fn<HostThrowawayExecutor["endOwner"]>>;
   } | null;
   let ids: number;
+  let now: number;
+  let mono: number;
   let runtime: HostCallRuntime;
 
   beforeEach(() => {
@@ -74,6 +77,8 @@ describe("HostCallRuntime host.call to a throwaway target (#14446)", () => {
       endOwner: vi.fn<HostThrowawayExecutor["endOwner"]>(),
     };
     ids = 0;
+    now = 1_000_000;
+    mono = 50_000;
     const local = createLocalMcpRelay({
       machineName: () => "greg-mbp",
       hasProject: vi.fn(async () => true),
@@ -99,6 +104,8 @@ describe("HostCallRuntime host.call to a throwaway target (#14446)", () => {
         throwawayCall: (payload) => local.throwawayCall(payload),
       },
       newId: () => `00000000-0000-4000-8000-00000000000${++ids}`,
+      now: () => now,
+      clock: () => ({ wall: now, mono }),
     });
   });
 
@@ -302,6 +309,209 @@ describe("HostCallRuntime host.call to a throwaway target (#14446)", () => {
     await expect(runtime.call("g", LAUNCH, { tier: "core" })).resolves.toMatchObject({
       ok: true,
       value: { outcome: "ok" },
+    });
+  });
+
+  describe("keeping a host's link while a run may still be going (#15878)", () => {
+    const TEN_MINUTES = 10 * 60_000;
+    const LONG_LAUNCH: HostCallArgs = {
+      ...LAUNCH,
+      args: { agentId: "claude", timeLimitMs: TEN_MINUTES },
+    };
+    const reading = (
+      tool: "throwaway.launch" | "throwaway.status",
+      fields: Partial<typeof RUN> & { ageMs: number }
+    ): ThrowawayCallAnswer => ({
+      status: "done",
+      result: {
+        tool,
+        run: {
+          ...RUN,
+          startedAt: 5_000,
+          timeLimitMs: TEN_MINUTES,
+          expiresAt: 5_000 + TEN_MINUTES,
+          ...fields,
+        },
+      },
+    });
+    const launched = (ageMs = 0) => reading("throwaway.launch", { ageMs });
+    const status = (runId = "run-1"): HostCallArgs => ({
+      ...LAUNCH,
+      tool: "throwaway.status",
+      args: { runId },
+    });
+    const advance = (ms: number) => {
+      now += ms;
+      mono += ms;
+    };
+    const held = () => runtime.holdsThrowawayRuns("studio");
+
+    it("holds the host after the launch answers, until the run's time limit", async () => {
+      throwawayCall.mockResolvedValueOnce(launched());
+      await runtime.call("a", LONG_LAUNCH, { tier: "core" });
+      expect(runtime.hasCallInFlight("studio")).toBe(false);
+      expect(runtime.awaitsNotices("studio")).toBe(false);
+      expect(held()).toBe(true);
+      expect(runtime.holdsThrowawayRuns("elsewhere")).toBe(false);
+      advance(TEN_MINUTES - 1);
+      expect(held()).toBe(true);
+      advance(1);
+      expect(held()).toBe(false);
+    });
+
+    it("counts what was left of the limit when the host read the run", async () => {
+      throwawayCall.mockResolvedValueOnce(launched());
+      await runtime.call("a", LONG_LAUNCH, { tier: "core" });
+      advance(4 * 60_000);
+      throwawayCall.mockResolvedValueOnce(reading("throwaway.status", { ageMs: 4 * 60_000 }));
+      await runtime.call("a", status(), { tier: "core" });
+      advance(6 * 60_000 - 1);
+      expect(held()).toBe(true);
+      advance(1);
+      expect(held()).toBe(false);
+    });
+
+    it("never stretches a run past an earlier reading, for an answer the host replays", async () => {
+      throwawayCall.mockResolvedValueOnce(launched());
+      await runtime.call("a", { ...LONG_LAUNCH, newCallId: "mine-1" }, { tier: "core" });
+      advance(8 * 60_000);
+      // The host's record of the first send, read at launch.
+      throwawayCall.mockResolvedValueOnce(launched());
+      await runtime.call("a", { ...LONG_LAUNCH, callId: "mine-1" }, { tier: "core" });
+      advance(2 * 60_000);
+      expect(held()).toBe(false);
+    });
+
+    it("lets go of a run once an answer shows it over, and never takes it back", async () => {
+      throwawayCall.mockResolvedValueOnce(launched());
+      await runtime.call("a", LONG_LAUNCH, { tier: "core" });
+      throwawayCall.mockResolvedValueOnce(
+        reading("throwaway.status", {
+          ageMs: 1_000,
+          state: "exited",
+          endedAt: 6_000,
+          endReason: "exit",
+        })
+      );
+      await runtime.call("a", status(), { tier: "core" });
+      expect(held()).toBe(false);
+      // A resend the host answers from its record of a read while it was still going.
+      throwawayCall.mockResolvedValueOnce(reading("throwaway.status", { ageMs: 500 }));
+      await runtime.call("a", { ...status(), callId: "old-read" }, { tier: "core" });
+      expect(held()).toBe(false);
+    });
+
+    it("lets go of a run the host no longer has, and keeps the others", async () => {
+      throwawayCall.mockResolvedValueOnce(launched());
+      await runtime.call("a", LONG_LAUNCH, { tier: "core" });
+      throwawayCall.mockResolvedValueOnce(
+        reading("throwaway.launch", { runId: "run-2", ageMs: 0 })
+      );
+      await runtime.call("a", LONG_LAUNCH, { tier: "core" });
+      throwawayCall.mockResolvedValueOnce({ status: "failed", reason: "not-found" });
+      await runtime.call("a", status("run-1"), { tier: "core" });
+      expect(held()).toBe(true);
+      throwawayCall.mockResolvedValueOnce({ status: "failed", reason: "close-failed" });
+      await runtime.call(
+        "a",
+        { ...LAUNCH, tool: "throwaway.close", args: { runId: "run-2" } },
+        { tier: "core" }
+      );
+      // A close that failed may have left it going.
+      expect(held()).toBe(true);
+      throwawayCall.mockResolvedValueOnce({
+        status: "done",
+        result: {
+          tool: "throwaway.close",
+          closed: true,
+          run: { ...RUN, runId: "run-2", state: "closed", endedAt: 9_000, endReason: "close" },
+        },
+      });
+      await runtime.call(
+        "a",
+        { ...LAUNCH, tool: "throwaway.close", args: { runId: "run-2" } },
+        { tier: "core" }
+      );
+      expect(held()).toBe(false);
+    });
+
+    it("holds a launch whose answer was lost for as long as its run could last", async () => {
+      throwawayCall.mockRejectedValueOnce(new AppError({ code: "OUTCOME_UNKNOWN", message: "lost" }));
+      await runtime.call("a", LONG_LAUNCH, { tier: "core" });
+      const runMs = (throwawayCall.mock.calls[0]![1] as ThrowawayCallPayload).runMs;
+      advance(TEN_MINUTES + runMs);
+      expect(held()).toBe(true);
+      advance(60_000);
+      expect(held()).toBe(false);
+    });
+
+    it("holds nothing for a launch that never ran", async () => {
+      throwawayCall.mockRejectedValueOnce(
+        new AppError({ code: "HOST_DISCONNECTED", message: "not sent" })
+      );
+      await runtime.call("a", LONG_LAUNCH, { tier: "core" });
+      expect(held()).toBe(false);
+      throwawayCall.mockResolvedValueOnce({ status: "refused", reason: "throwaway-off" });
+      await runtime.call("a", LONG_LAUNCH, { tier: "core" });
+      expect(held()).toBe(false);
+      throwawayCall.mockResolvedValueOnce({ status: "failed", reason: "launch-failed" });
+      await runtime.call("a", LONG_LAUNCH, { tier: "core" });
+      expect(held()).toBe(false);
+    });
+
+    it("keeps a lost launch held when a resend of it can't get through", async () => {
+      throwawayCall.mockRejectedValueOnce(new AppError({ code: "OUTCOME_UNKNOWN", message: "lost" }));
+      await runtime.call("a", { ...LONG_LAUNCH, newCallId: "mine-1" }, { tier: "core" });
+      throwawayCall.mockRejectedValueOnce(
+        new AppError({ code: "HOST_DISCONNECTED", message: "not sent" })
+      );
+      await runtime.call("a", { ...LONG_LAUNCH, callId: "mine-1" }, { tier: "core" });
+      expect(held()).toBe(true);
+    });
+
+    it("holds a run from a host before time limits for the longest limit since it was read", async () => {
+      throwawayCall.mockResolvedValueOnce(LAUNCHED);
+      await runtime.call("a", LAUNCH, { tier: "core" });
+      advance(MAX_THROWAWAY_TIME_LIMIT_MS - 1);
+      expect(held()).toBe(true);
+      advance(1);
+      expect(held()).toBe(false);
+    });
+
+    it("never lets go early when the wall clock steps forward", async () => {
+      throwawayCall.mockResolvedValueOnce(launched());
+      await runtime.call("a", LONG_LAUNCH, { tier: "core" });
+      now += 60 * 60_000;
+      expect(held()).toBe(true);
+    });
+
+    it("lets go of the host once the help session that launched it ends", async () => {
+      throwawayCall.mockResolvedValueOnce(launched());
+      await runtime.call("a", LONG_LAUNCH, { tier: "core" });
+      runtime.endHelpSession("a");
+      expect(held()).toBe(false);
+    });
+
+    it("holds nothing for a launch whose answer lands after its session ended", async () => {
+      let finish!: (answer: ThrowawayCallAnswer) => void;
+      throwawayCall.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          })
+      );
+      const pending = runtime.call("a", LONG_LAUNCH, { tier: "core" });
+      await vi.waitFor(() => expect(throwawayCall).toHaveBeenCalledTimes(1));
+      runtime.endHelpSession("a");
+      finish(launched());
+      await pending;
+      expect(held()).toBe(false);
+    });
+
+    it("holds no link for a run on this machine", async () => {
+      await runtime.call("a", { ...LONG_LAUNCH, hostId: "local" }, { tier: "core" });
+      expect(runtime.holdsThrowawayRuns("local")).toBe(false);
+      expect(held()).toBe(false);
     });
   });
 
