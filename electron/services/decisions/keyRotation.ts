@@ -331,6 +331,8 @@ export class KeyRotations {
       throw error;
     }
     const pending: PendingRotation = { epoch, revoke };
+    // Set before the write: one that fails partway may still have landed.
+    this.staged = true;
     // The key and what it is for are saved in one write, before anything is sent.
     const staged = await addEpoch(
       this.keys,
@@ -339,7 +341,6 @@ export class KeyRotations {
       raw,
       { makeCurrent: false }
     );
-    this.staged = true;
     client.identity = staged;
     return this.send(client, staged, pending, { list, grants });
   }

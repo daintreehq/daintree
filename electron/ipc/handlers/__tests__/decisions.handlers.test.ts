@@ -682,8 +682,17 @@ describe("decisions IPC", () => {
   it("revokes and rotates through Decisions itself once the setting is on", async () => {
     saved.value = { enabled: true };
 
-    await expect(revokeDevice("dev_phone_1")).resolves.toEqual({ result: "revoked", keyEpoch: 2 });
-    await expect(rotateKeys()).resolves.toEqual({ result: "rotated", keyEpoch: 2 });
+    decisionsEntry.revokeDevice.mockResolvedValueOnce({
+      result: "unconfirmed",
+      origin: "https://relay.example.com",
+    } as never);
+    decisionsEntry.rotateKeys.mockResolvedValueOnce({ result: "rotated", keyEpoch: 7 } as never);
+
+    await expect(revokeDevice("dev_phone_1")).resolves.toEqual({
+      result: "unconfirmed",
+      origin: "https://relay.example.com",
+    });
+    await expect(rotateKeys()).resolves.toEqual({ result: "rotated", keyEpoch: 7 });
 
     expect(decisionsEntry.revokeDevice).toHaveBeenCalledExactlyOnceWith("dev_phone_1");
     expect(decisionsEntry.rotateKeys).toHaveBeenCalledOnce();

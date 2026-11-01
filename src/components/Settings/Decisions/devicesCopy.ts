@@ -131,8 +131,7 @@ export function describeRotateResult(result: DecisionsRotateKeysResult): {
   if (result.result === "rotated") {
     return {
       finished: true,
-      message:
-        "The relay holds a new key, sealed to each paired device. What's sent from now on uses it.",
+      message: "The relay holds a new key, sealed to each paired device.",
     };
   }
   return { finished: false, message: describeRotationProblem(result) };

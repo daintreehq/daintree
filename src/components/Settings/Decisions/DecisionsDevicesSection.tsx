@@ -84,12 +84,15 @@ export function DecisionsDevicesSection({
   const [pairingOpen, setPairingOpen] = useState(false);
   const keyActions = useDecisionsKeyActions(reload);
   const [revokeTarget, setRevokeTarget] = useState<DecisionsDevice | null>(null);
+  const [revokeFinished, setRevokeFinished] = useState(false);
   const actionsLocked = locked || keyActions.pending !== null;
 
   const confirmRevoke = () => {
     if (!revokeTarget) return;
     void keyActions.revoke(revokeTarget).then((finished) => {
-      if (finished) setRevokeTarget(null);
+      if (!finished) return;
+      setRevokeFinished(true);
+      setRevokeTarget(null);
     });
   };
 
@@ -192,6 +195,7 @@ export function DecisionsDevicesSection({
                     aria-describedby={descriptionId}
                     onClick={() => {
                       keyActions.clearRevokeError();
+                      setRevokeFinished(false);
                       setRevokeTarget(device);
                     }}
                   >
@@ -208,9 +212,8 @@ export function DecisionsDevicesSection({
             label="Encryption key"
             description={
               <>
-                Questions and answers are sealed with a key each paired device holds. Rotating makes
-                a new one for what&apos;s sent from now on; what a device already has stays readable
-                on it.
+                Questions and answers are sealed with a key each paired device holds. Rotating seals
+                a new one to each of them; what a device already has stays readable on it.
                 {keyActions.notice && (
                   <span
                     className="mt-1 block text-text-primary"
@@ -269,6 +272,7 @@ export function DecisionsDevicesSection({
         }}
         onConfirm={confirmRevoke}
         restoreFocusTo={currentRotateButton}
+        revoked={revokeFinished}
       />
     </SettingsSection>
   );

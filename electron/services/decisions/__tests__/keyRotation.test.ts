@@ -37,16 +37,33 @@ let ownerStored: StoredIdentity;
 let phoneA: Phone;
 let phoneB: Phone;
 let stranger: Phone;
+/** This computer, as the relay lists it: never a recipient. */
+let ownerDevice: Phone;
+/** Revoked before: never a recipient either. */
+let gone: Phone;
+/** Owner-signed, but each certificate disagrees with the listing in one field. */
+let mismatched: Phone[];
 
-async function phone(id: string, issuer: DeviceKeys, issuerId = OWNER): Promise<Phone> {
-  const keys = await generateDeviceKeys(true);
+async function phone(
+  id: string,
+  issuer: DeviceKeys,
+  cert: {
+    issuerId?: string;
+    installationId?: string;
+    deviceId?: string;
+    role?: "phone" | "tablet" | "owner-desktop";
+    keys?: DeviceKeys;
+  } = {},
+  role: "phone" | "owner-desktop" = "phone"
+): Promise<Phone> {
+  const keys = cert.keys ?? (await generateDeviceKeys(true));
   const serialized = await serializeDeviceKeys(keys);
-  const cert = await issueDeviceCert({
-    issuerDeviceId: issuerId,
+  const issued = await issueDeviceCert({
+    issuerDeviceId: cert.issuerId ?? OWNER,
     issuerSigningKey: issuer.signing.privateKey,
-    installationId: INSTALLATION,
-    deviceId: id,
-    role: "phone",
+    installationId: cert.installationId ?? INSTALLATION,
+    deviceId: cert.deviceId ?? id,
+    role: cert.role ?? role,
     label: `Phone ${id}`,
     signingPub: serialized.signing_public,
     exchangePub: serialized.exchange_public,
@@ -56,13 +73,13 @@ async function phone(id: string, issuer: DeviceKeys, issuerId = OWNER): Promise<
     keys,
     info: {
       device_id: id,
-      role: "phone",
+      role,
       label: `Phone ${id}`,
       created_at: "2026-11-01T00:00:00.000Z",
       revoked_at: null,
       last_seen_at: null,
       last_ack_seq: 0,
-      cert,
+      cert: issued,
       push_enabled: false,
     } as DeviceInfo,
   };
@@ -87,6 +104,15 @@ beforeAll(async () => {
   phoneB = await phone("dev_phone_b", ownerKeys);
   // Signed by someone else's key: the relay can list it, but nothing may be sealed to it.
   stranger = await phone("dev_stranger", await generateDeviceKeys(true));
+  ownerDevice = await phone(OWNER, ownerKeys, { keys: ownerKeys }, "owner-desktop");
+  gone = await phone("dev_gone", ownerKeys);
+  gone.info = { ...gone.info, revoked_at: "2026-10-31T00:00:00.000Z" };
+  mismatched = await Promise.all([
+    phone("dev_other_install", ownerKeys, { installationId: "inst_other" }),
+    phone("dev_other_issuer", ownerKeys, { issuerId: "dev_someone_else" }),
+    phone("dev_other_subject", ownerKeys, { deviceId: "dev_someone_else" }),
+    phone("dev_other_role", ownerKeys, { role: "tablet" }),
+  ]);
 });
 
 /** The relay's state, as the fake client answers it. */
@@ -122,7 +148,7 @@ function commit(
     if (target.revoked_at !== null) throw new RelayError("invalid_state", "already revoked", 409);
   }
   const expected = state.devices
-    .filter((d) => d.revoked_at === null && d.device_id !== revoke)
+    .filter((d) => d.revoked_at === null && d.role !== "owner-desktop" && d.device_id !== revoke)
     .map((d) => d.device_id)
     .sort();
   const got = grants.map((g) => g.device_id).sort();
@@ -192,13 +218,14 @@ async function opened(state: RelayState, holder: Phone, epoch: number): Promise<
 describe("KeyRotations", () => {
   it("revokes a device and seals the new key to each one that remains, then makes it current", async () => {
     const keys = await keysWith();
-    const state = relayWith([phoneA, phoneB]);
+    const state = relayWith([ownerDevice, phoneA, phoneB, gone]);
     const { client, revokeDevice } = fakeClient(state);
 
     const outcome = await new KeyRotations(keys).rotate(client, phoneA.id);
 
     expect(outcome).toEqual({ outcome: "done", epoch: 2, revoked: phoneA.id });
     expect(revokeDevice).toHaveBeenCalledOnce();
+    // Neither this computer nor a device revoked before gets a grant.
     expect(state.grants.get(2)?.map((g) => g.device_id)).toEqual([phoneB.id]);
     const after = await stored(keys);
     expect(after.currentEpoch).toBe(2);
@@ -310,7 +337,9 @@ describe("KeyRotations", () => {
     const keys = await keysWith();
     const state = relayWith([phoneA]);
     const relay = fakeClient(state);
+    let firstStaged: string | undefined;
     relay.rotateEpoch.mockImplementationOnce(async (epoch: number, grants: EpochGrant[]) => {
+      firstStaged = await rawKey(keys, 2);
       state.devices.push({ ...phoneB.info });
       commit(state, null, epoch, grants);
     });
@@ -320,7 +349,10 @@ describe("KeyRotations", () => {
     });
 
     expect(relay.rotateEpoch).toHaveBeenCalledTimes(2);
-    expect(await opened(state, phoneB, 2)).toBe(await rawKey(keys, 2));
+    expect(firstStaged).toBeDefined();
+    expect(await rawKey(keys, 2)).toBe(firstStaged);
+    expect(await opened(state, phoneA, 2)).toBe(firstStaged);
+    expect(await opened(state, phoneB, 2)).toBe(firstStaged);
   });
 
   it("stages and sends nothing when a remaining device's certificate doesn't verify", async () => {
@@ -336,10 +368,43 @@ describe("KeyRotations", () => {
     expect(await stored(keys)).toEqual(ownerStored);
   });
 
+  it("refuses an owner-signed certificate that names another installation, issuer, device or role", async () => {
+    for (const odd of mismatched) {
+      const keys = await keysWith();
+      const relay = fakeClient(relayWith([phoneA, odd]));
+
+      await expect(new KeyRotations(keys).rotate(relay.client, null), odd.id).resolves.toEqual({
+        outcome: "unverified",
+      });
+
+      expect(relay.rotateEpoch, odd.id).not.toHaveBeenCalled();
+      expect(await stored(keys), odd.id).toEqual(ownerStored);
+    }
+  });
+
+  it("sends nothing when the key couldn't be staged", async () => {
+    const memory = await keysWith();
+    const keys: KeyStore = {
+      load: () => memory.load(),
+      clear: () => memory.clear(),
+      save: async () => {
+        throw new Error("disk full");
+      },
+    };
+    const relay = fakeClient(relayWith([phoneA]));
+
+    await expect(new KeyRotations(keys).rotate(relay.client, phoneA.id)).rejects.toThrow(
+      "disk full"
+    );
+
+    expect(relay.revokeDevice).not.toHaveBeenCalled();
+    expect(await stored(memory)).toEqual(ownerStored);
+  });
+
   it("says a device the relay doesn't list as active can't be revoked, staging nothing", async () => {
     const keys = await keysWith();
-    const state = relayWith([phoneA]);
-    state.devices[0] = { ...state.devices[0]!, revoked_at: "2026-11-01T00:00:00.000Z" };
+    const state = relayWith([ownerDevice, phoneA]);
+    state.devices[1] = { ...state.devices[1]!, revoked_at: "2026-11-01T00:00:00.000Z" };
     const relay = fakeClient(state);
 
     await expect(new KeyRotations(keys).rotate(relay.client, phoneA.id)).resolves.toEqual({

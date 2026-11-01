@@ -1245,12 +1245,15 @@ describe("RelayConnection", () => {
       await keys.save(withPendingRotation());
       const onDevicesChanged = vi.fn();
       const devicesRead = vi.fn();
+      let answerDevices!: () => void;
+      const devicesAnswered = new Promise<void>((resolve) => (answerDevices = resolve));
       const h = await harness({
         keys,
         overrides: { onDevicesChanged },
         wrapFetch: (inner) => async (url, init) => {
           if (new URL(url).pathname === "/api/v1/devices") {
             devicesRead();
+            await devicesAnswered;
             // The relay took the rotation before the crash.
             return new Response(JSON.stringify({ key_epoch: 2, devices: [] }), {
               status: 200,
@@ -1262,6 +1265,11 @@ describe("RelayConnection", () => {
       });
 
       h.connection.start();
+      await vi.waitFor(() => expect(devicesRead).toHaveBeenCalledOnce());
+      for (let i = 0; i < 20; i += 1) await Promise.resolve();
+      // No ticket, so no socket, until the pending key is settled.
+      expect(h.relay.tickets).toHaveLength(0);
+      answerDevices();
       await connectLive(h);
 
       expect(devicesRead).toHaveBeenCalledOnce();
@@ -1272,20 +1280,43 @@ describe("RelayConnection", () => {
       h.connection.stop();
     });
 
-    it("makes a pending key current when the ledger confirms its epoch, and says the devices changed", async () => {
-      const keys = new MemoryKeyStore();
-      await keys.save(withPendingRotation());
+    it("makes a pending key current when the ledger confirms its epoch, before the bridge reloads it", async () => {
+      const real = new MemoryKeyStore();
+      await real.save(withPendingRotation());
+      let holdSaves = false;
+      let releaseSave: (() => void) | null = null;
+      const keys: KeyStore = {
+        load: () => real.load(),
+        save: async (stored) => {
+          if (holdSaves) await new Promise<void>((resolve) => (releaseSave = resolve));
+          await real.save(stored);
+        },
+        clear: () => real.clear(),
+      };
       const onDevicesChanged = vi.fn();
-      // The relay's device list can't be read, so the pending key is still pending once live.
+      // The relay refuses the device list read (404), so the key is still pending once live.
       const h = await harness({ keys, overrides: { onDevicesChanged } });
       h.connection.start();
       const socket = await connectLive(h);
-      expect((await keys.load())?.currentEpoch).toBe(1);
+      expect((await real.load())?.currentEpoch).toBe(1);
+      const bridgeEpoch = () =>
+        (
+          h.connection as unknown as {
+            current: { bridge: { ctx: { identity: { currentEpoch: number } } } | null } | null;
+          }
+        ).current?.bridge?.ctx.identity.currentEpoch;
 
+      holdSaves = true;
       deviceEvent(socket, 1, "device.key_rotated", { key_epoch: 2 });
+      // The bridge applies the event only once the key it will reload is current.
+      await vi.waitFor(() => expect(releaseSave).not.toBeNull());
+      for (let i = 0; i < 20; i += 1) await Promise.resolve();
+      expect(bridgeEpoch()).toBe(1);
+      releaseSave!();
 
-      await vi.waitFor(async () => expect((await keys.load())?.currentEpoch).toBe(2));
-      expect(pendingRotationOf((await keys.load())!)).toBeNull();
+      await vi.waitFor(() => expect(bridgeEpoch()).toBe(2));
+      expect((await real.load())?.currentEpoch).toBe(2);
+      expect(pendingRotationOf((await real.load())!)).toBeNull();
       await vi.waitFor(() => expect(onDevicesChanged).toHaveBeenCalledOnce());
       h.connection.stop();
     });

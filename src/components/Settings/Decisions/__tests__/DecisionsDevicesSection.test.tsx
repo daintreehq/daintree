@@ -96,18 +96,29 @@ describe("DecisionsDevicesSection revoke and rotate (#16010)", () => {
   it("revokes only the confirmed device, then reads the list again and says the key changed", async () => {
     revokeDevice.mockResolvedValue({ result: "revoked", keyEpoch: 2 });
     await renderSection();
-    listDevices.mockResolvedValue({ result: "listed", devices: [IPAD] });
+    // The list reads again only after the dialog has closed, so its row is still there then.
+    const reread = deferred<DecisionsDevicesResult>();
+    listDevices.mockReturnValue(reread.promise);
 
-    fireEvent.click(revokeButton("Pixel 9"));
+    const opener = revokeButton("Pixel 9");
+    opener.focus();
+    fireEvent.click(opener);
     await act(async () => {
       fireEvent.click(within(dialog()).getByRole("button", { name: "Revoke device" }));
     });
 
     expect(revokeDevice).toHaveBeenCalledExactlyOnceWith("dev_pixel");
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    // Focus goes to the key row, not back to the row that is about to go.
+    const rotate = screen.getByRole("button", { name: "Rotate keys" });
+    await waitFor(() => expect(document.activeElement).toBe(rotate));
+    await act(async () => {
+      reread.resolve({ result: "listed", devices: [IPAD] });
+    });
     expect(listDevices).toHaveBeenCalledTimes(2);
     expect(await screen.findByText(/'Pixel 9' is revoked/)).toBeTruthy();
     expect(screen.queryByText("Pixel 9")).toBeNull();
+    expect(document.activeElement).toBe(rotate);
   });
 
   it("keeps the dialog open with what was observed when the relay's answer was lost", async () => {
@@ -130,9 +141,13 @@ describe("DecisionsDevicesSection revoke and rotate (#16010)", () => {
     await renderSection();
 
     const rotate = screen.getByRole("button", { name: "Rotate keys" }) as HTMLButtonElement;
+    rotate.focus();
     fireEvent.click(rotate);
     fireEvent.click(rotate);
-    // Nothing else changes the key while it rotates.
+    // Busy, not disabled, so the button keeps focus; nothing else changes the key meanwhile.
+    expect(rotate.getAttribute("aria-busy")).toBe("true");
+    expect(rotate.disabled).toBe(false);
+    expect(document.activeElement).toBe(rotate);
     expect(revokeButton("Pixel 9").disabled).toBe(true);
     await act(async () => {
       rotation.resolve({ result: "rotated", keyEpoch: 3 });
@@ -152,7 +167,13 @@ describe("DecisionsDevicesSection revoke and rotate (#16010)", () => {
       </TooltipProvider>
     );
 
-    expect(await screen.findByRole("button", { name: "Rotate keys" })).toBeTruthy();
+    rotateKeys.mockResolvedValue({ result: "rotated", keyEpoch: 2 });
+    const rotate = await screen.findByRole("button", { name: "Rotate keys" });
+    await act(async () => {
+      fireEvent.click(rotate);
+    });
+
+    expect(rotateKeys).toHaveBeenCalledOnce();
   });
 
   it("reads the list again when main says the devices changed", async () => {

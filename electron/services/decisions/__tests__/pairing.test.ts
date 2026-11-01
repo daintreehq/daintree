@@ -405,6 +405,23 @@ describe("OwnerDevices", () => {
     expect(relay.approveCandidate).not.toHaveBeenCalled();
   });
 
+  it("expires an approval whose invitation lapsed while it waited its turn", async () => {
+    let clock = Date.now();
+    const devices = owner(stored(), () => clock);
+    await invited(devices);
+    relay.pending = [candidate()];
+    await devices.read("pair_1");
+    relay.holdQueue = true;
+
+    const approving = devices.approve({ pairingId: "pair_1", code: "482913" });
+    await vi.waitFor(() => expect(relay.queue).toHaveLength(1));
+    clock += 300_000;
+    releaseQueue();
+
+    await expect(approving).resolves.toEqual({ result: "expired" });
+    expect(relay.approveCandidate).not.toHaveBeenCalled();
+  });
+
   it("revokes a device and reports the epoch the relay now holds", async () => {
     relay.rotate.mockResolvedValueOnce({ outcome: "done", epoch: 4, revoked: "dev_phone_1" });
 

@@ -11,6 +11,8 @@ interface DecisionsRevokeDeviceDialogProps {
   onCancel: () => void;
   onConfirm: () => void;
   restoreFocusTo?: RestoreFocusTarget;
+  /** The revocation finished, so its row is going: focus goes to `restoreFocusTo` rather than back to it. */
+  revoked?: boolean;
 }
 
 /**
@@ -26,6 +28,7 @@ export function DecisionsRevokeDeviceDialog({
   onCancel,
   onConfirm,
   restoreFocusTo,
+  revoked = false,
 }: DecisionsRevokeDeviceDialogProps) {
   const label = device?.label ?? "this device";
   return (
@@ -34,11 +37,12 @@ export function DecisionsRevokeDeviceDialog({
       onClose={onCancel}
       variant="destructive"
       title={`Revoke '${label}'?`}
-      description={`${device ? `${deviceRoleLabel(device.role)} '${label}'` : `'${label}'`} can no longer reach your relay, and the relay gets a new key, sealed to each device that remains, for what's sent from now on. Questions, answers and screenshots already on '${label}' can't be recalled.`}
+      description={`${device ? `${deviceRoleLabel(device.role)} '${label}'` : `'${label}'`} can no longer reach your relay, and Daintree seals a new key to each device that remains. Questions, answers and screenshots already on '${label}' can't be recalled.`}
       confirmLabel="Revoke device"
       onConfirm={onConfirm}
       isConfirmLoading={revoking}
       restoreFocusTo={restoreFocusTo}
+      preferRestoreFocusTo={revoked}
     >
       {error && (
         <p role="alert" className="text-xs text-status-error select-text">
