@@ -93,9 +93,9 @@ describe("relay socket address", () => {
   it("is the relay's origin as a socket origin, and nothing else", () => {
     const relay = "https://decisions.example.workers.dev";
     expect(socketOriginOf(relay)).toBe("wss://decisions.example.workers.dev");
-    expect(isRelaySocketUrl("wss://decisions.example.workers.dev/api/v1/socket?ticket=t", relay)).toBe(
-      true
-    );
+    expect(
+      isRelaySocketUrl("wss://decisions.example.workers.dev/api/v1/socket?ticket=t", relay)
+    ).toBe(true);
     expect(isRelaySocketUrl("wss://elsewhere.example/api/v1/socket?ticket=t", relay)).toBe(false);
     expect(isRelaySocketUrl("ws://decisions.example.workers.dev/api/v1/socket", relay)).toBe(false);
     expect(isRelaySocketUrl("not a url", relay)).toBe(false);

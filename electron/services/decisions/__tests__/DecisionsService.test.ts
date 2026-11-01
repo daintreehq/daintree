@@ -542,7 +542,9 @@ describe("DecisionsService relay connection", () => {
 
   it("runs no connection without a complete relay identity", async () => {
     const { service, made } = connected();
-    await service.start(on({ relayOrigin: RELAY.relayOrigin, installationId: RELAY.installationId }));
+    await service.start(
+      on({ relayOrigin: RELAY.relayOrigin, installationId: RELAY.installationId })
+    );
     expect(made).toHaveLength(0);
     expect(service.getStatus()).toEqual({ state: "not-connected" });
   });

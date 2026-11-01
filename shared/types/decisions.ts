@@ -64,13 +64,7 @@ export interface DecisionsSettings {
  * - `revoked`: the relay revoked this computer; nothing reconnects.
  */
 export type DecisionsState =
-  | "off"
-  | "not-connected"
-  | "connecting"
-  | "connected"
-  | "reconnecting"
-  | "replaced"
-  | "revoked";
+  "off" | "not-connected" | "connecting" | "connected" | "reconnecting" | "replaced" | "revoked";
 
 /**
  * Why a relay that is set up isn't being connected to, while `not-connected`:

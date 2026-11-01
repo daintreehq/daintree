@@ -280,7 +280,9 @@ describe("Decisions entry", () => {
 
     const status = await setDecisionsEnabled(true);
 
-    expect(status).toEqual(withRevision({ state: "not-connected", relayOrigin: RELAY.relayOrigin }));
+    expect(status).toEqual(
+      withRevision({ state: "not-connected", relayOrigin: RELAY.relayOrigin })
+    );
     expect(saved.value).toMatchObject({ enabled: true, ...RELAY, proxyAllowlisted: true });
     expect(peekDecisionsService()?.getStatus().state).toBe("not-connected");
   });
@@ -310,7 +312,9 @@ describe("Decisions entry", () => {
   it("reports the saved consent with the switch off", async () => {
     saved.value = { enabled: false, consentedAt: 1_761_955_200_000 };
 
-    expect(await getDecisionsStatus()).toEqual(withRevision({ state: "off", consentedAt: 1_761_955_200_000 }));
+    expect(await getDecisionsStatus()).toEqual(
+      withRevision({ state: "off", consentedAt: 1_761_955_200_000 })
+    );
   });
 
   it("turns off at runtime, stopping the service and saving off", async () => {
@@ -661,7 +665,9 @@ describe("Decisions entry", () => {
 
       writeFileSync(keyFile.path, "sealed");
 
-      expect(await getDecisionsStatus()).toEqual(withRevision({ state: "not-connected", keysStored: true }));
+      expect(await getDecisionsStatus()).toEqual(
+        withRevision({ state: "not-connected", keysStored: true })
+      );
     });
 
     it("turns off only once a claim in flight has settled, keeping what it recorded", async () => {

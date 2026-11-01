@@ -220,7 +220,9 @@ let identity: StoredIdentity;
 
 beforeEach(async () => {
   identity ??= await ownerIdentity();
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+  vi.useFakeTimers({
+    toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
+  });
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
@@ -347,7 +349,10 @@ describe("RelayConnection", () => {
     await socket.waitFor((frame) => frame.t === "ack" && frame.seq === 4);
 
     expect(await h.store.getCursor()).toBe(4);
-    const acks = socket.frames().filter((frame) => frame.t === "ack").map((frame) => frame.seq);
+    const acks = socket
+      .frames()
+      .filter((frame) => frame.t === "ack")
+      .map((frame) => frame.seq);
     expect(acks).toContain(1);
     expect(acks).toContain(2);
     expect(acks).toContain(3);
@@ -371,9 +376,12 @@ describe("RelayConnection", () => {
     await socket.waitFor((frame) => frame.t === "sync" && frame.after === 1);
     expect(await h.store.getCursor()).toBe(1);
     // The replay that brought it live acked 0; each event since acks the cursor as it stands.
-    expect(socket.frames().filter((frame) => frame.t === "ack").map((frame) => frame.seq)).toEqual([
-      0, 1, 1,
-    ]);
+    expect(
+      socket
+        .frames()
+        .filter((frame) => frame.t === "ack")
+        .map((frame) => frame.seq)
+    ).toEqual([0, 1, 1]);
 
     socket.event(2);
     await socket.waitFor((frame) => frame.t === "ack" && frame.seq === 3);
@@ -391,7 +399,10 @@ describe("RelayConnection", () => {
     const droppedAt = Date.now();
     first.drop(1006);
     const waiting = await h.status("reconnecting");
-    expect(waiting).toEqual({ state: "reconnecting", nextAttemptAt: droppedAt + RECONNECT_BASE_MS });
+    expect(waiting).toEqual({
+      state: "reconnecting",
+      nextAttemptAt: droppedAt + RECONNECT_BASE_MS,
+    });
     expect(h.relay.tickets).toHaveLength(1);
 
     await vi.advanceTimersByTimeAsync(RECONNECT_BASE_MS);

@@ -347,8 +347,7 @@ export class RelayConnection {
     }
     if (attempt.closeCode === WS_CLOSE.replaced) {
       this.retire(attempt);
-      const delay =
-        REPLACED_MIN_MS + Math.floor(this.rand() * (REPLACED_MAX_MS - REPLACED_MIN_MS));
+      const delay = REPLACED_MIN_MS + Math.floor(this.rand() * (REPLACED_MAX_MS - REPLACED_MIN_MS));
       this.replacedUntil = this.now() + delay;
       this.wait("replaced", delay);
       return;
