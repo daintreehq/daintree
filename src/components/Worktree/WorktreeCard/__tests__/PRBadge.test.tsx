@@ -63,7 +63,6 @@ function renderBadge(extra: Partial<Parameters<typeof PRBadge>[0]> = {}) {
         prState="open"
         isSubordinate={false}
         worktreePath="/repo"
-        isActive
         {...extra}
       />
     </TooltipProvider>

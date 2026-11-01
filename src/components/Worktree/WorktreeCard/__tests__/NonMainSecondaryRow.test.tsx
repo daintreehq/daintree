@@ -82,7 +82,6 @@ function renderRow(overrides: RenderOverrides = {}) {
         worktree={overrides.worktree ?? baseWorktree}
         branchLabel="feature/test"
         isActive
-        underlineOnHover={false}
         hasUpstreamDelta={overrides.hasUpstreamDelta ?? false}
         hasAuthFailedSignIn={overrides.hasAuthFailedSignIn ?? false}
         hasDisplayTitle={overrides.hasDisplayTitle ?? false}
@@ -213,9 +212,10 @@ describe("NonMainSecondaryRow → badge ordering by alarm tier", () => {
     expect(upIdx).toBeLessThan(prIdx);
   });
 
-  it("PR-originated: suppresses the subordinate PR badge and shows the linked issue", () => {
+  it("PR-originated: the source PR is its own reference here, beside the linked issue", () => {
     issueBadgeProps.length = 0;
-    const { queryByTestId } = renderRow({
+    prBadgeProps.length = 0;
+    renderRow({
       variant: "grid",
       worktree: {
         ...baseWorktree,
@@ -225,14 +225,30 @@ describe("NonMainSecondaryRow → badge ordering by alarm tier", () => {
       hasDisplayTitle: true,
       isPrOriginated: true,
     });
-    // PR is the headline above — no subordinate PR badge here.
-    expect(queryByTestId("pr-badge")).toBeNull();
+    // The headline above shows the PR's title as words (#15864), so the PR
+    // opens from a reference of its own: the source PR, once, by number.
+    expect(prBadgeProps.map((p) => p.prNumber)).toEqual([42]);
+    expect(prBadgeProps[0]?.prTitle).toBeUndefined();
     // The linked issue surfaces in the secondary row even though hasDisplayTitle is true.
     expect(issueBadgeProps.at(-1)?.issueNumber).toBe(123);
   });
 
+  it("issue headline: the issue opens from a number-only reference in the stack (#15864)", () => {
+    issueBadgeProps.length = 0;
+    renderRow({
+      variant: "grid",
+      worktree: { ...baseWorktree, issueNumber: 123, issueTitle: "Fix login" } as WorktreeState,
+      hasDisplayTitle: true,
+      isPrOriginated: false,
+    });
+    expect(issueBadgeProps.map((p) => p.issueNumber)).toEqual([123]);
+    // The title is already the headline; the reference does not repeat it.
+    expect(issueBadgeProps[0]?.issueTitle).toBeUndefined();
+  });
+
   it("PR-originated with no linked issue: renders no issue badge", () => {
     issueBadgeProps.length = 0;
+    prBadgeProps.length = 0;
     const { queryByTestId } = renderRow({
       variant: "grid",
       worktree: {
@@ -244,7 +260,7 @@ describe("NonMainSecondaryRow → badge ordering by alarm tier", () => {
       isPrOriginated: true,
     });
     expect(queryByTestId("issue-badge")).toBeNull();
-    expect(queryByTestId("pr-badge")).toBeNull();
+    expect(prBadgeProps.map((p) => p.prNumber)).toEqual([10]);
   });
 });
 

@@ -9,6 +9,8 @@ import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Sprout, Pin, BellOff } from "lucide-react";
 import { FolderOutput } from "@/components/icons";
 import type { AggregateCounts } from "./aggregateCounts";
+import { PRBadge } from "./PRBadge";
+import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
 import { EnvironmentPopover } from "./EnvironmentPopover";
 import { WorktreeAttachmentChips } from "./WorktreeAttachmentChips";
 import { visibleAttachmentChips } from "./attachmentState";
@@ -285,6 +287,14 @@ export function WorktreeHeader({
   // yet has no words to keep, so it stays the badge until the title arrives,
   // and so does a PR headline that warns: on a collapsed card nothing else
   // would show that its head moved under an armed merge.
+  const prDetectionPaused = usePRCircuitBreakerStore((s) => s.tripped);
+  const showCollapsedPrReference =
+    !!isCollapsed &&
+    isPrOriginated &&
+    !hasCustomTitle &&
+    headline.kind === "pr" &&
+    isPullRequestWarning(worktree.linked?.pr);
+
   const quietHeadlineTitle =
     quietGit && !hasCustomTitle && !(isPrOriginated && isPullRequestWarning(worktree.linked?.pr))
       ? displayTitle
@@ -399,6 +409,28 @@ export function WorktreeHeader({
             </TruncatedTooltip>
           ) : (
             <BranchLabel label={branchLabel} isActive={isActive} isMuted={isMuted} />
+          )}
+          {/* A collapsed card has no stack for the PR reference to sit in, and
+              the collapsed alarm pill has no word for a head that moved under
+              an armed merge. So a PR headline that warns keeps its reference
+              beside the title, where the warning was before the headline
+              became words. */}
+          {showCollapsedPrReference && (
+            // The title gives way first; the number and its warning do not.
+            <span className="flex shrink-0">
+              <PRBadge
+                prNumber={worktree.sourcePrNumber!}
+                prState={worktree.linked?.pr?.state}
+                prCiStatus={worktree.linked?.pr?.ciStatus}
+                mergeIntent={worktree.linked?.pr?.mergeIntent}
+                headMovedWhileArmed={worktree.linked?.pr?.headMovedWhileArmed}
+                isSubordinate={false}
+                worktreePath={worktree.path}
+                onOpen={badges.onOpenPR}
+                worktreeLabel={worktreeLabel}
+                prDetectionPaused={prDetectionPaused}
+              />
+            </span>
           )}
           {/* The grid keeps the word beside its title; the sidebar draws it as
               a pill in the title row's attention column. */}

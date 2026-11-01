@@ -161,11 +161,14 @@ describe("WorktreeHeader PR-originated headline (#8888)", () => {
       badges: { onOpenPR: noop, onOpenIssue: noop },
     });
 
-    const prButton = screen.getByRole("button", {
-      name: /pull request #314: Fix flaky terminal search/,
-    });
-    expect(prButton).toBeDefined();
-    expect(screen.getByText("Fix flaky terminal search")).toBeDefined();
+    // The title is words, not the link (#15864): the PR opens from its own
+    // number-only reference in the stack below.
+    expect(screen.getByTestId("worktree-headline-title").textContent).toBe(
+      "Fix flaky terminal search"
+    );
+    expect(screen.getByTestId("worktree-headline-title").closest("button")).toBeNull();
+    const prButton = screen.getByRole("button", { name: /pull request #314/ });
+    expect(prButton.getAttribute("aria-label")).not.toContain("Fix flaky terminal search");
   });
 
   it("falls back to the flat prTitle when linked.pr is not yet populated", () => {
@@ -223,11 +226,12 @@ describe("WorktreeHeader issue title headline", () => {
       badges: { onOpenIssue: noop },
     });
 
-    const issueButton = screen.getByRole("button", {
-      name: /Open issue #2907: Add terminal recipe editor coverage/,
-    });
-    expect(issueButton).toBeDefined();
-    expect(screen.getByText("Add terminal recipe editor coverage")).toBeDefined();
+    expect(screen.getByTestId("worktree-headline-title").textContent).toBe(
+      "Add terminal recipe editor coverage"
+    );
+    expect(screen.getByTestId("worktree-headline-title").closest("button")).toBeNull();
+    // The issue opens from its own reference, by number, rather than the title.
+    expect(screen.getByRole("button", { name: "Open issue #2907" })).toBeDefined();
   });
 
   it("uses branch name as primary headline when no issueTitle", () => {
@@ -472,141 +476,79 @@ describe("WorktreeHeader click bubbling", () => {
     return { ...result, onParentClick };
   }
 
-  it("issue badge click on inactive card bubbles to parent but does NOT call onOpenIssue", () => {
+  // The card ignores clicks on its controls (cardClickTarget.ts), so whether a
+  // reference's click reaches this wrapper no longer decides anything; what
+  // matters is that the reference does its one thing on the first click on any
+  // card (#15864). The rendered card suite pins that nothing selects.
+  it.each([false, true])("issue reference opens on the first click, isActive=%s", (isActive) => {
     const onOpenIssue = vi.fn();
-    const { onParentClick } = renderHeaderInWrapper({
+    renderHeaderInWrapper({
       worktree: { ...baseWorktree, issueNumber: 42, issueTitle: "Test issue" },
       badges: { onOpenIssue },
-      isActive: false,
+      isActive,
     });
 
-    const issueButton = screen.getByRole("button", { name: /Open issue #42/ });
-    fireEvent.click(issueButton);
-    expect(onOpenIssue).not.toHaveBeenCalled();
-    expect(onParentClick).toHaveBeenCalledOnce();
-  });
-
-  it("issue badge click on active card calls onOpenIssue and bubbles to parent", () => {
-    const onOpenIssue = vi.fn();
-    const { onParentClick } = renderHeaderInWrapper({
-      worktree: { ...baseWorktree, issueNumber: 42, issueTitle: "Test issue" },
-      badges: { onOpenIssue },
-      isActive: true,
-    });
-
-    const issueButton = screen.getByRole("button", { name: /Open issue #42/ });
-    fireEvent.click(issueButton);
+    fireEvent.click(screen.getByRole("button", { name: /Open issue #42/ }));
     expect(onOpenIssue).toHaveBeenCalledOnce();
-    expect(onParentClick).toHaveBeenCalledOnce();
   });
 
-  it("PR badge click on inactive card bubbles to parent but does NOT call onOpenPR", () => {
+  it.each([false, true])("PR reference opens on the first click, isActive=%s", (isActive) => {
     const onOpenPR = vi.fn();
-    const { onParentClick } = renderHeaderInWrapper({
+    renderHeaderInWrapper({
       worktree: { ...baseWorktree, ...prLinked(101), prNumber: 101, prState: "open" },
       badges: { onOpenPR },
-      isActive: false,
+      isActive,
     });
 
-    const prButton = screen.getByRole("button", { name: /pull request #101/ });
-    fireEvent.click(prButton);
-    expect(onOpenPR).not.toHaveBeenCalled();
-    expect(onParentClick).toHaveBeenCalledOnce();
-  });
-
-  it("PR badge click on active card calls onOpenPR and bubbles to parent", () => {
-    const onOpenPR = vi.fn();
-    const { onParentClick } = renderHeaderInWrapper({
-      worktree: { ...baseWorktree, ...prLinked(101), prNumber: 101, prState: "open" },
-      badges: { onOpenPR },
-      isActive: true,
-    });
-
-    const prButton = screen.getByRole("button", { name: /pull request #101/ });
-    fireEvent.click(prButton);
+    fireEvent.click(screen.getByRole("button", { name: /pull request #101/ }));
     expect(onOpenPR).toHaveBeenCalledOnce();
-    expect(onParentClick).toHaveBeenCalledOnce();
   });
 
-  it("plan badge click on inactive card bubbles to parent but does NOT call onOpenPlan", () => {
+  it.each([false, true])("plan file opens on the first click, isActive=%s", (isActive) => {
     const onOpenPlan = vi.fn();
-    const { onParentClick } = renderHeaderInWrapper({
+    renderHeaderInWrapper({
       worktree: { ...baseWorktree, hasPlanFile: true, planFilePath: "TODO.md" },
       badges: { onOpenPlan },
-      isActive: false,
+      isActive,
     });
 
-    const planButton = screen.getByRole("button", { name: /plan file/ });
-    fireEvent.click(planButton);
-    expect(onOpenPlan).not.toHaveBeenCalled();
-    expect(onParentClick).toHaveBeenCalledOnce();
-  });
-
-  it("plan badge click on active card calls onOpenPlan and bubbles to parent", () => {
-    const onOpenPlan = vi.fn();
-    const { onParentClick } = renderHeaderInWrapper({
-      worktree: { ...baseWorktree, hasPlanFile: true, planFilePath: "TODO.md" },
-      badges: { onOpenPlan },
-      isActive: true,
-    });
-
-    const planButton = screen.getByRole("button", { name: /plan file/ });
-    fireEvent.click(planButton);
+    fireEvent.click(screen.getByRole("button", { name: /plan file/ }));
     expect(onOpenPlan).toHaveBeenCalledOnce();
-    expect(onParentClick).toHaveBeenCalledOnce();
   });
 
-  it("inactive badges have aria-disabled attribute", () => {
-    renderHeaderInWrapper({
-      worktree: {
-        ...baseWorktree,
-        issueNumber: 42,
-        issueTitle: "Test issue",
-        prNumber: 101,
-        prState: "open",
-        ...prLinked(101),
-        hasPlanFile: true,
-        planFilePath: "TODO.md",
-      },
-      badges: { onOpenIssue: vi.fn(), onOpenPR: vi.fn(), onOpenPlan: vi.fn() },
-      isActive: false,
-    });
+  it("names every reference the same way on an active and an inactive card", () => {
+    const worktree = {
+      ...baseWorktree,
+      issueNumber: 42,
+      issueTitle: "Test issue",
+      prNumber: 101,
+      prState: "open" as const,
+      ...prLinked(101),
+      hasPlanFile: true,
+      planFilePath: "TODO.md",
+    };
+    const names = (isActive: boolean) => {
+      const { unmount } = renderHeaderInWrapper({
+        worktree,
+        badges: { onOpenIssue: vi.fn(), onOpenPR: vi.fn(), onOpenPlan: vi.fn() },
+        isActive,
+      });
+      const buttons = [/Open issue #42/, /pull request #101/, /plan file/].map((name) =>
+        screen.getByRole("button", { name })
+      );
+      const read = buttons.map((b) => [
+        b.getAttribute("aria-label"),
+        b.getAttribute("aria-disabled"),
+      ]);
+      unmount();
+      return read;
+    };
 
-    const issueButton = screen.getByRole("button", { name: /Open issue #42/ });
-    const prButton = screen.getByRole("button", { name: /pull request #101/ });
-    const planButton = screen.getByRole("button", { name: /plan file/ });
-    expect(issueButton.getAttribute("aria-disabled")).toBe("true");
-    expect(prButton.getAttribute("aria-disabled")).toBe("true");
-    // The plan row's first click selects the card rather than being refused,
-    // so it says so in its name instead of announcing itself disabled.
-    expect(planButton.getAttribute("aria-disabled")).toBeNull();
-    expect(planButton.getAttribute("aria-label")).toBe(
-      "Select worktree, then open plan file TODO.md"
-    );
-  });
-
-  it("active badges do not have aria-disabled attribute", () => {
-    renderHeaderInWrapper({
-      worktree: {
-        ...baseWorktree,
-        issueNumber: 42,
-        issueTitle: "Test issue",
-        prNumber: 101,
-        prState: "open",
-        ...prLinked(101),
-        hasPlanFile: true,
-        planFilePath: "TODO.md",
-      },
-      badges: { onOpenIssue: vi.fn(), onOpenPR: vi.fn(), onOpenPlan: vi.fn() },
-      isActive: true,
-    });
-
-    const issueButton = screen.getByRole("button", { name: /Open issue #42/ });
-    const prButton = screen.getByRole("button", { name: /pull request #101/ });
-    const planButton = screen.getByRole("button", { name: /plan file/ });
-    expect(issueButton.getAttribute("aria-disabled")).toBeNull();
-    expect(prButton.getAttribute("aria-disabled")).toBeNull();
-    expect(planButton.getAttribute("aria-disabled")).toBeNull();
+    const inactive = names(false);
+    expect(inactive).toEqual(names(true));
+    // None of them is refused on a card that is not the current one.
+    for (const [, disabled] of inactive) expect(disabled).toBeNull();
+    expect(inactive[2]?.[0]).toBe("Open plan file TODO.md");
   });
 
   it("more actions button click does NOT bubble to parent", () => {
@@ -631,58 +573,40 @@ describe("WorktreeHeader click bubbling", () => {
   });
 });
 
-describe("WorktreeHeader hover:underline on badges", () => {
-  const issueWt = { ...baseWorktree, issueNumber: 42, issueTitle: "Test issue" };
-
-  function getIssueSpan(container: HTMLElement) {
-    return container.querySelector('button[aria-label*="Open issue"] .truncate');
+describe("WorktreeHeader reference hover treatment (#15864)", () => {
+  // A reference that only answered the pointer on the active card told the
+  // user its click did something different elsewhere. Every reference now
+  // opens from any card, so its styling cannot depend on selection either.
+  function referenceClasses(isActive: boolean, variant: "sidebar" | "grid") {
+    const { unmount } = renderHeader({
+      worktree: {
+        ...baseWorktree,
+        issueNumber: 42,
+        issueTitle: "Test issue",
+        prNumber: 101,
+        prState: "open",
+        ...prLinked(101),
+        hasPlanFile: true,
+        planFilePath: "TODO.md",
+      },
+      badges: { onOpenIssue: noop, onOpenPR: noop, onOpenPlan: noop },
+      isActive,
+      variant,
+    });
+    const classes = [/Open issue #42/, /pull request #101/, /plan file/].map((name) => {
+      const button = screen.getByRole("button", { name });
+      return [button, ...button.querySelectorAll("*")].map((el) => el.getAttribute("class"));
+    });
+    unmount();
+    return classes;
   }
 
-  it("sidebar variant: issue badge underline only when active", () => {
-    const { container } = renderHeader({ worktree: issueWt, badges: { onOpenIssue: noop } });
-    expect(getIssueSpan(container)!.className).not.toContain("hover:underline");
-
-    const { container: activeContainer } = renderHeader({
-      worktree: issueWt,
-      badges: { onOpenIssue: noop },
-      isActive: true,
-    });
-    expect(getIssueSpan(activeContainer)!.className).toContain("hover:underline");
-  });
-
-  it("grid variant: badges keep hover:underline regardless of active state", () => {
-    const { container, unmount } = renderHeader({
-      worktree: {
-        ...issueWt,
-        prNumber: 101,
-        prState: "open",
-        ...prLinked(101),
-        hasPlanFile: true,
-        planFilePath: "TODO.md",
-      },
-      badges: { onOpenIssue: noop, onOpenPR: noop, onOpenPlan: noop },
-      variant: "grid",
-    });
-    expect(getIssueSpan(container)!.className).toContain("hover:underline");
-    expect(screen.getByText("#101").className).toContain("hover:underline");
-    expect(screen.getByText("TODO.md").className).toContain("hover:underline");
-    unmount();
-
-    const { container: activeContainer } = renderHeader({
-      worktree: {
-        ...issueWt,
-        prNumber: 101,
-        prState: "open",
-        ...prLinked(101),
-        hasPlanFile: true,
-        planFilePath: "TODO.md",
-      },
-      badges: { onOpenIssue: noop, onOpenPR: noop, onOpenPlan: noop },
-      variant: "grid",
-      isActive: true,
-    });
-    expect(getIssueSpan(activeContainer)!.className).toContain("hover:underline");
-  });
+  it.each(["sidebar", "grid"] as const)(
+    "%s: styles each reference the same on an active and an inactive card",
+    (variant) => {
+      expect(referenceClasses(false, variant)).toEqual(referenceClasses(true, variant));
+    }
+  );
 });
 
 const allZeroStates = {
@@ -1142,7 +1066,7 @@ describe("WorktreeHeader token-missing badge behavior", () => {
     expect(onOpenIssue).toHaveBeenCalledOnce();
   });
 
-  it("token-missing badge click does nothing on inactive card", () => {
+  it("token-missing badge routes to settings on an inactive card too", () => {
     mockMissingCredential = true;
     renderHeader({
       worktree: { ...baseWorktree, issueNumber: 42, issueTitle: "Test issue" },
@@ -1154,7 +1078,11 @@ describe("WorktreeHeader token-missing badge behavior", () => {
       name: /Add a forge access token/,
     });
     fireEvent.click(issueButton);
-    expect(actionService.dispatch).not.toHaveBeenCalled();
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "code-forge", subtab: "daintree.github.github" },
+      { source: "user" }
+    );
   });
 });
 

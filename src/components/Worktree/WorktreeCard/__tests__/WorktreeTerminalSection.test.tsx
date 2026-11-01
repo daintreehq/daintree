@@ -735,36 +735,70 @@ describe("WorktreeTerminalSection drag handle reveal", () => {
   });
 });
 
-describe("WorktreeTerminalSection collapsed trigger name", () => {
-  it("names itself once, starting with the visible summary, and repeats no count", () => {
-    // Left to name-from-content the button read its visible "N active" and then
-    // the nested cluster's own name, which restates the total. It also has to
-    // start with what is on screen, so speech input can target it.
-    const terminals = [
-      makeTerminal({ detectedAgentId: "claude" }),
-      makeTerminal({ detectedAgentId: "claude" }),
-      makeTerminal({ detectedAgentId: "claude" }),
-    ];
-    renderSection({
-      isExpanded: false,
-      terminals,
-      counts: {
-        total: 3,
-        byState: { idle: 0, working: 2, waiting: 1, directing: 0, completed: 0, exited: 0 },
-        unread: 0,
-      },
-    });
+describe("WorktreeTerminalSection disclosure control (#15864)", () => {
+  const terminals = [
+    makeTerminal({ detectedAgentId: "claude" }),
+    makeTerminal({ detectedAgentId: "claude" }),
+    makeTerminal({ detectedAgentId: "claude" }),
+  ];
+  const counts = {
+    total: 3,
+    byState: { idle: 0, working: 2, waiting: 1, directing: 0, completed: 0, exited: 0 },
+    unread: 0,
+  };
+
+  it("is one control with one name open and closed, describing the breakdown", () => {
+    // The count and marks are content now, so the breakdown is the control's
+    // description: said once, with the total once.
+    const { rerender } = renderSection({ isExpanded: false, terminals, counts });
+    const closed = document.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!;
+    const name = closed.getAttribute("aria-label");
+    const description =
+      document.getElementById(closed.getAttribute("aria-describedby") ?? "")?.textContent ?? "";
+    expect(description.match(/\b3\b/g) ?? []).toHaveLength(1);
+    expect(description).toContain("2 working");
+    expect(description).toContain("1 waiting");
+    expect(closed.querySelector("div")).toBeNull();
+
+    rerender(
+      <TooltipProvider>
+        <WorktreeTerminalSection
+          worktreeId="wt-1"
+          isExpanded
+          counts={counts}
+          terminals={terminals}
+          onToggle={vi.fn()}
+          onTerminalSelect={vi.fn()}
+        />
+      </TooltipProvider>
+    );
+    const open = document.querySelector<HTMLButtonElement>('button[aria-expanded="true"]')!;
+    // The same element, so keyboard focus survives the toggle.
+    expect(open).toBe(closed);
+    expect(open.getAttribute("aria-label")).toBe(name);
+  });
+
+  it("names the worktree it belongs to", () => {
+    renderSection({ isExpanded: false, terminals, counts, worktreeLabel: "feature/login" });
     const button = document.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!;
-    const name = button.getAttribute("aria-label") ?? "";
-    // The visible words sit in separate flex items, so compare without spaces.
-    const squash = (text: string) => text.replace(/\s+/g, "");
-    const visible = squash(button.querySelector("span")!.textContent ?? "");
-    expect(visible.length).toBeGreaterThan(0);
-    expect(squash(name).startsWith(visible)).toBe(true);
-    expect(name.match(/\b3\b/g) ?? []).toHaveLength(1);
-    expect(name).toContain("2 working");
-    expect(name).toContain("1 waiting");
-    expect(button.querySelector("div")).toBeNull();
+    expect(button.getAttribute("aria-label")).toBe("Active sessions for worktree feature/login");
+  });
+
+  it("leaves the count and the agent glyph outside the control, as card content", () => {
+    renderSection({ isExpanded: false, terminals, counts });
+    const button = document.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!;
+    expect(button.textContent).toBe("");
+    expect(button.parentElement!.textContent).toContain("active");
+  });
+
+  it("keeps the inline trigger in its row once open and lays the list out beneath it", () => {
+    const { container } = renderSection({ isExpanded: true, inline: true, terminals, counts });
+    const button = container.querySelector<HTMLButtonElement>('button[aria-expanded="true"]')!;
+    const list = container.querySelector('[role="list"]')!;
+    expect(list).not.toBeNull();
+    // The trigger is not inside the list's well, so it did not move into it.
+    expect(button.closest(`[id="worktree-wt-1-terminals"]`)).not.toBeNull();
+    expect(list.closest(`[id="worktree-wt-1-terminals"]`)).toBeNull();
   });
 });
 
