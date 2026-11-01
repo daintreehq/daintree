@@ -27,7 +27,10 @@ describe("readSystemTimeZone", () => {
 describe("scheduleOsJobContext", () => {
   it("names each platform's job", () => {
     expect(scheduleOsJobContext("darwin").kind).toBe("launch-agent");
-    expect(scheduleOsJobContext("linux").kind).toBe("systemd-timer");
+    // The zone the timer is checked and written in, read as on macOS.
+    const zone = readSystemTimeZone();
+    expect(zone).not.toBeNull();
+    expect(scheduleOsJobContext("linux")).toEqual({ kind: "systemd-timer", systemTimeZone: zone });
     expect(scheduleOsJobContext("win32")).toEqual({ kind: null, systemTimeZone: null });
   });
 });

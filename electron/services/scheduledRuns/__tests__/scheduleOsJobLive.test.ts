@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSchedule } from "../../../../shared/utils/scheduledRuns.js";
+import type { Schedule } from "../../../../shared/types/scheduledRuns.js";
+import { readSystemTimeZone } from "../scheduleOsJobContext.js";
 
 const mocks = vi.hoisted(() => ({
   activeShutdown: null as object | null,
@@ -9,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   systemdDeps: [] as Array<Record<string, unknown>>,
   launchAgentDeps: [] as Array<Record<string, unknown>>,
   followAppImageMove: vi.fn(),
+  schedules: [] as Schedule[],
+  adapters: [] as Array<{ sync: ReturnType<typeof vi.fn> }>,
 }));
 
 vi.mock("node:fs", async (importActual) => {
@@ -41,22 +46,24 @@ vi.mock("../../appImageRelocation.js", () => ({
 
 vi.mock("../../ProjectStore.js", () => ({
   projectStore: {
-    getAllProjectIdentities: () => [],
+    getAllProjectIdentities: () => [{ id: "p1", path: "/repo", name: "Repo" }],
     schedules: {
-      list: async (projectId: string) => ({ projectId, schedules: [], revision: 1 }),
+      list: async (projectId: string) => ({ projectId, schedules: mocks.schedules, revision: 1 }),
       subscribe: () => () => {},
     },
   },
 }));
 
 function fakeAdapter(kind: string) {
-  return {
+  const adapter = {
     kind,
     unavailable: null,
     sync: vi.fn(async () => {}),
     observe: vi.fn(async () => ({ installed: false, current: true, loaded: false })),
     followAppImageMove: mocks.followAppImageMove,
   };
+  mocks.adapters.push(adapter);
+  return adapter;
 }
 
 vi.mock("../systemdScheduleJob.js", async (importActual) => ({
@@ -96,6 +103,8 @@ beforeEach(() => {
   mocks.systemdDeps.length = 0;
   mocks.launchAgentDeps.length = 0;
   mocks.followAppImageMove.mockReset();
+  mocks.schedules = [];
+  mocks.adapters.length = 0;
   vi.unstubAllEnvs();
 });
 
@@ -130,6 +139,34 @@ describe("scheduleOsJobLive", () => {
         },
       },
     });
+  });
+
+  it("hands the timer every opted-in schedule here, in this computer's zone", async () => {
+    onPlatform("linux");
+    const zone = readSystemTimeZone()!;
+    const schedule = (id: string, runWhenClosed: boolean) =>
+      createSchedule(
+        {
+          id,
+          projectId: "p1",
+          name: id,
+          launch: { agentId: "claude", prompt: "Go." },
+          cron: "0 9 * * 1-5",
+          timeZone: zone,
+          policies: { runWhenClosed },
+        },
+        1
+      );
+    mocks.schedules = [schedule("on", true), schedule("off", false)];
+    const { scheduleOsJobStatus } = await live();
+
+    await scheduleOsJobStatus("p1");
+
+    expect(mocks.adapters[0]!.sync).toHaveBeenCalledWith(
+      [{ cron: "0 9 * * 1-5", timeZone: zone }],
+      zone,
+      { reload: false }
+    );
   });
 
   it("says why there's no timer where systemd isn't the init system", async () => {

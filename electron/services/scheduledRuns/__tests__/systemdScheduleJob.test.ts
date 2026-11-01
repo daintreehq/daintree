@@ -5,13 +5,13 @@ import os from "node:os";
 import nodePath from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CommandResult } from "../../../utils/runCommand.js";
-import type { ScheduleJobFs } from "../launchAgentScheduleJob.js";
 import {
   DISPLAY_WAIT_SCRIPT,
   buildScheduleAppUnit,
   buildScheduleLauncherUnit,
   buildScheduleTimerUnit,
   createSystemdScheduleJob,
+  type SystemdScheduleJobFs,
   parseUnitStates,
   scheduleSystemdUnitBase,
   scheduleSystemdUnits,
@@ -50,11 +50,22 @@ const HOURLY = { cron: "30 * * * *", timeZone: "Europe/London" };
 const ok = (stdout = ""): CommandResult => ({ code: 0, stdout, stderr: "" });
 const failed = (stderr: string): CommandResult => ({ code: 1, stdout: "", stderr });
 
-function memoryFs(initial: Record<string, string> = {}, events: string[] = []) {
+function memoryFs(
+  initial: Record<string, string> = {},
+  events: string[] = [],
+  /** Holds each async write until it resolves, to land something in between. */
+  hold?: () => Promise<void>
+) {
   const files = new Map(Object.entries(initial));
-  const fs: ScheduleJobFs = {
+  const fs: SystemdScheduleJobFs = {
     readFile: vi.fn(async (file: string) => files.get(file) ?? null),
+    readFileSync: vi.fn((file: string) => files.get(file) ?? null),
     writeFile: vi.fn(async (file: string, content: string) => {
+      await hold?.();
+      events.push(`write ${nodePath.posix.basename(file)}`);
+      files.set(file, content);
+    }),
+    writeFileSync: vi.fn((file: string, content: string) => {
       events.push(`write ${nodePath.posix.basename(file)}`);
       files.set(file, content);
     }),
@@ -79,6 +90,12 @@ function fakeSystemd(
     active?: boolean;
     /** The launcher is still waiting for a desktop session. */
     launcherWaiting?: boolean;
+    /** systemd's reading of a unit, whatever its file says: masked, bad-setting. */
+    loadStates?: Record<string, string>;
+    /** Held before each status read answers, to land something in between. */
+    beforeShow?: () => Promise<void>;
+    /** The timer is waiting even though its link is gone. */
+    enabled?: boolean;
     fail?: Partial<Record<string, CommandResult>>;
     unreachable?: boolean;
     unitDir?: string;
@@ -101,7 +118,7 @@ function fakeSystemd(
     const onDisk = files.get(unitFile(unit));
     return [
       `Id=${unit}`,
-      `LoadState=${content !== undefined ? "loaded" : "not-found"}`,
+      `LoadState=${options.loadStates?.[unit] ?? (content !== undefined ? "loaded" : "not-found")}`,
       `ActiveState=${activeState(unit)}`,
       `UnitFileState=${unit !== TIMER ? "static" : files.has(wantsLink) ? "enabled" : onDisk !== undefined ? "disabled" : ""}`,
       `NeedDaemonReload=${content !== undefined && onDisk !== content ? "yes" : "no"}`,
@@ -119,6 +136,7 @@ function fakeSystemd(
       if (failure) return failure;
       switch (rest[0]) {
         case "show": {
+          await options.beforeShow?.();
           const units = rest.slice(1).filter((arg, i, all) => arg !== "-p" && all[i - 1] !== "-p");
           return ok(`${units.map(state).join("\n\n")}\n`);
         }
@@ -139,6 +157,7 @@ function fakeSystemd(
           if (rest.includes("--now")) active = false;
           return ok();
         case "clean":
+        case "reset-failed":
           return ok();
         case "stop":
           if (rest[1] === APP) throw new Error("Daintree's own unit was stopped");
@@ -184,13 +203,14 @@ function installed(cadences = [NINE]) {
   });
   const launcher = buildScheduleLauncherUnit(UNITS);
   const app = buildScheduleAppUnit(DEB);
-  return {
+  const files: Record<string, string> = {
     [TIMER_FILE]: timer,
     [LAUNCHER_FILE]: launcher,
     [APP_FILE]: app,
     [WANTS_LINK]: "->",
-    loaded: { [TIMER]: timer, [LAUNCHER]: launcher, [APP]: app },
   };
+  const loaded: Record<string, string> = { [TIMER]: timer, [LAUNCHER]: launcher, [APP]: app };
+  return { files, loaded };
 }
 
 describe("systemdScheduleTargetFor", () => {
@@ -332,7 +352,7 @@ describe("buildScheduleTimerUnit", () => {
   it("leaves out a schedule systemd can't start", () => {
     expect(
       scheduleTimerSpecs(
-        [NINE, { cron: "0 9 * * *", timeZone: "Asia/Tokyo" }],
+        [NINE, { cron: "15 7 * * *", timeZone: "Asia/Tokyo" }],
         "Europe/London",
         ZONE_KNOWN
       )
@@ -398,7 +418,7 @@ describe("createSystemdScheduleJob", () => {
   });
 
   it("does nothing while the timer is current, loaded and waiting", async () => {
-    const { loaded, ...initial } = installed();
+    const { files: initial, loaded } = installed();
     const events: string[] = [];
     const files = memoryFs(initial, events);
     const systemd = fakeSystemd(files.files, { events, loaded, active: true });
@@ -409,7 +429,7 @@ describe("createSystemdScheduleJob", () => {
   });
 
   it("rewrites only what changed and never touches Daintree's own unit", async () => {
-    const { loaded, ...initial } = installed();
+    const { files: initial, loaded } = installed();
     const events: string[] = [];
     const files = memoryFs(initial, events);
     const systemd = fakeSystemd(files.files, { events, loaded, active: true });
@@ -430,7 +450,7 @@ describe("createSystemdScheduleJob", () => {
   });
 
   it("restarts the timer for a repair, even when it reads current", async () => {
-    const { loaded, ...initial } = installed();
+    const { files: initial, loaded } = installed();
     const events: string[] = [];
     const files = memoryFs(initial, events);
     const systemd = fakeSystemd(files.files, { events, loaded, active: true });
@@ -441,7 +461,7 @@ describe("createSystemdScheduleJob", () => {
   });
 
   it("reloads a timer whose file changed under it", async () => {
-    const { loaded, ...initial } = installed();
+    const { files: initial, loaded } = installed();
     const files = memoryFs(initial);
     const systemd = fakeSystemd(files.files, {
       loaded: { ...loaded, [TIMER]: "[Timer]\nOnCalendar=*-*-* 03:00:00\n" },
@@ -459,20 +479,76 @@ describe("createSystemdScheduleJob", () => {
     expect(await adapter.observe([NINE], "Europe/London")).toMatchObject({ loaded: true });
   });
 
-  it("starts a timer that was stopped, and enables one that was disabled", async () => {
-    const { loaded, [WANTS_LINK]: _link, ...initial } = installed();
+  it("enables a waiting timer that was disabled, so the next login has it", async () => {
+    const {
+      files: { [WANTS_LINK]: _link, ...initial },
+      loaded,
+    } = installed();
+    const files = memoryFs(initial);
+    const systemd = fakeSystemd(files.files, { loaded, active: true });
+    const adapter = job({ files, systemd });
+    expect(await adapter.observe([NINE], "Europe/London")).toMatchObject({ loaded: false });
+
+    await adapter.sync([NINE], "Europe/London", { reload: false });
+
+    expect(files.files.has(WANTS_LINK)).toBe(true);
+    expect(await adapter.observe([NINE], "Europe/London")).toMatchObject({ loaded: true });
+  });
+
+  it("starts an enabled timer that was stopped", async () => {
+    const { files: initial, loaded } = installed();
     const files = memoryFs(initial);
     const systemd = fakeSystemd(files.files, { loaded, active: false });
     const adapter = job({ files, systemd });
+    expect(await adapter.observe([NINE], "Europe/London")).toMatchObject({ loaded: false });
 
     await adapter.sync([NINE], "Europe/London", { reload: false });
 
     expect(systemd.isActive()).toBe(true);
-    expect(files.files.has(WANTS_LINK)).toBe(true);
+  });
+
+  it.each([
+    ["launcher", LAUNCHER],
+    ["Daintree's unit", APP],
+  ])("reloads when the %s changed on disk since systemd read it", async (_name, unit) => {
+    const { files: initial, loaded } = installed();
+    const files = memoryFs(initial);
+    const systemd = fakeSystemd(files.files, {
+      loaded: { ...loaded, [unit]: "[Service]\nExecStart=/old\n" },
+      active: true,
+    });
+    const adapter = job({ files, systemd });
+    expect(await adapter.observe([NINE], "Europe/London")).toMatchObject({
+      current: true,
+      loaded: false,
+    });
+
+    await adapter.sync([NINE], "Europe/London", { reload: false });
+
+    expect(systemd.loaded.get(unit)).toBe(initial[`${UNIT_DIR}/${unit}`]);
+  });
+
+  it.each([
+    ["masked", LAUNCHER],
+    ["bad-setting", APP],
+  ])("never reads a %s unit as a timer that can start Daintree", async (loadState, unit) => {
+    const { files: initial, loaded } = installed();
+    const files = memoryFs(initial);
+    const systemd = fakeSystemd(files.files, {
+      loaded,
+      active: true,
+      loadStates: { [unit]: loadState },
+    });
+    const adapter = job({ files, systemd });
+
+    expect(await adapter.observe([NINE], "Europe/London")).toMatchObject({ loaded: false });
+    await expect(adapter.sync([NINE], "Europe/London", { reload: false })).rejects.toThrow(
+      "systemd didn't take the timer that starts Daintree"
+    );
   });
 
   it("removes the job when no schedule needs it, leaving a running Daintree alone", async () => {
-    const { loaded, ...initial } = installed();
+    const { files: initial, loaded } = installed();
     const events: string[] = [];
     const files = memoryFs(initial, events);
     const systemd = fakeSystemd(files.files, { events, loaded, active: true });
@@ -483,6 +559,7 @@ describe("createSystemdScheduleJob", () => {
     expect(events).toEqual([
       `disable --now ${TIMER}`,
       `stop ${LAUNCHER}`,
+      `reset-failed ${TIMER}`,
       `clean --what=state ${TIMER}`,
       `remove ${TIMER}`,
       `remove ${LAUNCHER}`,
@@ -497,7 +574,10 @@ describe("createSystemdScheduleJob", () => {
   });
 
   it("stops a launcher still waiting for a desktop session, and reads it until then", async () => {
-    const { loaded, [WANTS_LINK]: _link, ...initial } = installed();
+    const {
+      files: { [WANTS_LINK]: _link, ...initial },
+      loaded,
+    } = installed();
     const files = memoryFs(initial);
     const systemd = fakeSystemd(files.files, { loaded, launcherWaiting: true });
     const adapter = job({ files, systemd });
@@ -511,7 +591,7 @@ describe("createSystemdScheduleJob", () => {
   });
 
   it("removes the timer's link itself when systemctl can't disable it", async () => {
-    const { loaded, ...initial } = installed();
+    const { files: initial, loaded } = installed();
     const files = memoryFs(initial);
     const systemd = fakeSystemd(files.files, {
       loaded,
@@ -561,7 +641,7 @@ describe("createSystemdScheduleJob", () => {
   });
 
   it("can't say whether the timer is loaded while the user manager doesn't answer", async () => {
-    const { loaded: _loaded, ...initial } = installed();
+    const { files: initial } = installed();
     const files = memoryFs(initial);
     const systemd = fakeSystemd(files.files, { unreachable: true });
 
@@ -573,7 +653,7 @@ describe("createSystemdScheduleJob", () => {
   });
 
   it("touches nothing from a copy that can't install a timer", async () => {
-    const { loaded, ...initial } = installed();
+    const { files: initial, loaded } = installed();
     const files = memoryFs(initial);
     const systemd = fakeSystemd(files.files, { loaded, active: true });
     const adapter = job({
@@ -660,6 +740,65 @@ describe("followAppImageMove", () => {
     expect(files.files.get(nodePath.posix.join(unitDir, APP))).toBe(
       buildScheduleAppUnit({ ...image, executable: NEW })
     );
+  });
+
+  it("writes no old image when the image moved while a pass was reading", async () => {
+    let answer: () => void = () => {};
+    const files = memoryFs();
+    const systemd = fakeSystemd(files.files, {
+      beforeShow: () => new Promise<void>((resolve) => (answer = resolve)),
+    });
+    const adapter = job({ files, systemd, target: { ok: true, target: image } });
+
+    const pass = adapter.sync([NINE], "Europe/London", { reload: false });
+    await vi.waitFor(() => expect(systemd.calls[0]?.[0]).toBe("show"));
+    adapter.followAppImageMove({ previous: OLD, next: NEW });
+    answer();
+
+    await expect(pass).rejects.toThrow("Daintree moved while its systemd units were written");
+    expect(files.files.has(APP_FILE)).toBe(false);
+  });
+
+  it("moves the unit a pass already wrote, while the pass writes the rest", async () => {
+    let release: () => void = () => {};
+    let held = false;
+    const files = memoryFs({}, [], async () => {
+      if (held) return;
+      held = true;
+      await new Promise<void>((resolve) => (release = resolve));
+    });
+    const systemd = fakeSystemd(files.files);
+    const reloadSync = vi.fn();
+    const adapter = job({ files, systemd, target: { ok: true, target: image }, reloadSync });
+
+    const pass = adapter.sync([NINE], "Europe/London", { reload: false });
+    await vi.waitFor(() => expect(held).toBe(true));
+    expect(files.files.get(APP_FILE)).toBe(buildScheduleAppUnit(image));
+    adapter.followAppImageMove({ previous: OLD, next: NEW });
+    release();
+    await pass;
+
+    expect(files.files.get(APP_FILE)).toBe(buildScheduleAppUnit({ ...image, executable: NEW }));
+    expect(reloadSync).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs a reload that failed, keeping the unit it moved", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const files = memoryFs({ [APP_FILE]: buildScheduleAppUnit(image) });
+    const adapter = job({
+      files,
+      systemd: fakeSystemd(files.files),
+      target: { ok: true, target: image },
+      reloadSync: () => {
+        throw new Error("systemctl --user daemon-reload failed: exit 1");
+      },
+    });
+
+    adapter.followAppImageMove({ previous: OLD, next: NEW });
+
+    expect(files.files.get(APP_FILE)).toBe(buildScheduleAppUnit({ ...image, executable: NEW }));
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/updated AppImage/), expect.any(Error));
+    warn.mockRestore();
   });
 });
 

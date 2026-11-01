@@ -282,17 +282,47 @@ export interface SystemdScheduleJob extends ScheduleOsJobAdapter {
 
 type States = Record<keyof ScheduleSystemdUnits, UnitState>;
 
+/**
+ * The job's files. Daintree's own unit is also read and written synchronously:
+ * an AppImage move rewrites it from inside the updater, so a write that
+ * awaited between checking the image and committing could put the old one back.
+ */
+export interface SystemdScheduleJobFs extends ScheduleJobFs {
+  /** Null when there is no file. */
+  readFileSync(file: string): string | null;
+  writeFileSync(file: string, content: string): void;
+}
+
+export const nodeSystemdScheduleJobFs: SystemdScheduleJobFs = {
+  ...nodeScheduleJobFs,
+  readFileSync(file) {
+    try {
+      return fs.readFileSync(file, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  },
+  writeFileSync(file, content) {
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o755 });
+    resilientAtomicWriteFileSync(file, content, "utf-8", { mode: 0o644 });
+  },
+};
+
 export function createSystemdScheduleJob(deps: {
   homeDir: string;
   target: SystemdScheduleTargetResult;
   userDataDir: string;
   run: CommandRunner;
-  /** `systemctl --user daemon-reload`, run to completion; only followAppImageMove uses it. */
+  /**
+   * `systemctl --user daemon-reload`, run to completion; throws when it
+   * failed. Only followAppImageMove uses it.
+   */
   reloadSync: () => void;
-  fs?: ScheduleJobFs;
+  fs?: SystemdScheduleJobFs;
   zoneKnown?: (zone: string) => boolean;
 }): SystemdScheduleJob {
-  const files = deps.fs ?? nodeScheduleJobFs;
+  const files = deps.fs ?? nodeSystemdScheduleJobFs;
   const zoneKnown = deps.zoneKnown ?? zoneinfoHas;
   const units = scheduleSystemdUnits(deps.userDataDir);
   const unitDir = path.posix.join(deps.homeDir, ".config", "systemd", "user");
@@ -337,8 +367,9 @@ export function createSystemdScheduleJob(deps: {
 
   /**
    * Whether the job is in effect. With a job to have: the timer is waiting,
-   * enabled for the next login, and every unit loaded from its file as it is
-   * now. With none: the timer still waiting or enabled, or the launcher still
+   * enabled for the next login, and every unit loaded, from its file as it is
+   * now (a masked unit, or one systemd refused a setting of, starts nothing).
+   * With none: the timer still waiting or enabled, or the launcher still
    * waiting to start Daintree. The app unit's own state never counts: it is
    * Daintree, or a Daintree that handed over and exited.
    */
@@ -350,8 +381,9 @@ export function createSystemdScheduleJob(deps: {
     return (
       armed &&
       enabled &&
-      states.timer.loadState === "loaded" &&
-      Object.values(states).every((state) => !state.needDaemonReload)
+      Object.values(states).every(
+        (state) => state.loadState === "loaded" && !state.needDaemonReload
+      )
     );
   };
 
@@ -387,7 +419,10 @@ export function createSystemdScheduleJob(deps: {
       }
     }
     // Its record of the last firing: a timer installed again later would
-    // otherwise fire at once for what passed since. Older systemd can't.
+    // otherwise fire at once for what passed since (harmless, since Daintree
+    // is running then, so this is only tidying). systemd cleans only a timer
+    // that is stopped and not failed.
+    await systemctl(["reset-failed", units.timer]);
     await systemctl(["clean", "--what=state", units.timer]);
     // The link goes too, so a disable that failed can't leave the next login a timer to start.
     for (const file of [wantsLink, ...names.map(fileOf)]) {
@@ -426,12 +461,18 @@ export function createSystemdScheduleJob(deps: {
         onDisk.app === desired.app;
       if (!options.reload && filesCurrent && inEffect(states, true) === true) return;
       // What the timer starts before the timer, so it never names a unit that isn't there.
-      for (const unit of ["app", "launcher", "timer"] as const) {
-        if (onDisk[unit] === desired[unit]) continue;
-        // An AppImage move while this pass ran wrote the app unit already.
-        if (target !== writing)
+      if (onDisk.app !== desired.app) {
+        // An AppImage move while this pass read wrote Daintree's unit already.
+        // Checked and written with nothing awaited between, so a move can't
+        // land in the middle.
+        if (target !== writing) {
           throw new Error("Daintree moved while its systemd units were written");
-        await files.writeFile(fileOf(units[unit]), desired[unit]);
+        }
+        files.writeFileSync(fileOf(units.app), desired.app);
+      }
+      for (const unit of ["launcher", "timer"] as const) {
+        if (onDisk[unit] !== desired[unit])
+          await files.writeFile(fileOf(units[unit]), desired[unit]);
       }
       const reloaded = await systemctl(["daemon-reload"]);
       if (reloaded.code !== 0) {
@@ -474,15 +515,10 @@ export function createSystemdScheduleJob(deps: {
       target = { ...target, executable: next };
       const file = fileOf(units.app);
       try {
-        let onDisk: string;
-        try {
-          onDisk = fs.readFileSync(file, "utf8");
-        } catch {
-          return;
-        }
-        // Only the unit this install wrote; another install's stays as it is.
-        if (onDisk !== ours) return;
-        resilientAtomicWriteFileSync(file, buildScheduleAppUnit(target), "utf-8", { mode: 0o644 });
+        // Only the unit this install wrote; another install's, or a removed
+        // job, stays as it is.
+        if (files.readFileSync(file) !== ours) return;
+        files.writeFileSync(file, buildScheduleAppUnit(target));
         deps.reloadSync();
       } catch (error) {
         console.warn(

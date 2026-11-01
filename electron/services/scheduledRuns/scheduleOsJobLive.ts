@@ -51,7 +51,17 @@ function systemdJob(userDataDir: string): SystemdScheduleJob {
     }),
     run: runCommand,
     reloadSync: () => {
-      spawnSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore", timeout: 5_000 });
+      let detail = "";
+      // Once more on a failure: there may be no later Daintree start to put it right.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const result = spawnSync("systemctl", ["--user", "daemon-reload"], {
+          stdio: "ignore",
+          timeout: 5_000,
+        });
+        if (!result.error && result.status === 0) return;
+        detail = result.error?.message ?? `exit ${result.status ?? result.signal}`;
+      }
+      throw new Error(`systemctl --user daemon-reload failed: ${detail}`);
     },
   });
   movingJob = job;
