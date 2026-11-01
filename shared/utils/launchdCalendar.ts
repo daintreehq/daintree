@@ -1,4 +1,4 @@
-import { parseCron, type ParsedCron } from "./cron.js";
+import { parseCron, validateTimeZone, type ParsedCron } from "./cron.js";
 
 /**
  * One `StartCalendarInterval` entry of a launchd job. A missing key is a
@@ -99,7 +99,10 @@ export function launchdCalendarFor(
 ): LaunchdCalendarResult {
   const parsed = parseCron(cadence.cron);
   if (!parsed.ok) return { ok: false, reason: parsed.error.message };
-  if (cadence.timeZone !== machineZone) {
+  const scheduleZone = validateTimeZone(cadence.timeZone);
+  if (!scheduleZone.ok) return { ok: false, reason: scheduleZone.message };
+  const systemZone = validateTimeZone(machineZone);
+  if (!systemZone.ok || scheduleZone.timeZone !== systemZone.timeZone) {
     return {
       ok: false,
       reason: `macOS starts it on this Mac's time zone (${machineZone}), and this schedule runs on ${cadence.timeZone} time`,

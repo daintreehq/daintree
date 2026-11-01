@@ -8,7 +8,7 @@ import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { schedulesFilePath } from "./projectStorePaths.js";
 import { decodeSchedulesFile, encodeSchedulesFile } from "./schedulesCodec.js";
 import { createSchedule, normalizeCadence } from "../../shared/utils/scheduledRuns.js";
-import { scheduleIssues } from "../../shared/utils/scheduleValidation.js";
+import { scheduleIssues, type ScheduleIssue } from "../../shared/utils/scheduleValidation.js";
 import type { Schedule } from "../../shared/types/scheduledRuns.js";
 import type {
   ScheduleCreateInput,
@@ -51,7 +51,14 @@ export class ScheduleStore {
     private readonly forgetSchedule: (
       projectId: string,
       scheduleId: string
-    ) => Promise<void> | void = () => {}
+    ) => Promise<void> | void = () => {},
+    /**
+     * What this machine refuses in a schedule the schema accepts: the option
+     * to start Daintree when it isn't running, for a cadence its OS job can't
+     * hold (#15990). Asked only of a write, never of a read, so a stored
+     * schedule never stops loading because the machine changed.
+     */
+    private readonly writeIssues: (schedule: Schedule) => ScheduleIssue[] = () => []
   ) {}
 
   /** Hears every committed change. Returns its unsubscribe. */
@@ -77,7 +84,7 @@ export class ScheduleStore {
     return this.enqueue(projectId, async () => {
       this.requireProject(projectId);
       const schedule = createSchedule({ ...input, id: randomUUID(), projectId }, this.now());
-      const issues = scheduleIssues(schedule);
+      const issues = this.issuesFor(schedule);
       if (issues.length > 0) return { status: "invalid", issues };
       const schedules = [...(await this.read(projectId)), schedule];
       const snapshot = await this.commit(projectId, schedules);
@@ -117,7 +124,7 @@ export class ScheduleStore {
         ...(patch.policies !== undefined && { policies: { ...patch.policies } }),
         updatedAt: this.nextUpdatedAt(existing),
       };
-      const issues = scheduleIssues(schedule);
+      const issues = this.issuesFor(schedule);
       if (issues.length > 0) return { status: "invalid", issues };
       const snapshot = await this.commit(projectId, replaceAt(current, index, schedule));
       return { status: "saved", schedule, snapshot };
@@ -194,6 +201,11 @@ export class ScheduleStore {
     } catch (error) {
       if (!isEnoent(error)) throw error;
     }
+  }
+
+  private issuesFor(schedule: Schedule): ScheduleIssue[] {
+    const issues = scheduleIssues(schedule);
+    return issues.length > 0 ? issues : this.writeIssues(schedule);
   }
 
   // Strictly after the stored stamp, so an edit in the same millisecond, or

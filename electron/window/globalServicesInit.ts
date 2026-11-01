@@ -1202,6 +1202,19 @@ export async function initGlobalServices(
     },
   });
 
+  // Keeps the macOS job that starts Daintree for schedules set to run while it
+  // isn't running (#15990) matching them, and repairs one left by an app that
+  // has moved.
+  registerDeferredTask({
+    name: "schedule-os-job",
+    run: async () => {
+      if (process.platform !== "darwin") return;
+      const { startScheduleOsJob } =
+        await import("../services/scheduledRuns/scheduleOsJobLive.js");
+      startScheduleOsJob();
+    },
+  });
+
   // Worker governance — providers for every persistent worker subsystem, so
   // diagnostics can report a bounded resource story and the efficiency profile
   // can request safe trims. Registered BEFORE resource-profile-service so the

@@ -164,6 +164,8 @@ describe("leaf preload namespace bindings", () => {
       await bindings.setEnabled("s1", false);
       await bindings.remove("s1");
       await bindings.runNow("s1");
+      await bindings.osJobStatus();
+      await bindings.repairOsJob();
 
       expect(invoke.mock.calls).toEqual([
         ["schedules:list"],
@@ -172,6 +174,8 @@ describe("leaf preload namespace bindings", () => {
         ["schedules:set-enabled", "s1", false],
         ["schedules:remove", "s1"],
         ["schedules:run-now", "s1"],
+        ["schedules:os-job-status"],
+        ["schedules:repair-os-job"],
       ]);
     });
   });

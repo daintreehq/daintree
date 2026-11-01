@@ -17,6 +17,7 @@ import {
 import type {
   ScheduleCreateInput,
   ScheduleCreateOutcome,
+  ScheduleOsJobStatus,
   ScheduleRemoveOutcome,
   ScheduleRunNowOptions,
   ScheduleRunNowOutcome,
@@ -199,6 +200,26 @@ async function handleRunNow(
   });
 }
 
+/**
+ * The OS job that starts Daintree for schedules set to run when it isn't
+ * running (#15990), once every change already saved has reached it. The job is
+ * the machine's; only the sender project's schedules are named in it.
+ */
+async function handleOsJobStatus(ctx: IpcContext): Promise<ScheduleOsJobStatus> {
+  const projectId = requireSenderProjectId(ctx);
+  const { scheduleOsJobStatus } =
+    await import("../../services/scheduledRuns/scheduleOsJobLive.js");
+  return scheduleOsJobStatus(projectId);
+}
+
+/** Rewrites and reloads the job from the saved schedules. It saves nothing and runs nothing. */
+async function handleRepairOsJob(ctx: IpcContext): Promise<ScheduleOsJobStatus> {
+  const projectId = requireSenderProjectId(ctx);
+  const { repairScheduleOsJob } =
+    await import("../../services/scheduledRuns/scheduleOsJobLive.js");
+  return repairScheduleOsJob(projectId);
+}
+
 async function handleRemove(ctx: IpcContext, scheduleId: string): Promise<ScheduleRemoveOutcome> {
   const projectId = requireSenderProjectId(ctx);
   return projectStore.schedules.remove(
@@ -236,6 +257,12 @@ export const schedulesNamespace = defineIpcNamespace({
     setEnabled: op(SCHEDULES_METHOD_CHANNELS.setEnabled, handleSetEnabled, { withContext: true }),
     remove: op(SCHEDULES_METHOD_CHANNELS.remove, handleRemove, { withContext: true }),
     runNow: op(SCHEDULES_METHOD_CHANNELS.runNow, handleRunNow, { withContext: true }),
+    osJobStatus: op(SCHEDULES_METHOD_CHANNELS.osJobStatus, handleOsJobStatus, {
+      withContext: true,
+    }),
+    repairOsJob: op(SCHEDULES_METHOD_CHANNELS.repairOsJob, handleRepairOsJob, {
+      withContext: true,
+    }),
   },
 });
 

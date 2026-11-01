@@ -916,6 +916,7 @@ describe("initGlobalServices task ordering", () => {
       "ccr-config",
       "idle-terminal-notification-service",
       "scheduled-run-scheduler",
+      "schedule-os-job",
       "resource-profile-service",
       "plugin-service",
       "plugin-cli-server",

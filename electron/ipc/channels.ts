@@ -1495,6 +1495,8 @@ export const CHANNELS = {
   SCHEDULES_REMOVE: "schedules:remove",
   SCHEDULES_CHANGED: "schedules:changed",
   SCHEDULES_RUN_NOW: "schedules:run-now",
+  SCHEDULES_OS_JOB_STATUS: "schedules:os-job-status",
+  SCHEDULES_REPAIR_OS_JOB: "schedules:repair-os-job",
   // Main asks the view showing a project to launch a scheduled run (#15978)
   SCHEDULES_LAUNCH_REQUEST: "schedules:launch-request",
   SCHEDULES_LAUNCH_RESPONSE: "schedules:launch-response",
