@@ -3,9 +3,9 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ExecuteCloneOptions } from "../../../ipc/handlers/projectCrud/gitClone.js";
 import { AppError, GitOperationError } from "../../../utils/errorTypes.js";
-import { localPlacementAuthority } from "../service.js";
+import { localPlacementAuthority, ProjectAcrossHostsService } from "../service.js";
 import { aliasRemote, commit, git, makeBare, makeRepo, tempRoot } from "./gitFixtures.js";
-import { createTestHost, plainClone, settled } from "./testService.js";
+import { createTestHost, listConfigRemotes, plainClone, settled } from "./testService.js";
 
 let root: string;
 let bare: string;
@@ -1050,5 +1050,65 @@ describe("identify", () => {
     expect(identity.committedProjectId).toBeNull();
     expect(identity.remotes).toHaveLength(1);
     expect(identity.remotes[0]!.url).not.toContain("secret");
+  });
+});
+
+describe("remote reads across lookups", () => {
+  const OTHER_URL = "https://example.test/daintreehq/other.git";
+
+  function countedHost(name: string) {
+    const host = createTestHost(root, name);
+    const reads: string[] = [];
+    const service = new ProjectAcrossHostsService(host.deps, async (repoPath) => {
+      reads.push(repoPath);
+      return listConfigRemotes(repoPath);
+    });
+    return { host, service, reads };
+  }
+
+  it("reads each registered project's remotes once for lookups close together", async () => {
+    const { host, service, reads } = countedHost("reads-a");
+    const repos = [
+      makeRepo(root, "reads-a-1", URL),
+      makeRepo(root, "reads-a-2", URL),
+      makeRepo(root, "reads-a-3", OTHER_URL),
+    ];
+    for (const repo of repos) host.addProject(repo);
+    const payload = { remoteUrls: [URL], committedProjectId: null };
+
+    const first = await service.find(payload);
+    const second = await service.find(payload);
+    const [third, fourth] = await Promise.all([service.find(payload), service.find(payload)]);
+
+    expect(first.map((m) => m.path).sort()).toEqual([repos[0], repos[1]].sort());
+    for (const later of [second, third, fourth]) expect(later).toEqual(first);
+    expect(reads.sort()).toEqual([...repos].sort());
+  });
+
+  it("reflects a changed remote, a new project and a removed one on the next lookup", async () => {
+    const { host, service, reads } = countedHost("reads-b");
+    const kept = makeRepo(root, "reads-b-kept", URL);
+    const changed = makeRepo(root, "reads-b-changed", URL);
+    host.addProject(kept);
+    host.addProject(changed);
+    const payload = { remoteUrls: [URL], committedProjectId: null };
+    expect((await service.find(payload)).map((m) => m.path).sort()).toEqual(
+      [kept, changed].sort()
+    );
+
+    git(changed, ["remote", "set-url", "origin", OTHER_URL]);
+    reads.length = 0;
+    expect((await service.find(payload)).map((m) => m.path)).toEqual([kept]);
+    expect(reads).toEqual([changed]);
+
+    const added = makeRepo(root, "reads-b-added", URL);
+    host.addProject(added);
+    host.projects.splice(
+      host.projects.findIndex((p) => p.path === kept),
+      1
+    );
+    reads.length = 0;
+    expect((await service.find(payload)).map((m) => m.path)).toEqual([added]);
+    expect(reads).toEqual([added]);
   });
 });
