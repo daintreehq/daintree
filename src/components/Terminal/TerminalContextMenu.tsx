@@ -40,7 +40,6 @@ import { resolveSelectedFilePath } from "@/services/terminal/filePathDetection";
 import { resolveWorktreePathScope } from "@shared/utils/path";
 import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
 import { actionService } from "@/services/ActionService";
-import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
 import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
 import type { WhenClauseContext } from "@shared/utils/whenClause";
@@ -386,7 +385,6 @@ function TerminalContextMenuBody({
   const isWatched = usePanelStore((state) => state.watchedPanels.has(terminalId));
   const isArmed = useFleetArmingStore((s) => s.armedIds.has(terminalId));
   const fleetSize = useFleetArmingStore((s) => s.armedIds.size);
-  const isHibernated = useIsHibernated(terminalId);
   const isVoiceLockedHere = useVoiceRecordingStore((s) => s.lockedTarget?.panelId === terminalId);
   const hybridInputEnabled = useTerminalInputStore((s) => isMenuLive && s.hybridInputEnabled);
   const recentVoiceTargets = useVoiceRecordingStore((s) => s.recentTargets);
@@ -884,7 +882,6 @@ function TerminalContextMenuBody({
             terminalId={terminalId}
             terminalPty={terminalPty}
             hasPty={hasPty}
-            isHibernated={isHibernated}
             isPaused={isPaused}
             isInputLocked={terminal.isInputLocked}
             isVoiceLockedHere={isVoiceLockedHere}

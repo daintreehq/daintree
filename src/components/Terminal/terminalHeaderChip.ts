@@ -9,12 +9,11 @@ export const HEADER_CHIP_FOCUS_CLASS =
   "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary";
 
 /**
- * Every chip in a pane header's row — finished, hibernated, queued, driven-by,
+ * Every chip in a pane header's row — finished, queued, driven-by,
  * rate limit, notices, subagents, the running command, the worktree branch and
  * plugin badges — shares this box, so the row reads as one line of metadata at
  * one height instead of three sizes jostling beside the title. A chip keeps its
- * own ink and, where it says something (the hibernated dash, the worktree's
- * colour), its own edge; the size, padding and shape are not negotiable.
+ * own ink and, where it says something (the worktree's colour), its own edge; the size, padding and shape are not negotiable.
  *
  * 11px, one step under the pane title and the same size as the resource
  * readout at the end of the row, so metadata never outweighs the name it

@@ -83,7 +83,6 @@
   .panel-state-compiling,
   .panel-state-waiting,
   .panel-state-working,
-  .panel-state-hibernated,
   .panel-voice-dictation-locked,
   .panel-state-arming {
     border-width: 2px;

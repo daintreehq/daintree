@@ -282,10 +282,6 @@
     animation: none;
   }
 
-  .panel-state-hibernated {
-    border-color: GrayText;
-  }
-
   .panel-voice-dictation-locked,
   .panel-state-arming {
     border-color: Highlight;

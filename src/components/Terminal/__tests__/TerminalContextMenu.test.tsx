@@ -170,7 +170,6 @@ vi.mock("@/clients/claudeClient", async (importOriginal) => ({
 vi.mock("@/hooks/useSidebarWorktreeOrder", () => ({
   useSidebarWorktreeOrder: () => worktreeList.current,
 }));
-vi.mock("@/hooks/useIsHibernated", () => ({ useIsHibernated: () => false }));
 vi.mock("@/hooks/usePluginContextMenuItems", () => ({ usePluginContextMenuItems: () => [] }));
 
 vi.mock("@/store/voiceRecordingStore", () => ({

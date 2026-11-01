@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Lock, Moon } from "lucide-react";
+import { Lock } from "lucide-react";
 import { OctagonAlert, TriangleAlert } from "@/components/icons";
 import type { AgentState, PanelKind } from "@/types";
 import { cn } from "@/lib/utils";
@@ -43,11 +43,6 @@ export interface TerminalHeaderContentProps {
    * Leads the settled trace chip with "Nothing to commit".
    */
   completedWithNoChanges?: boolean;
-  /**
-   * True when the terminal's renderer is hibernated (PTY preserved, xterm
-   * disposed). Drives the ambient Moon pill — Tier-1 only, no toast.
-   */
-  isHibernated?: boolean;
 }
 
 /**
@@ -234,7 +229,6 @@ export function TerminalHeaderContent({
   exitCode = null,
   queueCount = 0,
   completedWithNoChanges = false,
-  isHibernated = false,
 }: TerminalHeaderContentProps) {
   const resourceEnabled = useResourceMonitoringStore((s) => s.enabled);
   const resourceState = useResourceMonitoringStore((s) => s.metrics.get(id));
@@ -399,39 +393,6 @@ export function TerminalHeaderContent({
           )}
           {exitStatus.badge}
         </span>
-      )}
-
-      {/* Hibernated badge — ambient cue that the pane's renderer is asleep.
-          Rounded-full + dashed border keeps its silhouette apart from the
-          other metadata chips without escalating weight. Transient flow and
-          submit status live in TerminalStatusSlot's reserved box instead
-          (#12374). The PTY survives; focus wakes it. */}
-      {isHibernated && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div
-              className={cn(
-                HEADER_CHIP_CLASS,
-                HEADER_CHIP_SURFACE,
-                HEADER_CHIP_FOCUS_CLASS,
-                "border-dashed"
-              )}
-              role="status"
-              aria-live="off"
-              tabIndex={0}
-              data-testid="terminal-hibernated-badge"
-            >
-              <Moon className="w-3 h-3" aria-hidden="true" />
-              Hibernated
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="max-w-xs">
-            <div className="flex flex-col gap-0.5">
-              <span className="font-medium">Renderer asleep</span>
-              <span>PTY preserved. Wakes on focus.</span>
-            </div>
-          </TooltipContent>
-        </Tooltip>
       )}
 
       {/* Driven-by badge — ambient cue that the user handed this terminal to

@@ -1700,7 +1700,8 @@ export class TerminalProcess {
   }
 
   setSabModeEnabled(_enabled: boolean): void {
-    // No-op: SAB mode is always used, flow control handled by pty-host.ts
+    // No-op: the SAB transport is disabled and MessagePort carries terminal output.
+    // Flow control is handled by pty-host.ts.
   }
 
   // xterm 6.0 actively resizes the buffer when scrollback shrinks (verified in headless-scrollback-trim.test.ts).

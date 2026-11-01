@@ -173,7 +173,6 @@ vi.mock("@/store/worktreeFilterStore", () => ({
   useWorktreeFilterStore: (selector: (state: unknown) => unknown) => selector(prefsRef.current),
 }));
 
-vi.mock("@/hooks/useIsHibernated", () => ({ useIsHibernated: () => false }));
 vi.mock("@/hooks/usePluginContextMenuItems", () => ({ usePluginContextMenuItems: () => [] }));
 
 vi.mock("@/store/voiceRecordingStore", () => ({

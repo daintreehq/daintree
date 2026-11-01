@@ -924,7 +924,6 @@ describe("PaintFabricCompositor sync-read mirrors", () => {
     expect(compositor.getAttachGeneration("v-1")).toBe(0);
     expect(compositor.getAltBufferState("v-1")).toBe(false);
     expect(compositor.getSynchronizedOutputMode("v-1")).toBeNull();
-    expect(compositor.isHibernated("v-1")).toBe(false);
     expect(compositor.isWebGLActive("v-1")).toBe(false);
   });
 
