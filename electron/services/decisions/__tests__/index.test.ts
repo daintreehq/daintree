@@ -54,6 +54,63 @@ const storedRows = vi.hoisted(() => ({ count: 0, failErase: false }));
 
 vi.mock("../../../ipc/utils.js", () => ({ broadcastToProjectRenderers: broadcast }));
 
+// The pane bearers `/mcp/decisions` reads, as the pane config service holds them.
+const paneTokens = vi.hoisted(
+  () => new Map<string, { paneId: string; principal: string; workspaceId?: string }>()
+);
+vi.mock("../../McpPaneConfigService.js", () => ({
+  mcpPaneConfigService: {
+    isValidPaneToken: (token: string) => paneTokens.has(token),
+    getPaneIdForToken: (token: string) => paneTokens.get(token)?.paneId ?? null,
+    getOwnershipPrincipalForToken: (token: string) => paneTokens.get(token)?.principal ?? null,
+    getPaneWorkspaceBindingForToken: (token: string) => {
+      const workspaceId = paneTokens.get(token)?.workspaceId;
+      return workspaceId === undefined ? null : { workspaceId };
+    },
+    getOrchestratorPane: (paneId: string) => {
+      for (const record of paneTokens.values()) {
+        if (record.paneId === paneId) return { principalId: record.principal, tier: "core" };
+      }
+      return null;
+    },
+  },
+}));
+
+// The MCP listener and terminal host the route is opened over.
+const mcpRefs = vi.hoisted(() => ({
+  ptyClient: { name: "pty client" },
+  holdListener: vi.fn(async () => ({ port: 4100, release: async () => {} })),
+}));
+vi.mock("../../../window/serviceRefs.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../window/serviceRefs.js")>()),
+  getPtyClient: () => mcpRefs.ptyClient,
+  getMcpServerServiceRef: () => ({ holdListener: mcpRefs.holdListener }),
+}));
+
+// What each opened route was handed.
+const openedRoutes = vi.hoisted(
+  () =>
+    [] as Array<{
+      sources: import("../mcpRoute.js").DecisionsMcpRouteSources;
+      after: Promise<void> | undefined;
+      letGo: () => void;
+    }>
+);
+vi.mock("../mcpRoute.js", () => ({
+  openDecisionsMcpRoute: (
+    _source: unknown,
+    sources: import("../mcpRoute.js").DecisionsMcpRouteSources,
+    after?: Promise<void>
+  ) => {
+    let letGo!: () => void;
+    const closed = new Promise<void>((resolve) => {
+      letGo = resolve;
+    });
+    openedRoutes.push({ sources, after, letGo });
+    return { close: () => closed };
+  },
+}));
+
 // This machine's own windows, which the status push goes to.
 const statusView = vi.hoisted(() => ({ send: vi.fn(), isDestroyed: () => false }));
 vi.mock("../../../window/webContentsRegistry.js", () => ({
@@ -224,6 +281,8 @@ describe("Decisions entry", () => {
     netFetch.mockReset();
     statusView.send.mockClear();
     connections.length = 0;
+    openedRoutes.length = 0;
+    paneTokens.clear();
     _resetDecisionsForTesting();
   });
 
@@ -870,6 +929,64 @@ describe("Decisions entry", () => {
       label: "Daintree",
     };
     const SECRET = "claim-secret-0123456789abcdef";
+
+    it("opens /mcp/decisions over the live pane bearers, this machine's host id and the MCP listener", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startDecisionsIfEnabled();
+      connections[0]!.options.onQuestionsReady!({
+        identity: () => null,
+        live: () => null,
+        store: {} as never,
+        policy: {} as never,
+      });
+      expect(openedRoutes).toHaveLength(1);
+      const { sources } = openedRoutes[0]!;
+
+      paneTokens.set("pane-token", {
+        paneId: "pane-1",
+        principal: "principal-1",
+        workspaceId: "p1",
+      });
+      paneTokens.set("unbound-token", { paneId: "pane-2", principal: "principal-2" });
+      expect(sources.bearerFor("pane-token")).toEqual({
+        paneId: "pane-1",
+        principal: "principal-1",
+        workspaceId: "p1",
+      });
+      expect(sources.bearerFor("unbound-token")).toEqual({
+        paneId: "pane-2",
+        principal: "principal-2",
+      });
+      expect(sources.bearerFor("api-key")).toBeNull();
+      expect(sources.principalFor("pane-1")).toBe("principal-1");
+      expect(sources.principalFor("pane-unknown")).toBeNull();
+      expect(sources.hostId()).toBe(RELAY.hostId);
+      expect(sources.getPtyClient()).toBe(mcpRefs.ptyClient);
+
+      const route = { path: "/mcp/decisions", handle: async () => {} };
+      await sources.holdListener("decisions", route);
+      expect(mcpRefs.holdListener).toHaveBeenCalledWith("decisions", route);
+
+      // A replacement takes the listener only once this route has let go of it.
+      connections[0]!.options.onQuestionsReady!({
+        identity: () => null,
+        live: () => null,
+        store: {} as never,
+        policy: {} as never,
+      });
+      let replaced = false;
+      void openedRoutes[1]!.after!.then(() => {
+        replaced = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(replaced).toBe(false);
+      openedRoutes[0]!.letGo();
+      await vi.waitFor(() => expect(replaced).toBe(true));
+
+      openedRoutes[1]!.letGo();
+      await stopDecisions();
+      expect(sources.hostId()).toBeNull();
+    });
 
     it("connects at boot once a relay is set up, and not before", async () => {
       saved.value = { enabled: true };

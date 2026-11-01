@@ -44,6 +44,21 @@ export type RelayConnectionStatus =
 /** The store as a connection uses it: the library's, and whether it stopped taking writes. */
 export type RelayConnectionStore = LocalStore & { isFaulted?(): boolean };
 
+/**
+ * What agents' questions are asked through while a connection runs (#16011):
+ * the identity and store it runs on, and the attempt bridge that is live now.
+ */
+export interface QuestionSource {
+  /** The identity as the latest attempt left it; null once the connection has ended. */
+  identity(): Identity | null;
+  /** The started attempt's bridge, while it is current; null between attempts. */
+  live(): DecisionsBridge | null;
+  /** The lifetime's store, refused to anyone once the connection has ended. */
+  readonly store: LocalStore;
+  /** The lifetime's trusted policy, the one every attempt's bridge asks under. */
+  readonly policy: PolicyRegistry;
+}
+
 export interface RelayConnectionOptions {
   relay: RelayBinding;
   store: RelayConnectionStore;
@@ -68,6 +83,12 @@ export interface RelayConnectionOptions {
   helloTimeoutMs?: number;
   /** The bridge's background pass over the outbox and pending work; the library's 30 s by default. */
   pumpIntervalMs?: number;
+  /**
+   * The identity loaded and the store bound, before the first attempt goes
+   * out: questions can be asked from here on, and are published once an
+   * attempt is live. Called at most once.
+   */
+  onQuestionsReady?(source: QuestionSource): void;
 }
 
 /** Where the store records which relay identity its cursor and events belong to. */
@@ -87,6 +108,8 @@ interface Attempt {
   startedAt: number;
   controller: AbortController;
   bridge: DecisionsBridge | null;
+  /** Its bridge finished starting: it has reconciled what an earlier run left and runs its pump. */
+  started: boolean;
   socket: ObservedSocket | null;
   closeCode: number | null;
   helloTimer: ReturnType<typeof setTimeout> | null;
@@ -217,6 +240,16 @@ export class RelayConnection {
       return;
     }
     this.identity = identity;
+    this.o.onQuestionsReady?.({
+      identity: () => (this.ended ? null : this.identity),
+      live: () => {
+        const current = this.current;
+        return current?.started && !current.retired ? current.bridge : null;
+      },
+      store: this.store,
+      policy: this.o.policy,
+    });
+    if (this.ended) return;
     this.watchers.push(
       (this.o.watchResume ?? watchResume)(() => this.reconnectNow()),
       (this.o.watchNetwork ?? watchNetwork)((online) => {
@@ -253,6 +286,7 @@ export class RelayConnection {
       startedAt: this.now(),
       controller: new AbortController(),
       bridge: null,
+      started: false,
       socket: null,
       closeCode: null,
       helloTimer: null,
@@ -300,6 +334,7 @@ export class RelayConnection {
         })
       );
       await started.start();
+      if (!attempt.retired) attempt.started = true;
     } catch {
       if (this.o.store.isFaulted?.()) this.halt({ state: "not-connected", problem: "storage" });
       else this.fail(attempt);

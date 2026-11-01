@@ -394,8 +394,14 @@ describe("McpServerService listener holds (#15999)", () => {
     await hold.release();
     expect(service.isRunning).toBe(true);
     expect((await postMcp(port, API_KEY)).status).toBe(200);
-    // Released, the path is the control surface's again: no credential, no answer.
-    expect((await request(port, "/mcp/feature")).status).toBe(401);
+    // Released, nothing is there, whatever the credential: a feature's path
+    // never falls through to the control surface (#16011).
+    expect((await request(port, "/mcp/feature")).status).toBe(404);
+    expect(
+      (await request(port, "/mcp/feature", { headers: { Authorization: `Bearer ${API_KEY}` } }))
+        .status
+    ).toBe(404);
+    expect(service.getAuditStats(false).auth401Count).toBe(0);
   });
 
   it("moves a held listener to a new port with the server off", async () => {

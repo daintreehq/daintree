@@ -39,6 +39,9 @@ export type DecisionTerminalInfo = Pick<
   | "worktreeId"
 >;
 
+/** The worktree id a question's origin carries for a pane in no worktree. */
+export const NO_WORKTREE = "";
+
 /** A record's agent incarnation as the library compares it; never invented when unobserved. */
 export function incarnationOf(info: Pick<NotifyTerminalInfo, "agentIncarnation">): string | null {
   return info.agentIncarnation === undefined ? null : String(info.agentIncarnation);
@@ -85,8 +88,9 @@ export function identityMismatch(
   if (target.agentSessionId !== null && info.agentSessionId !== target.agentSessionId) {
     return "session-mismatch";
   }
-  // An answer for one worktree never lands in another.
-  if (info.worktreeId !== target.worktreeId) return "gone";
+  // An answer for one worktree never lands in another. A pane outside any
+  // worktree (a scratch folder) asked with none: `NO_WORKTREE`.
+  if ((info.worktreeId ?? NO_WORKTREE) !== target.worktreeId) return "gone";
   return null;
 }
 

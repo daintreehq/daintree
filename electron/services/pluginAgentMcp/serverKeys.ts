@@ -12,7 +12,8 @@ const FALLBACK_NAME = "plugin";
 
 /**
  * Keys Daintree's own servers use beside a plugin's: the orchestration server,
- * and the Daintree Assistant's docs and runbooks servers. The manifest schema
+ * the Daintree Assistant's docs and runbooks servers, and the Decisions server
+ * agents ask the person through. The manifest schema
  * refuses them as an `mcpName`, but a name derived from a manifest id
  * (`acme.docs`) could still arrive at one, so no plugin is ever given them.
  */
@@ -20,6 +21,7 @@ export const RESERVED_PLUGIN_SERVER_KEYS: ReadonlySet<string> = new Set([
   "daintree",
   "daintree-docs",
   "daintree-runbooks",
+  "daintree-decisions",
 ]);
 
 export interface PluginServerNameInput {
