@@ -152,6 +152,7 @@ export interface HydrationOptions {
     sessionLostOnRestore?: SessionLostReason;
     conversationCwd?: string;
     restoreRecovery?: PanelRestoreRecovery;
+    restoredExitCode?: number;
     restoreProvenance?: import("@shared/types/panel").TerminalRestoreProvenance;
     lastAgentObservation?: import("@shared/types/panel").TerminalAgentObservation;
     launchedByPluginId?: string;

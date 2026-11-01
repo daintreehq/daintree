@@ -249,7 +249,8 @@ export interface AddPanelOptionsBase {
   /**
    * PTY-only. Restore of a pane whose process had exited with this code
    * (#15941): the pane commits exited, as the exit left it, and nothing is
-   * spawned until the user restarts it. Ignored for a reconnect or a hold.
+   * spawned until the user restarts it. With `existingId`, the host record it
+   * reattaches to has no process left. Ignored for a hold.
    */
   restoredExitCode?: number;
   /** PTY-only. See `PtyPanelData.restoreProvenance`. */

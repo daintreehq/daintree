@@ -191,9 +191,11 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
     const isRecoveryHold = options.restoreRecovery !== undefined && !isReconnect;
     // Restored as its process's own exit left it (#15941): the pane commits
     // exited and stops there, as a pane does when its PTY ends — no startup
-    // slot, no spawn, until the user restarts it.
-    const restoredExitCode = isReconnect || isRecoveryHold ? undefined : options.restoredExitCode;
-    const isRestoredExit = restoredExitCode !== undefined;
+    // slot, no spawn, until the user restarts it. A reconnect to a host record
+    // whose process is gone takes the exit too, and spawns nothing anyway.
+    const restoredExitCode = isRecoveryHold ? undefined : options.restoredExitCode;
+    const restoresExit = restoredExitCode !== undefined;
+    const isRestoredExit = restoresExit && !isReconnect;
 
     // Checked after the last await before the commit: the pane may have been
     // closed, or already launched by another click, while this call waited, and
@@ -247,7 +249,25 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
     // merge below would clobber it). Generation 0 = "persisted snapshot,
     // predates every launch this session", so the rejection lands in the
     // anomaly ring for diagnostics.
-    if (isReconnect || isRestoredExit) {
+    // A replayed snapshot finds the pane as that exit left it, or moved on:
+    // restarting, running again, or exited since with another code. Only the
+    // former is committed again.
+    if (isRestoredExit) {
+      const existing = get().panelsById[id];
+      if (
+        existing !== undefined &&
+        !(
+          isPtyPanel(existing) &&
+          !existing.isRestarting &&
+          existing.runtimeStatus === "exited" &&
+          existing.exitCode === restoredExitCode
+        )
+      ) {
+        logWarn("[TerminalStore] Kept a pane that moved on over a restored exit", { id });
+        return id;
+      }
+    }
+    if (isReconnect) {
       const preexisting = get().panelsById[id];
       const ledgerEntry = preexisting ? agentLifecycleLedger.getEntry(id) : undefined;
       if (
@@ -346,8 +366,8 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
       // Initialize grid terminals as visible to avoid initial under-throttling
       // IntersectionObserver will update this once mounted
       isVisible: location === "grid" ? true : false,
-      runtimeStatus: isRecoveryHold ? undefined : isRestoredExit ? "exited" : runtimeStatus,
-      ...(isRestoredExit && { exitCode: restoredExitCode }),
+      runtimeStatus: isRecoveryHold ? undefined : restoresExit ? "exited" : runtimeStatus,
+      ...(restoresExit && { exitCode: restoredExitCode }),
       isInputLocked: options.isInputLocked,
       exitBehavior: options.exitBehavior,
       agentSessionId: options.agentSessionId,

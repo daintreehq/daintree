@@ -319,6 +319,14 @@ describe("serializePtyPanel — shown exit (#15941)", () => {
     expect("exitCode" in serializePtyPanel(makePanel({ runtimeStatus: "exited" }))).toBe(false);
   });
 
+  it("omits a value that was never an exit code", () => {
+    for (const exitCode of [1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(
+        "exitCode" in serializePtyPanel(makePanel({ runtimeStatus: "exited", exitCode }))
+      ).toBe(false);
+    }
+  });
+
   it("omits an exit from a session-preserving teardown, which restores a new process", () => {
     const snapshot = serializePtyPanel(
       makePanel({ runtimeStatus: "exited", exitCode: 0, sessionPreservingExit: true })

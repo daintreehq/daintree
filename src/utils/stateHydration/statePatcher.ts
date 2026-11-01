@@ -306,6 +306,8 @@ interface BackendTerminalData {
   agentIncarnation?: number;
   detectedAgentId?: BuiltInAgentId;
   detectedProcessId?: string;
+  /** False once the host's record outlived its process. */
+  hasPty?: boolean;
 }
 
 interface ReconnectedTerminalData {
@@ -435,6 +437,12 @@ export function buildArgsForBackendTerminal(
   const location = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
   const isDevPreview = backendTerminal.kind === "dev-preview";
   const devCommand = isDevPreview ? saved.command?.trim() : undefined;
+  // The host keeps a shell that once ran an agent after a clean exit, with no
+  // process left (#15941): it reattaches showing the exit it saved, not live.
+  const restoredExitCode =
+    backendTerminal.hasPty === false && !isDevPreview && launchAgentId === undefined
+      ? sanitizeSavedExitCode(saved.exitCode)
+      : undefined;
 
   return {
     kind: normalizePtyKind(backendTerminal.kind),
@@ -445,6 +453,7 @@ export function buildArgsForBackendTerminal(
     worktreeId: saved.worktreeId,
     location,
     existingId: backendTerminal.id,
+    ...(restoredExitCode !== undefined && { restoredExitCode }),
     agentState: coerceAgentState(backendTerminal.agentState),
     waitingReason: restoredWaitingReason(backendTerminal),
     lastStateChange: backendTerminal.lastStateChange,

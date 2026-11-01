@@ -90,6 +90,11 @@ import { flushPanelStatusBuffer, enqueueFlowStatusUpdate } from "@/store/panelSt
 import { isPtyPanel } from "@shared/types/panel";
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { panelPersistence } from "@/store/persistence/panelPersistence";
+import {
+  beginBatch,
+  resetBatchState,
+  takeDeferredPersist,
+} from "@/store/slices/panelRegistry/hydrationBatch";
 
 const terminalInstanceService = await loadTerminalService();
 
@@ -1352,15 +1357,34 @@ describe("onExit — the shown exit is saved with the layout (#15941)", () => {
     });
   }
 
-  it("saves a kept pane with its exit, so a reload restores the exit", () => {
+  it("saves a kept pane with its exit at once, so a reload restores the exit", () => {
     const save = vi.spyOn(panelPersistence, "save").mockImplementation(() => {});
+    const flush = vi.spyOn(panelPersistence, "flushAndSettle").mockResolvedValue(undefined);
     try {
       setupShell();
 
       getExitHandler()("shell", 3);
 
       expect(savedShell(save)).toMatchObject({ runtimeStatus: "exited", exitCode: 3 });
+      expect(flush).toHaveBeenCalled();
     } finally {
+      save.mockRestore();
+      flush.mockRestore();
+    }
+  });
+
+  it("leaves the save to the end of a hydration batch, whose panel list is still partial", () => {
+    const save = vi.spyOn(panelPersistence, "save").mockImplementation(() => {});
+    beginBatch();
+    try {
+      setupShell();
+
+      getExitHandler()("shell", 3);
+
+      expect(save).not.toHaveBeenCalled();
+      expect(takeDeferredPersist()).toBe(true);
+    } finally {
+      resetBatchState();
       save.mockRestore();
     }
   });

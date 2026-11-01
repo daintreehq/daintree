@@ -95,6 +95,8 @@ beforeAll(async () => {
   await loadTerminalService();
 });
 const { usePanelLimitStore } = await import("@/store/panelLimitStore");
+const { agentLifecycleLedger } = await import("@/services/terminal/lifecycleLedger");
+const { terminalStartupQueue } = await import("../ptyStartup");
 const { terminalClient } = await import("@/clients");
 const spawn = vi.mocked(terminalClient.spawn);
 const terminalInstanceService = (
@@ -145,8 +147,11 @@ describe("addPanel — a restored exit (#15941)", () => {
     expect(panel?.spawnStatus).toBe("ready");
     expect(panel?.command).toBe("npm run dev");
     expect(usePanelStore.getState().panelIds).toContain("dev");
-    expect(terminalInstanceService.prewarmTerminal).toHaveBeenCalledTimes(1);
+    expect(panel?.eagerAttach).toBeUndefined();
+    expect(vi.mocked(terminalInstanceService.prewarmTerminal).mock.calls[0]?.[0]).toBe("dev");
     expect(spawn).not.toHaveBeenCalled();
+    // Restore-born, so replaying the same snapshot may land on it again.
+    expect(agentLifecycleLedger.getEntry("dev")?.restoredAt).toBeDefined();
   });
 
   it("keeps a clean exit's code, since zero is a code", async () => {
@@ -161,6 +166,7 @@ describe("addPanel — a restored exit (#15941)", () => {
   it("leaves the startup queue free for the launches that follow", async () => {
     await restoreExited("dev-1", 1);
     await restoreExited("dev-2", 2);
+    expect(terminalStartupQueue.isIdle).toBe(true);
 
     await usePanelStore.getState().addPanel({
       kind: "terminal",
@@ -187,22 +193,80 @@ describe("addPanel — a restored exit (#15941)", () => {
     await restoreExited("dev", 3);
     await drainMicrotasks();
 
+    expect(ptyPanel("dev")).toBeDefined();
     expect(ptyPanel("dev")?.runtimeStatus).not.toBe("exited");
     expect(ptyPanel("dev")?.exitCode).toBeUndefined();
   });
 
-  it("reads a reconnect as the live terminal it attaches to", async () => {
+  it("commits a replay of the same exit again", async () => {
+    await restoreExited("dev", 3);
     await usePanelStore.getState().addPanel({
       kind: "terminal",
-      existingId: "live",
+      requestedId: "dev",
       cwd: "/repo",
+      command: "npm run dev",
+      title: "Dev server, renamed",
+      restore: true,
       restoredExitCode: 3,
       bypassLimits: true,
     });
     await drainMicrotasks();
 
-    expect(ptyPanel("live")?.runtimeStatus).not.toBe("exited");
-    expect(ptyPanel("live")?.exitCode).toBeUndefined();
+    expect(ptyPanel("dev")?.title).toBe("Dev server, renamed");
+    expect(ptyPanel("dev")?.exitCode).toBe(3);
+  });
+
+  it.each([
+    ["restarting", { isRestarting: true }],
+    ["running again", { runtimeStatus: "running", exitCode: undefined }],
+    ["exited since with another code", { exitCode: 1 }],
+  ] as const)("keeps a pane that is %s over a replayed exit", async (_label, moved) => {
+    await restoreExited("dev", 3);
+    const restoredPanel = ptyPanel("dev")!;
+    usePanelStore.setState((state) => ({
+      panelsById: { ...state.panelsById, dev: { ...restoredPanel, ...moved } },
+    }));
+    const before = usePanelStore.getState().panelsById.dev;
+
+    await restoreExited("dev", 3);
+    await drainMicrotasks();
+
+    expect(usePanelStore.getState().panelsById.dev).toBe(before);
+  });
+
+  it("takes the exit on a reconnect to a host record whose process is gone", async () => {
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      existingId: "kept",
+      cwd: "/repo",
+      restoredExitCode: 0,
+      bypassLimits: true,
+    });
+    await drainMicrotasks();
+
+    expect(ptyPanel("kept")?.runtimeStatus).toBe("exited");
+    expect(ptyPanel("kept")?.exitCode).toBe(0);
+    expect(ptyPanel("kept")?.spawnStatus).toBe("ready");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("holds a pane held for recovery, whatever exit it carries", async () => {
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: "held",
+      launchAgentId: "codex",
+      command: "codex",
+      cwd: "/repo",
+      restoreRecovery: { reason: "sibling-owns-resume-latest-slot" },
+      restoredExitCode: 3,
+      bypassLimits: true,
+    });
+    await drainMicrotasks();
+
+    expect(ptyPanel("held")?.restoreRecovery).toBeDefined();
+    expect(ptyPanel("held")?.runtimeStatus).toBeUndefined();
+    expect(ptyPanel("held")?.exitCode).toBeUndefined();
+    expect(terminalInstanceService.prewarmTerminal).not.toHaveBeenCalled();
     expect(spawn).not.toHaveBeenCalled();
   });
 });

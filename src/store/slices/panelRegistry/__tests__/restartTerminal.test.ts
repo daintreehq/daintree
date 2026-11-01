@@ -3096,3 +3096,50 @@ describe("restartTerminal with a retired Copilot model (#15652)", () => {
     expect(notifyRetiredModelDroppedMock).not.toHaveBeenCalled();
   });
 });
+
+describe("restartTerminal drops a saved exit (#15941)", () => {
+  it("saves the restarting pane without its exit, so a reload starts it", async () => {
+    const { panelPersistence } = await import("@/store/persistence/panelPersistence");
+    const { serializePtyPanel } = await import("@/panels/terminal/serializer");
+    const save = vi.spyOn(panelPersistence, "save").mockImplementation(() => {});
+    let finishSpawn: (value: { id: string }) => void = () => {};
+    mockSpawn.mockImplementationOnce(
+      () => new Promise<{ id: string }>((resolve) => (finishSpawn = resolve))
+    );
+    try {
+      const shell = {
+        id: "test-1",
+        kind: "terminal" as const,
+        title: "Dev server",
+        cwd: "/some/path",
+        command: "npm run dev",
+        cols: 80,
+        rows: 24,
+        location: "grid" as const,
+        isVisible: true,
+        exitCode: 3,
+        runtimeStatus: "exited" as const,
+      };
+      usePanelStore.setState({ panelsById: { [shell.id]: shell }, panelIds: [shell.id] });
+      expect(serializePtyPanel(shell).exitCode).toBe(3);
+
+      const restart = usePanelStore.getState().restartTerminal("test-1");
+      await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalled());
+
+      // Saved while the new process is still on its way, the status still reads exited.
+      const saved = (save.mock.lastCall?.[0] as PtyPanelData[] | undefined)?.find(
+        (p) => p.id === "test-1"
+      );
+      expect(saved).toBeDefined();
+      expect(serializePtyPanel(saved!)).not.toHaveProperty("exitCode");
+
+      finishSpawn({ id: "test-1" });
+      await restart;
+      const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData;
+      expect(after.runtimeStatus).toBe("running");
+      expect(serializePtyPanel(after)).not.toHaveProperty("exitCode");
+    } finally {
+      save.mockRestore();
+    }
+  });
+});

@@ -2475,8 +2475,12 @@ describe("buildArgsForRespawn — a pane saved showing its exit (#15941)", () =>
     expect(result.restoredExitCode).toBe(2);
   });
 
+  it("keeps a negative code, which a process can report", () => {
+    expect(respawn({ exitCode: -1 }).restoredExitCode).toBe(-1);
+  });
+
   it("ignores a saved value that was never an exit code", () => {
-    for (const exitCode of ["3", 1.5, Number.NaN, null, true]) {
+    for (const exitCode of ["3", 1.5, Number.NaN, Number.POSITIVE_INFINITY, null, true]) {
       const result = respawn({ exitCode });
       expect(result.restoredExitCode).toBeUndefined();
       expect(result.restoreProvenance?.disposition).toBe("fresh");
@@ -2484,13 +2488,65 @@ describe("buildArgsForRespawn — a pane saved showing its exit (#15941)", () =>
   });
 
   it("leaves an agent pane on its resume path", () => {
-    const result = respawn({ launchAgentId: "claude", title: "Claude", exitCode: 1 });
-    expect(result.launchAgentId).toBe("claude");
+    const result = respawn({
+      launchAgentId: "claude",
+      title: "Claude",
+      agentSessionId: "sess-1",
+      exitCode: 1,
+    });
+    expect(result.command).toBe("claude --resume sess-1");
+    expect(result.agentSessionId).toBe("sess-1");
+    expect(result.restoreProvenance?.disposition).toBe("resume");
+    expect(result.restoredExitCode).toBeUndefined();
+  });
+
+  it("leaves a dev preview to start its server again", () => {
+    const result = buildArgsForRespawn(
+      { id: "t1", kind: "dev-preview", cwd: "/p", location: "grid", exitCode: 1 },
+      "dev-preview",
+      "/p",
+      { agents: {} },
+      false,
+      undefined
+    );
     expect(result.restoredExitCode).toBeUndefined();
   });
 
   it("starts a terminal with no saved exit as before", () => {
     expect(respawn({}).restoredExitCode).toBeUndefined();
+  });
+});
+
+describe("buildArgsForBackendTerminal — a host record with no process left (#15941)", () => {
+  const saved = { id: "t1", kind: "terminal" as const, cwd: "/p", location: "grid", exitCode: 0 };
+
+  it("reattaches a plain terminal showing the exit it saved", () => {
+    const result = buildArgsForBackendTerminal({ id: "t1", cwd: "/p", hasPty: false }, saved, "/p");
+    expect(result.existingId).toBe("t1");
+    expect(result.restoredExitCode).toBe(0);
+  });
+
+  it("reattaches a live one as live, whatever the snapshot says", () => {
+    const result = buildArgsForBackendTerminal({ id: "t1", cwd: "/p", hasPty: true }, saved, "/p");
+    expect(result.restoredExitCode).toBeUndefined();
+  });
+
+  it("claims no exit it never saw", () => {
+    const result = buildArgsForBackendTerminal(
+      { id: "t1", cwd: "/p", hasPty: false },
+      { ...saved, exitCode: undefined },
+      "/p"
+    );
+    expect(result.restoredExitCode).toBeUndefined();
+  });
+
+  it("leaves an agent's record to the agent paths", () => {
+    const result = buildArgsForBackendTerminal(
+      { id: "t1", cwd: "/p", hasPty: false, launchAgentId: "claude" },
+      saved,
+      "/p"
+    );
+    expect(result.restoredExitCode).toBeUndefined();
   });
 });
 
