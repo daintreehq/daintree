@@ -330,7 +330,8 @@ export class HostControlLinkClient {
   async throwawayRelease(hostId: HostId, payload: ThrowawayReleasePayload): Promise<void> {
     const session = await this.open(hostId);
     await this.authenticate(hostId, session);
-    await this.call(hostId, session, AssistantLinkMethod.THROWAWAY_RELEASE, payload);
+    // No deadline: a release that settles unsent is dropped, and its runs live on to their own limits.
+    await this.call(hostId, session, AssistantLinkMethod.THROWAWAY_RELEASE, payload, 0);
   }
 
   /**

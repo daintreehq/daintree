@@ -161,13 +161,131 @@ describe("LinkSession request/response", () => {
 
   it("reports an aborted request as an unknown outcome once sent, cancelled before", async () => {
     const { host, client } = await pair();
-    host.registerCallHandler("hang", z.unknown(), () => new Promise(() => {}));
+    let reached = false;
+    host.registerCallHandler("hang", z.unknown(), () => {
+      reached = true;
+      return new Promise(() => {});
+    });
     const ac = new AbortController();
     const p = client.call("hang", null, { signal: ac.signal });
+    p.catch(() => {});
+    await waitFor(() => reached);
     ac.abort();
-    await expect(p).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
+    await expect(p).rejects.toMatchObject({
+      code: "OUTCOME_UNKNOWN",
+      message: expect.stringMatching(/after it was sent/),
+    });
     await expect(client.call("hang", null, { signal: ac.signal })).rejects.toMatchObject({
       code: "CANCELLED",
+    });
+  });
+
+  describe("a request settled while its frame waits behind backpressure (#15882)", () => {
+    const BEYOND_SOCKET_BUFFERS = "x".repeat(4 * 1024 * 1024);
+    const peers: net.Socket[] = [];
+
+    afterEach(() => {
+      for (const peer of peers.splice(0)) peer.destroy();
+    });
+
+    /**
+     * A client whose peer is a paused raw socket, with one frame larger than
+     * any socket buffer already handed to the stream: until the peer reads,
+     * every later frame stays in the scheduler.
+     */
+    async function stalledClient(options: { requestTimeoutMs?: number } = {}) {
+      const { client, a, b } = await pausedPeer(options);
+      client.post({
+        lane: Lane.EVENTS,
+        kind: EventKind.EVENT,
+        body: { endpointId: null, channel: "fill", args: [BEYOND_SOCKET_BUFFERS] },
+      });
+      await waitFor(() => a.writableNeedDrain);
+      return { client, b };
+    }
+
+    async function pausedPeer(options: { requestTimeoutMs?: number } = {}) {
+      const { a, b } = await socketPair(dir);
+      peers.push(b);
+      const client = new LinkSession(a, {
+        role: "client",
+        pingIntervalMs: 0,
+        idleTimeoutMs: 0,
+        ...options,
+      });
+      sessions.push(client);
+      client.open();
+      b.pause();
+      return { client, a, b };
+    }
+
+    /** Resume the peer and name every request it receives up to a sentinel posted behind them. */
+    async function requestsReceived(client: LinkSession, b: net.Socket): Promise<string[]> {
+      const frames = recordFrames(b);
+      client.post({
+        lane: Lane.EVENTS,
+        kind: EventKind.EVENT,
+        body: { endpointId: null, channel: "sentinel", args: [] },
+      });
+      b.resume();
+      const isSentinel = (f: LinkFrame) =>
+        f.lane === Lane.EVENTS &&
+        (frameToMessage(f).body as { channel: string }).channel === "sentinel";
+      await waitFor(() => frames.some(isSentinel));
+      return frames.flatMap((f) => {
+        if (f.lane !== Lane.RPC) return [];
+        const message = frameToMessage(f);
+        if (message.lane !== Lane.RPC) return [];
+        if (message.kind === RpcKind.CALL) return [message.body.method];
+        if (message.kind === RpcKind.INVOKE) return [message.body.channel];
+        return [];
+      });
+    }
+
+    it("never sends a request that timed out before it was written", async () => {
+      const { client, b } = await stalledClient();
+      const timedOut = client.call("late", null, { timeoutMs: 20 });
+      await expect(timedOut).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
+      expect(client.queuedBytes(Lane.RPC)).toBeGreaterThan(0);
+      client.call("kept", null).catch(() => {});
+      expect(await requestsReceived(client, b)).toEqual(["kept"]);
+      expect(client.queuedBytes(Lane.RPC)).toBe(0);
+    });
+
+    it("never sends a request that was aborted before it was written", async () => {
+      const { client, b } = await stalledClient();
+      const ac = new AbortController();
+      const aborted = client.invoke("e1", "late", [], { signal: ac.signal });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(client.queuedBytes(Lane.RPC)).toBeGreaterThan(0);
+      ac.abort();
+      const env = await aborted;
+      expect(!env.ok && env.error.code).toBe("OUTCOME_UNKNOWN");
+      expect(!env.ok && env.error.message).toMatch(/before it was sent/);
+      client.invoke("e1", "kept", []).catch(() => {});
+      expect(await requestsReceived(client, b)).toEqual(["kept"]);
+    });
+
+    it("still reports a request the stalled socket took as an unknown outcome, and delivers it", async () => {
+      const { client, a, b } = await pausedPeer();
+      const taken = client.call("taken", BEYOND_SOCKET_BUFFERS, { timeoutMs: 20 });
+      taken.catch(() => {});
+      await waitFor(() => a.writableNeedDrain);
+      expect(client.queuedBytes(Lane.RPC)).toBe(0);
+      await expect(taken).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
+      expect(await requestsReceived(client, b)).toEqual(["taken"]);
+    });
+
+    it("still sends a request with no deadline once the link drains", async () => {
+      const { client, b } = await stalledClient({ requestTimeoutMs: 20 });
+      const late = client.call("late", null);
+      const notice = client.call("notice", null, { timeoutMs: 0 });
+      late.catch(() => {});
+      notice.catch(() => {});
+      await expect(late).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
+      // Past the session's deadline for a call made a moment after the first.
+      await new Promise((r) => setTimeout(r, 40));
+      expect(await requestsReceived(client, b)).toEqual(["notice"]);
     });
   });
 

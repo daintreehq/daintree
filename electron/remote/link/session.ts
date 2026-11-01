@@ -99,6 +99,12 @@ export interface LinkCloseInfo {
 }
 
 export interface RequestOptions {
+  /**
+   * How long the caller waits for an answer; 0 for no deadline. A request that
+   * settles before its frame is written is never sent, so a notice whose
+   * delivery matters more than its answer passes 0: once the session has
+   * queued it, it goes when the link drains, or the session's end settles it.
+   */
   timeoutMs?: number;
   signal?: AbortSignal;
 }
@@ -112,6 +118,8 @@ interface Pending {
   resolve: (envelope: IpcEnvelope) => void;
   /** The request frame reached the socket, so the peer may have acted on it. */
   written: boolean;
+  /** Its caller has its answer; a frame still queued for it is never sent. */
+  settled: boolean;
 }
 
 type PendingKind = typeof RpcKind.INVOKE | typeof RpcKind.CALL | typeof RpcKind.REVERSE_REQUEST;
@@ -602,23 +610,27 @@ export class LinkSession {
     const requestId = this.allocateRequestId(table);
     return new Promise<IpcEnvelope>((resolve) => {
       let timer: ReturnType<typeof setTimeout> | null = null;
-      // The request may already be on the wire; the peer can still act on it.
+      // Still unknown either way, so callers keep one contract; only a written
+      // one can reach the peer, since a settled frame is never sent.
       const onAbort = () =>
         settle(
           appErrorEnvelope(
             "OUTCOME_UNKNOWN",
-            "Request aborted after it was sent; the peer may still act on it"
+            entry.written
+              ? "Request aborted after it was sent; the peer may still act on it"
+              : "Request aborted before it was sent"
           )
         );
       const settle = (envelope: IpcEnvelope) => {
         if (table.get(requestId) !== entry) return;
+        entry.settled = true;
         table.delete(requestId);
         this.pendingCount--;
         if (timer) clearTimeout(timer);
         signal?.removeEventListener("abort", onAbort);
         resolve(envelope);
       };
-      const entry: Pending = { kind, resolve: settle, written: false };
+      const entry: Pending = { kind, resolve: settle, written: false, settled: false };
       table.set(requestId, entry);
       this.pendingCount++;
       if (timeoutMs > 0) {
@@ -679,13 +691,14 @@ export class LinkSession {
   private flush(): void {
     if (this.state === "closed" || this.waitingForDrain) return;
     for (let frame = this.scheduler.next(); frame; frame = this.scheduler.next()) {
+      const request = frame.lane === Lane.RPC ? this.requestFrames.get(frame) : undefined;
+      // Timed out or aborted while queued: its caller has moved on, and the
+      // peer running it now would act on a call nobody is waiting for.
+      if (request?.settled) continue;
       const written = this.socket.write(encodeFrame(frame, this.maxFrameBytes));
       // A false return still took the bytes; only frames left in the scheduler
       // are known never to have reached the peer.
-      if (frame.lane === Lane.RPC) {
-        const request = this.requestFrames.get(frame);
-        if (request) request.written = true;
-      }
+      if (request) request.written = true;
       if (!written) {
         this.waitingForDrain = true;
         break;

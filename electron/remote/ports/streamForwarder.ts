@@ -243,7 +243,10 @@ export class PortStreamMux {
       stream.closed = true;
       if (this.streams.get(id) === stream) this.streams.delete(id);
       if (!stream.closedRemotely && !this.disposed && this.session.isOpen) {
-        void this.session.call(PortLinkMethod.CLOSE, { streamId: id }).catch(() => {});
+        // No deadline: a notice that settles unsent is dropped, and nothing sends it again.
+        void this.session
+          .call(PortLinkMethod.CLOSE, { streamId: id }, { timeoutMs: 0 })
+          .catch(() => {});
       }
       stream.onActivity?.();
     });
@@ -259,7 +262,10 @@ export class PortStreamMux {
     });
     socket.once("end", () => {
       if (stream.closed || this.disposed) return;
-      void this.session.call(PortLinkMethod.END, { streamId: stream.id }).catch(() => {});
+      // No deadline: a notice that settles unsent is dropped, and nothing sends it again.
+      void this.session
+        .call(PortLinkMethod.END, { streamId: stream.id }, { timeoutMs: 0 })
+        .catch(() => {});
     });
     socket.resume();
   }

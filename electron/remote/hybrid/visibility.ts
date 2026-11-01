@@ -197,7 +197,9 @@ export class ViewVisibilityReporter {
       endpointId: view.endpointId,
       visible: this.isActive(webContentsId),
     };
-    view.session.call(ENDPOINT_VISIBILITY_METHOD, report).catch(() => {
+    // No deadline: a report that settled unsent would be dropped, and only a
+    // change sends another, so a shown view could stay reported hidden.
+    view.session.call(ENDPOINT_VISIBILITY_METHOD, report, { timeoutMs: 0 }).catch(() => {
       // The host re-learns on the next session; unreported views count as visible there.
     });
   }
