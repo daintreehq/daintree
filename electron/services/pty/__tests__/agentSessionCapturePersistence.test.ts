@@ -1146,6 +1146,20 @@ describe("captured agent session persistence (#12433)", () => {
       expect((await savedPane())?.agentSessionId).toBe("after-new");
     });
 
+    it("is corrected by its run's demotion even while the argv write still waits", async () => {
+      const generation = launch();
+      await seed([pane()]);
+      const held = holdQueue();
+      const argv = acceptObservedAgentSession(observed(generation, 1));
+      const farewell = writeBackCapturedSessionId(demotion(generation, 1, "after-new"));
+
+      held.release();
+
+      await expect(argv).resolves.toBe("filled");
+      await expect(farewell).resolves.toBe("superseded");
+      expect((await savedPane())?.agentSessionId).toBe("after-new");
+    });
+
     it("is not corrected by another run's demotion", async () => {
       // An earlier run's farewell that arrives late (its branch stamp yields)
       // describes a conversation the pane has since left.

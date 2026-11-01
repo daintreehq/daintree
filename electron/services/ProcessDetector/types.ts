@@ -74,6 +74,8 @@ export type DetectionCallback = (result: DetectionResult, spawnedAt: number) => 
 export interface AgentProcessObservation {
   agentType: BuiltInAgentId;
   command: string;
+  /** The process itself, so a row a run left in the census isn't read as its successor's. */
+  pid?: number;
 }
 
 export type AgentProcessObserver = (

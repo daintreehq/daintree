@@ -1237,6 +1237,12 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "terminal:exited",
 ];
 
+/** Events whose payload carries a session id: a resume credential, never printed. */
+const CREDENTIAL_PAYLOAD_EVENTS: ReadonlySet<keyof DaintreeEventMap> = new Set([
+  "agent-session:captured",
+  "agent-session:observed",
+]);
+
 export class TypedEventBus {
   private bus = new EventEmitter();
 
@@ -1268,7 +1274,11 @@ export class TypedEventBus {
     ...args: DaintreeEventMap[K] extends void ? [] : [DaintreeEventMap[K]]
   ) {
     if (this.debugEnabled) {
-      console.log("[events]", event, args[0]);
+      console.log(
+        "[events]",
+        event,
+        CREDENTIAL_PAYLOAD_EVENTS.has(event) ? "[payload withheld: resume credential]" : args[0]
+      );
     }
     this.bus.emit(event, ...(args as any[]));
   }

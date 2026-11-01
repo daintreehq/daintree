@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readArgvSessionId } from "../argvSessionId.js";
+import { readArgvSessionId, readTypedSessionId } from "../argvSessionId.js";
 import { getAgentConfig, type AgentResumeArgv } from "../../../../shared/config/agentRegistry.js";
 
 /** Codex's real declaration, so a registry change that breaks a case fails here. */
@@ -61,6 +61,10 @@ describe("readArgvSessionId with Codex's declaration", () => {
     ["codex only as a later operand", `env FOO=1 codex resume ${ID}`],
     ["a runtime running some other script", `node /tmp/other.js resume ${ID}`],
     ["an empty line", ""],
+    [
+      "a Windows config value whose escaped quotes hold resume text",
+      `codex -c "developer_instructions=\\"please resume ${ID} now\\""`,
+    ],
   ])("reads nothing from %s", (_name, command) => {
     expect(read(command)).toBeNull();
   });
@@ -69,5 +73,38 @@ describe("readArgvSessionId with Codex's declaration", () => {
     expect(
       readArgvSessionId(`codex resume ${ID}`, "codex", { ...SPEC, sessionIdPattern: "(" })
     ).toBe(null);
+  });
+});
+
+describe("readTypedSessionId with Codex's declaration", () => {
+  it("reads the id a typed resume names", () => {
+    expect(readTypedSessionId(`codex resume ${ID}`, "codex", SPEC)).toEqual({
+      runsAgent: true,
+      sessionId: ID,
+    });
+  });
+
+  it("keeps a quoted prompt whole, so it never reads as a resume", () => {
+    expect(readTypedSessionId(`codex "resume ${ID}"`, "codex", SPEC)).toEqual({
+      runsAgent: true,
+      sessionId: null,
+    });
+  });
+
+  it("reads Daintree's own quoted launch line", () => {
+    expect(
+      readTypedSessionId(
+        `codex -c 'developer_instructions=be brief' resume ${ID} -C '.'`,
+        "codex",
+        SPEC
+      )
+    ).toEqual({ runsAgent: true, sessionId: ID });
+  });
+
+  it.each([
+    ["an alias", `cx resume ${ID}`],
+    ["a script", "./start-codex.sh"],
+  ])("says nothing about a line that doesn't run the agent directly: %s", (_name, line) => {
+    expect(readTypedSessionId(line, "codex", SPEC)).toEqual({ runsAgent: false });
   });
 });

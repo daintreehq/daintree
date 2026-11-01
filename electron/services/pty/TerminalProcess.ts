@@ -182,6 +182,8 @@ export class TerminalProcess {
   // The run (`generation:incarnation`) whose argv was already read: argv never
   // changes while a run lives, so one read per run is the whole story.
   private argvReadRun: string | undefined;
+  // The agent process last seen, and the run it was seen in.
+  private agentProcessSeen: { pid: number; run: string } | undefined;
   private headlineGenerator = new ActivityHeadlineGenerator();
   private lastDetectedProcessIconId: string | undefined;
 
@@ -2063,15 +2065,24 @@ export class TerminalProcess {
    * The census process behind the committed agent, every detection pass. Read
    * once per run, and only once this record has promoted the same agent, so
    * the run's incarnation is already the one the process belongs to.
+   *
+   * A census taken before the last run's process went away can still list it
+   * when a typed command promotes the next run at once; that row belongs to
+   * the run it was first seen in, and must not spend this run's one read.
    */
   handleAgentProcessObservation(observation: AgentProcessObservation, spawnedAt: number): void {
     const info = this.terminalInfo;
     if (info.spawnedAt !== spawnedAt || info.wasKilled || info.isExited) return;
     if (info.detectedAgentId !== observation.agentType) return;
     const run = `${info.launchGeneration ?? "?"}:${info.agentIncarnation}`;
+    if (observation.pid !== undefined) {
+      const seen = this.agentProcessSeen;
+      if (seen?.pid === observation.pid && seen.run !== run) return;
+      this.agentProcessSeen = { pid: observation.pid, run };
+    }
     if (this.argvReadRun === run) return;
     this.argvReadRun = run;
-    offerAgentRunArgvSession(this.id, info, observation);
+    offerAgentRunArgvSession(this.id, info, observation, this.identityWatcher.submittedCommandText);
   }
 
   handleAgentDetection(result: DetectionResult, spawnedAt: number): void {

@@ -184,6 +184,15 @@ function argvClaimOfRun(
 
 function decidePaneWriteback(state: ProjectState | null, claim: PaneClaim): PaneWritebackOutcome {
   const { terminalId, agentId, sessionId, generation, projectId } = claim;
+  const authored = authoredIds.get(terminalId);
+  // A demotion leaves a live shell that can host another conversation, so its
+  // farewell never stands for the pane on its own. It only corrects an id the
+  // same run's argv wrote: `/resume` or `/new` inside the TUI switched
+  // conversations without touching argv. Read here, behind that argv write in
+  // the queue, never when the demotion arrived.
+  if (claim.source === "demotion" && !argvClaimOfRun(authored, claim)) {
+    return "ineligible-boundary";
+  }
 
   // Ownership is read here, when the queued update runs, not when it was
   // enqueued: a respawn of the same id can land while this waits. A closed
@@ -213,15 +222,10 @@ function decidePaneWriteback(state: ProjectState | null, claim: PaneClaim): Pane
   }
   if (pane.launchAgentId !== agentId) return "agent-mismatch";
 
-  const authored = authoredIds.get(terminalId);
-  // A demotion leaves a live shell that can host another conversation, so its
-  // farewell never stands for the pane on its own. It only corrects an id the
-  // same run's argv wrote: `/resume` or `/new` inside the TUI switched
-  // conversations without touching argv.
   if (claim.source === "demotion") {
-    if (!pane.agentSessionId || !argvClaimOfRun(authored, claim)) return "ineligible-boundary";
+    if (!pane.agentSessionId) return "ineligible-boundary";
     if (pane.agentSessionId === sessionId) return "unchanged";
-    if (!claimCovers(authored, pane.agentSessionId)) return "conflict";
+    if (!authored || !claimCovers(authored, pane.agentSessionId)) return "conflict";
     pane.agentSessionId = sessionId;
     return "superseded";
   }
@@ -271,7 +275,9 @@ export async function writeBackCapturedSessionId(
 ): Promise<PaneWritebackOutcome> {
   const { terminalId, boundary, launchGeneration: generation, record, run } = capture;
   if (boundary === "demotion" && run && record.projectId) {
-    const claim: PaneClaim = {
+    // Queued even when no argv claim is held yet: the run's own argv write can
+    // still be waiting ahead of it.
+    return writeBackPaneClaim({
       terminalId,
       agentId: record.agentId,
       sessionId: record.sessionId,
@@ -279,10 +285,7 @@ export async function writeBackCapturedSessionId(
       projectId: record.projectId,
       source: "demotion",
       incarnation: run.agentIncarnation,
-    };
-    // Decided again when the queued update runs; this only spares the queue
-    // the common demotion that has nothing to correct.
-    if (argvClaimOfRun(authoredIds.get(terminalId), claim)) return writeBackPaneClaim(claim);
+    });
   }
   if (boundary !== "exit") return "ineligible-boundary";
   if (typeof generation !== "number") return "unknown-generation";

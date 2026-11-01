@@ -3,7 +3,7 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { createLogger } from "../../utils/logger.js";
 import type { AgentProcessObservation } from "../ProcessDetector.js";
 import { events } from "../events.js";
-import { readArgvSessionId } from "./argvSessionId.js";
+import { readArgvSessionId, readTypedSessionId } from "./argvSessionId.js";
 import type { TerminalInfo } from "./types.js";
 
 const logger = createLogger("pty:AgentRunArgv");
@@ -18,12 +18,21 @@ const logger = createLogger("pty:AgentRunArgv");
  *
  * The caller asks once per observed run. Only the pane's launch agent counts:
  * restore relaunches that agent, so another agent's id would resume nothing.
- * Never logs the command line or the id.
+ *
+ * `typedLine` is the shell line that started the run, when one was typed. It
+ * never supplies an id; it only refuses one. POSIX `ps` drops argument
+ * boundaries, so `codex "resume <id>"` — a fresh conversation whose prompt
+ * happens to read that way — looks like a resume in argv, and only the typed
+ * quoting tells them apart. A line that doesn't run the agent directly (an
+ * alias, a script) says nothing either way.
+ *
+ * Never logs the command line, the typed line or the id.
  */
 export function offerAgentRunArgvSession(
   terminalId: string,
   terminal: TerminalInfo,
-  observation: AgentProcessObservation
+  observation: AgentProcessObservation,
+  typedLine?: string
 ): void {
   const { agentType } = observation;
   if (terminal.isAssistantTerminal === true || agentType !== terminal.launchAgentId) return;
@@ -33,7 +42,12 @@ export function offerAgentRunArgvSession(
   const config = getEffectiveAgentConfig(agentType);
   if (!config?.resumeArgv) return;
 
-  const sessionId = readArgvSessionId(observation.command, config.command, config.resumeArgv);
+  const argvId = readArgvSessionId(observation.command, config.command, config.resumeArgv);
+  const typed = typedLine
+    ? readTypedSessionId(typedLine, config.command, config.resumeArgv)
+    : { runsAgent: false as const };
+  const typedDisagrees = typed.runsAgent && typed.sessionId !== argvId;
+  const sessionId = typedDisagrees ? null : argvId;
   const run = { launchGeneration: generation, agentIncarnation: terminal.agentIncarnation };
   logger.info("Agent run argv read", {
     terminalId,
@@ -41,7 +55,8 @@ export function offerAgentRunArgvSession(
     agentId: agentType,
     generation,
     incarnation: run.agentIncarnation,
-    named: sessionId !== null,
+    named: argvId !== null,
+    typedDisagrees,
   });
   if (!sessionId) return;
 

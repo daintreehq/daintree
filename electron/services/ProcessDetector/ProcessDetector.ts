@@ -610,7 +610,11 @@ export class ProcessDetector {
         treeMatch.processCommand
       ) {
         this.agentProcessObserver(
-          { agentType: treeMatch.agentType, command: treeMatch.processCommand },
+          {
+            agentType: treeMatch.agentType,
+            command: treeMatch.processCommand,
+            ...(treeMatch.provenance && { pid: treeMatch.provenance.pid }),
+          },
           this.spawnedAt
         );
       }

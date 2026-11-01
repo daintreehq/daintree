@@ -818,8 +818,8 @@ describe("ProcessDetector", () => {
 
       expect(callback).toHaveBeenCalledTimes(1);
       expect(observer.mock.calls).toEqual([
-        [{ agentType: "codex", command: TREE_COMMAND }, 1],
-        [{ agentType: "codex", command: TREE_COMMAND }, 1],
+        [{ agentType: "codex", command: TREE_COMMAND, pid: 200 }, 1],
+        [{ agentType: "codex", command: TREE_COMMAND, pid: 200 }, 1],
       ]);
     });
 
@@ -844,7 +844,10 @@ describe("ProcessDetector", () => {
       cache.setChildren(100, [{ pid: 200, comm: "node", command: TREE_COMMAND }]);
       cache.emitRefresh();
 
-      expect(observer).toHaveBeenCalledWith({ agentType: "codex", command: TREE_COMMAND }, 1);
+      expect(observer).toHaveBeenCalledWith(
+        { agentType: "codex", command: TREE_COMMAND, pid: 200 },
+        1
+      );
     });
 
     it("says nothing for a process that is not an agent", () => {

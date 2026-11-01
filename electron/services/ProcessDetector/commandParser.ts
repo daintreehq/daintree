@@ -14,7 +14,8 @@ export function stripCommandExecutableExtension(name: string): string {
   return name.replace(WINDOWS_LAUNCHER_EXTENSION_PATTERN, "").replace(SCRIPT_EXTENSION_PATTERN, "");
 }
 
-function splitShellLikeCommand(command: string): string[] {
+/** Split a line as a POSIX shell would read it: quotes group, a backslash escapes. */
+export function splitShellLikeCommand(command: string): string[] {
   const parts: string[] = [];
   let current = "";
   let quote: "'" | `"` | null = null;

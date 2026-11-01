@@ -1,5 +1,8 @@
 import type { AgentResumeArgv } from "../../../shared/config/agentRegistry.js";
-import { stripCommandExecutableExtension } from "../ProcessDetector/commandParser.js";
+import {
+  splitShellLikeCommand,
+  stripCommandExecutableExtension,
+} from "../ProcessDetector/commandParser.js";
 
 /** Runtimes that run an agent as a script: the script names the agent, not argv[0]. */
 const SCRIPT_RUNTIMES = new Set(["node", "nodejs", "bun"]);
@@ -7,12 +10,12 @@ const SCRIPT_RUNTIMES = new Set(["node", "nodejs", "bun"]);
 /**
  * Split a command line as the OS reports it (`ps`, Win32 `CommandLine`).
  * Double quotes group, because Windows quotes a path with spaces; a backslash
- * is a path separator, never an escape. POSIX `ps` joins argv with spaces and
- * keeps no quoting at all, so an argument that held spaces comes back as
- * several tokens: parsing below only ever misses on that, since an id has to
- * match its pattern in full.
+ * is a path separator, never an escape. A quote escaped inside an argument
+ * (`\"`) can't be decoded without Windows' own backslash rules and would put
+ * an argument's text where a positional goes, so it reads as nothing.
  */
-function splitReportedCommandLine(command: string): string[] {
+function splitReportedCommandLine(command: string): string[] | null {
+  if (command.includes('\\"')) return null;
   const tokens: string[] = [];
   let current = "";
   let inToken = false;
@@ -61,27 +64,8 @@ function isExcluded(token: string, excluded: readonly string[]): boolean {
   return excluded.some((flag) => name === flag || (/^-[^-]$/.test(flag) && token.startsWith(flag)));
 }
 
-/**
- * The session id a process's command line resumes, read positionally per the
- * agent's {@link AgentResumeArgv} (#15994): the declared subcommand must be the
- * first positional, and the id is the positional right after it. Anything this
- * can't read with certainty — an unknown launcher, an option it doesn't know
- * taking a value, an excluded flag, an id of the wrong shape — is null.
- *
- * The command line is a resume credential and may hold other secrets: callers
- * keep it inside the pty-host and never log it.
- */
-export function readArgvSessionId(
-  command: string,
-  executable: string,
-  spec: AgentResumeArgv
-): string | null {
-  const tokens = splitReportedCommandLine(command);
-  const start = argumentsStart(tokens, executable);
-  if (start === null) return null;
-
+function readSessionIdFromArguments(args: string[], spec: AgentResumeArgv): string | null {
   const excluded = spec.excludedFlags ?? [];
-  const args = tokens.slice(start);
   if (args.some((token) => token.startsWith("-") && isExcluded(token, excluded))) return null;
 
   let pattern: RegExp;
@@ -111,4 +95,47 @@ export function readArgvSessionId(
     return match !== null && match[0] === token ? token : null;
   }
   return null;
+}
+
+/**
+ * The session id a process's command line resumes, read positionally per the
+ * agent's {@link AgentResumeArgv} (#15994): the declared subcommand must be the
+ * first positional, and the id is the positional right after it. Anything this
+ * can't read with certainty — an unknown launcher, an option it doesn't know
+ * taking a value, an excluded flag, an id of the wrong shape — is null.
+ *
+ * POSIX `ps` joins argv with spaces and keeps no quoting, so a single argument
+ * holding spaces (`codex "resume <id>"`, a prompt) reads as several. Callers
+ * that know the line typed for the run check it with
+ * {@link readTypedSessionId}.
+ *
+ * The command line is a resume credential and may hold other secrets: callers
+ * keep it inside the pty-host and never log it.
+ */
+export function readArgvSessionId(
+  command: string,
+  executable: string,
+  spec: AgentResumeArgv
+): string | null {
+  const tokens = splitReportedCommandLine(command);
+  if (!tokens) return null;
+  const start = argumentsStart(tokens, executable);
+  return start === null ? null : readSessionIdFromArguments(tokens.slice(start), spec);
+}
+
+/**
+ * The same reading over a line typed at the shell, whose quoting still marks
+ * where each argument ends. `runsAgent` is false when the line doesn't start
+ * the agent's executable directly (an alias, a script, a wrapper), so it says
+ * nothing about the argv.
+ */
+export function readTypedSessionId(
+  line: string,
+  executable: string,
+  spec: AgentResumeArgv
+): { runsAgent: false } | { runsAgent: true; sessionId: string | null } {
+  const tokens = splitShellLikeCommand(line);
+  const start = argumentsStart(tokens, executable);
+  if (start === null) return { runsAgent: false };
+  return { runsAgent: true, sessionId: readSessionIdFromArguments(tokens.slice(start), spec) };
 }

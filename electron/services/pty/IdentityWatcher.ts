@@ -550,6 +550,15 @@ export class IdentityWatcher {
     return this.seededCommand;
   }
 
+  /**
+   * The line typed at the shell that started what is running now, until a
+   * prompt return ends it. Absent when nothing was typed (a recalled history
+   * line, a script) or the command has finished.
+   */
+  get submittedCommandText(): string | undefined {
+    return this.submittedAt === null ? undefined : this.commandText;
+  }
+
   clearSeededCommandText(): void {
     this.seededCommand = undefined;
   }
