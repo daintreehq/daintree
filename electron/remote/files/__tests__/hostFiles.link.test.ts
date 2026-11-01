@@ -113,6 +113,7 @@ async function setup(
     /** The link between the two, emulated; a plain socket when absent. */
     conditions?: LinkConditions;
     clientPullDepth?: number;
+    clientCommitTimeoutMs?: number;
     /** Answer as a host from before pull depths: never sees the Shell's ask, never grants one. */
     legacyHost?: boolean;
   } = {}
@@ -158,6 +159,7 @@ async function setup(
   const transport = new ClientFileTransport({
     maxConcurrentPulls: options.clientPulls,
     pullDepth: options.clientPullDepth,
+    commitTimeoutMs: options.clientCommitTimeoutMs,
   });
   transport.noteEndpointOpened(HOST, { session: client, webContentsId: 7, endpointId: "view-7" });
   const capabilities = new ViewFileCapabilities(() => () => {});
@@ -1117,6 +1119,138 @@ describe("a download the link drops", () => {
     ).rejects.toMatchObject({ code: "HOST_DISCONNECTED" });
     expect(drop.dropped()).toBe(true);
     await expectEventuallyEmpty(downloads);
+  });
+
+  it("starts over when the link drops before the host answered the download", async () => {
+    const { transport, client: firstLink, service } = await setup();
+    const bytes = crypto.randomBytes(64 * 1024);
+    await fs.writeFile(path.join(project, "notes.bin"), bytes);
+    const realCall = firstLink.call.bind(firstLink);
+    let lost: unknown = null;
+    vi.spyOn(firstLink, "call").mockImplementationOnce((...args) => {
+      const answer = realCall(...args);
+      answer.catch((error: unknown) => {
+        lost = error;
+      });
+      // After the session's own flush: the request is on the wire, its answer not yet back.
+      setImmediate(() => {
+        firstLink.close("network went away");
+        void relink(transport, service);
+      });
+      return answer;
+    });
+    const result = await windowDownloads(transport, () => {}).download(7, {
+      hostId: HOST,
+      hostPath: path.join(project, "notes.bin"),
+      opId: "op-notes",
+    });
+    expect(lost).toMatchObject({ code: "OUTCOME_UNKNOWN" });
+    expect(sha256(await fs.readFile(result.localPath))).toBe(sha256(bytes));
+    await vi.waitFor(async () => expect(await fs.readdir(downloads)).toEqual(["notes.bin"]));
+  });
+
+  /** Holds the download's placement into Downloads until released. */
+  const holdPlacement = () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const placing = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const realLink = fs.link.bind(fs);
+    const spy = vi.spyOn(fs, "link").mockImplementation(async (from, to) => {
+      if (String(to).startsWith(downloads)) {
+        started();
+        await held;
+      }
+      return realLink(from, to);
+    });
+    return { placing, release, restore: () => spy.mockRestore() };
+  };
+
+  it("keeps a file the link dropped under while it was being placed, fetching it once", async () => {
+    const { transport, client: firstLink, service } = await setup();
+    const bytes = crypto.randomBytes(256 * 1024);
+    await fs.writeFile(path.join(project, "report.bin"), bytes);
+    const placement = holdPlacement();
+    const attempts = vi.spyOn(transport, "download");
+    try {
+      const pending = windowDownloads(transport, () => {}).download(7, {
+        hostId: HOST,
+        hostPath: path.join(project, "report.bin"),
+        opId: "op-report",
+      });
+      await placement.placing;
+      firstLink.close("network went away");
+      await relink(transport, service);
+      placement.release();
+      const result = await pending;
+      expect(result.localPath).toBe(path.join(downloads, "report.bin"));
+      expect(sha256(await fs.readFile(result.localPath))).toBe(sha256(bytes));
+      expect(attempts).toHaveBeenCalledTimes(1);
+      await vi.waitFor(async () => expect(await fs.readdir(downloads)).toEqual(["report.bin"]));
+    } finally {
+      placement.restore();
+    }
+  });
+
+  it("fails a save the link dropped under that never finishes, without fetching it again", async () => {
+    const { transport, client: firstLink, service } = await setup({ clientCommitTimeoutMs: 50 });
+    await fs.writeFile(path.join(project, "report.bin"), crypto.randomBytes(256 * 1024));
+    const placement = holdPlacement();
+    const attempts = vi.spyOn(transport, "download");
+    try {
+      const pending = windowDownloads(transport, () => {}).download(7, {
+        hostId: HOST,
+        hostPath: path.join(project, "report.bin"),
+        opId: "op-report",
+      });
+      await placement.placing;
+      firstLink.close("network went away");
+      await relink(transport, service);
+      await expect(pending).rejects.toMatchObject({ code: "INTERNAL" });
+      placement.release();
+      expect(attempts).toHaveBeenCalledTimes(1);
+      await expectEventuallyEmpty(downloads);
+    } finally {
+      placement.restore();
+    }
+  });
+});
+
+describe("waiting for a view to be reachable on its host", () => {
+  it("resolves once the view's own endpoint is on an open link again, not another view's", async () => {
+    const { transport, client: firstLink } = await setup();
+    firstLink.close("network went away");
+    transport.noteEndpointClosed(HOST, { endpointId: "view-7" });
+    expect(transport.isReachable(HOST, 7)).toBe(false);
+    let reachable: boolean | null = null;
+    const waiting = transport.whenReachable(HOST, 7, 5_000).then((answer) => {
+      reachable = answer;
+    });
+    const { host, client } = await openSessionPair(socketDir);
+    sessions.push(host, client);
+    transport.noteEndpointOpened(HOST, { session: client, webContentsId: 8, endpointId: "view-8" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(reachable).toBeNull();
+    transport.noteEndpointOpened(HOST, { session: client, webContentsId: 7, endpointId: "view-7" });
+    await waiting;
+    expect(reachable).toBe(true);
+  });
+
+  it("gives up when its wait runs out, or when it is aborted", async () => {
+    const { transport, client: firstLink } = await setup();
+    firstLink.close("network went away");
+    await expect(transport.whenReachable(HOST, 7, 20)).resolves.toBe(false);
+    const controller = new AbortController();
+    const waiting = transport.whenReachable(HOST, 7, 5_000, controller.signal);
+    controller.abort();
+    await expect(waiting).resolves.toBe(false);
+    expect((transport as unknown as { openedListeners: Set<unknown> }).openedListeners.size).toBe(
+      0
+    );
   });
 });
 
