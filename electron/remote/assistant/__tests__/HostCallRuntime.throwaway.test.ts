@@ -436,7 +436,9 @@ describe("HostCallRuntime host.call to a throwaway target (#14446)", () => {
     });
 
     it("holds a launch whose answer was lost for as long as its run could last", async () => {
-      throwawayCall.mockRejectedValueOnce(new AppError({ code: "OUTCOME_UNKNOWN", message: "lost" }));
+      throwawayCall.mockRejectedValueOnce(
+        new AppError({ code: "OUTCOME_UNKNOWN", message: "lost" })
+      );
       await runtime.call("a", LONG_LAUNCH, { tier: "core" });
       const runMs = (throwawayCall.mock.calls[0]![1] as ThrowawayCallPayload).runMs;
       advance(TEN_MINUTES + runMs);
@@ -460,7 +462,9 @@ describe("HostCallRuntime host.call to a throwaway target (#14446)", () => {
     });
 
     it("keeps a lost launch held when a resend of it can't get through", async () => {
-      throwawayCall.mockRejectedValueOnce(new AppError({ code: "OUTCOME_UNKNOWN", message: "lost" }));
+      throwawayCall.mockRejectedValueOnce(
+        new AppError({ code: "OUTCOME_UNKNOWN", message: "lost" })
+      );
       await runtime.call("a", { ...LONG_LAUNCH, newCallId: "mine-1" }, { tier: "core" });
       throwawayCall.mockRejectedValueOnce(
         new AppError({ code: "HOST_DISCONNECTED", message: "not sent" })

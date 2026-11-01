@@ -448,7 +448,11 @@ describe("assistantsUseHost (#15878)", () => {
       },
     };
     const throwawayRelease = vi.fn(async () => {});
-    const client = { relayCall: vi.fn(), throwawayCall: vi.fn(async () => launched), throwawayRelease };
+    const client = {
+      relayCall: vi.fn(),
+      throwawayCall: vi.fn(async () => launched),
+      throwawayRelease,
+    };
     teardown.push(
       registerRemoteService("hostControlLinkClient", client as unknown as HostControlLinkClient),
       installHostControl({

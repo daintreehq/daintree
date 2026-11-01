@@ -1776,7 +1776,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     } finally {
       sendDone();
     }
-    if (session) noteThrowawayAnswer(session, args.hostId, parsed.data, callId, answer, holdsLaunch);
+    if (session)
+      noteThrowawayAnswer(session, args.hostId, parsed.data, callId, answer, holdsLaunch);
     switch (answer.status) {
       case "done":
         return {
