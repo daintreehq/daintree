@@ -77,8 +77,9 @@ function sendStatus(status: DecisionsStatus): void {
 
 /**
  * Something the status shows changed: push it to Settings. The revision moves
- * now and each push reads the status after it, in order, so the last push is
- * the newest. Nothing is pushed once quitting.
+ * now and each push reads the status when its turn comes, in order, so the
+ * last push is the newest and changes that come quicker than that arrive as
+ * one. Nothing is pushed once quitting.
  */
 function publishStatus(): void {
   if (shutDown) return;
@@ -86,7 +87,8 @@ function publishStatus(): void {
   statusPushes = statusPushes
     .then(async () => {
       if (shutDown) return;
-      sendStatus(await getDecisionsStatus());
+      const status = await getDecisionsStatus();
+      if (!shutDown) sendStatus(status);
     })
     .catch(() => {});
 }

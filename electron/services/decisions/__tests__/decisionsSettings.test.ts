@@ -23,6 +23,7 @@ const connected: DecisionsSettings = {
   hostId: "host_01HZY3K9QY",
   proxyAllowlisted: true,
   consentedAt: 1_761_955_200_000,
+  revokedAt: null,
 };
 
 function memoryStore(initial?: unknown) {
@@ -130,6 +131,24 @@ describe("sanitizeDecisionsSettings", () => {
         enabled: false,
         relayOrigin: null,
       });
+    }
+  });
+
+  it("keeps a revocation time with the relay's ids, and drops it without them or when malformed", () => {
+    const revoked = sanitizeDecisionsSettings({ ...connected, revokedAt: 1_761_955_300_000 });
+    expect(revoked).toEqual({ ...connected, revokedAt: 1_761_955_300_000 });
+
+    for (const revokedAt of [0, -1, Number.NaN, "1761955300000", true, {}]) {
+      const settings = sanitizeDecisionsSettings({ ...connected, revokedAt });
+      expect(settings, String(revokedAt)).toEqual(connected);
+    }
+    for (const field of ["relayOrigin", "installationId", "deviceId"] as const) {
+      const settings = sanitizeDecisionsSettings({
+        ...connected,
+        [field]: null,
+        revokedAt: 1_761_955_300_000,
+      });
+      expect(settings.revokedAt, field).toBeNull();
     }
   });
 

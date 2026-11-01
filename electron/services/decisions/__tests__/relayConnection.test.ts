@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   MemoryKeyStore,
   MemoryLocalStore,
@@ -13,7 +17,11 @@ import {
 import { bytesToBase64Url } from "@daintreehq/decisions-protocol";
 
 vi.mock("electron", () => ({
-  app: {},
+  app: {
+    getPath: () => "/fake/userData",
+    isPackaged: false,
+    getAppPath: () => "/fake/appPath",
+  },
   safeStorage: {},
   net: { isOnline: () => true },
   powerMonitor: { on: vi.fn(), off: vi.fn() },
@@ -31,6 +39,8 @@ import {
   type RelayConnectionStatus,
 } from "../relayConnection.js";
 import type { RelayFetch } from "../relayCheck.js";
+import { openDb } from "../../persistence/db.js";
+import { DaintreeLocalStore } from "../daintreeLocalStore.js";
 
 const RELAY: RelayBinding = {
   relayOrigin: "https://decisions.example.workers.dev",
@@ -196,7 +206,7 @@ async function ownerIdentity(relay: RelayBinding = RELAY): Promise<StoredIdentit
 interface Harness {
   connection: RelayConnection;
   relay: ReturnType<typeof fakeRelay>;
-  store: MemoryLocalStore;
+  store: MemoryLocalStore | DaintreeLocalStore;
   statuses: RelayConnectionStatus[];
   revoked: ReturnType<typeof vi.fn>;
   resume(): void;
@@ -221,7 +231,7 @@ afterEach(() => {
 
 async function harness(
   options: {
-    store?: MemoryLocalStore;
+    store?: MemoryLocalStore | DaintreeLocalStore;
     stored?: StoredIdentity | null;
     rand?: () => number;
     wrapFetch?: (fetchImpl: RelayFetch) => RelayFetch;
@@ -712,5 +722,40 @@ describe("RelayConnection", () => {
     expect(await h.status("not-connected")).toEqual({ state: "not-connected", problem: "storage" });
     expect(socket.frames().some((frame) => frame.t === "ack" && frame.seq === 1)).toBe(false);
     expect(socket.closedByClient).toBe(1000);
+  });
+
+  it("picks up from the cursor the app database kept, after the app starts again", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-relay-connection-"));
+    const migrations = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../persistence/migrations"
+    );
+    const dbPath = path.join(dir, "app.db");
+    try {
+      const firstDb = openDb(dbPath, migrations).sqlite;
+      const firstStore = new DaintreeLocalStore(firstDb);
+      const first = await harness({ store: firstStore });
+      first.connection.start();
+      const socket = await connectLive(first);
+      socket.event(1);
+      socket.event(2);
+      await socket.waitFor((frame) => frame.t === "ack" && frame.seq === 2);
+      first.connection.stop();
+      await firstStore.close();
+      firstDb.close();
+
+      const secondDb = openDb(dbPath, migrations).sqlite;
+      const secondStore = new DaintreeLocalStore(secondDb);
+      const second = await harness({ store: secondStore });
+      second.connection.start();
+      const next = await second.relay.socket(0);
+      next.accept(2);
+      expect(await next.waitFor((frame) => frame.t === "sync")).toEqual({ t: "sync", after: 2 });
+      second.connection.stop();
+      await secondStore.close();
+      secondDb.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
