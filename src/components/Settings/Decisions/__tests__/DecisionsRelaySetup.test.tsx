@@ -83,7 +83,7 @@ async function checkAddress(result: ClaimState, typed = ORIGIN) {
 }
 
 function secretField(): HTMLInputElement {
-  return document.querySelector("#decisions-claim-secret input[type=password]") as HTMLInputElement;
+  return document.querySelector<HTMLInputElement>("#decisions-claim-secret input[type=password]")!;
 }
 
 function passphraseField(): HTMLInputElement {
