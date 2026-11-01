@@ -354,6 +354,8 @@ describe("DecisionsService store", () => {
     finishClose();
     await stopping;
     expect(states).toEqual(["not-connected", "off"]);
+  });
+});
 
 describe("DecisionsService pane state", () => {
   function withPushes() {
