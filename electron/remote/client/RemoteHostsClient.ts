@@ -208,11 +208,13 @@ export interface RemoteHostsClientOptions {
   /** How long a switch naming no project waits to hear whether the host has a copy of the window's. */
   copyLookupTimeoutMs?: number;
   /**
-   * Whether this machine is checking on or starting Daintree on the host
-   * right now (a reboot or power cut left it stopped). A wait for the link
-   * goes on while it is, up to {@link STARTING_TIMEOUT_MS}.
+   * Whether this machine is starting Daintree on the host right now (a
+   * reboot or power cut left it stopped). A wait for the link goes on while
+   * it is, up to {@link STARTING_TIMEOUT_MS}.
    */
   isStarting?: (hostId: HostId) => boolean;
+  /** A person asked to try the host again: what was last found there no longer stands. */
+  onRetry?: (hostId: HostId) => void;
   /** How long forgetting a host waits for each of its windows to come back here. */
   forgetSwitchWaitMs?: number;
   /** After a host is forgotten: drop what this machine kept for it (SSH master, cached bundles). */
@@ -665,6 +667,7 @@ export class RemoteHostsClient {
     if (this.retiring.has(hostId)) return this.options.manager.connectionState(hostId);
     this.ensureRouter();
     this.disconnectedByPerson.delete(hostId);
+    if (payload.restart === true) this.options.onRetry?.(hostId);
     return this.options.manager.connect(hostId, { restart: payload.restart === true }).state();
   }
 

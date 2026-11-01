@@ -79,9 +79,10 @@ import { RemoteRouterImpl, type SenderLookup } from "./RemoteRouter.js";
 import { answerReverseRequest } from "./reverseRequests.js";
 import { requireSupportedConnection } from "./connection.js";
 import { SshTransport } from "./sshTransport.js";
+import { HostStarts } from "./hostStarts.js";
 import { WslKeepalive } from "./wslKeepalive.js";
 import { WslTransport } from "./wslTransport.js";
-import { TransportError, UnusableConnectionError, type LinkTransport } from "./transport.js";
+import { UnusableConnectionError, type LinkTransport } from "./transport.js";
 import { WindowHostBinding } from "./WindowHostBinding.js";
 import { defaultCommandRunner } from "./commandRunner.js";
 import { readOrCreateDeviceId } from "./deviceId.js";
@@ -760,8 +761,6 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   // Remote windows' titles name their host as it is called now.
   setRemoteHostNameResolver((hostId) => registry.get(hostId)?.name ?? null);
   const stopTitleRefresh = registry.onChange(refreshWindowTitles);
-  /** Hosts whose Daintree this machine is checking on or starting over ssh, by attempts in flight. */
-  const startingHosts = new Map<HostId, number>();
   const clientDir = path.join(app.getPath("userData"), "rh");
   const wslKeepalive = new WslKeepalive();
   // Bound below: the sink needs the router's answer, the router needs the manager.
@@ -780,7 +779,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
           // A dial while the host is removed or re-pointed (a notification, an
           // update's reconnect) would hold the old distro after its release.
           { keepalive: wslKeepalive, isRetiring: (connection) => client.isRetiring(connection) },
-          (signal) => ensureHostRunning(descriptor.id, descriptor.connection, signal)
+          (signal) => starts.ensureRunning(descriptor.id, descriptor.connection, signal)
         )),
     handshake: getLocalHandshakeInfo,
     client: {
@@ -822,34 +821,20 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       await forgetHostState(before.id, HOST_STATE_CLEANUPS);
       await setup.forgetArtifacts(before);
     },
-    isStarting: (hostId) => (startingHosts.get(hostId) ?? 0) > 0,
+    isStarting: (hostId) => starts.isStarting(hostId),
     isInstalling: (connection) => setup.isInstallRunning(connection),
+    onRetry: (hostId) => recheckStart(hostId),
   });
-  /**
-   * A host reachable over ssh whose Daintree isn't serving (a reboot, a power
-   * cut) is started rather than reported unreachable; its own reason for not
-   * starting is what the user sees.
-   */
-  const ensureHostRunning = async (
-    hostId: HostId,
-    connection: HostConnection,
-    signal: AbortSignal
-  ): Promise<boolean> => {
-    startingHosts.set(hostId, (startingHosts.get(hostId) ?? 0) + 1);
-    client.refreshPendingSwitches(hostId);
-    try {
-      return (await setup.ensureHostRunning(connection, signal)) !== "not-startable";
-    } catch (error) {
-      const reason = isAppError(error)
-        ? (error.userMessage ?? error.message)
-        : formatErrorMessage(error, "Daintree couldn't be started on the host");
-      throw new TransportError(reason, reason);
-    } finally {
-      const left = (startingHosts.get(hostId) ?? 1) - 1;
-      if (left > 0) startingHosts.set(hostId, left);
-      else startingHosts.delete(hostId);
-      client.refreshPendingSwitches(hostId);
-    }
+  const starts = new HostStarts({
+    setup: {
+      ensureHostRunning: (connection, signal, onStart) =>
+        setup.ensureHostRunning(connection, signal, onStart),
+    },
+    onChange: (hostId) => client.refreshPendingSwitches(hostId),
+  });
+  const recheckStart = (hostId: HostId): void => {
+    const descriptor = registry.get(hostId);
+    if (descriptor) setup.recheckStart(descriptor.connection);
   };
   const setup: HostSetupService = new HostSetupService({
     run: defaultCommandRunner,
@@ -931,6 +916,10 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     isRetiring: (connection) => client.isRetiring(connection),
     wslKeepalive,
   });
+  // A host whose Daintree answered is checked afresh the next time it isn't serving.
+  const stopStartRechecks = manager.onStateChange((hostId, state) => {
+    if (state.status === "connected") recheckStart(hostId);
+  });
   const stopOwnedHostCleanup = watchOwnedHostCleanup({
     list: () => registry.list(),
     forget: (hostId) => client.forget({ hostId }),
@@ -953,6 +942,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     registry,
     async dispose() {
       stopWakeWatch();
+      stopStartRechecks();
       stopOwnedHostCleanup();
       unregister();
       unregisterWindowHosts();

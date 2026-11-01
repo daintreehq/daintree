@@ -21,6 +21,7 @@ import {
   TransportError,
   connectUnixSocket,
   isSshAccessDenied,
+  type LinkOpenOptions,
   type LinkTransport,
   type LinkTransportConnection,
 } from "./transport.js";
@@ -84,9 +85,10 @@ export interface SshTransportOptions {
   /** Remote userData directory name on macOS (the packaged app's by default). */
   macAppDirName?: string;
   /**
-   * Called once when ssh reached the host but Daintree there didn't answer:
-   * start it if it can be (installed, Host mode last on), resolving true when
-   * the link should be tried again. Rejects with why it couldn't start.
+   * Called once when ssh reached the host but Daintree there didn't answer,
+   * unless the dial says the host may not be started: start it if it can be
+   * (installed, Host mode last on), resolving true when the link should be
+   * tried again. Rejects with why it couldn't start.
    */
   ensureRunning?: (signal: AbortSignal) => Promise<boolean>;
   linuxDirName?: string;
@@ -714,14 +716,14 @@ export class SshTransport implements LinkTransport {
     return this.lastRoute;
   }
 
-  async open(signal: AbortSignal): Promise<LinkTransportConnection> {
+  async open(signal: AbortSignal, options?: LinkOpenOptions): Promise<LinkTransportConnection> {
     let reached = false;
     try {
       return await this.openOnce(signal, () => (reached = true));
     } catch (error) {
       // ssh itself failing (unreachable, refused key) is not Daintree being down.
       const ensureRunning = this.options.ensureRunning;
-      if (!reached || !ensureRunning || signal.aborted) throw error;
+      if (!reached || !ensureRunning || options?.mayStart === false || signal.aborted) throw error;
       if (error instanceof DiscoveryRejectedError) throw error;
       if (!(await ensureRunning(signal))) throw error;
       return this.openOnce(signal, () => {});
