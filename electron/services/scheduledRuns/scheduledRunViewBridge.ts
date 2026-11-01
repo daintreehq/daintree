@@ -5,7 +5,10 @@ import { thawThenSend } from "../../utils/thawThenSend.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
 import type { ScheduledLaunchViewRequest } from "../../../shared/types/ipc/schedules.js";
-import { ScheduledLaunchUnansweredError, type ScheduledLaunchRequest } from "./ScheduledRunLauncher.js";
+import {
+  ScheduledLaunchUnansweredError,
+  type ScheduledLaunchRequest,
+} from "./ScheduledRunLauncher.js";
 
 /**
  * Main asks the view showing a project to launch a scheduled run (#15978):
@@ -94,7 +97,13 @@ export function requestScheduledLaunchInView(
         new ScheduledLaunchUnansweredError("The window showing the project closed.")
       );
     });
-    pendingLaunches.set(requestId, { webContentsId: webContents.id, resolve, reject, timer, unwatch });
+    pendingLaunches.set(requestId, {
+      webContentsId: webContents.id,
+      resolve,
+      reject,
+      timer,
+      unwatch,
+    });
     const payload: ScheduledLaunchViewRequest = {
       requestId,
       args: { ...request.args },

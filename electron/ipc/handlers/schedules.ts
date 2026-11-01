@@ -169,9 +169,8 @@ async function handleSetEnabled(
  */
 async function handleRunNow(ctx: IpcContext, scheduleId: string): Promise<ScheduleRunNowOutcome> {
   const projectId = requireSenderProjectId(ctx);
-  const { launchScheduledRunLive, RUN_NOW_ORIGIN } = await import(
-    "../../services/scheduledRuns/scheduledRunLaunchLive.js"
-  );
+  const { launchScheduledRunLive, RUN_NOW_ORIGIN } =
+    await import("../../services/scheduledRuns/scheduledRunLaunchLive.js");
   return launchScheduledRunLive({
     projectId,
     scheduleId: parsed(ScheduleIdShape, scheduleId, "scheduleId must name a schedule"),

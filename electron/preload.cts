@@ -2005,9 +2005,8 @@ function buildElectronApi(): ElectronAPI {
       onChanged: (callback: (snapshot: IpcEventMap["schedules:changed"]) => void) =>
         _typedOn(CHANNELS.SCHEDULES_CHANGED, callback),
 
-      onLaunchRequest: (
-        callback: (request: IpcEventMap["schedules:launch-request"]) => void
-      ) => _typedOn(CHANNELS.SCHEDULES_LAUNCH_REQUEST, callback),
+      onLaunchRequest: (callback: (request: IpcEventMap["schedules:launch-request"]) => void) =>
+        _typedOn(CHANNELS.SCHEDULES_LAUNCH_REQUEST, callback),
 
       sendLaunchResponse: (
         response: import("../shared/types/ipc/schedules.js").ScheduledLaunchViewResponse

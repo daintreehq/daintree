@@ -32,7 +32,10 @@ import {
   _resetScheduledRunViewBridgeForTest,
   requestScheduledLaunchInView,
 } from "../scheduledRunViewBridge.js";
-import { ScheduledLaunchUnansweredError, type ScheduledLaunchRequest } from "../ScheduledRunLauncher.js";
+import {
+  ScheduledLaunchUnansweredError,
+  type ScheduledLaunchRequest,
+} from "../ScheduledRunLauncher.js";
 
 const request: ScheduledLaunchRequest = {
   args: {
