@@ -77,7 +77,7 @@ export const APP_THEME_TOKEN_KEYS = [
   "status-warning-surface",
   "status-info-surface",
   // Status text: text-grade twins of the status inks for status-coloured small
-  // text such as git status letters. Derived by deriveStatusTextInk (contrast.ts).
+  // text such as git status letters. Derived by deriveStatusTextInks (themes.ts).
   "status-danger-text",
   "status-success-text",
   "status-warning-text",
@@ -96,6 +96,12 @@ export const APP_THEME_TOKEN_KEYS = [
   "activity-working",
   "activity-waiting",
   "activity-completed",
+  // Activity text: text-grade twins of the activity inks for status sentences in
+  // an activity hue, such as the project switcher's. Derived by
+  // deriveActivityTextInks (themes.ts).
+  "activity-working-text",
+  "activity-waiting-text",
+  "activity-completed-text",
 
   // Overlay ladder
   // overlay-base is the tint color for the ladder (default: white dark / black light).

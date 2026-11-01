@@ -8,11 +8,14 @@ import type {
 import type { ThemePalette, ThemeStrategy } from "./palette.js";
 import type { ExtensionKey } from "./types.js";
 import {
+  ACTIVITY_TEXT_INKS,
+  ACTIVITY_TEXT_MIN_CONTRAST,
   DESTRUCTIVE_BUTTON_CONTRAST,
   DIFF_TEXT_MIN_CONTRAST,
   STATUS_TEXT_CONTRAST,
   STATUS_TEXT_INKS,
   getThemeContrastWarnings,
+  resolveActivityTextBackdrops,
   resolveDiffTextBackdrops,
   resolveStatusTextBackdrops,
 } from "./contrast.js";
@@ -423,6 +426,10 @@ export function createDaintreeTokens(
     "status-success-text": tokens["status-success"],
     "status-warning-text": tokens["status-warning"],
     "status-info-text": tokens["status-info"],
+    // Lifted below, against the same rows plus the project switcher's.
+    "activity-working-text": tokens["activity-working"],
+    "activity-waiting-text": tokens["activity-waiting"],
+    "activity-completed-text": tokens["activity-completed"] ?? tokens["status-success"],
     // Derived below, from the final danger ink and text tokens.
     "destructive-fill": tokens["status-danger"],
     "destructive-fill-hover": tokens["status-danger"],
@@ -432,6 +439,7 @@ export function createDaintreeTokens(
   };
   followStatusForDiffText(resolved, tokens, type);
   followStatusForText(resolved, tokens, type);
+  followActivityForText(resolved, tokens, type);
   followDangerForDestructive(resolved, tokens, type);
   return resolved;
 }
@@ -686,6 +694,7 @@ function followRaisedForHighlight(
 // from `blendOverBackground`.
 const DIFF_TEXT_DERIVATION_TARGET = DIFF_TEXT_MIN_CONTRAST + 0.05;
 const STATUS_TEXT_DERIVATION_TARGET = STATUS_TEXT_CONTRAST.minimum + 0.05;
+const ACTIVITY_TEXT_DERIVATION_TARGET = ACTIVITY_TEXT_MIN_CONTRAST + 0.05;
 
 const DIFF_TEXT_SOURCES = [
   ["diff-text-insert", "status-success"],
@@ -693,6 +702,7 @@ const DIFF_TEXT_SOURCES = [
 ] as const;
 
 type StatusTextKey = (typeof STATUS_TEXT_INKS)[keyof typeof STATUS_TEXT_INKS];
+type ActivityTextKey = (typeof ACTIVITY_TEXT_INKS)[keyof typeof ACTIVITY_TEXT_INKS];
 
 /**
  * DiffStat's churn inks: each status ink lifted to the nearest lightness that
@@ -762,6 +772,43 @@ function followStatusForText(
 ): void {
   const inks = deriveStatusTextInks(tokens as Partial<Record<AppThemeTokenKey, string>>, type);
   for (const key of Object.values(STATUS_TEXT_INKS)) {
+    if (typeof overrides?.[key] === "string") continue;
+    if (inks[key] !== undefined) tokens[key] = inks[key];
+  }
+}
+
+/**
+ * The activity sentence inks, lifted the same way against the status text rows
+ * and the project switcher's, where the sentences actually print (#15866).
+ */
+export function deriveActivityTextInks(
+  tokens: Partial<Record<AppThemeTokenKey, string>>,
+  type: "dark" | "light"
+): Partial<Pick<AppColorSchemeTokens, ActivityTextKey>> {
+  const backdrops = resolveActivityTextBackdrops(tokens, type).map((backdrop) => backdrop.hex);
+  const inks: Partial<Pick<AppColorSchemeTokens, ActivityTextKey>> = {};
+  for (const [source, key] of Object.entries(ACTIVITY_TEXT_INKS) as Array<
+    [keyof typeof ACTIVITY_TEXT_INKS, ActivityTextKey]
+  >) {
+    const ink = tokens[source];
+    if (typeof ink !== "string") continue;
+    let lifted = liftToContrast(ink, backdrops, ACTIVITY_TEXT_DERIVATION_TARGET, type);
+    // A custom surface can leave room for the floor but not the headroom over it;
+    // the floor still holds, and the gate would otherwise reject a repairable ink.
+    if (lifted === ink) lifted = liftToContrast(ink, backdrops, ACTIVITY_TEXT_MIN_CONTRAST, type);
+    inks[key] = lifted;
+  }
+  return inks;
+}
+
+/** The activity sentence inks follow their activity inks the same way. */
+function followActivityForText(
+  tokens: Record<string, unknown>,
+  overrides: Record<string, unknown> | undefined,
+  type: "dark" | "light"
+): void {
+  const inks = deriveActivityTextInks(tokens as Partial<Record<AppThemeTokenKey, string>>, type);
+  for (const key of Object.values(ACTIVITY_TEXT_INKS)) {
     if (typeof overrides?.[key] === "string") continue;
     if (inks[key] !== undefined) tokens[key] = inks[key];
   }
@@ -860,6 +907,7 @@ function createThemeFromSource(source: BuiltInThemeSource): AppColorScheme {
   if (source.tokens) followRaisedForHighlight(tokens, source.tokens, source.type);
   if (source.tokens) followStatusForDiffText(tokens, source.tokens, source.type);
   if (source.tokens) followStatusForText(tokens, source.tokens, source.type);
+  if (source.tokens) followActivityForText(tokens, source.tokens, source.type);
   if (source.tokens) followDangerForDestructive(tokens, source.tokens, source.type);
   const extensions = resolveStrategyExtensions(source.palette, source.extensions);
 
@@ -1307,6 +1355,7 @@ export function normalizeAppColorScheme(
   followRaisedForHighlight(normalizedTokens, tokenOverrides, resolvedType);
   followStatusForDiffText(normalizedTokens, tokenOverrides, resolvedType);
   followStatusForText(normalizedTokens, tokenOverrides, resolvedType);
+  followActivityForText(normalizedTokens, tokenOverrides, resolvedType);
   if (
     typeof tokenOverrides["accent-foreground"] !== "string" &&
     typeof normalizedTokens["accent-primary"] === "string"

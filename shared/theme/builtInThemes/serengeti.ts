@@ -90,6 +90,9 @@ export const theme: BuiltInThemeSource = {
     },
   },
   tokens: {
+    // Parted from the working green it would otherwise share through
+    // `status-success`, as in bondi (#15866): ΔE 0.101.
+    "activity-completed": "#3C5C32",
     "accent-muted": "rgba(139,109,8,0.30)",
     "accent-soft": "rgba(139,109,8,0.18)",
     // Solid so the field edge clears 3:1 on every surface a field sits on

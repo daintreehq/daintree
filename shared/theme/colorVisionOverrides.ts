@@ -9,6 +9,7 @@
  */
 
 import {
+  ACTIVITY_TEXT_INKS,
   STATUS_INK_CONTRAST,
   STATUS_TEXT_INKS,
   SYNTAX_CANVAS_FLOORS,
@@ -16,7 +17,12 @@ import {
   isHexColor,
 } from "./contrast.js";
 import { liftToContrast } from "./oklch.js";
-import { deriveDestructiveAction, deriveDiffTextInks, deriveStatusTextInks } from "./themes.js";
+import {
+  deriveActivityTextInks,
+  deriveDestructiveAction,
+  deriveDiffTextInks,
+  deriveStatusTextInks,
+} from "./themes.js";
 import type { AppColorScheme, AppThemeTokenKey, ColorVisionMode } from "./types.js";
 
 // Status base token -> its derived surface-wash token. When CVD mode patches a
@@ -41,6 +47,15 @@ const STATUS_TEXT_TOKENS: Record<string, string> = {
   "--theme-status-warning": "--theme-status-warning-text",
   "--theme-status-info": "--theme-status-info-text",
 };
+
+// Activity ink -> its text-grade twin, which the switcher's status sentences
+// paint. Lifted the same way as the status letter inks above.
+const ACTIVITY_TEXT_TOKENS: Record<string, string> = Object.fromEntries(
+  Object.entries(ACTIVITY_TEXT_INKS).map(([activity, text]) => [
+    `--theme-${activity}`,
+    `--theme-${text}`,
+  ])
+);
 
 // Wash alpha for the derived surfaces. The engine uses 0.10 (dark) / 0.08
 // (light); these static overrides apply across both polarities, and the
@@ -105,7 +120,10 @@ function withStatusSurfaces(overrides: Record<string, string>): Record<string, s
     const hex = overrides[baseToken];
     if (hex) result[surfaceToken] = hexToRgba(hex, CVD_STATUS_SURFACE_ALPHA);
   }
-  for (const [baseToken, textToken] of Object.entries(STATUS_TEXT_TOKENS)) {
+  for (const [baseToken, textToken] of Object.entries({
+    ...STATUS_TEXT_TOKENS,
+    ...ACTIVITY_TEXT_TOKENS,
+  })) {
     const hex = overrides[baseToken];
     if (hex) result[textToken] = hex;
   }
@@ -202,12 +220,15 @@ const COLOR_VISION_OVERRIDES: Partial<Record<ColorVisionMode, Record<string, str
   "blue-yellow": BLUE_YELLOW_OVERRIDES,
 };
 
-// Each text ink lifted from a status ink, beside the status ink it follows.
+// Each text ink lifted from a status or activity ink, beside the ink it follows.
 const LIFTED_TEXT_INKS: ReadonlyArray<readonly [AppThemeTokenKey, AppThemeTokenKey]> = [
   ["diff-text-insert", "status-success"],
   ["diff-text-delete", "status-danger"],
   ...(Object.entries(STATUS_TEXT_INKS) as Array<[AppThemeTokenKey, AppThemeTokenKey]>).map(
     ([status, text]) => [text, status] as const
+  ),
+  ...(Object.entries(ACTIVITY_TEXT_INKS) as Array<[AppThemeTokenKey, AppThemeTokenKey]>).map(
+    ([activity, text]) => [text, activity] as const
   ),
 ];
 
@@ -220,9 +241,9 @@ const FIT_HEADROOM = 0.05;
  * token for both polarities, so each syntax and graphical status ink a mode swaps
  * in is moved along lightness, at its own hue, until it holds the floor this
  * theme's own ink is held to on this theme's surfaces (#15580). The text inks and
- * the destructive fill that follow a status ink are then derived from the ink the
- * mode actually paints, the way the theme derives its own; one whose status ink
- * the mode leaves alone keeps the theme's. Without a scheme the map's raw values
+ * the destructive fill that follow a status or activity ink are then derived from
+ * the ink the mode actually paints, the way the theme derives its own; one whose
+ * source ink the mode leaves alone keeps the theme's. Without a scheme the map's raw values
  * are all there is.
  */
 export function getColorVisionWrites(
@@ -265,6 +286,7 @@ export function getColorVisionWrites(
   const inks: Partial<Record<AppThemeTokenKey, string>> = {
     ...deriveDiffTextInks(effective, scheme.type),
     ...deriveStatusTextInks(effective, scheme.type),
+    ...deriveActivityTextInks(effective, scheme.type),
   };
   for (const [token, status] of LIFTED_TEXT_INKS) {
     const ink = inks[token];
