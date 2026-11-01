@@ -45,8 +45,8 @@ export interface SleepProjectDependencies {
  * included, because that is what was asked for.
  *
  * `"policy"` is the app deciding on its own (idle auto-close). It never
- * destroys a view an MCP dispatch is waiting on, and it re-asks the policy at
- * every await, so a project the user picks up mid-sleep is left alone. The
+ * destroys a view an MCP dispatch is waiting on or a dictation still needs,
+ * and it re-asks the policy at every await, so a project the user picks up mid-sleep is left alone. The
  * policy owns its own eligibility; Sleep only owns the order it is asked in.
  */
 export type SleepProjectOptions =
@@ -62,7 +62,10 @@ export type SleepProjectOptions =
     };
 
 /** Why a policy can't go on right now. */
-type PolicyRefusal = "mcp-dispatch" | "ineligible" | PanelRecoveryHold;
+type PolicyRefusal = ViewRefusal | "ineligible" | PanelRecoveryHold;
+
+/** What a project's view is doing that an automatic teardown waits out. */
+type ViewRefusal = "mcp-dispatch" | "dictation";
 
 export type SleepProjectOutcome =
   | ({ status: "slept" } & ProjectSleepResult)
@@ -72,6 +75,8 @@ export type SleepProjectOutcome =
       /**
        * `in-flight`: another sleep of this project is already running.
        * `mcp-dispatch`: an MCP dispatch is waiting on one of its views.
+       * `dictation`: a dictation session, or the cleanup after its stop, still
+       * needs one of its views.
        * `ineligible`: the policy said no at a later check.
        * `panel-unrecoverable` / `panel-unknown`: a view holds work recovery
        * storage would not bring back, or could not say whether it does.
@@ -171,8 +176,7 @@ async function runSleep(
   const policyRefusal = (): PolicyRefusal | null => {
     if (!policy) return null;
     if (!policy.isStillEligible()) return "ineligible";
-    if (isMcpDispatchProtected(projectId, deps.projectViewManagers)) return "mcp-dispatch";
-    return null;
+    return viewRefusal(projectId, deps.projectViewManagers);
   };
   // A user's Sleep goes through unsaved work on purpose; an automatic one has
   // no one to have asked, so it waits for the view to say it holds nothing a
@@ -414,25 +418,30 @@ async function runSleep(
 }
 
 /**
- * Is an MCP dispatch waiting on this project's view in any window, or can that
- * not be ruled out? An unreadable window list counts as yes: the only caller
- * that asks is a policy, and a policy can always try again next sweep.
+ * What this project's view in any window is still doing that destroying it
+ * would end: an MCP dispatch waiting on it, or a dictation whose session or
+ * post-stop cleanup writes into it (#15920). Eviction and freezing already
+ * leave a dictation's view alone. A window list or a window that can't be
+ * read counts as a dispatch that can't be ruled out: the only caller that
+ * asks is a policy, and a policy can always try again next sweep.
  */
-function isMcpDispatchProtected(projectId: string, provider: ProjectViewManagersProvider): boolean {
+function viewRefusal(projectId: string, provider: ProjectViewManagersProvider): ViewRefusal | null {
   let managers;
   try {
     managers = provider();
   } catch (error) {
     logError("project-sleep-window-provider-failed", error, { projectId });
-    return true;
+    return "mcp-dispatch";
   }
-  return managers.some((manager) => {
+  for (const manager of managers) {
     try {
-      return manager.isMcpDispatchProtected(projectId);
+      if (manager.isMcpDispatchProtected(projectId)) return "mcp-dispatch";
+      if (manager.isDictationHeld(projectId)) return "dictation";
     } catch {
-      return true;
+      return "mcp-dispatch";
     }
-  });
+  }
+  return null;
 }
 
 /**
