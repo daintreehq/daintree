@@ -118,8 +118,7 @@ export interface ScheduledRunLaunchInput {
  * carries no occurrence, so it never sees it.
  */
 export type ScheduledRunLaunchOutcome =
-  | ScheduleRunNowOutcome
-  | { status: "already-recorded"; runId: string };
+  ScheduleRunNowOutcome | { status: "already-recorded"; runId: string };
 
 const DEFAULT_SPAWN_TIMEOUT_MS = 60_000;
 const DEFAULT_ANSWER_TIMEOUT_MS = 60_000;
@@ -284,8 +283,7 @@ async function launchInScheduleTurn<View>(
       const openRunIds = openRuns.map((run) => run.id);
       const confirmed = input.overlapConfirmed;
       const agreed =
-        confirmed?.policy === policy &&
-        openRunIds.every((id) => confirmed.openRunIds.includes(id));
+        confirmed?.policy === policy && openRunIds.every((id) => confirmed.openRunIds.includes(id));
       if (!agreed) return { status: "confirm-overlap", policy, openRunIds };
       // Agreeing to a skip is running anyway, alongside.
       if (policy === "replace") replacing = openRuns;
@@ -537,7 +535,10 @@ async function replaceOpenRuns<View>(
         await Promise.race([
           replacement.gone,
           new Promise<void>((resolve) => {
-            timer = setTimeout(resolve, deps.replaceExitTimeoutMs ?? DEFAULT_REPLACE_EXIT_TIMEOUT_MS);
+            timer = setTimeout(
+              resolve,
+              deps.replaceExitTimeoutMs ?? DEFAULT_REPLACE_EXIT_TIMEOUT_MS
+            );
           }),
         ]);
         clearTimeout(timer);

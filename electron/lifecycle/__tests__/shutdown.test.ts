@@ -107,7 +107,10 @@ const schedulePreconditionsMock = vi.hoisted(() => ({
   disposeSchedulePreconditions: vi.fn(),
 }));
 
-vi.mock("../../services/scheduledRuns/scheduledRunPrecondition.js", () => schedulePreconditionsMock);
+vi.mock(
+  "../../services/scheduledRuns/scheduledRunPrecondition.js",
+  () => schedulePreconditionsMock
+);
 
 const mcpServerMock = vi.hoisted(() => ({
   stop: vi.fn(() => Promise.resolve()),

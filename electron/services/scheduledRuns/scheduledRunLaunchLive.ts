@@ -129,7 +129,10 @@ async function liveDeps(): Promise<ScheduledRunLauncherDeps<Electron.WebContents
     runPrecondition: async ({ projectId, command, cwd, signal }) => {
       // The variables the user set for terminals, as a project command gets them.
       const layers = await readProjectCommandEnvLayers(projectId).catch((error: unknown) => {
-        console.warn("[ScheduledRuns] Couldn't read environment variables for a precondition:", error);
+        console.warn(
+          "[ScheduledRuns] Couldn't read environment variables for a precondition:",
+          error
+        );
         return null;
       });
       return runSchedulePrecondition({

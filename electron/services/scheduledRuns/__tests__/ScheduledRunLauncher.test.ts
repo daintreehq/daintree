@@ -921,7 +921,11 @@ describe("launchScheduledRun's overlap policy and precondition", () => {
     const first = launchWith(SCHEDULED);
     await vi.waitFor(() => expect(deps.runPrecondition).toHaveBeenCalledTimes(1));
 
-    const other = { ...schedule, id: "schedule-2", policies: { ...schedule.policies, precondition: null } };
+    const other = {
+      ...schedule,
+      id: "schedule-2",
+      policies: { ...schedule.policies, precondition: null },
+    };
     deps.getSchedule = async (_projectId, scheduleId) =>
       scheduleId === "schedule-2" ? other : schedule;
     await expect(

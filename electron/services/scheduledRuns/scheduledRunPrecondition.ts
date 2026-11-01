@@ -73,9 +73,7 @@ function describeSeconds(ms: number): string {
 export async function runSchedulePrecondition(
   request: PreconditionRequest
 ): Promise<PreconditionSkipReason | null> {
-  const skip = (
-    fields: Partial<Omit<PreconditionSkipReason, "kind">>
-  ): PreconditionSkipReason => ({
+  const skip = (fields: Partial<Omit<PreconditionSkipReason, "kind">>): PreconditionSkipReason => ({
     kind: "precondition",
     exitCode: null,
     signal: null,

@@ -32,9 +32,7 @@ export const schedulesClient = {
    * `confirm-overlap` outcome.
    */
   runNow: (id: string, options?: ScheduleRunNowOptions): Promise<ScheduleRunNowOutcome> =>
-    options
-      ? window.electron.schedules.runNow(id, options)
-      : window.electron.schedules.runNow(id),
+    options ? window.electron.schedules.runNow(id, options) : window.electron.schedules.runNow(id),
   onChanged: (callback: (snapshot: SchedulesSnapshot) => void): (() => void) =>
     window.electron.schedules.onChanged(callback),
   /** The project's recorded runs, newest first (#15976). */

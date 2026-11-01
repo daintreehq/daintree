@@ -183,8 +183,18 @@ export interface BoundedProcessOptions {
  * the child could not be spawned or errored before exiting.
  */
 export function runBoundedProcess(options: BoundedProcessOptions): Promise<BoundedProcessOutcome> {
-  const { command, executable, cwd, env, timeoutMs, maxOutputBytes, label, logPrefix, signal, slot } =
-    options;
+  const {
+    command,
+    executable,
+    cwd,
+    env,
+    timeoutMs,
+    maxOutputBytes,
+    label,
+    logPrefix,
+    signal,
+    slot,
+  } = options;
   return new Promise<BoundedProcessOutcome>((resolve, reject) => {
     const useGroup = process.platform !== "win32";
     const tail = new OutputTail(maxOutputBytes + SCRUB_OVERLAP_BYTES);

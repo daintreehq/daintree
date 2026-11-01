@@ -16,7 +16,10 @@ const dispatch = vi.hoisted(() =>
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 
 const panels = vi.hoisted(() => ({
-  panelsById: {} as Record<string, { id: string; scheduledRun?: { scheduleId: string; runId: string } }>,
+  panelsById: {} as Record<
+    string,
+    { id: string; scheduledRun?: { scheduleId: string; runId: string } }
+  >,
   removePanel: vi.fn(),
 }));
 
@@ -120,8 +123,14 @@ describe("useScheduledRunLaunchBridge", () => {
 
   it("drops the pane of a run main closed to replace it, leaving its backend alone (#15980)", () => {
     panels.panelsById = {
-      "terminal-1": { id: "terminal-1", scheduledRun: { scheduleId: "schedule-1", runId: "run-1" } },
-      "terminal-2": { id: "terminal-2", scheduledRun: { scheduleId: "schedule-1", runId: "run-2" } },
+      "terminal-1": {
+        id: "terminal-1",
+        scheduledRun: { scheduleId: "schedule-1", runId: "run-1" },
+      },
+      "terminal-2": {
+        id: "terminal-2",
+        scheduledRun: { scheduleId: "schedule-1", runId: "run-2" },
+      },
       "terminal-3": { id: "terminal-3" },
     };
     renderHook(() => useScheduledRunLaunchBridge());
