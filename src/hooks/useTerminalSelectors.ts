@@ -10,11 +10,10 @@ import { isTerminalOrphaned, isTerminalVisible } from "@/lib/terminalVisibility"
 import { isTerminalErrorClusterEligible } from "@/store/fleetEligibility";
 import { isAskingWait } from "@/lib/handBackPresentation";
 import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
-import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import { useFleetBandRunIds } from "@/hooks/useRunFleetBand";
 import {
   ATTENTION_FILTER_BANDS,
   DEMAND_BANDS,
-  fleetBandRunKey,
   UNREAD_FILTER_BANDS,
   type FleetBand,
 } from "@/lib/fleetAttention";
@@ -94,14 +93,7 @@ export function useTerminalNotificationCounts(blurTime?: number | null): {
   );
 }
 
-const EMPTY_RUN_IDS: ReadonlySet<string> = new Set();
 const EMPTY_TERMINALS: PtyPanelData[] = [];
-
-/** Runs the fleet places in `bands`. Stable across fleet pushes that leave the set alone. */
-function useFleetBandRunIds(bands: ReadonlySet<FleetBand>): ReadonlySet<string> {
-  const key = useFleetSnapshotStore((s) => fleetBandRunKey(s.snapshot, bands));
-  return useMemo(() => (key === "" ? EMPTY_RUN_IDS : new Set(key.split("\n"))), [key]);
-}
 
 /**
  * Visible terminals whose fleet run sits in `bands`, so the dock's pills hold

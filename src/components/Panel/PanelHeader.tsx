@@ -100,8 +100,9 @@ import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { TabButton, type TabInfo } from "./TabButton";
 import { HiddenTabMenuItem } from "./HiddenTabMenuItem";
-import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
-import { isAskingWait } from "@/lib/handBackPresentation";
+import { useFleetBandRunIds } from "@/hooks/useRunFleetBand";
+import { NEEDS_YOU_BANDS } from "@/lib/fleetAttention";
+import { isNeedsYouPane } from "@/lib/paneSessionPresentation";
 import { SortableTabButton } from "./SortableTabButton";
 import { TAB_DRAG_MODIFIERS } from "./tabDragModifiers";
 import { MoveToWorktreePicker } from "./MoveToWorktreePicker";
@@ -417,7 +418,7 @@ function PanelHeaderComponent({
   const { activeCount, workingCount, waitingCount } = useBackgroundPanelStats(id, isMaximized);
   const readoutRef = useRef<HTMLDivElement | null>(null);
   const readoutClear = useReadoutClearance(readoutRef, isMaximized && activeCount > 0);
-  const handBackRunIds = useHandBackRunIds();
+  const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
 
   // Check if panel has dangerous launch flags
   const hasDangerousFlags = (() => {
@@ -997,9 +998,9 @@ function PanelHeaderComponent({
   // A tab you cannot see can still be the one asking for you. The trigger wears
   // the same waiting mark the hidden tab would, so the strip never hides an
   // agent that needs input behind a bare chevron.
-  // A hand-back is not asking for anything, so it does not mark the chevron.
-  // Read off the panels themselves: an approval the renderer has just observed
-  // must count even while the fleet still holds the earlier hand-back.
+  // Only the fleet's needs-you band counts, the same call the pane's own edge
+  // makes: a prompt or a hand-back asks nothing, and a tab whose agent has
+  // gone back to work since the reading no longer asks either.
   const hiddenWaitingCount = usePanelStore((state) => {
     let count = 0;
     for (const tab of hiddenTabs) {
@@ -1007,7 +1008,7 @@ function PanelHeaderComponent({
       // glyph at the far right; it is not hidden work.
       if (tab.isActive) continue;
       const panel = state.panelsById[tab.id];
-      if (panel && isPtyPanel(panel) && isAskingWait(handBackRunIds, panel)) count++;
+      if (panel && isPtyPanel(panel) && isNeedsYouPane(needsYouRunIds, panel)) count++;
     }
     return count;
   });

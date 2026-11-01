@@ -3,15 +3,16 @@ import type { AgentState, AgentStateChangeTrigger } from "@/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
-  SESSION_ICONS,
-  SESSION_COLORS,
+  PANE_SESSION_ICONS,
+  PANE_SESSION_COLORS,
+  PANE_SESSION_LABELS,
   SESSION_LABELS,
 } from "@/components/Worktree/terminalStateConfig";
 import {
-  resolveSessionPresentation,
-  type SessionPresentationState,
-} from "@/lib/handBackPresentation";
-import { useRunHandBackState } from "@/hooks/useRunHandBackState";
+  resolvePaneSessionPresentation,
+  type PaneSessionPresentationState,
+} from "@/lib/paneSessionPresentation";
+import { useRunFleetBand } from "@/hooks/useRunFleetBand";
 import type { ActivityState } from "./TerminalPane";
 import { usePanelStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
@@ -49,14 +50,14 @@ export function AgentStateChip({
   agentState,
   ariaLabel,
 }: {
-  agentState: SessionPresentationState;
+  agentState: PaneSessionPresentationState;
   ariaLabel: string;
 }) {
-  const StateIcon = SESSION_ICONS[agentState];
+  const StateIcon = PANE_SESSION_ICONS[agentState];
   if (!StateIcon) return null;
   // Finished is white here rather than the settled grey it wears in lists: the
   // title bar shows one agent, and its ring has no chip around it to carry it.
-  const tone = agentState === "completed" ? "text-text-primary" : SESSION_COLORS[agentState];
+  const tone = agentState === "completed" ? "text-text-primary" : PANE_SESSION_COLORS[agentState];
   return (
     <div
       className={cn(
@@ -137,43 +138,48 @@ export function TerminalAgentIndicator({
   useGlobalMinuteTicker();
   const now = Date.now();
 
-  const handBack = useRunHandBackState(id);
+  const band = useRunFleetBand(id);
 
   if (!agentState || agentState === "idle") {
     return null;
   }
 
-  // The glyph follows the hand-back; `agentState` stays the observation.
-  const shownState = resolveSessionPresentation(agentState, rawAgentState, waitingReason, handBack);
-  const isHandBack = shownState !== agentState;
+  // The glyph follows the run's fleet band; `agentState` stays the observation.
+  const shownState = resolvePaneSessionPresentation(agentState, band, waitingReason);
+  const isReinterpreted = shownState !== agentState;
 
   // A settled agent only keeps its glyph while a session cost is on record;
   // without one the row's settled trace is the only mark. A live agent drawn
-  // settled by its hand-back keeps it.
+  // settled by its band keeps it.
   if (
-    !isHandBack &&
+    !isReinterpreted &&
     (agentState === "completed" || agentState === "exited") &&
     sessionCost == null
   ) {
     return null;
   }
 
-  if (!shownState || !SESSION_ICONS[shownState]) return null;
+  if (!shownState || !PANE_SESSION_ICONS[shownState]) return null;
 
   const showConfidence = stateChangeConfidence != null && stateChangeConfidence < 1;
-  const stateLabel = SESSION_LABELS[shownState];
+  const stateLabel = PANE_SESSION_LABELS[shownState];
   const observedLabel = SESSION_LABELS[rawAgentState ?? agentState];
   const headline = activity?.headline?.trim() || `Agent ${stateLabel}`;
   const exitStatus = isExited ? describeExitStatus(exitCode) : null;
   const showStateDuration =
-    (shownState === "working" || shownState === "waiting" || shownState === "directing") &&
+    (shownState === "working" ||
+      shownState === "waiting" ||
+      shownState === "blocked" ||
+      shownState === "directing") &&
     lastStateChange != null &&
     lastStateChange > 0 &&
     now - lastStateChange > 10_000;
   // Specific reasons only — the classifier's `prompt` fallback stays a
   // plain "waiting" so the chip never overclaims.
   const chipWaitingReason =
-    shownState === "waiting" ? actionableWaitingReason(waitingReason) : null;
+    shownState === "waiting" || shownState === "blocked"
+      ? actionableWaitingReason(waitingReason)
+      : null;
   const chipAriaLabel = chipWaitingReason
     ? `Agent state: ${stateLabel} (${WAITING_REASON_BADGE_LABEL[chipWaitingReason].toLowerCase()})`
     : `Agent state: ${stateLabel}`;
@@ -221,7 +227,9 @@ export function TerminalAgentIndicator({
             {stateChangeTrigger && <> · {TRIGGER_LABELS[stateChangeTrigger]}</>}
             {showConfidence && <> ({Math.round(stateChangeConfidence * 100)}%)</>}
           </span>
-          {isHandBack && <span className="text-text-secondary">Observed: {observedLabel}</span>}
+          {isReinterpreted && (
+            <span className="text-text-secondary">Observed: {observedLabel}</span>
+          )}
           {lastStateChange != null && lastStateChange > 0 && (
             <span className="text-text-secondary">Since: {formatTimeAgo(lastStateChange)}</span>
           )}

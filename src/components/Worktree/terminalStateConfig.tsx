@@ -7,9 +7,11 @@ import {
   DoneCircle,
   IdleCircle,
   UnreadCircle,
+  BlockedCircle,
 } from "@/components/icons";
 import { pluralize } from "@/lib/pluralize";
 import type { SessionPresentationState } from "@/lib/handBackPresentation";
+import type { PaneSessionPresentationState } from "@/lib/paneSessionPresentation";
 
 export const STATE_ICONS = {
   working: SpinnerCircle,
@@ -66,6 +68,26 @@ export const SESSION_LABELS = {
   ...STATE_LABELS,
   unread: "unread",
 } as const satisfies Record<SessionPresentationState, string>;
+
+/**
+ * The state maps for a pane header's glyph, which adds `blocked` for an error
+ * wait: the same failure mark and hue the header gives a plugin's failed
+ * activity, so an agent stopped on an error never wears the waiting ring.
+ */
+export const PANE_SESSION_ICONS = {
+  ...SESSION_ICONS,
+  blocked: BlockedCircle,
+} satisfies Record<PaneSessionPresentationState, React.ComponentType<{ className?: string }>>;
+
+export const PANE_SESSION_COLORS = {
+  ...SESSION_COLORS,
+  blocked: "text-status-error",
+} as const satisfies Record<PaneSessionPresentationState, string>;
+
+export const PANE_SESSION_LABELS = {
+  ...SESSION_LABELS,
+  blocked: "blocked",
+} as const satisfies Record<PaneSessionPresentationState, string>;
 
 export const SESSION_PRIORITY = [
   "working",

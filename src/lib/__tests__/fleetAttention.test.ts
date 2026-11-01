@@ -8,9 +8,11 @@ import {
   DEMAND_BANDS,
   emptyBandCounts,
   FLEET_BANDS,
+  fleetBandForRun,
   fleetBandRunKey,
   isAttentionBand,
   isDemandBand,
+  NEEDS_YOU_BANDS,
   UNREAD_FILTER_BANDS,
 } from "../fleetAttention";
 import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
@@ -673,6 +675,25 @@ describe("fleetBandRunKey", () => {
     expect(fleetBandRunKey(fleet, DEMAND_BANDS).split("\n")).toEqual(
       [...attention, ...unread].sort()
     );
+  });
+
+  it("reads each run's band by its terminal id, and none for a run it doesn't hold", () => {
+    expect(fleetBandForRun(fleet, "canopy-ask")).toBe("needs-you");
+    expect(fleetBandForRun(fleet, "bare-prompt")).toBe("idle");
+    expect(fleetBandForRun(fleet, "read-ask")).toBe("idle");
+    expect(fleetBandForRun(fleet, "unread")).toBe("review");
+    expect(fleetBandForRun(fleet, "error")).toBe("blocked");
+    expect(fleetBandForRun(fleet, "parked-ask")).toBe("parked");
+    expect(fleetBandForRun(fleet, "missing")).toBeUndefined();
+    expect(fleetBandForRun(null, "canopy-ask")).toBeUndefined();
+    for (const r of fleet.runs) expect(fleetBandForRun(fleet, r.runId)).toBe(bandForRun(r));
+  });
+
+  it("holds only Canopy's unread asks as needs-you", () => {
+    expect(fleetBandRunKey(fleet, NEEDS_YOU_BANDS).split("\n")).toEqual([
+      "canopy-approval",
+      "canopy-ask",
+    ]);
   });
 
   it("holds nobody before the first snapshot", () => {
