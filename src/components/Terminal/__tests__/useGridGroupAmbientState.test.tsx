@@ -94,7 +94,7 @@ describe("useGridGroupAmbientState", () => {
     fleet([{ runId: "hidden", agentState: "waiting", waitingReason: "question", canopy: ask }]);
     const staleFields: Partial<PtyPanelData>[] = [
       { isRestarting: true },
-      { exitCode: 0 },
+      { runtimeStatus: "exited" },
       { agentState: "exited" },
     ];
     for (const fields of staleFields) {

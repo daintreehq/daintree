@@ -64,7 +64,8 @@ describe("pane observation ahead of the band", () => {
   it("draws no amber through a restart or an exit the band hasn't caught up with", () => {
     for (const observed of [
       { isRestarting: true },
-      { exitCode: 0 },
+      // A terminal the host lost carries no exit code, only the status.
+      { runtimeStatus: "exited" },
       { agentState: "exited" as const },
     ]) {
       expect(
@@ -78,8 +79,12 @@ describe("pane observation ahead of the band", () => {
         false
       );
     }
-    expect(resolvePaneSessionPresentation("waiting", "needs-you", { exitCode: null })).toBe(
-      "waiting"
-    );
+    // What a successful restart can leave behind is no exit.
+    expect(
+      resolvePaneSessionPresentation("waiting", "needs-you", {
+        agentState: "waiting",
+        runtimeStatus: "error",
+      })
+    ).toBe("waiting");
   });
 });

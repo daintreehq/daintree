@@ -14,18 +14,21 @@ export interface PaneObservation {
   agentState?: AgentState;
   waitingReason?: WaitingReason;
   isRestarting?: boolean;
-  exitCode?: number | null;
+  runtimeStatus?: string;
 }
 
 /**
  * The pane's own observation still has the run stopped where it could be
  * asking. The band is main's polled read and the pane's state is pushed, so the
  * pane can be a beat ahead of it: amber must not outlive a reply that set the
- * agent working again, a restart, an exit code on record (what a shown pane's
- * own exit reads), or a wait that has turned into an error.
+ * agent working again, a restart, an exit on record, or a wait that has turned
+ * into an error. An exit is `runtimeStatus: "exited"`, exactly what a shown
+ * pane reads its own from (`useTerminalLogic`), so a hidden tab and the same
+ * pane in front agree; a leftover `"error"` or exit code after a successful
+ * restart is not one.
  */
 function isStillStopped(pane: PaneObservation): boolean {
-  if (pane.isRestarting === true || typeof pane.exitCode === "number") return false;
+  if (pane.isRestarting === true || pane.runtimeStatus === "exited") return false;
   const { agentState } = pane;
   if (agentState === "working" || agentState === "directing" || agentState === "exited") {
     return false;
