@@ -62,7 +62,12 @@ function run(id: string, overrides: Partial<ScheduledRun> = {}): ScheduledRun {
 
 function scheduled(id: string, dueAt: number): ScheduledRun {
   return run(id, {
-    origin: { trigger: "scheduled", dueAt, occurrenceKey: occurrenceKeyFor(dueAt), coalesced: null },
+    origin: {
+      trigger: "scheduled",
+      dueAt,
+      occurrenceKey: occurrenceKeyFor(dueAt),
+      coalesced: null,
+    },
   });
 }
 

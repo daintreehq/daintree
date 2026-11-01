@@ -92,17 +92,15 @@ export class ScheduledRunStore {
   update(run: ScheduledRun): boolean {
     const record = ScheduledRunSchema.parse(run);
     const result = this.sqlite
-      .prepare(
-        "UPDATE scheduled_runs SET terminal_id = ?, live = ?, record = ? WHERE id = ?"
-      )
+      .prepare("UPDATE scheduled_runs SET terminal_id = ?, live = ?, record = ? WHERE id = ?")
       .run(record.terminalId, isLive(record) ? 1 : 0, JSON.stringify(record), record.id);
     return result.changes > 0;
   }
 
   get(id: string): ScheduledRun | null {
-    const row = this.sqlite.prepare("SELECT id, record FROM scheduled_runs WHERE id = ?").get(id) as
-      | RunRow
-      | undefined;
+    const row = this.sqlite
+      .prepare("SELECT id, record FROM scheduled_runs WHERE id = ?")
+      .get(id) as RunRow | undefined;
     return row ? this.decode(row) : null;
   }
 

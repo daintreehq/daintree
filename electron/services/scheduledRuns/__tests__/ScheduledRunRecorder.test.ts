@@ -155,7 +155,12 @@ describe("ScheduledRunRecorder", () => {
   it("takes an exit that reaches it before the spawn answer, which then changes nothing", () => {
     const recorder = lifetime();
     recorder.registerLaunch(launch());
-    recorder.handleExit({ terminalId: "terminal-1", spawnedAt: SPAWNED_AT, exitCode: 0, signal: 0 });
+    recorder.handleExit({
+      terminalId: "terminal-1",
+      spawnedAt: SPAWNED_AT,
+      exitCode: 0,
+      signal: 0,
+    });
     recorder.handleSpawnResult("terminal-1", { success: true, spawnedAt: SPAWNED_AT });
 
     const run = recorder.get("run-1");

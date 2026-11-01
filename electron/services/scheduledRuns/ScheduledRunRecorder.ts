@@ -88,7 +88,13 @@ function normalizeSignal(signal: number | null | undefined): number | null {
 // A process last seen running whose host is gone: nothing is known of its exit.
 function goneProcess(process: ScheduledRunProcess, at: number): ScheduledRunProcess {
   if (process.state !== "running") return process;
-  return { state: "exited", startedAt: process.startedAt, exitedAt: at, exitCode: null, signal: null };
+  return {
+    state: "exited",
+    startedAt: process.startedAt,
+    exitedAt: at,
+    exitCode: null,
+    signal: null,
+  };
 }
 
 function exitedProcess(
