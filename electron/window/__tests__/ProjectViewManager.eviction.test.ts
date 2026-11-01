@@ -4711,6 +4711,9 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
   // sleep could take the view a dispatch was waiting on, leaving that session
   // failing SESSION_BINDING_GONE until the project reopened.
   describe("destroying a view for an automatic sleep", () => {
+    beforeEach(() => _resetDictationViewHoldsForTests());
+    afterEach(() => _resetDictationViewHoldsForTests());
+
     it("leaves a view alone while a dispatch is in flight against it", async () => {
       const mgr = makeManager(3);
       await seedThreeViews(mgr);

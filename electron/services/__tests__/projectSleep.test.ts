@@ -301,6 +301,52 @@ describe("sleepProject", () => {
       expect(teardownMock.gracefulTeardownAndJournalProject).not.toHaveBeenCalled();
     });
 
+    it("refuses at the kill's own guard when a dictation starts as the snapshot is read", async () => {
+      teardownMock.gracefulTeardownAndJournalProject.mockImplementationOnce(
+        async (_scopeId, _client, _ws, options) => {
+          await flushMicrotasks();
+          holdDictationView(CACHED_VIEW_ID);
+          const allowed = options.beforeKill!(killSnapshot.value);
+          return { confirmed: false, aborted: !allowed, terminalsKilled: 0, sessions: [] };
+        }
+      );
+
+      const outcome = await sleepProject("proj-1", policy(), makeDeps());
+
+      expect(outcome).toEqual({ status: "skipped", reason: "dictation" });
+      expect(persistenceMock.writeHibernatedMarker).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+
+    it("stops before the revoke when a dictation starts during the first panel read", async () => {
+      panelRecoveryMock.readPanelRecoveryHold.mockImplementationOnce(async () => {
+        holdDictationView(CACHED_VIEW_ID);
+        return null;
+      });
+
+      const outcome = await sleepProject("proj-1", policy(), makeDeps());
+
+      expect(outcome).toEqual({ status: "skipped", reason: "dictation" });
+      expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalled();
+      expect(teardownMock.gracefulTeardownAndJournalProject).not.toHaveBeenCalled();
+    });
+
+    it("keeps the view when a dictation starts during the panel read after the kill", async () => {
+      panelRecoveryMock.readPanelRecoveryHold
+        .mockResolvedValueOnce(null)
+        .mockImplementationOnce(async () => {
+          holdDictationView(CACHED_VIEW_ID);
+          return null;
+        });
+
+      const outcome = await sleepProject("proj-1", policy(), makeDeps());
+
+      expect(outcome).toEqual({ status: "skipped", reason: "dictation", terminalsKilled: 1 });
+      expect(hibernationMock.evictProjectRenderer).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
+    });
+
     it("keeps the view when a dictation starts there while the kill is in flight", async () => {
       teardownMock.gracefulTeardownAndJournalProject.mockImplementationOnce(async () => {
         holdDictationView(CACHED_VIEW_ID);
