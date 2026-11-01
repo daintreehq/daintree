@@ -106,7 +106,7 @@ async function applyDonePolicy(
   await forgetViewlessTerminal(projectStore, target.projectId, target.terminalId);
 }
 
-let policy: ScheduledRunDonePolicy | null = null;
+let policy: { readonly policy: ScheduledRunDonePolicy; readonly stop: () => void } | null = null;
 
 /**
  * Arms a launched run's done policy (#15982), from the launcher once the
@@ -121,9 +121,23 @@ export function armScheduledRunDonePolicy(target: ArmedScheduledRun): void {
       isShuttingDown: () => getActiveShutdown() !== null,
       apply: applyDonePolicy,
     });
-    events.on("scheduled-run:ended", (payload) => created.handleRunEnded(payload));
-    events.on("scheduled-runs:deleted", (payload) => created.handleRunsDeleted(payload));
-    policy = created;
+    const offEnded = events.on("scheduled-run:ended", (payload) => created.handleRunEnded(payload));
+    const offDeleted = events.on("scheduled-runs:deleted", (payload) =>
+      created.handleRunsDeleted(payload)
+    );
+    policy = {
+      policy: created,
+      stop: () => {
+        offEnded();
+        offDeleted();
+      },
+    };
   }
-  policy.arm(target);
+  policy.policy.arm(target);
+}
+
+/** @internal Tests only. */
+export function _resetScheduledRunDonePolicyForTest(): void {
+  policy?.stop();
+  policy = null;
 }

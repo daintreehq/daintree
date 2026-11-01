@@ -5,7 +5,7 @@ import {
   _resetHostStartedTerminalsForTesting,
   hostStartedTerminals,
 } from "../hostStartedTerminals.js";
-import { forgetViewlessTerminal } from "../projectStateAuthoring.js";
+import { backgroundViewlessTerminal, forgetViewlessTerminal } from "../projectStateAuthoring.js";
 
 const startedIds = (projectId: string) => hostStartedTerminals(projectId).map((t) => t.id);
 
@@ -102,6 +102,61 @@ describe("recordViewlessTerminal", () => {
     await recordViewlessTerminal(writer, "proj-1", SNAPSHOT);
 
     expect(read()).toBe(saved);
+    expect(writes()).toBe(0);
+  });
+});
+
+describe("backgroundViewlessTerminal (#15982)", () => {
+  afterEach(() => _resetHostStartedTerminalsForTesting());
+
+  it("parks a grid or dock panel in the background, coming back where it was", async () => {
+    const saved: ProjectState = {
+      projectId: "proj-1",
+      sidebarWidth: 280,
+      terminals: [
+        { id: "t-0", kind: "terminal", title: "Shell", location: "grid" },
+        { ...SNAPSHOT, location: "dock" },
+      ],
+      tabGroups: [
+        { id: "g-1", location: "dock", activeTabId: "t-1", panelIds: ["t-1", "t-2"] },
+        { id: "g-2", location: "grid", activeTabId: "t-1", panelIds: ["t-1"] },
+      ],
+      terminalLayout: { focusedTerminalId: "t-1", maximizedTerminalId: "t-0" },
+      draftInputs: { "t-1": "half typed" },
+    };
+    const { writer, read } = writerOver(saved);
+    await recordViewlessTerminal(writer, "proj-1", SNAPSHOT);
+
+    await backgroundViewlessTerminal(writer, "proj-1", "t-1");
+
+    expect(read()).toEqual({
+      ...saved,
+      terminals: [
+        saved.terminals[0],
+        { ...SNAPSHOT, location: "background", backgroundRestoreLocation: "dock" },
+      ],
+      tabGroups: [{ id: "g-1", location: "dock", activeTabId: "t-2", panelIds: ["t-2"] }],
+      terminalLayout: { maximizedTerminalId: "t-0" },
+    });
+    expect(hostStartedTerminals("proj-1")).toEqual([
+      { id: "t-1", location: "background", heldBy: new Set() },
+    ]);
+  });
+
+  it("leaves a panel already parked, trashed or never saved alone", async () => {
+    for (const location of ["background", "trash"] as const) {
+      const saved: ProjectState = {
+        projectId: "proj-1",
+        sidebarWidth: 280,
+        terminals: [{ ...SNAPSHOT, location }],
+      };
+      const { writer, read, writes } = writerOver(saved);
+      await backgroundViewlessTerminal(writer, "proj-1", "t-1");
+      expect(read()).toBe(saved);
+      expect(writes()).toBe(0);
+    }
+    const { writer, writes } = writerOver(null);
+    await backgroundViewlessTerminal(writer, "proj-1", "t-1");
     expect(writes()).toBe(0);
   });
 });

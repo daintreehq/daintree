@@ -222,6 +222,35 @@ describe("launchScheduledRun", () => {
     expect(hasPendingScheduledLaunch("project-1")).toBe(false);
   });
 
+  it("arms the done policy its launch read once the run started, and only then (#15982)", async () => {
+    const onLaunched = vi.fn();
+    deps.onLaunched = onLaunched;
+    schedule = { ...schedule, policies: { ...schedule.policies, onDone: "close" } };
+    deps.launchInView = vi.fn(async (_view, request) => {
+      spawnFor(request);
+      // An edit made while the run launches applies to later runs.
+      schedule = { ...schedule, policies: { ...schedule.policies, onDone: "keep" } };
+      return launched(request.args.requestedId);
+    });
+
+    await expect(run()).resolves.toMatchObject({ status: "started" });
+    expect(onLaunched).toHaveBeenCalledWith({
+      runId: "id-1",
+      scheduleId: "schedule-1",
+      projectId: "project-1",
+      terminalId: "terminal-id-2",
+      onDone: "close",
+    });
+
+    onLaunched.mockClear();
+    deps.launchInView = async () => ({
+      ok: true,
+      result: { launched: false, terminalId: null, spawnStatus: "panel-limit" },
+    });
+    await expect(run()).resolves.toMatchObject({ status: "failed" });
+    expect(onLaunched).not.toHaveBeenCalled();
+  });
+
   it("keeps the launcher's own refusal as the reason", async () => {
     deps.launchWithoutView = async () => ({
       ok: false,
