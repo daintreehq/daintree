@@ -200,9 +200,7 @@ describe("repositoryConfigFingerprint", () => {
     const main = makeRepo(root, "replaced-main", "git@example.test:a/b.git");
     const folder = path.join(root, "replaced");
     git(main, ["worktree", "add", "-q", folder, "-b", "replaced"]);
-    expect(await repositoryConfigFingerprint(folder)).toBe(
-      await repositoryConfigFingerprint(main)
-    );
+    expect(await repositoryConfigFingerprint(folder)).toBe(await repositoryConfigFingerprint(main));
 
     fs.rmSync(folder, { recursive: true, force: true });
     makeRepo(root, "replaced", "git@example.test:c/d.git");
