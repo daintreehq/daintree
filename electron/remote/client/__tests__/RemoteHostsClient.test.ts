@@ -2175,8 +2175,9 @@ describe("RemoteHostsClient", () => {
       shown = new Map([[1, "proj-local"]]);
       order = [];
       windows.shownProjectKey = vi.fn((windowId: number) => shown.get(windowId) ?? null);
-      windows.reusableRemoteViewPath = vi.fn((windowId: number, hostId: string, projectId: string) =>
-        windowId === 1 && hostId === "studio-01" && projectId === "proj-1" ? "/srv/held" : null
+      windows.reusableRemoteViewPath = vi.fn(
+        (windowId: number, hostId: string, projectId: string) =>
+          windowId === 1 && hostId === "studio-01" && projectId === "proj-1" ? "/srv/held" : null
       );
       windows.discardCachedView = vi.fn();
       windows.notifyWindow = vi.fn();
@@ -2190,12 +2191,10 @@ describe("RemoteHostsClient", () => {
       windows.openLocalProject = vi.fn(async (windowId: number, projectId: string) => {
         shown.set(windowId, projectId);
       });
-      manager
-        .connect("studio-01")
-        .describeProject.mockImplementation(async (projectId: string) => {
-          order.push("describe");
-          return { projectId, path: `/srv/${projectId}`, name: projectId };
-        });
+      manager.connect("studio-01").describeProject.mockImplementation(async (projectId: string) => {
+        order.push("describe");
+        return { projectId, path: `/srv/${projectId}`, name: projectId };
+      });
     });
 
     afterEach(() => {
@@ -2269,7 +2268,9 @@ describe("RemoteHostsClient", () => {
     it("keeps the view up when the host can't say", async () => {
       manager
         .get("studio-01")!
-        .describeProject.mockRejectedValue(new AppError({ code: "OUTCOME_UNKNOWN", message: "No answer in time" }));
+        .describeProject.mockRejectedValue(
+          new AppError({ code: "OUTCOME_UNKNOWN", message: "No answer in time" })
+        );
       await switchTo("proj-1");
       await settle();
       expect(shown.get(1)).toBe(held);

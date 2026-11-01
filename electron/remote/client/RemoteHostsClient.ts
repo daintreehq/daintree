@@ -927,12 +927,9 @@ export class RemoteHostsClient {
       });
     }
     // Just listed: the host has said where it is.
-    return this.switchWindow(
-      null,
-      { hostId, newWindow: true, projectId: project.id },
-      undefined,
-      { known: { path: project.path, name: project.name } }
-    );
+    return this.switchWindow(null, { hostId, newWindow: true, projectId: project.id }, undefined, {
+      known: { path: project.path, name: project.name },
+    });
   }
 
   /**
@@ -1701,12 +1698,12 @@ export class RemoteHostsClient {
       this.options.windows.shownProjectKey?.(windowId) === key
     ) {
       // Nothing to go back to, or no way back: as a host going away leaves it.
-      offerIn = await (this.options.windows.replaceWithLocalWindow?.(windowId) ?? Promise.resolve(null)).catch(
-        (error: unknown) => {
-          logger.warn("Couldn't replace a window showing a host project that is gone", { error });
-          return null;
-        }
-      );
+      offerIn = await (
+        this.options.windows.replaceWithLocalWindow?.(windowId) ?? Promise.resolve(null)
+      ).catch((error: unknown) => {
+        logger.warn("Couldn't replace a window showing a host project that is gone", { error });
+        return null;
+      });
     }
     if (offerIn === null || this.options.registry.get(hostId) === null) return;
     this.holdProjectOffer(offerIn, hostId);
