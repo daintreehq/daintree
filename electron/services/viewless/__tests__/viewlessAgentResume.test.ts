@@ -571,6 +571,14 @@ describe("resumeAgentSessionAsPane", () => {
     expect(spawns(invoke)).toHaveLength(0);
   });
 
+  it("refuses when the saved layout can't be read", async () => {
+    const { deps, invoke, store } = resumeDeps();
+    store.getProjectState.mockRejectedValue(new Error("state unreadable"));
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+    expect(result).toMatchObject({ status: "refused", reason: "terminals-unavailable" });
+    expect(spawns(invoke)).toHaveLength(0);
+  });
+
   it("refuses when not every terminal host answered", async () => {
     const { deps, invoke } = resumeDeps({ degraded: true });
     const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());

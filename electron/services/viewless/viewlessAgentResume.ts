@@ -387,7 +387,12 @@ async function findPaneHoldingSession(
     );
   }
 
-  const state = await deps.getProjectState(projectId).catch(() => null);
+  const state = await deps.getProjectState(projectId).catch(() => undefined);
+  if (state === undefined) {
+    return unavailable(
+      "The saved layout couldn't be read, so whether a pane already holds this session can't be read."
+    );
+  }
   const savedPanes = new Map((state?.terminals ?? []).map((pane) => [pane.id, pane]));
   const live = terminals.filter(
     (terminal): terminal is ViewlessTerminalRecord & { id: string } =>
