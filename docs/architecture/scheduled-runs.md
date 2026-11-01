@@ -24,6 +24,7 @@ A project can run an agent on a schedule (#15973). A due schedule launches its a
 | The overlap policy and the precondition | `electron/services/scheduledRuns/ScheduledRunLauncher.ts`, `scheduledRunPrecondition.ts`, `ScheduledRunRecorder.beginReplacement` |
 | Run now's overlap confirmation | `src/store/scheduleRunConfirmStore.ts`, `src/components/Schedules/ScheduleRunConfirmDialog.tsx` |
 | Firing due schedules: evaluation points, the clock, power events, catch-up | `electron/services/scheduledRuns/ScheduledRunScheduler.ts`, `scheduledRunSchedulerLive.ts` |
+| Notifying when a run needs you, and where its click lands | `electron/services/scheduledRuns/scheduledRunAttention.ts`, `scheduledRunNotifierLive.ts`, `electron/window/scheduledRunNotificationNavigation.ts`, `src/services/scheduledRunLanding.ts` |
 
 ## Boundaries
 
@@ -211,6 +212,7 @@ Deleting a schedule deletes its history and its evaluation point with it: `Sched
 | `scheduled-run:started` on the main event bus | A run was registered to launch, just before its terminal spawns |
 | `scheduled-run:ended` on the main event bus | A run settled, once, with its outcome. A run that starts ends, at the next startup if Daintree quits first, or is deleted; a skipped run neither starts nor ends |
 | `scheduled-runs:deleted` on the main event bus | `{ projectId, scheduleId }` once a schedule's history is deleted, or `scheduleId: null` once a project's is; its runs will never end |
+| The recorder's `onRunSettled` | Every committed settlement once, with the whole record: each run that ends, and the skipped and refused runs that neither start nor end. The record holds the agent's summary, so it stays in main and is never put on the bus |
 
 The IPC surface is read-only: main registers runs and records their facts, so no view can write one.
 
@@ -306,6 +308,24 @@ A run handed back as `done` applies its schedule's `onDone`, as the launch read 
 - **Clocks set back.** The point never moves back, so a clock set back waits until it passes the last occurrence that ran. A clock set far ahead and then corrected stalls the schedule until the clock catches up with what ran: the price of never running an occurrence twice once its run is pruned.
 - **Shutdown.** Once shutdown has begun no pass launches or records anything, and a launch in flight neither spawns nor records its refusal; `stopScheduledRunScheduler` clears the timer and the power and store listeners before the database closes.
 
+## Notifying when a run needs you
+
+A run that settles needing a person puts up a native notification on this machine (#15988), read from the evidence it settled on (`scheduledRunAttention`):
+
+| Settled on | Notifies |
+| --- | --- |
+| `launch-error`, a refused launch included | "Scheduled run couldn't start" |
+| `exit` with a non-zero code | "Scheduled run failed", with the code |
+| `handback` `needs-you` | "Scheduled run needs you" |
+| Anything else | Nothing |
+
+- **Exits by signal alone stay quiet.** An exit with code 0 and a signal is how Daintree's own kills end a terminal (the trash's expiry, a kill), so it says nothing about the agent's work. A run that went fine, was skipped by its policy, cancelled, replaced, lost or interrupted is in its history and pages nobody.
+- **From the commit, not the bus.** The recorder hands every committed settlement to `onRunSettled`, which `getScheduledRunRecorder` installs before any run can register, so a launch refused at once can't outrun it. The delivery is imported only when a run needs attention, and it never holds up or undoes the settlement.
+- **Names and codes only.** The banner names the schedule and the run's agent (the schedule's agent for a refused launch, which has no resume snapshot); the agent's summary and a launch error's reason stay in the history the click opens. It names no owning view, so it is shown on this machine and never handed to a remote Shell.
+- **The same gates as agent notifications.** It is held back while the project's notifications are off, in quiet hours, or while this machine's session is muted, read again after the schedule is so a mute set meanwhile counts. It plays the waiting sound when sounds are on. A run in a worktree on screen still notifies: what it reports is a recorded outcome, not a wait the user can see.
+- **The click.** Main brings the run's project on screen: the window holding it comes forward, or failing that a window on this machine switches to it, as picking it there would; with none (a windowless Host, or macOS after the last window closed) it opens one on the project through the opener `main.ts` sets (`setScheduledRunWindowOpener`), and a second click while that window opens waits for it. A closed project opens, since the click asked for it; one that is gone or missing on disk opens nothing, and nor does a Host with no display. The view gets a `focus-scheduled-run` intent once it has hydrated (a window opened for the click is waited on for up to a minute) and decides from its own panes: the run's pane, trashed or backgrounded included and whatever its terminal did since, comes forward and takes focus; with none, the schedule's history opens, or the list when the schedule is gone. A launch that never had a terminal goes straight to the history.
+- Clicks are routed while Daintree runs: the handler lives in the process that showed the banner, so one clicked after Daintree quit isn't routed to the run.
+
 ## Keeping the machine awake
 
 An unattended run needs the display awake as well as the system: a run under `caffeinate -is` alone froze when the display slept. `PowerSaveBlockerService` holds a `prevent-display-sleep` blocker from `scheduled-run:started` until the run's `scheduled-run:ended` or a `scheduled-runs:deleted` that covers it, and on quit, when the service is disposed. Electron merges every blocker into one wake lock of the strongest type, and Chromium's display lock also holds off idle system sleep on macOS, Windows and Linux. It doesn't override a closed lid or another forced sleep.
@@ -328,5 +348,6 @@ An unattended run needs the display awake as well as the system: a run under `ca
 | #15980 | The overlap policy and the precondition command (see Overlap and precondition) |
 | #15981 | Holding the machine and display awake for a run |
 | #15982 | The done and needs-you handback, and the done policy |
+| #15988 | Notifying when a run fails or needs you, and landing its click |
 | #15984, #15985 | The Schedules view and the cadence picker |
 | #15989-#15993 | Windowless launch and the per-platform OS jobs |
