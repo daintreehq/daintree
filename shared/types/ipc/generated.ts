@@ -3833,7 +3833,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "scheduled-runs:take-inbox": {
     args: [];
-    result: import("./scheduledRuns.js").ScheduledRunInboxItem[];
+    result: import("./scheduledRuns.js").ScheduledRunInboxTake;
   };
   "schedules:create": {
     args: [input: import("./schedules.js").ScheduleCreateInput];
