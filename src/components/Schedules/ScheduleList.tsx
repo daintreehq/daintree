@@ -5,9 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
-import { Switch } from "@/components/ui/switch";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { TimeAgo } from "@/components/ui/TimeAgo";
+import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { resolveAgentIcon } from "@/config/agentIcons";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { SEVERITY_GLYPH, type StatusSeverity } from "@/lib/statusSeverity";
@@ -138,18 +138,14 @@ function ScheduleRow({
 
   return (
     // A click anywhere on the row but its switch opens the schedule, as a settings
-    // row's onRowClick does. The name stays the one control for the keyboard, and
-    // the row draws its ring, so the cells keep their own hover disclosures.
+    // row's onRowClick does. The name stays the one control for the keyboard, so
+    // the cells keep their own hover disclosures.
     <li
-      className={cn(
-        GRID,
-        "relative cursor-pointer px-4 py-3 hover:bg-overlay-subtle",
-        "has-[[data-schedule-row]:focus-visible]:outline has-[[data-schedule-row]:focus-visible]:outline-2",
-        "has-[[data-schedule-row]:focus-visible]:-outline-offset-2 has-[[data-schedule-row]:focus-visible]:outline-accent-primary"
-      )}
+      className={cn(GRID, "relative cursor-pointer px-4 py-3 hover:bg-overlay-subtle")}
       onClick={(event) => {
-        const target = event.target as HTMLElement;
-        if (target.closest("button, [role='switch']")) return;
+        if (event.target instanceof Element && event.target.closest("button, [role='switch']")) {
+          return;
+        }
         onOpen();
       }}
     >
@@ -164,7 +160,7 @@ function ScheduleRow({
               onClick={onOpen}
               aria-describedby={detailsId}
               data-schedule-row={schedule.id}
-              className="block max-w-full truncate text-left text-sm font-medium text-text-primary outline-hidden"
+              className="block max-w-full truncate rounded-[var(--radius-sm)] text-left text-sm font-medium text-text-primary outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
             >
               {schedule.name}
             </button>
@@ -213,8 +209,7 @@ function ScheduleRow({
       <div className="flex justify-end">
         {/* aria-disabled while saving, not disabled: a disabled switch drops the focus
             a keyboard toggle left on it. It holds main's answer until main replies. */}
-        <Switch
-          size="sm"
+        <SettingsSwitch
           checked={schedule.enabled}
           aria-disabled={enabledPending || undefined}
           onCheckedChange={(enabled) => {
@@ -308,12 +303,12 @@ export function ScheduleList({
             <Button
               variant="outline"
               size="sm"
-              // aria-disabled, not disabled: a disabled button drops the focus a keyboard retry left on it.
-              onClick={state.retrying ? undefined : onRetry}
-              aria-disabled={state.retrying || undefined}
+              // `loading` keeps the button focusable while it blocks a second retry.
+              onClick={onRetry}
+              loading={state.retrying ?? false}
             >
               <RefreshCw />
-              {state.retrying ? "Retrying…" : "Retry"}
+              Retry
             </Button>
           }
         >

@@ -3,7 +3,8 @@ import { describeCron } from "../cronDescription.js";
 
 // en-US so the clock reads "9:00 AM" whatever the machine's locale. ICU puts a
 // narrow no-break space before AM/PM; the assertions spell it as a plain space.
-const words = (expression: string) => describeCron(expression, "en-US")?.replace(/ /g, " ") ?? null;
+const words = (expression: string) =>
+  describeCron(expression, "en-US")?.replace(/\u202f/g, " ") ?? null;
 
 describe("describeCron", () => {
   it("reads a daily time", () => {

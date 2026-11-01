@@ -94,8 +94,22 @@ function blankDraft(agentId: string): Draft {
   );
 }
 
+const DRAFT_KEYS: readonly (keyof Draft)[] = [
+  "name",
+  "agentId",
+  "presetId",
+  "prompt",
+  "worktreeId",
+  "cron",
+  "missedRuns",
+  "overlap",
+  "checkFirst",
+  "checkCommand",
+  "onDone",
+];
+
 function sameDraft(a: Draft, b: Draft): boolean {
-  return (Object.keys(a) as (keyof Draft)[]).every((key) => a[key] === b[key]);
+  return DRAFT_KEYS.every((key) => a[key] === b[key]);
 }
 
 type FieldKey = "name" | "agentId" | "prompt" | "cron" | "checkCommand";
@@ -152,6 +166,8 @@ interface ScheduleEditorProps {
 }
 
 const MAIN_CHECKOUT_VALUE = "__main__";
+/** How long the cadence must sit still before its words or error are read out. */
+const CADENCE_ANNOUNCE_SETTLE_MS = 600;
 const NO_PRESET_VALUE = "__none__";
 
 export function ScheduleEditor({
@@ -234,7 +250,7 @@ export function ScheduleEditor({
   const cadenceLive = cadence.ok ? cadenceDescription : cronError ? `Cadence: ${cronError}` : "";
   const [settledCadenceLive, setSettledCadenceLive] = useState(cadenceLive);
   useEffect(() => {
-    const timer = setTimeout(() => setSettledCadenceLive(cadenceLive), 600);
+    const timer = setTimeout(() => setSettledCadenceLive(cadenceLive), CADENCE_ANNOUNCE_SETTLE_MS);
     return () => clearTimeout(timer);
   }, [cadenceLive]);
 

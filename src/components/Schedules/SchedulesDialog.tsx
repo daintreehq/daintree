@@ -253,8 +253,13 @@ export function SchedulesDialog({ isOpen, onClose }: SchedulesDialogProps) {
             </Tooltip>
           )}
           <AppDialog.Title icon={page.kind === "list" ? <CalendarClock /> : undefined}>
-            {/* The page's focus landing when it opens on a schedule: announced, never ringed. */}
-            <span ref={titleRef} tabIndex={-1} className="truncate outline-hidden">
+            {/* The page's focus landing when it opens on a schedule: announced, and
+                ringed only when the keyboard brought it here. */}
+            <span
+              ref={titleRef}
+              tabIndex={-1}
+              className="truncate rounded-[var(--radius-sm)] outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+            >
               {title}
             </span>
           </AppDialog.Title>

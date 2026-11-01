@@ -1,29 +1,45 @@
 import { describe, expect, it } from "vitest";
-import type { ScheduledRun } from "@shared/types/scheduledRuns";
+import type {
+  ScheduledRun,
+  ScheduledRunEvidence,
+  ScheduledRunOutcome,
+} from "@shared/types/scheduledRuns";
 import { lastRunWords } from "../lastRunWords";
 
-// Only the axes the wording reads; the rest of a record never changes the words.
-function run(parts: { settlement: unknown; pty?: unknown; createdAt?: number }): ScheduledRun {
-  return {
-    createdAt: parts.createdAt ?? 1_000,
-    settlement: parts.settlement,
-    process: { agent: { state: "not-started" }, pty: parts.pty ?? { state: "not-started" } },
-  } as unknown as ScheduledRun;
+const BASE: ScheduledRun = {
+  id: "run-1",
+  scheduleId: "schedule-1",
+  projectId: "project-1",
+  origin: { trigger: "run-now", dueAt: null, occurrenceKey: null, coalesced: null },
+  createdAt: 1_000,
+  terminalId: null,
+  terminalSpawnedAt: null,
+  settlement: { state: "open" },
+  process: { agent: { state: "not-started" }, pty: { state: "not-started" } },
+  pane: { state: "none" },
+  resume: null,
+};
+
+function open(pty: ScheduledRun["process"]["pty"], createdAt = 1_000): ScheduledRun {
+  return { ...BASE, createdAt, process: { agent: { state: "not-started" }, pty } };
 }
 
-function settled(outcome: string, evidence: unknown) {
-  return run({ settlement: { state: "settled", settledAt: 5_000, outcome, evidence } });
+function settled(outcome: ScheduledRunOutcome, evidence: ScheduledRunEvidence): ScheduledRun {
+  return { ...BASE, settlement: { state: "settled", settledAt: 5_000, outcome, evidence } };
 }
 
 describe("lastRunWords", () => {
   it("never calls an open run running before its terminal was seen to start", () => {
-    const registered = lastRunWords(run({ settlement: { state: "open" }, createdAt: 2_000 }));
-    expect(registered).toMatchObject({ label: "Starting", at: 2_000, timePrefix: null });
-
-    const started = lastRunWords(
-      run({ settlement: { state: "open" }, pty: { state: "running", startedAt: 3_000 } })
-    );
-    expect(started).toMatchObject({ label: "Running", at: 3_000, timePrefix: "Started" });
+    expect(lastRunWords(open({ state: "not-started" }, 2_000))).toMatchObject({
+      label: "Starting",
+      at: 2_000,
+      timePrefix: null,
+    });
+    expect(lastRunWords(open({ state: "running", startedAt: 3_000 }))).toMatchObject({
+      label: "Running",
+      at: 3_000,
+      timePrefix: "Started",
+    });
   });
 
   it("reads a signal before the exit code it came with", () => {
@@ -44,34 +60,28 @@ describe("lastRunWords", () => {
   });
 
   it("says why a run was skipped without claiming more than the record holds", () => {
-    const details = (["missed", "overlap", "precondition"] as const).map(
-      (kind) =>
-        lastRunWords(
-          settled("skipped", {
-            kind: "skip",
-            reason:
-              kind === "overlap"
-                ? { kind, openRunId: "r" }
-                : kind === "precondition"
-                  ? { kind, exitCode: 1, signal: null, error: null }
-                  : { kind },
-          })
-        ).detail
-    );
+    const reasons: ScheduledRunEvidence[] = [
+      { kind: "skip", reason: { kind: "missed" } },
+      { kind: "skip", reason: { kind: "overlap", openRunId: "run-0" } },
+      {
+        kind: "skip",
+        reason: { kind: "precondition", exitCode: 1, signal: null, error: null },
+      },
+    ];
+    const details = reasons.map((evidence) => lastRunWords(settled("skipped", evidence)).detail);
     expect(new Set(details).size).toBe(3);
     expect(details.every((detail) => detail !== null && !/closed|quit/.test(detail))).toBe(true);
   });
 
   it("gives only done, needs-you, failed and lost a severity", () => {
-    const severities = {
+    expect({
       done: lastRunWords(settled("done", { kind: "handback", report: "done" })).severity,
       needsYou: lastRunWords(settled("needs-you", { kind: "handback", report: "needs-you" }))
         .severity,
       lost: lastRunWords(settled("lost", { kind: "lost" })).severity,
       cancelled: lastRunWords(settled("cancelled", { kind: "cancel" })).severity,
       interrupted: lastRunWords(settled("interrupted", { kind: "interrupted" })).severity,
-    };
-    expect(severities).toEqual({
+    }).toEqual({
       done: "success",
       needsYou: "warning",
       lost: "error",
