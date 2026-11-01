@@ -158,13 +158,13 @@ The four `*-surface` washes are built with `withAlpha` (plain `rgba` for a hex i
 
 Drive state chips in panel headers and worktree card indicators.
 
-| Token                | Purpose                              | Derived?                  |
-| -------------------- | ------------------------------------ | ------------------------- |
-| `activity-active`    | Real-time working indicator (vivid)  | Required                  |
-| `activity-working`   | Animated spinner color               | Required                  |
-| `activity-waiting`   | Agent waiting for user input (amber) | Required                  |
-| `activity-idle`      | Inactive/dormant state               | Required                  |
-| `activity-completed` | Finished successfully                | Derived: `status-success` |
+| Token | Purpose | Derived? |
+| --- | --- | --- |
+| `activity-active` | Real-time working indicator (vivid) | Required |
+| `activity-working` | Animated spinner color | Required |
+| `activity-waiting` | Agent waiting for user input (amber) | Required |
+| `activity-idle` | Inactive/dormant state | Required |
+| `activity-completed` | Finished successfully | Derived: `status-success` |
 | `activity-working-text` | Text-grade working ink for status sentences such as the project switcher's "2 running" | Derived: `activity-working` lifted along OKLCH lightness until it holds 4.5:1 on every backdrop `diff-text-*` answers to, and on the switcher's rows at rest and highlighted |
 | `activity-waiting-text` | Text-grade waiting ink | Derived: same rule |
 | `activity-completed-text` | Text-grade completed ink ("2 agents unread") | Derived: same rule |

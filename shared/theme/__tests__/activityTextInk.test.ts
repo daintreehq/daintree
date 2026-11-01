@@ -76,9 +76,10 @@ describe("activity sentence inks (#15866)", () => {
       expect(deltaEOK(working, completed)).toBeGreaterThanOrEqual(WORKING_COMPLETED_MIN_DELTA_E);
       // Both halves stay visible as a mark on the row they sit on.
       for (const row of resolvePaletteRowBackdrops(scheme.tokens, scheme.type)) {
-        expect(contrastRatio(completed, row.hex), `completed on ${row.label}`).toBeGreaterThanOrEqual(
-          3
-        );
+        expect(
+          contrastRatio(completed, row.hex),
+          `completed on ${row.label}`
+        ).toBeGreaterThanOrEqual(3);
       }
     }
   );

@@ -42,12 +42,7 @@ function rowBackdrops(scheme: AppColorScheme): Array<{ label: string; hex: strin
       : [
           { label: "surface-sidebar", hex: t["surface-sidebar"] },
           ...(
-            [
-              "surface-grid",
-              "surface-canvas",
-              "surface-panel",
-              "surface-panel-elevated",
-            ] as const
+            ["surface-grid", "surface-canvas", "surface-panel", "surface-panel-elevated"] as const
           ).map((key) => ({
             label: `palette over ${key}`,
             hex: blendOverBackground(t["surface-sidebar"], t[key], 0.94),
