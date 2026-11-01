@@ -120,6 +120,12 @@ describe("buildHostMenuRows", () => {
     );
     expect(rows[0]).toMatchObject({ platform: null, summary: windows });
     expect(rows[1]!.platform).toBe("darwin");
+    const [, reported] = rowsFor([
+      entry("h1", "studio-01", CONNECTED, summary("h1", { platform: "linux" }), {
+        platform: "darwin",
+      }),
+    ]);
+    expect(reported!.platform).toBe("linux");
   });
 
   it("marks the window's own host as current", () => {

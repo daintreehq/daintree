@@ -481,23 +481,21 @@ describe("HostMetricsSampler", () => {
       }
     });
 
-    it("keeps the CPU reading when another reader runs past the sample budget", async () => {
-      vi.useFakeTimers();
-      try {
-        const { sources: source } = windows({ agents: () => new Promise(() => {}) });
-        const sampler = new HostMetricsSampler(source);
-        const first = sampler.sample();
-        await vi.advanceTimersByTimeAsync(HOST_SAMPLE_BUDGET_MS);
-        await first;
-        const second = sampler.sample();
-        await vi.advanceTimersByTimeAsync(HOST_SAMPLE_BUDGET_MS);
-        const summary = await second;
-        expect(summary.agentsObserved).toBeNull();
-        expect(summary.cpuPercent).toBe(50);
-        expect(summary.memoryTotalBytes).toBe(8 * 1024 ** 3);
-      } finally {
-        vi.useRealTimers();
-      }
+    it("keeps the CPU reading when the resource read fails, which only a Linux scope would drop", async () => {
+      const { sources: source } = windows({
+        totalmem: () => {
+          throw new Error("no totalmem");
+        },
+      });
+      const sampler = new HostMetricsSampler(source);
+      await sampler.sample();
+      const summary = await sampler.sample();
+      expect(summary).toMatchObject({
+        cpuPercent: 50,
+        cpuLogicalCoreCount: 1,
+        memoryTotalBytes: null,
+      });
+      expect(summary).not.toHaveProperty("cpuCapacityCores");
     });
   });
 

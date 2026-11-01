@@ -23,11 +23,15 @@ const pty = vi.hoisted(() => ({
   },
 }));
 
+const profile = vi.hoisted(() => ({
+  service: null as null | { getSnapshot: () => { thermalState: string } },
+}));
+
 vi.mock("../../../window/serviceRefs.js", () => ({
   getPtyClient: () => pty.client,
   getAgentVersionService: () => null,
   getCliAvailabilityServiceRef: () => cli.service,
-  getResourceProfileService: () => null,
+  getResourceProfileService: () => profile.service,
   getWorkspaceClientRef: () => workspace.client,
 }));
 const store = vi.hoisted(() => ({
@@ -151,7 +155,10 @@ describe("createHostSampleSources", () => {
     const realPlatform = process.platform;
     const stub = (value: NodeJS.Platform) =>
       Object.defineProperty(process, "platform", { value, configurable: true });
-    afterEach(() => stub(realPlatform));
+    afterEach(() => {
+      stub(realPlatform);
+      profile.service = null;
+    });
 
     it("names the machine it runs on, a Windows one as its own", () => {
       for (const [os, sampled] of [
@@ -165,9 +172,16 @@ describe("createHostSampleSources", () => {
       }
     });
 
-    it("reads no macOS thermal state on Windows", () => {
-      stub("win32");
-      expect(createHostSampleSources().thermalState()).toBeNull();
+    it("reads the macOS thermal state there and nowhere else", () => {
+      profile.service = { getSnapshot: () => ({ thermalState: "fair" }) };
+      for (const [os, thermal] of [
+        ["darwin", "fair"],
+        ["linux", null],
+        ["win32", null],
+      ] as const) {
+        stub(os);
+        expect(createHostSampleSources().thermalState()).toBe(thermal);
+      }
     });
   });
 
