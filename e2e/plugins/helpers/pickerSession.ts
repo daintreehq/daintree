@@ -144,5 +144,7 @@ export async function expectComponentsNamed(page: Page, name?: string): Promise<
 export async function expectComponentSelected(page: Page, name: string): Promise<void> {
   const strip = page.getByRole("toolbar", { name: "Element Picker" });
   await expect(strip).toContainText(name, { timeout: 30_000 });
-  await expect(strip.getByText("Component", { exact: true })).toBeVisible();
+  // By role: the trail also draws an aria-hidden copy of itself to measure
+  // its fold, badge included.
+  await expect(strip.getByRole("listitem").getByText("Component", { exact: true })).toBeVisible();
 }
