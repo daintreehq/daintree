@@ -511,7 +511,9 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
       () => groupedChanges.flatMap((group) => group.files.map(getWorkingTreeChangeKey)),
       [groupedChanges]
     );
-    const roving = useRovingRows({ keys: rovingKeys });
+    // Nested in the sidebar card's row controls: an arrow past either end
+    // steps on to the next worktree.
+    const roving = useRovingRows({ keys: rovingKeys, releaseAtEdges: true });
 
     if (changes.length === 0) {
       return null;
@@ -533,6 +535,9 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
           isStale && "surface-stale"
         )}
         aria-busy={isStale || undefined}
+        // One stop for an enclosing keyboard model (the sidebar card's row
+        // controls) however its rows are grouped into folders.
+        data-roving-list=""
         onKeyDown={roving.onKeyDown}
       >
         {groupedChanges.map((group) => (

@@ -8,7 +8,7 @@
  */
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createPortal } from "react-dom";
 import type { WorktreeState } from "@/types";
 import type { PtyPanelData } from "@shared/types/panel";
@@ -406,7 +406,12 @@ describe.each(["comfortable", "compact"] as const)("WorktreeCard selection — %
       fireEvent.keyDown(screen.getByRole("button", { name: "More actions" }), { key: "Enter" });
       // The item sits a submenu deep, so both layers are portalled from the card.
       press(await screen.findByRole("menuitem", { name: "Review" }));
-      press(await screen.findByRole("menuitem", { name: /Review worktree/ }));
+      // The root carries a direct "Review worktree" row too; this one is the
+      // submenu's, the deeper of the two portalled layers.
+      await waitFor(() => expect(screen.getAllByRole("menu")).toHaveLength(2));
+      const submenu = screen.getAllByRole("menu")[1]!;
+      expect(within(submenu).queryByRole("menuitem", { name: "Launch" })).toBeNull();
+      press(within(submenu).getByRole("menuitem", { name: /Review worktree/ }));
       expect(dispatch).toHaveBeenCalledWith("worktree.openReviewHub", { worktreeId: WORKTREE.id });
       expect(onSelect).not.toHaveBeenCalled();
     });

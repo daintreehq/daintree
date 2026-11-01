@@ -321,6 +321,11 @@ export function NonMainSecondaryRow({
                   {compactDrift}
                   {trailingIssueBadge}
                   {sharedRowPr}
+                  {/* The word as Comfortable has it, at every width: below
+                      20rem the PR stacks onto a line of its own, with room. */}
+                  {sharedRowPr && worktree.linked?.pr?.ciStatus?.state === "failure" && (
+                    <span className="-ml-1 text-2xs text-text-secondary">CI failed</span>
+                  )}
                 </div>
               )}
             </div>

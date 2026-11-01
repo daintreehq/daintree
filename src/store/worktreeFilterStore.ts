@@ -108,6 +108,10 @@ interface WorktreeFilterActions {
   collapseWorktree: (id: string) => void;
   expandWorktree: (id: string) => void;
   toggleWorktreeCollapsed: (id: string) => void;
+  /** Collapse every listed card in one write; the list-level fold. */
+  collapseWorktrees: (ids: readonly string[]) => void;
+  /** Expand every card in one write. */
+  expandAllWorktrees: () => void;
   isWorktreeCollapsed: (id: string) => boolean;
   setWorktreeLabelColor: (id: string, token: WorktreeLabelToken | null) => void;
   /**
@@ -987,6 +991,18 @@ const _actions: WorktreeFilterActions = {
     } else {
       _actions.collapseWorktree(id);
     }
+  },
+  collapseWorktrees: (ids) => {
+    _projectStore.setState((state) => {
+      const missing = ids.filter((id) => !state.collapsedWorktrees.includes(id));
+      if (missing.length === 0) return state;
+      return { collapsedWorktrees: [...state.collapsedWorktrees, ...missing] };
+    });
+  },
+  expandAllWorktrees: () => {
+    _projectStore.setState((state) =>
+      state.collapsedWorktrees.length === 0 ? state : { collapsedWorktrees: [] }
+    );
   },
   isWorktreeCollapsed: (id) => _projectStore.getState().collapsedWorktrees.includes(id),
   setWorktreeLabelColor: (id, token) => {

@@ -169,9 +169,12 @@ export function DeletedWorktreeCard({
     <div
       data-deleted-worktree-id={worktree.id}
       className="sidebar-worktree-card group/card relative isolate transition-colors duration-150"
+      // The live card's plane and shadow come from sidebar.css's
+      // `[data-variant="sidebar"]` rules; without it this row sank flat into
+      // the rail on every theme. Its select button carries the name.
+      data-variant="sidebar"
       data-active={isActive ? "true" : undefined}
       data-hoverable={!isActive ? "true" : undefined}
-      aria-label={`Deleted worktree: ${worktree.title}`}
       onClick={handleSelect}
     >
       <button
@@ -181,7 +184,7 @@ export function DeletedWorktreeCard({
         // contract), this card has no focusable parent row owning keyboard
         // nav — the overlay button IS the keyboard path, so it carries its
         // own inset focus ring.
-        className="absolute inset-0 z-0 outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+        className="row-select-target absolute inset-0 z-0 outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         aria-label={`Select deleted worktree: ${worktree.title}`}
       />
       {/* Left padding is the live card's drag-grip gutter (w-4), so FolderX
@@ -247,11 +250,11 @@ export function DeletedWorktreeCard({
             branch name down to a few characters, and the name is what says
             which worktree this is. */}
         <div className="mt-0.5 flex items-center gap-2">
-          <TruncatedTooltip
-            content={worktree.path}
-            isTruncated={formatPath(worktree.path, homeDir) !== worktree.path || undefined}
-          >
-            <div className="min-w-0 flex-1 truncate font-mono text-xs text-text-muted line-through">
+          {/* Measured, not inferred from the ~ shortening: an unclipped path
+              is no tab stop. */}
+          <TruncatedTooltip content={worktree.path}>
+            {/* A size under the branch name it belongs to, not over it. */}
+            <div className="min-w-0 flex-1 truncate font-mono text-2xs text-text-secondary line-through">
               {formatPath(worktree.path, homeDir)}
             </div>
           </TruncatedTooltip>

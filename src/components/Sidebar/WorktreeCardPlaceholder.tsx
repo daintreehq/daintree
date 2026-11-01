@@ -5,6 +5,8 @@ import { BranchLabel } from "@/components/Worktree/BranchLabel";
 import { Button } from "@/components/ui/button";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { SKELETON_HINT_FIRST_THRESHOLD_MS, useLiveRegionReady } from "@/components/ui/Skeleton";
+import { Spinner } from "@/components/ui/Spinner";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 
 interface WorktreeCardPlaceholderProps {
   pendingCreation: PendingCreation;
@@ -39,6 +41,10 @@ export function WorktreeCardPlaceholder({
   const isError = pendingCreation.status === "error";
   const slow = useIsSlow(pendingCreation.startedAt, !isError);
   const liveReady = useLiveRegionReady();
+  // Setup hooks routinely take tens of seconds; a static "Creating…" that long
+  // reads as stuck. A spinner past the Doherty gate, stilled by reduced motion
+  // like every other.
+  const showSpinner = useDohertyGate(!isError);
 
   if (isError) {
     const title = `Couldn't create ${pendingCreation.branch}`;
@@ -50,7 +56,8 @@ export function WorktreeCardPlaceholder({
       <div
         role="alert"
         data-pending-creation-path={pendingCreation.path}
-        className="flex items-start gap-2 border-b border-divider px-4 py-3"
+        data-variant="sidebar"
+        className="sidebar-worktree-card flex items-start gap-2 px-4 py-3"
       >
         <XCircle className="mt-0.5 size-3.5 shrink-0 text-status-error" aria-hidden="true" />
         <div className="min-w-0 flex-1 space-y-1">
@@ -58,12 +65,11 @@ export function WorktreeCardPlaceholder({
             <span className="block truncate text-xs text-text-primary">{title}</span>
           </TruncatedTooltip>
           {pendingCreation.error && (
-            <p
-              className="line-clamp-3 break-words text-xs text-text-secondary"
-              title={pendingCreation.error}
-            >
-              {pendingCreation.error}
-            </p>
+            <TruncatedTooltip content={pendingCreation.error}>
+              <p className="line-clamp-3 break-words text-xs text-text-secondary">
+                {pendingCreation.error}
+              </p>
+            </TruncatedTooltip>
           )}
           <div className="flex items-center gap-1.5 pt-1">
             <Button
@@ -117,7 +123,10 @@ export function WorktreeCardPlaceholder({
             <div className="flex min-w-0 flex-1 items-center">
               <BranchLabel label={pendingCreation.branch} isActive={false} />
             </div>
-            <span className="shrink-0 text-xs text-text-secondary">{status}</span>
+            <span className="flex shrink-0 items-center gap-1.5 text-xs text-text-secondary">
+              {showSpinner && <Spinner size="xs" className="shrink-0" />}
+              {status}
+            </span>
             {/* Holds the row at a live card's height: its toolbar buttons are 24px. */}
             <span className="block h-6 w-0 shrink-0" />
           </div>

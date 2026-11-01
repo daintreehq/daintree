@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, useRef } from "react";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { WorktreeFilterPopover } from "./WorktreeFilterPopover";
@@ -312,13 +313,16 @@ export function WorktreeSidebarSearchBar({
               </span>
             )}
             {showClearAll && (
-              <button
-                type="button"
+              // A link-styled button, so it reads as the way out rather than as
+              // more of the status text beside it, on a 24px target that
+              // reaches into the line's own padding.
+              <Button
+                variant="link"
                 onClick={handleClearAll}
-                className="ml-auto shrink-0 rounded-[var(--radius-sm)] text-2xs text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+                className="-my-1 -mr-1 ml-auto min-h-6 shrink-0 px-1 text-2xs"
               >
                 Clear all
-              </button>
+              </Button>
             )}
           </div>
           {filterSummaryText && (

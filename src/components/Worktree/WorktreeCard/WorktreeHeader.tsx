@@ -30,6 +30,8 @@ import { isExternalWorktree, isLiveDevServerStatus } from "@/lib/worktreeFilters
 import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 import { WorktreeActionsToolbar } from "./WorktreeActionsToolbar";
+import { SECTION_TEXT_COLUMN } from "./sectionChrome";
+import { WorktreeDensitySubmenu } from "../WorktreeDensitySubmenu";
 import { MainWorktreeSecondaryRow } from "./MainWorktreeSecondaryRow";
 import { NonMainSecondaryRow } from "./NonMainSecondaryRow";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -617,7 +619,12 @@ export function WorktreeHeader({
         {variant === "sidebar" && (
           // For the card's select button to be described by; see rowDescriptions.
           <span id={worktreeRowDescriptionId(worktree.id, "attention")} hidden>
-            {[gitStateIndicator?.label, lifecycleAlarm?.label].filter(Boolean).join(". ")}
+            {/* The session states too: the select button is what a screen
+                reader lands on as the cursor moves, and the glyphs beside the
+                title are pictures it cannot reach. */}
+            {[gitStateIndicator?.label, lifecycleAlarm?.label, sessionAriaLabel]
+              .filter(Boolean)
+              .join(". ")}
           </span>
         )}
         {/* An open card raises the pill only for an alarm its own lines don't
@@ -633,6 +640,7 @@ export function WorktreeHeader({
             }
             detail={collapsedAlarmDetail}
             descriptionId={collapsedAlarmDescriptionId(worktree.id)}
+            spokenAlarm={collapsedAlarm.tier >= 2 ? collapsedAlarm : undefined}
             revealed={
               isKeyboardFocused &&
               (variant !== "sidebar" || (!showGitStateMark && !showLifecycleMark))
@@ -640,10 +648,12 @@ export function WorktreeHeader({
           />
         )}
 
-        {/* The compact card draws session state here in both modes, so a
-            waiting ring always lands in the same column of every card's first
-            line. An open comfortable card draws it on its Sessions row. */}
-        {(isCollapsed || isCompact) && visibleStates.length > 0 && (
+        {/* Every sidebar card draws session state here, open or collapsed, in
+            either density, so a waiting ring always lands in the same column
+            of every card's first line. On the Sessions row it sat four to
+            eight lines down a card of varying height, and finding who was
+            waiting meant reading each card's bottom corner. */}
+        {(isCollapsed || variant === "sidebar") && visibleStates.length > 0 && (
           <CollapsedSessionIndicators
             visibleStates={visibleStates}
             sessionAriaLabel={sessionAriaLabel}
@@ -652,6 +662,16 @@ export function WorktreeHeader({
         )}
 
         <WorktreeActionsToolbar
+          managedByGrid={variant === "sidebar"}
+          viewSubmenu={
+            variant === "sidebar" ? (
+              <WorktreeDensitySubmenu
+                key="view"
+                kind="dropdown"
+                iconClassName="mr-2 h-3.5 w-3.5 shrink-0"
+              />
+            ) : undefined
+          }
           isCollapsed={isCollapsed ?? false}
           onCleanupWorktree={onCleanupWorktree}
           canCollapse={canCollapse ?? false}
@@ -718,7 +738,11 @@ export function WorktreeHeader({
           without squeezing the headline out of the row above. */}
       {!isCollapsed && pluginStatuses.length > 0 && (
         <div
-          className={cn("flex flex-wrap items-center gap-1 px-1", isCompact ? "mt-1" : "mt-1.5")}
+          className={cn(
+            "flex flex-wrap items-center gap-1",
+            SECTION_TEXT_COLUMN,
+            isCompact ? "mt-1" : "mt-1.5"
+          )}
         >
           <WorktreePluginStatusChips worktreeId={worktree.id} statuses={pluginStatuses} />
         </div>

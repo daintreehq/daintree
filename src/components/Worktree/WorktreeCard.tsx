@@ -45,6 +45,7 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useResolvedPresentation } from "@/hooks/useResolvedPresentation";
 import { QuietGitDetails } from "./WorktreeCard/QuietGitDetails";
 import { cn } from "../../lib/utils";
+import { getWorktreeSidebarRowId } from "@/components/Sidebar/useWorktreeSidebarKeyboard";
 import {
   copyableBranchName,
   isExternalWorktree,
@@ -74,7 +75,6 @@ import { WorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSection"
 import { deriveSetupAlarm } from "./WorktreeCard/setupAlarm";
 import { syncLineHasNews } from "./WorktreeCard/syncLineNews";
 import { WslGitBanner } from "./WorktreeCard/WslGitBanner";
-import type { AggregateCounts } from "./WorktreeCard/aggregateCounts";
 import { useInputReceiptKey } from "./WorktreeCard/hooks/useInputReceiptKey";
 import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
@@ -126,7 +126,8 @@ export interface WorktreeCardProps {
   isActive: boolean;
   isFocused: boolean;
   isSingleWorktree?: boolean;
-  aggregateCounts?: AggregateCounts;
+  /** The sidebar grid's keyboard cursor is on this card (grid keyboard-focused). */
+  isKeyboardCursor?: boolean;
   onSelect: () => void;
   onOpenEditor: () => void;
   onSaveLayout?: () => void;
@@ -160,7 +161,7 @@ export function WorktreeCard({
   isActive,
   isFocused,
   isSingleWorktree: _isSingleWorktree,
-  aggregateCounts: _aggregateCounts,
+  isKeyboardCursor = false,
   onSelect,
   onOpenEditor,
   onSaveLayout,
@@ -1128,7 +1129,16 @@ export function WorktreeCard({
   // Details is closed: two disclosures that each used a full row to say one
   // line. Opening Sessions keeps its trigger in that row and lays the list out
   // beneath, so the control does not move out from under the click.
-  const isSessionsFooterInline = isCompactCard && !isExpanded && terminalCounts.total > 0;
+  // The pinned main card takes the compact footer in either density: it never
+  // scrolls away, so every row it spends is a row the list below loses. Not on
+  // a card showing setup recovery: that block sits under the summary row and
+  // needs the card's full width, not the width left beside the trigger.
+  const hasInlineFooter =
+    (isCompactCard || (variant === "sidebar" && isMainWorktree)) && lifecycleAlarm === null;
+  const isSessionsFooterInline = hasInlineFooter && !isExpanded && terminalCounts.total > 0;
+  // A card with no sessions keeps the trigger's slot empty on that row, so the
+  // age column sits on the same x on every card with the shared footer.
+  const reservesSessionsSlot = hasInlineFooter && !isExpanded && terminalCounts.total === 0;
 
   const ariaStatusParts: string[] = [spineState];
   if (gitStateIndicator) {
@@ -1219,7 +1229,13 @@ export function WorktreeCard({
           aria-busy={isBeingDeleted && !deleteError ? "true" : undefined}
           role={variant === "grid" ? "group" : undefined}
           aria-current={variant === "grid" && isActive ? "true" : undefined}
-          aria-label={`Worktree: ${ariaName}${worktree.isCurrent ? " (current)" : ""}, Status: ${ariaStatusLabel}${labelAriaSuffix}`}
+          // The sidebar card is a plain container (no role), where a label is
+          // prohibited and never read; its select button carries these words.
+          aria-label={
+            variant === "sidebar"
+              ? undefined
+              : `Worktree: ${ariaName}${worktree.isCurrent ? " (current)" : ""}, Status: ${ariaStatusLabel}${labelAriaSuffix}`
+          }
           onMouseDown={isMultiSelectEnabled ? suppressShiftClickTextSelection : undefined}
           onClick={handleCardClick}
           onDoubleClick={handleDoubleClick}
@@ -1327,10 +1343,12 @@ export function WorktreeCard({
             </span>
           )}
 
-          {/* Sidebar only. This is a real keyboard target there: it is
-              tabbable, sidebar.css paints its focus ring via
-              `.sidebar-worktree-card:has(> button:focus-visible)`, and
-              Enter/Space produce a click that bubbles to `handleCardClick`.
+          {/* Sidebar only. It is the row's keyboard identity there, but not a
+              tab stop: the grid is one tab stop and points at this button with
+              `aria-activedescendant` (it carries the row's id), so a screen
+              reader hears the button's name and the marks that describe it as
+              the arrow keys move. A mouse click focuses it and lands in
+              `handleCardClick`.
 
               In the grid it was none of those things. It sat at `z-0` beneath
               the `relative z-10` content column, so no pointer could ever
@@ -1344,12 +1362,17 @@ export function WorktreeCard({
             <button
               type="button"
               ref={selectButtonRef}
+              id={getWorktreeSidebarRowId(worktree.id)}
+              tabIndex={-1}
               data-card-select-overlay=""
               className={cn(
-                "absolute inset-0 z-0 outline-hidden",
+                // row-select-target: the contrast modes' exemption for a
+                // full-row select button, which would otherwise box every card.
+                "row-select-target absolute inset-0 z-0 outline-hidden",
                 (isDraggingSort || isWorktreeSortDragging) && "pointer-events-none"
               )}
-              aria-label={`Select worktree: ${ariaName}${labelAriaSuffix}`}
+              aria-label={`Select worktree: ${ariaName}${worktree.isCurrent ? " (current)" : ""}, ${ariaStatusLabel}${labelAriaSuffix}`}
+              aria-current={isActive ? "true" : undefined}
               // The row's marks are non-focusable, so this button is where a
               // keyboard user meets them: described by each mark's words, and,
               // collapsed, revealing the alarm's tooltip while ringed.
@@ -1437,7 +1460,10 @@ export function WorktreeCard({
                     <div
                       ref={dragHandleActivatorRef}
                       data-worktree-row-drag-handle=""
-                      className="shrink-0 w-4 flex items-center justify-center cursor-not-allowed opacity-50 touch-none select-none transition-colors motion-reduce:transition-none"
+                      // Dimmed to the unavailable level, but only where the
+                      // gesture would be tried: at rest during a search it ran a
+                      // column of dead grips down every card.
+                      className="shrink-0 w-4 flex items-center justify-center cursor-not-allowed opacity-0 group-hover/card:opacity-50 touch-none select-none transition-[color,opacity] motion-reduce:transition-none"
                       aria-hidden="true"
                     >
                       <GripVertical className="w-3 h-3" />
@@ -1587,7 +1613,10 @@ export function WorktreeCard({
                   isMainOnStandardBranch={isMainOnStandardBranch}
                   isPinned={isPinned}
                   isCollapsed={effectiveIsCollapsed}
-                  isKeyboardFocused={isSelectFocusVisible}
+                  // The grid's cursor reveals a row's marks the way Tab focus
+                  // on its select button used to, now that arrows move a
+                  // virtual cursor and the button is not a tab stop.
+                  isKeyboardFocused={isSelectFocusVisible || isKeyboardCursor}
                   canCollapse={canCollapse}
                   onToggleCollapse={handleToggleCollapse}
                   contentId={`worktree-body-${worktree.id}`}
@@ -1650,13 +1679,21 @@ export function WorktreeCard({
               {!effectiveIsCollapsed && (
                 <div
                   id={`worktree-body-${worktree.id}`}
-                  className={
+                  className={cn(
                     variant !== "sidebar"
                       ? "pb-2.5 pt-2"
                       : isCompactCard
                         ? "pb-3 pt-1"
-                        : "pb-3.5 pt-2"
-                  }
+                        : "pb-3.5 pt-2",
+                    // The pinned main card never scrolls with the list, so an
+                    // opened Details or Sessions could take the whole sidebar
+                    // and leave the list no room. It scrolls inside itself
+                    // past half the window instead.
+                    variant === "sidebar" &&
+                      isMainWorktree &&
+                      (isExpanded || isTerminalsExpanded) &&
+                      "max-h-[50vh] overflow-y-auto overscroll-contain"
+                  )}
                 >
                   {worktree.isWslPath && !worktree.wslGitOptIn && !worktree.wslGitDismissed && (
                     <WslGitBanner
@@ -1669,11 +1706,15 @@ export function WorktreeCard({
                       a time and the sessions trigger without losing the words. */}
                   <div
                     className={cn(
-                      isSessionsFooterInline &&
+                      (isSessionsFooterInline || reservesSessionsSlot) &&
                         "flex flex-col @xs/card:flex-row @xs/card:flex-wrap @xs/card:items-center @xs/card:gap-x-1"
                     )}
                   >
-                    <div className={cn(isSessionsFooterInline && "min-w-0 flex-1")}>
+                    <div
+                      className={cn(
+                        (isSessionsFooterInline || reservesSessionsSlot) && "min-w-0 flex-1"
+                      )}
+                    >
                       <WorktreeDetailsSection
                         variant={variant}
                         worktree={worktree}
@@ -1741,18 +1782,23 @@ export function WorktreeCard({
 
                     <WorktreeTerminalSection
                       variant={variant}
-                      density={cardDensity}
                       worktreeId={worktree.id}
                       worktreeLabel={ariaName}
                       onStartSession={() => handleOpenPanelPalette("user")}
                       isExpanded={isTerminalsExpanded}
                       inline={isSessionsFooterInline}
-                      stateGlyphsElsewhere={isCompactCard}
+                      stateGlyphsElsewhere={variant === "sidebar"}
                       counts={terminalCounts}
                       terminals={worktreeTerminals}
                       onToggle={handleToggleTerminals}
                       onTerminalSelect={handleTerminalSelect}
                     />
+                    {reservesSessionsSlot && (
+                      <div
+                        aria-hidden="true"
+                        className="hidden w-[3.625rem] shrink-0 @xs/card:block"
+                      />
+                    )}
                   </div>
                 </div>
               )}

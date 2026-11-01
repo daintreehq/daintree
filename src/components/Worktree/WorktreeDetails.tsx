@@ -14,7 +14,6 @@ import { actionService } from "@/services/ActionService";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isValidPastTimestamp } from "@/utils/timestamps";
-import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 
 const MAX_VISIBLE_FILES = 100;
 
@@ -45,9 +44,10 @@ const NARRATIVE_RAIL_SIDEBAR_NUDGE = "ml-0.5";
 // `text-secondary`, not `text-muted`: this label is the only thing that says
 // whether the prose under it is an AI note, a summary, or a commit message,
 // and `text-muted` has no contrast floor on the darkest palettes — 2.22:1 on
-// namib, where it drops out of the rail entirely. The 10px uppercase size and
-// the tracking already do the de-emphasis.
-const NARRATIVE_LABEL = cn(LIST_LABEL_CLASS, "flex items-center gap-1");
+// namib, where it drops out of the rail entirely. Sentence case at the panel's
+// one label size, the same as "Changed files" and "Last active" below it: an
+// uppercase eyebrow over those put two label systems in a three-label panel.
+const NARRATIVE_LABEL = "flex items-center gap-1 text-xs font-medium text-text-secondary";
 
 export interface WorktreeDetailsProps {
   worktree: WorktreeState;
@@ -80,7 +80,7 @@ export function WorktreeDetails({
   effectiveSummary,
   worktreeErrors,
   hasChanges,
-  isFocused,
+  isFocused: _isFocused,
   isStale = false,
   onPathClick,
   onDismissError,
@@ -239,7 +239,7 @@ export function WorktreeDetails({
           {/* Nothing to say yet. A filled box here occupied the footprint of
               real content and read as data; a single muted line does not. */}
           {!effectiveNote && !effectiveSummary && !rawLastCommitMsg && (
-            <div className="text-xs text-text-muted">No AI summary yet</div>
+            <div className="text-xs text-text-secondary">No AI summary yet</div>
           )}
 
           {/* Block 3: Artifacts (folder-grouped file changes + system path).
@@ -329,12 +329,13 @@ export function WorktreeDetails({
                   onPathClick();
                 }}
                 className={cn(
-                  "flex min-w-0 flex-1 items-center gap-1.5 truncate rounded-[var(--radius-md)] text-left font-mono text-xs text-text-muted hover:text-text-secondary",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
-                  isFocused && "text-text-secondary"
+                  // text-secondary: a control, and text-muted has no contrast
+                  // floor on the darkest palettes (2.22:1 on namib).
+                  "flex min-w-0 flex-1 items-center gap-1.5 truncate rounded-[var(--radius-md)] text-left font-mono text-xs text-text-secondary hover:text-text-primary",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                 )}
               >
-                <FolderTree className="w-3 h-3 shrink-0 text-text-muted" />
+                <FolderTree className="w-3 h-3 shrink-0 text-text-secondary" />
                 <span className="truncate">{displayPath}</span>
               </button>
             </TooltipTrigger>

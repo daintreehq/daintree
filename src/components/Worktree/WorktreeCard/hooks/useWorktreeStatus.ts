@@ -90,6 +90,16 @@ export interface UseWorktreeStatusResult {
   gitStateIndicator: GitStateIndicator | null;
 }
 
+// "Running setup" → "Setup": the phase as the subject of a sentence-case label
+// ("Setup failed"), not the lowercase remainder of a progress line.
+function phaseNoun(phase: string): string {
+  const noun = phase.replace(
+    /^(Running |Provisioning |Tearing down |Resuming |Pausing |Checking )/,
+    ""
+  );
+  return noun.charAt(0).toUpperCase() + noun.slice(1);
+}
+
 export function useWorktreeStatus({
   worktree,
 }: {
@@ -225,15 +235,15 @@ export function useWorktreeStatus({
     }
     if (lifecycle.state === "failed") {
       const phase = LIFECYCLE_PHASE_LABELS[lifecycle.phase] ?? lifecycle.phase;
-      return `${phase.replace(/^(Running |Provisioning |Tearing down |Resuming |Pausing |Checking )/, "")} failed`;
+      return `${phaseNoun(phase)} failed`;
     }
     if (lifecycle.state === "timed-out") {
       const phase = LIFECYCLE_PHASE_LABELS[lifecycle.phase] ?? lifecycle.phase;
-      return `${phase.replace(/^(Running |Provisioning |Tearing down |Resuming |Pausing |Checking )/, "")} timed out`;
+      return `${phaseNoun(phase)} timed out`;
     }
     if (lifecycle.state === "needs-approval") {
       const phase = LIFECYCLE_PHASE_LABELS[lifecycle.phase] ?? lifecycle.phase;
-      return `${phase.replace(/^(Running |Provisioning |Tearing down |Resuming |Pausing |Checking )/, "")} needs approval`;
+      return `${phaseNoun(phase)} needs approval`;
     }
     return undefined;
   }, [lifecycle]);

@@ -22,9 +22,15 @@ export interface HiddenSide {
    * so the pills break down the same number the quick-state bar shows.
    */
   attention: number;
+  /**
+   * How many report something broken that no agent is asking about (conflict,
+   * failing CI, failed setup, failed sign-in), and the worst tone among them.
+   */
+  problem: number;
+  problemTone: "error" | "warning" | null;
 }
 
-const NO_HIDDEN: HiddenSide = { count: 0, attention: 0 };
+const NO_HIDDEN: HiddenSide = { count: 0, attention: 0, problem: 0, problemTone: null };
 
 /** How much of each edge of the scroller a pill's band currently covers. */
 export interface BandInsets {
@@ -51,9 +57,11 @@ interface Classification {
   /** The hidden row nearest the top edge, and the nearest one needing attention. */
   nearestAbove: number | null;
   nearestAttentionAbove: number | null;
+  nearestProblemAbove: number | null;
   /** The hidden row nearest the bottom edge, and the nearest one needing attention. */
   nearestBelow: number | null;
   nearestAttentionBelow: number | null;
+  nearestProblemBelow: number | null;
   /** Rows cut by the top or bottom edge: on screen, but not all of them. */
   clippedAtTop: number | null;
   clippedAtBottom: number | null;
@@ -67,12 +75,14 @@ interface Classification {
 
 function emptyClassification(): Classification {
   return {
-    above: { count: 0, attention: 0 },
-    below: { count: 0, attention: 0 },
+    above: { ...NO_HIDDEN },
+    below: { ...NO_HIDDEN },
     nearestAbove: null,
     nearestAttentionAbove: null,
+    nearestProblemAbove: null,
     nearestBelow: null,
     nearestAttentionBelow: null,
+    nearestProblemBelow: null,
     clippedAtTop: null,
     clippedAtBottom: null,
     clippedAtTopFillsView: false,
@@ -80,11 +90,21 @@ function emptyClassification(): Classification {
   };
 }
 
+function worseTone(
+  current: "error" | "warning" | null,
+  next: "error" | "warning"
+): "error" | "warning" {
+  return current === "error" || next === "error" ? "error" : "warning";
+}
+
+const NO_PROBLEMS: ReadonlyMap<string, "error" | "warning"> = new Map();
+
 /** Classifies the list against one viewport, given as content offsets. */
 function classifyBetween(
   items: ReadonlyArray<ScrollIndicatorItem>,
   rendered: ReadonlyArray<ListItem<ScrollIndicatorItem>>,
   attention: ReadonlySet<string>,
+  problems: ReadonlyMap<string, "error" | "warning">,
   viewportTop: number,
   viewportBottom: number
 ): Classification {
@@ -102,6 +122,15 @@ function classifyBetween(
       result.above.attention++;
       result.nearestAttentionAbove = index;
     }
+    // A row already counted as waiting is not counted again: one row, one flag.
+    const waiting = item.worktreeId !== undefined && attention.has(item.worktreeId);
+    const tone =
+      item.worktreeId !== undefined && !waiting ? problems.get(item.worktreeId) : undefined;
+    if (tone) {
+      result.above.problem++;
+      result.above.problemTone = worseTone(result.above.problemTone, tone);
+      result.nearestProblemAbove = index;
+    }
   };
   const markBelow = (index: number) => {
     const item = items[index]!;
@@ -110,6 +139,15 @@ function classifyBetween(
     if (item.worktreeId !== undefined && attention.has(item.worktreeId)) {
       result.below.attention++;
       result.nearestAttentionBelow ??= index;
+    }
+    // A row already counted as waiting is not counted again: one row, one flag.
+    const waiting = item.worktreeId !== undefined && attention.has(item.worktreeId);
+    const tone =
+      item.worktreeId !== undefined && !waiting ? problems.get(item.worktreeId) : undefined;
+    if (tone) {
+      result.below.problem++;
+      result.below.problemTone = worseTone(result.below.problemTone, tone);
+      result.nearestProblemBelow ??= index;
     }
   };
 
@@ -164,6 +202,8 @@ interface UseScrollIndicatorParams {
    * throw away the measured geometry and blank both pills for a frame.
    */
   attentionWorktreeIds: ReadonlySet<string>;
+  /** Worktrees reporting a problem, by tone. Kept apart from `items` likewise. */
+  problemWorktreeTones?: ReadonlyMap<string, "error" | "warning">;
   /** Used to jump by index, since the row a pill targets is usually unmounted. */
   virtuosoRef: RefObject<Pick<VirtuosoHandle, "scrollToIndex"> | null>;
   /** False under reduced motion: a long smooth scroll is exactly the motion it asks to drop. */
@@ -211,12 +251,18 @@ function pageStep(scroller: HTMLElement, band: number): number {
 }
 
 function sameSide(a: HiddenSide, b: HiddenSide): boolean {
-  return a.count === b.count && a.attention === b.attention;
+  return (
+    a.count === b.count &&
+    a.attention === b.attention &&
+    a.problem === b.problem &&
+    a.problemTone === b.problemTone
+  );
 }
 
 function useScrollIndicator({
   items,
   attentionWorktreeIds,
+  problemWorktreeTones = NO_PROBLEMS,
   virtuosoRef,
   smoothScroll,
   bandHeightPx = 0,
@@ -243,12 +289,14 @@ function useScrollIndicator({
   // after commit, so the ref is current by the time they read it.
   const itemsRef = useRef(items);
   const attentionRef = useRef(attentionWorktreeIds);
+  const problemsRef = useRef(problemWorktreeTones);
   const smoothScrollRef = useRef(smoothScroll);
   const bandHeightRef = useRef(bandHeightPx);
   const pausedRef = useRef(paused);
   useEffect(() => {
     itemsRef.current = items;
     attentionRef.current = attentionWorktreeIds;
+    problemsRef.current = problemWorktreeTones;
     smoothScrollRef.current = smoothScroll;
     bandHeightRef.current = bandHeightPx;
     pausedRef.current = paused;
@@ -287,10 +335,12 @@ function useScrollIndicator({
     const band = bandHeightRef.current;
     if (band > 0 && clientHeight < band * MIN_VIEWPORT_IN_BANDS) return emptyClassification();
     const attention = attentionRef.current;
+    const problems = problemsRef.current;
     const physical = classifyBetween(
       items,
       rendered,
       attention,
+      problems,
       scrollTop,
       scrollTop + clientHeight
     );
@@ -307,6 +357,7 @@ function useScrollIndicator({
       items,
       rendered,
       attention,
+      problems,
       scrollTop + top,
       scrollTop + clientHeight - bottom
     );
@@ -331,7 +382,7 @@ function useScrollIndicator({
   // anything scrolling, so the set is a recompute trigger of its own.
   useEffect(() => {
     updateScrollIndicators();
-  }, [attentionWorktreeIds, updateScrollIndicators]);
+  }, [attentionWorktreeIds, problemWorktreeTones, updateScrollIndicators]);
 
   useEffect(() => {
     updateScrollIndicators();
@@ -412,8 +463,9 @@ function useScrollIndicator({
     if (!result || !virtuoso || !scroller) return;
     const behavior = smoothScrollRef.current ? "smooth" : "auto";
     const band = bandHeightRef.current;
-    if (result.nearestAttentionAbove !== null) {
-      virtuoso.scrollToIndex({ index: result.nearestAttentionAbove, align: "center", behavior });
+    const nearestFlaggedAbove = result.nearestAttentionAbove ?? result.nearestProblemAbove;
+    if (nearestFlaggedAbove !== null) {
+      virtuoso.scrollToIndex({ index: nearestFlaggedAbove, align: "center", behavior });
     } else if (result.clippedAtTopFillsView) {
       scroller.scrollTo({ top: scroller.scrollTop - pageStep(scroller, band), behavior });
     } else if (result.nearestAbove !== null) {
@@ -429,8 +481,9 @@ function useScrollIndicator({
     if (!result || !virtuoso || !scroller) return;
     const behavior = smoothScrollRef.current ? "smooth" : "auto";
     const band = bandHeightRef.current;
-    if (result.nearestAttentionBelow !== null) {
-      virtuoso.scrollToIndex({ index: result.nearestAttentionBelow, align: "center", behavior });
+    const nearestFlaggedBelow = result.nearestAttentionBelow ?? result.nearestProblemBelow;
+    if (nearestFlaggedBelow !== null) {
+      virtuoso.scrollToIndex({ index: nearestFlaggedBelow, align: "center", behavior });
     } else if (result.clippedAtBottomFillsView) {
       scroller.scrollTo({ top: scroller.scrollTop + pageStep(scroller, band), behavior });
     } else if (result.nearestBelow !== null) {

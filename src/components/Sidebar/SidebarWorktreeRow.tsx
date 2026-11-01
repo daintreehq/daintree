@@ -129,6 +129,7 @@ function SidebarWorktreeRow({
             worktree={worktree}
             isActive={isActive}
             isFocused={isFocused}
+            isKeyboardCursor={isKeyboardCursor}
             isSingleWorktree={isSingleWorktree}
             onSelect={onSelect}
             onOpenEditor={onOpenEditor}

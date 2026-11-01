@@ -109,10 +109,12 @@ function fullyPopulated(): Parameters<typeof renderWorktreeMenu>[0] {
 }
 
 describe("WorktreeMenuItems — root hierarchy", () => {
-  it("renders the twelve intent groups in the specified order", () => {
+  it("renders the direct rows, then the twelve intent groups in the specified order", () => {
     const { container } = renderWorktreeMenu(fullyPopulated());
 
     expect(rootRowLabels(container)).toEqual([
+      "New session…",
+      "Review worktree",
       "Launch",
       "Open",
       "Review",
@@ -128,10 +130,10 @@ describe("WorktreeMenuItems — root hierarchy", () => {
     ]);
   });
 
-  it("separates the four bands with exactly three root separators", () => {
+  it("separates the five bands with exactly four root separators", () => {
     const { container } = renderWorktreeMenu(fullyPopulated());
 
-    expect(rootSeparatorCount(container)).toBe(3);
+    expect(rootSeparatorCount(container)).toBe(4);
   });
 
   it("drops every conditional group on a fresh worktree without ending on a separator", () => {
@@ -142,6 +144,7 @@ describe("WorktreeMenuItems — root hierarchy", () => {
     });
 
     expect(rootRowLabels(container)).toEqual([
+      "Review worktree",
       "Launch",
       "Open",
       "Review",
@@ -263,6 +266,8 @@ describe("WorktreeMenuItems — quiet git detail", () => {
     const { container } = renderWorktreeMenu({ ...fullyPopulated(), quietGit: true });
 
     expect(rootRowLabels(container)).toEqual([
+      "New session…",
+      "Review worktree",
       "Launch",
       "Open",
       "Git",
@@ -327,9 +332,20 @@ describe("WorktreeMenuItems — quiet git detail", () => {
 
   it("dispatches a folded row exactly as the shown menu does", () => {
     const onOpenReviewHub = vi.fn();
-    renderWorktreeMenu({ ...fullyPopulated(), onOpenReviewHub, quietGit: true });
+    const { container } = renderWorktreeMenu({
+      ...fullyPopulated(),
+      onOpenReviewHub,
+      quietGit: true,
+    });
+    const git = Array.from(container.querySelectorAll("[data-menu-sub]")).find(
+      (node) => node.firstElementChild?.textContent?.trim() === "Git"
+    );
+    const folded = Array.from(
+      git?.querySelector("[data-menu-subcontent]")?.querySelectorAll("[data-menu-item]") ?? []
+    ).find((n) => n.textContent?.trim() === "Review worktree");
+    expect(folded).toBeDefined();
 
-    fireEvent.click(screen.getByText("Review worktree"));
+    fireEvent.click(folded!);
 
     expect(onOpenReviewHub).toHaveBeenCalledTimes(1);
   });

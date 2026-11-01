@@ -37,6 +37,12 @@ interface CollapsedAlarmPillProps {
    */
   descriptionId?: string;
   /**
+   * What the description speaks when it differs from the mark: an open card
+   * draws no pill for a failure its PR or sync line already shows, but a
+   * screen reader moving through the list hears the row, not that line.
+   */
+  spokenAlarm?: AlarmDescriptor;
+  /**
    * The row's keyboard target has `:focus-visible`. Opens the tooltip as a
    * hover would, since a keyboard user cannot hover the mark itself.
    */
@@ -74,6 +80,7 @@ export function CollapsedAlarmPill({
   alarm,
   detail,
   descriptionId,
+  spokenAlarm,
   revealed = false,
 }: CollapsedAlarmPillProps) {
   const [hoverOpen, setHoverOpen] = useState(false);
@@ -91,7 +98,18 @@ export function CollapsedAlarmPill({
   // Tier 0 is the no-alarm case; `kind` is tested alongside it so the icon
   // lookup below is total rather than needing a glyph for "none".
   if (alarm.tier === 0 || alarm.kind === "none") {
-    return descriptionId ? <span id={descriptionId} hidden /> : null;
+    if (!descriptionId) return null;
+    const spoken =
+      spokenAlarm && spokenAlarm.tier > 0 && spokenAlarm.kind !== "none"
+        ? detail
+          ? `${spokenAlarm.label} — ${detail}`
+          : spokenAlarm.label
+        : null;
+    return (
+      <span id={descriptionId} hidden>
+        {spoken}
+      </span>
+    );
   }
 
   const Icon = ALARM_ICONS[alarm.kind];

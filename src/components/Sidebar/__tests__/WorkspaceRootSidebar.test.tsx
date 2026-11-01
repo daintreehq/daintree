@@ -291,7 +291,7 @@ describe("WorkspaceRootSidebar", () => {
     // menu inert is a bigger lie than the dead toggle this replaces. Asserted as
     // an exact list so a git-shaped group can't be added back unnoticed.
     render(<WorkspaceRootSidebar workspace={SCRATCH} />);
-    expect(contextMenuRootRows()).toEqual(["Launch", "Open", "Copy"]);
+    expect(contextMenuRootRows()).toEqual(["New session…", "Launch", "Open", "Copy"]);
   });
 
   it("puts the more-actions button last in the row, after Browse files", () => {
@@ -352,7 +352,7 @@ describe("WorkspaceRootSidebar", () => {
     ];
     render(<WorkspaceRootSidebar workspace={PLAIN_FOLDER} />);
 
-    expect(contextMenuRootRows()).toEqual(["Launch", "Open", "Recipes", "Copy"]);
+    expect(contextMenuRootRows()).toEqual(["New session…", "Launch", "Open", "Recipes", "Copy"]);
     expect(screen.queryByText("Elsewhere")).toBeNull();
 
     await act(async () => {
@@ -402,7 +402,7 @@ describe("WorkspaceRootSidebar", () => {
     const rows = Array.from(dropdown.querySelectorAll("[role='menuitem']")).map(
       (el) => el.textContent?.trim() ?? ""
     );
-    expect(rows).toEqual(["Launch", "Open", "Copy"]);
+    expect(rows).toEqual(["New session…", "Launch", "Open", "Copy"]);
   });
 
   it("exposes no worktree-shaped control outside the menu either", () => {

@@ -131,7 +131,7 @@ export function PRBadge({
           data-no-dnd
           // A bounded control with its own plate, on the text's own x: the
           // negative margin cancels the padding the plate is drawn on.
-          className="-mx-1 flex min-w-0 items-center gap-1 rounded-[var(--radius-sm)] px-1 text-left text-xs cursor-pointer transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+          className="relative -mx-1 flex min-w-0 items-center gap-1 rounded-[var(--radius-sm)] px-1 text-left text-xs cursor-pointer transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary after:absolute after:inset-x-0 after:-inset-y-1 after:content-['']"
           aria-label={ariaLabel}
         >
           {isSubordinate && (

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { WorktreeState } from "@/types";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -40,6 +40,10 @@ export const DROPDOWN_COMPONENTS: WorktreeMenuComponents = {
 };
 
 interface WorktreeActionsToolbarProps {
+  /** The sidebar grid owns the row's keyboard model; see `rovingProps`. */
+  managedByGrid?: boolean;
+  /** The sidebar's View ▸ submenu, so "More actions" carries what right-click does. */
+  viewSubmenu?: ReactNode;
   isCollapsed: boolean;
   onCleanupWorktree?: () => void;
   canCollapse: boolean;
@@ -86,6 +90,8 @@ function handleToolbarKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
 }
 
 export function WorktreeActionsToolbar({
+  managedByGrid = false,
+  viewSubmenu,
   isCollapsed,
   onCleanupWorktree,
   canCollapse,
@@ -104,8 +110,11 @@ export function WorktreeActionsToolbar({
     "more",
   ];
   const tabStop = lastFocused && rendered.includes(lastFocused) ? lastFocused : rendered[0];
+  // In the sidebar the grid owns this row's keyboard model: its row-controls
+  // mode roves every control on the card, the toolbar's buttons among them, so
+  // the toolbar keeps no tab stop or arrow handling of its own to fight it.
   const rovingProps = (key: ToolbarButtonKey) => ({
-    tabIndex: key === tabStop ? 0 : -1,
+    tabIndex: managedByGrid ? -1 : key === tabStop ? 0 : -1,
     onFocus: () => setLastFocused(key),
   });
 
@@ -115,7 +124,7 @@ export function WorktreeActionsToolbar({
       data-worktree-row-toolbar=""
       role="toolbar"
       aria-label="Worktree actions"
-      onKeyDown={handleToolbarKeyDown}
+      onKeyDown={managedByGrid ? undefined : handleToolbarKeyDown}
       className="flex shrink-0 items-center gap-0.5"
     >
       {onCleanupWorktree && (
@@ -206,6 +215,7 @@ export function WorktreeActionsToolbar({
             components={DROPDOWN_COMPONENTS}
             isPinned={isPinned}
             {...menu}
+            viewSubmenu={viewSubmenu}
           />
         </DropdownMenuContent>
       </DropdownMenu>

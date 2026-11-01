@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import { render, fireEvent, act } from "@testing-library/react";
 import { useRef, useState } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import {
@@ -249,10 +249,29 @@ describe("useWorktreeSidebarKeyboard — pinned rows in navigation", () => {
 });
 
 describe("useWorktreeSidebarKeyboard — keyboard cursor exposure", () => {
+  // The cursor shows only while the grid holds keyboard focus, which the hook
+  // reads from :focus-visible. jsdom's heuristic for that selector carries
+  // state across tests, so each test here says which kind of focus it means.
+  let focusVisible = true;
+  const originalMatches = Element.prototype.matches;
+  beforeEach(() => {
+    focusVisible = true;
+    vi.spyOn(Element.prototype, "matches").mockImplementation(function (
+      this: Element,
+      selector: string
+    ) {
+      if (selector === ":focus-visible") return focusVisible && this === document.activeElement;
+      return originalMatches.call(this, selector);
+    });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("exposes keyboardCursorId tracking the active row in list mode", () => {
     const { getByTestId } = render(<Harness items={ITEMS} />);
     const grid = getByTestId("grid");
-    fireEvent.focus(grid); // seeds wt1
+    act(() => grid.focus()); // seeds wt1
     expect(grid.getAttribute("data-cursor-id")).toBe("wt1");
     fireEvent.keyDown(grid, { key: "ArrowDown" });
     expect(grid.getAttribute("data-cursor-id")).toBe("wt2");
@@ -267,6 +286,27 @@ describe("useWorktreeSidebarKeyboard — keyboard cursor exposure", () => {
     expect(container.querySelectorAll('[data-keyboard-cursor="true"]')).toHaveLength(0);
     fireEvent.keyDown(getByTestId("tb-wt1-1"), { key: "Escape" }); // back to list mode
     expect(grid.getAttribute("data-cursor-id")).toBe("wt1");
+  });
+
+  it("shows no cursor when the grid takes focus from the pointer", () => {
+    focusVisible = false;
+    const { getByTestId, container } = render(<Harness items={ITEMS} />);
+    const grid = getByTestId("grid");
+    act(() => grid.focus());
+    expect(grid.getAttribute("data-cursor-id")).toBe("");
+    expect(container.querySelectorAll('[data-keyboard-cursor="true"]')).toHaveLength(0);
+  });
+
+  it("drops the cursor once focus leaves the grid", () => {
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    const { getByTestId } = render(<Harness items={ITEMS} />);
+    const grid = getByTestId("grid");
+    act(() => grid.focus());
+    expect(grid.getAttribute("data-cursor-id")).toBe("wt1");
+    act(() => outside.focus());
+    expect(grid.getAttribute("data-cursor-id")).toBe("");
+    outside.remove();
   });
 });
 

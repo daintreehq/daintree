@@ -205,3 +205,10 @@ export const CARD_DENSITY: Record<"sidebar" | "grid", CardDensity> = {
  * toggling a card slid it 26px sideways.
  */
 export const SECTION_TEXT_COLUMN = "pl-[22px]";
+
+/**
+ * The compact card's inline Sessions trigger, at one width whatever its count
+ * says, and the empty slot a card with no sessions keeps in its place, so the
+ * age beside it lands on one column down the list.
+ */
+export const INLINE_SESSIONS_SLOT = "@xs/card:min-w-14";

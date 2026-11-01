@@ -488,17 +488,37 @@ describe("useScrollIndicator attention worktrees and reveal targets", () => {
 
   it("counts waiting worktrees per direction, ignoring ones on screen", () => {
     const { result } = setup(["w0", "w1", "w5", "w9"]);
-    expect(result.current.hiddenAbove).toEqual({ count: 3, attention: 2 });
-    expect(result.current.hiddenBelow).toEqual({ count: 3, attention: 1 });
+    expect(result.current.hiddenAbove).toEqual({
+      count: 3,
+      attention: 2,
+      problem: 0,
+      problemTone: null,
+    });
+    expect(result.current.hiddenBelow).toEqual({
+      count: 3,
+      attention: 1,
+      problem: 0,
+      problemTone: null,
+    });
   });
 
   it("recomputes when an agent starts waiting, without a scroll or a new list", () => {
     const { result, rerender } = setup([]);
     expect(result.current.hiddenBelow.attention).toBe(0);
     rerender({ waitingIds: new Set(["w8"]) });
-    expect(result.current.hiddenBelow).toEqual({ count: 3, attention: 1 });
+    expect(result.current.hiddenBelow).toEqual({
+      count: 3,
+      attention: 1,
+      problem: 0,
+      problemTone: null,
+    });
     rerender({ waitingIds: new Set() });
-    expect(result.current.hiddenBelow).toEqual({ count: 3, attention: 0 });
+    expect(result.current.hiddenBelow).toEqual({
+      count: 3,
+      attention: 0,
+      problem: 0,
+      problemTone: null,
+    });
   });
 
   it("reveals the NEAREST waiting worktree in each direction, centred", () => {
@@ -655,8 +675,18 @@ describe("useScrollIndicator with the pills' bands (issue #15805)", () => {
   // Rows 3 and 12 are on screen bare and behind the bands with them.
   it("counts and reveals a waiting worktree that only a band hides", () => {
     const { result, scrollToIndex } = setup(95, { bandHeightPx: BAND }, { waiting: ["w3", "w12"] });
-    expect(result.current.hiddenAbove).toEqual({ count: 4, attention: 1 });
-    expect(result.current.hiddenBelow).toEqual({ count: 8, attention: 1 });
+    expect(result.current.hiddenAbove).toEqual({
+      count: 4,
+      attention: 1,
+      problem: 0,
+      problemTone: null,
+    });
+    expect(result.current.hiddenBelow).toEqual({
+      count: 8,
+      attention: 1,
+      problem: 0,
+      problemTone: null,
+    });
 
     act(() => result.current.revealBelow());
     expect(scrollToIndex).toHaveBeenLastCalledWith({
@@ -733,7 +763,7 @@ describe("useScrollIndicator with the pills' bands (issue #15805)", () => {
     scroller.scrollTop = 120;
     act(() => result.current.handleScroll());
     rerender({ bandHeightPx: BAND, paused: true });
-    const cleared = { count: 0, attention: 0 };
+    const cleared = { count: 0, attention: 0, problem: 0, problemTone: null };
     expect(result.current.hiddenAbove).toEqual(cleared);
     expect(result.current.hiddenBelow).toEqual(cleared);
     expect(result.current.bandInsets).toEqual({ top: 0, bottom: 0 });

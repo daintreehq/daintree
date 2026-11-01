@@ -17,9 +17,21 @@ export type SidebarKeyboardItem = SidebarRowItemRef | SidebarHeaderItemRef;
 
 type GridMode = "list" | "toolbar";
 
-const TOOLBAR_SELECTOR = "[data-worktree-row-toolbar]";
-const TOOLBAR_ITEM_SELECTOR =
-  "button:not(:disabled), [role='button']:not([aria-disabled='true']), [tabindex]:not([tabindex='-1'])";
+// Every control a row carries, header toolbar and body alike (badges, Details,
+// Sessions, chips, recovery buttons), in DOM order. Elements this hook has
+// already taken off the tab ring keep a marker so they stay findable once
+// their tabindex reads -1. The card's full-card select overlay is not one:
+// the grid itself is how a row is chosen.
+const ROW_CONTROL_MARK = "data-sidebar-row-control";
+const ROW_CONTROL_SELECTOR = [
+  "button:not(:disabled)",
+  "summary",
+  "a[href]",
+  "[role='button']:not([aria-disabled='true'])",
+  "[tabindex='0']",
+  `[${ROW_CONTROL_MARK}]`,
+].join(", ");
+const SELECT_OVERLAY_SELECTOR = "[data-card-select-overlay]";
 
 const ROW_DOM_ID_PREFIX = "worktree-sidebar-row-";
 
@@ -38,6 +50,56 @@ export function getWorktreeSidebarRowId(worktreeId: string): string {
 
 function isElementVisible(el: HTMLElement): boolean {
   return el.offsetParent !== null || el.getClientRects().length > 0;
+}
+
+function getRowControls(row: HTMLElement): HTMLElement[] {
+  const seenRovingLists = new Set<Element>();
+  return Array.from(row.querySelectorAll<HTMLElement>(ROW_CONTROL_SELECTOR)).filter((el) => {
+    if (el.matches(SELECT_OVERLAY_SELECTOR) || el.closest("[data-worktree-row]") !== row) {
+      return false;
+    }
+    // A list with its own roving rows (Details' changed files) is one stop:
+    // its first row, from which its own arrow keys take over.
+    if (el.matches("[data-roving-row]")) {
+      const list = el.closest("[data-roving-list]") ?? el.parentElement ?? el;
+      if (seenRovingLists.has(list)) return false;
+      seenRovingLists.add(list);
+    }
+    return true;
+  });
+}
+
+/**
+ * Keeps the grid one tab stop: every control inside every mounted row comes
+ * off the tab ring, except in the row whose controls the user has entered.
+ * Rows mount and re-render under Virtuoso at any time, so this runs from a
+ * MutationObserver rather than once.
+ */
+// Every focusable in a row, nested lists' rows included, for retiring. The
+// traversal list above keeps one stop per nested list; retiring must reach the
+// row a nested list has promoted to its own stop too, or it stays tabbable.
+function getAllRowFocusables(row: HTMLElement): HTMLElement[] {
+  return Array.from(row.querySelectorAll<HTMLElement>(ROW_CONTROL_SELECTOR)).filter(
+    (el) => !el.matches(SELECT_OVERLAY_SELECTOR) && el.closest("[data-worktree-row]") === row
+  );
+}
+
+function retireRowTabStops(grid: HTMLElement, exceptRow: HTMLElement | null): void {
+  for (const row of grid.querySelectorAll<HTMLElement>("[data-worktree-row]")) {
+    if (row === exceptRow) continue;
+    for (const el of getAllRowFocusables(row)) {
+      if (!el.hasAttribute(ROW_CONTROL_MARK)) el.setAttribute(ROW_CONTROL_MARK, "");
+      if (el.tabIndex !== -1) el.tabIndex = -1;
+    }
+  }
+}
+
+function isFocusVisible(el: HTMLElement): boolean {
+  try {
+    return el.matches(":focus-visible");
+  } catch {
+    return true;
+  }
 }
 
 const PAGE_SIZE_FALLBACK = 10;
@@ -212,11 +274,7 @@ export function useWorktreeSidebarKeyboard({
   }, []);
 
   const getToolbarItemsForRow = useCallback((row: HTMLElement): HTMLElement[] => {
-    const toolbar = row.querySelector<HTMLElement>(TOOLBAR_SELECTOR);
-    if (!toolbar) return [];
-    return Array.from(toolbar.querySelectorAll<HTMLElement>(TOOLBAR_ITEM_SELECTOR)).filter(
-      isElementVisible
-    );
+    return getRowControls(row).filter(isElementVisible);
   }, []);
 
   const syncToolbarTabStops = useCallback((toolbarItems: HTMLElement[], activeIdx: number) => {
@@ -228,10 +286,9 @@ export function useWorktreeSidebarKeyboard({
     (worktreeId: string) => {
       const row = findRowEl(worktreeId);
       if (!row) return;
-      const items = getToolbarItemsForRow(row);
-      for (const el of items) el.tabIndex = -1;
+      for (const el of getAllRowFocusables(row)) el.tabIndex = -1;
     },
-    [findRowEl, getToolbarItemsForRow]
+    [findRowEl]
   );
 
   const enterListMode = useCallback(
@@ -299,8 +356,67 @@ export function useWorktreeSidebarKeyboard({
     syncToolbarTabStops(toolbarItems, idx);
   });
 
+  // One tab stop for the whole grid. Controls inside rows are reached with
+  // ArrowRight / F2 (or a click), never by tabbing through every mounted card.
+  useEffect(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
+    const sync = () => {
+      const entered =
+        modeRef.current === "toolbar" && activeWorktreeId !== null
+          ? findRowEl(activeWorktreeId)
+          : null;
+      retireRowTabStops(grid, entered);
+    };
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(grid, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["tabindex"],
+    });
+    return () => observer.disconnect();
+  }, [activeWorktreeId, mode, findRowEl]);
+
+  // Whether focus is anywhere in the grid. The cursor (and the marks it
+  // reveals) exists only while the keyboard is in here, never left behind
+  // on a row once focus has gone back to a terminal.
+  const [gridHasFocus, setGridHasFocus] = useState(false);
+  useEffect(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
+    // The grid itself, keyboard-focused: the same condition the cursor's CSS
+    // edge waits for, so a mouse click into a card reveals nothing.
+    const onFocusIn = (e: FocusEvent) => setGridHasFocus(e.target === grid && isFocusVisible(grid));
+    const onFocusOut = (e: FocusEvent) => {
+      if (!(e.relatedTarget instanceof Node) || !grid.contains(e.relatedTarget)) {
+        setGridHasFocus(false);
+        // Tabbing out of a row's controls ends row-controls mode, so the row
+        // keeps no tab stop of its own behind the grid's.
+        if (modeRef.current === "toolbar") {
+          modeRef.current = "list";
+          setMode("list");
+        }
+      }
+    };
+    grid.addEventListener("focusin", onFocusIn);
+    grid.addEventListener("focusout", onFocusOut);
+    return () => {
+      grid.removeEventListener("focusin", onFocusIn);
+      grid.removeEventListener("focusout", onFocusOut);
+    };
+  }, []);
+
   const handleGridFocus = useCallback(
-    (_e: React.FocusEvent<HTMLDivElement>) => {
+    (e: React.FocusEvent<HTMLDivElement>) => {
+      // Focus back on the grid itself (Shift+Tab out of a row's controls)
+      // means list mode again, with the cursor and active descendant restored.
+      if (e.target === gridRef.current && modeRef.current === "toolbar") {
+        if (activeWorktreeId !== null) clearToolbarTabStops(activeWorktreeId);
+        setGridMode("list");
+        return;
+      }
       if (modeRef.current !== "list") return;
       if (activeWorktreeId !== null) return;
       const first = firstRowFlatIndex();
@@ -308,7 +424,7 @@ export function useWorktreeSidebarKeyboard({
       const item = itemsRef.current[first];
       if (item?.kind === "row") setActiveWorktreeId(item.worktreeId);
     },
-    [activeWorktreeId, firstRowFlatIndex]
+    [activeWorktreeId, firstRowFlatIndex, clearToolbarTabStops, setGridMode]
   );
 
   const handleGridFocusCapture = useCallback(
@@ -320,10 +436,15 @@ export function useWorktreeSidebarKeyboard({
       if (!row) return;
       const worktreeId = row.dataset.worktreeRow;
       if (!worktreeId) return;
-      const toolbar = row.querySelector<HTMLElement>(TOOLBAR_SELECTOR);
-      if (toolbar && toolbar.contains(target) && target !== row) {
+      if (target !== row && !target.matches(SELECT_OVERLAY_SELECTOR)) {
         const toolbarItems = getToolbarItemsForRow(row);
-        const itemIdx = toolbarItems.indexOf(target);
+        let itemIdx = toolbarItems.indexOf(target);
+        // Any row of a nested roving list (Details' changed files) stands for
+        // the list's one stop, so moving within it stays in row-controls mode.
+        if (itemIdx === -1) {
+          const list = target.closest("[data-roving-list]");
+          if (list) itemIdx = toolbarItems.findIndex((el) => list.contains(el));
+        }
         if (itemIdx !== -1) {
           setGridMode("toolbar");
           activeToolbarIndexRef.current = itemIdx;
@@ -345,6 +466,12 @@ export function useWorktreeSidebarKeyboard({
 
   const handleGridKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
+      // React bubbles a portalled menu's keys through the card that opened
+      // it; those belong to the menu, as do keys a nested widget handled.
+      if (e.defaultPrevented) return;
+      if (!(e.target instanceof Node) || !gridRef.current?.contains(e.target)) return;
+      // A keyboard drag (a session grip, a card) owns the arrows while it lasts.
+      if (document.documentElement.dataset.dragging === "true") return;
       if (e.metaKey) return;
       const isAltArrowReorder = e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown");
       if (e.altKey && !isAltArrowReorder) return;
@@ -381,6 +508,40 @@ export function useWorktreeSidebarKeyboard({
           return;
         }
         if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+          // Inside an open Sessions list the arrows walk its rows first, as the
+          // list is laid out; past either end they step to the next worktree.
+          const focused = document.activeElement as HTMLElement | null;
+          // The open section: its disclosure trigger, then each row (a row's
+          // drag grip counts as that row). The trigger and the list can be
+          // siblings, so each finds the other through its ARIA reference.
+          const list =
+            focused?.closest<HTMLElement>("[data-session-list]") ??
+            (focused?.matches("[data-session-trigger][aria-expanded='true']")
+              ? document.getElementById(focused.getAttribute("aria-controls") ?? "")
+              : null);
+          if (list && focused) {
+            const trigger = document.getElementById(list.getAttribute("aria-labelledby") ?? "");
+            const sessionRows = [
+              ...(trigger ? [trigger] : []),
+              ...list.querySelectorAll<HTMLElement>("[data-session-row-button]"),
+            ];
+            const rowOfFocus =
+              focused
+                .closest<HTMLElement>("[data-session-row]")
+                ?.querySelector<HTMLElement>("[data-session-row-button]") ?? focused;
+            const at = sessionRows.indexOf(rowOfFocus);
+            const next = sessionRows[at + (e.key === "ArrowDown" ? 1 : -1)];
+            if (at !== -1 && next) {
+              e.preventDefault();
+              const nextIdx = toolbarItems.indexOf(next);
+              if (nextIdx !== -1) {
+                activeToolbarIndexRef.current = nextIdx;
+                syncToolbarTabStops(toolbarItems, nextIdx);
+              }
+              next.focus();
+              return;
+            }
+          }
           // Bounce back to list mode and move the active row by one.
           const fromIdx = getActiveRowFlatIndex();
           if (fromIdx === -1) return;
@@ -419,7 +580,23 @@ export function useWorktreeSidebarKeyboard({
       // Only handle keys originating on the grid container itself. Once focus
       // descends into a row (e.g., mouse-click into a toolbar), the toolbar
       // branch above takes over.
-      if (e.target !== gridRef.current) return;
+      // The grid itself, or what a mouse click left focused in a row (the
+      // card's select overlay or the row element). After a click the first key
+      // takes the grid's focus back, so the cursor it moves is the one drawn
+      // and announced, not an invisible one.
+      const keyTarget = e.target as HTMLElement;
+      // Only a live row's: a deleted worktree's card has a select overlay of
+      // its own, outside any `[data-worktree-row]`, whose keys are its own.
+      const isRowClickFocus =
+        (keyTarget.matches?.(SELECT_OVERLAY_SELECTOR) &&
+          keyTarget.closest("[data-worktree-row]") !== null) ||
+        keyTarget.matches?.("[data-worktree-row]");
+      if (keyTarget !== gridRef.current && !isRowClickFocus) return;
+      if (isRowClickFocus) {
+        const rowEl = keyTarget.closest<HTMLElement>("[data-worktree-row]");
+        if (rowEl?.dataset.worktreeRow) setActiveWorktreeId(rowEl.dataset.worktreeRow);
+        gridRef.current?.focus({ preventScroll: true });
+      }
 
       // Establish an active row on first interaction.
       let currentFlatIdx = getActiveRowFlatIndex();
@@ -458,6 +635,21 @@ export function useWorktreeSidebarKeyboard({
       // j / k aliases for Vim-style navigation, alongside ArrowUp/ArrowDown.
       if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
         selectRow(currentWorktreeId, e);
+        return;
+      }
+
+      // The platform's menu key opens the row's own menu, as a right-click would.
+      if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+        const more = findRowEl(currentWorktreeId)?.querySelector<HTMLElement>(
+          '[data-testid="worktree-actions-menu"]'
+        );
+        if (more) {
+          e.preventDefault();
+          e.stopPropagation();
+          // Radix opens its trigger on pointer-down or a key, not on click.
+          more.focus();
+          more.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        }
         return;
       }
 
@@ -542,7 +734,7 @@ export function useWorktreeSidebarKeyboard({
   // Mirror the activeDescendant mode-guard: only expose a cursor in list mode.
   // In toolbar mode focus has descended into a real DOM button, which owns the
   // visible focus ring, so the row-level cursor ring would be a duplicate.
-  const keyboardCursorId = mode === "list" ? activeWorktreeId : null;
+  const keyboardCursorId = mode === "list" && gridHasFocus ? activeWorktreeId : null;
 
   return {
     gridRef,

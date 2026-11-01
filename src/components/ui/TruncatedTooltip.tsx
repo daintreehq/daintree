@@ -63,7 +63,9 @@ export function TruncatedTooltip({
 
   const mergedRef = mergeRefs(
     isTruncatedProp ? undefined : ownDetection.ref,
-    (children as React.ReactElement & { ref?: React.Ref<unknown> }).ref
+    // React 19 carries a ref as a prop; reading `element.ref` is deprecated
+    // and warns in development.
+    (children.props as { ref?: React.Ref<unknown> }).ref
   );
 
   const extraProps: Record<string, unknown> = { ref: mergedRef };

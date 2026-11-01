@@ -71,7 +71,12 @@ describe("ScrollIndicator", () => {
     ["below", 3, 0, "3 more worktrees below. Click to show the next page"],
     ["above", 1, 0, "1 more worktree above. Click to show the next page"],
     ["below", 7, 1, "7 more worktrees below, 1 needs attention. Click to show it"],
-    ["above", 7, 2, "7 more worktrees above, 2 need attention. Click to show the nearest"],
+    [
+      "above",
+      7,
+      2,
+      "7 more worktrees above, 2 need attention. Click to show the nearest that needs attention",
+    ],
   ] as const)(
     "names %s with %i hidden, %i needing attention",
     (direction, count, attentionCount, name) => {
