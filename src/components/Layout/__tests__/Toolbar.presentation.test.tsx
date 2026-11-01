@@ -14,6 +14,8 @@ import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useScratchStore } from "@/store/scratchStore";
+import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import {
   _resetProjectPresentationStoreForTest,
@@ -83,11 +85,14 @@ beforeEach(async () => {
   } as DOMRect);
   _resetProjectPresentationStoreForTest();
   initBuiltInPanelKinds();
-  const worktreeStore = createWorktreeStore();
-  setCurrentViewStore(worktreeStore);
   useWorktreeSelectionStore.setState({ activeWorktreeId: null });
   useProjectStore.setState({ currentProject: PREVIEW_PROJECT });
+  await mountToolbar();
+});
 
+async function mountToolbar(): Promise<void> {
+  const worktreeStore = createWorktreeStore();
+  setCurrentViewStore(worktreeStore);
   render(
     <TooltipProvider>
       <WorktreeStoreContext.Provider value={worktreeStore}>
@@ -96,7 +101,7 @@ beforeEach(async () => {
     </TooltipProvider>
   );
   await settle();
-});
+}
 
 const initialToolbarLayout = useToolbarPreferencesStore.getState().layout;
 
@@ -104,8 +109,19 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   _resetProjectPresentationStoreForTest();
+  useScratchStore.setState({ scratches: [], currentScratch: null });
+  useProjectStore.setState({ projects: [] });
+  useVoiceRecordingStore.setState({ pendingTarget: null });
+  seedViewWorkspace(undefined);
   useToolbarPreferencesStore.setState({ layout: initialToolbarLayout });
 });
+
+/** The id main seeds into a view at creation; absent, the view resolves from the current workspace. */
+function seedViewWorkspace(id: string | undefined): void {
+  const target = window as { __DAINTREE_INITIAL_PROJECT__?: { id: string } };
+  if (id === undefined) delete target.__DAINTREE_INITIAL_PROJECT__;
+  else target.__DAINTREE_INITIAL_PROJECT__ = { id };
+}
 
 describe("Toolbar forge stats under the presentation profile", () => {
   it("draws the pill on the row by default", () => {
@@ -144,6 +160,104 @@ describe("Toolbar forge stats under the presentation profile", () => {
     await applyProfile({ forgeStats: "shown" });
 
     expect(forgeSlot()).toBeNull();
+  });
+});
+
+describe("Toolbar forge stats in a workspace without a repository (#15931)", () => {
+  const SCRATCH = {
+    id: "scratch-15931",
+    path: "/tmp/scratches/scratch-15931",
+    name: "Scratch",
+    createdAt: 1,
+    lastOpened: 1,
+  };
+
+  const rightRowIds = () =>
+    Array.from(
+      document.querySelectorAll<HTMLElement>(
+        '[role="group"][aria-label="Tools and settings"] [data-toolbar-button-id]'
+      ),
+      (el) => el.dataset.toolbarButtonId
+    );
+
+  async function resolveAsScratch(): Promise<void> {
+    act(() => {
+      useProjectStore.setState({ currentProject: null });
+    });
+    await settle();
+    act(() => {
+      useScratchStore.setState({ scratches: [SCRATCH], currentScratch: SCRATCH });
+    });
+    await settle();
+  }
+
+  it("holds the slot's placeholder while the view's workspace is still unknown", async () => {
+    act(() => {
+      useProjectStore.setState({ currentProject: null });
+    });
+    await settle();
+
+    expect(forgeSlot()?.getAttribute("data-toolbar-placeholder")).toBe("true");
+  });
+
+  it("drops the slot once the view resolves as a scratch, leaving the rest of the row as it was", async () => {
+    const gitRow = rightRowIds();
+    expect(gitRow).toContain("forge-stats");
+
+    await resolveAsScratch();
+
+    expect(forgeSlot()).toBeNull();
+    expect(forgeMenuShown()).toBe(false);
+    expect(rightRowIds()).toEqual(gitRow.filter((id) => id !== "forge-stats"));
+  });
+
+  it("keeps the recording indicator beside its neighbours in a scratch", async () => {
+    act(() => {
+      useVoiceRecordingStore.setState({ pendingTarget: { panelId: "panel-15931" } });
+    });
+    await settle();
+    const gitRow = rightRowIds();
+    expect(gitRow).toContain("voice-recording");
+
+    await resolveAsScratch();
+
+    expect(forgeSlot()).toBeNull();
+    expect(rightRowIds()).toEqual(gitRow.filter((id) => id !== "forge-stats"));
+  });
+
+  it("never holds a slot when the view mounts as a scratch, whatever project another window has", async () => {
+    cleanup();
+    seedViewWorkspace(SCRATCH.id);
+    useProjectStore.setState({ projects: [PREVIEW_PROJECT], currentProject: PREVIEW_PROJECT });
+    useScratchStore.setState({ scratches: [SCRATCH], currentScratch: null });
+    await mountToolbar();
+
+    expect(forgeSlot()).toBeNull();
+  });
+
+  it("keeps the pill in a project view while another window has a scratch open", async () => {
+    cleanup();
+    seedViewWorkspace(PREVIEW_PROJECT.id);
+    useProjectStore.setState({ projects: [PREVIEW_PROJECT], currentProject: PREVIEW_PROJECT });
+    useScratchStore.setState({ scratches: [SCRATCH], currentScratch: SCRATCH });
+    await mountToolbar();
+
+    expect(forgeSlot()).not.toBeNull();
+    expect(forgeSlot()?.getAttribute("data-toolbar-placeholder")).toBeNull();
+  });
+
+  it("holds the slot in a view whose own workspace hasn't resolved, whatever scratches exist", async () => {
+    cleanup();
+    seedViewWorkspace("project-15931-pending");
+    useScratchStore.setState({ scratches: [SCRATCH], currentScratch: SCRATCH });
+    await mountToolbar();
+    // Main hasn't bound this view to its project yet.
+    act(() => {
+      useProjectStore.setState({ projects: [], currentProject: null });
+    });
+    await settle();
+
+    expect(forgeSlot()?.getAttribute("data-toolbar-placeholder")).toBe("true");
   });
 });
 

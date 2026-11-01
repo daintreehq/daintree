@@ -83,6 +83,7 @@ import {
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
+import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 import { activeWorkspaceIdentity } from "@/lib/workspaceIdentity";
 import { usePreferencesStore, useToolbarPreferencesStore, useVoiceRecordingStore } from "@/store";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
@@ -143,18 +144,9 @@ import { useToolbarOverflowStatus } from "./useToolbarOverflowStatus";
 import { useToolbarOverflowEviction } from "./useToolbarOverflowEviction";
 import { useToolbarCustomization } from "./useToolbarCustomization";
 import { useToolbarProjectPill } from "./useToolbarProjectPill";
+import { ForgeStatsPlaceholder } from "./ForgeStatsPlaceholder";
 
 export { OVERFLOW_MENU_META } from "./ToolbarOverflowMenu";
-
-function ForgeStatsPlaceholder() {
-  return (
-    <div className="toolbar-stats app-no-drag relative mr-2 flex h-8 w-[13rem] shrink-0 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,var(--radius-md))] border opacity-0 pointer-events-none">
-      <div data-stat-segment="" className="h-8 flex-1" />
-      <div data-stat-segment="" className="h-8 flex-1" />
-      <div data-stat-segment="" className="h-8 flex-1" />
-    </div>
-  );
-}
 
 // The same box as the `size="icon"` button it stands in for, so the overflow
 // budget and the row height it reserves are the button's, not 4px more.
@@ -203,7 +195,14 @@ export function Toolbar({
   // resolves to hidden at any level: it has nothing to count.
   const presentation = useResolvedPresentation();
   const forgeStatsLevel = presentation.forgeStats;
-  const forgeStatsHidden = currentProject !== null && forgeStatsLevel === "hidden";
+  // This view's own workspace, not the broadcast `currentProject`, which a
+  // scratch never gets: once the view resolves to a workspace without a
+  // repository the slot goes, rather than holding its placeholder for good
+  // (#15931). Until the view resolves either way, the placeholder stays.
+  const workspaceRoot = useWorkspaceRoot();
+  const forgeStatsHidden =
+    workspaceRoot?.isGitBacked === false ||
+    (currentProject !== null && forgeStatsLevel === "hidden");
   // "Use this project's toolbar" (#13783): demoted buttons fold into `…`,
   // explicitly shown ones and promoted plugin buttons claim a slot. All of it
   // is applied at the render boundary; the app-wide layout is never written.
@@ -953,13 +952,13 @@ export function Toolbar({
       "forge-stats": {
         // The button owns its own shape now: full three-segment pill with a
         // resolved forge provider, commits-only without one (commit count is
-        // local git data). Placeholder (not removal) when no project: the
-        // slot's no-drag rectangle must exist on first paint regardless
-        // (PROJECT_SCOPED_TOOLBAR_IDS).
+        // local git data). Placeholder (not removal) while no project has
+        // resolved: the slot's no-drag rectangle must exist on first paint
+        // regardless (PROJECT_SCOPED_TOOLBAR_IDS).
         // A profile that hides the pill drops its slot from the row instead
         // (see `isButtonShownOnToolbar`), so the button — and its stats
-        // polling — never mounts. A workspace with no repository always
-        // resolves to hidden, so polling never starts for it (#11405).
+        // polling — never mounts. A workspace with no repository, a scratch
+        // included, always drops it, so polling never starts for it (#11405).
         render: () =>
           currentProject && forgeStatsLevel !== "hidden" ? (
             <ForgeStatsToolbarButton

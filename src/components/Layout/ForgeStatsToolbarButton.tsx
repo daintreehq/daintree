@@ -46,6 +46,7 @@ import {
 } from "./RateLimitDetails";
 import { forgeNotConnectedLabel, useRemoteHostName } from "@/hooks/useSettingsOwner";
 import { ForgeStatPill } from "./ForgeStatPill";
+import { ForgeStatsPlaceholder } from "./ForgeStatsPlaceholder";
 import { LocalCommitsDropdown } from "./LocalCommitsDropdown";
 
 // Hover-to-prefetch tuning. The prefetch fires immediately on pointerenter
@@ -1017,7 +1018,11 @@ export const ForgeStatsToolbarButton = memo(
       prCircuitTripped ? "PR detection paused" : null,
     ]);
 
-    if (!currentProject || providerLoading) return null;
+    if (!currentProject) return null;
+    // Until the provider answers, the slot keeps the full pill's width: a forge
+    // provider's pill then fills it without moving the row, and commits-only
+    // only ever shrinks it.
+    if (providerLoading) return <ForgeStatsPlaceholder />;
 
     // Every right-click target in the control owns its menu, the indicators
     // beside the pills included. One menu wrapping the whole control would also
