@@ -3,6 +3,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type {
   ClaimDecisionsRelayPayload,
   DecisionsConnectResult,
+  DecisionsRelayCheck,
   DecisionsStatus,
   RestoreDecisionsIdentityPayload,
 } from "@shared/types/decisions";
@@ -14,6 +15,11 @@ export interface UseRelayIdentityResult {
   pending: RelayIdentityAction | null;
   /** What the last claim or restore observed, unless it saved the identity. */
   result: DecisionsConnectResult | null;
+  /**
+   * The relay check a claim or restore last reran, newer than any shown
+   * before it. Kept across later attempts until `reset`.
+   */
+  recheck: DecisionsRelayCheck | null;
   /** Main couldn't make the change at all; not something the relay did. */
   error: { action: RelayIdentityAction; message: string } | null;
   claim(payload: ClaimDecisionsRelayPayload): void;
@@ -38,6 +44,7 @@ export function useRelayIdentity(
 ): UseRelayIdentityResult {
   const [pending, setPending] = useState<RelayIdentityAction | null>(null);
   const [result, setResult] = useState<DecisionsConnectResult | null>(null);
+  const [recheck, setRecheck] = useState<DecisionsRelayCheck | null>(null);
   const [error, setError] = useState<UseRelayIdentityResult["error"]>(null);
   const busy = useRef(false);
   const generation = useRef(0);
@@ -65,7 +72,10 @@ export function useRelayIdentity(
         (next) => {
           if ("state" in next) status = next;
           else if (next.result === "saved") status = next.status;
-          else if (generation.current === mine) setResult(next);
+          else if (generation.current === mine) {
+            setResult(next);
+            if (next.result === "relay") setRecheck(next.check);
+          }
           return true;
         },
         (failure: unknown) => {
@@ -78,7 +88,9 @@ export function useRelayIdentity(
       .then((done) => {
         busy.current = false;
         setPending(null);
-        onSettled(status);
+        // A reply that outlived a reset or unmount says how things stood then,
+        // not now: the status is read afresh instead.
+        onSettled(generation.current === mine ? status : null);
         return done;
       });
   };
@@ -96,8 +108,9 @@ export function useRelayIdentity(
   const reset = () => {
     generation.current += 1;
     setResult(null);
+    setRecheck(null);
     setError(null);
   };
 
-  return { pending, result, error, claim, restore, disconnect, reset };
+  return { pending, result, recheck, error, claim, restore, disconnect, reset };
 }

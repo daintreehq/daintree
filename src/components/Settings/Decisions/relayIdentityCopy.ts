@@ -36,7 +36,7 @@ function refusal(host: string, reason: DecisionsClaimRefusal): RelayObservation 
         severity: "error",
         label: `${host} is already claimed`,
         detail:
-          "It was claimed before this computer's claim reached it. Restore its owner's identity from a recovery kit instead.",
+          "It refused the keys this claim made. Restore its owner's identity from a recovery kit instead.",
       };
     case "not-configured":
       return {
@@ -114,7 +114,16 @@ export function describeConnectResult(result: DecisionsConnectResult): RelayObse
     case "relay":
       return describeRelayCheck(result.check);
     case "refused": {
-      const observed = refusal(hostOf(result.origin), result.reason);
+      const host = hostOf(result.origin);
+      if (result.reason === "already-claimed" && result.kept) {
+        return {
+          severity: "warning",
+          label: `${host} is already claimed`,
+          detail:
+            "It refused a request signed with the keys an earlier claim from this computer left here, so they may not be its owner's. They stay on this computer until you remove them.",
+        };
+      }
+      const observed = refusal(host, result.reason);
       const outcome = result.kept ? KEPT : "Nothing was saved.";
       return { ...observed, detail: `${observed.detail} ${outcome}` };
     }

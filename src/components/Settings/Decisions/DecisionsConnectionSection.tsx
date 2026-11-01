@@ -90,7 +90,7 @@ export function DecisionsConnectionSection({
   }, [connected, savedOrigin, locked]);
 
   // A setup reruns the check, and what it saw then is newer than the last one shown.
-  const check = identity.result?.result === "relay" ? identity.result.check : relay.check;
+  const check = identity.recheck ?? relay.check;
   const observation = check ? describeRelayCheck(check) : null;
   const compatibility = check && "compatibility" in check ? check.compatibility : null;
   const versions = compatibility ? describeCompatibility(compatibility) : null;

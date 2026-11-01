@@ -69,6 +69,26 @@ describe("describeConnectResult", () => {
     }
   });
 
+  it("says an earlier claim's keys stay, unproven, when a claimed relay refuses them", () => {
+    const kept = describeConnectResult({
+      result: "refused",
+      origin: ORIGIN,
+      reason: "already-claimed",
+      kept: true,
+    })!;
+    const dropped = describeConnectResult({
+      result: "refused",
+      origin: ORIGIN,
+      reason: "already-claimed",
+      kept: false,
+    })!;
+
+    expect(kept.label).toBe(dropped.label);
+    expect(kept.detail).toMatch(/earlier claim from this computer/);
+    expect(kept.detail).toMatch(/stay on this computer until you remove them/);
+    expect(dropped.detail).toMatch(/Nothing was saved\.$/);
+  });
+
   it("tells a claim that may have arrived from a relay never reached", () => {
     const maybe = describeConnectResult({
       result: "unreachable",

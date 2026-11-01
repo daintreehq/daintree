@@ -908,6 +908,53 @@ describe("restoreDecisionsIdentity", () => {
     expect(memory.stored).toEqual(identity);
   });
 
+  it("keeps the sealed copy's other epochs when the kit's keys replace its broken ones", async () => {
+    const { relay, identity, kit } = await setup();
+    const other = await claimedElsewhere(fakeRelay());
+    const epoch2 = { epoch: 2, raw: bytesToBase64Url(generateEpochKeyBytes()) };
+    const memory = memoryKeys();
+    memory.stored = {
+      ...identity,
+      keys: { ...identity.keys, signing_private_pkcs8: other.keys.signing_private_pkcs8 },
+      epochs: [...identity.epochs, epoch2],
+      currentEpoch: 2,
+    };
+
+    const outcome = await restoreDecisionsIdentity(
+      { url: ORIGIN, kit, passphrase: PASSPHRASE },
+      { keys: memory.keys, fetchImpl: relay.fetchImpl }
+    );
+
+    expect(outcome).toEqual({ identity: identity.config });
+    expect(memory.stored).toEqual({
+      ...identity,
+      epochs: [...identity.epochs, epoch2],
+      currentEpoch: 2,
+    });
+  });
+
+  it("refuses to take up a sealed copy whose exchange keys differ from the kit's", async () => {
+    const { relay, identity, kit } = await setup();
+    const other = await claimedElsewhere(fakeRelay());
+    const memory = memoryKeys();
+    memory.stored = {
+      ...identity,
+      keys: {
+        ...identity.keys,
+        exchange_private_pkcs8: other.keys.exchange_private_pkcs8,
+        exchange_public: other.keys.exchange_public,
+      },
+    };
+
+    const outcome = await restoreDecisionsIdentity(
+      { url: ORIGIN, kit, passphrase: PASSPHRASE },
+      { keys: memory.keys, fetchImpl: relay.fetchImpl }
+    );
+
+    expect(outcome).toEqual({ failure: { result: "conflict", origin: ORIGIN, unfinished: false } });
+    expect(memory.keys.save).not.toHaveBeenCalled();
+  });
+
   it.each([
     [
       "lacks its current epoch's key",

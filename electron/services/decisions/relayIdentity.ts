@@ -480,8 +480,23 @@ function sameIdentity(a: StoredIdentity, b: StoredIdentity): boolean {
     normalizeRelayOrigin(a.config.relayOrigin) === normalizeRelayOrigin(b.config.relayOrigin) &&
     a.config.installationId === b.config.installationId &&
     a.config.deviceId === b.config.deviceId &&
-    a.keys.signing_public === b.keys.signing_public
+    a.keys.signing_public === b.keys.signing_public &&
+    a.keys.exchange_public === b.keys.exchange_public
   );
+}
+
+/**
+ * The kit's proven keys, with every epoch either copy holds (the kit's where
+ * both do), current at the newest epoch whose key is there: a repair of the
+ * same identity keeps the history only the sealed copy can read.
+ */
+function mergeEpochs(kit: StoredIdentity, held: StoredIdentity): StoredIdentity {
+  const known = new Set(kit.epochs.map((epoch) => epoch.epoch));
+  const epochs = [...kit.epochs, ...held.epochs.filter((epoch) => !known.has(epoch.epoch))];
+  const present = new Set(epochs.map((epoch) => epoch.epoch));
+  const newest = Math.max(kit.currentEpoch, held.currentEpoch);
+  const currentEpoch = present.has(newest) ? newest : kit.currentEpoch;
+  return { ...kit, epochs, currentEpoch };
 }
 
 /**
@@ -538,7 +553,7 @@ export async function restoreDecisionsIdentity(
   const held = existing.value;
   if (held && !sameIdentity(held, stored)) return failed(conflictWith(held));
   // The same identity sealed here is kept unless its own keys don't work, in
-  // which case the kit's, proven below, replace them.
+  // which case the kit's, proven below, replace them, keeping its epochs.
   const adopt = held && (await usable(held)) ? held : null;
   if (!adopt) {
     const sealing = await prepareSealing(keys, payload.acceptWeakStorage);
@@ -571,7 +586,9 @@ export async function restoreDecisionsIdentity(
   if (!relayRecognises(devices, identity)) return refuse("not-recognised");
 
   if (adopt) return { identity: adopt.config };
-  const saved = await keyCall(() => keys.save(stored));
+  const merged = held ? mergeEpochs(stored, held) : stored;
+  const sealed = held && !(await usable(merged)) ? stored : merged;
+  const saved = await keyCall(() => keys.save(sealed));
   if ("failure" in saved) return saved;
-  return { identity: stored.config };
+  return { identity: sealed.config };
 }

@@ -272,6 +272,80 @@ describe("DecisionsConnectionSection claim and restore", () => {
     expect(screen.getByText("No kit chosen")).toBeTruthy();
   });
 
+  it("drops a kit still being read when the claim form is sent", async () => {
+    const read = deferred<string>();
+    const file = new File(["{}"], "slow.json");
+    Object.defineProperty(file, "text", { value: () => read.promise });
+    claimRelay.mockResolvedValue({
+      result: "refused",
+      origin: ORIGIN,
+      reason: "wrong-secret",
+      kept: true,
+    });
+    renderSection({ state: "not-connected", keysStored: true });
+    await checkAddress("claimed");
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
+
+    await act(async () => {
+      fireEvent.change(input, { target: { files: [file] } });
+    });
+    fireEvent.change(secretField(), { target: { value: SECRET } });
+    await submit(secretField());
+    await act(async () => {
+      read.resolve('{"late":true}');
+    });
+
+    expect(screen.getByText("No kit chosen")).toBeTruthy();
+  });
+
+  it("keeps showing the rerun check through a later attempt's refusal", async () => {
+    claimRelay.mockResolvedValue({ result: "relay", check: relayCheck("claimed") });
+    restoreIdentity.mockResolvedValue({
+      result: "kit-refused",
+      origin: ORIGIN,
+      reason: "wrong-passphrase",
+    });
+    renderSection({ state: "not-connected" });
+    await checkAddress("unclaimed");
+    fireEvent.change(secretField(), { target: { value: SECRET } });
+    await submit(secretField());
+
+    await chooseKit('{"v":1}');
+    fireEvent.change(passphraseField(), { target: { value: "the wrong passphrase" } });
+    await submit(passphraseField());
+
+    expect(document.querySelector("#decisions-recovery-kit")).not.toBeNull();
+    expect(document.querySelector("#decisions-claim-secret")).toBeNull();
+    expect(document.querySelector("#decisions-relay-setup-outcome")?.textContent).toContain(
+      "The passphrase didn't open this kit"
+    );
+  });
+
+  it("reads the status afresh for a claim that settles after the section moved on", async () => {
+    const answer = deferred<DecisionsConnectResult>();
+    claimRelay.mockReturnValue(answer.promise);
+    const onChanged = vi.fn();
+    const { view } = renderSection({ state: "not-connected" }, onChanged);
+    await checkAddress("unclaimed");
+    fireEvent.change(secretField(), { target: { value: SECRET } });
+    await submit(secretField());
+
+    // Another window set the relay up meanwhile.
+    view.rerender(
+      <TooltipProvider>
+        <DecisionsConnectionSection
+          status={{ state: "not-connected", relayOrigin: ORIGIN }}
+          onChanged={onChanged}
+        />
+      </TooltipProvider>
+    );
+    await act(async () => {
+      answer.resolve({ result: "saved", status: { state: "not-connected", relayOrigin: ORIGIN } });
+    });
+
+    expect(onChanged).toHaveBeenCalledExactlyOnceWith(null);
+  });
+
   it("offers what the relay is now when a claim finds it claimed since the check", async () => {
     claimRelay.mockResolvedValue({ result: "relay", check: relayCheck("claimed") });
     renderSection({ state: "not-connected" });
