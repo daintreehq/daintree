@@ -227,6 +227,12 @@ interface HelpPanelState {
   /** Monotonic counter bumped by requestFocus() so repeated Cmd+L presses re-trigger the focus effect. */
   focusRequest: number;
   /**
+   * The `focusRequest` dictation made (#15870), or null when the latest was
+   * anyone else's: the composer takes the keyboard whatever home says, with
+   * its caret where the words go.
+   */
+  dictationFocusRequest: number | null;
+  /**
    * The panel body shows the installation's global assistant instead of a
    * project lane (#14454). `activeSlot` keeps the lane to come back to.
    */
@@ -288,7 +294,7 @@ interface HelpPanelActions {
   clearDroppedPreferredAgent: () => void;
   dismissIntro: () => void;
   markConversationStarted: (slot: number) => void;
-  requestFocus: () => void;
+  requestFocus: (options?: { forDictation?: boolean }) => void;
   setHibernateSession: (
     projectId: string,
     slot: number,
@@ -321,6 +327,7 @@ const initialState: HelpPanelState = {
   introDismissed: false,
   hibernateSessions: {},
   focusRequest: 0,
+  dictationFocusRequest: null,
   globalSelected: false,
   globalTarget: null,
 };
@@ -703,7 +710,14 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
           )
         ),
 
-      requestFocus: () => set((s) => ({ focusRequest: s.focusRequest + 1 })),
+      requestFocus: (options) =>
+        set((s) => {
+          const focusRequest = s.focusRequest + 1;
+          return {
+            focusRequest,
+            dictationFocusRequest: options?.forDictation === true ? focusRequest : null,
+          };
+        }),
 
       setHibernateSession: (projectId, slot, entry) =>
         set((s) => ({

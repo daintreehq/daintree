@@ -47,6 +47,16 @@ export function revealDictationComposer(panelId: string, caret?: () => number | 
   requestPaneFocus(panelId, "hybridInput", { forDictation: true, ...(caret ? { caret } : {}) });
 }
 
+/**
+ * The dictation key falling back to the Assistant (#15870): its composer
+ * takes the keyboard as a grid pane's does for #14770, past a home of the
+ * terminal, once the panel shows it. An open modal still keeps it.
+ */
+export function revealAssistantComposer(): void {
+  if (hasBlockingOverlay()) return;
+  useHelpPanelStore.getState().requestFocus({ forDictation: true });
+}
+
 /** The dictation key's way back to its pane (#14791), from {@link beginDictationReturn}. */
 export interface DictationReturn {
   /** False once a press, or a newer request for a pane's keyboard, has called it off. */

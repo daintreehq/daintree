@@ -20,6 +20,11 @@ import {
   slicePausePositions,
 } from "@shared/utils/voicePausePositions";
 import { panelHasComposer } from "@/components/Terminal/terminalComposer";
+import { shouldShowHybridInputBar } from "@/components/Terminal/terminalFocus";
+import { isBuiltInAgentId } from "@shared/config/agentIds";
+import { isPtyPanel } from "@shared/types/panel";
+import { wasAssistantUsedAfter } from "@/lib/composerSurface";
+import { useFocusStore } from "@/store/focusStore";
 import { useHelpPanelStore, selectActiveSlot, selectSlotTerminalIds } from "@/store/helpPanelStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
@@ -171,6 +176,7 @@ import { findRewriteComposer, type RewriteSelection } from "@/services/voiceRewr
 import {
   beginDictationReturn,
   focusDictationComposer,
+  revealAssistantComposer,
   revealDictationComposer,
 } from "@/services/voiceComposerFocus";
 import { captureFocusEpoch, isFocusEpochCurrent } from "@/components/Terminal/paneFocusRequest";
@@ -4991,8 +4997,20 @@ class VoiceRecordingService {
       return;
     }
 
+    // The Assistant counts as the place the person was last in when it is on
+    // screen and they used it after the pane in question (#15870).
+    const assistant = this.getAssistantFallbackTarget();
+    const assistantAhead = (paneIds: Iterable<string>): boolean =>
+      this.isAssistantShown() && wasAssistantUsedAfter(paneIds);
+
+    // `focusedId` stays on the pane the person left for the Assistant (#6959),
+    // so it is the focused agent only once they are back in it.
     const focusedTarget = this.getFocusedPanelTarget();
     if (focusedTarget) {
+      if (assistant && assistantAhead([focusedTarget.panelId])) {
+        await this.startInAssistant(assistant);
+        return;
+      }
       await this.startOrToggle(focusedTarget);
       return;
     }
@@ -5000,7 +5018,11 @@ class VoiceRecordingService {
     // Nothing focused can take it, so the agent on screen the person was just
     // in does (#15550). It comes forward with the keyboard in its composer, as
     // if it had been focused, so they see where the words go (#14770).
-    const target = this.getVisibleFallbackTarget();
+    const { candidates, target } = this.getVisibleFallback();
+    if (assistant && (target ? assistantAhead(candidates.keys()) : candidates.size === 0)) {
+      await this.startInAssistant(assistant);
+      return;
+    }
     if (!target) {
       useVoiceRecordingStore.getState().setLastError({
         severity: "fatal",
@@ -5019,6 +5041,18 @@ class VoiceRecordingService {
 
     usePanelStore.getState().activateTerminal(target.panelId);
     revealDictationComposer(target.panelId);
+    await this.startOrToggle(target);
+  }
+
+  /**
+   * The Assistant as the key's fallback: shown if it was closed, with the
+   * keyboard in its composer, as a grid pane comes forward for #15550.
+   */
+  private async startInAssistant(target: VoiceRecordingTarget): Promise<void> {
+    const help = useHelpPanelStore.getState();
+    useFocusStore.getState().clearAssistantGesture();
+    if (!help.isOpen) help.setOpen(true);
+    revealAssistantComposer();
     await this.startOrToggle(target);
   }
 
@@ -5481,11 +5515,14 @@ class VoiceRecordingService {
   }
 
   /**
-   * Of the panes on screen that can take dictation, the one most recently
-   * focused, else the only one. Null when there is none, or several and none
-   * was focused.
+   * The panes on screen that can take dictation, and of them the one most
+   * recently focused, else the only one. No target when there is none, or
+   * several and none was focused.
    */
-  private getVisibleFallbackTarget(): VoiceRecordingTarget | null {
+  private getVisibleFallback(): {
+    candidates: ReadonlyMap<string, VoiceRecordingTarget>;
+    target: VoiceRecordingTarget | null;
+  } {
     const panels = usePanelStore.getState();
     const { activeWorktreeId, isFleetScopeActive } = useWorktreeSelectionStore.getState();
     const closing = getClosingIds();
@@ -5519,7 +5556,7 @@ class VoiceRecordingService {
       const target = this.getDictationTarget(id);
       if (target) targets.set(id, target);
     }
-    return pickRecentVisibleTarget(targets, panels.mruList);
+    return { candidates: targets, target: pickRecentVisibleTarget(targets, panels.mruList) };
   }
 
   /** The pane as a dictation target, or null when it has no composer to show the words. */
@@ -5572,6 +5609,35 @@ class VoiceRecordingService {
       projectId: currentProject?.id,
       projectName: currentProject?.name,
     };
+  }
+
+  /**
+   * The Assistant the key may fall back to (#15870): the active lane's
+   * session, already running and showing its composer. Never one still to be
+   * launched, and never while the panel shows the global assistant in place of
+   * the lane, where the words would go somewhere nobody can see.
+   */
+  private getAssistantFallbackTarget(): VoiceRecordingTarget | null {
+    const help = useHelpPanelStore.getState();
+    if (help.globalSelected) return null;
+    const target = this.getAssistantTarget();
+    if (!target) return null;
+    const panel = usePanelStore.getState().panelsById[target.panelId];
+    if (!panel || !isPtyPanel(panel)) return null;
+    if (panel.spawnStatus === "failed" || panel.spawnStatus === "missing-cli") return null;
+    // The composer as the Assistant renders it, from the lane's agent.
+    const hasComposer = shouldShowHybridInputBar({
+      hasAgentIdentity: isBuiltInAgentId(selectActiveSlot(help).agentId),
+      hybridInputEnabled: useTerminalInputStore.getState().hybridInputEnabled,
+      isFleetArmed: false,
+      fleetSize: 0,
+    });
+    return hasComposer ? target : null;
+  }
+
+  /** The Assistant panel on screen: open, and not hidden by the focus gesture. */
+  private isAssistantShown(): boolean {
+    return useHelpPanelStore.getState().isOpen && !useFocusStore.getState().gestureAssistantHidden;
   }
 
   private async waitForPanel(panelId: string, timeoutMs = 5000): Promise<void> {

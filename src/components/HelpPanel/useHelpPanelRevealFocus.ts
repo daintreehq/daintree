@@ -138,8 +138,13 @@ export function useHelpPanelRevealFocus({
         // that check aborts silently, which would leave an authorized open
         // request marked complete with focus still in another pane.
         const bar = inputBarRef.current;
+        // Dictation falling back to the Assistant asked for its composer
+        // (#15870); a structural re-run of the same request never does.
+        const forDictation = hasNewFocusTrigger && state.dictationFocusRequest === focusRequest;
         const focusTarget = getTerminalFocusTarget({
-          preferredTarget: selectHomeFocusTarget(useTerminalInputStore.getState()),
+          preferredTarget: forDictation
+            ? "hybridInput"
+            : selectHomeFocusTarget(useTerminalInputStore.getState()),
           hasHybridInputSurface: showHybridInputBar && bar !== null,
           isInputDisabled: currentTerminalPty?.isInputLocked === true,
           hybridInputEnabled: useTerminalInputStore.getState().hybridInputEnabled,
@@ -163,7 +168,16 @@ export function useHelpPanelRevealFocus({
           currentTerminalPty?.spawnStatus !== "missing-cli" &&
           currentTerminalPty?.spawnStatus !== "failed"
         ) {
-          if (focusTarget === "hybridInput" && bar) {
+          if (focusTarget === "hybridInput" && bar && forDictation) {
+            // Focused now, inside the frame that made the last ownership
+            // check, with the caret where dictation will write (#14770).
+            bar.focusForDictation();
+            const focused = document.activeElement;
+            if (focused?.closest?.(".cm-editor") && panelRef.current?.contains(focused)) {
+              completeFocusTrigger();
+              return;
+            }
+          } else if (focusTarget === "hybridInput" && bar) {
             // The bar defers the real `view.focus()` to a frame of its own,
             // which is the LAST frame in this grab — so the last ownership
             // check has to run inside it. We can't edit that shared component,
