@@ -62,6 +62,28 @@ describe("LaneScheduler", () => {
     expect(drained).toEqual([Lane.BULK]);
   });
 
+  it("serves a frame from the queue it was put in, counted there, with its own lane intact", () => {
+    const roomy: LaneLimits = { highWaterBytes: 1e9, hardCapBytes: 1e9, maxFrames: 1e9 };
+    const s = new LaneScheduler({ ...tight, [Lane.BULK]: roomy });
+    const drained: Lane[] = [];
+    s.onDrain((lane) => drained.push(lane));
+    s.enqueue(f(Lane.RPC));
+    s.enqueue(f(Lane.EVENTS));
+    s.enqueue(f(Lane.BULK));
+    const promoted = f(Lane.BULK, 8);
+    expect(s.enqueue(promoted, undefined, undefined, Lane.CONTROL)).toBe("queued");
+    expect(s.enqueue(f(Lane.BULK, 8), undefined, undefined, Lane.CONTROL)).toBe("over-high-water");
+    expect(s.enqueue(f(Lane.BULK, 8), undefined, undefined, Lane.CONTROL)).toBe("refused");
+    expect(s.queuedBytes(Lane.CONTROL)).toBe(16 + 2 * H);
+    expect(s.queuedBytes(Lane.BULK)).toBe(1 + H);
+    expect(s.next()).toBe(promoted);
+    expect(promoted.lane).toBe(Lane.BULK);
+    const order: number[] = [];
+    for (let fr = s.next(); fr; fr = s.next()) order.push(fr.lane);
+    expect(order).toEqual([Lane.BULK, Lane.RPC, Lane.EVENTS, Lane.BULK]);
+    expect(drained).toEqual([Lane.CONTROL]);
+  });
+
   it("refuses a frame over the hard cap even into an empty lane", () => {
     const s = new LaneScheduler(tight);
     expect(s.enqueue(f(Lane.RPC, 50))).toBe("refused");
@@ -261,6 +283,18 @@ describe("LaneScheduler endpoint closes (#15881)", () => {
     expect(s.next()?.streamId).toBe(1);
     expect(s.enqueue(tagged(Lane.CONTROL, 4))).toBe("refused");
     expect(s.queuedBytes(Lane.CONTROL)).toBe(2 * (1 + H));
+  });
+
+  it("releases a frame held behind a close into the queue it was counted in", () => {
+    const s = new LaneScheduler();
+    s.enqueue(tagged(Lane.RPC, 1), undefined, { endpointIds: ["e1"] });
+    s.enqueue(tagged(Lane.CONTROL, 2), undefined, { closes: "e1" });
+    s.enqueue(tagged(Lane.BULK, 3), undefined, { endpointIds: ["e1"] }, Lane.CONTROL);
+    expect(s.queuedBytes(Lane.CONTROL)).toBe(2 * (1 + H));
+    expect(drain(s)).toEqual([1, 2, 3]);
+    expect(s.queuedBytes(Lane.CONTROL)).toBe(0);
+    expect(s.queuedBytes(Lane.BULK)).toBe(0);
+    expect(s.isEmpty).toBe(true);
   });
 
   it("forgets what a closed session left unwritten", () => {

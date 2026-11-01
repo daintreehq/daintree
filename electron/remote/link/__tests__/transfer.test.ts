@@ -3,14 +3,23 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Lane } from "../frames.js";
-import { BulkKind, type TransferBeginMessage } from "../messages.js";
+import {
+  BulkKind,
+  EventKind,
+  RpcKind,
+  type LinkMessage,
+  type TransferBeginMessage,
+} from "../messages.js";
 import type { LinkSession } from "../session.js";
 import {
+  LinkTransfers,
   TRANSFER_WINDOW_BYTES,
   bytesTransferSource,
   fileTransferSource,
+  type TransferLink,
   type TransferProgress,
   type TransferSink,
+  type TransferSource,
 } from "../transfer.js";
 import { makeTempDir, openSessionPair, removeTempDir, waitFor } from "./linkTestUtils.js";
 
@@ -390,6 +399,206 @@ describe("bulk transfer", () => {
       })
     ).rejects.toThrow(/timed out/);
     expect(host.transfers.activeIncoming).toBe(0);
+  });
+
+  const fillers: Array<[string, Lane, LinkMessage]> = [
+    [
+      "events",
+      Lane.EVENTS,
+      {
+        lane: Lane.EVENTS,
+        kind: EventKind.EVENT,
+        body: { endpointId: null, channel: "fill", args: ["x".repeat(16 * 1024)] },
+      },
+    ],
+    [
+      "rpc",
+      Lane.RPC,
+      {
+        lane: Lane.RPC,
+        kind: RpcKind.SEND,
+        body: { endpointId: "e", channel: "fill", args: ["x".repeat(16 * 1024)] },
+      },
+    ],
+  ];
+
+  it.each(fillers)(
+    "keeps credit moving while the receiver's %s lane never empties",
+    async (_name, lane, filler) => {
+      const transfers = { inactivityTimeoutMs: 5_000 };
+      const { host, client } = await openSessionPair(
+        dir,
+        { transfers },
+        { transfers },
+        { oneWayDelayMs: 0, bytesPerSecond: 8 * 1024 * 1024 }
+      );
+      sessions.push(host, client);
+      const { sinks, factory } = memorySinks();
+      host.transfers.setSinkFactory(factory);
+      // More than one write pass can take, so the lane is never empty when the
+      // scheduler picks; refilled after every pass.
+      let leastQueuedAfterPass = Infinity;
+      const refill = () => {
+        leastQueuedAfterPass = Math.min(leastQueuedAfterPass, host.queuedBytes(lane));
+        while (host.queuedBytes(lane) < 2 * 1024 * 1024) host.post(filler);
+      };
+      refill();
+      leastQueuedAfterPass = Infinity;
+      const stopRefill = host.onWritable(refill);
+      const payload = crypto.randomBytes(3 * TRANSFER_WINDOW_BYTES);
+      try {
+        const result = await client.transfers.send(bytesTransferSource(payload), {
+          name: "busy.bin",
+          destination: { kind: "inbox", bucket: "files" },
+        });
+        expect(result.bytes).toBe(payload.byteLength);
+      } finally {
+        stopRefill();
+      }
+      expect(concat(sinks[0]!.chunks).equals(payload)).toBe(true);
+      expect(leastQueuedAfterPass).toBeGreaterThan(0);
+    },
+    15_000
+  );
+
+  /** A link that takes every post except the kinds in `refused`. */
+  function fakeLink(refused: Set<number>) {
+    const posted: LinkMessage[] = [];
+    const errors: string[] = [];
+    const link: TransferLink = {
+      role: "client",
+      post(message) {
+        if (refused.has(message.kind)) return "refused";
+        posted.push(message);
+        return "queued";
+      },
+      isOpen: () => true,
+      protocolError: (reason) => errors.push(reason),
+    };
+    const sent = (kind: number) => posted.filter((m) => m.kind === kind);
+    return { link, posted, errors, sent };
+  }
+
+  /** A peer's BEGIN that a side with no sink refuses with an ACK. */
+  const peerBegin = (transferId: number): LinkMessage => ({
+    lane: Lane.BULK,
+    kind: BulkKind.TRANSFER_BEGIN,
+    body: {
+      transferId,
+      name: "in.bin",
+      size: 1,
+      sha256: "0".repeat(64),
+      destination: { kind: "inbox", bucket: "files" },
+    },
+  });
+
+  /** Sends an empty file and cancels it once END is out, so its ABORT is posted. */
+  async function cancelAfterEnd(transfers: LinkTransfers, sent: (kind: number) => LinkMessage[]) {
+    const controller = new AbortController();
+    const settled = transfers
+      .send(bytesTransferSource(new Uint8Array(0)), {
+        name: "gone.bin",
+        destination: { kind: "inbox", bucket: "files" },
+        signal: controller.signal,
+      })
+      .catch((err: unknown) => err);
+    await waitFor(() => sent(BulkKind.TRANSFER_END).length === 1);
+    controller.abort();
+    await settled;
+  }
+
+  it("posts and retries credit apart from aborts waiting for the bulk lane", async () => {
+    const refused = new Set<number>([BulkKind.TRANSFER_ABORT]);
+    const { link, errors, sent } = fakeLink(refused);
+    const transfers = new LinkTransfers(link);
+    try {
+      await cancelAfterEnd(transfers, sent);
+      transfers.handle(peerBegin(2));
+      expect(sent(BulkKind.TRANSFER_ACK)).toMatchObject([
+        { body: { transferId: 2, error: "not-accepted" } },
+      ]);
+      refused.add(BulkKind.TRANSFER_ACK);
+      transfers.handle(peerBegin(4));
+      expect(sent(BulkKind.TRANSFER_ACK)).toHaveLength(1);
+      refused.delete(BulkKind.TRANSFER_ACK);
+      transfers.onWritable();
+      await waitFor(() => sent(BulkKind.TRANSFER_ACK).length === 2);
+      expect(sent(BulkKind.TRANSFER_ACK)[1]).toMatchObject({ body: { transferId: 4 } });
+      expect(sent(BulkKind.TRANSFER_ABORT)).toHaveLength(0);
+      refused.delete(BulkKind.TRANSFER_ABORT);
+      transfers.onWritable();
+      await waitFor(() => sent(BulkKind.TRANSFER_ABORT).length === 1);
+      expect(errors).toEqual([]);
+    } finally {
+      transfers.closeAll("test done");
+    }
+  });
+
+  it("retries refused credit while the pump waits on a source read", async () => {
+    const refused = new Set<number>([BulkKind.TRANSFER_ACK]);
+    const { link, sent } = fakeLink(refused);
+    const transfers = new LinkTransfers(link);
+    const stalled: TransferSource = {
+      size: 1,
+      sha256: "0".repeat(64),
+      read: () => new Promise<Uint8Array>(() => {}),
+    };
+    const sending = transfers
+      .send(stalled, { name: "stalled.bin", destination: { kind: "inbox", bucket: "files" } })
+      .catch((err: unknown) => err);
+    try {
+      await waitFor(() => sent(BulkKind.TRANSFER_BEGIN).length === 1);
+      transfers.handle(peerBegin(2));
+      expect(sent(BulkKind.TRANSFER_ACK)).toHaveLength(0);
+      refused.delete(BulkKind.TRANSFER_ACK);
+      transfers.onWritable();
+      await waitFor(() => sent(BulkKind.TRANSFER_ACK).length === 1, 1_000);
+    } finally {
+      transfers.closeAll("test done");
+      await sending;
+    }
+  });
+
+  it("drops a retried ack the link can't send and still sends the ones behind it", () => {
+    const refused = new Set<number>([BulkKind.TRANSFER_ACK]);
+    const { link, sent } = fakeLink(refused);
+    const post = link.post.bind(link);
+    link.post = (message) => {
+      const unsendable =
+        message.lane === Lane.BULK &&
+        message.kind === BulkKind.TRANSFER_ACK &&
+        message.body.transferId === 2;
+      if (refused.size === 0 && unsendable) throw new Error("frame too large");
+      return post(message);
+    };
+    const transfers = new LinkTransfers(link);
+    transfers.handle(peerBegin(2));
+    transfers.handle(peerBegin(4));
+    refused.clear();
+    expect(() => transfers.onWritable()).not.toThrow();
+    expect(sent(BulkKind.TRANSFER_ACK)).toMatchObject([{ body: { transferId: 4 } }]);
+    transfers.closeAll("test done");
+  });
+
+  it("bounds refused credit and aborts as one backlog", async () => {
+    const acksUntilBacklog = async (abortWaiting: boolean) => {
+      const { link, errors, sent } = fakeLink(
+        new Set([BulkKind.TRANSFER_ACK, BulkKind.TRANSFER_ABORT])
+      );
+      const transfers = new LinkTransfers(link);
+      try {
+        if (abortWaiting) await cancelAfterEnd(transfers, sent);
+        for (let acks = 1; acks <= 100_000; acks++) {
+          transfers.handle(peerBegin(2));
+          if (errors.length > 0) return acks;
+        }
+        throw new Error("refused credit was never bounded");
+      } finally {
+        transfers.closeAll("test done");
+      }
+    };
+    const alone = await acksUntilBacklog(false);
+    expect(await acksUntilBacklog(true)).toBe(alone - 1);
   });
 
   it("reports OUTCOME_UNKNOWN when the sender's commit wait runs out", async () => {

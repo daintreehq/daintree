@@ -14,6 +14,7 @@ import {
   type LinkFrame,
 } from "./frames.js";
 import {
+  BulkKind,
   ControlKind,
   InteractiveKind,
   RpcKind,
@@ -224,6 +225,17 @@ function callEndpointOrder(payload: unknown): EndpointOrder | undefined {
     for (const id of endpointIds) if (typeof id === "string") ids.add(id);
   }
   return ids.size > 0 ? { endpointIds: [...ids] } : undefined;
+}
+
+/**
+ * The scheduler queue a message waits in. Transfer credit is a few bytes that
+ * release a sender stalled on its window, so it waits with control frames
+ * rather than behind this side's own answers and events, which would let a
+ * busy but healthy link time an upload out. It stays a BULK frame on the wire.
+ */
+function queueOf(message: LinkMessage): Lane {
+  if (message.lane === Lane.BULK && message.kind === BulkKind.TRANSFER_ACK) return Lane.CONTROL;
+  return message.lane;
 }
 
 /** The interactive-lane flow one endpoint's output for one terminal takes turns in. */
@@ -550,7 +562,12 @@ export class LinkSession {
     assertOutboundMessage(message);
     const frame = messageToFrame(message, this.encodingLimits);
     this.assertFrameSize(frame);
-    const result = this.scheduler.enqueue(frame, flowOf(message), endpointOrderOf(message));
+    const result = this.scheduler.enqueue(
+      frame,
+      flowOf(message),
+      endpointOrderOf(message),
+      queueOf(message)
+    );
     if (result !== "refused") this.scheduleFlush();
     return { result, frame };
   }
