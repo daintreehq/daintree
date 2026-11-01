@@ -147,6 +147,41 @@ export async function spawnHostAssistantLive(
   return spawnHostAssistant(project, spec, deps);
 }
 
+/** Reopen a saved agent session as a pane of its worktree (#16000); see `resumeAgentSessionAsPane`. */
+export async function resumeAgentSessionAsPaneLive(
+  request: import("./viewlessAgentResume.js").AgentSessionPaneRequest
+): Promise<import("./viewlessAgentResume.js").AgentSessionPaneResult> {
+  const [{ resumeAgentSessionAsPane }, { spawnAndConfirm }, { getPtyClient }, { stat }, deps] =
+    await Promise.all([
+      import("./viewlessAgentResume.js"),
+      import("../assistants/assistantLaunch.js"),
+      import("../../window/serviceRefs.js"),
+      import("node:fs/promises"),
+      loadLiveDeps(),
+    ]);
+  return resumeAgentSessionAsPane(request, deps, {
+    isDirectory: async (path) => (await stat(path)).isDirectory(),
+    confirmSpawn: (terminalId, spawn) =>
+      spawnAndConfirm(
+        getPtyClient(),
+        async () => {
+          await spawn();
+          return true;
+        },
+        terminalId
+      ),
+  });
+}
+
+/** Wait for an agent main launched or found to be at rest (#16000); see `waitForAgentAtPrompt`. */
+export async function waitForAgentAtPromptLive(
+  terminalId: string,
+  options: { timeoutMs: number; signal?: AbortSignal }
+): Promise<import("./agentPromptWait.js").AgentPromptWaitResult> {
+  const { waitForAgentAtPrompt } = await import("./agentPromptWait.js");
+  return waitForAgentAtPrompt(terminalId, options);
+}
+
 /** Restart a terminal of a project no frontend is attached to (#14703); see `restartTerminalWithoutView`. */
 export async function restartTerminalWithoutViewLive(
   projectId: string,

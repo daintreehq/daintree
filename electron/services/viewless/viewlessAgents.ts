@@ -71,6 +71,28 @@ import {
 /** Launch ids the launcher always turns into a panel, never an agent. */
 const PANEL_LAUNCH_IDS: ReadonlySet<string> = new Set(["browser", "dev-preview"]);
 
+/**
+ * The launch-time context an agent pane's MCP session replays (#12486),
+ * pointed at the pane itself, as a view captures it. None for an agent whose
+ * MCP session replays no context.
+ */
+export function paneLaunchContext(
+  agentId: string,
+  projectId: string,
+  worktreeId: string | null,
+  terminalId: string,
+  title: string
+) {
+  if (!LAUNCH_CONTEXT_AGENT_IDS.has(agentId)) return undefined;
+  return {
+    projectId,
+    ...(worktreeId !== null ? { activeWorktreeId: worktreeId, focusedWorktreeId: worktreeId } : {}),
+    focusedTerminalId: terminalId,
+    focusedTerminalKind: "terminal" as const,
+    focusedTerminalTitle: title,
+  };
+}
+
 /** A launch that started nothing, in the shape the action's output schema requires. */
 function declined(
   spawnStatus: "missing-cli" | "panel-limit" | "spawn-failed" | "presets-loading",
@@ -392,19 +414,9 @@ export async function runAgentLaunch(
   });
   const env = mergeTerminalLaunchEnv(layers?.global, layers?.project, plan.env);
   const launchAgentId = isAgent ? agentId : undefined;
-  // The launch-time context an agent pane's MCP session replays (#12486),
-  // pointed at the pane itself, as a view captures it.
   const actionContext =
-    launchAgentId !== undefined && LAUNCH_CONTEXT_AGENT_IDS.has(launchAgentId)
-      ? {
-          projectId: project.id,
-          ...(worktreeId !== null
-            ? { activeWorktreeId: worktreeId, focusedWorktreeId: worktreeId }
-            : {}),
-          focusedTerminalId: id,
-          focusedTerminalKind: "terminal" as const,
-          focusedTerminalTitle: plan.title,
-        }
+    launchAgentId !== undefined
+      ? paneLaunchContext(launchAgentId, project.id, worktreeId, id, plan.title)
       : undefined;
 
   // Only an agent is handed the prompt as its launch argument, recorded as the

@@ -102,6 +102,10 @@ export interface ViewlessTerminalRecord {
   worktreeId?: string;
   launchAgentId?: string;
   detectedAgentId?: string;
+  /** The conversation the agent was launched or resumed with, as the spawn recorded it. */
+  agentSessionId?: string;
+  /** New agent sessions observed taking the PTY over after the launched one exited (#12535). */
+  agentIncarnation?: number;
   agentState?: AgentState | string;
   waitingReason?: WaitingReason;
   everDetectedAgent?: boolean;

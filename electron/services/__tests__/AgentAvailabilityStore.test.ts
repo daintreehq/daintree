@@ -5,6 +5,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   AgentAvailabilityStore,
+  disposeAgentAvailabilityStore,
+  initializeAgentAvailabilityStore,
   MAX_CLOSED_TERMINALS as CLOSED_TERMINAL_CAPACITY,
 } from "../AgentAvailabilityStore.js";
 import { events } from "../events.js";
@@ -781,5 +783,36 @@ describe("AgentAvailabilityStore", () => {
 
       expect(store.getTerminalSnapshot("term-1")).toBeUndefined();
     });
+  });
+});
+
+describe("initializeAgentAvailabilityStore", () => {
+  afterEach(() => {
+    disposeAgentAvailabilityStore();
+  });
+
+  it("keeps what an earlier window's store observed when another window initializes", () => {
+    const first = initializeAgentAvailabilityStore();
+    spawn("claude", "init-term-1");
+    transition("claude", "init-term-1", "waiting", { waitingReason: "prompt" });
+
+    const second = initializeAgentAvailabilityStore();
+
+    expect(second).toBe(first);
+    expect(second.getTerminalSnapshot("init-term-1")).toMatchObject({
+      state: "waiting",
+      waitingReason: "prompt",
+    });
+  });
+
+  it("starts over after the store is disposed", () => {
+    const first = initializeAgentAvailabilityStore();
+    spawn("claude", "init-term-2");
+    disposeAgentAvailabilityStore();
+
+    const next = initializeAgentAvailabilityStore();
+
+    expect(next).not.toBe(first);
+    expect(next.getTerminalSnapshot("init-term-2")).toBeUndefined();
   });
 });

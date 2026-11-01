@@ -1,27 +1,14 @@
-import {
-  buildResumeCommand,
-  buildResumeLatestCommand,
-  reconcileBypassFlags,
-  reconcileDecorationFlags,
-  reconcileInlineModeFlag,
-  resolveKeepDecorations,
-  resolveEffectiveBypass,
-  resolveEffectiveInlineMode,
-} from "@shared/types/agentSettings";
+import { buildResumeCommand, buildResumeLatestCommand } from "@shared/types/agentSettings";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import type { AddPanelOptions } from "@shared/types/addPanelOptions";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
-import { splitCallerLaunchFlags } from "@shared/utils/callerLaunchFlags";
+import { reconcileResumeLaunchFlagsWith } from "@shared/utils/agentResumeFlags";
 
 /**
- * Reconciles a resumed session's persisted launch flags against the current
- * global settings (#10432 skip-permissions, #10876 alt-screen — both "resume
- * traps"): the snapshot may have been captured while a global switch was in a
- * different state, so strip the agent's canonical bypass / inline flags and
- * re-add them only if they currently resolve.
+ * {@link reconcileResumeLaunchFlagsWith} against the current global settings.
  *
  * Reads `useAgentSettingsStore` synchronously (a Zustand store read, not
  * React-bound), so it is safe to call from action definitions and effects alike.
@@ -32,39 +19,7 @@ export function reconcileResumeLaunchFlags(session: {
   /** The caller's verbatim tail (#13046), re-appended untouched after reconcile. */
   callerLaunchFlags?: string[];
 }): string[] | undefined {
-  const settings = useAgentSettingsStore.getState().settings;
-  const entry = settings?.agents?.[session.agentId] ?? {};
-  const effectiveBypass = resolveEffectiveBypass(
-    entry,
-    session.agentId,
-    settings?.globalSkipPermissions
-  );
-  const effectiveInline = resolveEffectiveInlineMode(
-    entry,
-    session.agentId,
-    settings?.globalUseAltScreen
-  );
-  const { base, caller } = splitCallerLaunchFlags(
-    session.agentLaunchFlags,
-    session.callerLaunchFlags
-  );
-  // Pass [] when no flags were captured so a global-on still injects the token
-  // for a supported agent (each reconcile no-ops for agents without one).
-  const reconciled = reconcileDecorationFlags(
-    reconcileInlineModeFlag(
-      reconcileBypassFlags(
-        base,
-        session.agentId,
-        effectiveBypass,
-        entry.dangerousArgs as string | undefined
-      ),
-      session.agentId,
-      effectiveInline
-    ),
-    session.agentId,
-    resolveKeepDecorations(entry)
-  );
-  return caller.length > 0 ? [...reconciled, ...caller] : reconciled;
+  return reconcileResumeLaunchFlagsWith(session, useAgentSettingsStore.getState().settings);
 }
 
 /**
