@@ -783,7 +783,8 @@ export class HostConnection {
       const reconcile: EndpointReconcilePayload = {
         endpointIds: [...this.endpoints.values()].map((open) => open.endpointId),
       };
-      session.call(LinkMethod.ENDPOINT_RECONCILE, reconcile).catch(() => {});
+      // No deadline: a notice that settles unsent is dropped, and nothing sends it again.
+      session.call(LinkMethod.ENDPOINT_RECONCILE, reconcile, { timeoutMs: 0 }).catch(() => {});
     }
     // A resume keeps the host's endpoints, so the views' streams move to the new session.
     for (const [webContentsId, open] of [...this.endpoints]) {

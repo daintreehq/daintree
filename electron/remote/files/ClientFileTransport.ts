@@ -666,7 +666,8 @@ export class ClientFileTransport {
       pullSlice: (pinned, sequence, onBegin) => this.pullSlice(pinned, streamId, sequence, onBegin),
       cancelRemote: () => {
         if (session?.isOpen) {
-          void session.call(FileLinkMethod.CANCEL, { streamId }).catch(() => {});
+          // No deadline: a notice that settles unsent is dropped, and nothing sends it again.
+          void session.call(FileLinkMethod.CANCEL, { streamId }, { timeoutMs: 0 }).catch(() => {});
         }
       },
       forget: () => {
@@ -754,7 +755,8 @@ export class ClientFileTransport {
   async cancelStream(hostId: HostId, streamId: string): Promise<void> {
     const session = this.hosts.get(hostId)?.session;
     if (!session?.isOpen) return;
-    await session.call(FileLinkMethod.CANCEL, { streamId }).catch(() => {});
+    // No deadline: a notice that settles unsent is dropped, and nothing sends it again.
+    await session.call(FileLinkMethod.CANCEL, { streamId }, { timeoutMs: 0 }).catch(() => {});
   }
 
   /** Save a host file into `destinationDir` here, under a name that doesn't overwrite anything. */

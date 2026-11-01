@@ -99,6 +99,12 @@ export interface LinkCloseInfo {
 }
 
 export interface RequestOptions {
+  /**
+   * How long the caller waits for an answer; 0 for no deadline. A request that
+   * settles before its frame is written is never sent, so a notice whose
+   * delivery matters more than its answer passes 0: it goes once the link
+   * drains, or the session's end settles it.
+   */
   timeoutMs?: number;
   signal?: AbortSignal;
 }

@@ -170,7 +170,10 @@ describe("LinkSession request/response", () => {
     p.catch(() => {});
     await waitFor(() => reached);
     ac.abort();
-    await expect(p).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
+    await expect(p).rejects.toMatchObject({
+      code: "OUTCOME_UNKNOWN",
+      message: expect.stringMatching(/after it was sent/),
+    });
     await expect(client.call("hang", null, { signal: ac.signal })).rejects.toMatchObject({
       code: "CANCELLED",
     });
@@ -178,14 +181,19 @@ describe("LinkSession request/response", () => {
 
   describe("a request settled while its frame waits behind backpressure (#15882)", () => {
     const BEYOND_SOCKET_BUFFERS = "x".repeat(4 * 1024 * 1024);
+    const peers: net.Socket[] = [];
+
+    afterEach(() => {
+      for (const peer of peers.splice(0)) peer.destroy();
+    });
 
     /**
      * A client whose peer is a paused raw socket, with one frame larger than
      * any socket buffer already handed to the stream: until the peer reads,
      * every later frame stays in the scheduler.
      */
-    async function stalledClient() {
-      const { client, a, b } = await pausedPeer();
+    async function stalledClient(options: { requestTimeoutMs?: number } = {}) {
+      const { client, a, b } = await pausedPeer(options);
       client.post({
         lane: Lane.EVENTS,
         kind: EventKind.EVENT,
@@ -195,9 +203,15 @@ describe("LinkSession request/response", () => {
       return { client, b };
     }
 
-    async function pausedPeer() {
+    async function pausedPeer(options: { requestTimeoutMs?: number } = {}) {
       const { a, b } = await socketPair(dir);
-      const client = new LinkSession(a, { role: "client", pingIntervalMs: 0, idleTimeoutMs: 0 });
+      peers.push(b);
+      const client = new LinkSession(a, {
+        role: "client",
+        pingIntervalMs: 0,
+        idleTimeoutMs: 0,
+        ...options,
+      });
       sessions.push(client);
       client.open();
       b.pause();
@@ -246,6 +260,7 @@ describe("LinkSession request/response", () => {
       ac.abort();
       const env = await aborted;
       expect(!env.ok && env.error.code).toBe("OUTCOME_UNKNOWN");
+      expect(!env.ok && env.error.message).toMatch(/before it was sent/);
       client.invoke("e1", "kept", []).catch(() => {});
       expect(await requestsReceived(client, b)).toEqual(["kept"]);
     });
@@ -253,10 +268,21 @@ describe("LinkSession request/response", () => {
     it("still reports a request the stalled socket took as an unknown outcome, and delivers it", async () => {
       const { client, a, b } = await pausedPeer();
       const taken = client.call("taken", BEYOND_SOCKET_BUFFERS, { timeoutMs: 20 });
+      taken.catch(() => {});
       await waitFor(() => a.writableNeedDrain);
       expect(client.queuedBytes(Lane.RPC)).toBe(0);
       await expect(taken).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
       expect(await requestsReceived(client, b)).toEqual(["taken"]);
+    });
+
+    it("still sends a request with no deadline once the link drains", async () => {
+      const { client, b } = await stalledClient({ requestTimeoutMs: 20 });
+      const late = client.call("late", null);
+      const notice = client.call("notice", null, { timeoutMs: 0 });
+      late.catch(() => {});
+      notice.catch(() => {});
+      await expect(late).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
+      expect(await requestsReceived(client, b)).toEqual(["notice"]);
     });
   });
 
