@@ -144,7 +144,8 @@ class FakeDebugger extends EventEmitter {
         }
         try {
           const source = (params.expression as string).trim().replace(/;$/, "");
-          const value = new Function(`return ${source}`)() as unknown;
+          const evaluated = new Function(`return ${source}`)() as unknown;
+          const value = params.awaitPromise ? await evaluated : evaluated;
           return params.returnByValue
             ? { result: { value: JSON.parse(JSON.stringify(value ?? null)) as unknown } }
             : { result: {} };
@@ -294,11 +295,16 @@ const SHIPPED_DETECTIONS: Array<[string, () => void]> = [
 beforeEach(() => {
   __resetCdpLeasesForTests();
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  // Astro's extractor fetches the page's markup before it installs. Nothing
+  // serves this realm's URL, and a real request would hold the install until
+  // the read's deadline, which these fake timers never reach.
+  vi.stubGlobal("fetch", () => Promise.reject(new TypeError("Failed to fetch")));
   document.body.innerHTML = "";
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
   const api = scope[BOOTSTRAP_GLOBAL] as { dispose?: (() => void) | null } | undefined;
   try {
     api?.dispose?.();
@@ -442,6 +448,47 @@ describe("core Element Picker guest loading", () => {
     expect(withAstro!.componentChain.components).toEqual([]);
     expect(withReact!.componentChain.components[0]!.name.value).toBe("FixtureButton");
     expect(withReact!.frameworkEvidence.map((entry) => entry.framework)).toEqual(["astro"]);
+  });
+
+  it("traces an Astro element its dev toolbar took the stamps off, from the markup as served", async () => {
+    const page = "/proj/src/pages/index.astro";
+    const h = makeHarness();
+    const served = `<!doctype html><html><head></head><body>
+      <main data-astro-source-file="${page}" data-astro-source-loc="18:5">
+        <h1 id="title" data-astro-source-file="${page}" data-astro-source-loc="19:11">Shop</h1>
+      </main></body></html>`;
+    const fetched: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      fetched.push(url);
+      return new Response(served, { headers: { "content-type": "text/html" } });
+    });
+    // All the toolbar leaves: the markup unstamped, and itself, which is all that says Astro.
+    document.body.innerHTML = `
+      <main>
+        <h1 id="title">Shop</h1>
+      </main><astro-dev-toolbar></astro-dev-toolbar>`;
+    await h.bind();
+    await settle();
+    expect(h.wc.debugger.evaluates().filter((entry) => entry.kind === "extractor")).toEqual([
+      { kind: "extractor", framework: "astro" },
+    ]);
+    expect(fetched).toEqual([location.href.split("#")[0]]);
+
+    (document.getElementById("title") as HTMLElement).click();
+    await settle();
+    const selected = h.pickerEvents("selectionChanged").at(-1)!.event as {
+      observations: SelectionObservation[];
+    };
+    expect(selected.observations[0]!.sourceCandidates).toEqual([
+      expect.objectContaining({
+        kind: "template-location",
+        framework: "astro",
+        extraction: { kind: "attribute", attribute: "data-astro-source-loc" },
+        file: page,
+        location: expect.objectContaining({ line: 19, column: 11 }),
+      }),
+    ]);
+    expect(h.kinds("host-issue")).toHaveLength(0);
   });
 
   it("describes Astro, React and Svelte selections side by side on a page of islands", async () => {

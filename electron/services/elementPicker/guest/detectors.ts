@@ -23,6 +23,12 @@ export const DETECTION_LIMITS = { detections: 8, signals: 16 } as const;
 
 /** Elements the document sample visits; the probe stops there whatever it found. */
 export const DOCUMENT_SAMPLE_LIMIT = 256;
+/**
+ * The body's last children, read for their tag alone when the sample stopped
+ * short of them: a dev tool appends its own element there once the page has
+ * loaded, after however much markup.
+ */
+export const BODY_TAIL_LIMIT = 8;
 /** Ancestors walked from a selected element, its own node included. */
 export const ANCESTRY_LIMIT = 64;
 /** Own keys read off one node when looking for expandos. */
@@ -95,6 +101,11 @@ const ATTRIBUTE_MARKERS: readonly AttributeMarker[] = [
 ];
 
 const TAG_MARKERS: ReadonlyMap<string, ElementPickerFramework> = new Map([
+  // Astro's dev toolbar, appended to the body only while the toolbar is on,
+  // which is exactly when the compiler stamps source attributes: the toolbar
+  // takes those off the elements, so on a page with no islands or scoped
+  // styles it is the one mark left.
+  ["astro-dev-toolbar", "astro"],
   ["astro-island", "astro"],
   ["astro-slot", "astro"],
   ["astro-static-slot", "astro"],
@@ -265,8 +276,9 @@ export function detectMarkup(node: Element, via: Via, into: DetectionSet): void 
 }
 
 /**
- * A bounded walk of the document in tree order. Bounded by count rather than
- * time so two runs over the same document report the same thing.
+ * A bounded walk of the document in tree order and, when that stopped short,
+ * the tags of the body's last few children. Bounded by count rather than time
+ * so two runs over the same document report the same thing.
  */
 export function sampleDocument(
   doc: Document,
@@ -278,14 +290,20 @@ export function sampleDocument(
   const limit = options.limit ?? DOCUMENT_SAMPLE_LIMIT;
   const walker = doc.createTreeWalker(root, 1 /* NodeFilter.SHOW_ELEMENT */);
   let visited = 0;
-  for (let node: Node | null = walker.currentNode; node !== null && visited < limit;) {
-    if (node.nodeType === 1) {
-      visited += 1;
-      const element = node as Element;
-      detectMarkup(element, "document-sample", into);
-      if (options.expandos) detectExpandos(element, into);
-    }
-    node = walker.nextNode();
+  let node: Node | null = walker.currentNode;
+  for (; node !== null && visited < limit; node = walker.nextNode()) {
+    if (node.nodeType !== 1) continue;
+    visited += 1;
+    const element = node as Element;
+    detectMarkup(element, "document-sample", into);
+    if (options.expandos) detectExpandos(element, into);
+  }
+  if (node === null) return;
+  let tail = doc.body?.lastElementChild ?? null;
+  for (let count = 0; tail !== null && count < BODY_TAIL_LIMIT; count += 1) {
+    const framework = TAG_MARKERS.get(tail.localName);
+    if (framework !== undefined) into.add(framework, "document-sample", "<" + tail.localName + ">");
+    tail = tail.previousElementSibling;
   }
 }
 

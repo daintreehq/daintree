@@ -168,16 +168,22 @@ ${params.body}
 })()`;
 }
 
-/** Evaluates, by value, to one of {@link EXTRACTOR_INSTALL_STATUS}. */
+/**
+ * Evaluates, by value, to one of {@link EXTRACTOR_INSTALL_STATUS}. `served`,
+ * the markup the dev server sent for this document, goes in as data for an
+ * extractor that reads it: through `JSON.stringify`, like everything else here.
+ */
 export function buildExtractorSource(params: {
   channel: string;
   framework: ElementPickerFramework;
   body: string;
+  served?: { url: string; html: string } | null;
 }): string {
   const status = EXTRACTOR_INSTALL_STATUS;
+  const served = params.served === undefined ? "" : `, served: ${JSON.stringify(params.served)}`;
   return `(() => {
   ${handshakeSource(params.channel, JSON.stringify(status.absent))}
-  const api = { channel: ${JSON.stringify(params.channel)}, framework: ${JSON.stringify(params.framework)}, installed: false };
+  const api = { channel: ${JSON.stringify(params.channel)}, framework: ${JSON.stringify(params.framework)}, installed: false${served} };
   try {
 ${params.body}
   } catch { return ${JSON.stringify(status.threw)}; }

@@ -22,6 +22,13 @@ const SVELTE: FrameworkDetection[] = [
 const REACT: FrameworkDetection[] = [
   { framework: "react", signals: [{ via: "expando", name: "__reactFiber" }] },
 ];
+const ASTRO: FrameworkDetection[] = [
+  { framework: "astro", signals: [{ via: "document-sample", name: "<astro-dev-toolbar>" }] },
+];
+const SERVED = {
+  url: "http://localhost/",
+  html: '<h1 data-astro-source-file="/p/src/pages/index.astro" data-astro-source-loc="6:9">Shop</h1>',
+};
 const READY = {
   type: "documentReady",
   url: "http://localhost/",
@@ -51,6 +58,8 @@ function harness(
     reselect?: (() => unknown) | { error: Error };
     /** Reads a plugin provider's entry; the default returns a stub body. */
     loadPluginAsset?: CoreGuestDeps["loadPluginAsset"];
+    /** How the picker's world answers a fetch of the document as served; the default is `SERVED`. */
+    servedContent?: () => Promise<unknown>;
   } = {}
 ) {
   const calls: Call[] = [];
@@ -65,6 +74,7 @@ function harness(
     probe: "/* probe */",
     "extractor:svelte": "/* svelte */",
     "extractor:react": "/* react */",
+    "extractor:astro": "/* astro */",
     "plugin-runtime": "/* runtime */",
     ...overrides.assets,
   };
@@ -79,6 +89,9 @@ function harness(
         return overrides.noWorld ? {} : { executionContextId: CONTEXT_ID };
       }
       if (method !== "Runtime.evaluate") return {};
+      if (params.awaitPromise === true && params.contextId === CONTEXT_ID) {
+        return overrides.servedContent ? overrides.servedContent() : { result: { value: SERVED } };
+      }
       const expression = params.expression as string;
       if (params.contextId === CONTEXT_ID && overrides.worldGone) {
         throw new Error("Cannot find context with specified id");
@@ -558,6 +571,119 @@ describe("CoreGuest", () => {
     h.guest.onGuestEvent(0, { type: "frameworksDetected", detections: SVELTE });
     await h.settle();
     expect(h.emitted).toEqual([]);
+  });
+
+  describe("on an Astro page", () => {
+    const servedReads = (h: ReturnType<typeof harness>) =>
+      h.calls.filter((call) => call.params.awaitPromise === true);
+    const astroInstall = (h: ReturnType<typeof harness>) =>
+      h
+        .extractorEvaluates()
+        .map((call) => call.params.expression as string)
+        .find((expression) => expression.includes("/* astro */"));
+    /** Lets queued work run up to a read that has not answered, without waiting on the queue. */
+    const flush = async () => {
+      for (let round = 0; round < 50; round += 1) await Promise.resolve();
+    };
+
+    it("hands Astro's extractor the markup as served, fetched once from the picker's world, and no other extractor", async () => {
+      const h = harness({ probeResult: [...ASTRO, ...REACT] });
+      await h.install();
+      h.guest.onGuestEvent(0, READY);
+      await h.settle();
+      expect(servedReads(h)).toEqual([
+        {
+          method: "Runtime.evaluate",
+          params: expect.objectContaining({ contextId: CONTEXT_ID, returnByValue: true }),
+        },
+      ]);
+      expect(servedReads(h)[0]!.params.expression).toContain("fetch(url");
+      expect(astroInstall(h)).toContain(`served: ${JSON.stringify(SERVED)}`);
+      const react = h
+        .extractorEvaluates()
+        .find((call) => (call.params.expression as string).includes("/* react */"));
+      expect(react?.params.expression).not.toContain("served:");
+      expect(h.availabilities().at(-1)?.extractors).toEqual({
+        astro: "installed",
+        react: "installed",
+      });
+    });
+
+    it("reads nothing as served for a page with no Astro on it", async () => {
+      const h = harness({ probeResult: REACT });
+      await h.install();
+      h.guest.onGuestEvent(0, READY);
+      await h.settle();
+      expect(servedReads(h)).toEqual([]);
+    });
+
+    it("still installs Astro's extractor, with nothing as served, when the read fails or answers out of shape", async () => {
+      for (const servedContent of [
+        () => Promise.reject(new Error("Cannot find context with specified id")),
+        async () => ({ result: { value: null } }),
+        async () => ({ result: { value: { url: "file:///p/index.html", html: "<h1></h1>" } } }),
+        async () => ({ result: { value: { url: SERVED.url, html: "a".repeat(2 * 1024 * 1024) } } }),
+      ]) {
+        const h = harness({ probeResult: ASTRO, servedContent });
+        await h.install();
+        h.guest.onGuestEvent(0, READY);
+        await h.settle();
+        expect(astroInstall(h)).toContain("served: null");
+        expect(h.availabilities().at(-1)?.extractors).toEqual({ astro: "installed" });
+      }
+    });
+
+    it("stops waiting on a read that has not answered by its deadline, and ignores the late answer", async () => {
+      let answer!: (value: unknown) => void;
+      const h = harness({
+        probeResult: ASTRO,
+        servedContent: () => new Promise((resolve) => (answer = resolve)),
+      });
+      await h.install();
+      h.guest.onGuestEvent(0, READY);
+      await flush();
+      // The late probe's timer, then the read's deadline.
+      expect(h.timers).toHaveLength(2);
+      expect(h.extractorEvaluates()).toHaveLength(0);
+      h.timers[1]!();
+      await h.settle();
+      expect(astroInstall(h)).toContain("served: null");
+      answer({ result: { value: SERVED } });
+      await h.settle();
+      expect(h.extractorEvaluates()).toHaveLength(1);
+      expect(h.availabilities().at(-1)?.extractors).toEqual({ astro: "installed" });
+    });
+
+    it("installs nothing when the document changes while the markup is being read", async () => {
+      let answer!: (value: unknown) => void;
+      const h = harness({
+        probeResult: ASTRO,
+        servedContent: () => new Promise((resolve) => (answer = resolve)),
+      });
+      await h.install();
+      h.guest.onGuestEvent(0, READY);
+      await flush();
+      h.state.epoch = 1;
+      h.guest.invalidate();
+      answer({ result: { value: SERVED } });
+      await h.settle();
+      expect(h.extractorEvaluates()).toHaveLength(0);
+    });
+
+    it("drops markup read while the main world was replaced, rather than hand it to the new one", async () => {
+      let answer!: (value: unknown) => void;
+      const h = harness({
+        probeResult: ASTRO,
+        servedContent: () => new Promise((resolve) => (answer = resolve)),
+      });
+      await h.install();
+      h.guest.onGuestEvent(0, READY);
+      await flush();
+      h.main.uniqueId = "main-2";
+      answer({ result: { value: SERVED } });
+      await h.settle();
+      expect(astroInstall(h)).toContain("served: null");
+    });
   });
 
   describe("reselect", () => {
