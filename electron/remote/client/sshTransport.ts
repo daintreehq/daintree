@@ -708,9 +708,10 @@ interface KnownHost {
 
 /**
  * How the ssh config files stood. A remembered route is only good while they
- * are unchanged: one that re-points the alias would otherwise keep reaching
- * the old host through the master still open to it. Files they `Include`
- * aren't covered; a person's Retry dials afresh whatever they say.
+ * are unchanged: after an edit (an alias re-pointed, say) the next dial runs
+ * in full, as every dial did before, instead of carrying on by the control
+ * path the old config expanded to. Files they `Include` aren't covered; a
+ * person's Retry dials afresh whatever they say.
  */
 async function sshConfigStamp(files: readonly string[]): Promise<string> {
   const stamps = await Promise.all(
