@@ -10,13 +10,12 @@ function settings(overrides: Partial<AgentSettings> = {}): AgentSettings {
 
 describe("reconcileResumeLaunchFlagsWith", () => {
   it("drops a captured bypass flag the settings no longer resolve", () => {
-    const flags = reconcileResumeLaunchFlagsWith(
-      { agentId: "claude", agentLaunchFlags: ["--model", "opus", BYPASS] },
-      settings({ globalSkipPermissions: false })
-    );
-    expect(flags).toContain("--model");
-    expect(flags).toContain("opus");
-    expect(flags).not.toContain(BYPASS);
+    expect(
+      reconcileResumeLaunchFlagsWith(
+        { agentId: "claude", agentLaunchFlags: ["--model", "opus", BYPASS] },
+        settings({ globalSkipPermissions: false })
+      )
+    ).toEqual(["--model", "opus"]);
   });
 
   it("adds the bypass flag a global switch turns on, even with nothing captured", () => {
@@ -25,28 +24,28 @@ describe("reconcileResumeLaunchFlagsWith", () => {
         { agentId: "claude" },
         settings({ globalSkipPermissions: true })
       )
-    ).toContain(BYPASS);
+    ).toEqual([BYPASS]);
   });
 
-  it("re-appends the caller's verbatim tail after the reconciled flags", () => {
-    const flags = reconcileResumeLaunchFlagsWith(
-      {
-        agentId: "claude",
-        agentLaunchFlags: [BYPASS, "--verbose"],
-        callerLaunchFlags: ["--verbose"],
-      },
-      settings({ globalSkipPermissions: false })
-    );
-    expect(flags).not.toContain(BYPASS);
-    expect(flags.at(-1)).toBe("--verbose");
+  it("keeps the caller's verbatim tail, even a flag reconcile would drop, once and last", () => {
+    expect(
+      reconcileResumeLaunchFlagsWith(
+        {
+          agentId: "claude",
+          agentLaunchFlags: ["--model", "opus", BYPASS, BYPASS],
+          callerLaunchFlags: [BYPASS],
+        },
+        settings({ globalSkipPermissions: false })
+      )
+    ).toEqual(["--model", "opus", BYPASS]);
   });
 
-  it("reconciles with no settings at all", () => {
+  it("reconciles with no settings at all, adding nothing", () => {
     expect(
       reconcileResumeLaunchFlagsWith(
         { agentId: "claude", agentLaunchFlags: ["--model", "opus"] },
         null
       )
-    ).toEqual(expect.arrayContaining(["--model", "opus"]));
+    ).toEqual(["--model", "opus"]);
   });
 });

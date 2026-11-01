@@ -3,7 +3,7 @@ import { CHANNELS } from "../../ipc/channels.js";
 import type { PanelSnapshot, Project } from "../../../shared/types/project.js";
 import type { AgentSessionRecord } from "../../../shared/types/ipc/agentSessionHistory.js";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
-import { buildResumeCommand } from "../../../shared/types/agentSettings.js";
+import { buildResumeCommand, dropRetiredAgentModel } from "../../../shared/types/agentSettings.js";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability.js";
 import { resolveAgentLaunchBaseCommandFor } from "../../../shared/utils/agentLaunchCommand.js";
 import { buildLaunchIdentity } from "../../../shared/utils/agentLaunchPlan.js";
@@ -31,8 +31,9 @@ export interface AgentSessionPaneRequest {
   /** The conversation to reopen; absent or blank when none was ever captured. */
   sessionId: string | null | undefined;
   /**
-   * The directory the session ran in, inside the worktree. Absent: the
-   * session's journal record's, else the worktree's root.
+   * The directory the session ran in, inside the worktree, for a session the
+   * history no longer holds. A journaled directory always wins; absent both,
+   * the worktree's root.
    */
   cwd?: string;
 }
@@ -42,6 +43,7 @@ export type AgentSessionPaneRefusal =
   | "unknown-agent"
   | "no-resume-support"
   | "unknown-project"
+  | "history-unavailable"
   | "worktrees-unavailable"
   | "worktree-gone"
   | "other-worktree"
@@ -77,6 +79,15 @@ export interface AgentSessionPaneRuntime {
    * pty-host reports the spawn failed, or nothing could listen for its report.
    */
   confirmSpawn(terminalId: string, spawn: () => Promise<void>): Promise<boolean>;
+}
+
+/**
+ * What a resume target never is: an option, or a CLI's own word for "the
+ * latest" (`codex resume --last`, `gemini --resume latest`), either of which
+ * would reopen some other conversation under this one's id.
+ */
+function isResumeTarget(sessionId: string): boolean {
+  return /^[A-Za-z0-9][\w.:-]*$/.test(sessionId) && !/^(latest|last)$/i.test(sessionId);
 }
 
 const refused = (reason: AgentSessionPaneRefusal, message: string): AgentSessionPaneResult => ({
@@ -117,6 +128,9 @@ export async function resumeAgentSessionAsPane(
   const sessionId = request.sessionId?.trim() ?? "";
   if (sessionId === "") {
     return refused("no-session-id", "No session id is known for this agent session.");
+  }
+  if (!isResumeTarget(sessionId)) {
+    return refused("no-session-id", "That isn't a session id an agent can reopen exactly.");
   }
   const agentConfig = getEffectiveAgentConfig(request.agentId);
   if (!agentConfig) return refused("unknown-agent", unknownAgentIdMessage(request.agentId));
@@ -168,11 +182,17 @@ async function launchResumedPane(
 
   // The journal only adds what it kept of the launch: an id it no longer
   // holds (aged out of retention) still resumes, with the current settings.
-  const records = await deps
-    .invoke<AgentSessionRecord[]>(project.id, CHANNELS.AGENT_SESSION_LIST, [
+  let records: AgentSessionRecord[];
+  try {
+    records = await deps.invoke<AgentSessionRecord[]>(project.id, CHANNELS.AGENT_SESSION_LIST, [
       { projectId: project.id },
-    ])
-    .catch(() => []);
+    ]);
+  } catch {
+    return refused(
+      "history-unavailable",
+      "The session history couldn't be read, so where that session ran can't be confirmed."
+    );
+  }
   const record = (Array.isArray(records) ? records : []).find(
     (candidate) => candidate.sessionId === sessionId && candidate.agentId === agentId
   );
@@ -184,7 +204,7 @@ async function launchResumedPane(
       "That session was recorded in another worktree, and resuming it anywhere else would start a new conversation."
     );
   }
-  const cwd = request.cwd?.trim() || record?.cwd?.trim() || worktree.path;
+  const cwd = record?.cwd?.trim() || request.cwd?.trim() || worktree.path;
   const { cwdOutsideWorktree } = buildLaunchIdentity(worktreeId, worktree, cwd, {
     caseInsensitive: process.platform === "darwin" || process.platform === "win32",
   });
@@ -194,38 +214,16 @@ async function launchResumedPane(
       "That session's directory isn't inside the worktree, and resuming it anywhere else would start a new conversation."
     );
   }
-  if (!(await runtime.isDirectory(cwd).catch(() => false))) {
-    return refused("worktree-gone", "The directory that session ran in no longer exists.");
-  }
-
-  const held = await findPaneHoldingSession(project.id, worktreeId, sessionId, deps);
-  if (held.status === "unavailable") return refused("terminals-unavailable", held.message);
-  if (held.status === "found") {
-    return { status: "existing", projectId: project.id, worktreeId, terminalId: held.terminalId };
-  }
-
-  const defaults = computeHardwareDefaults(deps.hostPlatform.totalMemoryBytes);
-  const panelLimit = buildPanelLimitSnapshot(await countProjectPanels(project, deps), {
-    softWarningLimit: defaults.soft,
-    confirmationLimit: defaults.confirm,
-    hardLimit: defaults.hard,
-  });
-  if (panelLimit.tier === "hard") {
-    return refused("panel-limit", "This project is at its panel limit.");
-  }
 
   const cliDetail = await deps.agents.getCliDetail(agentId).catch(() => undefined);
-  if (cliDetail && !isAgentLaunchable(cliDetail.state)) {
-    return refused("missing-cli", `${agentConfig.name} can't be launched on this machine.`);
-  }
   const settings = await deps.agents.getSettings().catch(() => null);
-  const flags = reconcileResumeLaunchFlagsWith(
-    { agentId, agentLaunchFlags: record?.agentLaunchFlags },
-    settings
-  );
+  // A retired model fails the relaunch (#15652); a view's resume drops it too.
+  const captured = dropRetiredAgentModel(agentId, { agentLaunchFlags: record?.agentLaunchFlags })
+    .launch.agentLaunchFlags;
+  const flags = reconcileResumeLaunchFlagsWith({ agentId, agentLaunchFlags: captured }, settings);
   // Only a captured launch is kept for restart and restore to replay: flags
   // reconciled into an empty one are no whole configuration.
-  const savedFlags = record?.agentLaunchFlags?.length ? flags : undefined;
+  const savedFlags = captured?.length ? flags : undefined;
   const command = buildResumeCommand(
     agentId,
     sessionId,
@@ -244,13 +242,39 @@ async function launchResumedPane(
       `${agentConfig.name} can't reopen a conversation by its session id.`
     );
   }
-
-  const terminalId = `terminal-${randomUUID()}`;
-  const title = agentConfig.name;
   const layers = await deps.getLaunchEnvLayers(project.id).catch((err: unknown) => {
     console.warn("[Viewless] Could not read environment variables for a resume:", err);
     return null;
   });
+  const panelCount = await countProjectPanels(project, deps);
+
+  // Last before the spawn, so as little as possible can change in between:
+  // the spawn handler would launch a vanished directory's session from the
+  // project root, and a pane resumed meanwhile would share its transcript.
+  if (!(await runtime.isDirectory(cwd).catch(() => false))) {
+    return refused("worktree-gone", "The directory that session ran in no longer exists.");
+  }
+  const held = await findPaneHoldingSession(project.id, worktreeId, sessionId, deps);
+  if (held.status === "unavailable") return refused("terminals-unavailable", held.message);
+  if (held.status === "found") {
+    return { status: "existing", projectId: project.id, worktreeId, terminalId: held.terminalId };
+  }
+
+  const defaults = computeHardwareDefaults(deps.hostPlatform.totalMemoryBytes);
+  const panelLimit = buildPanelLimitSnapshot(panelCount, {
+    softWarningLimit: defaults.soft,
+    confirmationLimit: defaults.confirm,
+    hardLimit: defaults.hard,
+  });
+  if (panelLimit.tier === "hard") {
+    return refused("panel-limit", "This project is at its panel limit.");
+  }
+  if (cliDetail && !isAgentLaunchable(cliDetail.state)) {
+    return refused("missing-cli", `${agentConfig.name} can't be launched on this machine.`);
+  }
+
+  const terminalId = `terminal-${randomUUID()}`;
+  const title = agentConfig.name;
   const env = mergeTerminalLaunchEnv(layers?.global, layers?.project, undefined);
   const actionContext = paneLaunchContext(agentId, project.id, worktreeId, terminalId, title);
   let started: boolean;
@@ -373,6 +397,10 @@ async function findPaneHoldingSession(
       terminal.hasPty !== false &&
       // A pane whose agent quit to its shell no longer runs the conversation.
       terminal.agentState !== "exited" &&
+      // Nor one where another agent has since taken the PTY over (#12535).
+      (terminal.agentIncarnation ?? 0) === 0 &&
+      (terminal.detectedAgentId === undefined ||
+        terminal.detectedAgentId === terminal.launchAgentId) &&
       terminal.isAssistantTerminal !== true &&
       (terminal.projectId ?? pty.getTerminalProjectId(terminal.id)) === projectId
   );

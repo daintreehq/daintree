@@ -172,6 +172,24 @@ describe("resumeAgentSessionAsPane", () => {
     expect(savedPane(store.read(), payload!.id)?.agentLaunchFlags).toEqual(["--model", "opus"]);
   });
 
+  it("drops a retired model from the journaled launch, as a view's resume does", async () => {
+    const { deps, invoke, store } = resumeDeps({
+      sessions: [record({ agentId: "copilot", agentLaunchFlags: ["--model", "gpt-5.4"] })],
+    });
+
+    const result = await resumeAgentSessionAsPane(
+      { ...REQUEST, agentId: "copilot" },
+      deps,
+      makeRuntime()
+    );
+
+    expect(result).toMatchObject({ status: "launched" });
+    const [payload] = spawns(invoke);
+    expect(payload!.command).toContain(`--resume=${SESSION}`);
+    expect(payload!.command).not.toContain("gpt-5.4");
+    expect(savedPane(store.read(), payload!.id)?.command).not.toContain("gpt-5.4");
+  });
+
   it("keeps no launch flags for a session the journal holds none for", async () => {
     const { deps, invoke, store } = resumeDeps({
       settings: { agents: {}, globalSkipPermissions: true } as AgentSettings,
@@ -194,6 +212,16 @@ describe("resumeAgentSessionAsPane", () => {
     expect(result).toMatchObject({ status: "refused", reason: "no-session-id" });
     expect(invoke).not.toHaveBeenCalled();
   });
+
+  it.each([["--last"], ["latest"], ["LAST"], ["two words"], ["../x"]])(
+    "refuses %s, which isn't an exact session",
+    async (sessionId) => {
+      const { deps, invoke } = resumeDeps();
+      const result = await resumeAgentSessionAsPane({ ...REQUEST, sessionId }, deps, makeRuntime());
+      expect(result).toMatchObject({ status: "refused", reason: "no-session-id" });
+      expect(invoke).not.toHaveBeenCalled();
+    }
+  );
 
   it.each([
     ["aider", "no-resume-support"],
@@ -227,20 +255,45 @@ describe("resumeAgentSessionAsPane", () => {
     expect(spawns(invoke)).toHaveLength(0);
   });
 
-  it("refuses when the session's directory is gone", async () => {
+  it.each([
+    ["missing", async () => false],
+    ["unreadable", async (): Promise<boolean> => Promise.reject(new Error("ENOENT"))],
+  ])("refuses when the session's directory is %s", async (_label, isDirectory) => {
     const { deps, invoke } = resumeDeps();
-    const runtime = makeRuntime({ isDirectory: vi.fn(async () => false) });
+    const runtime = makeRuntime({ isDirectory: vi.fn(isDirectory) });
     const result = await resumeAgentSessionAsPane(REQUEST, deps, runtime);
     expect(result).toMatchObject({ status: "refused", reason: "worktree-gone" });
     expect(runtime.isDirectory).toHaveBeenCalledWith(WORKTREE.path);
     expect(spawns(invoke)).toHaveLength(0);
   });
 
-  it("refuses when the worktrees can't be read", async () => {
+  it("refuses when no workspace host can list the worktrees", async () => {
     const { deps } = resumeDeps();
     deps.getWorkspaceHosts = () => null;
     const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
     expect(result).toMatchObject({ status: "refused", reason: "worktrees-unavailable" });
+  });
+
+  it("refuses when listing the worktrees fails", async () => {
+    const { deps, invoke } = resumeDeps();
+    const hosts = makeHosts();
+    hosts.waitForReady.mockRejectedValue(new Error("host crashed"));
+    deps.getWorkspaceHosts = () => hosts;
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+    expect(result).toMatchObject({ status: "refused", reason: "worktrees-unavailable" });
+    expect(spawns(invoke)).toHaveLength(0);
+  });
+
+  it("refuses when the session history can't be read", async () => {
+    const { deps, invoke } = resumeDeps();
+    const base = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (projectId, channel, args) => {
+      if (channel === CHANNELS.AGENT_SESSION_LIST) throw new Error("history unreadable");
+      return base(projectId, channel, args);
+    });
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+    expect(result).toMatchObject({ status: "refused", reason: "history-unavailable" });
+    expect(spawns(invoke)).toHaveLength(0);
   });
 
   it.each([
@@ -251,11 +304,47 @@ describe("resumeAgentSessionAsPane", () => {
     ],
     [
       "its directory walks out of the worktree",
-      { sessions: [record({ cwd: "/repo-wt/feature/../other" })] },
+      { sessions: [record({ cwd: "/repo-wt/feature/child/../app" })] },
     ],
   ])("refuses to relaunch a session elsewhere when %s", async (_label, options) => {
     const { deps, invoke } = resumeDeps(options);
     const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+    expect(result).toMatchObject({ status: "refused", reason: "other-worktree" });
+    expect(spawns(invoke)).toHaveLength(0);
+  });
+
+  it("resumes in the caller's directory when the journal holds none", async () => {
+    const { deps, invoke } = resumeDeps();
+    const result = await resumeAgentSessionAsPane(
+      { ...REQUEST, cwd: "/repo-wt/feature/packages/web" },
+      deps,
+      makeRuntime()
+    );
+    expect(result).toMatchObject({ status: "launched", cwd: "/repo-wt/feature/packages/web" });
+    expect(spawns(invoke)[0]!.cwd).toBe("/repo-wt/feature/packages/web");
+  });
+
+  it("prefers the journaled directory to the caller's", async () => {
+    const { deps, invoke } = resumeDeps({
+      sessions: [record({ cwd: "/repo-wt/feature/packages/app" })],
+    });
+    await resumeAgentSessionAsPane(
+      { ...REQUEST, cwd: "/repo-wt/feature/packages/web" },
+      deps,
+      makeRuntime()
+    );
+    expect(spawns(invoke)[0]!.cwd).toBe("/repo-wt/feature/packages/app");
+  });
+
+  it("refuses a journaled directory outside the worktree whatever the caller passes", async () => {
+    const { deps, invoke } = resumeDeps({
+      sessions: [record({ worktreeId: null, cwd: "/other/repo" })],
+    });
+    const result = await resumeAgentSessionAsPane(
+      { ...REQUEST, cwd: WORKTREE.path },
+      deps,
+      makeRuntime()
+    );
     expect(result).toMatchObject({ status: "refused", reason: "other-worktree" });
     expect(spawns(invoke)).toHaveLength(0);
   });
@@ -308,6 +397,8 @@ describe("resumeAgentSessionAsPane", () => {
     ["back at its shell", { agentState: "exited" }],
     ["an assistant", { isAssistantTerminal: true }],
     ["in another worktree", { worktreeId: "/repo" }],
+    ["taken over by a later agent", { agentIncarnation: 1 }],
+    ["running another agent now", { launchAgentId: "claude", detectedAgentId: "codex" }],
     ["holding another session", { agentSessionId: "another" }],
   ])("launches beside a terminal that is %s", async (_label, overrides) => {
     const { deps, invoke } = resumeDeps({
@@ -336,6 +427,54 @@ describe("resumeAgentSessionAsPane", () => {
     });
     const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
     expect(result).toMatchObject({ status: "launched" });
+  });
+
+  it("launches beside a holder the saved layout shows as a dialog", async () => {
+    const { deps } = resumeDeps({
+      terminals: { "pane-1": { agentSessionId: SESSION, worktreeId: WORKTREE.id } },
+      state: {
+        projectId: PROJECT.id,
+        sidebarWidth: 350,
+        terminals: [{ id: "pane-1", kind: "terminal", location: "dialog" } as PanelSnapshot],
+      },
+    });
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+    expect(result).toMatchObject({ status: "launched" });
+  });
+
+  it("returns an existing pane even at the panel limit", async () => {
+    const { deps, invoke } = resumeDeps({
+      terminals: { "pane-1": { agentSessionId: SESSION, worktreeId: WORKTREE.id } },
+      state: {
+        projectId: PROJECT.id,
+        sidebarWidth: 350,
+        terminals: Array.from({ length: 400 }, (_, index) => ({
+          id: index === 0 ? "pane-1" : `other-${index}`,
+          kind: "terminal",
+          location: "grid",
+        })) as PanelSnapshot[],
+      },
+    });
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+    expect(result).toMatchObject({ status: "existing", terminalId: "pane-1" });
+    expect(spawns(invoke)).toHaveLength(0);
+  });
+
+  it("refuses a new pane at the panel limit", async () => {
+    const { deps, invoke } = resumeDeps({
+      state: {
+        projectId: PROJECT.id,
+        sidebarWidth: 350,
+        terminals: Array.from({ length: 400 }, (_, index) => ({
+          id: `other-${index}`,
+          kind: "terminal",
+          location: "grid",
+        })) as PanelSnapshot[],
+      },
+    });
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+    expect(result).toMatchObject({ status: "refused", reason: "panel-limit" });
+    expect(spawns(invoke)).toHaveLength(0);
   });
 
   it("refuses rather than duplicate a holder nothing places", async () => {
@@ -408,10 +547,28 @@ describe("resumeAgentSessionAsPane", () => {
     expect(second).toEqual(first);
   });
 
+  it("launches again after an earlier call for the session threw", async () => {
+    const { deps, invoke } = resumeDeps();
+    const getCliDetail = deps.agents.getCliDetail;
+    deps.agents.getCliDetail = () => {
+      throw new Error("probe crashed");
+    };
+    await expect(resumeAgentSessionAsPane(REQUEST, deps, makeRuntime())).rejects.toThrow(
+      "probe crashed"
+    );
+    deps.agents.getCliDetail = getCliDetail;
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+    expect(result).toMatchObject({ status: "launched" });
+    expect(spawns(invoke)).toHaveLength(1);
+  });
+
   it("launches again once an earlier call for the session has settled", async () => {
     const { deps, invoke } = resumeDeps();
     const failing = makeRuntime({ isDirectory: vi.fn(async () => false) });
-    await resumeAgentSessionAsPane(REQUEST, deps, failing);
+    await expect(resumeAgentSessionAsPane(REQUEST, deps, failing)).resolves.toMatchObject({
+      status: "refused",
+      reason: "worktree-gone",
+    });
     const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
     expect(result).toMatchObject({ status: "launched" });
     expect(spawns(invoke)).toHaveLength(1);

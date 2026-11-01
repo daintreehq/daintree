@@ -11,20 +11,27 @@ function spawn(terminalId: string) {
   events.emit("agent:spawned", { agentId: "claude", terminalId, timestamp: Date.now() });
 }
 
-function transition(terminalId: string, state: AgentState, waitingReason?: WaitingReason) {
+function transition(
+  terminalId: string,
+  state: AgentState,
+  waitingReason?: WaitingReason,
+  trigger: "output" | "exit" = "output"
+) {
   events.emit("agent:state-changed", {
     agentId: "claude",
     terminalId,
     state,
     previousState: "working",
-    trigger: "output",
+    trigger,
     confidence: 1,
     timestamp: Date.now(),
     ...(waitingReason ? { waitingReason } : {}),
   });
 }
 
+/** As `TerminalProcess.kill` reports one: the reset to idle, then the kill. */
 function kill(terminalId: string) {
+  transition(terminalId, "idle", undefined, "exit");
   events.emit("agent:killed", { agentId: "claude", terminalId, timestamp: Date.now() });
 }
 
@@ -64,6 +71,17 @@ describe("waitForAgentAtPrompt", () => {
       state: "waiting",
       waitingReason: "prompt",
     });
+  });
+
+  it("ignores other terminals' transitions", async () => {
+    const terminalId = nextTerminal();
+    const other = nextTerminal();
+    spawn(terminalId);
+    spawn(other);
+    const wait = waitForAgentAtPrompt(terminalId, { timeoutMs: 60_000 });
+    transition(other, "waiting", "prompt");
+    kill(other);
+    expect(await isSettled(wait)).toBe(false);
   });
 
   it("never reads a terminal not yet announced as idle", async () => {
@@ -120,6 +138,7 @@ describe("waitForAgentAtPrompt", () => {
   it("reports a terminal killed during the wait, or before it", async () => {
     const terminalId = nextTerminal();
     spawn(terminalId);
+    transition(terminalId, "working");
     const wait = waitForAgentAtPrompt(terminalId, { timeoutMs: 60_000 });
     kill(terminalId);
     await expect(wait).resolves.toMatchObject({ outcome: "closed" });
@@ -132,6 +151,15 @@ describe("waitForAgentAtPrompt", () => {
     const terminalId = nextTerminal();
     spawn(terminalId);
     const wait = waitForAgentAtPrompt(terminalId, { timeoutMs: 1_000 });
+    transition(terminalId, "completed");
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(wait).resolves.toEqual({ terminalId, outcome: "timeout", state: "completed" });
+  });
+
+  it("notes a spawn announced during the wait", async () => {
+    const terminalId = nextTerminal();
+    const wait = waitForAgentAtPrompt(terminalId, { timeoutMs: 1_000 });
+    spawn(terminalId);
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(wait).resolves.toEqual({ terminalId, outcome: "timeout", state: "working" });
   });
@@ -152,27 +180,50 @@ describe("waitForAgentAtPrompt", () => {
     ).resolves.toMatchObject({ outcome: "aborted" });
   });
 
-  it("releases its listeners and timer however it ends", async () => {
-    const realOn = events.on.bind(events);
-    const offs: Array<ReturnType<typeof vi.fn>> = [];
-    vi.spyOn(events, "on").mockImplementation(((
-      event: Parameters<typeof events.on>[0],
-      listener: Parameters<typeof events.on>[1]
-    ) => {
-      const off = vi.fn(realOn(event, listener));
-      offs.push(off);
-      return off;
-    }) as typeof events.on);
+  it.each([
+    ["settles", (id: string) => transition(id, "waiting", "prompt"), "settled"],
+    ["exits", (id: string) => transition(id, "exited"), "exited"],
+    ["is killed", (id: string) => kill(id), "closed"],
+    ["times out", () => vi.advanceTimersByTime(60_000), "timeout"],
+    ["is given up on", (_id: string, controller: AbortController) => controller.abort(), "aborted"],
+  ] as const)(
+    "releases its listeners, timer and abort listener when it %s",
+    async (_label, end, outcome) => {
+      const realOn = events.on.bind(events);
+      const offs: Array<ReturnType<typeof vi.fn>> = [];
+      vi.spyOn(events, "on").mockImplementation(((
+        event: Parameters<typeof events.on>[0],
+        listener: Parameters<typeof events.on>[1]
+      ) => {
+        const off = vi.fn(realOn(event, listener));
+        offs.push(off);
+        return off;
+      }) as typeof events.on);
+      const terminalId = nextTerminal();
+      spawn(terminalId);
+      const controller = new AbortController();
+      const removeAbort = vi.spyOn(controller.signal, "removeEventListener");
+
+      const wait = waitForAgentAtPrompt(terminalId, {
+        timeoutMs: 60_000,
+        signal: controller.signal,
+      });
+      expect(vi.getTimerCount()).toBe(1);
+      end(terminalId, controller);
+
+      await expect(wait).resolves.toMatchObject({ outcome });
+      expect(offs).toHaveLength(3);
+      for (const off of offs) expect(off).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(removeAbort).toHaveBeenCalledWith("abort", expect.any(Function));
+    }
+  );
+
+  it("releases everything when it answers before waiting at all", async () => {
     const terminalId = nextTerminal();
     spawn(terminalId);
-
-    const wait = waitForAgentAtPrompt(terminalId, { timeoutMs: 60_000 });
-    expect(vi.getTimerCount()).toBe(1);
     transition(terminalId, "waiting", "prompt");
-    await wait;
-
-    expect(offs.length).toBeGreaterThan(0);
-    for (const off of offs) expect(off).toHaveBeenCalledTimes(1);
+    await waitForAgentAtPrompt(terminalId, { timeoutMs: 60_000 });
     expect(vi.getTimerCount()).toBe(0);
   });
 });

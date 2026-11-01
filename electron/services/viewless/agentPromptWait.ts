@@ -6,10 +6,11 @@ import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
  * How a wait for an agent's prompt ended, with the last state observed for
  * its terminal. What was observed, never a judgement that typing is safe.
  *
- * - `settled`: the agent was observed `waiting` or `idle`. `waitingReason`
- *   says what kind of wait: `prompt` is usually its own input prompt, while
- *   `approval`, `question` and `error` are something else on screen.
- * - `exited`: the agent quit, leaving the terminal running its shell.
+ * - `settled`: the agent was observed `waiting` or `idle`, which the state
+ *   machine reads off its output and can get wrong. `waitingReason` says what
+ *   kind of wait: `prompt` is usually its own input prompt, while `approval`,
+ *   `question` and `error` are something else on screen.
+ * - `exited`: the agent was observed exiting, or its spawn failing.
  * - `closed`: the agent's terminal was killed.
  * - `timeout`, `aborted`: neither happened in time, or the caller gave up.
  */
@@ -36,33 +37,49 @@ export function waitForAgentAtPrompt(
   return new Promise((resolve) => {
     let observed: { state?: AgentState; waitingReason?: WaitingReason } = {};
     const unsubscribers: Array<() => void> = [];
-    let timer: ReturnType<typeof setTimeout> | undefined;
     let settled = false;
 
+    const timer = setTimeout(() => finish("timeout"), Math.max(0, options.timeoutMs));
     const onAbort = () => finish("aborted");
     const finish = (outcome: AgentPromptWaitResult["outcome"]) => {
       if (settled) return;
       settled = true;
-      if (timer !== undefined) clearTimeout(timer);
+      clearTimeout(timer);
       for (const off of unsubscribers) off();
       signal?.removeEventListener("abort", onAbort);
       resolve({ terminalId, outcome, ...observed });
     };
-    const observe = (state: AgentState, waitingReason: WaitingReason | undefined) => {
+    const listen = (off: () => void) => {
+      if (settled) off();
+      else unsubscribers.push(off);
+    };
+    const observe = (
+      state: AgentState,
+      waitingReason: WaitingReason | undefined,
+      trigger?: string
+    ) => {
       observed = { state, ...(state === "waiting" && waitingReason ? { waitingReason } : {}) };
+      // A kill resets the agent to idle just before it announces the kill.
+      if (state === "idle" && trigger === "exit") return;
       if (state === "waiting" || state === "idle") finish("settled");
       else if (state === "exited") finish("exited");
     };
 
     // Read straight off each event, so the answer never depends on whether
     // the availability store's own listener ran first.
-    unsubscribers.push(
+    listen(
       events.on("agent:state-changed", (payload) => {
-        if (payload.terminalId === terminalId) observe(payload.state, payload.waitingReason);
-      }),
+        if (payload.terminalId === terminalId) {
+          observe(payload.state, payload.waitingReason, payload.trigger);
+        }
+      })
+    );
+    listen(
       events.on("agent:spawned", (payload) => {
         if (payload.terminalId === terminalId) observed = { state: "working" };
-      }),
+      })
+    );
+    listen(
       events.on("agent:killed", (payload) => {
         if (payload.terminalId === terminalId) finish("closed");
       })
@@ -81,6 +98,5 @@ export function waitForAgentAtPrompt(
       return;
     }
     signal?.addEventListener("abort", onAbort, { once: true });
-    timer = setTimeout(() => finish("timeout"), Math.max(0, options.timeoutMs));
   });
 }
