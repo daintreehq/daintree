@@ -97,7 +97,12 @@ describe("Decisions lazy boundary", () => {
   it("adds no module of its own to the startup graph", () => {
     // The status read is declared in a handler module startup loads anyway.
     expect(eager.has(STATUS_READ_HOST)).toBe(true);
-    expect([...eager].filter((file) => /decisions/i.test(file))).toEqual([]);
+    // Repo sources only: a package is the library check's to judge, and a
+    // namespaced stub's key can carry an absolute path naming any checkout.
+    const ownSources = [...eager].filter(
+      (file) => !file.includes(":") && !file.includes("node_modules/")
+    );
+    expect(ownSources.filter((file) => /decisions/i.test(file))).toEqual([]);
   });
 
   it("bundles the code of every library instead of leaving it to node_modules", () => {
