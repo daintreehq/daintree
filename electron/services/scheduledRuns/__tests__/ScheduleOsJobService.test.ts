@@ -10,7 +10,7 @@ import {
 } from "../ScheduleOsJobService.js";
 
 const ZONE = "Europe/London";
-const MAC: ScheduleOsJobContext = { kind: "launch-agent", systemTimeZone: ZONE };
+const MAC: ScheduleOsJobContext = { kind: "launch-agent", systemTimeZone: ZONE, unavailable: null };
 
 function schedule(
   id: string,
@@ -20,6 +20,7 @@ function schedule(
     timeZone?: string;
     enabled?: boolean;
     runWhenClosed?: boolean;
+    createdAt?: number;
   } = {}
 ): Schedule {
   return createSchedule(
@@ -33,7 +34,7 @@ function schedule(
       enabled: options.enabled ?? true,
       policies: { runWhenClosed: options.runWhenClosed ?? true },
     },
-    1
+    options.createdAt ?? 1
   );
 }
 
@@ -48,7 +49,9 @@ function deferred<T = void>() {
 }
 
 /** Records what each sync was asked for, and reads current when the last one is what's wanted. */
-function fakeAdapter(options: { unavailable?: string | null } = {}) {
+function fakeAdapter(
+  options: { unavailable?: string | null; kind?: ScheduleOsJobAdapter["kind"] } = {}
+) {
   const syncs: { crons: string[]; reload: boolean }[] = [];
   const zones: string[] = [];
   const events: string[] = [];
@@ -59,7 +62,7 @@ function fakeAdapter(options: { unavailable?: string | null } = {}) {
   const crons = (cadences: readonly { cron: string }[]) =>
     cadences.map((cadence) => cadence.cron).sort();
   const adapter: ScheduleOsJobAdapter = {
-    kind: "launch-agent",
+    kind: options.kind ?? "launch-agent",
     unavailable: options.unavailable ?? null,
     sync: vi.fn(async (cadences, zone, { reload }) => {
       syncs.push({ crons: crons(cadences), reload });
@@ -254,7 +257,11 @@ describe("ScheduleOsJobService", () => {
   it("leaves the job as it was while the Mac's zone can't be read", async () => {
     const store = fakeStore({ a: [schedule("a1", "a")] });
     const job = fakeAdapter();
-    let context: ScheduleOsJobContext = { kind: "launch-agent", systemTimeZone: null };
+    let context: ScheduleOsJobContext = {
+      kind: "launch-agent",
+      systemTimeZone: null,
+      unavailable: null,
+    };
     const svc = service(store, job.adapter, () => context);
     await svc.start();
 
@@ -271,7 +278,11 @@ describe("ScheduleOsJobService", () => {
       b: [schedule("b1", "b", { cron: "30 * * * *", timeZone: "Asia/Tokyo" })],
     });
     const job = fakeAdapter();
-    let context: ScheduleOsJobContext = { kind: "launch-agent", systemTimeZone: "Asia/Tokyo" };
+    let context: ScheduleOsJobContext = {
+      kind: "launch-agent",
+      systemTimeZone: "Asia/Tokyo",
+      unavailable: null,
+    };
     const svc = service(store, job.adapter, () => context);
     await svc.start();
     expect(job.syncs.at(-1)?.crons).toEqual(["30 * * * *"]);
@@ -407,5 +418,57 @@ describe("ScheduleOsJobService", () => {
     expect(job.syncs).toEqual([{ crons: ["0 9 * * *"], reload: false }]);
     expect(job.events).toEqual(["synced", "disposed"]);
     await started;
+  });
+});
+
+describe("ScheduleOsJobService with Windows' task (#15993)", () => {
+  const PC: ScheduleOsJobContext = {
+    kind: "task-scheduler",
+    systemTimeZone: ZONE,
+    unavailable: null,
+  };
+  /** Twelve start times no run can share, so twelve triggers. */
+  const twelve = (minute: number) => `${minute} 0,1,3,7,8,10,13,15,16,20,22,23 * * *`;
+
+  it("fits the task oldest first across projects, and names what's left out for its project only", async () => {
+    const store = fakeStore({
+      a: [
+        schedule("a1", "a", { cron: twelve(1), createdAt: 1 }),
+        schedule("a2", "a", { cron: twelve(3), createdAt: 3 }),
+        schedule("a3", "a", { cron: "0 9 * * *", createdAt: 5 }),
+      ],
+      b: [
+        schedule("b1", "b", { cron: twelve(2), createdAt: 2 }),
+        schedule("b2", "b", { cron: twelve(4), createdAt: 4 }),
+      ],
+    });
+    const job = fakeAdapter({ kind: "task-scheduler" });
+    const svc = service(store, job.adapter, () => PC);
+    await svc.start();
+
+    expect(job.syncs.at(-1)?.crons).toEqual([twelve(1), twelve(2), twelve(3), twelve(4)].sort());
+    expect((await svc.status("a")).excluded).toEqual([
+      { scheduleId: "a3", reason: expect.stringMatching(/at most 48 triggers.*already use 48/) },
+    ]);
+    expect((await svc.status("b")).excluded).toEqual([]);
+
+    // Room made in another project lets the left-out schedule in.
+    store.commit("b", [schedule("b1", "b", { cron: twelve(2), createdAt: 2 })]);
+    const status = await svc.status("a");
+    expect(status).toMatchObject({ state: "current", excluded: [] });
+    expect(job.syncs.at(-1)?.crons).toContain("0 9 * * *");
+  });
+
+  it("says it's the PC's zone it couldn't read", async () => {
+    const store = fakeStore({ a: [schedule("a1", "a")] });
+    const job = fakeAdapter({ kind: "task-scheduler" });
+    const svc = service(store, job.adapter, () => ({ ...PC, systemTimeZone: null }));
+    await svc.start();
+
+    expect(job.syncs).toEqual([]);
+    expect(await svc.status("a")).toMatchObject({
+      state: "stale",
+      error: expect.stringMatching(/this PC's time zone/),
+    });
   });
 });

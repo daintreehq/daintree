@@ -1,6 +1,9 @@
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
+  fitRunWhenClosed,
+  isRunWhenClosedOptedIn,
   runWhenClosedIssue,
+  scheduleOsJobMachine,
   type ScheduleOsJobContext,
   type ScheduleOsJobKind,
 } from "../../../shared/utils/scheduleOsJob.js";
@@ -56,21 +59,17 @@ const DRAIN_TIMEOUT_MS = 10_000;
 
 const UNREAD_ERROR =
   "Couldn't read every project's schedules, so the job that starts Daintree was left as it was";
+
 function noZoneError(kind: ScheduleOsJobKind): string {
-  const machine = kind === "launch-agent" ? "this Mac's" : "this computer's";
-  return `Couldn't read ${machine} time zone, so the job that starts Daintree was left as it was`;
+  return `Couldn't read this ${scheduleOsJobMachine(kind)}'s time zone, so the job that starts Daintree was left as it was`;
 }
 
-function optedIn(schedule: Schedule): boolean {
-  return schedule.enabled && schedule.policies.runWhenClosed;
-}
-
-/** The sender's switched-on, opted-in schedules the job can't start. */
+/** The sender's switched-on, opted-in schedules whose cadences the job can't start. */
 export function excludedSchedules(
   schedules: readonly Schedule[],
   context: ScheduleOsJobContext
 ): ScheduleOsJobExclusion[] {
-  return schedules.filter(optedIn).flatMap((schedule) => {
+  return schedules.filter(isRunWhenClosedOptedIn).flatMap((schedule) => {
     const reason = runWhenClosedIssue(schedule.cadence, context);
     return reason === null ? [] : [{ scheduleId: schedule.id, reason }];
   });
@@ -78,10 +77,10 @@ export function excludedSchedules(
 
 /**
  * Keeps the machine's one OS job matching every switched-on schedule, in every
- * local project, set to run when Daintree isn't running (#15990, #15991). It reads
- * each project's schedules once, follows every committed change, and rewrites
- * the job after each, one pass at a time: changes that arrive during a pass
- * are taken by the next, from the newest snapshots.
+ * local project, set to run when Daintree isn't running (#15990, #15991,
+ * #15993). It reads each project's schedules once, follows every committed
+ * change, and rewrites the job after each, one pass at a time: changes that
+ * arrive during a pass are taken by the next, from the newest snapshots.
  *
  * It never treats schedules it couldn't read, or a zone it couldn't read, as
  * none: either would remove a job other schedules rely on, so the job is left
@@ -115,7 +114,9 @@ export class ScheduleOsJobService {
     // job can't have heard of its schedules.
     if (!this.snapshots.has(projectId) && !this.unread.has(projectId)) {
       await this.read([projectId]);
-      if (this.snapshots.get(projectId)?.schedules.some(optedIn)) await this.request(false);
+      if (this.snapshots.get(projectId)?.schedules.some(isRunWhenClosedOptedIn)) {
+        await this.request(false);
+      }
     }
     let status = await this.observe(projectId);
     // A job that drifted since its last pass (the app moved, the file went,
@@ -238,16 +239,9 @@ export class ScheduleOsJobService {
     }
   }
 
-  private eligibleCadences(context: ScheduleOsJobContext): Cadence[] {
-    const cadences: Cadence[] = [];
-    for (const snapshot of this.snapshots.values()) {
-      for (const schedule of snapshot.schedules) {
-        if (optedIn(schedule) && runWhenClosedIssue(schedule.cadence, context) === null) {
-          cadences.push(schedule.cadence);
-        }
-      }
-    }
-    return cadences;
+  /** Every project's opted-in schedules, fitted to the one job together. */
+  private fit(context: ScheduleOsJobContext) {
+    return fitRunWhenClosed(this.snapshots.values(), context);
   }
 
   private async pass(reload: boolean): Promise<void> {
@@ -264,7 +258,7 @@ export class ScheduleOsJobService {
       return;
     }
     try {
-      await adapter.sync(this.eligibleCadences(context), context.systemTimeZone, { reload });
+      await adapter.sync(this.fit(context).included, context.systemTimeZone, { reload });
       this.lastError = null;
     } catch (error) {
       this.lastError = formatErrorMessage(error, "Couldn't update the job that starts Daintree");
@@ -275,12 +269,23 @@ export class ScheduleOsJobService {
   private async observe(projectId: string): Promise<ScheduleOsJobStatus> {
     const { adapter } = this.deps;
     const context = this.deps.context();
-    const excluded = excludedSchedules(this.snapshots.get(projectId)?.schedules ?? [], context);
+    const fit = this.fit(context);
+    // In the sender's own order; the job is one for the machine, but no other
+    // project's schedules are named to a view.
+    const reasons = new Map(
+      fit.excluded
+        .filter((entry) => entry.projectId === projectId)
+        .map((entry) => [entry.scheduleId, entry.reason])
+    );
+    const excluded = (this.snapshots.get(projectId)?.schedules ?? []).flatMap((schedule) => {
+      const reason = reasons.get(schedule.id);
+      return reason === undefined ? [] : [{ scheduleId: schedule.id, reason }];
+    });
     const base = { context, unavailable: adapter.unavailable, error: this.lastError, excluded };
     if (adapter.unavailable !== null) return { ...base, state: "none", error: null };
     if (context.systemTimeZone === null || this.unread.size > 0) return { ...base, state: "stale" };
 
-    const cadences = this.eligibleCadences(context);
+    const cadences = fit.included;
     let seen: ScheduleOsJobObservation;
     try {
       seen = await adapter.observe(cadences, context.systemTimeZone);

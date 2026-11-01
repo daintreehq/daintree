@@ -14,7 +14,7 @@ import { useScheduleOsJob } from "../useScheduleOsJob";
 
 function status(state: ScheduleOsJobStatus["state"], error: string | null = null) {
   return {
-    context: { kind: "launch-agent", systemTimeZone: "UTC" },
+    context: { kind: "launch-agent", systemTimeZone: "UTC", unavailable: null },
     unavailable: null,
     state,
     error,

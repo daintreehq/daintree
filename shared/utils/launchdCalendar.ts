@@ -1,4 +1,5 @@
-import { parseCron, validateTimeZone, type ParsedCron } from "./cron.js";
+import { parseCron, validateTimeZone } from "./cron.js";
+import { chosen, dayRule, type DayRule } from "./cronDayRule.js";
 
 /**
  * One `StartCalendarInterval` entry of a launchd job. A missing key is a
@@ -23,42 +24,6 @@ export type LaunchdCalendarResult =
  * by leaving Daintree running.
  */
 export const MAX_LAUNCHD_INTERVALS_PER_SCHEDULE = 500;
-
-type DayRule =
-  | { readonly kind: "any" }
-  | { readonly kind: "days"; readonly days: readonly number[] }
-  | { readonly kind: "weekdays"; readonly weekdays: readonly number[] }
-  | {
-      readonly kind: "either";
-      readonly days: readonly number[];
-      readonly weekdays: readonly number[];
-    };
-
-function chosen(values: readonly boolean[], min: number, max: number): number[] {
-  const out: number[] = [];
-  for (let value = min; value <= max; value++) if (values[value]) out.push(value);
-  return out;
-}
-
-/**
- * Vixie cron's day rule as launchd entries, or null when launchd can't hold
- * it. Cron ORs the two day fields when neither starts with `*` and ANDs them
- * otherwise. launchd ORs a Day and a Weekday in one entry, but the OR is
- * written as separate entries so nothing leans on that, and it has no AND.
- */
-function dayRule(cron: ParsedCron): DayRule | null {
-  const days = chosen(cron.daysOfMonth, 1, 31);
-  const weekdays = chosen(cron.daysOfWeek, 0, 6);
-  const everyDay = days.length === 31;
-  const everyWeekday = weekdays.length === 7;
-  if (!cron.dayOfMonthStarred && !cron.dayOfWeekStarred) {
-    return everyDay || everyWeekday ? { kind: "any" } : { kind: "either", days, weekdays };
-  }
-  if (everyDay && everyWeekday) return { kind: "any" };
-  if (everyDay) return { kind: "weekdays", weekdays };
-  if (everyWeekday) return { kind: "days", days };
-  return null;
-}
 
 /** Each value as a key, or one wildcard entry when the field covers its whole range. */
 function axis<K extends keyof LaunchdCalendarInterval>(
