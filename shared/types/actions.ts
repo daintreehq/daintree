@@ -3,7 +3,7 @@ import type { BuiltInRuntimeActionId } from "../config/actionIds.js";
 import type { z } from "zod";
 import type { CopyTreeRunSource } from "./ipc/copyTreeHistory.js";
 import type { GitPushReview } from "./git.js";
-import type { ScheduledRunRef } from "./panel.js";
+import type { ScheduledRunRef } from "./scheduledRunRef.js";
 
 export type ActionSource = "user" | "keybinding" | "menu" | "agent" | "context-menu" | "plugin";
 

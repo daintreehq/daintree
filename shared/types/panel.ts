@@ -4,6 +4,7 @@ import type { TerminalHandback } from "./handback.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { BrowserHistory } from "./browser.js";
 import type { GitStatus, DiffChangeSetEntry } from "./git.js";
+import type { ScheduledRunRef } from "./scheduledRunRef.js";
 import {
   BUILT_IN_PANEL_KINDS,
   panelKindIsDockable,
@@ -191,7 +192,7 @@ export type TerminalRuntimeStatus = PersistableFlowStatus | "background" | "exit
  * one they did.
  *
  * `schedule` is Daintree's scheduler launching a scheduled run (#15977). It
- * always travels with a {@link ScheduledRunRef} and is never caller-settable:
+ * always travels with a `ScheduledRunRef` and is never caller-settable:
  * action arguments validate against the narrower caller list, so an MCP or
  * plugin caller can't claim it.
  */
@@ -207,16 +208,7 @@ export const TERMINAL_SPAWN_SOURCES = [
 
 export type TerminalSpawnSource = (typeof TERMINAL_SPAWN_SOURCES)[number];
 
-/**
- * The scheduled run a `schedule`-spawned terminal belongs to (#15977): the
- * schedule and the run record ids from `shared/types/scheduledRuns.ts`. Present
- * exactly when `spawnedBy` is `"schedule"`; `shared/utils/scheduledRunProvenance.ts`
- * keeps the pair together wherever it is read back.
- */
-export interface ScheduledRunRef {
-  scheduleId: string;
-  runId: string;
-}
+export type { ScheduledRunRef };
 
 /** Focus policy for newly-created panels — orthogonal to provenance. */
 export type AddPanelFocusPolicy = "auto" | "preserve" | "take";
