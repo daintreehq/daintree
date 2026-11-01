@@ -6,7 +6,7 @@ import {
   persistSessionSnapshotAsync,
   isSessionPersistSuppressed,
 } from "./terminalSessionPersistence.js";
-import { isHostThrowawayTerminalId } from "../../../shared/config/hostThrowaway.js";
+import { isScreenNeverSaved } from "../../../shared/config/terminalScreenPersistence.js";
 
 const EVENT_DRIVEN_SNAPSHOT_THROTTLE_MS = 2000;
 
@@ -151,8 +151,10 @@ export class SessionSnapshotter {
   // work is async and every await is followed by a lifecycle re-check.
   private async captureAsync(trigger: CaptureTrigger): Promise<void> {
     if (!TERMINAL_SESSION_PERSISTENCE_ENABLED) return;
-    // A throwaway run (#14445) keeps nothing for recovery, its screen included.
-    if (isHostThrowawayTerminalId(this.host.id)) return;
+    // A throwaway run (#14445) keeps nothing for recovery, its screen included,
+    // and a relay deploy's screen holds a claim secret (#16023). The writers
+    // refuse both too; this check spares the serialize.
+    if (isScreenNeverSaved(this.host.id)) return;
     if (isSessionPersistSuppressed()) return;
     // Agent terminals are event-driven only: their scrollback is captured on a
     // state settle, never on the debounce.
