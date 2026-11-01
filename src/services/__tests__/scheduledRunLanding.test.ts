@@ -182,6 +182,19 @@ describe("landOnScheduledRun", () => {
     }
   );
 
+  it("leaves alone a Schedules view opened while the schedules were read", async () => {
+    let answer: () => void = () => {};
+    fake.list = () =>
+      new Promise((resolve) => {
+        answer = () => resolve(fake.schedules);
+      });
+    const landing = landOnScheduledRun({ ...target, panelId: null }, notSuperseded);
+    fake.schedulesOpen = true;
+    answer();
+    await landing;
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it("opens the list for a schedule deleted since, and the schedule when they can't be read", async () => {
     fake.schedules = { schedules: [{ id: "schedule-2" }] };
     await landOnScheduledRun(target, notSuperseded);

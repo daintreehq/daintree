@@ -70,7 +70,8 @@ export async function landOnScheduledRun(
     logWarn("Couldn't read the project's schedules for a run's notification", { error });
     return null;
   });
-  if (isSuperseded()) return;
+  // Opened while the schedules were read, it holds an edit just as surely.
+  if (isSuperseded() || useSchedulesViewStore.getState().isOpen) return;
   // Unreadable, the schedule is asked for anyway: its page says what it can.
   const scheduleExists =
     snapshot === null || snapshot.schedules.some((schedule) => schedule.id === target.scheduleId);
