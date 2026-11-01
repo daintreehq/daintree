@@ -137,9 +137,10 @@
    lights up, so the hover never claims two different click results at once.
    The list is `CARD_CONTROL_SELECTOR` in `cardClickTarget.ts`, which routes
    the click the same way. `:where()` adds no specificity, so the drag rules
-   below still out-rank this one. */
+   below still out-rank this one, and an armed drop target is left to its own
+   frame and fill rather than this tint. */
 .sidebar-worktree-card[data-hoverable="true"]:hover:where(
-    :not(
+    :not([data-drop-target="true"]):not(
       :has(
         :is(
           button:not([data-card-select-overlay]),
@@ -161,7 +162,10 @@
         ):hover
       )
     )
-  ),
+  ) {
+  background: var(--sidebar-hover-bg, rgba(255, 255, 255, 0.048));
+}
+
 .sidebar-worktree-card[data-hovered="true"] {
   background: var(--sidebar-hover-bg, rgba(255, 255, 255, 0.048));
 }

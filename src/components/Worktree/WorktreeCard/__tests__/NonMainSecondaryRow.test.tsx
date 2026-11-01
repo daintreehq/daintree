@@ -220,6 +220,8 @@ describe("NonMainSecondaryRow → badge ordering by alarm tier", () => {
       worktree: {
         ...baseWorktree,
         sourcePrNumber: 42,
+        // A title the reference could repeat, so leaving it off is a decision.
+        prTitle: "Fix the login flow",
         issueNumber: 123,
       } as WorktreeState,
       hasDisplayTitle: true,

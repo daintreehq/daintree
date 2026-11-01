@@ -350,7 +350,7 @@ export function UpstreamSyncBadge({
             type="button"
             onClick={handleRetryClick}
             data-no-dnd
-            className="group flex items-center w-fit max-w-full min-w-0 -my-1 py-1 text-left text-3xs font-mono tabular-nums cursor-pointer rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+            className="group flex items-center w-fit max-w-full min-w-0 -mx-1 -my-1 px-1 py-1 text-left text-3xs font-mono tabular-nums cursor-pointer rounded-[var(--radius-sm)] transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
             data-testid="upstream-sync-indicator"
             data-fetch-auth-failed="true"
             aria-label={`Git authentication failed — click to retry${

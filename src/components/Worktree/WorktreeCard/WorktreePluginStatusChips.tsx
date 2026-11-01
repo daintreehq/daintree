@@ -69,7 +69,7 @@ function PluginStatusChip({
           className={cn(
             "inline-flex h-6 min-w-0 max-w-full items-center rounded-[var(--radius-sm)] px-1 text-xs text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
             actionTitle !== undefined &&
-              "cursor-pointer transition-colors duration-150 ease-out hover:text-text-primary"
+              "cursor-pointer transition-colors duration-150 ease-out hover:bg-overlay-soft hover:text-text-primary"
           )}
         >
           <span className="min-w-0 truncate">{status.label}</span>

@@ -36,6 +36,35 @@ describe("isCardContentEvent", () => {
     }
   });
 
+  // One witness per entry, each clicked on a descendant, so dropping an entry
+  // from the list (in TS and CSS alike, which parity would not notice) fails.
+  it.each([
+    ["a button", `<button><span id="t">x</span></button>`],
+    ["a link", `<a href="#"><span id="t">x</span></a>`],
+    ["an input", `<input id="t" />`],
+    ["a select", `<select id="t"><option>a</option></select>`],
+    ["a textarea", `<textarea id="t"></textarea>`],
+    ["a summary", `<details><summary><span id="t">x</span></summary></details>`],
+    ["a role=button", `<div role="button"><span id="t">x</span></div>`],
+    ["a role=checkbox", `<div role="checkbox"><span id="t">x</span></div>`],
+    ["a role=switch", `<div role="switch"><span id="t">x</span></div>`],
+    ["a role=tab", `<div role="tab"><span id="t">x</span></div>`],
+    ["a role=option", `<div role="option"><span id="t">x</span></div>`],
+    ["a role=menuitem", `<div role="menuitem"><span id="t">x</span></div>`],
+    ["a role=menuitemcheckbox", `<div role="menuitemcheckbox"><span id="t">x</span></div>`],
+    ["a role=menuitemradio", `<div role="menuitemradio"><span id="t">x</span></div>`],
+    ["a control region", `<div data-card-control><span id="t">Couldn't delete</span></div>`],
+    ["the drag grip", `<div data-worktree-row-drag-handle><span id="t">x</span></div>`],
+  ])("is not content inside %s", (_name, inner) => {
+    const host = mount(`<div id="card">${inner}</div>`);
+    expect(
+      isCardContentEvent({
+        target: host.querySelector("#t"),
+        currentTarget: host.querySelector("#card"),
+      })
+    ).toBe(false);
+  });
+
   it("is not content for anything inside a control or a control region", () => {
     const host = mount(`
       <div id="card">
@@ -74,20 +103,34 @@ describe("isCardContentEvent", () => {
 });
 
 describe("hasTextSelectionWithin", () => {
+  function select(anchor: Node, focus: Node) {
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.setBaseAndExtent(anchor, 0, focus, 1);
+  }
+
   it("sees a selection that starts or ends in the card, and nothing else", () => {
     const host = mount(`<div id="card"><span id="a">alpha</span></div><p id="out">beta</p>`);
     const card = host.querySelector("#card")!;
+    const inside = host.querySelector("#a")!.firstChild!;
+    const outside = host.querySelector("#out")!.firstChild!;
     expect(hasTextSelectionWithin(card)).toBe(false);
 
-    const range = document.createRange();
-    range.selectNodeContents(host.querySelector("#out")!);
-    window.getSelection()!.addRange(range);
-    expect(hasTextSelectionWithin(card)).toBe(false);
+    select(outside, outside);
+    expect(hasTextSelectionWithin(card), "wholly outside").toBe(false);
+    select(inside, inside);
+    expect(hasTextSelectionWithin(card), "wholly inside").toBe(true);
+    select(inside, outside);
+    expect(hasTextSelectionWithin(card), "starts inside").toBe(true);
+    select(outside, inside);
+    expect(hasTextSelectionWithin(card), "ends inside").toBe(true);
+  });
 
-    window.getSelection()!.removeAllRanges();
-    range.selectNodeContents(host.querySelector("#a")!);
-    window.getSelection()!.addRange(range);
-    expect(hasTextSelectionWithin(card)).toBe(true);
+  it("ignores a collapsed caret inside the card", () => {
+    const host = mount(`<div id="card"><span id="a">alpha</span></div>`);
+    const text = host.querySelector("#a")!.firstChild!;
+    window.getSelection()!.collapse(text, 1);
+    expect(hasTextSelectionWithin(host.querySelector("#card")!)).toBe(false);
   });
 });
 
@@ -100,7 +143,7 @@ describe("the card's hover rule names the same controls as its click routing", (
       "utf-8"
     );
     const rule = css.match(
-      /\.sidebar-worktree-card\[data-hoverable="true"\]:hover:where\(\s*:not\(\s*:has\(\s*:is\(([^)]*(?:\([^)]*\)[^)]*)*)\):hover/
+      /\.sidebar-worktree-card\[data-hoverable="true"\]:hover:where\([^{]*?:not\(\s*:has\(\s*:is\(([^)]*(?:\([^)]*\)[^)]*)*)\):hover/
     );
     expect(rule, "hover rule with a :has(:is(...):hover) control list").not.toBeNull();
     const normalise = (list: string) =>

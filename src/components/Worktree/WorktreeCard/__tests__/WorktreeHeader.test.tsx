@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { WorktreeHeader, type WorktreeHeaderProps } from "../WorktreeHeader";
 import { collapsedAlarmDescriptionId } from "../CollapsedAlarmPill";
@@ -11,6 +11,7 @@ import type { WorktreeState } from "@shared/types";
 import type { NormalizedPRState } from "@shared/types/forge";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { actionService } from "@/services/ActionService";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 
 vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
@@ -169,6 +170,25 @@ describe("WorktreeHeader PR-originated headline (#8888)", () => {
     expect(screen.getByTestId("worktree-headline-title").closest("button")).toBeNull();
     const prButton = screen.getByRole("button", { name: /pull request #314/ });
     expect(prButton.getAttribute("aria-label")).not.toContain("Fix flaky terminal search");
+  });
+
+  it("names an untitled PR headline by its number once the cold window passes", () => {
+    // The headline is words now, so the number fallback the badge used to
+    // draw has to come from the headline itself, or the card names nothing.
+    vi.useFakeTimers();
+    try {
+      renderHeader({
+        worktree: { ...baseWorktree, sourcePrNumber: 314 } as WorktreeState,
+        badges: { onOpenPR: noop },
+      });
+      expect(screen.getByTestId("worktree-headline-title").textContent).toBe("");
+      act(() => {
+        vi.advanceTimersByTime(UI_DOHERTY_THRESHOLD);
+      });
+      expect(screen.getByTestId("worktree-headline-title").textContent).toBe("#314");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("falls back to the flat prTitle when linked.pr is not yet populated", () => {
@@ -604,7 +624,12 @@ describe("WorktreeHeader reference hover treatment (#15864)", () => {
   it.each(["sidebar", "grid"] as const)(
     "%s: styles each reference the same on an active and an inactive card",
     (variant) => {
-      expect(referenceClasses(false, variant)).toEqual(referenceClasses(true, variant));
+      const inactive = referenceClasses(false, variant);
+      expect(inactive).toEqual(referenceClasses(true, variant));
+      // And each has a hover state of its own, whatever its colour.
+      for (const classes of inactive) {
+        expect(classes.some((c) => /(^|\s)(group-)?hover:/.test(c ?? ""))).toBe(true);
+      }
     }
   );
 });

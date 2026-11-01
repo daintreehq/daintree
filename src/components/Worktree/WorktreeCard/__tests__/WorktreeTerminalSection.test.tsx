@@ -788,7 +788,14 @@ describe("WorktreeTerminalSection disclosure control (#15864)", () => {
     renderSection({ isExpanded: false, terminals, counts });
     const button = document.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!;
     expect(button.textContent).toBe("");
-    expect(button.parentElement!.textContent).toContain("active");
+    // The visible summary, not the hidden description beside it.
+    const summary = button.nextElementSibling as HTMLElement;
+    expect(summary.hidden).toBe(false);
+    expect(summary.textContent?.replace(/\s+/g, "")).toBe("3active");
+    const glyph = summary.querySelector("svg");
+    expect(glyph).not.toBeNull();
+    expect(button.contains(summary)).toBe(false);
+    expect(button.querySelectorAll("svg")).toHaveLength(1);
   });
 
   it("keeps the inline trigger in its row once open and lays the list out beneath it", () => {

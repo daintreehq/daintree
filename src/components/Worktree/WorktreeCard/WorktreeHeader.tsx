@@ -10,6 +10,7 @@ import { Sprout, Pin, BellOff } from "lucide-react";
 import { FolderOutput } from "@/components/icons";
 import type { AggregateCounts } from "./aggregateCounts";
 import { PRBadge } from "./PRBadge";
+import { useColdNumberGap } from "./hooks/useColdNumberGap";
 import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
 import { EnvironmentPopover } from "./EnvironmentPopover";
 import { WorktreeAttachmentChips } from "./WorktreeAttachmentChips";
@@ -167,6 +168,16 @@ export function WorktreeHeader({
   const hasDisplayTitle = headline.kind === "pr" || headline.kind === "issue";
   const displayTitle =
     headline.kind === "pr" || headline.kind === "issue" ? headline.title : undefined;
+  // A PR headline can arrive before its title. Its number stands in once the
+  // cold-number window has passed, as it did when the headline was the badge
+  // (#8079), so the card never names itself with nothing.
+  const hideColdPrNumber = useColdNumberGap(
+    headline.kind === "pr" ? headline.number : 0,
+    displayTitle,
+    headline.kind === "pr"
+  );
+  const headlineTitleText =
+    displayTitle ?? (headline.kind === "pr" && !hideColdPrNumber ? `#${headline.number}` : "");
   const hasPlanFile = Boolean(worktree.hasPlanFile);
   const hasDevServerSignal = !!devServerSession && isLiveDevServerStatus(devServerSession.status);
   const devServerSummary = devServerSession ? summarizeDevServer(devServerSession) : null;
@@ -373,7 +384,7 @@ export function WorktreeHeader({
             // was current (#15864). The reference that opens it is its own
             // control in the stack below.
             <CustomTitleHeadline
-              title={displayTitle!}
+              title={headlineTitleText}
               displaced={[]}
               isActive={isActive}
               isMuted={isMuted}

@@ -58,8 +58,10 @@ describe("useForgeBadgeTooltip hover card", () => {
     act(() => result.current.handleOpenChange(true));
     expect(result.current.isOpen).toBe(true);
     expect(fetchTooltip).toHaveBeenCalledTimes(1);
+    expect(reset).not.toHaveBeenCalled();
     act(() => result.current.handleOpenChange(false));
     expect(result.current.isOpen).toBe(false);
+    expect(fetchTooltip).toHaveBeenCalledTimes(1);
     expect(reset).toHaveBeenCalledTimes(1);
   });
 });

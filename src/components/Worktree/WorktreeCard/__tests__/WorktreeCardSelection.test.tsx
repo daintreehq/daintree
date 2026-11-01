@@ -120,7 +120,7 @@ vi.mock("framer-motion", () => {
 });
 
 import { WorktreeCard } from "../../WorktreeCard";
-import { createWorktreeStore } from "@/store/createWorktreeStore";
+import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktreeStore";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 
 const WORKTREE: WorktreeState = {
@@ -162,13 +162,22 @@ const WORKTREE: WorktreeState = {
 function renderCard({
   isActive,
   worktree = WORKTREE,
+  deleteError,
+  isDraggingSort,
 }: {
   isActive: boolean;
   worktree?: WorktreeState;
+  deleteError?: string;
+  isDraggingSort?: boolean;
 }) {
   const onSelect = vi.fn();
+  const store = createWorktreeStore();
+  // The card's handlers act on the current view's store, as they do in a
+  // project view.
+  setCurrentViewStore(store);
+  if (deleteError) store.setState({ deleteErrors: new Map([[worktree.id, deleteError]]) });
   const utils = render(
-    <WorktreeStoreContext.Provider value={createWorktreeStore()}>
+    <WorktreeStoreContext.Provider value={store}>
       <TooltipProvider>
         <WorktreeCard
           worktree={worktree}
@@ -176,6 +185,7 @@ function renderCard({
           isFocused={false}
           onSelect={onSelect}
           onOpenEditor={vi.fn()}
+          isDraggingSort={isDraggingSort}
         />
       </TooltipProvider>
     </WorktreeStoreContext.Provider>
@@ -201,6 +211,18 @@ function detailsButton(): HTMLElement {
 
 function sessionsButton(): HTMLElement {
   return screen.getByRole("button", { name: /^Active sessions for worktree/ });
+}
+
+/** A real pointer click: `detail` counts presses, where Enter/Space give 0. */
+function press(target: Element) {
+  fireEvent.click(target, { detail: 1 });
+}
+
+function selectTextOf(node: Node) {
+  const range = document.createRange();
+  range.selectNodeContents(node);
+  window.getSelection()!.removeAllRanges();
+  window.getSelection()!.addRange(range);
 }
 
 beforeEach(() => {
@@ -239,7 +261,7 @@ describe.each(["comfortable", "compact"] as const)("WorktreeCard selection — %
 
     it.each(contentTargets)("a click on %s selects and opens nothing", (_name, target) => {
       const { onSelect } = renderCard({ isActive });
-      fireEvent.click(target());
+      press(target());
       // Re-selecting the active worktree is the store's no-op; what matters is
       // that content always answers as the card.
       expect(onSelect).toHaveBeenCalledTimes(1);
@@ -253,9 +275,65 @@ describe.each(["comfortable", "compact"] as const)("WorktreeCard selection — %
         worktreeChanges: { ...WORKTREE.worktreeChanges!, changes: [], changedFileCount: 0 },
       } as WorktreeState;
       const { onSelect } = renderCard({ isActive, worktree: clean });
-      fireEvent.click(screen.getByText(/Tighten the session check/));
+      press(screen.getByText(/Tighten the session check/));
       expect(onSelect).toHaveBeenCalledTimes(1);
       expect(expanded()).toEqual({ details: false, sessions: false });
+    });
+
+    it("a click on the sessions count and agent glyph selects and opens nothing", () => {
+      const { onSelect } = renderCard({ isActive });
+      const summary = sessionsButton().nextElementSibling!;
+      expect(summary.querySelector("svg")).not.toBeNull();
+      expect(summary.textContent).toContain("1");
+      press(summary);
+      expect(onSelect).toHaveBeenCalledTimes(1);
+      expect(expanded()).toEqual({ details: false, sessions: false });
+    });
+
+    it("a PR headline is words that select, and its PR opens from its own reference", () => {
+      const fromPr = { ...WORKTREE, sourcePrNumber: 101, issueNumber: undefined } as WorktreeState;
+      const { onSelect } = renderCard({ isActive, worktree: fromPr });
+      const title = screen.getByTestId("worktree-headline-title");
+      expect(title.textContent).toBe("Fix the login flow");
+      press(title);
+      expect(onSelect).toHaveBeenCalledTimes(1);
+      expect(dispatch).not.toHaveBeenCalled();
+
+      press(screen.getByRole("button", { name: /pull request #101/ }));
+      expect(dispatch).toHaveBeenCalledWith(
+        "worktree.openPR",
+        { worktreeId: WORKTREE.id },
+        { source: "user" }
+      );
+      expect(onSelect).toHaveBeenCalledTimes(1);
+    });
+
+    it("the plan file opens on the first click without selecting", () => {
+      const withPlan = { ...WORKTREE, hasPlanFile: true, planFilePath: "TODO.md" } as WorktreeState;
+      const { onSelect } = renderCard({ isActive, worktree: withPlan });
+      press(screen.getByRole("button", { name: /^Open plan file TODO\.md for worktree/ }));
+      expect(dispatch).toHaveBeenCalledWith(
+        "file.view",
+        expect.objectContaining({ path: "TODO.md", worktreeId: WORKTREE.id })
+      );
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it("a recovery banner's text and its actions never select", () => {
+      const { onSelect } = renderCard({ isActive, deleteError: "fatal: worktree is locked" });
+      press(screen.getByText("fatal: worktree is locked"));
+      press(screen.getByTestId("worktree-delete-dismiss"));
+      // Dismissing did its job: the banner is gone.
+      expect(screen.queryByTestId("worktree-delete-error-banner")).toBeNull();
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it("the open session list is the arming surface, not the card", () => {
+      useWorktreeSelectionStore.setState({ expandedTerminals: new Set([WORKTREE.id]) });
+      const { onSelect } = renderCard({ isActive });
+      // A marquee drag that ends over the list's own background clicks it.
+      press(screen.getByRole("list"));
+      expect(onSelect).not.toHaveBeenCalled();
     });
 
     it("the Details control toggles Details only, on the first click, as the same control", () => {
@@ -323,10 +401,19 @@ describe.each(["comfortable", "compact"] as const)("WorktreeCard selection — %
       expect(dispatch).not.toHaveBeenCalled();
     });
 
+    it("the More actions menu opens and its items act without selecting", async () => {
+      const { onSelect } = renderCard({ isActive });
+      fireEvent.keyDown(screen.getByRole("button", { name: "More actions" }), { key: "Enter" });
+      // The item sits a submenu deep, so both layers are portalled from the card.
+      press(await screen.findByRole("menuitem", { name: "Review" }));
+      press(await screen.findByRole("menuitem", { name: /Review worktree/ }));
+      expect(dispatch).toHaveBeenCalledWith("worktree.openReviewHub", { worktreeId: WORKTREE.id });
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
     it("toolbar controls act without selecting", () => {
       const { onSelect } = renderCard({ isActive });
-      fireEvent.click(screen.getByRole("button", { name: "More actions" }));
-      fireEvent.click(screen.getByRole("button", { name: "Collapse card" }));
+      press(screen.getByRole("button", { name: "Collapse card" }));
       expect(useWorktreeFilterStore.getState().collapsedWorktrees).toContain(WORKTREE.id);
       expect(onSelect).not.toHaveBeenCalled();
     });
@@ -372,26 +459,32 @@ describe.each(["comfortable", "compact"] as const)("WorktreeCard selection — %
     it("the end of a drag-to-select in the card's text does not select", () => {
       const { onSelect } = renderCard({ isActive });
       const summary = screen.getByText("3 files");
-      const range = document.createRange();
-      range.selectNodeContents(summary);
-      window.getSelection()!.removeAllRanges();
-      window.getSelection()!.addRange(range);
-      fireEvent.click(summary, { detail: 1 });
+      selectTextOf(summary);
+      press(summary);
       expect(onSelect).not.toHaveBeenCalled();
     });
 
-    it("the keyboard select button still selects", () => {
+    it("the keyboard select button selects even while text in the card is selected", () => {
       const { onSelect } = renderCard({ isActive });
+      selectTextOf(screen.getByText("3 files"));
       const select = screen.getByRole("button", { name: /^Select worktree:/ });
-      // Enter/Space activate a button as a click with detail 0.
+      // Enter/Space activate a button as a click with detail 0, which ends no drag.
       fireEvent.click(select, { detail: 0 });
       expect(onSelect).toHaveBeenCalledTimes(1);
+    });
+
+    it("a click on content while this card is being dragged to reorder does not select", () => {
+      const { onSelect } = renderCard({ isActive, isDraggingSort: true });
+      press(screen.getByText("3 files"));
+      expect(onSelect).not.toHaveBeenCalled();
     });
 
     it("a double-click on content still folds the card, and on a control does not", () => {
       renderCard({ isActive });
       fireEvent.doubleClick(detailsButton());
       expect(useWorktreeFilterStore.getState().collapsedWorktrees).not.toContain(WORKTREE.id);
+      // A double-click selects a word on its own; that must not stop the fold.
+      selectTextOf(screen.getByText("3 files"));
       fireEvent.doubleClick(screen.getByText("3 files"));
       expect(useWorktreeFilterStore.getState().collapsedWorktrees).toContain(WORKTREE.id);
     });
