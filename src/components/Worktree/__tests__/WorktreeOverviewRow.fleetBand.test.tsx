@@ -11,6 +11,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { WorktreeOverviewRow } from "../WorktreeOverviewRow";
+import { SESSION_COLORS } from "../terminalStateConfig";
 
 // The overview row draws each session the way its pane does (#16057): amber
 // only for an unread Canopy ask, a hand-back unread or finished, an error wait
@@ -130,11 +131,16 @@ function renderRow() {
   );
 }
 
-const sessionName = (id: string) =>
+const sessionButton = (id: string) =>
   screen
     .getAllByRole("button")
-    .map((b) => b.getAttribute("aria-label") ?? "")
-    .find((label) => label.endsWith(`task ${id}`));
+    .find((b) => (b.getAttribute("aria-label") ?? "").endsWith(`task ${id}`))!;
+const sessionName = (id: string) => sessionButton(id).getAttribute("aria-label");
+/** Whether the session's drawn glyph wears a state's hue. */
+const wears = (id: string, state: keyof typeof SESSION_COLORS) =>
+  Array.from(sessionButton(id).querySelectorAll("*")).some((el) =>
+    el.classList.contains(SESSION_COLORS[state])
+  );
 
 describe("WorktreeOverviewRow sessions from the fleet band", () => {
   it("draws amber only for the unread ask, and names a bare prompt nothing", () => {
@@ -149,6 +155,12 @@ describe("WorktreeOverviewRow sessions from the fleet band", () => {
     expect(sessionName("ask")).toMatch(/, waiting: /);
     expect(sessionName("done")).toMatch(/, finished: /);
     expect(sessionName("prompt")).not.toMatch(/waiting|finished|unread/);
+    expect(wears("ask", "waiting")).toBe(true);
+    expect(wears("prompt", "waiting")).toBe(false);
+    expect(wears("done", "waiting")).toBe(false);
+    expect(sessionButton("prompt").querySelectorAll("svg, [data-glyph-box]").length).toBe(
+      sessionButton("ask").querySelectorAll("svg, [data-glyph-box]").length - 1
+    );
   });
 
   it("counts the strip's waiting from needs-you alone, with blocked and unread apart", () => {
@@ -167,5 +179,10 @@ describe("WorktreeOverviewRow sessions from the fleet band", () => {
     expect(strip?.getAttribute("aria-label")).toBe(
       "4 active sessions: 1 blocked, 1 waiting, 1 unread"
     );
+    const indicators = strip!.querySelector('[data-testid="collapsed-session-indicators"]')!;
+    const segments = Array.from(indicators.querySelectorAll<HTMLElement>("[data-state]")).map(
+      (seg) => seg.dataset.state
+    );
+    expect(segments.sort()).toEqual(["blocked", "unread", "waiting"]);
   });
 });

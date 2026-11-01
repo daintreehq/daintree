@@ -109,6 +109,7 @@ function renderInCard(onAncestorContextMenu?: () => void) {
                     exited: 0,
                   },
                   unread: 0,
+                  blocked: 0,
                 }}
                 terminals={sessions}
                 onToggle={() => {}}

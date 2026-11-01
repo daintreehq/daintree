@@ -1393,9 +1393,7 @@ describe("AgentButton preset UX", () => {
       mockPanelIdsByWorktreeId = { "wt-1": ["panel-1"] };
       mockActiveWorktreeId = "wt-1";
 
-      const { container } = render(
-        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
-      );
+      const { container } = render(<AgentButton type="claude" availability="ready" />);
 
       const badge = container.querySelector('.relative span[aria-hidden="true"]');
       expect(badge?.getAttribute("data-visible")).not.toBe("true");
@@ -1408,9 +1406,7 @@ describe("AgentButton preset UX", () => {
       mockPanelIdsByWorktreeId = { "wt-1": ["panel-1"] };
       mockActiveWorktreeId = "wt-1";
 
-      const { container } = render(
-        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
-      );
+      const { container } = render(<AgentButton type="claude" availability="ready" />);
 
       const badge = container.querySelector('.relative span[aria-hidden="true"]');
       expect(badge?.getAttribute("data-visible")).toBe("true");

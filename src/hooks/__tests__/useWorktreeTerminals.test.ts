@@ -5,7 +5,7 @@ import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import type { PtyPanelData } from "@shared/types/panel";
-import type { FleetBand } from "@/lib/fleetAttention";
+import { bandForRun, type FleetBand } from "@/lib/fleetAttention";
 import { aggregateAgentStates, useWorktreeTerminals } from "../useWorktreeTerminals";
 
 // #6650 — Active agentState (working/waiting/directing) credited to counts
@@ -89,6 +89,43 @@ describe("aggregateAgentStates (#6650)", () => {
       expect(blocked).toBe(0);
       // The dominant state follows the observation, not the band.
       expect(agentStates).toEqual(["waiting", "waiting", "waiting", "waiting", "waiting"]);
+    });
+
+    it("counts an approval wait by its band: waiting for an unread ask, unread without one", () => {
+      // Bands as the fleet places these runs, over a hand-back already read.
+      const approval = {
+        workspaceId: "p1",
+        spawnedAt: 0,
+        cwd: "/x",
+        agentState: "waiting",
+        waitingReason: "approval",
+        handBack: { stoppedAt: 1, seenAt: 2 },
+      } as const;
+      const bands = new Map<string, FleetBand>([
+        [
+          "asked",
+          bandForRun({
+            ...approval,
+            runId: "asked",
+            canopy: { kind: "asked", quote: "Run it?", readAt: 3, seen: false },
+          }),
+        ],
+        ["guessed", bandForRun({ ...approval, runId: "guessed" })],
+      ]);
+      const asked = aggregateAgentStates([agent("asked", { waitingReason: "approval" })], (id) =>
+        bands.get(id)
+      );
+      expect(asked.byState.waiting).toBe(1);
+      expect(asked.byState.completed).toBe(0);
+      expect(asked.unread).toBe(0);
+      expect(asked.blocked).toBe(0);
+
+      const guessed = aggregateAgentStates([agent("guessed", { waitingReason: "approval" })], (id) =>
+        bands.get(id)
+      );
+      expect(guessed.unread).toBe(1);
+      expect(guessed.byState.waiting).toBe(0);
+      expect(guessed.byState.completed).toBe(0);
     });
 
     it("counts an error wait as blocked, never as waiting", () => {

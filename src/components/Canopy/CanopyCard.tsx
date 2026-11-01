@@ -659,11 +659,14 @@ export function CanopyCard({
   // prompt that asks nothing draws nothing. The pane's newer observation
   // speaks for the run when this view holds it, as on the pane, and the row's
   // otherwise: another project's or host's terminal id names no pane here.
+  // Display state and observation come from the same one, so a pane already
+  // back at work draws its spinner rather than a wait the row still holds.
   const ownPane = usePaneObservation(ownsContext ? item.runId : null);
+  const observed = ownPane ?? run;
   const agentState = resolvePaneSessionPresentation(
-    getTerminalAgentDisplayState(row.chrome, run.agentState),
+    getTerminalAgentDisplayState(row.chrome, observed.agentState),
     row.band,
-    ownPane ?? run
+    observed
   );
   const { detail, action, progress, facts, contextWarning, readerWritten } = itemDetail(item);
   // An open question is the pane's anchor, whole and in the screen's words: the

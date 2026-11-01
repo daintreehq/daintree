@@ -130,17 +130,24 @@ vi.mock("@/utils/terminalChrome", () => ({
   deriveTerminalChrome: () => ({ isAgent: mockIsAgent, color: "#abc" }),
 }));
 
-vi.mock("@/components/Worktree/terminalStateConfig", () => ({
-  getEffectiveStateIcon: () => null,
-  getEffectiveStateColor: () => "",
-  getEffectiveStateLabel: (state: string) => state,
-  SESSION_ICONS: {},
-  SESSION_COLORS: {},
-  SESSION_LABELS: {},
-}));
+// The real session glyph maps, so the chip's drawn glyph can be checked.
+vi.mock("@/components/Worktree/terminalStateConfig", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/Worktree/terminalStateConfig")>();
+  return {
+    getEffectiveStateIcon: () => null,
+    getEffectiveStateColor: () => "",
+    getEffectiveStateLabel: (state: string) => state,
+    SESSION_ICONS: actual.SESSION_ICONS,
+    SESSION_COLORS: actual.SESSION_COLORS,
+    SESSION_LABELS: actual.SESSION_LABELS,
+  };
+});
 
-// The real band read and resolver; the pane observation half reads the real
-// panel store, whose import graph this suite's mocks don't cover.
+// The pane's own record of its run, standing in for the panel store, whose
+// import graph this suite's mocks don't cover.
+let mockPaneObservation: Record<string, unknown> | undefined = undefined;
+
+// The real band read and resolver, fed the observation above.
 vi.mock("@/hooks/useRunSessionPresentation", async () => {
   const { useRunFleetBand } = await import("@/hooks/useRunFleetBand");
   const { resolvePaneSessionPresentation } = await import("@/lib/paneSessionPresentation");
@@ -148,7 +155,7 @@ vi.mock("@/hooks/useRunSessionPresentation", async () => {
     useRunSessionPresentation: (
       id: string,
       state: Parameters<typeof resolvePaneSessionPresentation>[0]
-    ) => resolvePaneSessionPresentation(state, useRunFleetBand(id)),
+    ) => resolvePaneSessionPresentation(state, useRunFleetBand(id), mockPaneObservation),
   };
 });
 
@@ -249,33 +256,68 @@ describe("DockedTerminalItem move-to-grid gesture", () => {
     useFleetSnapshotStore.setState({ snapshot: null });
   });
 
-  // Amber is the fleet band's needs-you alone (#16057): a prompt that asks
-  // nothing never edges the chip, and an unread Canopy ask does.
-  it("edges the chip only for an unread Canopy ask, never a bare prompt", () => {
-    mockDockAgentState = "waiting";
-    mockIsAgent = true;
-    const view = render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
-    expect(blockedStateArg).toBeUndefined();
-
-    act(() => {
-      useFleetSnapshotStore.getState().applySnapshot({
-        runs: [
-          {
-            runId: "t-1",
-            workspaceId: "p1",
-            spawnedAt: 1,
-            cwd: "/repo",
-            agentState: "waiting",
-            canopy: { kind: "asked", quote: "Run it?", readAt: 1, seen: false },
-          },
-        ],
-        changedAt: 2,
-        degraded: false,
-        lastSuccessfulAt: 2,
+  // Amber is the fleet band's needs-you alone (#16057): the chip draws the
+  // pane's own glyph, and only an unread Canopy ask edges it.
+  describe("glyph and edge from the fleet band", () => {
+    function deliverRun(overrides: Record<string, unknown>) {
+      act(() => {
+        useFleetSnapshotStore.getState().applySnapshot({
+          runs: [
+            {
+              runId: "t-1",
+              workspaceId: "p1",
+              spawnedAt: 1,
+              cwd: "/repo",
+              agentState: "waiting",
+              ...overrides,
+            },
+          ],
+          changedAt: 2,
+          degraded: false,
+          lastSuccessfulAt: 2,
+        });
       });
+    }
+    const ask = { kind: "asked", quote: "Run it?", readAt: 1, seen: false } as const;
+    const chipName = () => screen.getByRole("button", { name: /Click to preview/ }).getAttribute("aria-label");
+
+    beforeEach(() => {
+      mockDockAgentState = "waiting";
+      mockIsAgent = true;
+      mockPaneObservation = undefined;
     });
-    expect(blockedStateArg).toBe("waiting");
-    view.unmount();
+
+    it("draws no glyph and no edge for a prompt that asks nothing", () => {
+      const view = render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+      deliverRun({});
+      expect(view.container.querySelector(".text-state-waiting")).toBeNull();
+      expect(blockedStateArg).toBeUndefined();
+    });
+
+    it("draws the amber ring and edges the chip for an unread Canopy ask", () => {
+      const view = render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+      deliverRun({ canopy: ask });
+      expect(view.container.querySelector(".text-state-waiting")).not.toBeNull();
+      expect(blockedStateArg).toBe("waiting");
+      expect(chipName()).toMatch(/— agent waiting/);
+    });
+
+    it("names a hand-back unread, then finished once read, with no edge", () => {
+      render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+      deliverRun({ handBack: { stoppedAt: 1 } });
+      expect(chipName()).toMatch(/— agent unread/);
+      deliverRun({ handBack: { stoppedAt: 1, seenAt: 2 } });
+      expect(chipName()).toMatch(/— agent finished/);
+      expect(blockedStateArg).toBeUndefined();
+    });
+
+    it("drops the amber once its pane restarts, before the band catches up", () => {
+      mockPaneObservation = { agentState: "waiting", isRestarting: true };
+      const view = render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+      deliverRun({ canopy: ask });
+      expect(view.container.querySelector(".text-state-waiting")).toBeNull();
+      expect(blockedStateArg).toBeUndefined();
+    });
   });
 
   // #10024 — the dock chip's state icon is aria-hidden, so the agent state must

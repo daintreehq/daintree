@@ -438,6 +438,16 @@ describe("TabButton", () => {
       expect(screen.getByRole("tab", { name: /Agent waiting/ })).not.toBeNull();
     });
 
+    it("draws an ask amber on live agent chrome before the pane reports any state", () => {
+      // The boot window: agent chrome is live, the pane has observed nothing yet.
+      deliverRun({ agentState: "waiting", canopy: UNREAD_ASK });
+      const { container } = render(
+        <TabButton {...defaultProps} chrome={deriveTerminalChrome({ launchAgentId: "claude" })} />
+      );
+      expect(container.querySelector(".text-state-waiting")).not.toBeNull();
+      expect(screen.getByRole("tab", { name: /Agent waiting/ })).not.toBeNull();
+    });
+
     it("draws a hand-back unread, then finished once read, and an error wait blocked", () => {
       const chrome = deriveTerminalChrome({ launchAgentId: "claude" });
       const { container } = render(

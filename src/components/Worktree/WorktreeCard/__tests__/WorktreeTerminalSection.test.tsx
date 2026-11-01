@@ -80,6 +80,7 @@ const baseCounts: WorktreeTerminalSectionProps["counts"] = {
   total: 2,
   byState: { idle: 2, working: 0, waiting: 0, directing: 0, completed: 0, exited: 0 },
   unread: 0,
+  blocked: 0,
 };
 
 function renderSection(overrides: Partial<WorktreeTerminalSectionProps> = {}) {
@@ -722,12 +723,28 @@ describe("WorktreeTerminalSection collapsed pill state indicators", () => {
         total: 5,
         byState: { idle: 3, working: 2, waiting: 2, directing: 0, completed: 1, exited: 0 },
         unread: 0,
+        blocked: 0,
       },
     });
     const indicators = screen.getByTestId("collapsed-session-indicators");
     expect(indicators.getAttribute("role")).toBe("img");
     expect(indicators.getAttribute("aria-label")).toBe(
       "5 sessions: 2 working, 2 waiting, 1 finished"
+    );
+  });
+
+  it("names error waits blocked in the collapsed breakdown, apart from waiting", () => {
+    renderSection({
+      isExpanded: false,
+      counts: {
+        total: 4,
+        byState: { idle: 1, working: 1, waiting: 1, directing: 0, completed: 0, exited: 0 },
+        unread: 0,
+        blocked: 1,
+      },
+    });
+    expect(screen.getByTestId("collapsed-session-indicators").getAttribute("aria-label")).toBe(
+      "4 sessions: 1 working, 1 blocked, 1 waiting"
     );
   });
 
@@ -738,6 +755,7 @@ describe("WorktreeTerminalSection collapsed pill state indicators", () => {
         total: 3,
         byState: { idle: 0, working: 2, waiting: 1, directing: 0, completed: 0, exited: 0 },
         unread: 0,
+        blocked: 0,
       },
     });
     expect(screen.queryByTestId("collapsed-session-indicators")).toBeNull();
@@ -750,6 +768,7 @@ describe("WorktreeTerminalSection collapsed pill state indicators", () => {
         total: 2,
         byState: { idle: 2, working: 0, waiting: 0, directing: 0, completed: 0, exited: 0 },
         unread: 0,
+        blocked: 0,
       },
     });
     expect(screen.queryByTestId("collapsed-session-indicators")).toBeNull();
@@ -780,6 +799,7 @@ describe("WorktreeTerminalSection disclosure control (#15864)", () => {
     total: 3,
     byState: { idle: 0, working: 2, waiting: 1, directing: 0, completed: 0, exited: 0 },
     unread: 0,
+    blocked: 0,
   };
 
   it("is one control with one name open and closed, describing the breakdown", () => {

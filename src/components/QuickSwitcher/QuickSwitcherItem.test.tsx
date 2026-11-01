@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
-import { fireEvent, render } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { QuickSwitcherItem, pathTail } from "./QuickSwitcherItem";
 import type { QuickSwitcherItem as QuickSwitcherItemData } from "@/hooks/useQuickSwitcher";
+import type { FleetRunRow } from "@shared/types/ipc/fleet";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 
 vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
@@ -104,5 +107,64 @@ describe("QuickSwitcherItem path evidence", () => {
       .filter((el) => el.children.length === 0 && el.className.includes("bg-overlay-medium"))
       .map((el) => el.textContent);
     expect(marked).toEqual(["login"]);
+  });
+});
+
+// The terminal row's state mark is the pane's own glyph (#16057): amber only
+// for an unread Canopy ask, never for a prompt that asks nothing.
+describe("QuickSwitcherItem agent mark from the fleet band", () => {
+  afterEach(() => {
+    useFleetSnapshotStore.setState({ snapshot: null });
+  });
+
+  function deliverRun(overrides: Partial<FleetRunRow>) {
+    act(() => {
+      useFleetSnapshotStore.getState().applySnapshot({
+        runs: [
+          {
+            runId: "t1",
+            workspaceId: "p1",
+            spawnedAt: 1,
+            cwd: "/repo",
+            agentState: "waiting",
+            ...overrides,
+          },
+        ],
+        changedAt: 2,
+        degraded: false,
+        lastSuccessfulAt: 2,
+      });
+    });
+  }
+
+  const terminalItem: QuickSwitcherItemData = {
+    id: "terminal:t1",
+    type: "terminal",
+    title: "Claude",
+    terminalKind: "terminal",
+    chrome: deriveTerminalChrome({ launchAgentId: "claude" }),
+    agentState: "waiting",
+  };
+  const mark = (container: HTMLElement) =>
+    [...container.querySelectorAll(".sr-only")].map((el) => el.textContent).join("");
+
+  it("names a prompt that asks nothing with no state, and an unread ask waiting", () => {
+    const { container } = render(
+      <QuickSwitcherItem item={terminalItem} isSelected={false} onSelect={vi.fn()} />
+    );
+    deliverRun({});
+    expect(mark(container)).not.toMatch(/agent/);
+    deliverRun({ canopy: { kind: "asked", quote: "Run it?", readAt: 1, seen: false } });
+    expect(mark(container)).toContain(", agent waiting");
+  });
+
+  it("names a hand-back unread, then finished once read", () => {
+    const { container } = render(
+      <QuickSwitcherItem item={terminalItem} isSelected={false} onSelect={vi.fn()} />
+    );
+    deliverRun({ handBack: { stoppedAt: 1 } });
+    expect(mark(container)).toContain(", agent unread");
+    deliverRun({ handBack: { stoppedAt: 1, seenAt: 2 } });
+    expect(mark(container)).toContain(", agent finished");
   });
 });

@@ -155,8 +155,24 @@ describe("Toolbar under activity-only panel churn", () => {
   // Proves the counter sees real renders, so the zero above is not vacuous. The
   // overflow hooks' outputs are covered in useOverflowBadgeSeverity.test.ts.
   it("still re-renders when an agent pip state changes", async () => {
-    // Amber comes from the fleet band: an unread Canopy ask on the run, with
-    // its pane stopped.
+    const amberPips = () =>
+      document.querySelectorAll('[data-visible="true"][class*="bg-state-waiting"]').length;
+
+    // A pane stopped at a prompt with no reading behind it earns no amber pip.
+    act(() => {
+      usePanelStore.setState((s) => ({
+        panelsById: {
+          ...s.panelsById,
+          "pane-0": { ...s.panelsById["pane-0"]!, agentState: "waiting" } as PtyPanelData,
+        },
+      }));
+    });
+    await settle();
+    expect(amberPips()).toBe(0);
+
+    // Amber comes from the fleet band alone: an unread Canopy ask on the run,
+    // with nothing about the pane changing.
+    toolbarRenders.count = 0;
     act(() => {
       useFleetSnapshotStore.getState().applySnapshot({
         runs: [
@@ -175,16 +191,7 @@ describe("Toolbar under activity-only panel churn", () => {
       });
     });
     await settle();
-    toolbarRenders.count = 0;
-    act(() => {
-      usePanelStore.setState((s) => ({
-        panelsById: {
-          ...s.panelsById,
-          "pane-0": { ...s.panelsById["pane-0"]!, agentState: "waiting" } as PtyPanelData,
-        },
-      }));
-    });
-    await settle();
+    expect(amberPips()).toBe(1);
     expect(toolbarRenders.count).toBeGreaterThan(0);
   });
 });

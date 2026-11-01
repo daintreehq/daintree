@@ -375,6 +375,49 @@ describe("BackgroundContainer", () => {
     });
   });
 
+  describe("row glyphs from the fleet band", () => {
+    it("draws each row the way its pane does: amber only for the unread ask", () => {
+      mockTerminals = [
+        makeTerminal({ id: "ask", title: "a", agentState: "waiting" }),
+        makeTerminal({ id: "prompt", title: "b", agentState: "waiting" }),
+        makeTerminal({ id: "review", title: "c", agentState: "waiting" }),
+        makeTerminal({ id: "done", title: "d", agentState: "waiting" }),
+      ];
+      act(() => {
+        useFleetSnapshotStore.getState().applySnapshot({
+          runs: [
+            { runId: "ask", canopy: { kind: "asked", quote: "Run it?", readAt: 1, seen: false } },
+            { runId: "prompt" },
+            { runId: "review", handBack: { stoppedAt: 1 } },
+            { runId: "done", handBack: { stoppedAt: 1, seenAt: 2 } },
+          ].map((run) => ({
+            workspaceId: "p1",
+            spawnedAt: 1,
+            cwd: "/tmp",
+            agentState: "waiting" as const,
+            ...run,
+          })),
+          changedAt: 2,
+          degraded: false,
+          lastSuccessfulAt: 2,
+        });
+      });
+      render(<BackgroundContainer />);
+      const row = (title: string) =>
+        screen
+          .getAllByTestId("background-single-item")
+          .find((r) => r.textContent?.startsWith(title))!;
+      expect(row("a").querySelector(".text-state-waiting")).not.toBeNull();
+      expect(row("a").textContent).toContain("waiting");
+      for (const title of ["b", "c", "d"]) {
+        expect(row(title).querySelector(".text-state-waiting")).toBeNull();
+      }
+      expect(row("b").textContent).not.toMatch(/waiting|unread|finished/);
+      expect(row("c").textContent).toContain("unread");
+      expect(row("d").textContent).toContain("finished");
+    });
+  });
+
   describe("row context menu", () => {
     it("scopes each row's right-click to that row's own panel", () => {
       mockTerminals = [
@@ -581,6 +624,27 @@ describe("BackgroundContainer", () => {
       // Expanded by default → the toggle offers to collapse, not expand.
       expect(screen.getByRole("button", { name: "Collapse group" })).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Expand group" })).toBeNull();
+    });
+
+    it("counts only the group's unread Canopy ask as waiting, not its bare prompt", () => {
+      const groupMetadata: TrashedTerminalGroupMetadata = {
+        panelIds: ["t1", "t2"],
+        activeTabId: "t1",
+        location: "dock",
+        worktreeId: "wt-1",
+      };
+      mockTerminals = [
+        makeTerminal({ id: "t1", title: "claude", agentState: "waiting" }),
+        makeTerminal({ id: "t2", title: "gemini", agentState: "waiting" }),
+      ];
+      mockBackgroundedTerminals = new Map([
+        ["t1", { groupRestoreId: "g1", groupMetadata }],
+        ["t2", { groupRestoreId: "g1", groupMetadata }],
+      ]);
+      deliverAsks(["t1"]);
+      render(<BackgroundContainer />);
+      const header = screen.getByRole("button", { name: "Collapse group" }).parentElement!;
+      expect(header.textContent).toContain("· 1 waiting");
     });
 
     it("gives every member its own Restore, the row's keyboard target", () => {
