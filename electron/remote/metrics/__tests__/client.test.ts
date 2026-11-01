@@ -119,6 +119,13 @@ function harness(hosts: HostDescriptor[], extra: Partial<HostMetricsClientOption
         local.worktreesHeard = null;
       };
     },
+    projectsHeard: null as (() => void) | null,
+    onProjectsChanged(listener: () => void) {
+      local.projectsHeard = listener;
+      return () => {
+        local.projectsHeard = null;
+      };
+    },
   };
   const options: HostMetricsClientOptions = {
     manager: {
@@ -625,6 +632,34 @@ describe("HostMetricsClient", () => {
     await quiet.host.call(MetricsLinkMethod.WORKTREES_CHANGED, null);
     expect(h.emitted).toContainEqual({ type: "worktrees", hostId: "quiet" });
     h.client.dispose();
+  });
+
+  it("tells every view a host's projects changed, apart from its worktrees", async () => {
+    const h = harness([descriptor("quiet")]);
+    h.client.start();
+    const quiet = await openSessionPair(dir);
+    open.push(quiet.host, quiet.client);
+    h.openSession("quiet", quiet.client);
+    await quiet.host.call(MetricsLinkMethod.PROJECTS_CHANGED, null);
+    expect(h.emitted).toContainEqual({ type: "projects", hostId: "quiet" });
+    expect(h.emitted.some((event) => event.type === "worktrees")).toBe(false);
+    h.client.dispose();
+  });
+
+  it("follows this machine's projects only while another host exists", () => {
+    const h = harness([]);
+    h.client.start();
+    expect(h.local.projectsHeard).toBeNull();
+
+    h.setHosts([descriptor("a")]);
+    h.local.projectsHeard?.();
+    expect(h.emitted).toEqual([{ type: "projects", hostId: "local" }]);
+
+    h.setHosts([]);
+    expect(h.local.projectsHeard).toBeNull();
+    h.setHosts([descriptor("a")]);
+    h.client.dispose();
+    expect(h.local.projectsHeard).toBeNull();
   });
 
   it("follows this machine's worktree list only while another host exists", async () => {

@@ -1651,3 +1651,89 @@ describe("ProjectStore.addProject permission failures", () => {
     }
   );
 });
+
+describe("ProjectStore.onProjectRegistryChanged", () => {
+  let store: ProjectStore;
+  let alphaDir: string;
+  let betaDir: string;
+  let alphaId: string;
+
+  beforeEach(async () => {
+    alphaDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-reg-a-"));
+    betaDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-reg-b-"));
+    const { generateProjectId } = await import("../projectStorePaths.js");
+    const alphaCanonical = await fs.promises.realpath(alphaDir);
+    alphaId = generateProjectId(alphaCanonical);
+
+    sqlite = new Database(":memory:");
+    sqlite.exec(CREATE_TABLES_SQL);
+    db = drizzle(sqlite, { schema });
+    db.insert(schema.projects)
+      .values({
+        id: alphaId,
+        path: alphaCanonical,
+        name: "Alpha",
+        emoji: "🌲",
+        lastOpened: Date.now(),
+        status: "closed",
+        frecencyScore: 1,
+        lastAccessedAt: Date.now(),
+      })
+      .run();
+    store = new ProjectStore();
+  });
+
+  afterEach(() => {
+    resetWritesSuppressedForTesting();
+    sqlite.close();
+    fs.rmSync(alphaDir, { recursive: true, force: true });
+    fs.rmSync(betaDir, { recursive: true, force: true });
+  });
+
+  it("fires for a project added or removed, and not for one reopened or already gone", async () => {
+    const heard = vi.fn();
+    store.onProjectRegistryChanged(heard);
+
+    await store.addProject(alphaDir);
+    expect(heard).not.toHaveBeenCalled();
+
+    const beta = await store.addProject(betaDir);
+    expect(heard).toHaveBeenCalledTimes(1);
+
+    await store.removeProject(beta.id);
+    expect(heard).toHaveBeenCalledTimes(2);
+
+    await store.removeProject(beta.id);
+    expect(heard).toHaveBeenCalledTimes(2);
+  });
+
+  it("fires for a change to where a project is or what it is called, never for its status or ranking", () => {
+    const heard = vi.fn();
+    store.onProjectRegistryChanged(heard);
+
+    store.updateProject(alphaId, { status: "active", pinned: true, frecencyScore: 4 });
+    store.updateProjectStatus(alphaId, "background");
+    expect(heard).not.toHaveBeenCalled();
+
+    store.updateProject(alphaId, { name: "Alpha 2" });
+    store.updateProject(alphaId, { path: betaDir });
+    store.updateProject(alphaId, { gitBacked: false });
+    expect(heard).toHaveBeenCalledTimes(3);
+  });
+
+  it("stops after unsubscribing, and a listener that throws neither fails the write nor silences the rest", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const gone = vi.fn();
+    const heard = vi.fn();
+    store.onProjectRegistryChanged(() => {
+      throw new Error("listener broke");
+    });
+    store.onProjectRegistryChanged(gone)();
+    store.onProjectRegistryChanged(heard);
+
+    expect(store.updateProject(alphaId, { name: "Renamed" }).name).toBe("Renamed");
+    expect(heard).toHaveBeenCalledTimes(1);
+    expect(gone).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalled();
+  });
+});
