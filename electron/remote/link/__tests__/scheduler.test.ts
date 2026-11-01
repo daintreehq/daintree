@@ -249,22 +249,42 @@ describe("LaneScheduler endpoint closes (#15881)", () => {
     expect(drain(s)).toEqual([1, 2, 3, 4, 5]);
   });
 
-  it("counts a held close against its lane and forgets it on clear", () => {
-    const s = new LaneScheduler(tight);
+  it("counts held closes against their lane's limits, frames and bytes alike", () => {
+    // Control holds two frames and calls one past high water; bytes never cap it.
+    const s = new LaneScheduler({
+      ...tight,
+      [Lane.CONTROL]: { highWaterBytes: 1 + H, hardCapBytes: 1e6, maxFrames: 2 },
+    });
     s.enqueue(tagged(Lane.RPC, 1), undefined, { endpointIds: ["e1"] });
-    const fits = Math.floor(limit.hardCapBytes / (1 + H));
-    for (let i = 0; i < fits; i++) {
-      expect(s.enqueue(tagged(Lane.CONTROL, 10 + i), undefined, { closes: "e1" })).not.toBe(
-        "refused"
-      );
-    }
+    expect(s.enqueue(tagged(Lane.CONTROL, 2), undefined, { closes: "e1" })).toBe("queued");
+    expect(s.enqueue(tagged(Lane.CONTROL, 3), undefined, { closes: "e1" })).toBe("over-high-water");
     expect(s.next()?.streamId).toBe(1);
     expect(s.enqueue(tagged(Lane.CONTROL, 4))).toBe("refused");
-    expect(s.queuedBytes(Lane.CONTROL)).toBe(fits * (1 + H));
+    expect(s.queuedBytes(Lane.CONTROL)).toBe(2 * (1 + H));
+  });
 
-    // The rpc frame was served but never written: a session that closed.
+  it("forgets what a closed session left unwritten", () => {
+    const s = new LaneScheduler();
+    s.enqueue(tagged(Lane.RPC, 1), undefined, { endpointIds: ["e1"] });
+    s.enqueue(tagged(Lane.CONTROL, 2), undefined, { closes: "e1" });
+    // Served but never written, as a session that closed mid-flush leaves it.
+    const served = s.next()!;
     s.clear();
-    s.enqueue(tagged(Lane.CONTROL, 5), undefined, { closes: "e1" });
-    expect(drain(s)).toEqual([5]);
+    s.written(served);
+    s.enqueue(tagged(Lane.CONTROL, 3), undefined, { closes: "e1" });
+    expect(drain(s)).toEqual([3]);
+  });
+
+  it("never holds a close behind a frame its lane refused", () => {
+    const s = new LaneScheduler(tight);
+    expect(s.enqueue(tagged(Lane.RPC, 1), undefined, { endpointIds: ["e1"] })).not.toBe("refused");
+    const tooBig: LinkFrame = {
+      ...tagged(Lane.RPC, 2),
+      payload: new Uint8Array(limit.hardCapBytes),
+    };
+    expect(s.enqueue(tooBig, undefined, { endpointIds: ["e1"] })).toBe("refused");
+    s.written(s.next()!);
+    s.enqueue(tagged(Lane.CONTROL, 3), undefined, { closes: "e1" });
+    expect(drain(s)).toEqual([3]);
   });
 });

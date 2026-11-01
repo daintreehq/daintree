@@ -709,4 +709,85 @@ describe("LinkSession endpoint closes (#15881)", () => {
     await waitFor(() => arrived.length === 4);
     expect(arrived).toEqual(["open:e2", "input", "send:commit", "close:e1"]);
   });
+
+  it.each<[string, (client: LinkSession) => void]>([
+    [
+      "terminal input",
+      (client) =>
+        client.post({
+          lane: Lane.INTERACTIVE,
+          kind: InteractiveKind.TERMINAL_IN,
+          body: { endpointId: "e1", message: { type: "write", data: "q" } },
+        }),
+    ],
+    [
+      "a worktree port message",
+      (client) =>
+        client.post({
+          lane: Lane.INTERACTIVE,
+          kind: InteractiveKind.WORKTREE_PORT,
+          body: { endpointId: "e1", message: { id: 1 } },
+        }),
+    ],
+    ["an invoke", (client) => void client.invoke("e1", "commit", [])],
+    ["a call naming it", (client) => void client.call("m", { endpointId: "e1" })],
+    [
+      "a call naming it among others",
+      (client) => void client.call("m", { endpointIds: ["e2", "e1"] }),
+    ],
+  ])("writes %s ahead of the endpoint's close", async (_kind, queue) => {
+    const { host, client } = await pair();
+    const arrived: string[] = [];
+    const record = () => void arrived.push("frame");
+    host.on(Lane.INTERACTIVE, InteractiveKind.TERMINAL_IN, record);
+    host.on(Lane.INTERACTIVE, InteractiveKind.WORKTREE_PORT, record);
+    host.setInvokeHandler(async () => {
+      record();
+      return { __daintreeIpcEnvelope: true, ok: true, data: null };
+    });
+    host.registerCallHandler("m", z.unknown(), () => {
+      record();
+      return null;
+    });
+    host.on(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, () => arrived.push("close"));
+
+    queue(client);
+    client.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.ENDPOINT_CLOSE,
+      body: { endpointId: "e1" },
+    });
+
+    await waitFor(() => arrived.length === 2);
+    expect(arrived).toEqual(["frame", "close"]);
+  });
+
+  it("keeps a reopen under the same id behind the close it follows", async () => {
+    const { host, client } = await pair();
+    const arrived: string[] = [];
+    host.setSendHandler(() => arrived.push("send"));
+    host.on(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, () => arrived.push("close"));
+    host.on(Lane.CONTROL, ControlKind.ENDPOINT_OPEN, () => arrived.push("open"));
+    host.on(Lane.CONTROL, ControlKind.ENDPOINT_REBIND, () => arrived.push("rebind"));
+
+    client.send("e1", "commit", []);
+    client.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.ENDPOINT_CLOSE,
+      body: { endpointId: "e1" },
+    });
+    client.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.ENDPOINT_OPEN,
+      body: { endpointId: "e1", projectId: "p", openId: "o2" },
+    });
+    client.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.ENDPOINT_REBIND,
+      body: { endpointId: "e1", projectId: "q" },
+    });
+
+    await waitFor(() => arrived.length === 4);
+    expect(arrived).toEqual(["send", "close", "open", "rebind"]);
+  });
 });

@@ -1537,6 +1537,12 @@ describe("a closing view's last calls (#15881)", () => {
     await waitFor(() => socket.writableNeedDrain);
     connection.send(VIEW_A, "proj-1", "commit", [{ panelIds: ["t1"] }]);
     h.sink.gone(VIEW_A);
+    // A flush later, both still wait in the scheduler and nothing has arrived.
+    await new Promise((resolve) => setImmediate(resolve));
+    const session = connection.currentSession!;
+    expect(session.queuedBytes(Lane.RPC)).toBeGreaterThan(0);
+    expect(session.queuedBytes(Lane.CONTROL)).toBeGreaterThan(0);
+    expect(received).toEqual([]);
     socket.uncork();
 
     await waitFor(() => viewAOnHost() === undefined);
