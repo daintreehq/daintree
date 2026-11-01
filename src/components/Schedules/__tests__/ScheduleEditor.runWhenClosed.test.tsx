@@ -22,7 +22,7 @@ vi.mock("@/components/Worktree/hooks/useFirstAgentOptions", () => ({
 vi.mock("../useScheduleLaunchOptions", () => ({
   useScheduleLaunchOptions: () => ({ presets: [], preset: undefined, stopsAtPrompts: false }),
 }));
-const platformMock = vi.hoisted(() => ({ isMac: vi.fn(() => true) }));
+const platformMock = vi.hoisted(() => ({ isMac: vi.fn(() => true), isLinux: vi.fn(() => false) }));
 vi.mock("@/lib/platform", async (importActual) => ({
   ...(await importActual<object>()),
   ...platformMock,
@@ -34,6 +34,7 @@ const LABEL = "Run when Daintree isn't running";
 const NOW = Date.UTC(2027, 0, 4, 8);
 
 const LONDON: ScheduleOsJobContext = { kind: "launch-agent", systemTimeZone: "Europe/London" };
+const LINUX: ScheduleOsJobContext = { kind: "systemd-timer", systemTimeZone: "Europe/London" };
 /** No preset writes a day-of-month range, so it opens as a custom expression. */
 const CUSTOM_CRON = "0 9 1-7 * *";
 /** Days that must be both odd dates and Mondays: launchd can't AND them. */
@@ -97,6 +98,7 @@ function typeCron(cron: string): void {
 beforeEach(() => {
   vi.clearAllMocks();
   platformMock.isMac.mockReturnValue(true);
+  platformMock.isLinux.mockReturnValue(false);
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -215,14 +217,35 @@ describe("ScheduleEditor: Run when Daintree isn't running (#15990)", () => {
     expect(optionRow().textContent).not.toContain("Not on this Mac");
   });
 
-  it("is offered on a Mac before main has answered, and nowhere else", () => {
+  it("is offered on a Mac or on Linux before main has answered, and nowhere else", () => {
     renderEditor(existing({ runWhenClosed: false }), null);
-    expect(option()).not.toBeNull();
+    expect(optionRow().textContent).toMatch(/^.*macOS starts Daintree/);
     cleanup();
 
     platformMock.isMac.mockReturnValue(false);
+    platformMock.isLinux.mockReturnValue(true);
+    renderEditor(existing({ runWhenClosed: false }), null);
+    expect(optionRow().textContent).toMatch(/systemd starts Daintree/);
+    cleanup();
+
+    platformMock.isLinux.mockReturnValue(false);
     renderEditor(existing({ runWhenClosed: false }), null);
     expect(option()).toBeNull();
+  });
+
+  it("judges a Linux cadence by what a systemd timer can hold, in main's words", () => {
+    // Days launchd can't require both of are one OnCalendar line.
+    renderEditor(existing({ runWhenClosed: false }, "Europe/London", BOTH_DAYS_CRON), LINUX);
+    expect(option()?.hasAttribute("disabled")).toBe(false);
+    expect(optionRow().textContent).toMatch(/systemd starts Daintree without a window/);
+    expect(optionRow().textContent).toMatch(/wakes or you next log in/);
+    cleanup();
+
+    renderEditor(existing({ runWhenClosed: false }, "Asia/Tokyo"), LINUX);
+    expect(option()?.hasAttribute("disabled")).toBe(true);
+    expect(optionRow().textContent).toContain(
+      "systemd can only start Daintree on this computer's time (Europe/London), and this schedule runs on Asia/Tokyo time"
+    );
   });
 
   it("isn't offered where there's no OS job, unless a schedule already has it on", () => {

@@ -202,7 +202,7 @@ async function handleRunNow(
 
 /**
  * The OS job that starts Daintree for schedules set to run when it isn't
- * running (#15990), once every change already saved has reached it. The job is
+ * running (#15990, #15991), once every change already saved has reached it. The job is
  * the machine's; only the sender project's schedules are named in it.
  */
 async function handleOsJobStatus(ctx: IpcContext): Promise<ScheduleOsJobStatus> {
@@ -211,7 +211,11 @@ async function handleOsJobStatus(ctx: IpcContext): Promise<ScheduleOsJobStatus> 
   return scheduleOsJobStatus(projectId);
 }
 
-/** Rewrites and reloads the job from the saved schedules. It saves nothing and runs nothing. */
+/**
+ * Rewrites and reloads the job from the saved schedules. It saves nothing and
+ * launches nothing itself; a reloaded systemd timer can fire at once, which
+ * only asks the scheduler to look.
+ */
 async function handleRepairOsJob(ctx: IpcContext): Promise<ScheduleOsJobStatus> {
   const projectId = requireSenderProjectId(ctx);
   const { repairScheduleOsJob } = await import("../../services/scheduledRuns/scheduleOsJobLive.js");
