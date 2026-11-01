@@ -1040,6 +1040,18 @@ const HAIKU_CLARIFY_3 = revise(HAIKU_CLARIFY_2, {
   ],
 });
 
+// Review: a clarification settles a word that sounds like what it names,
+// even a plausible one ("Dev" for Dave), not only nonsense, as the examples
+// already showed; "that is" or "as in" alone is no sign of one.
+const HAIKU_CLARIFY_4 = revise(HAIKU_CLARIFY_3, {
+  core: [
+    [
+      " settles a word or fragment that makes no sense where it stands, even when it names a person and doesn't repeat the words around it.",
+      ' settles an earlier word or fragment that sounds like what it names, even one that reads as a real word or name, a person\'s included, and even when it doesn\'t repeat the words around it. The words "that is" or "as in" alone are no sign of one: they have to name what an earlier word was.',
+    ],
+  ],
+});
+
 // The same for Terra, whose rules have no whole-passage reading: only the
 // clarification, none of Haiku's restatement and restart rules.
 const TERRA_CLARIFY = revise(INTENT_OPENING, {
@@ -1060,6 +1072,20 @@ const TERRA_CLARIFY_2 = revise(TERRA_CLARIFY, {
     [
       ' Write the name as the clarification spells it, never respelled from what you know of the name. An "as in"',
       ' An "as in"',
+    ],
+  ],
+});
+
+// Review: the same reading, and a spelled-out word kept, as Haiku's rules say.
+const TERRA_CLARIFY_3 = revise(TERRA_CLARIFY_2, {
+  core: [
+    [
+      "When a clarification clearly refers back to an earlier word or fragment that makes no sense where it stands, a person's name included,",
+      "When a clarification clearly names what an earlier word or fragment was, one that sounds like it, even one that reads as a real word or a person's name,",
+    ],
+    [
+      ' An "as in" or "that is" that explains words already making sense where they stand is content and stays ("cache it, as in keep it in memory"), and when you can\'t tell',
+      ' A word spelled out letter by letter is not a clarification: the spelling stays, under NAMES AND SPELLINGS. An "as in" or "that is" that explains words already making sense where they stand is content and stays ("cache it, as in keep it in memory"), and when you can\'t tell',
     ],
   ],
 });
@@ -1274,6 +1300,16 @@ export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
   "terra-clarify2": {
     description: "terra-clarify without the respelling ban",
     instructionsFor: fixed(TERRA_CLARIFY_2),
+  },
+  "haiku-clarify4": {
+    description:
+      "Haiku: haiku-clarify3 settling a word that sounds like the clarification, even a plausible one",
+    instructionsFor: fixed(HAIKU_CLARIFY_4),
+  },
+  "terra-clarify3": {
+    description:
+      "terra-clarify2 settling a word that sounds like the clarification, a spelled-out word kept",
+    instructionsFor: fixed(TERRA_CLARIFY_3),
   },
   production: {
     description: "the rules production sends each model now",

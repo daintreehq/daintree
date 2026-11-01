@@ -2152,7 +2152,7 @@ const DENSE: readonly AuthoredCase[] = [
       (name) =>
         `Actually, in general, this whole episode was quite useful. I like the whole legal stuff. Who sends the buyer was very interesting too. ${name} HackerTube was also very, very interesting. I actually don't have much useful stuff to say.`
     ),
-    fixes: { "athy's HackerTube": "misread" },
+    fixes: { "rpathy's HackerTube": "misread" },
     drops: ["Coppethies", "that is Carpathy", "as in", "yeah"],
     keep: ["Who sends the buyer", "I actually don't have much useful stuff to say"],
   },
@@ -2356,7 +2356,7 @@ const TICS: readonly AuthoredCase[] = [
 // Words that look like filler or a hedge but carry the meaning here: an
 // answer to the agent, "just" for "only", a guess, a kind, a direction.
 const LOOKALIKE: readonly AuthoredCase[] = [
-  // An "as in" that explains words already right, not a clarification (#15926).
+  // An "as in" or "that is" that explains words already right, not a clarification (#15926).
   {
     id: "lookalike-as-in:grok",
     style: "grok",
@@ -2365,6 +2365,15 @@ const LOOKALIKE: readonly AuthoredCase[] = [
     reference:
       "For the model catalog, can we cache it, as in keep it in memory, so we don't refetch it on every window? Writing it to disk is overkill.",
     keep: ["cache it, as in keep it in memory", "Writing it to disk is overkill"],
+  },
+  {
+    id: "lookalike-that-is:grok",
+    style: "grok",
+    source: "lookalike",
+    raw: "Go with the second option, that is, the one that retries on a timeout. Leave the first one in the branch for now.",
+    reference:
+      "Go with the second option, that is, the one that retries on a timeout. Leave the first one in the branch for now.",
+    keep: ["that is, the one that retries on a timeout"],
   },
   {
     id: "lookalike-yeah-answer:openai",
