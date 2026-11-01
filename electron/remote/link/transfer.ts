@@ -392,6 +392,8 @@ export class LinkTransfers {
 
   /** Session hook: a write pass finished; refused frames can be retried. */
   onWritable(): void {
+    // Credit goes from here as well as the pump, which may be awaiting a source read.
+    if (!this.closed && this.link.isOpen()) this.flushQueue(this.ackRetry);
     if (this.ackRetry.length > 0 || this.abortRetry.length > 0 || this.outgoing.size > 0) {
       this.schedulePump();
     }

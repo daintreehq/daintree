@@ -348,6 +348,27 @@ describe("LinkSession request/response", () => {
     });
     expect(inputs[0]).toEqual({ endpointId: "e1", message: { type: "write", data: "ls\r" } });
   });
+
+  it("queues transfer credit with control frames and the rest of a transfer in bulk", async () => {
+    const { host } = await pair();
+    // Synchronous reads, before the write pass the posts scheduled.
+    host.post({
+      lane: Lane.BULK,
+      kind: BulkKind.TRANSFER_ACK,
+      body: { transferId: 1, receivedBytes: 0, path: null, error: null },
+    });
+    const control = host.queuedBytes(Lane.CONTROL);
+    expect(control).toBeGreaterThan(0);
+    expect(host.queuedBytes(Lane.BULK)).toBe(0);
+    host.post({ lane: Lane.BULK, kind: BulkKind.TRANSFER_END, body: { transferId: 2 } });
+    host.post({
+      lane: Lane.BULK,
+      kind: BulkKind.TRANSFER_ABORT,
+      body: { transferId: 4, reason: "cancelled" },
+    });
+    expect(host.queuedBytes(Lane.CONTROL)).toBe(control);
+    expect(host.queuedBytes(Lane.BULK)).toBeGreaterThan(0);
+  });
 });
 
 describe("LinkSession liveness", () => {

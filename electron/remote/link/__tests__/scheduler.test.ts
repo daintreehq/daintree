@@ -63,7 +63,8 @@ describe("LaneScheduler", () => {
   });
 
   it("serves a frame from the queue it was put in, counted there, with its own lane intact", () => {
-    const s = new LaneScheduler(tight);
+    const roomy: LaneLimits = { highWaterBytes: 1e9, hardCapBytes: 1e9, maxFrames: 1e9 };
+    const s = new LaneScheduler({ ...tight, [Lane.BULK]: roomy });
     const drained: Lane[] = [];
     s.onDrain((lane) => drained.push(lane));
     s.enqueue(f(Lane.RPC));
