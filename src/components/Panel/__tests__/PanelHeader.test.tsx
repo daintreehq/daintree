@@ -124,6 +124,26 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: (...args: unknown[]) => mockDispatch(...args) },
 }));
 
+// A scheduled pane's chip reads its schedule's name; nothing else here reads schedules.
+vi.mock("@/clients/schedulesClient", () => ({
+  schedulesClient: {
+    list: () =>
+      Promise.resolve({
+        projectId: "p1",
+        revision: 1,
+        schedules: [{ id: "sched-1", name: "Nightly triage" }],
+      }),
+    onChanged: () => () => {},
+  },
+}));
+
+const SCHEDULED_PANEL = {
+  id: "test-panel",
+  kind: "terminal",
+  spawnedBy: "schedule",
+  scheduledRun: { scheduleId: "sched-1", runId: "run-1" },
+};
+
 vi.mock("@/lib/watchNotification", () => ({
   fireWatchNotification: vi.fn(),
 }));
@@ -289,6 +309,56 @@ describe("PanelHeader", () => {
     mockWorktreeIds = null;
     mockMenuOpenChange = undefined;
     mockMenuCloseAutoFocus = undefined;
+  });
+
+  describe("schedule chip", () => {
+    const tabs = [
+      {
+        id: "test-panel",
+        title: "Tab 1",
+        kind: "terminal" as const,
+        chrome: deriveTerminalChrome(),
+        isActive: true,
+      },
+      {
+        id: "t2",
+        title: "Tab 2",
+        kind: "terminal" as const,
+        chrome: deriveTerminalChrome(),
+        isActive: false,
+      },
+    ];
+
+    it("draws nothing for a pane no schedule launched", () => {
+      mockHasPty = true;
+      mockStoreState = {
+        ...mockStoreState,
+        panelsById: { "test-panel": { id: "test-panel", kind: "terminal", spawnedBy: "agent" } },
+      };
+      render(<PanelHeader {...makeProps()} />);
+      expect(screen.queryByTestId("terminal-schedule-chip")).toBeNull();
+    });
+
+    it.each([
+      ["a single pane", {}],
+      ["a tab group, for its active pane", { tabs, onTabClick: vi.fn() }],
+    ])("follows the title in %s, outside the window controls", async (_layout, extra) => {
+      mockHasPty = true;
+      mockStoreState = { ...mockStoreState, panelsById: { "test-panel": SCHEDULED_PANEL } };
+      render(<PanelHeader {...makeProps(extra)} />);
+      await act(async () => {});
+
+      const chip = screen.getByTestId("terminal-schedule-chip");
+      expect(chip.textContent).toBe("Nightly triage");
+      expect(screen.getByTestId("panel-header-controls").contains(chip)).toBe(false);
+
+      fireEvent.click(chip);
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "schedules.open",
+        { scheduleId: "sched-1" },
+        { source: "user" }
+      );
+    });
   });
 
   describe("overflow menu tooltip", () => {
@@ -2145,6 +2215,14 @@ describe("PanelHeader", () => {
           },
           controls: { "fleet failure dot": () => screen.getByTestId("panel-fleet-failure-dot") },
         },
+        {
+          props: { location: "grid" },
+          setup: () => {
+            mockHasPty = true;
+            mockStoreState = { ...mockStoreState, panelsById: { "test-panel": SCHEDULED_PANEL } };
+          },
+          controls: { "schedule chip": () => screen.getByTestId("terminal-schedule-chip") },
+        },
       ];
 
       const dragPointerDown = vi.fn();
@@ -2186,6 +2264,7 @@ describe("PanelHeader", () => {
           "move to grid",
           "overflow menu",
           "restore",
+          "schedule chip",
           "tabs overflow",
         ].sort()
       );

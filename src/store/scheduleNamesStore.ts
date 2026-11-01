@@ -73,8 +73,9 @@ function read(): void {
   if (reading) return;
   reading = true;
   const readGeneration = generation;
-  schedulesClient
-    .list()
+  // Through a promise, so a bridge that throws as it's called fails the read rather than the caller.
+  Promise.resolve()
+    .then(() => schedulesClient.list())
     .then((snapshot) => {
       if (readGeneration !== generation) return;
       if (snapshot) take(snapshot);

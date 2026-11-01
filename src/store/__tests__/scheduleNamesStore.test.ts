@@ -91,6 +91,7 @@ describe("scheduleNamesStore", () => {
 
     const releaseA = acquireScheduleNames();
     const releaseB = acquireScheduleNames();
+    await act(async () => {});
     expect(order).toEqual(["subscribe", "list"]);
     expect(nameOf("s1")).toEqual({ kind: "unnamed" });
 
@@ -152,6 +153,7 @@ describe("scheduleNamesStore", () => {
     client.list.mockReturnValue(reply.promise);
     retryScheduleNames();
     retryScheduleNames();
+    await act(async () => {});
     expect(client.list).toHaveBeenCalledTimes(2);
 
     await act(async () => reply.resolve(snapshot(1, { s1: "Nightly" })));
@@ -170,6 +172,15 @@ describe("scheduleNamesStore", () => {
     await act(async () => reply.resolve(snapshot(1, { s1: "Nightly" })));
     act(() => stalePush?.(snapshot(2, { s1: "Nightly" })));
     expect(useScheduleNamesStore.getState().status).toBe("idle");
+  });
+
+  it("fails the read, not the holder, when the bridge throws as it's called", async () => {
+    client.list.mockImplementation(() => {
+      throw new Error("no bridge");
+    });
+    expect(() => acquireScheduleNames()).not.toThrow();
+    await act(async () => {});
+    expect(useScheduleNamesStore.getState().status).toBe("failed");
   });
 
   it("asks nothing in a window driving a Remote Host", () => {

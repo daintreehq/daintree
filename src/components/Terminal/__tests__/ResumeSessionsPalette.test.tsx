@@ -372,6 +372,45 @@ describe("ResumeSessionsPalette", () => {
     expect(footer).toMatch(/to resume Session a/);
     expect(footer).not.toMatch(/resume resume/i);
   });
+
+  it("marks a scheduled run's row with its schedule, after the location", () => {
+    const scheduled = makeItem("s", {
+      schedule: { scheduleId: "sched-1", name: "Nightly triage", label: "Nightly triage" },
+    });
+    paletteState.results = [scheduled, makeItem("a")];
+    paletteState.visibleResults = [scheduled, makeItem("a")];
+    paletteState.removedResults = [];
+    renderPalette();
+
+    const meta = document.getElementById("resume-session-option-s-meta");
+    expect(meta?.querySelector("svg")).not.toBeNull();
+    const visible = [...(meta?.childNodes ?? [])]
+      .filter((node) => !(node instanceof HTMLElement && node.classList.contains("sr-only")))
+      .map((node) => node.textContent)
+      .join("");
+    expect(visible).toBe("feature-a · Nightly triage · Opus 4.8");
+    // Spoken with what the name is, since the mark is hidden from assistive tech.
+    expect(meta?.textContent).toMatch(/scheduled run of Nightly triage/i);
+
+    // An ordinary row draws no mark.
+    const plain = document.getElementById("resume-session-option-a-meta");
+    expect(plain?.querySelector("svg")).toBeNull();
+    expect(plain?.textContent).toBe("feature-a · Opus 4.8");
+  });
+
+  it("names a schedule it couldn't read without claiming a name", () => {
+    const scheduled = makeItem("s", {
+      location: null,
+      schedule: { scheduleId: "sched-1", name: null, label: "Scheduled run" },
+    });
+    paletteState.results = [scheduled];
+    paletteState.visibleResults = [scheduled];
+    paletteState.removedResults = [];
+    renderPalette();
+
+    const meta = document.getElementById("resume-session-option-s-meta");
+    expect(meta?.textContent).toBe("Scheduled run · Opus 4.8");
+  });
 });
 
 describe("ResumeSessionsPalette Escape", () => {
