@@ -94,9 +94,13 @@ describe("ScheduleOsJobStatus (#15990)", () => {
   });
 
   it("holds the repair while one is under way", () => {
-    show({ ...CURRENT, state: "stale" }, [schedule("a")], { repairing: true });
-    const button = screen.getByRole("button", { name: "Repairing…" }) as HTMLButtonElement;
-    expect(button.disabled).toBe(true);
+    const { onRepair } = show({ ...CURRENT, state: "stale" }, [schedule("a")], {
+      repairing: true,
+    });
+    const button = screen.getByRole("button", { name: "Repair" });
+    expect(button.getAttribute("aria-busy")).toBe("true");
+    fireEvent.click(button);
+    expect(onRepair).not.toHaveBeenCalled();
   });
 
   it("names each schedule the job can't start, with why", () => {

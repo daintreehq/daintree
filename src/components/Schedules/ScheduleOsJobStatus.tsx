@@ -35,9 +35,9 @@ export function ScheduleOsJobStatus({
   const excluded = (status?.excluded ?? []).filter((entry) => names.has(entry.scheduleId));
   const started = optedIn.length - excluded.length;
   const repairButton = (
-    <Button variant="outline" size="sm" onClick={onRepair} disabled={repairing}>
+    <Button variant="outline" size="sm" onClick={onRepair} loading={repairing}>
       <RefreshCw />
-      {repairing ? "Repairing…" : "Repair"}
+      Repair
     </Button>
   );
 
