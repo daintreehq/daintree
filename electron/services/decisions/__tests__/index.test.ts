@@ -4,7 +4,13 @@ import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const saved = vi.hoisted(() => ({ value: undefined as unknown }));
-const loads = vi.hoisted(() => ({ constructed: 0, failNextConstruct: false, failNextOpen: false }));
+const loads = vi.hoisted(() => ({
+  constructed: 0,
+  failNextConstruct: false,
+  failNextOpen: false,
+  // While set, closing a store waits for it, holding the service's transitions.
+  closing: null as Promise<void> | null,
+}));
 const broadcast = vi.hoisted(() => vi.fn());
 // The relay check's network: Chromium's, which tests answer by hand.
 const netFetch = vi.hoisted(() => vi.fn<(url: string, init: RequestInit) => Promise<Response>>());
@@ -130,7 +136,7 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
             loads.failNextOpen = false;
             throw new Error("store unavailable");
           }
-          return { close: async () => {} } as never;
+          return { close: () => loads.closing ?? Promise.resolve() } as never;
         },
       });
       loads.constructed += 1;
@@ -212,6 +218,7 @@ describe("Decisions entry", () => {
     saved.value = undefined;
     loads.failNextConstruct = false;
     loads.failNextOpen = false;
+    loads.closing = null;
     vi.mocked(store.set).mockClear();
     broadcast.mockClear();
     netFetch.mockReset();
@@ -553,14 +560,30 @@ describe("Decisions entry", () => {
 
     it("waits for a switch-on under way, so the starting lifetime can't keep the old allowlist", async () => {
       saved.value = { enabled: true, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      // A stop still closing the store holds the service, so the switch-on
+      // below waits there with the settings it read.
+      let closed!: () => void;
+      loads.closing = new Promise<void>((resolve) => (closed = resolve));
+      const stopping = service.stop();
       const enabling = setDecisionsEnabled(true);
-      // The switch is saved and the service is still being made when the allowlist changes.
-      await vi.waitFor(() => expect(store.set).toHaveBeenCalled());
-      const allowing = setDecisionsProxyAllowlisted(true);
-      await Promise.all([enabling, allowing]);
+      await vi.waitFor(() => expect(store.set).toHaveBeenCalledTimes(1));
 
+      let allowed = false;
+      const allowing = setDecisionsProxyAllowlisted(true).then((policy) => {
+        allowed = true;
+        return policy;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      // Queued behind the switch-on: nothing saved, nothing answered yet.
+      expect(allowed).toBe(false);
+      expect(saved.value).toMatchObject({ proxyAllowlisted: false });
+
+      closed();
+      await Promise.all([stopping, enabling, allowing]);
       expect(saved.value).toMatchObject({ enabled: true, proxyAllowlisted: true });
-      const running = peekDecisionsService()!.getPolicy()!;
+      const running = service.getPolicy()!;
       expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
     });
 

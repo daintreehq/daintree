@@ -301,6 +301,38 @@ describe("useDecisionsPolicy", () => {
     expect(result.current.saveFailure).toBeNull();
   });
 
+  it("forgets what it read on turning off, and starts again from main on turning on", async () => {
+    getPolicy.mockResolvedValueOnce(policy({ proxyAllowlisted: true, revision: 4 }));
+    const { result, rerender } = renderHook(({ active }) => useDecisionsPolicy(active), {
+      initialProps: { active: true },
+    });
+    await act(async () => {});
+    expect(result.current.policy?.proxyAllowlisted).toBe(true);
+
+    // A save asked for just before turning off answers after it.
+    const late = deferred<DecisionsPolicy>();
+    setProxyAllowlisted.mockReturnValueOnce(late.promise);
+    act(() => {
+      void result.current.setProxyAllowlisted(false);
+    });
+    rerender({ active: false });
+    expect(result.current.policy).toBeNull();
+
+    getPolicy.mockRejectedValueOnce(new Error("Decisions has stopped"));
+    rerender({ active: true });
+    await act(async () => late.resolve(policy({ proxyAllowlisted: false, revision: 5 })));
+    expect(result.current.policy).toBeNull();
+    expect(result.current.loadError).toContain("Decisions has stopped");
+
+    // Main's answer after turning on is shown, though its revision is lower than anything seen before.
+    getPolicy.mockResolvedValueOnce(policy({ proxyAllowlisted: true, revision: 0 }));
+    await act(async () => {
+      await result.current.reload();
+    });
+    expect(result.current.policy?.proxyAllowlisted).toBe(true);
+    expect(result.current.loadError).toBeNull();
+  });
+
   it("stops listening once off or unmounted", async () => {
     getPolicy.mockResolvedValue(policy());
     const { rerender, unmount } = renderHook(({ active }) => useDecisionsPolicy(active), {
@@ -356,10 +388,8 @@ describe("policy copy", () => {
       allowsText: true,
       bindsAttachments: false,
     };
-    expect(gateDescription(lenient)).toBe(
-      "A proxy may answer: A, B or C, with a note if you like."
-    );
-    expect(gateDescription({ ...lenient, choices: [] })).toBe("A proxy may answer.");
+    expect(gateDescription(lenient)).toBe("A proxy may answer: A, B or C, with a note if you like");
+    expect(gateDescription({ ...lenient, choices: [] })).toBe("A proxy may answer");
   });
 
   it("names the gates that still need the person, and only those", () => {

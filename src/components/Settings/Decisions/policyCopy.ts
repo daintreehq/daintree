@@ -27,13 +27,9 @@ export function gateDescription(gate: DecisionsWorkflowGate): string {
       : gate.allowsText
         ? `: ${either(labels)}, with a note if you like`
         : `: ${either(labels)}, and nothing else`;
-  const sentences = [`${who}${what}.`];
-  if (gate.bindsAttachments) {
-    sentences.push(
-      "The question has to carry screenshots, and the agent learns whether your phone showed you exactly the ones attached."
-    );
-  }
-  return sentences.join(" ");
+  if (!gate.bindsAttachments) return `${who}${what}`;
+  // Several sentences, so each one ends with a period.
+  return `${who}${what}. The question has to carry screenshots, and the agent learns whether your phone showed you exactly the ones attached.`;
 }
 
 /** How long a question waits, and how long its agent can make it wait, as the library applies it. */

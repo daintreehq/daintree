@@ -20,7 +20,7 @@ export function DecisionsQuestionsSection({ policy: read }: { policy: UseDecisio
           label="Expiry"
           description={
             policy === null
-              ? "An expired question authorises nothing, and the agent is told so."
+              ? "An expired question authorises nothing, and the agent is told so"
               : questionExpiryText(policy)
           }
         />
