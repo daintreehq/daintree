@@ -387,30 +387,34 @@ async function findPaneHoldingSession(
     );
   }
 
+  // The saved pane names the session a run resumed by hand (#15994), which
+  // the pty-host's own record only ever names for the launched run.
+  const state = await deps.getProjectState(projectId).catch(() => null);
+  const savedPanes = new Map((state?.terminals ?? []).map((pane) => [pane.id, pane]));
+  const launchedRunHolds = (terminal: ViewlessTerminalRecord) =>
+    terminal.agentSessionId === sessionId &&
+    // Not once another agent has taken the PTY over (#12535).
+    (terminal.agentIncarnation ?? 0) === 0 &&
+    (terminal.detectedAgentId === undefined || terminal.detectedAgentId === terminal.launchAgentId);
   const holders = terminals.filter(
     (terminal): terminal is ViewlessTerminalRecord & { id: string } =>
       typeof terminal.id === "string" &&
-      terminal.agentSessionId === sessionId &&
+      (launchedRunHolds(terminal) || savedPanes.get(terminal.id)?.agentSessionId === sessionId) &&
       (terminal.worktreeId ?? null) === worktreeId &&
       terminal.isTrashed !== true &&
       terminal.isExited !== true &&
       terminal.hasPty !== false &&
       // A pane whose agent quit to its shell no longer runs the conversation.
       terminal.agentState !== "exited" &&
-      // Nor one where another agent has since taken the PTY over (#12535).
-      (terminal.agentIncarnation ?? 0) === 0 &&
-      (terminal.detectedAgentId === undefined ||
-        terminal.detectedAgentId === terminal.launchAgentId) &&
       terminal.isAssistantTerminal !== true &&
       (terminal.projectId ?? pty.getTerminalProjectId(terminal.id)) === projectId
   );
   if (holders.length === 0) return { status: "none" };
 
-  const state = await deps.getProjectState(projectId).catch(() => null);
   const started = new Set(hostStartedTerminals(projectId).map((terminal) => terminal.id));
   let unplaced = false;
   for (const holder of holders) {
-    const saved = state?.terminals.find((terminal) => terminal.id === holder.id);
+    const saved = savedPanes.get(holder.id);
     if (saved) {
       if (saved.location === "trash" || saved.location === "dialog") continue;
       return { status: "found", terminalId: holder.id };

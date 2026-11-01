@@ -382,6 +382,35 @@ describe("resumeAgentSessionAsPane", () => {
     expect(spawns(invoke)).toHaveLength(0);
   });
 
+  it("returns a pane whose saved record names the session a run there resumed by hand", async () => {
+    const { deps, invoke } = resumeDeps({
+      terminals: {
+        "pane-1": {
+          launchAgentId: "claude",
+          agentSessionId: "the-launched-run",
+          agentIncarnation: 1,
+          detectedAgentId: "claude",
+          worktreeId: WORKTREE.id,
+        },
+      },
+      state: {
+        projectId: PROJECT.id,
+        sidebarWidth: 350,
+        terminals: [
+          {
+            id: "pane-1",
+            kind: "terminal",
+            location: "grid",
+            agentSessionId: SESSION,
+          } as PanelSnapshot,
+        ],
+      },
+    });
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+    expect(result).toMatchObject({ status: "existing", terminalId: "pane-1" });
+    expect(spawns(invoke)).toHaveLength(0);
+  });
+
   it("returns a pane main started that no layout save has placed yet", async () => {
     noteHostStartedTerminal(PROJECT.id, "pane-1", { location: "grid", worktreeId: WORKTREE.id });
     const { deps } = resumeDeps({
