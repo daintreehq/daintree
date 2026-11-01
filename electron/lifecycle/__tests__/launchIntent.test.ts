@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   launchOpensFolder,
+  resolveFirstWindowLaunch,
   resolveLaunchIntent,
   resolveRestoreFallbackProjectId,
   shouldRestoreWindowFleet,
@@ -131,6 +132,45 @@ describe("shouldRestoreWindowFleet", () => {
  * classifies the raw argv as targeted, then classifies the stripped argv, using
  * the same detector shapes production injects.
  */
+describe("resolveFirstWindowLaunch", () => {
+  const plain = { targeted: false, opensFolder: false };
+
+  it("restores the fleet onto the last-active project for a plain request", () => {
+    expect(resolveFirstWindowLaunch(signals(), plain, "p1")).toEqual({
+      intent: "cold",
+      fallbackProjectId: "p1",
+    });
+  });
+
+  it("opens one window for an archive the request named", () => {
+    expect(
+      resolveFirstWindowLaunch(signals(), { targeted: true, opensFolder: false }, "p1")
+    ).toEqual({ intent: "targeted", fallbackProjectId: "p1" });
+  });
+
+  it("starts a folder request on the picker, even one whose folder didn't resolve", () => {
+    expect(
+      resolveFirstWindowLaunch(signals(), { targeted: true, opensFolder: true }, "p1")
+    ).toEqual({ intent: "targeted", fallbackProjectId: undefined });
+  });
+
+  it("reads a folder queued since the start as targeted", () => {
+    expect(
+      resolveFirstWindowLaunch(signals({ pendingOpenDirPaths: ["/repos/app"] }), plain, "p1")
+    ).toEqual({ intent: "targeted", fallbackProjectId: undefined });
+  });
+
+  it("keeps recovery ahead of what the request named", () => {
+    expect(
+      resolveFirstWindowLaunch(
+        signals({ hasPendingCrash: true }),
+        { targeted: true, opensFolder: true },
+        "p1"
+      ).intent
+    ).toBe("recovery");
+  });
+});
+
 describe("stripLaunchTargets", () => {
   /** Detector stubs shaped like the real appLifecycle ones. */
   const argvSignals = (argv: string[]) =>
@@ -159,6 +199,11 @@ describe("stripLaunchTargets", () => {
   it("keeps every switch that is not a launch target", () => {
     const argv = ["--disable-gpu", "--reset-data", "--e2e", "--inspect=9229"];
     expect(stripLaunchTargets(argv)).toEqual(argv);
+  });
+
+  it("drops the OS job's one-shot windowless launch, displaced or not", () => {
+    expect(stripLaunchTargets(["--run-due-schedules", "--disable-gpu"])).toEqual(["--disable-gpu"]);
+    expect(stripLaunchTargets(["--cli-path", "--run-due-schedules", "/repos/app"])).toEqual([]);
   });
 
   it("removes every target when several are present", () => {

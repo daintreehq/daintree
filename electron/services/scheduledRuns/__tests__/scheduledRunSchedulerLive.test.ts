@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => {
     suspend: ReturnType<typeof vi.fn>;
     resume: ReturnType<typeof vi.fn>;
     unlock: ReturnType<typeof vi.fn>;
+    check: ReturnType<typeof vi.fn>;
     dispose: ReturnType<typeof vi.fn>;
   }> = [];
   return {
@@ -62,6 +63,7 @@ vi.mock("../ScheduledRunScheduler.js", () => ({
     suspend = vi.fn();
     resume = vi.fn();
     unlock = vi.fn();
+    check = vi.fn();
     dispose = vi.fn(async () => {});
     constructor(deps: Record<string, unknown>) {
       this.deps = deps;
@@ -72,11 +74,14 @@ vi.mock("../ScheduledRunScheduler.js", () => ({
 
 import { powerMonitor } from "electron";
 import {
+  checkDueSchedules,
   startScheduledRunScheduler,
   stopScheduledRunScheduler,
 } from "../scheduledRunSchedulerLive.js";
 
 const power = powerMonitor as unknown as EventEmitter;
+
+const originalArgv = process.argv;
 
 beforeEach(() => {
   mocks.instances.length = 0;
@@ -84,6 +89,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  process.argv = originalArgv;
   await stopScheduledRunScheduler();
 });
 
@@ -161,6 +167,44 @@ describe("scheduledRunSchedulerLive", () => {
     expect(power.listenerCount("suspend")).toBe(0);
     expect(power.listenerCount("resume")).toBe(0);
     expect(power.listenerCount("unlock-screen")).toBe(0);
+  });
+
+  /** A fresh copy of the module, as a new process has. */
+  async function freshLive() {
+    vi.resetModules();
+    return import("../scheduledRunSchedulerLive.js");
+  }
+
+  it("gives the first scheduler of a process an OS job started its launch on both clocks", async () => {
+    process.argv = [...originalArgv, "--run-due-schedules"];
+    const live = await freshLive();
+    live.startScheduledRunScheduler();
+    const osLaunch = mocks.instances[0]!.deps.osLaunch as { at: number; monotonicAt: number };
+    expect(osLaunch.at).toBe(performance.timeOrigin);
+    // On the scheduler's monotonic clock (`performance.now()`), the seed reads as now.
+    expect(osLaunch.at + (performance.now() - osLaunch.monotonicAt)).toBeCloseTo(Date.now(), -3);
+
+    await live.stopScheduledRunScheduler();
+    live.startScheduledRunScheduler();
+    expect(mocks.instances[1]!.deps.osLaunch).toBeNull();
+    await live.stopScheduledRunScheduler();
+  });
+
+  it("gives any other launch no OS launch", async () => {
+    const live = await freshLive();
+    live.startScheduledRunScheduler();
+    expect(mocks.instances[0]!.deps.osLaunch).toBeNull();
+    await live.stopScheduledRunScheduler();
+  });
+
+  it("asks a running scheduler to look at once, and does nothing before it starts", () => {
+    checkDueSchedules();
+    startScheduledRunScheduler();
+    const scheduler = mocks.instances[0]!;
+    expect(scheduler.check).not.toHaveBeenCalled();
+
+    checkDueSchedules();
+    expect(scheduler.check).toHaveBeenCalledTimes(1);
   });
 
   it("starts nothing once shutdown has begun", () => {

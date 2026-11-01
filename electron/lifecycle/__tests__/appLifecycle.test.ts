@@ -73,6 +73,11 @@ const installPluginMock = vi.hoisted(() => vi.fn());
 vi.mock("../../services/PluginService.js", () => ({
   pluginService: { installPlugin: installPluginMock },
 }));
+const handleDaintreeUrlMock = vi.hoisted(() => vi.fn<(url: string) => void>());
+vi.mock("../../setup/deepLinkInstall.js", () => ({
+  extractDaintreeUrl: (argv: string[]) => argv.find((arg) => arg.startsWith("daintree://")) ?? null,
+  handleDaintreeUrl: handleDaintreeUrlMock,
+}));
 // environment.ts registers real `open-file` listeners and calls enableSandbox()
 // at import time; only the external folder-open dispatch is needed here.
 const dispatchOpenDirPathMock = vi.hoisted(() => vi.fn<(dirPath: string) => void>());
@@ -491,14 +496,14 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
 
   async function register(overrides?: Partial<AppLifecycleOptions>) {
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
-    const opts = makeOpts({ isHostModeActive: () => true, ...overrides });
+    const opts = makeOpts({ keepsRunningWithoutWindows: () => true, ...overrides });
     const handle = registerAppLifecycleHandlers(opts);
     const call = appMock.on.mock.calls.find(([event]: string[]) => event === "second-instance");
     return { opts, handle, handler: call![1] as SecondInstanceHandler };
   }
 
   it("keeps today's behaviour without Host mode: no window is opened", async () => {
-    const { opts, handler } = await register({ isHostModeActive: () => false });
+    const { opts, handler } = await register({ keepsRunningWithoutWindows: () => false });
 
     handler({}, ["daintree"], "/");
 
@@ -563,6 +568,57 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
     expect(opts.onCreateWindow).not.toHaveBeenCalled();
   });
 
+  it("runs due schedules for an OS job's launch without opening, focusing or routing anything", async () => {
+    const onDueScheduleCheckRequested = vi.fn();
+    const win = makeWindow();
+    const { opts, handler } = await register({
+      onDueScheduleCheckRequested,
+      getMainWindow: vi.fn(() => win as unknown as import("electron").BrowserWindow),
+    });
+
+    handler(
+      {},
+      [
+        "/opt/Daintree/daintree",
+        "--run-due-schedules",
+        `--cli-path=${cliDir}`,
+        pathToFileURL(cliDir).href,
+        nodePath.join(cliDir, "plugin.dntr"),
+        "daintree://install?plugin=x",
+      ],
+      "/home/greg"
+    );
+    await Promise.resolve();
+
+    expect(onDueScheduleCheckRequested).toHaveBeenCalledOnce();
+    expect(win.focus).not.toHaveBeenCalled();
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+    expect(dispatchOpenDirPathMock).not.toHaveBeenCalled();
+    expect(enqueueArchiveInstallIntentsMock).not.toHaveBeenCalled();
+    expect(handleDaintreeUrlMock).not.toHaveBeenCalled();
+  });
+
+  it("opens nothing for an OS job's launch with nothing to run the check", async () => {
+    const { opts, handle, handler } = await register({ isLaunchSettled: () => false });
+
+    handler({}, ["daintree", "--run-due-schedules"], "/");
+    handle.onLaunchSettled();
+
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  it("hands over Host mode asked for beside the schedule check", async () => {
+    const onHostModeRequested = vi.fn();
+    const onDueScheduleCheckRequested = vi.fn();
+    const { opts, handler } = await register({ onHostModeRequested, onDueScheduleCheckRequested });
+
+    handler({}, ["daintree", "--host-mode", "--run-due-schedules"], "/");
+
+    expect(onDueScheduleCheckRequested).toHaveBeenCalledOnce();
+    expect(onHostModeRequested).toHaveBeenCalledOnce();
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
   it("treats --host-mode as a plain relaunch where Host mode can't be handed over", async () => {
     const { opts, handler } = await register();
 
@@ -576,7 +632,21 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
 
     handler({}, ["daintree"], "/");
 
-    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+    expect(opts.onCreateWindow).toHaveBeenCalledExactlyOnceWith({
+      targeted: false,
+      opensFolder: false,
+    });
+  });
+
+  it("says a relaunch that named something to open was targeted, and which a folder", async () => {
+    hasOpenDirConsumerMock.mockReturnValue(false);
+    const { opts, handler } = await register();
+
+    handler({}, ["daintree", nodePath.join(cliDir, "plugin.dntr")], "/");
+    handler({}, ["daintree", "--cli-path=/nowhere/at/all"], "/");
+
+    expect(opts.onCreateWindow).toHaveBeenNthCalledWith(1, { targeted: true, opensFolder: false });
+    expect(opts.onCreateWindow).toHaveBeenNthCalledWith(2, { targeted: true, opensFolder: true });
   });
 
   it("treats a destroyed primary window as no window", async () => {
@@ -633,10 +703,32 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
 
     handler({}, ["daintree", `--cli-path=${cliDir}`], "/");
     expect(dispatchOpenDirPathMock).toHaveBeenCalledExactlyOnceWith(cliDir);
+    handler({}, ["daintree"], "/");
     settled = true;
     handle.onLaunchSettled();
 
-    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+    // Targeted, though a plain relaunch arrived after it.
+    expect(opts.onCreateWindow).toHaveBeenCalledExactlyOnceWith({
+      targeted: true,
+      opensFolder: true,
+    });
+  });
+
+  it("keeps a folder request's flags through a Dock click before the start settles", async () => {
+    let settled = false;
+    hasOpenDirConsumerMock.mockReturnValue(false);
+    const { opts, handle, handler } = await register({ isLaunchSettled: () => settled });
+    const activate = appMock.on.mock.calls.find(([event]: string[]) => event === "activate")![1];
+
+    handler({}, ["daintree", "--cli-path=/nowhere/at/all"], "/");
+    activate();
+    settled = true;
+    handle.onLaunchSettled();
+
+    expect(opts.onCreateWindow).toHaveBeenCalledExactlyOnceWith({
+      targeted: true,
+      opensFolder: true,
+    });
   });
 
   it("does nothing on settle when no second launch arrived", async () => {
@@ -723,10 +815,10 @@ describe("registerAppLifecycleHandlers – window-all-closed", () => {
     expect(appMock.quit).toHaveBeenCalledOnce();
   });
 
-  it("keeps running on linux while Host mode is active", async () => {
+  it("keeps running on linux while it runs without windows", async () => {
     Object.defineProperty(process, "platform", { value: "linux" });
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
-    registerAppLifecycleHandlers(makeOpts({ isHostModeActive: () => true }));
+    registerAppLifecycleHandlers(makeOpts({ keepsRunningWithoutWindows: () => true }));
 
     getWindowAllClosedHandler()();
 
@@ -995,7 +1087,7 @@ describe("registerAppLifecycleHandlers – activate", () => {
     let settled = false;
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     const opts = makeOpts({
-      isHostModeActive: () => true,
+      keepsRunningWithoutWindows: () => true,
       isLaunchSettled: () => settled,
     });
     const handle = registerAppLifecycleHandlers(opts);
@@ -1016,7 +1108,7 @@ describe("registerAppLifecycleHandlers – activate", () => {
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     const opts = makeOpts({
       windowRegistry: makeRegistry(0),
-      isHostModeActive: () => false,
+      keepsRunningWithoutWindows: () => false,
       isLaunchSettled: () => false,
     });
     const handle = registerAppLifecycleHandlers(opts);

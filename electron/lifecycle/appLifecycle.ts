@@ -16,6 +16,7 @@ import { SAFETY_BELT_TIMEOUT_MS } from "./shutdownConfig.js";
 import { extractDaintreeUrl, handleDaintreeUrl } from "../setup/deepLinkInstall.js";
 import { dispatchOpenDirPath, hasOpenDirConsumer } from "../setup/environment.js";
 import { isHostModeRequested } from "../boot/hostModeLaunch.js";
+import { isDueScheduleCheckRequested } from "../boot/dueScheduleLaunch.js";
 
 const DISABLE_GPU_CRASH_LIMIT_SWITCH = "disable-gpu-process-crash-limit";
 const SIGNAL_ECHO_WINDOW_MS = 100;
@@ -231,16 +232,30 @@ export async function queueDntrPaths(archivePaths: readonly string[]): Promise<v
   await enqueueArchiveInstallIntents(archivePaths);
 }
 
+/** What asked for a window. */
+export interface WindowRequest {
+  /**
+   * A relaunch that named something to open (a folder, even one that didn't
+   * resolve, or a `.dntr` archive), so a launch that deferred its windows
+   * opens them as a targeted launch would.
+   */
+  readonly targeted: boolean;
+  /** Of those, one that named a folder: its window starts on the picker. */
+  readonly opensFolder: boolean;
+}
+
 export interface AppLifecycleOptions {
-  onCreateWindow: () => void | Promise<void>;
+  onCreateWindow: (request?: WindowRequest) => void | Promise<void>;
   getMainWindow: () => BrowserWindow | null;
   windowRegistry?: WindowRegistry;
   /**
-   * True while this process serves as a Host. Closing the last window then
-   * leaves it running on every platform, since remote Shells and working
-   * agents still depend on it.
+   * True while this process runs with or without windows: it serves as a
+   * Host, or an OS job started it windowless to run due schedules. Closing the
+   * last window then leaves it running on every platform, since remote
+   * Shells, working agents and scheduled runs still depend on it, and a
+   * relaunch with nothing on screen opens a window.
    */
-  isHostModeActive?: () => boolean;
+  keepsRunningWithoutWindows?: () => boolean;
   /**
    * Whether the launch has finished bringing up its initial windows (or its
    * windowless Host runtime). Until then a second launch must not open a
@@ -261,6 +276,11 @@ export interface AppLifecycleOptions {
    * launch is handled like any other.
    */
   onHostModeRequested?: (commandLine: readonly string[]) => void;
+  /**
+   * A second launch from an OS job asked for due schedules to run
+   * (`--run-due-schedules`). Such a launch never focuses or opens a window.
+   */
+  onDueScheduleCheckRequested?: () => void;
 }
 
 export interface AppLifecycleHandle {
@@ -373,8 +393,9 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
   else void app.whenReady().then(registerTerminationSignals);
 
   // A second launch that arrived before the first had anything on screen.
-  // `plainRelaunch` is true if any of them was a plain relaunch.
-  let deferredRelaunch: { plainRelaunch: boolean } | null = null;
+  // `plainRelaunch` is true if any of them was a plain relaunch, `targeted` if
+  // any named something to open.
+  let deferredRelaunch: ({ plainRelaunch: boolean } & WindowRequest) | null = null;
 
   const focusWindow = (win: BrowserWindow): void => {
     if (win.isMinimized()) win.restore();
@@ -386,20 +407,27 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
     return win && !win.isDestroyed() ? win : null;
   };
 
-  // Nothing is on screen — a windowless Host, or macOS after the last window
+  // Nothing is on screen — a windowless launch, or macOS after the last window
   // closed. A relaunch is the user asking to see the app, so it gets a window.
   // A folder open only needs one when no window has ever set up the routing
   // that would make one for it; queued, it opens in the new window.
-  const openWindowIfNeeded = (plainRelaunch: boolean): void => {
+  const openWindowIfNeeded = (plainRelaunch: boolean, request: WindowRequest): void => {
     if (opts.canOpenWindows && !opts.canOpenWindows()) return;
     if (!plainRelaunch && hasOpenDirConsumer()) return;
-    void Promise.resolve(opts.onCreateWindow()).catch((err) =>
+    void Promise.resolve(opts.onCreateWindow(request)).catch((err) =>
       console.error("[MAIN] Failed to open a window for a second launch:", err)
     );
   };
 
   app.on("second-instance", (_event, commandLine, workingDirectory) => {
     console.log("[MAIN] Second instance detected");
+    // An OS job running due schedules works in the background too: nothing is
+    // focused or opened for it, whether or not anything handles the check.
+    const dueScheduleCheck = isDueScheduleCheckRequested(commandLine);
+    if (dueScheduleCheck) {
+      console.log("[MAIN] Second instance asked to run due schedules");
+      opts.onDueScheduleCheckRequested?.();
+    }
     // A background Host-mode launch (login item, systemd unit, or a Shell
     // starting Host mode over SSH) is a request for this process to serve,
     // never for a window: nothing is focused or opened for it.
@@ -408,6 +436,7 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
       opts.onHostModeRequested(commandLine);
       return;
     }
+    if (dueScheduleCheck) return;
     if (opts.canOpenWindows && !opts.canOpenWindows()) {
       console.log("[MAIN] Second instance wants a window, but this Host has no display");
       return;
@@ -462,22 +491,26 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
     // re-launches (no path argument). A CLI path or folder open raises the
     // window it lands in, so it is excluded.
     const plainRelaunch = dntrPaths.length > 0 || (!cliPath && directoryPaths.length === 0);
+    const opensFolder = hasCliPathFlag(commandLine) || directoryPaths.length > 0;
+    const targeted = opensFolder || dntrPaths.length > 0;
     if (liveWindow) {
       if (plainRelaunch) focusWindow(liveWindow);
       return;
     }
-    // Without Host mode, a relaunch with nothing on screen behaves as it always
-    // has (the folder routing above still applies).
-    if (!opts.isHostModeActive?.()) return;
+    // Unless this process runs windowless, a relaunch with nothing on screen
+    // behaves as it always has (the folder routing above still applies).
+    if (!opts.keepsRunningWithoutWindows?.()) return;
     if (!app.isReady() || !(opts.isLaunchSettled?.() ?? true)) {
       // The launch is still bringing up its own windows or its windowless
       // Host; decided once it has, against whatever is on screen then.
       deferredRelaunch = {
         plainRelaunch: (deferredRelaunch?.plainRelaunch ?? false) || plainRelaunch,
+        targeted: (deferredRelaunch?.targeted ?? false) || targeted,
+        opensFolder: (deferredRelaunch?.opensFolder ?? false) || opensFolder,
       };
       return;
     }
-    openWindowIfNeeded(plainRelaunch);
+    openWindowIfNeeded(plainRelaunch, { targeted, opensFolder });
   });
 
   // The application menu is process-global but its project gates track the
@@ -525,17 +558,24 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
     // survives windowless with just its menu bar.
     refreshProjectMenuState();
 
-    if (process.platform !== "darwin" && !opts.isHostModeActive?.()) {
+    if (process.platform !== "darwin" && !opts.keepsRunningWithoutWindows?.()) {
       app.quit();
     }
   });
 
   app.on("activate", () => {
-    // A windowless Host launch never opens a window of its own, so a Dock click
+    // A windowless launch never opens a window of its own, so a Dock click
     // before it settles is the user asking to see the app: answered on settle
     // exactly like a plain relaunch.
-    if (opts.isHostModeActive?.() && (!app.isReady() || !(opts.isLaunchSettled?.() ?? true))) {
-      deferredRelaunch = { plainRelaunch: true };
+    if (
+      opts.keepsRunningWithoutWindows?.() &&
+      (!app.isReady() || !(opts.isLaunchSettled?.() ?? true))
+    ) {
+      deferredRelaunch = {
+        plainRelaunch: true,
+        targeted: deferredRelaunch?.targeted ?? false,
+        opensFolder: deferredRelaunch?.opensFolder ?? false,
+      };
       return;
     }
     // A Dock click during a slow startup fires `activate` before
@@ -561,7 +601,10 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
         if (pending.plainRelaunch) focusWindow(liveWindow);
         return;
       }
-      openWindowIfNeeded(pending.plainRelaunch);
+      openWindowIfNeeded(pending.plainRelaunch, {
+        targeted: pending.targeted,
+        opensFolder: pending.opensFolder,
+      });
     },
   };
 }
