@@ -62,8 +62,6 @@ class FakeDebugger extends EventEmitter {
   mainWorld = 1;
   /** Runs before the next evaluate into the picker's world, which then fails as a gone world does. */
   beforeIsolatedEvaluate: (() => void) | null = null;
-  /** The document's markup as served, which the browser's cache kept; null when it kept none. */
-  served: string | null = null;
 
   isAttached(): boolean {
     return this.attached;
@@ -110,14 +108,7 @@ class FakeDebugger extends EventEmitter {
         this.announceMainWorld();
         return {};
       case "Page.getFrameTree":
-        return {
-          frameTree: {
-            frame: { id: MAIN_FRAME_ID, url: location.href.split("#")[0], mimeType: "text/html" },
-          },
-        };
-      case "Page.getResourceContent":
-        if (this.served === null) throw new Error("Content unavailable. Resource was not cached");
-        return { content: this.served, base64Encoded: false };
+        return { frameTree: { frame: { id: MAIN_FRAME_ID } } };
       case "Runtime.addBinding": {
         const name = params.name as string;
         // CDP delivers binding calls asynchronously, never inside the evaluate.
@@ -153,7 +144,8 @@ class FakeDebugger extends EventEmitter {
         }
         try {
           const source = (params.expression as string).trim().replace(/;$/, "");
-          const value = new Function(`return ${source}`)() as unknown;
+          const evaluated = new Function(`return ${source}`)() as unknown;
+          const value = params.awaitPromise ? await evaluated : evaluated;
           return params.returnByValue
             ? { result: { value: JSON.parse(JSON.stringify(value ?? null)) as unknown } }
             : { result: {} };
@@ -308,6 +300,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
   const api = scope[BOOTSTRAP_GLOBAL] as { dispose?: (() => void) | null } | undefined;
   try {
     api?.dispose?.();
@@ -456,10 +449,15 @@ describe("core Element Picker guest loading", () => {
   it("traces an Astro element its dev toolbar took the stamps off, from the markup as served", async () => {
     const page = "/proj/src/pages/index.astro";
     const h = makeHarness();
-    h.wc.debugger.served = `<!doctype html><html><head></head><body>
+    const served = `<!doctype html><html><head></head><body>
       <main data-astro-source-file="${page}" data-astro-source-loc="18:5">
         <h1 id="title" data-astro-source-file="${page}" data-astro-source-loc="19:11">Shop</h1>
       </main></body></html>`;
+    const fetched: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      fetched.push(url);
+      return new Response(served, { headers: { "content-type": "text/html" } });
+    });
     // All the toolbar leaves: the markup unstamped, and itself, which is all that says Astro.
     document.body.innerHTML = `
       <main>
@@ -470,9 +468,7 @@ describe("core Element Picker guest loading", () => {
     expect(h.wc.debugger.evaluates().filter((entry) => entry.kind === "extractor")).toEqual([
       { kind: "extractor", framework: "astro" },
     ]);
-    expect(
-      h.wc.debugger.commands.filter((command) => command.method === "Page.getResourceContent")
-    ).toHaveLength(1);
+    expect(fetched).toEqual([location.href.split("#")[0]]);
 
     (document.getElementById("title") as HTMLElement).click();
     await settle();

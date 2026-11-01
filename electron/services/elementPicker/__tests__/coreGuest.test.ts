@@ -58,7 +58,7 @@ function harness(
     reselect?: (() => unknown) | { error: Error };
     /** Reads a plugin provider's entry; the default returns a stub body. */
     loadPluginAsset?: CoreGuestDeps["loadPluginAsset"];
-    /** How the browser answers a read of the document as served; the default is `SERVED`. */
+    /** How the picker's world answers a fetch of the document as served; the default is `SERVED`. */
     servedContent?: () => Promise<unknown>;
   } = {}
 ) {
@@ -88,15 +88,10 @@ function harness(
       if (method === "Page.createIsolatedWorld") {
         return overrides.noWorld ? {} : { executionContextId: CONTEXT_ID };
       }
-      if (method === "Page.getFrameTree") {
-        return { frameTree: { frame: { id: "main", url: SERVED.url, mimeType: "text/html" } } };
-      }
-      if (method === "Page.getResourceContent") {
-        return overrides.servedContent
-          ? overrides.servedContent()
-          : { content: SERVED.html, base64Encoded: false };
-      }
       if (method !== "Runtime.evaluate") return {};
+      if (params.awaitPromise === true && params.contextId === CONTEXT_ID) {
+        return overrides.servedContent ? overrides.servedContent() : { result: { value: SERVED } };
+      }
       const expression = params.expression as string;
       if (params.contextId === CONTEXT_ID && overrides.worldGone) {
         throw new Error("Cannot find context with specified id");
@@ -580,7 +575,7 @@ describe("CoreGuest", () => {
 
   describe("on an Astro page", () => {
     const servedReads = (h: ReturnType<typeof harness>) =>
-      h.calls.filter((call) => call.method === "Page.getResourceContent");
+      h.calls.filter((call) => call.params.awaitPromise === true);
     const astroInstall = (h: ReturnType<typeof harness>) =>
       h.extractorEvaluates()
         .map((call) => call.params.expression as string)
@@ -590,17 +585,18 @@ describe("CoreGuest", () => {
       for (let round = 0; round < 50; round += 1) await Promise.resolve();
     };
 
-    it("hands Astro's extractor the markup as served, read once from the frame, and no other extractor", async () => {
+    it("hands Astro's extractor the markup as served, fetched once from the picker's world, and no other extractor", async () => {
       const h = harness({ probeResult: [...ASTRO, ...REACT] });
       await h.install();
       h.guest.onGuestEvent(0, READY);
       await h.settle();
       expect(servedReads(h)).toEqual([
         {
-          method: "Page.getResourceContent",
-          params: { frameId: "main", url: SERVED.url },
+          method: "Runtime.evaluate",
+          params: expect.objectContaining({ contextId: CONTEXT_ID, returnByValue: true }),
         },
       ]);
+      expect(servedReads(h)[0]!.params.expression).toContain("fetch(url");
       expect(astroInstall(h)).toContain(`served: ${JSON.stringify(SERVED)}`);
       const react = h.extractorEvaluates().find((call) =>
         (call.params.expression as string).includes("/* react */")
@@ -617,19 +613,23 @@ describe("CoreGuest", () => {
       await h.install();
       h.guest.onGuestEvent(0, READY);
       await h.settle();
-      expect(h.calls.filter((call) => call.method.startsWith("Page.get"))).toEqual([]);
+      expect(servedReads(h)).toEqual([]);
     });
 
-    it("still installs Astro's extractor, with nothing as served, when the read fails", async () => {
-      const h = harness({
-        probeResult: ASTRO,
-        servedContent: () => Promise.reject(new Error("Content unavailable")),
-      });
-      await h.install();
-      h.guest.onGuestEvent(0, READY);
-      await h.settle();
-      expect(astroInstall(h)).toContain("served: null");
-      expect(h.availabilities().at(-1)?.extractors).toEqual({ astro: "installed" });
+    it("still installs Astro's extractor, with nothing as served, when the read fails or answers out of shape", async () => {
+      for (const servedContent of [
+        () => Promise.reject(new Error("Cannot find context with specified id")),
+        async () => ({ result: { value: null } }),
+        async () => ({ result: { value: { url: "file:///p/index.html", html: "<h1></h1>" } } }),
+        async () => ({ result: { value: { url: SERVED.url, html: "a".repeat(2 * 1024 * 1024) } } }),
+      ]) {
+        const h = harness({ probeResult: ASTRO, servedContent });
+        await h.install();
+        h.guest.onGuestEvent(0, READY);
+        await h.settle();
+        expect(astroInstall(h)).toContain("served: null");
+        expect(h.availabilities().at(-1)?.extractors).toEqual({ astro: "installed" });
+      }
     });
 
     it("stops waiting on a read that never answers", async () => {
@@ -656,7 +656,7 @@ describe("CoreGuest", () => {
       await flush();
       h.state.epoch = 1;
       h.guest.invalidate();
-      answer({ content: SERVED.html, base64Encoded: false });
+      answer({ result: { value: SERVED } });
       await h.settle();
       expect(h.extractorEvaluates()).toHaveLength(0);
     });
@@ -671,7 +671,7 @@ describe("CoreGuest", () => {
       h.guest.onGuestEvent(0, READY);
       await flush();
       h.main.uniqueId = "main-2";
-      answer({ content: SERVED.html, base64Encoded: false });
+      answer({ result: { value: SERVED } });
       await h.settle();
       expect(astroInstall(h)).toContain("served: null");
     });

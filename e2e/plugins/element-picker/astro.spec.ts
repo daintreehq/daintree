@@ -14,6 +14,7 @@ import { dispatch, inPreview, selectInPreview, selectedElement } from "../helper
  */
 const STAMPS_TAKEN_OFF = `document.querySelector("astro-dev-toolbar") !== null &&
   document.querySelectorAll("[data-astro-source-file]").length === 0`;
+const PICKER_GONE = `!("__daintreeElementPickerExtractors" in window)`;
 const projectDir = registerFixtureProject(() => createSiteProject(ASTRO));
 
 test.describe.serial("Element Picker on an Astro dev server", () => {
@@ -43,6 +44,10 @@ test.describe.serial("Element Picker on an Astro dev server", () => {
     expect((await dispatch(window, "devPreview.toggleElementPicker")).ok).toBe(true);
     await expect(strip).toBeHidden({ timeout: 10_000 });
     await expect(selectedElement(window)).toBeHidden();
+    // Gone from the page with its readers, so switching on again detects the page afresh.
+    await expect
+      .poll(() => inPreview<boolean>(session().app, PICKER_GONE), { timeout: 10_000 })
+      .toBe(true);
     expect((await dispatch(window, "devPreview.toggleElementPicker")).ok).toBe(true);
     await expect(
       strip.getByRole("status").filter({ hasText: "Click an element to ask an agent about it" })

@@ -1,69 +1,79 @@
-import { z } from "zod";
-
 /**
- * Reads back the markup a dev server served for the preview's current
- * document, for an extractor whose framework's dev tooling takes its stamps
- * off the live elements after load (Astro's toolbar). It comes from the
- * browser's own HTTP cache (`Page.getResourceContent`), so the server is not
- * asked again: a second request would render an on-demand page a second time,
- * side effects and all, and could answer with different markup. A response the
- * cache did not keep (`Cache-Control: no-store`) reads as nothing.
+ * The markup a dev server serves for the preview's current document, for an
+ * extractor whose framework's dev tooling takes its stamps off the live
+ * elements after load (Astro's toolbar). Fetched once more from the
+ * document's own URL, inside the picker's isolated world, so page script can
+ * neither see nor patch the request, and with the page's cookies, as the
+ * document itself was requested. The server renders the page a second time
+ * to answer. The browser's cache cannot stand in: in a dev preview,
+ * `Page.getResourceContent` finds no cached copy of the document even when
+ * its response was cacheable.
  *
- * Main's own read over its own CDP session, of the document the page was built
- * from; it is still only markup the page's server wrote, so the extractor that
- * receives it reports what it finds there as an observation, like any other.
+ * It is only markup the page's server wrote, so the extractor that receives
+ * it reports what it finds there as an observation, like any other.
  */
 
 /** Larger markup is refused outright: a cut-off copy would parse into a different tree. */
 export const MAX_SERVED_MARKUP_BYTES = 1024 * 1024;
-/** The whole read's deadline; the content read waits on the document's other loads. */
-export const SERVED_MARKUP_TIMEOUT_MS = 2_000;
+/** The whole read's deadline, in the guest and in main alike. */
+export const SERVED_MARKUP_TIMEOUT_MS = 3_000;
 
 export interface ServedMarkup {
-  /** The document's URL without its fragment, as the frame reports it. */
+  /** The document's URL without its fragment, which never reaches the server. */
   url: string;
   html: string;
 }
 
-type Send = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
-
-const FrameTreeSchema = z.object({
-  frameTree: z.object({
-    frame: z.object({ id: z.string(), url: z.string(), mimeType: z.string() }),
-  }),
-});
-
-const ResourceContentSchema = z.object({ content: z.string(), base64Encoded: z.boolean() });
-
-/** Null whenever the read fails, the frame is not the one asked about, or the markup is not HTML or too large. */
-export async function readServedMarkup(send: Send, frameId: string): Promise<ServedMarkup | null> {
-  let rawTree: unknown;
+/**
+ * Evaluates, awaited and by value, to a {@link ServedMarkup} or null. Only an
+ * OK HTML response from the document's own URL counts: a redirect or anything
+ * past the byte cap is refused, never followed or cut down.
+ */
+export function buildServedMarkupSource(): string {
+  return `(async () => {
   try {
-    rawTree = await send("Page.getFrameTree");
+    const url = location.href.split("#")[0];
+    const response = await fetch(url, {
+      credentials: "same-origin",
+      redirect: "error",
+      cache: "no-store",
+      signal: AbortSignal.timeout(${SERVED_MARKUP_TIMEOUT_MS}),
+    });
+    if (!response.ok || !/^text\\/html\\b/i.test(response.headers.get("content-type") ?? "")) {
+      return null;
+    }
+    const reader = response.body?.getReader();
+    if (!reader) return null;
+    const chunks = [];
+    let size = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > ${MAX_SERVED_MARKUP_BYTES}) {
+        void reader.cancel().catch(() => {});
+        return null;
+      }
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return { url, html: new TextDecoder().decode(bytes) };
   } catch {
     return null;
   }
-  const tree = FrameTreeSchema.safeParse(rawTree);
-  if (!tree.success) return null;
-  const { frame } = tree.data.frameTree;
-  if (frame.id !== frameId || frame.mimeType !== "text/html" || !/^https?:/i.test(frame.url)) {
-    return null;
-  }
-  let rawContent: unknown;
-  try {
-    rawContent = await send("Page.getResourceContent", { frameId, url: frame.url });
-  } catch {
-    return null;
-  }
-  const read = ResourceContentSchema.safeParse(rawContent);
-  if (!read.success) return null;
-  const { content, base64Encoded } = read.data;
-  // Bounded before decoding, so an oversized body is never copied twice.
-  const encodedLimit = base64Encoded
-    ? Math.ceil(MAX_SERVED_MARKUP_BYTES / 3) * 4
-    : MAX_SERVED_MARKUP_BYTES;
-  if (content.length > encodedLimit) return null;
-  const html = base64Encoded ? Buffer.from(content, "base64").toString("utf8") : content;
-  if (Buffer.byteLength(html, "utf8") > MAX_SERVED_MARKUP_BYTES) return null;
-  return { url: frame.url, html };
+})()`;
+}
+
+/** What the guest answered, if it is markup of a page served over HTTP and within the cap; null otherwise. */
+export function servedMarkupFrom(value: unknown): ServedMarkup | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { url, html } = value as Record<string, unknown>;
+  if (typeof url !== "string" || typeof html !== "string" || !/^https?:/i.test(url)) return null;
+  if (url.includes("#") || Buffer.byteLength(html, "utf8") > MAX_SERVED_MARKUP_BYTES) return null;
+  return { url, html };
 }
