@@ -335,7 +335,9 @@ describe("projectStore addProject", () => {
       const toast: unknown = notifyMock.mock.calls.at(-1)?.[0];
       const actions: unknown =
         typeof toast === "object" && toast !== null ? Reflect.get(toast, "actions") : undefined;
-      const retry: unknown = Array.isArray(actions) ? Reflect.get(actions[0], "onClick") : undefined;
+      const retry: unknown = Array.isArray(actions)
+        ? Reflect.get(actions[0], "onClick")
+        : undefined;
       if (typeof retry !== "function") throw new Error("expected a retry action");
       projectClientMock.add.mockResolvedValueOnce({ id: "p1", path: "/tmp/repo" });
       Reflect.apply(retry, undefined, []);

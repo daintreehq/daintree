@@ -163,9 +163,9 @@ describe("opening a folder without git (#11405)", () => {
     const project = await store.addProject(folder, { gitBacked: false, groupId: "gone" });
 
     expect(project.groupId).toBeUndefined();
-    expect(
-      sqlite.prepare("SELECT group_id FROM projects WHERE id = ?").get(project.id)
-    ).toEqual({ group_id: null });
+    expect(sqlite.prepare("SELECT group_id FROM projects WHERE id = ?").get(project.id)).toEqual({
+      group_id: null,
+    });
   });
 
   it("keeps a lightweight row's membership through re-adds and promotion to a repository", async () => {

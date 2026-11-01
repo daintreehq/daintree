@@ -498,11 +498,9 @@ describe("CloneRepoDialog", () => {
       });
       fireEvent.click(await screen.findByRole("button", { name: "Open project" }));
 
-      expect(onSuccess).toHaveBeenCalledExactlyOnceWith(
-        "/tmp/my-repo",
-        expect.any(Object),
-        { disposition: "current" }
-      );
+      expect(onSuccess).toHaveBeenCalledExactlyOnceWith("/tmp/my-repo", expect.any(Object), {
+        disposition: "current",
+      });
     });
   });
 
