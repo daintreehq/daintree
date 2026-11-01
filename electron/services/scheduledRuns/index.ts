@@ -34,12 +34,16 @@ export function getScheduledRunRecorder(): Promise<ScheduledRunRecorder | null> 
       { getSharedDb, getSharedSqlite },
       { ScheduledRunStore },
       { ScheduledRunRecorder },
-      { getPowerSaveBlockerService },
+      keepAwake,
     ] = await Promise.all([
       import("../persistence/db.js"),
       import("./ScheduledRunStore.js"),
       import("./ScheduledRunRecorder.js"),
-      import("../PowerSaveBlockerService.js"),
+      // Keep-awake failing to load must not keep the history closed.
+      import("../PowerSaveBlockerService.js").catch((error: unknown) => {
+        console.warn("[ScheduledRuns] Keep-awake couldn't load:", error);
+        return null;
+      }),
     ]);
     getSharedDb();
     const sqlite = getSharedSqlite();
@@ -56,7 +60,7 @@ export function getScheduledRunRecorder(): Promise<ScheduledRunRecorder | null> 
         // is listening before it fires, whichever boot path launched the run.
         // It refuses only once shutdown has disposed it.
         try {
-          getPowerSaveBlockerService();
+          keepAwake?.getPowerSaveBlockerService();
         } catch (error) {
           console.warn("[ScheduledRuns] Keep-awake is unavailable for a run:", error);
         }
