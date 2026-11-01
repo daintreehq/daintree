@@ -5,10 +5,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
-import { isCanopyUnacknowledged, useCanopyStore } from "@/store/canopyStore";
+import { useCanopyStore } from "@/store/canopyStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
-import type { FleetRunRow } from "@shared/types/ipc/fleet";
-import { CANOPY_URGENT_PRIORITY, type CanopySnapshot } from "@shared/types/ipc/canopy";
+import type { FleetSnapshot } from "@shared/types/ipc/fleet";
+import { bandForRun } from "@shared/utils/fleetBands";
 import { agentStateDotColor } from "@/components/Worktree/terminalStateConfig";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
@@ -20,43 +20,25 @@ const CANOPY_ACTION_ID = "canopy.toggle" as const;
 const CANOPY_LABEL = "Canopy";
 
 /**
- * Runs Canopy reads as blocked on the user right now, not yet answered or put
- * aside, nor shown in the open panel already — and, while the fleet is known,
- * still running in the same incarnation and neither snoozed nor parked.
+ * Runs Canopy read asking the user something they haven't had in front of them
+ * since: the fleet's own `needs-you` band. Main marks the ask read once the run
+ * has been in front of the user for the read dwell, in its pane or in Canopy's
+ * panel, so a look in any project view takes it off every view's count, and a
+ * new ask is a new turn that counts again. Parked, snoozed, archived and
+ * replied runs never band there.
  */
-function urgentCount(
-  snapshot: CanopySnapshot,
-  runs: readonly FleetRunRow[] | null,
-  acknowledged: Record<string, string>
-): number {
-  const aside = new Set(snapshot.dispositions.map((d) => `${d.runId}:${d.spawnedAt}`));
-  const live =
-    runs === null
-      ? null
-      : new Set(
-          runs
-            .filter((run) => !run.snooze && !run.park)
-            .map((run) => `${run.runId}:${run.spawnedAt}`)
-        );
-  return snapshot.cards.filter((card) => {
-    const id = `${card.runId}:${card.spawnedAt}`;
-    return (
-      card.priority >= CANOPY_URGENT_PRIORITY &&
-      card.handledAt === null &&
-      isCanopyUnacknowledged(acknowledged, card) &&
-      !aside.has(id) &&
-      (live === null || live.has(id))
-    );
-  }).length;
+function urgentCount(fleet: FleetSnapshot | null): number {
+  if (!fleet) return 0;
+  let count = 0;
+  for (const run of fleet.runs) if (bandForRun(run) === "needs-you") count += 1;
+  return count;
 }
 
 /** Urgent asks the toolbar shows for Canopy: none until it is turned on. */
 export function useCanopyUrgentCount(): number {
   const activated = useCanopyStore((s) => s.snapshot?.activated === true);
-  const canopy = useCanopyStore((s) => s.snapshot);
-  const runs = useFleetSnapshotStore((s) => s.snapshot?.runs ?? null);
-  const acknowledged = useCanopyStore((s) => s.acknowledged);
-  return activated && canopy ? urgentCount(canopy, runs, acknowledged) : 0;
+  const count = useFleetSnapshotStore((s) => urgentCount(s.snapshot));
+  return activated ? count : 0;
 }
 
 /** Two characters at most, so the badge stays a dot-sized pill. */
@@ -70,26 +52,17 @@ export function CanopyToolbarButton({
   "data-toolbar-item"?: string;
 }) {
   const isOpen = useCanopyStore((s) => s.isOpen);
-  // Turned on, read (by useCanopySnapshotSync) before the panel opens, so it
-  // opens on the inbox or the offer without a frame of the wrong one.
-  const activated = useCanopyStore((s) => s.snapshot?.activated === true);
-  // Agents Canopy read as blocked on the user right now — an approval or a
-  // question it is sure of — in any project, not yet answered or put aside,
-  // and not yet shown in the open panel: opening it clears the count until a
-  // new prompt arrives. Waiting alone never lights it: a finished turn can sit
-  // quietly.
-  const canopy = useCanopyStore((s) => s.snapshot);
-  const runs = useFleetSnapshotStore((s) => s.snapshot?.runs ?? null);
-  const acknowledged = useCanopyStore((s) => s.acknowledged);
-  const needYou = canopy ? urgentCount(canopy, runs, acknowledged) : 0;
+  // Agents Canopy read asking the user something, in any project, that they
+  // haven't looked at since. Waiting alone never lights it: a finished turn
+  // can sit quietly, and without a reading a wait is at most unread.
+  const needYou = useCanopyUrgentCount();
   // The badge keeps its last count while it fades out, rather than shrinking
   // away on a "0".
   const [shownCount, setShownCount] = useState(needYou);
   if (needYou > 0 && needYou !== shownCount) setShownCount(needYou);
-  // "Urgent", not "need you": the badge counts only urgent readings — asks,
-  // and the rare breach of an explicit instruction — while the panel's own
-  // "need you" counts everything left for the user to check.
-  const label = activated && needYou > 0 ? `${CANOPY_LABEL} — ${needYou} urgent` : CANOPY_LABEL;
+  // "Urgent", not "need you": the badge counts only unread asks, while the
+  // panel's own "need you" counts everything left for the user to check.
+  const label = needYou > 0 ? `${CANOPY_LABEL} — ${needYou} urgent` : CANOPY_LABEL;
   const shortcut = useEffectiveCombo(CANOPY_ACTION_ID);
   const ariaShortcut = useAriaKeyshortcuts(CANOPY_ACTION_ID);
   const hover = useShortcutHintHover(CANOPY_ACTION_ID);
@@ -132,7 +105,7 @@ export function CanopyToolbarButton({
                   <Telescope />
                   <span
                     className={cn("toolbar-count toolbar-badge", agentStateDotColor("waiting"))}
-                    data-visible={activated && needYou > 0 && !isOpen}
+                    data-visible={needYou > 0 && !isOpen}
                     aria-hidden="true"
                   >
                     {countGlyph(shownCount)}
@@ -143,7 +116,7 @@ export function CanopyToolbarButton({
             {/* The name alone says nothing to someone who hasn't used it. */}
             <TooltipContent side="bottom">
               {createTooltipContent(
-                needYou > 0 && activated ? label : `${CANOPY_LABEL} — agent inbox`,
+                needYou > 0 ? label : `${CANOPY_LABEL} — agent inbox`,
                 shortcut
               )}
             </TooltipContent>

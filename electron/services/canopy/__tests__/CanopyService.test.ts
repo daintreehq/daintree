@@ -4427,6 +4427,34 @@ describe("CanopyService refining attention", () => {
     );
   });
 
+  it("takes an ask out of Needs you once Canopy's panel showed it for the read dwell, not when arrowed past", async () => {
+    let now = 1_000_000;
+    const changed = vi.fn();
+    const h = await makeHarness({
+      classify: readScreen,
+      now: () => now,
+      onRefinementsChanged: changed,
+    });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "question", since: now }));
+    h.screens.set("a", ASK_SCREEN);
+    await h.service.refresh();
+    await vi.waitFor(() =>
+      expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: false })
+    );
+
+    h.service.markSeen("a", { viewId: 1, place: "panel", looking: true });
+    now += CANOPY_READ_DWELL_MS - 1;
+    h.service.markSeen("a", { viewId: 1, place: "panel", looking: false });
+    expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: false });
+
+    changed.mockClear();
+    h.service.markSeen("a", { viewId: 1, place: "panel", looking: true });
+    now += CANOPY_READ_DWELL_MS;
+    h.service.markSeen("a", { viewId: 1, place: "panel", looking: false });
+    expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: true });
+    await vi.waitFor(() => expect(changed).toHaveBeenCalled());
+  });
+
   it("says whether the user has read the question wait it cleared, by that turn's read mark", async () => {
     const changed = vi.fn();
     const h = await makeHarness({

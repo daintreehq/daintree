@@ -294,8 +294,8 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
   }, [hostListed, setHostId]);
   useOverlayClaim("canopy", isOpen);
   // A view put in the background — another project shown in its place — can
-  // be seen by no one: an inbox left open there would acknowledge asks nobody
-  // saw, keep its pages held back, and hold an agent's terminal at its size.
+  // be seen by no one: an inbox left open there would keep its pages held
+  // back, and hold an agent's terminal at its size.
   useEffect(() => {
     if (!isOpen) return;
     // Already there: opened by a key while the panel's code loaded, and the
@@ -716,8 +716,6 @@ function CanopyInbox({
     workerNavigation,
     firstAssistant,
     listRef,
-    scrollerRef,
-    acknowledgeOpened,
     onlyReadMatch,
   } = useCanopyInboxFilters({
     isOpen,
@@ -812,10 +810,6 @@ function CanopyInbox({
     seeAssistantHandback,
   });
 
-  const openedRunId = focusedItem?.runId ?? null;
-  useLayoutEffect(() => {
-    if (openedRunId !== null) acknowledgeOpened(openedRunId);
-  }, [openedRunId, acknowledgeOpened]);
   useLayoutEffect(() => placeOrder(), [placeOrder, orderWake]);
   const { reserveUndo, undoReads, undoLine } = useCanopyInboxUndo({ hostId, api });
 
@@ -1742,7 +1736,6 @@ function CanopyInbox({
                 />
               </div>
               <div
-                ref={scrollerRef}
                 className="canopy-inbox flex min-h-0 flex-1 flex-col overflow-y-auto select-none"
                 data-canopy-list=""
                 // Its rows have menus of their own: the app's Shift+F10 stands down here.

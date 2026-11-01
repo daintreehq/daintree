@@ -12,9 +12,7 @@ import {
 import { clampCanopyListWidth } from "@/components/Canopy/canopyListWidth";
 import type { CanopyReplyRow } from "./voiceRecordingStore";
 import {
-  CANOPY_URGENT_PRIORITY,
   readsWithHostedService,
-  type CanopyCard,
   type CanopyMode,
   type CanopySnapshot,
 } from "@shared/types/ipc/canopy";
@@ -46,14 +44,6 @@ interface CanopyState {
    * turned on from here until it is updated.
    */
   outdatedHost: boolean;
-  /**
-   * The urgent prompt each run last showed while the panel was open, as
-   * `spawnedAt:revision`. The toolbar badge counts only the urgent prompts not
-   * in here, so opening the panel clears it until a new one arrives.
-   */
-  acknowledged: Record<string, string>;
-  /** The open panel shows these runs: their urgent prompts count as seen. */
-  acknowledge: (runIds: readonly string[]) => void;
   /**
    * The inbox's order as last shown, run ids first to last, and the scan it was
    * ranked after: kept across opens, so the list opens as it was left.
@@ -154,77 +144,12 @@ const SCOPE_STORAGE_KEY = "daintree-canopy-scope";
 const ALL_HOSTS_STORAGE_KEY = "daintree-canopy-all-hosts";
 /** Read by every project view, so a view opened or reloaded since still opens on the order last shown. */
 const ORDER_STORAGE_KEY = "daintree-canopy-order";
-export const CANOPY_ACKNOWLEDGED_STORAGE_KEY = "daintree-canopy-acknowledged";
 export const CANOPY_ROLE_STORAGE_KEY = "daintree-canopy-role";
 const HANDBACKS_SEEN_STORAGE_KEY = "daintree-canopy-assistant-handbacks";
 const READING_OFFER_DISMISSED_STORAGE_KEY = "daintree-canopy-reading-offer-dismissed";
 const LIST_WIDTH_STORAGE_KEY = "daintree-canopy-list-width";
 /** Assistants whose seen handback is kept at most, the oldest seen dropped first: as many as one directory names. */
 const MAX_HANDBACKS_SEEN = AGENT_DIRECTORY_ENTRIES_MAX;
-
-function promptKey(card: Pick<CanopyCard, "spawnedAt" | "revision">): string {
-  return `${card.spawnedAt}:${card.revision}`;
-}
-
-function readAcknowledged(): Record<string, string> {
-  try {
-    const raw = window.localStorage.getItem(CANOPY_ACKNOWLEDGED_STORAGE_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : null;
-    if (!parsed || typeof parsed !== "object") return {};
-    const clean: Record<string, string> = {};
-    for (const [runId, key] of Object.entries(parsed)) {
-      if (typeof key === "string") clean[runId] = key;
-    }
-    return clean;
-  } catch {
-    return {};
-  }
-}
-
-function saveAcknowledged(acknowledged: Record<string, string>): void {
-  try {
-    window.localStorage.setItem(CANOPY_ACKNOWLEDGED_STORAGE_KEY, JSON.stringify(acknowledged));
-  } catch {
-    // Best effort: this view still stays quiet for this session.
-  }
-}
-
-/**
- * Marks the urgent prompts of the runs the panel shows as seen — only those: a
- * panel scoped to one project leaves another project's asks on the badge.
- * Merged over what is stored rather than this view's copy, since every project
- * view writes the key, and pruned to the runs Canopy still has cards for.
- */
-function acknowledgeUrgent(
-  current: Record<string, string>,
-  snapshot: CanopySnapshot | null,
-  shown: ReadonlySet<string>
-): Record<string, string> | null {
-  if (!snapshot) return null;
-  const urgent = snapshot.cards.filter(
-    (card) =>
-      shown.has(card.runId) &&
-      card.priority >= CANOPY_URGENT_PRIORITY &&
-      current[card.runId] !== promptKey(card)
-  );
-  if (urgent.length === 0) return null;
-  const known = new Set(snapshot.cards.map((card) => card.runId));
-  const next: Record<string, string> = {};
-  for (const [runId, key] of Object.entries({ ...current, ...readAcknowledged() })) {
-    if (known.has(runId)) next[runId] = key;
-  }
-  for (const card of urgent) next[card.runId] = promptKey(card);
-  saveAcknowledged(next);
-  return next;
-}
-
-/** An urgent card the user has not had in front of them in the open panel. */
-export function isCanopyUnacknowledged(
-  acknowledged: Record<string, string>,
-  card: Pick<CanopyCard, "runId" | "spawnedAt" | "revision">
-): boolean {
-  return acknowledged[card.runId] !== promptKey(card);
-}
 
 function loadHostId(): HostId | null {
   try {
@@ -502,13 +427,6 @@ export const useCanopyStore = create<CanopyState>((set, get) => ({
   mode: "unset",
   seedMode: (mode) => set((state) => (state.snapshot === null ? { mode } : state)),
   snapshot: null,
-  acknowledged: readAcknowledged(),
-  acknowledge: (runIds) =>
-    set((state) => {
-      if (!state.isOpen) return state;
-      const acknowledged = acknowledgeUrgent(state.acknowledged, state.snapshot, new Set(runIds));
-      return acknowledged ? { acknowledged } : state;
-    }),
   ...loadOrders(),
   setOrder: (scope, order) =>
     set((state) => {
@@ -635,7 +553,7 @@ export const useCanopyStore = create<CanopyState>((set, get) => ({
     }),
 }));
 
-// A sibling project view opened the panel: its badge cleared, so this one does too.
+// What a sibling project view saved, taken up here too.
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (event) => {
     if (event.key === HANDBACKS_SEEN_STORAGE_KEY) {
@@ -654,9 +572,6 @@ if (typeof window !== "undefined") {
     }
     if (event.key === LIST_WIDTH_STORAGE_KEY) {
       useCanopyStore.setState({ listWidth: loadListWidth() });
-      return;
     }
-    if (event.key !== CANOPY_ACKNOWLEDGED_STORAGE_KEY) return;
-    useCanopyStore.setState({ acknowledged: readAcknowledged() });
   });
 }
