@@ -140,6 +140,8 @@ describe("RemoteHostsClient", () => {
   let installRouter: Mock<(router: RemoteRouter | null) => void>;
   let events: RemoteHostsEvent[];
   let keys: Map<number, string>;
+  /** Every local app view, as the window manager lists them. */
+  let views: number[];
   let client: RemoteHostsClient;
   let router: RemoteRouter;
   let onFirstUse: Mock<() => void>;
@@ -150,6 +152,7 @@ describe("RemoteHostsClient", () => {
     manager = fakeManager();
     bindings = new WindowHostBinding();
     keys = new Map();
+    views = [];
     const senders = {
       projectKeyFor: (id: number) => keys.get(id) ?? null,
       windowIdFor: (id: number) => (id === 5 ? 1 : null),
@@ -177,6 +180,7 @@ describe("RemoteHostsClient", () => {
       windows,
       installRouter,
       emit: (event) => events.push(event),
+      listViews: () => views,
     });
     registry.add({ name: "studio-01", connection: { kind: "ssh", target: "studio.example" } });
     events.length = 0;
@@ -3570,6 +3574,70 @@ describe("RemoteHostsClient", () => {
       expect(resyncs()).toHaveLength(1);
     });
 
+    it("resyncs a view on the host that hadn't called through before the disconnect", async () => {
+      keys.set(9, "studio-01:proj-1");
+      // A view of this machine's, which the disconnect leaves alone.
+      keys.set(4, "proj-2");
+      views = [4, 9];
+      manager.connect("studio-01");
+      await client.disconnect({ hostId: "studio-01" });
+      events.length = 0;
+
+      manager.connect("studio-01");
+      manager.emit("studio-01", connected);
+      await vi.waitFor(() =>
+        expect(resyncs()).toEqual([
+          { type: "resync-required", hostId: "studio-01", reason: "reconnected" },
+        ])
+      );
+    });
+
+    it("resyncs a window's view with no project yet, which follows the window onto the host", async () => {
+      bindings.set(1, "studio-01");
+      views = [5];
+      manager.connect("studio-01");
+      await client.disconnect({ hostId: "studio-01" });
+      events.length = 0;
+
+      manager.connect("studio-01");
+      manager.emit("studio-01", connected);
+      await vi.waitFor(() => expect(resyncs()).toHaveLength(1));
+    });
+
+    it("tells no one about a view that came onto the host only after the disconnect", async () => {
+      keys.set(4, "proj-2");
+      views = [4];
+      manager.connect("studio-01");
+      await client.disconnect({ hostId: "studio-01" });
+      manager.emit("studio-01", { status: "disconnected" });
+      events.length = 0;
+
+      // A new view on the host loads what it shows for itself.
+      keys.set(4, "studio-01:proj-2");
+      manager.connect("studio-01");
+      manager.emit("studio-01", connected);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(resyncs()).toHaveLength(0);
+    });
+
+    it("resyncs the views on a host whose unused connection the Shell let go", async () => {
+      // A cached view of the host whose endpoint was never reopened, so nothing used the link.
+      keys.set(9, "studio-01:proj-1");
+      views = [9];
+      manager.connect("studio-01");
+      await manager.disconnect("studio-01");
+      manager.emit("studio-01", { status: "disconnected" });
+      events.length = 0;
+
+      manager.connect("studio-01");
+      manager.emit("studio-01", connected);
+      await vi.waitFor(() =>
+        expect(resyncs()).toEqual([
+          { type: "resync-required", hostId: "studio-01", reason: "reconnected" },
+        ])
+      );
+    });
+
     it("tells no one when the views have since moved to another host", async () => {
       await disconnectWithBoundView();
       keys.set(9, "proj-1");
@@ -3590,6 +3658,33 @@ describe("RemoteHostsClient", () => {
       manager.readiness = "ready";
       manager.emit("studio-01", connected);
       await vi.waitFor(() => expect(resyncs()).toHaveLength(1));
+    });
+
+    it("keeps none of a forgotten host's views, even from a link dialled while it went", async () => {
+      keys.set(9, "studio-01:proj-1");
+      views = [9];
+      manager.connect("studio-01");
+      // As the real manager does: nothing to discard says nothing, and a
+      // connection dialled again while the old one stopped speaks for the host.
+      const discard = manager.disconnect.getMockImplementation()!;
+      let redialled = false;
+      manager.disconnect.mockImplementation(async (hostId: string) => {
+        if (!manager.get(hostId)) return;
+        await discard(hostId);
+        if (!redialled) {
+          redialled = true;
+          manager.connect(hostId);
+          return;
+        }
+        manager.emit(hostId, { status: "disconnected" });
+      });
+      await client.forget({ hostId: "studio-01" });
+      expect(manager.disconnect).toHaveBeenCalledTimes(2);
+      registry.add({ name: "studio-01", connection: { kind: "ssh", target: "studio.example" } });
+      manager.connect("studio-01");
+      manager.emit("studio-01", connected);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(resyncs()).toHaveLength(0);
     });
 
     it("drops the views of a forgotten host", async () => {

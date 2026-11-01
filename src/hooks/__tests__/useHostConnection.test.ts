@@ -753,34 +753,35 @@ describe("lease and reconnect races", () => {
     stop();
   });
 
-  it("rehydrates after an explicit disconnect and connect, which main can't announce", async () => {
+  it("resyncs once after an explicit disconnect and connect, when main says so", async () => {
     const { electron, emitHost } = installElectron();
+    // This view's own claim on open stays out, so only the path under test reads state back.
+    electron.driveLease.takeOver.mockImplementationOnce(() => new Promise(() => {}));
     bindView("studio-01");
     const stop = startHostConnectionSync();
     await flush();
-    emitHost({
-      type: "connection-changed",
-      hostId: "studio-01",
-      connection: { status: "connected", rttMs: 5, handshake: HANDSHAKE },
-    });
+    const connected = { status: "connected", rttMs: 5, handshake: HANDSHAKE } as const;
+    emitHost({ type: "connection-changed", hostId: "studio-01", connection: connected });
     emitHost({
       type: "connection-changed",
       hostId: "studio-01",
       connection: { status: "disconnected" },
     });
-    // A real reconnect dials first; the pending resync must survive that.
+    // A real reconnect dials first.
     emitHost({
       type: "connection-changed",
       hostId: "studio-01",
       connection: { status: "connecting", attempt: 1 },
     });
+    emitHost({ type: "connection-changed", hostId: "studio-01", connection: connected });
     expect(electron.worktree.refresh).not.toHaveBeenCalled();
-    emitHost({
-      type: "connection-changed",
-      hostId: "studio-01",
-      connection: { status: "connected", rttMs: 5, handshake: HANDSHAKE },
-    });
-    await vi.waitFor(() => expect(electron.worktree.refresh).toHaveBeenCalledTimes(1));
+    // Main tells the views it cut off once the new connection takes calls.
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
+    await flush();
+    expect(electron.worktree.refresh).toHaveBeenCalledTimes(1);
+    expect(electron.worktreePort.request).toHaveBeenCalledTimes(1);
+    expect(pluginRefresh).toHaveBeenCalledTimes(1);
     stop();
   });
 });
@@ -818,6 +819,8 @@ describe("host-owned saves held through a reconnect", () => {
       hostId: "studio-01",
       connection: { status: "connected", rttMs: 5, handshake: HANDSHAKE },
     });
+    // Main's word comes in the same turn as the connection, before any call made on it answers.
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
     await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
     await flush();
     expect(replay).not.toHaveBeenCalled();
@@ -939,6 +942,17 @@ describe("coming back to drive after someone else drove meanwhile (#13921)", () 
     if (resumed) emitHost({ type: "resync-required", hostId: "studio-01", reason: "reattached" });
   }
 
+  /** A new connection after an explicit disconnect, which main announces as it comes up. */
+  async function reconnectAfterDisconnect(emitHost: (event: RemoteHostsEvent) => void) {
+    emitHost({
+      type: "connection-changed",
+      hostId: "studio-01",
+      connection: { status: "connected", rttMs: 5, handshake: HANDSHAKE },
+    });
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
+    await flush();
+  }
+
   it("drops what it held and reads the host's state back when another client drove meanwhile", async () => {
     const { electron, emitHost, stop } = await openUnder(mine());
     const held = await holdASave();
@@ -1033,10 +1047,47 @@ describe("coming back to drive after someone else drove meanwhile (#13921)", () 
 
     // A fresh session is a new endpoint and a new lease, but the same tenure.
     electron.driveLease.get.mockResolvedValue(mine({ leaseId: 9, endpointId: "me-again" }));
-    await bringTheLinkBack(emitHost, false);
+    await reconnectAfterDisconnect(emitHost);
 
     await vi.waitFor(() => expect(held.replay).toHaveBeenCalledTimes(1));
     expect(rehydrate).toHaveBeenCalledTimes(1);
+    expect(optionsOf(rehydrate.mock.calls[0]!).authoritative).toBe(false);
+    stop();
+  });
+
+  it("holds its saves for the fresh session's rehydrate when main's word lands in a later turn", async () => {
+    const { electron, emitHost, stop } = await openUnder(mine(), "disconnected");
+    const held = await holdASave();
+
+    // Every lease read on the new connection crosses the link, so none answers
+    // before main's word, which went out with the connection.
+    let answerLeases!: () => void;
+    const leasesAnswered = new Promise<void>((resolve) => (answerLeases = resolve));
+    electron.driveLease.get.mockImplementation(async () => {
+      await leasesAnswered;
+      return mine({ leaseId: 9, endpointId: "me-again" });
+    });
+    electron.driveLease.get.mockClear();
+    let finishRehydrate!: () => void;
+    rehydrate.mockImplementationOnce(
+      () => new Promise<undefined>((resolve) => (finishRehydrate = () => resolve(undefined)))
+    );
+    emitHost({
+      type: "connection-changed",
+      hostId: "studio-01",
+      connection: { status: "connected", rttMs: 5, handshake: HANDSHAKE },
+    });
+    await flush();
+    expect(electron.driveLease.get).toHaveBeenCalled();
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
+    await flush();
+    answerLeases();
+
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
+    await flush();
+    expect(held.replay).not.toHaveBeenCalled();
+    finishRehydrate();
+    await vi.waitFor(() => expect(held.replay).toHaveBeenCalledTimes(1));
     expect(optionsOf(rehydrate.mock.calls[0]!).authoritative).toBe(false);
     stop();
   });
@@ -1048,7 +1099,7 @@ describe("coming back to drive after someone else drove meanwhile (#13921)", () 
     electron.driveLease.get.mockResolvedValue(
       mine({ leaseId: 9, endpointId: "me-again", tenureId: "tenure-b" })
     );
-    await bringTheLinkBack(emitHost, false);
+    await reconnectAfterDisconnect(emitHost);
 
     await vi.waitFor(() => expect(authoritativeReads()).toHaveLength(1));
     await resyncFromHost();
@@ -1550,6 +1601,7 @@ describe("project state after a fresh session or a takeover", () => {
       connection: { status: "disconnected" },
     } as RemoteHostsEvent);
     emitHost({ type: "connection-changed", hostId: "studio-01", connection: connected });
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
     await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
     stop();
   });
@@ -1903,7 +1955,7 @@ describe("re-reading the host only when the project changed hands (#15900)", () 
     stop();
   });
 
-  it("follows the driver again after an explicit disconnect and connect, which main can't announce", async () => {
+  it("follows the driver again after an explicit disconnect and connect, once main says so", async () => {
     const { emitHost, stop } = await watchAnotherLaptop();
     const connected = { status: "connected", rttMs: 5, handshake: HANDSHAKE } as const;
 
@@ -1913,6 +1965,7 @@ describe("re-reading the host only when the project changed hands (#15900)", () 
       connection: { status: "disconnected" },
     } as RemoteHostsEvent);
     emitHost({ type: "connection-changed", hostId: "studio-01", connection: connected });
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
 
     await vi.waitFor(() => expect(followCalls()).toHaveLength(2));
     await flush();
