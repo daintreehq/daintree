@@ -127,7 +127,14 @@ interface ElectronSide {
   };
   disposeLifecycleLedger: () => void;
   writeBackCapturedSessionId: (capture: unknown) => Promise<string>;
+  acceptObservedAgentSession: (observation: unknown) => Promise<string>;
   resetCapturedSessionPersistenceForTests: () => void;
+  offerAgentRunArgvSession: (
+    terminalId: string,
+    terminal: Record<string, unknown>,
+    observation: { agentType: string; command: string }
+  ) => void;
+  events: { on: (event: string, listener: (payload: unknown) => void) => () => void };
 }
 
 async function loadElectronSide(): Promise<ElectronSide> {
@@ -268,4 +275,116 @@ describe("passive exit capture → cold restore (#12433)", () => {
       expect(args?.command).toContain(resumeArgs.join(" "));
     }
   });
+
+  // #15994: Codex quit to the shell, the user typed `codex resume <id>` to
+  // reopen an older conversation, and Daintree restarted mid-turn. No farewell
+  // and no teardown capture, and live attribution never covers a hand-started
+  // run, so the run's own argv is the only record of what it was running.
+  it.each([
+    ["holds no id", undefined],
+    ["holds the conversation it launched", "019a0000-0000-7000-8000-00000000a1d0"],
+  ])(
+    "resumes a hand-resumed run exactly after a mid-turn restart, when the pane %s",
+    async (_name, launchedId) => {
+      const HAND_ID = "0199f8c1-2b4d-7e3a-9f10-5c6d7e8f9a0b";
+      const codexPane = (id: string, agentSessionId?: string) => ({
+        id,
+        kind: "terminal",
+        launchAgentId: "codex",
+        title: "Codex",
+        // Two panes in one folder compete for the single resume-latest slot.
+        cwd: "/project",
+        location: "grid",
+        command: "codex",
+        ...(agentSessionId && { agentSessionId }),
+      });
+      await stateRef.manager!.saveProjectState(projectId, {
+        projectId,
+        sidebarWidth: 350,
+        terminals: [codexPane("pane-a", launchedId), codexPane("pane-b")],
+      });
+
+      const ledger = main.getLifecycleLedger();
+      const generation = ledger.recordLaunch("pane-a", { projectId, launchAgentId: "codex" });
+      ledger.recordLaunch("pane-b", { projectId, launchAgentId: "codex" });
+
+      // Main's side of the pty-host bridge.
+      const accepted: Array<Promise<string>> = [];
+      const off = main.events.on("agent-session:observed", (payload) => {
+        accepted.push(main.acceptObservedAgentSession(payload));
+      });
+      try {
+        // The launched run quits to the shell: its farewell is journaled, never
+        // written to the pane.
+        await expect(
+          main.writeBackCapturedSessionId({
+            terminalId: "pane-a",
+            launchGeneration: null,
+            boundary: "demotion",
+            run: { launchGeneration: generation, agentIncarnation: 0 },
+            record: {
+              sessionId: "019a0000-0000-7000-8000-00000000fa7e",
+              agentId: "codex",
+              worktreeId: null,
+              title: "Codex",
+              projectId,
+              cwd: "/project",
+            },
+          })
+        ).resolves.toBe("ineligible-boundary");
+
+        // The hand-typed resume, as the census reports the npm shim.
+        main.offerAgentRunArgvSession(
+          "pane-a",
+          { launchAgentId: "codex", launchGeneration: generation, projectId, agentIncarnation: 1 },
+          { agentType: "codex", command: `node /opt/homebrew/bin/codex resume ${HAND_ID}` }
+        );
+        expect(accepted).toHaveLength(1);
+        await expect(accepted[0]).resolves.toBe(launchedId ? "superseded" : "filled");
+      } finally {
+        off();
+      }
+
+      // The restart: nothing else is written, and the next launch reads disk.
+      const reader = new main.ProjectStateManager(dir);
+      const persisted = await reader.getProjectState(projectId);
+      reader.dispose();
+      expect(persisted?.terminals.map((t) => t.agentSessionId)).toEqual([HAND_ID, undefined]);
+
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: persisted!.terminals, sidebarWidth: 350 },
+        terminalConfig: { scrollbackLines: 1000, performanceMode: false },
+        project: { id: projectId, path: "/project" },
+        agentSettings: { agents: {} },
+      });
+      const addPanel = vi.fn(async (_args: RespawnArgs) => "ok");
+
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      const resume = getAgentConfig("codex")?.resume;
+      if (resume?.kind !== "session-id") throw new Error("codex must resume by session id");
+      const byPane = new Map(
+        addPanel.mock.calls.map(([args]): [string | undefined, RespawnArgs] => [
+          args.requestedId,
+          args,
+        ])
+      );
+      const handResumed = byPane.get("pane-a");
+      expect(handResumed?.agentSessionId).toBe(HAND_ID);
+      expect(handResumed?.command).toContain(
+        resume.args(HAND_ID).map((arg) => quoteLaunchArgOptional(arg)).join(" ")
+      );
+      // An exact id no longer leaves the pane to the folder's resume-latest
+      // election, which its sibling used to win.
+      expect(handResumed?.command).not.toContain("--last");
+      const sibling = byPane.get("pane-b");
+      expect(sibling?.agentSessionId).toBeUndefined();
+      expect(sibling?.command).not.toContain(HAND_ID);
+    }
+  );
 });
