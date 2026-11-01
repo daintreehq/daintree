@@ -172,13 +172,16 @@ describe("WorktreeHeader PR-originated headline (#8888)", () => {
     expect(prButton.getAttribute("aria-label")).not.toContain("Fix flaky terminal search");
   });
 
-  it("names an untitled PR headline by its number once the cold window passes", () => {
+  it.each([
+    ["no title yet", { sourcePrNumber: 314 }],
+    ["an empty title", { sourcePrNumber: 314, prTitle: "" }],
+  ])("names a PR headline with %s by its number once the cold window passes", (_name, fields) => {
     // The headline is words now, so the number fallback the badge used to
     // draw has to come from the headline itself, or the card names nothing.
     vi.useFakeTimers();
     try {
       renderHeader({
-        worktree: { ...baseWorktree, sourcePrNumber: 314 } as WorktreeState,
+        worktree: { ...baseWorktree, ...fields } as WorktreeState,
         badges: { onOpenPR: noop },
       });
       expect(screen.getByTestId("worktree-headline-title").textContent).toBe("");

@@ -177,7 +177,7 @@ export function WorktreeHeader({
     headline.kind === "pr"
   );
   const headlineTitleText =
-    displayTitle ?? (headline.kind === "pr" && !hideColdPrNumber ? `#${headline.number}` : "");
+    displayTitle || (headline.kind === "pr" && !hideColdPrNumber ? `#${headline.number}` : "");
   const hasPlanFile = Boolean(worktree.hasPlanFile);
   const hasDevServerSignal = !!devServerSession && isLiveDevServerStatus(devServerSession.status);
   const devServerSummary = devServerSession ? summarizeDevServer(devServerSession) : null;
