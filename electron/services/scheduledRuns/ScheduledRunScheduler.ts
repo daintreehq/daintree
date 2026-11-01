@@ -146,7 +146,7 @@ export class ScheduledRunScheduler {
     // Before the reads, so an edit committed while they run isn't lost; the
     // newer of a read and a change wins.
     this.unsubscribe = this.deps.subscribeSchedules((snapshot) => {
-      if (this.hold(snapshot)) this.requestPass();
+      if (this.holdRead(snapshot)) this.requestPass();
     });
     let projectIds: readonly string[] = [];
     try {
@@ -221,15 +221,23 @@ export class ScheduledRunScheduler {
     return true;
   }
 
+  /**
+   * Holds a snapshot from a read or a change. The first to arrive for a
+   * project that couldn't be read restores watching it, and what came due
+   * meanwhile was missed; a read still running after that marks nothing.
+   */
+  private holdRead(snapshot: SchedulesSnapshot): boolean {
+    const late = this.unread.delete(snapshot.projectId);
+    if (!this.hold(snapshot)) return false;
+    if (late) for (const schedule of snapshot.schedules) this.unwatched.add(schedule.id);
+    return true;
+  }
+
   private async readProjects(projectIds: readonly string[]): Promise<void> {
     await Promise.all(
       projectIds.map(async (projectId) => {
         try {
-          const snapshot = await this.deps.listSchedules(projectId);
-          const late = this.unread.delete(projectId);
-          if (!this.hold(snapshot) || !late) return;
-          // What came due while the project couldn't be read was missed.
-          for (const schedule of snapshot.schedules) this.unwatched.add(schedule.id);
+          this.holdRead(await this.deps.listSchedules(projectId));
         } catch (error) {
           this.unread.add(projectId);
           this.logWarn(`[ScheduledRuns] Couldn't read project ${projectId}'s schedules:`, error);
@@ -291,7 +299,13 @@ export class ScheduledRunScheduler {
     let nextDueAt: number | null = null;
     for (const [projectId, snapshot] of this.projects) {
       for (const schedule of snapshot.schedules) {
-        if (!schedule.enabled || this.launching.has(schedule.id)) continue;
+        if (!schedule.enabled) continue;
+        if (this.launching.has(schedule.id)) {
+          // Whatever comes due before its launch ends was missed, even for a
+          // launch from before a switch-off whose end leaves nothing.
+          this.unwatched.add(schedule.id);
+          continue;
+        }
         const retryAt = this.retryAfter.get(schedule.id);
         if (retryAt !== undefined) {
           if (retryAt > monotonic) continue;

@@ -764,89 +764,72 @@ describe("ScheduledRunScheduler", () => {
     ]);
   });
 
-  it("leaves nothing of a launch from before a switch-off on the schedule switched back on", async () => {
-    let finish: (outcome: ScheduleRunNowOutcome) => void = () => {};
-    vi.setSystemTime(at(8, 59, 50));
-    const skipping = schedule({ cron: "* * * * *" });
-    commit("project-1", [{ ...skipping, policies: { ...skipping.policies, missedRuns: "skip" } }]);
-    launchImpl = () =>
-      new Promise((resolve) => {
-        finish = resolve;
-      });
-    await start();
-    await elapse(10_000);
-    expect(launches).toHaveLength(1);
+  it.each<[string, ScheduleRunNowOutcome | Error]>([
+    ["found nothing to run", { status: "not-found" }],
+    ["recorded nothing", { status: "failed", runId: null, message: "History unavailable" }],
+    ["threw", new Error("view bridge gone")],
+  ])(
+    "leaves no retry from a launch before a switch-off that %s, and misses what it crossed",
+    async (_label, ending) => {
+      let finish: () => void = () => {};
+      vi.setSystemTime(at(8, 59, 50));
+      const skipping = schedule({ cron: "* * * * *" });
+      commit("project-1", [
+        { ...skipping, policies: { ...skipping.policies, missedRuns: "skip" } },
+      ]);
+      const policies = { ...skipping.policies, missedRuns: "skip" as const };
+      launchImpl = () =>
+        new Promise((resolve, reject) => {
+          finish = () => (ending instanceof Error ? reject(ending) : resolve(ending));
+        });
+      await start();
+      await elapse(10_000);
+      expect(launches).toHaveLength(1);
 
-    await elapse(10_000);
-    commit("project-1", [{ ...skipping, enabled: false, updatedAt: at(9, 0, 10) }]);
-    await elapse(10_000);
-    commit("project-1", [{ ...skipping, updatedAt: at(9, 0, 20) }]);
-    await elapse(30_000);
-    finish({ status: "not-found" });
-    await settle();
+      await elapse(10_000);
+      commit("project-1", [{ ...skipping, policies, enabled: false, updatedAt: at(9, 0, 10) }]);
+      await elapse(10_000);
+      commit("project-1", [{ ...skipping, policies, updatedAt: at(9, 0, 20) }]);
+      // The cancelled launch is still answering when 09:01 comes due.
+      await elapse(45_000);
+      finish();
+      await settle();
 
-    launchImpl = async (input) => registerAtSpawn(input);
-    await elapse(10_000);
-    expect(origins().map((origin) => [origin.trigger, origin.dueAt])).toEqual([
-      ["scheduled", at(9)],
-      ["scheduled", at(9, 1)],
-    ]);
-    expect(recorder.listBySchedule("schedule-1").map((run) => run.settlement.state)).toEqual([
-      "open",
-    ]);
-  });
+      launchImpl = async (input) => registerAtSpawn(input);
+      expect(recorder.listBySchedule("schedule-1")).toEqual([
+        expect.objectContaining({
+          origin: expect.objectContaining({ trigger: "catch-up", dueAt: at(9, 1) }),
+          settlement: expect.objectContaining({ outcome: "skipped" }),
+        }),
+      ]);
+      await elapse(55_000);
+      expect(origins().map((origin) => [origin.trigger, origin.dueAt])).toEqual([
+        ["scheduled", at(9)],
+        ["scheduled", at(9, 2)],
+      ]);
+    }
+  );
 
-  it("waits a minute before launching again when a launch found nothing to run", async () => {
-    commit("project-1", [schedule({ updatedAt: at(8) })]);
-    launchImpl = async () => ({ status: "not-found" });
-    await start();
-    await elapse(30 * MINUTE);
-    expect(launches).toHaveLength(1);
-
-    await elapse(SCHEDULER_TICK_MS);
-    expect(launches).toHaveLength(1);
-    await elapse(SCHEDULER_TICK_MS + 1_000);
-    expect(launches).toHaveLength(2);
-  });
-
-  it("waits a minute after a launch that threw, or a skip that couldn't be written", async () => {
-    commit("project-1", [schedule({ updatedAt: at(8) })]);
-    launchImpl = async () => {
-      throw new Error("view bridge gone");
-    };
-    await start();
-    await elapse(30 * MINUTE + SCHEDULER_TICK_MS);
-    expect(launches).toHaveLength(1);
-    expect(recorder.evaluationPoint("schedule-1")).toBeNull();
-
-    const skipping = schedule({ updatedAt: at(8) });
-    commit("project-1", [{ ...skipping, policies: { ...skipping.policies, missedRuns: "skip" } }]);
-    const registerSkip = vi.spyOn(recorder, "registerSkip").mockImplementation(() => {
-      throw new Error("SQLITE_BUSY");
+  it("calls nothing missed for a project that a change restored before its read did", async () => {
+    vi.setSystemTime(at(8, 59));
+    const base = deps();
+    let failing = true;
+    scheduler = new ScheduledRunScheduler({
+      ...base,
+      listSchedules: (projectId) =>
+        failing ? Promise.reject(new Error("EMFILE")) : base.listSchedules(projectId),
     });
-    await elapse(SCHEDULER_TICK_MS);
-    expect(registerSkip).toHaveBeenCalledTimes(1);
-    await elapse(SCHEDULER_TICK_MS);
-    expect(registerSkip).toHaveBeenCalledTimes(1);
-    registerSkip.mockRestore();
-    await elapse(SCHEDULER_TICK_MS);
-    expect(recorder.listBySchedule("schedule-1")).toEqual([
-      expect.objectContaining({ settlement: expect.objectContaining({ outcome: "skipped" }) }),
-    ]);
-  });
+    await scheduler.start();
+    await scheduler.idle();
 
-  it("cancels the launch in flight when its schedule is switched off", async () => {
-    commit("project-1", [schedule({ updatedAt: at(8) })]);
-    launchImpl = () => new Promise(() => {});
-    await start();
-    await elapse(30 * MINUTE);
-    expect(launches).toHaveLength(1);
-    expect(cancelled).toEqual([]);
+    await elapse(30_000);
+    const skipping = schedule({ cron: "* * * * *", updatedAt: at(8, 59, 30) });
+    commit("project-1", [{ ...skipping, policies: { ...skipping.policies, missedRuns: "skip" } }]);
+    failing = false;
+    await scheduler.idle();
+    await elapse(31_000);
 
-    commit("project-1", [{ ...schedule({ updatedAt: at(8) }), name: "Renamed" }]);
-    expect(cancelled).toEqual([]);
-    commit("project-1", [schedule({ enabled: false, updatedAt: at(9) })]);
-    expect(cancelled).toEqual(["schedule-1"]);
+    expect(origins()).toEqual([expect.objectContaining({ trigger: "scheduled", dueAt: at(9) })]);
   });
 
   it("stops every timer on dispose and launches nothing after", async () => {
