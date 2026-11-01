@@ -81,15 +81,18 @@ describe("scheduleIssues", () => {
       ...base,
       name: "",
       cadence: { cron: "SECRET-CRON", timeZone: "UTC" },
-      launch: { ...base.launch, prompt: "SECRET-PROMPT", agentId: "" },
+      launch: { ...base.launch, prompt: { text: "SECRET-PROMPT" } as never, agentId: "" },
       policies: {
         ...base.policies,
-        precondition: { command: "SECRET-COMMAND" },
+        precondition: { command: ["SECRET-COMMAND"] as never },
         onDone: "SECRET" as never,
       },
     });
 
-    expect(issues.length).toBeGreaterThanOrEqual(4);
+    const paths = issues.map((issue) => issue.path);
+    expect(paths).toEqual(
+      expect.arrayContaining(["launch.prompt", "policies.precondition.command", "name"])
+    );
     const messages = issues.map((issue) => issue.message).join("\n");
     expect(messages).not.toContain("SECRET-PROMPT");
     expect(messages).not.toContain("SECRET-COMMAND");

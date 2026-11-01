@@ -391,7 +391,8 @@ describe("ScheduleStore", () => {
 
   describe("removeProject", () => {
     it("holds every later turn until the caller's files are gone", async () => {
-      const store = newStore();
+      const checks = vi.fn((id: string) => registered.has(id));
+      const store = new ScheduleStore(root, checks, () => clock);
       saved(await store.create(PROJECT, input));
       registered.delete(PROJECT);
       let started: () => void = () => {};
@@ -412,12 +413,31 @@ describe("ScheduleStore", () => {
       registered.add(PROJECT);
       const again = store.create(PROJECT, { ...input, name: "Again" });
       await removalStarted;
+      checks.mockClear();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(checks).not.toHaveBeenCalled();
       release();
       await removing;
 
       expect((await again).status).toBe("saved");
       const names = (await newStore().list(PROJECT)).schedules.map((s) => s.name);
       expect(names).toEqual(["Again"]);
+    });
+
+    it("still tells listeners, and keeps the queue usable, when removing the files fails", async () => {
+      const store = newStore();
+      const before = saved(await store.create(PROJECT, input)).snapshot.revision;
+      const heard: SchedulesSnapshot[] = [];
+      store.subscribe((snapshot) => heard.push(snapshot));
+
+      await expect(
+        store.removeProject(PROJECT, async () => {
+          throw new Error("EBUSY");
+        })
+      ).rejects.toThrow("EBUSY");
+
+      expect(heard).toEqual([{ projectId: PROJECT, schedules: [], revision: before + 1 }]);
+      expect((await store.create(PROJECT, { ...input, name: "Next" })).status).toBe("saved");
     });
 
     it("deletes the file and tells listeners the project has none", async () => {
