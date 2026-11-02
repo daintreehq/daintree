@@ -4978,7 +4978,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "agent",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "List the slash commands an agent CLI offers, including project-local ones, before driving the agent with one. An empty list means it has none.",
+    "description": "List the slash commands an agent CLI offers, with what each does, project-local ones included. An empty list means it has none.",
     "examples": undefined,
     "id": "slashCommands.list",
     "keywords": undefined,

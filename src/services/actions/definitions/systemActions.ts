@@ -265,7 +265,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "slashCommands.list",
       title: "List slash commands",
       description:
-        "List the slash commands an agent CLI offers, including project-local ones, before driving the agent with one. An empty list means it has none.",
+        "List the slash commands an agent CLI offers, with what each does, project-local ones included. An empty list means it has none.",
       category: "agent",
       kind: "query",
       danger: "safe",
