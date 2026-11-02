@@ -63,12 +63,18 @@ describe("canSearch", () => {
 
   it("refuses everyone while the continuing agent hasn't been launched", () => {
     const pending = { ...record, terminalId: null };
-    expect(canSearch(pending, { projectId: "p1", terminalId: "t-continue" }, new Set())).toBe(false);
+    expect(canSearch(pending, { projectId: "p1", terminalId: "t-continue" }, new Set())).toBe(
+      false
+    );
   });
 
   it("opens a shared project's sessions to its agents and to other sharing projects only", () => {
-    expect(canSearch(record, { projectId: "p1", terminalId: "t-other" }, new Set(["p1"]))).toBe(true);
-    expect(canSearch(record, { projectId: "p2", terminalId: "t" }, new Set(["p1", "p2"]))).toBe(true);
+    expect(canSearch(record, { projectId: "p1", terminalId: "t-other" }, new Set(["p1"]))).toBe(
+      true
+    );
+    expect(canSearch(record, { projectId: "p2", terminalId: "t" }, new Set(["p1", "p2"]))).toBe(
+      true
+    );
     // p2 sharing doesn't open p1's sessions, and p1 sharing doesn't reach a project that doesn't.
     expect(canSearch(record, { projectId: "p2", terminalId: "t" }, new Set(["p2"]))).toBe(false);
     expect(canSearch(record, { projectId: "p2", terminalId: "t" }, new Set(["p1"]))).toBe(false);

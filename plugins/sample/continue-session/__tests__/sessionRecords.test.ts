@@ -39,7 +39,9 @@ describe("Codex rollout records", () => {
     expect(text).not.toContain("secret-reasoning");
     expect(fragments[3]!.text).toBe('exec_command {"cmd":"rg -n voiceShortcut src"}');
     // A function call's JSON-wrapped output is unwrapped to its text.
-    expect(fragments[4]!.text).toBe("src/keys/voiceShortcut.ts:12: export const VOICE_KEY = 'Mod+D';");
+    expect(fragments[4]!.text).toBe(
+      "src/keys/voiceShortcut.ts:12: export const VOICE_KEY = 'Mod+D';"
+    );
     expect(fragments[6]!.text).toContain("Success. Updated the following files");
   });
 

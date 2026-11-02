@@ -26,8 +26,12 @@ export interface QuotedTurn {
  */
 export class HandoffCollector {
   private readonly prompts: QuotedTurn[] = [];
-  private reply: { key: string | null; parts: string[]; line: number; timestamp: string | null } | null =
-    null;
+  private reply: {
+    key: string | null;
+    parts: string[];
+    line: number;
+    timestamp: string | null;
+  } | null = null;
 
   add(fragment: RecordFragment, line: number, timestamp: string | null): void {
     if (fragment.kind === "prompt") {

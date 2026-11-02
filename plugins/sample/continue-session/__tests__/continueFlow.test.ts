@@ -75,7 +75,10 @@ async function setUp(): Promise<Scenario> {
           scenario.launches.push(input);
           return scenario.launchResult(input);
         default:
-          return { ok: false, error: { code: "NOT_FOUND", message: actionId } } as ActionDispatchResult;
+          return {
+            ok: false,
+            error: { code: "NOT_FOUND", message: actionId },
+          } as ActionDispatchResult;
       }
     },
   });
@@ -113,7 +116,11 @@ describe("Continue in another agent", () => {
 
     const outcome = await clickContinue(host);
 
-    expect(outcome).toEqual({ status: "launched", conversionId: "id-1", terminalId: "continue-id-2" });
+    expect(outcome).toEqual({
+      status: "launched",
+      conversionId: "id-1",
+      terminalId: "continue-id-2",
+    });
     expect(host.showConfirmCalls[0]?.options).toMatchObject({
       title: "Continue in Claude Code?",
       confirmLabel: "Continue in Claude Code",
@@ -149,7 +156,11 @@ describe("Continue in another agent", () => {
     const tool = searchTool(host);
     const signal = new AbortController().signal;
 
-    const found = (await tool.execute({ query: "VOICE_KEY" }, caller("p1", "continue-id-2"), signal)) as {
+    const found = (await tool.execute(
+      { query: "VOICE_KEY" },
+      caller("p1", "continue-id-2"),
+      signal
+    )) as {
       sessions: { convertedSessionId: string; sessionFile: string; hits: { line: number }[] }[];
     };
     expect(found.sessions).toHaveLength(1);
@@ -157,9 +168,9 @@ describe("Continue in another agent", () => {
     expect(found.sessions[0]!.sessionFile).toBe(scenario.sourcePath);
     expect(found.sessions[0]!.hits[0]!.line).toBeGreaterThan(0);
 
-    await expect(tool.execute({ query: "VOICE_KEY" }, caller("p1", "another-pane"), signal)).rejects.toThrow(
-      /No converted session is searchable/
-    );
+    await expect(
+      tool.execute({ query: "VOICE_KEY" }, caller("p1", "another-pane"), signal)
+    ).rejects.toThrow(/No converted session is searchable/);
     await expect(
       tool.execute({ query: "VOICE_KEY" }, caller("p2", "continue-id-2"), signal)
     ).rejects.toThrow(/No converted session is searchable/);
@@ -225,7 +236,8 @@ describe("Continue in another agent", () => {
   it("takes the search grant back when the CLI doesn't start", async () => {
     const scenario = await setUp();
     const { host } = scenario;
-    scenario.launchResult = () => ok({ launched: false, terminalId: null, spawnStatus: "missing-cli" });
+    scenario.launchResult = () =>
+      ok({ launched: false, terminalId: null, spawnStatus: "missing-cli" });
     host.simulateConfirmResponse(true);
     const outcome = (await clickContinue(host)) as { status: string; reason: string };
     expect(outcome).toMatchObject({ status: "not-launched" });
@@ -283,7 +295,11 @@ describe("Converted sessions", () => {
     await manage(host);
     expect(readdirSync(join(scenario.dataDir, "sessions"))).toEqual([]);
     await expect(
-      searchTool(host).execute({ query: "keymap" }, caller("p1", "continue-id-2"), new AbortController().signal)
+      searchTool(host).execute(
+        { query: "keymap" },
+        caller("p1", "continue-id-2"),
+        new AbortController().signal
+      )
     ).rejects.toThrow(/No converted session is searchable/);
   });
 

@@ -35,7 +35,10 @@ export class SessionMismatchError extends Error {}
  * and nothing is written next to it; the index is only moved into place once
  * the whole snapshot is in it.
  */
-export async function convertSession(store: IndexStore, input: ConvertInput): Promise<ConvertResult> {
+export async function convertSession(
+  store: IndexStore,
+  input: ConvertInput
+): Promise<ConvertResult> {
   const snapshot = await openSessionSnapshot(input.path);
   const builder = await store.createBuilder(input.id).catch(async (error: unknown) => {
     await snapshot.handle.close();

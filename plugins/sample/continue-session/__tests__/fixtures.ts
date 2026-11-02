@@ -29,7 +29,9 @@ export function codexRollout(): unknown[] {
       payload: {
         type: "message",
         role: "user",
-        content: [{ type: "input_text", text: "# AGENTS.md instructions for /repo\n\nBe careful." }],
+        content: [
+          { type: "input_text", text: "# AGENTS.md instructions for /repo\n\nBe careful." },
+        ],
       },
     },
     {
@@ -38,7 +40,12 @@ export function codexRollout(): unknown[] {
       payload: {
         type: "message",
         role: "user",
-        content: [{ type: "input_text", text: "<environment_context>\n  <cwd>/repo</cwd>\n</environment_context>" }],
+        content: [
+          {
+            type: "input_text",
+            text: "<environment_context>\n  <cwd>/repo</cwd>\n</environment_context>",
+          },
+        ],
       },
     },
     {
@@ -50,7 +57,11 @@ export function codexRollout(): unknown[] {
         content: [{ type: "input_text", text: "Make the voice input start with Cmd-D." }],
       },
     },
-    { timestamp: at(2), type: "event_msg", payload: { type: "user_message", message: "Make the voice input start with Cmd-D." } },
+    {
+      timestamp: at(2),
+      type: "event_msg",
+      payload: { type: "user_message", message: "Make the voice input start with Cmd-D." },
+    },
     {
       timestamp: at(3),
       type: "response_item",
@@ -72,7 +83,9 @@ export function codexRollout(): unknown[] {
       payload: {
         type: "function_call_output",
         call_id: "call_1",
-        output: JSON.stringify({ output: "src/keys/voiceShortcut.ts:12: export const VOICE_KEY = 'Mod+D';" }),
+        output: JSON.stringify({
+          output: "src/keys/voiceShortcut.ts:12: export const VOICE_KEY = 'Mod+D';",
+        }),
       },
     },
     {
@@ -91,7 +104,9 @@ export function codexRollout(): unknown[] {
       payload: {
         type: "custom_tool_call_output",
         call_id: "call_2",
-        output: [{ type: "input_text", text: "Success. Updated the following files: voiceShortcut.ts" }],
+        output: [
+          { type: "input_text", text: "Success. Updated the following files: voiceShortcut.ts" },
+        ],
       },
     },
     {
@@ -100,7 +115,12 @@ export function codexRollout(): unknown[] {
       payload: {
         type: "message",
         role: "assistant",
-        content: [{ type: "output_text", text: "Cmd-D now starts dictation; the bookmark shortcut is gone." }],
+        content: [
+          {
+            type: "output_text",
+            text: "Cmd-D now starts dictation; the bookmark shortcut is gone.",
+          },
+        ],
       },
     },
     {
@@ -118,7 +138,12 @@ export function codexRollout(): unknown[] {
       payload: {
         type: "message",
         role: "assistant",
-        content: [{ type: "output_text", text: "Added keymap.linux.test.ts; it fails on the shared Windows replacement." }],
+        content: [
+          {
+            type: "output_text",
+            text: "Added keymap.linux.test.ts; it fails on the shared Windows replacement.",
+          },
+        ],
       },
     },
   ];
@@ -136,7 +161,8 @@ export function claudeTranscript(): unknown[] {
       timestamp: at(0),
       message: {
         role: "user",
-        content: "<command-message>work</command-message>\n<command-name>/work</command-name>\n<command-args>16097</command-args>",
+        content:
+          "<command-message>work</command-message>\n<command-name>/work</command-name>\n<command-args>16097</command-args>",
       },
     },
     {
@@ -144,7 +170,10 @@ export function claudeTranscript(): unknown[] {
       type: "user",
       isMeta: true,
       timestamp: at(0),
-      message: { role: "user", content: [{ type: "text", text: "Base directory for this skill: /skills/work" }] },
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "Base directory for this skill: /skills/work" }],
+      },
     },
     {
       ...base,
@@ -156,7 +185,12 @@ export function claudeTranscript(): unknown[] {
         content: [
           { type: "thinking", thinking: "private chain of thought", signature: "sig" },
           { type: "text", text: "Reading the issue first." },
-          { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "gh issue view 16097" } },
+          {
+            type: "tool_use",
+            id: "toolu_1",
+            name: "Bash",
+            input: { command: "gh issue view 16097" },
+          },
         ],
       },
     },
@@ -180,7 +214,11 @@ export function claudeTranscript(): unknown[] {
       isSidechain: true,
       type: "assistant",
       timestamp: at(3),
-      message: { id: "msg_side", role: "assistant", content: [{ type: "text", text: "subagent chatter" }] },
+      message: {
+        id: "msg_side",
+        role: "assistant",
+        content: [{ type: "text", text: "subagent chatter" }],
+      },
     },
     {
       ...base,
@@ -192,13 +230,21 @@ export function claudeTranscript(): unknown[] {
       ...base,
       type: "assistant",
       timestamp: at(5),
-      message: { id: "msg_2", role: "assistant", content: [{ type: "text", text: "FTS5 it is: the index is" }] },
+      message: {
+        id: "msg_2",
+        role: "assistant",
+        content: [{ type: "text", text: "FTS5 it is: the index is" }],
+      },
     },
     {
       ...base,
       type: "assistant",
       timestamp: at(5),
-      message: { id: "msg_2", role: "assistant", content: [{ type: "text", text: "one SQLite file per session." }] },
+      message: {
+        id: "msg_2",
+        role: "assistant",
+        content: [{ type: "text", text: "one SQLite file per session." }],
+      },
     },
   ];
 }
@@ -207,7 +253,11 @@ export function tempDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), `continue-session-${prefix}-`));
 }
 
-export function writeJsonl(path: string, records: readonly unknown[], trailingNewline = true): void {
+export function writeJsonl(
+  path: string,
+  records: readonly unknown[],
+  trailingNewline = true
+): void {
   const body = records.map((record) => JSON.stringify(record)).join("\n");
   writeFileSync(path, trailingNewline ? `${body}\n` : body);
 }

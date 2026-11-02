@@ -48,7 +48,10 @@ const UNKNOWN_REASONS: Readonly<Record<string, string>> = {
  * file, explain the trade-off, convert the session, then start the other CLI
  * in the same worktree with the hand-off.
  */
-export async function continueFromPane(ctx: PluginContext, args: unknown): Promise<ContinueOutcome> {
+export async function continueFromPane(
+  ctx: PluginContext,
+  args: unknown
+): Promise<ContinueOutcome> {
   const { host } = ctx;
   const terminalId = readString(args, "panelId") ?? readString(args, "terminalId");
   if (!terminalId) return unavailable(host, "No pane was named.");
@@ -64,7 +67,10 @@ export async function continueFromPane(ctx: PluginContext, args: unknown): Promi
   if (!located.ok) return unavailable(host, "This pane's session file couldn't be located.");
   const file = located.result as SessionFileAnswer;
   if (file.status !== "observed") {
-    return unavailable(host, UNKNOWN_REASONS[file.reason] ?? "This pane's session file is unknown.");
+    return unavailable(
+      host,
+      UNKNOWN_REASONS[file.reason] ?? "This pane's session file is unknown."
+    );
   }
 
   const sourceAgent = file.agentId;
@@ -198,7 +204,11 @@ export async function launchConversion(
     focusPolicy: "take",
   });
   if (!launch.ok) return notLaunched(launch.error.message);
-  const result = launch.result as { launched?: unknown; terminalId?: unknown; spawnStatus?: unknown };
+  const result = launch.result as {
+    launched?: unknown;
+    terminalId?: unknown;
+    spawnStatus?: unknown;
+  };
   if (result.launched !== true || typeof result.terminalId !== "string") {
     return notLaunched(launchRefusal(result.spawnStatus, target));
   }

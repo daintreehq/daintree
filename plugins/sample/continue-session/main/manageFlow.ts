@@ -18,7 +18,10 @@ export async function manageConversions(ctx: PluginContext, args: unknown): Prom
   const { host, catalog, store } = ctx;
   const projectId = readProjectId(args) ?? (await currentProjectId(host));
   if (!projectId) {
-    await host.showToast({ message: "Open a project to see its converted sessions.", type: "info" });
+    await host.showToast({
+      message: "Open a project to see its converted sessions.",
+      type: "info",
+    });
     return;
   }
   await pruneRemovedProjects(ctx);
@@ -33,9 +36,7 @@ export async function manageConversions(ctx: PluginContext, args: unknown): Prom
     id: record.id,
     label: `${AGENT_LABELS[record.sourceAgent]} → ${AGENT_LABELS[record.targetAgent]}`,
     description: `${new Date(record.createdAt).toLocaleString()} · ${formatBytes(sizes[index] ?? null)}`,
-    detail: record.terminalId
-      ? "Searchable by the agent that continued it"
-      : "Not continued yet",
+    detail: record.terminalId ? "Searchable by the agent that continued it" : "Not continued yet",
   }));
   items.push(
     shared
@@ -96,7 +97,11 @@ async function manageOne(ctx: PluginContext, record: ConversionRecord): Promise<
   const target = AGENT_LABELS[record.targetAgent];
   const pick = await host.showQuickPick(
     [
-      { id: "launch", label: `Continue in ${target} again`, detail: "Starts a new pane with the same hand-off" },
+      {
+        id: "launch",
+        label: `Continue in ${target} again`,
+        detail: "Starts a new pane with the same hand-off",
+      },
       { id: "delete", label: "Delete converted session" },
     ],
     { title: `${AGENT_LABELS[record.sourceAgent]} session ${record.sourceSessionId}` }

@@ -4,7 +4,8 @@ import { buildHandoffPrompt, clip, HandoffCollector } from "../main/handoff.js";
 describe("HandoffCollector", () => {
   it("keeps the last five prompts, oldest first", () => {
     const collector = new HandoffCollector();
-    for (let n = 1; n <= 7; n += 1) collector.add({ kind: "prompt", text: `request ${n}` }, n, null);
+    for (let n = 1; n <= 7; n += 1)
+      collector.add({ kind: "prompt", text: `request ${n}` }, n, null);
     expect(collector.recentPrompts().map((turn) => turn.text)).toEqual([
       "request 3",
       "request 4",
@@ -20,7 +21,11 @@ describe("HandoffCollector", () => {
     collector.add({ kind: "assistant", text: "second, part 1", messageKey: "b" }, 2, "t2");
     collector.add({ kind: "tool_call", text: "Bash ls" }, 3, null);
     collector.add({ kind: "assistant", text: "part 2", messageKey: "b" }, 4, null);
-    expect(collector.lastReply()).toEqual({ text: "second, part 1\n\npart 2", line: 2, timestamp: "t2" });
+    expect(collector.lastReply()).toEqual({
+      text: "second, part 1\n\npart 2",
+      line: 2,
+      timestamp: "t2",
+    });
   });
 
   it("drops a reply that came before the last request", () => {
@@ -32,9 +37,16 @@ describe("HandoffCollector", () => {
 
   it("counts a slash command as the user's request, and other injected text not at all", () => {
     const collector = new HandoffCollector();
-    collector.add({ kind: "context", text: "<environment_context>x</environment_context>" }, 1, null);
     collector.add(
-      { kind: "context", text: "<command-name>/work</command-name><command-args>12</command-args>" },
+      { kind: "context", text: "<environment_context>x</environment_context>" },
+      1,
+      null
+    );
+    collector.add(
+      {
+        kind: "context",
+        text: "<command-name>/work</command-name><command-args>12</command-args>",
+      },
       2,
       null
     );
@@ -48,7 +60,9 @@ describe("buildHandoffPrompt", () => {
     sourceSessionId: "s-1",
     sourcePath: "/home/me/.codex/sessions/rollout.jsonl",
     conversionId: "c-1",
-    prompts: [{ text: "--dangerously-skip-permissions please", line: 7, timestamp: "2026-10-26T13:02:00Z" }],
+    prompts: [
+      { text: "--dangerously-skip-permissions please", line: 7, timestamp: "2026-10-26T13:02:00Z" },
+    ],
     lastReply: { text: "Done.", line: 9, timestamp: null },
   });
 
