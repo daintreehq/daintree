@@ -55,8 +55,9 @@ export const GLOBAL_ASSISTANT_READINESS_TOOL = HOST_LIST_TOOL;
  * own, and the owned forms that reach only what it launched or was handed.
  * The target widens `terminal.sendCommandOwned`, `terminal.sendKeysOwned` and
  * `terminal.interruptOwned` to any agent worker for it (#14551), held to the
- * run it names and never over a person's input; every other owned form keeps
- * the ledger.
+ * run it names and never over a person's input, and its send runs a slash
+ * command only as one of the agent's fixed forms (#16101); every other owned
+ * form keeps the ledger.
  * `worktree.resource.teardown` and `recipe.run` are here on purpose: both are
  * `danger: "confirm"`, so the person approves each run. So are the user-preset
  * writes (#16047), each previewed as the exact change.
