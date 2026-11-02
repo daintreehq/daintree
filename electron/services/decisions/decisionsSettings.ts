@@ -39,6 +39,7 @@ export function defaultDecisionsSettings(): DecisionsSettings {
     setupCheck: null,
     modelLearning: false,
     modelAdapter: null,
+    modelConsentedAt: null,
   };
 }
 
@@ -194,6 +195,7 @@ export function sanitizeDecisionsSettings(raw: unknown): DecisionsSettings {
   // A revocation belongs to the identity it was observed for, so it goes with
   // the relay's ids; without them there is nothing it could still refer to.
   const identified = relayOrigin !== null && installationId !== null && deviceId !== null;
+  const modelConsentedAt = consentTime(value.modelConsentedAt);
   return {
     enabled: value.enabled === true && !damaged,
     relayOrigin,
@@ -211,8 +213,10 @@ export function sanitizeDecisionsSettings(raw: unknown): DecisionsSettings {
     // On unless turned off: a setting saved before the field existed enrolls.
     autoEnrollHosts: value.autoEnrollHosts !== false,
     setupCheck: setupCheckRecord(value.setupCheck, { relayOrigin, installationId, deviceId }),
-    modelLearning: value.modelLearning === true,
+    // Learning keeps the person's answers, so it is on only once they agreed to that.
+    modelLearning: value.modelLearning === true && modelConsentedAt !== null,
     modelAdapter: modelAdapter(value.modelAdapter),
+    modelConsentedAt,
   };
 }
 

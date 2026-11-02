@@ -35,6 +35,7 @@ const connected: DecisionsSettings = {
   setupCheck: null,
   modelLearning: true,
   modelAdapter: "codex",
+  modelConsentedAt: 1_761_955_250_000,
 };
 
 /** `connected`, with a recovery kit verified for its identity. */
@@ -83,9 +84,18 @@ describe("sanitizeDecisionsSettings", () => {
 
   it("keeps the decision model off with no CLI unless the saved values are exactly a choice", () => {
     // A setting saved before the fields existed has neither, and needs no migration.
-    const { modelLearning: _l, modelAdapter: _a, ...beforeTheFields } = connected;
+    const {
+      modelLearning: _l,
+      modelAdapter: _a,
+      modelConsentedAt: _c,
+      ...beforeTheFields
+    } = connected;
     const before = sanitizeDecisionsSettings(beforeTheFields);
-    expect([before.modelLearning, before.modelAdapter]).toEqual([false, null]);
+    expect([before.modelLearning, before.modelAdapter, before.modelConsentedAt]).toEqual([
+      false,
+      null,
+      null,
+    ]);
     for (const value of ["true", 1, {}, [true], null, "claude ", "Claude", "openai", ["codex"]]) {
       const settings = sanitizeDecisionsSettings({
         ...connected,
@@ -137,6 +147,24 @@ describe("sanitizeDecisionsSettings", () => {
     const { store, current } = memoryStore(connected);
     writeDecisionsSettings(store, readDecisionsSettings(store));
     expect(current()).toEqual(connected);
+  });
+
+  it("keeps learning off without the model's own consent, which Decisions' consent doesn't stand for", () => {
+    for (const value of [null, 0, -1, Number.NaN, Number.POSITIVE_INFINITY, "1761955250000"]) {
+      const settings = sanitizeDecisionsSettings({ ...connected, modelConsentedAt: value });
+      expect([settings.modelLearning, settings.modelConsentedAt], String(value)).toEqual([
+        false,
+        null,
+      ]);
+      // The choice of CLI and Decisions' own consent are kept either way.
+      expect([settings.modelAdapter, settings.consentedAt]).toEqual([
+        connected.modelAdapter,
+        connected.consentedAt,
+      ]);
+    }
+    // Consent with learning off is kept, so turning learning on later asks nothing again.
+    const off = sanitizeDecisionsSettings({ ...connected, modelLearning: false });
+    expect([off.modelLearning, off.modelConsentedAt]).toEqual([false, connected.modelConsentedAt]);
   });
 
   it("reads anything that isn't a settings object as off with no relay, without throwing", () => {

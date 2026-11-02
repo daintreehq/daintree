@@ -303,6 +303,9 @@ export interface GeneratedElectronAPI {
     approvePairing(
       ...args: IpcInvokeMap["decisions:approve-pairing"]["args"]
     ): Promise<IpcInvokeMap["decisions:approve-pairing"]["result"]>;
+    cancelModelEvaluation(
+      ...args: IpcInvokeMap["decisions:cancel-model-evaluation"]["args"]
+    ): Promise<IpcInvokeMap["decisions:cancel-model-evaluation"]["result"]>;
     cancelSetupCheck(
       ...args: IpcInvokeMap["decisions:cancel-setup-check"]["args"]
     ): Promise<IpcInvokeMap["decisions:cancel-setup-check"]["result"]>;
@@ -312,6 +315,9 @@ export interface GeneratedElectronAPI {
     claimRelay(
       ...args: IpcInvokeMap["decisions:claim-relay"]["args"]
     ): Promise<IpcInvokeMap["decisions:claim-relay"]["result"]>;
+    clearModelHistory(
+      ...args: IpcInvokeMap["decisions:clear-model-history"]["args"]
+    ): Promise<IpcInvokeMap["decisions:clear-model-history"]["result"]>;
     copyAnswer(
       ...args: IpcInvokeMap["decisions:copy-answer"]["args"]
     ): Promise<IpcInvokeMap["decisions:copy-answer"]["result"]>;
@@ -336,6 +342,9 @@ export interface GeneratedElectronAPI {
     exportRecoveryKit(
       ...args: IpcInvokeMap["decisions:export-recovery-kit"]["args"]
     ): Promise<IpcInvokeMap["decisions:export-recovery-kit"]["result"]>;
+    getModel(
+      ...args: IpcInvokeMap["decisions:get-model"]["args"]
+    ): Promise<IpcInvokeMap["decisions:get-model"]["result"]>;
     getPairing(
       ...args: IpcInvokeMap["decisions:get-pairing"]["args"]
     ): Promise<IpcInvokeMap["decisions:get-pairing"]["result"]>;
@@ -390,9 +399,18 @@ export interface GeneratedElectronAPI {
     setEnabled(
       ...args: IpcInvokeMap["decisions:set-enabled"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-enabled"]["result"]>;
+    setModel(
+      ...args: IpcInvokeMap["decisions:set-model"]["args"]
+    ): Promise<IpcInvokeMap["decisions:set-model"]["result"]>;
+    setModelThreshold(
+      ...args: IpcInvokeMap["decisions:set-model-threshold"]["args"]
+    ): Promise<IpcInvokeMap["decisions:set-model-threshold"]["result"]>;
     setProxyAllowlisted(
       ...args: IpcInvokeMap["decisions:set-proxy-allowlisted"]["args"]
     ): Promise<IpcInvokeMap["decisions:set-proxy-allowlisted"]["result"]>;
+    startModelEvaluation(
+      ...args: IpcInvokeMap["decisions:start-model-evaluation"]["args"]
+    ): Promise<IpcInvokeMap["decisions:start-model-evaluation"]["result"]>;
     startPairing(
       ...args: IpcInvokeMap["decisions:start-pairing"]["args"]
     ): Promise<IpcInvokeMap["decisions:start-pairing"]["result"]>;

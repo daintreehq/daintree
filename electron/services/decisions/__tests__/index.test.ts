@@ -1,7 +1,16 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LearnedDecision } from "@daintreehq/decisions-client";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const saved = vi.hoisted(() => ({ value: undefined as unknown }));
 // An enrolled Host's record (#16022), the store's `decisionsHost`.
@@ -430,6 +439,9 @@ import {
   getDecisionsPaneState,
   getDecisionsPolicy,
   cancelSetupCheck,
+  cancelDecisionsModelEvaluation,
+  clearDecisionsModelHistory,
+  getDecisionsModel,
   getDecisionsService,
   getDecisionsStatus,
   listHosts,
@@ -440,8 +452,11 @@ import {
   restoreIdentity,
   setAutoEnrollHosts,
   setDecisionsEnabled,
+  setDecisionsModel,
+  setDecisionsModelThreshold,
   setDecisionsProxyAllowlisted,
   setDecisionsDefaultQuestionExpiry,
+  startDecisionsModelEvaluation,
   startDecisionsIfEnabled,
   startSetupCheck,
   stopDecisions,
@@ -774,6 +789,130 @@ describe("Decisions entry", () => {
 
     await setDecisionsEnabled(true);
     expect(peekDecisionsService()?.getStore()).not.toBeNull();
+  });
+
+  describe("decision model (#16027)", () => {
+    const modelDir = () => join(keyFile.path, "..");
+    const historyFile = () => join(modelDir(), "model-history.sqlite");
+
+    function learned(n: number): LearnedDecision {
+      return {
+        questionId: `q-past-${String(n).padStart(4, "0")}`,
+        question: `Rebase or merge develop for change ${n}?`,
+        options: [
+          { id: "rebase", label: "Rebase" },
+          { id: "merge", label: "Merge" },
+        ],
+        kind: "choice",
+        requirement: "proxy-ok",
+        projectId: "project-1",
+        createdAt: new Date(Date.UTC(2026, 9, 1, 9, n * 10)).toISOString(),
+        chosenAt: new Date(Date.UTC(2026, 9, 1, 9, n * 10 + 5)).toISOString(),
+        selectedOptionIds: ["rebase"],
+        text: "",
+        revision: 1,
+        correction: false,
+      };
+    }
+
+    beforeEach(() => {
+      for (const name of readdirSync(modelDir())) {
+        if (name.startsWith("model-")) rmSync(join(modelDir(), name), { force: true });
+      }
+    });
+
+    afterEach(async () => {
+      // Closes the model's history before the next test removes its files.
+      await peekDecisionsService()?.stop();
+    });
+
+    it("turns learning on only with its own agreement, kept from the first time", async () => {
+      saved.value = { enabled: true, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+
+      // Decisions' own consent doesn't stand for the model's.
+      await expect(setDecisionsModel({ learning: true, adapter: "claude" })).rejects.toMatchObject({
+        name: "AppError",
+        code: "PERMISSION",
+      });
+      expect((saved.value as { modelLearning?: boolean }).modelLearning).not.toBe(true);
+      expect(existsSync(historyFile())).toBe(false);
+
+      const on = await setDecisionsModel({ learning: true, adapter: "claude", consent: true });
+      expect(on).toMatchObject({
+        learning: true,
+        adapter: "claude",
+        history: { state: "open", count: 0 },
+        evaluation: null,
+        answeringFrom: null,
+      });
+      const consentedAt = on.consentedAt!;
+      expect(consentedAt).toBeGreaterThan(0);
+      expect(saved.value).toMatchObject({ consentedAt: 5, modelConsentedAt: consentedAt });
+
+      const off = await setDecisionsModel({ learning: false, adapter: "claude" });
+      expect(off).toMatchObject({ learning: false, history: { state: "closed", stored: true } });
+      // Turning on again asks nothing more, and keeps the first agreement's time.
+      const again = await setDecisionsModel({ learning: true, adapter: null });
+      expect(again).toMatchObject({ learning: true, adapter: null, consentedAt });
+    });
+
+    it("refuses every change while Decisions is off, and reads it through the setting alone", async () => {
+      saved.value = { enabled: false };
+      const constructed = loads.constructed;
+      await expect(
+        setDecisionsModel({ learning: true, adapter: null, consent: true })
+      ).rejects.toMatchObject(CANCELLED);
+      await expect(clearDecisionsModelHistory()).rejects.toMatchObject(CANCELLED);
+      await expect(startDecisionsModelEvaluation()).rejects.toMatchObject(CANCELLED);
+      expect(store.set).not.toHaveBeenCalled();
+      expect(loads.constructed).toBe(constructed);
+    });
+
+    it("refuses to evaluate without a CLI chosen, or to arm from a report it doesn't hold", async () => {
+      saved.value = { enabled: true };
+      await startDecisionsIfEnabled();
+      await expect(startDecisionsModelEvaluation()).rejects.toMatchObject({ code: "PERMISSION" });
+
+      await setDecisionsModel({ learning: true, adapter: null, consent: true });
+      await expect(startDecisionsModelEvaluation()).rejects.toMatchObject({
+        code: "PERMISSION",
+        message: expect.stringMatching(/Choose an agent CLI/),
+      });
+      await expect(
+        setDecisionsModelThreshold({ threshold: 0.8, evaluatedAt: 1_761_955_200_000 })
+      ).rejects.toMatchObject({ code: "STALE_GENERATION" });
+      // A cancel naming no run changes nothing.
+      expect(cancelDecisionsModelEvaluation({ runId: "no-such-run" })).toMatchObject({
+        running: null,
+      });
+    });
+
+    it("counts what it learns, clears it with learning off, and tells every window each time", async () => {
+      saved.value = { enabled: true };
+      await startDecisionsIfEnabled();
+      await setDecisionsModel({ learning: true, adapter: null, consent: true });
+      const revision = getDecisionsModel().revision;
+      const pushes = pushedStatuses().length;
+
+      peekDecisionsService()!.getDecisionModel()!.learner.learn(learned(1));
+      expect(getDecisionsModel()).toMatchObject({ history: { state: "open", count: 1 } });
+      expect(getDecisionsModel().revision).toBeGreaterThan(revision);
+      await vi.waitFor(() => expect(pushedStatuses().length).toBeGreaterThan(pushes));
+
+      await setDecisionsModel({ learning: false, adapter: null });
+      expect(getDecisionsModel().history).toEqual({ state: "closed", stored: true });
+
+      const cleared = await clearDecisionsModelHistory();
+      expect(cleared).toMatchObject({
+        learning: false,
+        history: { state: "closed", stored: false },
+      });
+      expect(readdirSync(modelDir()).filter((name) => name.startsWith("model-"))).toEqual([]);
+      // Learning stays off, and its agreement stays.
+      expect(saved.value).toMatchObject({ modelLearning: false });
+      expect(cleared.consentedAt).toBeGreaterThan(0);
+    });
   });
 
   describe("policy", () => {

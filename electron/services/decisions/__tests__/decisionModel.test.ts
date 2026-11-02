@@ -38,8 +38,13 @@ import { parseAnswerNotice, renderDecisionSection } from "../answerNotice.js";
 import {
   DecisionModelRuntime,
   decisionModelFiles,
+  deleteDecisionModelFiles,
+  describeEvaluation,
+  describeReport,
   parseDecisionModelEvaluation,
   proxyRefusal,
+  supportedThresholds,
+  type DecisionModelEvaluation,
   type DecisionModelFiles,
 } from "../decisionModel.js";
 import { SETUP_DIAGNOSTIC_PROJECT_ID } from "../setupDiagnostic.js";
@@ -145,14 +150,15 @@ afterEach(async () => {
 
 function makeRuntime(cli: Partial<Record<DecisionsModelAdapter, FakeAdapter>> = {}) {
   const onProxyChanged = vi.fn();
+  const onChanged = vi.fn();
   const createAdapter = vi.fn((adapter: DecisionsModelAdapter) => {
     const made = cli[adapter];
     if (!made) throw new Error(`no ${adapter} in this test`);
     return made;
   });
-  const runtime = new DecisionModelRuntime({ files, onProxyChanged, createAdapter });
+  const runtime = new DecisionModelRuntime({ files, onProxyChanged, onChanged, createAdapter });
   runtimes.push(runtime);
-  return { runtime, onProxyChanged, createAdapter };
+  return { runtime, onProxyChanged, onChanged, createAdapter };
 }
 
 async function learnPast(runtime: DecisionModelRuntime, count = PAST): Promise<void> {
@@ -234,9 +240,11 @@ describe("the decision model's runtime (#16026)", () => {
     expect(stored.report).not.toHaveProperty("items");
     expect(parseDecisionModelEvaluation(stored)).toEqual(evaluation);
 
-    // Every replayed answer was at 0.95, so 0.99 has no evidence behind it.
-    await runtime.setAutoAnswerThreshold(0.99);
+    // Every replayed answer was at 0.95, so 0.99 has no evidence behind it,
+    // and it is refused rather than stored as a threshold that arms nothing.
+    await expect(runtime.setAutoAnswerThreshold(0.99)).rejects.toThrow(/doesn't support/);
     expect(runtime.proxy()).toBeNull();
+    expect(runtime.getEvaluation()?.autoAnswerThreshold).toBeNull();
     expect(onProxyChanged).not.toHaveBeenCalled();
 
     await runtime.setAutoAnswerThreshold(0.8);
@@ -486,6 +494,294 @@ describe("the decision model's runtime (#16026)", () => {
     expect(existsSync(files.evaluation)).toBe(false);
     expect(onProxyChanged).not.toHaveBeenCalled();
     expect(await runtime.learner.learn(decision(PAST + 1))).toBeUndefined();
+  });
+});
+
+describe("the decision model's settings (#16027)", () => {
+  it("shows what the history holds, and says so each time it learns", async () => {
+    const { runtime, onChanged } = makeRuntime();
+    expect(runtime.snapshot().historyCount).toBeNull();
+
+    await runtime.update({ modelLearning: true, modelAdapter: null });
+    expect(runtime.snapshot()).toMatchObject({ historyCount: 0, answeringFrom: null });
+    const opened = onChanged.mock.calls.length;
+    expect(opened).toBeGreaterThan(0);
+
+    await runtime.learner.learn(decision(1));
+    // The same answer offered again changes nothing, so it tells nothing.
+    await runtime.learner.learn(decision(1));
+    expect(runtime.snapshot().historyCount).toBe(1);
+    expect(onChanged).toHaveBeenCalledTimes(opened + 1);
+
+    await runtime.update({ modelLearning: false, modelAdapter: null });
+    expect(runtime.snapshot().historyCount).toBeNull();
+    expect(existsSync(files.history)).toBe(true);
+  });
+
+  it("runs one evaluation at a time for Settings, and stores its report with no threshold", async () => {
+    const cli = rebasingCli();
+    const { runtime } = makeRuntime({ claude: cli });
+    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await learnPast(runtime);
+    const release = cli.hold();
+
+    const run = runtime.startEvaluation();
+    expect(run).toMatchObject({ adapter: "claude", historyCount: PAST });
+    expect(runtime.startEvaluation()).toBe(run);
+    expect(runtime.snapshot().running).toBe(run);
+    release();
+
+    await vi.waitFor(() => expect(runtime.snapshot().running).toBeNull());
+    const snapshot = runtime.snapshot();
+    expect(snapshot.lastRun).toBeNull();
+    expect(snapshot.evaluation).toMatchObject({ adapter: "claude", autoAnswerThreshold: null });
+    expect(snapshot.answeringFrom).toBeNull();
+  });
+
+  it("refuses to start an evaluation without learning on and a CLI chosen", async () => {
+    const { runtime } = makeRuntime();
+    expect(() => runtime.startEvaluation()).toThrow(/learning on and a CLI/);
+    await runtime.update({ modelLearning: true, modelAdapter: null });
+    expect(() => runtime.startEvaluation()).toThrow(/learning on and a CLI/);
+    expect(runtime.snapshot().running).toBeNull();
+  });
+
+  it("cancels only the run it names, and keeps no report from a cancelled one", async () => {
+    const cli = rebasingCli();
+    const { runtime } = makeRuntime({ claude: cli });
+    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await learnPast(runtime);
+
+    // A cancel naming another run leaves this one to finish with its report.
+    let release = cli.hold();
+    const first = runtime.startEvaluation();
+    await vi.waitFor(() => expect(cli.calls.length).toBeGreaterThan(0));
+    runtime.cancelEvaluation("another-run");
+    release();
+    await vi.waitFor(() => expect(runtime.snapshot().running).toBeNull());
+    expect(runtime.snapshot()).toMatchObject({ lastRun: null, evaluation: { adapter: "claude" } });
+    const reported = runtime.snapshot().evaluation!.evaluatedAt;
+
+    release = cli.hold();
+    const asked = cli.calls.length;
+    const second = runtime.startEvaluation();
+    expect(second.runId).not.toBe(first.runId);
+    await vi.waitFor(() => expect(cli.calls.length).toBe(asked + 1));
+    runtime.cancelEvaluation(second.runId);
+    release();
+
+    await vi.waitFor(() =>
+      expect(runtime.snapshot().lastRun).toEqual({ runId: second.runId, result: "cancelled" })
+    );
+    // The replay stopped at the question it was on, and the report before it stands.
+    expect(cli.calls).toHaveLength(asked + 1);
+    expect(runtime.snapshot().evaluation?.evaluatedAt).toBe(reported);
+  });
+
+  it("ends a run it named as cancelled when another CLI is chosen before its turn", async () => {
+    const claude = rebasingCli();
+    const codex = rebasingCli();
+    const { runtime } = makeRuntime({ claude, codex });
+    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await learnPast(runtime);
+
+    const switched = runtime.update({ modelLearning: true, modelAdapter: "codex" });
+    const run = runtime.startEvaluation();
+    expect(run.adapter).toBe("claude");
+    await switched;
+
+    await vi.waitFor(() =>
+      expect(runtime.snapshot().lastRun).toEqual({ runId: run.runId, result: "cancelled" })
+    );
+    expect(claude.calls).toHaveLength(0);
+    expect(codex.calls).toHaveLength(0);
+    expect(existsSync(files.evaluation)).toBe(false);
+  });
+
+  it("ends a run as cancelled when learning is turned off under it", async () => {
+    const cli = rebasingCli();
+    const { runtime } = makeRuntime({ claude: cli });
+    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await learnPast(runtime);
+    const release = cli.hold();
+
+    const run = runtime.startEvaluation();
+    await vi.waitFor(() => expect(cli.calls.length).toBeGreaterThan(0));
+    const asked = cli.calls.length;
+    await runtime.update({ modelLearning: false, modelAdapter: "claude" });
+    release();
+
+    await vi.waitFor(() =>
+      expect(runtime.snapshot().lastRun).toEqual({ runId: run.runId, result: "cancelled" })
+    );
+    // Stopped where it was, rather than replaying to the end to be thrown away.
+    expect(cli.calls).toHaveLength(asked);
+    expect(existsSync(files.evaluation)).toBe(false);
+  });
+
+  it("refuses a threshold chosen from an older report, and dates each new one later", async () => {
+    const cli = rebasingCli();
+    const runtime = new DecisionModelRuntime({
+      files,
+      onProxyChanged: () => {},
+      createAdapter: () => cli,
+      // A clock that doesn't move: two evaluations still name different reports.
+      now: () => START,
+    });
+    runtimes.push(runtime);
+    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await learnPast(runtime);
+    const first = await runtime.evaluate();
+    const second = await runtime.evaluate();
+    expect(second.evaluatedAt).toBeGreaterThan(first.evaluatedAt);
+
+    await expect(runtime.setAutoAnswerThreshold(0.8, first.evaluatedAt)).rejects.toMatchObject({
+      name: "StaleEvaluationError",
+    });
+    expect(runtime.proxy()).toBeNull();
+    await runtime.setAutoAnswerThreshold(0.8, second.evaluatedAt);
+    expect(runtime.snapshot().answeringFrom).toBe(0.8);
+  });
+
+  it("clears what it learned with learning on: disarms, deletes the files, and keeps learning afresh", async () => {
+    const { runtime, onProxyChanged } = await armedRuntime();
+    writeFileSync(`${files.history}-journal`, "left by a crash");
+    const changed = onProxyChanged.mock.calls.length;
+
+    await runtime.clearHistory();
+
+    expect(runtime.proxy()).toBeNull();
+    expect(onProxyChanged).toHaveBeenCalledTimes(changed + 1);
+    expect(existsSync(files.evaluation)).toBe(false);
+    expect(existsSync(`${files.history}-journal`)).toBe(false);
+    expect(runtime.snapshot()).toMatchObject({ historyCount: 0, evaluation: null });
+
+    await runtime.learner.learn(decision(PAST + 1));
+    expect(runtime.snapshot().historyCount).toBe(1);
+    await runtime.close();
+    expect(storedExamples().map((example) => example.question_id)).toEqual([
+      decision(PAST + 1).questionId,
+    ]);
+  });
+
+  it("cancels an evaluation running when the history is cleared, and stores nothing from it", async () => {
+    const cli = rebasingCli();
+    const { runtime } = makeRuntime({ claude: cli });
+    await runtime.update({ modelLearning: true, modelAdapter: "claude" });
+    await learnPast(runtime);
+    const release = cli.hold();
+
+    const run = runtime.startEvaluation();
+    await vi.waitFor(() => expect(cli.calls.length).toBeGreaterThan(0));
+    const asked = cli.calls.length;
+    const clearing = runtime.clearHistory();
+    release();
+    await clearing;
+    expect(cli.calls).toHaveLength(asked);
+
+    await vi.waitFor(() =>
+      expect(runtime.snapshot().lastRun).toEqual({ runId: run.runId, result: "cancelled" })
+    );
+    expect(existsSync(files.evaluation)).toBe(false);
+    expect(runtime.snapshot()).toMatchObject({ historyCount: 0, evaluation: null });
+  });
+
+  it("deletes the model's files with none running, whatever of them is there", async () => {
+    const { runtime } = await armedRuntime();
+    await runtime.close();
+    expect(existsSync(files.history)).toBe(true);
+    expect(existsSync(files.evaluation)).toBe(true);
+
+    await deleteDecisionModelFiles(files);
+    for (const path of files.all) expect(existsSync(path), path).toBe(false);
+    // Nothing left to delete is no failure.
+    await expect(deleteDecisionModelFiles(files)).resolves.toBeUndefined();
+  });
+
+  it("offers only the thresholds the library honours, which needn't include every higher one", () => {
+    // Thirty right answers at 0.95, five at 0.99 and ten wrong ones at 0.55:
+    // from 0.5 the band matches 78%, from 0.6 to 0.9 every time, and from
+    // 0.97 it holds too few answers to count.
+    const points = [
+      ...Array.from({ length: 30 }, () => ({ confidence: 0.95, correct: true })),
+      ...Array.from({ length: 5 }, () => ({ confidence: 0.99, correct: true })),
+      ...Array.from({ length: 10 }, () => ({ confidence: 0.55, correct: false })),
+    ];
+    const edges = [0, 0.5, 0.6, 0.7, 0.8, 0.9, 0.97];
+    const report = {
+      buckets: edges.map((lo, index) => ({ lo, hi: edges[index + 1] ?? 1, n: 0, correct: 0 })),
+      recommended_threshold: 0.6,
+      calibration: { samples: 45, recommendedThreshold: 0.6, targetAccuracy: 0.9, points },
+    } as unknown as DecisionModelEvaluation["report"];
+
+    expect(supportedThresholds(report)).toEqual(
+      [0.6, 0.7, 0.8, 0.9].map((threshold) => ({ threshold, answered: 35, matched: 35 }))
+    );
+    // A threshold already chosen between the band floors is listed too.
+    expect(supportedThresholds(report, 0.85).map((choice) => choice.threshold)).toEqual([
+      0.6, 0.7, 0.8, 0.85, 0.9,
+    ]);
+    // Held to a lower accuracy than the library accepts, nothing qualifies.
+    expect(
+      supportedThresholds({
+        ...report,
+        calibration: { ...report.calibration, targetAccuracy: 0.5 },
+      })
+    ).toEqual([]);
+  });
+
+  it("describes a stored report as counts, reading damaged values as none", async () => {
+    const { runtime } = await armedRuntime();
+    const view = describeEvaluation(runtime.getEvaluation()!);
+    expect(view.report).toMatchObject({ total: PAST, minSamples: 30, targetAccuracy: 0.9 });
+    // The CLI always rebased at 0.95, as every past answer did: each answer it
+    // gave matched, all in the top band.
+    expect(view.report.answered).toBeGreaterThanOrEqual(30);
+    expect(view.report.matched).toBe(view.report.answered);
+    expect(view.report.buckets.at(-1)).toMatchObject({
+      answered: view.report.answered,
+      matched: view.report.answered,
+    });
+    expect(view.report.buckets.slice(0, -1).every((bucket) => bucket.answered === 0)).toBe(true);
+    expect(view.thresholds.map((choice) => choice.threshold)).toContain(0.8);
+    expect(view.autoAnswerThreshold).toBe(0.8);
+    // A threshold chosen between the band floors is listed with the rest.
+    await runtime.setAutoAnswerThreshold(0.85);
+    expect(
+      describeEvaluation(runtime.getEvaluation()!).thresholds.map((choice) => choice.threshold)
+    ).toContain(0.85);
+
+    const damaged = describeReport({
+      total: -3,
+      answered: "12",
+      buckets: [{ lo: 0.5, hi: 0.6, n: Number.NaN, correct: null }],
+      by_kind: { choice: { answered: 2, correct: Number.POSITIVE_INFINITY } },
+      abstain_reasons: { "model-error": "4" },
+      recommended_threshold: 7,
+    } as unknown as DecisionModelEvaluation["report"]);
+    expect(damaged).toMatchObject({
+      total: 0,
+      answered: 0,
+      buckets: [{ lo: 0.5, hi: 0.6, answered: 0, matched: 0 }],
+      byKind: { choice: { answered: 2, matched: 0 } },
+      abstainReasons: { "model-error": 0 },
+      recommendedThreshold: null,
+    });
+  });
+
+  it("drops per-question items from a stored evaluation it reads", async () => {
+    const { runtime } = await armedRuntime();
+    const stored = JSON.parse(readFileSync(files.evaluation, "utf8")) as {
+      report: Record<string, unknown>;
+    };
+    stored.report.items = [{ question_id: "q-past-0001" }];
+    const parsed = parseDecisionModelEvaluation(stored);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.report).not.toHaveProperty("items");
+    // A report without its bands is no evaluation.
+    const { buckets: _buckets, ...withoutBands } = stored.report;
+    expect(parseDecisionModelEvaluation({ ...stored, report: withoutBands })).toBeNull();
+    await runtime.close();
   });
 });
 

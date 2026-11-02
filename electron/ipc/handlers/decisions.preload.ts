@@ -35,6 +35,12 @@ export const DECISIONS_METHOD_CHANNELS = {
   listAnswerDestinations: "decisions:list-answer-destinations",
   reassignAnswer: "decisions:reassign-answer",
   markAnswerHandled: "decisions:mark-answer-handled",
+  getModel: "decisions:get-model",
+  setModel: "decisions:set-model",
+  startModelEvaluation: "decisions:start-model-evaluation",
+  cancelModelEvaluation: "decisions:cancel-model-evaluation",
+  setModelThreshold: "decisions:set-model-threshold",
+  clearModelHistory: "decisions:clear-model-history",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof DECISIONS_METHOD_CHANNELS;

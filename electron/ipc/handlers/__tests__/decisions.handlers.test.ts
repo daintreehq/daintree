@@ -130,6 +130,12 @@ const decisionsEntry = vi.hoisted(() => ({
   startSetupCheck: vi.fn(async (): Promise<unknown> => ({ result: "not-set-up" })),
   getSetupCheck: vi.fn((): unknown => null),
   cancelSetupCheck: vi.fn(async (_payload: { runId: string }): Promise<unknown> => null),
+  getDecisionsModel: vi.fn((): unknown => ({ revision: 0, learning: false })),
+  setDecisionsModel: vi.fn(async (_payload: unknown): Promise<unknown> => ({ learning: true })),
+  startDecisionsModelEvaluation: vi.fn(async (): Promise<unknown> => ({ running: {} })),
+  cancelDecisionsModelEvaluation: vi.fn((_payload: unknown): unknown => ({ running: null })),
+  setDecisionsModelThreshold: vi.fn(async (_payload: unknown): Promise<unknown> => ({})),
+  clearDecisionsModelHistory: vi.fn(async (): Promise<unknown> => ({})),
 }));
 const dialogMock = vi.hoisted(() => ({
   showSaveDialog: vi.fn<(...args: unknown[]) => Promise<{ canceled: boolean; filePath?: string }>>(
@@ -171,6 +177,12 @@ vi.mock("../../../services/decisions/index.js", () => {
     startSetupCheck: decisionsEntry.startSetupCheck,
     getSetupCheck: decisionsEntry.getSetupCheck,
     cancelSetupCheck: decisionsEntry.cancelSetupCheck,
+    getDecisionsModel: decisionsEntry.getDecisionsModel,
+    setDecisionsModel: decisionsEntry.setDecisionsModel,
+    startDecisionsModelEvaluation: decisionsEntry.startDecisionsModelEvaluation,
+    cancelDecisionsModelEvaluation: decisionsEntry.cancelDecisionsModelEvaluation,
+    setDecisionsModelThreshold: decisionsEntry.setDecisionsModelThreshold,
+    clearDecisionsModelHistory: decisionsEntry.clearDecisionsModelHistory,
   };
 });
 vi.mock("@daintreehq/decisions-protocol", () => {
@@ -267,6 +279,19 @@ const cancelSetupCheck = decisionsNamespace.ops.cancelSetupCheck.handler as unkn
   runId: string;
 }) => Promise<unknown>;
 
+const modelOps = decisionsNamespace.ops;
+const getModel = modelOps.getModel.handler as unknown as () => Promise<unknown>;
+const setModel = modelOps.setModel.handler as unknown as (payload: unknown) => Promise<unknown>;
+const startModelEvaluation = modelOps.startModelEvaluation
+  .handler as unknown as () => Promise<unknown>;
+const cancelModelEvaluation = modelOps.cancelModelEvaluation.handler as unknown as (
+  payload: unknown
+) => Promise<unknown>;
+const setModelThreshold = modelOps.setModelThreshold.handler as unknown as (
+  payload: unknown
+) => Promise<unknown>;
+const clearModelHistory = modelOps.clearModelHistory.handler as unknown as () => Promise<unknown>;
+
 const SECRET = "claim-secret-0123456789abcdef";
 const PASSPHRASE = "correct horse battery staple";
 const CLAIM: ClaimDecisionsRelayPayload = { url: "relay.example.com", claimSecret: SECRET };
@@ -300,6 +325,12 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_START_SETUP_CHECK,
   CHANNELS.DECISIONS_GET_SETUP_CHECK,
   CHANNELS.DECISIONS_CANCEL_SETUP_CHECK,
+  CHANNELS.DECISIONS_GET_MODEL,
+  CHANNELS.DECISIONS_SET_MODEL,
+  CHANNELS.DECISIONS_START_MODEL_EVALUATION,
+  CHANNELS.DECISIONS_CANCEL_MODEL_EVALUATION,
+  CHANNELS.DECISIONS_SET_MODEL_THRESHOLD,
+  CHANNELS.DECISIONS_CLEAR_MODEL_HISTORY,
 ];
 
 describe("decisions IPC", () => {
@@ -327,6 +358,12 @@ describe("decisions IPC", () => {
     decisionsEntry.startSetupCheck.mockClear();
     decisionsEntry.getSetupCheck.mockClear();
     decisionsEntry.cancelSetupCheck.mockClear();
+    decisionsEntry.getDecisionsModel.mockClear();
+    decisionsEntry.setDecisionsModel.mockClear();
+    decisionsEntry.startDecisionsModelEvaluation.mockClear();
+    decisionsEntry.cancelDecisionsModelEvaluation.mockClear();
+    decisionsEntry.setDecisionsModelThreshold.mockClear();
+    decisionsEntry.clearDecisionsModelHistory.mockClear();
     vi.mocked(store.set).mockClear();
   });
   afterEach(() => {
@@ -473,6 +510,29 @@ describe("decisions IPC", () => {
     expect(store.set).not.toHaveBeenCalled();
   });
 
+  it("refuses every decision model op while off, loading none of Decisions", async () => {
+    for (const value of [undefined, { enabled: false }, { enabled: "true" }]) {
+      saved.value = value;
+
+      await expect(getModel()).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(
+        setModel({ learning: true, adapter: "claude", consent: true })
+      ).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(startModelEvaluation()).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(cancelModelEvaluation({ runId: "run-1" })).rejects.toMatchObject({
+        code: "PERMISSION",
+      });
+      await expect(
+        setModelThreshold({ threshold: 0.8, evaluatedAt: 1_761_955_200_000 })
+      ).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(clearModelHistory()).rejects.toMatchObject({ code: "PERMISSION" });
+    }
+
+    expect(decisionsEntry.evaluated).toBe(0);
+    expect(decisionsEntry.libraries).toBe(0);
+    expect(store.set).not.toHaveBeenCalled();
+  });
+
   it("refuses to save or verify a recovery kit while off, loading none of Decisions", async () => {
     for (const value of [undefined, { enabled: false }]) {
       saved.value = value;
@@ -593,6 +653,76 @@ describe("decisions IPC", () => {
 
     expect(decisionsEntry.evaluated).toBe(0);
     expect(decisionsEntry.libraries).toBe(0);
+  });
+
+  it("hands each decision model op to Decisions itself once on", async () => {
+    saved.value = { enabled: true };
+    const preferences = { learning: true, adapter: "codex", consent: true };
+    const threshold = { threshold: 0.8, evaluatedAt: 1_761_955_200_000 };
+
+    await getModel();
+    await setModel(preferences);
+    await startModelEvaluation();
+    await cancelModelEvaluation({ runId: "run-1" });
+    await setModelThreshold(threshold);
+    await clearModelHistory();
+
+    expect(decisionsEntry.getDecisionsModel).toHaveBeenCalledOnce();
+    expect(decisionsEntry.setDecisionsModel).toHaveBeenCalledExactlyOnceWith(preferences);
+    expect(decisionsEntry.startDecisionsModelEvaluation).toHaveBeenCalledOnce();
+    expect(decisionsEntry.cancelDecisionsModelEvaluation).toHaveBeenCalledExactlyOnceWith({
+      runId: "run-1",
+    });
+    expect(decisionsEntry.setDecisionsModelThreshold).toHaveBeenCalledExactlyOnceWith(threshold);
+    expect(decisionsEntry.clearDecisionsModelHistory).toHaveBeenCalledOnce();
+    // The settings are Decisions' own to write, behind its transitions.
+    expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("takes only the model's own preferences, a confidence for an evaluation, and a run id", () => {
+    const setSchema = decisionsNamespace.ops.setModel.schema as SafeParse;
+    for (const value of [
+      { learning: false, adapter: null },
+      { learning: true, adapter: "claude", consent: true },
+      { learning: true, adapter: "gemini" },
+    ]) {
+      expect(setSchema.safeParse(value).success, JSON.stringify(value)).toBe(true);
+    }
+    for (const value of [
+      undefined,
+      { learning: true },
+      { learning: "true", adapter: null },
+      { learning: true, adapter: "openai" },
+      { learning: true, adapter: "claude", consent: "yes" },
+      { learning: true, adapter: "claude", modelConsentedAt: 1 },
+      { learning: true, adapter: "claude", command: "sh" },
+    ]) {
+      expect(setSchema.safeParse(value).success, JSON.stringify(value)).toBe(false);
+    }
+    const thresholdSchema = decisionsNamespace.ops.setModelThreshold.schema as SafeParse;
+    for (const value of [
+      { threshold: 0.8, evaluatedAt: 1_761_955_200_000 },
+      { threshold: null, evaluatedAt: 1_761_955_200_000 },
+      { threshold: 0, evaluatedAt: 1 },
+    ]) {
+      expect(thresholdSchema.safeParse(value).success, JSON.stringify(value)).toBe(true);
+    }
+    for (const value of [
+      { threshold: 1.2, evaluatedAt: 1 },
+      { threshold: -0.1, evaluatedAt: 1 },
+      { threshold: Number.NaN, evaluatedAt: 1 },
+      { threshold: 0.8 },
+      { threshold: 0.8, evaluatedAt: 0 },
+      { threshold: 0.8, evaluatedAt: 1.5 },
+      { threshold: 0.8, evaluatedAt: 1, calibration: {} },
+    ]) {
+      expect(thresholdSchema.safeParse(value).success, JSON.stringify(value)).toBe(false);
+    }
+    const cancelSchema = decisionsNamespace.ops.cancelModelEvaluation.schema as SafeParse;
+    expect(cancelSchema.safeParse({ runId: "run-1" }).success).toBe(true);
+    for (const value of [{}, { runId: "" }, { runId: "x".repeat(65) }, "run-1"]) {
+      expect(cancelSchema.safeParse(value).success).toBe(false);
+    }
   });
 
   it("asks Decisions itself once the setting is on, loading its entry once", async () => {
