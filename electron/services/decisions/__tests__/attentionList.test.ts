@@ -18,7 +18,20 @@ import {
   resumableReason,
   withoutHandled,
 } from "../attentionList.js";
-import { entry, qid, row } from "./questionRows.js";
+import { entry, row as baseRow } from "./questionRows.js";
+
+/**
+ * A question id as the library mints it: long enough for the id pattern the
+ * block parser and the handled record both hold to (the shared fixture's
+ * short ids aren't).
+ */
+function qid(alias: number): string {
+  return `0193f1a2b3c4d5e6${String(alias).padStart(16, "0")}`;
+}
+
+function row(alias: number, overrides: Parameters<typeof baseRow>[1] = {}): QuestionRow {
+  return baseRow(alias, { question_id: qid(alias), ...overrides });
+}
 
 function metaStore(rows: QuestionRow[], initial: Record<string, string> = {}) {
   const meta = new Map(Object.entries(initial));

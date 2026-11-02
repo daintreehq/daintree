@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, RefreshCw } from "lucide-react";
+import { ChevronDown, RotateCcw } from "lucide-react";
 import { DecisionsIcon, TriangleAlert } from "@/components/icons";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
@@ -260,7 +260,14 @@ function AttentionItem({ item, worktreeName, busy, onResume, onChoose, onHandled
             // Busy keeps its focus and its width: the glyph turns while it runs.
             onClick={busy === "resume" ? undefined : onResume}
           >
-            <SpinningIcon icon={RefreshCw} active={busy === "resume"} aria-hidden="true" />
+            {/* Resuming goes back to the session that asked: the go-back glyph,
+                turning the way its arrow points while it runs. */}
+            <SpinningIcon
+              icon={RotateCcw}
+              active={busy === "resume"}
+              wrapperClassName="[animation-direction:reverse]"
+              aria-hidden="true"
+            />
             Try resume
           </Button>
         )}
