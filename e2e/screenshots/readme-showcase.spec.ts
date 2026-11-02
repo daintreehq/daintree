@@ -146,7 +146,8 @@ function fakeCliProgram(
   const OSC_WORKING = ESC + "]9;4;1;0\u0007";
   const OSC_IDLE = ESC + "]9;4;0;0\u0007";
   const SGR_RESET = ESC + "[0m";
-  const ANSI = /\u001b\[[0-9;?]*[A-Za-z]/g;
+  const ANSI = new RegExp(ESC + "\\[[0-9;?]*[A-Za-z]", "g");
+  const ANSI_AT_START = new RegExp("^" + ESC + "\\[[0-9;?]*[A-Za-z]");
   const write = (text: string) => process.stdout.write(text);
   const visible = (text: string) => Array.from(text.replace(ANSI, "")).length;
 
@@ -157,7 +158,7 @@ function fakeCliProgram(
     let i = 0;
     while (i < line.length && count < width - 1) {
       if (line[i] === ESC) {
-        const m = /^\u001b\[[0-9;?]*[A-Za-z]/.exec(line.slice(i));
+        const m = ANSI_AT_START.exec(line.slice(i));
         if (m) {
           outText += m[0];
           i += m[0].length;
