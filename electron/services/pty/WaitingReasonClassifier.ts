@@ -224,12 +224,17 @@ export function classifyWaitingReason(
     return "approval";
   }
 
-  // Priority 2: the agent settled right after a blocking error.
-  const errorLines =
+  // Priority 2: the agent settled right after a blocking error. With its input
+  // row known, the window is the transcript above it: the input's own frame
+  // and glyph don't take rows a wrapped banner needs.
+  const errorCandidates =
     composerRow !== undefined && composerRow >= 0 && composerRow < lines.length
-      ? lines.slice(Math.max(0, composerRow + 1 - rows), composerRow + 1).map((l) => stripAnsi(l))
-      : strippedLines;
-  const errorCandidates = errorLines.filter((l) => l.trim().length > 0).slice(-ERROR_SCAN_LINES);
+      ? lines
+          .slice(Math.max(0, composerRow - rows), composerRow)
+          .map((l) => stripAnsi(l))
+          .filter((l) => l.trim().length > 0 && !PROMPT_CHROME_LINE.test(l))
+          .slice(-ERROR_SCAN_LINES)
+      : nonEmpty.slice(-ERROR_SCAN_LINES);
   for (const line of errorCandidates) {
     if (ERROR_PATTERNS.some((p) => p.test(line))) {
       return "error";

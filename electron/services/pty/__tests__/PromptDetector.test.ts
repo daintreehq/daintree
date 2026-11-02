@@ -201,9 +201,23 @@ describe("findEmptyComposerRow (#16093)", () => {
     ["a selector row", [RULE, "❯ 1. Yes", RULE]],
     ["a banner behind a pointer", [RULE, "❯ You've hit your usage limit.", RULE]],
     ["a bare glyph with no frame", ["● Done.", "❯ ", "  ⏵⏵ accept edits on"]],
-    ["a frame on one side only", ["● Done.", "❯ ", RULE]],
+    ["no frame above", ["● Done.", "❯ ", RULE]],
+    ["no frame below", [RULE, "❯ ", "  status footer"]],
+    ["a draft on several rows", [RULE, "❯ ", "  ─── section", "  unfinished draft", RULE]],
+    ["a draft whose first row is the bare glyph", [RULE, "❯", "  rest of the draft", RULE]],
+    ["a rule with text in it", ["── notes ──", "❯ ", RULE]],
   ])("finds none for %s", (_label, lines) => {
     expect(findEmptyComposerRow(lines, CLAUDE_PROMPT)).toBeUndefined();
+  });
+
+  it("never passes over a draft in the input row for a frame higher up", () => {
+    const lines = [RULE, "❯ ", RULE, "● Quoted from the transcript.", RULE, "❯ draft", RULE];
+    expect(findEmptyComposerRow(lines, CLAUDE_PROMPT)).toBeUndefined();
+  });
+
+  it("refuses text before an unanchored pattern's match", () => {
+    expect(findEmptyComposerRow([RULE, "prose ❯ ", RULE], [/❯\s*/])).toBeUndefined();
+    expect(findEmptyComposerRow([RULE, "❯ ", RULE], [/❯\s*/])).toBe(1);
   });
 
   it("never takes a pattern that matches nothing visible", () => {

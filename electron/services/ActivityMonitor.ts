@@ -1035,7 +1035,9 @@ export class ActivityMonitor {
       this.isResizeSuppressed(now) ||
       this.isFocusSuppressed(now) ||
       this.inputTracker.isRecentUserInput(now) ||
-      this.inputTracker.pendingInputUntil > 0
+      // Only the busy paths clear an empty Enter's confirmation, so one that
+      // expired with the agent idle still reads as set.
+      now < this.inputTracker.pendingInputUntil
     ) {
       return;
     }

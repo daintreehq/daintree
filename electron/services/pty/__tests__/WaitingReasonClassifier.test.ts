@@ -389,12 +389,13 @@ describe("classifyWaitingReason with the input row known (#16093)", () => {
       RULE,
       "❯ ",
       RULE,
-      "  Usage limit reached · continuing automatically at 10am · esc to cancel",
+      "  ⏵⏵ accept edits on (shift+tab to cycle)",
     ];
     expect(classify(lines)).toBe("error");
   });
 
-  it("reads the screen after Escape cancels the auto-continue as a prompt wait", () => {
+  it("keeps the banner an error after Escape cancels the auto-continue", () => {
+    // Cancelling the wait doesn't bring the quota back.
     const lines = [
       "  ⎿  You've hit your weekly limit · resets Oct 2 at 9pm (Europe/Lisbon)",
       "     /upgrade to increase your usage limit.",
@@ -406,7 +407,23 @@ describe("classifyWaitingReason with the input row known (#16093)", () => {
       RULE,
       "  ⏵⏵ accept edits on (shift+tab to cycle)",
     ];
-    expect(classify(lines)).toBe("prompt");
+    expect(classify(lines)).toBe("error");
+  });
+
+  it("reads a banner a narrow pane wrapped over several rows", () => {
+    const lines = [
+      "● Refactoring the parser.",
+      "  ⎿  You've hit your weekly limit · resets",
+      "     Oct 2 at 9pm (Europe/Lisbon)",
+      "     /upgrade to increase your usage",
+      "     limit.",
+      "",
+      RULE,
+      "❯ ",
+      RULE,
+      "  ⏵⏵ accept edits on",
+    ];
+    expect(classify(lines)).toBe("error");
   });
 
   it("keeps a footer below the input row out of a finished turn", () => {
@@ -458,6 +475,23 @@ describe("classifyWaitingReason with the input row known (#16093)", () => {
       ])
     ).toBe("approval");
     expect(classify(["Should I also update the docs?", "", RULE, "❯ ", RULE])).toBe("question");
+  });
+
+  it("reads a dialog drawn below the input row", () => {
+    expect(
+      classify([
+        "● Done.",
+        RULE,
+        "❯ ",
+        RULE,
+        "Do you want to make this edit to parser.ts?",
+        "❯ 1. Yes",
+        "  2. No",
+      ])
+    ).toBe("approval");
+    expect(classify(["● Done.", RULE, "❯ ", RULE, "Should I also update the docs?"])).toBe(
+      "question"
+    );
   });
 });
 

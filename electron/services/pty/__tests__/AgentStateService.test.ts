@@ -3,6 +3,7 @@ import { AgentStateService } from "../AgentStateService.js";
 import { events } from "../../events.js";
 import { HandbackTracker } from "../HandbackTracker.js";
 import type { TerminalInfo } from "../types.js";
+import type { WaitingReason } from "../../../../shared/types/agent.js";
 import { buildHandbackInstruction } from "../../../../shared/utils/handback.js";
 import * as detector from "../HandbackDetector.js";
 import {
@@ -303,7 +304,7 @@ describe("AgentStateService", () => {
     expect(stateChanges[0]?.waitingReason).toBe("prompt");
   });
 
-  it("does not emit state changes for waitingReason-only updates", () => {
+  it("does not emit a waitingReason change that comes through the FSM", () => {
     const service = new AgentStateService();
     const terminal = createTerminal({ agentState: "waiting" });
     terminal.waitingReason = "prompt";
@@ -371,48 +372,51 @@ describe("AgentStateService", () => {
   });
 
   describe("reason-only updates (#16093)", () => {
-    function settledOnError() {
+    function settledOnError(waitingReason: WaitingReason = "error") {
       const service = new AgentStateService();
       const terminal = createTerminal({
         agentState: "waiting",
-        waitingReason: "error",
+        waitingReason,
         lastStateChange: 1_000,
         detectedAgentId: "claude",
         hasPty: true,
       } as Partial<TerminalInfo>);
-      const stateChanges: Array<{
-        state: string;
-        previousState: string;
-        waitingReason?: string;
-        timestamp: number;
-      }> = [];
+      const stateChanges: Array<Record<string, unknown>> = [];
       const activityEvents: unknown[] = [];
       events.on("agent:state-changed", (payload) => {
-        stateChanges.push({
-          state: payload.state,
-          previousState: payload.previousState,
-          waitingReason: payload.waitingReason,
-          timestamp: payload.timestamp,
-        });
+        stateChanges.push({ ...payload });
       });
       events.on("terminal:activity", (payload) => activityEvents.push(payload));
       return { service, terminal, stateChanges, activityEvents };
     }
 
-    it("publishes the new reason as a waiting → waiting change", () => {
-      const { service, terminal, stateChanges, activityEvents } = settledOnError();
+    it.each([
+      ["error", "prompt"],
+      ["prompt", "error"],
+      ["question", "approval"],
+    ] as const)("publishes %s → %s as a waiting → waiting change", (from, to) => {
+      const { service, terminal, stateChanges, activityEvents } = settledOnError(from);
 
       service.handleActivityState(terminal, "idle", {
         trigger: "pattern",
-        waitingReason: "prompt",
+        waitingReason: to,
         rereadAt: 5_000,
       });
 
       expect(terminal.agentState).toBe("waiting");
-      expect(terminal.waitingReason).toBe("prompt");
+      expect(terminal.waitingReason).toBe(to);
       expect(terminal.lastStateChange).toBe(5_000);
       expect(stateChanges).toEqual([
-        { state: "waiting", previousState: "waiting", waitingReason: "prompt", timestamp: 5_000 },
+        expect.objectContaining({
+          terminalId: terminal.id,
+          state: "waiting",
+          previousState: "waiting",
+          waitingReason: to,
+          timestamp: 5_000,
+          trigger: "heuristic",
+          confidence: 0.9,
+          agentIncarnation: 0,
+        }),
       ]);
       expect(activityEvents).toHaveLength(1);
     });
@@ -454,6 +458,12 @@ describe("AgentStateService", () => {
       [
         "a later settle already read the screen",
         { lastStateChange: 6_000 },
+        "prompt" as const,
+        5_000,
+      ],
+      [
+        "the read is no newer than the last settle",
+        { lastStateChange: 5_000 },
         "prompt" as const,
         5_000,
       ],
