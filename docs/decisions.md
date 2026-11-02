@@ -30,7 +30,7 @@ If you don't have one, **Don't have a relay yet?** offers two ways to deploy one
 - **Deploy to Cloudflare** opens Cloudflare's deploy page in your browser. It asks for one secret, `CLAIM_SECRET`: enter a long random string (such as the output of `openssl rand -hex 32`) and keep it, since you claim the relay with it. When Cloudflare has deployed the Worker, enter its URL in **Relay URL** and press **Check**.
 - **Guided deploy** opens a terminal titled **Deploy Decisions relay** in the active worktree and runs the Decisions CLI's `deploy` from your home folder, pinned to the version Daintree speaks, with a fresh `daintree-decisions-<8 hex>` Worker and bucket name. Wrangler signs you in to Cloudflare in your browser, and the terminal shows the Worker URL and claim secret once. Copy both: Daintree never saves that terminal's screen, so after a restart the pane comes back empty. Press **Connect relay…** on the pane's banner to go back to Settings with the relay URL field focused. Guided deploy needs a local project window; a Remote Hosts window's terminals run on the Host.
 
-Daintree never sees a Cloudflare token, and Decisions doesn't read the URL or secret from the deploy terminal: you copy them yourself. The Decisions repository's [self-hosting guide](https://github.com/daintreehq/decisions/blob/v0.1.0/docs/self-host.md) covers the same routes from the CLI, a manual deploy, custom domains and Cloudflare Access. Choose a custom domain before you pair phones: moving the relay to another address means pairing them again.
+Daintree never sees a Cloudflare token, and Decisions doesn't read the URL or secret from the deploy terminal: you copy them yourself. The Decisions repository's [self-hosting guide](https://github.com/daintreehq/decisions/blob/v0.2.0/docs/self-host.md) covers the same routes from the CLI, a manual deploy, custom domains and Cloudflare Access. Choose a custom domain before you pair phones: moving the relay to another address means pairing them again.
 
 ### 3. Claim the relay, or restore your identity
 
@@ -48,7 +48,7 @@ Until a recovery kit is verified and the setup check has passed, Connection show
 - **Save a recovery kit**: enter a passphrase of at least 12 characters and press **Save kit…**. The kit is a file holding this computer's Decisions keys, locked with that passphrase. Daintree keeps neither the file nor the passphrase.
 - **Verify a saved kit**: choose the file you saved, enter its passphrase and press **Verify kit**. Daintree checks it opens, holds this computer's identity and has every key this computer holds now. Saving alone doesn't count as verified.
 
-Keep the kit somewhere other than this computer, such as a password manager. It's how you restore the relay's owner on a new computer. **If you lose every device that holds your keys and have no kit, nobody can read the relay's encrypted questions and answers again, you included.** If you rotate keys or revoke a device later, the old kit lacks the new key; save and verify a new one. The Decisions repository's [key recovery guide](https://github.com/daintreehq/decisions/blob/v0.1.0/docs/key-recovery.md) covers losing a phone or everything.
+Keep the kit somewhere other than this computer, such as a password manager. It's how you restore the relay's owner on a new computer. **If you lose every device that holds your keys and have no kit, nobody can read the relay's encrypted questions and answers again, you included.** If you rotate keys or revoke a device later, the old kit lacks the new key; save and verify a new one. The Decisions repository's [key recovery guide](https://github.com/daintreehq/decisions/blob/v0.2.0/docs/key-recovery.md) covers losing a phone or everything.
 
 ### 5. Pair a phone
 
@@ -133,11 +133,11 @@ comment: Proceed with the compact sidebar.
 
 - `choice` and `choice_label` appear when you picked an option, and `comment` when you wrote something; later lines of a comment are indented.
 - `injection_id` and the `[decision-injection …]` line are how Daintree recognises its own typing if it stops partway through.
-- A correction you send from the phone arrives as a new revision with `note: This corrects an earlier answer. Reassess any work that depended on the earlier one.`
+- A correction you send from the phone arrives as a new revision with `note: This corrects an earlier answer. Reassess any work that depended on the earlier one.`, and the reason you gave as `reason:`, after the choice and before any comment.
 - A question that expires unanswered is typed as `source: system`, `status: expired`, `authorised: no`, with a note that the agent isn't authorised to continue the gated step.
-- Answer text is treated as data: control and escape sequences are stripped, and anything that looks like the block's delimiters or marker is neutralised. A comment is cut at 4,000 characters, or sooner to fit the block's size limit, ending in `…[truncated]`. That limits what an answer can do to the terminal; it can't stop an agent from being swayed by what you wrote.
+- Answer text is treated as data: control and escape sequences are stripped, and anything that looks like the block's delimiters or marker is neutralised. A comment is cut at 4,000 characters and a correction's reason at 1,000, or sooner to fit the block's size limit (the comment first), ending in `…[truncated]`. That limits what an answer can do to the terminal; it can't stop an agent from being swayed by what you wrote.
 
-A question waits 7 days for an answer unless the agent asks for another time, at most 30 days. **Settings → Decisions → Questions** shows both.
+**Settings → Decisions → Questions → Default expiry** sets how long a question waits when its agent asks for no time: 1 hour, 1 day, 3 days, 7 days (the default), 30 days, 90 days, 365 days, or Never. An agent can still ask for another time, at most 30 days or the default when that's longer; under Never it can ask for any time up to the relay's limit of 366 days, and a request beyond that is refused when the agent asks. The `design-review/final` gate sets no expiry of its own, so naming it changes nothing. The setting covers questions asked on this computer: agents on a Remote Host still get the 7-day default. The row's description says the wait and the limit in force, as `A question waits 7 days for your answer, unless the agent that asked sets another time, at most 30 days.` An expired question authorises nothing.
 
 ### The pane chip
 
@@ -194,7 +194,7 @@ Each enrolled Host can read your agents' questions and answers, as every paired 
 
 ## Privacy
 
-The Decisions repository's [security claims](https://github.com/daintreehq/decisions/blob/v0.1.0/docs/security-claims.md) say exactly what its encryption protects and what it doesn't, including a compromised Cloudflare account and plaintext on your own devices. This section covers what Daintree adds to that.
+The Decisions repository's [security claims](https://github.com/daintreehq/decisions/blob/v0.2.0/docs/security-claims.md) say exactly what its encryption protects and what it doesn't, including a compromised Cloudflare account and plaintext on your own devices. This section covers what Daintree adds to that.
 
 ### What leaves this computer
 
@@ -208,7 +208,7 @@ A question's text, options and screenshots come from the agent; Daintree adds on
 
 ### Voice dictation
 
-Dictating an answer is a setting in the phone app, off until you turn it on there, and it **isn't end-to-end encrypted**. When you dictate, your voice goes through your relay to a speech provider (xAI or OpenAI), and the transcript, with the question, its options and a few project terms, goes to a correction provider (Anthropic or OpenAI), depending on the keys set on your Worker. Daintree on this computer sends nothing for it, and the answer you then send is encrypted like any other. The Decisions repository's [voice privacy page](https://github.com/daintreehq/decisions/blob/v0.1.0/docs/voice-privacy.md) says who sees what.
+Dictating an answer is a setting in the phone app, off until you turn it on there, and it **isn't end-to-end encrypted**. When you dictate, your voice goes through your relay to a speech provider (xAI or OpenAI), and the transcript, with the question, its options and a few project terms, goes to a correction provider (Anthropic or OpenAI), depending on the keys set on your Worker. Daintree on this computer sends nothing for it, and the answer you then send is encrypted like any other. The Decisions repository's [voice privacy page](https://github.com/daintreehq/decisions/blob/v0.2.0/docs/voice-privacy.md) says who sees what.
 
 ### Revoking a device
 
