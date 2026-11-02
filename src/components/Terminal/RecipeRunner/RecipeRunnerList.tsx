@@ -242,7 +242,7 @@ export function RecipeRunnerList({
           // in the grid: typing a name that matches nothing and pressing Enter
           // creates it. Sized like the grid footer's button so the two modes
           // draw the same control.
-          className="press-scale group w-full flex h-8 items-center gap-1.5 px-3 rounded-[var(--radius-md)] border border-transparent hover:bg-overlay-hover transition-[background-color,border-color] duration-150 ease-out active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2 group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
+          className="press-scale group w-full flex h-8 items-center gap-1.5 px-3 rounded-[var(--radius-md)] border border-transparent hover:bg-overlay-hover transition-[background-color,border-color] duration-150 ease-out active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2 group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)] forced-colors:group-focus-within/recipes:aria-selected:outline-solid forced-colors:group-focus-within/recipes:aria-selected:outline-2 forced-colors:group-focus-within/recipes:aria-selected:outline-[color:Highlight] forced-colors:group-focus-within/recipes:aria-selected:-outline-offset-2"
         >
           <Plus
             className="h-3.5 w-3.5 text-text-secondary group-hover:text-text-primary transition-colors shrink-0"

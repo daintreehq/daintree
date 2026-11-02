@@ -4,7 +4,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { BUILT_IN_APP_SCHEMES } from "@shared/theme/themes";
-import { contrastRatio, resolvePaletteRowBackdrops } from "@shared/theme/contrast";
+import {
+  blendOverBackground,
+  contrastRatio,
+  parseRgba,
+  resolvePaletteRowBackdrops,
+} from "@shared/theme/contrast";
 import { readIndexCss } from "@/__tests__/support/hostCss";
 import { LIST_DETAIL_ROW_CLASS, PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 
@@ -194,10 +199,47 @@ describe("highlighted-row language", () => {
     }
   });
 
+  it("holds selection-outline at 3:1 on a highlighted row on either panel surface, in every built-in theme", () => {
+    // List-detail rows, the file lists and the worktree overview sit on the
+    // panel, not on the palette's floating surface, and take the same
+    // increased-contrast outline. Dark panels are lighter than the sidebar the
+    // palette is scored on, which closes the fill in on the outline (#16126).
+    const over = (value: string, backdrop: string) => {
+      const rgba = parseRgba(value);
+      return rgba ? blendOverBackground(rgba.hex, backdrop, rgba.opacity) : value;
+    };
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      for (const panel of ["surface-panel", "surface-panel-elevated"] as const) {
+        const surface = scheme.tokens[panel];
+        const fill = over(scheme.tokens["overlay-highlight"], surface);
+        const outline = over(scheme.tokens["selection-outline"], fill);
+        for (const [label, against] of [
+          ["the highlight fill", fill],
+          [panel, surface],
+        ] as const) {
+          const ratio = contrastRatio(outline, against);
+          expect(
+            ratio,
+            `${scheme.id}: selection-outline against ${label} on ${panel} is ${ratio.toFixed(2)}:1`
+          ).toBeGreaterThanOrEqual(3);
+        }
+      }
+    }
+  });
+
   it("outlines every hook it accepts in both high-contrast modes", () => {
     const css = readIndexCss().replace(/\/\*[\s\S]*?\*\//g, "");
-    for (const query of ["(prefers-contrast: more)", "(forced-colors: active)"]) {
-      const selectors = outlinedSelectors(mediaBlocks(css, query));
+    // Chromium matches `prefers-contrast: more` under forced colours too, so the
+    // theme-ink outline stands aside there and the system-colour one shows.
+    const blocks = {
+      "(prefers-contrast: more)": mediaBlocks(
+        mediaBlocks(css, "(prefers-contrast: more)"),
+        "(forced-colors: none)"
+      ),
+      "(forced-colors: active)": mediaBlocks(css, "(forced-colors: active)"),
+    };
+    for (const [query, block] of Object.entries(blocks)) {
+      const selectors = outlinedSelectors(block);
       for (const hook of OUTLINE_HOOKS) {
         expect(
           selectors.some((selector) => matchesHook(selector, hook)),
@@ -210,6 +252,39 @@ describe("highlighted-row language", () => {
     for (const shared of [PALETTE_ROW_CLASS, LIST_DETAIL_ROW_CLASS]) {
       expect(shared.split(/\s+/)).toContain("palette-row");
     }
+  });
+
+  it("never lets the forced-colours idle-row rule hide a hooked row's outline", () => {
+    // The rule that paints a Radix row's transparent outline `Canvas` outranks
+    // the hook rules, so it has to exclude every state they outline.
+    const block = mediaBlocks(
+      readIndexCss().replace(/\/\*[\s\S]*?\*\//g, ""),
+      "(forced-colors: active)"
+    );
+    const hiding = [...block.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .filter(([, , body]) => /outline-color\s*:\s*(Canvas|transparent)\s*(;|$)/.test(body!))
+      .map(([, list]) => list!.replace(/\s+/g, ""));
+    expect(hiding.length).toBeGreaterThan(0);
+    for (const selector of hiding) {
+      expect(selector).toContain(":not([data-highlighted])");
+      expect(selector).toContain(':not([data-state="open"])');
+    }
+  });
+
+  it("keeps the overview cursor visible on a selected cell under increased contrast", () => {
+    // Membership takes the cell's outline there, so the cursor is drawn inside it.
+    const block = mediaBlocks(
+      mediaBlocks(readIndexCss().replace(/\/\*[\s\S]*?\*\//g, ""), "(prefers-contrast: more)"),
+      "(forced-colors: none)"
+    );
+    const ring = [...block.matchAll(/([^{}]+)\{([^{}]*)\}/g)].find(([, list]) =>
+      list!
+        .replace(/\s+/g, "")
+        .endsWith('[data-overview-cursor="true"][aria-selected="true"]::after')
+    );
+    expect(ring, "a ring for the selected cursor cell").toBeDefined();
+    expect(ring![2]).toMatch(/border\s*:\s*2px solid var\(--color-accent-primary\)/);
+    expect(ring![2]).toMatch(/position\s*:\s*absolute/);
   });
 
   it("puts an outline hook on every element that paints the highlight", () => {
@@ -307,6 +382,44 @@ describe("highlighted-row language", () => {
     expect(reasons(`const ROW = "aria-selected:bg-overlay-highlight";`)).toEqual([
       "painted outside a className attribute",
     ]);
+    // An open submenu's parent: outlined by its menuitem role and data-state.
+    expect(
+      reasons(
+        `<SubTrigger className="data-[highlighted]:bg-overlay-highlight data-[state=open]:bg-overlay-highlight" />`
+      )
+    ).toEqual(["hooked"]);
+    expect(
+      reasons(`<div role="menuitem" className="data-[state=open]:bg-overlay-highlight" />`)
+    ).toEqual(["hooked"]);
+    expect(reasons(`<div className="data-[state=open]:bg-overlay-highlight" />`)).toEqual([
+      "no outline hook",
+    ]);
+    expect(
+      reasons(
+        `<SubTrigger className="data-[state=open]:bg-overlay-highlight aria-selected:bg-overlay-highlight" />`
+      )
+    ).toEqual(["no outline hook"]);
+    // The worktree overview's membership: its role, marker and own aria-selected.
+    expect(
+      reasons(
+        `<div role="gridcell" aria-selected={on} data-worktree-overview-cell={id} className={cn("px-2", "aria-selected:bg-overlay-highlight")} />`
+      )
+    ).toEqual(["hooked"]);
+    expect(
+      reasons(
+        `<div role="gridcell" data-worktree-overview-cell={id} className="aria-selected:bg-overlay-highlight" />`
+      )
+    ).toEqual(["an overview cell painted on something other than its own `aria-selected`"]);
+    expect(
+      reasons(
+        `<div role="gridcell" aria-selected={on} data-worktree-overview-cell={id} className="data-[active]:bg-overlay-highlight" />`
+      )
+    ).toEqual(["an overview cell painted on something other than its own `aria-selected`"]);
+    expect(
+      reasons(
+        `<div role="gridcell" aria-selected={on} className="aria-selected:bg-overlay-highlight" />`
+      )
+    ).toEqual(["no outline hook"]);
   });
 });
 
@@ -316,6 +429,10 @@ const OUTLINE_HOOKS = [
   '.palette-row[data-selected="true"]',
   '.forge-row[data-active="true"]',
   "[data-highlighted]",
+  // A submenu's parent row keeps the fill while focus is inside the submenu.
+  '[role="menuitem"][data-state="open"]',
+  // The worktree overview's bulk membership; its cursor is its own outline.
+  '[role="gridcell"][aria-selected="true"][data-worktree-overview-cell]',
 ];
 
 /**
@@ -327,32 +444,42 @@ const OWN_TREATMENT: Record<
   string,
   { paints: number; treated: (classes: string[], states: string[][]) => boolean; why: string }
 > = {
-  "src/components/Worktree/WorktreeOverviewRow.tsx": {
-    paints: 1,
-    treated: (classes) =>
-      hasClass(classes, (_, utility) => utility === "outline-accent-primary") &&
-      hasClass(classes, (_, utility) => VISIBLE_OUTLINE.test(utility)),
-    why: "`aria-selected` is bulk membership there; the cursor is its own accent outline",
-  },
   "src/components/Terminal/RecipeRunner/RecipeRunnerItem.tsx": {
     paints: 2,
-    treated: selectionOutlineBorder,
-    why: "the cursor also draws a selection-outline border in the same state",
+    treated: recipeCursorTreatment,
+    why: "the cursor's card border steps to selection-outline, and forced colours outlines it",
   },
   "src/components/Terminal/RecipeRunner/RecipeRunnerList.tsx": {
     paints: 1,
-    treated: selectionOutlineBorder,
-    why: "the cursor also draws a selection-outline border in the same state",
+    treated: recipeCursorTreatment,
+    why: "the cursor's card border steps to selection-outline, and forced colours outlines it",
   },
 };
 
-function selectionOutlineBorder(classes: string[], states: string[][]): boolean {
-  return states.every((state) =>
-    hasClass(
-      classes,
-      (variants, utility) =>
-        utility === "border-[var(--color-selection-outline)]" && sameChain(variants, state)
-    )
+/**
+ * The recipe cursor is a bordered card, so its mark is the border stepping to
+ * `selection-outline` in the same state. Forced colours repaints every button
+ * border `ButtonText`, and in list mode focus stays in the filter field, so
+ * there the cursor needs a `Highlight` outline under the same state too.
+ */
+function recipeCursorTreatment(classes: string[], states: string[][]): boolean {
+  return states.every(
+    (state) =>
+      hasClass(
+        classes,
+        (variants, utility) =>
+          utility === "border-[var(--color-selection-outline)]" && sameChain(variants, state)
+      ) &&
+      hasClass(
+        classes,
+        (variants, utility) =>
+          VISIBLE_OUTLINE.test(utility) && sameChain(variants, ["forced-colors", ...state])
+      ) &&
+      hasClass(
+        classes,
+        (variants, utility) =>
+          utility === "outline-[color:Highlight]" && sameChain(variants, ["forced-colors", ...state])
+      )
   );
 }
 
@@ -422,8 +549,7 @@ interface HighlightPaint {
 /**
  * Every class token that paints `overlay-highlight` as a row's state, read from
  * the syntax tree so a comment can neither hide a paint nor fake a hook. Hover
- * is supplemental and an open submenu trigger is not the row Enter acts on, so
- * neither counts as a paint here.
+ * is supplemental, so it does not count as a paint here.
  */
 function highlightPaints(source: string, fileName = "fixture.tsx"): HighlightPaint[] {
   const file = ts.createSourceFile(
@@ -440,8 +566,7 @@ function highlightPaints(source: string, fileName = "fixture.tsx"): HighlightPai
       const variants = parts.slice(0, -1);
       return (
         HIGHLIGHT_PAINT.test(parts[parts.length - 1]!) &&
-        !variants.includes("hover") &&
-        !variants.includes("data-[state=open]")
+        !variants.includes("hover")
       );
     });
   const isText = (n: ts.Node): n is ts.StringLiteralLike | ts.TemplateLiteralLikeNode =>
@@ -489,10 +614,27 @@ function highlightPaints(source: string, fileName = "fixture.tsx"): HighlightPai
         const shared = names.has("PALETTE_ROW_CLASS") || names.has("LIST_DETAIL_ROW_CLASS");
         let hooked = false;
         let reason = "no outline hook";
-        const radixOnly = states.every((state) => state.includes("data-[highlighted]"));
+        const menuItem =
+          tag === "SubTrigger" ||
+          (role !== undefined && ts.isStringLiteral(role) && role.text === "menuitem");
+        // An open submenu's parent row is outlined by its role and `data-state`.
+        const radixOnly = states.every(
+          (state) =>
+            state.includes("data-[highlighted]") || (menuItem && state.includes("data-[state=open]"))
+        );
+        const overviewCell =
+          role !== undefined &&
+          ts.isStringLiteral(role) &&
+          role.text === "gridcell" &&
+          attributes.has("data-worktree-overview-cell");
         if (radixOnly && radixItem) hooked = true;
         else if (radixOnly) hooked = outlinedIn("contrast-more") && outlinedIn("forced-colors");
-        else if (shared || classes.includes("palette-row")) {
+        else if (overviewCell) {
+          hooked =
+            attributes.has("aria-selected") &&
+            states.every((state) => sameChain(state, ["aria-selected"]));
+          reason = "an overview cell painted on something other than its own `aria-selected`";
+        } else if (shared || classes.includes("palette-row")) {
           hooked = attributes.has("aria-selected") || attributes.has("data-selected");
           reason = "`palette-row` without aria-selected or data-selected";
         } else if (classes.includes("forge-row")) {

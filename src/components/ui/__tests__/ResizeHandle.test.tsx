@@ -117,11 +117,10 @@ describe("ResizeHandle", () => {
   type SplitterSurface = (typeof SPLITTER_SURFACES)[number];
   // Where `selection-outline` falls short of 3:1 on a splitter surface. The theme
   // contract holds it to 3:1 on palette surfaces (the sidebar on dark, the elevated
-  // panel on light), and these misses are on other surfaces. Exact, so a retuned
+  // panel on light) and over the highlighted row on both panel surfaces, and these
+  // misses are on other surfaces. Exact, so a retuned
   // theme that closes a gap has to drop its entry and a new gap fails.
   const REST_GAPS_UNDER_3: Record<string, SplitterSurface[]> = {
-    arashiyama: ["surface-panel-elevated"],
-    highlands: ["surface-panel-elevated"],
     hokkaido: ["surface-grid"],
   };
   // The surfaces `getPaletteSelectionWarnings` holds `selection-outline` to 3:1 on.
