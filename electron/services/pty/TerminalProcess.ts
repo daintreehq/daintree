@@ -1956,6 +1956,9 @@ export class TerminalProcess {
       (this.samplingFinalFrame &&
         (t.detectedAgentId !== undefined || t.launchAgentId !== undefined));
     const visible = hasAgent && hasRateLimitMessage(lines);
+    // The pane's own memory takes every appearance (#16136): only the event is
+    // throttled, and a limit hit again within the cooldown is still a limit.
+    if (visible && !this.rateLimitBannerVisible) t.usageLimitObservedAt = now;
     // The cooldown absorbs a TUI repaint that blanks the banner for one frame,
     // which would otherwise read as a fresh appearance each time.
     if (
@@ -1964,8 +1967,6 @@ export class TerminalProcess {
       now - this.lastRateLimitObservedAt >= RATE_LIMIT_OBSERVATION_COOLDOWN_MS
     ) {
       this.lastRateLimitObservedAt = now;
-      t.usageLimitObservedAt = now;
-      t.usageLimitTurnStarted = false;
       events.emit("agent:rate-limit-observed", {
         terminalId: this.id,
         observedAt: now,

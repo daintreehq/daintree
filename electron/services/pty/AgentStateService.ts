@@ -82,34 +82,37 @@ function isLifecycleEvent(event: AgentEvent): boolean {
 }
 
 /**
- * Whether a pane that showed a usage-limit banner has worked since (#16136).
- * A turn started after the banner is only a try: the user typing "continue"
- * on a spent account starts one that hits the limit again, while the old
- * banner may still sit in view. So the memory goes when that turn settles on
- * anything but an error, which is how the classifier reads a limit banner in
- * the transcript, or when a new session starts.
+ * How long an agent must have been at work after a usage-limit banner before
+ * a settle says the pane works again (#16136). Canopy's turn hold, for the
+ * same reason: a local command such as `/usage` on a spent account, or a
+ * flicker of output, is gone again in under this, and is no sign the account
+ * took a turn.
+ */
+export const USAGE_LIMIT_WORK_HOLD_MS = 3_000;
+
+/**
+ * Whether a pane that showed a usage-limit banner has worked since (#16136),
+ * read at each settle out of `working`. A settle on an error is how the
+ * classifier reads a limit banner in the transcript: the user's "continue" on
+ * a spent account hits it again, often with the old banner still in view. Any
+ * other settle clears the memory once the agent worked past the hold after
+ * both the turn's start and the banner, so a limit retried and lifted within
+ * one turn counts as well. A new session in the pane runs on the same
+ * account, so it keeps the memory.
  */
 function noteUsageLimitProgress(
   terminal: TerminalInfo,
-  event: AgentEvent,
+  previousState: AgentState,
+  workingSince: number | undefined,
   newState: AgentState,
   timestamp: number,
   waitingReason: WaitingReason | undefined
 ): void {
   const observedAt = terminal.usageLimitObservedAt;
-  if (observedAt === undefined) return;
-  if (event.type === "respawn") {
-    terminal.usageLimitObservedAt = undefined;
-    terminal.usageLimitTurnStarted = false;
-    return;
-  }
-  if (newState === "working") {
-    if (timestamp > observedAt) terminal.usageLimitTurnStarted = true;
-    return;
-  }
-  if (!terminal.usageLimitTurnStarted) return;
-  terminal.usageLimitTurnStarted = false;
+  if (observedAt === undefined || previousState !== "working" || newState === "working") return;
   if (newState === "waiting" && waitingReason === "error") return;
+  const workedFrom = Math.max(workingSince ?? observedAt, observedAt);
+  if (timestamp - workedFrom < USAGE_LIMIT_WORK_HOLD_MS) return;
   terminal.usageLimitObservedAt = undefined;
 }
 
@@ -285,6 +288,7 @@ export class AgentStateService {
     const effectiveAgentId = terminal.detectedAgentId ?? terminal.launchAgentId;
 
     const previousState = terminal.agentState || "idle";
+    const previousStateChange = terminal.lastStateChange;
     const newState = nextAgentState(previousState, event);
 
     if (newState === previousState) {
@@ -486,7 +490,14 @@ export class AgentStateService {
       terminal.waitingReason = undefined;
     }
 
-    noteUsageLimitProgress(terminal, event, newState, timestamp, waitingReason);
+    noteUsageLimitProgress(
+      terminal,
+      previousState,
+      previousStateChange,
+      newState,
+      timestamp,
+      waitingReason
+    );
 
     events.emit("agent:state-changed", validatedStateChange.data);
     this.emitTerminalActivity(terminal);

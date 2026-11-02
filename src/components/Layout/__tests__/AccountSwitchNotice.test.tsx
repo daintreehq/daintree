@@ -117,12 +117,18 @@ describe("AccountSwitchDialog (#16136)", () => {
     paneIds: ["a", "b", "c"],
   };
 
-  function renderDialog(onClose = vi.fn()) {
+  function renderDialog(onClose = vi.fn(), overrides: Record<string, PaneOverrides> = {}) {
     seed([
-      pane({ id: "a", title: "Parser" }),
-      pane({ id: "b", title: "Docs" }),
-      pane({ id: "c", title: "Release" }),
+      pane({ id: "a", title: "Parser", ...overrides.a }),
+      pane({ id: "b", title: "Docs", ...overrides.b }),
+      pane({ id: "c", title: "Release", ...overrides.c }),
     ]);
+    // The host still remembers each pane's limit when the confirm asks again.
+    getInfoMock.mockImplementation(async (id: string) => ({
+      id,
+      hasPty: true,
+      usageLimitObservedAt: 1,
+    }));
     const request = buildAccountSwitchRequest(notice, notice.paneIds);
     render(<AccountSwitchDialog request={request} onClose={onClose} />);
     return onClose;
@@ -141,10 +147,12 @@ describe("AccountSwitchDialog (#16136)", () => {
 
     expect(onClose).toHaveBeenCalled();
     await waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(3));
-    expect(dispatchMock).toHaveBeenCalledWith(
-      "terminal.restartOnAccount",
-      { terminalId: "a", accountId: "company", confirmed: true },
-      { source: "user" }
+    expect(dispatchMock.mock.calls).toEqual(
+      ["a", "b", "c"].map((terminalId) => [
+        "terminal.restartOnAccount",
+        { terminalId, accountId: "company", confirmed: true },
+        { source: "user" },
+      ])
     );
   });
 
@@ -152,7 +160,7 @@ describe("AccountSwitchDialog (#16136)", () => {
     renderDialog();
 
     act(() => {
-      fireEvent.click(screen.getByRole("checkbox", { name: "Docs" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "Parser" }));
       fireEvent.click(screen.getByRole("checkbox", { name: "Release" }));
     });
     act(() => {
@@ -160,11 +168,35 @@ describe("AccountSwitchDialog (#16136)", () => {
     });
 
     await waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(1));
-    expect(dispatchMock.mock.calls[0]?.[1]).toEqual({
-      terminalId: "a",
-      accountId: "company",
-      confirmed: true,
+    expect(dispatchMock.mock.calls.map((call) => call[1])).toEqual([
+      { terminalId: "b", accountId: "company", confirmed: true },
+    ]);
+  });
+
+  it("leaves out a pane that worked again before the confirm", async () => {
+    renderDialog();
+    getInfoMock.mockImplementation(async (id: string) => ({
+      id,
+      hasPty: true,
+      ...(id === "b" ? {} : { usageLimitObservedAt: 1 }),
+    }));
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Restart 3 panes" }));
     });
+
+    await waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(2));
+    expect(dispatchMock.mock.calls.map((call) => call[1].terminalId)).toEqual(["a", "c"]);
+  });
+
+  it("warns about the checked agents at work, as they are now", () => {
+    renderDialog(vi.fn(), { b: { agentState: "working" } });
+    expect(screen.getByText(/1 agent is working and will be interrupted/)).toBeTruthy();
+
+    act(() => {
+      fireEvent.click(screen.getByRole("checkbox", { name: "Docs" }));
+    });
+    expect(screen.queryByText(/will be interrupted/)).toBeNull();
   });
 
   it("switches nothing with every pane unchecked", () => {
@@ -185,6 +217,7 @@ describe("AccountSwitchDialog (#16136)", () => {
 
   it("moves panes to the default login with a null account", async () => {
     seed([pane({ id: "a", title: "Parser", agentAccountId: "company" })]);
+    getInfoMock.mockResolvedValue({ id: "a", hasPty: true, usageLimitObservedAt: 1 });
     const request = buildAccountSwitchRequest(
       { agentId: "claude", account: { id: null, name: "Default login" }, paneIds: ["a"] },
       ["a"]

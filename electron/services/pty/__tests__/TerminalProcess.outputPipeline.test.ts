@@ -415,6 +415,27 @@ describe("TerminalProcess rate-limit observation (#12797)", () => {
     terminal.dispose();
   });
 
+  it("remembers a limit hit again inside the event's cooldown (#16136)", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "codex" });
+
+    ptyOnDataCallback!("■ You've hit your usage limit.\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toHaveLength(1);
+
+    // The pane worked again, and its memory went with it.
+    terminal.getInfo().usageLimitObservedAt = undefined;
+    ptyOnDataCallback!("line\r\n".repeat(20));
+    await vi.advanceTimersByTimeAsync(1_000);
+    ptyOnDataCallback!("■ You've hit your usage limit.\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(seen).toHaveLength(1);
+    expect(terminal.getInfo().usageLimitObservedAt).toBeGreaterThan(Number(seen[0]?.observedAt));
+
+    terminal.dispose();
+  });
+
   it("ignores a plain shell with no agent", async () => {
     const seen = collect();
     const terminal = createTerminal();

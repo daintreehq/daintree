@@ -59,10 +59,12 @@ export function isAccountSwitchCandidate(
  */
 export async function readUsageLimitedPaneIds(
   agentId: string,
-  accountId: string | null
+  accountId: string | null,
+  /** Only these panes, when asking again about a list already offered. */
+  among?: readonly string[]
 ): Promise<string[]> {
   const { panelIds, panelsById } = usePanelStore.getState();
-  const candidates = panelIds.filter((id) =>
+  const candidates = (among ?? panelIds).filter((id) =>
     isAccountSwitchCandidate(panelsById[id], agentId, accountId)
   );
   const limited = await Promise.all(
@@ -137,9 +139,10 @@ export function AccountSwitchNoticeItems({
 }
 
 export interface AccountSwitchRequest {
+  agentId: string;
   account: RestartAccountChoice;
-  /** Frozen when asked, so the confirm acts on exactly the panes it named. */
-  panes: { id: string; title: string; worktree: string | undefined; working: boolean }[];
+  /** Frozen when asked, so the confirm never acts on a pane it didn't name. */
+  panes: { id: string; title: string; worktree: string | undefined }[];
 }
 
 export function buildAccountSwitchRequest(
@@ -149,6 +152,7 @@ export function buildAccountSwitchRequest(
   const panelsById = usePanelStore.getState().panelsById;
   const worktrees = getCurrentViewStoreOrNull()?.getState().worktrees;
   return {
+    agentId: notice.agentId,
     account: notice.account,
     panes: paneIds.map((id) => {
       const panel = panelsById[id];
@@ -156,7 +160,6 @@ export function buildAccountSwitchRequest(
         id,
         title: panel?.title?.trim() || id,
         worktree: panel?.worktreeId ? worktrees?.get(panel.worktreeId)?.name : undefined,
-        working: terminalHasRunningAgentSession(panel),
       };
     }),
   };
@@ -200,23 +203,40 @@ function OpenAccountSwitchDialog({
 
   const chosen = request.panes.filter((pane) => selected.has(pane.id));
   const count = chosen.length;
-  const working = chosen.filter((pane) => pane.working).length;
+  // Read live: an agent that took up work while the list was open is interrupted too.
+  const working = usePanelStore(
+    (state) =>
+      chosen.filter((pane) => terminalHasRunningAgentSession(state.panelsById[pane.id])).length
+  );
   const accountName = request.account.name;
 
   const handleConfirm = () => {
     if (count === 0) return;
     onClose();
-    void restartPanesOnPreset(
-      chosen,
-      accountName,
-      (pane) =>
-        actionService.dispatch(
-          "terminal.restartOnAccount",
-          { terminalId: pane.id, accountId: request.account.id, confirmed: true },
-          { source: "user" }
-        ),
-      (restarted) => `Restarting ${pluralize(restarted, "pane")} on ${accountName}`
-    );
+    void (async () => {
+      // Asked again: a pane that worked again, or restarted, since the list was
+      // made has no limit left to switch away from, and keeps its conversation.
+      const still = new Set(
+        await readUsageLimitedPaneIds(
+          request.agentId,
+          request.account.id,
+          chosen.map((pane) => pane.id)
+        )
+      );
+      const panes = chosen.filter((pane) => still.has(pane.id));
+      if (panes.length === 0) return;
+      await restartPanesOnPreset(
+        panes,
+        accountName,
+        (pane) =>
+          actionService.dispatch(
+            "terminal.restartOnAccount",
+            { terminalId: pane.id, accountId: request.account.id, confirmed: true },
+            { source: "user" }
+          ),
+        (restarted) => `Restarting ${pluralize(restarted, "pane")} on ${accountName}`
+      );
+    })();
   };
 
   return (

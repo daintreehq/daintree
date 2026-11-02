@@ -80,9 +80,14 @@ export function AgentAccountsSection({
     else launch();
   };
 
-  const offerSwitch = (account: { id: string | null; name: string }) => {
-    const generation = ++offerGenerationRef.current;
+  // Taken when the change is made, so a save that lands late can't replace
+  // the offer a later change raised.
+  const beginOffer = () => {
     setOffer(null);
+    return ++offerGenerationRef.current;
+  };
+
+  const offerSwitch = (generation: number, account: { id: string | null; name: string }) => {
     void readUsageLimitedPaneIds(agentId, account.id).then(
       (paneIds) => {
         if (offerGenerationRef.current !== generation || paneIds.length === 0) return;
@@ -153,12 +158,15 @@ export function AgentAccountsSection({
                 value === DEFAULT_LOGIN
                   ? { id: null, name: "Default login" }
                   : accounts.find((candidate) => candidate.id === value);
+              const generation = beginOffer();
               void (async () => {
                 await updateAgent(agentId, {
                   accountId: value === DEFAULT_LOGIN ? undefined : value,
                 });
                 onSettingsChange?.();
-                if (moved && account) offerSwitch({ id: account.id, name: account.name });
+                if (moved && account) {
+                  offerSwitch(generation, { id: account.id, name: account.name });
+                }
               })();
             }}
             options={[
@@ -167,11 +175,14 @@ export function AgentAccountsSection({
             ]}
             isModified={hasSavedDefault}
             onReset={() => {
-              const moved = defaultId !== DEFAULT_LOGIN;
+              // Any saved default moves, one whose account is gone included:
+              // panes may still run on it.
+              const moved = hasSavedDefault;
+              const generation = beginOffer();
               void (async () => {
                 await updateAgent(agentId, { accountId: undefined });
                 onSettingsChange?.();
-                if (moved) offerSwitch({ id: null, name: "Default login" });
+                if (moved) offerSwitch(generation, { id: null, name: "Default login" });
               })();
             }}
             resetAriaLabel={`Use ${agentName}'s default login`}
@@ -219,7 +230,7 @@ export function AgentAccountsSection({
           // switched onto it before then would only reach that sign-in, so the
           // offer waits until the account is picked.
           if (folder === "create") signIn(account);
-          else offerSwitch({ id: account.id, name: account.name });
+          else offerSwitch(beginOffer(), { id: account.id, name: account.name });
         }}
       />
 

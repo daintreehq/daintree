@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AgentStateService } from "../AgentStateService.js";
+import { AgentStateService, USAGE_LIMIT_WORK_HOLD_MS } from "../AgentStateService.js";
 import { events } from "../../events.js";
 import { HandbackTracker } from "../HandbackTracker.js";
 import type { TerminalInfo } from "../types.js";
@@ -1656,7 +1656,7 @@ describe("usage-limit memory (#16136)", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.setSystemTime(BANNER_AT + 60_000);
+    vi.setSystemTime(BANNER_AT);
   });
 
   afterEach(() => {
@@ -1664,32 +1664,41 @@ describe("usage-limit memory (#16136)", () => {
     events.removeAllListeners();
   });
 
-  function limitedPane(agentState: TerminalInfo["agentState"] = "waiting") {
-    const terminal = createTerminal({ agentState });
+  function limitedPane(overrides: Partial<TerminalInfo> = {}) {
+    const terminal = createTerminal({
+      agentState: "waiting",
+      lastStateChange: BANNER_AT,
+      ...overrides,
+    });
     terminal.usageLimitObservedAt = BANNER_AT;
-    terminal.usageLimitTurnStarted = false;
     return terminal;
+  }
+
+  function work(service: AgentStateService, terminal: TerminalInfo, forMs: number) {
+    service.updateAgentState(terminal, { type: "input" });
+    vi.advanceTimersByTime(forMs);
   }
 
   it("holds while the pane sits on the limit, however long", () => {
     const service = new AgentStateService();
-    const terminal = limitedPane("working");
+    const terminal = limitedPane({ agentState: "working", lastStateChange: BANNER_AT - 60_000 });
 
+    vi.advanceTimersByTime(USAGE_LIMIT_WORK_HOLD_MS);
     service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "error");
-    vi.setSystemTime(BANNER_AT + 8 * 60 * 60_000);
+    vi.advanceTimersByTime(8 * 60 * 60_000);
     service.updateAgentState(terminal, { type: "watchdog-timeout" });
 
     expect(terminal.usageLimitObservedAt).toBe(BANNER_AT);
   });
 
-  it("goes once a turn started after the banner settles without an error", () => {
+  it("goes once the agent works past the hold and settles without an error", () => {
     const service = new AgentStateService();
     const terminal = limitedPane();
 
-    service.updateAgentState(terminal, { type: "input" });
-    expect(terminal.usageLimitObservedAt).toBe(BANNER_AT);
-
+    vi.advanceTimersByTime(60_000);
+    work(service, terminal, USAGE_LIMIT_WORK_HOLD_MS);
     service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+
     expect(terminal.usageLimitObservedAt).toBeUndefined();
   });
 
@@ -1697,32 +1706,50 @@ describe("usage-limit memory (#16136)", () => {
     const service = new AgentStateService();
     const terminal = limitedPane();
 
-    service.updateAgentState(terminal, { type: "input" });
+    work(service, terminal, 30_000);
     service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "error");
-    expect(terminal.usageLimitObservedAt).toBe(BANNER_AT);
 
-    // That settle used up the try: a later settle with no turn between says nothing.
-    service.updateAgentState(terminal, { type: "watchdog-timeout" });
     expect(terminal.usageLimitObservedAt).toBe(BANNER_AT);
   });
 
-  it("ignores a turn already running when the banner landed", () => {
+  it("holds through a local command or a flicker, gone again inside the hold", () => {
     const service = new AgentStateService();
-    const terminal = limitedPane("idle");
-    terminal.usageLimitObservedAt = Date.now() + 1;
+    const terminal = limitedPane();
 
-    service.updateAgentState(terminal, { type: "input" });
+    vi.advanceTimersByTime(60_000);
+    work(service, terminal, USAGE_LIMIT_WORK_HOLD_MS - 1);
     service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
 
-    expect(terminal.usageLimitObservedAt).toBe(Date.now() + 1);
+    expect(terminal.usageLimitObservedAt).toBe(BANNER_AT);
   });
 
-  it("goes with the session when a new one starts in the pane", () => {
+  it("counts a limit retried and lifted within one turn", () => {
     const service = new AgentStateService();
-    const terminal = limitedPane("exited");
+    const terminal = limitedPane({ agentState: "working", lastStateChange: BANNER_AT - 5_000 });
+
+    vi.advanceTimersByTime(USAGE_LIMIT_WORK_HOLD_MS);
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+
+    expect(terminal.usageLimitObservedAt).toBeUndefined();
+  });
+
+  it("measures the hold from the banner when it lands mid-turn", () => {
+    const service = new AgentStateService();
+    const terminal = limitedPane({ agentState: "working", lastStateChange: BANNER_AT - 60_000 });
+
+    vi.advanceTimersByTime(USAGE_LIMIT_WORK_HOLD_MS - 1);
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+
+    expect(terminal.usageLimitObservedAt).toBe(BANNER_AT);
+  });
+
+  it("keeps it across a new session in the pane, which runs on the same account", () => {
+    const service = new AgentStateService();
+    const terminal = limitedPane({ agentState: "exited" });
 
     service.updateAgentState(terminal, { type: "respawn" });
 
-    expect(terminal.usageLimitObservedAt).toBeUndefined();
+    expect(terminal.agentState).toBe("idle");
+    expect(terminal.usageLimitObservedAt).toBe(BANNER_AT);
   });
 });

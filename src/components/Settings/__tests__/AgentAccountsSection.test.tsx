@@ -1,9 +1,16 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const dispatch = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
+
+// The confirm asks the host again before it restarts anything (#16136).
+vi.mock("@/clients/terminalClient", () => ({
+  terminalClient: {
+    getInfo: async (id: string) => ({ id, hasPty: true, usageLimitObservedAt: 1 }),
+  },
+}));
 
 // The host's answer to which panes are stopped on a usage limit (#16136).
 const readUsageLimitedPaneIds = vi.hoisted(() => vi.fn().mockResolvedValue([]));
@@ -57,7 +64,7 @@ import { AgentAccountsSection } from "../AgentAccountsSection";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { usePanelStore } from "@/store/panelStore";
 import type { AgentSettingsEntry } from "@shared/types";
-import type { PanelInstance } from "@shared/types/panel";
+import type { PtyPanelData } from "@shared/types/panel";
 
 const COMPANY = { id: "company", name: "Company", configDir: "/Users/me/.codex-company" };
 
@@ -162,7 +169,7 @@ describe("AgentAccountsSection (#16040)", () => {
   });
 
   describe("offering the panes stopped on a usage limit (#16136)", () => {
-    const limitedPane = {
+    const limitedPane: PtyPanelData = {
       id: "p1",
       kind: "terminal",
       title: "Parser",
@@ -172,7 +179,7 @@ describe("AgentAccountsSection (#16040)", () => {
       location: "grid",
       launchAgentId: "codex",
       agentState: "waiting",
-    } as PanelInstance;
+    };
 
     beforeEach(() => {
       usePanelStore.setState({ panelsById: { p1: limitedPane }, panelIds: ["p1"] });
@@ -201,17 +208,19 @@ describe("AgentAccountsSection (#16040)", () => {
         fireEvent.click(screen.getByRole("button", { name: "Restart pane" }));
       });
 
-      expect(dispatch).toHaveBeenCalledWith(
-        "terminal.restartOnAccount",
-        { terminalId: "p1", accountId: "company", confirmed: true },
-        { source: "user" }
+      await waitFor(() =>
+        expect(dispatch).toHaveBeenCalledWith(
+          "terminal.restartOnAccount",
+          { terminalId: "p1", accountId: "company", confirmed: true },
+          { source: "user" }
+        )
       );
     });
 
     it("offers a move to the default login when the default is reset", async () => {
       useAgentSettingsStore.setState({ updateAgent: vi.fn().mockResolvedValue(undefined) });
       usePanelStore.setState({
-        panelsById: { p1: { ...limitedPane, agentAccountId: "company" } as PanelInstance },
+        panelsById: { p1: { ...limitedPane, agentAccountId: "company" } },
         panelIds: ["p1"],
       });
       renderSection({ accounts: [COMPANY], accountId: "company" });
@@ -222,6 +231,42 @@ describe("AgentAccountsSection (#16040)", () => {
 
       expect(readUsageLimitedPaneIds).toHaveBeenCalledWith("codex", null);
       expect(screen.getByRole("button", { name: "Switch it to Default login…" })).toBeTruthy();
+    });
+
+    it("offers a move off a saved default whose account is gone", async () => {
+      useAgentSettingsStore.setState({ updateAgent: vi.fn().mockResolvedValue(undefined) });
+      usePanelStore.setState({
+        panelsById: { p1: { ...limitedPane, agentAccountId: "gone" } },
+        panelIds: ["p1"],
+      });
+      renderSection({ accounts: [COMPANY], accountId: "gone" });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Use Codex's default login" }));
+      });
+
+      expect(screen.getByRole("button", { name: "Switch it to Default login…" })).toBeTruthy();
+    });
+
+    it("keeps the offer of the later change when an earlier save lands last", async () => {
+      const LAB = { id: "lab", name: "Lab", configDir: "/Users/me/.codex-lab" };
+      let finishFirst: () => void = () => {};
+      const updateAgent = vi
+        .fn()
+        .mockImplementationOnce(() => new Promise<void>((resolve) => (finishFirst = resolve)))
+        .mockResolvedValue(undefined);
+      useAgentSettingsStore.setState({ updateAgent });
+      renderSection({ accounts: [COMPANY, LAB] });
+      const select = screen.getByRole("combobox", { name: "Default account" });
+
+      fireEvent.change(select, { target: { value: "company" } });
+      await act(async () => {
+        fireEvent.change(select, { target: { value: "lab" } });
+      });
+      await act(async () => finishFirst());
+
+      expect(screen.getByRole("button", { name: "Switch it to Lab…" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Switch it to Company…" })).toBeNull();
     });
 
     it("leaves them alone with Keep", async () => {
