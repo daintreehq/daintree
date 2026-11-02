@@ -1964,6 +1964,8 @@ export class TerminalProcess {
       now - this.lastRateLimitObservedAt >= RATE_LIMIT_OBSERVATION_COOLDOWN_MS
     ) {
       this.lastRateLimitObservedAt = now;
+      t.usageLimitObservedAt = now;
+      t.usageLimitTurnStarted = false;
       events.emit("agent:rate-limit-observed", {
         terminalId: this.id,
         observedAt: now,

@@ -81,6 +81,38 @@ function isLifecycleEvent(event: AgentEvent): boolean {
   return event.type === "exit" || event.type === "kill" || event.type === "respawn";
 }
 
+/**
+ * Whether a pane that showed a usage-limit banner has worked since (#16136).
+ * A turn started after the banner is only a try: the user typing "continue"
+ * on a spent account starts one that hits the limit again, while the old
+ * banner may still sit in view. So the memory goes when that turn settles on
+ * anything but an error, which is how the classifier reads a limit banner in
+ * the transcript, or when a new session starts.
+ */
+function noteUsageLimitProgress(
+  terminal: TerminalInfo,
+  event: AgentEvent,
+  newState: AgentState,
+  timestamp: number,
+  waitingReason: WaitingReason | undefined
+): void {
+  const observedAt = terminal.usageLimitObservedAt;
+  if (observedAt === undefined) return;
+  if (event.type === "respawn") {
+    terminal.usageLimitObservedAt = undefined;
+    terminal.usageLimitTurnStarted = false;
+    return;
+  }
+  if (newState === "working") {
+    if (timestamp > observedAt) terminal.usageLimitTurnStarted = true;
+    return;
+  }
+  if (!terminal.usageLimitTurnStarted) return;
+  terminal.usageLimitTurnStarted = false;
+  if (newState === "waiting" && waitingReason === "error") return;
+  terminal.usageLimitObservedAt = undefined;
+}
+
 // Backend-side identity used when routing agent-state events (who is this
 // event about?). Detection wins; during the boot window the launch hint is
 // used so a cold-launched agent's first state transitions carry a stable
@@ -453,6 +485,8 @@ export class AgentStateService {
     } else {
       terminal.waitingReason = undefined;
     }
+
+    noteUsageLimitProgress(terminal, event, newState, timestamp, waitingReason);
 
     events.emit("agent:state-changed", validatedStateChange.data);
     this.emitTerminalActivity(terminal);

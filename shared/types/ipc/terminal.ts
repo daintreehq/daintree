@@ -459,6 +459,12 @@ export interface TerminalInfoPayload {
    * never read absence as zero.
    */
   agentIncarnation?: number;
+  /**
+   * When the pane last showed an agent's usage-limit banner, held until its
+   * agent works again or a new session starts (#16136). An observation of
+   * printed text, kept far longer than the header chip's window.
+   */
+  usageLimitObservedAt?: number;
 }
 
 import type { TerminalActivityPayload } from "../terminal.js";

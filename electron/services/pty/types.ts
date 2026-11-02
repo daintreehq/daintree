@@ -168,6 +168,16 @@ export interface TerminalPublicState {
    * it, so the next settle publishes it to the renderer.
    */
   lastHandbackUnpublished?: boolean;
+  /**
+   * When this pane last showed an agent's usage-limit banner, kept until its
+   * agent works again (#16136): a turn started after the banner that doesn't
+   * end on an error, or a new session. The rate-limit chip forgets after a
+   * window; this is what an account switch lists. Set in `TerminalProcess`,
+   * cleared in `AgentStateService`; ephemeral (not persisted).
+   */
+  usageLimitObservedAt?: number;
+  /** A turn started after `usageLimitObservedAt`; its settle says whether the pane works again. */
+  usageLimitTurnStarted?: boolean;
   /** Worktree the terminal was spawned in; used when persisting agent session history */
   worktreeId?: string;
   /** Last non-useless title observed from xterm OSC updates (renderer-synced) */

@@ -1650,3 +1650,79 @@ describe("AgentStateService handback detection (#12488)", () => {
     expect(payloads.every((p) => p.lastHandback === undefined)).toBe(true);
   });
 });
+
+describe("usage-limit memory (#16136)", () => {
+  const BANNER_AT = 1_000_000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BANNER_AT + 60_000);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    events.removeAllListeners();
+  });
+
+  function limitedPane(agentState: TerminalInfo["agentState"] = "waiting") {
+    const terminal = createTerminal({ agentState });
+    terminal.usageLimitObservedAt = BANNER_AT;
+    terminal.usageLimitTurnStarted = false;
+    return terminal;
+  }
+
+  it("holds while the pane sits on the limit, however long", () => {
+    const service = new AgentStateService();
+    const terminal = limitedPane("working");
+
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "error");
+    vi.setSystemTime(BANNER_AT + 8 * 60 * 60_000);
+    service.updateAgentState(terminal, { type: "watchdog-timeout" });
+
+    expect(terminal.usageLimitObservedAt).toBe(BANNER_AT);
+  });
+
+  it("goes once a turn started after the banner settles without an error", () => {
+    const service = new AgentStateService();
+    const terminal = limitedPane();
+
+    service.updateAgentState(terminal, { type: "input" });
+    expect(terminal.usageLimitObservedAt).toBe(BANNER_AT);
+
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+    expect(terminal.usageLimitObservedAt).toBeUndefined();
+  });
+
+  it("holds through a turn that hits the limit again", () => {
+    const service = new AgentStateService();
+    const terminal = limitedPane();
+
+    service.updateAgentState(terminal, { type: "input" });
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "error");
+    expect(terminal.usageLimitObservedAt).toBe(BANNER_AT);
+
+    // That settle used up the try: a later settle with no turn between says nothing.
+    service.updateAgentState(terminal, { type: "watchdog-timeout" });
+    expect(terminal.usageLimitObservedAt).toBe(BANNER_AT);
+  });
+
+  it("ignores a turn already running when the banner landed", () => {
+    const service = new AgentStateService();
+    const terminal = limitedPane("idle");
+    terminal.usageLimitObservedAt = Date.now() + 1;
+
+    service.updateAgentState(terminal, { type: "input" });
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+
+    expect(terminal.usageLimitObservedAt).toBe(Date.now() + 1);
+  });
+
+  it("goes with the session when a new one starts in the pane", () => {
+    const service = new AgentStateService();
+    const terminal = limitedPane("exited");
+
+    service.updateAgentState(terminal, { type: "respawn" });
+
+    expect(terminal.usageLimitObservedAt).toBeUndefined();
+  });
+});
