@@ -345,6 +345,7 @@ export const CHANNEL_LEASE_POLICY = {
   "help:global-assistant-detach": "free",
   "help:global-assistant-claim-input": "free",
   "help:global-assistant-release-input": "free",
+  "help:global-assistant-input-eligible": "free",
   "help:global-assistant-restart": "free",
   "help:global-assistant-discard": "free",
   "help:global-assistant-changed": "free",

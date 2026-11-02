@@ -37,6 +37,7 @@ function makeDeps(overrides: Partial<MockedDeps> = {}) {
     kill: vi.fn((id: string) => {
       calls.push(`kill-${id}`);
     }),
+    focusedWindows: vi.fn(() => []),
     ...overrides,
   };
   return { deps, calls };
@@ -311,16 +312,143 @@ describe("GlobalAssistantService", () => {
       expect(service.detach(a, 99)).toBe(false);
     });
 
-    it("releases input when its owner detaches, without ending the session", async () => {
+    it("hands input to a remaining reader when its owner detaches, without ending the session (#16098)", async () => {
       const { deps } = makeDeps();
       const service = new GlobalAssistantService(deps);
       await service.ensureSession();
       const a = service.attach(10, 1);
-      service.attach(20, 2);
+      const b = service.attach(20, 2);
+      const epochBefore = service.getState().inputEpoch;
       service.detach(a, 10);
-      expect(service.getState().inputOwner).toBeNull();
+      expect(service.getState().inputOwner).toBe(b);
+      expect(service.canWrite(a, epochBefore)).toBe(false);
+      expect(service.canWrite(b, epochBefore)).toBe(false);
+      expect(service.canWrite(b, service.getState().inputEpoch)).toBe(true);
       expect(service.getState().phase).toBe("running");
       expect(deps.revoke).not.toHaveBeenCalled();
+
+      service.detach(b, 20);
+      expect(service.getState().inputOwner).toBeNull();
+    });
+
+    it("hands a vacated seat to the most recently focused window, else the latest to attach", async () => {
+      const { deps } = makeDeps();
+      const service = new GlobalAssistantService(deps);
+      await service.ensureSession();
+      const owner = service.attach(10, 1);
+      const inTwo = service.attach(20, 2);
+      const inThree = service.attach(30, 3);
+      deps.focusedWindows.mockReturnValue([2, 1]);
+      service.detach(owner, 10);
+      expect(service.getState().inputOwner).toBe(inTwo);
+
+      // No window it is in was ever focused: the latest to attach takes it.
+      deps.focusedWindows.mockReturnValue([]);
+      const inFour = service.attach(40, 4);
+      service.detach(inTwo, 20);
+      expect(service.getState().inputOwner).toBe(inFour);
+      service.detach(inFour, 40);
+      expect(service.getState().inputOwner).toBe(inThree);
+    });
+
+    it("prefers the later of two attachments in the same focused window", async () => {
+      const { deps } = makeDeps();
+      const service = new GlobalAssistantService(deps);
+      const owner = service.attach(10, 1);
+      service.attach(20, 2);
+      const later = service.attach(21, 2);
+      deps.focusedWindows.mockReturnValue([2]);
+      service.detach(owner, 10);
+      expect(service.getState().inputOwner).toBe(later);
+    });
+
+    it("passes over a reader that can't type, and fills the seat once it can", () => {
+      const { deps } = makeDeps();
+      const service = new GlobalAssistantService(deps);
+      const owner = service.attach(10, 1);
+      const behindCanopy = service.attach(20, 2, false);
+      deps.focusedWindows.mockReturnValue([2, 1]);
+      service.detach(owner, 10);
+      expect(service.getState().inputOwner).toBeNull();
+
+      const epoch = service.getState().inputEpoch;
+      const seen = vi.fn();
+      service.onChange(seen);
+      service.setEligible(behindCanopy, 20, true);
+      expect(service.getState().inputOwner).toBe(behindCanopy);
+      expect(service.getState().inputEpoch).toBe(epoch + 1);
+      expect(seen).toHaveBeenCalledTimes(1);
+    });
+
+    it("gives nothing to an attachment that arrives unable to type", () => {
+      const service = new GlobalAssistantService(makeDeps().deps);
+      service.attach(10, 1, false);
+      expect(service.getState().inputOwner).toBeNull();
+      const b = service.attach(20, 2);
+      expect(service.getState().inputOwner).toBe(b);
+    });
+
+    it("lets an owner keep input when it can no longer type, and takes it from nobody", () => {
+      const { deps } = makeDeps();
+      const service = new GlobalAssistantService(deps);
+      const a = service.attach(10, 1);
+      const b = service.attach(20, 2);
+      deps.focusedWindows.mockReturnValue([2, 1]);
+      const epoch = service.getState().inputEpoch;
+      const seen = vi.fn();
+      service.onChange(seen);
+      service.setEligible(a, 10, false);
+      service.setEligible(b, 20, false);
+      service.setEligible(b, 20, true);
+      expect(service.getState().inputOwner).toBe(a);
+      expect(service.getState().inputEpoch).toBe(epoch);
+      expect(seen).not.toHaveBeenCalled();
+      expect(() => service.setEligible(a, 99, true)).toThrow(/another window/);
+      expect(() => service.setEligible("missing", 10, true)).toThrow(/gone/);
+    });
+
+    it("hands over once when a closing window takes the owner and others with it", () => {
+      const { deps } = makeDeps();
+      const service = new GlobalAssistantService(deps);
+      service.attach(10, 1);
+      service.attach(11, 1);
+      const survivor = service.attach(20, 2);
+      // Window 1 is focused last, so only removing all of it first keeps input off its views.
+      deps.focusedWindows.mockReturnValue([1, 2]);
+      const epoch = service.getState().inputEpoch;
+      const owners: Array<string | null> = [];
+      service.onChange((state) => owners.push(state.inputOwner));
+      service.detachWindow(1);
+      expect(service.getState().inputOwner).toBe(survivor);
+      expect(service.getState().inputEpoch).toBe(epoch + 1);
+      expect(owners).toEqual([survivor]);
+    });
+
+    it("gives a restarted run's input to a reader still showing it", async () => {
+      const { deps } = makeDeps();
+      const service = new GlobalAssistantService(deps);
+      await service.ensureSession();
+      service.attach(10, 1);
+      const b = service.attach(20, 2);
+      deps.focusedWindows.mockReturnValue([2, 1]);
+      const restarting = service.restart();
+      expect(service.getState().inputOwner).toBeNull();
+      await restarting;
+      expect(service.getState().inputOwner).toBe(b);
+
+      await service.discard();
+      expect(service.getState().inputOwner).toBeNull();
+    });
+
+    it("leaves input with nobody when a launch fails", async () => {
+      const { deps } = makeDeps();
+      const service = new GlobalAssistantService(deps);
+      await service.ensureSession();
+      service.attach(10, 1);
+      await service.discard();
+      deps.spawn.mockResolvedValueOnce(false);
+      await expect(service.ensureSession()).rejects.toMatchObject({ code: "INTERNAL" });
+      expect(service.getState().inputOwner).toBeNull();
     });
 
     it("asks questions in the view holding input, else the latest reader, and nowhere once none is left (#14161)", async () => {

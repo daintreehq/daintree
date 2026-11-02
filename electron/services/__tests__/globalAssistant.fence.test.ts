@@ -16,6 +16,7 @@ function makeService() {
     spawn: async () => true,
     revoke: async () => {},
     kill: () => {},
+    focusedWindows: () => [],
   });
 }
 

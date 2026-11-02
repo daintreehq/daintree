@@ -701,6 +701,9 @@ export interface GeneratedElectronAPI {
     revokeSession(
       ...args: IpcInvokeMap["help:revoke-session"]["args"]
     ): Promise<IpcInvokeMap["help:revoke-session"]["result"]>;
+    setGlobalAssistantInputEligible(
+      ...args: IpcInvokeMap["help:global-assistant-input-eligible"]["args"]
+    ): Promise<IpcInvokeMap["help:global-assistant-input-eligible"]["result"]>;
     takePendingHibernation(
       ...args: IpcInvokeMap["help:take-pending-hibernation"]["args"]
     ): Promise<IpcInvokeMap["help:take-pending-hibernation"]["result"]>;

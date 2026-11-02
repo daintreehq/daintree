@@ -511,6 +511,7 @@ export const CHANNEL_LOCALITY = {
   "help:global-assistant-detach": "host",
   "help:global-assistant-claim-input": "host",
   "help:global-assistant-release-input": "host",
+  "help:global-assistant-input-eligible": "host",
   "help:global-assistant-restart": "host",
   "help:global-assistant-discard": "host",
   "help:global-assistant-changed": "host",
