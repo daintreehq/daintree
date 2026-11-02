@@ -260,4 +260,67 @@ describe("waitForAgentAtPrompt", () => {
     await waitForAgentAtPrompt(terminalId, { timeoutMs: 60_000 });
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it("answers a caller that already gave up, even for an agent at its prompt", async () => {
+    const terminalId = nextTerminal();
+    spawn(terminalId);
+    transition(terminalId, "waiting", "prompt");
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      waitForAgentAtPrompt(terminalId, { timeoutMs: 60_000, signal: controller.signal })
+    ).resolves.toMatchObject({ outcome: "aborted" });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  describe("promptOnly", () => {
+    it("waits through idle, an approval and a question for the prompt", async () => {
+      const terminalId = nextTerminal();
+      spawn(terminalId);
+      const wait = waitForAgentAtPrompt(terminalId, { timeoutMs: 60_000, promptOnly: true });
+      transition(terminalId, "idle");
+      transition(terminalId, "waiting", "approval");
+      transition(terminalId, "waiting", "question");
+      transition(terminalId, "waiting", "error");
+      expect(await isSettled(wait)).toBe(false);
+
+      transition(terminalId, "waiting", "prompt");
+      await expect(wait).resolves.toEqual({
+        terminalId,
+        outcome: "settled",
+        state: "waiting",
+        waitingReason: "prompt",
+      });
+    });
+
+    it("answers at once for an agent already at its prompt, and never for one idle", async () => {
+      const atPrompt = nextTerminal();
+      spawn(atPrompt);
+      transition(atPrompt, "waiting", "prompt");
+      await expect(
+        waitForAgentAtPrompt(atPrompt, { timeoutMs: 60_000, promptOnly: true })
+      ).resolves.toMatchObject({ outcome: "settled", waitingReason: "prompt" });
+
+      const idle = nextTerminal();
+      spawn(idle);
+      transition(idle, "idle");
+      const wait = waitForAgentAtPrompt(idle, { timeoutMs: 1_000, promptOnly: true });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(wait).resolves.toEqual({ terminalId: idle, outcome: "timeout", state: "idle" });
+    });
+
+    it("still reports an exit and a kill", async () => {
+      const exits = nextTerminal();
+      spawn(exits);
+      const exiting = waitForAgentAtPrompt(exits, { timeoutMs: 60_000, promptOnly: true });
+      transition(exits, "exited");
+      await expect(exiting).resolves.toMatchObject({ outcome: "exited" });
+
+      const killed = nextTerminal();
+      spawn(killed);
+      const killing = waitForAgentAtPrompt(killed, { timeoutMs: 60_000, promptOnly: true });
+      kill(killed);
+      await expect(killing).resolves.toMatchObject({ outcome: "closed" });
+    });
+  });
 });

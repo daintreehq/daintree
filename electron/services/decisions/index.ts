@@ -243,6 +243,17 @@ const deliveryDeps: DecisionsDeliveryDeps = {
     return mcpServerService.holdWakes();
   },
   watchPanes,
+  resume: {
+    resumeSession: async (request) => {
+      const { resumeAgentSessionAsPaneLive } = await import("../viewless/index.js");
+      return resumeAgentSessionAsPaneLive(request);
+    },
+    waitForPrompt: async (terminalId, options) => {
+      const { waitForAgentAtPromptLive } = await import("../viewless/index.js");
+      return waitForAgentAtPromptLive(terminalId, options);
+    },
+    isDirectory: async (path) => (await stat(path)).isDirectory(),
+  },
 };
 
 function serialize<T>(step: () => Promise<T>): Promise<T> {

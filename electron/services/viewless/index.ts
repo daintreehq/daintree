@@ -178,7 +178,7 @@ export async function resumeAgentSessionAsPaneLive(
 /** Wait for an agent main launched or found to be at rest (#16000); see `waitForAgentAtPrompt`. */
 export async function waitForAgentAtPromptLive(
   terminalId: string,
-  options: { timeoutMs: number; signal?: AbortSignal }
+  options: { timeoutMs: number; signal?: AbortSignal; promptOnly?: boolean }
 ): Promise<import("./agentPromptWait.js").AgentPromptWaitResult> {
   const { waitForAgentAtPrompt } = await import("./agentPromptWait.js");
   return waitForAgentAtPrompt(terminalId, options);
