@@ -353,14 +353,26 @@ export function AgentButton({
   // Accounts are a choice of their own beside the preset (#16040).
   const accounts = getAgentConfigFolderAccount(type) ? sanitizeAgentAccounts(entry.accounts) : [];
   const hasAccounts = accounts.length > 0;
-  const savedAccountId = resolveEffectiveAccountId(entry, activeWorktreeId);
-  const activeAccount = savedAccountId
-    ? accounts.find((account) => account.id === savedAccountId)
-    : undefined;
   // Worktree-scoped pick wins over the agent-level default so switching
   // worktrees doesn't silently surface another worktree's selection.
   const savedPresetId = resolveEffectivePresetId(entry, activeWorktreeId);
   const activePreset = savedPresetId ? presets.find((p) => p.id === savedPresetId) : undefined;
+  // What a plain launch signs in as: the worktree's pick, else the saved
+  // preset's pin (#16133), else the agent's default.
+  const launchAccountId = resolveEffectiveAccountId(
+    entry,
+    activeWorktreeId,
+    undefined,
+    activePreset?.accountId
+  );
+  const activeAccount = launchAccountId
+    ? accounts.find((account) => account.id === launchAccountId)
+    : undefined;
+  // The radio marks the slot a pick writes: the worktree's, which inherits the
+  // pin, or outside a worktree the agent's own default, which a pin outranks.
+  const savedAccountId = activeWorktreeId
+    ? launchAccountId
+    : resolveEffectiveAccountId(entry, null);
   // CCR presets carry the routing prefix in their stored name; strip it for
   // display so the tooltip and menu surfaces show the same human label.
   const presetDisplayName = (preset: { name: string; displayTitle?: string }) =>
@@ -1011,7 +1023,8 @@ export function AgentButton({
                       value={
                         savedAccountId === null
                           ? DEFAULT_LOGIN_VALUE
-                          : (activeAccount?.id ?? MISSING_ACCOUNT_VALUE)
+                          : (accounts.find((account) => account.id === savedAccountId)?.id ??
+                            MISSING_ACCOUNT_VALUE)
                       }
                       onValueChange={pickAccount}
                     >

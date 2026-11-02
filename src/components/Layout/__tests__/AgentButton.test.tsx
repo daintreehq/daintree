@@ -258,13 +258,20 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenuSeparator: () => <hr data-testid="preset-menu-separator" />,
   DropdownMenuRadioGroup: ({
     children,
+    value,
     onValueChange,
   }: {
     children: React.ReactNode;
+    value?: string;
     onValueChange?: (value: string) => void;
   }) => {
     radioGroupOnValueChange = onValueChange ?? null;
-    return <div role="group">{children}</div>;
+    // The marked value, for tests that read where the radio stands (#16133).
+    return (
+      <div role="group" data-testid="dropdown-radio-group" data-value={value ?? ""}>
+        {children}
+      </div>
+    );
   },
   // Mirrors real Radix: the value changes whatever onSelect does, and the
   // menu closes unless onSelect prevented it.
@@ -480,6 +487,35 @@ describe("AgentButton preset UX", () => {
     dropdownOpenState = undefined;
     dropdownOnOpenChange = null;
     mockProjectPresetsByAgent = {};
+  });
+
+  describe("account picker (#16133)", () => {
+    const COMPANY = { id: "company", name: "Company", configDir: "/Users/me/.codex-company" };
+    const PERSONAL = { id: "personal", name: "Personal", configDir: "/Users/me/.codex-personal" };
+
+    function renderCodex() {
+      mockMergedPresetsFn = () => [{ id: "work", name: "Work", accountId: "company" } as never];
+      mockSettings = settingsWith({
+        codex: { accounts: [COMPANY, PERSONAL], accountId: "personal", presetId: "work" },
+      });
+      return render(
+        <AgentButton type="codex" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+    }
+
+    it("marks the saved preset's pinned account for a worktree that hasn't picked one", () => {
+      mockActiveWorktreeId = "wt1";
+      const { getByTestId } = renderCodex();
+      expect(getByTestId("dropdown-radio-group").getAttribute("data-value")).toBe("company");
+    });
+
+    it("marks the agent's default outside a worktree, the slot a pick writes there", () => {
+      const { getByTestId, getByText } = renderCodex();
+      expect(getByTestId("dropdown-radio-group").getAttribute("data-value")).toBe("personal");
+
+      fireEvent.click(getByText("Company"));
+      expect(updateAgentMock).toHaveBeenCalledWith("codex", { accountId: "company" });
+    });
   });
 
   describe("split threshold", () => {
