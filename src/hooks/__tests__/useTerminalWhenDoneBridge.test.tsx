@@ -34,15 +34,20 @@ let askInUse: ((query: TerminalWhenDoneInUseQuery) => void) | null = null;
 let requestFinish: ((request: TerminalWhenDoneFinishRequest) => void) | null = null;
 let resolveList: ((entries: TerminalWhenDoneEntry[]) => void) | null = null;
 const replies: TerminalWhenDoneInUseReply[] = [];
-const unsubscribe = vi.fn();
+const unsubscribe = {
+  changed: vi.fn(),
+  inUse: vi.fn(),
+  finish: vi.fn(),
+};
 
-function pane(location = "grid") {
-  return { id: "terminal-1", kind: "terminal", location };
+function pane(location = "grid", kind = "terminal") {
+  return { id: "terminal-1", kind, location };
 }
 
-function focusPane(id: string): HTMLElement {
+/** Focuses a textarea inside an element carrying `attribute`, as a pane or the expanded composer does. */
+function focusWithin(attribute: string, id: string): HTMLElement {
   const root = document.createElement("div");
-  root.setAttribute("data-panel-id", id);
+  root.setAttribute(attribute, id);
   const input = document.createElement("textarea");
   root.appendChild(input);
   document.body.appendChild(root);
@@ -50,12 +55,14 @@ function focusPane(id: string): HTMLElement {
   return root;
 }
 
+const focusPane = (id: string) => focusWithin("data-panel-id", id);
+
 beforeEach(() => {
   store.panelsById = {};
   store.drafts = new Map();
   store.removePanel.mockReset();
   store.backgroundTerminal.mockReset();
-  unsubscribe.mockReset();
+  for (const off of Object.values(unsubscribe)) off.mockReset();
   replies.length = 0;
   useTerminalWhenDoneStore.setState({ choices: {} });
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
@@ -70,15 +77,15 @@ beforeEach(() => {
           }),
         onChanged: (cb: typeof pushChange) => {
           pushChange = cb;
-          return unsubscribe;
+          return unsubscribe.changed;
         },
         onInUseQuery: (cb: typeof askInUse) => {
           askInUse = cb;
-          return unsubscribe;
+          return unsubscribe.inUse;
         },
         onFinishRequest: (cb: typeof requestFinish) => {
           requestFinish = cb;
-          return unsubscribe;
+          return unsubscribe.finish;
         },
         sendInUseReply: (reply: TerminalWhenDoneInUseReply) => replies.push(reply),
       },
@@ -135,25 +142,43 @@ describe("useTerminalWhenDoneBridge (#16171)", () => {
     ]);
   });
 
-  it("moves the pane to the background, or removes it without a second kill", () => {
+  it.each([
+    ["grid", "terminal", 1],
+    ["dock", "terminal", 1],
+    ["trash", "terminal", 0],
+    ["background", "terminal", 0],
+    ["grid", "browser", 0],
+  ])("moves a %s %s pane to the background %i time(s)", (location, kind, times) => {
+    renderHook(() => useTerminalWhenDoneBridge());
+    store.panelsById = { "terminal-1": pane(location, kind) };
+
+    requestFinish?.({ terminalId: "terminal-1", action: "background" });
+
+    expect(store.backgroundTerminal).toHaveBeenCalledTimes(times);
+  });
+
+  it("removes the pane without a second kill, and nothing for a pane it doesn't hold", () => {
     renderHook(() => useTerminalWhenDoneBridge());
 
-    store.panelsById = { "terminal-1": pane("dock") };
-    requestFinish?.({ terminalId: "terminal-1", action: "background" });
-    store.panelsById = { "terminal-1": pane("trash") };
-    requestFinish?.({ terminalId: "terminal-1", action: "background" });
+    requestFinish?.({ terminalId: "terminal-1", action: "remove" });
+    expect(store.removePanel).not.toHaveBeenCalled();
+
     store.panelsById = { "terminal-1": pane("grid") };
     requestFinish?.({ terminalId: "terminal-1", action: "remove" });
-
-    expect(store.backgroundTerminal).toHaveBeenCalledTimes(1);
     expect(store.removePanel).toHaveBeenCalledWith("terminal-1", { backendAlreadyClosed: true });
   });
 
-  it("leaves a pane someone started using since main asked", () => {
+  it.each([
+    ["focused the pane", () => void focusPane("terminal-1")],
+    ["focused its expanded composer", () => void focusWithin("data-composer-terminal-id", "terminal-1")],
+    ["started a draft", () => void store.drafts.set("project-1:terminal-1", "wait")],
+  ])("leaves a pane someone %s in since main asked", (_name, startUsing) => {
     renderHook(() => useTerminalWhenDoneBridge());
     store.panelsById = { "terminal-1": pane("grid") };
-    focusPane("terminal-1");
 
+    askInUse?.({ requestId: "r1", terminalId: "terminal-1" });
+    expect(replies).toEqual([{ requestId: "r1", inUse: false }]);
+    startUsing();
     requestFinish?.({ terminalId: "terminal-1", action: "background" });
     requestFinish?.({ terminalId: "terminal-1", action: "remove" });
 
@@ -161,10 +186,15 @@ describe("useTerminalWhenDoneBridge (#16171)", () => {
     expect(store.removePanel).not.toHaveBeenCalled();
   });
 
-  it("stops listening on unmount", () => {
+  it("stops listening on unmount, and ignores a snapshot that answers after", async () => {
     const { unmount } = renderHook(() => useTerminalWhenDoneBridge());
     unmount();
-    expect(unsubscribe).toHaveBeenCalledTimes(3);
+    for (const off of Object.values(unsubscribe)) expect(off).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveList?.([{ terminalId: "terminal-1", choice: "close" }]);
+    });
+    expect(useTerminalWhenDoneStore.getState().choices).toEqual({});
   });
 });
 
@@ -173,6 +203,12 @@ describe("isTerminalPaneInUseHere", () => {
     focusPane("terminal-1");
     vi.spyOn(document, "hasFocus").mockReturnValue(false);
     expect(isTerminalPaneInUseHere("terminal-1")).toBe(false);
+  });
+
+  it("counts focus in the pane's own expanded composer, never another pane's", () => {
+    focusWithin("data-composer-terminal-id", "terminal-2");
+    expect(isTerminalPaneInUseHere("terminal-1")).toBe(false);
+    expect(isTerminalPaneInUseHere("terminal-2")).toBe(true);
   });
 
   it("doesn't count a blank draft", () => {

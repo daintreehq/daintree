@@ -29,11 +29,14 @@ describe("TerminalWhenDoneBadge (#16171)", () => {
     useTerminalWhenDoneStore.setState({ choices: { "terminal-1": "background" } });
     renderBadge();
     expect(screen.getByTestId("terminal-when-done-badge").dataset.whenDone).toBe("background");
+    const backgroundLabel = screen.getByTestId("terminal-when-done-badge").textContent;
 
     act(() =>
       useTerminalWhenDoneStore.getState().applyChange({ terminalId: "terminal-1", choice: "close" })
     );
     expect(screen.getByTestId("terminal-when-done-badge").dataset.whenDone).toBe("close");
+    // The chip says which: the two choices never read alike.
+    expect(screen.getByTestId("terminal-when-done-badge").textContent).not.toBe(backgroundLabel);
 
     act(() =>
       useTerminalWhenDoneStore.getState().applyChange({ terminalId: "terminal-1", choice: "keep" })

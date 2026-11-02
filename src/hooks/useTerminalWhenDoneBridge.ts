@@ -6,15 +6,21 @@ import { useTerminalWhenDoneStore } from "@/store/terminalWhenDoneStore";
 
 /**
  * Whether someone is using a pane in this view (#16171), so its When done
- * choice must leave it where it is: it holds real keyboard focus in a focused
- * window, or its composer holds a draft that closing it would lose. Anything
- * else (a glance, the pointer over it) can't be observed, so it doesn't count.
+ * choice must leave it where it is: it, or its expanded composer, holds real
+ * keyboard focus in a focused window, or its composer holds a draft that
+ * closing it would lose. Anything else (a glance, the pointer over it) can't
+ * be observed, so it doesn't count.
  */
 export function isTerminalPaneInUseHere(terminalId: string): boolean {
   if (typeof document !== "undefined" && document.hasFocus()) {
     const active = document.activeElement;
-    const root = active instanceof Element ? active.closest("[data-panel-id]") : null;
-    if (root?.getAttribute("data-panel-id") === terminalId) return true;
+    if (active instanceof Element) {
+      const pane = active.closest("[data-panel-id]");
+      if (pane?.getAttribute("data-panel-id") === terminalId) return true;
+      // The expanded composer portals out of its pane and names it instead.
+      const composer = active.closest("[data-composer-terminal-id]");
+      if (composer?.getAttribute("data-composer-terminal-id") === terminalId) return true;
+    }
   }
   // Drafts are keyed by the composer's project scope, so match the id alone.
   for (const [key, draft] of useTerminalInputStore.getState().draftInputs) {

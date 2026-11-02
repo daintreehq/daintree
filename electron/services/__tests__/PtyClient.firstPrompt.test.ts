@@ -175,6 +175,8 @@ describe("PtyClient first prompt (#15521)", () => {
           }
     );
 
+    // A notice that is nobody's prompt stays one when it is decorated.
+    client.submit("t1", "A worker finished", undefined, undefined, undefined, undefined, null);
     client.submit("t1", "Fix the login bug");
     client.submit("t1", "Plain", undefined, "skip00");
     // Already carrying the instruction, so never decorated twice.
@@ -191,6 +193,12 @@ describe("PtyClient first prompt (#15521)", () => {
         };
       })
     ).toEqual([
+      {
+        text: appendHandbackInstruction("A worker finished", "armed0", "run"),
+        code: "armed0",
+        instruction: "run",
+        firstPrompt: undefined,
+      },
       {
         text: appendHandbackInstruction("Fix the login bug", "armed0", "run"),
         code: "armed0",

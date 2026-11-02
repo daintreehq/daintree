@@ -1650,9 +1650,12 @@ export class PtyClient extends EventEmitter {
     if (handbackInstruction === undefined && this.submitDecorator !== null) {
       const armed = this.submitDecorator(id, text, handbackCode);
       if (armed !== null) {
-        // The first-prompt record is the caller's text, before either instruction.
-        promptAsWritten ??=
-          handbackCode !== undefined ? withoutHandbackInstruction(text, handbackCode) : text;
+        // The first-prompt record is the caller's text, before either
+        // instruction; null still marks a send that is nobody's prompt.
+        if (promptAsWritten === undefined) {
+          promptAsWritten =
+            handbackCode !== undefined ? withoutHandbackInstruction(text, handbackCode) : text;
+        }
         text = armed.text;
         handbackCode = armed.handbackCode;
         handbackInstruction = armed.handbackInstruction;

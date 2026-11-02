@@ -3066,6 +3066,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   // its own dictation takes.
                   {...(isolated ? { "data-keybindings-isolated": "" } : {})}
                   {...(isolated && voiceTarget ? { [DICTATION_OWNER_ATTR]: "" } : {})}
+                  // Portalled out of the pane, so it names the pane it writes
+                  // to: a When done choice leaves a pane being typed for (#16171).
+                  data-composer-terminal-id={terminalId}
                   className="flex-1 min-h-[200px] overflow-auto text-text-primary p-4"
                 />
               </ContextMenuTrigger>

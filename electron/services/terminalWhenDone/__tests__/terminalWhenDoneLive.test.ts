@@ -11,6 +11,8 @@ const state = vi.hoisted(() => ({
   broadcast: vi.fn(),
   background: vi.fn(async () => {}),
   forget: vi.fn(async () => {}),
+  /** Sends waiting on a view's thaw, run by `flushThaws` the way `thawThenSend` does. */
+  thaws: [] as Array<{ pending: () => boolean; send: () => void }>,
   ptyClient: null as unknown as {
     getTerminalAsync: ReturnType<typeof vi.fn>;
     gracefulKill: ReturnType<typeof vi.fn>;
@@ -36,7 +38,8 @@ vi.mock("../../../lifecycle/shutdownCoordinator.js", () => ({
   getActiveShutdown: () => state.shutdown,
 }));
 vi.mock("../../../utils/thawThenSend.js", () => ({
-  thawThenSend: (_wc: unknown, _pending: () => boolean, send: () => void) => send(),
+  thawThenSend: (_wc: unknown, pending: () => boolean, send: () => void) =>
+    state.thaws.push({ pending, send }),
 }));
 vi.mock("../../../window/serviceRefs.js", () => ({ getPtyClient: () => state.ptyClient }));
 vi.mock("../../../window/webContentsRegistry.js", () => ({
@@ -55,7 +58,11 @@ vi.mock("../../viewless/projectStateAuthoring.js", () => ({
 
 import { CHANNELS } from "../../../ipc/channels.js";
 import { events } from "../../events.js";
-import { buildHandbackInstruction } from "../../../../shared/utils/handback.js";
+import type { PtySubmitDecorator } from "../../PtyClient.js";
+import {
+  appendHandbackInstruction,
+  buildHandbackInstruction,
+} from "../../../../shared/utils/handback.js";
 import {
   IN_USE_ANSWER_TIMEOUT_MS,
   _resetTerminalWhenDoneForTest,
@@ -67,11 +74,12 @@ const SPAWNED_AT = 1_800_000_000_040;
 const PROJECT = "project-1";
 const TERMINAL = "terminal-1";
 
-type Answer = boolean | "silent";
+/** How a view answers the in-use query: at once, never, or when the test says. */
+type Answer = boolean | "silent" | "held";
 
-/** A project view that answers the in-use query as told. */
 function view(id: number, answer: Answer = false, loading = false) {
   const emitter = new EventEmitter();
+  const held: string[] = [];
   const wc = {
     id,
     isDestroyed: () => false,
@@ -81,15 +89,20 @@ function view(id: number, answer: Answer = false, loading = false) {
       emitter.removeListener(event, listener),
     send: vi.fn((channel: string, payload: { requestId?: string }) => {
       if (channel !== CHANNELS.TERMINAL_WHEN_DONE_IN_USE_QUERY || answer === "silent") return;
-      queueMicrotask(() =>
-        state.ipcMain.emit(
-          CHANNELS.TERMINAL_WHEN_DONE_IN_USE_REPLY,
-          { sender: wc },
-          { requestId: payload.requestId, inUse: answer }
-        )
-      );
+      if (answer === "held") {
+        held.push(payload.requestId!);
+        return;
+      }
+      queueMicrotask(() => reply(payload.requestId!, answer));
     }),
+    /** Answers every held query. */
+    answer: (inUse: boolean) => {
+      for (const requestId of held.splice(0)) reply(requestId, inUse);
+    },
   };
+  function reply(requestId: string, inUse: boolean) {
+    state.ipcMain.emit(CHANNELS.TERMINAL_WHEN_DONE_IN_USE_REPLY, { sender: wc }, { requestId, inUse });
+  }
   return wc;
 }
 
@@ -130,14 +143,43 @@ function finishRequests(wc: ReturnType<typeof view>) {
     .map(([, payload]) => payload);
 }
 
+function inUseQueries(wc: ReturnType<typeof view>) {
+  return wc.send.mock.calls.filter(
+    ([channel]) => channel === CHANNELS.TERMINAL_WHEN_DONE_IN_USE_QUERY
+  );
+}
+
 /** The code the arming submission carried. */
 function armingCode(): string {
   const call = state.ptyClient.submit.mock.calls[0] as unknown[];
   return call[3] as string;
 }
 
+function installedDecorator(): PtySubmitDecorator {
+  const calls = state.ptyClient.setSubmitDecorator.mock.calls;
+  return calls[calls.length - 1]?.[0] as PtySubmitDecorator;
+}
+
+function reportDone(code = armingCode(), report: "done" | "needs-you" = "done"): void {
+  events.emit("agent:run-handback-observed", {
+    terminalId: TERMINAL,
+    spawnedAt: SPAWNED_AT,
+    code,
+    report,
+    message: null,
+    truncated: false,
+    observedAt: SPAWNED_AT + 10,
+    timestamp: SPAWNED_AT + 10,
+  });
+}
+
+function flushThaws(): void {
+  for (const { pending, send } of state.thaws.splice(0)) if (pending()) send();
+}
+
 async function settle(): Promise<void> {
   for (let i = 0; i < 10; i++) await Promise.resolve();
+  flushThaws();
 }
 
 beforeEach(() => {
@@ -146,6 +188,7 @@ beforeEach(() => {
   state.holder = null;
   state.shutdown = null;
   state.generation = 4;
+  state.thaws = [];
   state.broadcast.mockClear();
   state.background.mockClear();
   state.forget.mockClear();
@@ -172,11 +215,19 @@ describe("isTerminalPaneInUse (#16171)", () => {
     expect(cached.send).not.toHaveBeenCalled();
   });
 
-  it("takes every on-screen view's answer, any yes keeping the pane", async () => {
-    state.views = [view(1, false), view(2, false)];
+  it("asks every on-screen view, any yes keeping the pane", async () => {
+    const views = [view(1, false), view(2, false)];
+    state.views = views;
     await expect(isTerminalPaneInUse(PROJECT, TERMINAL)).resolves.toBe(false);
-    state.views = [view(1, false), view(2, true)];
-    await expect(isTerminalPaneInUse(PROJECT, TERMINAL)).resolves.toBe(true);
+    for (const wc of views) expect(inUseQueries(wc)).toHaveLength(1);
+
+    for (const answers of [
+      [true, false],
+      [false, true],
+    ]) {
+      state.views = answers.map((answer, index) => view(index + 1, answer));
+      await expect(isTerminalPaneInUse(PROJECT, TERMINAL)).resolves.toBe(true);
+    }
   });
 
   it("counts a view that can't answer as someone using the pane", async () => {
@@ -191,16 +242,23 @@ describe("isTerminalPaneInUse (#16171)", () => {
     expect(state.ipcMain.listenerCount(CHANNELS.TERMINAL_WHEN_DONE_IN_USE_REPLY)).toBe(0);
   });
 
-  it("counts a person driving the project from another machine", async () => {
+  it("counts a person driving the project from another machine, before or during the answers", async () => {
     state.holder = { kind: "remote-view" };
     await expect(isTerminalPaneInUse(PROJECT, TERMINAL)).resolves.toBe(true);
     state.holder = { kind: "local-view" };
     await expect(isTerminalPaneInUse(PROJECT, TERMINAL)).resolves.toBe(false);
+
+    const wc = view(1, "held");
+    state.views = [wc];
+    const answer = isTerminalPaneInUse(PROJECT, TERMINAL);
+    state.holder = { kind: "remote-view" };
+    wc.answer(false);
+    await expect(answer).resolves.toBe(true);
   });
 });
 
 describe("getTerminalWhenDone live wiring", () => {
-  it("sends the arming instruction undecorated and decorates later submits only while armed", async () => {
+  it("sends the arming instruction undecorated, then gives each later prompt its own code", async () => {
     await getTerminalWhenDone().set(TERMINAL, "background", PROJECT);
 
     const code = armingCode();
@@ -214,67 +272,69 @@ describe("getTerminalWhenDone live wiring", () => {
       null,
       "run"
     );
-    expect(state.ptyClient.setSubmitDecorator).toHaveBeenLastCalledWith(expect.any(Function));
     expect(state.broadcast).toHaveBeenCalledWith(PROJECT, CHANNELS.TERMINAL_WHEN_DONE_CHANGED, {
       terminalId: TERMINAL,
       choice: "background",
     });
+
+    const decorate = installedDecorator();
+    const first = decorate(TERMINAL, "fix the bug", undefined);
+    const second = decorate(TERMINAL, "fix the bug", undefined);
+    expect(first?.text).toBe(appendHandbackInstruction("fix the bug", first!.handbackCode, "run"));
+    expect(new Set([code, first?.handbackCode, second?.handbackCode]).size).toBe(3);
+    expect(getTerminalWhenDone().peek(TERMINAL)?.outstanding).toBe(second?.handbackCode);
+    expect(decorate("terminal-2", "fix the bug", undefined)).toBeNull();
 
     await getTerminalWhenDone().set(TERMINAL, "keep", PROJECT);
     expect(state.ptyClient.setSubmitDecorator).toHaveBeenLastCalledWith(null);
     expect(state.ptyClient.listenerCount("incarnation-exit")).toBe(0);
   });
 
-  it("refuses a terminal whose agent has left it, so a shell never runs the instruction", async () => {
-    state.ptyClient.getTerminalAsync.mockResolvedValue(
-      terminalInfo({ detectedAgentId: undefined, agentState: "exited" })
-    );
-    await expect(getTerminalWhenDone().set(TERMINAL, "close", PROJECT)).rejects.toThrow();
+  it("refuses a terminal with no agent in it, so a shell never runs the instruction", async () => {
+    for (const shell of [
+      terminalInfo({ detectedAgentId: undefined, launchAgentId: undefined, agentState: "idle" }),
+      terminalInfo({ detectedAgentId: undefined, agentState: "exited" }),
+    ]) {
+      state.ptyClient.getTerminalAsync.mockResolvedValueOnce(shell);
+      await expect(getTerminalWhenDone().set(TERMINAL, "close", PROJECT)).rejects.toThrow();
+    }
     expect(state.ptyClient.submit).not.toHaveBeenCalled();
   });
 
   it("backgrounds the pane in every view and the saved layout on done", async () => {
-    const wc = view(1, false);
-    state.views = [wc];
+    const views = [view(1, false), view(2, false)];
+    state.views = views;
     await getTerminalWhenDone().set(TERMINAL, "background", PROJECT);
 
-    events.emit("agent:run-handback-observed", {
-      terminalId: TERMINAL,
-      spawnedAt: SPAWNED_AT,
-      code: armingCode(),
-      report: "done",
-      message: null,
-      truncated: false,
-      observedAt: SPAWNED_AT + 10,
-      timestamp: SPAWNED_AT + 10,
-    });
+    reportDone();
     await settle();
 
-    expect(finishRequests(wc)).toEqual([{ terminalId: TERMINAL, action: "background" }]);
+    for (const wc of views) {
+      expect(finishRequests(wc)).toEqual([{ terminalId: TERMINAL, action: "background" }]);
+    }
     expect(state.background).toHaveBeenCalledWith({ id: "project-store" }, PROJECT, TERMINAL);
     expect(state.ptyClient.gracefulKill).not.toHaveBeenCalled();
   });
 
-  it("closes the terminal keeping its session, then removes the pane", async () => {
+  it("closes the terminal keeping its session before the pane goes", async () => {
     const wc = view(1, false);
     state.views = [wc];
     const captured: unknown[] = [];
     events.on("agent-session:captured", (payload) => captured.push(payload));
+    let finishKill: (sessionId: string) => void = () => {};
+    state.ptyClient.gracefulKill.mockImplementation(
+      () => new Promise<string>((resolve) => (finishKill = resolve))
+    );
     await getTerminalWhenDone().set(TERMINAL, "close", PROJECT);
 
-    events.emit("agent:run-handback-observed", {
-      terminalId: TERMINAL,
-      spawnedAt: SPAWNED_AT,
-      code: armingCode(),
-      report: "done",
-      message: "shipped",
-      truncated: false,
-      observedAt: SPAWNED_AT + 10,
-      timestamp: SPAWNED_AT + 10,
-    });
+    reportDone();
     await settle();
-
     expect(state.ptyClient.gracefulKill).toHaveBeenCalledWith(TERMINAL);
+    expect(finishRequests(wc)).toEqual([]);
+    expect(state.forget).not.toHaveBeenCalled();
+
+    finishKill("claude-session");
+    await settle();
     expect(captured).toEqual([
       expect.objectContaining({
         terminalId: TERMINAL,
@@ -287,26 +347,81 @@ describe("getTerminalWhenDone live wiring", () => {
     expect(state.ptyClient.setSubmitDecorator).toHaveBeenLastCalledWith(null);
   });
 
-  it("moves nothing while someone is using the pane", async () => {
-    const wc = view(1, true);
+  it.each(["background", "close"] as const)(
+    "moves nothing on %s while someone is using the pane",
+    async (choice) => {
+      const wc = view(1, true);
+      state.views = [wc];
+      await getTerminalWhenDone().set(TERMINAL, choice, PROJECT);
+
+      reportDone();
+      await settle();
+
+      expect(state.ptyClient.gracefulKill).not.toHaveBeenCalled();
+      expect(finishRequests(wc)).toEqual([]);
+      expect(state.background).not.toHaveBeenCalled();
+      expect(state.forget).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    ["a newer prompt", () => installedDecorator()(TERMINAL, "and the docs", undefined)],
+    ["Keep open", () => void getTerminalWhenDone().set(TERMINAL, "keep", PROJECT)],
+    [
+      "another machine taking the project",
+      () => {
+        state.holder = { kind: "remote-view" };
+      },
+    ],
+    [
+      "a restart",
+      () => {
+        state.generation = 5;
+      },
+    ],
+  ])("closes nothing when %s arrives while the views answer", async (_name, change) => {
+    const wc = view(1, "held");
     state.views = [wc];
     await getTerminalWhenDone().set(TERMINAL, "close", PROJECT);
 
-    events.emit("agent:run-handback-observed", {
-      terminalId: TERMINAL,
-      spawnedAt: SPAWNED_AT,
-      code: armingCode(),
-      report: "done",
-      message: null,
-      truncated: false,
-      observedAt: SPAWNED_AT + 10,
-      timestamp: SPAWNED_AT + 10,
-    });
+    reportDone();
+    await settle();
+    change();
+    wc.answer(false);
     await settle();
 
     expect(state.ptyClient.gracefulKill).not.toHaveBeenCalled();
     expect(finishRequests(wc)).toEqual([]);
     expect(state.forget).not.toHaveBeenCalled();
+  });
+
+  it("delivers no removal to a view once a successor spawned under the id", async () => {
+    const wc = view(1, false);
+    state.views = [wc];
+    await getTerminalWhenDone().set(TERMINAL, "close", PROJECT);
+
+    reportDone();
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    // The close finished; the view's thaw is still outstanding when the user restarts.
+    state.generation = 5;
+    flushThaws();
+
+    expect(state.ptyClient.gracefulKill).toHaveBeenCalled();
+    expect(finishRequests(wc)).toEqual([]);
+  });
+
+  it("moves nothing on needs-you, or on a code that isn't the outstanding one", async () => {
+    const wc = view(1, false);
+    state.views = [wc];
+    await getTerminalWhenDone().set(TERMINAL, "close", PROJECT);
+
+    reportDone("zzzzzz");
+    reportDone(armingCode(), "needs-you");
+    reportDone();
+    await settle();
+
+    expect(inUseQueries(wc)).toEqual([]);
+    expect(state.ptyClient.gracefulKill).not.toHaveBeenCalled();
   });
 
   it("drops the choice when the incarnation exits or its host dies", async () => {
@@ -325,6 +440,10 @@ describe("getTerminalWhenDone live wiring", () => {
 
     await getTerminalWhenDone().set(TERMINAL, "close", PROJECT);
     events.emit("agent:exited", { terminalId: TERMINAL, timestamp: SPAWNED_AT + 5 });
+    expect(getTerminalWhenDone().peek(TERMINAL)).toBeUndefined();
+
+    await getTerminalWhenDone().set(TERMINAL, "close", PROJECT);
+    state.ptyClient.emit("terminal-lost", TERMINAL);
     expect(getTerminalWhenDone().peek(TERMINAL)).toBeUndefined();
   });
 });

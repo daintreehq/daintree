@@ -2,6 +2,7 @@ import { defineIpcNamespace, op } from "../define.js";
 import type { IpcContext } from "../types.js";
 import { TERMINAL_WHEN_DONE_METHOD_CHANNELS } from "./terminalWhenDone.preload.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import {
   TERMINAL_WHEN_DONE_CHOICES,
   type TerminalWhenDone,
@@ -38,6 +39,16 @@ async function handleSet(
     throw new AppError({
       code: "VALIDATION",
       message: `choice must be one of ${TERMINAL_WHEN_DONE_CHOICES.join(", ")}`,
+      context: { terminalId },
+    });
+  }
+  // Arming types into the agent, so only the project's driver may, as for a submit.
+  const lease = peekDriveLeaseService();
+  if (lease && ctx.endpoint && !lease.isDriving(projectId, ctx.endpoint)) {
+    throw new AppError({
+      code: "DRIVEN_ELSEWHERE",
+      message: `terminal ${terminalId} is driven elsewhere; only its driver may arm it`,
+      userMessage: "This project is being driven from another screen.",
       context: { terminalId },
     });
   }

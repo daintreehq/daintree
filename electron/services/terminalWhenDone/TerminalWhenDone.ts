@@ -29,6 +29,8 @@ export interface ArmedTerminal extends WhenDoneIncarnation {
    * it without asking.
    */
   outstanding: string | null;
+  /** Moves on every send Daintree makes to the terminal, so a report can tell newer work arrived. */
+  revision: number;
 }
 
 /** A submission to an armed terminal, carrying its own fresh code. */
@@ -56,8 +58,12 @@ export interface TerminalWhenDoneDeps {
   /** Sends `text` as a prompt of its own, already carrying the instruction for `code`. */
   submitInstruction: (terminalId: string, text: string, code: string) => void;
   notify: (projectId: string, change: TerminalWhenDoneChange) => void;
-  /** Moves or closes the pane, unless someone is using it. */
-  apply: (target: ArmedTerminal) => Promise<WhenDoneOutcome>;
+  /**
+   * Moves or closes the pane, unless someone is using it. `stillCurrent` turns
+   * false once the choice, the request or the incarnation it acts for has
+   * changed; it is asked again after every wait and just before acting.
+   */
+  apply: (target: ArmedTerminal, stillCurrent: () => boolean) => Promise<WhenDoneOutcome>;
   isShuttingDown: () => boolean;
   /** Called when the first terminal is armed (true) and when the last one stops being (false). */
   onActiveChange?: (active: boolean) => void;
@@ -83,6 +89,9 @@ export class TerminalWhenDoneError extends Error {}
  */
 export class TerminalWhenDone {
   private readonly armed = new Map<string, ArmedTerminal>();
+  /** The latest `set` asked for each terminal, so an older one answering later commits nothing. */
+  private readonly setSeq = new Map<string, number>();
+  private nextSetSeq = 0;
   private readonly mintCode: () => string;
   private readonly logWarn: (message: string, error?: unknown) => void;
 
@@ -97,7 +106,11 @@ export class TerminalWhenDone {
    * hands that work back; choosing again renews the request.
    */
   async set(terminalId: string, choice: TerminalWhenDoneChoice, projectId: string): Promise<void> {
+    const seq = ++this.nextSetSeq;
+    this.setSeq.set(terminalId, seq);
     if (choice === "keep") {
+      // Keep commits at once, so nothing asked before it may commit after.
+      this.setSeq.delete(terminalId);
       const current = this.armed.get(terminalId);
       if (current && current.projectId !== projectId) {
         throw new TerminalWhenDoneError(`Terminal ${terminalId} isn't in this project.`);
@@ -106,6 +119,9 @@ export class TerminalWhenDone {
       return;
     }
     const incarnation = await this.deps.readIncarnation(terminalId);
+    // A later choice for the terminal was asked for meanwhile, Keep included: it stands.
+    if (this.setSeq.get(terminalId) !== seq) return;
+    this.setSeq.delete(terminalId);
     if (!incarnation || incarnation.projectId !== projectId) {
       throw new TerminalWhenDoneError(`Terminal ${terminalId} has no running agent to hand back.`);
     }
@@ -122,6 +138,7 @@ export class TerminalWhenDone {
       launchGeneration: incarnation.launchGeneration,
       choice,
       outstanding: code,
+      revision: 0,
     });
     if (!wasActive) this.deps.onActiveChange?.(true);
     this.deps.notify(projectId, { terminalId, choice });
@@ -144,6 +161,8 @@ export class TerminalWhenDone {
       this.disarm(terminalId);
       return null;
     }
+    // Any send is newer work, so a done already being applied stops short.
+    armed.revision += 1;
     const trimmed = text.trimStart();
     if (trimmed === "" || trimmed.startsWith("/")) {
       armed.outstanding = null;
@@ -171,8 +190,14 @@ export class TerminalWhenDone {
     }
     // A quit is closing every terminal its own way.
     if (this.deps.isShuttingDown()) return;
+    const revision = armed.revision;
+    const stillCurrent = (): boolean =>
+      this.armed.get(armed.terminalId) === armed &&
+      armed.revision === revision &&
+      this.deps.currentGeneration(armed.terminalId) === armed.launchGeneration &&
+      !this.deps.isShuttingDown();
     void this.deps
-      .apply({ ...armed })
+      .apply({ ...armed }, stillCurrent)
       .then((outcome) => {
         if (outcome === "applied" && armed.choice === "close") this.disarmIf(armed);
       })

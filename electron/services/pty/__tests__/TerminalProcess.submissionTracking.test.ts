@@ -511,14 +511,31 @@ describe("TerminalProcess handback requests (#12488)", () => {
     await vi.advanceTimersByTimeAsync(250);
 
     // The first request was retired when the second reached the pty, so its
-    // marker reprinted (a transcript replay) reports nothing.
+    // marker reprinted (a transcript replay) reports nothing; neither does a
+    // marker with no code or another code, in a file or a command's output.
     ptyOnDataCallback!("DAINTREE-DONE-aaaaaa: first one END-aaaaaa\r\n");
+    ptyOnDataCallback!("$ cat notes.md\r\nDAINTREE-DONE: copied END-\r\n");
+    ptyOnDataCallback!("DAINTREE-DONE-zzzzzz: someone else's END-zzzzzz\r\n");
     await vi.advanceTimersByTimeAsync(300);
     expect(runs).toEqual([]);
 
     ptyOnDataCallback!("DAINTREE-NEEDS-YOU-bbbbbb: pick a name END-bbbbbb\r\n");
     await vi.advanceTimersByTimeAsync(300);
     expect(runs).toEqual([{ code: "bbbbbb", report: "needs-you" }]);
+
+    // Retired, so the same screen sampled again reports nothing more.
+    ptyOnDataCallback!("\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(runs).toHaveLength(1);
+
+    terminal.submit("third", "tok-3", "cccccc", undefined, undefined, undefined, "run");
+    await vi.advanceTimersByTimeAsync(250);
+    ptyOnDataCallback!("DAINTREE-DONE-cccccc: all done END-cccccc\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(runs).toEqual([
+      { code: "bbbbbb", report: "needs-you" },
+      { code: "cccccc", report: "done" },
+    ]);
     off();
     vi.useRealTimers();
     terminal.dispose();

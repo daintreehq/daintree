@@ -1398,9 +1398,14 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
     useTerminalWhenDoneStore.setState({ choices: {} });
   });
 
-  it("offers no When done on a pane with no live agent", () => {
-    renderMenu({ ...agentPane, detectedAgentId: undefined });
+  it.each([
+    ["no live agent", { detectedAgentId: undefined }],
+    ["the Assistant's own terminal", { excludeFromPersistence: true }],
+    ["a dialog pane", { location: "dialog" }],
+  ])("offers no When done on a pane with %s", (_name, overrides) => {
+    renderMenu({ ...agentPane, ...overrides });
     expect(screen.queryByText("When done")).toBeNull();
+    expect(screen.queryByText("Keep open")).toBeNull();
   });
 
   it("runs the watch and fleet rows from where they now sit", () => {

@@ -16,7 +16,7 @@ const SPAWNED_AT = 1_800_000_000_040;
 const PROJECT = "project-1";
 const TERMINAL = "terminal-1";
 
-function setup(options: { outcome?: WhenDoneOutcome } = {}) {
+function setup(options: { outcome?: WhenDoneOutcome; hold?: boolean } = {}) {
   let generation: number | undefined = 4;
   let shuttingDown = false;
   let nextCode = 0;
@@ -27,12 +27,22 @@ function setup(options: { outcome?: WhenDoneOutcome } = {}) {
   const submitted: Array<{ terminalId: string; text: string; code: string }> = [];
   const applied: ArmedTerminal[] = [];
   const active: boolean[] = [];
-  const apply = vi.fn(async (target: ArmedTerminal) => {
+  const stillCurrent: Array<() => boolean> = [];
+  // Reads held open by `holdReads`, answered in any order by `answerRead`.
+  const heldReads: Array<(value: WhenDoneIncarnation | null) => void> = [];
+  let holdReads = false;
+  const apply = vi.fn((target: ArmedTerminal, current: () => boolean) => {
     applied.push(target);
-    return options.outcome ?? "applied";
+    stillCurrent.push(current);
+    // `hold` leaves the apply waiting, as one does on the views' answers.
+    if (options.hold) return new Promise<WhenDoneOutcome>(() => {});
+    return Promise.resolve(options.outcome ?? "applied");
   });
   const service = new TerminalWhenDone({
-    readIncarnation: async () => incarnation.value,
+    readIncarnation: () =>
+      holdReads
+        ? new Promise<WhenDoneIncarnation | null>((resolve) => heldReads.push(resolve))
+        : Promise.resolve(incarnation.value),
     currentGeneration: () => generation,
     submitInstruction: (terminalId, text, code) => submitted.push({ terminalId, text, code }),
     notify: (_projectId, change) => notified.push(change),
@@ -49,7 +59,12 @@ function setup(options: { outcome?: WhenDoneOutcome } = {}) {
     applied,
     apply,
     active,
+    stillCurrent,
     incarnation,
+    holdReads: () => {
+      holdReads = true;
+    },
+    answerRead: (index: number) => heldReads[index]?.(incarnation.value),
     restart: (next: number | undefined) => {
       generation = next;
     },
@@ -119,11 +134,41 @@ describe("TerminalWhenDone arming (#16171)", () => {
   });
 
   it("arms nothing when the terminal restarted while its host answered", async () => {
-    const { service, restart, submitted } = setup();
+    const { service, restart, submitted, holdReads, answerRead } = setup();
+    holdReads();
+    const pending = service.set(TERMINAL, "close", PROJECT);
     restart(5);
-    await expect(service.set(TERMINAL, "close", PROJECT)).rejects.toThrow(/restarted/);
+    answerRead(0);
+    await expect(pending).rejects.toThrow(/restarted/);
     expect(service.peek(TERMINAL)).toBeUndefined();
     expect(submitted).toEqual([]);
+  });
+
+  it("commits nothing a later Keep overtook while the host answered", async () => {
+    const { service, submitted, notified, holdReads, answerRead } = setup();
+    holdReads();
+    const pending = service.set(TERMINAL, "close", PROJECT);
+    await service.set(TERMINAL, "keep", PROJECT);
+    answerRead(0);
+    await pending;
+
+    expect(service.peek(TERMINAL)).toBeUndefined();
+    expect(submitted).toEqual([]);
+    expect(notified).toEqual([]);
+  });
+
+  it("keeps the latest of two choices whose reads answer out of order", async () => {
+    const { service, submitted, holdReads, answerRead } = setup();
+    holdReads();
+    const first = service.set(TERMINAL, "close", PROJECT);
+    const second = service.set(TERMINAL, "background", PROJECT);
+    answerRead(1);
+    await second;
+    answerRead(0);
+    await first;
+
+    expect(service.peek(TERMINAL)?.choice).toBe("background");
+    expect(submitted).toHaveLength(1);
   });
 
   it("disarms on keep and tells the views", async () => {
@@ -245,6 +290,38 @@ describe("TerminalWhenDone reports", () => {
 
     expect(ctx.apply).not.toHaveBeenCalled();
     expect(ctx.service.peek(TERMINAL)).toBeUndefined();
+  });
+
+  it("stops a done being applied once newer work, another choice or a restart arrives", async () => {
+    // Each apply is still waiting on the views when the change lands.
+    async function applying() {
+      const pending = setup({ hold: true });
+      await pending.service.set(TERMINAL, "close", PROJECT);
+      pending.service.handleReport(done("code00"));
+      await flush();
+      expect(pending.stillCurrent[0]?.()).toBe(true);
+      return pending;
+    }
+
+    const prompted = await applying();
+    prompted.service.decorate(TERMINAL, "and one more thing");
+    expect(prompted.stillCurrent[0]?.()).toBe(false);
+
+    const kept = await applying();
+    await kept.service.set(TERMINAL, "keep", PROJECT);
+    expect(kept.stillCurrent[0]?.()).toBe(false);
+
+    const rearmed = await applying();
+    await rearmed.service.set(TERMINAL, "background", PROJECT);
+    expect(rearmed.stillCurrent[0]?.()).toBe(false);
+
+    const restarted = await applying();
+    restarted.restart(5);
+    expect(restarted.stillCurrent[0]?.()).toBe(false);
+
+    const quitting = await applying();
+    quitting.shutDown();
+    expect(quitting.stillCurrent[0]?.()).toBe(false);
   });
 
   it("moves nothing while Daintree is quitting", async () => {

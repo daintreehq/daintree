@@ -10,17 +10,19 @@ import { scheduledRunForRecord } from "../../../shared/utils/scheduledRunProvena
 /**
  * Sends `payload` to every local view of the project, thawing a cached one
  * first: a frozen renderer runs nothing. A view torn down mid-send has no pane
- * left to move.
+ * left to move. `isStillWanted` is asked once the thaw is done, so a request
+ * the world moved past meanwhile is never delivered.
  */
 export function sendToLocalProjectViews(
   projectId: string,
   channel: ChannelName,
-  payload: unknown
+  payload: unknown,
+  isStillWanted: () => boolean = () => true
 ): void {
   for (const view of getWebContentsForProject(projectId)) {
     thawThenSend(
       view,
-      () => true,
+      isStillWanted,
       () => {
         try {
           view.send(channel, payload);
@@ -42,12 +44,13 @@ export interface KeepingSessionTarget {
  * Closes a terminal the way a quit does (#15982, #16171): a graceful kill that
  * asks the agent to leave and captures its session id, journaled for resuming,
  * never the trash a view's close puts it in. False when `target`'s incarnation
- * is no longer the one running under its id, or a restart was asked for while
- * the agent was leaving.
+ * is no longer the one running under its id, `mayClose` says no once the host
+ * has answered, or a restart was asked for while the agent was leaving.
  */
 export async function closeTerminalKeepingSession(
   target: KeepingSessionTarget,
-  killReason: string
+  killReason: string,
+  mayClose: () => boolean = () => true
 ): Promise<boolean> {
   const ptyClient = getPtyClient();
   if (!ptyClient) return false;
@@ -66,6 +69,8 @@ export async function closeTerminalKeepingSession(
   ) {
     return false;
   }
+  // The caller's own last word, with no await before the kill.
+  if (!mayClose()) return false;
   const sessionId = await ptyClient.gracefulKill(target.terminalId);
   // A restart asked for while the agent was leaving is the user's: its
   // terminal and pane stay. Checked again with no await before acting.
