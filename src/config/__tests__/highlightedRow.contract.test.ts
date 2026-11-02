@@ -2,15 +2,19 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { BUILT_IN_APP_SCHEMES } from "@shared/theme/themes";
+import { contrastRatio, resolvePaletteRowBackdrops } from "@shared/theme/contrast";
 import { readIndexCss } from "@/__tests__/support/hostCss";
+import { LIST_DETAIL_ROW_CLASS, PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 
 /**
  * The highlighted-row language (docs/themes/interaction-state-recipes.md,
  * "Highlighted Row"): one row is lit, by a fill, and the pointer and the arrow
- * keys move that same row. Two ways to break it that no single component test
- * sees — a cursor list that paints its own hover fill beside the cursor, and a
- * leading rail creeping back onto a highlighted row — so both are scanned for
+ * keys move that same row. Ways to break it that no single component test
+ * sees — a cursor list that paints its own hover fill beside the cursor, a
+ * leading rail creeping back onto a highlighted row, and a row whose fill the
+ * increased-contrast and forced-colours outlines cannot find — are scanned for
  * across the renderer and the builtin plugin renderers.
  */
 
@@ -163,4 +167,418 @@ describe("highlighted-row language", () => {
       }
     }
   });
+
+  it("keeps primary and secondary text at 4.5:1 on the highlighted row in every built-in theme", () => {
+    // The ceiling on the fill's strength (#15865). Text on a fill k:1 from its
+    // surface measures contrast(text, surface) / k, so a neutral fill at 3:1
+    // would take text-secondary to 2.0-3.2:1 in every theme. Whatever the fill
+    // becomes, the row's own two text tiers stay readable on it.
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      const backdrops = resolvePaletteRowBackdrops(scheme.tokens, scheme.type);
+      const rows = backdrops.filter((row) => row.label.startsWith("the highlighted row"));
+      expect(rows.length, `${scheme.id}: no evaluable highlighted row`).toBeGreaterThan(0);
+      // One highlighted backdrop per resting surface, so this reads the fill.
+      const resting = backdrops.filter((row) => !rows.includes(row));
+      expect(rows.map((row) => row.label)).toEqual(
+        resting.map((row) => `the highlighted row on ${row.label}`)
+      );
+      for (const ink of ["text-primary", "text-secondary"] as const) {
+        for (const row of rows) {
+          const ratio = contrastRatio(scheme.tokens[ink], row.hex);
+          expect(
+            ratio,
+            `${scheme.id}: ${ink} on ${row.label} is ${ratio.toFixed(2)}:1`
+          ).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    }
+  });
+
+  it("outlines every hook it accepts in both high-contrast modes", () => {
+    const css = readIndexCss().replace(/\/\*[\s\S]*?\*\//g, "");
+    for (const query of ["(prefers-contrast: more)", "(forced-colors: active)"]) {
+      const selectors = outlinedSelectors(mediaBlocks(css, query));
+      for (const hook of OUTLINE_HOOKS) {
+        expect(
+          selectors.some((selector) => matchesHook(selector, hook)),
+          `${query} outlines ${hook}`
+        ).toBe(true);
+      }
+    }
+    // The shared row classes count as a hook below only because they carry the
+    // marker the two blocks select on.
+    for (const shared of [PALETTE_ROW_CLASS, LIST_DETAIL_ROW_CLASS]) {
+      expect(shared.split(/\s+/)).toContain("palette-row");
+    }
+  });
+
+  it("puts an outline hook on every element that paints the highlight", () => {
+    const offenders: string[] = [];
+    const ownTreatment = new Map<string, number>();
+    for (const { rel, source } of files) {
+      if (rel === "src/components/ui/paletteRowStyles.ts") continue;
+      for (const paint of highlightPaints(source, rel)) {
+        if (paint.hooked) continue;
+        const own = OWN_TREATMENT[rel];
+        if (paint.states.length > 0 && own?.treated(paint.classes, paint.states)) {
+          ownTreatment.set(rel, (ownTreatment.get(rel) ?? 0) + 1);
+          continue;
+        }
+        offenders.push(`${rel}:${paint.line} ${paint.reason}`);
+      }
+    }
+    expect(
+      offenders,
+      "A highlighted row's fill is the quietest mark there is; increased contrast and forced colours outline it through `palette-row` (+ aria-selected / data-selected), `forge-row` (+ data-active) or a Radix item's data-highlighted"
+    ).toEqual([]);
+    expect(
+      Object.fromEntries(ownTreatment),
+      "keep OWN_TREATMENT to the sites that need it"
+    ).toEqual(
+      Object.fromEntries(Object.entries(OWN_TREATMENT).map(([rel, own]) => [rel, own.paints]))
+    );
+  });
+
+  it("reads a highlight paint the way the outline rules match it", () => {
+    const reasons = (source: string) =>
+      highlightPaints(source).map((paint) => (paint.hooked ? "hooked" : paint.reason));
+    expect(
+      reasons(`<div aria-selected={on} className={cn("px-2", on && "bg-overlay-highlight")} />`)
+    ).toEqual(["no outline hook"]);
+    expect(reasons(`<div aria-selected={on} className={cn(PALETTE_ROW_CLASS, "px-2")} />`)).toEqual(
+      []
+    );
+    expect(
+      reasons(
+        `<div aria-selected={on} className={cn(PALETTE_ROW_CLASS, on && "bg-overlay-highlight")} />`
+      )
+    ).toEqual(["hooked"]);
+    expect(
+      reasons(`<div className={cn(LIST_DETAIL_ROW_CLASS, on && "bg-overlay-highlight")} />`)
+    ).toEqual(["`palette-row` without aria-selected or data-selected"]);
+    expect(
+      reasons(
+        `<div aria-selected={on} className={cn(/* palette-row */ "aria-selected:bg-overlay-highlight")} />`
+      )
+    ).toEqual(["no outline hook"]);
+    expect(
+      reasons(`<div className={cn("palette-row", "aria-selected:bg-overlay-highlight")} />`)
+    ).toEqual(["`palette-row` without aria-selected or data-selected"]);
+    expect(
+      reasons(
+        `<div data-active={a ? "true" : undefined} className={cn("forge-row", a && "bg-overlay-highlight")} />`
+      )
+    ).toEqual(["hooked"]);
+    expect(reasons(`<div className={cn("forge-row", a && "bg-overlay-highlight")} />`)).toEqual([
+      "`forge-row` without data-active",
+    ]);
+    expect(
+      reasons(
+        `<Item className="data-[highlighted]:bg-overlay-highlight hover:bg-overlay-highlight" />`
+      )
+    ).toEqual(["hooked"]);
+    expect(
+      reasons(`<li role="option" className="data-[highlighted]:bg-overlay-highlight" />`)
+    ).toEqual(["hooked"]);
+    // The increased-contrast rule scopes [data-highlighted] to menu and option roles.
+    expect(reasons(`<div className="data-[highlighted]:bg-overlay-highlight" />`)).toEqual([
+      "no outline hook",
+    ]);
+    expect(
+      reasons(
+        `<Item className="data-[highlighted]:bg-overlay-highlight aria-selected:bg-overlay-highlight" />`
+      )
+    ).toEqual(["no outline hook"]);
+    expect(
+      reasons(
+        `<b className={cn("data-[active]:bg-overlay-highlight", "contrast-more:data-[active]:outline-2", "forced-colors:data-[active]:outline-2")} />`
+      )
+    ).toEqual(["hooked"]);
+    expect(
+      reasons(
+        `<b className={cn("data-[active]:bg-overlay-highlight", "contrast-more:data-[active]:outline-offset-2", "forced-colors:data-[active]:outline-offset-2")} />`
+      )
+    ).toEqual(["no outline hook"]);
+    expect(
+      reasons(
+        `<b className={cn("data-[active]:bg-overlay-highlight", "contrast-more:data-[other]:outline-2", "forced-colors:data-[other]:outline-2")} />`
+      )
+    ).toEqual(["no outline hook"]);
+    expect(reasons(`const ROW = "aria-selected:bg-overlay-highlight";`)).toEqual([
+      "painted outside a className attribute",
+    ]);
+  });
 });
+
+/** The selectors the two high-contrast blocks outline a highlighted row by. */
+const OUTLINE_HOOKS = [
+  '.palette-row[aria-selected="true"]',
+  '.palette-row[data-selected="true"]',
+  '.forge-row[data-active="true"]',
+  "[data-highlighted]",
+];
+
+/**
+ * Rows that paint the highlight without a shared hook because they mark the
+ * state some other way that already holds 3:1 by default. Each entry checks the
+ * classes that carry that mark, so a site that loses it fails here.
+ */
+const OWN_TREATMENT: Record<
+  string,
+  { paints: number; treated: (classes: string[], states: string[][]) => boolean; why: string }
+> = {
+  "src/components/Worktree/WorktreeOverviewRow.tsx": {
+    paints: 1,
+    treated: (classes) =>
+      hasClass(classes, (_, utility) => utility === "outline-accent-primary") &&
+      hasClass(classes, (_, utility) => VISIBLE_OUTLINE.test(utility)),
+    why: "`aria-selected` is bulk membership there; the cursor is its own accent outline",
+  },
+  "src/components/Terminal/RecipeRunner/RecipeRunnerItem.tsx": {
+    paints: 2,
+    treated: selectionOutlineBorder,
+    why: "the cursor also draws a selection-outline border in the same state",
+  },
+  "src/components/Terminal/RecipeRunner/RecipeRunnerList.tsx": {
+    paints: 1,
+    treated: selectionOutlineBorder,
+    why: "the cursor also draws a selection-outline border in the same state",
+  },
+};
+
+function selectionOutlineBorder(classes: string[], states: string[][]): boolean {
+  return states.every((state) =>
+    hasClass(
+      classes,
+      (variants, utility) =>
+        utility === "border-[var(--color-selection-outline)]" && sameChain(variants, state)
+    )
+  );
+}
+
+/** An outline utility that draws one: a width or a style, not an offset or a colour. */
+const VISIBLE_OUTLINE =
+  /^outline(-solid|-dashed|-dotted|-double|-[1-9]\d*|-\[(length:)?(\d*\.)?\d*[1-9]\d*[a-z]*\])?$/;
+
+/** Radix's item primitives, which carry a menu or option role of their own. */
+const RADIX_ITEM_TAGS = new Set(["Item", "CheckboxItem", "RadioItem", "SubTrigger"]);
+const RADIX_ITEM_ROLES = new Set(["menuitem", "menuitemcheckbox", "menuitemradio", "option"]);
+
+function sameChain(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((variant, i) => variant === b[i]);
+}
+
+function hasClass(
+  classes: string[],
+  test: (variants: string[], utility: string) => boolean
+): boolean {
+  return classes.some((token) => {
+    const parts = splitVariants(token);
+    return test(parts.slice(0, -1), parts[parts.length - 1]!);
+  });
+}
+
+/** Exact, but for the Radix rule, which the increased-contrast block scopes by role. */
+function matchesHook(selector: string, hook: string): boolean {
+  if (selector === hook) return true;
+  const roles = selector.match(/^\[data-highlighted\]:is\(([^()]*)\)$/)?.[1]?.split(",");
+  return (
+    hook === "[data-highlighted]" &&
+    roles !== undefined &&
+    roles.length === RADIX_ITEM_ROLES.size &&
+    [...RADIX_ITEM_ROLES].every((role) => roles.includes(`[role="${role}"]`))
+  );
+}
+
+const HIGHLIGHT_PAINT = /^!?bg-overlay-highlight(\/\S+)?$/;
+
+/** `a:[b:c]:d` → `["a", "[b:c]", "d"]`: variant colons only, not ones in brackets. */
+function splitVariants(token: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < token.length; i++) {
+    const ch = token[i];
+    if (ch === "[" || ch === "(") depth++;
+    else if (ch === "]" || ch === ")") depth--;
+    else if (ch === ":" && depth === 0) {
+      parts.push(token.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(token.slice(start));
+  return parts;
+}
+
+interface HighlightPaint {
+  line: number;
+  classes: string[];
+  /** The variant chain of each paint token, `["aria-selected"]` and so on. */
+  states: string[][];
+  hooked: boolean;
+  reason: string;
+}
+
+/**
+ * Every class token that paints `overlay-highlight` as a row's state, read from
+ * the syntax tree so a comment can neither hide a paint nor fake a hook. Hover
+ * is supplemental and an open submenu trigger is not the row Enter acts on, so
+ * neither counts as a paint here.
+ */
+function highlightPaints(source: string, fileName = "fixture.tsx"): HighlightPaint[] {
+  const file = ts.createSourceFile(
+    fileName,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX
+  );
+  const out: HighlightPaint[] = [];
+  const stateTokens = (text: string) =>
+    text.split(/\s+/).filter((token) => {
+      const parts = splitVariants(token);
+      const variants = parts.slice(0, -1);
+      return (
+        HIGHLIGHT_PAINT.test(parts[parts.length - 1]!) &&
+        !variants.includes("hover") &&
+        !variants.includes("data-[state=open]")
+      );
+    });
+  const isText = (n: ts.Node): n is ts.StringLiteralLike | ts.TemplateLiteralLikeNode =>
+    ts.isStringLiteral(n) ||
+    ts.isNoSubstitutionTemplateLiteral(n) ||
+    ts.isTemplateHead(n) ||
+    ts.isTemplateMiddle(n) ||
+    ts.isTemplateTail(n);
+  const isClassName = (n: ts.Node): n is ts.JsxAttribute =>
+    ts.isJsxAttribute(n) && n.name.getText(file) === "className";
+
+  const visit = (node: ts.Node) => {
+    if (isClassName(node) && node.initializer) {
+      const classes: string[] = [];
+      const names = new Set<string>();
+      const collect = (n: ts.Node) => {
+        if (ts.isIdentifier(n)) names.add(n.text);
+        if (isText(n)) classes.push(...n.text.split(/\s+/).filter(Boolean));
+        ts.forEachChild(n, collect);
+      };
+      collect(node.initializer);
+      const paints = stateTokens(classes.join(" "));
+      if (paints.length > 0) {
+        const states = paints.map((token) => splitVariants(token).slice(0, -1));
+        const attributes = new Map<string, ts.JsxAttribute>();
+        for (const attribute of node.parent.properties) {
+          if (ts.isJsxAttribute(attribute)) attributes.set(attribute.name.getText(file), attribute);
+        }
+        const element = node.parent.parent;
+        const tag = element.tagName.getText(file);
+        const role = attributes.get("role")?.initializer;
+        const radixItem =
+          RADIX_ITEM_TAGS.has(tag) ||
+          (role !== undefined && ts.isStringLiteral(role) && RADIX_ITEM_ROLES.has(role.text));
+        // The paint's own state, outlined in each mode: a visible outline, not
+        // just an offset, under the same variants the fill is painted under.
+        const outlinedIn = (mode: string) =>
+          states.every((state) =>
+            hasClass(
+              classes,
+              (variants, utility) =>
+                VISIBLE_OUTLINE.test(utility) && sameChain(variants, [mode, ...state])
+            )
+          );
+        const shared = names.has("PALETTE_ROW_CLASS") || names.has("LIST_DETAIL_ROW_CLASS");
+        let hooked = false;
+        let reason = "no outline hook";
+        const radixOnly = states.every((state) => state.includes("data-[highlighted]"));
+        if (radixOnly && radixItem) hooked = true;
+        else if (radixOnly) hooked = outlinedIn("contrast-more") && outlinedIn("forced-colors");
+        else if (shared || classes.includes("palette-row")) {
+          hooked = attributes.has("aria-selected") || attributes.has("data-selected");
+          reason = "`palette-row` without aria-selected or data-selected";
+        } else if (classes.includes("forge-row")) {
+          hooked = attributes.has("data-active");
+          reason = "`forge-row` without data-active";
+        } else hooked = outlinedIn("contrast-more") && outlinedIn("forced-colors");
+        const line = file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
+        out.push({ line, classes, states, hooked, reason });
+      }
+      return;
+    }
+    if (isText(node) && stateTokens(node.text).length > 0) {
+      const line = file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
+      out.push({
+        line,
+        classes: [],
+        states: [],
+        hooked: false,
+        reason: "painted outside a className attribute",
+      });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return out;
+}
+
+/** The bodies of every `@media <query>` block, braces matched. */
+function mediaBlocks(css: string, query: string): string {
+  const bodies: string[] = [];
+  let from = 0;
+  for (;;) {
+    const at = css.indexOf(`@media ${query}`, from);
+    if (at === -1) break;
+    const open = css.indexOf("{", at);
+    let depth = 0;
+    let end = open;
+    for (; end < css.length; end++) {
+      if (css[end] === "{") depth++;
+      else if (css[end] === "}" && --depth === 0) break;
+    }
+    bodies.push(css.slice(open + 1, end));
+    from = end;
+  }
+  return bodies.join("\n");
+}
+
+/** A rule body that draws a solid outline of some width, in a colour. */
+function drawsOutline(body: string): boolean {
+  const declared = (property: string) =>
+    body.match(new RegExp(`(?:^|[;\\s])${property}\\s*:\\s*([^;]+)`))?.[1]?.trim();
+  const width = /^(\d*\.)?\d*[1-9]\d*px$/;
+  const shorthand = declared("outline")?.split(/\s+/);
+  if (shorthand) {
+    return (
+      shorthand.includes("solid") &&
+      shorthand.some((part) => width.test(part)) &&
+      !shorthand.includes("transparent")
+    );
+  }
+  const color = declared("outline-color");
+  return (
+    declared("outline-style") === "solid" &&
+    width.test(declared("outline-width") ?? "") &&
+    color !== undefined &&
+    color !== "transparent"
+  );
+}
+
+/** Each selector, whitespace removed, of every rule whose body draws an outline. */
+function outlinedSelectors(css: string): string[] {
+  const selectors: string[] = [];
+  for (const [, list, body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!drawsOutline(body!)) continue;
+    let depth = 0;
+    let start = 0;
+    const text = list!.replace(/\s+/g, "");
+    for (let i = 0; i <= text.length; i++) {
+      const ch = text[i];
+      if (ch === "(") depth++;
+      else if (ch === ")") depth--;
+      else if ((ch === "," && depth === 0) || i === text.length) {
+        selectors.push(text.slice(start, i));
+        start = i + 1;
+      }
+    }
+  }
+  return selectors;
+}

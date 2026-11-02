@@ -3940,6 +3940,26 @@ describe("GitHubResourceList — every row lands once (#14067)", () => {
     expect(screen.queryByText(/Page fetch failed/)).toBeNull();
     expect(screen.getByRole("button", { name: /load more/i })).toBeTruthy();
   });
+
+  it("marks Load more as the forge cursor only while the cursor is on it (#15865)", async () => {
+    // Increased contrast and forced colours outline the cursor through
+    // `.forge-row[data-active]`; the fill alone is all that mode would see.
+    mockListIssues.mockResolvedValueOnce(page([1, 2], "after-2"));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    const loadMore = await screen.findByRole("button", { name: /load more/i });
+    const input = screen.getByRole("combobox");
+    expect(loadMore.dataset.active).toBeUndefined();
+
+    for (let i = 0; i < 3; i++) fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(input.getAttribute("aria-activedescendant")).toBe("github-issue-load-more");
+    expect(loadMore.dataset.active).toBe("true");
+    expect(loadMore.classList.contains("forge-row")).toBe(true);
+
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(input.getAttribute("aria-activedescendant")).toBe("github-issue-option-2");
+    expect(loadMore.dataset.active).toBeUndefined();
+  });
 });
 
 describe("GitHubResourceList — only a cursor move scrolls the list (#14067)", () => {

@@ -191,7 +191,8 @@ function LoadMoreFooter({ context }: { context?: LoadMoreFooterContext }) {
               variant="outline"
               size="xs"
               onClick={isTokenError ? onOpenSettings : onLoadMore}
-              className={cn("mt-1", isLoadMoreActive && "bg-overlay-highlight")}
+              data-active={isLoadMoreActive ? "true" : undefined}
+              className={cn("forge-row mt-1", isLoadMoreActive && "bg-overlay-highlight")}
               icon={isTokenError ? "settings" : undefined}
             >
               {isTokenError ? "Open GitHub settings" : "Retry"}
@@ -202,8 +203,12 @@ function LoadMoreFooter({ context }: { context?: LoadMoreFooterContext }) {
             variant="ghost"
             onClick={onLoadMore}
             disabled={loadingMore}
+            data-active={isLoadMoreActive ? "true" : undefined}
             className={cn(
-              "w-full",
+              // `forge-row` + `data-active` is the hook the increased-contrast
+              // and forced-colours blocks outline a forge cursor by, on the
+              // button the fill is painted on rather than the padded row.
+              "forge-row w-full",
               // Neutral, not accent: the keyboard cursor uses the same neutral
               // lift here that it uses on a row, so the two can never both claim
               // the accent at once.
