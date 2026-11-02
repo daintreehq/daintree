@@ -307,7 +307,10 @@ export function formatBufferCell(bytes: number): string {
 
 /** The last path segment of a working directory, which is how a worktree is named on disk. */
 export function cwdLeaf(cwd: string): string | null {
-  const leaf = cwd.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+  const leaf = cwd
+    .replace(/[\\/]+$/, "")
+    .split(/[\\/]/)
+    .pop();
   return leaf && leaf !== "~" ? leaf : null;
 }
 

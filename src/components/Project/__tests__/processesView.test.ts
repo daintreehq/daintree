@@ -273,8 +273,11 @@ describe("unaccountedCores", () => {
     expect(unaccountedCores(whole, 6.5)).toBeCloseTo(4.5);
   });
 
-  it("never goes below zero", () => {
-    expect(unaccountedCores(whole, 1)).toBe(0);
+  it("says nothing once the listed rows account for the host's busy CPU, never a negative remainder", () => {
+    expect(unaccountedCores(whole, 1)).toBeNull();
+    expect(unaccountedCores(whole, 2)).toBeNull();
+    expect(unaccountedCores(whole, 2.04)).toBeNull();
+    expect(unaccountedCores(whole, 2.1)).toBeCloseTo(0.1);
   });
 
   it("says nothing from a partial, truncated or unsampled inventory, or without a host reading", () => {

@@ -1,12 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
-import {
-  ArrowDown,
-  CircleStop,
-  OctagonX,
-  RefreshCw,
-  Trash2,
-  type LucideIcon,
-} from "lucide-react";
+import { ArrowDown, CircleStop, OctagonX, RefreshCw, Trash2, type LucideIcon } from "lucide-react";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 import type { HostPlatform } from "@shared/types/remoteHosts";
 import { isDevPreviewKind } from "@shared/types/panel";
@@ -15,7 +8,6 @@ import type {
   ProcessInventoryPluginProcess,
   ProcessInventorySnapshot,
   ProcessInventoryTerminal,
-  ProcessTreeSample,
 } from "@shared/types/processes";
 import { AppDialog, type RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { Badge } from "@/components/ui/badge";
@@ -751,10 +743,7 @@ export function ProcessesDialog({
           primary
         />
         {showBuffers && (
-          <Reading
-            label="Buffer"
-            value={buffer ? formatBufferCell(buffer.estimatedBytes) : null}
-          />
+          <Reading label="Buffer" value={buffer ? formatBufferCell(buffer.estimatedBytes) : null} />
         )}
         {canKill && (
           <RowAction
@@ -814,18 +803,26 @@ export function ProcessesDialog({
     const only = count === 1 ? group.processes[0] : undefined;
     const members = describeClosedMembers(group.processes);
     return (
-      <tr key={group.key} className="h-9 border-t border-border-subtle" data-testid="closed-process-row">
+      <tr
+        key={group.key}
+        className="h-9 border-t border-border-subtle"
+        data-testid="closed-process-row"
+      >
         <IdentityCell
           title={group.title}
           // The count is on the group heading, the action's name and the confirm;
           // here it only pushed the process names off the row.
           tail={[members]}
           detail={[
-            count > 1 ? `${pluralize(count, "process", "processes")} still running` : "Still running",
+            count > 1
+              ? `${pluralize(count, "process", "processes")} still running`
+              : "Still running",
             only
               ? describeClosedMembers(group.processes, Infinity)
               : group.processes
-                  .map((process) => `${processName(process.comm) ?? "process"} (PID ${process.pid})`)
+                  .map(
+                    (process) => `${processName(process.comm) ?? "process"} (PID ${process.pid})`
+                  )
                   .join(", "),
           ]}
           state={<Badge tone="outline">Closed {formatAgo(now - group.closedAt)}</Badge>}
@@ -863,7 +860,10 @@ export function ProcessesDialog({
   // the active sort; "No project" stays last whatever it weighs.
   const pluginTop = plugins.reduce(
     (max, process) =>
-      Math.max(max, process.sample ? (sort === "cpu" ? process.sample.cpuPercent : process.sample.memoryKb) : -1),
+      Math.max(
+        max,
+        process.sample ? (sort === "cpu" ? process.sample.cpuPercent : process.sample.memoryKb) : -1
+      ),
     -1
   );
   const sections: Array<{
@@ -872,26 +872,25 @@ export function ProcessesDialog({
     counts: string;
     top: number;
     rows: Array<{ key: string; node: ReactNode }>;
-  }> =
-    groups.map((group) => {
-      const leftover = group.closed.reduce((sum, closed) => sum + closed.processes.length, 0);
-      return {
-        key: group.key,
-        label: group.label,
-        counts: [
-          group.terminals.length > 0 ? pluralize(group.terminals.length, "terminal") : null,
-          leftover > 0 ? `${pluralize(leftover, "process", "processes")} left running` : null,
-        ]
-          .filter((part): part is string => part !== null)
-          .join(" · "),
-        top: groupTopMetric(group, sort),
-        rows: group.rows.map((row) =>
-          row.kind === "live"
-            ? { key: row.terminal.id, node: renderTerminal(row.terminal, group.label) }
-            : { key: `closed:${row.closed.key}`, node: renderClosedGroup(row.closed) }
-        ),
-      };
-    });
+  }> = groups.map((group) => {
+    const leftover = group.closed.reduce((sum, closed) => sum + closed.processes.length, 0);
+    return {
+      key: group.key,
+      label: group.label,
+      counts: [
+        group.terminals.length > 0 ? pluralize(group.terminals.length, "terminal") : null,
+        leftover > 0 ? `${pluralize(leftover, "process", "processes")} left running` : null,
+      ]
+        .filter((part): part is string => part !== null)
+        .join(" · "),
+      top: groupTopMetric(group, sort),
+      rows: group.rows.map((row) =>
+        row.kind === "live"
+          ? { key: row.terminal.id, node: renderTerminal(row.terminal, group.label) }
+          : { key: `closed:${row.closed.key}`, node: renderClosedGroup(row.closed) }
+      ),
+    };
+  });
   if (plugins.length > 0) {
     const at = sections.findIndex(
       (section) => section.key === UNOWNED_GROUP_KEY || section.top < pluginTop
@@ -969,7 +968,9 @@ export function ProcessesDialog({
     target && target.terminal.rootPid !== null ? ` (PID ${target.terminal.rootPid})` : "";
   // Four "Claude" rows can share a project, so the question names the worktree too.
   const targetName =
-    targetLeaf && !targetTitle.includes(targetLeaf) ? `${targetTitle} · ${targetLeaf}` : targetTitle;
+    targetLeaf && !targetTitle.includes(targetLeaf)
+      ? `${targetTitle} · ${targetLeaf}`
+      : targetTitle;
 
   return (
     <>
@@ -1069,12 +1070,10 @@ export function ProcessesDialog({
                   onPointerLeave={() => setPointerInTable(false)}
                   onFocus={() => setFocusInTable(true)}
                   onBlur={(event) => {
-                    if (
-                      !(
-                        event.relatedTarget instanceof Node &&
-                        event.currentTarget.contains(event.relatedTarget)
-                      )
-                    ) {
+                    if (!(
+                      event.relatedTarget instanceof Node &&
+                      event.currentTarget.contains(event.relatedTarget)
+                    )) {
                       setFocusInTable(false);
                     }
                   }}
@@ -1099,9 +1098,14 @@ export function ProcessesDialog({
                         className="truncate bg-surface-dialog pb-1 pt-3 shadow-[inset_0_-1px_0_var(--color-border-subtle)] text-left font-normal"
                       >
                         Name
-                        {stale && sampleAge !== null && <span>{` · sampled ${formatAgo(sampleAge)}`}</span>}
+                        {stale && sampleAge !== null && (
+                          <span>{` · sampled ${formatAgo(sampleAge)}`}</span>
+                        )}
                       </th>
-                      <th scope="col" className="bg-surface-dialog pb-1 pt-3 shadow-[inset_0_-1px_0_var(--color-border-subtle)] pl-3 text-right font-normal">
+                      <th
+                        scope="col"
+                        className="bg-surface-dialog pb-1 pt-3 shadow-[inset_0_-1px_0_var(--color-border-subtle)] pl-3 text-right font-normal"
+                      >
                         PID
                       </th>
                       <SortHeader current={sort} sort="cpu" onSelect={setSort}>
@@ -1119,7 +1123,10 @@ export function ProcessesDialog({
                         </th>
                       )}
                       {canKill && (
-                        <th scope="col" className="bg-surface-dialog pb-1 pt-3 shadow-[inset_0_-1px_0_var(--color-border-subtle)]">
+                        <th
+                          scope="col"
+                          className="bg-surface-dialog pb-1 pt-3 shadow-[inset_0_-1px_0_var(--color-border-subtle)]"
+                        >
                           <span className="sr-only">Actions</span>
                         </th>
                       )}
@@ -1180,11 +1187,7 @@ export function ProcessesDialog({
         restoreFocusTo={resolveConfirmFocus}
         onClose={() => setKillTarget(null)}
         variant="destructive"
-        title={
-          target?.via === "dev-session"
-            ? `Stop '${targetName}'?`
-            : `Kill '${targetName}'?`
-        }
+        title={target?.via === "dev-session" ? `Stop '${targetName}'?` : `Kill '${targetName}'?`}
         description={
           target?.via === "dev-session"
             ? `Stops the dev server for this preview${targetWhich}${targetWhere}.`

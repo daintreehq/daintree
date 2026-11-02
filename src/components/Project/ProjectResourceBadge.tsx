@@ -139,7 +139,15 @@ function MemoryRow({ label, value, hint }: { label: string; value: string; hint?
  * labels under it rather than reading as one more of them. A `value` is the
  * block's total, on the heading's own line so it never reads as one more row.
  */
-function SectionLabel({ children, id, value }: { children: ReactNode; id?: string; value?: string }) {
+function SectionLabel({
+  children,
+  id,
+  value,
+}: {
+  children: ReactNode;
+  id?: string;
+  value?: string;
+}) {
   return (
     <div className="flex items-baseline justify-between gap-3 text-xs font-medium text-text-primary">
       <span id={id} className="min-w-0 truncate">
@@ -279,15 +287,15 @@ function TerminalBufferBreakdown({
     <div className="space-y-1" data-testid="terminal-buffer-breakdown">
       <TruncatedTooltip content={BUFFER_ESTIMATE_HINT} isTruncated side="left">
         <div className="rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary">
-            <SectionLabel
-              value={
-                slice.estimatedBytes !== null
-                  ? formatBufferEstimate(slice.estimatedBytes)
-                  : "Unavailable"
-              }
-            >
-              {slice.complete ? "Terminal buffers, est." : "Terminal buffers, est. (partial)"}
-            </SectionLabel>
+          <SectionLabel
+            value={
+              slice.estimatedBytes !== null
+                ? formatBufferEstimate(slice.estimatedBytes)
+                : "Unavailable"
+            }
+          >
+            {slice.complete ? "Terminal buffers, est." : "Terminal buffers, est. (partial)"}
+          </SectionLabel>
         </div>
       </TruncatedTooltip>
       {rows.map((row) => (
@@ -1132,46 +1140,48 @@ export function ProjectResourceBadge({
               memory read above must not hide the way to it. The two ways out sit
               together under their own rule, straight after the figures. */}
             <div className="-mt-1 space-y-0.5 border-t border-divider pt-2">
-            <button
-              type="button"
-              onClick={() => {
-                handingOffRef.current = true;
-                setOpen(false);
-                setProcessesOpen(true);
-              }}
-              data-testid="open-processes-dialog"
-              className="-mx-1 flex min-h-6 w-[calc(100%+0.5rem)] cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-1 text-left text-2xs text-text-secondary hover:bg-overlay-subtle hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-            >
-              <List className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              <span className="min-w-0 flex-1 truncate">Running processes</span>
-              <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
-            </button>
-            {/* The keep-awake hold used to be a coffee cup pinned to the strip.
+              <button
+                type="button"
+                onClick={() => {
+                  handingOffRef.current = true;
+                  setOpen(false);
+                  setProcessesOpen(true);
+                }}
+                data-testid="open-processes-dialog"
+                className="-mx-1 flex min-h-6 w-[calc(100%+0.5rem)] cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-1 text-left text-2xs text-text-secondary hover:bg-overlay-subtle hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+              >
+                <List className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span className="min-w-0 flex-1 truncate">Running processes</span>
+                <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
+              </button>
+              {/* The keep-awake hold used to be a coffee cup pinned to the strip.
               Its state and settings route survive here as one line.
 
               Mounted unconditionally, with only its wording changing: the hold
               ends on main's schedule, so a row that appeared only while holding
               could vanish under a keyboard user mid-popover. */}
-            <button
-              type="button"
-              onClick={() =>
-                void actionService.dispatch(
-                  "app.settings.openTab",
-                  { tab: "general", subtab: "overview", sectionId: "general-keep-awake" },
-                  { source: "user" }
-                )
-              }
-              aria-label={`${
-                holdingWakeLock ? "Keeping this machine awake" : "Not keeping this machine awake"
-              } — keep-awake settings`}
-              className="-mx-1 flex min-h-6 w-[calc(100%+0.5rem)] cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-1 text-left text-2xs text-text-secondary hover:bg-overlay-subtle hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-            >
-              <Coffee className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              <span className="min-w-0 flex-1 truncate">
-                {holdingWakeLock ? "Keeping this machine awake" : "Not keeping this machine awake"}
-              </span>
-              <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
-            </button>
+              <button
+                type="button"
+                onClick={() =>
+                  void actionService.dispatch(
+                    "app.settings.openTab",
+                    { tab: "general", subtab: "overview", sectionId: "general-keep-awake" },
+                    { source: "user" }
+                  )
+                }
+                aria-label={`${
+                  holdingWakeLock ? "Keeping this machine awake" : "Not keeping this machine awake"
+                } — keep-awake settings`}
+                className="-mx-1 flex min-h-6 w-[calc(100%+0.5rem)] cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-1 text-left text-2xs text-text-secondary hover:bg-overlay-subtle hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+              >
+                <Coffee className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span className="min-w-0 flex-1 truncate">
+                  {holdingWakeLock
+                    ? "Keeping this machine awake"
+                    : "Not keeping this machine awake"}
+                </span>
+                <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
+              </button>
             </div>
             {popoverData && (
               <div className="border-t border-divider pt-2">

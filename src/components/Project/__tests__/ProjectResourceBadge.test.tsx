@@ -762,7 +762,7 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
     expect(live?.closest("button")).toBeNull();
   });
 
-  it("raises a memory exception only once the threshold trips, outside the trigger", async () => {
+  it("raises a memory exception only once the threshold trips, as a mark in the trigger and words in its name", async () => {
     mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
     statsStoreState.stats = { p1: { processCount: 1 } };
     mockGetHardwareInfo.mockResolvedValue({ totalMemoryBytes: 16 * 1024 ** 3, logicalCpuCount: 8 });
@@ -770,15 +770,22 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
 
     const { container } = render(<ProjectResourceBadge />);
     await flush();
-    expect(container.textContent ?? "").not.toContain("High app memory");
+    const trigger = () => container.querySelector<HTMLElement>("[data-status-readout]");
+    expect(container.querySelector('[data-testid="sidebar-status-items"]')).toBeNull();
+    expect(trigger()?.getAttribute("aria-label") ?? "").not.toContain("high app memory");
 
     // 0.33 of 16GB is ~5.4GB; 9GB is past it.
     mockGetAppMetrics.mockResolvedValue({ totalMemoryMB: 9_000 });
     await advance(10_000);
 
-    expect(container.textContent ?? "").toContain("High app memory");
-    const trigger = container.querySelector("[data-status-readout]");
-    expect(trigger?.textContent ?? "").not.toContain("High app memory");
+    const mark = container.querySelector('[data-testid="sidebar-status-items"]');
+    expect(mark).not.toBeNull();
+    expect(trigger()?.contains(mark)).toBe(true);
+    expect(trigger()?.getAttribute("aria-label") ?? "").toMatch(
+      /, high app memory — open resource usage$/
+    );
+    // The mark alone on the row: the words don't crowd the count out.
+    expect(trigger()?.textContent ?? "").not.toMatch(/high app memory/i);
   });
 
   it("warns on the pressure figure, not a total swollen by GPU footprint (#13637)", async () => {
@@ -789,12 +796,16 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
 
     const { container } = render(<ProjectResourceBadge />);
     await flush();
-    expect(container.textContent ?? "").not.toContain("High app memory");
+    const label = () =>
+      container.querySelector("[data-status-readout]")?.getAttribute("aria-label") ?? "";
+    expect(container.querySelector('[data-testid="sidebar-status-items"]')).toBeNull();
+    expect(label()).not.toContain("high app memory");
 
     mockGetAppMetrics.mockResolvedValue({ totalMemoryMB: 9_000, pressureMemoryMB: 6_000 });
     await advance(10_000);
 
-    expect(container.textContent ?? "").toContain("High app memory");
+    expect(container.querySelector('[data-testid="sidebar-status-items"]')).not.toBeNull();
+    expect(label()).toContain(", high app memory");
   });
 
   it("removes visibility listener on unmount", () => {
