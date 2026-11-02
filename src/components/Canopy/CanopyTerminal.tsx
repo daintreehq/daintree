@@ -538,6 +538,29 @@ export function CanopyTerminal({
         : setTimeout(end, 0);
     };
     for (const type of GESTURE_EVENTS) frame.addEventListener(type, markGesture, true);
+    // A press the program reports has xterm follow its motion and release at the
+    // document, so they arrive wherever the pointer goes. Without them a
+    // fullscreen Claude Code reads a drag as a click, and a release outside the
+    // view leaves its button held. Captured, to run before xterm's own listeners.
+    let dragDocument: Document | null = null;
+    const endDrag = () => {
+      dragDocument?.removeEventListener("mousemove", followDrag, true);
+      dragDocument?.removeEventListener("mouseup", followDrag, true);
+      dragDocument = null;
+    };
+    const followDrag = (event: MouseEvent) => {
+      // A release the document never saw, as off the window's edge.
+      if (event.type === "mousemove" && event.buttons === 0) return endDrag();
+      markGesture(event);
+      if (event.type === "mouseup" && event.buttons === 0) endDrag();
+    };
+    const startDrag = () => {
+      if (dragDocument !== null) return;
+      dragDocument = frame.ownerDocument;
+      dragDocument.addEventListener("mousemove", followDrag, true);
+      dragDocument.addEventListener("mouseup", followDrag, true);
+    };
+    frame.addEventListener("mousedown", startDrag, true);
     // A sideways gesture over a grid wider than the pane scrolls the pane. xterm
     // swallows every wheel event while the program reports the mouse — and would
     // pass a diagonal one on as vertical wheel input — so it is taken first.
@@ -799,6 +822,8 @@ export function CanopyTerminal({
       unsubscribeFont();
       unsubscribeListDrag();
       for (const type of GESTURE_EVENTS) frame.removeEventListener(type, markGesture, true);
+      frame.removeEventListener("mousedown", startDrag, true);
+      endDrag();
       frame.removeEventListener("wheel", sideways, true);
       if (gestureTimer !== null) clearTimeout(gestureTimer);
       resizeObserver.disconnect();

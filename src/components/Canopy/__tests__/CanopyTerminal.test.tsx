@@ -336,6 +336,84 @@ describe("CanopyTerminal", () => {
     expect(terminalInput.mock.calls).toEqual([[7, "y"]]);
   });
 
+  describe("a drag the program reports", () => {
+    // SGR reports, as xterm sends them for Claude Code's fullscreen renderer.
+    const PRESS = "\x1b[<0;10;5M";
+    const MOTION = "\x1b[<32;14;5M";
+    const RELEASE = "\x1b[<0;14;5m";
+    const gestureOver = () =>
+      act(() => new Promise((resolve) => setTimeout(resolve, COMPOSITION_SENT_MS)));
+
+    it("sends the motion and the release, which xterm takes at the document", async () => {
+      const { frame } = mount();
+      await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
+      fireEvent.mouseDown(frame, { button: 0, buttons: 1 });
+      xterm.current!.emitData(PRESS);
+      await gestureOver();
+
+      fireEvent.mouseMove(document, { buttons: 1 });
+      xterm.current!.emitData(MOTION);
+      await gestureOver();
+      // Released past the panel's edge.
+      fireEvent.mouseUp(document.body, { button: 0, buttons: 0 });
+      xterm.current!.emitData(RELEASE);
+
+      expect(terminalInput.mock.calls).toEqual([
+        [7, PRESS],
+        [7, MOTION],
+        [7, RELEASE],
+      ]);
+    });
+
+    it("stops following once the button is up", async () => {
+      const { frame } = mount();
+      await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
+      fireEvent.mouseDown(frame, { button: 0, buttons: 1 });
+      fireEvent.mouseUp(document.body, { button: 0, buttons: 0 });
+      await gestureOver();
+      terminalInput.mockClear();
+
+      fireEvent.mouseMove(document, { buttons: 1 });
+      xterm.current!.emitData(MOTION);
+      expect(terminalInput).not.toHaveBeenCalled();
+    });
+
+    it("ends a drag whose release it never saw at the next move with no button held", async () => {
+      const { frame } = mount();
+      await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
+      fireEvent.mouseDown(frame, { button: 0, buttons: 1 });
+      await gestureOver();
+
+      fireEvent.mouseMove(document, { buttons: 0 });
+      await gestureOver();
+      fireEvent.mouseMove(document, { buttons: 1 });
+      xterm.current!.emitData(MOTION);
+      expect(terminalInput).not.toHaveBeenCalled();
+    });
+
+    it("follows nothing that started outside the view", async () => {
+      mount();
+      await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
+      fireEvent.mouseDown(document.body, { button: 0, buttons: 1 });
+      fireEvent.mouseMove(document, { buttons: 1 });
+      fireEvent.mouseUp(document.body, { button: 0, buttons: 0 });
+      xterm.current!.emitData(MOTION);
+      expect(terminalInput).not.toHaveBeenCalled();
+    });
+
+    it("leaves the document alone once the view is gone", async () => {
+      const { frame, unmount } = mount();
+      await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
+      fireEvent.mouseDown(frame, { button: 0, buttons: 1 });
+      const removed = vi.spyOn(document, "removeEventListener");
+      unmount();
+      expect(removed.mock.calls.map(([type]) => type).sort()).toEqual(
+        expect.arrayContaining(["mousemove", "mouseup"])
+      );
+      removed.mockRestore();
+    });
+  });
+
   it("takes a key an input method holds, which xterm sends a task later", async () => {
     const { frame } = mount();
     await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
