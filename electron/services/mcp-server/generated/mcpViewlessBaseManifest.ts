@@ -2331,7 +2331,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           enum: ["requested", "requested-unverified"],
           description:
-            "`requested`: keystrokes handed to an agent whose CLI names Escape as its interrupt. `requested-unverified`: that CLI names no interrupt key. Neither says the keystrokes arrived or the agent stopped; read the terminal's output.",
+            "`requested`: keys sent to an agent whose CLI interrupts on Escape; `requested-unverified`: its CLI names none. Neither means they arrived or it stopped; read the terminal.",
         },
       },
       required: ["terminalId", "agentId", "agentStateAtDispatch", "status"],

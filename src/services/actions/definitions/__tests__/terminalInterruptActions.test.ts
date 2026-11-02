@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { PtyPanelData } from "@shared/types/panel";
+import { z } from "zod";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -77,6 +78,12 @@ function definition(id: string) {
   const factory = buildRegistry().get(id);
   if (!factory) throw new Error(`action ${id} not registered`);
   return factory();
+}
+
+function resultObjectOf(id: string): z.ZodObject {
+  const schema = definition(id).resultSchema;
+  if (!(schema instanceof z.ZodObject)) throw new Error(`action ${id} has no object result`);
+  return schema;
 }
 
 async function run(id: string, args: unknown): Promise<unknown> {
@@ -214,12 +221,42 @@ describe("terminal.interruptOwned (#12338)", () => {
     );
   });
 
-  it("shares the delegate's result schema so both advertise the same contract", () => {
+  it("advertises the delegate's result contract, plus only the steer's own-keys note (#16094)", () => {
     const owned = definition("terminal.interruptOwned");
     const delegate = definition("terminal.interrupt");
-    expect(owned.resultSchema).toBe(delegate.resultSchema);
+    const ownedShape = resultObjectOf("terminal.interruptOwned").shape;
+    const delegateShape = resultObjectOf("terminal.interrupt").shape;
+    for (const [key, field] of Object.entries(delegateShape)) {
+      expect(ownedShape[key], key).toBe(field);
+    }
+    expect(Object.keys(ownedShape).filter((key) => !(key in delegateShape))).toEqual([
+      "inputSinceSettle",
+    ]);
     expect(owned.mcpOutputSchema).toBe(true);
     expect(delegate.mcpOutputSchema).toBe(true);
+
+    const receipt = {
+      terminalId: "a",
+      agentId: "claude",
+      agentStateAtDispatch: "working",
+      status: "requested",
+    };
+    for (const id of ["terminal.interruptOwned", "terminal.sendKeysOwned"]) {
+      const schema = resultObjectOf(id);
+      const base =
+        id === "terminal.sendKeysOwned" ? { terminalId: "a", keys: ["Escape"] } : receipt;
+      expect(schema.safeParse(base).success, id).toBe(true);
+      expect(schema.safeParse({ ...base, inputSinceSettle: "own-keys" }).success, id).toBe(true);
+      expect(schema.safeParse({ ...base, inputSinceSettle: "someone" }).success, id).toBe(false);
+    }
+    // The closed schema a client validates against carries it as optional.
+    const service = new ActionService();
+    for (const [, factory] of buildRegistry()) service.register(factory());
+    const advertised = service.list().find((e) => e.id === "terminal.interruptOwned")
+      ?.outputSchema as
+      { properties?: Record<string, { const?: unknown }>; required?: string[] } | undefined;
+    expect(advertised?.properties?.inputSinceSettle?.const).toBe("own-keys");
+    expect(advertised?.required).not.toContain("inputSinceSettle");
   });
 
   // A nullable or non-object root silently disables `mcpOutputSchema`, and no

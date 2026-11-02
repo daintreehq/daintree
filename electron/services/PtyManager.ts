@@ -713,13 +713,13 @@ export class PtyManager extends EventEmitter {
   /**
    * Write data to terminal stdin.
    */
-  write(id: string, data: string, traceId?: string): void {
+  write(id: string, data: string, traceId?: string, inputOwner?: string): void {
     const terminal = this.registry.get(id);
     if (!terminal) {
       logWarn(`Terminal ${id} not found, cannot write data`);
       return;
     }
-    terminal.write(data, traceId);
+    terminal.write(data, traceId, inputOwner);
   }
 
   /**

@@ -283,7 +283,11 @@ export type PtyHostRequest =
   | PluginPtyHostRequest
   | { type: "spawn"; id: string; options: PtyHostSpawnOptions }
   | { type: "resize"; id: string; cols: number; rows: number }
-  | { type: "write"; id: string; data: string; traceId?: string }
+  /**
+   * `inputOwner` names the assistant these bytes were written for (#16094);
+   * only main's own channel carries it, so a renderer's keys are never owned.
+   */
+  | { type: "write"; id: string; data: string; traceId?: string; inputOwner?: string }
   | {
       type: "broadcast-write";
       ids: string[];
@@ -316,7 +320,7 @@ export type PtyHostRequest =
   | { type: "withdraw-submission"; id: string; submissionToken: string }
   /** Drop input queued for the PTY but not yet written; input stays open. */
   | { type: "cancel-pending-input"; id: string }
-  | { type: "batch-double-escape"; ids: string[] }
+  | { type: "batch-double-escape"; ids: string[]; inputOwner?: string }
   | { type: "kill"; id: string; reason?: string; escalationDelayMs?: number }
   | { type: "trash"; id: string }
   | { type: "restore"; id: string }
@@ -1241,6 +1245,13 @@ export function isPtyHostResponseEvent(event: PtyHostEvent): event is PtyHostRes
   );
 }
 
+/** Typed input Daintree wrote on an assistant's behalf (#16094): when, and for whom. */
+export interface OwnedTypedInput {
+  /** The assistant's ownership principal, opaque to the pty host. */
+  owner: string;
+  at: number;
+}
+
 /** Terminal info sent from Host → Main for getTerminal queries */
 export interface PtyHostTerminalInfo {
   id: string;
@@ -1273,6 +1284,10 @@ export interface PtyHostTerminalInfo {
   lastInputTime?: number;
   /** Last input that could have put text in the composer, ignoring xterm's own reports (#12491). */
   lastTypedInputAt?: number;
+  /** The last of that input written for an assistant, and whose (#16094). */
+  lastOwnedInput?: OwnedTypedInput;
+  /** The last of that input anyone but `lastOwnedInput`'s owner wrote: all of it while none is owned. */
+  lastForeignInputAt?: number;
   lastOutputTime?: number;
   /** A submission is queued or still being written; absent from older hosts. */
   hasPendingSubmission?: boolean;

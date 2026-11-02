@@ -8,6 +8,7 @@ import { WORKER_STEER_REFUSALS } from "../../../../shared/types/assistantControl
 import { createSessionServer, type SessionServerDeps } from "../sessionServer.js";
 import { RESOURCE_NOT_OWNED_CODE } from "../shared.js";
 import { GlobalWorkerSteer, type WorkerSteerRecord } from "../../assistants/GlobalWorkerSteer.js";
+import { stampTypedInput } from "../../../../shared/utils/terminalInputProvenance.js";
 import { SessionStore } from "../sessionStore.js";
 import {
   callTool,
@@ -100,10 +101,10 @@ function harness(options: {
     },
     serializedState: async () => ({ data: "❯ 1. Yes\n  2. No" }),
     submit: pty.submit,
-    write: (id, data) => {
-      pty.write(id, data);
+    write: (id, data, inputOwner) => {
+      pty.write(id, data, inputOwner);
       const record = records.get(id);
-      if (record) record.lastTypedInputAt = ++clock;
+      if (record) stampTypedInput(record, ++clock, inputOwner);
     },
     doubleEscape: pty.doubleEscape,
     sleep: async () => {},
@@ -184,7 +185,7 @@ describe.each(LANES)("a global Assistant's relayed call ($lane) (#14551)", ({ sh
       arguments: { terminalId: WORKER, generation: 4 },
     });
     expect(interrupted.isError).toBeFalsy();
-    expect(pty.doubleEscape).toHaveBeenCalledWith(WORKER);
+    expect(pty.doubleEscape).toHaveBeenCalledWith(WORKER, store.resourceOwnership.ownerOf(SESSION));
 
     // Nothing reached a view, and steering it handed over nothing.
     expect(deps.dispatchAction).not.toHaveBeenCalled();
@@ -192,6 +193,36 @@ describe.each(LANES)("a global Assistant's relayed call ($lane) (#14551)", ({ sh
     expect(
       store.terminalAdoption.get(store.resourceOwnership.ownerOf(SESSION), WORKER)
     ).toBeUndefined();
+  });
+
+  it("files its keys under its principal, so its next keys aren't someone's (#16094)", async () => {
+    const { deps, pty, records, store } = harness({ shellName, global: true });
+    records.set(WORKER, atPrompt());
+    const server = await serve(deps);
+    const press = () =>
+      callTool(server, {
+        name: "terminal.sendKeysOwned",
+        arguments: { terminalId: WORKER, keys: ["Escape"], generation: 4 },
+      });
+
+    const first = await press();
+    const second = await press();
+
+    expect(first.isError).toBeFalsy();
+    expect(second.isError).toBeFalsy();
+    expect(answerOf(second)).toMatchObject({ keys: ["Escape"], inputSinceSettle: "own-keys" });
+    // The principal, not the session: a reconnected session is the same assistant.
+    const owner = store.resourceOwnership.ownerOf(SESSION);
+    expect(owner).not.toBe(SESSION);
+    expect(pty.write.mock.calls.map(([, , inputOwner]) => inputOwner)).toEqual([owner, owner]);
+
+    const sent = await callTool(server, {
+      name: "terminal.sendCommandOwned",
+      arguments: { terminalId: WORKER, command: "go", generation: 4 },
+    });
+    expect(sent.isError).toBe(true);
+    expect(JSON.stringify(sent.content)).toContain("keys you sent");
+    expect(pty.submit).not.toHaveBeenCalled();
   });
 
   it("runs a fixed slash form unstamped and refuses any other, in main (#16101)", async () => {

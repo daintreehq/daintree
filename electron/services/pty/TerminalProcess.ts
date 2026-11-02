@@ -993,6 +993,8 @@ export class TerminalProcess {
       analysisEnabled: t.analysisEnabled,
       lastInputTime: t.lastInputTime,
       lastTypedInputAt: t.lastTypedInputAt,
+      lastOwnedInput: t.lastOwnedInput,
+      lastForeignInputAt: t.lastForeignInputAt,
       lastOutputTime: t.lastOutputTime,
       lastCheckTime: t.lastCheckTime,
       detectedAgentId: t.detectedAgentId,
@@ -1110,8 +1112,8 @@ export class TerminalProcess {
     return this.inputController.tryWrite(data, traceId);
   }
 
-  write(data: string, traceId?: string): void {
-    this.inputController.write(data, traceId);
+  write(data: string, traceId?: string, inputOwner?: string): void {
+    this.inputController.write(data, traceId, inputOwner);
   }
 
   /**

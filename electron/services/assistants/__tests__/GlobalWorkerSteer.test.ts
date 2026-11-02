@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_STEER_REFUSALS } from "../../../../shared/types/assistantControl.js";
+import { stampTypedInput } from "../../../../shared/utils/terminalInputProvenance.js";
 import { AssistantTargetError } from "../AssistantTerminalControl.js";
 import {
   GlobalWorkerSteer,
@@ -11,6 +12,7 @@ import {
 
 const PROJECT = "proj-1";
 const WORKER = "term-worker";
+const OWNER = "principal\u0000relay\u0000shell-1\u0000help-1";
 
 interface Fake {
   projectId: string;
@@ -51,9 +53,15 @@ describe("GlobalWorkerSteer (#14551)", () => {
     projectId: PROJECT,
     terminalId: WORKER,
     generation: 4,
+    inputOwner: OWNER,
     authorize: () => {},
     ...extra,
   });
+
+  /** A key from a person at the pane, as the host files it: nobody's. */
+  const personTypes = () => {
+    if (fake.record) stampTypedInput(fake.record, ++fake.clock);
+  };
 
   const refusal = async (work: Promise<unknown>): Promise<AssistantTargetError> => {
     const error = await work.then(
@@ -89,13 +97,14 @@ describe("GlobalWorkerSteer (#14551)", () => {
       },
       submit: (_id, text, token, handback, promptAsWritten) =>
         submits.push({ text, token, ...(handback ? { handback } : {}), promptAsWritten }),
-      write: (_id, data) => {
+      write: (_id, data, inputOwner) => {
         writes.push(data);
-        // The host stamps every raw key as typed input, ours included.
-        if (fake.record) fake.record.lastTypedInputAt = ++fake.clock;
+        // The host stamps every raw key as typed input, filed under its owner.
+        if (fake.record) stampTypedInput(fake.record, ++fake.clock, inputOwner);
       },
-      doubleEscape: () => {
+      doubleEscape: (_id, inputOwner) => {
         escapes += 1;
+        if (fake.record) stampTypedInput(fake.record, ++fake.clock, inputOwner);
       },
       sleep: async () => {
         duringGap();
@@ -345,6 +354,92 @@ describe("GlobalWorkerSteer (#14551)", () => {
     expect(escapes).toBe(0);
   });
 
+  describe("its own earlier keys (#16094)", () => {
+    it("lets keys through after its own, and says so on that receipt alone", async () => {
+      const first = await steer.keys(target(), { keys: ["Escape"] });
+
+      const second = await steer.keys(target(), { keys: ["Escape"] });
+
+      expect(writes).toEqual(["\x1b", "\x1b"]);
+      expect(first.inputSinceSettle).toBeUndefined();
+      expect(second).toMatchObject({ keys: ["Escape"], inputSinceSettle: "own-keys" });
+    });
+
+    it("lets an interrupt through after its own keys, and says so", async () => {
+      await steer.keys(target(), { keys: ["Escape"] });
+      fake.record!.agentState = "working";
+      fake.record!.waitingReason = undefined;
+
+      const result = await steer.interrupt(target());
+
+      expect(escapes).toBe(1);
+      expect(result.inputSinceSettle).toBe("own-keys");
+    });
+
+    it("lets keys through after its own interrupt", async () => {
+      fake.record = atPrompt({ agentState: "working", waitingReason: undefined });
+      await steer.interrupt(target());
+
+      await expect(steer.keys(target(), { keys: ["Escape"] })).resolves.toMatchObject({
+        inputSinceSettle: "own-keys",
+      });
+    });
+
+    it("still refuses once a person types after them", async () => {
+      await steer.keys(target(), { keys: ["Escape"] });
+      personTypes();
+
+      const error = await refusal(steer.keys(target(), { keys: ["Escape"] }));
+
+      expect(error.code).toBe(WORKER_STEER_REFUSALS.typing);
+      expect(error.message).toContain("Someone has typed");
+      expect(writes).toEqual(["\x1b"]);
+    });
+
+    it("still refuses a person's key that landed between its check and its write", async () => {
+      // Under a "nothing newer than our own stamp" rule this key would be filed as ours.
+      await steer.keys(target({ authorize: personTypes }), { keys: ["Escape"] });
+
+      const error = await refusal(steer.keys(target(), { keys: ["Escape"] }));
+
+      expect(error.code).toBe(WORKER_STEER_REFUSALS.typing);
+      expect(writes).toEqual(["\x1b"]);
+    });
+
+    it("counts another assistant's keys as someone's", async () => {
+      await steer.keys(target({ inputOwner: "principal\u0000help\u0000other" }), {
+        keys: ["a"],
+      });
+
+      const keys = await refusal(steer.keys(target(), { keys: ["Enter"] }));
+      fake.record!.agentState = "working";
+      fake.record!.waitingReason = undefined;
+      const interrupt = await refusal(steer.interrupt(target()));
+
+      expect(keys.code).toBe(WORKER_STEER_REFUSALS.typing);
+      expect(interrupt.code).toBe(WORKER_STEER_REFUSALS.typing);
+      expect(writes).toEqual(["a"]);
+      expect(escapes).toBe(0);
+    });
+
+    it("still holds a prompt until the agent settles again, naming its own keys", async () => {
+      await steer.keys(target(), { keys: ["Up"] });
+
+      const error = await refusal(
+        steer.prompt(target(), { command: "go", handback: false, machineName: "m" })
+      );
+
+      expect(error.code).toBe(WORKER_STEER_REFUSALS.typing);
+      expect(error.message).toContain("keys you sent");
+      expect(error.message).not.toContain("Someone");
+      expect(submits).toEqual([]);
+
+      fake.record!.lastStateChange = ++fake.clock;
+      await steer.prompt(target(), { command: "go", handback: false, machineName: "m" });
+      expect(submits).toHaveLength(1);
+    });
+  });
+
   it("refuses keys while a submission is still going in, and before any settle is seen", async () => {
     fake.record = atPrompt({ hasPendingSubmission: true });
     expect((await refusal(steer.keys(target(), { keys: ["Enter"] }))).code).toBe(
@@ -359,9 +454,7 @@ describe("GlobalWorkerSteer (#14551)", () => {
 
   it("stops the rest when a person types between keys, and says which went in", async () => {
     fake.record = atPrompt({ waitingReason: "approval" });
-    duringGap = () => {
-      fake.record!.lastTypedInputAt = ++fake.clock;
-    };
+    duringGap = personTypes;
 
     const error = await refusal(steer.keys(target(), { keys: ["Down", "Enter"] }));
 
@@ -604,7 +697,13 @@ describe("liveGlobalWorkerSteer (#14551)", () => {
     });
 
     await steer.prompt(
-      { projectId: PROJECT, terminalId: WORKER, generation: 4, authorize: () => {} },
+      {
+        projectId: PROJECT,
+        terminalId: WORKER,
+        generation: 4,
+        inputOwner: OWNER,
+        authorize: () => {},
+      },
       { command: "go", handback: false, machineName: "m" }
     );
 
@@ -617,6 +716,48 @@ describe("liveGlobalWorkerSteer (#14551)", () => {
       undefined,
       "go"
     );
+  });
+
+  it("files its keys and its double Escape under the steering assistant (#16094)", async () => {
+    const pty = {
+      getTerminalProjectId: () => PROJECT,
+      getLiveGeneration: () => 4,
+      isAssistantTerminal: () => false,
+      getTerminalAsync: async () => ({
+        projectId: PROJECT,
+        detectedAgentId: "claude",
+        agentState: "working",
+        lastStateChange: 1_000,
+        hasPty: true,
+      }),
+      getSerializedStateAsync: async () => null,
+      write: vi.fn(),
+      batchDoubleEscape: vi.fn(),
+    };
+    const steer = liveGlobalWorkerSteer({
+      pty: () => pty as never,
+      isAssistantTerminal: () => false,
+    });
+    const target = {
+      projectId: PROJECT,
+      terminalId: WORKER,
+      generation: 4,
+      inputOwner: OWNER,
+      authorize: () => {},
+    };
+
+    vi.useFakeTimers();
+    try {
+      const keys = steer.keys(target, { keys: ["Escape"] });
+      await vi.runAllTimersAsync();
+      await keys;
+    } finally {
+      vi.useRealTimers();
+    }
+    await steer.interrupt(target);
+
+    expect(pty.write).toHaveBeenCalledWith(WORKER, "\x1b", undefined, OWNER);
+    expect(pty.batchDoubleEscape).toHaveBeenCalledWith([WORKER], OWNER);
   });
 
   it("submits a fixed slash form as written, as nobody's prompt (#16101)", async () => {
@@ -640,7 +781,13 @@ describe("liveGlobalWorkerSteer (#14551)", () => {
     });
 
     await steer.prompt(
-      { projectId: PROJECT, terminalId: WORKER, generation: 4, authorize: () => {} },
+      {
+        projectId: PROJECT,
+        terminalId: WORKER,
+        generation: 4,
+        inputOwner: OWNER,
+        authorize: () => {},
+      },
       { command: "/goal resume", handback: false, machineName: "m" }
     );
 
