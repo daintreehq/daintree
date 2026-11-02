@@ -127,6 +127,8 @@ const glyph = () =>
     .find((el) => (el.getAttribute("aria-label") ?? "").startsWith("Agent state:"));
 const glyphLabel = () => glyph()?.getAttribute("aria-label") ?? null;
 const wearsWaitingHue = () => glyph()?.className.includes(SESSION_COLORS.waiting) ?? false;
+/** The grey a wait that isn't news shares with the settled glyphs. */
+const wearsSettledTone = () => glyph()?.className.includes(SESSION_COLORS.idle) ?? false;
 
 /** Past the error wait's debounce, so nothing amber can still be on its way. */
 function settle() {
@@ -194,6 +196,7 @@ describe("ContentPanel amber from the fleet band", () => {
     // The header still draws the wait, in grey (#16138).
     expect(glyphLabel()).toBe("Agent state: waiting");
     expect(wearsWaitingHue()).toBe(false);
+    expect(wearsSettledTone()).toBe(true);
     // The observation itself is still reported as seen.
     expect(frame(container).getAttribute("data-agent-state")).toBe("waiting");
 
@@ -241,6 +244,7 @@ describe("ContentPanel amber from the fleet band", () => {
     // Seen is not answered: the ring stays, without the amber.
     expect(glyphLabel()).toBe("Agent state: waiting (question)");
     expect(wearsWaitingHue()).toBe(false);
+    expect(wearsSettledTone()).toBe(true);
 
     // A new ask is a new turn, unread again.
     fleet({
@@ -268,10 +272,12 @@ describe("ContentPanel amber from the fleet band", () => {
     expect(hasEdge(container, "waiting")).toBe(false);
     expect(glyphLabel()).toBe("Agent state: waiting (approval)");
     expect(wearsWaitingHue()).toBe(false);
+    expect(wearsSettledTone()).toBe(true);
 
     fleet({ agentState: "waiting", waitingReason: "approval", canopy: UNREAD_ASK });
     expect(hasEdge(container, "waiting")).toBe(true);
     expect(wearsWaitingHue()).toBe(true);
+    expect(wearsSettledTone()).toBe(false);
   });
 
   it("lets the pane's own newer observation end the amber before the band catches up", () => {

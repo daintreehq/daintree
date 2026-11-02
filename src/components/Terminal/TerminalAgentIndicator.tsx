@@ -166,11 +166,14 @@ export function TerminalAgentIndicator({
   // without the amber that only an unread ask wears: a restart is not waiting
   // on anyone, and an error wait is blocked whatever the band has caught up to.
   const isPassiveWait = bandedState === undefined && agentState === "waiting";
+  // A waiting reason only describes a wait the pane still observes; the fold
+  // draws idle and finished agents waiting too, over whatever reason is left.
+  const observesWait = (rawAgentState ?? agentState) === "waiting";
   const shownState: SessionPresentationState | undefined = !isPassiveWait
     ? bandedState
     : isRestarting === true
       ? "idle"
-      : (rawAgentState ?? agentState) === "waiting" && waitingReason === "error"
+      : observesWait && waitingReason === "error"
         ? "blocked"
         : "waiting";
   const isReinterpreted = shownState !== agentState;
@@ -193,7 +196,7 @@ export function TerminalAgentIndicator({
   // Specific reasons only — the classifier's `prompt` fallback stays a
   // plain "waiting" so the chip never overclaims.
   const chipWaitingReason =
-    shownState === "waiting" || shownState === "blocked"
+    observesWait && (shownState === "waiting" || shownState === "blocked")
       ? actionableWaitingReason(waitingReason)
       : null;
   const chipAriaLabel = chipWaitingReason

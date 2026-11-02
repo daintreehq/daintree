@@ -506,13 +506,23 @@ describe("TerminalAgentIndicator — glyph and tooltip", () => {
     expect(screen.getByRole("status", { name: "Agent state: blocked (error)" })).toBeTruthy();
   });
 
+  it("draws an error wait blocked when the store holds no observation of its own", () => {
+    mockTerminal = { id: "t1", waitingReason: "error" };
+
+    render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
+
+    expect(screen.getByRole("status", { name: "Agent state: blocked (error)" })).toBeTruthy();
+    expect(drawnGlyph()).toBe("blocked");
+  });
+
   it("leaves a stale error reason out of a wait the pane no longer observes as one", () => {
     // Folded to waiting from idle: the leftover reason describes an older wait.
     mockTerminal = { id: "t1", agentState: "idle", waitingReason: "error" };
 
     render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
 
-    expect(drawnGlyph()).toBe("waiting");
+    expectGreyWaitingRing("Agent state: waiting");
+    expect(screen.getByTestId("tooltip-content").textContent).not.toContain("(error)");
   });
 
   it("draws an error wait as blocked, never as the waiting ring", () => {
