@@ -63,8 +63,20 @@ const TerminalInterruptResultSchema = z.object({
   status: z
     .enum(["requested", "requested-unverified"])
     .describe(
-      "`requested`: keystrokes handed to an agent whose CLI names Escape as its interrupt. `requested-unverified`: that CLI names no interrupt key. Neither says the keystrokes arrived or the agent stopped; read the terminal's output."
+      "`requested`: keys handed to an agent whose CLI names Escape as its interrupt; `requested-unverified`: its CLI names none. Neither means they arrived or it stopped; read the terminal."
     ),
+});
+
+/**
+ * On an owned receipt admitted only because everything typed since the agent
+ * last settled was the caller's own keys (#16094), so a transcript shows why a
+ * terminal with input in it took more. Undescribed: the closed interrupt
+ * schema must advertise it, and its name and value say it on the wire.
+ */
+const InputSinceSettleSchema = z.literal("own-keys").optional();
+
+const OwnedTerminalInterruptResultSchema = TerminalInterruptResultSchema.extend({
+  inputSinceSettle: InputSinceSettleSchema,
 });
 
 const SEND_KEYS_DESCRIPTION =
@@ -77,6 +89,10 @@ const SendKeysResultSchema = z.object({
     .string()
     .optional()
     .describe("The terminal's last lines shortly after the keys, to check the dialog went."),
+});
+
+const OwnedSendKeysResultSchema = SendKeysResultSchema.extend({
+  inputSinceSettle: InputSinceSettleSchema,
 });
 
 export function registerTerminalInputActions(
@@ -316,7 +332,7 @@ export function registerTerminalInputActions(
         ),
       generation: RunGenerationArgSchema,
     }),
-    resultSchema: TerminalInterruptResultSchema,
+    resultSchema: OwnedTerminalInterruptResultSchema,
     mcpOutputSchema: true,
     run: async () => {
       throw new Error(
@@ -406,7 +422,7 @@ export function registerTerminalInputActions(
     keywords: ["key", "press", "dialog", "trust", "select", "owned"],
     palette: { mode: "hidden" },
     argsSchema: SendKeysArgsSchema,
-    resultSchema: SendKeysResultSchema,
+    resultSchema: OwnedSendKeysResultSchema,
     run: async () => {
       throw new Error(
         "terminal.sendKeysOwned must be invoked through the MCP main-process path, not renderer dispatch."

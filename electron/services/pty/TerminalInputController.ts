@@ -30,6 +30,7 @@ import {
   OUTPUT_SETTLE_POLL_INTERVAL_MS,
 } from "./terminalInput.js";
 import { formatWithBracketedPaste } from "../../../shared/utils/terminalInputProtocol.js";
+import { stampTypedInput } from "../../../shared/utils/terminalInputProvenance.js";
 import {
   isImageAttachmentPath,
   splitImageInputSegments,
@@ -191,7 +192,7 @@ export class TerminalInputController {
     }
 
     terminal.lastInputTime = Date.now();
-    if (!isTerminalReportOnly(data)) terminal.lastTypedInputAt = terminal.lastInputTime;
+    if (!isTerminalReportOnly(data)) stampTypedInput(terminal, terminal.lastInputTime);
     if (traceId !== undefined) {
       terminal.traceId = traceId || undefined;
     }
@@ -212,8 +213,9 @@ export class TerminalInputController {
     }
   }
 
-  write(data: string, traceId?: string): void {
-    this.writeInternal(data, traceId, false);
+  /** `inputOwner` names the assistant the bytes were written for (#16094); absent, they are a person's. */
+  write(data: string, traceId?: string, inputOwner?: string): void {
+    this.writeInternal(data, traceId, false, inputOwner);
   }
 
   /**
@@ -237,7 +239,12 @@ export class TerminalInputController {
     return this.writeInternal(data, traceId, true);
   }
 
-  private writeInternal(data: string, traceId: string | undefined, rethrow: boolean): boolean {
+  private writeInternal(
+    data: string,
+    traceId: string | undefined,
+    rethrow: boolean,
+    inputOwner?: string
+  ): boolean {
     const terminal = this.host.terminalInfo;
     if (this.isInputLocked) {
       return false;
@@ -246,7 +253,7 @@ export class TerminalInputController {
     // `rethrow` is the submit lane's own body and Enter, which leave the
     // composer empty once the Enter lands; only raw input can leave a draft.
     if (!rethrow && !isTerminalReportOnly(data)) {
-      terminal.lastTypedInputAt = terminal.lastInputTime;
+      stampTypedInput(terminal, terminal.lastInputTime, inputOwner);
     }
 
     if (terminal.isExited) {
@@ -613,7 +620,7 @@ export class TerminalInputController {
     // body stays in the composer unsent, which is a draft from here on, as a
     // staged line is.
     if (ctx?.isWithdrawn?.() === true) {
-      this.host.terminalInfo.lastTypedInputAt = Date.now();
+      stampTypedInput(this.host.terminalInfo, Date.now());
       return;
     }
 

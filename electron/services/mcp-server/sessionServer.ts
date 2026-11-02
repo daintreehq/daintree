@@ -939,7 +939,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           generation: parsed.data.generation,
         });
       }
-      if (ASSISTANT_INTERRUPT_TOOLS.has(actionId)) return control.interrupt(target);
+      if (ASSISTANT_INTERRUPT_TOOLS.has(actionId)) return control.interrupt(caller, target);
       return control.close(caller, target);
     };
     const callArgs =
@@ -966,6 +966,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         projectId,
         terminalId,
         generation,
+        // The principal admission captured, so keys this assistant wrote in
+        // an earlier session are still its own (#16094).
+        inputOwner: ownershipOwner,
         authorize: () => {
           if (sessionStore.getTier(sessionId) === null) {
             throw new AssistantTargetError(SESSION_GONE, SESSION_GONE_MESSAGE);

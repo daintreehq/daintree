@@ -25,11 +25,21 @@ import {
   SEND_KEYS_SETTLE_MS,
 } from "../../../shared/utils/terminalKeys.js";
 import {
+  foreignInputMoved,
+  foreignTypedInputAt,
+  typedSinceSettle,
+} from "../../../shared/utils/terminalInputProvenance.js";
+import {
   evaluateWakeGate,
   ASSISTANT_SEND_GATE,
   type WakeBlockReason,
   type WakeGateVerdict,
 } from "../../../shared/utils/terminalWakeGate.js";
+import {
+  helpOwnershipPrincipal,
+  principalOwnerKey,
+  relayOwnershipPrincipal,
+} from "../mcp-server/resourceOwnership.js";
 import type {
   HelpSessionStartedBy,
   RunningLane,
@@ -75,6 +85,8 @@ export interface AssistantTerminalRecord {
   waitingReason?: WaitingReason;
   lastStateChange?: number;
   lastTypedInputAt?: number;
+  lastOwnedInput?: { owner: string; at: number };
+  lastForeignInputAt?: number;
   isExited?: boolean;
   hasPty?: boolean;
   isTrashed?: boolean;
@@ -102,9 +114,10 @@ export interface AssistantTerminalControlDeps {
     handbackCode: string | undefined,
     promptAsWritten: string
   ): void;
-  doubleEscape(terminalId: string): void;
-  /** Raw bytes, as a person's keystrokes arrive. */
-  write(terminalId: string, data: string): void;
+  /** `inputOwner` files the keys under the caller in the pty host (#16094). */
+  doubleEscape(terminalId: string, inputOwner: string): void;
+  /** Raw bytes, as a person's keystrokes arrive, filed under `inputOwner`. */
+  write(terminalId: string, data: string, inputOwner: string): void;
   launch(request: AssistantLaunchRequest): Promise<AssistantLaunchResult>;
   /** Ends the session, which kills its PTY. */
   revoke(sessionId: string): Promise<void>;
@@ -174,6 +187,18 @@ function newestWithinEscapedBytes(text: string, maxBytes: number): string {
   return text.slice(start);
 }
 
+/**
+ * Whose keys a caller's are to the pty host (#16094): the owner key its
+ * session's ownership is held under, which outlives its MCP and link sessions.
+ */
+function inputOwnerOf(caller: AssistantCaller): string {
+  return principalOwnerKey(
+    caller.kind === "local"
+      ? helpOwnershipPrincipal(caller.helpSessionId)
+      : relayOwnershipPrincipal(caller.senderId, caller.helpSessionId)
+  );
+}
+
 function startedByCaller(caller: AssistantCaller): HelpSessionStartedBy {
   return caller.kind === "local"
     ? { kind: "local", askingHelpSessionId: caller.helpSessionId }
@@ -199,6 +224,9 @@ export function wasStartedBy(target: AssistantTarget, caller: AssistantCaller): 
     (caller.kind === "relay" && startedBy.senderId === caller.senderId)
   );
 }
+
+const OWN_KEYS_HELD_MESSAGE =
+  "The only input at the assistant's prompt since it settled is keys you sent, which can leave text there. Nothing was sent; send once it has settled again.";
 
 function busyMessage(verdict: Exclude<WakeGateVerdict, { kind: "ready" }>): string {
   switch (verdict.reason) {
@@ -399,9 +427,13 @@ export class AssistantTerminalControl {
     }
     const verdict = evaluateWakeGate(record, ASSISTANT_SEND_GATE);
     if (verdict.kind !== "ready") {
+      // Keys can leave text in the input that the send's Enter would take along (#16094).
+      const ownKeys =
+        verdict.reason === "typing" &&
+        typedSinceSettle(record, inputOwnerOf(caller)) === "own-keys";
       throw new AssistantTargetError(
         ASSISTANT_TARGET_REFUSALS.busy,
-        `${busyMessage(verdict)} (state: ${record.agentState ?? "unknown"}${
+        `${ownKeys ? OWN_KEYS_HELD_MESSAGE : busyMessage(verdict)} (state: ${record.agentState ?? "unknown"}${
           record.waitingReason ? `, ${record.waitingReason}` : ""
         })`
       );
@@ -429,8 +461,9 @@ export class AssistantTerminalControl {
    * Press keys in an assistant (#14548): to the run `generation` names, to
    * answer what its screen asks (an approval, a numbered choice). Unlike a
    * prompt this is admitted while it waits on such a question, but refused,
-   * with nothing pressed, once anything was typed there since its state last
-   * changed: a person's draft is never edited or submitted by these keys.
+   * with nothing pressed, once anyone else typed there since its state last
+   * changed: a person's draft is never edited or submitted by these keys. The
+   * caller's own earlier keys don't count (#16094), and the receipt says so.
    */
   async sendKeys(
     caller: AssistantCaller,
@@ -440,16 +473,22 @@ export class AssistantTerminalControl {
       choose: string | undefined;
       generation: number | undefined;
     }
-  ): Promise<{ terminalId: string; keys: string[]; screen?: string }> {
+  ): Promise<{
+    terminalId: string;
+    keys: string[];
+    screen?: string;
+    inputSinceSettle?: "own-keys";
+  }> {
     this.requireGeneration(caller, target, request.generation);
-    const record = await this.deps.getTerminal(target.terminalId);
+    const inputOwner = inputOwnerOf(caller);
+    let record = await this.deps.getTerminal(target.terminalId);
     if (!record) {
       throw new AssistantTargetError(
         ASSISTANT_TARGET_REFUSALS.notFound,
         `Assistant terminal '${target.terminalId}' can't be read right now. Nothing was pressed.`
       );
     }
-    this.requireKeysAdmitted(target, record);
+    this.requireKeysAdmitted(target, record, inputOwner);
     const readScreen = async (lines: number) => {
       const snapshot = await readTailSnapshot(
         (options) => this.deps.serializedState(target.terminalId, options),
@@ -482,34 +521,56 @@ export class AssistantTerminalControl {
           `Assistant terminal '${target.terminalId}' can't be read right now. Nothing was pressed.`
         );
       }
-      this.requireKeysAdmitted(target, fresh);
+      this.requireKeysAdmitted(target, fresh, inputOwner);
       this.requireGeneration(caller, target, request.generation);
+      record = fresh;
     }
+    // Read before the first key, never after one: anyone else's input since
+    // stops the rest, which our own keys stamping the record no longer hide.
+    const foreignBefore = foreignTypedInputAt(record, inputOwner);
+    const admittedOver =
+      typedSinceSettle(record, inputOwner) === "own-keys"
+        ? { inputSinceSettle: "own-keys" as const }
+        : {};
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    const pressed: string[] = [];
     for (const [index, key] of keys.entries()) {
       if (index > 0) {
         await sleep(SEND_KEYS_GAP_MS);
         // A replaced run must not get the rest of the sequence.
         this.requireGeneration(caller, target, request.generation);
+        const now = await this.deps.getTerminal(target.terminalId).catch(() => null);
+        if (now === null || foreignInputMoved(now, inputOwner, foreignBefore)) {
+          throw new AssistantTargetError(
+            ASSISTANT_TARGET_REFUSALS.busy,
+            `${
+              now === null
+                ? `Assistant terminal '${target.terminalId}' can't be read right now.`
+                : `Someone typed in assistant terminal '${target.terminalId}' while the keys were going in.`
+            } ${pressed.length} of ${keys.length} keys were sent (${pressed.join(", ")}); the rest weren't. Read the screen before pressing more, and never resend the whole sequence.`
+          );
+        }
       }
-      this.deps.write(target.terminalId, keySequence(key));
+      this.deps.write(target.terminalId, keySequence(key), inputOwner);
+      pressed.push(key);
     }
     await sleep(SEND_KEYS_SETTLE_MS);
     const screen = await readScreen(SEND_KEYS_SCREEN_LINES).catch(() => null);
-    return { terminalId: target.terminalId, keys, ...(screen ? { screen } : {}) };
+    return { terminalId: target.terminalId, keys, ...(screen ? { screen } : {}), ...admittedOver };
   }
 
-  private requireKeysAdmitted(target: AssistantTarget, record: AssistantTerminalRecord): void {
+  private requireKeysAdmitted(
+    target: AssistantTarget,
+    record: AssistantTerminalRecord,
+    inputOwner: string
+  ): void {
     if (record.isExited === true || record.hasPty === false || record.isTrashed === true) {
       throw new AssistantTargetError(
         ASSISTANT_TARGET_REFUSALS.busy,
         `Assistant terminal '${target.terminalId}' has no running process to press keys in. Nothing was pressed.`
       );
     }
-    if (
-      record.lastTypedInputAt !== undefined &&
-      (record.lastStateChange === undefined || record.lastTypedInputAt >= record.lastStateChange)
-    ) {
+    if (typedSinceSettle(record, inputOwner) === "someone") {
       throw new AssistantTargetError(
         ASSISTANT_TARGET_REFUSALS.busy,
         `Someone has typed in assistant terminal '${target.terminalId}' since it last changed state, so keys could edit or submit their draft. Nothing was pressed.`
@@ -517,7 +578,11 @@ export class AssistantTerminalControl {
     }
   }
 
-  async interrupt(target: AssistantTarget): Promise<{
+  /** The double Escape is filed under `caller` (#16094), so it never locks the caller's next keys out. */
+  async interrupt(
+    caller: AssistantCaller,
+    target: AssistantTarget
+  ): Promise<{
     terminalId: string;
     agentId: string;
     agentStateAtDispatch: string | undefined;
@@ -541,7 +606,7 @@ export class AssistantTerminalControl {
     if (!assessment.eligible) {
       throw new AssistantTargetError("VALIDATION_ERROR", assessment.reason);
     }
-    this.deps.doubleEscape(target.terminalId);
+    this.deps.doubleEscape(target.terminalId, inputOwnerOf(caller));
     return {
       terminalId: target.terminalId,
       agentId: assessment.agentId,
@@ -683,8 +748,10 @@ export function liveAssistantTerminalControl(deps: {
           undefined,
           promptAsWritten
         ),
-    doubleEscape: (terminalId) => deps.pty()?.batchDoubleEscape([terminalId]),
-    write: (terminalId, data) => deps.pty()?.write(terminalId, data),
+    doubleEscape: (terminalId, inputOwner) =>
+      deps.pty()?.batchDoubleEscape([terminalId], inputOwner),
+    write: (terminalId, data, inputOwner) =>
+      deps.pty()?.write(terminalId, data, undefined, inputOwner),
     launch: async (request) => {
       const { liveAssistantLaunchDeps, startAssistantWithoutView } =
         await import("./assistantLaunch.js");

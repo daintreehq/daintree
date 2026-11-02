@@ -11,6 +11,11 @@ import type { HandlerMap, HostContext } from "./types.js";
  */
 const REFUSING_GUARD: ExactPromptGuard = { kind: "settled-prompt-exact", agentIncarnation: -1 };
 
+/** Whose an input is, as main named it (#16094): a non-empty string or nobody's. */
+function inputOwnerOf(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
 /**
  * An exact guard as main sent it, with only the fields it may carry. Any other
  * object, or a field that is present but malformed, refuses the line.
@@ -38,7 +43,7 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
 
   return {
     write: (msg) => {
-      ptyManager.write(msg.id, msg.data, msg.traceId);
+      ptyManager.write(msg.id, msg.data, msg.traceId, inputOwnerOf(msg.inputOwner));
     },
 
     submit: (msg) => {
@@ -148,17 +153,18 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
       const ESC = "\u001b";
       const INTER_ESC_DELAY_MS = 50;
       const ids: string[] = Array.isArray(msg.ids) ? msg.ids : [];
+      const inputOwner = inputOwnerOf(msg.inputOwner);
       for (const id of ids) {
         if (typeof id !== "string" || !id) continue;
         const terminal = ptyManager.getTerminal(id);
         if (!terminal || terminal.wasKilled || terminal.isExited) continue;
-        ptyManager.write(id, ESC);
+        ptyManager.write(id, ESC, undefined, inputOwner);
         setTimeout(() => {
           const t = ptyManager.getTerminal(id);
           // The same spawn the first went to: a restart under this id in the
           // gap is a new run that asked for no Escape.
           if (!t || t.spawnedAt !== terminal.spawnedAt || t.wasKilled || t.isExited) return;
-          ptyManager.write(id, ESC);
+          ptyManager.write(id, ESC, undefined, inputOwner);
         }, INTER_ESC_DELAY_MS);
       }
     },

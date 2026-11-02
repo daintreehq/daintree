@@ -6,7 +6,11 @@ import type { TerminalCheckResult } from "../../../shared/types/checkResult.js";
 import type { TerminalHandback } from "../../../shared/types/handback.js";
 import type { PanelKind, PanelTitleMode, ScheduledRunRef } from "../../../shared/types/panel.js";
 import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
-import type { PtyHostSpawnOptions, TerminalResizeResult } from "../../../shared/types/pty-host.js";
+import type {
+  OwnedTypedInput,
+  PtyHostSpawnOptions,
+  TerminalResizeResult,
+} from "../../../shared/types/pty-host.js";
 import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.js";
 import { PTY_MIRROR_SCROLLBACK } from "../../../shared/config/scrollback.js";
 import type { ProcessDetector } from "../ProcessDetector.js";
@@ -76,6 +80,18 @@ export interface TerminalPublicState {
    * sends by itself, so a click on the pane does not read as a draft.
    */
   lastTypedInputAt?: number;
+  /**
+   * The last of that input written for an assistant, and whose (#16094), so
+   * its own keys needn't read as a person's on its next call.
+   */
+  lastOwnedInput?: OwnedTypedInput;
+  /**
+   * The last of that input anyone but `lastOwnedInput`'s owner wrote: a
+   * person's, or another assistant's once a different one wrote after it.
+   * Kept apart rather than inferred from the owner's stamp, so a key typed
+   * between an assistant's check and its write is never filed under its own.
+   */
+  lastForeignInputAt?: number;
   lastOutputTime: number;
   lastCheckTime: number;
   /**

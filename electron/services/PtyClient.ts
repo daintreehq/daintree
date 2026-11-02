@@ -123,6 +123,7 @@ import type {
   TerminalSubmitGuard,
   PtyHostDriveLease,
   FirstPromptCandidate,
+  OwnedTypedInput,
 } from "../../shared/types/pty-host.js";
 import type {
   ClosedProcessKillResult,
@@ -177,6 +178,10 @@ interface TerminalInfoResponse {
   lastInputTime?: number;
   /** Last input that could have put text in the composer, ignoring xterm's own reports (#12491). */
   lastTypedInputAt?: number;
+  /** The last of that input written for an assistant, and whose (#16094). */
+  lastOwnedInput?: OwnedTypedInput;
+  /** The last of that input anyone but `lastOwnedInput`'s owner wrote: all of it while none is owned. */
+  lastForeignInputAt?: number;
   lastOutputTime?: number;
   /** A submission is queued or still being written; absent from older hosts. */
   hasPendingSubmission?: boolean;
@@ -1593,8 +1598,15 @@ export class PtyClient extends EventEmitter {
     this.defaultShard.send({ type: "plugin-pty-kill", id, generation, signal });
   }
 
-  write(id: string, data: string, traceId?: string): void {
-    this.shardForTerminal(id).send({ type: "write", id, data, traceId });
+  /** `inputOwner` marks the bytes as an assistant's (#16094), for that assistant's next check. */
+  write(id: string, data: string, traceId?: string, inputOwner?: string): void {
+    this.shardForTerminal(id).send({
+      type: "write",
+      id,
+      data,
+      traceId,
+      ...(inputOwner !== undefined ? { inputOwner } : {}),
+    });
     const answer = terminalAnswerOf(data);
     if (answer !== null) this.emit("terminal-input", id, { answer } satisfies TerminalInputNotice);
   }
@@ -1711,12 +1723,16 @@ export class PtyClient extends EventEmitter {
    * gap survives main-process IPC jitter (which can otherwise collapse two
    * sub-10ms writes into a single Meta-Escape).
    */
-  batchDoubleEscape(ids: string[]): void {
+  batchDoubleEscape(ids: string[], inputOwner?: string): void {
     if (!Array.isArray(ids) || ids.length === 0) return;
     const validIds = ids.filter((id) => typeof id === "string" && id.length > 0);
     if (validIds.length === 0) return;
     for (const [shard, shardIds] of this.groupByOwnerShard(validIds)) {
-      shard.send({ type: "batch-double-escape", ids: shardIds });
+      shard.send({
+        type: "batch-double-escape",
+        ids: shardIds,
+        ...(inputOwner !== undefined ? { inputOwner } : {}),
+      });
     }
     // Escape declines an approval, as a single one sent by name does.
     for (const id of validIds) {
