@@ -552,6 +552,11 @@ describe("identity listener — agentIncarnation sync (#12535)", () => {
   it("follows the host downward after a pty-host replay restarts the count", () => {
     setupPanel({ agentState: "idle", agentIncarnation: 2 });
     const d = setupIdentityListeners();
+    const written: string[] = [];
+    const off = usePanelStore.subscribe((state) => {
+      const panel = state.panelsById["term-1"];
+      if (panel && isPtyPanel(panel)) written.push(`${panel.agentState}:${panel.agentIncarnation}`);
+    });
 
     // The replacement record starts at zero. A panel that held 2 forward would
     // go on naming a session that no longer exists.
@@ -563,10 +568,13 @@ describe("identity listener — agentIncarnation sync (#12535)", () => {
         agentIncarnation: 0,
       })
     );
+    off();
 
     expect(usePanelStore.getState().panelsById["term-1"]).toMatchObject({
       agentIncarnation: 0,
     });
+    // The new state is never readable beside its predecessor's count.
+    expect(written).not.toContain("working:2");
 
     d.dispose();
   });

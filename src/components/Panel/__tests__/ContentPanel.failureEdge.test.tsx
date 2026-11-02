@@ -564,8 +564,12 @@ describe("ContentPanel red edge after a host resync (#16153)", () => {
     act(() => usePanelStore.setState({ panelsById: { "t-1": panel }, panelIds: ["t-1"] }));
   }
 
-  const resync = (record: Parameters<typeof takeHostAgentState>[1]) =>
-    act(() => takeHostAgentState("t-1", record, usePanelStore.getState(), instances));
+  /** A resync's record for the pane; `alongside` lands in the same commit. */
+  const resync = (hostRecord: Parameters<typeof takeHostAgentState>[1], alongside?: () => void) =>
+    act(() => {
+      takeHostAgentState("t-1", hostRecord, usePanelStore.getState(), instances);
+      alongside?.();
+    });
 
   afterEach(() => {
     offRecords?.();
@@ -573,7 +577,10 @@ describe("ContentPanel red edge after a host resync (#16153)", () => {
     usePanelStore.setState({ panelsById: {}, panelIds: [] });
   });
 
-  it("draws the error wait of a session this view never saw start, though the last one was seen", () => {
+  const waitToken = () => usePanelFailureStore.getState().occurrences["t-1"]?.wait?.token;
+
+  /** Session 1's error wait, live, which the user then has in front of them. */
+  function seenFirstWait() {
     storePane({ agentState: "idle", lastStateChange: 1_000, agentIncarnation: 1 });
     act(() =>
       usePanelStore
@@ -587,6 +594,12 @@ describe("ContentPanel red edge after a host resync (#16153)", () => {
     expect(view.edge()).toBe(false);
     setStoreFocus(null);
     view.show({ isFocused: false });
+    return view;
+  }
+
+  it("draws the error wait of a session this view never saw start, though the last one was seen", () => {
+    const view = seenFirstWait();
+    const firstWait = waitToken();
 
     // The same session's wait, read again, is still the one the user saw.
     resync({ agentState: "waiting", waitingReason: "error", lastStateChange: 3_000, agentIncarnation: 1 });
@@ -595,6 +608,26 @@ describe("ContentPanel red edge after a host resync (#16153)", () => {
     // Relaunched while this view was away, and failed again: the resync is the
     // first this view hears of the new session.
     resync({ agentState: "waiting", waitingReason: "error", lastStateChange: 9_000, agentIncarnation: 2 });
+    expect(waitToken()).not.toBe(firstWait);
+    expect(view.edge()).toBe(true);
+  });
+
+  it("leaves nothing failed when the resync finds the new session working, and draws its own error wait", () => {
+    const view = seenFirstWait();
+
+    resync({ agentState: "working", lastStateChange: 9_000, agentIncarnation: 2 }, () =>
+      view.show({ agentState: "working" })
+    );
+    expect(waitToken()).toBeUndefined();
+    expect(view.edge()).toBe(false);
+
+    act(() => {
+      usePanelStore
+        .getState()
+        .updateAgentState("t-1", "waiting", undefined, 10_000, undefined, undefined, "error");
+      view.show({ agentState: "waiting" });
+    });
+    advance(ERROR_WAIT_DEBOUNCE_MS);
     expect(view.edge()).toBe(true);
   });
 });
