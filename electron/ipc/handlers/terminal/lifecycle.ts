@@ -34,7 +34,7 @@ import {
   ListBookmarksPayloadSchema,
 } from "../../../schemas/ipc.js";
 import { store } from "../../../store.js";
-import { loadDecisionsModule } from "../../../window/serviceRefs.js";
+import { decisionsServesPanes, loadDecisionsModule } from "../../../window/serviceRefs.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { armSpawnConfirmation, settleSpawnConfirmation } from "./spawnConfirmation.js";
 import type {
@@ -178,12 +178,12 @@ function wireAssistantPluginActivity(mcpServerService: McpServerSingleton): void
 
 /**
  * The listener port for a launch's `daintree-decisions` entry (#16012), or
- * null for none. The setting is read before anything of Decisions is
- * imported, so with Decisions off this loads nothing and the launch is
- * exactly what it was.
+ * null for none. The setting, and on an enrolled Remote Host its record
+ * (#16022), are read before anything of Decisions is imported, so with
+ * Decisions off this loads nothing and the launch is exactly what it was.
  */
 async function resolveDecisionsLaunchPort(): Promise<number | null> {
-  if (store.get("decisions")?.enabled !== true) return null;
+  if (!decisionsServesPanes(store.get("decisions"), store.get("decisionsHost"))) return null;
   try {
     const decisions = await loadDecisionsModule(
       () => import("../../../services/decisions/index.js")

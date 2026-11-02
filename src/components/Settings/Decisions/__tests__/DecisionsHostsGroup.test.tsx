@@ -227,6 +227,51 @@ describe("Remote Hosts under Devices", () => {
     await act(async () => {});
     expect(document.querySelector("#decisions-host-studio")?.textContent).toContain("Enrolled");
   });
+
+  it("shows what an enrolled Host last reported of its own Decisions, read again with each push (#16022)", async () => {
+    const enrolled: Pick<DecisionsHost, "enrollment" | "canEnroll"> = {
+      enrollment: { state: "enrolled", deviceId: "dev_x" },
+      canEnroll: false,
+    };
+    listHosts.mockResolvedValueOnce(
+      listed([
+        host({
+          ...enrolled,
+          runtime: {
+            runtime: { state: "running", deviceId: "dev_x", connection: "connected" },
+            at: 1,
+            live: true,
+          },
+        }),
+      ])
+    );
+    const view = await renderGroup({ revision: 1 });
+    expect(document.querySelector("#decisions-host-studio")?.textContent).toContain(
+      "It reports Decisions connected to the relay."
+    );
+
+    listHosts.mockResolvedValueOnce(
+      listed([
+        host({
+          ...enrolled,
+          runtime: {
+            runtime: { state: "revoked", deviceId: "dev_x", since: 2, credentialsRemoved: true },
+            at: 2,
+            live: true,
+          },
+        }),
+      ])
+    );
+    view.rerender(
+      <TooltipProvider>
+        <DecisionsHostsGroup enabled revision={2} />
+      </TooltipProvider>
+    );
+    await act(async () => {});
+    expect(document.querySelector("#decisions-host-studio")?.textContent).toContain(
+      "stopped, as the relay revoked it, and its keys removed"
+    );
+  });
 });
 
 describe("Remote Host copy", () => {
@@ -247,6 +292,64 @@ describe("Remote Host copy", () => {
     const away = host({ connected: false, enrollment: { state: "enrolled", deviceId: "dev_x" } });
     expect(hostEnrollmentText(away, true)).toContain("Not connected");
     expect(hostEnrollmentText({ ...away, connected: true }, true)).not.toContain("Not connected");
+  });
+
+  it("says what an enrolled Host last reported of its own Decisions, and when that was before its link closed", () => {
+    const enrolled = host({ enrollment: { state: "enrolled", deviceId: "dev_x" } });
+    const connected = {
+      runtime: { state: "running" as const, deviceId: "dev_x", connection: "connected" as const },
+      at: 1,
+      live: true,
+    };
+    expect(hostEnrollmentText({ ...enrolled, runtime: connected }, true)).toMatch(
+      /It reports Decisions connected to the relay\.$/
+    );
+    expect(
+      hostEnrollmentText(
+        { ...enrolled, connected: false, runtime: { ...connected, live: false } },
+        true
+      )
+    ).toMatch(
+      /Not connected\. Before its connection closed, it reported Decisions connected to the relay\.$/
+    );
+    expect(
+      hostEnrollmentText(
+        {
+          ...enrolled,
+          runtime: {
+            runtime: {
+              state: "running",
+              deviceId: "dev_x",
+              connection: "not-connected",
+              problem: "keys",
+            },
+            at: 1,
+            live: true,
+          },
+        },
+        true
+      )
+    ).toContain("not connected to the relay, as its keys couldn't be read");
+    expect(
+      hostEnrollmentText(
+        {
+          ...enrolled,
+          runtime: {
+            runtime: { state: "revoked", deviceId: "dev_x", since: 1, credentialsRemoved: false },
+            at: 1,
+            live: true,
+          },
+        },
+        true
+      )
+    ).toContain("its keys aren't removed yet");
+    // A Host that says it isn't enrolled by this owner adds nothing to the row.
+    expect(
+      hostEnrollmentText(
+        { ...enrolled, runtime: { runtime: { state: "not-enrolled" }, at: 1, live: true } },
+        true
+      )
+    ).toBe(hostEnrollmentText(enrolled, true));
   });
 
   it("carries the Host's own words as a sentence", () => {

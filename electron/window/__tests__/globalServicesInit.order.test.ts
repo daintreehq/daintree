@@ -1887,13 +1887,16 @@ describe("Decisions boot task (#16001)", () => {
     return counts;
   };
 
-  async function decisionsTask(saved: unknown): Promise<() => Promise<unknown>> {
+  async function decisionsTask(
+    saved: unknown,
+    hostRecord?: unknown
+  ): Promise<() => Promise<unknown>> {
     registeredTaskNames.length = 0;
     registeredTaskRuns.clear();
     await initGlobalServices({ all: () => [], size: 0 } as unknown as WindowRegistry);
     const fallback = vi.mocked(store.get).getMockImplementation()!;
     vi.mocked(store.get).mockImplementation((key: string) =>
-      key === "decisions" ? saved : fallback(key)
+      key === "decisions" ? saved : key === "decisionsHost" ? hostRecord : fallback(key)
     );
     const run = registeredTaskRuns.get("decisions");
     expect(run).toBeDefined();
@@ -1934,7 +1937,8 @@ describe("Decisions boot task (#16001)", () => {
         .mocked(store.get)
         .mock.calls.slice(readsBefore)
         .map(([key]) => key);
-      expect(reads).toEqual(["decisions"]);
+      // The switch and an enrolled Host's record (#16022), both saved values, and nothing else.
+      expect(reads).toEqual(["decisions", "decisionsHost"]);
       const grew = [...resourceCounts()].filter(
         ([type, count]) => count > (resourcesBefore.get(type) ?? 0)
       );
@@ -1952,6 +1956,18 @@ describe("Decisions boot task (#16001)", () => {
 
     expect(evaluatedTotal()).toBe(0);
     expect(decisionsEvaluated.start).not.toHaveBeenCalled();
+  });
+
+  it("loads the entry module and starts Decisions for an enrolled Host with the setting off (#16022)", async () => {
+    const run = await decisionsTask(
+      { enabled: false },
+      { deviceId: "dev_host_0001", ownerOffAt: null, revokedAt: null }
+    );
+
+    await run();
+
+    expect(decisionsEvaluated.index).toBe(1);
+    expect(decisionsEvaluated.start).toHaveBeenCalledTimes(1);
   });
 
   it("loads the entry module and starts Decisions when the setting is on", async () => {

@@ -1615,3 +1615,113 @@ describe("DecisionsService deleting local data", () => {
     }
   });
 });
+
+describe("DecisionsService as an enrolled Remote Host (#16022)", () => {
+  const HOST = {
+    relayOrigin: "https://relay.example.com",
+    installationId: "inst_12345678",
+    deviceId: "dev_host_0001",
+    hostId: "host_studio_01",
+  };
+
+  function hosted(rows?: DecisionsRows) {
+    const made: Array<{ options: RelayConnectionOptions; stopped: boolean }> = [];
+    const revoked: Array<{ deviceId: string; role: string }> = [];
+    const service = new DecisionsService({
+      openStore: async () => fakeStore(),
+      keyFilePath: () => ABSENT_KEY_FILE,
+      onRelayRevoked: (relay, role) => revoked.push({ deviceId: relay.deviceId, role }),
+      ...(rows ? { openRows: async () => rows } : {}),
+      connect: (options) => {
+        const record = { options, stopped: false };
+        made.push(record);
+        return {
+          start: () => {},
+          stop: () => {
+            record.stopped = true;
+          },
+        };
+      },
+    });
+    return { service, made, revoked };
+  }
+
+  it("connects in the desktop-host role, and says whose lifetime was revoked", async () => {
+    const { service, made, revoked } = hosted();
+    await service.start(on(HOST), "host");
+
+    expect(service.getRole()).toBe("host");
+    expect(made).toHaveLength(1);
+    expect(made[0]!.options.role).toBe("desktop-host");
+    made[0]!.options.onRevoked();
+    expect(revoked).toEqual([{ deviceId: HOST.deviceId, role: "host" }]);
+
+    const owner = hosted();
+    await owner.service.start(on(HOST));
+    expect(owner.made[0]!.options.role).toBe("owner-desktop");
+    owner.made[0]!.options.onRevoked();
+    expect(owner.revoked).toEqual([{ deviceId: HOST.deviceId, role: "owner" }]);
+  });
+
+  it("ends one role's lifetime before the other's begins", async () => {
+    const { service, made } = hosted();
+    const states = recordStates(service);
+    await service.start(on(HOST), "host");
+    await service.start(on({ ...HOST, deviceId: "dev_owner_0001" }));
+
+    expect(service.getRole()).toBe("owner");
+    expect(made.map((connection) => [connection.options.role, connection.stopped])).toEqual([
+      ["desktop-host", true],
+      ["owner-desktop", false],
+    ]);
+    // The Host's lifetime was let go whole: off in between, then the owner's starts.
+    expect(states).toEqual(["not-connected", "off", "not-connected"]);
+    await service.stop();
+    expect(service.getRole()).toBeNull();
+  });
+
+  it("deletes stored rows only while no lifetime runs, and never the key file", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "decisions-host-rows-"));
+    const keyFilePath = join(dir, "keys.bin");
+    writeFileSync(keyFilePath, "sealed");
+    let count = 2;
+    const service = new DecisionsService({
+      openStore: async () => fakeStore(),
+      keyFilePath: () => keyFilePath,
+      openRows: async () => ({
+        erase: () => {
+          count = 0;
+        },
+        exist: () => count > 0,
+      }),
+    });
+    try {
+      await service.start(on(HOST), "host");
+      await expect(service.eraseStoredRows()).rejects.toThrow(/running/);
+      expect(count).toBe(2);
+
+      await service.stop();
+      await service.eraseStoredRows();
+      expect(count).toBe(0);
+      expect(existsSync(keyFilePath)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("DecisionsService removing a revoked Host's keys (#16022)", () => {
+  it("refuses while a lifetime runs, and reads the file in its own turn when stopped", async () => {
+    const service = new DecisionsService({
+      openStore: async () => fakeStore(),
+      keyFilePath: () => ABSENT_KEY_FILE,
+      connect: () => ({ start: () => {}, stop: () => {} }),
+    });
+    await service.start(on(), "host");
+    await expect(service.clearHostKeys("dev_host_0001")).rejects.toThrow(/running/);
+
+    await service.stop();
+    // No key file at all: nothing to remove, and nothing asked of the keychain.
+    await expect(service.clearHostKeys("dev_host_0001")).resolves.toBeUndefined();
+  });
+});

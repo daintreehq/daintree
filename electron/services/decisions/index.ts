@@ -5,6 +5,7 @@ import { CHANNELS } from "../../ipc/channels.js";
 import { broadcastToProjectRenderers } from "../../ipc/utils.js";
 import { getAllAppWebContents } from "../../window/webContentsRegistry.js";
 import {
+  getDecisionsHostsPort,
   getMcpServerServiceRef,
   getPtyClient,
   watchDecisionsHostsPort,
@@ -48,8 +49,11 @@ import {
 } from "../../../shared/types/decisions.js";
 import type {
   DecisionsHostEnrollResult,
+  DecisionsHostRecord,
+  DecisionsHostRuntime,
   DecisionsHostsResult,
 } from "../../../shared/types/decisionsHosts.js";
+import type { HeldHost, OwnerStateAnnouncement } from "../../types/decisionsHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { OWNER_RW_FILE_MODE, resilientAtomicWriteFile } from "../../utils/fs.js";
 import {
@@ -63,6 +67,13 @@ import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
 import { buildDecisionsArchive, type DecisionsArchive } from "./dataExport.js";
 import { HostEnroller, type HostEnrollerOwner } from "./hostEnrollment.js";
 import { HostRecords } from "./hostEnrollmentRecords.js";
+import {
+  hostLifetimeSettings,
+  hostRecordServes,
+  hostRuntimeOf,
+  readHostRecord,
+  writeHostRecord,
+} from "./hostRecord.js";
 import { openDecisionsMcpRoute, type DecisionsMcpRouteSources } from "./mcpRoute.js";
 import { OwnerDevices } from "./pairing.js";
 import type { RelayBinding } from "./relayConnection.js";
@@ -165,7 +176,7 @@ async function ownerDevicesForHosts(): Promise<OwnerDevices | DecisionsRelayRequ
 /** This computer as the owner that enrolls Hosts: only with a relay identity of its own, unrevoked. */
 function hostEnrollmentOwner(): HostEnrollerOwner | null {
   const running = service;
-  if (shutDown || running === null) return null;
+  if (shutDown || running === null || running.getRole() !== "owner") return null;
   const settings = running.getSettings();
   if (
     settings === null ||
@@ -405,7 +416,8 @@ export function getDecisionsService(): Promise<DecisionsService> {
       const next: DecisionsService = new DecisionsService({
         publishPaneState,
         publishAnswerAttention: setAnswerAttention,
-        onRelayRevoked: recordRevocation,
+        onRelayRevoked: (relay, role) =>
+          role === "host" ? void hostRevoked(relay) : recordRevocation(relay),
         forgetIdentity: forgetRecordedIdentity,
         openQuestions: (source, previousClosed) =>
           openDecisionsMcpRoute(source, sources, previousClosed),
@@ -414,8 +426,10 @@ export function getDecisionsService(): Promise<DecisionsService> {
         diagnostics: setupDiagnostics,
       });
       next.onStatusChanged((event) => {
-        hostEnrollerFollows(event.status.state);
+        // A Host enrolls no Hosts: only an owner's lifetime does.
+        hostEnrollerFollows(next.getRole() === "host" ? "off" : event.status.state);
         publishStatus();
+        publishHostRuntime();
       });
       service = next;
       return next;
@@ -440,10 +454,12 @@ async function settledService(): Promise<DecisionsService | null> {
 export async function getDecisionsStatus(): Promise<DecisionsStatus> {
   const revision = statusRevision;
   const settings = readDecisionsSettings(store);
-  const observed = service?.getStatus() ?? {
+  // An enrolled Host's own lifetime is its owner's, not this computer's switch (#16022).
+  const owned = service !== null && service.getRole() !== "host" ? service : null;
+  const observed = owned?.getStatus() ?? {
     state: !shutDown && settings.enabled ? ("not-connected" as const) : ("off" as const),
   };
-  const keyFile = observed.state !== "off" && service !== null ? await service.hasKeyFile() : null;
+  const keyFile = observed.state !== "off" && owned !== null ? await owned.hasKeyFile() : null;
   // A verification for keys known to be gone protects nothing.
   const kitVerifiedAt =
     settings.recoveryKit !== null && keyFile !== false ? settings.recoveryKit.verifiedAt : null;
@@ -496,7 +512,10 @@ async function runningService(): Promise<DecisionsService> {
   const settings = readDecisionsSettings(store);
   if (shutDown || !settings.enabled) throw setupRefused();
   const running = await getDecisionsService();
-  if (running.getSettings() === null) await running.start(settings);
+  // The switch on here makes this computer the owner, ending a Host's lifetime if one ran.
+  if (running.getSettings() === null || running.getRole() !== "owner") {
+    await running.start(settings);
+  }
   if (shutDown) throw setupRefused();
   return running;
 }
@@ -552,6 +571,8 @@ function recordIdentity(
   running.updateSettings(saved);
   forgetOwnerDevices();
   hostEnroller.forget();
+  // Hosts connected already hear of this owner now, not at their next connection (#16022).
+  getDecisionsHostsPort()?.announceOwnerState();
   return saved;
 }
 
@@ -1101,6 +1122,203 @@ export async function rotateKeys(): Promise<DecisionsRotateKeysResult> {
   return result;
 }
 
+/**
+ * This machine as a Remote Host its owner enrolled (#16022). It serves its own
+ * panes with its own `desktop-host` identity, Shell or no Shell, until its
+ * owner's Shell says Decisions is off or the relay revokes its device. Each
+ * change to what it reports is heard here, so its link can tell the owner.
+ */
+const hostRuntimeListeners = new Set<() => void>();
+
+function publishHostRuntime(): void {
+  if (shutDown) return;
+  for (const listener of [...hostRuntimeListeners]) {
+    try {
+      listener();
+    } catch (err) {
+      console.warn("[Decisions] A Host report listener threw:", err);
+    }
+  }
+}
+
+/** Calls `listener` whenever what this Host reports may have changed. */
+export function onDecisionsHostRuntimeChanged(listener: () => void): () => void {
+  hostRuntimeListeners.add(listener);
+  return () => {
+    hostRuntimeListeners.delete(listener);
+  };
+}
+
+/**
+ * What this Host reports of its own Decisions to `owner`'s Shell: not
+ * enrolled, unless it was enrolled by that owner.
+ */
+export function decisionsHostRuntimeFor(
+  owner: Pick<OwnerStateAnnouncement, "installationId" | "ownerDeviceId">
+): DecisionsHostRuntime {
+  const record = readHostRecord(store);
+  if (
+    record === null ||
+    record.installationId !== owner.installationId ||
+    record.ownerDeviceId !== owner.ownerDeviceId
+  ) {
+    return { state: "not-enrolled" };
+  }
+  const running = service;
+  const status = running !== null && running.getRole() === "host" ? running.getStatus() : null;
+  return hostRuntimeOf(record, status);
+}
+
+/**
+ * Runs the Host lifetime the record calls for while the owner's switch here
+ * is off: started while it serves, a revoked Host's removal finished,
+ * stopped otherwise. Always inside the switch's transitions.
+ */
+async function reconcileHostLifetime(): Promise<void> {
+  if (shutDown || readDecisionsSettings(store).enabled) return;
+  const record = readHostRecord(store);
+  if (record !== null && hostRecordServes(record)) {
+    const next = await getDecisionsService();
+    await next.start(hostLifetimeSettings(record), "host");
+  } else if (record?.revokedAt != null && record.credentialsRemovedAt === null) {
+    await removeHostCredentials(record);
+  } else {
+    const running = await settledService();
+    if (running?.getRole() === "host") await running.stop();
+  }
+  publishHostRuntime();
+}
+
+/**
+ * Removes a revoked Host's delivery credentials: its keys, only while the
+ * key file still holds that device's (an enrollment may have saved another's
+ * meanwhile), and the questions stored for it, which no later device of this
+ * Host could have answered. Its lifetime stops first. Recorded as removed
+ * only once both are gone; what fails is tried again at the next start.
+ */
+async function removeHostCredentials(record: DecisionsHostRecord): Promise<void> {
+  const next = await getDecisionsService();
+  try {
+    if (next.getRole() === "host") await next.stop();
+    await next.clearHostKeys(record.deviceId);
+    await next.eraseStoredRows();
+  } catch (err) {
+    console.warn("[Decisions] A revoked Host's keys couldn't be removed yet:", err);
+    return;
+  }
+  const current = readHostRecord(store);
+  if (current?.deviceId === record.deviceId && current.revokedAt !== null) {
+    writeHostRecord(store, { ...current, credentialsRemovedAt: Date.now() });
+  }
+}
+
+/** The relay revoked this Host's device: recorded, then the Host stops and its credentials go. */
+function hostRevoked(relay: RelayBinding): Promise<void> {
+  return serialize(async () => {
+    const record = readHostRecord(store);
+    if (
+      record === null ||
+      record.relayOrigin !== relay.relayOrigin ||
+      record.installationId !== relay.installationId ||
+      record.deviceId !== relay.deviceId
+    ) {
+      return;
+    }
+    let current = record;
+    if (record.revokedAt === null) {
+      try {
+        current = writeHostRecord(store, { ...record, revokedAt: Date.now() });
+      } catch (err) {
+        // Stopped all the same: the relay refuses the device whatever is saved.
+        console.warn("[Decisions] A Host's revocation couldn't be recorded:", err);
+      }
+    }
+    publishHostRuntime();
+    if (shutDown || readDecisionsSettings(store).enabled) return;
+    await removeHostCredentials(current);
+    publishHostRuntime();
+  });
+}
+
+/**
+ * This machine holds `held` as its Remote Host identity, just accepted or
+ * read (#16022). A record naming that device already stands as it is (turned
+ * off or revoked included); otherwise the record names it now, off if the
+ * owner's Shell last said Decisions is off (`ownerEnabled`), and its lifetime
+ * starts. The questions stored for a device it replaced go first: only the
+ * device that asked could have them answered. While they can't be removed,
+ * the record stays as it was, and the next read tries again.
+ */
+export function noteHostIdentity(
+  held: HeldHost,
+  options: { ownerEnabled?: boolean } = {}
+): Promise<void> {
+  return serialize(async () => {
+    if (shutDown) return;
+    const relayOrigin = normalizeRelayOrigin(held.relayOrigin);
+    if (relayOrigin === null) return;
+    const previous = readHostRecord(store);
+    if (
+      previous !== null &&
+      previous.relayOrigin === relayOrigin &&
+      previous.installationId === held.installationId &&
+      previous.deviceId === held.deviceId
+    ) {
+      return;
+    }
+    if (previous !== null) {
+      try {
+        const running = await getDecisionsService();
+        if (running.getRole() === "host") await running.stop();
+        await running.eraseStoredRows();
+      } catch (err) {
+        console.warn(
+          "[Decisions] A replaced Host device's questions couldn't be removed yet:",
+          err
+        );
+        return;
+      }
+    }
+    writeHostRecord(store, {
+      relayOrigin,
+      installationId: held.installationId,
+      deviceId: held.deviceId,
+      ownerDeviceId: held.ownerDeviceId,
+      hostId: previous?.hostId ?? newId(),
+      ownerOffAt: options.ownerEnabled === false ? Date.now() : null,
+      revokedAt: null,
+      credentialsRemovedAt: null,
+    });
+    await reconcileHostLifetime();
+  });
+}
+
+/**
+ * What the owner's Shell says of its Decisions (#16022): off stops this Host
+ * and keeps its keys, so it carries on where it left off; on starts it
+ * again. Only the owner its certificate chains to is heard, and a revoked
+ * Host stays stopped. Answers what it then reports to that owner.
+ */
+export function applyOwnerState(input: OwnerStateAnnouncement): Promise<DecisionsHostRuntime> {
+  return serialize(async () => {
+    const record = readHostRecord(store);
+    if (
+      !shutDown &&
+      record !== null &&
+      record.revokedAt === null &&
+      record.installationId === input.installationId &&
+      record.ownerDeviceId === input.ownerDeviceId
+    ) {
+      const off = record.ownerOffAt !== null;
+      if (off === input.enabled) {
+        writeHostRecord(store, { ...record, ownerOffAt: input.enabled ? null : Date.now() });
+      }
+      await reconcileHostLifetime();
+    }
+    return decisionsHostRuntimeFor(input);
+  });
+}
+
 /** How long a launch waits for `/mcp/decisions` before going ahead without it. */
 const LAUNCH_ROUTE_WAIT_MS = 5_000;
 
@@ -1124,6 +1342,11 @@ async function startedLifetime(): Promise<DecisionsService | null> {
   return service?.getSettings() ? service : null;
 }
 
+/** This machine's lifetime serves panes: the owner's switch is on, or it is an enrolled Host (#16022). */
+function servesPanes(): boolean {
+  return readDecisionsSettings(store).enabled || hostRecordServes(readHostRecord(store));
+}
+
 /**
  * The listener port an agent launch points `daintree-decisions` at (#16012),
  * once this lifetime takes questions. Null while off or quitting, with no
@@ -1133,7 +1356,7 @@ async function startedLifetime(): Promise<DecisionsService | null> {
  * time, so no launch hangs on a keychain prompt or a setup queued ahead.
  */
 export async function decisionsLaunchPort(): Promise<number | null> {
-  if (shutDown || !readDecisionsSettings(store).enabled) return null;
+  if (shutDown || !servesPanes()) return null;
   const deadline = Date.now() + LAUNCH_ROUTE_WAIT_MS;
   const running = await within(startedLifetime(), LAUNCH_ROUTE_WAIT_MS);
   const remaining = deadline - Date.now();
@@ -1294,14 +1517,21 @@ function endSetupCheck(): Promise<void> {
   ]).finally(() => clearTimeout(timer));
 }
 
-/** Boot: starts the service only if the saved setting, sanitised, is on. */
+/**
+ * Boot: starts the service only if the saved setting, sanitised, is on; or,
+ * with it off, as the enrolled Remote Host the Host's record names (#16022),
+ * which also finishes removing a revoked Host's keys.
+ */
 export function startDecisionsIfEnabled(): Promise<void> {
   return serialize(async () => {
     if (shutDown) return;
     const settings = readDecisionsSettings(store);
-    if (!settings.enabled) return;
-    const next = await getDecisionsService();
-    await next.start(settings);
+    if (settings.enabled) {
+      const next = await getDecisionsService();
+      await next.start(settings);
+      return;
+    }
+    await reconcileHostLifetime();
   });
 }
 
@@ -1336,10 +1566,14 @@ export function setDecisionsEnabled(
         // Its question is cancelled while the store is still open.
         await checkStopped;
         await (await settledService())?.stop();
+        // An enrolled Host's own lifetime has no switch here (#16022).
+        await reconcileHostLifetime();
       }
     } finally {
       // The setting changed, whatever became of the start.
       publishStatus();
+      // Every connected Host this computer enrolled hears of it now (#16022).
+      getDecisionsHostsPort()?.announceOwnerState();
     }
     return getDecisionsStatus();
   });
@@ -1380,4 +1614,5 @@ export function _resetDecisionsForTesting(): void {
   hostEnroller.dispose();
   hostEnroller = makeHostEnroller();
   hostRecords = null;
+  hostRuntimeListeners.clear();
 }

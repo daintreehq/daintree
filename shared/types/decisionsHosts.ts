@@ -1,3 +1,5 @@
+import type { DecisionsConnectionProblem } from "./decisions.js";
+
 /**
  * Remote Hosts as Decisions devices (#16021), as the owner's computer last
  * observed each one. Every enrolled Host is its own `desktop-host` device on
@@ -81,6 +83,61 @@ export type DecisionsHostEnrollment =
   | { state: "needs-update" }
   | { state: "failed"; failure: DecisionsHostFailure };
 
+/**
+ * What an enrolled Host keeps of its enrollment, on the Host (#16022): the
+ * public half only, beside the sealed keys, so it can tell at startup that it
+ * runs Decisions without opening them. Never a secret.
+ */
+export interface DecisionsHostRecord {
+  relayOrigin: string;
+  installationId: string;
+  /** This Host's device on the relay. */
+  deviceId: string;
+  /** The owner its certificate chains to: only that owner's Shell turns it off or on. */
+  ownerDeviceId: string;
+  /** The id its panes' questions carry, minted on this Host. */
+  hostId: string;
+  /** When the owner's Shell last said Decisions is off there (epoch ms); null while on. */
+  ownerOffAt: number | null;
+  /** When the relay refused this device as revoked (epoch ms); null until it does. */
+  revokedAt: number | null;
+  /** When its keys and stored questions were removed after the revocation; null until they are. */
+  credentialsRemovedAt: number | null;
+}
+
+/**
+ * An enrolled Host's own Decisions, as the Host reports it (#16022):
+ *
+ * - `not-enrolled`: it holds no enrollment from this owner.
+ * - `running`: it runs Decisions for its own panes; `connection` is its relay
+ *   connection as it observes it.
+ * - `owner-off`: the owner's Shell said Decisions is off, so it stopped. Its
+ *   keys stay, so it carries on where it left off once Decisions is on again.
+ * - `revoked`: the relay refused its device as revoked, so it stopped and
+ *   removed its keys and stored questions (`credentialsRemoved`), or couldn't yet.
+ */
+export type DecisionsHostRuntime =
+  | { state: "not-enrolled" }
+  | {
+      state: "running";
+      deviceId: string;
+      connection:
+        "not-connected" | "connecting" | "connected" | "reconnecting" | "replaced" | "revoked";
+      nextAttemptAt?: number;
+      problem?: DecisionsConnectionProblem;
+    }
+  | { state: "owner-off"; deviceId: string; since: number }
+  | { state: "revoked"; deviceId: string; since: number; credentialsRemoved: boolean };
+
+/** A Host's last report of its own Decisions, as this computer received it. */
+export interface DecisionsHostRuntimeObservation {
+  runtime: DecisionsHostRuntime;
+  /** When it arrived (epoch ms). */
+  at: number;
+  /** It came over the link that is up now; false once that link has closed. */
+  live: boolean;
+}
+
 export interface DecisionsHost {
   /** The Host's id in this computer's host list. */
   hostId: string;
@@ -91,6 +148,8 @@ export interface DecisionsHost {
   enrollment: DecisionsHostEnrollment;
   /** Enroll would do something now: connected, and not enrolled or busy. */
   canEnroll: boolean;
+  /** What the Host last reported of its own Decisions; absent until it has. */
+  runtime?: DecisionsHostRuntimeObservation;
 }
 
 /**

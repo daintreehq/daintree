@@ -154,6 +154,36 @@ describe("SealedKeyStore", () => {
     expect(await readFile(file, "utf8")).toBe(before);
   });
 
+  it("removes the file only for what it holds when the removal's turn comes, and never one it can't open (#16022)", async () => {
+    keyed("v10");
+    const held = identity();
+    await new SealedKeyStore(file).save(held);
+    const seen: Array<StoredIdentity | null> = [];
+
+    // Another store saved other keys first: the removal reads those, and leaves them.
+    const other = identity({ config: { ...held.config, deviceId: "dev_other_0001" } });
+    const saving = new SealedKeyStore(file).save(other);
+    const kept = new SealedKeyStore(file).clearIf((current) => {
+      seen.push(current);
+      return current?.config.deviceId === held.config.deviceId;
+    });
+    await saving;
+    await expect(kept).resolves.toBe(false);
+    expect(seen).toEqual([other]);
+    await expect(new SealedKeyStore(file).load()).resolves.toEqual(other);
+
+    await expect(new SealedKeyStore(file).clearIf(() => true)).resolves.toBe(true);
+    await expect(stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(new SealedKeyStore(file).clearIf(() => true)).resolves.toBe(false);
+
+    // A keychain that can't open the file removes nothing.
+    await new SealedKeyStore(file).save(held);
+    noKey();
+    safeStorageMock.decryptStringAsync.mockRejectedValue(new Error("locked"));
+    await expect(new SealedKeyStore(file).clearIf(() => true)).rejects.toBeDefined();
+    await expect(stat(file)).resolves.toBeDefined();
+  });
+
   it("runs every store's steps on one file in turn, so one's read never lands inside another's write", async () => {
     keyed("v10");
     await new SealedKeyStore(file).save(identity());

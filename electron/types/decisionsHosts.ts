@@ -6,6 +6,8 @@
  * nothing.
  */
 
+import type { DecisionsHostRuntimeObservation } from "../../shared/types/decisionsHosts.js";
+
 /** The most a Host's or the library's own words may run to, wherever they are shown. */
 export const MAX_HOST_DETAIL_LENGTH = 300;
 
@@ -100,6 +102,25 @@ export interface DecisionsHostLink {
   accept(input: { attempt: string; response: string }): Promise<HostCallOutcome<HostAcceptResult>>;
 }
 
+/**
+ * What the owner's Shell tells a Host of its Decisions (#16022), on each
+ * connection and each change of the switch: whether it is on, and which
+ * owner says so. A Host hears only the owner its enrollment chains to.
+ */
+export interface OwnerStateAnnouncement {
+  installationId: string;
+  ownerDeviceId: string;
+  enabled: boolean;
+}
+
+/** A Host identity this machine holds, public parts only (#16022). */
+export interface HeldHost {
+  relayOrigin: string;
+  installationId: string;
+  deviceId: string;
+  ownerDeviceId: string;
+}
+
 export interface DecisionsHostEntry {
   hostId: string;
   name: string;
@@ -113,6 +134,10 @@ export interface DecisionsHostsPort {
   linkFor(hostId: string): DecisionsHostLink | null;
   /** Every new link as it comes up, before any view calls through it. */
   onLinkOpened(listener: (hostId: string, link: DecisionsHostLink) => void): () => void;
-  /** The host list or a Host's connection changed. */
+  /** The host list, a Host's connection, or what a Host reported of its Decisions changed. */
   onHostsChanged(listener: () => void): () => void;
+  /** What the Host last reported of its own Decisions (#16022); null before it has. */
+  runtimeOf(hostId: string): DecisionsHostRuntimeObservation | null;
+  /** Tells every connected Host now whether Decisions is on here, as the setting says. */
+  announceOwnerState(): void;
 }

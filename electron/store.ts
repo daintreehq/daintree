@@ -15,6 +15,7 @@ import type { TerminalConfig } from "../shared/types/ipc/config.js";
 import type { HostDescriptor } from "../shared/types/remoteHosts.js";
 import type { DeviceAnswerSettings } from "../shared/types/ipc/deviceAnswer.js";
 import type { DecisionsSettings } from "../shared/types/decisions.js";
+import type { DecisionsHostRecord } from "../shared/types/decisionsHosts.js";
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
 import type { InstalledPluginRecord } from "../shared/types/plugin.js";
 import type { ErrorRecord } from "../shared/types/ipc/errors.js";
@@ -929,6 +930,14 @@ export interface StoreSchema {
    * `sanitizeDecisionsSettings`.
    */
   decisions?: DecisionsSettings;
+  /**
+   * This machine as a Remote Host enrolled in its owner's Decisions (#16022):
+   * the enrollment's public half, so startup can tell it runs Decisions for
+   * its own panes without opening the sealed keys. Never a secret, and never
+   * a switch of its own: the owner's Shell turns it off and on. Additive key
+   * with no numbered migration; absent means not enrolled.
+   */
+  decisionsHost?: DecisionsHostRecord;
   /** Client-side behaviour while a window is attached to a remote host. */
   remoteHostsPreferences?: { interceptCtrlVImages: boolean };
   /**

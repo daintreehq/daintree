@@ -1,12 +1,18 @@
+import type { DecisionsConnectionProblem } from "@shared/types/decisions";
 import type {
   DecisionsHost,
   DecisionsHostFailure,
+  DecisionsHostRuntime,
+  DecisionsHostRuntimeObservation,
   DecisionsHostsResult,
 } from "@shared/types/decisionsHosts";
 
-/** The switch's own words: what enrolling gives a Host, and what turning it off leaves. */
+/**
+ * The switch's own words: what enrolling gives a Host, how turning Decisions
+ * off reaches it (#16022), and what turning this off leaves.
+ */
 export const AUTO_ENROLL_SUBTITLE =
-  "Each Remote Host you connect to gets its own keys, so its agents can ask you even while this computer sleeps, and it can read every question and answer. Turn this off to enroll Hosts one at a time.";
+  "Each Remote Host you connect to gets its own keys, so its agents can ask you even while this computer sleeps, and it can read every question and answer. Turning Decisions off here turns it off on each Host when this computer next connects to it. Turn this off to enroll Hosts one at a time.";
 
 function sentence(detail: string | undefined): string {
   if (!detail) return "";
@@ -46,8 +52,68 @@ export function hostFailureText(failure: DecisionsHostFailure): string {
   }
 }
 
-/** One Host's row, in words: what was last observed of it. */
+function problemText(problem: DecisionsConnectionProblem | undefined): string {
+  switch (problem) {
+    case "keys":
+      return ", as its keys couldn't be read";
+    case "storage":
+      return ", as its Decisions data couldn't be opened";
+    case "other-relay":
+      return ", as what it has stored belongs to another relay";
+    case undefined:
+      return "";
+  }
+}
+
+/** The Host's own Decisions, as it said it, to follow "it reports Decisions"; null when there is nothing to say. */
+function runtimeState(runtime: DecisionsHostRuntime): string | null {
+  switch (runtime.state) {
+    case "not-enrolled":
+      return null;
+    case "owner-off":
+      return "off, as this computer told it Decisions was off";
+    case "revoked":
+      return runtime.credentialsRemoved
+        ? "stopped, as the relay revoked it, and its keys removed"
+        : "stopped, as the relay revoked it; its keys aren't removed yet";
+    case "running":
+      switch (runtime.connection) {
+        case "connected":
+          return "connected to the relay";
+        case "connecting":
+          return "connecting to the relay";
+        case "reconnecting":
+          return "reconnecting to the relay";
+        case "replaced":
+          return "replaced on the relay by another connection with its keys";
+        case "revoked":
+          return "revoked by the relay";
+        case "not-connected":
+          return `not connected to the relay${problemText(runtime.problem)}`;
+      }
+  }
+}
+
+/**
+ * What the Host itself last reported of its own Decisions (#16022), in a
+ * sentence to follow its row; empty when it has said nothing to show. A
+ * report from before its link closed says so: it may have changed since.
+ */
+export function hostRuntimeText(observation: DecisionsHostRuntimeObservation | undefined): string {
+  if (observation === undefined) return "";
+  const state = runtimeState(observation.runtime);
+  if (state === null) return "";
+  return observation.live
+    ? ` It reports Decisions ${state}.`
+    : ` Before its connection closed, it reported Decisions ${state}.`;
+}
+
+/** One Host's row, in words: what was last observed of it, and what it last reported. */
 export function hostEnrollmentText(host: DecisionsHost, autoEnroll: boolean): string {
+  return `${enrollmentText(host, autoEnroll)}${hostRuntimeText(host.runtime)}`;
+}
+
+function enrollmentText(host: DecisionsHost, autoEnroll: boolean): string {
   const offline = host.connected ? "" : " Not connected.";
   const { enrollment } = host;
   switch (enrollment.state) {

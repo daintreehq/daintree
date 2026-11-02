@@ -3,6 +3,7 @@ import {
   RelayClient,
   RelayError,
   loadIdentity,
+  type DesktopRole,
   type Identity,
   type InboundEvent,
   type KeyStore,
@@ -76,6 +77,11 @@ export interface QuestionSource {
 
 export interface RelayConnectionOptions {
   relay: RelayBinding;
+  /**
+   * The role the identity must hold: the owner's desktop, or an enrolled
+   * Remote Host serving its own panes (#16022). The owner's unless said.
+   */
+  role?: DesktopRole;
   store: RelayConnectionStore;
   keys: KeyStore;
   /**
@@ -344,11 +350,11 @@ export class RelayConnection {
     this.begin();
   }
 
-  /** Whether `identity` is the owner identity this connection is for. */
+  /** Whether `identity` is the identity, in the role, this connection is for. */
   private isBound(identity: Identity): boolean {
     const { config } = identity;
     return (
-      identity.role === "owner-desktop" &&
+      identity.role === (this.o.role ?? "owner-desktop") &&
       normalizeRelayOrigin(config.relayOrigin) === this.o.relay.relayOrigin &&
       config.installationId === this.o.relay.installationId &&
       config.deviceId === this.o.relay.deviceId
@@ -587,7 +593,13 @@ export class RelayConnection {
             throw error;
           }
         ),
-      save: (identity) => keys.save(identity),
+      // A Host saves the grants it fetched after a rotation (#16022): a save that
+      // fails is final to the library too, so it stops the connection first.
+      save: (identity) =>
+        keys.save(identity).catch((error: unknown) => {
+          if (!(error instanceof RetiredAttemptError)) unusable();
+          throw error;
+        }),
       clear: () => keys.clear(),
     };
   }

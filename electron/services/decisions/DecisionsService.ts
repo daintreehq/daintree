@@ -40,6 +40,14 @@ import { createTrustedPolicy } from "./workflowGates.js";
 
 export type DecisionsStatusListener = (event: DecisionsStatusEvent) => void;
 
+/**
+ * Whose lifetime runs: this computer as the owner, under its switch, or as a
+ * Remote Host its owner enrolled (#16022), serving its own panes with the
+ * `desktop-host` identity it was given. One at a time: they share the key
+ * file and the store.
+ */
+export type DecisionsRole = "owner" | "host";
+
 /** What the service runs a relay connection with; tests hand in their own. */
 export interface DecisionsRelayConnection {
   start(): void;
@@ -97,9 +105,10 @@ export interface DecisionsServiceOptions {
   publishAnswerAttention?: AnswerAttentionPublisher;
   /**
    * The relay revoked the identity this lifetime connected with. The entry
-   * records it in the setting, so no later lifetime connects with it either.
+   * records it, in the setting or the Host's record, so no later lifetime
+   * connects with it either.
    */
-  onRelayRevoked?: (relay: RelayBinding) => void;
+  onRelayRevoked?: (relay: RelayBinding, role: DecisionsRole) => void;
   /**
    * The relay's devices changed, as the running connection observed it: a
    * device event in the ledger, or a pending key rotation finished (#16010).
@@ -141,6 +150,7 @@ export class DecisionsService {
 
   private status: ServiceStatus = { state: "off" };
   private settings: DecisionsSettings | null = null;
+  private role: DecisionsRole = "owner";
   private store: DaintreeLocalStore | null = null;
   private disposed = false;
   private readonly openStore: DecisionsStoreOpener;
@@ -153,7 +163,7 @@ export class DecisionsService {
   private erasing = false;
   private readonly panes: PaneDecisionStates;
   private readonly connect: DecisionsConnectionFactory;
-  private readonly onRelayRevoked: (relay: RelayBinding) => void;
+  private readonly onRelayRevoked: (relay: RelayBinding, role: DecisionsRole) => void;
   private readonly onDevicesChanged: () => void;
   private readonly delivery: DecisionsDeliveryDeps | null;
   private connection: DecisionsRelayConnection | null = null;
@@ -239,6 +249,11 @@ export class DecisionsService {
   /** The settings the running lifetime started with; null while stopped. */
   getSettings(): DecisionsSettings | null {
     return this.settings;
+  }
+
+  /** Whose lifetime runs; null while stopped. */
+  getRole(): DecisionsRole | null {
+    return this.settings === null ? null : this.role;
   }
 
   /** The policy this lifetime asks questions under; null while stopped. */
@@ -391,13 +406,17 @@ export class DecisionsService {
   }
 
   /**
-   * Begins, or carries on, an enabled lifetime with these settings. Settings
-   * that are off start nothing. Rejects when the store can't be opened; the
+   * Begins, or carries on, an enabled lifetime with these settings, as
+   * `role`. Settings that are off start nothing. A lifetime of the other role
+   * ends first, as a stop would. Rejects when the store can't be opened; the
    * lifetime stays on, and the next start tries the store again.
    */
-  start(settings: DecisionsSettings): Promise<void> {
+  start(settings: DecisionsSettings, role: DecisionsRole = "owner"): Promise<void> {
     return this.enqueue(async () => {
       if (this.disposed || !settings.enabled) return;
+      if (this.settings !== null && this.role !== role) await this.release(true);
+      if (this.disposed) return;
+      this.role = role;
       this.settings = settings;
       this.applyPolicy(settings);
       this.paused = false;
@@ -491,6 +510,46 @@ export class DecisionsService {
       // A deletion that changed nothing reconnects; one that forgot the relay has none to.
       if (!this.disposed && this.settings !== null) this.reconcileConnection();
       return outcome;
+    });
+  }
+
+  /**
+   * Deletes the stored rows, keeping the key file, while no lifetime runs: a
+   * Remote Host's replaced device's questions (#16022), which only the device
+   * that asked could have had answered.
+   */
+  eraseStoredRows(): Promise<void> {
+    return this.enqueue(async () => {
+      if (this.disposed) return;
+      if (this.settings !== null) {
+        throw new Error("Decisions is running, so its stored rows can't be deleted");
+      }
+      const rows = await this.openRows();
+      if (rows.exist()) rows.erase();
+    });
+  }
+
+  /**
+   * Removes a revoked Remote Host's keys (#16022) while no lifetime runs, only
+   * if the key file still holds that device's: keys an enrollment saved for
+   * another device meanwhile stay. Resolves once that device's keys are
+   * gone; rejects when the file can't be opened, removing nothing.
+   */
+  clearHostKeys(deviceId: string): Promise<void> {
+    return this.enqueue(async () => {
+      if (this.disposed) throw new Error("Decisions has stopped for this run");
+      if (this.settings !== null) {
+        throw new Error("Decisions is running, so its keys can't be removed");
+      }
+      const keys = new SealedKeyStore(this.keyFilePath());
+      try {
+        await keys.clearIf(
+          (stored) =>
+            stored !== null && stored.role === "desktop-host" && stored.config.deviceId === deviceId
+        );
+      } finally {
+        await keys.close();
+      }
     });
   }
 
@@ -590,8 +649,10 @@ export class DecisionsService {
     let connection: DecisionsRelayConnection | null = null;
     const feed = this.feed;
     const delivery = this.delivery;
+    const role = this.role;
     connection = this.connect({
       relay: wanted,
+      role: role === "host" ? "desktop-host" : "owner-desktop",
       store: observeQuestionWrites(store, () => void feed?.refresh()),
       keys: this.getKeyStore(),
       rotations: this.getKeyRotations(),
@@ -628,7 +689,7 @@ export class DecisionsService {
       onRevoked: () => {
         if (this.connection !== connection) return;
         this.revokedKey = key;
-        this.onRelayRevoked(wanted);
+        this.onRelayRevoked(wanted, role);
         // Revoked whether or not the setting recorded it.
         this.reconcileConnection();
       },
