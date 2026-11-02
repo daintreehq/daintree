@@ -975,7 +975,11 @@ describe("answers needing attention", () => {
   const idle = { agentState: "waiting", waitingReason: "prompt", since: NOW - 5_000 } as const;
 
   it("puts a run in the needs-you tier whatever its screen says, and lifts it to the tier's floor", () => {
-    const [plain, held] = inbox([run("plain", idle), run("held", { ...idle, answerAttention: 1 })]);
+    // The inbox comes back ranked, so the runs are found by id.
+    const items = inbox([run("plain", idle), run("held", { ...idle, answerAttention: 1 })]);
+    const plain = items.find((item) => item.runId === "plain");
+    const held = items.find((item) => item.runId === "held");
+    expect(items.map((item) => item.runId)).toEqual(["held", "plain"]);
     expect(itemNeedsAttention(plain!)).toBe(false);
     expect(itemNeedsAttention(held!)).toBe(true);
     expect(itemPriority(held!, NOW)).toBeGreaterThanOrEqual(CANOPY_NEEDS_YOU_PRIORITY);
