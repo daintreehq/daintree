@@ -284,6 +284,37 @@ describe("ContentPanel amber from the fleet band", () => {
     }
   );
 
+  it("lets the pane's newer stop end an observed ask before the fleet catches up", () => {
+    // The fleet still holds the approval; the pane has since answered it and
+    // stopped again, at a prompt or finished. Only a Canopy reading outlives that.
+    fleet({ agentState: "waiting", waitingReason: "approval", wait: { stoppedAt: 0 } });
+    for (const [agentState, waitingReason] of [
+      ["waiting", "prompt"],
+      ["completed", undefined],
+    ] as const) {
+      observe(agentState, waitingReason);
+      const { container, unmount } = render(pane({ agentState }));
+      settle();
+      expect(hasEdge(container, "waiting"), agentState).toBe(false);
+      unmount();
+    }
+
+    fleet({ agentState: "waiting", waitingReason: "approval", canopy: UNREAD_ASK });
+    observe("waiting", "prompt");
+    const { container } = render(pane({ agentState: "waiting" }));
+    expect(hasEdge(container, "waiting")).toBe(true);
+  });
+
+  it("draws no edge once the header has stopped showing the agent as waiting", () => {
+    // An exit code on record retires the display state before the exit itself
+    // lands; the edge goes with it.
+    observe("waiting", "approval");
+    fleet({ agentState: "waiting", waitingReason: "approval", wait: { stoppedAt: 0 } });
+    const { container } = render(pane({ agentState: "waiting", exitCode: 0 }));
+    settle();
+    expect(hasEdge(container, "waiting")).toBe(false);
+  });
+
   it("draws no edge for a question Canopy read as asking nothing", () => {
     observe("waiting", "question");
     fleet({

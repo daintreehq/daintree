@@ -9,6 +9,7 @@ import {
   isGroupDeprioritized,
 } from "../useDockBlockedState";
 import type { AgentState } from "@shared/types/agent";
+import type { UnseenAsk } from "@/lib/fleetAttention";
 
 describe("useDockBlockedState", () => {
   beforeEach(() => {
@@ -157,7 +158,8 @@ describe("getGroupBlockedAgentState", () => {
 });
 
 describe("getGroupAmbientAgentState", () => {
-  const NONE: ReadonlySet<string> = new Set();
+  const NONE: ReadonlyMap<string, UnseenAsk> = new Map();
+  const canopyAsk = (id: string) => new Map<string, UnseenAsk>([[id, "canopy"]]);
 
   it("returns undefined when all panels are idle or completed", () => {
     const panels = [{ agentState: "idle" as const }, { agentState: "completed" as const }];
@@ -169,7 +171,27 @@ describe("getGroupAmbientAgentState", () => {
       { id: "shown", agentState: "working" as const },
       { id: "asking", agentState: "completed" as const },
     ];
-    expect(getGroupAmbientAgentState(panels, new Set(["asking"]), "shown")).toBe("waiting");
+    expect(getGroupAmbientAgentState(panels, canopyAsk("asking"), "shown")).toBe("waiting");
+  });
+
+  it("holds a hidden tab's observed ask only while its pane still shows the wait", () => {
+    const observed = new Map<string, UnseenAsk>([["asking", "observed"]]);
+    for (const waitingReason of ["approval", "question"] as const) {
+      const panels = [
+        { id: "shown", agentState: "working" as const },
+        { id: "asking", agentState: "waiting" as const, waitingReason },
+      ];
+      expect(getGroupAmbientAgentState(panels, observed, "shown"), waitingReason).toBe("waiting");
+    }
+    // The fleet is a poll behind a pane that has since reached its prompt or finished.
+    for (const stopped of [
+      { id: "asking", agentState: "waiting" as const, waitingReason: "prompt" as const },
+      { id: "asking", agentState: "completed" as const },
+    ]) {
+      expect(getGroupAmbientAgentState([stopped], observed), JSON.stringify(stopped)).toBe(
+        undefined
+      );
+    }
   });
 
   it("takes no wait from a tab the fleet doesn't read as asking unseen", () => {
@@ -179,16 +201,16 @@ describe("getGroupAmbientAgentState", () => {
       { id: "done", agentState: "completed" as const },
     ];
     expect(getGroupAmbientAgentState(panels, NONE, "prompt")).toBe(undefined);
-    expect(getGroupAmbientAgentState(panels, new Set(["elsewhere"]), "prompt")).toBe(undefined);
+    expect(getGroupAmbientAgentState(panels, canopyAsk("elsewhere"), "prompt")).toBe(undefined);
   });
 
   it("leaves the shown tab's ask to the pane itself", () => {
     const panels = [{ id: "shown", agentState: "waiting" as const }];
-    expect(getGroupAmbientAgentState(panels, new Set(["shown"]), "shown")).toBe(undefined);
+    expect(getGroupAmbientAgentState(panels, canopyAsk("shown"), "shown")).toBe(undefined);
   });
 
   it("drops an asking tab its pane has since seen go back to work, exit or error", () => {
-    const asking = new Set(["t"]);
+    const asking = canopyAsk("t");
     for (const panel of [
       { id: "t", agentState: "exited" as const },
       { id: "t", agentState: "directing" as const },

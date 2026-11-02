@@ -94,19 +94,40 @@ describe("pane observation ahead of the band", () => {
 });
 
 describe("isUnseenAskPane", () => {
-  it("holds a pane the fleet reads as asking unseen while it is still stopped", () => {
+  it("holds Canopy's ask at any stop the pane is still at", () => {
     for (const agentState of ["waiting", "completed", "idle", undefined] as const) {
-      expect(isUnseenAskPane(true, { agentState }), String(agentState)).toBe(true);
-      expect(isUnseenAskPane(false, { agentState }), String(agentState)).toBe(false);
+      expect(isUnseenAskPane("canopy", { agentState }), String(agentState)).toBe(true);
+      expect(isUnseenAskPane(undefined, { agentState }), String(agentState)).toBe(false);
+    }
+    expect(isUnseenAskPane("canopy", { agentState: "waiting", waitingReason: "prompt" })).toBe(
+      true
+    );
+  });
+
+  it("holds an observed ask only while the pane still shows the approval or question wait", () => {
+    for (const waitingReason of ["approval", "question"] as const) {
+      expect(isUnseenAskPane("observed", { agentState: "waiting", waitingReason })).toBe(true);
+    }
+    for (const pane of [
+      { agentState: "waiting", waitingReason: "prompt" },
+      { agentState: "waiting" },
+      { agentState: "completed" },
+      { agentState: "idle" },
+      {},
+    ] as const) {
+      expect(isUnseenAskPane("observed", pane), JSON.stringify(pane)).toBe(false);
     }
   });
 
-  it("drops it once the pane has seen the agent work, exit, restart or hit an error", () => {
-    for (const agentState of ["working", "directing", "exited"] as const) {
-      expect(isUnseenAskPane(true, { agentState }), agentState).toBe(false);
+  it("drops either once the pane has seen the agent work, exit, restart or hit an error", () => {
+    for (const ask of ["canopy", "observed"] as const) {
+      for (const agentState of ["working", "directing", "exited"] as const) {
+        expect(isUnseenAskPane(ask, { agentState }), `${ask} ${agentState}`).toBe(false);
+      }
+      const asking = { agentState: "waiting", waitingReason: "question" } as const;
+      expect(isUnseenAskPane(ask, { agentState: "waiting", waitingReason: "error" })).toBe(false);
+      expect(isUnseenAskPane(ask, { ...asking, isRestarting: true })).toBe(false);
+      expect(isUnseenAskPane(ask, { ...asking, runtimeStatus: "exited" })).toBe(false);
     }
-    expect(isUnseenAskPane(true, { agentState: "waiting", waitingReason: "error" })).toBe(false);
-    expect(isUnseenAskPane(true, { agentState: "waiting", isRestarting: true })).toBe(false);
-    expect(isUnseenAskPane(true, { agentState: "waiting", runtimeStatus: "exited" })).toBe(false);
   });
 });

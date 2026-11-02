@@ -1,5 +1,6 @@
 import type { AgentState, WaitingReason } from "@shared/types/agent";
-import type { FleetBand } from "@/lib/fleetAttention";
+import { isObservedAskWait } from "@shared/utils/runHandBack";
+import type { FleetBand, UnseenAsk } from "@/lib/fleetAttention";
 
 /**
  * A session as its glyph draws it, on the pane and everywhere else the run
@@ -52,13 +53,18 @@ export function isNeedsYouPane(
 
 /**
  * A pane whose current stop the fleet reads as an ask the user hasn't seen
- * (`isUnseenAsk`: Canopy's unread ask, or, with no reading placing it, an
- * observed approval or question wait not yet looked at), still stopped as the
- * pane last saw it. What the full-pane amber edge draws for, the pane's own or
- * a hidden tab's.
+ * (`runUnseenAsk`), and the pane's own newer observation still agrees. What the
+ * full-pane amber edge draws for, the pane's own or a hidden tab's.
+ *
+ * Canopy's reading holds for the turn it read, whatever stop the pane has
+ * slid to since, so it only needs the run still stopped. An observed ask is
+ * the wait itself: once the pane shows anything but an approval or question
+ * wait, the fleet is a poll behind and the ask is over.
  */
-export function isUnseenAskPane(unseenAsk: boolean, pane: PaneObservation): boolean {
-  return unseenAsk && isStillStopped(pane);
+export function isUnseenAskPane(ask: UnseenAsk | undefined, pane: PaneObservation): boolean {
+  if (ask === undefined || !isStillStopped(pane)) return false;
+  if (ask === "canopy") return true;
+  return pane.agentState !== undefined && isObservedAskWait(pane.agentState, pane.waitingReason);
 }
 
 /**

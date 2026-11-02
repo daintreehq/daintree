@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import type { AgentState } from "@shared/types/agent";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { getGroupAmbientAgentState } from "@/components/Layout/useDockBlockedState";
-import { useUnseenAskRunIds } from "@/hooks/useRunFleetBand";
+import { useUnseenAsks } from "@/hooks/useRunFleetBand";
 
 /**
  * The state a grid tab group's edge takes from its tabs: waiting for a hidden
@@ -13,9 +13,9 @@ export function useGridGroupAmbientState(
   panels: readonly PanelInstance[],
   activeTabId: string
 ): AgentState | undefined {
-  const unseenAskRunIds = useUnseenAskRunIds();
+  const unseenAsks = useUnseenAsks();
   return useMemo(
-    () => getGroupAmbientAgentState(panels.filter(isPtyPanel), unseenAskRunIds, activeTabId),
-    [panels, unseenAskRunIds, activeTabId]
+    () => getGroupAmbientAgentState(panels.filter(isPtyPanel), unseenAsks, activeTabId),
+    [panels, unseenAsks, activeTabId]
   );
 }

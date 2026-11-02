@@ -8,7 +8,7 @@ import {
   useFleetBandRunIds,
   useRunFleetBand,
   useRunUnseenAsk,
-  useUnseenAskRunIds,
+  useUnseenAsks,
 } from "../useRunFleetBand";
 
 const ask = { kind: "asked", quote: "Ship it?", readAt: 0, seen: false } as const;
@@ -89,10 +89,10 @@ describe("useRunUnseenAsk", () => {
       renders++;
       return useRunUnseenAsk("t1");
     });
-    expect(result.current).toBe(false);
+    expect(result.current).toBeUndefined();
 
     push([{ runId: "t1", agentState: "waiting", waitingReason: "approval" }]);
-    expect(result.current).toBe(true);
+    expect(result.current).toBe("observed");
 
     // Another run's push leaves this one alone.
     const settled = renders;
@@ -102,6 +102,9 @@ describe("useRunUnseenAsk", () => {
     ]);
     expect(renders).toBe(settled);
 
+    push([{ runId: "t1", agentState: "waiting", waitingReason: "approval", canopy: ask }]);
+    expect(result.current).toBe("canopy");
+
     push([
       {
         runId: "t1",
@@ -110,20 +113,26 @@ describe("useRunUnseenAsk", () => {
         wait: { stoppedAt: 0, seenAt: 1 },
       },
     ]);
-    expect(result.current).toBe(false);
+    expect(result.current).toBeUndefined();
   });
 });
 
-describe("useUnseenAskRunIds", () => {
-  it("holds Canopy's unread asks and unseen observed waits, stable while membership holds", () => {
+describe("useUnseenAsks", () => {
+  it("holds each unseen ask by whose it is, the same map while the asks hold", () => {
     push([
       { runId: "t1", agentState: "waiting", waitingReason: "question" },
       { runId: "t2", agentState: "completed", canopy: ask },
       { runId: "t3", agentState: "waiting", waitingReason: "prompt" },
     ]);
-    const { result } = renderHook(() => useUnseenAskRunIds());
+    const { result, rerender } = renderHook(() => useUnseenAsks());
     const first = result.current;
-    expect([...first].sort()).toEqual(["t1", "t2"]);
+    expect([...first].sort()).toEqual([
+      ["t1", "observed"],
+      ["t2", "canopy"],
+    ]);
+
+    rerender();
+    expect(result.current).toBe(first);
 
     push([
       { runId: "t3", agentState: "waiting", waitingReason: "prompt" },

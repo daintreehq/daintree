@@ -3,9 +3,11 @@ import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import {
   fleetBandForRun,
   fleetBandRunKey,
-  fleetUnseenAskRunKey,
-  isFleetUnseenAsk,
+  fleetUnseenAskForRun,
+  fleetUnseenAskKey,
+  parseUnseenAskKey,
   type FleetBand,
+  type UnseenAsk,
 } from "@/lib/fleetAttention";
 
 /**
@@ -29,15 +31,17 @@ export function useFleetBandRunIds(bands: ReadonlySet<FleetBand>): ReadonlySet<s
 }
 
 /**
- * Whether the fleet reads this terminal's current stop as an ask the user
- * hasn't seen: the pane edge's amber. False before the fleet has reported it.
+ * This terminal's current stop as an ask the user hasn't seen, and whose:
+ * the pane edge's amber. Undefined before the fleet has reported it.
  */
-export function useRunUnseenAsk(terminalId: string): boolean {
-  return useFleetSnapshotStore((s) => isFleetUnseenAsk(s.snapshot, terminalId));
+export function useRunUnseenAsk(terminalId: string): UnseenAsk | undefined {
+  return useFleetSnapshotStore((s) => fleetUnseenAskForRun(s.snapshot, terminalId));
 }
 
-/** Runs whose current stop is an ask the user hasn't seen, stable across pushes that leave the set alone. */
-export function useUnseenAskRunIds(): ReadonlySet<string> {
-  const key = useFleetSnapshotStore((s) => fleetUnseenAskRunKey(s.snapshot));
-  return useMemo(() => (key === "" ? EMPTY_RUN_IDS : new Set(key.split("\n"))), [key]);
+const EMPTY_ASKS: ReadonlyMap<string, UnseenAsk> = new Map();
+
+/** Every run asking unseen, by run id, stable across pushes that leave the asks alone. */
+export function useUnseenAsks(): ReadonlyMap<string, UnseenAsk> {
+  const key = useFleetSnapshotStore((s) => fleetUnseenAskKey(s.snapshot));
+  return useMemo(() => (key === "" ? EMPTY_ASKS : parseUnseenAskKey(key)), [key]);
 }

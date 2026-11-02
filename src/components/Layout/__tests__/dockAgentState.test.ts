@@ -52,14 +52,14 @@ describe("dock display agent state", () => {
     // the grid edge from its unseen asks), so a pane reporting a wait the fleet
     // doesn't hold leaves the dock chip plain and the grid edge on the work.
     expect(getGroupBlockedAgentState(panels, new Set())).toBeUndefined();
-    expect(getGroupAmbientAgentState(panels, new Set())).toBe("working");
+    expect(getGroupAmbientAgentState(panels, new Map())).toBe("working");
 
     const asking = [
       agent({ id: "a", launchAgentId: "claude", agentState: "waiting" }),
       agent({ id: "b", launchAgentId: "codex", agentState: "working" }),
     ];
     expect(getGroupBlockedAgentState(asking, new Set(["a"]))).toBe("waiting");
-    expect(getGroupAmbientAgentState(asking, new Set(["a"]))).toBe("waiting");
+    expect(getGroupAmbientAgentState(asking, new Map([["a", "canopy"]]))).toBe("waiting");
   });
 
   it("does not deprioritize a group with working activity even before agentState catches up", () => {

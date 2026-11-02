@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AgentState, WaitingReason } from "@shared/types/agent";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
+import type { UnseenAsk } from "@/lib/fleetAttention";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { isNeedsYouPane, isUnseenAskPane } from "@/lib/paneSessionPresentation";
 
@@ -141,12 +142,12 @@ export function getGroupBlockedAgentState(
 /**
  * The state a grid tab group's edge takes from its members. Waiting is a hidden
  * tab whose stop the fleet reads as an ask the user hasn't seen
- * (`isUnseenAsk`) — the shown tab draws its own — and working is any member at
+ * (`runUnseenAsk`) — the shown tab draws its own — and working is any member at
  * work.
  */
 export function getGroupAmbientAgentState(
   panels: ReadonlyArray<AgentStateSource>,
-  unseenAskRunIds: ReadonlySet<string>,
+  unseenAsks: ReadonlyMap<string, UnseenAsk>,
   shownPanelId?: string
 ): AgentState | undefined {
   let hasWaiting = false;
@@ -156,7 +157,7 @@ export function getGroupAmbientAgentState(
     if (
       panel.id !== undefined &&
       panel.id !== shownPanelId &&
-      isUnseenAskPane(unseenAskRunIds.has(panel.id), panel)
+      isUnseenAskPane(unseenAsks.get(panel.id), panel)
     ) {
       hasWaiting = true;
     } else if (getDockDisplayAgentState(panel) === "working") {

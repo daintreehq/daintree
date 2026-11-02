@@ -2,13 +2,21 @@ import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
 import {
   FLEET_BANDS,
   bandForRun,
-  isUnseenAsk,
   runCanopyPlacement,
+  runUnseenAsk,
   type FleetBand,
+  type UnseenAsk,
 } from "@shared/utils/fleetBands";
 import { isHandBackStop } from "@shared/utils/runHandBack";
 
-export { FLEET_BANDS, bandForRun, isUnseenAsk, runCanopyPlacement, type FleetBand };
+export {
+  FLEET_BANDS,
+  bandForRun,
+  runCanopyPlacement,
+  runUnseenAsk,
+  type FleetBand,
+  type UnseenAsk,
+};
 
 /** Bands that constitute a demand on the user — the ones an idle fleet has none of. */
 export const DEMAND_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>([
@@ -87,35 +95,59 @@ export function fleetBandRunKey(
 
 /**
  * The one band the amber glyph and the counts stand for: a Canopy reading of an
- * ask the user hasn't seen. The pane edge reads the wider {@link isUnseenAsk}.
+ * ask the user hasn't seen. The pane edge reads the wider {@link runUnseenAsk}.
  */
 export const NEEDS_YOU_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>(["needs-you"]);
 
-const unseenAskCache = new WeakMap<FleetSnapshot, { ids: ReadonlySet<string>; key: string }>();
+interface UnseenAsks {
+  byRun: ReadonlyMap<string, UnseenAsk>;
+  key: string;
+}
 
-function unseenAsks(snapshot: FleetSnapshot): { ids: ReadonlySet<string>; key: string } {
+const unseenAskCache = new WeakMap<FleetSnapshot, UnseenAsks>();
+
+function unseenAsks(snapshot: FleetSnapshot): UnseenAsks {
   let entry = unseenAskCache.get(snapshot);
   if (entry === undefined) {
-    const ids = snapshot.runs.filter((run) => isUnseenAsk(run)).map((run) => run.runId);
-    entry = { ids: new Set(ids), key: ids.sort().join("\n") };
+    const byRun = new Map<string, UnseenAsk>();
+    for (const run of snapshot.runs) {
+      const ask = runUnseenAsk(run);
+      if (ask !== undefined) byRun.set(run.runId, ask);
+    }
+    const lines = [...byRun].map(([runId, ask]) => `${runId}\t${ask}`);
+    entry = { byRun, key: lines.sort().join("\n") };
     unseenAskCache.set(snapshot, entry);
   }
   return entry;
 }
 
 /**
- * Every run whose current stop is an ask the user hasn't seen, as one sorted
- * string of run ids: what the pane edge draws amber for. Like
- * {@link fleetBandRunKey}, a primitive cached per snapshot, and nobody before
- * the first snapshot.
+ * Every run whose current stop is an ask the user hasn't seen, and whose ask
+ * it is, as one sorted string of `runId<TAB>kind` lines: what the pane edge
+ * draws amber for. Like {@link fleetBandRunKey}, a primitive cached per
+ * snapshot, and nobody before the first snapshot. {@link parseUnseenAskKey}
+ * reads it back.
  */
-export function fleetUnseenAskRunKey(snapshot: FleetSnapshot | null): string {
+export function fleetUnseenAskKey(snapshot: FleetSnapshot | null): string {
   return snapshot === null ? "" : unseenAsks(snapshot).key;
 }
 
-/** Whether one run (`runId` is the terminal id) asks unseen; false before the snapshot arrives. */
-export function isFleetUnseenAsk(snapshot: FleetSnapshot | null, runId: string): boolean {
-  return snapshot !== null && unseenAsks(snapshot).ids.has(runId);
+export function parseUnseenAskKey(key: string): ReadonlyMap<string, UnseenAsk> {
+  const asks = new Map<string, UnseenAsk>();
+  if (key === "") return asks;
+  for (const line of key.split("\n")) {
+    const tab = line.lastIndexOf("\t");
+    asks.set(line.slice(0, tab), line.slice(tab + 1) === "observed" ? "observed" : "canopy");
+  }
+  return asks;
+}
+
+/** One run's unseen ask (`runId` is the terminal id); undefined before the snapshot arrives. */
+export function fleetUnseenAskForRun(
+  snapshot: FleetSnapshot | null,
+  runId: string
+): UnseenAsk | undefined {
+  return snapshot === null ? undefined : unseenAsks(snapshot).byRun.get(runId);
 }
 
 const bandIndexCache = new WeakMap<FleetSnapshot, Map<string, FleetBand>>();
