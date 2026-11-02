@@ -905,6 +905,7 @@ describe("CanopyView", () => {
     // In the pane it trashes the agent's terminal; off the Mac only from a
     // reply, since the terminal keeps Ctrl+W for the shell.
     expect(document.body.textContent).toMatch(/in a reply: trash the agent's terminal/i);
+    expect(document.body.textContent).toContain("In a reply: go to terminal");
   });
 
   it("steps to the next agent with ⌘↓ from inside its terminal, keeping the keyboard in the pane", async () => {
@@ -1122,9 +1123,11 @@ describe("CanopyView", () => {
 
     it("moves on with ⌘↩ to the agent the reply names, into its reply, and names none past the last", async () => {
       const { container, moveOnLine, replyEditor } = await replyingTo();
+      // On the row ⌘↩ sends nothing, so the line under the reply names it only from there.
+      expect(moveOnLine()).toBe("");
+      act(() => replyEditor().focus());
       expect(moveOnLine()).toContain("Send and go to");
       expect(moveOnLine()).toContain("Pick a port");
-      act(() => replyEditor().focus());
 
       const route = pane.reply!.modEnterSend!();
       await act(async () => {
@@ -1140,6 +1143,54 @@ describe("CanopyView", () => {
       );
       // Nothing below needs the user: ⌘↩ from here would send and stay.
       expect(moveOnLine()).toBe("");
+    });
+
+    it("names on the card only the keys that act from where the keyboard is (#16173)", async () => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+      const snapshot = { ...canopySnapshot, cards: [approvalCard("waiting")] };
+      const { container, replyEditor } = await replyingTo(snapshot);
+      const announced = (text: string) =>
+        [...document.querySelectorAll<HTMLElement>("[data-canopy-choices] button")]
+          .find((button) => button.textContent?.includes(text))!
+          .getAttribute("aria-keyshortcuts");
+
+      // On the agent's row: its number, R and Enter all act.
+      expect([announced("Yes"), announced("Reply"), announced("Go to terminal")]).toEqual([
+        "1",
+        "R",
+        "Enter",
+      ]);
+
+      // In its reply a number and R type, and Enter sends: the reply's own chord goes instead.
+      await act(async () => replyEditor().focus());
+      expect([announced("Yes"), announced("Reply"), announced("Go to terminal")]).toEqual([
+        null,
+        null,
+        "Meta+Alt+Enter",
+      ]);
+
+      // In the search only Enter acts on it.
+      await act(async () => searchInput().focus());
+      expect([announced("Yes"), announced("Reply"), announced("Go to terminal")]).toEqual([
+        null,
+        null,
+        "Enter",
+      ]);
+
+      // Its live terminal keeps every key for the agent.
+      await act(async () => terminalInput(container).focus());
+      expect([announced("Yes"), announced("Reply"), announced("Go to terminal")]).toEqual([
+        null,
+        null,
+        null,
+      ]);
+
+      // And the chord the reply names takes it there.
+      await act(async () => replyEditor().focus());
+      fireEvent.keyDown(replyEditor(), { key: "Enter", metaKey: true, altKey: true });
+      await act(async () => {});
+      expect(useCanopyStore.getState().isOpen).toBe(false);
+      expect(useCanopyStore.getState().resume?.runId).toBe("waiting");
     });
 
     it("stays when the agent ⌘↩ named was parked before the send landed", async () => {

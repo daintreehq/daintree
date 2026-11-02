@@ -52,6 +52,7 @@ import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState"
 import type { BrandMarkSurface } from "@/lib/brandIcon";
 import type { HybridInputBarHandle } from "@/components/Terminal/HybridInputBar";
 import { isMac } from "@/lib/platform";
+import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { PRESS_AGAIN_CONFIRM_MS } from "@/lib/pressAgain";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
@@ -131,6 +132,24 @@ export interface CanopyCardHandle {
 /** Where the keyboard lands in the pane when it opens: what the user was in on the agent before. */
 export type CanopyPaneFocus = "composer" | "terminal" | null;
 
+/**
+ * Where the keyboard is, for the keys the card names: this agent's row in the
+ * list, where its one-key actions and Enter act; the search, where Enter alone
+ * goes to this agent's terminal; or this card's reply. Anywhere else (its
+ * terminal, a button, nothing) none of them acts, so none is named.
+ */
+export type CanopyCardKeys = "list" | "search" | "reply" | null;
+
+/** Go to terminal from the reply, where Enter sends and ⌘↩ sends and moves on. */
+export const REPLY_GO_TO_TERMINAL = "Cmd+Alt+Enter";
+
+function isReplyGoToTerminal(event: KeyboardEvent<HTMLElement>): boolean {
+  if (event.key !== "Enter" || event.shiftKey) return false;
+  return isMac()
+    ? event.metaKey && event.altKey && !event.ctrlKey
+    : event.ctrlKey && event.altKey && !event.metaKey;
+}
+
 interface CanopyCardProps extends CanopyCardHandlers {
   item: CanopyItem;
   domId: string;
@@ -175,6 +194,8 @@ interface CanopyCardProps extends CanopyCardHandlers {
   workLabel?: string | null;
   /** Where ⌘↩ from the reply goes on to once it sends, named in the reply; null for nowhere. */
   moveOnTo?: CanopyItem | null;
+  /** Where the keyboard is, so the card names only the keys that act from there. */
+  keysFrom?: CanopyCardKeys;
   /** The reader is on, so a reading may land while the card is open. */
   reading?: boolean;
 }
@@ -278,6 +299,7 @@ export function CanopyCard({
   reconnecting = false,
   workLabel = null,
   moveOnTo = null,
+  keysFrom = null,
   reading = false,
 }: CanopyCardProps) {
   const otherHost = otherHostId !== undefined;
@@ -1007,6 +1029,20 @@ export function CanopyCard({
         // Escape belongs to the agent here — it interrupts or backs out of a
         // menu — so it must not also close the dialog around it.
         onKeyDown={(event) => {
+          // From the reply only: the terminal's modified keys are the agent's.
+          if (
+            isReplyGoToTerminal(event) &&
+            !event.defaultPrevented &&
+            !event.nativeEvent.isComposing &&
+            event.keyCode !== 229 &&
+            event.target instanceof Element &&
+            event.target.closest(".cm-editor") !== null
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!event.repeat) onOpen(item);
+            return;
+          }
           if (event.key === "Escape") {
             // A reply hands Escape to the list through `onSendKey`; one that is
             // disabled (its terminal gone) never handles the key at all, so a
@@ -1058,11 +1094,11 @@ export function CanopyCard({
                 disabled={reconnecting}
                 data-canopy-choice=""
                 data-armed={armed || undefined}
-                aria-keyshortcuts={String(index + 1)}
+                aria-keyshortcuts={keysFrom === "list" ? String(index + 1) : undefined}
                 className={cn("min-w-0 shrink", armed && "bg-status-error/10")}
                 onClick={() => pressAnswer(choice, index + 1)}
               >
-                <Kbd className="shrink-0">{index + 1}</Kbd>
+                {keysFrom === "list" && <Kbd className="shrink-0">{index + 1}</Kbd>}
                 <span className="min-w-0 truncate">
                   {armed ? `Press again: ${choice}` : choice}
                 </span>
@@ -1074,25 +1110,34 @@ export function CanopyCard({
               <Button
                 variant="ghost"
                 size="xs"
-                aria-keyshortcuts="R"
+                aria-keyshortcuts={keysFrom === "list" ? "R" : undefined}
                 // As the composer it focuses is: shut while the stream is.
                 disabled={stream.watchId === null}
                 onClick={() => composerRef.current?.focus()}
               >
                 <MessageSquare aria-hidden="true" />
                 Reply
-                <Kbd className="shrink-0">R</Kbd>
+                {keysFrom === "list" && <Kbd className="shrink-0">R</Kbd>}
               </Button>
             )}
             <Button
               variant="ghost"
               size="xs"
-              aria-keyshortcuts="Enter"
+              aria-keyshortcuts={
+                keysFrom === "list" || keysFrom === "search"
+                  ? "Enter"
+                  : keysFrom === "reply"
+                    ? comboToAriaKeyshortcuts(REPLY_GO_TO_TERMINAL, isMac())
+                    : undefined
+              }
               onClick={(event) => onOpen(item, isNewWindowClick(event))}
             >
               <SquareArrowOutUpRight aria-hidden="true" />
               Go to terminal
-              <Kbd className="shrink-0">↵</Kbd>
+              {(keysFrom === "list" || keysFrom === "search") && <Kbd className="shrink-0">↵</Kbd>}
+              {keysFrom === "reply" && (
+                <KbdChord shortcut={REPLY_GO_TO_TERMINAL} className="shrink-0" />
+              )}
             </Button>
           </span>
         </div>
@@ -1122,8 +1167,9 @@ export function CanopyCard({
               data-canopy-move-on=""
               className="flex h-6 shrink-0 items-center gap-1.5 px-3.5 pb-1.5 text-xs text-text-secondary"
             >
-              {/* Only while the reply can send: a closed stream leaves it disabled. */}
-              {moveOnTo !== null && stream.watchId !== null && (
+              {/* Only while the reply has the keyboard and can send: a closed
+                  stream leaves it disabled. */}
+              {moveOnTo !== null && stream.watchId !== null && keysFrom === "reply" && (
                 <>
                   <KbdChord shortcut="Cmd+Enter" density="compact" />
                   <span className="shrink-0">Send and go to</span>
