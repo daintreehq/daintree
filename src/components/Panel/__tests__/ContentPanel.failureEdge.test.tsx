@@ -418,12 +418,16 @@ describe("ContentPanel red edge look", () => {
 
   it("counts a look in an open dock popover, Home or not, and none while it is shut", () => {
     setStoreFocus("t-1");
-    act(() => useProjectHomeStore.setState({ presented: true }));
+    act(() => {
+      useProjectHomeStore.setState({ presented: true });
+    });
     mount({ ...failedExit.fail(1), isFocused: true, location: "dock" });
     advance(HAND_BACK_SEEN_DWELL_MS * 3);
     expect(seenMarks()).toBeUndefined();
 
-    act(() => usePanelStore.setState({ activeDockTerminalId: "t-1" }));
+    act(() => {
+      usePanelStore.setState({ activeDockTerminalId: "t-1" });
+    });
     advance(HAND_BACK_SEEN_DWELL_MS);
     const exit = usePanelFailureStore.getState().occurrences["t-1"]?.exit?.token;
     expect(exit).toBeDefined();
