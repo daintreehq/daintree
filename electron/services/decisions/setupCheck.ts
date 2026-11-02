@@ -574,14 +574,16 @@ export class SetupCheck {
       questionId,
       (row): StepOutcome<"question"> | undefined => {
         last = row;
+        // An ended question fails whatever was typed for it: deleting one keeps its delivery mark.
+        if (row.local_status === "expired") {
+          return { passed: false, observation: { result: "expired" } };
+        }
+        if (row.local_status === "cancelled") {
+          return { passed: false, observation: { result: "cancelled" } };
+        }
         const typed = terminal.answerTypedFor(questionId);
         if (typed !== undefined && row.delivery_status === "terminal-delivered") {
           return { passed: true, observation: { result: "typed", text: typed.text } };
-        }
-        if (row.local_status === "expired")
-          return { passed: false, observation: { result: "expired" } };
-        if (row.local_status === "cancelled") {
-          return { passed: false, observation: { result: "cancelled" } };
         }
         if (
           row.delivery_status === "needs-attention" ||

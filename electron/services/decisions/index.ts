@@ -1194,13 +1194,21 @@ function recordSetupCheck(
  * answers that one. It runs beside the switch's transitions, since it waits
  * on a person, and turning off, a disconnect, a deletion or quit cancels it.
  */
-export async function startSetupCheck(): Promise<DecisionsSetupCheckStartResult> {
-  if (setupCheck) return { result: "running", run: setupCheck.snapshot() };
+export function startSetupCheck(): Promise<DecisionsSetupCheckStartResult> {
+  if (setupCheck) return Promise.resolve({ result: "running", run: setupCheck.snapshot() });
+  // Admitted behind the switch's transitions, so a start can't slip in while
+  // a turn-off, disconnect or deletion is under way; the run itself waits on
+  // a person outside them.
   const epoch = setupCheckEpoch;
-  const running = await runningService();
-  // Turned off, disconnected, deleted or quit while the service started.
+  return serialize(() => admitSetupCheck(epoch));
+}
+
+async function admitSetupCheck(epoch: number): Promise<DecisionsSetupCheckStartResult> {
+  // Turned off, disconnected, deleted or quit since it was asked for.
   if (epoch !== setupCheckEpoch) throw setupRefused();
-  // Another start may have made one meanwhile.
+  const running = await runningService();
+  if (epoch !== setupCheckEpoch) throw setupRefused();
+  // Another start, ahead of this one in the queue, made one.
   const raced = setupCheck as SetupCheck | null;
   if (raced) return { result: "running", run: raced.snapshot() };
   const settings = running.getSettings() ?? readDecisionsSettings(store);

@@ -279,6 +279,41 @@ describe("DecisionsSetupCheck", () => {
     expect(screen.queryByText(/Not run yet/)).toBeNull();
   });
 
+  it("forgets a run when its relay goes and the same relay is set up again with none running", async () => {
+    bridge.getSetupCheck.mockResolvedValueOnce(run({ revision: 2 }));
+    const { rerender } = renderCheck();
+    await settle();
+    expect(screen.getByRole("button", { name: "Cancel check" })).toBeTruthy();
+
+    const at = (status: DecisionsStatus) =>
+      rerender(
+        <TooltipProvider>
+          <Check status={status} />
+        </TooltipProvider>
+      );
+    at({ state: "not-connected" });
+    await settle();
+    bridge.getSetupCheck.mockResolvedValueOnce(null);
+    at({ state: "connected", relayOrigin: ORIGIN });
+    await settle();
+
+    expect(screen.queryByRole("button", { name: "Cancel check" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Check setup" })).toBeTruthy();
+  });
+
+  it("clears a run main no longer has when cancelling it", async () => {
+    bridge.getSetupCheck.mockResolvedValue(run());
+    bridge.cancelSetupCheck.mockResolvedValue(null);
+    renderCheck();
+    await settle();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Cancel check" }));
+    });
+
+    expect(screen.getByRole("button", { name: "Check setup" })).toBeTruthy();
+  });
+
   it("reads nothing while no relay is set up", async () => {
     render(
       <TooltipProvider>

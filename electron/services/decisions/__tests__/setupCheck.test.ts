@@ -47,6 +47,7 @@ import {
   batchNotices,
   formatAnswerNotice,
   loadIdentity,
+  serializeAnswers,
   targetOf,
   type Identity,
   type StoredIdentity,
@@ -357,6 +358,59 @@ describe("SetupCheck", () => {
     expect((await done).steps.question).toEqual({
       state: "failed",
       observation: { result: "not-answered" },
+    });
+  });
+
+  it("fails a question deleted after its answer was typed, though its delivery mark stays", async () => {
+    const h = await harness();
+    relay.downloadAttachment.mockImplementation(async (id: string) => h.spool.get(id));
+    const done = h.check.start();
+    const questionId = await publish(h);
+
+    await typeAnswer(h, questionId);
+    await h.store.updateQuestion(questionId, {
+      local_status: "cancelled",
+      delivery_status: "terminal-delivered",
+    });
+    h.commit();
+
+    expect((await done).steps.question).toEqual({
+      state: "failed",
+      observation: { result: "cancelled" },
+    });
+  });
+
+  it("says an answer came but wasn't typed when one is recorded and the row still reads open", async () => {
+    const h = await harness({ timeouts: { answerMs: 120, pollMs: 20 } });
+    relay.downloadAttachment.mockImplementation(async (id: string) => h.spool.get(id));
+    const done = h.check.start();
+    const questionId = await publish(h);
+    await h.reached("question");
+
+    // A person's answer, received and stored, with a late create receipt's `open` on the row.
+    await h.store.updateQuestion(questionId, {
+      local_status: "open",
+      delivery_status: "desktop-received",
+      answers_json: serializeAnswers([
+        {
+          entry_id: `${questionId}-a1`,
+          kind: "answer",
+          action: "answer",
+          revision: 1,
+          source: "human",
+          correction: false,
+          created_at: "2026-11-02T09:00:00.000Z",
+          deliver: true,
+          delivered: false,
+          sealed: "sealed",
+        },
+      ]),
+    });
+    h.commit();
+
+    expect((await done).steps.question).toEqual({
+      state: "failed",
+      observation: { result: "not-typed" },
     });
   });
 

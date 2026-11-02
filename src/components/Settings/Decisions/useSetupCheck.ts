@@ -46,11 +46,34 @@ export function useSetupCheck(relayOrigin: string | undefined): UseSetupCheckRes
   const owned = useRef<string | null>(null);
   /** Moves with every subscription, so a reply meant for an earlier one is dropped. */
   const generation = useRef(0);
+  /** The subscription that took the run shown now. */
+  const shownGeneration = useRef(0);
 
-  const accept = (next: DecisionsSetupCheckRun | null, gen: number, origin: string) => {
-    if (gen !== generation.current || next === null || next.revision <= latest.current) return;
+  /**
+   * Takes what main said. Null is main having no run: it clears a run an
+   * earlier subscription took, as when the same relay is set up again, and
+   * clears any run when `final` (a cancel's answer), but never one this
+   * subscription already took from a push that beat its read.
+   */
+  const accept = (
+    next: DecisionsSetupCheckRun | null,
+    gen: number,
+    origin: string,
+    final = false
+  ) => {
+    if (gen !== generation.current) return;
+    if (next === null) {
+      if (final || shownGeneration.current !== gen) {
+        current.current = null;
+        shownGeneration.current = gen;
+        setShown(null);
+      }
+      return;
+    }
+    if (next.revision <= latest.current) return;
     latest.current = next.revision;
     current.current = next;
+    shownGeneration.current = gen;
     setShown({ relayOrigin: origin, value: next });
   };
 
@@ -124,7 +147,7 @@ export function useSetupCheck(relayOrigin: string | undefined): UseSetupCheckRes
     const gen = generation.current;
     const origin = relayOrigin;
     window.electron.decisions.cancelSetupCheck({ runId: run.runId }).then(
-      (next) => accept(next, gen, origin),
+      (next) => accept(next, gen, origin, true),
       () => {}
     );
   };

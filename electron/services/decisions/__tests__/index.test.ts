@@ -2253,9 +2253,13 @@ describe("Decisions entry", () => {
       saved.value = { enabled: true, ...RELAY };
       writeFileSync(keyFile.path, "sealed");
       await startSetupCheck();
+      const updateSettings = vi.spyOn(peekDecisionsService()!, "updateSettings");
 
       setupChecks.made[0]!.finish("failed", "question");
       await settle();
+
+      // Written to the store alone: the service's settings never take it.
+      expect(updateSettings).not.toHaveBeenCalled();
 
       const recorded = (saved.value as { setupCheck: { checkedAt: number } }).setupCheck;
       expect(recorded).toEqual({
@@ -2343,6 +2347,9 @@ describe("Decisions entry", () => {
       expect(check.cancelled).toBe(1);
       // The run ends as passed before its cancel lands: still not recorded.
       check.finish("passed");
+      await settle();
+      // Not even for a moment, while the disconnect is still under way.
+      expect((saved.value as { setupCheck: unknown }).setupCheck).toBeNull();
       release();
       await disconnecting;
       await settle();
@@ -2380,6 +2387,42 @@ describe("Decisions entry", () => {
       await startSetupCheck();
       await stopDecisions();
       expect(setupChecks.made[1]!.cancelled).toBe(1);
+    });
+
+    it("admits a start asked for while a disconnect is under way only once it has finished", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startSetupCheck();
+      let release!: () => void;
+      setupChecks.holdCancel = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+
+      const disconnecting = disconnectRelay();
+      await settle();
+      const start = startSetupCheck();
+      release();
+      await disconnecting;
+
+      await expect(start).resolves.toEqual({ result: "not-set-up" });
+      expect(setupChecks.made).toHaveLength(1);
+    });
+
+    it("refuses a start asked for while turning off is under way", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startSetupCheck();
+      let release!: () => void;
+      setupChecks.holdCancel = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+
+      const off = setDecisionsEnabled(false);
+      await settle();
+      const start = startSetupCheck();
+      release();
+      await off;
+
+      await expect(start).rejects.toMatchObject(CANCELLED);
+      expect(setupChecks.made).toHaveLength(1);
     });
 
     it("cancels a running check before deleting local data", async () => {
