@@ -318,6 +318,48 @@ describe("HostCallRuntime host.call (#13493)", () => {
       ["other", false],
     ]);
   });
+
+  it("reports an answered call with where it ran, for a schedule's run to read (#16169)", async () => {
+    const noteAnswered = vi.fn();
+    const launched: McpCallAnswer = {
+      status: "done",
+      result: { isError: false, structured: { launched: true, terminalId: "t-w" }, text: null },
+    };
+    relayCall.mockResolvedValueOnce(launched).mockResolvedValueOnce({
+      status: "refused",
+      reason: "control-off",
+    });
+    let clock = 5_000;
+    runtime = new HostCallRuntime({
+      getSessionLane: (id) => lanes.get(id) ?? null,
+      callerRun: (id) => runs.get(id) ?? null,
+      client: () => ({ relayCall }) as never,
+      hosts: () => hosts,
+      inLocalView: (id) => localViews.has(id),
+      controlEnabled: (hostId) => control.has(hostId),
+      newId: () => `00000000-0000-4000-8000-00000000000${++ids}`,
+      now: () => clock++,
+      noteAnswered,
+    });
+    const launch = { ...CALL, tool: "agent.launch", args: { agentId: "codex" } };
+
+    await runtime.call("a", launch, { tier: "full" });
+    await runtime.call("a", launch, { tier: "full" });
+
+    // The refused call ran nothing, so it says nothing.
+    expect(noteAnswered).toHaveBeenCalledTimes(1);
+    expect(noteAnswered).toHaveBeenCalledWith({
+      helpSessionId: "a",
+      hostId: "studio",
+      hostName: "studio-01",
+      projectId: "proj-2",
+      tool: "agent.launch",
+      args: { agentId: "codex" },
+      structured: { launched: true, terminalId: "t-w" },
+      askedAt: expect.any(Number),
+    });
+    expect(noteAnswered.mock.calls[0]![0].askedAt).toBeGreaterThanOrEqual(5_000);
+  });
 });
 
 describe("relayRunMs", () => {

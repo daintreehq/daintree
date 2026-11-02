@@ -93,6 +93,22 @@ describe("ScheduledRunSchema", () => {
     expect(issues(registered())).toEqual([]);
   });
 
+  it("lists workers only on a run of the Daintree Assistant (#16169)", () => {
+    const worker = {
+      terminalId: "terminal-w",
+      hostId: "studio",
+      hostName: "Studio",
+      projectId: "project-2",
+      projectName: null,
+      agentId: "claude",
+      observedAt: NOW,
+    };
+    expect(issues(registered({ assistant: true, workers: [worker] }))).toEqual([]);
+    expect(issues(registered({ workers: [worker] }))).toEqual([
+      "Only an Assistant's run lists workers",
+    ]);
+  });
+
   it("keeps settlement, process exit and pane close apart", () => {
     // Settled on the agent's marker while its PTY still runs and the pane stays open.
     const settledRunning = registered({
