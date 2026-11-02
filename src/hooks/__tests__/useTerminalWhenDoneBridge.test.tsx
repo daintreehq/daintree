@@ -170,7 +170,10 @@ describe("useTerminalWhenDoneBridge (#16171)", () => {
 
   it.each([
     ["focused the pane", () => void focusPane("terminal-1")],
-    ["focused its expanded composer", () => void focusWithin("data-composer-terminal-id", "terminal-1")],
+    [
+      "focused its expanded composer",
+      () => void focusWithin("data-composer-terminal-id", "terminal-1"),
+    ],
     ["started a draft", () => void store.drafts.set("project-1:terminal-1", "wait")],
   ])("leaves a pane someone %s in since main asked", (_name, startUsing) => {
     renderHook(() => useTerminalWhenDoneBridge());

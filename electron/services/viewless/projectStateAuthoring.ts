@@ -105,10 +105,13 @@ function withoutGroupMember(
 export async function backgroundViewlessTerminal(
   writer: ProjectStateWriter,
   projectId: string,
-  terminalId: string
+  terminalId: string,
+  /** Asked when the queued write runs: false leaves the layout as it is (#16171). */
+  isStillWanted: () => boolean = () => true
 ): Promise<void> {
   noteHostStartedTerminalBackgrounded(projectId, terminalId);
   await writer.enqueueProjectStateUpdate(projectId, (existing) => {
+    if (!isStillWanted()) return null;
     if (!existing || !Array.isArray(existing.terminals)) return null;
     const restoreLocation = existing.terminals.find(
       (terminal) => terminal.id === terminalId
@@ -142,10 +145,13 @@ export async function backgroundViewlessTerminal(
 export async function forgetViewlessTerminal(
   writer: ProjectStateWriter,
   projectId: string,
-  terminalId: string
+  terminalId: string,
+  /** Asked when the queued write runs: false leaves the layout as it is (#16171). */
+  isStillWanted: () => boolean = () => true
 ): Promise<void> {
   forgetHostStartedTerminals(projectId, [terminalId]);
   await writer.enqueueProjectStateUpdate(projectId, (existing) => {
+    if (!isStillWanted()) return null;
     if (!existing || !Array.isArray(existing.terminals)) return null;
     if (!existing.terminals.some((terminal) => terminal.id === terminalId)) return null;
     const tabGroups = withoutGroupMember(existing.tabGroups, terminalId);

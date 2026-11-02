@@ -15,7 +15,7 @@ Any agent terminal can be armed with a **When done** choice (#16171): keep (the 
 - **`needs-you` never moves anything.** It answers the request; the terminal stays armed for the next prompt. Agent state, process exit and silence never act either.
 - **Background** matches a scheduled run's: each local view moves the pane to the background and main parks it in the saved layout. The terminal stays armed.
 - **Close** matches a scheduled run's: a graceful kill that captures the session id and journals it for resuming (`agent-session:captured`, boundary `kill`), guarded by the incarnation's `spawnedAt` and launch generation; then each view removes the pane and main takes it out of the saved layout.
-- **A newer word wins.** Between the report and the move, main waits on the views. If a newer send reaches the terminal, its choice changes, it restarts, someone takes the project over from another machine, or Daintree starts quitting, nothing moves. Main asks again just before the kill and before each view is sent the move, and a removal is never delivered once a successor has spawned under the id.
+- **A newer word wins.** Between the report and the move, main waits on the views. If a newer send reaches the terminal, its choice changes, it restarts, someone takes the project over from another machine, or Daintree starts quitting, nothing moves. Main asks again just before the kill, before each view is sent the move, and when its saved-layout write runs, and neither a removal nor a layout forget lands once a successor has spawned under the id. A new choice stops a pending move the moment it is asked.
 
 ## Never from under someone
 

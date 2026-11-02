@@ -125,7 +125,7 @@ export async function applyWhenDone(
   if (!mayAct()) return "not-applied";
   if (target.choice === "background") {
     askViews(target, "background", mayAct);
-    await backgroundViewlessTerminal(projectStore, target.projectId, target.terminalId);
+    await backgroundViewlessTerminal(projectStore, target.projectId, target.terminalId, mayAct);
     return "applied";
   }
   const closed = await closeTerminalKeepingSession(
@@ -139,7 +139,12 @@ export async function applyWhenDone(
   const unchangedSinceClose = () =>
     getLifecycleLedger().currentGeneration(target.terminalId) === closedGeneration;
   askViews(target, "remove", unchangedSinceClose);
-  await forgetViewlessTerminal(projectStore, target.projectId, target.terminalId);
+  await forgetViewlessTerminal(
+    projectStore,
+    target.projectId,
+    target.terminalId,
+    unchangedSinceClose
+  );
   return "applied";
 }
 

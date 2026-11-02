@@ -174,4 +174,28 @@ describe("backgroundViewlessTerminal (#15982)", () => {
     await backgroundViewlessTerminal(writer, "proj-1", "t-1");
     expect(writes()).toBe(0);
   });
+
+  it("writes nothing when its caller no longer wants it by the time the queued write runs (#16171)", async () => {
+    const saved: ProjectState = { projectId: "proj-1", sidebarWidth: 280, terminals: [SNAPSHOT] };
+    let wanted = true;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let state: ProjectState | null = saved;
+    const writer: ProjectStateWriter = {
+      // Another project write is ahead in the queue.
+      enqueueProjectStateUpdate: async (_projectId, updater) => {
+        await gate;
+        const next = await updater(state);
+        if (next !== null) state = next;
+      },
+    };
+
+    const backgrounding = backgroundViewlessTerminal(writer, "proj-1", "t-1", () => wanted);
+    const forgetting = forgetViewlessTerminal(writer, "proj-1", "t-1", () => wanted);
+    wanted = false;
+    release();
+    await Promise.all([backgrounding, forgetting]);
+
+    expect(state).toBe(saved);
+  });
 });

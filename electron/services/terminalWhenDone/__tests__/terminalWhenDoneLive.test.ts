@@ -101,7 +101,11 @@ function view(id: number, answer: Answer = false, loading = false) {
     },
   };
   function reply(requestId: string, inUse: boolean) {
-    state.ipcMain.emit(CHANNELS.TERMINAL_WHEN_DONE_IN_USE_REPLY, { sender: wc }, { requestId, inUse });
+    state.ipcMain.emit(
+      CHANNELS.TERMINAL_WHEN_DONE_IN_USE_REPLY,
+      { sender: wc },
+      { requestId, inUse }
+    );
   }
   return wc;
 }
@@ -312,8 +316,19 @@ describe("getTerminalWhenDone live wiring", () => {
     for (const wc of views) {
       expect(finishRequests(wc)).toEqual([{ terminalId: TERMINAL, action: "background" }]);
     }
-    expect(state.background).toHaveBeenCalledWith({ id: "project-store" }, PROJECT, TERMINAL);
+    expect(state.background).toHaveBeenCalledWith(
+      { id: "project-store" },
+      PROJECT,
+      TERMINAL,
+      expect.any(Function)
+    );
     expect(state.ptyClient.gracefulKill).not.toHaveBeenCalled();
+
+    // The queued layout write asks again when it runs: a newer prompt since stops it.
+    const stillWanted = (state.background.mock.calls[0] as unknown[])[3] as () => boolean;
+    expect(stillWanted()).toBe(true);
+    installedDecorator()(TERMINAL, "and the docs", undefined);
+    expect(stillWanted()).toBe(false);
   });
 
   it("closes the terminal keeping its session before the pane goes", async () => {
@@ -343,7 +358,17 @@ describe("getTerminalWhenDone live wiring", () => {
       }),
     ]);
     expect(finishRequests(wc)).toEqual([{ terminalId: TERMINAL, action: "remove" }]);
-    expect(state.forget).toHaveBeenCalledWith({ id: "project-store" }, PROJECT, TERMINAL);
+    expect(state.forget).toHaveBeenCalledWith(
+      { id: "project-store" },
+      PROJECT,
+      TERMINAL,
+      expect.any(Function)
+    );
+    // A successor spawned before the queued layout write runs keeps its saved pane.
+    const stillWanted = (state.forget.mock.calls[0] as unknown[])[3] as () => boolean;
+    expect(stillWanted()).toBe(true);
+    state.generation = 5;
+    expect(stillWanted()).toBe(false);
     expect(state.ptyClient.setSubmitDecorator).toHaveBeenLastCalledWith(null);
   });
 

@@ -71,7 +71,14 @@ export interface TerminalWhenDoneDeps {
   logWarn?: (message: string, error?: unknown) => void;
 }
 
-export class TerminalWhenDoneError extends Error {}
+export class TerminalWhenDoneError extends Error {
+  constructor(
+    message: string,
+    readonly code: "NOT_FOUND" | "DRIVEN_ELSEWHERE" = "NOT_FOUND"
+  ) {
+    super(message);
+  }
+}
 
 /**
  * A When done choice on any agent terminal (#16171): keep (the default, never
@@ -105,13 +112,21 @@ export class TerminalWhenDone {
    * fresh code at once, so an agent working on a prompt typed straight into it
    * hands that work back; choosing again renews the request.
    */
-  async set(terminalId: string, choice: TerminalWhenDoneChoice, projectId: string): Promise<void> {
+  async set(
+    terminalId: string,
+    choice: TerminalWhenDoneChoice,
+    projectId: string,
+    /** The caller may still type into the terminal; asked again once the host answers. */
+    mayArm: () => boolean = () => true
+  ): Promise<void> {
     const seq = ++this.nextSetSeq;
     this.setSeq.set(terminalId, seq);
+    const current = this.armed.get(terminalId);
+    // A new choice is newer word than any done already being applied.
+    if (current?.projectId === projectId) current.revision += 1;
     if (choice === "keep") {
       // Keep commits at once, so nothing asked before it may commit after.
       this.setSeq.delete(terminalId);
-      const current = this.armed.get(terminalId);
       if (current && current.projectId !== projectId) {
         throw new TerminalWhenDoneError(`Terminal ${terminalId} isn't in this project.`);
       }
@@ -128,6 +143,12 @@ export class TerminalWhenDone {
     // The read was async: a restart asked for meanwhile is a new incarnation.
     if (this.deps.currentGeneration(terminalId) !== incarnation.launchGeneration) {
       throw new TerminalWhenDoneError(`Terminal ${terminalId} restarted. Nothing was armed.`);
+    }
+    if (!mayArm()) {
+      throw new TerminalWhenDoneError(
+        "This project is being driven from another screen.",
+        "DRIVEN_ELSEWHERE"
+      );
     }
     const code = this.mintCode();
     const wasActive = this.armed.size > 0;

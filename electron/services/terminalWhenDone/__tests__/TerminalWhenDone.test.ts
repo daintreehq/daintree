@@ -157,6 +157,19 @@ describe("TerminalWhenDone arming (#16171)", () => {
     expect(notified).toEqual([]);
   });
 
+  it("arms nothing for a caller that stopped driving the project while the host answered", async () => {
+    const { service, submitted, holdReads, answerRead } = setup();
+    holdReads();
+    let driving = true;
+    const pending = service.set(TERMINAL, "close", PROJECT, () => driving);
+    driving = false;
+    answerRead(0);
+
+    await expect(pending).rejects.toMatchObject({ code: "DRIVEN_ELSEWHERE" });
+    expect(service.peek(TERMINAL)).toBeUndefined();
+    expect(submitted).toEqual([]);
+  });
+
   it("keeps the latest of two choices whose reads answer out of order", async () => {
     const { service, submitted, holdReads, answerRead } = setup();
     holdReads();
@@ -311,8 +324,10 @@ describe("TerminalWhenDone reports", () => {
     await kept.service.set(TERMINAL, "keep", PROJECT);
     expect(kept.stillCurrent[0]?.()).toBe(false);
 
+    // A new choice stops it the moment it is asked, before its own host read answers.
     const rearmed = await applying();
-    await rearmed.service.set(TERMINAL, "background", PROJECT);
+    rearmed.holdReads();
+    void rearmed.service.set(TERMINAL, "background", PROJECT);
     expect(rearmed.stillCurrent[0]?.()).toBe(false);
 
     const restarted = await applying();

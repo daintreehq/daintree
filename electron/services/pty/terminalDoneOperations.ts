@@ -20,17 +20,13 @@ export function sendToLocalProjectViews(
   isStillWanted: () => boolean = () => true
 ): void {
   for (const view of getWebContentsForProject(projectId)) {
-    thawThenSend(
-      view,
-      isStillWanted,
-      () => {
-        try {
-          view.send(channel, payload);
-        } catch {
-          // A view torn down mid-send has no pane left to move.
-        }
+    thawThenSend(view, isStillWanted, () => {
+      try {
+        view.send(channel, payload);
+      } catch {
+        // A view torn down mid-send has no pane left to move.
       }
-    );
+    });
   }
 }
 

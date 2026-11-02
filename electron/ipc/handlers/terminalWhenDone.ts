@@ -22,6 +22,15 @@ function requireProjectId(ctx: IpcContext): string {
   return ctx.projectId;
 }
 
+function drivenElsewhere(terminalId: string): AppError {
+  return new AppError({
+    code: "DRIVEN_ELSEWHERE",
+    message: `terminal ${terminalId} is driven elsewhere; only its driver may arm it`,
+    userMessage: "This project is being driven from another screen.",
+    context: { terminalId },
+  });
+}
+
 function isChoice(value: unknown): value is TerminalWhenDone {
   return (TERMINAL_WHEN_DONE_CHOICES as readonly unknown[]).includes(value);
 }
@@ -42,23 +51,23 @@ async function handleSet(
       context: { terminalId },
     });
   }
-  // Arming types into the agent, so only the project's driver may, as for a submit.
-  const lease = peekDriveLeaseService();
-  if (lease && ctx.endpoint && !lease.isDriving(projectId, ctx.endpoint)) {
-    throw new AppError({
-      code: "DRIVEN_ELSEWHERE",
-      message: `terminal ${terminalId} is driven elsewhere; only its driver may arm it`,
-      userMessage: "This project is being driven from another screen.",
-      context: { terminalId },
-    });
-  }
+  // Arming types into the agent, so only the project's driver may, as for a
+  // submit: asked now, and again once the host has answered.
+  const isDriver = (): boolean => {
+    const lease = peekDriveLeaseService();
+    return !lease || !ctx.endpoint || lease.isDriving(projectId, ctx.endpoint);
+  };
+  if (!isDriver()) throw drivenElsewhere(terminalId);
   const { getTerminalWhenDone } =
     await import("../../services/terminalWhenDone/terminalWhenDoneLive.js");
   const { TerminalWhenDoneError } =
     await import("../../services/terminalWhenDone/TerminalWhenDone.js");
   try {
-    await getTerminalWhenDone().set(terminalId, choice, projectId);
+    await getTerminalWhenDone().set(terminalId, choice, projectId, isDriver);
   } catch (error) {
+    if (error instanceof TerminalWhenDoneError && error.code === "DRIVEN_ELSEWHERE") {
+      throw drivenElsewhere(terminalId);
+    }
     if (error instanceof TerminalWhenDoneError) {
       throw new AppError({
         code: "NOT_FOUND",
