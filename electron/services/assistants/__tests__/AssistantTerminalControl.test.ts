@@ -8,7 +8,12 @@ import {
   liveAssistantTerminalControl,
 } from "../AssistantTerminalControl.js";
 import { MAX_ASSISTANT_SLOTS } from "../../../../shared/config/assistantSlots.js";
+import { stampTypedInput } from "../../../../shared/utils/terminalInputProvenance.js";
 import type { RunningLane, RunningLaneSession } from "../../HelpSessionService.js";
+import {
+  helpOwnershipPrincipal,
+  principalOwnerKey,
+} from "../../mcp-server/resourceOwnership.js";
 
 const PROJECT = "proj-1";
 const LOCAL: AssistantCaller = {
@@ -17,6 +22,8 @@ const LOCAL: AssistantCaller = {
   projectId: PROJECT,
   machineName: "Greg's\u202eMac\nmini",
 };
+/** The owner key LOCAL's ownership is held under, which its keys are filed under too (#16094). */
+const LOCAL_OWNER = principalOwnerKey(helpOwnershipPrincipal("hub-session"));
 const RELAY: AssistantCaller = {
   kind: "relay",
   senderId: "sender-a",
@@ -336,8 +343,8 @@ describe("AssistantTerminalControl (#13496)", () => {
         })
       ).resolves.toMatchObject({ terminalId: "t-one", keys: ["Down", "Enter"] });
       expect(mocks.write.mock.calls).toEqual([
-        ["t-one", "\x1b[B"],
-        ["t-one", "\r"],
+        ["t-one", "\x1b[B", LOCAL_OWNER],
+        ["t-one", "\r", LOCAL_OWNER],
       ]);
     });
 
@@ -376,7 +383,7 @@ describe("AssistantTerminalControl (#13496)", () => {
         choose: undefined,
         generation: 3,
       });
-      expect(mocks.write).toHaveBeenCalledWith("t-one", "1");
+      expect(mocks.write).toHaveBeenCalledWith("t-one", "1", LOCAL_OWNER);
     });
 
     it("refuses a run with no process", async () => {
@@ -446,21 +453,110 @@ describe("AssistantTerminalControl (#13496)", () => {
     });
   });
 
+  describe("its own earlier keys (#16094)", () => {
+    let clock: number;
+    beforeEach(() => {
+      clock = 2_000;
+      addLane(0, "t-hub", { sessionId: "hub-session" });
+      // The host files each key under the caller that wrote it.
+      const stamp = (terminalId: string, inputOwner: string) => {
+        const record = byTerminal(terminalId)?.record;
+        if (record) stampTypedInput(record, ++clock, inputOwner);
+      };
+      mocks.write.mockImplementation((terminalId, _data, inputOwner) =>
+        stamp(terminalId, inputOwner)
+      );
+      mocks.doubleEscape.mockImplementation(stamp);
+    });
+    const keys = (caller: AssistantCaller, pressed: string[]) =>
+      control.sendKeys(caller, control.require(caller, "t-one"), {
+        keys: pressed,
+        choose: undefined,
+        generation: 3,
+      });
+
+    it("presses keys after its own, and says so on that receipt alone", async () => {
+      addLane(1, "t-one", { record: atPrompt({ waitingReason: "approval" }) });
+
+      const first = await keys(LOCAL, ["Escape"]);
+      const second = await keys(LOCAL, ["1"]);
+
+      expect(first.inputSinceSettle).toBeUndefined();
+      expect(second).toMatchObject({ keys: ["1"], inputSinceSettle: "own-keys" });
+    });
+
+    it("presses keys after its own interrupt", async () => {
+      addLane(1, "t-one", { record: atPrompt({ agentState: "working" }) });
+      await control.interrupt(LOCAL, control.require(LOCAL, "t-one"));
+
+      await expect(keys(LOCAL, ["Escape"])).resolves.toMatchObject({
+        inputSinceSettle: "own-keys",
+      });
+    });
+
+    it("counts another assistant's keys as someone's", async () => {
+      addLane(1, "t-one", { record: atPrompt({ waitingReason: "approval" }) });
+      await keys(RELAY, ["a"]);
+
+      await expect(keys(LOCAL, ["Enter"])).rejects.toMatchObject({ code: "ASSISTANT_BUSY" });
+      expect(mocks.write).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops the rest when someone types between keys, saying which went in", async () => {
+      const lane = addLane(1, "t-one", { record: atPrompt({ waitingReason: "approval" }) });
+      deps.sleep = async () => {
+        stampTypedInput(lane.record, ++clock);
+      };
+
+      const error = await keys(LOCAL, ["Down", "Enter"]).then(
+        () => null,
+        (caught: unknown) => caught as AssistantTargetError
+      );
+
+      expect(error?.code).toBe("ASSISTANT_BUSY");
+      expect(error?.message).toContain("1 of 2 keys were sent (Down)");
+      expect(mocks.write).toHaveBeenCalledTimes(1);
+    });
+
+    it("still holds a send until it settles again, naming its own keys", async () => {
+      addLane(1, "t-one", { record: atPrompt() });
+      await keys(LOCAL, ["Up"]);
+
+      const error = await control
+        .submit(LOCAL, control.require(LOCAL, "t-one"), {
+          command: "go",
+          generation: 3,
+          handback: false,
+        })
+        .then(
+          () => null,
+          (caught: unknown) => caught as AssistantTargetError
+        );
+
+      expect(error?.code).toBe("ASSISTANT_BUSY");
+      expect(error?.message).toContain("keys you sent");
+      expect(error?.message).not.toContain("Someone");
+      expect(mocks.submit).not.toHaveBeenCalled();
+    });
+  });
+
   describe("interrupt", () => {
     it("sends the agent's interrupt to a run with a turn to stop", async () => {
       addLane(1, "t-one", { record: atPrompt({ agentState: "working" }) });
-      await expect(control.interrupt(control.require(LOCAL, "t-one"))).resolves.toMatchObject({
+      await expect(
+        control.interrupt(LOCAL, control.require(LOCAL, "t-one"))
+      ).resolves.toMatchObject({
         terminalId: "t-one",
         agentId: "codex",
       });
-      expect(mocks.doubleEscape).toHaveBeenCalledWith("t-one");
+      expect(mocks.doubleEscape).toHaveBeenCalledWith("t-one", LOCAL_OWNER);
     });
 
     it("refuses one with no process", async () => {
       addLane(1, "t-one", { record: atPrompt({ isExited: true }) });
-      await expect(control.interrupt(control.require(LOCAL, "t-one"))).rejects.toBeInstanceOf(
-        AssistantTargetError
-      );
+      await expect(
+        control.interrupt(LOCAL, control.require(LOCAL, "t-one"))
+      ).rejects.toBeInstanceOf(AssistantTargetError);
       expect(mocks.doubleEscape).not.toHaveBeenCalled();
     });
   });

@@ -39,6 +39,8 @@ interface Internals {
     waitingReason?: string;
     lastStateChange?: number;
     lastTypedInputAt?: number;
+    lastOwnedInput?: { owner: string; at: number };
+    lastForeignInputAt?: number;
     detectedAgentId?: string;
     agentIncarnation?: number;
     agentSessionId?: string;
@@ -138,6 +140,41 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
     vi.setSystemTime(new Date("2026-09-19T10:00:05Z"));
     terminal.write("x");
     expect(info(terminal).lastTypedInputAt).toBe(Date.now());
+  });
+
+  it("files an assistant's keys under it and every other typed input as foreign (#16094)", () => {
+    const terminal = createTerminal();
+    const start = Date.now();
+
+    terminal.write("\x1b", undefined, "principal-a");
+    expect(info(terminal)).toMatchObject({
+      lastTypedInputAt: start,
+      lastOwnedInput: { owner: "principal-a", at: start },
+    });
+    expect(info(terminal).lastForeignInputAt).toBeUndefined();
+
+    vi.setSystemTime(start + 10);
+    terminal.tryWrite("x");
+    vi.setSystemTime(start + 20);
+    terminal.write("\x1b[I", undefined, "principal-a");
+    expect(info(terminal)).toMatchObject({
+      lastTypedInputAt: start + 10,
+      lastForeignInputAt: start + 10,
+      lastOwnedInput: { owner: "principal-a", at: start },
+    });
+  });
+
+  it("still holds a strict submission after an assistant's own keys (#16094)", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    terminal.write("\x1b[A", undefined, "principal-a");
+    ptyWriteMock.mockClear();
+
+    terminal.submit("brief", "tok-1", undefined, "settled-prompt-strict");
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(ptyWriteMock).not.toHaveBeenCalled();
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
   });
 
   it("writes a guarded submission to an agent settled at an empty prompt", async () => {
@@ -371,6 +408,8 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
     // The body is still in the composer: a draft to every reader of the
     // settle, auto-sleep included (#13854), until the agent settles again.
     expect(info(terminal).lastTypedInputAt).toBeGreaterThanOrEqual(info(terminal).lastStateChange!);
+    // Nobody's keys left it there, so no assistant may press keys over it.
+    expect(info(terminal).lastForeignInputAt).toBe(info(terminal).lastTypedInputAt);
   });
 
   it("never withdraws an ordinary submission", async () => {

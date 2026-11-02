@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { PtyPanelData } from "@shared/types/panel";
+import type { z } from "zod";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -214,10 +215,17 @@ describe("terminal.interruptOwned (#12338)", () => {
     );
   });
 
-  it("shares the delegate's result schema so both advertise the same contract", () => {
+  it("advertises the delegate's result contract, plus only the steer's own-keys note (#16094)", () => {
     const owned = definition("terminal.interruptOwned");
     const delegate = definition("terminal.interrupt");
-    expect(owned.resultSchema).toBe(delegate.resultSchema);
+    const ownedShape = (owned.resultSchema as z.ZodObject).shape;
+    const delegateShape = (delegate.resultSchema as z.ZodObject).shape;
+    for (const [key, field] of Object.entries(delegateShape)) {
+      expect(ownedShape[key], key).toBe(field);
+    }
+    expect(Object.keys(ownedShape).filter((key) => !(key in delegateShape))).toEqual([
+      "inputSinceSettle",
+    ]);
     expect(owned.mcpOutputSchema).toBe(true);
     expect(delegate.mcpOutputSchema).toBe(true);
   });

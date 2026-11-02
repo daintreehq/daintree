@@ -127,7 +127,20 @@ describe("createPtyHostMessageDispatcher", () => {
 
     dispatch({ type: "write", id: "term-1", data: "hello", traceId: "t-1" });
 
-    expect(ctx.ptyManager.write).toHaveBeenCalledWith("term-1", "hello", "t-1");
+    expect(ctx.ptyManager.write).toHaveBeenCalledWith("term-1", "hello", "t-1", undefined);
+  });
+
+  it("forwards whose input a write from main is, and only a non-empty owner (#16094)", () => {
+    const ctx = makeCtx();
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "write", id: "term-1", data: "\x1b", inputOwner: "principal-a" });
+    dispatch({ type: "write", id: "term-1", data: "\x1b", inputOwner: "" });
+
+    expect(vi.mocked(ctx.ptyManager.write).mock.calls).toEqual([
+      ["term-1", "\x1b", undefined, "principal-a"],
+      ["term-1", "\x1b", undefined, undefined],
+    ]);
   });
 
   it("treats prototype-chain keys as unknown message types", () => {

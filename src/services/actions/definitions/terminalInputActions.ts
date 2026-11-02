@@ -63,7 +63,7 @@ const TerminalInterruptResultSchema = z.object({
   status: z
     .enum(["requested", "requested-unverified"])
     .describe(
-      "`requested`: keys handed to an agent whose CLI names Escape as its interrupt; `requested-unverified`: its CLI names none. Neither means they arrived or it stopped; read the terminal."
+      "`requested`: keys sent to an agent whose CLI interrupts on Escape; `requested-unverified`: its CLI names none. Neither means they arrived or it stopped; read the terminal."
     ),
 });
 

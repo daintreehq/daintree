@@ -23,7 +23,8 @@ describe("batch-double-escape", () => {
     } as unknown as HostContext)["batch-double-escape"]!;
     return {
       ptyManager,
-      escape: () => handler({ type: "batch-double-escape", ids: ["t1"] }),
+      escape: (inputOwner?: string) =>
+        handler({ type: "batch-double-escape", ids: ["t1"], ...(inputOwner ? { inputOwner } : {}) }),
       restart: () => {
         spawnedAt = 200;
       },
@@ -33,13 +34,24 @@ describe("batch-double-escape", () => {
   it("writes the second Escape to the spawn the first went to, after the gap", () => {
     const { ptyManager, escape } = setup();
     escape();
-    expect(ptyManager.write.mock.calls).toEqual([["t1", "\x1b"]]);
+    expect(ptyManager.write.mock.calls).toEqual([["t1", "\x1b", undefined, undefined]]);
     vi.advanceTimersByTime(49);
     expect(ptyManager.write).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(1);
     expect(ptyManager.write.mock.calls).toEqual([
-      ["t1", "\x1b"],
-      ["t1", "\x1b"],
+      ["t1", "\x1b", undefined, undefined],
+      ["t1", "\x1b", undefined, undefined],
+    ]);
+  });
+
+  // #16094: both Escapes are the assistant's, or its next keys would read the second as a person's.
+  it("files both Escapes under the assistant that asked for them", () => {
+    const { ptyManager, escape } = setup();
+    escape("principal-a");
+    vi.advanceTimersByTime(50);
+    expect(ptyManager.write.mock.calls).toEqual([
+      ["t1", "\x1b", undefined, "principal-a"],
+      ["t1", "\x1b", undefined, "principal-a"],
     ]);
   });
 
