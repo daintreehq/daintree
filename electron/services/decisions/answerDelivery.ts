@@ -307,7 +307,7 @@ export class AnswerDelivery {
       const opened = await this.openPending(row);
       const answer = opened === null ? null : answerPreviewOf(opened);
       const answerUnavailable = answer !== null ? null : opened === null ? "unreadable" : "none";
-      let question: string | null = null;
+      let question: string | null;
       try {
         const content = await openQuestionContent(this.owner.ctx, row);
         question = content === null ? null : questionLine(content.question);

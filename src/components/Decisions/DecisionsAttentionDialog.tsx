@@ -580,7 +580,13 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
           </div>
         )}
         <AppDialog.Body>
-          <div ref={bodyRef} tabIndex={-1} className="flex flex-col outline-hidden">
+          {/* Focus lands here only when no row is left to take it; ringed when
+              the keyboard brought it, like any other stop. */}
+          <div
+            ref={bodyRef}
+            tabIndex={-1}
+            className="flex flex-col rounded-[var(--radius-sm)] outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+          >
             <AppDialog.Description className="text-xs text-text-secondary [text-wrap:pretty]">
               {empty ? EMPTY_DESCRIPTION : LIST_DESCRIPTION}
             </AppDialog.Description>
