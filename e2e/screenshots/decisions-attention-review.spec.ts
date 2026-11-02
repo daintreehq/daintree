@@ -713,7 +713,7 @@ async function themedStates(run: Run, theme: string): Promise<void> {
 }
 
 async function daintreeStates(run: Run): Promise<void> {
-  const { app, page, panes } = run;
+  const { page, panes } = run;
   const theme = "daintree";
   await shoot(run, "dialog-end", theme, async () => {
     await ready(page, panes);

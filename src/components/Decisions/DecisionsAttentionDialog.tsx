@@ -647,6 +647,7 @@ export function DecisionsAttentionDialog({ isOpen, onClose }: DecisionsAttention
         isOpen={move !== null}
         onClose={() => setMove(null)}
         zIndex="nested"
+        variant="default"
         title={
           move === null
             ? ""
