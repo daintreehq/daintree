@@ -77,7 +77,7 @@ export async function manageConversions(ctx: PluginContext, args: unknown): Prom
   }
   if (pick.id === DELETE_ALL_ID) {
     const ok = await host.showConfirm({
-      title: `Delete ${countLabel(records.length)}?`,
+      title: "Delete this project's converted sessions?",
       message:
         "Their indexes are removed from this machine and no agent can search them any more. The original session files aren't touched.",
       confirmLabel: "Delete sessions",
@@ -119,10 +119,6 @@ function readProjectId(args: unknown): string | null {
   if (!args || typeof args !== "object") return null;
   const value = (args as Record<string, unknown>).projectId;
   return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-function countLabel(count: number): string {
-  return count === 1 ? "1 converted session" : `${count} converted sessions`;
 }
 
 export function formatBytes(bytes: number | null): string {
