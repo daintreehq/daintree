@@ -1245,6 +1245,7 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
       ).rejects.toThrow(/no Claude conversation to resume/);
       expect(ptyClient.spawn).not.toHaveBeenCalled();
       expect(mockPreparePaneConfig).not.toHaveBeenCalled();
+      expect(claudeStoreMocks.rememberClaudePaneStore).not.toHaveBeenCalled();
     });
 
     it("spawns an exact resume whose conversation exists as asked", async () => {

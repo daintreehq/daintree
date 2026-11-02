@@ -735,7 +735,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       launchAgentId === "claude"
         ? resolvePaneClaudeProjectsRoot({ shell: quotingShell, env: spawnEnv })
         : undefined;
-    if (claudePaneStore !== undefined) rememberClaudePaneStore(id, claudePaneStore);
     const untouchedSessionId = await findUntouchedClaudeSession(safeCommand, launchAgentId, {
       cwd,
       agentSessionId: validatedOptions.agentSessionId,
@@ -748,6 +747,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         `Terminal ${id.slice(0, 8)} has no Claude conversation to resume; refusing a fresh one under its id`
       );
     }
+    if (claudePaneStore !== undefined) rememberClaudePaneStore(id, claudePaneStore);
 
     // Expand `${settings:*}` templates a plugin agent embedded in its command
     // or args (e.g. `--token=${settings:apiToken}`). The agent's args were

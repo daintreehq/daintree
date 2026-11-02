@@ -156,7 +156,18 @@ export async function resumeAgentSessionAsPane(
 
   const key = JSON.stringify([project.id, request.worktreeId, request.agentId, sessionId]);
   const pending = inFlight.get(key);
-  if (pending) return pending;
+  if (pending) {
+    const joined = await pending;
+    if (
+      !(joined.status === "refused" && joined.reason === "cancelled") ||
+      request.signal?.aborted
+    ) {
+      return joined;
+    }
+    // Abandoned by its own caller, not this one: launch again once it has gone.
+    if (inFlight.get(key) === pending) inFlight.delete(key);
+    return resumeAgentSessionAsPane(request, deps, runtime);
+  }
   const run = Promise.resolve().then(() =>
     launchResumedPane(project, { ...request, sessionId }, agentConfig, deps, runtime)
   );

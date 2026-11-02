@@ -263,6 +263,25 @@ describe("resumeAgentSessionAsPane", () => {
     ).resolves.toMatchObject({ status: "launched" });
   });
 
+  it("launches for a caller that joined a launch its own caller gave up on", async () => {
+    const { deps, invoke } = resumeDeps();
+    const abandoned = new AbortController();
+    const first = resumeAgentSessionAsPane(
+      { ...REQUEST, signal: abandoned.signal },
+      deps,
+      makeRuntime({ isDirectory: vi.fn(async () => (abandoned.abort(), true)) })
+    );
+    const joined = resumeAgentSessionAsPane(
+      { ...REQUEST, signal: new AbortController().signal },
+      deps,
+      makeRuntime()
+    );
+
+    await expect(first).resolves.toMatchObject({ status: "refused", reason: "cancelled" });
+    await expect(joined).resolves.toMatchObject({ status: "launched" });
+    expect(spawns(invoke)).toHaveLength(1);
+  });
+
   it("refuses a project it doesn't know", async () => {
     const { deps } = resumeDeps();
     const result = await resumeAgentSessionAsPane(
