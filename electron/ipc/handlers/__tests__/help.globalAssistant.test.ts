@@ -286,7 +286,12 @@ describe("global assistant IPC handlers", () => {
 describe("window global assistant panel IPC handlers (#16099)", () => {
   const shown = {
     showing: true,
-    target: { hostId: "local", scope: { kind: "global" as const }, terminalId: "g", incarnation: 1 },
+    target: {
+      hostId: "local",
+      scope: { kind: "global" as const },
+      terminalId: "g",
+      incarnation: 1,
+    },
   };
 
   function fakeManager(viewIds: number[]) {
