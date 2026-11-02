@@ -920,6 +920,17 @@ describe("Decisions entry", () => {
       expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
     });
 
+    it("refuses either policy change after quit, though the switch still reads on", async () => {
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      await stopDecisions();
+      vi.mocked(store.set).mockClear();
+
+      await expect(setDecisionsDefaultQuestionExpiry(null)).rejects.toMatchObject(CANCELLED);
+      await expect(setDecisionsProxyAllowlisted(true)).rejects.toMatchObject(CANCELLED);
+      expect(store.set).not.toHaveBeenCalled();
+    });
+
     it("refuses to change the allowlist while off, and saves nothing", async () => {
       saved.value = { enabled: false };
       await expect(setDecisionsProxyAllowlisted(true)).rejects.toMatchObject(CANCELLED);

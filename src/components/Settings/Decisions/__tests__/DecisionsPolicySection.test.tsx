@@ -337,19 +337,33 @@ describe("Decisions policy and questions sections", () => {
     expect(setProxyAllowlisted).toHaveBeenCalledExactlyOnceWith(true);
     expect(setDefaultQuestionExpiry).toHaveBeenCalledExactlyOnceWith(60 * 60_000);
 
-    // Main applies them in turn, each over the setting as it stands: the later answer holds both.
+    // Main applied the proxy save first, then the expiry over it, but the
+    // answers land the other way round: the later revision holds both.
     await act(async () =>
-      expirySave.resolve(policy({ defaultQuestionExpiryMs: 60 * 60_000, revision: 1 }))
-    );
-    await act(async () =>
-      proxySave.resolve(
+      expirySave.resolve(
         policy({ proxyAllowlisted: true, defaultQuestionExpiryMs: 60 * 60_000, revision: 2 })
       )
     );
-    expect(checked()).toBe("true");
     expect(expirySelect().textContent).toBe("1 hour");
-    expect(proxySwitch().disabled).toBe(false);
     expect(expirySelect().disabled).toBe(false);
+    // The switch still shows what was asked, locked until its own save answers.
+    expect(checked()).toBe("true");
+    expect(proxySwitch().disabled).toBe(true);
+
+    await act(async () =>
+      proxySave.resolve(
+        policy({
+          proxyAllowlisted: true,
+          defaultQuestionExpiryMs: DEFAULT_QUESTION_EXPIRY_MS,
+          revision: 1,
+        })
+      )
+    );
+    expect(checked()).toBe("true");
+    expect(proxySwitch().disabled).toBe(false);
+    // The older answer doesn't take the expiry back.
+    expect(expirySelect().textContent).toBe("1 hour");
+    expect(expiryRow()).toContain("waits 1 hour");
   });
 
   it("says when the policy couldn't be read, in both sections, and one Retry recovers both", async () => {
@@ -462,6 +476,54 @@ describe("useDecisionsPolicy", () => {
     });
     expect(result.current.policy?.proxyAllowlisted).toBe(true);
     expect(result.current.loadError).toBeNull();
+  });
+
+  it("drops an expiry save that answers after a turn off, and lets the next one go ahead", async () => {
+    getPolicy.mockResolvedValueOnce(policy({ defaultQuestionExpiryMs: null, revision: 4 }));
+    const { result, rerender } = renderHook(({ active }) => useDecisionsPolicy(active), {
+      initialProps: { active: true },
+    });
+    await act(async () => {});
+
+    const failing = deferred<DecisionsPolicy>();
+    setDefaultQuestionExpiry.mockReturnValueOnce(failing.promise);
+    act(() => {
+      void result.current.setDefaultQuestionExpiry(60 * 60_000);
+    });
+    expect(result.current.pendingExpiry).toEqual({ ms: 60 * 60_000 });
+    rerender({ active: false });
+
+    getPolicy.mockResolvedValueOnce(policy({ defaultQuestionExpiryMs: 30 * DAY, revision: 0 }));
+    rerender({ active: true });
+    await act(async () => {});
+    await act(async () => failing.reject(new Error("Decisions has stopped")));
+    // From before the turn off: no failure shown, no read asked, and what main said since stays.
+    expect(result.current.expirySaveFailure).toBeNull();
+    expect(getPolicy).toHaveBeenCalledTimes(2);
+    expect(result.current.policy?.defaultQuestionExpiryMs).toBe(30 * DAY);
+    expect(result.current.pendingExpiry).toBeNull();
+
+    const late = deferred<DecisionsPolicy>();
+    setDefaultQuestionExpiry.mockReturnValueOnce(late.promise);
+    act(() => {
+      void result.current.setDefaultQuestionExpiry(90 * DAY);
+    });
+    rerender({ active: false });
+    getPolicy.mockResolvedValueOnce(policy({ defaultQuestionExpiryMs: 30 * DAY, revision: 0 }));
+    rerender({ active: true });
+    await act(async () => {});
+    await act(async () => late.resolve(policy({ defaultQuestionExpiryMs: 90 * DAY, revision: 9 })));
+    expect(result.current.policy?.defaultQuestionExpiryMs).toBe(30 * DAY);
+    expect(result.current.pendingExpiry).toBeNull();
+
+    setDefaultQuestionExpiry.mockResolvedValueOnce(
+      policy({ defaultQuestionExpiryMs: null, revision: 1 })
+    );
+    await act(async () => {
+      await result.current.setDefaultQuestionExpiry(null);
+    });
+    expect(setDefaultQuestionExpiry).toHaveBeenCalledTimes(3);
+    expect(result.current.policy?.defaultQuestionExpiryMs).toBeNull();
   });
 
   it("stops listening once off or unmounted", async () => {
