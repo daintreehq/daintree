@@ -374,6 +374,8 @@ export function AgentButton({
   const savedAccountId = activeWorktreeId
     ? launchAccountId
     : resolveEffectiveAccountId(entry, null);
+  const savedAccount =
+    savedAccountId === null ? undefined : accounts.find((account) => account.id === savedAccountId);
   // CCR presets carry the routing prefix in their stored name; strip it for
   // display so the tooltip and menu surfaces show the same human label.
   const presetDisplayName = (preset: { name: string; displayTitle?: string }) =>
@@ -543,7 +545,8 @@ export function AgentButton({
       : store.updateAgent(type, { accountId: accountId ?? undefined });
     const picked = accountId === null ? undefined : accounts.find((a) => a.id === accountId);
     // A saved account that's gone stands for none, so any pick moves off it.
-    const currentAccountId = savedAccountId === null ? null : activeAccount?.id;
+    // Measured against where the radio stands, the slot this pick writes.
+    const currentAccountId = savedAccountId === null ? null : savedAccount?.id;
     const moved = accountId !== currentAccountId;
     const generation = dismissSwitchNotices();
     void write
@@ -1024,8 +1027,7 @@ export function AgentButton({
                       value={
                         savedAccountId === null
                           ? DEFAULT_LOGIN_VALUE
-                          : (accounts.find((account) => account.id === savedAccountId)?.id ??
-                            MISSING_ACCOUNT_VALUE)
+                          : (savedAccount?.id ?? MISSING_ACCOUNT_VALUE)
                       }
                       onValueChange={pickAccount}
                     >
