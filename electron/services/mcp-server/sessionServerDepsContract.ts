@@ -6,7 +6,10 @@ import type { HelpAssistantTier, McpTier, DispatchEnvelope } from "./shared.js";
 import type { McpWorkspaceBinding } from "./shared.js";
 import type { OwnPane, TerminalNotifyHandlers } from "./terminalNotify.js";
 import type { ReplyWaiterService } from "./replyWaiter.js";
-import type { CodexQuotaResult } from "../../../shared/types/ipc/agentQuota.js";
+import type {
+  ClaudeUsageObservation,
+  CodexQuotaResult,
+} from "../../../shared/types/ipc/agentQuota.js";
 import type { HostControlAccess } from "./hostControlTools.js";
 import type {
   AssistantCaller,
@@ -314,6 +317,8 @@ export interface SessionServerDeps extends OwnedMainExecutors {
   >;
   /** This machine's Codex quota, as `agent.readQuota` reports it. */
   readCodexQuota?: () => Promise<CodexQuotaResult>;
+  /** The Claude Code usage messages this machine's panes showed, latest per limit (#15727). */
+  readClaudeUsage?: () => ClaudeUsageObservation[];
   /** Blocking replies for `waitForReply`. Optional; absent, the flag is ignored. */
   replyWaiter?: Pick<ReplyWaiterService, "wait">;
   /**

@@ -372,7 +372,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "agent",
     danger: "safe",
     description:
-      "Read this machine's Codex account quota, as Codex reports it: how much of each rate-limit window is used and when it resets.",
+      "Read this machine's Codex quota as Codex reports it, and the last Claude Code usage-limit message per limit its panes showed (not a live reading).",
     enabled: true,
     id: "agent.readQuota",
     inputSchema: {
@@ -380,7 +380,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       type: "object",
       properties: {},
     },
-    keywords: ["codex", "quota", "usage", "limit"],
+    keywords: ["codex", "claude", "quota", "usage", "limit"],
     kind: "query",
     mcpAnnotations: {
       readOnlyHint: true,
@@ -393,6 +393,72 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       $schema: "https://json-schema.org/draft/2020-12/schema",
       type: "object",
       properties: {
+        claude: {
+          type: "object",
+          properties: {
+            source: {
+              type: "string",
+              const: "seen-in-panes",
+              description:
+                "Claude Code's own messages in this machine's panes, not a live account reading.",
+            },
+            readings: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  window: {
+                    type: "string",
+                    enum: [
+                      "5-hour limit",
+                      "session limit",
+                      "weekly limit",
+                      "Opus limit",
+                      "Sonnet limit",
+                      "Fable limit",
+                      "usage limit",
+                      "limit",
+                    ],
+                    description: "The limit as Claude Code named it.",
+                  },
+                  statement: {
+                    type: "string",
+                    enum: ["used", "over", "approaching", "reached"],
+                    description:
+                      "used: usedPercent exact. over: past usedPercent. reached: limit hit.",
+                  },
+                  usedPercent: {
+                    type: ["number", "null"],
+                  },
+                  resetsAt: {
+                    description: "Epoch ms of the reset it printed, or null.",
+                    type: ["number", "null"],
+                  },
+                  terminalId: {
+                    type: "string",
+                    description: "The pane that showed it.",
+                  },
+                  observedAt: {
+                    type: "number",
+                    description: "When it showed, epoch ms.",
+                  },
+                },
+                required: [
+                  "window",
+                  "statement",
+                  "usedPercent",
+                  "resetsAt",
+                  "terminalId",
+                  "observedAt",
+                ],
+                additionalProperties: false,
+              },
+              description: "Latest per limit since Daintree started. Empty: none seen.",
+            },
+          },
+          required: ["source", "readings"],
+          additionalProperties: false,
+        },
         codex: {
           oneOf: [
             {
@@ -463,11 +529,11 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           ],
         },
       },
-      required: ["codex"],
+      required: ["claude", "codex"],
       additionalProperties: false,
     },
     requiresArgs: false,
-    title: "Read Codex quota",
+    title: "Read agent quota",
   },
   {
     band: "reversible",

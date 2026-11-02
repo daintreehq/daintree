@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { MAX_ASSISTANT_SLOTS } from "../config/assistantSlots.js";
-import { CODEX_QUOTA_UNAVAILABLE_REASONS } from "./ipc/agentQuota.js";
+import {
+  CLAUDE_USAGE_STATEMENTS,
+  CLAUDE_USAGE_WINDOWS,
+  CODEX_QUOTA_UNAVAILABLE_REASONS,
+} from "./ipc/agentQuota.js";
 
 /**
  * One assistant addressing another (#13496): a help session here, or another
@@ -15,7 +19,11 @@ import { CODEX_QUOTA_UNAVAILABLE_REASONS } from "./ipc/agentQuota.js";
 
 export const ASSISTANT_LIST_TOOL = "assistant.list";
 export const ASSISTANT_START_TOOL = "assistant.start";
-/** The Codex account's quota on this machine, as an ordinary tool so `host.call` reads a host's. */
+/**
+ * This machine's agent quota as an ordinary tool, so `host.call` reads a
+ * host's: the Codex account's own reading and the Claude Code usage messages
+ * its panes showed (#15727).
+ */
 export const AGENT_READ_QUOTA_TOOL = "agent.readQuota";
 
 /** Offered only to an assistant caller, at any in-app tier. */
@@ -91,7 +99,26 @@ const codexQuotaWindowSchema = z.object({
   resetsAt: z.number().nullable().describe("When it resets, epoch ms; null when Codex didn't say."),
 });
 
+const claudeUsageReadingSchema = z.object({
+  window: z.enum(CLAUDE_USAGE_WINDOWS).describe("The limit as Claude Code named it."),
+  statement: z
+    .enum(CLAUDE_USAGE_STATEMENTS)
+    .describe("used: usedPercent exact. over: past usedPercent. reached: limit hit."),
+  usedPercent: z.number().nullable(),
+  resetsAt: z.number().nullable().describe("Epoch ms of the reset it printed, or null."),
+  terminalId: z.string().describe("The pane that showed it."),
+  observedAt: z.number().describe("When it showed, epoch ms."),
+});
+
 export const AgentReadQuotaResultSchema = z.object({
+  claude: z.object({
+    source: z
+      .literal("seen-in-panes")
+      .describe("Claude Code's own messages in this machine's panes, not a live account reading."),
+    readings: z
+      .array(claudeUsageReadingSchema)
+      .describe("Latest per limit since Daintree started. Empty: none seen."),
+  }),
   codex: z.discriminatedUnion("status", [
     z.object({
       status: z.literal("ok"),

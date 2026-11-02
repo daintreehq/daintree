@@ -953,7 +953,15 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 172_872): `terminal.revealOwned` takes `generation`, so the global
   // Assistant shows the person the run it read. Withheld from external
   // clients like the steer's, so the external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 173_000;
+  // 173_000 → 174_200 for #15727, measured at 174_160 B (+1_168):
+  // `agent.readQuota` answers the latest Claude Code usage-limit message per
+  // limit beside Codex's reading, so an orchestrator holding a weekly-limit
+  // policy reads it in one call instead of scraping a throwaway pane's
+  // `/usage`. Nearly all of it is the output schema: each reading's printed
+  // limit, what it said, its reset and the pane and time it showed, with the
+  // label that it isn't a live account reading. Assistant-only, so the
+  // external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 174_200;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

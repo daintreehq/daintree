@@ -142,6 +142,7 @@ import {
   ASSISTANT_TARGET_REFUSALS,
   AssistantStartArgsSchema,
   WORKER_STEER_REFUSALS,
+  type AgentReadQuotaResult,
 } from "../../../shared/types/assistantControl.js";
 import { HOST_CALL_TOOL, HOST_CONTROL_TOOL_IDS } from "../../../shared/types/hostControl.js";
 import { auditCodeForHostControlRefusal, runHostControlTool } from "./hostControlTools.js";
@@ -2444,7 +2445,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                   "This machine can't read its Codex quota."
                 );
               }
-              result = { codex: await readQuota() };
+              const quota: AgentReadQuotaResult = {
+                claude: { source: "seen-in-panes", readings: deps.readClaudeUsage?.() ?? [] },
+                codex: await readQuota(),
+              };
+              result = quota;
             }
             outcome = { kind: "result", value: { ok: true, result } };
             return buildToolCallResult(result, {
