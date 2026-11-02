@@ -382,6 +382,11 @@ export class DaintreeLocalStore implements LocalStore {
   private closed = false;
   private fault: DecisionsStoreUnavailableError | null = null;
   private readonly statements = new Map<string, Database.Statement>();
+  /**
+   * Creates this store deleted: published, cancelled before they ever were,
+   * or refused. A flush holding a copy of one must never write it back.
+   */
+  private readonly deletedCreates = new Set<string>();
   private readonly commitListeners = new Set<() => void>();
 
   constructor(private readonly sqlite: Database.Database) {}
@@ -488,7 +493,11 @@ export class DaintreeLocalStore implements LocalStore {
   /**
    * A create's `maybePublished` mark, once stored, stays (#16014): the
    * publisher rewrites the create from its own copy after each attachment it
-   * uploads, and that copy predates a mark a cancel set meanwhile.
+   * uploads, and that copy predates a mark a cancel set meanwhile. A create
+   * deleted meanwhile is refused, never put back: a cancel that dropped it as
+   * never published while a starting attempt was uploading it would otherwise
+   * see it published after all. The refusal fails that flush before it sends
+   * the create.
    */
   putOutbox(item: OutboxItem): Promise<void> {
     return this.enqueueWith("write", () => {
@@ -525,10 +534,12 @@ export class DaintreeLocalStore implements LocalStore {
         payload: string;
       }[];
       for (const { payload } of rows) {
-        const attachments = (JSON.parse(payload) as { attachments?: unknown }).attachments;
-        if (attachments === undefined) continue;
-        if (!Array.isArray(attachments))
+        const parsed = JSON.parse(payload) as { attachments?: unknown } | null;
+        // The library writes `attachments: []` on every create; one without is unreadable.
+        const attachments = typeof parsed === "object" ? parsed?.attachments : undefined;
+        if (!Array.isArray(attachments)) {
           throw new Error("A pending create's attachments are unreadable");
+        }
         for (const attachment of attachments as { attachment_id?: unknown }[]) {
           if (typeof attachment?.attachment_id !== "string") {
             throw new Error("A pending create names an unreadable attachment");
@@ -562,7 +573,9 @@ export class DaintreeLocalStore implements LocalStore {
 
   deleteOutbox(id: string): Promise<void> {
     return this.enqueue("write", () => {
-      this.st("DELETE FROM decisions_outbox WHERE id = ?").run(id);
+      const r = this.st("DELETE FROM decisions_outbox WHERE id = ? RETURNING kind").get(id) as
+        { kind: string } | undefined;
+      if (r?.kind === "create") this.deletedCreates.add(id);
     });
   }
 
@@ -904,6 +917,9 @@ export class DaintreeLocalStore implements LocalStore {
   private keepingPublishedMark(record: OutboxRecord): OutboxRecord {
     const stored = this.st("SELECT payload FROM decisions_outbox WHERE id = ?").get(record.id) as
       { payload: string } | undefined;
+    if (stored === undefined && this.deletedCreates.has(record.id)) {
+      throw new Error("This question's create is no longer queued, so it isn't written back");
+    }
     if (stored === undefined || !isMarkedPublished(stored.payload)) return record;
     if (isMarkedPublished(record.payload)) return record;
     const payload = JSON.parse(record.payload) as Record<string, unknown>;

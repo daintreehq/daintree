@@ -1,4 +1,4 @@
-import { readdir, unlink } from "node:fs/promises";
+import { lstat, readdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import {
   BridgeError,
@@ -61,6 +61,8 @@ export class DecisionsAttachments implements QuestionAttachments {
   private closed = false;
   /** Whether the ask holding the gate has spooled anything. */
   private spooled = false;
+  /** The spool directory's own entry, in the directory above it, is on disk. */
+  private dirDurable = false;
 
   constructor(private readonly options: DecisionsAttachmentsOptions) {
     this.resolver = options.resolver ?? createWorktreeAttachmentResolver();
@@ -110,13 +112,17 @@ export class DecisionsAttachments implements QuestionAttachments {
    * temporary file. Runs only on the gate; returns how many went.
    */
   async sweep(): Promise<number> {
-    let names: string[];
     try {
-      names = await readdir(this.options.dir);
+      // Never through a symlink: the sweep would delete files wherever it led.
+      const dir = await lstat(this.options.dir);
+      if (dir.isSymbolicLink() || !dir.isDirectory()) {
+        throw new Error("The attachment spool isn't a real directory");
+      }
     } catch (error) {
       if (codeOf(error) === "ENOENT") return 0;
       throw error;
     }
+    const names = await readdir(this.options.dir);
     const entries = names.filter((name) => SPOOL_ENTRY.test(name));
     if (entries.length === 0) return 0;
     const keep = await this.options.referenced();
@@ -145,12 +151,17 @@ export class DecisionsAttachments implements QuestionAttachments {
 
   /**
    * Durable before the create naming it commits: written and synced by
-   * `FileSpool`, then the directory synced, so a crash can't keep the create
-   * and lose its ciphertext.
+   * `FileSpool`, then the spool directory synced, and the directory above it
+   * once the spool's own entry is new, so a crash can't keep the create and
+   * lose its ciphertext.
    */
   private async put(id: string, bytes: Uint8Array): Promise<void> {
     this.spooled = true;
     await ensureOwnerOnlyDir(this.options.dir);
+    if (!this.dirDurable) {
+      await syncParentDirectory(this.options.dir);
+      this.dirDurable = true;
+    }
     await this.files.put(id, bytes);
     await syncParentDirectory(join(this.options.dir, id));
   }

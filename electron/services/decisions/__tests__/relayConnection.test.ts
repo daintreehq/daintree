@@ -1121,19 +1121,17 @@ describe("RelayConnection", () => {
       });
       let firstSource: QuestionSource | null = null;
       let uploadsTried = 0;
+      let finishLateUpload!: () => void;
+      const lateUpload = new Promise<void>((resolve) => (finishLateUpload = resolve));
       const first = await harness({
         store: firstStore,
         overrides: {
           attachments: firstAttachments,
           onQuestionsReady: (ready) => (firstSource = ready),
         },
-        // The relay takes the first image and is gone before the second lands.
+        // The relay takes the first image; the app quits while the second is still going up.
         wrapFetch: (fetchImpl) => async (url, init) => {
-          if (init.method === "PUT" && ++uploadsTried === 2) {
-            return new Response(JSON.stringify({ code: "unavailable", message: "down" }), {
-              status: 503,
-            });
-          }
+          if (init.method === "PUT" && ++uploadsTried === 2) await lateUpload;
           return fetchImpl(url, init);
         },
       });
@@ -1155,20 +1153,19 @@ describe("RelayConnection", () => {
       await vi.waitFor(async () => {
         const [create] = await firstStore.outboxFor(asked.questionId);
         expect((create?.payload as { uploaded: string[] }).uploaded).toHaveLength(1);
-        expect(create?.attempts).toBe(1);
       });
       const [uploadedFirst] = first.relay.uploads;
       expect(first.relay.questions).toEqual([]);
       const pending = spooled();
       expect(pending).toHaveLength(2);
-      first.connection.stop();
+      // Quit mid-upload: the second image's request is still out.
+      void first.connection.stop();
       await firstAttachments.close();
       await firstStore.close();
       firstDb.close();
 
       // The screenshots are gone: only the spooled ciphertext can publish the question now.
       fs.rmSync(worktree, { recursive: true });
-      vi.setSystemTime(Date.now() + 10 * 60_000);
 
       const secondDb = openDb(dbPath, migrations).sqlite;
       const secondStore = new DaintreeLocalStore(secondDb);
@@ -1191,6 +1188,14 @@ describe("RelayConnection", () => {
       );
       expect(spooled()).toEqual([]);
       expect(await secondStore.outboxFor(asked.questionId)).toEqual([]);
+
+      // The interrupted upload finishing late changes nothing the restart did.
+      finishLateUpload();
+      for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve));
+      expect(first.relay.questions).toEqual([]);
+      expect((await secondStore.getQuestion(asked.questionId))?.local_status).toBe("open");
+      expect(await secondStore.outboxFor(asked.questionId)).toEqual([]);
+      expect(spooled()).toEqual([]);
       second.connection.stop();
       await secondAttachments.close();
       await secondStore.close();

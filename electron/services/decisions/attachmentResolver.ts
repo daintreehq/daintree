@@ -51,11 +51,22 @@ export function relativeIdProblem(
   return null;
 }
 
-/** Whether `target` is strictly inside `root`; both already real paths. */
-export function isInsideRoot(root: string, target: string): boolean {
-  const relative = path.relative(root, target);
-  if (relative === "" || path.isAbsolute(relative)) return false;
-  return relative !== ".." && !relative.startsWith(`..${path.sep}`);
+/**
+ * Whether `target` is strictly inside `root`, both real paths. Windows'
+ * `path.relative` ignores case, but a directory there can be case-sensitive,
+ * with `repo` and `REPO` side by side; real paths carry each directory's own
+ * spelling, so the root must also be the target's exact leading components.
+ */
+export function isInsideRoot(
+  root: string,
+  target: string,
+  paths: path.PlatformPath = path
+): boolean {
+  const relative = paths.relative(root, target);
+  if (relative === "" || paths.isAbsolute(relative)) return false;
+  if (relative === ".." || relative.startsWith(`..${paths.sep}`)) return false;
+  const prefix = root.endsWith(paths.sep) ? root : `${root}${paths.sep}`;
+  return target.startsWith(prefix);
 }
 
 /** Whether `mime`, as the library sniffed it, holds for the whole signature. */

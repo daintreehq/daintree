@@ -1,10 +1,43 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { BridgeError, type QuestionOrigin } from "@daintreehq/decisions-client";
 import { LIMITS } from "@daintreehq/decisions-protocol";
+/** Moments the resolver touches the file at, for a test to change it then. */
+const at = vi.hoisted(() => ({
+  lstat: null as null | ((file: string) => void),
+  open: null as null | ((file: string) => void),
+  read: null as null | (() => void),
+  opens: 0,
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    lstat: ((file: string, options?: unknown) => {
+      at.lstat?.(file);
+      return actual.lstat(file, options as never);
+    }) as typeof actual.lstat,
+    open: (async (file: string, flags?: number) => {
+      at.open?.(file);
+      at.opens += 1;
+      const handle = await actual.open(file, flags);
+      const read = handle.read.bind(handle);
+      return Object.assign(handle, {
+        read: (...args: Parameters<typeof read>) => {
+          const before = at.read;
+          at.read = null;
+          before?.();
+          return read(...args);
+        },
+      });
+    }) as typeof actual.open,
+  };
+});
+
 import {
   createWorktreeAttachmentResolver,
   isInsideRoot,
@@ -37,6 +70,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  at.lstat = null;
+  at.open = null;
+  at.read = null;
+  at.opens = 0;
   fs.rmSync(base, { recursive: true, force: true });
 });
 
@@ -159,11 +196,12 @@ describe("createWorktreeAttachmentResolver", () => {
     expect((await refusal("icon.png")).message).toMatch(/isn't a PNG, JPEG or WebP image/);
   });
 
-  it("refuses a file over 20 MiB without reading it, and takes one of exactly 20 MiB", async () => {
+  it("refuses a file over 20 MiB without opening it, and takes one of exactly 20 MiB", async () => {
     const big = path.join(worktree, "big.png");
     fs.writeFileSync(big, PNG);
     fs.truncateSync(big, LIMITS.attachmentBytes + 1);
     expect((await refusal("big.png")).message).toMatch(/larger than 20 MiB/);
+    expect(at.opens).toBe(0);
 
     fs.truncateSync(big, LIMITS.attachmentBytes);
     const resolved = await createWorktreeAttachmentResolver().resolve(origin(), "big.png");
@@ -179,6 +217,38 @@ describe("createWorktreeAttachmentResolver", () => {
       /isn't a file in this terminal's worktree/
     );
     expect((await refusal("empty.png/inner.png")).message).toMatch(/isn't a file/);
+  });
+
+  it("refuses a file swapped for another between its checks and its open", async () => {
+    const file = path.join(worktree, "shots", "after.png");
+    fs.writeFileSync(file, withSecret(PNG));
+    fs.writeFileSync(path.join(worktree, "other.png"), withSecret(JPEG));
+    at.open = () => fs.renameSync(path.join(worktree, "other.png"), file);
+    expect((await refusal("shots/after.png")).message).toMatch(/changed while it was being read/);
+  });
+
+  it("refuses a file reached, once checked, through a directory swapped for a symlink outside", async () => {
+    fs.writeFileSync(path.join(worktree, "shots", "after.png"), withSecret(PNG));
+    fs.mkdirSync(path.join(outside, "shots"));
+    fs.writeFileSync(path.join(outside, "shots", "after.png"), withSecret(PNG));
+    // After containment is checked, before the file is identified and opened:
+    // both then see the outside file, and only the check after the open can tell.
+    at.lstat = () => {
+      fs.renameSync(path.join(worktree, "shots"), path.join(base, "moved"));
+      fs.symlinkSync(path.join(outside, "shots"), path.join(worktree, "shots"), "dir");
+    };
+    expect((await refusal("shots/after.png")).message).toMatch(/changed while it was being read/);
+  });
+
+  it("refuses a file that grows or shrinks once its size was read", async () => {
+    const file = path.join(worktree, "shot.png");
+    fs.writeFileSync(file, withSecret(PNG));
+    at.read = () => fs.appendFileSync(file, "more");
+    expect((await refusal("shot.png")).message).toMatch(/changed while it was being read/);
+
+    fs.writeFileSync(file, withSecret(PNG));
+    at.read = () => fs.truncateSync(file, PNG.length);
+    expect((await refusal("shot.png")).message).toMatch(/changed while it was being read/);
   });
 
   it.skipIf(process.platform === "win32")("refuses a FIFO without waiting on it", async () => {
@@ -223,6 +293,13 @@ describe("relativeIdProblem", () => {
 });
 
 describe("isInsideRoot", () => {
+  it("tells apart directories whose names differ only in case, as Windows can hold side by side", () => {
+    expect(isInsideRoot("C:\\ws\\repo", "C:\\ws\\REPO\\secret.png", path.win32)).toBe(false);
+    expect(isInsideRoot("C:\\ws\\repo", "C:\\ws\\repo\\shot.png", path.win32)).toBe(true);
+    expect(isInsideRoot("C:\\", "C:\\shot.png", path.win32)).toBe(true);
+    expect(isInsideRoot("C:\\ws\\repo", "D:\\ws\\repo\\shot.png", path.win32)).toBe(false);
+  });
+
   it("holds only for paths strictly below the root", () => {
     const root = path.resolve("/work/tree");
     expect(isInsideRoot(root, path.join(root, "a.png"))).toBe(true);

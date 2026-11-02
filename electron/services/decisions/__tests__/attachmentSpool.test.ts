@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import type Database from "better-sqlite3";
 import {
   BridgeError,
+  DecisionsBridge,
   MemoryKeyStore,
   PolicyRegistry,
   loadIdentity,
@@ -13,6 +14,7 @@ import {
   type AttachmentResolver,
   type Identity,
   type QuestionOrigin,
+  type RelayClient,
 } from "@daintreehq/decisions-client";
 import {
   generateDeviceKeys,
@@ -31,10 +33,26 @@ vi.mock("electron", () => ({
   powerMonitor: { on: vi.fn(), off: vi.fn() },
 }));
 
+/** Every directory sync the spool asks for, and whether what it names was there by then. */
+const syncs = vi.hoisted(() => [] as Array<{ path: string; present: boolean }>);
+
+vi.mock("../../../utils/fs.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../utils/fs.js")>();
+  const { existsSync } = await import("node:fs");
+  return {
+    ...actual,
+    syncParentDirectory: (filePath: string) => {
+      syncs.push({ path: filePath, present: existsSync(filePath) });
+      return actual.syncParentDirectory(filePath);
+    },
+  };
+});
+
 import { openDb } from "../../persistence/db.js";
 import { DecisionsAttachments } from "../attachmentSpool.js";
 import { DaintreeLocalStore } from "../daintreeLocalStore.js";
 import { QuestionBridge } from "../questionBridge.js";
+import { holdingTerminalSink } from "../relayTransport.js";
 
 const migrationsFolder = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -59,6 +77,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  syncs.length = 0;
   fs.rmSync(base, { recursive: true, force: true });
 });
 
@@ -177,19 +196,36 @@ describe("DecisionsAttachments", () => {
     }
   });
 
-  it("refuses a symlink in place of its directory", async () => {
+  it("refuses a symlink in place of its directory, and never sweeps where it leads", async () => {
     const elsewhere = path.join(base, "elsewhere");
     fs.mkdirSync(elsewhere);
+    fs.writeFileSync(path.join(elsewhere, "important_file"), "someone else's");
     fs.mkdirSync(path.dirname(spoolDir), { recursive: true });
     fs.symlinkSync(elsewhere, spoolDir, "dir");
+    const referenced = vi.fn(async () => new Set<string>());
+    const attachments = new DecisionsAttachments({ dir: spoolDir, referenced });
+    await expect(
+      attachments.register(() => attachments.spool.put("entry_1", new Uint8Array([7])))
+    ).rejects.toThrow(/expected a real directory/);
+    await attachments.close();
+    expect(fs.readdirSync(elsewhere)).toEqual(["important_file"]);
+    expect(referenced).not.toHaveBeenCalled();
+  });
+
+  it("makes each entry durable before its ask can commit, and the new spool directory with the first", async () => {
     const attachments = new DecisionsAttachments({
       dir: spoolDir,
       referenced: async () => new Set(),
     });
-    await expect(
-      attachments.register(() => attachments.spool.put("entry_1", new Uint8Array([7])))
-    ).rejects.toThrow(/expected a real directory/);
-    expect(fs.readdirSync(elsewhere)).toEqual([]);
+    await attachments.register(async () => {
+      await attachments.spool.put("entry_1", new Uint8Array([1]));
+      expect(syncs).toEqual([
+        { path: spoolDir, present: true },
+        { path: path.join(spoolDir, "entry_1"), present: true },
+      ]);
+      await attachments.spool.put("entry_2", new Uint8Array([2]));
+    });
+    expect(syncs.slice(2)).toEqual([{ path: path.join(spoolDir, "entry_2"), present: true }]);
   });
 
   it("refuses asks once closed, after the one it was running has settled", async () => {
@@ -349,6 +385,57 @@ describe("asking with attachments", () => {
     expect(error.message).toContain('"fake.png"');
     expect(error.message).not.toContain(SECRET);
     expect(resolved).toEqual(["ok.png", "fake.png"]);
+    expect(spooled()).toEqual([]);
+  });
+
+  it("publishes nothing for a question cancelled offline while a starting attempt uploads it", async () => {
+    writeImage("before.png");
+    writeImage("after.png");
+    const offline = bridge();
+    const asked = await offline.registerQuestion({
+      origin: origin(),
+      input: {
+        question: "Which one?",
+        attachments: [{ local_resource_id: "before.png" }, { local_resource_id: "after.png" }],
+      },
+    });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let uploading = false;
+    const client = {
+      reserveAttachment: async (body: { attachment_id: string }) => ({
+        attachment_id: body.attachment_id,
+        upload_path: `/api/v1/attachments/${body.attachment_id}/content`,
+      }),
+      uploadAttachment: async () => {
+        uploading = true;
+        await held;
+      },
+      completeAttachment: async () => ({}),
+      createQuestion: vi.fn(async () => ({ event_seq: 1 })),
+    };
+    // An attempt whose start is still running: it flushes, but isn't live yet.
+    const attempt = new DecisionsBridge({
+      identity,
+      store,
+      policy: new PolicyRegistry(),
+      sink: holdingTerminalSink,
+      client: client as unknown as RelayClient,
+      resolver: attachments.resolver,
+      spool: attachments.spool,
+      pumpIntervalMs: 0,
+    });
+    const pumping = attempt.pump();
+    await vi.waitFor(() => expect(uploading).toBe(true));
+
+    await offline.cancelQuestion(asked.questionId, paneIdentityOf(origin()));
+    expect(spooled()).toEqual([]);
+    release();
+    await pumping;
+
+    expect(client.createQuestion).not.toHaveBeenCalled();
+    expect((await store.getQuestion(asked.questionId))?.local_status).toBe("cancelled");
+    expect(await store.outboxFor(asked.questionId)).toEqual([]);
     expect(spooled()).toEqual([]);
   });
 
