@@ -176,10 +176,10 @@ describe("editorConfig IPC adversarial", () => {
       expect(pinned.effectiveEditor).toEqual({ id: "vscode" });
 
       projectStoreMock.getProjectSettings.mockResolvedValue({});
-      const following = (await getHandler(CHANNELS.EDITOR_GET_CONFIG)(
-        fakeEvent(),
-        "p2"
-      )) as Record<string, unknown>;
+      const following = (await getHandler(CHANNELS.EDITOR_GET_CONFIG)(fakeEvent(), "p2")) as Record<
+        string,
+        unknown
+      >;
       expect(following.preferredEditor).toBeNull();
       expect(following.effectiveEditor).toMatchObject({ id: "antigravity-ide" });
     });
