@@ -393,8 +393,12 @@ export function rendererStorageDeclaration(key: string): SettingDeclaration | un
 export type ProjectStateFile = keyof (typeof SETTING_CATALOG)["project-state-files"]["entries"] &
   string;
 
-export function projectStateFileOwner(file: ProjectStateFile): SettingOwner {
-  return SETTING_CATALOG["project-state-files"].entries[file].owner;
+export function projectStateFileOwner(file: string): SettingOwner {
+  const declaration = own<SettingEntry>(SETTING_CATALOG["project-state-files"].entries, file);
+  if (!declaration || "fields" in declaration) {
+    throw new Error(`No project state file is declared as "${file}"`);
+  }
+  return declaration.owner;
 }
 
 export function rendererStorageOwner(key: string): SettingOwner {

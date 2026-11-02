@@ -11,3 +11,11 @@ const LOCAL_ONLY_SETTINGS_TABS: ReadonlySet<SettingsTab> = new Set<SettingsTab>(
 export function isSettingsTabAvailable(tab: SettingsTab): boolean {
   return !LOCAL_ONLY_SETTINGS_TABS.has(tab) || !isRemoteWindow();
 }
+
+/**
+ * The search entries this window can open. Filtered before ranking, so a page
+ * it never shows can't push the fuzzy rows that can be opened out of the results.
+ */
+export function availableSearchEntries<T extends { tab: SettingsTab }>(index: readonly T[]): T[] {
+  return index.filter((entry) => isSettingsTabAvailable(entry.tab));
+}

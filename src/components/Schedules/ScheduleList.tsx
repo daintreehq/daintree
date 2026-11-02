@@ -28,6 +28,8 @@ export function scheduleActionSelector(id: string, action: ScheduleRowAction): s
   return `[data-schedule-id="${CSS.escape(id)}"] [data-schedule-action="${action}"]`;
 }
 export const NEW_SCHEDULE_SELECTOR = "[data-schedules-new]";
+/** A Run now failure's callout, list or history: its Retry is where the keyboard may be. */
+export const RUN_NOW_FAILURE_SELECTOR = "[data-run-now-failure]";
 
 interface ScheduleListProps {
   state: ProjectSchedulesState;
@@ -359,6 +361,7 @@ export function ScheduleList({
             severity="error"
             role="alert"
             title="Couldn't start a run"
+            data-run-now-failure=""
             action={
               // `loading` keeps the button focusable while it blocks a second try.
               <Button variant="outline" size="sm" onClick={onRetryRunNow} loading={runNowRetrying}>

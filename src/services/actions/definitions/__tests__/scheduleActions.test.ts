@@ -62,7 +62,8 @@ async function openSchedules(args: unknown): Promise<void> {
 
 describe("schedules.open", () => {
   const settingsOpens: unknown[] = [];
-  const recordOpen = (event: Event) => settingsOpens.push((event as CustomEvent).detail);
+  const recordOpen = (event: Event) =>
+    settingsOpens.push(event instanceof CustomEvent ? event.detail : undefined);
   beforeEach(() => {
     settingsOpens.length = 0;
     window.addEventListener("daintree:open-settings-tab", recordOpen);

@@ -132,8 +132,7 @@ function isFileRef(ref: SettingRef): ref is `file:${ProjectStateFile}` {
 
 export function ownerOfSetting(ref: SettingRef): SettingOwner {
   if (isStorageRef(ref)) return rendererStorageOwner(ref.slice(STORAGE_PREFIX.length));
-  if (isFileRef(ref))
-    return projectStateFileOwner(ref.slice(FILE_PREFIX.length) as ProjectStateFile);
+  if (isFileRef(ref)) return projectStateFileOwner(ref.slice(FILE_PREFIX.length));
   return settingOwner(ref);
 }
 

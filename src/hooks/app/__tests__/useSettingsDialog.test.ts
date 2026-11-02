@@ -4,12 +4,14 @@ import { renderHook, act } from "@testing-library/react";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 
 vi.mock("@/components/Settings/settingsTabIds", () => ({
-  isSettingsTab: (tab: string) => ["general", "code-forge", "appearance", "hosts"].includes(tab),
+  isSettingsTab: (tab: string) =>
+    ["general", "code-forge", "appearance", "hosts", "project:schedules"].includes(tab),
 }));
 
 import type { SettingsTab } from "@/components/Settings/settingsTabIds";
 import { takePendingHostPlugins } from "@/components/Settings/Hosts/hostPluginRequests";
 import { useSettingsDialog } from "../useSettingsDialog";
+import { _resetHostPlatformForTests } from "@/hooks/useHostPlatform";
 
 // Stale/fake ids exercised below sit outside the SettingsTab union by design —
 // the hook normalizes or validates them at runtime.
@@ -99,6 +101,25 @@ describe("useSettingsDialog — forge subtab normalization", () => {
 
     expect(result.current.settingsTab).toBe("appearance");
     expect(result.current.settingsSubtab).toBe("github");
+  });
+});
+
+describe("useSettingsDialog — pages this window never shows", () => {
+  it("opens Schedules on this machine's project, and General in a Remote Host's window", () => {
+    const { result } = renderHook(() => useSettingsDialog());
+    act(() => result.current.handleOpenSettingsTab({ tab: "project:schedules" }));
+    expect(result.current.settingsTab).toBe("project:schedules");
+
+    window.__DAINTREE_HOST_ID__ = { id: "studio" };
+    _resetHostPlatformForTests();
+    try {
+      act(() => result.current.handleOpenSettingsTab({ tab: "project:schedules" }));
+      expect(result.current.settingsTab).toBe("general");
+      expect(result.current.isSettingsOpen).toBe(true);
+    } finally {
+      delete window.__DAINTREE_HOST_ID__;
+      _resetHostPlatformForTests();
+    }
   });
 });
 

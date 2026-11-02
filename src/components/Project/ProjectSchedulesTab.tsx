@@ -9,43 +9,40 @@ import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
 import { useWallClock } from "@/hooks/useWallClock";
-import { useWorktrees } from "@/hooks/useWorktrees";
 import { useResumeAgentSession } from "@/hooks/useResumeAgentSession";
 import { useSchedulesViewStore } from "@/store/schedulesViewStore";
 import { usePanelStore } from "@/store/panelStore";
 import { schedulesClient } from "@/clients/schedulesClient";
 import { actionService } from "@/services/ActionService";
 import { revealRunTerminal } from "@/services/scheduledRunLanding";
-import { useFirstAgentOptions } from "@/components/Worktree/hooks/useFirstAgentOptions";
-import { worktreeDisplayName } from "@/utils/recipeScope";
 import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { Schedule, ScheduledRun } from "@shared/types/scheduledRuns";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
-import type { ScheduleRunNowOutcome, SchedulesSnapshot } from "@shared/types/ipc/schedules";
+import type { ScheduleRunNowOutcome } from "@shared/types/ipc/schedules";
 import {
   NEW_SCHEDULE_SELECTOR,
+  RUN_NOW_FAILURE_SELECTOR,
   ScheduleList,
   scheduleActionSelector,
 } from "@/components/Schedules/ScheduleList";
-import type { WorktreeChoice } from "@/components/Schedules/ScheduleEditor";
-import { ScheduleEditorDialog } from "@/components/Schedules/ScheduleEditorDialog";
 import { ScheduleOsJobStatus } from "@/components/Schedules/ScheduleOsJobStatus";
-import { ScheduleRuns } from "@/components/Schedules/ScheduleRuns";
+import { HISTORY_RUN_NOW_SELECTOR, ScheduleRuns } from "@/components/Schedules/ScheduleRuns";
 import { useProjectSchedules } from "@/components/Schedules/useProjectSchedules";
 import { useScheduleOsJob } from "@/components/Schedules/useScheduleOsJob";
 import { useLastRuns } from "@/components/Schedules/useLastRuns";
 import { useScheduleRuns } from "@/components/Schedules/useScheduleRuns";
 import { useScheduleLaunchOptions } from "@/components/Schedules/useScheduleLaunchOptions";
+import { useWorktreeChoices } from "@/components/Schedules/useWorktreeChoices";
 
 type Page = { kind: "list" } | { kind: "history"; id: string };
 
-/** An editor opening: a new schedule, or the saved schedule it was opened on. */
-interface EditorOpening {
-  schedule: Schedule | null;
-  open: boolean;
-  key: number;
-}
+/** Where focus goes once a page has rendered; `visible` rings it, for the keyboard. */
+type FocusTarget =
+  | { kind: "back"; visible: boolean }
+  | { kind: "row"; id: string; visible: boolean }
+  | { kind: "add" }
+  | { kind: "run-now"; id: string };
 
 /** A Run now failure the history couldn't record, so the page says it instead. */
 interface RunNowFailure {
@@ -55,7 +52,6 @@ interface RunNowFailure {
 }
 
 interface ProjectSchedulesTabProps {
-  projectId: string;
   isOpen: boolean;
   isActive: boolean;
   /** Closes Project settings, for a run's terminal to come forward behind it. */
@@ -111,24 +107,22 @@ function runNowWords(outcome: ScheduleRunNowOutcome, name: string): string {
 /**
  * Project settings → Schedules: the project's schedules listed the way the
  * Recipes tab lists recipes, each schedule's run history a page of its own,
- * and its editor opened over Project settings from its row.
+ * and its editor opened over Project settings from its row. The editor itself
+ * is hosted outside Settings (`ScheduleEditorHost`), so a draft outlives
+ * anything Settings does.
  */
-export function ProjectSchedulesTab({
-  projectId,
-  isOpen,
-  isActive,
-  onClose,
-}: ProjectSchedulesTabProps) {
+export function ProjectSchedulesTab({ isOpen, isActive, onClose }: ProjectSchedulesTabProps) {
   const request = useSchedulesViewStore((s) => s.request);
+  const editing = useSchedulesViewStore((s) => s.editor !== null);
+  const editorAnswer = useSchedulesViewStore((s) => s.editorAnswer);
   const markLanded = useSchedulesViewStore((s) => s.markLanded);
   const setShowing = useSchedulesViewStore((s) => s.setShowing);
+  const openEditor = useSchedulesViewStore((s) => s.openEditor);
   const [page, setPage] = useState<Page>({ kind: "list" });
-  const [editor, setEditor] = useState<EditorOpening | null>(null);
   // Mounted again after leaving project scope, the tab starts from the openings
   // it already landed on, so it never acts on one twice.
   const [seenSeq, setSeenSeq] = useState(() => useSchedulesViewStore.getState().landedSeq);
-  const [backFocus, setBackFocus] = useState<{ viaKeyboard: boolean } | null>(null);
-  const [rowFocus, setRowFocus] = useState<{ id: string; viaKeyboard: boolean } | null>(null);
+  const [focusTarget, setFocusTarget] = useState<FocusTarget | null>(null);
   const addButtonRef = useRef<HTMLButtonElement>(null);
   const backButtonRef = useRef<HTMLButtonElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -147,40 +141,44 @@ export function ProjectSchedulesTab({
 
   // Each opening lands where it asked to, even on the page already showing; one
   // arriving mid-edit waits for the editor to close, so it never drops an edit.
-  if (active && editor === null && request.seq > seenSeq) {
+  // A page it changes takes focus, since what had it may be gone.
+  if (active && !editing && request.seq > seenSeq) {
+    const next = pageFor(request.scheduleId);
     setSeenSeq(request.seq);
-    setPage(pageFor(request.scheduleId));
-    setRunNowFailure(null);
-    setRequestedRunIds(new Set());
+    go(next);
+    if (next.kind === "history") setFocusTarget({ kind: "back", visible: false });
+    else if (page.kind === "history") setFocusTarget({ kind: "add" });
   }
   useEffect(() => {
     markLanded(seenSeq);
   }, [seenSeq, markLanded]);
 
-  // A run notification leaves the tab alone while it's in front or an edit is open.
-  const showing = active || editor !== null;
+  // A run's notification leaves the tab alone while it's in front.
   useEffect(() => {
-    setShowing(showing);
-  }, [showing, setShowing]);
+    setShowing(active);
+  }, [active, setShowing]);
   useEffect(() => () => setShowing(false), [setShowing]);
 
-  const { state, retry, accept } = useProjectSchedules(showing);
-  const osJob = useScheduleOsJob(showing, state.snapshot?.revision ?? null);
+  const { state, retry, accept } = useProjectSchedules(active);
+  // The editor's save or delete answer, folded in so the list doesn't wait for the push.
+  useEffect(() => {
+    if (editorAnswer) accept(editorAnswer);
+  }, [editorAnswer, accept]);
+  const osJob = useScheduleOsJob(active, state.snapshot?.revision ?? null);
   const { lastRuns, retryLastRuns } = useLastRuns(
-    showing ? (state.snapshot?.projectId ?? null) : null
+    active ? (state.snapshot?.projectId ?? null) : null
   );
   const { runsState, retryRuns } = useScheduleRuns(
-    showing && page.kind === "history" ? (state.snapshot?.projectId ?? null) : null,
+    active && page.kind === "history" ? (state.snapshot?.projectId ?? null) : null,
     page.kind === "history" ? page.id : null
   );
   // Re-read on a schedule change and on fresh run history too, so a run that just
   // landed is never timed against an older clock reading.
   const now = useWallClock(
-    `${showing}:${state.snapshot?.revision ?? -1}:${lastRuns.version}:${runsState.version}`,
-    showing ? untilNextMinute : never
+    `${active}:${state.snapshot?.revision ?? -1}:${lastRuns.version}:${runsState.version}`,
+    active ? untilNextMinute : never
   );
-  const { worktrees } = useWorktrees();
-  const agents = useFirstAgentOptions();
+  const worktrees = useWorktreeChoices();
   const [pendingEnabled, setPendingEnabled] = useState<ReadonlySet<string>>(() => new Set());
   const [enabledError, setEnabledError] = useState<string | null>(null);
 
@@ -199,7 +197,6 @@ export function ProjectSchedulesTab({
     )
   );
   const liveTerminalIds = useMemo(() => new Set(liveTerminalIdList), [liveTerminalIdList]);
-  const worktreeIds = useMemo(() => new Set(worktrees.map((worktree) => worktree.id)), [worktrees]);
   const { preset: shownPreset, stopsAtPrompts: shownSettingsRead } = useScheduleLaunchOptions(
     shown?.launch.agentId ?? "",
     shown?.launch.presetId ?? null
@@ -209,57 +206,42 @@ export function ProjectSchedulesTab({
     shown?.launch.presetId != null && shownSettingsRead !== null && shownPreset === undefined;
   const resumeSession = useResumeAgentSession();
 
-  const worktreeChoices = useMemo<WorktreeChoice[]>(() => {
-    const main = worktrees.find((worktree) => worktree.isMainWorktree);
-    const others = worktrees.filter((worktree) => !worktree.isMainWorktree);
-    const mainBranch = main?.branch ? ` · ${main.branch}` : "";
-    return [
-      { id: null, label: `Main checkout${mainBranch}` },
-      ...others.map((worktree) => ({
-        id: worktree.id,
-        label: worktreeDisplayName(worktree) ?? worktree.path,
-      })),
-    ];
-  }, [worktrees]);
-  const worktreeLabels = useMemo(
-    () =>
-      new Map(
-        worktreeChoices.flatMap((choice) => (choice.id ? [[choice.id, choice.label] as const] : []))
-      ),
-    [worktreeChoices]
-  );
-
-  // The history's way back takes focus when the page opens, ringed only when the
-  // keyboard brought it here; the list's way in takes it back on return.
   useEffect(() => {
-    if (backFocus === null) return;
+    if (focusTarget === null) return;
     const frame = requestAnimationFrame(() => {
-      backButtonRef.current?.focus({ focusVisible: backFocus.viaKeyboard });
-      setBackFocus(null);
+      const root = containerRef.current;
+      let target: HTMLElement | null = null;
+      let visible = false;
+      if (focusTarget.kind === "back") {
+        target = backButtonRef.current;
+        visible = focusTarget.visible;
+      } else if (focusTarget.kind === "row") {
+        target =
+          root?.querySelector<HTMLElement>(scheduleActionSelector(focusTarget.id, "history")) ??
+          null;
+        visible = focusTarget.visible;
+      } else if (focusTarget.kind === "run-now") {
+        target =
+          root?.querySelector<HTMLElement>(scheduleActionSelector(focusTarget.id, "run")) ??
+          root?.querySelector<HTMLElement>(HISTORY_RUN_NOW_SELECTOR) ??
+          null;
+        visible = true;
+      }
+      target ??= root?.querySelector<HTMLElement>(NEW_SCHEDULE_SELECTOR) ?? null;
+      target?.focus({ focusVisible: visible });
+      setFocusTarget(null);
     });
     return () => cancelAnimationFrame(frame);
-  }, [backFocus]);
-  useEffect(() => {
-    if (rowFocus === null) return;
-    const frame = requestAnimationFrame(() => {
-      const target =
-        containerRef.current?.querySelector<HTMLElement>(
-          scheduleActionSelector(rowFocus.id, "history")
-        ) ?? containerRef.current?.querySelector<HTMLElement>(NEW_SCHEDULE_SELECTOR);
-      target?.focus({ focusVisible: rowFocus.viaKeyboard });
-      setRowFocus(null);
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [rowFocus]);
+  }, [focusTarget]);
 
   const openHistory = (schedule: Schedule, viaKeyboard: boolean) => {
     go({ kind: "history", id: schedule.id });
-    setBackFocus({ viaKeyboard });
+    setFocusTarget({ kind: "back", visible: viaKeyboard });
   };
   const backToList = (viaKeyboard: boolean) => {
     const from = page.kind === "history" ? page.id : null;
     go({ kind: "list" });
-    if (from) setRowFocus({ id: from, viaKeyboard });
+    setFocusTarget(from ? { kind: "row", id: from, visible: viaKeyboard } : { kind: "add" });
   };
 
   const setEnabled = async (schedule: Schedule, enabled: boolean) => {
@@ -285,11 +267,13 @@ export function ProjectSchedulesTab({
   // Through the action, so the overlap policy's confirmation (#15980) asks first.
   // The history announces a run starting, skipping or failing, and shows a
   // recorded one as its newest row, as the list's Last run does; the page speaks
-  // only for a failure the history couldn't record. Backing out runs nothing.
+  // only for a failure the history couldn't record. Backing out runs nothing. A
+  // failure stays up while its Retry is pending, so the focused Retry isn't pulled
+  // out from under the keyboard; once a retry gets through, focus goes to Run now.
   const runNow = async (schedule: Schedule) => {
     if (pendingRunNow.has(schedule.id)) return;
+    const retrying = document.activeElement?.closest(RUN_NOW_FAILURE_SELECTOR) != null;
     setPendingRunNow((prev) => new Set(prev).add(schedule.id));
-    setRunNowFailure(null);
     setRunNowStatus("");
     const fail = (message: string) =>
       setRunNowFailure({ scheduleId: schedule.id, name: schedule.name, message });
@@ -309,8 +293,13 @@ export function ProjectSchedulesTab({
           ? outcome.runId
           : null;
       if (runId !== null) setRequestedRunIds((prev) => new Set(prev).add(runId));
-      if (outcome.status === "failed" && outcome.runId === null) fail(outcome.message);
-      else setRunNowStatus(runNowWords(outcome, schedule.name));
+      if (outcome.status === "failed" && outcome.runId === null) {
+        fail(outcome.message);
+        return;
+      }
+      setRunNowFailure((prev) => (prev?.scheduleId === schedule.id ? null : prev));
+      setRunNowStatus(runNowWords(outcome, schedule.name));
+      if (retrying) setFocusTarget({ kind: "run-now", id: schedule.id });
     } catch (error) {
       logError("Failed to run a schedule now", error);
       fail(formatErrorMessage(error, "Try again."));
@@ -343,57 +332,15 @@ export function ProjectSchedulesTab({
     closeThen(() => void resumeSession(record));
   };
 
-  // ── Editor ──
-  const editorKeyRef = useRef(0);
-  // Where focus goes once the editor closes, when its opener is no longer the right place.
-  const editorFocusRef = useRef<(() => HTMLElement | null) | null>(null);
-  const openEditor = (schedule: Schedule | null) => {
-    editorFocusRef.current = null;
-    editorKeyRef.current += 1;
-    setEditor({ schedule, open: true, key: editorKeyRef.current });
-  };
-  const closeEditor = () => setEditor((prev) => prev && { ...prev, open: false });
-  const rowControl = (id: string, action: "edit" | "delete") => () =>
-    containerRef.current?.querySelector<HTMLElement>(scheduleActionSelector(id, action)) ??
-    addButtonRef.current;
-
-  const handleSaved = (snapshot: SchedulesSnapshot, scheduleId: string) => {
-    accept(snapshot);
-    // A new schedule's row is where the user goes next; an edit returns to its opener.
-    if (editor?.schedule === null) editorFocusRef.current = rowControl(scheduleId, "edit");
-    closeEditor();
-  };
-
-  /** The row that slides into a deleted one's place, or the one above it. */
-  const successorOf = (deletedId: string): string | null => {
-    const index = schedules.findIndex((s) => s.id === deletedId);
-    if (index === -1) return null;
-    return schedules[index + 1]?.id ?? schedules[index - 1]?.id ?? null;
-  };
-
-  const handleEditorDeleted = (snapshot: SchedulesSnapshot, deletedId: string) => {
-    const successor = successorOf(deletedId);
-    accept(snapshot);
-    if (page.kind === "history" && page.id === deletedId) go({ kind: "list" });
-    editorFocusRef.current = successor
-      ? rowControl(successor, "delete")
-      : () => addButtonRef.current;
-    closeEditor();
-  };
-
-  const openAgentSettings = () => {
-    window.dispatchEvent(
-      new CustomEvent("daintree:open-settings-tab", { detail: { tab: "agents" } })
-    );
-  };
-
   // ── Delete from a row ──
   const [toDelete, setToDelete] = useState<Schedule | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // The row that slides into the deleted one's place, or the one above it.
   const deleteSuccessorRef = useRef<string | null>(null);
   const requestDelete = (schedule: Schedule) => {
-    deleteSuccessorRef.current = successorOf(schedule.id);
+    const index = schedules.findIndex((s) => s.id === schedule.id);
+    deleteSuccessorRef.current = schedules[index + 1]?.id ?? schedules[index - 1]?.id ?? null;
     setDeleteError(null);
     setToDelete(schedule);
   };
@@ -414,7 +361,10 @@ export function ProjectSchedulesTab({
   };
   const deleteFocusSuccessor = (): HTMLElement | null => {
     const id = deleteSuccessorRef.current;
-    return id ? rowControl(id, "delete")() : addButtonRef.current;
+    const row = id
+      ? containerRef.current?.querySelector<HTMLElement>(scheduleActionSelector(id, "delete"))
+      : null;
+    return row ?? addButtonRef.current;
   };
 
   const historyRunNowError =
@@ -438,7 +388,7 @@ export function ProjectSchedulesTab({
           <ScheduleList
             state={state}
             now={now}
-            worktreeLabels={worktreeLabels}
+            worktreeLabels={worktrees.labels}
             pendingEnabled={pendingEnabled}
             enabledError={enabledError}
             pendingRunNow={pendingRunNow}
@@ -484,14 +434,14 @@ export function ProjectSchedulesTab({
                 worktreeLabel={
                   shown.launch.worktreeId === null
                     ? null
-                    : (worktreeLabels.get(shown.launch.worktreeId) ?? "Missing worktree")
+                    : (worktrees.labels.get(shown.launch.worktreeId) ?? "Missing worktree")
                 }
                 presetName={shown.launch.presetId === null ? null : (shownPreset?.name ?? null)}
                 presetMissing={presetMissing}
                 runsState={runsState}
                 onRetryRuns={retryRuns}
                 liveTerminalIds={liveTerminalIds}
-                worktreeIds={worktreeIds}
+                worktreeIds={worktrees.ids}
                 runNowError={historyRunNowError}
                 runNowPending={pendingRunNow.has(shown.id)}
                 requestedRunIds={requestedRunIds}
@@ -525,24 +475,6 @@ export function ProjectSchedulesTab({
             </Callout>
           )}
         </div>
-      )}
-
-      {editor && (
-        <ScheduleEditorDialog
-          isOpen={editor.open}
-          schedule={editor.schedule}
-          openingKey={editor.key}
-          defaultAgentId={editor.schedule?.launch.agentId ?? agents[0]?.id ?? ""}
-          worktrees={worktreeChoices}
-          now={now}
-          osJobContext={osJob.status?.context ?? null}
-          restoreFocusTo={() => editorFocusRef.current?.() ?? null}
-          onSaved={handleSaved}
-          onDeleted={handleEditorDeleted}
-          onClose={closeEditor}
-          onCloseComplete={() => setEditor(null)}
-          onOpenAgentSettings={openAgentSettings}
-        />
       )}
 
       <ConfirmDialog

@@ -41,7 +41,8 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 import { ProjectSchedulesTab } from "../ProjectSchedulesTab";
-import { useSchedulesViewStore } from "@/store/schedulesViewStore";
+import { ScheduleEditorHost } from "@/components/Schedules/ScheduleEditorHost";
+import { isSchedulesViewHeld, useSchedulesViewStore } from "@/store/schedulesViewStore";
 
 const NOW = Date.UTC(2027, 0, 4, 8);
 
@@ -66,8 +67,26 @@ function snapshot(schedules: Schedule[], revision = 1): SchedulesSnapshot {
 const NIGHTLY = schedule("s1", "Nightly audit");
 const WEEKLY = schedule("s2", "Weekly triage");
 
-function renderTab(props: Partial<React.ComponentProps<typeof ProjectSchedulesTab>> = {}) {
-  return render(<ProjectSchedulesTab projectId="p1" isOpen isActive {...props} />);
+interface HarnessProps {
+  isActive?: boolean;
+  /** False once Settings leaves project scope (or closes), which unmounts the tab. */
+  mounted?: boolean;
+  onClose?: React.ComponentProps<typeof ProjectSchedulesTab>["onClose"];
+}
+
+/** The tab where Project settings mounts it, and the editor where the project's dialogs host it. */
+function Harness({ isActive = true, mounted = true, onClose }: HarnessProps) {
+  return (
+    <>
+      {mounted && <ProjectSchedulesTab isOpen isActive={isActive} onClose={onClose} />}
+      <ScheduleEditorHost />
+    </>
+  );
+}
+
+function renderTab(props: HarnessProps = {}) {
+  const view = render(<Harness {...props} />);
+  return { ...view, update: (next: HarnessProps) => view.rerender(<Harness {...next} />) };
 }
 
 const editor = () => screen.queryByTestId("schedule-editor-dialog");
@@ -77,6 +96,8 @@ beforeEach(() => {
     request: { scheduleId: null, seq: 0 },
     landedSeq: 0,
     showing: false,
+    editor: null,
+    editorAnswer: null,
   });
   client.list.mockResolvedValue(snapshot([NIGHTLY, WEEKLY]));
   client.remove.mockReset();
@@ -148,31 +169,52 @@ describe("ProjectSchedulesTab — the list", () => {
     renderTab();
     fireEvent.click(await screen.findByRole("button", { name: "Run Nightly audit now" }));
     expect(await screen.findByText("Nightly audit: The project isn't open")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    // The failure, and its focused Retry, stay up while the retry is pending.
+    let answer: (value: unknown) => void = () => {};
+    dispatch.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    const retry = screen.getByRole("button", { name: "Retry" });
+    retry.focus();
+    fireEvent.click(retry);
     await waitFor(() => expect(dispatch).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("Nightly audit: The project isn't open")).toBeTruthy();
+    expect(document.activeElement).toBe(retry);
+
+    // Once it gets through, the failure goes and focus moves to the row's Run now.
+    await act(async () =>
+      answer({ ok: true, result: { status: "started", runId: "r2", terminalId: "t2" } })
+    );
+    await waitFor(() =>
+      expect(screen.queryByText("Nightly audit: The project isn't open")).toBeNull()
+    );
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "Run Nightly audit now" })
+      )
+    );
   });
 });
 
 describe("ProjectSchedulesTab — landing on a request", () => {
   it("opens the schedule a request names on its history, once", async () => {
     useSchedulesViewStore.getState().open("s2");
-    const { unmount } = renderTab();
+    const { update } = renderTab();
     expect(await screen.findByRole("button", { name: "All schedules" })).toBeTruthy();
-    expect(await screen.findByText("Weekly triage")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Weekly triage" })).toBeTruthy();
     expect(useSchedulesViewStore.getState().landedSeq).toBe(1);
 
     // Leaving project scope unmounts the tab; coming back doesn't land again.
-    unmount();
-    renderTab();
+    update({ mounted: false });
+    update({ mounted: true });
     expect(await screen.findByRole("button", { name: "Add schedule" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "All schedules" })).toBeNull();
   });
 
   it("lands only once it is in front", async () => {
-    const { rerender } = renderTab({ isActive: false });
+    const { update } = renderTab({ isActive: false });
     act(() => useSchedulesViewStore.getState().open("s1"));
     expect(screen.queryByRole("button", { name: "All schedules" })).toBeNull();
-    rerender(<ProjectSchedulesTab projectId="p1" isOpen isActive />);
+    update({ isActive: true });
     expect(await screen.findByRole("button", { name: "All schedules" })).toBeTruthy();
   });
 
@@ -190,23 +232,45 @@ describe("ProjectSchedulesTab — landing on a request", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     fireEvent.click(await screen.findByRole("button", { name: "Discard changes" }));
     await waitFor(() => expect(editor()).toBeNull());
-    expect(await screen.findByRole("button", { name: "All schedules" })).toBeTruthy();
+    const back = await screen.findByRole("button", { name: "All schedules" });
+    expect(screen.getByRole("heading", { name: "Weekly triage" })).toBeTruthy();
     expect(useSchedulesViewStore.getState().landedSeq).toBe(1);
+    // The row the editor handed focus back to is gone, so the new page takes it.
+    await waitFor(() => expect(document.activeElement).toBe(back));
   });
 
   it("tells a run's notification it is in front while it shows or an edit is open", async () => {
-    const { rerender, unmount } = renderTab();
+    const { update } = renderTab();
     await screen.findByText("Nightly audit");
-    expect(useSchedulesViewStore.getState().showing).toBe(true);
-    rerender(<ProjectSchedulesTab projectId="p1" isOpen isActive={false} />);
+    expect(isSchedulesViewHeld()).toBe(true);
+    update({ isActive: false });
+    expect(isSchedulesViewHeld()).toBe(false);
+
+    update({ isActive: true });
+    fireEvent.click(await screen.findByRole("button", { name: "Edit schedule Nightly audit" }));
+    await screen.findByTestId("schedule-editor-dialog");
+    update({ mounted: false });
     expect(useSchedulesViewStore.getState().showing).toBe(false);
-    rerender(<ProjectSchedulesTab projectId="p1" isOpen isActive />);
-    unmount();
-    expect(useSchedulesViewStore.getState().showing).toBe(false);
+    expect(isSchedulesViewHeld()).toBe(true);
   });
 });
 
 describe("ProjectSchedulesTab — the editor", () => {
+  it("keeps a draft when Settings unmounts the tab beneath it (Cmd+, to global scope)", async () => {
+    const { update } = renderTab();
+    fireEvent.click(await screen.findByRole("button", { name: "Edit schedule Nightly audit" }));
+    fireEvent.change(await screen.findByDisplayValue("Nightly audit"), {
+      target: { value: "Renamed" },
+    });
+    update({ mounted: false });
+    expect(screen.queryByTestId("project-schedules-tab")).toBeNull();
+    expect(editor()).toBeTruthy();
+    expect(screen.getByDisplayValue("Renamed")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByText("Discard changes to 'Nightly audit'?")).toBeTruthy();
+  });
+
   it("asks before discarding unsaved edits, and keeps them on Keep editing", async () => {
     renderTab();
     fireEvent.click(await screen.findByRole("button", { name: "Edit schedule Nightly audit" }));
