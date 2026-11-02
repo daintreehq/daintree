@@ -26,12 +26,10 @@ export interface PluginViewHostProps extends BasePanelProps {
   /** Version `extensionState` was persisted at (#12280). */
   extensionStateVersion?: number;
   tabs?: TabInfo[];
-  groupId?: string;
   onTabClick?: (tabId: string) => void;
   onTabClose?: (tabId: string) => void;
   onTabRename?: (tabId: string, newTitle: string) => void;
   onAddTab?: () => void;
-  onTabReorder?: (newOrder: string[]) => void;
 }
 
 /**
