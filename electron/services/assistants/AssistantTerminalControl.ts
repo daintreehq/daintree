@@ -534,20 +534,37 @@ export class AssistantTerminalControl {
         : {};
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     const pressed: string[] = [];
+    const stopPartway = (code: string, why: string): never => {
+      throw new AssistantTargetError(
+        code,
+        `${why} ${pressed.length} of ${keys.length} keys were sent (${pressed.join(", ")}); the rest weren't. Read the screen before pressing more, and never resend the whole sequence.`
+      );
+    };
     for (const [index, key] of keys.entries()) {
       if (index > 0) {
         await sleep(SEND_KEYS_GAP_MS);
-        // A replaced run must not get the rest of the sequence.
-        this.requireGeneration(caller, target, request.generation);
         const now = await this.deps.getTerminal(target.terminalId).catch(() => null);
-        if (now === null || foreignInputMoved(now, inputOwner, foreignBefore)) {
-          throw new AssistantTargetError(
+        // Asked after the read, with no await before the write: a run
+        // replaced while the read was out must not get the rest.
+        try {
+          this.requireGeneration(caller, target, request.generation);
+        } catch (error) {
+          if (!(error instanceof AssistantTargetError)) throw error;
+          stopPartway(
+            error.code,
+            `Assistant terminal '${target.terminalId}' isn't the run that generation named; it was restarted or replaced.`
+          );
+        }
+        if (now === null) {
+          stopPartway(
             ASSISTANT_TARGET_REFUSALS.busy,
-            `${
-              now === null
-                ? `Assistant terminal '${target.terminalId}' can't be read right now.`
-                : `Someone typed in assistant terminal '${target.terminalId}' while the keys were going in.`
-            } ${pressed.length} of ${keys.length} keys were sent (${pressed.join(", ")}); the rest weren't. Read the screen before pressing more, and never resend the whole sequence.`
+            `Assistant terminal '${target.terminalId}' can't be read right now.`
+          );
+        }
+        if (foreignInputMoved(now!, inputOwner, foreignBefore)) {
+          stopPartway(
+            ASSISTANT_TARGET_REFUSALS.busy,
+            `Someone typed in assistant terminal '${target.terminalId}' while the keys were going in.`
           );
         }
       }

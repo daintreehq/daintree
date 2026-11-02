@@ -534,6 +534,34 @@ describe("AssistantTerminalControl (#13496)", () => {
       expect(error?.message).toContain("keys you sent");
       expect(error?.message).not.toContain("Someone");
       expect(mocks.submit).not.toHaveBeenCalled();
+
+      byTerminal("t-one")!.record.lastStateChange = ++clock;
+      await control.submit(LOCAL, control.require(LOCAL, "t-one"), {
+        command: "go",
+        generation: 3,
+        handback: false,
+      });
+      expect(mocks.submit).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops the rest when the run is replaced while it is read between keys", async () => {
+      const lane = addLane(1, "t-one", { record: atPrompt({ waitingReason: "approval" }) });
+      let reads = 0;
+      deps.getTerminal = async () => {
+        reads += 1;
+        // The read between the keys comes back after a restart.
+        if (reads > 1) lane.generation = 4;
+        return lane.record;
+      };
+
+      const error = await keys(LOCAL, ["Down", "Enter"]).then(
+        () => null,
+        (caught: unknown) => caught as AssistantTargetError
+      );
+
+      expect(error?.code).toBe("ASSISTANT_RESTARTED");
+      expect(error?.message).toContain("1 of 2 keys were sent (Down)");
+      expect(mocks.write).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -880,5 +908,46 @@ describe("liveAssistantTerminalControl (#15521)", () => {
       undefined,
       "Hello"
     );
+  });
+
+  it("files its keys and its double Escape under the caller (#16094)", async () => {
+    const pty = {
+      getTerminalAsync: async () => atPrompt({ agentState: "working" }),
+      getLiveGeneration: () => 3,
+      getSerializedStateAsync: async () => null,
+      write: vi.fn(),
+      batchDoubleEscape: vi.fn(),
+    };
+    const control = liveAssistantTerminalControl({
+      help: {
+        listRunningLanes: () => [{ projectId: PROJECT, slot: 1, agentId: "codex", attached: true }],
+        getRunningLaneSession: () => ({
+          sessionId: "session-1",
+          terminalId: "t-one",
+          projectViewWebContentsId: 7,
+        }),
+        revokeSession: async () => {},
+      },
+      pty: () => pty as never,
+      extractReply: () => ({ reply: null, reachedHandback: false }),
+    });
+    const target = control.require(LOCAL, "t-one");
+
+    vi.useFakeTimers();
+    try {
+      const pressed = control.sendKeys(LOCAL, target, {
+        keys: ["Escape"],
+        choose: undefined,
+        generation: 3,
+      });
+      await vi.runAllTimersAsync();
+      await pressed;
+    } finally {
+      vi.useRealTimers();
+    }
+    await control.interrupt(LOCAL, target);
+
+    expect(pty.write).toHaveBeenCalledWith("t-one", "\x1b", undefined, LOCAL_OWNER);
+    expect(pty.batchDoubleEscape).toHaveBeenCalledWith(["t-one"], LOCAL_OWNER);
   });
 });

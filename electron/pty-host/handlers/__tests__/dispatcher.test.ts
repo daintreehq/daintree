@@ -135,10 +135,16 @@ describe("createPtyHostMessageDispatcher", () => {
     const dispatch = createPtyHostMessageDispatcher(ctx);
 
     dispatch({ type: "write", id: "term-1", data: "\x1b", inputOwner: "principal-a" });
-    dispatch({ type: "write", id: "term-1", data: "\x1b", inputOwner: "" });
+    dispatch({ type: "write", id: "term-1", data: "\x1b", inputOwner: "principal-b" });
+    for (const malformed of ["", 7, { owner: "principal-a" }]) {
+      dispatch({ type: "write", id: "term-1", data: "\x1b", inputOwner: malformed } as never);
+    }
 
     expect(vi.mocked(ctx.ptyManager.write).mock.calls).toEqual([
       ["term-1", "\x1b", undefined, "principal-a"],
+      ["term-1", "\x1b", undefined, "principal-b"],
+      ["term-1", "\x1b", undefined, undefined],
+      ["term-1", "\x1b", undefined, undefined],
       ["term-1", "\x1b", undefined, undefined],
     ]);
   });

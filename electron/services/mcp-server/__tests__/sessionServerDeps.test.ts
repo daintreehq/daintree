@@ -267,6 +267,7 @@ describe("createSessionServerDeps", () => {
         projectId: "p",
         terminalId: "t",
         generation: 1,
+        inputOwner: "principal-a",
         authorize: () => {},
       };
 

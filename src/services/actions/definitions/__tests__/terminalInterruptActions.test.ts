@@ -228,6 +228,29 @@ describe("terminal.interruptOwned (#12338)", () => {
     ]);
     expect(owned.mcpOutputSchema).toBe(true);
     expect(delegate.mcpOutputSchema).toBe(true);
+
+    const receipt = {
+      terminalId: "a",
+      agentId: "claude",
+      agentStateAtDispatch: "working",
+      status: "requested",
+    };
+    for (const id of ["terminal.interruptOwned", "terminal.sendKeysOwned"]) {
+      const schema = definition(id).resultSchema as z.ZodType;
+      const base =
+        id === "terminal.sendKeysOwned" ? { terminalId: "a", keys: ["Escape"] } : receipt;
+      expect(schema.safeParse(base).success, id).toBe(true);
+      expect(schema.safeParse({ ...base, inputSinceSettle: "own-keys" }).success, id).toBe(true);
+      expect(schema.safeParse({ ...base, inputSinceSettle: "someone" }).success, id).toBe(false);
+    }
+    // The closed schema a client validates against carries it as optional.
+    const service = new ActionService();
+    for (const [, factory] of buildRegistry()) service.register(factory());
+    const advertised = service.list().find((e) => e.id === "terminal.interruptOwned")
+      ?.outputSchema as
+      { properties?: Record<string, { const?: unknown }>; required?: string[] } | undefined;
+    expect(advertised?.properties?.inputSinceSettle?.const).toBe("own-keys");
+    expect(advertised?.required).not.toContain("inputSinceSettle");
   });
 
   // A nullable or non-object root silently disables `mcpOutputSchema`, and no

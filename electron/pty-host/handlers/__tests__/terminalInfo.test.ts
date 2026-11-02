@@ -204,6 +204,23 @@ describe("mapTerminalInfo", () => {
     expect(result.lastOutputTime).toBe(222);
   });
 
+  it("forwards whose typed input it holds, so an assistant's next call can tell its own keys (#16094)", () => {
+    const ctx = createCtx();
+    const result = mapTerminalInfo(
+      makeTerminal({
+        lastTypedInputAt: 30,
+        lastOwnedInput: { owner: "principal-a", at: 30 },
+        lastForeignInputAt: 20,
+      }),
+      ctx
+    );
+    expect(result).toMatchObject({
+      lastTypedInputAt: 30,
+      lastOwnedInput: { owner: "principal-a", at: 30 },
+      lastForeignInputAt: 20,
+    });
+  });
+
   it("forwards worktreeId so fleet rows keep their worktree attribution (#12078)", () => {
     // FleetSnapshotService copies worktreeId onto every FleetRunRow and the
     // palette groups on it; a dropped field files every agent under the single
