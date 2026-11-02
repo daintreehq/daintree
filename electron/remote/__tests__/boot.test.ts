@@ -474,6 +474,24 @@ vi.mock("../deviceAnswer/hostInstall.js", () => ({
     return deviceAnswer.uninstallHost;
   }),
 }));
+const decisionsHosts = vi.hoisted(() => ({
+  uninstallClient: vi.fn(),
+  uninstallHost: vi.fn(),
+  installDecisionsHostsClient: vi.fn(),
+  installDecisionsHost: vi.fn(),
+}));
+vi.mock("../decisions/clientInstall.js", () => ({
+  installDecisionsHostsClient: vi.fn((deps: unknown) => {
+    decisionsHosts.installDecisionsHostsClient(deps);
+    return decisionsHosts.uninstallClient;
+  }),
+}));
+vi.mock("../decisions/hostInstall.js", () => ({
+  installDecisionsHost: vi.fn((server: unknown) => {
+    decisionsHosts.installDecisionsHost(server);
+    return decisionsHosts.uninstallHost;
+  }),
+}));
 const voicePane = vi.hoisted(() => ({
   uninstallClient: vi.fn(),
   uninstallHost: vi.fn(),
@@ -1240,6 +1258,25 @@ describe("startRemoteHosts", () => {
 
     await stopRemoteHosts();
     expect(deviceAnswer.uninstallClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers its hosts to Decisions enrollment from start, and lets a Shell enroll this host only while listening", async () => {
+    await startRemoteHosts({ hostMode: false });
+    expect(decisionsHosts.installDecisionsHostsClient).toHaveBeenCalledWith({
+      registry: m.client.registry,
+      manager: m.client.manager,
+      sessionFor: m.client.sessionFor,
+    });
+    expect(decisionsHosts.installDecisionsHost).not.toHaveBeenCalled();
+
+    const hostMode = getRemoteService("hostMode")!;
+    await hostMode.startListening();
+    expect(decisionsHosts.installDecisionsHost).toHaveBeenCalledWith(m.server);
+    await hostMode.stopListening();
+    expect(decisionsHosts.uninstallHost).toHaveBeenCalledTimes(1);
+
+    await stopRemoteHosts();
+    expect(decisionsHosts.uninstallClient).toHaveBeenCalledTimes(1);
   });
 
   it("reads a host's pane for dictation from start, and answers a Shell's only while listening", async () => {
