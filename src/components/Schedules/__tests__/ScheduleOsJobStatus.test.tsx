@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createSchedule } from "@shared/utils/scheduledRuns";
 import type { ProjectScheduleSwitches, Schedule } from "@shared/types/scheduledRuns";
 import type { ScheduleOsJobStatus as Status } from "@shared/types/ipc/schedules";
@@ -38,38 +38,76 @@ const STARTS: ProjectScheduleSwitches = {
   schedulesOnSince: 1,
 };
 
-function show(
-  status: Status | null,
-  schedules: Schedule[],
-  options: {
-    error?: string | null;
-    repairing?: boolean;
-    switches?: ProjectScheduleSwitches | null;
-  } = {}
-) {
-  const onRepair = vi.fn();
-  render(
+interface ShowOptions {
+  error?: string | null;
+  repairing?: boolean;
+  /** The switches the status was read against; null before any answer. */
+  switches?: ProjectScheduleSwitches | null;
+  /** The switches now, when they've changed since that read. */
+  switchesNow?: ProjectScheduleSwitches | null;
+  checking?: boolean;
+}
+
+function element(status: Status | null, schedules: Schedule[], options: ShowOptions) {
+  const switches = options.switches === undefined ? STARTS : options.switches;
+  return (
     <ScheduleOsJobStatus
       status={status}
-      schedules={schedules}
-      switches={options.switches === undefined ? STARTS : options.switches}
+      basis={switches ? { switches, schedules } : null}
+      switches={options.switchesNow === undefined ? switches : options.switchesNow}
+      checking={options.checking ?? false}
       repairing={options.repairing ?? false}
       error={options.error ?? null}
       onRepair={onRepair}
     />
   );
-  return { onRepair, text: () => document.body.textContent ?? "" };
 }
 
-afterEach(cleanup);
+const onRepair = vi.fn();
+
+function show(status: Status | null, schedules: Schedule[], options: ShowOptions = {}) {
+  onRepair.mockReset();
+  const view = render(element(status, schedules, options));
+  return {
+    onRepair,
+    text: () => document.body.textContent ?? "",
+    update: (next: ShowOptions) => view.rerender(element(status, schedules, next)),
+  };
+}
+
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 describe("ScheduleOsJobStatus (#15990)", () => {
-  it("says nothing while no switched-on schedule here asks for the job", () => {
-    show({ ...CURRENT, state: "stale" }, [
-      schedule("a", { runWhenClosed: false }),
-      schedule("b", { enabled: false }),
-    ]);
-    expect(screen.queryByTestId("schedule-os-job-status")).toBeNull();
+  it.each([
+    ["current for another project", CURRENT],
+    ["not installed", { ...CURRENT, state: "none" as const }],
+  ])(
+    "says no schedule here asks for the job while the switch is on and none has the option: %s (#16168)",
+    (_label, status) => {
+      const { text } = show(status, [
+        schedule("a", { runWhenClosed: false }),
+        schedule("b", { enabled: false }),
+      ]);
+      expect(text()).toContain(
+        "No schedule that's on here is set to run when Daintree isn't running"
+      );
+      expect(text()).not.toContain("Installed and loaded");
+      expect(screen.queryByRole("button", { name: "Repair" })).toBeNull();
+    }
+  );
+
+  it("offers to repair a stale job even while the project's switches leave it out (#16168)", () => {
+    // A job switching off couldn't remove still starts Daintree, for nothing.
+    const { text } = show(
+      { ...CURRENT, state: "stale", error: "Couldn't remove the macOS job" },
+      [schedule("a")],
+      { switches: { ...STARTS, startWhenClosed: false } }
+    );
+    expect(text()).toContain("Couldn't remove the macOS job");
+    expect(screen.getByRole("button", { name: "Repair" })).not.toBeNull();
   });
 
   it.each([
@@ -85,12 +123,13 @@ describe("ScheduleOsJobStatus (#15990)", () => {
     }
   );
 
-  it("counts the schedules a current job starts", () => {
+  it("says a current job is installed and loaded, counting the schedules it starts", () => {
     const { text } = show(CURRENT, [
       schedule("a"),
       schedule("b"),
       schedule("c", { enabled: false }),
     ]);
+    expect(text()).toContain("Installed and loaded");
     expect(text()).toContain("for 2 schedules here");
     expect(screen.queryByRole("button", { name: "Repair" })).toBeNull();
   });
@@ -158,14 +197,24 @@ describe("ScheduleOsJobStatus (#15990)", () => {
           { scheduleId: "b", reason: "Runs on Asia/Tokyo time" },
           { scheduleId: "c", reason: "Needs 600 start times" },
           { scheduleId: "gone", reason: "Not in this list" },
+          { scheduleId: "paused", reason: "Switched off since" },
+          { scheduleId: "plain", reason: "Not opted in since" },
         ],
       },
-      [schedule("a"), schedule("b"), schedule("c")]
+      [
+        schedule("a"),
+        schedule("b"),
+        schedule("c"),
+        schedule("paused", { enabled: false }),
+        schedule("plain", { runWhenClosed: false }),
+      ]
     );
     expect(text()).toContain("2 schedules can't start Daintree when it isn't running");
     expect(text()).toContain("Schedule b: Runs on Asia/Tokyo time");
     expect(text()).toContain("Schedule c: Needs 600 start times");
     expect(text()).not.toContain("Not in this list");
+    expect(text()).not.toContain("Switched off since");
+    expect(text()).not.toContain("Not opted in since");
     expect(text()).toContain("for 1 schedule here");
   });
 
@@ -175,6 +224,68 @@ describe("ScheduleOsJobStatus (#15990)", () => {
     ]);
     expect(text()).toContain("Temporary copy");
     expect(screen.queryByRole("button", { name: "Repair" })).toBeNull();
+  });
+});
+
+describe("ScheduleOsJobStatus after a change (#16168)", () => {
+  it("keeps the answer for the switches it was read against until the next read answers", () => {
+    // Switched off: the job is still installed until main has removed it.
+    const { text } = show(CURRENT, [schedule("a")], {
+      switchesNow: { ...STARTS, startWhenClosed: false },
+      checking: true,
+    });
+    expect(text()).toContain("Installed and loaded");
+  });
+
+  it("says nothing of a job a switch just asked for until it has been read", () => {
+    show({ ...CURRENT, state: "none" }, [schedule("a")], {
+      switches: { ...STARTS, startWhenClosed: false },
+      switchesNow: STARTS,
+      checking: true,
+    });
+    expect(screen.queryByTestId("schedule-os-job-status")).toBeNull();
+  });
+
+  it("says it's checking once a read outlasts the gate, while the project asks for the job", () => {
+    vi.useFakeTimers();
+    const view = show(CURRENT, [schedule("a")], {
+      switches: { ...STARTS, startWhenClosed: false },
+      switchesNow: STARTS,
+      checking: true,
+    });
+    expect(view.text()).not.toContain("Checking");
+    act(() => {
+      vi.advanceTimersByTime(250);
+    });
+    expect(view.text()).toContain("Checking the job that starts Daintree");
+
+    view.update({ checking: false });
+    expect(view.text()).not.toContain("Checking");
+    expect(view.text()).toContain("Installed and loaded");
+  });
+
+  it("says a read failed with Repair after switching off, since the removal wasn't confirmed", () => {
+    const { text } = show(CURRENT, [schedule("a")], {
+      switches: { ...STARTS, startWhenClosed: false },
+      error: "Couldn't check the job",
+    });
+    expect(text()).toContain("Couldn't check the job");
+    expect(text()).not.toContain("Installed and loaded");
+    expect(screen.getByRole("button", { name: "Repair" })).not.toBeNull();
+  });
+
+  it("never says it's checking for a project that doesn't ask for the job", () => {
+    vi.useFakeTimers();
+    const off = { ...STARTS, schedulesOn: false };
+    const { text } = show(CURRENT, [schedule("a")], {
+      switches: off,
+      switchesNow: off,
+      checking: true,
+    });
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(text()).not.toContain("Checking");
   });
 });
 

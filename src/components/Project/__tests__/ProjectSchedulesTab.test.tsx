@@ -2,8 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createSchedule } from "@shared/utils/scheduledRuns";
-import type { Schedule } from "@shared/types/scheduledRuns";
-import type { SchedulesSnapshot } from "@shared/types/ipc/schedules";
+import type { ProjectScheduleSwitches, Schedule } from "@shared/types/scheduledRuns";
+import type { ScheduleOsJobStatus, SchedulesSnapshot } from "@shared/types/ipc/schedules";
 
 // No jest-dom in this repo — plain DOM reads only.
 
@@ -11,6 +11,10 @@ const client = vi.hoisted(() => ({
   list: vi.fn(),
   onChanged: vi.fn(() => () => {}),
   setEnabled: vi.fn(),
+  setSwitches: vi.fn(),
+  // Unanswered unless a test answers it: the real hook reads the job's status.
+  osJobStatus: vi.fn(() => new Promise(() => {})),
+  repairOsJob: vi.fn(),
   remove: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
@@ -30,9 +34,6 @@ vi.mock("@/components/Worktree/hooks/useFirstAgentOptions", () => ({
 }));
 vi.mock("@/components/Schedules/useScheduleLaunchOptions", () => ({
   useScheduleLaunchOptions: () => ({ presets: [], preset: undefined, stopsAtPrompts: false }),
-}));
-vi.mock("@/components/Schedules/useScheduleOsJob", () => ({
-  useScheduleOsJob: () => ({ status: null, repairing: false, error: null, repair: vi.fn() }),
 }));
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -60,8 +61,19 @@ function schedule(id: string, name: string): Schedule {
   );
 }
 
-function snapshot(schedules: Schedule[], revision = 1): SchedulesSnapshot {
-  return { projectId: "p1", revision, schedules } as SchedulesSnapshot;
+const SCHEDULES_ON: ProjectScheduleSwitches = {
+  schedulesOn: true,
+  startWhenClosed: false,
+  schedulesOnSince: 1,
+};
+const SCHEDULES_OFF: ProjectScheduleSwitches = { ...SCHEDULES_ON, schedulesOn: false };
+
+function snapshot(
+  schedules: Schedule[],
+  revision = 1,
+  switches: ProjectScheduleSwitches = SCHEDULES_ON
+): SchedulesSnapshot {
+  return { projectId: "p1", revision, switches, schedules };
 }
 
 const NIGHTLY = schedule("s1", "Nightly audit");
@@ -192,6 +204,157 @@ describe("ProjectSchedulesTab — the list", () => {
         screen.getByRole("button", { name: "Run Nightly audit now" })
       )
     );
+  });
+});
+
+describe("ProjectSchedulesTab — the project's switches (#16168)", () => {
+  const nextRuns = () => screen.queryAllByText(/^Next run/);
+  const STARTS: ProjectScheduleSwitches = { ...SCHEDULES_ON, startWhenClosed: true };
+  const OPTED_IN = createSchedule(
+    {
+      id: "s3",
+      projectId: "p1",
+      name: "Overnight build",
+      launch: { agentId: "claude", prompt: "Build it." },
+      cron: "0 2 * * *",
+      timeZone: "Europe/London",
+      policies: { runWhenClosed: true },
+    },
+    NOW - 1000
+  );
+  function jobStatus(state: ScheduleOsJobStatus["state"]): ScheduleOsJobStatus {
+    return {
+      context: { kind: "launch-agent", systemTimeZone: "Europe/London", unavailable: null },
+      unavailable: null,
+      state,
+      error: null,
+      excluded: [],
+    };
+  }
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((res) => (resolve = res));
+    return { promise, resolve };
+  }
+  const startSwitch = () =>
+    screen.getByRole("switch", { name: "Start Daintree for due schedules" });
+  const installed = () => screen.queryByText(/Installed and loaded/);
+
+  it("heads the list with the switches, listing every schedule while they're off", async () => {
+    client.list.mockResolvedValue(snapshot([NIGHTLY, WEEKLY], 1, SCHEDULES_OFF));
+    renderTab();
+    await screen.findByText("Nightly audit");
+
+    const schedulesOn = screen.getByRole("switch", { name: "Schedules on" });
+    expect(schedulesOn.getAttribute("aria-checked")).toBe("false");
+    const firstRow = screen.getByRole("switch", { name: "Enable Nightly audit" });
+    expect(
+      schedulesOn.compareDocumentPosition(firstRow) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(screen.getByText("Weekly triage")).toBeTruthy();
+    // No time is promised for a schedule the project holds.
+    expect(screen.getAllByText("Schedules off")).toHaveLength(2);
+    expect(nextRuns()).toHaveLength(0);
+  });
+
+  it("keeps a switched-off schedule Paused while the project's are off", async () => {
+    client.list.mockResolvedValue(
+      snapshot([NIGHTLY, { ...WEEKLY, enabled: false }], 1, SCHEDULES_OFF)
+    );
+    renderTab();
+    await screen.findByText("Weekly triage");
+    expect(screen.getAllByText("Schedules off")).toHaveLength(1);
+    expect(screen.getByText("Paused")).toBeTruthy();
+  });
+
+  it("shows the job once main has written it, and until main has removed it", async () => {
+    client.list.mockResolvedValue(snapshot([OPTED_IN], 1));
+    const firstRead = deferred<ScheduleOsJobStatus>();
+    const written = deferred<ScheduleOsJobStatus>();
+    const removed = deferred<ScheduleOsJobStatus>();
+    client.osJobStatus
+      .mockReturnValueOnce(firstRead.promise)
+      .mockReturnValueOnce(written.promise)
+      .mockReturnValueOnce(removed.promise);
+    renderTab();
+    await screen.findByText("Overnight build");
+    await act(async () => firstRead.resolve(jobStatus("none")));
+
+    client.setSwitches.mockResolvedValueOnce({
+      status: "saved",
+      snapshot: snapshot([OPTED_IN], 2, STARTS),
+    });
+    await act(async () => fireEvent.click(startSwitch()));
+    expect(startSwitch().getAttribute("aria-checked")).toBe("true");
+    expect(installed()).toBeNull();
+    await act(async () => written.resolve(jobStatus("current")));
+    expect(installed()).toBeTruthy();
+
+    client.setSwitches.mockResolvedValueOnce({
+      status: "saved",
+      snapshot: snapshot([OPTED_IN], 3, SCHEDULES_ON),
+    });
+    await act(async () => fireEvent.click(startSwitch()));
+    expect(startSwitch().getAttribute("aria-checked")).toBe("false");
+    expect(installed()).toBeTruthy();
+    await act(async () => removed.resolve(jobStatus("none")));
+    expect(installed()).toBeNull();
+  });
+
+  it("reads the switches afresh for each opening of the editor", async () => {
+    client.list.mockResolvedValue(snapshot([OPTED_IN], 1, STARTS));
+    renderTab();
+    await screen.findByText("Overnight build");
+    const option = () =>
+      screen.queryByRole("checkbox", { name: "Run when Daintree isn't running" });
+
+    act(() => useSchedulesViewStore.getState().openEditor(OPTED_IN));
+    await waitFor(() => expect(option()?.getAttribute("aria-checked")).toBe("true"));
+    act(() => {
+      useSchedulesViewStore.getState().closeEditor();
+      useSchedulesViewStore.getState().clearEditor();
+    });
+
+    // Turned off elsewhere while no editor was watching; this opening's read hasn't answered.
+    client.list.mockReturnValue(new Promise(() => {}));
+    act(() => useSchedulesViewStore.getState().openEditor(OPTED_IN));
+    await waitFor(() => expect(option()).not.toBeNull());
+    expect(option()?.getAttribute("aria-checked")).toBe("false");
+    act(() => {
+      useSchedulesViewStore.getState().closeEditor();
+      useSchedulesViewStore.getState().clearEditor();
+    });
+
+    // A read that fails keeps the old snapshot, which still never counts.
+    client.list.mockRejectedValue(new Error("main went away"));
+    act(() => useSchedulesViewStore.getState().openEditor(OPTED_IN));
+    await waitFor(() =>
+      expect(document.body.textContent).toContain(
+        "main went away, so this option keeps its saved setting"
+      )
+    );
+    expect(option()?.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("turns the project's schedules on, and their next runs come back with main's answer", async () => {
+    client.list.mockResolvedValue(snapshot([NIGHTLY], 1, SCHEDULES_OFF));
+    client.setSwitches.mockResolvedValue({ status: "saved", snapshot: snapshot([NIGHTLY], 2) });
+    renderTab();
+
+    fireEvent.click(await screen.findByRole("switch", { name: "Schedules on" }));
+
+    expect(client.setSwitches).toHaveBeenCalledWith({ schedulesOn: true });
+    await waitFor(() => expect(nextRuns()).toHaveLength(1));
+    expect(screen.queryByText("Schedules off")).toBeNull();
+  });
+
+  it("says a schedule's history waits on the project's switch", async () => {
+    client.list.mockResolvedValue(snapshot([NIGHTLY], 1, SCHEDULES_OFF));
+    renderTab();
+    fireEvent.click(await screen.findByRole("button", { name: "Run history of Nightly audit" }));
+
+    expect(await screen.findByText("Schedules off")).toBeTruthy();
+    expect(await screen.findByText(/Schedules are off for this project/)).toBeTruthy();
   });
 });
 

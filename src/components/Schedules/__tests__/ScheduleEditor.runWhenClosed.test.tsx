@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createSchedule } from "@shared/utils/scheduledRuns";
 import { machineTimeZone } from "@shared/utils/cron";
-import type { Schedule } from "@shared/types/scheduledRuns";
+import type { ProjectScheduleSwitches, Schedule } from "@shared/types/scheduledRuns";
 import type { ScheduleOsJobContext } from "@shared/utils/scheduleOsJob";
 
 // No jest-dom in this repo — plain DOM reads only.
@@ -71,23 +71,41 @@ function existing(
   );
 }
 
-function renderEditor(schedule: Schedule | null, osJobContext: ScheduleOsJobContext | null) {
+/** A project that lets Daintree start for its schedules (#16166). */
+const STARTS: ProjectScheduleSwitches = {
+  schedulesOn: true,
+  startWhenClosed: true,
+  schedulesOnSince: 1,
+};
+
+function renderEditor(
+  schedule: Schedule | null,
+  osJobContext: ScheduleOsJobContext | null,
+  projectSwitches: ProjectScheduleSwitches | null = STARTS
+) {
   const onSaved = vi.fn();
-  render(
+  const leaveStateRef = createRef<EditorLeaveState | null>();
+  const element = (switches: ProjectScheduleSwitches | null) => (
     <ScheduleEditor
       schedule={schedule}
       defaultAgentId="claude"
       worktrees={[{ id: null, label: "Main checkout" }]}
       now={NOW}
       osJobContext={osJobContext}
-      leaveStateRef={createRef<EditorLeaveState | null>()}
+      projectSwitches={switches}
+      leaveStateRef={leaveStateRef}
       onSaved={onSaved}
       onDeleted={vi.fn()}
       onCancel={vi.fn()}
       onOpenAgentSettings={vi.fn()}
     />
   );
-  return { onSaved };
+  const view = render(element(projectSwitches));
+  return {
+    onSaved,
+    leaveStateRef,
+    setSwitches: (next: ProjectScheduleSwitches | null) => view.rerender(element(next)),
+  };
 }
 
 function option(): HTMLElement | null {
@@ -289,6 +307,150 @@ describe("ScheduleEditor: Run when Daintree isn't running (#15990)", () => {
     });
     expect(option()?.getAttribute("aria-checked")).toBe("true");
     expect(optionRow().textContent).toMatch(/isn't available on this platform/);
+  });
+});
+
+describe("ScheduleEditor: Run when Daintree isn't running under the project's switches (#16168)", () => {
+  it.each([
+    [
+      "starting Daintree is off",
+      { ...STARTS, startWhenClosed: false },
+      "Turn on Start Daintree for due schedules for this project to use this",
+    ],
+    [
+      "schedules are off",
+      { ...STARTS, schedulesOn: false },
+      "Turn on Schedules on for this project to use this",
+    ],
+    [
+      "both are off",
+      { ...STARTS, schedulesOn: false, startWhenClosed: false },
+      "Turn on Schedules on and Start Daintree for due schedules for this project to use this",
+    ],
+  ])(
+    "never reads as on while %s, and says which switch it waits on",
+    (_label, switches, reason) => {
+      renderEditor(existing({ runWhenClosed: true }), LONDON, switches);
+
+      expect(option()?.getAttribute("aria-checked")).toBe("false");
+      expect(option()?.hasAttribute("disabled")).toBe(true);
+      expect(optionRow().textContent).toContain(reason);
+    }
+  );
+
+  it("reads as off until the project's switches have been read", () => {
+    renderEditor(existing({ runWhenClosed: true }), LONDON, null);
+
+    expect(option()?.getAttribute("aria-checked")).toBe("false");
+    expect(option()?.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("keeps the stored opt-in through a save while the project's switch is off", async () => {
+    const schedule = existing({ runWhenClosed: true });
+    clientMock.update.mockResolvedValue({
+      status: "saved",
+      schedule,
+      snapshot: { projectId: "p1", schedules: [], revision: 2 },
+    });
+    renderEditor(schedule, LONDON, { ...STARTS, startWhenClosed: false });
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Renamed" } });
+    await act(async () => fireEvent.click(button("Save changes")));
+
+    expect(clientMock.update).toHaveBeenCalledWith(
+      "s1",
+      schedule.updatedAt,
+      expect.objectContaining({ policies: expect.objectContaining({ runWhenClosed: true }) })
+    );
+  });
+
+  it("shows the stored opt-in again when the switch comes back on in another window, without an edit", () => {
+    const { setSwitches, leaveStateRef } = renderEditor(existing({ runWhenClosed: true }), LONDON, {
+      ...STARTS,
+      startWhenClosed: false,
+    });
+
+    setSwitches(STARTS);
+
+    expect(option()?.getAttribute("aria-checked")).toBe("true");
+    expect(option()?.hasAttribute("disabled")).toBe(false);
+    expect(leaveStateRef.current?.dirty).toBe(false);
+  });
+
+  it("drops a stored opt-in the job can't hold rather than keep it from saving, while it can't be turned off", async () => {
+    const schedule = existing({ runWhenClosed: true }, "Asia/Tokyo");
+    clientMock.update.mockResolvedValue({
+      status: "saved",
+      schedule,
+      snapshot: { projectId: "p1", schedules: [], revision: 2 },
+    });
+    renderEditor(schedule, LONDON, { ...STARTS, schedulesOn: false });
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Renamed" } });
+    await act(async () => fireEvent.click(button("Save changes")));
+
+    expect(clientMock.update).toHaveBeenCalledWith(
+      "s1",
+      schedule.updatedAt,
+      expect.objectContaining({ policies: expect.objectContaining({ runWhenClosed: false }) })
+    );
+  });
+});
+
+describe("ScheduleEditor: main's refusal under the project's switches (#16168)", () => {
+  it("says main refused a hidden opt-in, and saves it off on the next try", async () => {
+    const schedule = existing({ runWhenClosed: true });
+    clientMock.update
+      .mockResolvedValueOnce({
+        status: "invalid",
+        issues: [{ path: "policies.runWhenClosed", cronField: null, message: "Not on this Mac" }],
+      })
+      .mockResolvedValueOnce({
+        status: "saved",
+        schedule,
+        snapshot: { projectId: "p1", schedules: [], revision: 2 },
+      });
+    // No context from main, so nothing is refused before Save.
+    renderEditor(schedule, null, { ...STARTS, startWhenClosed: false });
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Renamed" } });
+    await act(async () => fireEvent.click(button("Save changes")));
+    expect(clientMock.update).toHaveBeenLastCalledWith(
+      "s1",
+      schedule.updatedAt,
+      expect.objectContaining({ policies: expect.objectContaining({ runWhenClosed: true }) })
+    );
+    expect(optionRow().textContent).toContain("Not on this Mac");
+
+    await act(async () => fireEvent.click(button("Save changes")));
+    expect(clientMock.update).toHaveBeenLastCalledWith(
+      "s1",
+      schedule.updatedAt,
+      expect.objectContaining({ policies: expect.objectContaining({ runWhenClosed: false }) })
+    );
+  });
+
+  it("says when the project's switches couldn't be read", () => {
+    render(
+      <ScheduleEditor
+        schedule={existing({ runWhenClosed: true })}
+        defaultAgentId="claude"
+        worktrees={[{ id: null, label: "Main checkout" }]}
+        now={NOW}
+        osJobContext={LONDON}
+        projectSwitches={null}
+        projectSwitchesError="Couldn't load this project's schedules"
+        leaveStateRef={createRef<EditorLeaveState | null>()}
+        onSaved={vi.fn()}
+        onDeleted={vi.fn()}
+        onCancel={vi.fn()}
+        onOpenAgentSettings={vi.fn()}
+      />
+    );
+    expect(option()?.getAttribute("aria-checked")).toBe("false");
+    expect(optionRow().textContent).toContain(
+      "Couldn't load this project's schedules, so this option keeps its saved setting"
+    );
   });
 });
 

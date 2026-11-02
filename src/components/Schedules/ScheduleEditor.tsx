@@ -20,6 +20,7 @@ import { describeParsedCron } from "@shared/utils/cronDescription";
 import { createSchedule, validateCadence } from "@shared/utils/scheduledRuns";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type {
+  ProjectScheduleSwitches,
   Schedule,
   ScheduleDonePolicy,
   ScheduleMissedRunPolicy,
@@ -28,16 +29,17 @@ import type {
 import type { ScheduleIssue } from "@shared/utils/scheduleValidation";
 import {
   RUN_WHEN_CLOSED_PATH,
+  projectStartsDaintree,
   runWhenClosedIssue,
   type ScheduleOsJobContext,
   type ScheduleOsJobKind,
 } from "@shared/utils/scheduleOsJob";
 import type { SchedulesSnapshot } from "@shared/types/ipc/schedules";
-import { isLinux, isMac, isWindows } from "@/lib/platform";
 import { logError } from "@/utils/logger";
 import { useFirstAgentOptions } from "@/components/Worktree/hooks/useFirstAgentOptions";
 import { useScheduleLaunchOptions } from "./useScheduleLaunchOptions";
 import { CadencePicker } from "./CadencePicker";
+import { scheduleOsJobKindHere } from "./scheduleOsJobKind";
 import { choiceFromCron, choiceIssue, type CadenceChoice } from "./cadenceChoice";
 import {
   DONE_CONSEQUENCE,
@@ -175,6 +177,20 @@ function runWhenClosedReason(
   return runWhenClosedIssue(cadence, context);
 }
 
+/** Which of the project's switches keep "Run when Daintree isn't running" from counting. */
+function runWhenClosedGateReason(switches: ProjectScheduleSwitches | null): string | null {
+  if (!switches) return null;
+  const { schedulesOn, startWhenClosed } = switches;
+  if (!schedulesOn && !startWhenClosed) {
+    return "Turn on Schedules on and Start Daintree for due schedules for this project to use this";
+  }
+  if (!schedulesOn) return "Turn on Schedules on for this project to use this";
+  if (!startWhenClosed) {
+    return "Turn on Start Daintree for due schedules for this project to use this";
+  }
+  return null;
+}
+
 /** The same reasons main gives, checked here so a field says what's wrong before Save. */
 function localIssues(
   draft: Draft,
@@ -214,6 +230,10 @@ interface ScheduleEditorProps {
   now: number;
   /** What main judges "Run when Daintree isn't running" by; null until it has answered. */
   osJobContext: ScheduleOsJobContext | null;
+  /** The project's switches (#16166), kept current while editing; null until read. */
+  projectSwitches: ProjectScheduleSwitches | null;
+  /** Why the project's switches couldn't be read, or null. */
+  projectSwitchesError?: string | null;
   /** Kept current every render, so the dialog can guard Cancel and dismissal. */
   leaveStateRef: RefObject<EditorLeaveState | null>;
   onSaved: (snapshot: SchedulesSnapshot, scheduleId: string) => void;
@@ -246,6 +266,8 @@ export function ScheduleEditor({
   worktrees,
   now,
   osJobContext,
+  projectSwitches,
+  projectSwitchesError = null,
   leaveStateRef,
   onSaved,
   onDeleting,
@@ -281,7 +303,14 @@ export function ScheduleEditor({
   const dirty = !sameDraft(draft, initial);
   const timeZone = base?.cadence.timeZone ?? machineTimeZone();
   const runWhenClosedRefusal = runWhenClosedReason(draft, timeZone, osJobContext);
-  const issues = localIssues(draft, runWhenClosedRefusal);
+  // The option counts only while the project lets Daintree start for its
+  // schedules, so it reads as on only then (#16168). The draft keeps what's
+  // stored, so turning the project's switches back on brings it back.
+  const projectStarts = projectSwitches !== null && projectStartsDaintree(projectSwitches);
+  const projectGateReason = projectSwitchesError
+    ? `${projectSwitchesError}, so this option keeps its saved setting`
+    : runWhenClosedGateReason(projectSwitches);
+  const issues = localIssues(draft, projectStarts ? runWhenClosedRefusal : null);
 
   useEffect(() => {
     leaveStateRef.current = { dirty, saving, isNew, name: base?.name ?? draft.name };
@@ -372,15 +401,7 @@ export function ScheduleEditor({
 
   const agentName = getEffectiveAgentConfig(draft.agentId)?.name ?? "This agent";
   // Before main's context arrives, judged by the platform the view runs on.
-  const osJobKind: ScheduleOsJobKind | null = osJobContext
-    ? osJobContext.kind
-    : isMac()
-      ? "launch-agent"
-      : isWindows()
-        ? "task-scheduler"
-        : isLinux()
-          ? "systemd-timer"
-          : null;
+  const osJobKind: ScheduleOsJobKind | null = scheduleOsJobKindHere(osJobContext);
   // Shown where an OS job exists, and wherever the option is already on so it can be turned off.
   const showRunWhenClosed = draft.runWhenClosed || osJobKind !== null;
 
@@ -402,7 +423,13 @@ export function ScheduleEditor({
       overlap: draft.overlap,
       precondition: draft.checkFirst ? { command: draft.checkCommand } : null,
       onDone: draft.onDone,
-      runWhenClosed: draft.runWhenClosed,
+      // A stored opt-in main would refuse, or just did, is dropped while the
+      // project hides the option: it reads as off, and there'd be no way left to
+      // turn it off.
+      runWhenClosed:
+        draft.runWhenClosed &&
+        (projectStarts ||
+          (runWhenClosedRefusal === null && serverError("runWhenClosed") === undefined)),
     };
     const launch = {
       agentId: draft.agentId,
@@ -650,20 +677,24 @@ export function ScheduleEditor({
                   id={FIELD_ROW.runWhenClosed}
                   label="Run when Daintree isn't running"
                   description={
-                    !draft.runWhenClosed && runWhenClosedRefusal !== null
+                    projectGateReason ??
+                    (!draft.runWhenClosed && runWhenClosedRefusal !== null
                       ? runWhenClosedRefusal
                       : osJobKind
                         ? RUN_WHEN_CLOSED_DESCRIPTION[osJobKind]
-                        : RUN_WHEN_CLOSED_FALLBACK_DESCRIPTION
+                        : RUN_WHEN_CLOSED_FALLBACK_DESCRIPTION)
                   }
-                  checked={draft.runWhenClosed}
+                  checked={projectStarts && draft.runWhenClosed}
                   onChange={(value) => update("runWhenClosed", value)}
                   // Never locked on: an option main would refuse can always be turned off.
-                  disabled={!draft.runWhenClosed && runWhenClosedRefusal !== null}
+                  disabled={
+                    !projectStarts || (!draft.runWhenClosed && runWhenClosedRefusal !== null)
+                  }
                   // Said at once: the box was just ticked, or the cadence just moved under it.
                   error={
                     draft.runWhenClosed
-                      ? (serverError("runWhenClosed") ?? issues.runWhenClosed)
+                      ? (serverError("runWhenClosed") ??
+                        (projectStarts ? issues.runWhenClosed : undefined))
                       : undefined
                   }
                 />

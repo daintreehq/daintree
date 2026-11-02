@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { AppDialog, type RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import type { Schedule } from "@shared/types/scheduledRuns";
+import type { ProjectScheduleSwitches, Schedule } from "@shared/types/scheduledRuns";
 import type { SchedulesSnapshot } from "@shared/types/ipc/schedules";
 import type { ScheduleOsJobContext } from "@shared/utils/scheduleOsJob";
 import { ScheduleEditor, type EditorLeaveState, type WorktreeChoice } from "./ScheduleEditor";
@@ -26,6 +26,10 @@ interface ScheduleEditorDialogProps {
   worktrees: readonly WorktreeChoice[];
   now: number;
   osJobContext: ScheduleOsJobContext | null;
+  /** The project's switches, kept current while editing; null until read. */
+  projectSwitches: ProjectScheduleSwitches | null;
+  /** Why the project's switches couldn't be read, or null. */
+  projectSwitchesError?: string | null;
   /** Where focus goes once the editor has closed instead of its opener; null keeps the opener. */
   restoreFocusTo?: RestoreFocusTarget;
   onSaved: (snapshot: SchedulesSnapshot, scheduleId: string) => void;
@@ -51,6 +55,8 @@ export function ScheduleEditorDialog({
   worktrees,
   now,
   osJobContext,
+  projectSwitches,
+  projectSwitchesError = null,
   restoreFocusTo,
   onSaved,
   onDeleting,
@@ -117,6 +123,8 @@ export function ScheduleEditorDialog({
           worktrees={worktrees}
           now={now}
           osJobContext={osJobContext}
+          projectSwitches={projectSwitches}
+          projectSwitchesError={projectSwitchesError}
           leaveStateRef={leaveStateRef}
           onSaved={onSaved}
           onDeleting={onDeleting}

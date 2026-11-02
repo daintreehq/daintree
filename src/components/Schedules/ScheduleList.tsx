@@ -34,6 +34,8 @@ export const RUN_NOW_FAILURE_SELECTOR = "[data-run-now-failure]";
 interface ScheduleListProps {
   state: ProjectSchedulesState;
   now: number;
+  /** The project's switches, heading the section above its schedules. */
+  switches?: ReactNode;
   /** Worktree labels by id, for schedules that don't run in the main checkout. */
   worktreeLabels: ReadonlyMap<string, string>;
   /** Schedules whose switch is being saved; the switch holds still until main answers. */
@@ -70,8 +72,18 @@ export function AgentMark({ agentId }: { agentId: string }) {
 }
 
 /** The next run in words: when it is, and the exact time beside it. */
-function NextRun({ schedule, now }: { schedule: Schedule; now: number }) {
+function NextRun({
+  schedule,
+  now,
+  schedulesOn,
+}: {
+  schedule: Schedule;
+  now: number;
+  schedulesOn: boolean;
+}) {
   if (!schedule.enabled) return <span>Paused</span>;
+  // The project's own switch holds every schedule, so no time it names would come.
+  if (!schedulesOn) return <span>Schedules off</span>;
   const next = nextRunAt(schedule.cadence, now);
   if (next === null) return <span>Never runs</span>;
   const timeZone = schedule.cadence.timeZone;
@@ -163,6 +175,7 @@ function RowAction({
 function ScheduleRow({
   schedule,
   now,
+  schedulesOn,
   worktreeLabel,
   enabledPending,
   runNowPending,
@@ -176,6 +189,7 @@ function ScheduleRow({
 }: {
   schedule: Schedule;
   now: number;
+  schedulesOn: boolean;
   worktreeLabel: string | null;
   enabledPending: boolean;
   runNowPending: boolean;
@@ -212,7 +226,7 @@ function ScheduleRow({
             {agentName}
           </p>
           <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-3 text-xs text-text-secondary">
-            <NextRun schedule={schedule} now={now} />
+            <NextRun schedule={schedule} now={now} schedulesOn={schedulesOn} />
             <LastRun run={lastRun} status={lastRunsStatus} now={now} />
           </div>
         </div>
@@ -273,6 +287,7 @@ function ScheduleRow({
 export function ScheduleList({
   state,
   now,
+  switches,
   worktreeLabels,
   pendingEnabled,
   enabledError,
@@ -293,6 +308,7 @@ export function ScheduleList({
 }: ScheduleListProps) {
   const schedules = state.snapshot?.schedules ?? [];
   const listed = state.snapshot !== null && schedules.length > 0;
+  const schedulesOn = state.snapshot?.switches.schedulesOn ?? false;
 
   return (
     <SettingsSection
@@ -339,6 +355,7 @@ export function ScheduleList({
             {state.message}
           </Callout>
         )}
+        {switches}
         {lastRuns.status === "error" && listed && (
           <Callout
             severity="error"
@@ -407,6 +424,7 @@ export function ScheduleList({
                 key={schedule.id}
                 schedule={schedule}
                 now={now}
+                schedulesOn={schedulesOn}
                 worktreeLabel={
                   schedule.launch.worktreeId === null
                     ? null

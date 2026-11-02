@@ -27,6 +27,7 @@ import {
   scheduleActionSelector,
 } from "@/components/Schedules/ScheduleList";
 import { ScheduleOsJobStatus } from "@/components/Schedules/ScheduleOsJobStatus";
+import { ScheduleSwitches } from "@/components/Schedules/ScheduleSwitches";
 import { HISTORY_RUN_NOW_SELECTOR, ScheduleRuns } from "@/components/Schedules/ScheduleRuns";
 import { useProjectSchedules } from "@/components/Schedules/useProjectSchedules";
 import { useScheduleOsJob } from "@/components/Schedules/useScheduleOsJob";
@@ -164,7 +165,9 @@ export function ProjectSchedulesTab({ isOpen, isActive, onClose }: ProjectSchedu
   useEffect(() => {
     if (editorAnswer) accept(editorAnswer);
   }, [editorAnswer, accept]);
-  const osJob = useScheduleOsJob(active, state.snapshot?.revision ?? null);
+  // Each answer is shown against the snapshot it was asked about, so turning a
+  // switch shows once main has written or removed the job, not before.
+  const osJob = useScheduleOsJob(active, state.snapshot?.revision ?? null, state.snapshot);
   const { lastRuns, retryLastRuns } = useLastRuns(
     active ? (state.snapshot?.projectId ?? null) : null
   );
@@ -377,40 +380,47 @@ export function ProjectSchedulesTab({ isOpen, isActive, onClose }: ProjectSchedu
       </p>
 
       {page.kind === "list" && (
-        <>
-          <ScheduleOsJobStatus
-            status={osJob.status}
-            schedules={schedules}
-            switches={state.snapshot?.switches ?? null}
-            repairing={osJob.repairing}
-            error={osJob.error}
-            onRepair={osJob.repair}
-          />
-          <ScheduleList
-            state={state}
-            now={now}
-            worktreeLabels={worktrees.labels}
-            pendingEnabled={pendingEnabled}
-            enabledError={enabledError}
-            pendingRunNow={pendingRunNow}
-            runNowError={runNowFailure ? `${runNowFailure.name}: ${runNowFailure.message}` : null}
-            runNowRetrying={runNowFailure !== null && pendingRunNow.has(runNowFailure.scheduleId)}
-            onRetryRunNow={() => {
-              const failed = schedules.find((s) => s.id === runNowFailure?.scheduleId);
-              if (failed) void runNow(failed);
-            }}
-            lastRuns={lastRuns}
-            addButtonRef={addButtonRef}
-            onRetryLastRuns={retryLastRuns}
-            onCreate={() => openEditor(null)}
-            onSetEnabled={(schedule, enabled) => void setEnabled(schedule, enabled)}
-            onRunNow={(schedule) => void runNow(schedule)}
-            onOpenHistory={openHistory}
-            onEdit={(schedule) => openEditor(schedule)}
-            onDelete={requestDelete}
-            onRetry={retry}
-          />
-        </>
+        <ScheduleList
+          state={state}
+          now={now}
+          switches={
+            <ScheduleSwitches
+              switches={state.snapshot?.switches ?? null}
+              osJobStatus={osJob.status}
+              onSaved={accept}
+            >
+              <ScheduleOsJobStatus
+                status={osJob.status}
+                basis={osJob.basis}
+                switches={state.snapshot?.switches ?? null}
+                checking={osJob.checking}
+                repairing={osJob.repairing}
+                error={osJob.error}
+                onRepair={osJob.repair}
+              />
+            </ScheduleSwitches>
+          }
+          worktreeLabels={worktrees.labels}
+          pendingEnabled={pendingEnabled}
+          enabledError={enabledError}
+          pendingRunNow={pendingRunNow}
+          runNowError={runNowFailure ? `${runNowFailure.name}: ${runNowFailure.message}` : null}
+          runNowRetrying={runNowFailure !== null && pendingRunNow.has(runNowFailure.scheduleId)}
+          onRetryRunNow={() => {
+            const failed = schedules.find((s) => s.id === runNowFailure?.scheduleId);
+            if (failed) void runNow(failed);
+          }}
+          lastRuns={lastRuns}
+          addButtonRef={addButtonRef}
+          onRetryLastRuns={retryLastRuns}
+          onCreate={() => openEditor(null)}
+          onSetEnabled={(schedule, enabled) => void setEnabled(schedule, enabled)}
+          onRunNow={(schedule) => void runNow(schedule)}
+          onOpenHistory={openHistory}
+          onEdit={(schedule) => openEditor(schedule)}
+          onDelete={requestDelete}
+          onRetry={retry}
+        />
       )}
 
       {page.kind === "history" && (
@@ -432,6 +442,7 @@ export function ProjectSchedulesTab({ isOpen, isActive, onClose }: ProjectSchedu
               <ScheduleRuns
                 schedule={shown}
                 now={now}
+                schedulesOn={state.snapshot?.switches.schedulesOn ?? false}
                 worktreeLabel={
                   shown.launch.worktreeId === null
                     ? null

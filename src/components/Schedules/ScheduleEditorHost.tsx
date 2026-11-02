@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useWallClock } from "@/hooks/useWallClock";
 import { isVisibleTabbableElement } from "@/lib/accessibility";
 import { useSchedulesViewStore } from "@/store/schedulesViewStore";
@@ -7,6 +7,7 @@ import type { SchedulesSnapshot } from "@shared/types/ipc/schedules";
 import { ScheduleEditorDialog } from "./ScheduleEditorDialog";
 import { NEW_SCHEDULE_SELECTOR, scheduleActionSelector } from "./ScheduleList";
 import { useScheduleOsJob } from "./useScheduleOsJob";
+import { useProjectSchedules } from "./useProjectSchedules";
 import { useWorktreeChoices } from "./useWorktreeChoices";
 
 /** Re-read on each minute boundary, so the next runs it previews stay current. */
@@ -58,13 +59,30 @@ export function ScheduleEditorHost() {
   const { choices } = useWorktreeChoices();
   const agents = useFirstAgentOptions();
   const osJob = useScheduleOsJob(editor !== null, editor?.key ?? null);
+  // The project's switches decide whether "Run when Daintree isn't running"
+  // counts. Read here, not handed over by the tab, which Settings can unmount
+  // under an open editor, and kept current if another window turns them.
+  const { state: project } = useProjectSchedules(editor !== null);
+  // What the hook held from an earlier opening is no longer watched, so each
+  // opening trusts the switches only once its own read or a push has landed. A
+  // failed read keeps the old snapshot, so it never counts.
+  const openingKey = editor?.key ?? null;
+  const [opening, setOpening] = useState({ key: openingKey, stale: project, read: false });
+  const landed = project !== opening.stale && project.status === "ready";
+  if (opening.key !== openingKey) {
+    setOpening({ key: openingKey, stale: project, read: false });
+  } else if (landed && !opening.read) {
+    setOpening({ ...opening, read: true });
+  }
+  const read = opening.key === openingKey && (opening.read || landed);
+  const readError =
+    !read && project !== opening.stale && project.status === "error" ? project.message : null;
   const now = useWallClock(editor?.key ?? 0, untilNextMinute);
   // Where focus goes once the editor closes, when its opener is the wrong place.
   const focusAfterRef = useRef<(() => HTMLElement | null) | null>(null);
   const successorRef = useRef<string | null>(null);
   // What had focus as this opening began, which the editor hands focus back to.
   const openerRef = useRef<HTMLElement | null>(null);
-  const openingKey = editor?.key ?? null;
   useLayoutEffect(() => {
     if (openingKey === null) return;
     const active = document.activeElement;
@@ -115,6 +133,8 @@ export function ScheduleEditorHost() {
       worktrees={choices}
       now={now}
       osJobContext={osJob.status?.context ?? null}
+      projectSwitches={read ? (project.snapshot?.switches ?? null) : null}
+      projectSwitchesError={readError}
       restoreFocusTo={restoreTarget}
       onSaved={handleSaved}
       // Read while the row is still on screen: main's push can remove it before the delete answers.
