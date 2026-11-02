@@ -2148,10 +2148,20 @@ export const SETTINGS_REGISTRY = [
       {
         id: "decisions-questions",
         section: "Questions",
-        title: "Question expiry",
+        title: "Default question expiry",
         description:
-          "How long a question waits for your answer, and what an expired one authorises",
-        keywords: ["expiry", "expire", "expires", "timeout", "wait", "question", "authorise"],
+          "How long a question waits for your answer when its agent sets no expiry, never included, and what an expired one authorises",
+        keywords: [
+          "expiry",
+          "expire",
+          "expires",
+          "timeout",
+          "wait",
+          "question",
+          "authorise",
+          "default",
+          "never",
+        ],
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
       {

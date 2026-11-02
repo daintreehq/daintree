@@ -10,6 +10,10 @@ import {
 } from "../decisionsSettings.js";
 import type { StoreSchema } from "../../../store.js";
 import type { DecisionsSettings } from "../../../../shared/types/decisions.js";
+import {
+  DEFAULT_QUESTION_EXPIRY_MS,
+  QUESTION_EXPIRY_CHOICES,
+} from "../../../../shared/config/decisionsQuestionExpiry.js";
 
 // The app's settings store is what callers hand these helpers.
 const appStoreFits: Store<StoreSchema> extends DecisionsStore ? true : never = true;
@@ -22,6 +26,8 @@ const connected: DecisionsSettings = {
   deviceId: "dev-01HZY3K9QX",
   hostId: "host_01HZY3K9QY",
   proxyAllowlisted: true,
+  // Never: the one choice a careless `??` would lose.
+  defaultQuestionExpiryMs: null,
   consentedAt: 1_761_955_200_000,
   revokedAt: null,
   recoveryKit: null,
@@ -93,6 +99,34 @@ describe("sanitizeDecisionsSettings", () => {
       writeDecisionsSettings(store, readDecisionsSettings(store));
       expect(current()).toEqual({ ...connected, modelAdapter: adapter });
     }
+  });
+
+  it("keeps a default expiry only when Settings offers it, never included, and 7 days otherwise", () => {
+    // Saved before the field existed: the library's own default, no migration.
+    const { defaultQuestionExpiryMs: _absent, ...beforeTheField } = connected;
+    expect(sanitizeDecisionsSettings(beforeTheField).defaultQuestionExpiryMs).toBe(
+      DEFAULT_QUESTION_EXPIRY_MS
+    );
+    for (const choice of QUESTION_EXPIRY_CHOICES) {
+      expect(
+        sanitizeDecisionsSettings({ ...connected, defaultQuestionExpiryMs: choice })
+          .defaultQuestionExpiryMs,
+        String(choice)
+      ).toBe(choice);
+    }
+    // Anything else, the library's own limits included, would make the policy
+    // refuse to start, so it reads as the default rather than surviving.
+    for (const value of [0, -1, 59_999, 60_000, 1.5, 2 * DEFAULT_QUESTION_EXPIRY_MS, "never", NaN, {}]) {
+      expect(
+        sanitizeDecisionsSettings({ ...connected, defaultQuestionExpiryMs: value })
+          .defaultQuestionExpiryMs,
+        String(value)
+      ).toBe(DEFAULT_QUESTION_EXPIRY_MS);
+    }
+    // Never survives a rewrite, with nothing else changed.
+    const { store, current } = memoryStore(connected);
+    writeDecisionsSettings(store, readDecisionsSettings(store));
+    expect(current()).toEqual(connected);
   });
 
   it("reads anything that isn't a settings object as off with no relay, without throwing", () => {

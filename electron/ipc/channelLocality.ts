@@ -246,6 +246,7 @@ export const CHANNEL_LOCALITY = {
   "decisions:revoke-device": "shell",
   "decisions:rotate-keys": "shell",
   "decisions:set-auto-enroll-hosts": "shell",
+  "decisions:set-default-question-expiry": "shell",
   "decisions:set-enabled": "shell",
   "decisions:set-proxy-allowlisted": "shell",
   "decisions:start-pairing": "shell",

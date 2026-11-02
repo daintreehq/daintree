@@ -10,6 +10,7 @@ import {
   writeHostRecord,
 } from "../hostRecord.js";
 import { ownerStateOf } from "../../../remote/decisions/clientInstall.js";
+import { DEFAULT_QUESTION_EXPIRY_MS } from "../../../../shared/config/decisionsQuestionExpiry.js";
 
 const RECORD = {
   relayOrigin: "https://relay.example.com",
@@ -75,6 +76,8 @@ describe("an enrolled Host's record (#16022)", () => {
       deviceId: RECORD.deviceId,
       hostId: RECORD.hostId,
       proxyAllowlisted: false,
+      // The owner's default expiry isn't sent to a Host, so its questions keep the library's.
+      defaultQuestionExpiryMs: DEFAULT_QUESTION_EXPIRY_MS,
       revokedAt: null,
     });
     expect(hostLifetimeSettings({ ...RECORD, revokedAt: 4 }).revokedAt).toBe(4);

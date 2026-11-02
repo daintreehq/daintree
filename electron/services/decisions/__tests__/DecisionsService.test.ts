@@ -17,6 +17,7 @@ import {
 } from "../DecisionsService.js";
 import type { DaintreeLocalStore } from "../daintreeLocalStore.js";
 import { defaultDecisionsSettings } from "../decisionsSettings.js";
+import { DEFAULT_QUESTION_EXPIRY_MS } from "../../../../shared/config/decisionsQuestionExpiry.js";
 import type {
   DecisionsSettings,
   DecisionsStatusEvent,
@@ -750,6 +751,28 @@ describe("DecisionsService relay connection", () => {
     await service.start(on({ ...RELAY, proxyAllowlisted: false, deviceId: "dev_87654321" }));
     expect(service.getPolicy()).toBe(policy);
     expect(policy?.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+  });
+
+  it("changes the default expiry on the running policy, never included, without a reconnect", async () => {
+    const { service, made } = connected();
+    await service.start(on(RELAY));
+    const policy = service.getPolicy();
+    expect(policy?.defaultQuestionExpiryMs).toBe(DEFAULT_QUESTION_EXPIRY_MS);
+
+    service.updateSettings(on({ ...RELAY, defaultQuestionExpiryMs: null }));
+    expect(service.getPolicy()).toBe(policy);
+    expect(policy?.defaultQuestionExpiryMs).toBeNull();
+    expect(made).toHaveLength(1);
+    expect(made[0]!.stopped).toBe(false);
+
+    service.updateSettings(on({ ...RELAY, defaultQuestionExpiryMs: 60 * 60_000 }));
+    expect(policy?.defaultQuestionExpiryMs).toBe(60 * 60_000);
+
+    // The next lifetime starts from what is saved then.
+    await service.stop();
+    await service.start(on({ ...RELAY, defaultQuestionExpiryMs: null }));
+    expect(service.getPolicy()).not.toBe(policy);
+    expect(service.getPolicy()?.defaultQuestionExpiryMs).toBeNull();
   });
 
   it("drops the policy with the lifetime, and the next lifetime starts from the saved settings", async () => {

@@ -89,6 +89,15 @@ const decisionsEntry = vi.hoisted(() => ({
     maxQuestionExpiryMs: 2,
     revision: 1,
   })),
+  setDecisionsDefaultQuestionExpiry: vi.fn(
+    async (ms: number | null): Promise<DecisionsPolicy> => ({
+      gates: [],
+      proxyAllowlisted: false,
+      defaultQuestionExpiryMs: ms,
+      maxQuestionExpiryMs: null,
+      revision: 1,
+    })
+  ),
   // Asks for a path as the real entry does, and answers with what it was given.
   exportRecoveryKit: vi.fn(
     async (
@@ -153,6 +162,7 @@ vi.mock("../../../services/decisions/index.js", () => {
     deleteLocalData: decisionsEntry.deleteLocalData,
     getDecisionsPolicy: decisionsEntry.getDecisionsPolicy,
     setDecisionsProxyAllowlisted: decisionsEntry.setDecisionsProxyAllowlisted,
+    setDecisionsDefaultQuestionExpiry: decisionsEntry.setDecisionsDefaultQuestionExpiry,
     exportRecoveryKit: decisionsEntry.exportRecoveryKit,
     verifyRecoveryKit: decisionsEntry.verifyRecoveryKit,
     revokeDevice: decisionsEntry.revokeDevice,
@@ -216,6 +226,8 @@ const getPolicy = decisionsNamespace.ops.getPolicy
 const setProxyAllowlisted = decisionsNamespace.ops.setProxyAllowlisted.handler as unknown as (
   allowed: boolean
 ) => Promise<DecisionsPolicy>;
+const setDefaultQuestionExpiry = decisionsNamespace.ops.setDefaultQuestionExpiry
+  .handler as unknown as (ms: number | null) => Promise<DecisionsPolicy>;
 
 const listHosts = decisionsNamespace.ops.listHosts
   .handler as unknown as () => Promise<DecisionsHostsResult>;
@@ -281,6 +293,7 @@ const DECISIONS_CHANNELS = [
   CHANNELS.DECISIONS_DELETE_LOCAL_DATA,
   CHANNELS.DECISIONS_GET_POLICY,
   CHANNELS.DECISIONS_SET_PROXY_ALLOWLISTED,
+  CHANNELS.DECISIONS_SET_DEFAULT_QUESTION_EXPIRY,
   CHANNELS.DECISIONS_EXPORT_RECOVERY_KIT,
   CHANNELS.DECISIONS_VERIFY_RECOVERY_KIT,
   CHANNELS.DECISIONS_LIST_HOSTS,
@@ -310,6 +323,7 @@ describe("decisions IPC", () => {
     dialogMock.showSaveDialog.mockClear();
     decisionsEntry.getDecisionsPolicy.mockClear();
     decisionsEntry.setDecisionsProxyAllowlisted.mockClear();
+    decisionsEntry.setDecisionsDefaultQuestionExpiry.mockClear();
     decisionsEntry.revokeDevice.mockClear();
     decisionsEntry.rotateKeys.mockClear();
     decisionsEntry.startSetupCheck.mockClear();
@@ -453,6 +467,7 @@ describe("decisions IPC", () => {
 
       await expect(getPolicy()).rejects.toMatchObject({ code: "PERMISSION" });
       await expect(setProxyAllowlisted(true)).rejects.toMatchObject({ code: "PERMISSION" });
+      await expect(setDefaultQuestionExpiry(null)).rejects.toMatchObject({ code: "PERMISSION" });
     }
 
     expect(decisionsEntry.evaluated).toBe(0);
@@ -775,6 +790,31 @@ describe("decisions IPC", () => {
     expect(decisionsEntry.getDecisionsPolicy).toHaveBeenCalledOnce();
     expect(decisionsEntry.setDecisionsProxyAllowlisted).toHaveBeenCalledExactlyOnceWith(true);
     expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("changes the default expiry through Decisions itself once on, never included", async () => {
+    saved.value = { enabled: true };
+
+    await expect(setDefaultQuestionExpiry(null)).resolves.toMatchObject({
+      defaultQuestionExpiryMs: null,
+    });
+    await expect(setDefaultQuestionExpiry(3_600_000)).resolves.toMatchObject({
+      defaultQuestionExpiryMs: 3_600_000,
+    });
+    expect(decisionsEntry.setDecisionsDefaultQuestionExpiry.mock.calls).toEqual([
+      [null],
+      [3_600_000],
+    ]);
+    expect(store.set).not.toHaveBeenCalled();
+  });
+
+  it("takes only whole milliseconds or null for the default expiry", () => {
+    const schema = decisionsNamespace.ops.setDefaultQuestionExpiry.schema as SafeParse;
+    expect(schema.safeParse(null).success).toBe(true);
+    expect(schema.safeParse(3_600_000).success).toBe(true);
+    for (const value of [undefined, "never", 0, -1, 1.5, { ms: 1 }]) {
+      expect(schema.safeParse(value).success).toBe(false);
+    }
   });
 
   it("lists, enrolls and switches Remote Host enrollment through Decisions itself once on", async () => {

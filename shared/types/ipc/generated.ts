@@ -714,6 +714,10 @@ export interface GeneratedIpcInvokeMap {
     args: [enabled: boolean];
     result: import("../decisionsHosts.js").DecisionsHostsResult;
   };
+  "decisions:set-default-question-expiry": {
+    args: [ms: number | null];
+    result: import("../decisions.js").DecisionsPolicy;
+  };
   "decisions:set-enabled": {
     args: [payload: import("../decisions.js").SetDecisionsEnabledPayload];
     result: import("../decisions.js").DecisionsStatus;

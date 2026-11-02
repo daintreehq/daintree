@@ -218,6 +218,7 @@ export const SETTING_CATALOG = {
           deviceId: device,
           hostId: device,
           proxyAllowlisted: device,
+          defaultQuestionExpiryMs: device,
           consentedAt: device,
           revokedAt: device,
           recoveryKit: device,

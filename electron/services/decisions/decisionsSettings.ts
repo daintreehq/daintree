@@ -7,6 +7,10 @@ import {
   type DecisionsSetupCheckRecord,
   type DecisionsSetupCheckStep,
 } from "../../../shared/types/decisions.js";
+import {
+  DEFAULT_QUESTION_EXPIRY_MS,
+  isQuestionExpiryChoice,
+} from "../../../shared/config/decisionsQuestionExpiry.js";
 
 /** The relay protocol's id shape: what a relay mints for installations and devices. */
 const RELAY_ID = /^[A-Za-z0-9_-]{8,64}$/;
@@ -27,6 +31,7 @@ export function defaultDecisionsSettings(): DecisionsSettings {
     deviceId: null,
     hostId: null,
     proxyAllowlisted: false,
+    defaultQuestionExpiryMs: DEFAULT_QUESTION_EXPIRY_MS,
     consentedAt: null,
     revokedAt: null,
     recoveryKit: null,
@@ -196,6 +201,10 @@ export function sanitizeDecisionsSettings(raw: unknown): DecisionsSettings {
     deviceId,
     hostId,
     proxyAllowlisted: value.proxyAllowlisted === true,
+    // Only a choice Settings offers survives, so the library never refuses one; null is "never".
+    defaultQuestionExpiryMs: isQuestionExpiryChoice(value.defaultQuestionExpiryMs)
+      ? value.defaultQuestionExpiryMs
+      : DEFAULT_QUESTION_EXPIRY_MS,
     consentedAt: consentTime(value.consentedAt),
     revokedAt: identified ? consentTime(value.revokedAt) : null,
     recoveryKit: recoveryKitRecord(value.recoveryKit, { relayOrigin, installationId, deviceId }),

@@ -1,7 +1,7 @@
 import {
   PolicyRegistry,
   gateAllowsText,
-  resolveExpiry,
+  questionExpiryPolicy,
   type WorkflowGate,
 } from "@daintreehq/decisions-client";
 import type {
@@ -30,6 +30,8 @@ const DESIGN_REVIEW_FINAL: WorkflowGate = {
   // Said outright: with text allowed, the library takes a note with no choice as an answer.
   allowText: false,
   bindArtifacts: true,
+  // No `expiryMs`: naming the gate never changes how long a question waits, so
+  // the default expiry Settings saves applies under it too.
 };
 
 /**
@@ -38,15 +40,20 @@ const DESIGN_REVIEW_FINAL: WorkflowGate = {
  */
 const TRUSTED_WORKFLOW_GATES: readonly WorkflowGate[] = [DESIGN_REVIEW_FINAL];
 
+/** The saved settings the trusted policy is made from. */
+export type PolicySettings = Pick<DecisionsSettings, "proxyAllowlisted" | "defaultQuestionExpiryMs">;
+
 /**
  * The policy an enabled lifetime asks every question under: the trusted
- * gates, and the proxy allowlist as saved. The registry copies each gate, so
- * nothing holding the definitions above can change one after registration.
+ * gates, the proxy allowlist and the default expiry as saved. The registry
+ * copies each gate, so nothing holding the definitions above can change one
+ * after registration.
  */
-export function createTrustedPolicy(
-  settings: Pick<DecisionsSettings, "proxyAllowlisted">
-): PolicyRegistry {
-  const policy = new PolicyRegistry({ proxyAllowlisted: settings.proxyAllowlisted });
+export function createTrustedPolicy(settings: PolicySettings): PolicyRegistry {
+  const policy = new PolicyRegistry({
+    proxyAllowlisted: settings.proxyAllowlisted,
+    defaultQuestionExpiryMs: settings.defaultQuestionExpiryMs,
+  });
   for (const gate of TRUSTED_WORKFLOW_GATES) policy.register(gate);
   return policy;
 }
@@ -62,30 +69,11 @@ export function describeTrustedGates(): DecisionsWorkflowGate[] {
   }));
 }
 
-/** The latest instant a Date can hold: a request no limit could leave uncut. */
-const LATEST_ISO = new Date(8.64e15).toISOString();
-
-/**
- * The library's expiry for a question with no origin gate, asked of its own
- * resolver rather than copied from it, so what Settings says is what the
- * library does: the expiry an agent gets by asking nothing, and the latest it
- * can get by asking.
- */
-function gatelessExpiry(): { defaultMs: number | null; maxMs: number | null } {
-  const byDefault = resolveExpiry(undefined, undefined, 0);
-  const longest = resolveExpiry(LATEST_ISO, undefined, 0);
-  return {
-    defaultMs: byDefault === null ? null : Date.parse(byDefault),
-    maxMs: longest === null || longest === LATEST_ISO ? null : Date.parse(longest),
-  };
-}
-
 /** The policy as Settings reads it, for these settings, at this revision. */
-export function decisionsPolicyOf(
-  settings: Pick<DecisionsSettings, "proxyAllowlisted">,
-  revision: number
-): DecisionsPolicy {
-  const expiry = gatelessExpiry();
+export function decisionsPolicyOf(settings: PolicySettings, revision: number): DecisionsPolicy {
+  // The library's own rule for a question with no origin gate, so what
+  // Settings says is what the registry does.
+  const expiry = questionExpiryPolicy(settings.defaultQuestionExpiryMs);
   return {
     gates: describeTrustedGates(),
     proxyAllowlisted: settings.proxyAllowlisted,

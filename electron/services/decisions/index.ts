@@ -62,6 +62,7 @@ import type {
   ReassignDecisionsAnswerPayload,
 } from "../../../shared/types/decisionsAttention.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { isQuestionExpiryChoice } from "../../../shared/config/decisionsQuestionExpiry.js";
 import { OWNER_RW_FILE_MODE, resilientAtomicWriteFile } from "../../utils/fs.js";
 import {
   normalizeRelayOrigin,
@@ -96,7 +97,7 @@ import {
 } from "./relayIdentity.js";
 import { SetupCheck } from "./setupCheck.js";
 import { SetupDiagnostics } from "./setupDiagnostic.js";
-import { decisionsPolicyOf } from "./workflowGates.js";
+import { decisionsPolicyOf, type PolicySettings } from "./workflowGates.js";
 import {
   checkRecoveryKit,
   makeRecoveryKit,
@@ -984,15 +985,16 @@ export function getDecisionsPolicy(): DecisionsPolicy {
 }
 
 /**
- * Lets questions with no workflow gate accept a proxy answer, or stops them.
- * The running lifetime's policy changes in place, so the next question is
- * asked under it; questions already asked keep the level they were asked with.
+ * Saves one field of the policy over the setting as it stands when its turn
+ * comes, so a save of the other field queued meanwhile is kept. The running
+ * lifetime's policy changes in place, so the next question is asked under it;
+ * questions already asked keep what they were asked with.
  */
-export function setDecisionsProxyAllowlisted(allowed: boolean): Promise<DecisionsPolicy> {
+function savePolicy(change: Partial<PolicySettings>): Promise<DecisionsPolicy> {
   return serialize(async () => {
     const current = readDecisionsSettings(store);
     if (shutDown || !current.enabled) throw setupRefused();
-    const saved = writeDecisionsSettings(store, { ...current, proxyAllowlisted: allowed });
+    const saved = writeDecisionsSettings(store, { ...current, ...change });
     policyRevision += 1;
     service?.updateSettings(saved);
     // The policy has no push of its own: Settings in other windows reads it
@@ -1000,6 +1002,28 @@ export function setDecisionsProxyAllowlisted(allowed: boolean): Promise<Decision
     publishStatus();
     return decisionsPolicyOf(saved, policyRevision);
   });
+}
+
+/** Lets questions with no workflow gate accept a proxy answer, or stops them. */
+export function setDecisionsProxyAllowlisted(allowed: boolean): Promise<DecisionsPolicy> {
+  return savePolicy({ proxyAllowlisted: allowed });
+}
+
+/**
+ * How long a question asked on this computer waits when its agent sets no
+ * expiry (#16122): one of the choices Settings offers, or null for never.
+ * Anything else is refused rather than saved as the default.
+ */
+export function setDecisionsDefaultQuestionExpiry(ms: number | null): Promise<DecisionsPolicy> {
+  if (!isQuestionExpiryChoice(ms)) {
+    return Promise.reject(
+      new AppError({
+        code: "VALIDATION",
+        message: "That expiry isn't one Settings offers",
+      })
+    );
+  }
+  return savePolicy({ defaultQuestionExpiryMs: ms });
 }
 
 function cancelKitExports(): void {

@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import type { DecisionsPolicy, DecisionsWorkflowGate } from "@shared/types/decisions";
+import { DEFAULT_QUESTION_EXPIRY_MS } from "@shared/config/decisionsQuestionExpiry";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { DecisionsPolicySection } from "../DecisionsPolicySection";
 import { DecisionsQuestionsSection } from "../DecisionsQuestionsSection";
@@ -57,6 +58,7 @@ function deferred<T>() {
 
 const getPolicy = vi.fn<() => Promise<DecisionsPolicy>>();
 const setProxyAllowlisted = vi.fn<(allowed: boolean) => Promise<DecisionsPolicy>>();
+const setDefaultQuestionExpiry = vi.fn<(ms: number | null) => Promise<DecisionsPolicy>>();
 const statusListeners = new Set<() => void>();
 
 /** Main's status push, which another window's policy change sends. */
@@ -95,13 +97,28 @@ function expiryRow(): string {
   return document.querySelector("#decisions-questions-expiry")?.textContent ?? "";
 }
 
+function expirySelect(): HTMLButtonElement {
+  return screen.getByRole("combobox", { name: "Default expiry" }) as HTMLButtonElement;
+}
+
+async function pickExpiry(label: string) {
+  fireEvent.keyDown(expirySelect(), { key: "ArrowDown" });
+  const option = await screen.findByRole("option", { name: label });
+  await act(async () => {
+    fireEvent.click(option);
+  });
+}
+
+const resetExpiry = () => screen.queryByRole("button", { name: "Reset default expiry" });
+
 beforeEach(() => {
   getPolicy.mockReset();
   setProxyAllowlisted.mockReset();
+  setDefaultQuestionExpiry.mockReset();
   statusListeners.clear();
   Object.defineProperty(window, "electron", {
     value: {
-      decisions: { getPolicy, setProxyAllowlisted },
+      decisions: { getPolicy, setProxyAllowlisted, setDefaultQuestionExpiry },
       events: {
         on: (name: string, listener: () => void) => {
           if (name !== "decisions:status-changed") return () => {};
@@ -226,6 +243,111 @@ describe("Decisions policy and questions sections", () => {
     getPolicy.mockResolvedValueOnce(policy({ proxyAllowlisted: false, revision: 1 }));
     await statusPushed();
     expect(checked()).toBe("true");
+  });
+
+  it("saves a default expiry of never in main, shows it while saving, then what main saved", async () => {
+    getPolicy.mockResolvedValue(
+      policy({ defaultQuestionExpiryMs: DEFAULT_QUESTION_EXPIRY_MS, maxQuestionExpiryMs: 30 * DAY })
+    );
+    const save = deferred<DecisionsPolicy>();
+    setDefaultQuestionExpiry.mockReturnValue(save.promise);
+    await renderSections();
+    expect(expirySelect().textContent).toBe("7 days");
+    expect(resetExpiry()).toBeNull();
+
+    await pickExpiry("Never");
+    expect(setDefaultQuestionExpiry).toHaveBeenCalledExactlyOnceWith(null);
+    expect(expirySelect().textContent).toBe("Never");
+    expect(expirySelect().disabled).toBe(true);
+    // The description stays on what main holds until it has saved the change.
+    expect(expiryRow()).toContain("waits 7 days");
+
+    await act(async () =>
+      save.resolve(
+        policy({ defaultQuestionExpiryMs: null, maxQuestionExpiryMs: null, revision: 1 })
+      )
+    );
+    expect(expirySelect().textContent).toBe("Never");
+    expect(expirySelect().disabled).toBe(false);
+    expect(expiryRow()).toContain("until it's answered or cancelled");
+    expect(expiryRow()).not.toContain("at most");
+    expect(resetExpiry()).not.toBeNull();
+  });
+
+  it("puts the default expiry back to the library's default with Reset", async () => {
+    getPolicy.mockResolvedValue(policy({ defaultQuestionExpiryMs: null, maxQuestionExpiryMs: null }));
+    setDefaultQuestionExpiry.mockResolvedValue(
+      policy({
+        defaultQuestionExpiryMs: DEFAULT_QUESTION_EXPIRY_MS,
+        maxQuestionExpiryMs: 30 * DAY,
+        revision: 1,
+      })
+    );
+    await renderSections();
+
+    await act(async () => {
+      fireEvent.click(resetExpiry()!);
+    });
+    expect(setDefaultQuestionExpiry).toHaveBeenCalledExactlyOnceWith(DEFAULT_QUESTION_EXPIRY_MS);
+    expect(expirySelect().textContent).toBe("7 days");
+    expect(resetExpiry()).toBeNull();
+  });
+
+  it("shows what main holds after a failed expiry change, and Retry asks for the same one", async () => {
+    getPolicy.mockResolvedValueOnce(policy({ defaultQuestionExpiryMs: 3 * DAY }));
+    const recovered = deferred<DecisionsPolicy>();
+    getPolicy.mockReturnValueOnce(recovered.promise);
+    setDefaultQuestionExpiry.mockRejectedValueOnce(new Error("Decisions has stopped"));
+    await renderSections();
+
+    await pickExpiry("90 days");
+    expect(screen.getByText("Couldn't change the default expiry")).toBeTruthy();
+    expect(expirySelect().disabled).toBe(false);
+    expect(expirySelect().textContent).toBe("3 days");
+    // Another window chose 30 days meanwhile: the recovery read shows that.
+    await act(async () =>
+      recovered.resolve(policy({ defaultQuestionExpiryMs: 30 * DAY, revision: 2 }))
+    );
+    expect(expirySelect().textContent).toBe("30 days");
+
+    setDefaultQuestionExpiry.mockResolvedValueOnce(
+      policy({ defaultQuestionExpiryMs: 90 * DAY, revision: 3 })
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    expect(setDefaultQuestionExpiry).toHaveBeenLastCalledWith(90 * DAY);
+    expect(screen.queryByText("Couldn't change the default expiry")).toBeNull();
+    expect(expirySelect().textContent).toBe("90 days");
+  });
+
+  it("saves the expiry and the allowlist side by side, and shows both once main has", async () => {
+    getPolicy.mockResolvedValue(policy({ defaultQuestionExpiryMs: DEFAULT_QUESTION_EXPIRY_MS }));
+    const proxySave = deferred<DecisionsPolicy>();
+    const expirySave = deferred<DecisionsPolicy>();
+    setProxyAllowlisted.mockReturnValue(proxySave.promise);
+    setDefaultQuestionExpiry.mockReturnValue(expirySave.promise);
+    await renderSections();
+
+    fireEvent.click(proxySwitch());
+    // A save of one field never holds up the other.
+    await pickExpiry("1 hour");
+    expect(setProxyAllowlisted).toHaveBeenCalledExactlyOnceWith(true);
+    expect(setDefaultQuestionExpiry).toHaveBeenCalledExactlyOnceWith(60 * 60_000);
+
+    // Main applies them in turn, each over the setting as it stands: the later answer holds both.
+    await act(async () =>
+      expirySave.resolve(policy({ defaultQuestionExpiryMs: 60 * 60_000, revision: 1 }))
+    );
+    await act(async () =>
+      proxySave.resolve(
+        policy({ proxyAllowlisted: true, defaultQuestionExpiryMs: 60 * 60_000, revision: 2 })
+      )
+    );
+    expect(checked()).toBe("true");
+    expect(expirySelect().textContent).toBe("1 hour");
+    expect(proxySwitch().disabled).toBe(false);
+    expect(expirySelect().disabled).toBe(false);
   });
 
   it("says when the policy couldn't be read, in both sections, and one Retry recovers both", async () => {
@@ -369,7 +491,7 @@ describe("policy copy", () => {
     expect(
       questionExpiryText({ defaultQuestionExpiryMs: 2 * DAY, maxQuestionExpiryMs: 20 * DAY })
     ).toBe(
-      "A question waits 2 days for your answer, unless the agent that asked sets another time, at most 20 days. An expired question authorises nothing, and the agent is told so."
+      "A question waits 2 days for your answer, unless the agent that asked sets another time, at most 20 days. Questions asked on a Remote Host still wait 7 days by default. An expired question authorises nothing, and the agent is told so."
     );
     const unbounded = questionExpiryText({
       defaultQuestionExpiryMs: null,
