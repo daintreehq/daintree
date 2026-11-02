@@ -40,6 +40,8 @@ export interface ScheduledRunSchedulerLaunch {
   readonly projectId: string;
   readonly scheduleId: string;
   readonly origin: ScheduledRunOrigin;
+  /** False once the schedule's timing changed after this launch was decided. */
+  readonly stillCurrent: () => boolean;
 }
 
 export interface ScheduledRunSchedulerDeps {
@@ -464,7 +466,7 @@ export class ScheduledRunScheduler {
       `[ScheduledRuns] Schedule ${scheduleId} is due: ${origin.trigger} for ${origin.occurrenceKey}`
     );
     new Promise<ScheduledRunLaunchOutcome>((resolve) =>
-      resolve(this.deps.launch({ projectId, scheduleId, origin }))
+      resolve(this.deps.launch({ projectId, scheduleId, origin, stillCurrent: current }))
     )
       .then(
         (outcome) => {

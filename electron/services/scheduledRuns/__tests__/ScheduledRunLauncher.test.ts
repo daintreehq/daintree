@@ -619,27 +619,33 @@ describe("launchScheduledRun", () => {
     }
   );
 
-  it("fires no occurrence due before the project's schedules last went on (#16166)", async () => {
+  it("fires nothing for a launch whose decision no longer stands, though its schedule reads on again (#16166)", async () => {
     const dueAt = Date.UTC(2026, 10, 2, 9);
-    const occurrence = (at: number): ScheduledRunOrigin => ({
+    const origin: ScheduledRunOrigin = {
       trigger: "scheduled",
-      dueAt: at,
-      occurrenceKey: new Date(at).toISOString(),
+      dueAt,
+      occurrenceKey: new Date(dueAt).toISOString(),
       coalesced: null,
-    });
-    switches = { schedulesOn: true, startWhenClosed: false, schedulesOnSince: dueAt };
+    };
+    // Switched off and back on while this launch waited for its turn.
+    const stillCurrent = vi.fn(() => false);
 
     await expect(
       launchScheduledRun(
-        { projectId: "project-1", scheduleId: "schedule-1", origin: occurrence(dueAt) },
+        { projectId: "project-1", scheduleId: "schedule-1", origin, stillCurrent },
         deps
       )
     ).resolves.toEqual({ status: "not-found" });
+    expect(stillCurrent).toHaveBeenCalled();
     expect(deps.launchInView).not.toHaveBeenCalled();
+    expect(recorder.registerRefusedLaunch).not.toHaveBeenCalled();
+    expect(recorder.registerSkip).not.toHaveBeenCalled();
+    expect(hasPendingScheduledLaunch("project-1")).toBe(false);
 
+    stillCurrent.mockReturnValue(true);
     await expect(
       launchScheduledRun(
-        { projectId: "project-1", scheduleId: "schedule-1", origin: occurrence(dueAt + 60_000) },
+        { projectId: "project-1", scheduleId: "schedule-1", origin, stillCurrent },
         deps
       )
     ).resolves.toMatchObject({ status: "started" });

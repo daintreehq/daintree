@@ -454,16 +454,19 @@ describe("ScheduleOsJobService", () => {
       const job = fakeAdapter();
       const svc = service(store, job.adapter);
       await svc.start();
-      expect(job.syncs.at(-1)?.crons).toEqual(["0 18 * * *"]);
+      // Each change reaches the job on its own, with no status read to repair it.
+      const synced = (crons: string[]) =>
+        vi.waitFor(() => expect(job.syncs.at(-1)?.crons).toEqual(crons), { interval: 1 });
+      await synced(["0 18 * * *"]);
 
       store.setSwitches("a", { schedulesOn: true });
-      expect(await svc.status("a")).toMatchObject({ state: "current" });
+      await synced(["0 18 * * *", "0 9 * * *"]);
       store.setSwitches("a", { startWhenClosed: false });
-      await svc.status("a");
+      await synced(["0 18 * * *"]);
       store.setSwitches("a", { startWhenClosed: true });
-      await svc.status("a");
+      await synced(["0 18 * * *", "0 9 * * *"]);
       store.setSwitches("a", { schedulesOn: false });
-      await svc.status("a");
+      await synced(["0 18 * * *"]);
 
       expect(job.syncs.map((sync) => sync.crons)).toEqual([
         ["0 18 * * *"],
@@ -472,6 +475,7 @@ describe("ScheduleOsJobService", () => {
         ["0 18 * * *", "0 9 * * *"],
         ["0 18 * * *"],
       ]);
+      expect(await svc.status("a")).toMatchObject({ state: "current", excluded: [] });
     });
 
     it("removes the job when the last project asking for it turns either switch off, or is removed", async () => {

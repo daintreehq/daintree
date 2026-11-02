@@ -4,13 +4,15 @@ import { CalendarClock } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { pluralize } from "@/lib/pluralize";
-import type { Schedule } from "@shared/types/scheduledRuns";
+import type { ProjectScheduleSwitches, Schedule } from "@shared/types/scheduledRuns";
 import type { ScheduleOsJobStatus as OsJobStatus } from "@shared/types/ipc/schedules";
-import { scheduleOsJobStarter } from "@shared/utils/scheduleOsJob";
+import { runWhenClosedSchedules, scheduleOsJobStarter } from "@shared/utils/scheduleOsJob";
 
 interface ScheduleOsJobStatusProps {
   status: OsJobStatus | null;
   schedules: readonly Schedule[];
+  /** The project's switches (#16166); null before its schedules are read. */
+  switches: ProjectScheduleSwitches | null;
   repairing: boolean;
   /** Why the status or a repair couldn't be read. */
   error: string | null;
@@ -20,16 +22,18 @@ interface ScheduleOsJobStatusProps {
 /**
  * Whether the OS job that starts Daintree for this project's schedules, set
  * to run when it isn't running, is installed and current (#15990, #15991,
- * #15993). Silent while no switched-on schedule here asks for it.
+ * #15993). Silent while no switched-on schedule here asks for it, or while
+ * the project's own switches leave the job out of it (#16166).
  */
 export function ScheduleOsJobStatus({
   status,
   schedules,
+  switches,
   repairing,
   error,
   onRepair,
 }: ScheduleOsJobStatusProps) {
-  const optedIn = schedules.filter((s) => s.enabled && s.policies.runWhenClosed);
+  const optedIn = runWhenClosedSchedules(switches ? { switches, schedules } : undefined);
   if (optedIn.length === 0 || (!status && !error)) return null;
 
   const names = new Map(schedules.map((s) => [s.id, s.name]));

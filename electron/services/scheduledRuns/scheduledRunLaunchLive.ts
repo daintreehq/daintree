@@ -189,6 +189,7 @@ export async function launchScheduledRunLive(input: {
   scheduleId: string;
   origin: ScheduledRunOrigin;
   preferredWebContentsId?: number;
+  stillCurrent?: () => boolean;
 }): Promise<ScheduledRunLaunchOutcome> {
   return launchScheduledRun(input, await liveDeps());
 }

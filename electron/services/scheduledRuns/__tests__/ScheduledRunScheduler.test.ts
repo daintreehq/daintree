@@ -1312,13 +1312,17 @@ describe("ScheduledRunScheduler", () => {
       expect(launches).toEqual([]);
     });
 
-    it("fires nothing missed across a restart or a sleep, and records no skip, while it's off", async () => {
+    it("fires nothing missed across a sleep or a restart, and records no skip, while it's off", async () => {
       const skipping = schedule({ updatedAt: at(8) });
       commit(
         "project-1",
         [{ ...skipping, policies: { ...skipping.policies, missedRuns: "skip" } }],
         off()
       );
+      projects.add("project-2");
+      commit("project-2", [
+        schedule({ id: "schedule-2", projectId: "project-2", updatedAt: at(8) }),
+      ]);
       await start();
       scheduler!.suspend();
       sleepFor(4 * HOUR);
@@ -1327,16 +1331,26 @@ describe("ScheduledRunScheduler", () => {
       setClock(at(16, 30));
       await restart();
 
-      expect(launches).toEqual([]);
+      // The project still on catches up after each, in the same passes.
+      expect(launches.map((launch) => [launch.scheduleId, launch.origin.trigger])).toEqual([
+        ["schedule-2", "catch-up"],
+        ["schedule-2", "catch-up"],
+      ]);
       expect(recorder.listBySchedule("schedule-1")).toEqual([]);
     });
 
     it("fires nothing for an OS job's launch while it's off", async () => {
       setClock(at(9, 0, 20));
       commit("project-1", [schedule({ cron: "0 9 * * *", updatedAt: at(8) })], off());
+      projects.add("project-2");
+      commit("project-2", [
+        schedule({ id: "schedule-2", projectId: "project-2", cron: "0 9 * * *", updatedAt: at(8) }),
+      ]);
       await start(at(9));
 
-      expect(launches).toEqual([]);
+      expect(launches.map((launch) => [launch.scheduleId, launch.origin.trigger])).toEqual([
+        ["schedule-2", "os-launch"],
+      ]);
       expect(recorder.listBySchedule("schedule-1")).toEqual([]);
     });
 
@@ -1355,15 +1369,34 @@ describe("ScheduledRunScheduler", () => {
     it("cancels a launch not yet spawned when it goes off, and fires nothing after", async () => {
       const original = schedule({ updatedAt: at(8) });
       commit("project-1", [original]);
-      launchImpl = () => new Promise(() => {});
+      let finish: (outcome: ScheduleRunNowOutcome) => void = () => {};
+      launchImpl = () => new Promise((resolve) => (finish = resolve));
       await start();
       await elapse(30 * MINUTE);
       expect(launches).toHaveLength(1);
 
       commit("project-1", [original], off());
       expect(cancelled).toEqual(["schedule-1"]);
+      expect(launches[0]!.stillCurrent()).toBe(false);
+      // The cancelled launch ends as the launcher answers it.
+      finish({ status: "not-found" });
+      await settle();
       await elapse(2 * HOUR);
       expect(launches).toHaveLength(1);
+    });
+
+    it("tells a launch still waiting for its turn that it no longer stands once off and back on", async () => {
+      const original = schedule({ updatedAt: at(8) });
+      commit("project-1", [original]);
+      launchImpl = () => new Promise(() => {});
+      await start();
+      await elapse(30 * MINUTE);
+      expect(launches[0]!.stillCurrent()).toBe(true);
+
+      commit("project-1", [original], off());
+      commit("project-1", [original], onSince(Date.now()));
+
+      expect(launches[0]!.stillCurrent()).toBe(false);
     });
 
     it("resumes from the next occurrence when it goes back on, never catching up what came due while off", async () => {
@@ -1417,15 +1450,25 @@ describe("ScheduledRunScheduler", () => {
       const original = schedule({ updatedAt: at(8) });
       commit("project-1", [original]);
       await start();
+      // A rename keeps the window the schedule had, from 08:00.
+      const renamed = { ...original, name: "Renamed", updatedAt: at(8, 15) };
+      commit("project-1", [renamed]);
       scheduler!.suspend();
       sleepFor(2 * HOUR);
       // Turned on while the sleep's catch-up is still owed.
-      commit("project-1", [original], { ...ON, startWhenClosed: true });
+      commit("project-1", [renamed], { ...ON, startWhenClosed: true });
       scheduler!.resume();
       await scheduler!.idle();
 
       expect(cancelled).toEqual([]);
-      expect(origins()).toEqual([expect.objectContaining({ trigger: "catch-up", dueAt: at(10) })]);
+      expect(origins()).toEqual([
+        {
+          trigger: "catch-up",
+          dueAt: at(10),
+          occurrenceKey: occurrenceKeyFor(at(10)),
+          coalesced: { after: at(8), through: at(10, 30) },
+        },
+      ]);
     });
   });
 });

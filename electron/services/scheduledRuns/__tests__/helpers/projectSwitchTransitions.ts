@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { ScheduleStore } from "../../../ScheduleStore.js";
 import { ScheduleOsJobService, type ScheduleOsJobAdapter } from "../../ScheduleOsJobService.js";
 import type { ScheduleSwitchesPatch } from "../../../../../shared/types/ipc/schedules.js";
@@ -43,13 +43,24 @@ export function itFollowsProjectSwitches(makeHarness: () => ProjectSwitchHarness
       readTimeoutMs: 1_000,
       drainTimeoutMs: 1_000,
     });
+    const held = () => ({ live: harness.live(), hours: harness.hours() });
     const job = async () => {
       const status = await service.status(A);
-      return { state: status.state, live: harness.live(), hours: harness.hours() };
+      return { state: status.state, ...held() };
     };
-    const set = async (projectId: string, patch: ScheduleSwitchesPatch) => {
+    /**
+     * The OS is waited on before the status is read: a status read repairs a
+     * job that drifted, which would hide a commit that never reached it.
+     */
+    const set = async (
+      projectId: string,
+      patch: ScheduleSwitchesPatch,
+      expected: { state: string; live: boolean; hours: number[] }
+    ) => {
       expect((await store.setSwitches(projectId, patch)).status).toBe("saved");
-      return job();
+      const { state: _state, ...onOs } = expected;
+      await vi.waitFor(() => expect(held()).toEqual(onOs), { timeout: 2_000, interval: 5 });
+      expect(await job()).toEqual(expected);
     };
     const asking = (cron: string) => ({
       name: cron,
@@ -68,19 +79,25 @@ export function itFollowsProjectSwitches(makeHarness: () => ProjectSwitchHarness
       // A schedule asking for the job does nothing while its project's switches are off.
       expect(await job()).toEqual(none);
 
-      expect(await set(A, { schedulesOn: true })).toEqual(none);
-      expect(await set(A, { startWhenClosed: true })).toEqual(covering(9));
-      expect(await set(B, { schedulesOn: true, startWhenClosed: true })).toEqual(covering(9, 18));
-      expect(await set(A, { startWhenClosed: false })).toEqual(covering(18));
-      expect(await set(A, { startWhenClosed: true })).toEqual(covering(9, 18));
-      expect(await set(A, { schedulesOn: false })).toEqual(covering(18));
-      // The last project needing it turns its schedules off: the job goes.
-      expect(await set(B, { schedulesOn: false })).toEqual(none);
-      expect(await set(B, { schedulesOn: true })).toEqual(covering(18));
+      await set(A, { schedulesOn: true }, none);
+      await set(A, { startWhenClosed: true }, covering(9));
+      await set(B, { schedulesOn: true, startWhenClosed: true }, covering(9, 18));
+      await set(A, { startWhenClosed: false }, covering(18));
+      await set(A, { startWhenClosed: true }, covering(9, 18));
+      await set(A, { schedulesOn: false }, covering(18));
+      // The last project needing it turns either switch off: the job goes.
+      await set(B, { startWhenClosed: false }, none);
+      await set(B, { startWhenClosed: true }, covering(18));
+      await set(B, { schedulesOn: false }, none);
+      await set(B, { schedulesOn: true }, covering(18));
 
       // Removing the project from Daintree leaves none of its schedules in the job.
       registered.delete(B);
       await store.removeProject(B);
+      await vi.waitFor(() => expect(held()).toEqual({ live: false, hours: [] }), {
+        timeout: 2_000,
+        interval: 5,
+      });
       expect(await job()).toEqual(none);
     } finally {
       await service.dispose();

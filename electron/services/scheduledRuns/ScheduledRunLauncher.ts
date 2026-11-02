@@ -122,6 +122,12 @@ export interface ScheduledRunLaunchInput {
   preferredWebContentsId?: number;
   /** Run now only: what the user agreed to when earlier runs were still open. */
   overlapConfirmed?: ScheduleRunNowOverlapConfirmation;
+  /**
+   * The scheduler's: false once what it decided on has changed (the schedule
+   * or its project's schedules switched off, its cadence changed, it was
+   * removed), so a launch that waited for its turn fires nothing.
+   */
+  stillCurrent?: () => boolean;
 }
 
 /**
@@ -251,12 +257,12 @@ async function launchInScheduleTurn<View>(
   const { schedule, switches } = found;
   // The scheduler decided on a schedule it read earlier: one switched off
   // since, or whose project's schedules went off since, fires nothing and
-  // records nothing. Run now runs either way: asking is the opt-in.
+  // records nothing, even when it was switched back on while this launch
+  // waited for its turn. Run now runs either way: asking is the opt-in.
+  // Asked after the last await before the reservation, so a switch-off from
+  // here on cancels the reservation instead.
   if (origin.trigger !== "run-now") {
-    if (!schedule.enabled || !switches.schedulesOn) return { status: "not-found" };
-    // Due while the project's schedules were off, found by a launch that
-    // waited out a switch-off and back on.
-    if (switches.schedulesOnSince !== null && origin.dueAt <= switches.schedulesOnSince) {
+    if (!schedule.enabled || !switches.schedulesOn || input.stillCurrent?.() === false) {
       return { status: "not-found" };
     }
   }

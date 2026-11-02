@@ -52,9 +52,14 @@ describe("schedules codec", () => {
   it("reads back exactly what it wrote, prompt whitespace included", () => {
     const schedules = [schedule("one"), schedule("two")];
 
-    const decoded = decodeSchedulesFile(encodeSchedulesFile({ switches: ON, schedules }), PROJECT);
-
-    expect(decoded).toEqual({ ok: true, switches: ON, schedules });
+    for (const switches of [
+      ON,
+      { schedulesOn: true, startWhenClosed: false, schedulesOnSince: null },
+      { schedulesOn: false, startWhenClosed: true, schedulesOnSince: NOW - 1 },
+    ]) {
+      const decoded = decodeSchedulesFile(encodeSchedulesFile({ switches, schedules }), PROJECT);
+      expect(decoded).toEqual({ ok: true, switches, schedules });
+    }
   });
 
   it("reads an empty list", () => {

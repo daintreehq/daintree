@@ -474,18 +474,28 @@ describe("ScheduleStore", () => {
       expect(again.snapshot.switches.schedulesOnSince).toBe(clock);
     });
 
-    it("leave the schedules, and a switch already as asked, untouched", async () => {
-      const store = newStore();
+    it("leave the schedules, their history, and a switch already as asked, untouched", async () => {
+      const forget = vi.fn();
+      const store = new ScheduleStore(
+        root,
+        (id) => registered.has(id),
+        () => clock,
+        forget
+      );
       const created = saved(await store.create(PROJECT, input));
       const heard: SchedulesSnapshot[] = [];
       store.subscribe((snapshot) => heard.push(snapshot));
 
       const same = saved(await store.setSwitches(PROJECT, { schedulesOn: false }));
       const on = saved(await store.setSwitches(PROJECT, { schedulesOn: true }));
+      const off = saved(await store.setSwitches(PROJECT, { schedulesOn: false }));
 
       expect(same.snapshot.revision).toBe(created.snapshot.revision);
-      expect(heard).toHaveLength(1);
+      expect(heard).toHaveLength(2);
       expect(on.snapshot.schedules).toEqual([created.schedule]);
+      expect(off.snapshot.schedules).toEqual([created.schedule]);
+      expect((await newStore().list(PROJECT)).schedules).toEqual([created.schedule]);
+      expect(forget).not.toHaveBeenCalled();
     });
 
     it("refuse starting Daintree where the machine can't, but never refuse turning it off", async () => {
