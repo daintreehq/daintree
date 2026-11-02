@@ -964,6 +964,7 @@ describe("DecisionsService relay connection", () => {
       opened.push(record);
       events.push(`questions opened ${opened.length}`);
       return {
+        listenerPort: async () => (record.closed > 0 ? null : 4100),
         close: () => {
           record.closed += 1;
           events.push(`questions closed ${opened.indexOf(record) + 1}`);
@@ -1000,6 +1001,63 @@ describe("DecisionsService relay connection", () => {
     expect(routes.opened[0]!.closed).toBe(1);
     routes.opened[0]!.release();
     await service.stop();
+  });
+
+  it("hands a launch the route's port once the connection opens it, waiting while its identity loads", async () => {
+    const routes = questionRoutes();
+    const { service, made } = connected(undefined, routes.openQuestions);
+    await service.start(on(RELAY));
+
+    const port = service.questionsPort(60_000);
+    let settled = false;
+    void port.then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+
+    made[0]!.options.onQuestionsReady!(SOURCE);
+    await expect(port).resolves.toBe(4100);
+    // Once open, a launch is answered at once.
+    await expect(service.questionsPort(60_000)).resolves.toBe(4100);
+    routes.opened[0]!.release();
+    await service.stop();
+  });
+
+  it("answers a launch with no port at once while there is no relay, or the connection stopped", async () => {
+    const routes = questionRoutes();
+    const bare = connected(undefined, routes.openQuestions);
+    await bare.service.start(on());
+    await expect(bare.service.questionsPort(60_000)).resolves.toBeNull();
+    await bare.service.stop();
+
+    const { service, made } = connected(undefined, routes.openQuestions);
+    await service.start(on(RELAY));
+    made[0]!.options.onStatus({ state: "not-connected", problem: "keys" });
+    await expect(service.questionsPort(60_000)).resolves.toBeNull();
+    await service.stop();
+    await expect(service.questionsPort(60_000)).resolves.toBeNull();
+  });
+
+  it("wakes a waiting launch with no port when the connection halts, the lifetime stops, or the wait is up", async () => {
+    const routes = questionRoutes();
+    const halted = connected(undefined, routes.openQuestions);
+    await halted.service.start(on(RELAY));
+    const haltedPort = halted.service.questionsPort(60_000);
+    halted.made[0]!.options.onStatus({ state: "revoked" });
+    await expect(haltedPort).resolves.toBeNull();
+    await halted.service.stop();
+
+    const stopped = connected(undefined, routes.openQuestions);
+    await stopped.service.start(on(RELAY));
+    const stoppedPort = stopped.service.questionsPort(60_000);
+    await stopped.service.stop();
+    await expect(stoppedPort).resolves.toBeNull();
+
+    const slow = connected(undefined, routes.openQuestions);
+    await slow.service.start(on(RELAY));
+    await expect(slow.service.questionsPort(10)).resolves.toBeNull();
+    await slow.service.stop();
   });
 
   it("closes the questions when the connection stops for the lifetime, is revoked or let go", async () => {

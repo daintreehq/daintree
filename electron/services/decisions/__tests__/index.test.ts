@@ -64,21 +64,27 @@ vi.mock("../recoveryKit.js", async (importOriginal) => ({
 
 vi.mock("../../../ipc/utils.js", () => ({ broadcastToProjectRenderers: broadcast }));
 
-// The pane bearers `/mcp/decisions` reads, as the pane config service holds them.
+// The Decisions bearers `/mcp/decisions` reads, as the pane config service
+// holds them, and a control-surface bearer it must never take.
 const paneTokens = vi.hoisted(
-  () => new Map<string, { paneId: string; principal: string; workspaceId?: string }>()
+  () => new Map<string, { paneId: string; principal: string; workspaceId: string }>()
 );
+const controlTokens = vi.hoisted(() => new Map<string, { paneId: string; principal: string }>());
 vi.mock("../../McpPaneConfigService.js", () => ({
   mcpPaneConfigService: {
-    isValidPaneToken: (token: string) => paneTokens.has(token),
-    getPaneIdForToken: (token: string) => paneTokens.get(token)?.paneId ?? null,
-    getOwnershipPrincipalForToken: (token: string) => paneTokens.get(token)?.principal ?? null,
-    getPaneWorkspaceBindingForToken: (token: string) => {
-      const workspaceId = paneTokens.get(token)?.workspaceId;
-      return workspaceId === undefined ? null : { workspaceId };
-    },
-    getOrchestratorPane: (paneId: string) => {
+    getDecisionsBearerForToken: (token: string) => paneTokens.get(token) ?? null,
+    getDecisionsPrincipal: (paneId: string) => {
       for (const record of paneTokens.values()) {
+        if (record.paneId === paneId) return record.principal;
+      }
+      return null;
+    },
+    isValidPaneToken: (token: string) => controlTokens.has(token),
+    getPaneIdForToken: (token: string) => controlTokens.get(token)?.paneId ?? null,
+    getOwnershipPrincipalForToken: (token: string) => controlTokens.get(token)?.principal ?? null,
+    getPaneWorkspaceBindingForToken: () => null,
+    getOrchestratorPane: (paneId: string) => {
+      for (const record of controlTokens.values()) {
         if (record.paneId === paneId) return { principalId: record.principal, tier: "core" };
       }
       return null;
@@ -86,15 +92,21 @@ vi.mock("../../McpPaneConfigService.js", () => ({
   },
 }));
 
-// The MCP listener and terminal host the route is opened over.
+// The MCP listener and terminal host the route is opened over. `loaded` is
+// whether something already loaded the MCP server's module.
 const mcpRefs = vi.hoisted(() => ({
   ptyClient: { name: "pty client" },
+  loaded: true,
   holdListener: vi.fn(async () => ({ port: 4100, release: async () => {} })),
+  lazyHoldListener: vi.fn(async () => ({ port: 4200, release: async () => {} })),
 }));
 vi.mock("../../../window/serviceRefs.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../window/serviceRefs.js")>()),
   getPtyClient: () => mcpRefs.ptyClient,
-  getMcpServerServiceRef: () => ({ holdListener: mcpRefs.holdListener }),
+  getMcpServerServiceRef: () => (mcpRefs.loaded ? { holdListener: mcpRefs.holdListener } : null),
+}));
+vi.mock("../../McpServerService.js", () => ({
+  mcpServerService: { holdListener: mcpRefs.lazyHoldListener },
 }));
 
 // What each opened route was handed.
@@ -116,8 +128,15 @@ vi.mock("../mcpRoute.js", () => ({
     const closed = new Promise<void>((resolve) => {
       letGo = resolve;
     });
+    let isClosed = false;
     openedRoutes.push({ sources, after, letGo });
-    return { close: () => closed };
+    return {
+      listenerPort: async () => (isClosed ? null : 4100),
+      close: () => {
+        isClosed = true;
+        return closed;
+      },
+    };
   },
 }));
 
@@ -135,6 +154,7 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
 /** The revocation hook the entry hands each service it makes. */
 const entryHooks = vi.hoisted(() => ({
   onRelayRevoked: null as ((relay: import("../relayConnection.js").RelayBinding) => void) | null,
+  delivery: null as import("../DecisionsService.js").DecisionsServiceOptions["delivery"] | null,
 }));
 
 const connections = vi.hoisted(
@@ -185,6 +205,7 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
       // A store that holds nothing, so starting never reaches the app database;
       // `failNextOpen` makes the next open fail, once.
       entryHooks.onRelayRevoked = options.onRelayRevoked ?? null;
+      entryHooks.delivery = options.delivery ?? null;
       super({
         ...options,
         keyFilePath: () => keyFile.path,
@@ -261,6 +282,7 @@ import {
   _resetDecisionsForTesting,
   checkRelay,
   claimRelay,
+  decisionsLaunchPort,
   deleteLocalData,
   deleteRelayData,
   disconnectRelay,
@@ -321,6 +343,8 @@ describe("Decisions entry", () => {
     connections.length = 0;
     openedRoutes.length = 0;
     paneTokens.clear();
+    controlTokens.clear();
+    mcpRefs.loaded = true;
     _resetDecisionsForTesting();
   });
 
@@ -1011,7 +1035,7 @@ describe("Decisions entry", () => {
     };
     const SECRET = "claim-secret-0123456789abcdef";
 
-    it("opens /mcp/decisions over the live pane bearers, this machine's host id and the MCP listener", async () => {
+    it("opens /mcp/decisions over the live Decisions bearers, this machine's host id and the MCP listener", async () => {
       saved.value = { enabled: true, ...RELAY };
       await startDecisionsIfEnabled();
       connections[0]!.options.onQuestionsReady!({
@@ -1023,24 +1047,26 @@ describe("Decisions entry", () => {
       expect(openedRoutes).toHaveLength(1);
       const { sources } = openedRoutes[0]!;
 
-      paneTokens.set("pane-token", {
+      paneTokens.set("decisions-token", {
         paneId: "pane-1",
         principal: "principal-1",
         workspaceId: "p1",
       });
-      paneTokens.set("unbound-token", { paneId: "pane-2", principal: "principal-2" });
-      expect(sources.bearerFor("pane-token")).toEqual({
+      controlTokens.set("control-token", { paneId: "pane-2", principal: "principal-2" });
+      expect(sources.bearerFor("decisions-token")).toEqual({
         paneId: "pane-1",
         principal: "principal-1",
         workspaceId: "p1",
       });
-      expect(sources.bearerFor("unbound-token")).toEqual({
-        paneId: "pane-2",
-        principal: "principal-2",
-      });
+      // A control-surface bearer opens the control surface, never this route (#16012).
+      expect(sources.bearerFor("control-token")).toBeNull();
       expect(sources.bearerFor("api-key")).toBeNull();
       expect(sources.principalFor("pane-1")).toBe("principal-1");
+      expect(sources.principalFor("pane-2")).toBeNull();
       expect(sources.principalFor("pane-unknown")).toBeNull();
+      // Delivery checks an answer's run against the same principal (#16012).
+      expect(entryHooks.delivery?.principalFor("pane-1")).toBe("principal-1");
+      expect(entryHooks.delivery?.principalFor("pane-2")).toBeNull();
       expect(sources.hostId()).toBe(RELAY.hostId);
       expect(sources.getPtyClient()).toBe(mcpRefs.ptyClient);
 
@@ -1067,6 +1093,25 @@ describe("Decisions entry", () => {
       openedRoutes[1]!.letGo();
       await stopDecisions();
       expect(sources.hostId()).toBeNull();
+    });
+
+    it("loads the MCP server's module for the route's hold when nothing else has", async () => {
+      mcpRefs.loaded = false;
+      saved.value = { enabled: true, ...RELAY };
+      await startDecisionsIfEnabled();
+      connections[0]!.options.onQuestionsReady!({
+        identity: () => null,
+        live: () => null,
+        store: {} as never,
+        policy: {} as never,
+      });
+      const route = { path: "/mcp/decisions", handle: async () => {} };
+      await expect(
+        openedRoutes[0]!.sources.holdListener("decisions", route)
+      ).resolves.toMatchObject({ port: 4200 });
+      expect(mcpRefs.lazyHoldListener).toHaveBeenCalledWith("decisions", route);
+      openedRoutes[0]!.letGo();
+      await stopDecisions();
     });
 
     it("connects at boot once a relay is set up, and not before", async () => {
@@ -1751,6 +1796,63 @@ describe("Decisions entry", () => {
       expect(peekDecisionsService()).toBeNull();
       expect(kitRuns.make).not.toHaveBeenCalled();
       expect(kitRuns.check).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("launch port (#16012)", () => {
+    const SOURCE = {
+      identity: () => null,
+      live: () => null,
+      store: {} as never,
+      policy: {} as never,
+    };
+
+    it("is null while off, and makes no service", async () => {
+      saved.value = { enabled: false, ...RELAY };
+      await expect(decisionsLaunchPort()).resolves.toBeNull();
+      expect(peekDecisionsService()).toBeNull();
+    });
+
+    it("starts the lifetime boot hasn't, and hands over the route's port once it opens", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      const port = decisionsLaunchPort();
+      await vi.waitFor(() => expect(connections).toHaveLength(1));
+      connections[0]!.options.onQuestionsReady!(SOURCE);
+
+      await expect(port).resolves.toBe(4100);
+      // Boot's own start later carries on the same lifetime.
+      await startDecisionsIfEnabled();
+      expect(connections).toHaveLength(1);
+      await expect(decisionsLaunchPort()).resolves.toBe(4100);
+      openedRoutes[0]!.letGo();
+      await stopDecisions();
+    });
+
+    it("is null at once with no relay set up, and after quitting", async () => {
+      saved.value = { enabled: true };
+      await expect(decisionsLaunchPort()).resolves.toBeNull();
+      expect(connections).toHaveLength(0);
+
+      saved.value = { enabled: true, ...RELAY };
+      await stopDecisions();
+      await expect(decisionsLaunchPort()).resolves.toBeNull();
+    });
+
+    it("goes ahead without the route once the wait is up", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      // A connection still loading its identity: a keychain prompt, say.
+      await startDecisionsIfEnabled();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      try {
+        const port = decisionsLaunchPort();
+        await vi.advanceTimersByTimeAsync(5_000);
+        await expect(port).resolves.toBeNull();
+        expect(connections).toHaveLength(1);
+        expect(openedRoutes).toHaveLength(0);
+      } finally {
+        vi.useRealTimers();
+      }
+      await stopDecisions();
     });
   });
 });

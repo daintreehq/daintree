@@ -768,7 +768,7 @@ describe("DecisionsMcpRoute", () => {
     await vi.waitFor(() => expect(route).not.toBeNull());
     const closing = decisions.close();
     expect(await answerOf(route!)).toBe(404);
-    grant({ release });
+    grant({ port: 4100, release });
     await opened;
     await closing;
     expect(release).toHaveBeenCalledTimes(1);
@@ -779,7 +779,7 @@ describe("DecisionsMcpRoute", () => {
     const previous = new Promise<void>((resolve) => {
       letGo = resolve;
     });
-    const holdListener = vi.fn(async () => ({ release: vi.fn(async () => {}) }));
+    const holdListener = vi.fn(async () => ({ port: 4100, release: vi.fn(async () => {}) }));
     const next = new DecisionsMcpRoute(bridge, authenticator, holdListener);
     const opened = next.open(previous);
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -792,7 +792,7 @@ describe("DecisionsMcpRoute", () => {
     const again = new Promise<void>((resolve) => {
       letGoAgain = resolve;
     });
-    const unused = vi.fn(async () => ({ release: vi.fn(async () => {}) }));
+    const unused = vi.fn(async () => ({ port: 4100, release: vi.fn(async () => {}) }));
     const closedFirst = new DecisionsMcpRoute(bridge, authenticator, unused);
     const openedLate = closedFirst.open(again);
     const closing = closedFirst.close();
@@ -800,5 +800,29 @@ describe("DecisionsMcpRoute", () => {
     await openedLate;
     await closing;
     expect(unused).not.toHaveBeenCalled();
+  });
+
+  it("reports where launches reach it: the hold's port, none once closed or when the hold failed", async () => {
+    let port: number | null = 4100;
+    const route = new DecisionsMcpRoute(bridge, authenticator, async () => ({
+      get port() {
+        return port;
+      },
+      release: vi.fn(async () => {}),
+    }));
+    expect(await new DecisionsMcpRoute(bridge, authenticator, vi.fn()).listenerPort()).toBeNull();
+    void route.open();
+    await expect(route.listenerPort()).resolves.toBe(4100);
+    // The listener moved: the hold's live port, not the one first seen.
+    port = 4101;
+    await expect(route.listenerPort()).resolves.toBe(4101);
+    await route.close();
+    await expect(route.listenerPort()).resolves.toBeNull();
+
+    const refused = new DecisionsMcpRoute(bridge, authenticator, async () => {
+      throw new Error("no listener");
+    });
+    await refused.open().catch(() => {});
+    await expect(refused.listenerPort()).resolves.toBeNull();
   });
 });
