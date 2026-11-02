@@ -208,7 +208,9 @@ vi.mock("@/components/Panel", async () => {
           <span
             data-testid="group-reorder"
             data-group-id={reorder?.groupId}
-            onClick={() => reorder?.onTabReorder([...(props.tabs ?? [])].reverse().map((t) => t.id))}
+            onClick={() =>
+              reorder?.onTabReorder([...(props.tabs ?? [])].reverse().map((t) => t.id))
+            }
           />
           {props.toolbar}
           {props.children}
