@@ -183,9 +183,18 @@ export class DaintreeTerminalSink implements TerminalSink {
    * differently, and a run that is no longer there is never searched.
    */
   async hasMarker(target: TerminalTarget, injectionId: string): Promise<boolean> {
+    return (await this.readMarker(target, injectionId)) === true;
+  }
+
+  /**
+   * As `hasMarker`, telling a screen that couldn't be read (null) from one
+   * read without the marker (false): the run was there a moment ago, so a
+   * read that failed or a run that changed since says nothing either way.
+   */
+  async readMarker(target: TerminalTarget, injectionId: string): Promise<boolean | null> {
     if (!MARKER_ID.test(injectionId)) return false;
     const observed = await this.observe(target);
-    if (observed.state !== "alive") return false;
+    if (observed.state !== "alive") return null;
     const client = this.deps.getPtyClient();
     if (client?.getSerializedStateAsync === undefined) return false;
     let data: string | undefined;
@@ -193,9 +202,10 @@ export class DaintreeTerminalSink implements TerminalSink {
       data = (await client.getSerializedStateAsync(target.paneId, { tailRows: MARKER_SEARCH_ROWS }))
         ?.data;
     } catch {
-      return false;
+      return null;
     }
-    if (data === undefined || identityMismatch(this.deps, target) !== null) return false;
+    // The pty client answers a read that failed with nothing.
+    if (data === undefined || identityMismatch(this.deps, target) !== null) return null;
     const screen = tailCapturedOutput(data, MARKER_SEARCH_ROWS, true).content;
     // The id is random hex, so it is found whole even across a wrapped row.
     return screen.replace(WRAP_NOISE, "").includes(injectionId);

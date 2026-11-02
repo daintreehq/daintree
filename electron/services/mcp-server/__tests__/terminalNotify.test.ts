@@ -2720,6 +2720,30 @@ describe("wake scopes (#15999)", () => {
     expect(scoped.outcomes).toEqual([{ kind: "delivered" }]);
   });
 
+  it("ends a scope's queued wakes on cancel, takes no more, and lets a submitted line confirm", async () => {
+    const h = setup({ enabled: false });
+    const scope = h.service.openWakeScope();
+    const submitted = fakeWake("decision-1");
+    scope.enqueueWake(PANE, PROJECT, submitted.wake);
+    await vi.advanceTimersByTimeAsync(NOTIFY_COALESCE_MS + 100);
+    const line = h.client.submitted[0];
+    h.client.records.set(line.token!, { phase: "queued", at: Date.now() });
+    const queued = fakeWake("decision-2");
+    scope.enqueueWake({ key: "pane\u0000principal-2", terminalId: "t-idle" }, PROJECT, queued.wake);
+
+    scope.cancelQueued();
+    expect(queued.outcomes).toEqual([{ kind: "unavailable", reason: "stopped" }]);
+    expect(h.client.withdrawn).toEqual([]);
+    const late = fakeWake("decision-3");
+    scope.enqueueWake(PANE, PROJECT, late.wake);
+    expect(late.outcomes).toEqual([{ kind: "unavailable", reason: "notices-off" }]);
+
+    h.client.records.set(line.token!, { phase: "pty_written", at: Date.now() });
+    await flushWake();
+    expect(submitted.outcomes).toEqual([{ kind: "delivered" }]);
+    scope.release();
+  });
+
   it("disposes everything as before when no scope is live", async () => {
     const h = setup();
     h.service.openWakeScope().release();

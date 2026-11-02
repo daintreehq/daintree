@@ -6,6 +6,7 @@ import { broadcastToProjectRenderers } from "../../ipc/utils.js";
 import { getAllAppWebContents } from "../../window/webContentsRegistry.js";
 import { getMcpServerServiceRef, getPtyClient } from "../../window/serviceRefs.js";
 import { mcpPaneConfigService } from "../McpPaneConfigService.js";
+import { events } from "../events.js";
 import type { RelayConfig } from "@daintreehq/decisions-client";
 import { newId } from "@daintreehq/decisions-crypto";
 import {
@@ -42,7 +43,8 @@ import {
   readDecisionsSettings,
   writeDecisionsSettings,
 } from "./decisionsSettings.js";
-import type { DecisionsService } from "./DecisionsService.js";
+import type { PaneSignal } from "./answerDelivery.js";
+import type { DecisionsDeliveryDeps, DecisionsService } from "./DecisionsService.js";
 import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
 import { buildDecisionsArchive, type DecisionsArchive } from "./dataExport.js";
 import { openDecisionsMcpRoute, type DecisionsMcpRouteSources } from "./mcpRoute.js";
@@ -198,6 +200,35 @@ function mcpRouteSources(running: () => DecisionsService | null): DecisionsMcpRo
   };
 }
 
+/** Main's pane events that may let a pane take an answer now. */
+function watchPanes(onPane: (signal: PaneSignal) => void): () => void {
+  const offs = [
+    events.on("agent:state-changed", ({ terminalId, state }) => {
+      if (terminalId && state === "waiting") onPane("settled");
+    }),
+    events.on("agent:detected", () => onPane("appeared")),
+    events.on("agent:spawned", () => onPane("appeared")),
+    events.on("terminal:restored", () => onPane("appeared")),
+  ];
+  return () => {
+    for (const off of offs) off();
+  };
+}
+
+/**
+ * What delivery reaches in the rest of main (#16017). The MCP server loads
+ * only once a lifetime with a relay first delivers.
+ */
+const deliveryDeps: DecisionsDeliveryDeps = {
+  principalFor: (paneId) => mcpPaneConfigService.getOrchestratorPane(paneId)?.principalId ?? null,
+  getPtyClient: () => getPtyClient(),
+  holdWakes: async () => {
+    const { mcpServerService } = await import("../McpServerService.js");
+    return mcpServerService.holdWakes();
+  },
+  watchPanes,
+};
+
 function serialize<T>(step: () => Promise<T>): Promise<T> {
   const run = transitions.then(step);
   transitions = run.catch(() => {});
@@ -220,6 +251,7 @@ export function getDecisionsService(): Promise<DecisionsService> {
         forgetIdentity: forgetRecordedIdentity,
         openQuestions: (source, previousClosed) =>
           openDecisionsMcpRoute(source, sources, previousClosed),
+        delivery: deliveryDeps,
       });
       next.onStatusChanged(() => publishStatus());
       service = next;
@@ -420,8 +452,8 @@ export function disconnectRelay(): Promise<DecisionsStatus> {
   return serialize(async () => {
     const { service: running, keys } = await setupKeys();
     forgetOwnerDevices();
-    // The socket runs on these keys, so it closes before they go.
-    running.suspendConnection();
+    // The socket and delivery run on these keys, so they stop before the keys go.
+    await running.suspendConnection();
     try {
       await keys.clear();
     } catch (error) {

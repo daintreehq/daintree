@@ -35,7 +35,7 @@ export function observeQuestionWrites<T extends LocalStore>(store: T, onWrite: (
  * that lands after its lifetime ended changes nothing.
  */
 export class QuestionRowsFeed {
-  private reading = false;
+  private reading: Promise<void> | null = null;
   private again = false;
   private stopped = false;
 
@@ -44,14 +44,15 @@ export class QuestionRowsFeed {
     private readonly apply: (rows: readonly QuestionRow[]) => void
   ) {}
 
-  refresh(): void {
-    if (this.stopped) return;
+  /** Resolves once a read begun after this ask has been fed, or at once when stopped. */
+  refresh(): Promise<void> {
+    if (this.stopped) return Promise.resolve();
     if (this.reading) {
       this.again = true;
-      return;
+      return this.reading;
     }
-    this.reading = true;
-    void this.run();
+    this.reading = this.run();
+    return this.reading;
   }
 
   stop(): void {
@@ -73,7 +74,7 @@ export class QuestionRowsFeed {
         this.apply(rows);
       } while (this.again && !this.stopped);
     } finally {
-      this.reading = false;
+      this.reading = null;
     }
   }
 }

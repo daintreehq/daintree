@@ -2,8 +2,11 @@ import { networkInterfaces } from "node:os";
 import { net, powerMonitor } from "electron";
 import type {
   InjectResult,
+  InjectionIntent,
+  LocalStore,
   LocateResult,
   QuestionOrigin,
+  QuestionRow,
   TerminalSink,
   WebSocketLike,
 } from "@daintreehq/decisions-client";
@@ -105,9 +108,10 @@ export function retireable<T extends object>(target: T, isRetired: () => boolean
 }
 
 /**
- * Until delivery lands (#16017), received answers stay saved and undelivered:
- * every pane reads as present but busy, so the delivery engine defers without
- * changing a question's status, and nothing is ever typed.
+ * The sink a socket attempt's bridge runs with. Answers are typed by the
+ * lifetime's delivery (`AnswerDelivery`, #16017), never by an attempt: every
+ * pane reads as present but busy, so an attempt's engine, which also runs
+ * stopped, defers without changing a question's status and types nothing.
  */
 export const holdingTerminalSink: TerminalSink = {
   locate: async (origin: QuestionOrigin): Promise<LocateResult> => ({
@@ -115,9 +119,37 @@ export const holdingTerminalSink: TerminalSink = {
     target: targetOf(origin),
   }),
   isIdle: async () => false,
-  inject: async (): Promise<InjectResult> => ({ outcome: "held", reason: "delivery-not-wired" }),
+  inject: async (): Promise<InjectResult> => ({ outcome: "held", reason: "socket-attempt" }),
   hasMarker: async () => false,
 };
+
+/**
+ * The store as a socket attempt's bridge sees it once delivery runs for the
+ * lifetime (#16017). The attempt's own delivery engine never types, so it
+ * sees no injection intents: on start it would otherwise reconcile the
+ * lifetime engine's injections as ones a crash interrupted. Each answer its
+ * inbox makes deliverable is passed on once that write has committed.
+ */
+export function socketBridgeStore<T extends LocalStore>(store: T, onAnswerReceived: () => void): T {
+  return new Proxy(store, {
+    get(object, property) {
+      const value: unknown = Reflect.get(object, property, object);
+      if (property === "openIntents") return async (): Promise<InjectionIntent[]> => [];
+      if (property === "updateQuestion") {
+        return (id: string, patch: Partial<QuestionRow>) => {
+          const written = object.updateQuestion(id, patch);
+          if (patch.delivery_status === "desktop-received") {
+            written.then(onAnswerReceived, () => {});
+          }
+          return written;
+        };
+      }
+      return typeof value === "function"
+        ? (value as (...args: unknown[]) => unknown).bind(object)
+        : value;
+    },
+  });
+}
 
 /**
  * This machine's network as a comparable string: whether Chromium thinks it

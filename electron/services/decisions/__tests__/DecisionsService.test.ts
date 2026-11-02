@@ -17,13 +17,18 @@ import type {
 import { outstandingRows, row } from "./questionRows.js";
 import type { DecisionsRows } from "../localData.js";
 import type { QuestionSource, RelayConnectionOptions } from "../relayConnection.js";
+import type { QuestionRow } from "@daintreehq/decisions-client";
 
 interface FakeStore {
   close: ReturnType<typeof vi.fn>;
 }
 
 function fakeStore(): FakeStore & DaintreeLocalStore {
-  return { close: vi.fn(async () => {}) } as unknown as FakeStore & DaintreeLocalStore;
+  return {
+    close: vi.fn(async () => {}),
+    onCommit: () => () => {},
+    listQuestions: async () => [],
+  } as unknown as FakeStore & DaintreeLocalStore;
 }
 
 /** A key file nothing writes, so each start finds no deletion to finish. */
@@ -393,6 +398,37 @@ describe("DecisionsService pane state", () => {
     expect(service.getPaneState("pane-a")).toBeNull();
   });
 
+  it("shows each pane what the store holds when it starts, and again after each commit", async () => {
+    let rows = [row(1)];
+    const listeners = new Set<() => void>();
+    const store = {
+      ...fakeStore(),
+      onCommit: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      listQuestions: async () => rows,
+    } as unknown as DaintreeLocalStore;
+    const pushes: PaneDecisionState[] = [];
+    const service = new DecisionsService({
+      openStore: async () => store,
+      keyFilePath: () => ABSENT_KEY_FILE,
+      publishPaneState: (_projectId, state) => pushes.push(state),
+    });
+
+    await service.start(on());
+    expect(service.getPaneState("pane-a")?.openQuestions).toHaveLength(1);
+
+    rows = [row(1), row(2)];
+    for (const listener of listeners) listener();
+    for (const listener of listeners) listener();
+    await vi.waitFor(() => expect(service.getPaneState("pane-a")?.openQuestions).toHaveLength(2));
+    expect(pushes).toHaveLength(2);
+
+    await service.stop();
+    expect(listeners.size).toBe(0);
+  });
+
   it("pushes and answers each pane's state while running", async () => {
     const { pushes, service } = withPushes();
     await service.start(on());
@@ -562,6 +598,65 @@ describe("DecisionsService relay connection", () => {
     return { service, events, made, revoked };
   }
 
+  it("closes the store only once a stopped connection has settled its deliveries", async () => {
+    const events: string[] = [];
+    let settle!: () => void;
+    const service = new DecisionsService({
+      openStore: async () => {
+        const store = fakeStore();
+        store.close.mockImplementation(async () => {
+          events.push("store closed");
+        });
+        return store;
+      },
+      keyFilePath: () => "/nonexistent/keys.bin",
+      connect: () => ({
+        start: () => {},
+        stop: () => {
+          events.push("connection stopped");
+          return new Promise<void>((resolve) => {
+            settle = () => {
+              events.push("deliveries settled");
+              resolve();
+            };
+          });
+        },
+      }),
+    });
+    await service.start(on(RELAY));
+
+    const stopping = service.stop();
+    await vi.waitFor(() => expect(events).toEqual(["connection stopped"]));
+    settle();
+    await stopping;
+    expect(events).toEqual(["connection stopped", "deliveries settled", "store closed"]);
+  });
+
+  it("hands delivery this machine's host id as the running settings name it", async () => {
+    const delivery = {
+      principalFor: () => null,
+      getPtyClient: () => null,
+      holdWakes: () => ({ queueWake: () => {}, cancelQueued: () => {}, release: () => {} }),
+      watchPanes: () => () => {},
+    };
+    const made: RelayConnectionOptions[] = [];
+    const service = new DecisionsService({
+      openStore: async () => fakeStore(),
+      keyFilePath: () => "/nonexistent/keys.bin",
+      delivery,
+      connect: (options) => {
+        made.push(options);
+        return { start: () => {}, stop: () => {} };
+      },
+    });
+    await service.start(on({ ...RELAY, hostId: "host_aaaaaaaa" }));
+
+    expect(made[0].delivery?.watchPanes).toBe(delivery.watchPanes);
+    expect(made[0].delivery?.hostId()).toBe("host_aaaaaaaa");
+    await service.stop();
+    expect(made[0].delivery?.hostId()).toBeNull();
+  });
+
   it("runs no connection without a complete relay identity", async () => {
     const { service, made } = connected();
     await service.start(
@@ -706,6 +801,106 @@ describe("DecisionsService relay connection", () => {
     service.resumeConnection();
 
     expect(events).toEqual(["started 1", "stopped 1", "started 2"]);
+  });
+
+  it("starts a replacement connection only once the one stopped before it has settled", async () => {
+    const events: string[] = [];
+    const settles: Array<() => void> = [];
+    const made: RelayConnectionOptions[] = [];
+    const service = new DecisionsService({
+      openStore: async () => fakeStore(),
+      keyFilePath: () => "/nonexistent/keys.bin",
+      connect: (options) => {
+        made.push(options);
+        const n = made.length;
+        return {
+          start: () => events.push(`started ${n}`),
+          stop: () => {
+            events.push(`stopped ${n}`);
+            return new Promise<void>((resolve) => {
+              settles.push(() => {
+                events.push(`settled ${n}`);
+                resolve();
+              });
+            });
+          },
+        };
+      },
+    });
+    await service.start(on(RELAY));
+
+    // Another identity: a disconnect and a new claim.
+    service.updateSettings(on({ ...RELAY, deviceId: "dev_87654321" }));
+    await Promise.resolve();
+    expect(events).toEqual(["started 1", "stopped 1"]);
+
+    settles[0]!();
+    await vi.waitFor(() =>
+      expect(events).toEqual(["started 1", "stopped 1", "settled 1", "started 2"])
+    );
+    expect(made[1]!.relay.deviceId).toBe("dev_87654321");
+  });
+
+  it.each([
+    ["a stop", (service: DecisionsService) => service.stop()],
+    ["a suspension", (service: DecisionsService) => service.suspendConnection()],
+  ] as const)(
+    "starts no replacement still waiting on a settling connection after %s",
+    async (_label, end) => {
+      const settles: Array<() => void> = [];
+      const made: RelayConnectionOptions[] = [];
+      const stopped: number[] = [];
+      const service = new DecisionsService({
+        openStore: async () => fakeStore(),
+        keyFilePath: () => "/nonexistent/keys.bin",
+        connect: (options) => {
+          made.push(options);
+          const n = made.length;
+          return {
+            start: () => {},
+            stop: () => {
+              stopped.push(n);
+              return new Promise<void>((resolve) => settles.push(resolve));
+            },
+          };
+        },
+      });
+      await service.start(on(RELAY));
+      service.updateSettings(on({ ...RELAY, deviceId: "dev_87654321" }));
+
+      const ending = end(service);
+      settles[0]!();
+      await ending;
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(made).toHaveLength(1);
+      expect(stopped).toEqual([1]);
+    }
+  );
+
+  it("resolves a suspension only once its connection has settled, so the keys can go", async () => {
+    let settle!: () => void;
+    const service = new DecisionsService({
+      openStore: async () => fakeStore(),
+      keyFilePath: () => "/nonexistent/keys.bin",
+      connect: () => ({
+        start: () => {},
+        stop: () =>
+          new Promise<void>((resolve) => {
+            settle = resolve;
+          }),
+      }),
+    });
+    await service.start(on(RELAY));
+
+    let suspended = false;
+    const suspending = service.suspendConnection().then(() => {
+      suspended = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(suspended).toBe(false);
+    settle();
+    await suspending;
+    expect(suspended).toBe(true);
   });
 
   it("names the store as the problem when it can't open for a relay that's set up", async () => {
@@ -903,6 +1098,8 @@ describe("DecisionsService deleting local data", () => {
       forgetFails?: boolean;
       /** Holds the rows from the deletion until it settles. */
       rowsReady?: Promise<void>;
+      /** A stopped connection settles its deliveries only when this does. */
+      connectionSettled?: Promise<void>;
     } = {}
   ) {
     const dir = mkdtempSync(join(tmpdir(), "decisions-service-erase-"));
@@ -911,6 +1108,8 @@ describe("DecisionsService deleting local data", () => {
     const rows = { count: options.rows ?? 2 };
     const pushes: PaneDecisionState[] = [];
     const stores: Array<FakeStore & DaintreeLocalStore> = [];
+    /** The question rows every store opened here holds. */
+    const questions: QuestionRow[] = [];
     let forgetFails = options.forgetFails ?? false;
     const decisionRows: DecisionsRows = {
       erase: () => {
@@ -924,7 +1123,9 @@ describe("DecisionsService deleting local data", () => {
       keyFilePath: () => keyFile,
       openStore: async () => {
         log.push("open store");
-        const store = fakeStore();
+        const store = Object.assign(fakeStore(), {
+          listQuestions: async () => (rows.count > 0 ? [...questions] : []),
+        });
         store.close.mockImplementation(async () => {
           log.push("close store");
         });
@@ -945,7 +1146,12 @@ describe("DecisionsService deleting local data", () => {
       // Recorded, never run: no socket opens in these tests.
       connect: () => ({
         start: () => log.push("connect"),
-        stop: () => log.push("disconnect"),
+        stop: () => {
+          log.push("disconnect");
+          return options.connectionSettled?.then(() => {
+            log.push("deliveries settled");
+          });
+        },
       }),
     });
     return {
@@ -956,6 +1162,7 @@ describe("DecisionsService deleting local data", () => {
       rows,
       pushes,
       stores,
+      questions,
       allowForget: () => {
         forgetFails = false;
       },
@@ -1043,12 +1250,34 @@ describe("DecisionsService deleting local data", () => {
     }
   });
 
+  it("closes the store for a deletion only once the connection's deliveries have settled", async () => {
+    let settle!: () => void;
+    const t = setup({ connectionSettled: new Promise<void>((resolve) => (settle = resolve)) });
+    try {
+      writeFileSync(t.keyFile, KEYS);
+      await t.service.start(on(RELAY));
+      t.log.length = 0;
+      // Another identity: its connection waits on the first to settle, and must not start mid-deletion.
+      t.service.updateSettings(on({ ...RELAY, deviceId: "dev_87654321" }));
+
+      const erasing = t.service.eraseLocalData();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(t.log).toEqual(["disconnect"]);
+      settle();
+      await erasing;
+      expect(t.log.slice(0, 3)).toEqual(["disconnect", "deliveries settled", "close store"]);
+      expect(t.log.filter((entry) => entry === "connect")).toHaveLength(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it("changes nothing when the rows can't be deleted, and carries on with a store", async () => {
     const t = setup({ failErase: true });
     try {
       writeFileSync(t.keyFile, KEYS);
+      t.questions.push(row(1));
       await t.service.start(on(RELAY));
-      t.service.observeQuestions([row(1)]);
 
       await expect(t.service.eraseLocalData()).resolves.toEqual({
         result: "failed",

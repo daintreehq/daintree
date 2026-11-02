@@ -391,6 +391,12 @@ export const MAX_QUEUED_WAKES_PER_PANE = 32;
  */
 export interface WakeScope {
   enqueueWake(pane: OwnPane, projectId: string, wake: LaneWake): void;
+  /**
+   * Ends the scope's wakes still waiting to be typed and takes no more. A
+   * line already submitted stays on its pane until the host confirms it or
+   * the scope is released, so its outcome is still known.
+   */
+  cancelQueued(): void;
   release(): void;
 }
 
@@ -398,6 +404,8 @@ export interface WakeScope {
 interface WakeScopeRecord {
   readonly id: string;
   released: boolean;
+  /** Takes no new wakes; its submitted ones still count as live. */
+  closed?: boolean;
 }
 
 interface WakeEntry {
@@ -980,6 +988,7 @@ export class TerminalNotifyService {
     this.wakeScopes.add(scope);
     return {
       enqueueWake: (pane, projectId, wake) => this.queueWake(pane, projectId, wake, scope),
+      cancelQueued: () => this.cancelQueuedInScope(scope),
       release: () => this.releaseScope(scope),
     };
   }
@@ -1155,6 +1164,23 @@ export class TerminalNotifyService {
    * off, a pane its wakes were keeping is stopped whole, its line taken back
    * if the host still holds it, since nothing else may be typed there.
    */
+  private cancelQueuedInScope(scope: WakeScopeRecord): void {
+    if (scope.released || scope.closed === true) return;
+    scope.closed = true;
+    for (const owner of [...this.ownersByKey.values()]) {
+      let touched = false;
+      for (const [key, entry] of owner.wakes) {
+        if (entry.scope !== scope || entry.token !== undefined) continue;
+        touched = true;
+        owner.wakes.delete(key);
+        reportWake(entry.wake, { kind: "unavailable", reason: "stopped" });
+      }
+      if (!touched) continue;
+      this.publish(owner);
+      this.maybeDispose(owner);
+    }
+  }
+
   private releaseScope(scope: WakeScopeRecord): void {
     if (scope.released) return;
     scope.released = true;
@@ -1181,7 +1207,7 @@ export class TerminalNotifyService {
 
   /** Whether a wake may be queued now: a scoped one needs its scope, any other the server on. */
   private accepts(scope: WakeScopeRecord | undefined): boolean {
-    return scope === undefined ? this.deps.isEnabled() : !scope.released;
+    return scope === undefined ? this.deps.isEnabled() : !scope.released && scope.closed !== true;
   }
 
   /** Whether anything may be typed into this pane now. */

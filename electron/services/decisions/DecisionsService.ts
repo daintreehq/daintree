@@ -6,6 +6,7 @@ import type {
   DecisionsStatusEvent,
   PaneDecisionState,
 } from "../../../shared/types/decisions.js";
+import type { AnswerDeliveryDeps } from "./answerDelivery.js";
 import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
 import { decisionsLibraries, type DecisionsLibraries } from "./libraries.js";
 import { openDecisionsLocalStore, openDecisionsRows } from "./openLocalStore.js";
@@ -33,8 +34,12 @@ export type DecisionsStatusListener = (event: DecisionsStatusEvent) => void;
 /** What the service runs a relay connection with; tests hand in their own. */
 export interface DecisionsRelayConnection {
   start(): void;
-  stop(): void;
+  /** Resolves, if it returns a promise, once the connection writes nothing more to the store. */
+  stop(): void | Promise<void>;
 }
+
+/** What delivery needs from main, apart from this machine's host id, which the service reads from its settings. */
+export type DecisionsDeliveryDeps = Omit<AnswerDeliveryDeps, "hostId">;
 
 export type DecisionsConnectionFactory = (
   options: RelayConnectionOptions
@@ -93,6 +98,8 @@ export interface DecisionsServiceOptions {
    * is served.
    */
   openQuestions?: (source: QuestionSource, previousClosed: Promise<void>) => DecisionsQuestions;
+  /** Types received answers into the panes that asked (#16017); without it answers stay stored. */
+  delivery?: DecisionsDeliveryDeps;
 }
 
 /**
@@ -119,6 +126,7 @@ export class DecisionsService {
   private readonly panes: PaneDecisionStates;
   private readonly connect: DecisionsConnectionFactory;
   private readonly onRelayRevoked: (relay: RelayBinding) => void;
+  private readonly delivery: DecisionsDeliveryDeps | null;
   private connection: DecisionsRelayConnection | null = null;
   private connectionKey: string | null = null;
   /**
@@ -134,6 +142,15 @@ export class DecisionsService {
   private questionsClosing: Promise<void> = Promise.resolve();
   /** Feeds the panes' state from the lifetime's store, for as long as it is open. */
   private feed: QuestionRowsFeed | null = null;
+  private offCommit: (() => void) | null = null;
+  /** Connections stopped but still settling: the store closes only after them. */
+  private readonly stopping = new Set<Promise<void>>();
+  /**
+   * No connection may start: a suspension until the next settings change or
+   * resume, a stop until the next start. Set synchronously, so a reconcile
+   * deferred behind a settling connection can't start one meanwhile.
+   */
+  private paused = false;
   /** The store didn't open for this lifetime; the next start tries it again. */
   private storeFailed = false;
   /**
@@ -158,6 +175,7 @@ export class DecisionsService {
         throw new Error("Nothing saves the Decisions setting here");
       });
     this.openQuestions = options.openQuestions ?? null;
+    this.delivery = options.delivery ?? null;
   }
 
   getStatus(): DecisionsStatus {
@@ -204,22 +222,28 @@ export class DecisionsService {
     if (this.disposed || this.settings === null || !settings.enabled) return;
     this.settings = settings;
     this.applyPolicy(settings);
+    this.paused = false;
     this.reconcileConnection();
   }
 
   /**
    * Stops the relay connection until the next settings change or
    * `resumeConnection`: disconnecting removes the keys it runs on, so it
-   * stops first.
+   * stops first. Resolves once nothing it started can reach the keys or the
+   * store: an answer being typed settles first.
    */
-  suspendConnection(): void {
+  suspendConnection(): Promise<void> {
+    this.paused = true;
     this.dropConnection();
     if (this.settings !== null && !this.disposed) this.setStatus({ state: "not-connected" });
+    return this.settledConnections();
   }
 
   /** Connects again after `suspendConnection`, if the settings still want it. */
   resumeConnection(): void {
-    if (this.settings !== null && !this.disposed) this.reconcileConnection();
+    if (this.settings === null || this.disposed) return;
+    this.paused = false;
+    this.reconcileConnection();
   }
 
   /** Where this lifetime's sealed keys live, read or not. */
@@ -273,6 +297,7 @@ export class DecisionsService {
       if (this.disposed || !settings.enabled) return;
       this.settings = settings;
       this.applyPolicy(settings);
+      this.paused = false;
       // There is no relay identity until a relay is claimed or restored, and no
       // socket until one opens, so on is honestly "not connected" for now.
       if (this.state === "off") this.setStatus({ state: "not-connected" });
@@ -293,9 +318,8 @@ export class DecisionsService {
           await opened?.close();
           return;
         }
-        this.store = opened;
         this.storeFailed = false;
-        this.feedFrom(opened);
+        await this.adoptStore(opened);
       }
       this.reconcileConnection();
     });
@@ -316,30 +340,36 @@ export class DecisionsService {
         throw new Error("Decisions is off, so its data can't be deleted");
       }
       // The connection goes first: nothing may reach the store or keys once they close.
-      this.dropConnection();
-      this.feedFrom(null);
-      const store = this.store;
-      const keyStore = this.keyStore;
-      this.store = null;
-      this.keyStore = null;
+      this.paused = true;
+      let outcome: LocalEraseOutcome;
       try {
-        await store?.close();
-      } finally {
-        await keyStore?.close();
-      }
-      const outcome = await eraseLocalDecisionsData(this.eraseDeps());
-      // Every row is gone, so no pane has anything outstanding.
-      if (outcome.result !== "failed") this.panes.clear(true);
-      if (outcome.result !== "incomplete" && !this.disposed && this.settings !== null) {
+        this.dropConnection();
+        // An answer being typed settles before the store stops taking its result.
+        await this.settledConnections();
+        const store = this.detachStore();
+        const keyStore = this.keyStore;
+        this.keyStore = null;
         try {
-          this.store = await this.openStore(() => this.disposed);
-          this.storeFailed = false;
-          this.feedFrom(this.store);
-        } catch (err) {
-          // The next start tries again; the deletion stands either way.
-          this.storeFailed = true;
-          console.warn("[Decisions] The store didn't reopen after deleting data:", err);
+          await store?.close();
+        } finally {
+          await keyStore?.close();
         }
+        outcome = await eraseLocalDecisionsData(this.eraseDeps());
+        // Every row is gone, so no pane has anything outstanding.
+        if (outcome.result !== "failed") this.panes.clear(true);
+        if (outcome.result !== "incomplete" && !this.disposed && this.settings !== null) {
+          try {
+            const reopened = await this.openStore(() => this.disposed);
+            this.storeFailed = false;
+            await this.adoptStore(reopened);
+          } catch (err) {
+            // The next start tries again; the deletion stands either way.
+            this.storeFailed = true;
+            console.warn("[Decisions] The store didn't reopen after deleting data:", err);
+          }
+        }
+      } finally {
+        this.paused = false;
       }
       // A deletion that changed nothing reconnects; one that forgot the relay has none to.
       if (!this.disposed && this.settings !== null) this.reconcileConnection();
@@ -371,13 +401,14 @@ export class DecisionsService {
    */
   private async release(clearViews: boolean): Promise<void> {
     // The connection goes first: nothing may reach the store or keys once they close.
+    this.paused = true;
     this.dropConnection();
-    this.feedFrom(null);
+    // An answer being typed settles before the store stops taking its result.
+    await this.settledConnections();
     // The route lets go of the listener before the lifetime ends.
     await this.questionsClosing;
-    const store = this.store;
+    const store = this.detachStore();
     const keyStore = this.keyStore;
-    this.store = null;
     this.keyStore = null;
     this.settings = null;
     this.policy = null;
@@ -404,7 +435,7 @@ export class DecisionsService {
     if (settings !== null && relayKey !== this.revokedKey) this.revokedKey = null;
     const revoked =
       relay !== null && (settings?.revokedAt !== null || relayKey === this.revokedKey);
-    const wanted = relay !== null && !revoked && this.store !== null ? relay : null;
+    const wanted = relay !== null && !revoked && this.store !== null && !this.paused ? relay : null;
     const key = wanted ? relayKey : null;
     if (this.connectionKey !== key) this.dropConnection();
     if (wanted === null || key === null) {
@@ -419,13 +450,26 @@ export class DecisionsService {
     const store = this.store;
     const policy = this.policy;
     if (!store || !policy) return;
+    if (this.stopping.size > 0) {
+      // One connection's delivery at a time: a replacement waits for the one
+      // stopped before it to settle what it was typing, or its recovery would
+      // take that injection for a crashed one.
+      void this.settledConnections().then(() => {
+        if (!this.disposed && this.store === store) this.reconcileConnection();
+      });
+      return;
+    }
     let connection: DecisionsRelayConnection | null = null;
     const feed = this.feed;
+    const delivery = this.delivery;
     connection = this.connect({
       relay: wanted,
-      store: observeQuestionWrites(store, () => feed?.refresh()),
+      store: observeQuestionWrites(store, () => void feed?.refresh()),
       keys: this.getKeyStore(),
       policy,
+      ...(delivery
+        ? { delivery: { ...delivery, hostId: () => this.settings?.hostId ?? null } }
+        : {}),
       onStatus: (status) => {
         if (this.connection !== connection) return;
         // Stopped for this lifetime: nothing could publish what an agent asks.
@@ -469,7 +513,29 @@ export class DecisionsService {
     this.connection = null;
     this.connectionKey = null;
     this.closeQuestions();
-    connection?.stop();
+    const stopped = connection?.stop();
+    if (!(stopped instanceof Promise)) return;
+    const settling = stopped.catch(() => {}).finally(() => this.stopping.delete(settling));
+    this.stopping.add(settling);
+  }
+
+  /** Makes `opened` the lifetime's store, and shows each pane what it holds before anything new arrives. */
+  private async adoptStore(opened: DaintreeLocalStore | null): Promise<void> {
+    this.store = opened;
+    await this.feedFrom(opened);
+  }
+
+  /** Lets go of the lifetime's store, and stops feeding the panes from it; the caller closes it. */
+  private detachStore(): DaintreeLocalStore | null {
+    void this.feedFrom(null);
+    const store = this.store;
+    this.store = null;
+    return store;
+  }
+
+  /** Resolves once every connection stopped so far has settled. */
+  private async settledConnections(): Promise<void> {
+    while (this.stopping.size > 0) await Promise.all([...this.stopping]);
   }
 
   private eraseDeps(): LocalEraseDeps {
@@ -485,18 +551,22 @@ export class DecisionsService {
 
   /**
    * The panes show what `store` holds from now on, read once now and again
-   * after every question write; null feeds them nothing, as while the store
-   * is closed.
+   * after every write it commits; null feeds them nothing, as while the store
+   * is closed. Resolves once the first read has been shown.
    */
-  private feedFrom(store: DaintreeLocalStore | null): void {
+  private feedFrom(store: DaintreeLocalStore | null): Promise<void> {
     this.feed?.stop();
     this.feed = null;
-    if (store === null) return;
-    this.feed = new QuestionRowsFeed(
+    this.offCommit?.();
+    this.offCommit = null;
+    if (store === null) return Promise.resolve();
+    const feed = new QuestionRowsFeed(
       () => store.listQuestions(),
       (rows) => this.observeQuestions(rows)
     );
-    this.feed.refresh();
+    this.feed = feed;
+    this.offCommit = store.onCommit(() => void feed.refresh());
+    return feed.refresh();
   }
 
   /** Refuses agents' questions at once; the listener hold goes when the route has let go. */

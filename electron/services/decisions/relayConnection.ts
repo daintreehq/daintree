@@ -7,11 +7,11 @@ import {
   type LocalStore,
   type PolicyRegistry,
   type SocketState,
-  type TerminalSink,
   type WebSocketLike,
 } from "@daintreehq/decisions-client";
 import { WS_CLOSE } from "@daintreehq/decisions-protocol";
 import type { DecisionsConnectionProblem } from "../../../shared/types/decisions.js";
+import { AnswerDelivery, type AnswerDeliveryDeps } from "./answerDelivery.js";
 import { normalizeRelayOrigin } from "./decisionsSettings.js";
 import type { RelayFetch } from "./relayCheck.js";
 import { relayRequests } from "./relayIdentity.js";
@@ -22,6 +22,7 @@ import {
   holdingTerminalSink,
   isRelaySocketUrl,
   retireable,
+  socketBridgeStore,
   watchNetwork,
   watchResume,
 } from "./relayTransport.js";
@@ -41,8 +42,14 @@ export type RelayConnectionStatus =
   | { state: "revoked" }
   | { state: "not-connected"; problem: DecisionsConnectionProblem };
 
-/** The store as a connection uses it: the library's, and whether it stopped taking writes. */
-export type RelayConnectionStore = LocalStore & { isFaulted?(): boolean };
+/**
+ * The store as a connection uses it: the library's, whether it stopped taking
+ * writes, and whether any answer waits to be typed.
+ */
+export type RelayConnectionStore = LocalStore & {
+  isFaulted?(): boolean;
+  hasPendingDelivery?(): Promise<boolean>;
+};
 
 /**
  * What agents' questions are asked through while a connection runs (#16011):
@@ -74,7 +81,12 @@ export interface RelayConnectionOptions {
   onRevoked(): void;
   webSocket?: (url: string) => WebSocketLike;
   fetchImpl?: RelayFetch;
-  sink?: TerminalSink;
+  /**
+   * Types received answers into the panes that asked (#16017), for as long as
+   * the connection lasts, whether or not a socket is up. Without it answers
+   * stay stored and untyped.
+   */
+  delivery?: AnswerDeliveryDeps;
   watchResume?: (onResume: () => void) => () => void;
   watchNetwork?: (onChange: (online: boolean) => void) => () => void;
   now?: () => number;
@@ -157,6 +169,10 @@ export class RelayConnection {
   private watchers: Array<() => void> = [];
   private readonly keys: KeyStore;
   private readonly store: RelayConnectionStore;
+  private delivery: AnswerDelivery | null = null;
+  private stopping: Promise<void> = Promise.resolve();
+  /** Aborts the lifetime's own requests: delivery's reports to the relay. */
+  private readonly lifetime = new AbortController();
 
   constructor(options: RelayConnectionOptions) {
     this.o = options;
@@ -185,12 +201,15 @@ export class RelayConnection {
   /**
    * Ends the connection for good. Everything it started stops now; work a
    * retired attempt had already handed to the store finishes there, and the
-   * next lifetime picks up from what was committed.
+   * next lifetime picks up from what was committed. Resolves once delivery
+   * writes nothing more: an answer being typed settles first, briefly, so
+   * its outcome is recorded.
    */
-  stop(): void {
-    if (this.ended) return;
+  stop(): Promise<void> {
+    if (this.ended) return this.stopping;
     this.end();
     if (this.current) this.retire(this.current);
+    return this.stopping;
   }
 
   /**
@@ -250,6 +269,8 @@ export class RelayConnection {
       policy: this.o.policy,
     });
     if (this.ended) return;
+    await this.startDelivery(identity);
+    if (this.ended) return;
     this.watchers.push(
       (this.o.watchResume ?? watchResume)(() => this.reconnectNow()),
       (this.o.watchNetwork ?? watchNetwork)((online) => {
@@ -272,6 +293,37 @@ export class RelayConnection {
     if (recorded !== null) return false;
     await this.store.setMeta(RELAY_BINDING_META_KEY, wanted);
     return true;
+  }
+
+  /**
+   * Delivery runs for the connection's lifetime, not an attempt's, so an
+   * answer already stored is typed while the relay is out of reach.
+   */
+  private async startDelivery(identity: Identity): Promise<void> {
+    const deps = this.o.delivery;
+    if (!deps) return;
+    let requests: Awaited<ReturnType<typeof relayRequests>>;
+    try {
+      requests = await relayRequests(this.o.relay.relayOrigin, {
+        fetchImpl: this.o.fetchImpl,
+        signal: this.lifetime.signal,
+      });
+    } catch {
+      console.warn("[Decisions] Answers can't be delivered: no way to reach the relay was made");
+      return;
+    }
+    if (this.ended) return;
+    const delivery = new AnswerDelivery({
+      deps,
+      identity,
+      store: this.o.store,
+      keys: this.o.keys,
+      // Reports are retried on every pass while they fail, so each is tried once.
+      client: new RelayClient({ identity, fetch: requests.fetch, maxRetries: 0 }),
+      onKeysUnusable: () => this.halt({ state: "not-connected", problem: "keys" }),
+    });
+    this.delivery = delivery;
+    delivery.start();
   }
 
   private begin(): void {
@@ -314,14 +366,20 @@ export class RelayConnection {
       bridge = new DecisionsBridge({
         identity,
         keyStore: this.bridgeKeys(attempt, retireable(this.keys, retired)),
-        store: retireable(this.store, retired),
-        sink: this.o.sink ?? holdingTerminalSink,
+        store: socketBridgeStore(retireable(this.store, retired), () => this.delivery?.request()),
+        sink: holdingTerminalSink,
         policy: this.o.policy,
         // The outbox keeps its own retry times, so a request is tried once per pass.
         client: new RelayClient({ identity, fetch: requests.fetch, maxRetries: 0 }),
         webSocket: (url) => this.openSocket(attempt, url),
         ...(this.o.pumpIntervalMs !== undefined ? { pumpIntervalMs: this.o.pumpIntervalMs } : {}),
       });
+      // Answers are typed by the lifetime's delivery. An attempt's own engine
+      // would stop with its socket, and reconcile the lifetime's injections as
+      // crashed ones each time an attempt starts.
+      bridge.delivery.stopped = true;
+      // Its inbox appends answers to the rows delivery marks delivered.
+      if (this.delivery) bridge.ctx.lock = this.delivery.lock;
       attempt.bridge = bridge;
       const started = bridge;
       attempt.offs.push(
@@ -396,6 +454,8 @@ export class RelayConnection {
         attempt.helloTimer = null;
         this.failures = 0;
         this.publish({ state: "connected" });
+        // Deliveries made while the relay was out of reach can be reported now.
+        if (state === "live") this.delivery?.request();
         return;
       case "backoff":
         // The library schedules its own retry right after saying so; once it
@@ -487,6 +547,13 @@ export class RelayConnection {
     this.ended = true;
     this.clearRetry();
     for (const off of this.watchers.splice(0)) off();
+    // Reports to the relay stop now: a stalled one must not hold up the local
+    // record of an answer being typed. A delivery's report is sent again next
+    // lifetime; a failure's is best effort, as the library makes it.
+    this.lifetime.abort();
+    const delivery = this.delivery;
+    this.delivery = null;
+    if (delivery) this.stopping = delivery.stop();
   }
 
   private clearRetry(): void {

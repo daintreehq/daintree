@@ -1,0 +1,2 @@
+-- Decisions answers waiting to be typed (#16017): the minute check reads this index alone, so it costs nothing when no answer is waiting. A row leaves it once every answer is typed, or a person has to decide.
+CREATE INDEX IF NOT EXISTS `decisions_questions_pending_delivery_idx` ON `decisions_questions` (`alias`) WHERE `delivery_status` IN ('desktop-received', 'pending-host') AND `history_only` = 0;

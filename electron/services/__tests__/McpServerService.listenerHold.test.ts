@@ -595,4 +595,34 @@ describe("McpServerService listener holds (#15999)", () => {
     hold.queueWake(pane, "project-1", released.wake);
     expect(released.outcomes).toEqual([{ kind: "unavailable", reason: "notices-off" }]);
   });
+
+  it("takes a wake hold's wakes with the server off and no listener open, until released or shutdown", async () => {
+    await boot(false);
+    const hold = service.holdWakes();
+    const pane = { key: "pane\u0000principal-1", terminalId: "t-1" };
+    expect(service.isRunning).toBe(false);
+
+    // Past the server gate: here there is no terminal host to read the pane from.
+    const scoped = recordingWake("decision-1");
+    hold.queueWake(pane, "project-1", scoped.wake);
+    expect(scoped.outcomes).toEqual([{ kind: "unavailable", reason: "unreadable" }]);
+
+    // Cancelled: no more wakes are taken, though the hold is still held.
+    hold.cancelQueued();
+    const cancelled = recordingWake("decision-1b");
+    hold.queueWake(pane, "project-1", cancelled.wake);
+    expect(cancelled.outcomes).toEqual([{ kind: "unavailable", reason: "notices-off" }]);
+
+    hold.release();
+    hold.release();
+    const released = recordingWake("decision-2");
+    hold.queueWake(pane, "project-1", released.wake);
+    expect(released.outcomes).toEqual([{ kind: "unavailable", reason: "notices-off" }]);
+
+    const ended = service.holdWakes();
+    await service.stop();
+    const late = recordingWake("decision-3");
+    ended.queueWake(pane, "project-1", late.wake);
+    expect(late.outcomes).toEqual([{ kind: "unavailable", reason: "notices-off" }]);
+  });
 });
