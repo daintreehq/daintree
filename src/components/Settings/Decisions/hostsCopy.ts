@@ -7,9 +7,12 @@ import type {
   DecisionsHostsResult,
 } from "@shared/types/decisionsHosts";
 
-/** The switch's own words: what enrolling gives a Host, and what turning it off leaves. */
+/**
+ * The switch's own words: what enrolling gives a Host, how turning Decisions
+ * off reaches it (#16022), and what turning this off leaves.
+ */
 export const AUTO_ENROLL_SUBTITLE =
-  "Each Remote Host you connect to gets its own keys, so its agents can ask you even while this computer sleeps, and it can read every question and answer. Turn this off to enroll Hosts one at a time.";
+  "Each Remote Host you connect to gets its own keys, so its agents can ask you even while this computer sleeps, and it can read every question and answer. Turning Decisions off here turns it off on each Host when this computer next connects to it. Turn this off to enroll Hosts one at a time.";
 
 function sentence(detail: string | undefined): string {
   if (!detail) return "";
