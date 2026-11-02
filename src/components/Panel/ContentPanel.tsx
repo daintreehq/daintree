@@ -40,6 +40,7 @@ import { useRunUnseenAsk } from "@/hooks/useRunFleetBand";
 import { isUnseenAskPane } from "@/lib/paneSessionPresentation";
 import { isFailedExitCode } from "@/store/panelFailureStore";
 import { usePanelFailureEdge } from "./usePanelFailureEdge";
+import { useGridGroupAttention } from "./gridGroupAttention";
 
 /**
  * Base props for all panel types.
@@ -121,10 +122,6 @@ export interface ContentPanelProps extends BasePanelProps {
   onRestart?: () => void;
   isPinged?: boolean;
   wasJustSelected?: boolean;
-  // Group-level ambient state: highest-urgency agent state across all tabs in a tab group.
-  // When set, this overrides agentState for container border styling so hidden tabs
-  // surface their state on the group container without changing the header chip.
-  ambientAgentState?: AgentState;
 
   // Multi-select indicator. When the pane is part of an armed set of 2+
   // terminals, the title bar lifts. The outer container border stays as-is —
@@ -263,7 +260,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     onRestart,
     isPinged,
     wasJustSelected,
-    ambientAgentState,
     isSelected = false,
     isFleetFollower = false,
     compactTitle,
@@ -449,6 +445,10 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   );
   const ownAgentState = agentState;
   const headerAgentState = getTerminalAgentDisplayState(terminalChrome, ownAgentState);
+  // A grid tab group's hidden tabs reach the edge of the tab it shows, whatever
+  // that tab's kind, without changing its header chip.
+  const groupAttention = useGridGroupAttention(id, location);
+  const ambientAgentState = groupAttention?.ambientAgentState;
   // Determine effective agent state for container border styling.
   // ambientAgentState takes priority so tab groups can surface highest-urgency
   // state from hidden live-agent tabs without affecting the active header chip.
@@ -509,7 +509,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   const exitedFailed = isExited === true && isFailedExitCode(exitCode);
   // The red edge is for a failure the user hasn't had in front of them yet; the
   // header glyph and the inline banners keep it for as long as it lasts.
-  const isFailed = usePanelFailureEdge(
+  const ownFailed = usePanelFailureEdge(
     id,
     {
       wait: isBlockedWait,
@@ -522,6 +522,8 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     isFocused,
     location
   );
+  // A hidden tab's failure clears only by that tab's own look, once shown.
+  const isFailed = ownFailed || groupAttention?.hiddenTabFailed === true;
 
   // Auto-construct the terminal header for PTY-backed terminals when no custom
   // headerContent is provided. One gate covers both the metadata and the status

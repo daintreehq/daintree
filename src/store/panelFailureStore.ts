@@ -141,6 +141,25 @@ function withoutSources(
   return rest;
 }
 
+/**
+ * Whether a record-backed failure the panel shows now is one the user hasn't
+ * had in front of them. A failed submit doesn't count: only a mounted pane
+ * observes one, and its occurrence outlives the failure, so a pane that isn't
+ * showing can neither draw nor clear it.
+ */
+export function hasUnseenRecordFailure(
+  state: Pick<PanelFailureState, "occurrences" | "seen">,
+  panelId: string
+): boolean {
+  const occurrences = state.occurrences[panelId];
+  if (occurrences === undefined) return false;
+  const seen = state.seen[panelId];
+  return RECORD_FAILURE_SOURCES.some((source) => {
+    const occurrence = occurrences[source];
+    return occurrence !== undefined && seen?.[source] !== occurrence.token;
+  });
+}
+
 /** An exit the pane shows as failed: a non-zero code other than an interrupt. */
 export function isFailedExitCode(exitCode: number | null | undefined): boolean {
   return exitCode != null && exitCode !== 0 && exitCode !== 130;

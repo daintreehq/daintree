@@ -65,6 +65,7 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 import { ContentPanel } from "../ContentPanel";
+import { GridGroupAttentionContext, type GridGroupAttention } from "../gridGroupAttention";
 
 const UNREAD_ASK: RunCanopyRefinement = {
   kind: "asked",
@@ -96,11 +97,13 @@ interface PaneProps {
   isFocused?: boolean;
   isExited?: boolean;
   exitCode?: number | null;
-  ambientAgentState?: AgentState;
+  location?: "grid" | "dock" | "dialog";
+  /** What the pane's tab group says about its hidden tabs. */
+  group?: Partial<GridGroupAttention>;
 }
 
-function pane({ isFocused = false, ...props }: PaneProps = {}) {
-  return (
+function pane({ isFocused = false, group, ...props }: PaneProps = {}) {
+  const panel = (
     <ContentPanel
       id="t-1"
       title="Claude"
@@ -115,6 +118,16 @@ function pane({ isFocused = false, ...props }: PaneProps = {}) {
     >
       <div data-testid="panel-body" />
     </ContentPanel>
+  );
+  if (group === undefined) return panel;
+  const value: GridGroupAttention = {
+    panelId: "t-1",
+    ambientAgentState: undefined,
+    hiddenTabFailed: false,
+    ...group,
+  };
+  return (
+    <GridGroupAttentionContext.Provider value={value}>{panel}</GridGroupAttentionContext.Provider>
   );
 }
 
@@ -400,12 +413,53 @@ describe("ContentPanel amber from the fleet band", () => {
   it("raises the edge for a hidden tab's ask even while the shown tab sits at its prompt", () => {
     observe("waiting", "prompt");
     fleet({ agentState: "waiting", waitingReason: "prompt" });
-    const { container } = render(pane({ agentState: "waiting", ambientAgentState: "waiting" }));
+    const { container } = render(
+      pane({ agentState: "waiting", group: { ambientAgentState: "waiting" } })
+    );
 
     expect(hasEdge(container, "waiting")).toBe(true);
     // The shown tab's own glyph keeps to its own band.
     expect(glyphLabel()).toBe("Agent state: waiting");
     expect(wearsWaitingHue()).toBe(false);
+  });
+
+  it("raises the red edge for a hidden tab's unseen failure over a hidden ask, and drops it with the group", () => {
+    observe("waiting", "prompt");
+    fleet({ agentState: "waiting", waitingReason: "prompt" });
+    const asking = { ambientAgentState: "waiting" } as const;
+    const { container, rerender } = render(
+      pane({ agentState: "waiting", group: { ...asking, hiddenTabFailed: true } })
+    );
+    expect(hasEdge(container, "failed")).toBe(true);
+    expect(hasEdge(container, "waiting")).toBe(false);
+    // The shown tab's glyph keeps to its own state.
+    expect(glyphLabel()).toBe("Agent state: waiting");
+
+    rerender(pane({ agentState: "waiting", isFocused: true, group: { hiddenTabFailed: true } }));
+    expect(hasEdge(container, "failed")).toBe(true);
+    expect(frame(container).classList.contains("terminal-selected")).toBe(true);
+
+    // The failed tab's own look cleared it; the hidden ask still draws.
+    rerender(pane({ agentState: "waiting", group: asking }));
+    expect(hasEdge(container, "failed")).toBe(false);
+    expect(hasEdge(container, "waiting")).toBe(true);
+  });
+
+  it("takes no group edge meant for another tab, or outside the grid", () => {
+    observe("waiting", "prompt");
+    fleet({ agentState: "waiting", waitingReason: "prompt" });
+    const loud = { ambientAgentState: "waiting", hiddenTabFailed: true } as const;
+    const other = render(pane({ agentState: "waiting", group: { ...loud, panelId: "t-2" } }));
+    expect(hasEdge(other.container, "failed")).toBe(false);
+    expect(hasEdge(other.container, "waiting")).toBe(false);
+    expect(frame(other.container).hasAttribute("data-ambient-agent-state")).toBe(false);
+    other.unmount();
+
+    for (const location of ["dock", "dialog"] as const) {
+      const { container, unmount } = render(pane({ agentState: "waiting", location, group: loud }));
+      expect(frame(container).hasAttribute("data-ambient-agent-state"), location).toBe(false);
+      unmount();
+    }
   });
 
   it("draws the failed edge for an error wait, with the blocked mark in place of the ring", () => {

@@ -83,6 +83,7 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 import { ContentPanel } from "../ContentPanel";
+import { GridGroupAttentionContext } from "../gridGroupAttention";
 import { focusPanelInput } from "../panelFocusRegistry";
 import { inlineRenameFieldClassName } from "../inlineRenameField";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
@@ -578,8 +579,8 @@ describe("ContentPanel selection chrome", () => {
   }
 
   function renderPanel(overrides: PanelOverrides = {}, id = "t-1") {
-    const { isFocused = true, ...rest } = overrides;
-    return render(
+    const { isFocused = true, ambientAgentState, ...rest } = overrides;
+    const panel = (
       <ContentPanel
         id={id}
         title={`Panel ${id}`}
@@ -592,12 +593,21 @@ describe("ContentPanel selection chrome", () => {
         <div data-testid="panel-body" />
       </ContentPanel>
     );
+    if (ambientAgentState === undefined) return render(panel);
+    // A hidden tab's state reaches the shown pane from its group.
+    return render(
+      <GridGroupAttentionContext.Provider
+        value={{ panelId: id, ambientAgentState, hiddenTabFailed: false }}
+      >
+        {panel}
+      </GridGroupAttentionContext.Provider>
+    );
   }
 
   /**
    * The fleet reads an unread Canopy ask on t-1: the one thing pane chrome
    * draws amber for. An asking pane is stopped, so the work it competes with in
-   * these cases comes from a hidden tab (`ambientAgentState`).
+   * these cases comes from a hidden tab (the group's `ambientAgentState`).
    */
   function askFromFleet() {
     mockState.headerAgentState = "waiting";
