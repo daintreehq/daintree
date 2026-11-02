@@ -2845,9 +2845,12 @@ describe("Decisions entry", () => {
       await expect(getDecisionsStatus()).resolves.toMatchObject({
         setupCheck: { checkedAt: recorded.checkedAt, failedStep: "question" },
       });
-      expect(pushedStatuses().at(-1)).toMatchObject({
-        setupCheck: { checkedAt: recorded.checkedAt, failedStep: "question" },
-      });
+      // Its push goes out behind any status read still under way.
+      await vi.waitFor(() =>
+        expect(pushedStatuses().at(-1)).toMatchObject({
+          setupCheck: { checkedAt: recorded.checkedAt, failedStep: "question" },
+        })
+      );
       // A check of keys known to be gone protects nothing, so the status doesn't show it.
       rmSync(keyFile.path, { force: true });
       expect((await getDecisionsStatus()).setupCheck).toBeUndefined();
@@ -2908,22 +2911,45 @@ describe("Decisions entry", () => {
       saved.value = { enabled: true, ...RELAY };
       await startSetupCheck();
       const check = setupChecks.made[0]!;
+      const untouched = saved.value;
       let release!: () => void;
       setupChecks.holdCancel = new Promise<void>((resolve) => {
         release = resolve;
       });
+      // The run's end also ends the disconnect's wait on it, so the disconnect
+      // is held where it goes on, before the keys and the identity it checked
+      // go: the record is refused while that identity is still the one set up.
+      const service = peekDecisionsService()!;
+      const suspend = service.suspendConnection.bind(service);
+      let suspending!: () => void;
+      const reached = new Promise<void>((resolve) => {
+        suspending = resolve;
+      });
+      let resume!: () => void;
+      const resumed = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      vi.spyOn(service, "suspendConnection").mockImplementationOnce(async () => {
+        suspending();
+        await resumed;
+        return suspend();
+      });
 
       const disconnecting = disconnectRelay();
-      await settle();
-      expect(check.cancelled).toBe(1);
-      // The run ends as passed before its cancel lands: still not recorded.
-      check.finish("passed");
-      await settle();
-      // Not even for a moment, while the disconnect is still under way.
-      expect((saved.value as { setupCheck: unknown }).setupCheck).toBeNull();
-      release();
-      await disconnecting;
-      await settle();
+      try {
+        expect(check.cancelled).toBe(1);
+        // The run ends as passed before its cancel lands: still not recorded.
+        check.finish("passed");
+        // Its own handler has run by the time the disconnect gets past the wait.
+        await reached;
+        // Not even for a moment, while the disconnect is still under way.
+        expect(saved.value).toBe(untouched);
+        expect(getSetupCheck()).toBeNull();
+      } finally {
+        release();
+        resume();
+        await disconnecting;
+      }
 
       expect((saved.value as { setupCheck: unknown }).setupCheck).toBeNull();
       expect(getSetupCheck()).toBeNull();
