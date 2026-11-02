@@ -1430,6 +1430,8 @@ describe("destructive-action danger metadata", () => {
       terminalIds: ["term-placeholder"],
       // terminal.restartOnPreset names the preset to respawn on.
       presetId: "preset-placeholder",
+      // terminal.restartOnAccount names the account to respawn on.
+      accountId: "account-placeholder",
       // terminal.startHeld names how the held pane starts.
       start: "fresh",
       // session.bookmarkAndClose/delete need label + sessionId to clear arg
