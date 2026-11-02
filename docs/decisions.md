@@ -167,7 +167,7 @@ When Daintree stopped while typing an answer in and can't find its marker in the
 
 ## Workflows: the `design-review/final` gate
 
-Daintree registers trusted workflow gates in its own code; an agent can name one but can't change it or ask for less. **Settings → Decisions → Policy** lists them. The one gate today is `design-review/final`: only you can answer, the answer is Approve or Reject and nothing else, and the question has to carry screenshots. A question without a gate needs your own answer too, unless you turn on **Allow proxy answers** under Policy; no decision model is connected yet, so today nothing answers in your place either way.
+Daintree registers trusted workflow gates in its own code; an agent can name one but can't change it or ask for less. **Settings → Decisions → Policy** lists them. The one gate today is `design-review/final`: only you can answer, the answer is Approve or Reject and nothing else, and the question has to carry screenshots. A question without a gate needs your own answer too, unless you turn on **Allow proxy answers** under Policy. Even then, the decision model on your computer answers in your place only after you've turned on its learning, chosen an agent CLI for it and evaluated it against your own past answers, and Settings doesn't offer those yet, so today nothing answers in your place either way. When it does answer, the answer is labelled as a proxy's in your terminal, in the audit trail and on your phone.
 
 A workflow uses the gate from your own skill, command or runbook. Daintree installs nothing into `~/.claude`, `~/.codex` or any other agent config, so adding the step is up to you. A design-review step reads like this:
 
@@ -226,6 +226,6 @@ Questions, answers and their delivery records are stored in Daintree's local dat
 | **Disconnect relay** (Connection) | Removes this computer's Decisions keys and its record of the relay. The relay, everything on it and your paired phones stay as they are. Connecting again needs a recovery kit. |
 | **Export decision history** (Data) | Saves every question and answer stored here, with the audit log, to a file you pick, encrypted with a passphrase. |
 | **Delete relay data** (Data) | Permanently deletes the questions, answers and attachments the relay stores, after you type the relay's host name (such as `decisions.example.workers.dev`). The Worker, its paired devices, this computer's history and anything already on your devices stay. |
-| **Delete local data** (Data) | Deletes this computer's decision history, Decisions keys and record of the relay. Nothing on the relay changes, and paired devices stay paired. |
+| **Delete local data** (Data) | Deletes this computer's decision history (what the decision model learned included), Decisions keys and record of the relay. Nothing on the relay changes, and paired devices stay paired. |
 
 Deleting local data isn't secure erasure. Deleted rows, including the unencrypted ids, session ids and folder paths stored beside the sealed question and answer text, can remain in the database's free pages, its write-ahead log and the app database's rolling backup until those are rewritten. Filesystem snapshots, exports you made and any other copy of your keys, such as a recovery kit, are untouched.

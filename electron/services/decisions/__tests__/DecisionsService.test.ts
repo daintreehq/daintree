@@ -25,7 +25,15 @@ import type {
 import { outstandingRows, row } from "./questionRows.js";
 import type { DecisionsRows } from "../localData.js";
 import type { QuestionSource, RelayConnectionOptions } from "../relayConnection.js";
-import type { QuestionRow } from "@daintreehq/decisions-client";
+import type { LearnedDecision, QuestionRow } from "@daintreehq/decisions-client";
+import {
+  FakeAdapter,
+  MemoryHistoryStore,
+  type HistoryStore,
+  type ModelPrompt,
+} from "@daintreehq/decisions-model";
+import { SqliteHistoryStore } from "@daintreehq/decisions-model/sqlite";
+import { DecisionModelRuntime } from "../decisionModel.js";
 
 interface FakeStore {
   close: ReturnType<typeof vi.fn>;
@@ -1723,5 +1731,261 @@ describe("DecisionsService removing a revoked Host's keys (#16022)", () => {
     await service.stop();
     // No key file at all: nothing to remove, and nothing asked of the keychain.
     await expect(service.clearHostKeys("dev_host_0001")).resolves.toBeUndefined();
+  });
+});
+
+describe("DecisionsService decision model (#16026)", () => {
+  const RELAY = {
+    relayOrigin: "https://relay.example.com",
+    installationId: "inst_12345678",
+    deviceId: "dev_12345678",
+  };
+  const OPTIONS = [
+    { id: "rebase", label: "Rebase onto develop" },
+    { id: "merge", label: "Merge develop in" },
+  ];
+
+  function decision(n: number): LearnedDecision {
+    return {
+      questionId: `q-past-${String(n).padStart(4, "0")}`,
+      question: `Rebase or merge develop before opening the pull request for change ${n}?`,
+      options: OPTIONS,
+      kind: "choice",
+      requirement: "proxy-ok",
+      projectId: "project-1",
+      createdAt: new Date(Date.UTC(2026, 9, 1, 9, n * 10)).toISOString(),
+      chosenAt: new Date(Date.UTC(2026, 9, 1, 9, n * 10 + 5)).toISOString(),
+      selectedOptionIds: ["rebase"],
+      text: "",
+      revision: 1,
+      correction: false,
+    };
+  }
+
+  /** A CLI that always rebases, citing an example it was shown, as a calibrated model would. */
+  function rebasingCli(): FakeAdapter {
+    return new FakeAdapter({
+      responder: (prompt: ModelPrompt) =>
+        JSON.stringify({
+          action: "answer",
+          selected_option_ids: ["rebase"],
+          answer_text: null,
+          confidence_estimate: 0.95,
+          supporting_decision_ids: [/\[example id=(\S+) chosen_at=/.exec(prompt.user)?.[1]],
+          risk_flags: [],
+          rationale: null,
+          reason: null,
+        }),
+    });
+  }
+
+  /** A service whose connections are recorded, never run, over a history kept in memory. */
+  function modelled(
+    openHistory?: (path: string) => HistoryStore,
+    extra: Partial<DecisionsServiceOptions> = {}
+  ) {
+    const dir = mkdtempSync(join(tmpdir(), "decisions-service-model-"));
+    const made: Array<{ options: RelayConnectionOptions; modelChanged: ReturnType<typeof vi.fn> }> =
+      [];
+    const histories: Array<HistoryStore & { close: ReturnType<typeof vi.fn> }> = [];
+    const service = new DecisionsService({
+      openStore: async () => fakeStore(),
+      keyFilePath: () => join(dir, "keys.bin"),
+      model: {
+        openHistory:
+          openHistory ??
+          (() => {
+            const history = Object.assign(new MemoryHistoryStore(), { close: vi.fn() });
+            histories.push(history);
+            return history;
+          }),
+        createAdapter: () => rebasingCli(),
+      },
+      connect: (options) => {
+        const record = { options, modelChanged: vi.fn() };
+        made.push(record);
+        return { start: () => {}, stop: () => {}, modelChanged: record.modelChanged };
+      },
+      ...extra,
+    });
+    return {
+      service,
+      made,
+      histories,
+      dir,
+      cleanup: () => rmSync(dir, { recursive: true, force: true }),
+    };
+  }
+
+  it("hands the owner's connection the model's learner and proxy, and a Host's connection neither", async () => {
+    const t = modelled();
+    try {
+      await t.service.start(on({ ...RELAY, modelLearning: true }));
+      expect(t.made[0]!.options.model).toBeDefined();
+      expect(t.made[0]!.options.model!.proxy()).toBeNull();
+      expect(t.service.getDecisionModel()).not.toBeNull();
+      await vi.waitFor(() => expect(t.histories).toHaveLength(1));
+
+      await t.service.start(on({ ...RELAY, modelLearning: true }), "host");
+      expect(t.made[1]!.options.role).toBe("desktop-host");
+      expect(t.made[1]!.options.model).toBeUndefined();
+      expect(t.service.getDecisionModel()).toBeNull();
+      // The owner's history closed with the owner's lifetime, and the Host's opened none.
+      expect(t.histories).toHaveLength(1);
+      expect(t.histories[0]!.close).toHaveBeenCalledTimes(1);
+      await t.service.stop();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it("learns through the connection's learner only while learning is on, without a new connection", async () => {
+    const t = modelled();
+    try {
+      await t.service.start(on(RELAY));
+      const learner = t.made[0]!.options.model!.learner;
+      await learner.learn(decision(1));
+      expect(t.histories).toHaveLength(0);
+
+      t.service.updateSettings(on({ ...RELAY, modelLearning: true }));
+      await vi.waitFor(() => expect(t.histories).toHaveLength(1));
+      await learner.learn(decision(2));
+      expect(t.histories[0]!.all().map((example) => example.question_id)).toEqual([
+        decision(2).questionId,
+      ]);
+
+      t.service.updateSettings(on({ ...RELAY, modelLearning: false }));
+      await vi.waitFor(() => expect(t.histories[0]!.close).toHaveBeenCalledTimes(1));
+      await learner.learn(decision(3));
+      expect(t.histories[0]!.count()).toBe(1);
+      expect(t.made).toHaveLength(1);
+      await t.service.stop();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it("asks the running connection to replace its attempt each time the proxy arms or disarms", async () => {
+    const t = modelled();
+    try {
+      await t.service.start(on({ ...RELAY, modelLearning: true, modelAdapter: "claude" }));
+      const hooks = t.made[0]!.options.model!;
+      await vi.waitFor(() => expect(t.histories).toHaveLength(1));
+      for (let n = 1; n <= 36; n += 1) await hooks.learner.learn(decision(n));
+
+      const model = t.service.getDecisionModel()!;
+      await model.evaluate();
+      expect(t.made[0]!.modelChanged).not.toHaveBeenCalled();
+      await model.setAutoAnswerThreshold(0.8);
+      expect(t.made[0]!.modelChanged).toHaveBeenCalledTimes(1);
+      expect(hooks.proxy()).toBe(model.proxy());
+      expect(hooks.proxy()).not.toBeNull();
+
+      t.service.updateSettings(on({ ...RELAY, modelLearning: false, modelAdapter: "claude" }));
+      await vi.waitFor(() => expect(t.made[0]!.modelChanged).toHaveBeenCalledTimes(2));
+      expect(hooks.proxy()).toBeNull();
+      await t.service.stop();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it("makes no model for a settings change while the lifetime's model is still closing", async () => {
+    for (const ending of ["stop", "erase"] as const) {
+      const t = modelled(undefined, {
+        openRows: async () => ({ erase: () => {}, exist: () => false }),
+        forgetIdentity: () => on({ modelLearning: true }),
+      });
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const original = DecisionModelRuntime.prototype.close;
+      const close = vi
+        .spyOn(DecisionModelRuntime.prototype, "close")
+        .mockImplementation(async function (this: DecisionModelRuntime) {
+          await held;
+          return original.call(this);
+        });
+      try {
+        await t.service.start(on({ ...RELAY, modelLearning: true }));
+        await vi.waitFor(() => expect(t.histories).toHaveLength(1));
+
+        const ended = ending === "stop" ? t.service.stop() : t.service.eraseLocalData();
+        await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
+        t.service.updateSettings(on({ ...RELAY, modelLearning: true }));
+        expect(t.service.getDecisionModel(), ending).toBeNull();
+        release();
+        await ended;
+
+        // Only the deletion's own reopen may make one, and it is the one model after it.
+        if (ending === "erase") await vi.waitFor(() => expect(t.histories).toHaveLength(2));
+        else expect(t.service.getDecisionModel()).toBeNull();
+        expect(t.histories.length, ending).toBe(ending === "stop" ? 1 : 2);
+        expect(t.histories[0]!.close, ending).toHaveBeenCalledTimes(1);
+        await t.service.stop();
+      } finally {
+        close.mockRestore();
+        t.cleanup();
+      }
+    }
+  });
+
+  it("deletes the model's files with local data while learning is off, companions and all", async () => {
+    const t = modelled(undefined, {
+      openRows: async () => ({ erase: () => {}, exist: () => false }),
+      forgetIdentity: () => on(),
+    });
+    try {
+      const names = [
+        "model-history.sqlite",
+        "model-history.sqlite-journal",
+        "model-history.sqlite-wal",
+        "model-history.sqlite-shm",
+        "model-evaluation.json",
+      ];
+      for (const name of names)
+        writeFileSync(join(t.dir, name), "plaintext from an earlier lifetime");
+      await t.service.start(on(RELAY));
+      expect(t.service.getDecisionModel()).toBeNull();
+
+      await expect(t.service.eraseLocalData()).resolves.toEqual({ result: "deleted" });
+      expect(readdirSync(t.dir)).toEqual([]);
+      expect(t.histories).toHaveLength(0);
+      await t.service.stop();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it("deletes what the model learned with local data, and starts it again empty", async () => {
+    const t = modelled((path) => new SqliteHistoryStore(path), {
+      openRows: async () => ({ erase: () => {}, exist: () => false }),
+      // As saved: everything but the relay's origin and ids.
+      forgetIdentity: () => on({ modelLearning: true }),
+    });
+    try {
+      writeFileSync(
+        join(t.dir, "keys.bin"),
+        '{"v":1,"protection":"keychain","ciphertext":"sealed"}'
+      );
+      await t.service.start(on({ ...RELAY, modelLearning: true }));
+      const history = join(t.dir, "model-history.sqlite");
+      await vi.waitFor(() => expect(existsSync(history)).toBe(true));
+      await t.made[0]!.options.model!.learner.learn(decision(1));
+      const before = new SqliteHistoryStore(history);
+      expect(before.count()).toBe(1);
+      before.close();
+
+      await expect(t.service.eraseLocalData()).resolves.toEqual({ result: "deleted" });
+
+      expect(readdirSync(t.dir).filter((name) => name.endsWith(".erasing"))).toEqual([]);
+      // The model starts again with learning still on, over an empty history.
+      await vi.waitFor(() => expect(existsSync(history)).toBe(true));
+      const reopened = new SqliteHistoryStore(history);
+      expect(reopened.count()).toBe(0);
+      reopened.close();
+      await t.service.stop();
+    } finally {
+      t.cleanup();
+    }
   });
 });

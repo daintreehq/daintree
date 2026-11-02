@@ -64,7 +64,25 @@ export interface DecisionsSettings {
    * finishes.
    */
   setupCheck: DecisionsSetupCheckRecord | null;
+  /**
+   * Whether the person's answers are kept for the decision model (#16026):
+   * each question answered from a phone, with the secrets filter applied, in
+   * the model's own history on this computer. Off unless the person turns it
+   * on; while off nothing is recorded and no proxy answers anything.
+   */
+  modelLearning: boolean;
+  /**
+   * The agent CLI installed here that the decision model runs, which sends
+   * its prompt (the question and past decisions like it) to that CLI's own
+   * provider. Null until the person chooses one; no proxy answers without it.
+   */
+  modelAdapter: DecisionsModelAdapter | null;
 }
+
+/** The agent CLIs the decision model can run (#16026), each one only when the person chooses it. */
+export const DECISIONS_MODEL_ADAPTERS = ["claude", "codex", "gemini"] as const;
+
+export type DecisionsModelAdapter = (typeof DECISIONS_MODEL_ADAPTERS)[number];
 
 /** A verified recovery kit, recorded by the identity it held. Never the kit or its passphrase. */
 export interface DecisionsRecoveryKitRecord {
@@ -439,22 +457,23 @@ export type DecisionsRelayDeleteResult =
 
 /**
  * What deleting this computer's Decisions data observed (#16025): its stored
- * history, its keys and its record of the relay. Nothing is sent to the relay.
+ * history, the decision model's history (#16026), its keys and its record of
+ * the relay. Nothing is sent to the relay.
  *
- * - `deleted`: all three are gone; `status` is Decisions as it is now.
+ * - `deleted`: all of it is gone; `status` is Decisions as it is now.
  * - `failed`: nothing was deleted (`disk-pressure`: writes are refused while
  *   disk space is critical; `storage`: the database refused; `keys`: the key
- *   file couldn't be moved).
- * - `incomplete`: a step didn't finish. With `erased`, the history is
- *   deleted but the keys or the relay record are still to go; with it false,
- *   nothing was deleted, but the keys couldn't be put back where they were;
- *   null when the history couldn't be read to tell which.
- *   Deleting again finishes or undoes it, and so does the next start when
- *   keys were involved. Decisions holds no store until then.
+ *   file couldn't be moved; `model`: a decision model file couldn't be moved).
+ * - `incomplete`: a step didn't finish. With `erased`, the stored rows are
+ *   deleted but the keys, the decision model's files or the relay record are
+ *   still to go; with it false, nothing was deleted, but what was set aside
+ *   couldn't be put back where it was; null when the history couldn't be read
+ *   to tell which. Deleting again finishes or undoes it, and so does the next
+ *   start when files were set aside. Decisions holds no store until then.
  */
 export type DecisionsLocalDeleteResult =
   | { result: "deleted"; status: DecisionsStatus }
-  | { result: "failed"; reason: "disk-pressure" | "storage" | "keys" }
+  | { result: "failed"; reason: "disk-pressure" | "storage" | "keys" | "model" }
   | { result: "incomplete"; erased: boolean | null; status: DecisionsStatus };
 
 /**

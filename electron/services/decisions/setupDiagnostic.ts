@@ -18,6 +18,9 @@ import { parseAnswerNotice, renderDecisionSection } from "./answerNotice.js";
 /** Every setup check's diagnostic terminal has a pane id with this prefix, and no real pane does. */
 export const SETUP_DIAGNOSTIC_PANE_PREFIX = "daintree-decisions-check-";
 
+/** The project a setup check's own question names: none of the person's, so nothing learns from it. */
+export const SETUP_DIAGNOSTIC_PROJECT_ID = "daintree-setup-check";
+
 export const SETUP_DIAGNOSTIC_TITLE = "Decisions setup check · runs no agent";
 
 /** The one resource a diagnostic terminal's question may attach. */
@@ -87,7 +90,7 @@ export class SetupDiagnosticTerminal {
       agent_incarnation: "none",
       agent_kind: "setup-check",
       agent_session_id: null,
-      project_id: "daintree-setup-check",
+      project_id: SETUP_DIAGNOSTIC_PROJECT_ID,
       worktree_id: "setup-check",
       worktree_root: "",
       workflow_gate_id: null,

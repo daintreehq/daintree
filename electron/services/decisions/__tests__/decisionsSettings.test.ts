@@ -27,6 +27,8 @@ const connected: DecisionsSettings = {
   recoveryKit: null,
   autoEnrollHosts: true,
   setupCheck: null,
+  modelLearning: true,
+  modelAdapter: "codex",
 };
 
 /** `connected`, with a recovery kit verified for its identity. */
@@ -71,6 +73,26 @@ describe("sanitizeDecisionsSettings", () => {
     const { store, current } = memoryStore({ ...connected, autoEnrollHosts: false });
     writeDecisionsSettings(store, readDecisionsSettings(store));
     expect(current()).toEqual({ ...connected, autoEnrollHosts: false });
+  });
+
+  it("keeps the decision model off with no CLI unless the saved values are exactly a choice", () => {
+    // A setting saved before the fields existed has neither, and needs no migration.
+    const { modelLearning: _l, modelAdapter: _a, ...beforeTheFields } = connected;
+    const before = sanitizeDecisionsSettings(beforeTheFields);
+    expect([before.modelLearning, before.modelAdapter]).toEqual([false, null]);
+    for (const value of ["true", 1, {}, [true], null, "claude ", "Claude", "openai", ["codex"]]) {
+      const settings = sanitizeDecisionsSettings({
+        ...connected,
+        modelLearning: value,
+        modelAdapter: value,
+      });
+      expect([settings.modelLearning, settings.modelAdapter], String(value)).toEqual([false, null]);
+    }
+    for (const adapter of ["claude", "codex", "gemini"] as const) {
+      const { store, current } = memoryStore({ ...connected, modelAdapter: adapter });
+      writeDecisionsSettings(store, readDecisionsSettings(store));
+      expect(current()).toEqual({ ...connected, modelAdapter: adapter });
+    }
   });
 
   it("reads anything that isn't a settings object as off with no relay, without throwing", () => {

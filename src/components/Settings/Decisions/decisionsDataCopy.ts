@@ -130,6 +130,7 @@ const NOTHING_DELETED: Record<
   "disk-pressure": "Disk space is critical, so the database refuses writes.",
   storage: "The database refused the deletion.",
   keys: "The Decisions key file couldn't be moved.",
+  model: "The decision model's files couldn't be moved.",
 };
 
 /** What deleting this computer's Decisions data observed, in words. */
@@ -156,8 +157,8 @@ export function describeLocalDeleteResult(result: DecisionsLocalDeleteResult): R
           result.erased === null
             ? "The stored history couldn't be read to tell whether it's deleted. Delete again to finish."
             : result.erased
-              ? "The decision history is deleted, but the keys or the relay record are still to go. Delete again to finish."
-              : "Nothing was deleted, but the keys are still set aside. Restart Daintree to put them back, or delete again to finish.",
+              ? "The stored questions and answers are deleted, but the keys, what the decision model learned or the relay record are still to go. Delete again to finish."
+              : "Nothing was deleted, but the keys or the decision model's history are still set aside. Restart Daintree to put them back, or delete again to finish.",
       };
   }
 }

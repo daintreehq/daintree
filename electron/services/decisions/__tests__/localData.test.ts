@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Every rename and directory sync, in order, beside the rows' own steps.
 const fsFaults = vi.hoisted(() => ({
   rename: null as null | ((src: string) => boolean),
+  /** Refuses the unlinks of the paths it picks. */
+  unlink: null as null | ((path: string) => boolean),
   /** Fails the directory syncs whose 1-based call numbers it picks. */
   syncFailOn: null as null | ((call: number) => boolean),
   syncCalls: 0,
@@ -22,6 +24,12 @@ vi.mock("../../../utils/fs.js", async (importOriginal) => {
       }
       await actual.resilientRename(src, dest);
       fsFaults.log.push(`rename ${src.endsWith(".erasing") ? "back" : "aside"}`);
+    },
+    resilientUnlink: async (path: string) => {
+      if (fsFaults.unlink?.(path)) {
+        throw Object.assign(new Error("unlink refused"), { code: "EACCES" });
+      }
+      await actual.resilientUnlink(path);
     },
     syncParentDirectory: async () => {
       fsFaults.syncCalls += 1;
@@ -80,6 +88,7 @@ describe("local Decisions data deletion", () => {
     forgotten = 0;
     forgetFails = false;
     fsFaults.rename = null;
+    fsFaults.unlink = null;
     fsFaults.syncFailOn = null;
     fsFaults.syncCalls = 0;
     fsFaults.log = [];
@@ -286,6 +295,197 @@ describe("local Decisions data deletion", () => {
     expect(rows.erase).not.toHaveBeenCalled();
     expect(forgotten).toBe(1);
     expect(existsSync(erasingKeyFilePath(keyFile))).toBe(false);
+  });
+
+  describe("the decision model's files (#16026)", () => {
+    const HISTORY = "examples in clear";
+    let history: string;
+    let evaluation: string;
+
+    function withModel(rows: DecisionsRows): LocalEraseDeps {
+      return { ...deps(rows), modelFiles: [history, `${history}-journal`, evaluation] };
+    }
+
+    beforeEach(() => {
+      history = join(dir, "model-history.sqlite");
+      evaluation = join(dir, "model-evaluation.json");
+    });
+
+    it("deletes them with the rows, with no keys at all", async () => {
+      writeFileSync(history, HISTORY);
+      writeFileSync(evaluation, "{}");
+      const { rows, state } = fakeRows();
+
+      await expect(eraseLocalDecisionsData(withModel(rows))).resolves.toEqual({
+        result: "deleted",
+      });
+
+      expect(state.count).toBe(0);
+      expect(readdirSync(dir)).toEqual([]);
+      expect(forgotten).toBe(1);
+    });
+
+    it("puts them back with the keys when the rows can't be deleted", async () => {
+      writeFileSync(keyFile, KEYS);
+      writeFileSync(history, HISTORY);
+      const { rows, state } = fakeRows();
+      state.failErase = new Error("database is locked");
+
+      await expect(eraseLocalDecisionsData(withModel(rows))).resolves.toEqual({
+        result: "failed",
+        reason: "storage",
+      });
+
+      expect(readFileSync(history, "utf8")).toBe(HISTORY);
+      expect(readFileSync(keyFile, "utf8")).toBe(KEYS);
+      expect(readdirSync(dir).sort()).toEqual(["keys.bin", "model-history.sqlite"]);
+    });
+
+    it("changes nothing, keys included, when one of them can't be moved aside", async () => {
+      writeFileSync(keyFile, KEYS);
+      writeFileSync(history, HISTORY);
+      fsFaults.rename = (src) => src === history;
+      const { rows } = fakeRows();
+
+      await expect(eraseLocalDecisionsData(withModel(rows))).resolves.toEqual({
+        result: "failed",
+        reason: "model",
+      });
+
+      expect(rows.erase).not.toHaveBeenCalled();
+      expect(readFileSync(keyFile, "utf8")).toBe(KEYS);
+      expect(readFileSync(history, "utf8")).toBe(HISTORY);
+    });
+
+    it("finishes a deletion that committed with no keys set aside, from the model's own marker", async () => {
+      writeFileSync(erasingKeyFilePath(history), HISTORY);
+      const { rows } = fakeRows(0);
+
+      await expect(finishInterruptedErase(withModel(rows))).resolves.toBe("finished");
+
+      expect(readdirSync(dir)).toEqual([]);
+      expect(forgotten).toBe(1);
+    });
+
+    it("deletes a model file a crash stopped short of moving, once the rows are found gone", async () => {
+      writeFileSync(erasingKeyFilePath(keyFile), KEYS);
+      writeFileSync(history, HISTORY);
+      writeFileSync(evaluation, "{}");
+      const { rows } = fakeRows(0);
+
+      await expect(eraseLocalDecisionsData(withModel(rows))).resolves.toEqual({
+        result: "deleted",
+      });
+
+      expect(readdirSync(dir)).toEqual([]);
+      expect(forgotten).toBe(1);
+    });
+
+    it("keeps its marker until a model file a crash didn't move is gone, so a retry finishes it", async () => {
+      writeFileSync(erasingKeyFilePath(keyFile), KEYS);
+      writeFileSync(history, HISTORY);
+      const { rows } = fakeRows(0);
+      fsFaults.unlink = (path) => path === history;
+
+      await expect(finishInterruptedErase(withModel(rows))).rejects.toThrow(/unlink refused/);
+      expect(existsSync(erasingKeyFilePath(keyFile))).toBe(true);
+
+      fsFaults.unlink = null;
+      await expect(finishInterruptedErase(withModel(rows))).resolves.toBe("finished");
+      expect(readdirSync(dir)).toEqual([]);
+    });
+
+    it("leaves the keys' marker for last when a set-aside model file won't go after the rows did", async () => {
+      writeFileSync(keyFile, KEYS);
+      writeFileSync(history, HISTORY);
+      const { rows } = fakeRows();
+      fsFaults.unlink = (path) => path === erasingKeyFilePath(history);
+
+      await expect(eraseLocalDecisionsData(withModel(rows))).resolves.toEqual({
+        result: "incomplete",
+        erased: true,
+      });
+      expect(existsSync(erasingKeyFilePath(keyFile))).toBe(true);
+
+      fsFaults.unlink = null;
+      await expect(finishInterruptedErase(withModel(rows))).resolves.toBe("finished");
+      expect(readdirSync(dir)).toEqual([]);
+    });
+
+    it("keeps the newer relay record across a recovery that fails after seeing new keys", async () => {
+      const newer = '{"v":1,"protection":"keychain","ciphertext":"newer"}';
+      writeFileSync(erasingKeyFilePath(keyFile), KEYS);
+      writeFileSync(keyFile, newer);
+      writeFileSync(erasingKeyFilePath(history), HISTORY);
+      const { rows } = fakeRows(0);
+      let readable = false;
+      const flaky: LocalEraseDeps = {
+        ...withModel(rows),
+        openRows: async () => {
+          if (!readable) throw new Error("database is locked");
+          return rows;
+        },
+      };
+
+      await expect(finishInterruptedErase(flaky)).rejects.toThrow(/locked/);
+      readable = true;
+      await expect(finishInterruptedErase(flaky)).resolves.toBe("none");
+
+      expect(readdirSync(dir)).toEqual(["keys.bin"]);
+      expect(readFileSync(keyFile, "utf8")).toBe(newer);
+      expect(forgotten).toBe(0);
+    });
+
+    it("keeps a relay set up after a deletion that had no keys, and a retry deletes it", async () => {
+      writeFileSync(history, HISTORY);
+      const { rows } = fakeRows();
+      fsFaults.unlink = (path) => path === erasingKeyFilePath(history);
+      await expect(eraseLocalDecisionsData(withModel(rows))).resolves.toEqual({
+        result: "incomplete",
+        erased: true,
+      });
+      expect(forgotten).toBe(1);
+      fsFaults.unlink = null;
+
+      // A relay is claimed while the store stays closed.
+      writeFileSync(keyFile, KEYS);
+      await expect(finishInterruptedErase(withModel(rows))).resolves.toBe("none");
+      expect(readdirSync(dir)).toEqual(["keys.bin"]);
+      expect(forgotten).toBe(1);
+
+      // Asked to delete again, it deletes what is there now.
+      await expect(eraseLocalDecisionsData(withModel(rows))).resolves.toEqual({
+        result: "deleted",
+      });
+      expect(readdirSync(dir)).toEqual([]);
+      expect(forgotten).toBe(2);
+    });
+
+    it("keeps a relay set up since, while dropping what the given-up deletion set aside", async () => {
+      const newer = '{"v":1,"protection":"keychain","ciphertext":"newer"}';
+      writeFileSync(erasingKeyFilePath(keyFile), KEYS);
+      writeFileSync(keyFile, newer);
+      writeFileSync(erasingKeyFilePath(history), HISTORY);
+      const { rows } = fakeRows(0);
+
+      await expect(finishInterruptedErase(withModel(rows))).resolves.toBe("none");
+
+      expect(readdirSync(dir)).toEqual(["keys.bin"]);
+      expect(readFileSync(keyFile, "utf8")).toBe(newer);
+      expect(forgotten).toBe(0);
+    });
+
+    it("puts them back when a deletion stopped before the rows went", async () => {
+      writeFileSync(erasingKeyFilePath(keyFile), KEYS);
+      writeFileSync(erasingKeyFilePath(history), HISTORY);
+      const { rows } = fakeRows();
+
+      await expect(finishInterruptedErase(withModel(rows))).resolves.toBe("restored");
+
+      expect(readFileSync(keyFile, "utf8")).toBe(KEYS);
+      expect(readFileSync(history, "utf8")).toBe(HISTORY);
+      expect(forgotten).toBe(0);
+    });
   });
 
   describe("finishing a deletion that stopped partway", () => {

@@ -223,6 +223,8 @@ export const SETTING_CATALOG = {
           recoveryKit: device,
           autoEnrollHosts: device,
           setupCheck: device,
+          modelLearning: device,
+          modelAdapter: device,
         },
       },
       // An enrolled Host's own record of its enrollment, kept on the Host itself.

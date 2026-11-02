@@ -1,6 +1,6 @@
 import { stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { PolicyRegistry, QuestionRow } from "@daintreehq/decisions-client";
+import type { DecisionLearner, PolicyRegistry, QuestionRow } from "@daintreehq/decisions-client";
 import type {
   DecisionsSettings,
   DecisionsStatus,
@@ -12,6 +12,11 @@ import { createWorktreeAttachmentResolver } from "./attachmentResolver.js";
 import { DecisionsAttachments } from "./attachmentSpool.js";
 import { readHandledAnswers, withoutHandled } from "./attentionList.js";
 import type { DaintreeLocalStore } from "./daintreeLocalStore.js";
+import {
+  DecisionModelRuntime,
+  decisionModelFiles,
+  type DecisionModelRuntimeOptions,
+} from "./decisionModel.js";
 import { decisionsLibraries, type DecisionsLibraries } from "./libraries.js";
 import { openDecisionsLocalStore, openDecisionsRows } from "./openLocalStore.js";
 import { KeyRotations } from "./keyRotation.js";
@@ -58,6 +63,8 @@ export interface DecisionsRelayConnection {
   refresh?(): boolean;
   /** The connection's answer delivery, while it runs; what the needs-attention list acts through. */
   getDelivery?(): AnswerDelivery | null;
+  /** The decision model's proxy changed (#16026): an attempt asking the old one gives way. */
+  modelChanged?(): void;
 }
 
 /** What delivery needs from main, apart from this machine's host id, which the service reads from its settings. */
@@ -137,6 +144,8 @@ export interface DecisionsServiceOptions {
   delivery?: DecisionsDeliveryDeps;
   /** The setup check's diagnostic terminals (#16024), whose own image their questions attach. */
   diagnostics?: SetupDiagnostics;
+  /** The decision model's history and CLIs (#16026): the library's unless a test says otherwise. */
+  model?: Pick<DecisionModelRuntimeOptions, "openHistory" | "createAdapter">;
 }
 
 /**
@@ -216,6 +225,17 @@ export class DecisionsService {
   private revokedKey: string | null = null;
   private readonly openRows: () => Promise<DecisionsRows>;
   private readonly forgetIdentity: () => DecisionsSettings;
+  /** The owner lifetime's decision model (#16026), while its store is open; a Host's never has one. */
+  private model: DecisionModelRuntime | null = null;
+  private readonly modelOptions: DecisionsServiceOptions["model"];
+  /**
+   * What every owner attempt's bridge offers the person's answers to: the
+   * model of the moment, so a model made after the connection (or none) is
+   * the one that learns.
+   */
+  private readonly learner: DecisionLearner = {
+    learn: (decision) => this.model?.learner.learn(decision),
+  };
 
   constructor(options: DecisionsServiceOptions = {}) {
     this.openStore = options.openStore ?? openDecisionsLocalStore;
@@ -239,6 +259,7 @@ export class DecisionsService {
     this.openQuestions = options.openQuestions ?? null;
     this.delivery = options.delivery ?? null;
     this.diagnostics = options.diagnostics ?? null;
+    this.modelOptions = options.model;
   }
 
   getStatus(): DecisionsStatus {
@@ -267,6 +288,11 @@ export class DecisionsService {
   /** The running lifetime's store; null while stopped, or while it couldn't be opened. */
   getStore(): DaintreeLocalStore | null {
     return this.store;
+  }
+
+  /** The owner lifetime's decision model (#16026); null while stopped, for a Host, or with no store. */
+  getDecisionModel(): DecisionModelRuntime | null {
+    return this.model;
   }
 
   /**
@@ -304,6 +330,7 @@ export class DecisionsService {
     this.settings = settings;
     this.applyPolicy(settings);
     this.paused = false;
+    this.applyModel();
     this.reconcileConnection();
   }
 
@@ -457,6 +484,7 @@ export class DecisionsService {
         this.storeFailed = false;
         await this.adoptStore(opened, keyFilePath);
       }
+      this.applyModel();
       this.reconcileConnection();
     });
   }
@@ -486,6 +514,9 @@ export class DecisionsService {
         // An ask still spooling finishes too; the spool it leaves goes with the rows.
         await this.closeAttachments();
         const store = this.detachStore();
+        // With no store attached no settings change can make another model,
+        // and its history closes before its files are set aside.
+        await this.closeModel();
         const keyStore = this.keyStore;
         const rotations = this.rotations;
         this.keyStore = null;
@@ -521,7 +552,10 @@ export class DecisionsService {
         this.paused = false;
       }
       // A deletion that changed nothing reconnects; one that forgot the relay has none to.
-      if (!this.disposed && this.settings !== null) this.reconcileConnection();
+      if (!this.disposed && this.settings !== null) {
+        this.applyModel();
+        this.reconcileConnection();
+      }
       return outcome;
     });
   }
@@ -598,6 +632,8 @@ export class DecisionsService {
     await this.questionsClosing;
     await this.closeAttachments();
     const store = this.detachStore();
+    // With no store attached no settings change can make another model meanwhile.
+    await this.closeModel();
     const keyStore = this.keyStore;
     const rotations = this.rotations;
     this.keyStore = null;
@@ -673,6 +709,10 @@ export class DecisionsService {
         if (this.connection === connection) this.onDevicesChanged();
       },
       policy,
+      // A Host's panes are answered by a person: its owner's model is the owner's own.
+      ...(role === "owner"
+        ? { model: { learner: this.learner, proxy: () => this.model?.proxy() ?? null } }
+        : {}),
       ...(delivery
         ? { delivery: { ...delivery, hostId: () => this.settings?.hostId ?? null } }
         : {}),
@@ -723,6 +763,39 @@ export class DecisionsService {
     else this.policy = createTrustedPolicy(settings);
   }
 
+  /**
+   * The decision model (#16026) takes the settings as they are now, made the
+   * first time learning is on. It runs only in the owner's lifetime and only
+   * with the store attached: a deletion of local data closes it with the
+   * store, and one that didn't finish leaves its files set aside, so nothing
+   * may open them until the next start finishes it. A Remote Host's lifetime
+   * never has one, whatever its settings say.
+   */
+  private applyModel(): void {
+    const settings = this.settings;
+    if (this.disposed || settings === null || this.role !== "owner" || this.store === null) return;
+    // With learning off there is nothing to run: no history, no proxy.
+    if (this.model === null && !settings.modelLearning) return;
+    this.model ??= new DecisionModelRuntime({
+      files: decisionModelFiles(this.keyFilePath()),
+      onProxyChanged: () => this.connection?.modelChanged?.(),
+      ...this.modelOptions,
+    });
+    this.model.update(settings).catch((error: unknown) => {
+      console.warn(
+        "[Decisions] The decision model couldn't take its settings:",
+        error instanceof Error ? error.name : "error"
+      );
+    });
+  }
+
+  /** Closes the decision model, after the connection that asked it has gone. Its files stay. */
+  private async closeModel(): Promise<void> {
+    const model = this.model;
+    this.model = null;
+    await model?.close();
+  }
+
   private dropConnection(): void {
     const connection = this.connection;
     this.connection = null;
@@ -765,6 +838,7 @@ export class DecisionsService {
   private eraseDeps(keyFilePath: string): LocalEraseDeps {
     return {
       keyFilePath,
+      modelFiles: decisionModelFiles(keyFilePath).all,
       openRows: this.openRows,
       forgetIdentity: () => {
         const saved = this.forgetIdentity();
