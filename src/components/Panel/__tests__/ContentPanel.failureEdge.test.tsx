@@ -555,7 +555,7 @@ describe("ContentPanel red edge after a host resync (#16153)", () => {
       rows: 24,
       ...fields,
     };
-    mockState.panel = panel;
+    mockState.panel = { ...panel };
     offRecords = usePanelStore.subscribe((state, prev) => {
       if (state.panelsById === prev.panelsById) return;
       observePanelFailures(state.panelsById, prev.panelsById);
