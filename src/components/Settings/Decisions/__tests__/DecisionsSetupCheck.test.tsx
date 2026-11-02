@@ -16,7 +16,7 @@ const ORIGIN = "https://decisions.example.workers.dev";
 const bridge = {
   getSetupCheck: vi.fn<() => Promise<DecisionsSetupCheckRun | null>>(),
   startSetupCheck: vi.fn<() => Promise<DecisionsSetupCheckStartResult>>(),
-  cancelSetupCheck: vi.fn<() => Promise<DecisionsSetupCheckRun | null>>(),
+  cancelSetupCheck: vi.fn<(payload: { runId: string }) => Promise<DecisionsSetupCheckRun | null>>(),
 };
 const pushes = new Set<(run: DecisionsSetupCheckRun) => void>();
 
@@ -50,8 +50,8 @@ function push(next: DecisionsSetupCheckRun): void {
   });
 }
 
-function Check({ status, active = true }: { status: DecisionsStatus; active?: boolean }) {
-  const check = useSetupCheck(active);
+function Check({ status }: { status: DecisionsStatus }) {
+  const check = useSetupCheck(status.relayOrigin);
   return <DecisionsSetupCheck check={check} status={status} disabled={false} />;
 }
 
@@ -61,6 +61,11 @@ function renderCheck(status: DecisionsStatus = { state: "connected", relayOrigin
       <Check status={status} />
     </TooltipProvider>
   );
+}
+
+/** What one step's row says. */
+function stepRow(step: string): string {
+  return document.getElementById(`decisions-setup-check-${step}`)?.textContent ?? "";
 }
 
 async function settle(): Promise<void> {
@@ -103,7 +108,7 @@ describe("DecisionsSetupCheck", () => {
     });
 
     expect(bridge.startSetupCheck).toHaveBeenCalledOnce();
-    expect(screen.getByText(/Reading the relay's \/health/)).toBeTruthy();
+    expect(stepRow("relay")).toMatch(/Reading the relay's \/health/);
     expect(screen.getByRole("button", { name: "Cancel check" })).toBeTruthy();
 
     push(
@@ -116,8 +121,8 @@ describe("DecisionsSetupCheck", () => {
         }),
       })
     );
-    expect(screen.getByText(/lists this computer as its owner/)).toBeTruthy();
-    expect(screen.getByText(/Opening a socket with a new ticket/)).toBeTruthy();
+    expect(stepRow("claim")).toMatch(/lists this computer as its owner/);
+    expect(stepRow("socket")).toMatch(/Opening a socket with a new ticket/);
   });
 
   it("shows the diagnostic terminal while the run holds it open, and what was typed into it", async () => {
@@ -179,9 +184,10 @@ describe("DecisionsSetupCheck", () => {
     expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
   });
 
-  it("cancels the run when asked, and a run it started when Settings closes", async () => {
+  it("cancels the run it shows by its id, and nothing more once it has ended", async () => {
     const started = run({ steps: steps({ relay: { state: "running" } }) });
     bridge.startSetupCheck.mockResolvedValue({ result: "started", run: started });
+    bridge.cancelSetupCheck.mockResolvedValue(run({ revision: 2, state: "cancelled" }));
     const { unmount } = renderCheck();
     await settle();
     await act(async () => {
@@ -191,26 +197,92 @@ describe("DecisionsSetupCheck", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Cancel check" }));
     });
-    expect(bridge.cancelSetupCheck).toHaveBeenCalledOnce();
+    expect(bridge.cancelSetupCheck).toHaveBeenCalledExactlyOnceWith({ runId: "run-1" });
+    expect(screen.getByText(/was cancelled, so it recorded nothing/)).toBeTruthy();
 
     unmount();
-    expect(bridge.cancelSetupCheck).toHaveBeenCalledTimes(2);
+    expect(bridge.cancelSetupCheck).toHaveBeenCalledOnce();
   });
 
-  it("leaves a run another window started running when this one closes", async () => {
-    bridge.getSetupCheck.mockResolvedValue(run({ runId: "run-elsewhere" }));
+  it("calls off a run it started when Settings closes", async () => {
+    bridge.startSetupCheck.mockResolvedValue({ result: "started", run: run() });
     const { unmount } = renderCheck();
     await settle();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Check setup" }));
+    });
+
+    unmount();
+
+    expect(bridge.cancelSetupCheck).toHaveBeenCalledExactlyOnceWith({ runId: "run-1" });
+  });
+
+  it("calls off a run whose start was still on its way when Settings closed", async () => {
+    let answer!: (result: DecisionsSetupCheckStartResult) => void;
+    bridge.startSetupCheck.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve;
+      })
+    );
+    const { unmount } = renderCheck();
+    await settle();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Check setup" }));
+    });
+
+    unmount();
+    expect(bridge.cancelSetupCheck).not.toHaveBeenCalled();
+    await act(async () => {
+      answer({ result: "started", run: run({ runId: "run-late" }) });
+    });
+
+    expect(bridge.cancelSetupCheck).toHaveBeenCalledExactlyOnceWith({ runId: "run-late" });
+  });
+
+  it("only shows a run another window started, and leaves it running when this one closes", async () => {
+    bridge.startSetupCheck.mockResolvedValue({
+      result: "running",
+      run: run({ runId: "run-elsewhere" }),
+    });
+    const { unmount } = renderCheck();
+    await settle();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Check setup" }));
+    });
+    expect(screen.getByRole("button", { name: "Cancel check" })).toBeTruthy();
 
     unmount();
 
     expect(bridge.cancelSetupCheck).not.toHaveBeenCalled();
   });
 
+  it("drops what a relay's read said once another relay is set up", async () => {
+    let answer!: (value: DecisionsSetupCheckRun | null) => void;
+    bridge.getSetupCheck.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answer = resolve;
+      })
+    );
+    const { rerender } = renderCheck();
+    rerender(
+      <TooltipProvider>
+        <Check status={{ state: "connected", relayOrigin: "https://other.example.workers.dev" }} />
+      </TooltipProvider>
+    );
+    await settle();
+
+    await act(async () => {
+      answer(run({ revision: 9, state: "failed" }));
+    });
+
+    expect(screen.getByRole("button", { name: "Check setup" })).toBeTruthy();
+    expect(screen.queryByText(/Not run yet/)).toBeNull();
+  });
+
   it("reads nothing while no relay is set up", async () => {
     render(
       <TooltipProvider>
-        <Check status={{ state: "not-connected" }} active={false} />
+        <Check status={{ state: "not-connected" }} />
       </TooltipProvider>
     );
     await settle();
@@ -219,16 +291,59 @@ describe("DecisionsSetupCheck", () => {
     expect(pushes.size).toBe(0);
   });
 
+  it("announces the step under way, and how the run ended", async () => {
+    bridge.getSetupCheck.mockResolvedValue(
+      run({
+        steps: steps({
+          relay: { state: "passed", observation: { result: "unexpected" } },
+          claim: { state: "running" },
+        }),
+      })
+    );
+    renderCheck();
+    await settle();
+
+    const status = () =>
+      screen
+        .getAllByRole("status")
+        .map((region) => region.textContent ?? "")
+        .join(" | ");
+    expect(status()).toContain("Claim. Asking the relay which devices it accepts…");
+
+    push(
+      run({
+        revision: 3,
+        state: "failed",
+        steps: steps({ push: { state: "failed", observation: { result: "no-phone" } } }),
+      })
+    );
+    expect(status()).toContain("Setup check stopped at push configuration. No phone is paired.");
+  });
+
   it("says when the last recorded check passed or where it stopped, before any run this session", async () => {
-    renderCheck({
+    const checkedAt = Date.UTC(2026, 10, 1, 9, 30);
+    const when = new Date(checkedAt).toLocaleString(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+    const { unmount } = renderCheck({
       state: "connected",
       relayOrigin: ORIGIN,
-      setupCheck: { checkedAt: Date.UTC(2026, 10, 1, 9, 30), failedStep: "push" },
+      setupCheck: { checkedAt, failedStep: "push" },
     });
     await settle();
 
-    expect(screen.getByText(/stopped at push configuration/)).toBeTruthy();
+    expect(screen.getByText(`The check on ${when} stopped at push configuration`)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
+    unmount();
+
+    renderCheck({
+      state: "connected",
+      relayOrigin: ORIGIN,
+      setupCheck: { checkedAt, failedStep: null },
+    });
+    await settle();
+    expect(screen.getByText(`Every step passed on ${when}`)).toBeTruthy();
   });
 
   it("says why a check couldn't start", async () => {

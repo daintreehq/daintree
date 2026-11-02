@@ -118,9 +118,11 @@ export class SetupDiagnosticTerminal {
     return this.open && sameAsker(paneIdentityOf(this.origin), pane);
   }
 
-  /** The first answer typed for `questionId`, if one has been. */
-  typedFor(questionId: string): SetupDiagnosticTyping | undefined {
-    return this.typings.find((typing) => typing.questionId === questionId);
+  /** A person's answer to `questionId`, once one has been typed; never an expiry notice or a proxy's. */
+  answerTypedFor(questionId: string): SetupDiagnosticTyping | undefined {
+    return this.typings.find(
+      (typing) => typing.questionId === questionId && typing.source === "human" && !typing.expired
+    );
   }
 
   hasMarker(injectionId: string): boolean {

@@ -57,6 +57,7 @@ export interface DecisionsSettings {
    * connected Host instead.
    */
   autoEnrollHosts: boolean;
+  /**
    * The latest setup check that ran to the end (#16024), and the identity it
    * checked. Setup is finished only while it passed and names the relay and
    * ids recorded above, with a recovery kit verified too; null until a check
@@ -879,8 +880,17 @@ export interface DecisionsSetupCheckRun {
   diagnostic: DecisionsSetupDiagnosticTerminal | null;
 }
 
-/** Starting a setup check: the run (the one already running, if any), or why none can run. */
+/**
+ * Starting a setup check: the run this started, the one already running
+ * (`running`, which the asker didn't start), or why none can run.
+ */
 export type DecisionsSetupCheckStartResult =
   | { result: "started"; run: DecisionsSetupCheckRun }
+  | { result: "running"; run: DecisionsSetupCheckRun }
   | { result: "not-set-up" }
   | { result: "revoked" };
+
+/** Calling off the setup check with this run id, and no other. */
+export interface CancelDecisionsSetupCheckPayload {
+  runId: string;
+}

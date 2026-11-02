@@ -620,7 +620,7 @@ describe("AnswerDelivery", () => {
     await until(async () => (await h.question(Q1))?.delivery_status === "terminal-delivered");
     await until(() => h.client.submitted.length === 1);
 
-    expect(terminal.typedFor(Q1)?.text).toContain("choice: received");
+    expect(terminal.answerTypedFor(Q1)?.text).toContain("choice: received");
     // The agent's pane got only its own answer.
     expect(typedChoices(h.client.submitted[0].text)).toEqual(["approve"]);
     await until(() => h.terminalReports().length === 2);
@@ -633,12 +633,17 @@ describe("AnswerDelivery", () => {
     const terminal = diagnostics.open(HOST, () => {});
     terminal.expect(Q1);
     diagnostics.close(terminal);
+    const located = vi.spyOn(diagnostics.sink, "locate");
     const h = setup({ diagnostics });
+    const read = vi.spyOn(h.client, "getTerminalAsync");
     await answered(h.store, Q1, 1, "received", { origin: terminal.origin });
 
     h.delivery.start();
     await advance(2 * DELIVERY_CHECK_INTERVAL_MS, 5_000);
 
+    // Asked of the diagnostic terminals, never of the pty host as an agent's pane.
+    expect(located).toHaveBeenCalled();
+    expect(read.mock.calls.some(([id]) => id === terminal.origin.pane_id)).toBe(false);
     expect(h.client.submitted).toEqual([]);
     expect((await h.question(Q1))?.delivery_status).not.toBe("terminal-delivered");
     expect(h.terminalReports()).toEqual([]);

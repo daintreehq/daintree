@@ -146,7 +146,7 @@ export function DecisionsConnectionSection({
   const keysStored = status.keysStored === true;
   const relay = useRelayCheck();
   const identity = useRelayIdentity((next) => onChanged?.(next));
-  const setup = useSetupCheck(status.relayOrigin !== undefined);
+  const setup = useSetupCheck(status.relayOrigin);
   const checking = setup.run?.state === "running";
   const [draft, setDraft] = useState("");
   const [disconnectOpen, setDisconnectOpen] = useState(false);
@@ -156,7 +156,6 @@ export function DecisionsConnectionSection({
   const forget = useEffectEvent(() => {
     relay.reset();
     identity.reset();
-    setup.reset();
   });
   const checkSaved = useEffectEvent((origin: string) => relay.run(origin));
   useEffect(() => {
@@ -246,9 +245,9 @@ export function DecisionsConnectionSection({
             </Button>
           }
         >
-          Save a recovery kit and verify it to finish. Everything on the relay is encrypted with
-          keys only this computer holds: without a kit or these keys, none of it can be recovered,
-          by anyone.
+          Save a recovery kit and verify it, then run the setup check to finish. Everything on the
+          relay is encrypted with keys only this computer holds: without a kit or these keys, none
+          of it can be recovered, by anyone.
         </Callout>
       )}
       {reason !== null && reason !== "kit" && (

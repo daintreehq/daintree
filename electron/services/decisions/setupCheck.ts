@@ -3,6 +3,7 @@ import {
   BridgeError,
   openQuestionContent,
   paneIdentityOf,
+  parseAnswers,
   RelayClient,
   verifiedDevices,
   type Identity,
@@ -556,7 +557,12 @@ export class SetupCheck {
     });
   }
 
-  /** A person's answer from a phone, typed into the diagnostic terminal and recorded as delivered. */
+  /**
+   * A person's answer from a phone, typed into the diagnostic terminal and
+   * recorded as delivered. Read from what delivery did, not the row's
+   * `local_status`: a create receipt that lands after the answer sets that
+   * back to `open`.
+   */
   private async awaitAnswer(
     terminal: SetupDiagnosticTerminal,
     source: QuestionSource,
@@ -568,14 +574,8 @@ export class SetupCheck {
       questionId,
       (row): StepOutcome<"question"> | undefined => {
         last = row;
-        const typed = terminal.typedFor(questionId);
-        if (
-          row.local_status === "human-answered" &&
-          row.delivery_status === "terminal-delivered" &&
-          typed !== undefined &&
-          typed.source === "human" &&
-          !typed.expired
-        ) {
+        const typed = terminal.answerTypedFor(questionId);
+        if (typed !== undefined && row.delivery_status === "terminal-delivered") {
           return { passed: true, observation: { result: "typed", text: typed.text } };
         }
         if (row.local_status === "expired")
@@ -594,7 +594,9 @@ export class SetupCheck {
       this.timeouts.answerMs
     );
     if (settled !== null) return settled;
-    const answered = (last as QuestionRow | null)?.local_status === "human-answered";
+    const row = last as QuestionRow | null;
+    const answered =
+      row !== null && parseAnswers(row.answers_json).some((entry) => entry.source === "human");
     return { passed: false, observation: { result: answered ? "not-typed" : "not-answered" } };
   }
 

@@ -18,6 +18,7 @@ import type {
 } from "../../../shared/types/ipc/deviceAnswer.js";
 import type {
   ApproveDecisionsPairingPayload,
+  CancelDecisionsSetupCheckPayload,
   ClaimDecisionsRelayPayload,
   DecisionsConnectResult,
   DecisionsDevicesResult,
@@ -197,6 +198,9 @@ const verifyRecoveryKitSchema = z
 
 // A host id as the host list keeps it.
 const enrollHostSchema = z.object({ hostId: z.string().min(1).max(256) }).strict();
+
+// A run id main minted (a UUID); a cancel names the run it means to end.
+const cancelSetupCheckSchema = z.object({ runId: z.string().min(1).max(64) }).strict();
 
 function refuseWhileOff(action: string): void {
   if (!decisionsOn()) {
@@ -507,6 +511,8 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) throw setupCancelled();
         return decisions.setAutoEnrollHosts(enabled);
+      }
+    ),
     // The setup check (#16024): the whole loop, run when the person asks,
     // its progress read and pushed, and called off. Reading and cancelling
     // answer null while off, without loading Decisions.
@@ -527,12 +533,13 @@ export const decisionsNamespace = defineIpcNamespace({
         return decisions ? decisions.getSetupCheck() : null;
       }
     ),
-    cancelSetupCheck: op(
+    cancelSetupCheck: opValidated(
       CHANNELS.DECISIONS_CANCEL_SETUP_CHECK,
-      async (): Promise<DecisionsSetupCheckRun | null> => {
+      cancelSetupCheckSchema,
+      async (payload: CancelDecisionsSetupCheckPayload): Promise<DecisionsSetupCheckRun | null> => {
         if (!decisionsOn()) return null;
         const decisions = await loadDecisions();
-        return decisions ? decisions.cancelSetupCheck() : null;
+        return decisions ? decisions.cancelSetupCheck(payload) : null;
       }
     ),
   },

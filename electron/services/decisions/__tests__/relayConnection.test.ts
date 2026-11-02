@@ -663,7 +663,7 @@ describe("RelayConnection", () => {
     h.connection.stop();
   });
 
-  it("refreshes nothing during a 4409's wait, or once stopped", async () => {
+  it("refreshes nothing during a 4409's wait", async () => {
     const h = await harness({ rand: () => 0.5 });
     h.connection.start();
     const first = await connectLive(h);
@@ -673,9 +673,19 @@ describe("RelayConnection", () => {
     expect(h.connection.refresh()).toBe(false);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(h.relay.tickets).toHaveLength(1);
-
     h.connection.stop();
+  });
+
+  it("refreshes nothing once stopped", async () => {
+    const h = await harness();
+    h.connection.start();
+    await connectLive(h);
+    h.connection.stop();
+
     expect(h.connection.refresh()).toBe(false);
+    await vi.advanceTimersByTimeAsync(RECONNECT_CAP_MS);
+    expect(h.relay.tickets).toHaveLength(1);
+    expect(h.relay.sockets).toHaveLength(1);
   });
 
   it("cuts a backoff wait short on resume", async () => {

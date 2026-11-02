@@ -35,6 +35,7 @@ import {
   type DecisionsRevokeDeviceResult,
   type DecisionsRotateKeysResult,
   type DecisionsSettings,
+  type CancelDecisionsSetupCheckPayload,
   type DecisionsSetupCheckRun,
   type DecisionsSetupCheckStartResult,
   type DecisionsStatus,
@@ -232,6 +233,12 @@ let shownCheck: SetupCheck | null = null;
 /** The latest run, finished or not, for Settings to show. */
 let lastSetupRun: DecisionsSetupCheckRun | null = null;
 let setupCheckRevision = 0;
+/**
+ * Moves whenever a change ends what a check checks (turning off, a
+ * disconnect, a deletion, quit), so a start still waiting on the service when
+ * one lands makes no check.
+ */
+let setupCheckEpoch = 0;
 /** How long turning off, a disconnect, a deletion or quit waits for a check's cleanup. */
 const SETUP_CHECK_CANCEL_MS = 5_000;
 
@@ -1143,15 +1150,16 @@ function publishSetupCheck(check: SetupCheck, run: DecisionsSetupCheckRun): void
 
 /**
  * Records a check that ran to the end against the identity it checked, if
- * the setting still records that identity: a disconnect or new setup since
- * leaves it behind. A cancelled run records nothing.
+ * it wasn't called off by a change to what it checks and the setting still
+ * records that identity. A cancelled run records nothing.
  */
 function recordSetupCheck(
   relay: { relayOrigin: string; installationId: string; deviceId: string },
   check: SetupCheck,
   run: DecisionsSetupCheckRun
 ): void {
-  if (shutDown || (run.state !== "passed" && run.state !== "failed")) return;
+  if (shutDown || check !== shownCheck) return;
+  if (run.state !== "passed" && run.state !== "failed") return;
   const current = readDecisionsSettings(store);
   if (
     current.relayOrigin !== relay.relayOrigin ||
@@ -1160,9 +1168,11 @@ function recordSetupCheck(
   ) {
     return;
   }
-  let saved: DecisionsSettings;
+  // Written to the store alone: the status reads it from there, the service
+  // reads nothing of it, and updating the service's settings would resume a
+  // connection a disconnect had suspended.
   try {
-    saved = writeDecisionsSettings(store, {
+    writeDecisionsSettings(store, {
       ...current,
       setupCheck: {
         checkedAt: run.finishedAt ?? Date.now(),
@@ -1174,7 +1184,6 @@ function recordSetupCheck(
     console.warn("[Decisions] The setup check's result couldn't be recorded in settings");
     return;
   }
-  service?.updateSettings(saved);
   publishStatus();
 }
 
@@ -1186,11 +1195,14 @@ function recordSetupCheck(
  * on a person, and turning off, a disconnect, a deletion or quit cancels it.
  */
 export async function startSetupCheck(): Promise<DecisionsSetupCheckStartResult> {
-  if (setupCheck) return { result: "started", run: setupCheck.snapshot() };
+  if (setupCheck) return { result: "running", run: setupCheck.snapshot() };
+  const epoch = setupCheckEpoch;
   const running = await runningService();
-  // Another start may have made one while the service started.
+  // Turned off, disconnected, deleted or quit while the service started.
+  if (epoch !== setupCheckEpoch) throw setupRefused();
+  // Another start may have made one meanwhile.
   const raced = setupCheck as SetupCheck | null;
-  if (raced) return { result: "started", run: raced.snapshot() };
+  if (raced) return { result: "running", run: raced.snapshot() };
   const settings = running.getSettings() ?? readDecisionsSettings(store);
   const { relayOrigin, installationId, deviceId, hostId } = settings;
   if (relayOrigin === null || installationId === null || deviceId === null || hostId === null) {
@@ -1237,10 +1249,16 @@ export function getSetupCheck(): DecisionsSetupCheckRun | null {
   return setupCheck?.snapshot() ?? lastSetupRun;
 }
 
-/** Calls off the setup check running now; resolves once it has cleaned up. */
-export async function cancelSetupCheck(): Promise<DecisionsSetupCheckRun | null> {
+/**
+ * Calls off the setup check running now, if it is `runId`, so a cancel that
+ * arrives late can't end a newer run; resolves once it has cleaned up.
+ */
+export async function cancelSetupCheck(
+  payload: CancelDecisionsSetupCheckPayload
+): Promise<DecisionsSetupCheckRun | null> {
   const check = setupCheck;
-  return check ? check.cancel() : lastSetupRun;
+  if (check?.runId === payload.runId) return check.cancel();
+  return check?.snapshot() ?? lastSetupRun;
 }
 
 /**
@@ -1249,6 +1267,7 @@ export async function cancelSetupCheck(): Promise<DecisionsSetupCheckRun | null>
  * `SETUP_CHECK_CANCEL_MS`, so a stuck store can't hold up the change.
  */
 function endSetupCheck(): Promise<void> {
+  setupCheckEpoch += 1;
   const check = setupCheck;
   setupCheck = null;
   shownCheck = null;
@@ -1342,6 +1361,7 @@ export function _resetDecisionsForTesting(): void {
   shownCheck = null;
   lastSetupRun = null;
   setupCheckRevision = 0;
+  setupCheckEpoch = 0;
   service = null;
   creating = null;
   shutDown = false;

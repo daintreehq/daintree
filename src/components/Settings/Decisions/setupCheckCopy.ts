@@ -4,7 +4,7 @@ import type {
   DecisionsSetupCheckObservations,
   DecisionsSetupCheckRun,
   DecisionsSetupCheckStep,
-  DecisionsSetupCheckSteps,
+  DecisionsSetupStepState,
   DecisionsStatus,
 } from "@shared/types/decisions";
 import { describeRelayRequestFailure } from "./devicesCopy";
@@ -45,112 +45,109 @@ export interface SetupStepView {
   severity?: StatusSeverity;
 }
 
+/** What each step observed, in words. */
+const OBSERVED: {
+  [S in DecisionsSetupCheckStep]: (observation: DecisionsSetupCheckObservations[S]) => string;
+} = {
+  relay: (relay) => {
+    if (relay.result === "unexpected") return UNEXPECTED;
+    const words = describeRelayCheck(relay);
+    return words ? `${words.label}. ${words.detail}` : UNEXPECTED;
+  },
+  claim: (claim) => {
+    switch (claim.result) {
+      case "recognised":
+        return "The relay lists this computer as its owner, under the keys stored here";
+      case "not-recognised":
+        return "The relay answered, but it lists another owner, or other keys for this computer";
+      case "unexpected":
+        return UNEXPECTED;
+      default:
+        return describeRelayRequestFailure(claim);
+    }
+  },
+  socket: (socket) => {
+    switch (socket.result) {
+      case "connected":
+        return "A socket opened with a new ticket, and the relay answered on it";
+      case "no-hello":
+        return "Daintree asked for a socket with a new ticket, but it closed or the relay didn't answer on it in time";
+      case "replaced":
+        return "Another connection is using this computer's identity, most likely another copy of Daintree with the same keys. Daintree waits a few minutes before connecting again.";
+      case "revoked":
+        return "The relay revoked this computer";
+      case "not-connected":
+        return socket.problem
+          ? CONNECTION_PROBLEM[socket.problem]
+          : "Decisions isn't connected to the relay";
+      case "unexpected":
+        return UNEXPECTED;
+    }
+  },
+  push: (push) => {
+    switch (push.result) {
+      case "configured":
+        return `The relay has a push key, and holds notifications for ${push.pushEnabled} of ${pluralize(push.phones, "paired phone")}`;
+      case "no-push-key":
+        return "The relay didn't give a push key, so it can't notify a phone";
+      case "no-phone":
+        return "No phone is paired. Pair one under Devices, then check again.";
+      case "push-off":
+        return `${pluralize(push.phones, "phone is", "phones are")} paired, but the relay holds notifications for none of them. Turn notifications on in the Decisions app, then check again.`;
+      case "unexpected":
+        return UNEXPECTED;
+      default:
+        return describeRelayRequestFailure(push);
+    }
+  },
+  attachment: (attachment) => {
+    switch (attachment.result) {
+      case "matched":
+        return `An encrypted test image (${pluralize(attachment.bytes, "byte")}) went up with the question and came back the same`;
+      case "not-asked":
+        return "The test question couldn't be asked on this computer";
+      case "not-published":
+        return "The relay hadn't taken the test question and its image in time";
+      case "publish-failed":
+        return "The relay refused the test question and its image";
+      case "mismatch":
+        return "The image that came back didn't decrypt to the one sent";
+      case "unexpected":
+        return UNEXPECTED;
+      default:
+        return describeRelayRequestFailure(attachment);
+    }
+  },
+  question: (question) => {
+    switch (question.result) {
+      case "typed":
+        return "Your answer came back from the phone and was typed into the diagnostic terminal";
+      case "not-answered":
+        return "No answer came from a phone in time. Check that a phone shows the test question, then check again.";
+      case "expired":
+        return "The test question expired before it was answered";
+      case "cancelled":
+        return "The test question was cancelled before it was answered";
+      case "not-typed":
+        return "An answer came back, but it wasn't typed into the diagnostic terminal";
+      case "unexpected":
+        return UNEXPECTED;
+    }
+  },
+};
+
 function observed<S extends DecisionsSetupCheckStep>(
   step: S,
   observation: DecisionsSetupCheckObservations[S]
 ): string {
-  if (observation.result === "unexpected") return UNEXPECTED;
-  switch (step) {
-    case "relay": {
-      const relay = observation as DecisionsSetupCheckObservations["relay"];
-      if (relay.result === "unexpected") return UNEXPECTED;
-      const words = describeRelayCheck(relay);
-      return words ? `${words.label}. ${words.detail}` : UNEXPECTED;
-    }
-    case "claim": {
-      const claim = observation as DecisionsSetupCheckObservations["claim"];
-      switch (claim.result) {
-        case "recognised":
-          return "The relay lists this computer as its owner, under the keys stored here";
-        case "not-recognised":
-          return "The relay answered, but it lists another owner, or other keys for this computer";
-        case "unexpected":
-          return UNEXPECTED;
-        default:
-          return describeRelayRequestFailure(claim);
-      }
-    }
-    case "socket": {
-      const socket = observation as DecisionsSetupCheckObservations["socket"];
-      switch (socket.result) {
-        case "connected":
-          return "A socket opened with a new ticket, and the relay answered on it";
-        case "no-hello":
-          return "Daintree asked for a socket with a new ticket, but it closed or the relay didn't answer on it in time";
-        case "replaced":
-          return "Another connection is using this computer's identity, most likely another copy of Daintree with the same keys. Daintree waits a few minutes before connecting again.";
-        case "revoked":
-          return "The relay revoked this computer";
-        case "not-connected":
-          return socket.problem
-            ? CONNECTION_PROBLEM[socket.problem]
-            : "Decisions isn't connected to the relay";
-        case "unexpected":
-          return UNEXPECTED;
-      }
-      return UNEXPECTED;
-    }
-    case "push": {
-      const push = observation as DecisionsSetupCheckObservations["push"];
-      switch (push.result) {
-        case "configured":
-          return `The relay has a push key, and holds notifications for ${push.pushEnabled} of ${pluralize(push.phones, "paired phone")}`;
-        case "no-push-key":
-          return "The relay didn't give a push key, so it can't notify a phone";
-        case "no-phone":
-          return "No phone is paired. Pair one under Devices, then check again.";
-        case "push-off":
-          return `${pluralize(push.phones, "phone is", "phones are")} paired, but the relay holds notifications for none of them. Turn notifications on in the Decisions app, then check again.`;
-        case "unexpected":
-          return UNEXPECTED;
-        default:
-          return describeRelayRequestFailure(push);
-      }
-    }
-    case "attachment": {
-      const attachment = observation as DecisionsSetupCheckObservations["attachment"];
-      switch (attachment.result) {
-        case "matched":
-          return `An encrypted test image (${pluralize(attachment.bytes, "byte")}) went up with the question and came back the same`;
-        case "not-asked":
-          return "The test question couldn't be asked on this computer";
-        case "not-published":
-          return "The relay hadn't taken the test question and its image in time";
-        case "publish-failed":
-          return "The relay refused the test question and its image";
-        case "mismatch":
-          return "The image that came back didn't decrypt to the one sent";
-        case "unexpected":
-          return UNEXPECTED;
-        default:
-          return describeRelayRequestFailure(attachment);
-      }
-    }
-    case "question": {
-      const question = observation as DecisionsSetupCheckObservations["question"];
-      switch (question.result) {
-        case "typed":
-          return "Your answer came back from the phone and was typed into the diagnostic terminal";
-        case "not-answered":
-          return "No answer came from a phone in time. Check that a phone shows the test question, then check again.";
-        case "expired":
-          return "The test question expired before it was answered";
-        case "cancelled":
-          return "The test question was cancelled before it was answered";
-        case "not-typed":
-          return "An answer came back, but it wasn't typed into the diagnostic terminal";
-        case "unexpected":
-          return UNEXPECTED;
-      }
-    }
-  }
-  return UNEXPECTED;
+  const describe: (observation: DecisionsSetupCheckObservations[S]) => string = OBSERVED[step];
+  return describe(observation);
 }
 
 /** One step as Connection shows it: what it is, and what it observed. */
 export function describeSetupStep<S extends DecisionsSetupCheckStep>(
   step: S,
-  state: DecisionsSetupCheckSteps[S],
+  state: DecisionsSetupStepState<DecisionsSetupCheckObservations[S]>,
   run: Pick<DecisionsSetupCheckRun, "state">
 ): SetupStepView {
   const label = SETUP_STEP_LABEL[step];

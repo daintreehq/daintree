@@ -120,7 +120,11 @@ interface Harness {
   question(): Promise<NonNullable<Awaited<ReturnType<MemoryLocalStore["getQuestion"]>>>>;
 }
 
-async function harness(overrides: Partial<SetupCheckDeps> = {}): Promise<Harness> {
+async function harness(
+  overrides: Partial<SetupCheckDeps> = {},
+  /** Another image than the check's own, for its diagnostic origin to attach. */
+  image?: Uint8Array
+): Promise<Harness & { identity: Identity }> {
   const identity = await ownerIdentity();
   const store = new MemoryLocalStore();
   const spool = new MemorySpool();
@@ -132,7 +136,12 @@ async function harness(overrides: Partial<SetupCheckDeps> = {}): Promise<Harness
     store,
     policy: new PolicyRegistry(),
     attachments: {
-      resolver: diagnostics.attachmentResolver({ resolve: async () => null }),
+      resolver: image
+        ? {
+            resolve: async (origin) =>
+              diagnostics.handles(origin.pane_id) ? { bytes: new Uint8Array(image) } : null,
+          }
+        : diagnostics.attachmentResolver({ resolve: async () => null }),
       spool,
       register: (ask) => ask(),
     },
@@ -178,6 +187,7 @@ async function harness(overrides: Partial<SetupCheckDeps> = {}): Promise<Harness
     }
   );
   return {
+    identity,
     check,
     store,
     spool,
@@ -215,8 +225,8 @@ async function publish(h: Harness): Promise<string> {
   return row.question_id;
 }
 
-/** A person's answer, typed by delivery into the diagnostic terminal and recorded. */
-async function answer(h: Harness, questionId: string): Promise<void> {
+/** A person's answer, as delivery types it into the diagnostic terminal. */
+async function typeAnswer(h: Harness, questionId: string): Promise<void> {
   await h.reached("question");
   const row = await h.question();
   const injectionId = "inj_0123456789abcdef";
@@ -236,6 +246,11 @@ async function answer(h: Harness, questionId: string): Promise<void> {
   )[0]!;
   const typed = await h.diagnostics.sink.inject(targetOf(row.origin), text, injectionId);
   expect(typed.outcome).toBe("delivered");
+}
+
+/** A person's answer, typed by delivery into the diagnostic terminal and recorded. */
+async function answer(h: Harness, questionId: string): Promise<void> {
+  await typeAnswer(h, questionId);
   await h.store.updateQuestion(questionId, {
     local_status: "human-answered",
     delivery_status: "terminal-delivered",
@@ -285,6 +300,11 @@ describe("SetupCheck", () => {
     if (question.state === "passed" && question.observation.result === "typed") {
       expect(question.observation.text).toContain("choice_label: Received");
     }
+    // The relay's own device list was judged against the connection's identity.
+    expect(relay.recognises).toHaveBeenCalledExactlyOnceWith(
+      { owner_device_id: RELAY.deviceId, devices: [] },
+      h.identity
+    );
     // A fresh attempt was asked for, and the question was asked as a person's to answer.
     expect(h.refresh).toHaveBeenCalledOnce();
     const row = await h.question();
@@ -297,6 +317,47 @@ describe("SetupCheck", () => {
     );
     expect(run.diagnostic).toBeNull();
     expect(h.diagnostics.isCurrent({ ...row.origin })).toBe(false);
+  });
+
+  it("passes on what delivery did, though a late create receipt set the row back to open", async () => {
+    const h = await harness();
+    relay.downloadAttachment.mockImplementation(async (id: string) => h.spool.get(id));
+    const done = h.check.start();
+    const questionId = await publish(h);
+
+    await typeAnswer(h, questionId);
+    // The library writes `open` on every create receipt, even after an answer arrived.
+    await h.store.updateQuestion(questionId, {
+      local_status: "open",
+      delivery_status: "terminal-delivered",
+    });
+    h.commit();
+
+    expect((await done).steps.question.state).toBe("passed");
+  });
+
+  it("doesn't pass on a delivery recorded without the answer typed here, or typing never recorded", async () => {
+    let h = await harness({ timeouts: { answerMs: 120, pollMs: 20 } });
+    relay.downloadAttachment.mockImplementation(async (id: string) => h.spool.get(id));
+    let done = h.check.start();
+    let questionId = await publish(h);
+    await h.reached("question");
+    await h.store.updateQuestion(questionId, {
+      local_status: "human-answered",
+      delivery_status: "terminal-delivered",
+    });
+    h.commit();
+    expect((await done).steps.question.state).toBe("failed");
+
+    h = await harness({ timeouts: { answerMs: 120, pollMs: 20 } });
+    relay.downloadAttachment.mockImplementation(async (id: string) => h.spool.get(id));
+    done = h.check.start();
+    questionId = await publish(h);
+    await typeAnswer(h, questionId);
+    expect((await done).steps.question).toEqual({
+      state: "failed",
+      observation: { result: "not-answered" },
+    });
   });
 
   it("stops at the first step that fails, naming it, and runs nothing after it", async () => {
@@ -444,6 +505,22 @@ describe("SetupCheck", () => {
     expect(run.steps.question.state).toBe("skipped");
     expect((await h.store.outboxFor(questionId)).some((item) => item.kind === "cancel")).toBe(true);
     expect(run.diagnostic).toBeNull();
+  });
+
+  it("fails the attachment step when the image decrypts to another than the one sent", async () => {
+    // Other bytes behind the same PNG signature: they decrypt cleanly, so only the comparison can catch them.
+    const other = new Uint8Array(SETUP_CHECK_IMAGE);
+    other[other.length - 13] ^= 0xff;
+    const h = await harness({}, other);
+    relay.downloadAttachment.mockImplementation(async (id: string) => h.spool.get(id));
+    const done = h.check.start();
+
+    const questionId = await publish(h);
+    const run = await done;
+
+    expect(run.steps.attachment).toEqual({ state: "failed", observation: { result: "mismatch" } });
+    expect(run.steps.question.state).toBe("skipped");
+    expect((await h.store.outboxFor(questionId)).some((item) => item.kind === "cancel")).toBe(true);
   });
 
   it("fails the attachment step when the relay doesn't take the question in time", async () => {

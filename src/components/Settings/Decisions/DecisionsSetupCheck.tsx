@@ -55,6 +55,23 @@ function DiagnosticTerminal({ terminal }: { terminal: DecisionsSetupDiagnosticTe
   );
 }
 
+/** The run as one line for a screen reader: the step under way, or how it ended. */
+function announcement(run: DecisionsSetupCheckRun | null): string {
+  if (run === null) return "";
+  if (run.state === "running") {
+    const step = DECISIONS_SETUP_CHECK_STEPS.find((each) => run.steps[each].state === "running");
+    if (!step) return "Checking setup…";
+    const view = describeSetupStep(step, run.steps[step], run);
+    return `${view.label}. ${view.detail}`;
+  }
+  if (run.state === "cancelled") return "Setup check cancelled";
+  if (run.state === "passed") return "Setup check passed: every step passed";
+  const failed = DECISIONS_SETUP_CHECK_STEPS.find((each) => run.steps[each].state === "failed");
+  if (!failed) return "Setup check failed";
+  const view = describeSetupStep(failed, run.steps[failed], run);
+  return `Setup check stopped at ${view.label.toLowerCase()}. ${view.detail}`;
+}
+
 /**
  * Check setup (#16024): runs the whole loop against the relay set up here,
  * shows each step as it observes it, and holds the diagnostic terminal the
@@ -73,63 +90,68 @@ export function DecisionsSetupCheck({
   const { run } = check;
   const running = run?.state === "running";
   return (
-    <SettingsGroup id="decisions-setup-check-group">
-      <SettingsRow
-        id="decisions-setup-check"
-        label="Setup check"
-        description={summary(run, status)}
-        error={check.error ?? undefined}
-        disabled={disabled && !running}
-        control={({ descriptionId, disabled: rowDisabled }) =>
-          running ? (
-            <Button
-              variant="outline"
-              size="sm"
-              aria-describedby={descriptionId}
-              onClick={() => check.cancel()}
-            >
-              Cancel check
-            </Button>
-          ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              loading={check.starting}
-              disabled={rowDisabled}
-              aria-describedby={descriptionId}
-              data-decisions-setup-check-start=""
-              onClick={() => check.start()}
-            >
-              {run || status.setupCheck ? "Check again" : "Check setup"}
-            </Button>
-          )
-        }
-      />
-      {run &&
-        DECISIONS_SETUP_CHECK_STEPS.map((step) => {
-          const state = run.steps[step];
-          const view = describeSetupStep(step, state, run);
-          return (
-            <SettingsRow
-              key={step}
-              id={`decisions-setup-check-${step}`}
-              label={view.label}
-              accessory={
-                view.severity ? (
-                  <SeverityMark
-                    severity={view.severity}
-                    label={view.severity === "success" ? "Passed" : "Failed"}
-                    className="h-3.5 w-3.5"
-                  />
-                ) : state.state === "running" ? (
-                  <Spinner size="sm" className="text-text-secondary" />
-                ) : undefined
-              }
-              description={view.detail}
-            />
-          );
-        })}
-      {run?.diagnostic && <DiagnosticTerminal terminal={run.diagnostic} />}
-    </SettingsGroup>
+    <>
+      <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {announcement(run)}
+      </span>
+      <SettingsGroup id="decisions-setup-check-group">
+        <SettingsRow
+          id="decisions-setup-check"
+          label="Setup check"
+          description={summary(run, status)}
+          error={check.error ?? undefined}
+          disabled={disabled && !running}
+          control={({ descriptionId, disabled: rowDisabled }) =>
+            running ? (
+              <Button
+                variant="outline"
+                size="sm"
+                aria-describedby={descriptionId}
+                onClick={() => check.cancel()}
+              >
+                Cancel check
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                loading={check.starting}
+                disabled={rowDisabled}
+                aria-describedby={descriptionId}
+                data-decisions-setup-check-start=""
+                onClick={() => check.start()}
+              >
+                {run || status.setupCheck ? "Check again" : "Check setup"}
+              </Button>
+            )
+          }
+        />
+        {run &&
+          DECISIONS_SETUP_CHECK_STEPS.map((step) => {
+            const state = run.steps[step];
+            const view = describeSetupStep(step, state, run);
+            return (
+              <SettingsRow
+                key={step}
+                id={`decisions-setup-check-${step}`}
+                label={view.label}
+                accessory={
+                  view.severity ? (
+                    <SeverityMark
+                      severity={view.severity}
+                      label={view.severity === "success" ? "Passed" : "Failed"}
+                      className="h-3.5 w-3.5"
+                    />
+                  ) : state.state === "running" ? (
+                    <Spinner size="sm" className="text-text-secondary" />
+                  ) : undefined
+                }
+                description={view.detail}
+              />
+            );
+          })}
+        {run?.diagnostic && <DiagnosticTerminal terminal={run.diagnostic} />}
+      </SettingsGroup>
+    </>
   );
 }

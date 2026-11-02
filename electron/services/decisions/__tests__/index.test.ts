@@ -154,6 +154,8 @@ vi.mock("../mcpRoute.js", () => ({
  * as the real one would. The checking itself is setupCheck.ts's own suite's.
  */
 const setupChecks = vi.hoisted(() => ({
+  /** While set, a cancel ends its run only once this settles, as a slow cleanup would. */
+  holdCancel: null as Promise<void> | null,
   made: [] as Array<{
     deps: import("../setupCheck.js").SetupCheckDeps;
     report: (run: import("../../../../shared/types/decisions.js").DecisionsSetupCheckRun) => void;
@@ -213,11 +215,16 @@ vi.mock("../setupCheck.js", () => {
     cancel(): Promise<Run> {
       const entry = setupChecks.made.find((made) => made.deps === this.deps);
       if (entry) entry.cancelled += 1;
-      if (this.run.state === "running") this.end("cancelled");
+      const hold = setupChecks.holdCancel;
+      if (hold) void hold.then(() => this.end("cancelled"));
+      else this.end("cancelled");
       return this.ending;
     }
     private end(state: Run["state"]): void {
-      this.run = { ...this.run, state, finishedAt: 2, revision: this.deps.nextRevision() };
+      if (this.run.state !== "running") return;
+      const revision = this.deps.nextRevision();
+      // Each run ends at a time of its own, so one record can't pass for another's.
+      this.run = { ...this.run, state, finishedAt: 1_000 + revision, revision };
       this.onChange(this.snapshot());
       this.ended(this.snapshot());
     }
@@ -440,6 +447,7 @@ describe("Decisions entry", () => {
     controlTokens.clear();
     mcpRefs.loaded = true;
     // The last test's check is cancelled by the reset, before its record goes.
+    setupChecks.holdCancel = null;
     _resetDecisionsForTesting();
     setupChecks.made.length = 0;
   });
@@ -2133,6 +2141,9 @@ describe("Decisions entry", () => {
 
       await setDecisionsEnabled(false);
       await expect(setAutoEnrollHosts(true)).rejects.toMatchObject(CANCELLED);
+    });
+  });
+
   describe("setup check (#16024)", () => {
     /** What the setup check pushes to this machine's windows carried, in order. */
     function pushedRuns(): Array<{ runId: string; state: string; revision: number }> {
@@ -2176,11 +2187,66 @@ describe("Decisions entry", () => {
       const again = await startSetupCheck();
 
       expect(first).toMatchObject({ result: "started", run: { runId: "run-1", state: "running" } });
-      expect(again).toMatchObject({ result: "started", run: { runId: "run-1" } });
+      // Asked again, it answers the run already going, which the asker didn't start.
+      expect(again).toMatchObject({ result: "running", run: { runId: "run-1" } });
       expect(setupChecks.made).toHaveLength(1);
-      expect(setupChecks.made[0]!.deps.relay).toEqual(RELAY);
+      const check = setupChecks.made[0]!;
+      expect(check.deps.relay).toEqual(RELAY);
       expect(getSetupCheck()).toMatchObject({ runId: "run-1", state: "running" });
-      expect(pushedRuns().map((run) => run.state)).toEqual(["running"]);
+
+      // What it reports reaches this machine's windows as it is.
+      const progress = { ...first, run: { ...(first as { run: object }).run, revision: 99 } };
+      check.report(progress.run as never);
+      expect(pushedRuns().map((run) => run.revision)).toContain(99);
+    });
+
+    it("hands the check the running lifetime's connection, status and store", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startSetupCheck();
+      const service = peekDecisionsService()!;
+      const refresh = vi.spyOn(service, "refreshConnection").mockReturnValue(true);
+      const source = vi.spyOn(service, "getQuestionSource").mockReturnValue(null);
+      const deps = setupChecks.made[0]!.deps;
+
+      expect(deps.refreshConnection()).toBe(true);
+      expect(deps.questionSource()).toBeNull();
+      expect(deps.status()).toEqual(service.getStatus());
+      expect(refresh).toHaveBeenCalledOnce();
+      expect(source).toHaveBeenCalledOnce();
+    });
+
+    it("makes one check for two starts that both wait on the service starting", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      let open!: () => void;
+      loads.opening = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+
+      const first = startSetupCheck();
+      const second = startSetupCheck();
+      await settle();
+      open();
+      const results = await Promise.all([first, second]);
+
+      expect(setupChecks.made).toHaveLength(1);
+      expect(results.map((result) => result.result).sort()).toEqual(["running", "started"]);
+    });
+
+    it("makes no check for a start still waiting on the service when Decisions is turned off", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      let open!: () => void;
+      loads.opening = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+
+      const start = startSetupCheck();
+      await settle();
+      const off = setDecisionsEnabled(false);
+      open();
+
+      await expect(start).rejects.toMatchObject(CANCELLED);
+      await off;
+      expect(setupChecks.made).toHaveLength(0);
     });
 
     it("records a check that ran to the end against its identity, which the status then shows", async () => {
@@ -2191,20 +2257,22 @@ describe("Decisions entry", () => {
       setupChecks.made[0]!.finish("failed", "question");
       await settle();
 
-      expect((saved.value as { setupCheck: unknown }).setupCheck).toEqual({
-        checkedAt: 2,
+      const recorded = (saved.value as { setupCheck: { checkedAt: number } }).setupCheck;
+      expect(recorded).toEqual({
+        checkedAt: expect.any(Number),
         relayOrigin: RELAY.relayOrigin,
         installationId: RELAY.installationId,
         deviceId: RELAY.deviceId,
         failedStep: "question",
       });
+      expect(getSetupCheck()).toMatchObject({ runId: "run-1", state: "failed" });
+      expect(recorded.checkedAt).toBe(getSetupCheck()!.finishedAt);
       await expect(getDecisionsStatus()).resolves.toMatchObject({
-        setupCheck: { checkedAt: 2, failedStep: "question" },
+        setupCheck: { checkedAt: recorded.checkedAt, failedStep: "question" },
       });
       expect(pushedStatuses().at(-1)).toMatchObject({
-        setupCheck: { checkedAt: 2, failedStep: "question" },
+        setupCheck: { checkedAt: recorded.checkedAt, failedStep: "question" },
       });
-      expect(getSetupCheck()).toMatchObject({ runId: "run-1", state: "failed" });
       // A check of keys known to be gone protects nothing, so the status doesn't show it.
       rmSync(keyFile.path, { force: true });
       expect((await getDecisionsStatus()).setupCheck).toBeUndefined();
@@ -2225,55 +2293,103 @@ describe("Decisions entry", () => {
       setupChecks.made[0]!.finish("passed");
       await settle();
       const recorded = (saved.value as { setupCheck: unknown }).setupCheck;
+      const second = await startSetupCheck();
+      vi.mocked(store.set).mockClear();
 
-      await startSetupCheck();
-      await expect(cancelSetupCheck()).resolves.toMatchObject({
-        runId: "run-2",
-        state: "cancelled",
-      });
+      await expect(
+        cancelSetupCheck({ runId: (second as { run: { runId: string } }).run.runId })
+      ).resolves.toMatchObject({ runId: "run-2", state: "cancelled" });
       await settle();
 
+      expect(store.set).not.toHaveBeenCalled();
       expect((saved.value as { setupCheck: unknown }).setupCheck).toEqual(recorded);
       expect(getSetupCheck()).toMatchObject({ runId: "run-2", state: "cancelled" });
     });
 
-    it("doesn't record a check whose identity was disconnected while it ran", async () => {
+    it("cancels only the run a cancel names, so a late one can't end a newer run", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startSetupCheck();
+
+      await expect(cancelSetupCheck({ runId: "run-0" })).resolves.toMatchObject({
+        runId: "run-1",
+        state: "running",
+      });
+      expect(setupChecks.made[0]!.cancelled).toBe(0);
+    });
+
+    it("doesn't record a check whose identity changed while it ran", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startSetupCheck();
+
+      // Another identity recorded under it, as a new setup would.
+      saved.value = { ...(saved.value as object), deviceId: "dev_another_1" };
+      setupChecks.made[0]!.finish("passed");
+      await settle();
+
+      expect((saved.value as { setupCheck?: unknown }).setupCheck ?? null).toBeNull();
+    });
+
+    it("doesn't record a check a disconnect called off, nor show or push it after", async () => {
       saved.value = { enabled: true, ...RELAY };
       await startSetupCheck();
       const check = setupChecks.made[0]!;
+      let release!: () => void;
+      setupChecks.holdCancel = new Promise<void>((resolve) => {
+        release = resolve;
+      });
 
-      await disconnectRelay();
+      const disconnecting = disconnectRelay();
+      await settle();
+      expect(check.cancelled).toBe(1);
+      // The run ends as passed before its cancel lands: still not recorded.
       check.finish("passed");
+      release();
+      await disconnecting;
       await settle();
 
-      expect(check.cancelled).toBe(1);
       expect((saved.value as { setupCheck: unknown }).setupCheck).toBeNull();
-      // Forgotten with its identity: nothing shows it, nothing more is pushed.
       expect(getSetupCheck()).toBeNull();
       expect(pushedRuns().map((run) => run.state)).toEqual(["running"]);
     });
 
-    it("cancels a running check before turning off stops the service, and at quit", async () => {
+    it("waits for a running check's cleanup before turning off stops the service, and cancels one at quit", async () => {
       saved.value = { enabled: true, ...RELAY };
       await startSetupCheck();
       const service = peekDecisionsService()!;
       const stop = vi.spyOn(service, "stop");
       const check = setupChecks.made[0]!;
-      let cancelledBeforeStop: boolean | null = null;
-      stop.mockImplementation(async function (this: typeof service) {
-        cancelledBeforeStop = check.cancelled === 1;
+      let release!: () => void;
+      setupChecks.holdCancel = new Promise<void>((resolve) => {
+        release = resolve;
       });
 
-      await setDecisionsEnabled(false);
+      const off = setDecisionsEnabled(false);
+      await settle();
+      expect(check.cancelled).toBe(1);
+      // The question is cancelled while the store is still open.
+      expect(stop).not.toHaveBeenCalled();
+      release();
+      await off;
 
-      expect(cancelledBeforeStop).toBe(true);
+      expect(stop).toHaveBeenCalled();
       expect(getSetupCheck()).toBeNull();
 
+      setupChecks.holdCancel = null;
       saved.value = { enabled: true, ...RELAY };
       _resetDecisionsForTesting();
       await startSetupCheck();
       await stopDecisions();
       expect(setupChecks.made[1]!.cancelled).toBe(1);
+    });
+
+    it("cancels a running check before deleting local data", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startSetupCheck();
+
+      await deleteLocalData();
+
+      expect(setupChecks.made[0]!.cancelled).toBe(1);
+      expect(getSetupCheck()).toBeNull();
     });
 
     it("forgets the setup check's result with the identity it checked", async () => {

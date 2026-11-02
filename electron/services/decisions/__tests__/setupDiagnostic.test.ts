@@ -67,16 +67,28 @@ describe("SetupDiagnostics", () => {
       target: targetOf(terminal.origin),
     });
     await expect(diagnostics.sink.isIdle(targetOf(terminal.origin))).resolves.toBe(true);
+    terminal.expect("q_setup_check");
     for (const other of [
       { ownership_principal: "someone-else" },
       { terminal_generation: 2 },
       { host_id: "host_b" },
+      { agent_incarnation: "1" },
     ]) {
+      const wrong = { ...terminal.origin, ...other };
+      const label = JSON.stringify(other);
+      await expect(diagnostics.sink.locate(wrong), label).resolves.toEqual({ state: "gone" });
+      await expect(diagnostics.sink.isIdle(targetOf(wrong)), label).resolves.toBe(false);
       await expect(
-        diagnostics.sink.locate({ ...terminal.origin, ...other }),
-        JSON.stringify(other)
-      ).resolves.toEqual({ state: "gone" });
+        diagnostics.sink.inject(
+          targetOf(wrong),
+          notice("q_setup_check", "inj_0123456789"),
+          "inj_0123456789"
+        ),
+        label
+      ).resolves.toEqual({ outcome: "unavailable", reason: "gone" });
     }
+    // Nothing reached the terminal through a wrong target.
+    expect(terminal.view()!.screen).toBe("");
 
     diagnostics.close(terminal);
     await expect(diagnostics.sink.locate(terminal.origin)).resolves.toEqual({ state: "gone" });
@@ -102,13 +114,37 @@ describe("SetupDiagnostics", () => {
     expect(view.screen).toContain("question_id: q_setup_check (q-3)");
     expect(view.screen).toContain("choice_label: Received");
     expect(view.screen).toContain("inj_0123456789");
-    expect(terminal.typedFor("q_setup_check")).toMatchObject({
+    expect(terminal.answerTypedFor("q_setup_check")).toMatchObject({
       source: "human",
       expired: false,
       injectionId: "inj_0123456789",
     });
     await expect(diagnostics.sink.hasMarker(target, "inj_0123456789")).resolves.toBe(true);
     await expect(diagnostics.sink.hasMarker(target, "inj_9999999999")).resolves.toBe(false);
+  });
+
+  it("counts only a person's answer as answered, never an expiry notice", async () => {
+    const diagnostics = new SetupDiagnostics();
+    const terminal = diagnostics.open("host_a", () => {});
+    terminal.expect("q_setup_check");
+    const expiry = batchNotices(
+      [
+        formatAnswerNotice({
+          kind: "expired",
+          questionId: "q_setup_check",
+          revision: 1,
+          source: "human",
+          injectionId: "inj_expired_01",
+        }),
+      ],
+      Number.MAX_SAFE_INTEGER
+    )[0]!;
+
+    await expect(
+      diagnostics.sink.inject(targetOf(terminal.origin), expiry, "inj_expired_01")
+    ).resolves.toMatchObject({ outcome: "delivered" });
+
+    expect(terminal.answerTypedFor("q_setup_check")).toBeUndefined();
   });
 
   it("refuses another question's answer, a notice for another injection, and text that isn't one", async () => {
@@ -148,6 +184,9 @@ describe("SetupDiagnostics", () => {
     diagnostics.close(terminal);
 
     expect(terminal.view()).toBeNull();
+    // Its screen went with it, not just out of view.
+    expect(terminal.hasMarker("inj_0123456789")).toBe(false);
+    expect(terminal.isOpen).toBe(false);
     await expect(
       diagnostics.sink.inject(target, notice("q_setup_check", "inj_0123456780"), "inj_0123456780")
     ).resolves.toEqual({ outcome: "unavailable", reason: "gone" });
