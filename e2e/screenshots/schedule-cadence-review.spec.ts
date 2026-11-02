@@ -49,7 +49,10 @@ const OUTPUT_DIR = process.env.DESIGN_CAPTURE_DIR
   ? path.resolve(process.env.DESIGN_CAPTURE_DIR)
   : path.resolve(process.cwd(), "artifacts", "cadence-shots");
 
-const DIALOG = '[data-testid="schedules-dialog"]';
+// Every capture is of the schedule's editor, opened over Project settings → Schedules.
+const DIALOG = '[data-testid="schedule-editor-dialog"]';
+const TAB = '[data-testid="project-schedules-tab"]';
+const SETTINGS = `[role="dialog"]:has(${TAB})`;
 const PREVIEW = '[data-testid="schedule-cadence-preview"]';
 
 const POLISH_CSS = `
@@ -158,22 +161,23 @@ async function showCadence(page: Page): Promise<void> {
 async function openSchedule(page: Page, scheduleId: string): Promise<void> {
   const result = await dispatchAction(page, "schedules.open", { scheduleId }, { source: "user" });
   if (!result.ok) throw new Error(`schedules.open failed: ${JSON.stringify(result)}`);
-  await page.locator(DIALOG).waitFor({ state: "visible", timeout: 8000 });
+  await page.locator(TAB).waitFor({ state: "visible", timeout: 8000 });
   // A schedule opens on its runs (#15986); the cadence is on its editor.
-  await page.locator(DIALOG).getByRole("button", { name: "Edit schedule" }).click();
+  await page.locator(TAB).getByRole("button", { name: "Edit schedule" }).click();
+  await page.locator(DIALOG).waitFor({ state: "visible", timeout: 8000 });
   await showCadence(page);
 }
 
 async function closeView(page: Page): Promise<void> {
-  // An open list takes the first Escape.
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (!(await page.locator(DIALOG).isVisible())) break;
+  // An open list takes the first Escape, the editor the next, then Project settings.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if ((await page.locator(SETTINGS).count()) === 0) break;
     await page.keyboard.press("Escape");
     const discard = page.getByRole("button", { name: "Discard changes" });
     if (await discard.isVisible({ timeout: 600 }).catch(() => false)) await discard.click();
     await settle(page, 150);
   }
-  await page.locator(DIALOG).waitFor({ state: "detached", timeout: 8000 });
+  await page.locator(SETTINGS).waitFor({ state: "detached", timeout: 8000 });
   await settle(page, 200);
 }
 

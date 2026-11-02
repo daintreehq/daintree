@@ -58,7 +58,10 @@ const OUTPUT_DIR = process.env.DESIGN_CAPTURE_DIR
   ? path.resolve(process.env.DESIGN_CAPTURE_DIR)
   : path.resolve(process.cwd(), "artifacts", "schedules-shots");
 
-const DIALOG = '[data-testid="schedules-dialog"]';
+const TAB = '[data-testid="project-schedules-tab"]';
+const EDITOR = '[data-testid="schedule-editor-dialog"]';
+// Project settings, framed whole: the tab in its page.
+const SETTINGS = `[role="dialog"]:has(${TAB})`;
 const UNATTENDED_PRESET = "schedules-shot-unattended";
 
 const MINUTE = 60_000;
@@ -100,12 +103,18 @@ async function settle(page: Page, ms = 400): Promise<void> {
   await page.waitForTimeout(ms);
 }
 
-async function snap(page: Page, theme: string, slug: string, expect: string): Promise<void> {
+async function snap(
+  page: Page,
+  theme: string,
+  slug: string,
+  expect: string,
+  frame: string = SETTINGS
+): Promise<void> {
   await settle(page);
   if (!(await page.locator(expect).first().isVisible())) {
     throw new Error(`${slug}: expected ${expect} to be visible before capture`);
   }
-  const box = await page.locator(DIALOG).first().boundingBox();
+  const box = await page.locator(frame).first().boundingBox();
   if (!box) throw new Error(`${slug}: dialog has no box`);
   const pad = 24;
   const viewport = page.viewportSize() ?? { width: 1680, height: 1050 };
@@ -129,18 +138,18 @@ async function snap(page: Page, theme: string, slug: string, expect: string): Pr
   }
 }
 
-/** Scroll the dialog body to its end, so the lower sections of the editor are in frame. */
-async function scrollBodyToEnd(page: Page): Promise<void> {
+/** Scroll a dialog's body to its end, so the lower sections of the page are in frame. */
+async function scrollBodyToEnd(page: Page, frame: string = SETTINGS): Promise<void> {
   await page.evaluate((selector) => {
     const dialog = document.querySelector(selector);
-    if (!dialog) throw new Error("schedules dialog missing");
+    if (!dialog) throw new Error(`${selector} missing`);
     const scrollers = [...dialog.querySelectorAll<HTMLElement>("*")].filter(
       (el) => el.scrollHeight > el.clientHeight + 4 && getComputedStyle(el).overflowY !== "visible"
     );
     const body = scrollers.sort((a, b) => b.scrollHeight - a.scrollHeight)[0];
-    if (!body) throw new Error("schedules dialog has nothing to scroll");
+    if (!body) throw new Error(`${selector} has nothing to scroll`);
     body.scrollTop = body.scrollHeight;
-  }, DIALOG);
+  }, frame);
 }
 
 async function openView(page: Page, scheduleId?: string): Promise<void> {
@@ -153,15 +162,19 @@ async function openView(page: Page, scheduleId?: string): Promise<void> {
     }
   );
   if (!result.ok) throw new Error(`schedules.open failed: ${JSON.stringify(result)}`);
-  await page.locator(DIALOG).waitFor({ state: "visible", timeout: 8000 });
+  await page.locator(TAB).waitFor({ state: "visible", timeout: 8000 });
 }
 
+/** Escape out of the editor, if it's open, and then Project settings. */
 async function closeView(page: Page): Promise<void> {
-  await page.keyboard.press("Escape");
-  // A page with unsaved edits asks before it lets go.
-  const discard = page.getByRole("button", { name: "Discard changes" });
-  if (await discard.isVisible({ timeout: 1000 }).catch(() => false)) await discard.click();
-  await page.locator(DIALOG).waitFor({ state: "detached", timeout: 8000 });
+  for (let layer = 0; layer < 3 && (await page.locator(SETTINGS).count()) > 0; layer++) {
+    await page.keyboard.press("Escape");
+    // An editor with unsaved edits asks before it lets go.
+    const discard = page.getByRole("button", { name: "Discard changes" });
+    if (await discard.isVisible({ timeout: 1000 }).catch(() => false)) await discard.click();
+    await settle(page, 200);
+  }
+  await page.locator(SETTINGS).waitFor({ state: "detached", timeout: 8000 });
   await settle(page, 200);
 }
 
@@ -680,7 +693,7 @@ test("schedules view review — every state, per theme", async () => {
 
       // 01 — no schedules yet: what a schedule is, and the way to make one.
       await openView(page);
-      await snap(page, theme, "01-empty", `${DIALOG} >> text=Run an agent on a schedule`);
+      await snap(page, theme, "01-empty", `${TAB} >> text=Add a schedule to run an agent`);
       await closeView(page);
 
       const ids = await seedSchedules(page);
@@ -688,7 +701,7 @@ test("schedules view review — every state, per theme", async () => {
 
       // The list's first read opens the run history, so it exists before runs are written.
       await openView(page);
-      await page.locator(`${DIALOG} >> text=Monthly licence audit`).waitFor({ timeout: 8000 });
+      await page.locator(`${TAB} >> text=Monthly licence audit`).waitFor({ timeout: 8000 });
       await closeView(page);
 
       const shellPaneId = await openShellPane(page);
@@ -728,46 +741,48 @@ test("schedules view review — every state, per theme", async () => {
 
       // 02 — the list: on, paused, every-N, custom cron, another worktree, a long name, last runs.
       await openView(page);
-      await snap(page, theme, "02-list", `${DIALOG} >> text=Monthly licence audit`);
+      await snap(page, theme, "02-list", `${TAB} >> text=Monthly licence audit`);
 
       // 03 — a new schedule: #15974's defaults, and the bare agent's permission warning.
-      await page.getByRole("button", { name: "New schedule" }).first().click();
+      await page.locator(TAB).getByRole("button", { name: "Add schedule" }).first().click();
       await snap(
         page,
         theme,
         "03-new-top",
-        `${DIALOG} >> text=This run will stop at permission prompts`
+        `${EDITOR} >> text=This run will stop at permission prompts`,
+        EDITOR
       );
 
       // 04 — Create with nothing filled in and a cron out of range: every field says what's wrong.
-      await page.locator(DIALOG).getByRole("combobox", { name: "Repeats" }).click();
+      await page.locator(EDITOR).getByRole("combobox", { name: "Repeats" }).click();
       await page.getByRole("option", { name: "Custom cron expression" }).click();
-      const cadence = page.locator(`${DIALOG} input[placeholder="0 9 * * *"]`);
+      const cadence = page.locator(`${EDITOR} input[placeholder="0 9 * * *"]`);
       await cadence.fill("61 9 * * *");
       await page.getByRole("button", { name: "Create schedule" }).click();
-      await snap(page, theme, "04-new-invalid", `${DIALOG} >> text=Name the schedule`);
-      await scrollBodyToEnd(page);
+      await snap(page, theme, "04-new-invalid", `${EDITOR} >> text=Name the schedule`, EDITOR);
+      await scrollBodyToEnd(page, EDITOR);
       await snap(
         page,
         theme,
         "05-new-invalid-bottom",
-        `${DIALOG} >> text=When the agent reports done`
+        `${EDITOR} >> text=When the agent reports done`,
+        EDITOR
       );
       await closeView(page);
 
       // 06 — a schedule opened straight to its page, as another surface would: its runs.
       await openView(page, ids.first);
       await page.getByText("react-router 8 drops the loader API").waitFor({ timeout: 8000 });
-      await snap(page, theme, "06-runs-top", `${DIALOG} >> text=Run now`);
+      await snap(page, theme, "06-runs-top", `${TAB} >> text=Run now`);
       await scrollBodyToEnd(page);
-      await snap(page, theme, "07-runs-bottom", `${DIALOG} >> text=Didn't start`);
+      await snap(page, theme, "07-runs-bottom", `${TAB} >> text=Didn't start`);
 
       // 08 — Edit schedule: the editor, reached from the schedule's page.
-      await page.getByRole("button", { name: "Edit schedule" }).click();
-      await page.locator(`${DIALOG} [data-schedule-focus="name"]`).waitFor({ timeout: 5000 });
-      await snap(page, theme, "08-edit-top", `${DIALOG} >> text=What runs`);
-      await scrollBodyToEnd(page);
-      await snap(page, theme, "09-edit-bottom", `${DIALOG} >> text=Delete schedule…`);
+      await page.locator(TAB).getByRole("button", { name: "Edit schedule" }).click();
+      await page.locator(`${EDITOR} [data-schedule-focus="name"]`).waitFor({ timeout: 5000 });
+      await snap(page, theme, "08-edit-top", `${EDITOR} >> text=What runs`, EDITOR);
+      await scrollBodyToEnd(page, EDITOR);
+      await snap(page, theme, "09-edit-bottom", `${EDITOR} >> text=Delete schedule…`, EDITOR);
 
       // 10 — delete asks first, naming the schedule.
       await page.getByRole("button", { name: "Delete schedule…" }).click();
@@ -776,11 +791,11 @@ test("schedules view review — every state, per theme", async () => {
       await page.keyboard.press("Escape");
       await page.getByRole("alertdialog").waitFor({ state: "detached", timeout: 5000 });
 
-      // 11 — an edit, then Back: the draft isn't thrown away without asking.
+      // 11 — an edit, then Cancel: the draft isn't thrown away without asking.
       await page
-        .locator(`${DIALOG} [data-schedule-focus="name"]`)
+        .locator(`${EDITOR} [data-schedule-focus="name"]`)
         .fill("Nightly dependency check and audit");
-      await page.getByRole("button", { name: "Back to schedule" }).click();
+      await page.locator(EDITOR).getByRole("button", { name: "Cancel" }).click();
       await page.getByRole("alertdialog").waitFor({ state: "visible", timeout: 5000 });
       await snap(page, theme, "11-discard-confirm", '[role="alertdialog"]');
       await page.getByRole("button", { name: "Discard changes" }).click();
@@ -791,38 +806,39 @@ test("schedules view review — every state, per theme", async () => {
       // run whose worktree is gone and one that kept no session.
       await openView(page, ids.withCheck);
       await page.getByText("Worktree removed").first().waitFor({ timeout: 8000 });
-      await snap(page, theme, "12-runs-dense", `${DIALOG} >> text=Worktree removed`);
+      await snap(page, theme, "12-runs-dense", `${TAB} >> text=Worktree removed`);
 
       // 13 — the same schedule's editor, with its precondition on and Replace.
-      await page.getByRole("button", { name: "Edit schedule" }).click();
-      await page.locator(`${DIALOG} [data-schedule-focus="name"]`).waitFor({ timeout: 5000 });
-      await scrollBodyToEnd(page);
+      await page.locator(TAB).getByRole("button", { name: "Edit schedule" }).click();
+      await page.locator(`${EDITOR} [data-schedule-focus="name"]`).waitFor({ timeout: 5000 });
+      await scrollBodyToEnd(page, EDITOR);
       await snap(
         page,
         theme,
         "13-check-on-bottom",
-        `${DIALOG} >> text=Runs in a shell in the schedule's worktree`
+        `${EDITOR} >> text=Runs in a shell in the schedule's worktree`,
+        EDITOR
       );
       await closeView(page);
 
       // 14 — no runs yet, on a paused schedule and an enabled one.
       await openView(page, ids.paused);
-      await snap(page, theme, "14-runs-empty-paused", `${DIALOG} >> text=Start the first run`);
+      await snap(page, theme, "14-runs-empty-paused", `${TAB} >> text=Start the first run`);
       await closeView(page);
       await openView(page, ids.noRuns);
-      await snap(page, theme, "15-runs-empty", `${DIALOG} >> text=/^First run in/`);
+      await snap(page, theme, "15-runs-empty", `${TAB} >> text=/^First run in/`);
       await closeView(page);
 
       // 16 — Run now refused: the schedule's preset is gone, so nothing starts, and the
       // refusal lands in the history as its newest run.
       await openView(page, ids.presetGone);
       await page.getByText("Missing preset").waitFor({ timeout: 8000 });
-      await page.getByRole("button", { name: "Run now" }).click();
+      await page.locator(TAB).getByRole("button", { name: "Run now" }).click();
       await page
-        .locator(`${DIALOG} li`)
+        .locator(`${TAB} li`)
         .getByText("Failed to launch", { exact: true })
         .waitFor({ timeout: 15_000 });
-      await snap(page, theme, "16-run-now-refused", `${DIALOG} >> text=Failed to launch`);
+      await snap(page, theme, "16-run-now-refused", `${TAB} >> text=Failed to launch`);
       await closeView(page);
 
       // 17 — a run arriving while the pointer is over the history waits behind
@@ -840,7 +856,7 @@ test("schedules view review — every state, per theme", async () => {
       }, ids.first);
       if (again.status !== "started") throw new Error(`Second Run now: ${JSON.stringify(again)}`);
       await page.getByRole("button", { name: "Show 1 new run" }).waitFor({ timeout: 15_000 });
-      await snap(page, theme, "17-held-arrival", `${DIALOG} >> text=Show 1 new run`);
+      await snap(page, theme, "17-held-arrival", `${TAB} >> text=Show 1 new run`);
       await closeView(page);
     } finally {
       if (ctx) await closeApp(ctx.app).catch(() => {});

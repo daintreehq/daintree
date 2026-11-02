@@ -84,6 +84,7 @@ function renderEditor(schedule: Schedule | null, osJobContext: ScheduleOsJobCont
       onSaved={onSaved}
       onDeleted={vi.fn()}
       onCancel={vi.fn()}
+      onOpenAgentSettings={vi.fn()}
     />
   );
   return { onSaved };

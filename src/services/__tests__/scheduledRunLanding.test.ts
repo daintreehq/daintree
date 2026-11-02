@@ -10,7 +10,7 @@ interface FakePanel {
 const fake = vi.hoisted(() => ({
   panels: {} as Record<string, FakePanel>,
   activeWorktreeId: "wt-main" as string | null,
-  schedulesOpen: false,
+  schedulesHeld: false,
   schedules: null as { schedules: Array<{ id: string }> } | null,
   listError: null as Error | null,
   list: null as (() => Promise<{ schedules: Array<{ id: string }> } | null>) | null,
@@ -66,7 +66,7 @@ vi.mock("@/store/worktreeStore", () => ({
   },
 }));
 vi.mock("@/store/schedulesViewStore", () => ({
-  useSchedulesViewStore: { getState: () => ({ isOpen: fake.schedulesOpen }) },
+  isSchedulesViewHeld: () => fake.schedulesHeld,
 }));
 vi.mock("@/clients/schedulesClient", () => ({
   schedulesClient: {
@@ -90,7 +90,7 @@ const opened = (args: unknown) => ["schedules.open", args, { source: "user" }];
 beforeEach(() => {
   fake.panels = {};
   fake.activeWorktreeId = "wt-main";
-  fake.schedulesOpen = false;
+  fake.schedulesHeld = false;
   fake.schedules = { schedules: [{ id: "schedule-1" }] };
   fake.listError = null;
   fake.list = null;
@@ -172,24 +172,24 @@ describe("landOnScheduledRun", () => {
     ["the run's pane is here", "terminal-1"],
     ["the run has no pane", null],
   ])(
-    "leaves a Schedules view already open as it is when %s, so an edit in it is never lost",
+    "leaves a Schedules tab in front, or an open editor, as it is when %s, so an edit is never lost",
     async (_name, panelId) => {
       fake.panels["terminal-1"] = { location: "grid", worktreeId: null, scheduledRun: runRef };
-      fake.schedulesOpen = true;
+      fake.schedulesHeld = true;
       await landOnScheduledRun({ ...target, panelId }, notSuperseded);
       expect(dispatch).not.toHaveBeenCalled();
       expect(fake.calls).toEqual([]);
     }
   );
 
-  it("leaves alone a Schedules view opened while the schedules were read", async () => {
+  it("leaves alone a Schedules tab or editor opened while the schedules were read", async () => {
     let answer: () => void = () => {};
     fake.list = () =>
       new Promise((resolve) => {
         answer = () => resolve(fake.schedules);
       });
     const landing = landOnScheduledRun({ ...target, panelId: null }, notSuperseded);
-    fake.schedulesOpen = true;
+    fake.schedulesHeld = true;
     answer();
     await landing;
     expect(dispatch).not.toHaveBeenCalled();

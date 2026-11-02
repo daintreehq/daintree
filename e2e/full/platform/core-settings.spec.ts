@@ -304,6 +304,14 @@ const PROJECT_TABS: Record<ProjectSettingsTab, TabExpectation> = {
     },
   },
   "project:recipes": {},
+  "project:schedules": {
+    // A fresh project has no schedules, so the tab offers the first one.
+    content: async (_window, panel) => {
+      await expect(panel.getByRole("button", { name: "Add schedule" })).toBeVisible({
+        timeout: T_SHORT,
+      });
+    },
+  },
   "project:notifications": {},
   "project:code-forge": {},
   "project:plugins": {},

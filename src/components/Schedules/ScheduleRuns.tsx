@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Pencil, RefreshCw } from "lucide-react";
-import { History, SquareTerminal } from "@/components/icons";
+import { History, Play, SquareTerminal } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -52,16 +52,20 @@ interface ScheduleRunsProps {
   worktreeIds: ReadonlySet<string>;
   /** A Run now failure the history didn't record, so the page is the only place it can be said. */
   runNowError: string | null;
-  runNowRetrying: boolean;
+  /** Run now is waiting on main, so neither its button nor its Retry starts a second run. */
+  runNowPending: boolean;
   /** Runs this page started with Run now, announced even when they land in the first read. */
   requestedRunIds: ReadonlySet<string>;
-  onRetryRunNow: () => void;
+  onRunNow: () => void;
   onEdit: () => void;
   onOpenRun: (run: ScheduledRun) => void;
   onResumeRun: (run: ScheduledRun) => void;
 }
 
 const MissingGlyph = SEVERITY_GLYPH.warning;
+
+/** The history's own Run now, for handing focus back to once a retried run gets through. */
+export const HISTORY_RUN_NOW_SELECTOR = "[data-schedule-run-now]";
 
 const GRID = "grid grid-cols-[minmax(0,1fr)_10.5rem_5rem_7.5rem] items-start gap-x-4";
 
@@ -380,9 +384,9 @@ export function ScheduleRuns({
   liveTerminalIds,
   worktreeIds,
   runNowError,
-  runNowRetrying,
+  runNowPending,
   requestedRunIds,
-  onRetryRunNow,
+  onRunNow,
   onEdit,
   onOpenRun,
   onResumeRun,
@@ -498,10 +502,23 @@ export function ScheduleRuns({
             </>
           )}
         </div>
-        <Button variant="outline" size="sm" onClick={onEdit} data-schedule-edit="">
-          <Pencil />
-          Edit schedule
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* `loading` keeps the button focusable while it blocks a second run. */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onRunNow}
+            loading={runNowPending}
+            data-schedule-run-now=""
+          >
+            <Play />
+            Run now
+          </Button>
+          <Button variant="outline" size="sm" onClick={onEdit} data-schedule-edit="">
+            <Pencil />
+            Edit schedule
+          </Button>
+        </div>
       </div>
 
       {runNowError && (
@@ -509,9 +526,10 @@ export function ScheduleRuns({
           severity="error"
           role="alert"
           title="Couldn't start a run"
+          data-run-now-failure=""
           action={
             // `loading` keeps the button mounted and focusable while it blocks a second try.
-            <Button variant="outline" size="sm" onClick={onRetryRunNow} loading={runNowRetrying}>
+            <Button variant="outline" size="sm" onClick={onRunNow} loading={runNowPending}>
               <RefreshCw />
               Retry
             </Button>

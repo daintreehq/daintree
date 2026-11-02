@@ -406,6 +406,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       "project:variables": "Variables",
       "project:automation": "Worktree setup",
       "project:recipes": "Recipes",
+      "project:schedules": "Schedules",
       "project:notifications": "Notifications",
       "project:code-forge": "Code forge",
       "project:plugins": "Plugins",

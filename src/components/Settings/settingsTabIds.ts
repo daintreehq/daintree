@@ -37,6 +37,7 @@ export const PROJECT_SETTINGS_TAB_IDS = [
   "project:variables",
   "project:automation",
   "project:recipes",
+  "project:schedules",
   "project:notifications",
   "project:code-forge",
   "project:plugins",

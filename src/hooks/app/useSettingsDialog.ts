@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { SettingsTab, SettingsNavTarget } from "@/components/Settings";
 import { isSettingsTab } from "@/components/Settings/settingsTabIds";
+import { isSettingsTabAvailable } from "@/components/Settings/settingsTabAvailability";
 import {
   hostPluginsTargetRequest,
   requestHostPlugins,
@@ -60,7 +61,11 @@ export function useSettingsDialog() {
       requestHostPlugins(pluginsRequest.hostId, pluginsRequest.sectionId);
       normalized = { tab: normalized.tab };
     }
-    const tab = isSettingsTab(normalized.tab) ? normalized.tab : "general";
+    // A page this window never shows (another host's project has no schedules) opens General.
+    const tab =
+      isSettingsTab(normalized.tab) && isSettingsTabAvailable(normalized.tab)
+        ? normalized.tab
+        : "general";
     setSettingsTab(tab);
     // Forge subtabs route on canonical `{pluginId}.{contributionId}` ids;
     // normalize legacy bare forms ("github", "builtin.github") from in-flight

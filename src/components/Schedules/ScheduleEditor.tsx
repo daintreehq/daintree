@@ -13,7 +13,6 @@ import { SettingsPresetGroup } from "@/components/Settings/SettingsPresetGroup";
 import { SettingsCheckbox } from "@/components/Settings/SettingsCheckbox";
 import { resolveAgentIcon } from "@/config/agentIcons";
 import { pluralize } from "@/lib/pluralize";
-import { actionService } from "@/services/ActionService";
 import { schedulesClient } from "@/clients/schedulesClient";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { machineTimeZone, nextCronOccurrences } from "@shared/utils/cron";
@@ -215,11 +214,15 @@ interface ScheduleEditorProps {
   now: number;
   /** What main judges "Run when Daintree isn't running" by; null until it has answered. */
   osJobContext: ScheduleOsJobContext | null;
-  /** Kept current every render, so the dialog can guard Back, Cancel and dismissal. */
+  /** Kept current every render, so the dialog can guard Cancel and dismissal. */
   leaveStateRef: RefObject<EditorLeaveState | null>;
   onSaved: (snapshot: SchedulesSnapshot, scheduleId: string) => void;
+  /** A confirmed delete is about to go to main; the schedule's row is still on screen. */
+  onDeleting?: (scheduleId: string) => void;
   onDeleted: (snapshot: SchedulesSnapshot, deletedId: string) => void;
   onCancel: () => void;
+  /** Leaves the editor for Agent settings, which takes over the settings it sits on. */
+  onOpenAgentSettings: () => void;
 }
 
 const MAIN_CHECKOUT_VALUE = "__main__";
@@ -245,8 +248,10 @@ export function ScheduleEditor({
   osJobContext,
   leaveStateRef,
   onSaved,
+  onDeleting,
   onDeleted,
   onCancel,
+  onOpenAgentSettings,
 }: ScheduleEditorProps) {
   const [base, setBase] = useState<Schedule | null>(schedule);
   const initial = useMemo(
@@ -457,6 +462,7 @@ export function ScheduleEditor({
 
   const remove = async () => {
     if (!base) return;
+    onDeleting?.(base.id);
     setDeleting(true);
     setDeleteError(null);
     try {
@@ -568,17 +574,7 @@ export function ScheduleEditor({
                     severity="warning"
                     title="This run will stop at permission prompts"
                     action={
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() =>
-                          void actionService.dispatch(
-                            "app.settings.openTab",
-                            { tab: "agents" },
-                            { source: "user" }
-                          )
-                        }
-                      >
+                      <Button variant="outline" size="sm" onClick={onOpenAgentSettings}>
                         Agent settings
                       </Button>
                     }
@@ -738,6 +734,7 @@ export function ScheduleEditor({
         <ConfirmDialog
           isOpen={confirmingDelete}
           variant="destructive"
+          zIndex="nested"
           title={`Delete '${base.name}'?`}
           description="It stops running, and its settings and prompt are gone from this machine. Terminals its past runs opened stay open."
           confirmLabel={deleteError ? "Retry delete" : "Delete schedule"}

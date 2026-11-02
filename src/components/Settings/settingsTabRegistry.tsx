@@ -24,6 +24,7 @@ import {
   Server,
 } from "lucide-react";
 import {
+  CalendarClock,
   DaintreeIcon,
   DecisionsIcon,
   FolderGit2,
@@ -49,6 +50,7 @@ import type {
 // Boot-path consumers import the ids/validators from settingsTabIds (no
 // component imports); re-export them so registry consumers are untouched.
 import { scopeForTab } from "./settingsTabIds";
+import { isSettingsTabAvailable } from "./settingsTabAvailability";
 
 export { isSettingsTab, scopeForTab } from "./settingsTabIds";
 export type { GlobalSettingsTab, ProjectSettingsTab, SettingsScope, SettingsTab };
@@ -171,6 +173,7 @@ const importProjectContextTab = () => import("@/components/Project/ContextTab");
 const importProjectVariablesTab = () => import("@/components/Project/EnvironmentVariablesEditor");
 const importProjectAutomationTab = () => import("@/components/Project/AutomationTab");
 const importProjectRecipesTab = () => import("@/components/Project/RecipesTab");
+const importProjectSchedulesTab = () => import("@/components/Project/ProjectSchedulesTab");
 const importProjectNotificationsTab = () => import("@/components/Project/ProjectNotificationsTab");
 const importProjectCodeForgeTab = () => import("@/components/Project/CodeForgeTab");
 const importProjectPluginsTab = () => import("./ProjectPluginsTab");
@@ -259,6 +262,10 @@ const LazyProjectAutomationTab = lazyWithPreload(
   (m) => m.AutomationTab
 );
 const LazyProjectRecipesTab = lazyWithPreload(importProjectRecipesTab, (m) => m.RecipesTab);
+const LazyProjectSchedulesTab = lazyWithPreload(
+  importProjectSchedulesTab,
+  (m) => m.ProjectSchedulesTab
+);
 const LazyProjectNotificationsTab = lazyWithPreload(
   importProjectNotificationsTab,
   (m) => m.ProjectNotificationsTab
@@ -2446,6 +2453,22 @@ export const SETTINGS_REGISTRY = [
   } satisfies LazySettingsTabEntry,
 
   {
+    id: "project:schedules",
+    scope: "project",
+    group: "Project",
+    settings: ["file:schedules"],
+    label: "Schedules",
+    icon: <CalendarClock className="w-4 h-4" />,
+    importKind: "lazy",
+    importer: LazyProjectSchedulesTab.preload,
+    LazyComponent: LazyProjectSchedulesTab,
+    // Reads its own schedules over IPC rather than the shared project form.
+    needsProjectForm: true,
+    needsOnClose: true,
+    needsIsActive: true,
+  } satisfies LazySettingsTabEntry,
+
+  {
     id: "project:notifications",
     scope: "project",
     group: "Project",
@@ -2703,6 +2726,34 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
       },
     ],
   },
+  "project:schedules": {
+    tabLabel: "Schedules",
+    searchNavDescription:
+      "Agents this project runs on a schedule: their cadence, prompt, and run history",
+    searchNavKeywords: [
+      "project",
+      "schedules",
+      "schedule",
+      "scheduled",
+      "cron",
+      "recurring",
+      "nightly",
+      "timer",
+      "automation",
+      "agent",
+      "runs",
+    ],
+    sections: [
+      {
+        id: "project-schedules",
+        section: "Agent schedules",
+        title: "Schedules",
+        description:
+          "Run an agent with your prompt at the times you set, and see what each run did",
+        keywords: ["schedule", "cron", "recurring", "nightly", "run now", "history", "resume"],
+      },
+    ],
+  },
   "project:notifications": {
     tabLabel: "Notifications",
     searchNavDescription: "Project-specific notification overrides",
@@ -2820,6 +2871,7 @@ export const projectTabIcons: Record<ProjectSettingsTab, ReactNode> = {
   "project:variables": <KeyRound className="w-5 h-5 text-text-secondary" />,
   "project:automation": <GitBranchPlus className="w-5 h-5 text-text-secondary" />,
   "project:recipes": <Workflow className="w-5 h-5 text-text-secondary" />,
+  "project:schedules": <CalendarClock className="w-5 h-5 text-text-secondary" />,
   "project:notifications": <Bell className="w-5 h-5 text-text-secondary" />,
   "project:code-forge": <GitBranch className="w-5 h-5 text-text-secondary" />,
   "project:plugins": <Package className="w-5 h-5 text-text-secondary" />,
@@ -2866,5 +2918,12 @@ const _projectGroups: SettingsNavGroup[] = [
 ].filter((g) => g.entries.length > 0);
 
 export function getSettingsNavGroups(scope: SettingsScope): SettingsNavGroup[] {
-  return scope === "global" ? _globalGroups : _projectGroups;
+  const groups = scope === "global" ? _globalGroups : _projectGroups;
+  // Asked each time rather than at load: the window learns which host it drives after boot.
+  return groups
+    .map((group) => ({
+      ...group,
+      entries: group.entries.filter((entry) => isSettingsTabAvailable(entry.id)),
+    }))
+    .filter((group) => group.entries.length > 0);
 }

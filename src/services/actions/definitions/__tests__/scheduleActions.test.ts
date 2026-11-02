@@ -61,22 +61,45 @@ async function openSchedules(args: unknown): Promise<void> {
 }
 
 describe("schedules.open", () => {
-  it("opens this project's schedule in place", async () => {
+  const settingsOpens: unknown[] = [];
+  const recordOpen = (event: Event) =>
+    settingsOpens.push(event instanceof CustomEvent ? event.detail : undefined);
+  beforeEach(() => {
+    settingsOpens.length = 0;
+    window.addEventListener("daintree:open-settings-tab", recordOpen);
+  });
+  afterEach(() => window.removeEventListener("daintree:open-settings-tab", recordOpen));
+
+  it("opens Project settings at Schedules, landing on this project's schedule", async () => {
+    const before = useSchedulesViewStore.getState().request.seq;
     await openSchedules({ scheduleId: "schedule-1", projectId: "project-1" });
     expect(projects.switchProject).not.toHaveBeenCalled();
-    expect(useSchedulesViewStore.getState()).toMatchObject({
-      isOpen: true,
-      request: { scheduleId: "schedule-1" },
+    expect(useSchedulesViewStore.getState().request).toEqual({
+      scheduleId: "schedule-1",
+      seq: before + 1,
     });
+    expect(settingsOpens).toEqual([{ tab: "project:schedules" }]);
+  });
+
+  it("asks again for the page already asked for, so a repeat still lands", async () => {
+    await openSchedules(undefined);
+    const first = useSchedulesViewStore.getState().request;
+    await openSchedules(undefined);
+    expect(useSchedulesViewStore.getState().request).toEqual({
+      scheduleId: null,
+      seq: first.seq + 1,
+    });
+    expect(settingsOpens).toEqual([{ tab: "project:schedules" }, { tab: "project:schedules" }]);
   });
 
   it("switches to another project's schedule, for that project's view to open (#15983)", async () => {
-    useSchedulesViewStore.getState().close();
+    const before = useSchedulesViewStore.getState().request;
     await openSchedules({ scheduleId: "schedule-9", projectId: "project-2" });
     expect(projects.switchProject).toHaveBeenCalledExactlyOnceWith("project-2", {
       focusIntent: { intent: "open-schedules", scheduleId: "schedule-9" },
     });
-    expect(useSchedulesViewStore.getState()).toMatchObject({ isOpen: false });
+    expect(useSchedulesViewStore.getState().request).toEqual(before);
+    expect(settingsOpens).toEqual([]);
   });
 });
 
